@@ -68,10 +68,13 @@ if [ -f "/etc/wireguard/{{ .WgConfName }}" ]; then
 fi
 
 {{ if .HasBabel -}}
-if [ -f "/etc/babel/{{ .BabelConfName }}" ]; then
-    rm -f "/etc/babel/{{ .BabelConfName }}"
-    echo "  Removed old Babel config: /etc/babel/{{ .BabelConfName }}"
-fi
+# Clean old babel config from both legacy and standard locations
+for _bcf in "/etc/babel/{{ .BabelConfName }}" "/etc/{{ .BabelConfName }}"; do
+    if [ -f "$_bcf" ]; then
+        rm -f "$_bcf"
+        echo "  Removed old Babel config: $_bcf"
+    fi
+done
 {{ end -}}
 
 if [ -f "/etc/sysctl.d/{{ .SysctlConfName }}" ]; then
@@ -247,6 +250,29 @@ echo "  WireGuard interface $WG_IFACE is up"
 systemctl enable wg-quick@"$WG_IFACE" 2>/dev/null || true
 
 {{ if .HasBabel -}}
+# Configure babeld systemd service to use our config and depend on WireGuard
+echo "Configuring babeld systemd service..."
+mkdir -p /etc/systemd/system/babeld.service.d
+cat > /etc/systemd/system/babeld.service.d/override.conf << 'BABEL_OVERRIDE'
+[Unit]
+Description=Babel routing daemon (overlay)
+After=network.target wg-quick@{{ .WgConfName }}.service
+Wants=wg-quick@{{ .WgConfName }}.service
+
+[Service]
+Type=simple
+ExecStart=
+ExecStart=/usr/sbin/babeld -c /etc/babel/{{ .BabelConfName }} -D
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+BABEL_OVERRIDE
+# Strip the .conf suffix for wg-quick@ service name
+sed -i "s/wg-quick@{{ .WgConfName }}/wg-quick@${WG_IFACE}/g" /etc/systemd/system/babeld.service.d/override.conf
+systemctl daemon-reload
+
 # Start Babel
 echo "Starting Babel..."
 systemctl restart babeld

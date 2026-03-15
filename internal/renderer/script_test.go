@@ -89,6 +89,14 @@ func TestRenderInstallScript_RouterWithBabel(t *testing.T) {
 	if strings.Contains(script, ".bak.") {
 		t.Errorf("不应包含备份逻辑，Phase 0 已清理旧文件")
 	}
+
+	// 应包含 babeld systemd override（指定配置文件路径）
+	if !strings.Contains(script, "babeld.service.d/override.conf") {
+		t.Errorf("有 Babel 时应创建 systemd override 指定配置文件路径")
+	}
+	if !strings.Contains(script, "/etc/babel/babeld.conf") {
+		t.Errorf("babeld 应使用 /etc/babel/babeld.conf 配置路径")
+	}
 }
 
 func TestRenderInstallScript_PeerWithoutBabel(t *testing.T) {
