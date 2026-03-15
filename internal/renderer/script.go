@@ -262,7 +262,7 @@ Wants=wg-quick@{{ .WgConfName }}.service
 [Service]
 Type=simple
 ExecStart=
-ExecStart=/usr/sbin/babeld -c /etc/babel/{{ .BabelConfName }} -D
+ExecStart=/usr/sbin/babeld -c /etc/babel/{{ .BabelConfName }}
 Restart=on-failure
 RestartSec=5
 

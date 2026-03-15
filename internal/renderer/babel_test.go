@@ -50,19 +50,28 @@ func TestRenderBabelConfig_Router(t *testing.T) {
 		t.Errorf("不应包含 per-peer 接口名，应使用统一的 wg0")
 	}
 
-	// 
+	// type wired
 	if !strings.Contains(config, "type wired") {
-		t.Errorf("WireGuard  wired ")
+		t.Errorf("WireGuard should be type wired")
 	}
 
-	// 
+	// overlay IP /32
 	if !strings.Contains(config, "10.10.0.1/32") {
-		t.Errorf(" overlay IP /32")
+		t.Errorf("should contain overlay IP /32")
 	}
 
-	//  redistribute deny
+	// redistribute deny
 	if !strings.Contains(config, "redistribute local deny") {
-		t.Errorf(" redistribute local deny")
+		t.Errorf("should contain redistribute local deny")
+	}
+
+	// should NOT contain router-id (babeld requires MAC-48/EUI-64 format, not hostname)
+	if strings.Contains(config, "router-id") {
+		t.Errorf("should not contain router-id with hostname (babeld requires MAC-48/EUI-64)")
+	}
+	// should NOT contain default-metric (not a valid babeld global option)
+	if strings.Contains(config, "default-metric") {
+		t.Errorf("should not contain default-metric (not a valid babeld option)")
 	}
 }
 
