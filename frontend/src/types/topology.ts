@@ -101,3 +101,10 @@ export interface CompileResponse {
   install_scripts: Record<string, string>;
   manifest: CompileManifest;
 }
+
+export interface CompileHistoryEntry {
+  id: string;
+  timestamp: string;
+  topology: Topology;
+  compileResult: CompileResponse;
+}

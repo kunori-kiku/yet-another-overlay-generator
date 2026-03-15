@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   Topology,
   Project,
@@ -7,6 +8,7 @@ import type {
   Edge,
   ValidateResponse,
   CompileResponse,
+  CompileHistoryEntry,
 } from '../types/topology';
 
 interface TopologyState {
@@ -16,12 +18,19 @@ interface TopologyState {
   nodes: Node[];
   edges: Edge[];
 
+  // 历史快照
+  history: CompileHistoryEntry[];
+
   // 编译/校验结果
   validateResult: ValidateResponse | null;
   compileResult: CompileResponse | null;
   isCompiling: boolean;
   isValidating: boolean;
   error: string | null;
+
+  // 界面状态
+  viewMode: 'topology' | 'audit';
+  setViewMode: (mode: 'topology' | 'audit') => void;
 
   // 选中状态
   selectedNodeId: string | null;
@@ -58,6 +67,9 @@ interface TopologyState {
   getTopology: () => Topology;
   loadTopology: (topo: Topology) => void;
   reset: () => void;
+  exportProject: () => void;
+  importProject: (file: File) => Promise<void>;
+  clearHistory: () => void;
 }
 
 const defaultProject: Project = {
@@ -66,19 +78,26 @@ const defaultProject: Project = {
   version: '0.1.0',
 };
 
-export const useTopologyStore = create<TopologyState>((set, get) => ({
-  // 初始数据
-  project: { ...defaultProject },
-  domains: [],
-  nodes: [],
-  edges: [],
-  validateResult: null,
-  compileResult: null,
-  isCompiling: false,
-  isValidating: false,
-  error: null,
-  selectedNodeId: null,
-  selectedEdgeId: null,
+export const useTopologyStore = create<TopologyState>()(
+  persist(
+    (set, get) => ({
+      // 初始数据
+      project: { ...defaultProject },
+      domains: [],
+      nodes: [],
+      edges: [],
+      history: [],
+      validateResult: null,
+      compileResult: null,
+      isCompiling: false,
+      isValidating: false,
+      error: null,
+      viewMode: 'topology',
+      selectedNodeId: null,
+      selectedEdgeId: null,
+
+  // UI
+  setViewMode: (mode) => set({ viewMode: mode }),
 
   // Project
   setProject: (updates) =>
@@ -150,6 +169,31 @@ export const useTopologyStore = create<TopologyState>((set, get) => ({
     return { project, domains, nodes, edges };
   },
 
+  exportProject: () => {
+    const topo = get().getTopology();
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(topo, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href",     dataStr);
+    downloadAnchorNode.setAttribute("download", `${topo.project.id || 'project'}.json`);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  },
+
+  importProject: async (file: File) => {
+    try {
+      const text = await file.text();
+      const topo = JSON.parse(text) as Topology;
+      if (topo.project && topo.domains && topo.nodes && topo.edges) {
+        get().loadTopology(topo);
+      } else {
+        throw new Error('Invalid project file format');
+      }
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Import failed' });
+    }
+  },
+
   // 加载拓扑
   loadTopology: (topo) =>
     set({
@@ -211,7 +255,19 @@ export const useTopologyStore = create<TopologyState>((set, get) => ({
         throw new Error(errData.error || '编译失败');
       }
       const data: CompileResponse = await res.json();
-      set({ compileResult: data, isCompiling: false });
+      
+      const newHistoryEntry: CompileHistoryEntry = {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        topology: topo,
+        compileResult: data,
+      };
+
+      set((state) => ({ 
+        compileResult: data, 
+        isCompiling: false,
+        history: [newHistoryEntry, ...state.history].slice(0, 50), // keep last 50
+      }));
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : '编译请求失败',
@@ -249,4 +305,19 @@ export const useTopologyStore = create<TopologyState>((set, get) => ({
       });
     }
   },
-}));
+
+  clearHistory: () => set({ history: [] }),
+    }),
+    {
+      name: 'topology-storage',
+      // We only persist these properties to avoid saving volatile UI state like isCompiling or errors
+      partialize: (state) => ({
+        project: state.project,
+        domains: state.domains,
+        nodes: state.nodes,
+        edges: state.edges,
+        history: state.history,
+      }),
+    }
+  )
+);

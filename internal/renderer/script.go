@@ -6,14 +6,14 @@ import (
 
 // InstallScriptConfig 安装脚本渲染数据
 type InstallScriptConfig struct {
-	NodeName     string
-	NodeRole     string
-	Platform     string
-	OverlayIP    string
-	HasBabel     bool
-	HasForward   bool
-	WgConfName   string
-	BabelConfName string
+	NodeName       string
+	NodeRole       string
+	Platform       string
+	OverlayIP      string
+	HasBabel       bool
+	HasForward     bool
+	WgConfName     string
+	BabelConfName  string
 	SysctlConfName string
 }
 
@@ -30,6 +30,21 @@ set -euo pipefail
 # ============================================================
 
 echo "=== Phase 1: Environment Preparation ==="
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Verify checksums if available
+if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
+    echo "Verifying file integrity..."
+    cd "$SCRIPT_DIR"
+    if ! sha256sum --status -c checksums.sha256; then
+        echo "ERROR: Checksum validation failed! The configuration files may have been tampered with." >&2
+        echo "If you intentionally modified them, update or remove checksums.sha256." >&2
+        exit 1
+    fi
+    echo "Checksum validation passed."
+    cd - >/dev/null
+fi
 
 # Check root
 if [ "$(id -u)" -ne 0 ]; then

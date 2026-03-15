@@ -176,9 +176,9 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 		}
 	}
 
-	// Hub (node-1) 没有出站边，所以 peer 列表为空
-	if len(peerMap["node-1"]) != 0 {
-		t.Errorf("Hub 没有出站边，peer 列表应为空, 得到 %d", len(peerMap["node-1"]))
+	// Hub (node-1) 被动接收 node-2 和 node-3，所以具有两条被动 Peer 记录
+	if len(peerMap["node-1"]) != 2 {
+		t.Errorf("Hub 应有 2 个反向被动 Peer，得到 %d", len(peerMap["node-1"]))
 	}
 }
 
@@ -188,15 +188,16 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo.Nodes[1].OverlayIP = "10.10.0.2"
 	topo.Nodes[2].OverlayIP = "10.10.0.3"
 
-	// 禁用一条边
+	// 禁用 node-1 <-> node-2 之间的双向边
 	topo.Edges[0].IsEnabled = false
+	topo.Edges[1].IsEnabled = false
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// node-1 应只有 1 个 peer（node-3），因为到 node-2 的边被禁用
+	// node-1 应只有 1 个 peer（node-3），因为与 node-2 之间的边被禁用
 	if len(peerMap["node-1"]) != 1 {
-		t.Errorf("node-1 禁用一条边后期望 1 个 peer, 得到 %d", len(peerMap["node-1"]))
+		t.Errorf("node-1 禁用与 node-2 双向边后期望 1 个 peer, 得到 %d", len(peerMap["node-1"]))
 	}
 }
 

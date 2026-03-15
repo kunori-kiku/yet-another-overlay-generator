@@ -127,6 +127,25 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 
 		peerMap[fromNode.ID] = append(peerMap[fromNode.ID], peer)
 		addedPeers[peerKey] = true
+
+		// B视角，配置被动接受（反向 Peer）
+		reversePeerKey := toNode.ID + "->" + fromNode.ID
+		if !addedPeers[reversePeerKey] {
+			fromKey, _ := keys[fromNode.ID]
+			reversePeer := PeerInfo{
+				NodeID:              fromNode.ID,
+				NodeName:            fromNode.Name,
+				PublicKey:           fromKey.PublicKey,
+				OverlayIP:           fromNode.OverlayIP,
+				AllowedIPs:          deriveAllowedIPs(fromNode),
+				Endpoint:            "", // 留空，等待对方连接上来动态学习
+				PersistentKeepalive: 0,  // 被动接受方通常不需要 Keepalive
+				InterfaceName:       wgInterfaceName(toNode.ID, fromNode.ID),
+			}
+
+			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)
+			addedPeers[reversePeerKey] = true
+		}
 	}
 
 	return peerMap
