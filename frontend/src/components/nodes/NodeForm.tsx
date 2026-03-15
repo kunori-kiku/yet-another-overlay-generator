@@ -11,6 +11,7 @@ export function NodeForm() {
   const [hostname, setHostname] = useState('');
   const [listenPort, setListenPort] = useState(51820);
   const [hasPublicIP, setHasPublicIP] = useState(false);
+  const [mtu, setMtu] = useState(0);
   const [canForward, setCanForward] = useState(false);
   const [fixedPrivateKey, setFixedPrivateKey] = useState(false);
   const [endpointHost, setEndpointHost] = useState('');
@@ -36,6 +37,7 @@ export function NodeForm() {
       role,
       domain_id: targetDomain,
       listen_port: listenPort,
+      mtu: mtu > 0 ? mtu : undefined,
       capabilities: {
         can_accept_inbound: hasPublicIP,
         can_forward: canForward || role === 'router' || role === 'relay' || role === 'gateway',
@@ -113,6 +115,13 @@ export function NodeForm() {
         placeholder={txt(language, '监听端口', 'Listen Port')}
         value={listenPort}
         onChange={(e) => setListenPort(parseInt(e.target.value) || 51820)}
+        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+      />
+      <input
+        type="number"
+        placeholder={txt(language, 'MTU (留空使用默认值 1420)', 'MTU (leave empty for default 1420)')}
+        value={mtu || ''}
+        onChange={(e) => setMtu(parseInt(e.target.value) || 0)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
       />
       <label className="flex items-center gap-2 text-sm">

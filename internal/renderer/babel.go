@@ -80,11 +80,13 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		EnableForwarding: semantics.EnableForwarding,
 	}
 
-	//  Babel  WireGuard ， cost
-	for _, p := range peers {
+	//  Babel  WireGuard 
+	// WireGuard  wg0（ wg0.conf  peer），
+	//  wg0  Babel
+	if len(peers) > 0 {
 		cost := preset.DefaultCost
 		iface := BabelInterface{
-			Name:     p.InterfaceName,
+			Name:     "wg0",
 			Type:     "wired",
 			IsTunnel: true,
 			Cost:     cost,

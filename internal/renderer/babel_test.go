@@ -41,12 +41,13 @@ func TestRenderBabelConfig_Router(t *testing.T) {
 		t.Fatalf("Router  Babel ")
 	}
 
-	// 
-	if !strings.Contains(config, "interface wg-node-2") {
-		t.Errorf(" wg-node-2 ")
+	// WireGuard 使用单一 wg0 接口（所有 peer 在同一个 wg0.conf 中）
+	if !strings.Contains(config, "interface wg0") {
+		t.Errorf("应包含 wg0 接口声明")
 	}
-	if !strings.Contains(config, "interface wg-node-3") {
-		t.Errorf(" wg-node-3 ")
+	// 不应出现 per-peer 接口名
+	if strings.Contains(config, "interface wg-node-2") || strings.Contains(config, "interface wg-node-3") {
+		t.Errorf("不应包含 per-peer 接口名，应使用统一的 wg0")
 	}
 
 	// 
@@ -98,9 +99,9 @@ func TestRenderBabelConfig_Peer(t *testing.T) {
 		t.Fatalf("Peer  babel  Babel ")
 	}
 
-	// 
-	if !strings.Contains(config, "interface wg-hub-1") {
-		t.Errorf(" wg-hub-1 ")
+	// Peer 也使用统一的 wg0 接口
+	if !strings.Contains(config, "interface wg0") {
+		t.Errorf("应包含 wg0 接口声明")
 	}
 }
 

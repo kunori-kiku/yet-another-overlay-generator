@@ -17,6 +17,7 @@ type WireGuardConfig struct {
 	PrivateKey string
 	OverlayIP  string
 	ListenPort int
+	MTU        int
 
 	// Peer 
 	Peers []WireGuardPeer
@@ -49,6 +50,9 @@ Address = {{ .OverlayIP }}/32
 {{- if gt .ListenPort 0 }}
 ListenPort = {{ .ListenPort }}
 {{- end }}
+{{- if gt .MTU 0 }}
+MTU = {{ .MTU }}
+{{- end }}
 {{ range .Peers }}
 # Peer: {{ .Name }}
 [Peer]
@@ -69,6 +73,7 @@ func RenderWireGuardConfig(node *model.Node, peers []compiler.PeerInfo, keys com
 		PrivateKey: keys.PrivateKey,
 		OverlayIP:  node.OverlayIP,
 		ListenPort: node.ListenPort,
+		MTU:        node.MTU,
 		Peers:      make([]WireGuardPeer, 0, len(peers)),
 	}
 

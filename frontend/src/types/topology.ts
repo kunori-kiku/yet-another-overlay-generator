@@ -34,6 +34,7 @@ export interface Node {
   domain_id: string;
   overlay_ip?: string;
   listen_port?: number;
+  mtu?: number;
   capabilities: NodeCapabilities;
   fixed_private_key?: boolean;
   wireguard_private_key?: string;

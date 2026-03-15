@@ -10,6 +10,7 @@ type InstallScriptConfig struct {
 	NodeRole       string
 	Platform       string
 	OverlayIP      string
+	MTU            int
 	HasBabel       bool
 	HasForward     bool
 	WgConfName     string
@@ -24,6 +25,61 @@ const installScriptTemplate = `#!/usr/bin/env bash
 # Role: {{ .NodeRole }}
 
 set -euo pipefail
+
+# ============================================================
+# Phase 0: Cleanup Previous Installation
+# ============================================================
+
+echo "=== Phase 0: Cleanup Previous Installation ==="
+
+WG_IFACE="{{ .WgConfName }}"
+WG_IFACE="${WG_IFACE%.conf}"
+
+# Stop WireGuard interface if running
+if command -v wg >/dev/null 2>&1 && wg show "$WG_IFACE" > /dev/null 2>&1; then
+    echo "  Stopping existing WireGuard interface: $WG_IFACE..."
+    wg-quick down "$WG_IFACE" 2>/dev/null || true
+    echo "  WireGuard interface $WG_IFACE stopped"
+fi
+
+# Disable WireGuard auto-start
+if systemctl is-enabled "wg-quick@$WG_IFACE" >/dev/null 2>&1; then
+    systemctl disable "wg-quick@$WG_IFACE" 2>/dev/null || true
+    echo "  Disabled wg-quick@$WG_IFACE auto-start"
+fi
+
+{{ if .HasBabel -}}
+# Stop Babel if running
+if systemctl is-active babeld >/dev/null 2>&1; then
+    echo "  Stopping Babel daemon..."
+    systemctl stop babeld 2>/dev/null || true
+    echo "  Babel daemon stopped"
+fi
+if systemctl is-enabled babeld >/dev/null 2>&1; then
+    systemctl disable babeld 2>/dev/null || true
+    echo "  Disabled babeld auto-start"
+fi
+{{ end -}}
+
+# Remove old configuration files
+if [ -f "/etc/wireguard/{{ .WgConfName }}" ]; then
+    rm -f "/etc/wireguard/{{ .WgConfName }}"
+    echo "  Removed old WireGuard config: /etc/wireguard/{{ .WgConfName }}"
+fi
+
+{{ if .HasBabel -}}
+if [ -f "/etc/babel/{{ .BabelConfName }}" ]; then
+    rm -f "/etc/babel/{{ .BabelConfName }}"
+    echo "  Removed old Babel config: /etc/babel/{{ .BabelConfName }}"
+fi
+{{ end -}}
+
+if [ -f "/etc/sysctl.d/{{ .SysctlConfName }}" ]; then
+    rm -f "/etc/sysctl.d/{{ .SysctlConfName }}"
+    echo "  Removed old sysctl config: /etc/sysctl.d/{{ .SysctlConfName }}"
+fi
+
+echo "Phase 0 complete."
 
 # ============================================================
 # Phase 1: Environment Preparation
@@ -151,10 +207,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Deploy WireGuard configuration
 echo "Deploying WireGuard configuration..."
-if [ -f "/etc/wireguard/{{ .WgConfName }}" ]; then
-    cp "/etc/wireguard/{{ .WgConfName }}" "/etc/wireguard/{{ .WgConfName }}.bak.$(date +%s)"
-    echo "  Backed up existing WireGuard config"
-fi
 cp "$SCRIPT_DIR/wireguard/{{ .WgConfName }}" /etc/wireguard/{{ .WgConfName }}
 chmod 600 /etc/wireguard/{{ .WgConfName }}
 echo "  WireGuard config deployed: /etc/wireguard/{{ .WgConfName }}"
@@ -162,10 +214,6 @@ echo "  WireGuard config deployed: /etc/wireguard/{{ .WgConfName }}"
 {{ if .HasBabel -}}
 # Deploy Babel configuration
 echo "Deploying Babel configuration..."
-if [ -f "/etc/babel/{{ .BabelConfName }}" ]; then
-    cp "/etc/babel/{{ .BabelConfName }}" "/etc/babel/{{ .BabelConfName }}.bak.$(date +%s)"
-    echo "  Backed up existing Babel config"
-fi
 cp "$SCRIPT_DIR/babel/{{ .BabelConfName }}" /etc/babel/{{ .BabelConfName }}
 echo "  Babel config deployed: /etc/babel/{{ .BabelConfName }}"
 {{ end -}}
@@ -191,13 +239,7 @@ echo "  IPv4 forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
 {{ end -}}
 
 # Start WireGuard
-WG_IFACE="{{ .WgConfName }}"
-WG_IFACE="${WG_IFACE%.conf}"
 echo "Starting WireGuard interface: $WG_IFACE..."
-if wg show "$WG_IFACE" > /dev/null 2>&1; then
-    echo "  Interface $WG_IFACE already up, restarting..."
-    wg-quick down "$WG_IFACE" || true
-fi
 wg-quick up "$WG_IFACE"
 echo "  WireGuard interface $WG_IFACE is up"
 
@@ -218,6 +260,9 @@ echo "============================================================"
 echo "  Node: {{ .NodeName }}"
 echo "  Overlay IP: {{ .OverlayIP }}"
 echo "  Role: {{ .NodeRole }}"
+{{- if gt .MTU 0 }}
+echo "  MTU: {{ .MTU }}"
+{{- end }}
 echo "============================================================"
 echo ""
 echo "WireGuard status:"
@@ -239,6 +284,7 @@ func RenderInstallScript(node *model.Node, hasBabel bool) (string, error) {
 		NodeRole:       node.Role,
 		Platform:       node.Platform,
 		OverlayIP:      node.OverlayIP,
+		MTU:            node.MTU,
 		HasBabel:       hasBabel,
 		HasForward:     node.Capabilities.CanForward,
 		WgConfName:     "wg0.conf",

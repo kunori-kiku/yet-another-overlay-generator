@@ -56,6 +56,9 @@ type Node struct {
 	// WireGuard 
 	ListenPort int `json:"listen_port,omitempty"`
 
+	// WireGuard 接口 MTU（0 = 使用系统默认值，通常 1420）
+	MTU int `json:"mtu,omitempty"`
+
 	// 
 	Capabilities NodeCapabilities `json:"capabilities"`
 

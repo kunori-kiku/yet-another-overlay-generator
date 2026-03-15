@@ -254,6 +254,16 @@ export function RightPanel() {
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
+            <div>
+              <label className="text-xs text-gray-400">{txt(language, 'MTU (留空使用默认值 1420)', 'MTU (empty for default 1420)')}</label>
+              <input
+                type="number"
+                value={selectedNode.mtu || ''}
+                onChange={(e) => updateNode(selectedNode.id, { mtu: parseInt(e.target.value) || undefined })}
+                placeholder="1420"
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              />
+            </div>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
