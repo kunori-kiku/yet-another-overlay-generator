@@ -8,11 +8,11 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "监听地址")
+	addr := flag.String("addr", ":8080", "")
 	flag.Parse()
 
 	server := api.NewServer()
 	if err := server.ListenAndServe(*addr); err != nil {
-		log.Fatalf("服务启动失败: %v", err)
+		log.Fatalf(": %v", err)
 	}
 }

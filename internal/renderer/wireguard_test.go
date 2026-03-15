@@ -34,32 +34,32 @@ func TestRenderWireGuardConfig_Basic(t *testing.T) {
 
 	config, err := RenderWireGuardConfig(node, peers, keys)
 	if err != nil {
-		t.Fatalf("渲染 WireGuard 配置失败: %v", err)
+		t.Fatalf(" WireGuard : %v", err)
 	}
 
-	// 检查 Interface 段
+	//  Interface 
 	if !strings.Contains(config, "PrivateKey = privkey-alpha-fake") {
-		t.Errorf("配置应包含 PrivateKey")
+		t.Errorf(" PrivateKey")
 	}
 	if !strings.Contains(config, "Address = 10.10.0.1/32") {
-		t.Errorf("配置应包含 Address")
+		t.Errorf(" Address")
 	}
 	if !strings.Contains(config, "ListenPort = 51820") {
-		t.Errorf("配置应包含 ListenPort")
+		t.Errorf(" ListenPort")
 	}
 
-	// 检查 Peer 段
+	//  Peer 
 	if !strings.Contains(config, "[Peer]") {
-		t.Errorf("配置应包含 [Peer] 段")
+		t.Errorf(" [Peer] ")
 	}
 	if !strings.Contains(config, "PublicKey = pubkey-beta-fake") {
-		t.Errorf("配置应包含对端 PublicKey")
+		t.Errorf(" PublicKey")
 	}
 	if !strings.Contains(config, "AllowedIPs = 10.10.0.2/32") {
-		t.Errorf("配置应包含 AllowedIPs")
+		t.Errorf(" AllowedIPs")
 	}
 	if !strings.Contains(config, "Endpoint = 203.0.113.2:51820") {
-		t.Errorf("配置应包含 Endpoint")
+		t.Errorf(" Endpoint")
 	}
 }
 
@@ -90,11 +90,11 @@ func TestRenderWireGuardConfig_WithKeepalive(t *testing.T) {
 
 	config, err := RenderWireGuardConfig(node, peers, keys)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
 	if !strings.Contains(config, "PersistentKeepalive = 25") {
-		t.Errorf("NAT 客户端配置应包含 PersistentKeepalive")
+		t.Errorf("NAT  PersistentKeepalive")
 	}
 }
 
@@ -103,7 +103,7 @@ func TestRenderWireGuardConfig_NoListenPort(t *testing.T) {
 		ID:        "node-1",
 		Name:      "alpha",
 		OverlayIP: "10.10.0.1",
-		// ListenPort 为 0
+		// ListenPort  0
 	}
 
 	peers := []compiler.PeerInfo{}
@@ -111,11 +111,11 @@ func TestRenderWireGuardConfig_NoListenPort(t *testing.T) {
 
 	config, err := RenderWireGuardConfig(node, peers, keys)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
 	if strings.Contains(config, "ListenPort") {
-		t.Errorf("ListenPort 为 0 时不应出现在配置中")
+		t.Errorf("ListenPort  0 ")
 	}
 }
 
@@ -136,20 +136,20 @@ func TestRenderWireGuardConfig_MultiplePeers(t *testing.T) {
 
 	config, err := RenderWireGuardConfig(node, peers, keys)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 应有 2 个 [Peer] 段
+	//  2  [Peer] 
 	peerCount := strings.Count(config, "[Peer]")
 	if peerCount != 2 {
-		t.Errorf("期望 2 个 [Peer] 段, 得到 %d", peerCount)
+		t.Errorf(" 2  [Peer] ,  %d", peerCount)
 	}
 
 	if !strings.Contains(config, "# Peer: beta") {
-		t.Errorf("应包含 peer beta 的注释")
+		t.Errorf(" peer beta ")
 	}
 	if !strings.Contains(config, "# Peer: gamma") {
-		t.Errorf("应包含 peer gamma 的注释")
+		t.Errorf(" peer gamma ")
 	}
 }
 
@@ -168,7 +168,7 @@ func TestRenderWireGuardConfig_NoEndpoint(t *testing.T) {
 			PublicKey:  "pubkey-client",
 			OverlayIP:  "10.10.0.2",
 			AllowedIPs: []string{"10.10.0.2/32"},
-			// 无 Endpoint（NAT 后客户端主动连接 hub，hub 不需要知道客户端 endpoint）
+			//  Endpoint（NAT  hub，hub  endpoint）
 		},
 	}
 
@@ -176,11 +176,11 @@ func TestRenderWireGuardConfig_NoEndpoint(t *testing.T) {
 
 	config, err := RenderWireGuardConfig(node, peers, keys)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
 	if strings.Contains(config, "Endpoint") {
-		t.Errorf("无 endpoint 时不应出现 Endpoint 行")
+		t.Errorf(" endpoint  Endpoint ")
 	}
 }
 
@@ -204,16 +204,16 @@ func TestRenderAllWireGuardConfigs(t *testing.T) {
 
 	configs, err := RenderAllWireGuardConfigs(topo, peerMap, keys)
 	if err != nil {
-		t.Fatalf("渲染所有配置失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
 	if len(configs) != 2 {
-		t.Errorf("期望 2 个配置, 得到 %d", len(configs))
+		t.Errorf(" 2 ,  %d", len(configs))
 	}
 
 	for nodeID, config := range configs {
 		if config == "" {
-			t.Errorf("节点 %s 的配置为空", nodeID)
+			t.Errorf(" %s ", nodeID)
 		}
 	}
 }

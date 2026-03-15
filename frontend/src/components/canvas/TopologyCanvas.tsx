@@ -10,6 +10,8 @@ import {
   type Connection,
   type Edge as FlowEdge,
   type Node as FlowNode,
+  type NodeChange,
+  type EdgeChange,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -26,8 +28,11 @@ export function TopologyCanvas() {
     edges: topoEdges,
     domains,
     addEdge: addTopoEdge,
+    removeNode: removeTopoNode,
+    removeEdge: removeTopoEdge,
     selectNode,
     selectEdge,
+    selectDomain,
   } = useTopologyStore();
 
   // 构建 domain 名称索引
@@ -106,6 +111,30 @@ export function TopologyCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
+  const handleNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      onNodesChange(changes);
+      for (const change of changes) {
+        if (change.type === 'remove') {
+          removeTopoNode(change.id);
+        }
+      }
+    },
+    [onNodesChange, removeTopoNode]
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange[]) => {
+      onEdgesChange(changes);
+      for (const change of changes) {
+        if (change.type === 'remove') {
+          removeTopoEdge(change.id);
+        }
+      }
+    },
+    [onEdgesChange, removeTopoEdge]
+  );
+
   // 同步 React Flow 节点变化
   useMemo(() => {
     setNodes(flowNodes);
@@ -121,17 +150,23 @@ export function TopologyCanvas() {
 
       if (params.source && params.target) {
         const id = `edge-${Date.now()}`;
+        const targetNode = topoNodes.find((n) => n.id === params.target);
+        const preferredEndpoint = targetNode?.public_endpoints?.[0];
+
         addTopoEdge({
           id,
           from_node_id: params.source,
           to_node_id: params.target,
           type: 'direct',
+          endpoint_host: preferredEndpoint?.host,
+          endpoint_port: preferredEndpoint?.port,
           transport: 'udp',
           is_enabled: true,
         });
+        selectEdge(id);
       }
     },
-    [setEdges, addTopoEdge]
+    [setEdges, addTopoEdge, topoNodes, selectEdge]
   );
 
   const onNodeClick = useCallback(
@@ -151,14 +186,15 @@ export function TopologyCanvas() {
   const onPaneClick = useCallback(() => {
     selectNode(null);
     selectEdge(null);
-  }, [selectNode, selectEdge]);
+    selectDomain(null);
+  }, [selectNode, selectEdge, selectDomain]);
 
   return (
     <ReactFlow
       nodes={nodes}
       edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
+      onNodesChange={handleNodesChange}
+      onEdgesChange={handleEdgesChange}
       onConnect={onConnect}
       onNodeClick={onNodeClick}
       onEdgeClick={onEdgeClick}

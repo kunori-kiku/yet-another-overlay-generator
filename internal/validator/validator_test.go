@@ -6,13 +6,13 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// --- Schema 校验测试 ---
+// --- Schema  ---
 
 func TestValidateSchema_ValidTopology(t *testing.T) {
 	topo := validTopology()
 	result := ValidateSchema(topo)
 	if !result.IsValid() {
-		t.Errorf("合法拓扑应通过 Schema 校验, 但有 %d 个错误:", len(result.Errors))
+		t.Errorf(" Schema ,  %d :", len(result.Errors))
 		for _, e := range result.Errors {
 			t.Errorf("  %s", e.Error())
 		}
@@ -111,13 +111,13 @@ func TestValidateSchema_InvalidPort(t *testing.T) {
 	assertHasError(t, result, "nodes[0].listen_port")
 }
 
-// --- 语义校验测试 ---
+// ---  ---
 
 func TestValidateSemantic_ValidTopology(t *testing.T) {
 	topo := validTopology()
 	result := ValidateSemantic(topo)
 	if !result.IsValid() {
-		t.Errorf("合法拓扑应通过语义校验, 但有 %d 个错误:", len(result.Errors))
+		t.Errorf(",  %d :", len(result.Errors))
 		for _, e := range result.Errors {
 			t.Errorf("  %s", e.Error())
 		}
@@ -148,7 +148,7 @@ func TestValidateSemantic_DuplicateIP(t *testing.T) {
 
 func TestValidateSemantic_IPOutsideDomainCIDR(t *testing.T) {
 	topo := validTopology()
-	topo.Nodes[0].OverlayIP = "192.168.1.1" // 不在 10.10.0.0/24 中
+	topo.Nodes[0].OverlayIP = "192.168.1.1" //  10.10.0.0/24 
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "nodes[0].overlay_ip")
 }
@@ -156,7 +156,7 @@ func TestValidateSemantic_IPOutsideDomainCIDR(t *testing.T) {
 func TestValidateSemantic_DuplicateDomainID(t *testing.T) {
 	topo := validTopology()
 	topo.Domains = append(topo.Domains, model.Domain{
-		ID:             "domain-1", // 重复
+		ID:             "domain-1", // 
 		Name:           "duplicate",
 		CIDR:           "10.20.0.0/24",
 		AllocationMode: "auto",
@@ -169,7 +169,7 @@ func TestValidateSemantic_DuplicateDomainID(t *testing.T) {
 func TestValidateSemantic_DuplicateNodeID(t *testing.T) {
 	topo := validTopology()
 	topo.Nodes = append(topo.Nodes, model.Node{
-		ID:       "node-1", // 重复
+		ID:       "node-1", // 
 		Name:     "duplicate-node",
 		Role:     "peer",
 		DomainID: "domain-1",
@@ -180,7 +180,7 @@ func TestValidateSemantic_DuplicateNodeID(t *testing.T) {
 
 func TestValidateSemantic_IsolatedNode(t *testing.T) {
 	topo := validTopology()
-	// 添加一个没有任何边的节点
+	// 
 	topo.Nodes = append(topo.Nodes, model.Node{
 		ID:       "node-isolated",
 		Name:     "isolated-node",
@@ -193,22 +193,22 @@ func TestValidateSemantic_IsolatedNode(t *testing.T) {
 
 func TestValidateSemantic_NATDirectConnect(t *testing.T) {
 	topo := validTopology()
-	// 两个 NAT 后节点
+	//  NAT 
 	topo.Nodes[0].Capabilities.HasPublicIP = false
 	topo.Nodes[0].Capabilities.CanAcceptInbound = false
 	topo.Nodes[1].Capabilities.HasPublicIP = false
 	topo.Nodes[1].Capabilities.CanAcceptInbound = false
 	result := ValidateSemantic(topo)
-	// 应有 NAT 直连警告
+	//  NAT 
 	found := false
 	for _, w := range result.Warnings {
-		if containsSubstring(w.Message, "NAT") || containsSubstring(w.Message, "直连") {
+		if containsSubstring(w.Message, "NAT") || containsSubstring(w.Message, "") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("两个 NAT 节点直连应有警告")
+		t.Errorf(" NAT ")
 	}
 }
 
@@ -229,14 +229,14 @@ func TestValidateSemantic_NATNodeNoOutbound(t *testing.T) {
 				Capabilities: model.NodeCapabilities{HasPublicIP: true, CanAcceptInbound: true},
 			},
 		},
-		// NAT 节点没有出站边
+		// NAT 
 		Edges: []model.Edge{},
 	}
 	result := ValidateSemantic(topo)
-	// 不应有NAT出站警告（因为没有任何边）
-	// 但应有孤立节点警告
+	// NAT（）
+	// 
 	if len(result.Warnings) == 0 {
-		t.Errorf("应有警告")
+		t.Errorf("")
 	}
 }
 
@@ -262,10 +262,10 @@ func TestValidateSemantic_NATViaRelay(t *testing.T) {
 		},
 	}
 	result := ValidateSemantic(topo)
-	// NAT 节点通过 relay 连接，不应有"无出站"警告
+	// NAT  relay ，""
 	for _, w := range result.Warnings {
 		if containsSubstring(w.Field, "nat_reachability") && containsSubstring(w.Message, "nat-peer-1") {
-			t.Errorf("NAT 节点经 relay 连接不应有出站警告, 但得到: %s", w.Message)
+			t.Errorf("NAT  relay , : %s", w.Message)
 		}
 	}
 }
@@ -290,11 +290,11 @@ func TestValidateSemantic_NoIsolatedWarningForSingleNode(t *testing.T) {
 	}
 	result := ValidateSemantic(topo)
 	if len(result.Warnings) > 0 {
-		t.Errorf("单节点拓扑不应有孤立节点警告")
+		t.Errorf("")
 	}
 }
 
-// --- 辅助函数 ---
+// ---  ---
 
 func validTopology() *model.Topology {
 	return &model.Topology{
@@ -373,7 +373,7 @@ func assertHasError(t *testing.T, result *ValidationResult, fieldSubstring strin
 			return
 		}
 	}
-	t.Errorf("期望在字段 %q 上有错误, 但未找到。所有错误: %v", fieldSubstring, result.Errors)
+	t.Errorf(" %q , 。: %v", fieldSubstring, result.Errors)
 }
 
 func assertHasWarning(t *testing.T, result *ValidationResult, fieldSubstring string) {
@@ -383,7 +383,7 @@ func assertHasWarning(t *testing.T, result *ValidationResult, fieldSubstring str
 			return
 		}
 	}
-	t.Errorf("期望在字段 %q 上有警告, 但未找到。所有警告: %v", fieldSubstring, result.Warnings)
+	t.Errorf(" %q , 。: %v", fieldSubstring, result.Warnings)
 }
 
 func contains(s, substr string) bool {

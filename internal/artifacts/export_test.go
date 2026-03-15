@@ -12,7 +12,7 @@ import (
 )
 
 func TestExport_BasicStructure(t *testing.T) {
-	// 构建一个简单的编译结果
+	// 
 	result := &compiler.CompileResult{
 		Topology: &model.Topology{
 			Project: model.Project{ID: "test-001", Name: "Test", Version: "0.1.0"},
@@ -52,19 +52,19 @@ func TestExport_BasicStructure(t *testing.T) {
 		},
 	}
 
-	// 导出到临时目录
+	// 
 	outputDir := t.TempDir()
 	exportResult, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf("导出失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 检查导出了 2 个节点
+	//  2 
 	if len(exportResult.Nodes) != 2 {
-		t.Errorf("期望导出 2 个节点, 得到 %d", len(exportResult.Nodes))
+		t.Errorf(" 2 ,  %d", len(exportResult.Nodes))
 	}
 
-	// 检查每个节点的文件结构
+	// 
 	for _, nodeName := range []string{"alpha", "beta"} {
 		nodeDir := filepath.Join(outputDir, nodeName)
 
@@ -80,7 +80,7 @@ func TestExport_BasicStructure(t *testing.T) {
 		for _, f := range expectedFiles {
 			path := filepath.Join(nodeDir, f)
 			if _, err := os.Stat(path); os.IsNotExist(err) {
-				t.Errorf("节点 %s 缺少文件: %s", nodeName, f)
+				t.Errorf(" %s : %s", nodeName, f)
 			}
 		}
 	}
@@ -92,19 +92,19 @@ func TestExport_WireGuardPermissions(t *testing.T) {
 
 	_, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf("导出失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// WireGuard 配置文件应为 0600
+	// WireGuard  0600
 	wgPath := filepath.Join(outputDir, "alpha", "wireguard", "wg0.conf")
 	info, err := os.Stat(wgPath)
 	if err != nil {
-		t.Fatalf("获取文件信息失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
 	perm := info.Mode().Perm()
 	if perm != 0600 {
-		t.Errorf("WireGuard 配置文件权限期望 0600, 得到 %o", perm)
+		t.Errorf("WireGuard  0600,  %o", perm)
 	}
 }
 
@@ -114,19 +114,19 @@ func TestExport_InstallScriptExecutable(t *testing.T) {
 
 	_, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf("导出失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 安装脚本应可执行
+	// 
 	scriptPath := filepath.Join(outputDir, "alpha", "install.sh")
 	info, err := os.Stat(scriptPath)
 	if err != nil {
-		t.Fatalf("获取文件信息失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
 	perm := info.Mode().Perm()
 	if perm&0100 == 0 {
-		t.Errorf("安装脚本应可执行, 当前权限: %o", perm)
+		t.Errorf(", : %o", perm)
 	}
 }
 
@@ -136,29 +136,29 @@ func TestExport_ManifestContent(t *testing.T) {
 
 	_, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf("导出失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 读取 manifest
+	//  manifest
 	manifestPath := filepath.Join(outputDir, "alpha", "manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Fatalf("读取 manifest 失败: %v", err)
+		t.Fatalf(" manifest : %v", err)
 	}
 
 	var manifest map[string]interface{}
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatalf("解析 manifest 失败: %v", err)
+		t.Fatalf(" manifest : %v", err)
 	}
 
 	if manifest["node_id"] != "n1" {
-		t.Errorf("manifest node_id 期望 n1, 得到 %v", manifest["node_id"])
+		t.Errorf("manifest node_id  n1,  %v", manifest["node_id"])
 	}
 	if manifest["overlay_ip"] != "10.10.0.1" {
-		t.Errorf("manifest overlay_ip 期望 10.10.0.1, 得到 %v", manifest["overlay_ip"])
+		t.Errorf("manifest overlay_ip  10.10.0.1,  %v", manifest["overlay_ip"])
 	}
 	if manifest["project_id"] != "test-001" {
-		t.Errorf("manifest project_id 期望 test-001, 得到 %v", manifest["project_id"])
+		t.Errorf("manifest project_id  test-001,  %v", manifest["project_id"])
 	}
 }
 

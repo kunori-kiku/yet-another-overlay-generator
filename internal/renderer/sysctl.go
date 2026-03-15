@@ -4,7 +4,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// SysctlConfig sysctl 配置渲染数据
+// SysctlConfig sysctl 
 type SysctlConfig struct {
 	NodeName         string
 	EnableForwarding bool
@@ -15,25 +15,25 @@ const sysctlConfigTemplate = `# Sysctl configuration for {{ .NodeName }}
 
 {{- if .EnableForwarding }}
 
-# 启用 IPv4 转发
+#  IPv4 
 net.ipv4.ip_forward = 1
 
-# 启用 IPv6 转发（如需要）
+#  IPv6 （）
 # net.ipv6.conf.all.forwarding = 1
 
-# 放宽反向路径过滤（Babel 动态路由需要）
+# （Babel ）
 net.ipv4.conf.all.rp_filter = 0
 net.ipv4.conf.default.rp_filter = 0
 {{- else }}
 
-# 此节点不启用转发（纯 peer 模式）
-# 仍需放宽 rp_filter 以支持 Babel 学习的路由
+# （ peer ）
+#  rp_filter  Babel 
 net.ipv4.conf.all.rp_filter = 2
 net.ipv4.conf.default.rp_filter = 2
 {{- end }}
 `
 
-// RenderSysctlConfig 渲染单个节点的 sysctl 配置
+// RenderSysctlConfig  sysctl 
 func RenderSysctlConfig(node *model.Node) (string, error) {
 	config := SysctlConfig{
 		NodeName:         node.Name,
@@ -43,7 +43,7 @@ func RenderSysctlConfig(node *model.Node) (string, error) {
 	return renderTemplate("sysctl.conf", sysctlConfigTemplate, config)
 }
 
-// RenderAllSysctlConfigs 渲染所有节点的 sysctl 配置
+// RenderAllSysctlConfigs  sysctl 
 func RenderAllSysctlConfigs(topo *model.Topology) (map[string]string, error) {
 	configs := make(map[string]string)
 

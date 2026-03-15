@@ -82,7 +82,7 @@ func natHubTopo() *model.Topology {
 
 func TestDerivePeers_SimpleMesh(t *testing.T) {
 	topo := simpleMeshTopo()
-	// 先分配 IP
+	//  IP
 	topo.Nodes[0].OverlayIP = "10.10.0.1"
 	topo.Nodes[1].OverlayIP = "10.10.0.2"
 	topo.Nodes[2].OverlayIP = "10.10.0.3"
@@ -90,11 +90,11 @@ func TestDerivePeers_SimpleMesh(t *testing.T) {
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// 全互联：每个节点应有 2 个 peer
+	// ： 2  peer
 	for _, node := range topo.Nodes {
 		peers := peerMap[node.ID]
 		if len(peers) != 2 {
-			t.Errorf("节点 %s 期望 2 个 peer, 得到 %d", node.Name, len(peers))
+			t.Errorf(" %s  2  peer,  %d", node.Name, len(peers))
 		}
 	}
 }
@@ -108,17 +108,17 @@ func TestDerivePeers_EdgeConsistency(t *testing.T) {
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// node-1 的 peer 列表应包含 node-2 和 node-3
+	// node-1  peer  node-2  node-3
 	node1Peers := peerMap["node-1"]
 	peerIDs := make(map[string]bool)
 	for _, p := range node1Peers {
 		peerIDs[p.NodeID] = true
 	}
 	if !peerIDs["node-2"] {
-		t.Errorf("node-1 的 peer 列表应包含 node-2")
+		t.Errorf("node-1  peer  node-2")
 	}
 	if !peerIDs["node-3"] {
-		t.Errorf("node-1 的 peer 列表应包含 node-3")
+		t.Errorf("node-1  peer  node-3")
 	}
 }
 
@@ -131,11 +131,11 @@ func TestDerivePeers_EndpointCorrect(t *testing.T) {
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// node-1 -> node-2 的 endpoint 应该是 203.0.113.2:51820
+	// node-1 -> node-2  endpoint  203.0.113.2:51820
 	for _, p := range peerMap["node-1"] {
 		if p.NodeID == "node-2" {
 			if p.Endpoint != "203.0.113.2:51820" {
-				t.Errorf("node-1->node-2 endpoint 期望 203.0.113.2:51820, 得到 %s", p.Endpoint)
+				t.Errorf("node-1->node-2 endpoint  203.0.113.2:51820,  %s", p.Endpoint)
 			}
 		}
 	}
@@ -150,11 +150,11 @@ func TestDerivePeers_AllowedIPs(t *testing.T) {
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// 点对点模式：AllowedIPs 应只包含对端 /32
+	// ：AllowedIPs  /32
 	for _, p := range peerMap["node-1"] {
 		if p.NodeID == "node-2" {
 			if len(p.AllowedIPs) != 1 || p.AllowedIPs[0] != "10.10.0.2/32" {
-				t.Errorf("AllowedIPs 期望 [10.10.0.2/32], 得到 %v", p.AllowedIPs)
+				t.Errorf("AllowedIPs  [10.10.0.2/32],  %v", p.AllowedIPs)
 			}
 		}
 	}
@@ -169,16 +169,16 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// NAT 客户端 (node-2, node-3) 连接 hub 时应有 PersistentKeepalive
+	// NAT  (node-2, node-3)  hub  PersistentKeepalive
 	for _, p := range peerMap["node-2"] {
 		if p.NodeID == "node-1" && p.PersistentKeepalive == 0 {
-			t.Errorf("NAT 客户端连接 hub 应有 PersistentKeepalive")
+			t.Errorf("NAT  hub  PersistentKeepalive")
 		}
 	}
 
-	// Hub (node-1) 被动接收 node-2 和 node-3，所以具有两条被动 Peer 记录
+	// Hub (node-1)  node-2  node-3， Peer 
 	if len(peerMap["node-1"]) != 2 {
-		t.Errorf("Hub 应有 2 个反向被动 Peer，得到 %d", len(peerMap["node-1"]))
+		t.Errorf("Hub  2  Peer， %d", len(peerMap["node-1"]))
 	}
 }
 
@@ -188,16 +188,16 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo.Nodes[1].OverlayIP = "10.10.0.2"
 	topo.Nodes[2].OverlayIP = "10.10.0.3"
 
-	// 禁用 node-1 <-> node-2 之间的双向边
+	//  node-1 <-> node-2 
 	topo.Edges[0].IsEnabled = false
 	topo.Edges[1].IsEnabled = false
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// node-1 应只有 1 个 peer（node-3），因为与 node-2 之间的边被禁用
+	// node-1  1  peer（node-3）， node-2 
 	if len(peerMap["node-1"]) != 1 {
-		t.Errorf("node-1 禁用与 node-2 双向边后期望 1 个 peer, 得到 %d", len(peerMap["node-1"]))
+		t.Errorf("node-1  node-2  1  peer,  %d", len(peerMap["node-1"]))
 	}
 }
 
@@ -208,23 +208,23 @@ func TestCompile_SimpleMesh(t *testing.T) {
 	c := NewCompiler()
 	result, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("编译失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 检查 IP 已分配
+	//  IP 
 	for _, node := range result.Topology.Nodes {
 		if node.OverlayIP == "" {
-			t.Errorf("节点 %s 没有分配 IP", node.Name)
+			t.Errorf(" %s  IP", node.Name)
 		}
 	}
 
-	// 检查 PeerMap 已生成
+	//  PeerMap 
 	if len(result.PeerMap) != 3 {
-		t.Errorf("PeerMap 期望 3 个节点, 得到 %d", len(result.PeerMap))
+		t.Errorf("PeerMap  3 ,  %d", len(result.PeerMap))
 	}
 
-	// 检查 Manifest
+	//  Manifest
 	if result.Manifest.NodeCount != 3 {
-		t.Errorf("Manifest NodeCount 期望 3, 得到 %d", result.Manifest.NodeCount)
+		t.Errorf("Manifest NodeCount  3,  %d", result.Manifest.NodeCount)
 	}
 }

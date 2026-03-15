@@ -11,22 +11,22 @@ func TestDeriveRoleSemantics_Peer(t *testing.T) {
 	sem := DeriveRoleSemantics(node)
 
 	if sem.EnableForwarding {
-		t.Errorf("peer 不应启用转发")
+		t.Errorf("peer ")
 	}
 	if sem.AcceptAllInbound {
-		t.Errorf("peer 不应接受所有入站")
+		t.Errorf("peer ")
 	}
 	if !sem.RunBabel {
-		t.Errorf("peer 应运行 Babel")
+		t.Errorf("peer  Babel")
 	}
 	if !sem.BabelAnnounce.AnnounceSelf {
-		t.Errorf("peer 应通告自身 /32")
+		t.Errorf("peer  /32")
 	}
 	if sem.BabelAnnounce.AnnounceDomainCIDR {
-		t.Errorf("peer 不应通告 Domain CIDR")
+		t.Errorf("peer  Domain CIDR")
 	}
 	if sem.AllowedIPsMode != "point-to-point" {
-		t.Errorf("peer AllowedIPs 模式应为 point-to-point, 得到 %s", sem.AllowedIPsMode)
+		t.Errorf("peer AllowedIPs  point-to-point,  %s", sem.AllowedIPsMode)
 	}
 }
 
@@ -35,16 +35,16 @@ func TestDeriveRoleSemantics_Router(t *testing.T) {
 	sem := DeriveRoleSemantics(node)
 
 	if !sem.EnableForwarding {
-		t.Errorf("router 应启用转发")
+		t.Errorf("router ")
 	}
 	if !sem.BabelAnnounce.AnnounceSelf {
-		t.Errorf("router 应通告自身")
+		t.Errorf("router ")
 	}
 	if !sem.BabelAnnounce.AnnounceDomainCIDR {
-		t.Errorf("router 应通告 Domain CIDR")
+		t.Errorf("router  Domain CIDR")
 	}
 	if sem.AllowedIPsMode != "point-to-point" {
-		t.Errorf("router AllowedIPs 模式应为 point-to-point, 得到 %s", sem.AllowedIPsMode)
+		t.Errorf("router AllowedIPs  point-to-point,  %s", sem.AllowedIPsMode)
 	}
 }
 
@@ -53,16 +53,16 @@ func TestDeriveRoleSemantics_Relay(t *testing.T) {
 	sem := DeriveRoleSemantics(node)
 
 	if !sem.EnableForwarding {
-		t.Errorf("relay 应启用转发")
+		t.Errorf("relay ")
 	}
 	if !sem.AcceptAllInbound {
-		t.Errorf("relay 应接受所有入站")
+		t.Errorf("relay ")
 	}
 	if sem.AllowedIPsMode != "relay-all" {
-		t.Errorf("relay AllowedIPs 模式应为 relay-all, 得到 %s", sem.AllowedIPsMode)
+		t.Errorf("relay AllowedIPs  relay-all,  %s", sem.AllowedIPsMode)
 	}
 	if !sem.BabelAnnounce.AnnounceDomainCIDR {
-		t.Errorf("relay 应通告 Domain CIDR")
+		t.Errorf("relay  Domain CIDR")
 	}
 }
 
@@ -71,16 +71,16 @@ func TestDeriveRoleSemantics_Gateway(t *testing.T) {
 	sem := DeriveRoleSemantics(node)
 
 	if !sem.EnableForwarding {
-		t.Errorf("gateway 应启用转发")
+		t.Errorf("gateway ")
 	}
 	if !sem.BabelAnnounce.AnnounceDefault {
-		t.Errorf("gateway 应通告默认路由")
+		t.Errorf("gateway ")
 	}
 	if !sem.BabelAnnounce.AnnounceExtraPrefixes {
-		t.Errorf("gateway 应通告额外前缀")
+		t.Errorf("gateway ")
 	}
 	if sem.AllowedIPsMode != "gateway" {
-		t.Errorf("gateway AllowedIPs 模式应为 gateway, 得到 %s", sem.AllowedIPsMode)
+		t.Errorf("gateway AllowedIPs  gateway,  %s", sem.AllowedIPsMode)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestInferCapabilitiesFromRole_Router(t *testing.T) {
 	caps := InferCapabilitiesFromRole(node)
 
 	if !caps.CanForward {
-		t.Errorf("router 角色推导后应 CanForward=true")
+		t.Errorf("router  CanForward=true")
 	}
 }
 
@@ -98,25 +98,25 @@ func TestInferCapabilitiesFromRole_Relay(t *testing.T) {
 	caps := InferCapabilitiesFromRole(node)
 
 	if !caps.CanForward {
-		t.Errorf("relay 角色推导后应 CanForward=true")
+		t.Errorf("relay  CanForward=true")
 	}
 	if !caps.CanRelay {
-		t.Errorf("relay 角色推导后应 CanRelay=true")
+		t.Errorf("relay  CanRelay=true")
 	}
 	if !caps.CanAcceptInbound {
-		t.Errorf("relay 角色推导后应 CanAcceptInbound=true")
+		t.Errorf("relay  CanAcceptInbound=true")
 	}
 }
 
 func TestInferCapabilitiesFromRole_Peer(t *testing.T) {
-	// peer 不覆盖用户设置
+	// peer 
 	node := &model.Node{ID: "n1", Role: "peer", Capabilities: model.NodeCapabilities{
 		CanForward: false,
 	}}
 	caps := InferCapabilitiesFromRole(node)
 
 	if caps.CanForward {
-		t.Errorf("peer 角色推导不应覆盖 CanForward")
+		t.Errorf("peer  CanForward")
 	}
 }
 
@@ -126,7 +126,7 @@ func TestDeriveAllowedIPsForPeer_PointToPoint(t *testing.T) {
 
 	ips := DeriveAllowedIPsForPeer(node, domain)
 	if len(ips) != 1 || ips[0] != "10.10.0.1/32" {
-		t.Errorf("peer AllowedIPs 期望 [10.10.0.1/32], 得到 %v", ips)
+		t.Errorf("peer AllowedIPs  [10.10.0.1/32],  %v", ips)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestDeriveAllowedIPsForPeer_Relay(t *testing.T) {
 
 	ips := DeriveAllowedIPsForPeer(node, domain)
 	if len(ips) != 1 || ips[0] != "10.10.0.0/24" {
-		t.Errorf("relay AllowedIPs 期望包含 Domain CIDR, 得到 %v", ips)
+		t.Errorf("relay AllowedIPs  Domain CIDR,  %v", ips)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestDeriveAllowedIPsForPeer_Gateway(t *testing.T) {
 
 	ips := DeriveAllowedIPsForPeer(node, domain)
 
-	// 应包含 Domain CIDR + 额外前缀 + 默认路由
+	//  Domain CIDR +  + 
 	hasDefault := false
 	hasExtra := false
 	hasDomain := false
@@ -166,12 +166,12 @@ func TestDeriveAllowedIPsForPeer_Gateway(t *testing.T) {
 	}
 
 	if !hasDefault {
-		t.Errorf("gateway AllowedIPs 应包含 0.0.0.0/0, 得到 %v", ips)
+		t.Errorf("gateway AllowedIPs  0.0.0.0/0,  %v", ips)
 	}
 	if !hasExtra {
-		t.Errorf("gateway AllowedIPs 应包含额外前缀, 得到 %v", ips)
+		t.Errorf("gateway AllowedIPs ,  %v", ips)
 	}
 	if !hasDomain {
-		t.Errorf("gateway AllowedIPs 应包含 Domain CIDR, 得到 %v", ips)
+		t.Errorf("gateway AllowedIPs  Domain CIDR,  %v", ips)
 	}
 }

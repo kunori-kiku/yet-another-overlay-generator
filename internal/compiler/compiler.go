@@ -10,31 +10,31 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
-// CompileResult 编译结果
+// CompileResult 
 type CompileResult struct {
-	// 编译后的拓扑（含分配的 IP）
+	// （ IP）
 	Topology *model.Topology
 
-	// 每节点的 Peer 关系
+	//  Peer 
 	PeerMap map[string][]PeerInfo
 
-	// 每节点的 WireGuard 配置
+	//  WireGuard 
 	WireGuardConfigs map[string]string
 
-	// 每节点的 Babel 配置
+	//  Babel 
 	BabelConfigs map[string]string
 
-	// 每节点的 sysctl 配置
+	//  sysctl 
 	SysctlConfigs map[string]string
 
-	// 每节点的安装脚本
+	// 
 	InstallScripts map[string]string
 
-	// 编译元信息
+	// 
 	Manifest CompileManifest
 }
 
-// CompileManifest 编译清单
+// CompileManifest 
 type CompileManifest struct {
 	ProjectID   string    `json:"project_id"`
 	ProjectName string    `json:"project_name"`
@@ -44,39 +44,39 @@ type CompileManifest struct {
 	Checksum    string    `json:"checksum"`
 }
 
-// Compiler 编译器
+// Compiler 
 type Compiler struct {
 	ipAllocator *allocator.IPAllocator
 }
 
-// NewCompiler 创建新的编译器
+// NewCompiler 
 func NewCompiler() *Compiler {
 	return &Compiler{
 		ipAllocator: allocator.NewIPAllocator(),
 	}
 }
 
-// Compile 执行完整编译流程
+// Compile 
 func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error) {
-	// Pass 1: Schema 校验
+	// Pass 1: Schema 
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
-		return nil, fmt.Errorf("schema 校验失败: %v", schemaResult.Errors)
+		return nil, fmt.Errorf("schema : %v", schemaResult.Errors)
 	}
 
-	// Pass 2: 语义校验
+	// Pass 2: 
 	semanticResult := validator.ValidateSemantic(topo)
 	if !semanticResult.IsValid() {
-		return nil, fmt.Errorf("语义校验失败: %v", semanticResult.Errors)
+		return nil, fmt.Errorf(": %v", semanticResult.Errors)
 	}
 
-	// Pass 3: IP 分配
+	// Pass 3: IP 
 	allocatedNodes, err := c.ipAllocator.AllocateIPs(topo)
 	if err != nil {
-		return nil, fmt.Errorf("IP 分配失败: %w", err)
+		return nil, fmt.Errorf("IP : %w", err)
 	}
 
-	// 构建编译后的拓扑副本
+	// 
 	compiledTopo := &model.Topology{
 		Project:       topo.Project,
 		Domains:       topo.Domains,
@@ -85,12 +85,12 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		RoutePolicies: topo.RoutePolicies,
 	}
 
-	// Pass 3 续: 根据角色推导 capabilities
+	// Pass 3 :  capabilities
 	for i := range compiledTopo.Nodes {
 		compiledTopo.Nodes[i].Capabilities = InferCapabilitiesFromRole(&compiledTopo.Nodes[i])
 	}
 
-	// Pass 3 续: 推导 Peer 关系
+	// Pass 3 :  Peer 
 	peerMap := DerivePeers(compiledTopo, keys)
 
 	result := &CompileResult{

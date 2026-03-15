@@ -2,45 +2,45 @@ import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
 
-export function DomainList() {
-  const { domains, removeDomain, reorderDomains, selectDomain, selectedDomainId, language } = useTopologyStore();
+export function NodeList() {
+  const { nodes, domains, reorderNodes, selectNode, selectedNodeId, removeNode, language } = useTopologyStore();
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
-  if (domains.length === 0) {
-    return (
-      <p className="text-xs text-gray-500 italic">{txt(language, '尚未创建网络域', 'No domains created yet')}</p>
-    );
+  if (nodes.length === 0) {
+    return <p className="text-xs text-gray-500 italic">{txt(language, '尚未添加节点', 'No nodes yet')}</p>;
   }
+
+  const domainName = (domainId: string) => domains.find((d) => d.id === domainId)?.name || txt(language, '未分配域', 'Unassigned domain');
 
   return (
     <div className="space-y-2">
-      {domains.map((domain) => (
+      {nodes.map((node) => (
         <div
-          key={domain.id}
+          key={node.id}
           draggable
-          onDragStart={() => setDraggingId(domain.id)}
+          onDragStart={() => setDraggingId(node.id)}
           onDragOver={(e) => e.preventDefault()}
           onDrop={() => {
             if (draggingId) {
-              reorderDomains(draggingId, domain.id);
+              reorderNodes(draggingId, node.id);
             }
             setDraggingId(null);
           }}
           onDragEnd={() => setDraggingId(null)}
-          onClick={() => selectDomain(domain.id)}
+          onClick={() => selectNode(node.id)}
           className={`p-2 rounded text-sm space-y-1 cursor-pointer border ${
-            selectedDomainId === domain.id
+            selectedNodeId === node.id
               ? 'bg-blue-900/30 border-blue-500'
               : 'bg-gray-700 border-transparent hover:border-gray-500'
           }`}
           title={txt(language, '点击编辑，拖拽排序', 'Click to edit, drag to reorder')}
         >
           <div className="flex items-center justify-between">
-            <span className="font-medium text-blue-300">☰ {domain.name}</span>
+            <span className="font-medium text-green-300">☰ {node.name}</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                removeDomain(domain.id);
+                removeNode(node.id);
               }}
               className="text-red-400 hover:text-red-300 text-xs"
               title={txt(language, '删除', 'Delete')}
@@ -49,7 +49,7 @@ export function DomainList() {
             </button>
           </div>
           <div className="text-xs text-gray-400">
-            CIDR: {domain.cidr} | {domain.routing_mode} | {domain.allocation_mode}
+            {node.role} | {domainName(node.domain_id)}
           </div>
         </div>
       ))}

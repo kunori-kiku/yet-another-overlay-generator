@@ -9,19 +9,14 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build & Release
+  build-frontend:
+    name: Build Frontend Dist
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-          
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -32,29 +27,128 @@ jobs:
         run: |
           npm ci
           npm run build
-          
-      - name: Tar Frontend Dist
-        run: |
-          tar -czvf frontend-dist.tar.gz -C frontend/dist/ .
 
-      - name: Build Backend (Linux AMD64)
-        run: |
-          GOOS=linux GOARCH=amd64 go build -o yaog-server-linux-amd64 ./cmd/server
-          GOOS=linux GOARCH=amd64 go build -o yaog-compiler-linux-amd64 ./cmd/compiler
+      - name: Upload Frontend Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
 
-      - name: Build Backend (Linux ARM64)
+  build-bundles:
+    name: Build ${{ matrix.target.id }} Bundle
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - id: linux-amd64
+            goos: linux
+            goarch: amd64
+            goarm: ''
+            archive: tar.gz
+            exe_ext: ''
+          - id: linux-arm64
+            goos: linux
+            goarch: arm64
+            goarm: ''
+            archive: tar.gz
+            exe_ext: ''
+          - id: linux-386
+            goos: linux
+            goarch: 386
+            goarm: ''
+            archive: tar.gz
+            exe_ext: ''
+          - id: linux-armv7
+            goos: linux
+            goarch: arm
+            goarm: '7'
+            archive: tar.gz
+            exe_ext: ''
+          - id: windows-amd64
+            goos: windows
+            goarch: amd64
+            goarm: ''
+            archive: zip
+            exe_ext: .exe
+          - id: windows-arm64
+            goos: windows
+            goarch: arm64
+            goarm: ''
+            archive: zip
+            exe_ext: .exe
+          - id: windows-386
+            goos: windows
+            goarch: 386
+            goarm: ''
+            archive: zip
+            exe_ext: .exe
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Download Frontend Dist Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: .tmp/frontend-dist
+
+      - name: Build Backend Binaries
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          GOARM: ${{ matrix.target.goarm }}
+          CGO_ENABLED: 0
         run: |
-          GOOS=linux GOARCH=arm64 go build -o yaog-server-linux-arm64 ./cmd/server
-          GOOS=linux GOARCH=arm64 go build -o yaog-compiler-linux-arm64 ./cmd/compiler
+          mkdir -p .tmp/bin
+          go build -trimpath -ldflags "-s -w" -o ".tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
+          go build -trimpath -ldflags "-s -w" -o ".tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
+
+      - name: Assemble Bundle Directory
+        run: |
+          mkdir -p .tmp/bundle/bin .tmp/bundle/frontend
+          cp .tmp/bin/* .tmp/bundle/bin/
+          cp -R .tmp/frontend-dist/. .tmp/bundle/frontend/
+
+      - name: Create Bundle Archive
+        run: |
+          if [ "${{ matrix.target.archive }}" = "tar.gz" ]; then
+            tar -czf "yaog-bundle-${{ matrix.target.id }}.tar.gz" -C .tmp/bundle .
+          else
+            (cd .tmp/bundle && zip -r "$GITHUB_WORKSPACE/yaog-bundle-${{ matrix.target.id }}.zip" .)
+          fi
+
+      - name: Upload Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaog-bundle-${{ matrix.target.id }}
+          path: yaog-bundle-${{ matrix.target.id }}.${{ matrix.target.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build-bundles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Bundle Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: yaog-bundle-*
+          merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            frontend-dist.tar.gz
-            yaog-server-linux-amd64
-            yaog-compiler-linux-amd64
-            yaog-server-linux-arm64
-            yaog-compiler-linux-arm64
+            yaog-bundle-*.tar.gz
+            yaog-bundle-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

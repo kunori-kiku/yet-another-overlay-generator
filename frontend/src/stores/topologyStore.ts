@@ -10,6 +10,7 @@ import type {
   CompileResponse,
   CompileHistoryEntry,
 } from '../types/topology';
+import { detectSystemLanguage, type UILanguage } from '../i18n';
 
 interface TopologyState {
   // 数据
@@ -35,6 +36,9 @@ interface TopologyState {
   // 选中状态
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
+  selectedDomainId: string | null;
+  language: UILanguage;
+  setLanguage: (lang: UILanguage) => void;
 
   // Project 操作
   setProject: (project: Partial<Project>) => void;
@@ -43,11 +47,13 @@ interface TopologyState {
   addDomain: (domain: Domain) => void;
   updateDomain: (id: string, updates: Partial<Domain>) => void;
   removeDomain: (id: string) => void;
+  reorderDomains: (sourceId: string, targetId: string) => void;
 
   // Node CRUD
   addNode: (node: Node) => void;
   updateNode: (id: string, updates: Partial<Node>) => void;
   removeNode: (id: string) => void;
+  reorderNodes: (sourceId: string, targetId: string) => void;
 
   // Edge CRUD
   addEdge: (edge: Edge) => void;
@@ -57,6 +63,7 @@ interface TopologyState {
   // 选中
   selectNode: (id: string | null) => void;
   selectEdge: (id: string | null) => void;
+  selectDomain: (id: string | null) => void;
 
   // API 操作
   validate: () => Promise<void>;
@@ -70,6 +77,7 @@ interface TopologyState {
   exportProject: () => void;
   importProject: (file: File) => Promise<void>;
   clearHistory: () => void;
+  flushWorkspace: () => void;
 }
 
 const defaultProject: Project = {
@@ -77,6 +85,8 @@ const defaultProject: Project = {
   name: 'New Project',
   version: '0.1.0',
 };
+
+const defaultLanguage: UILanguage = detectSystemLanguage();
 
 export const useTopologyStore = create<TopologyState>()(
   persist(
@@ -95,6 +105,10 @@ export const useTopologyStore = create<TopologyState>()(
       viewMode: 'topology',
       selectedNodeId: null,
       selectedEdgeId: null,
+      selectedDomainId: null,
+        language: defaultLanguage,
+
+      setLanguage: (lang) => set({ language: lang }),
 
   // UI
   setViewMode: (mode) => set({ viewMode: mode }),
@@ -115,11 +129,39 @@ export const useTopologyStore = create<TopologyState>()(
     })),
 
   removeDomain: (id) =>
-    set((state) => ({
-      domains: state.domains.filter((d) => d.id !== id),
-      // 同时移除归属此 domain 的节点
-      nodes: state.nodes.filter((n) => n.domain_id !== id),
-    })),
+    set((state) => {
+      const removedNodeIDs = new Set(
+        state.nodes.filter((n) => n.domain_id === id).map((n) => n.id)
+      );
+
+      return {
+        domains: state.domains.filter((d) => d.id !== id),
+        // 同时移除归属此 domain 的节点
+        nodes: state.nodes.filter((n) => n.domain_id !== id),
+        // 同时移除与被删除节点关联的边，避免孤儿 edge
+        edges: state.edges.filter(
+          (e) => !removedNodeIDs.has(e.from_node_id) && !removedNodeIDs.has(e.to_node_id)
+        ),
+        selectedDomainId: state.selectedDomainId === id ? null : state.selectedDomainId,
+        selectedNodeId:
+          state.selectedNodeId && removedNodeIDs.has(state.selectedNodeId)
+            ? null
+            : state.selectedNodeId,
+      };
+    }),
+
+  reorderDomains: (sourceId, targetId) =>
+    set((state) => {
+      const next = [...state.domains];
+      const sourceIndex = next.findIndex((d) => d.id === sourceId);
+      const targetIndex = next.findIndex((d) => d.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+        return { domains: state.domains };
+      }
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return { domains: next };
+    }),
 
   // Node CRUD
   addNode: (node) =>
@@ -142,6 +184,19 @@ export const useTopologyStore = create<TopologyState>()(
       selectedNodeId: state.selectedNodeId === id ? null : state.selectedNodeId,
     })),
 
+  reorderNodes: (sourceId, targetId) =>
+    set((state) => {
+      const next = [...state.nodes];
+      const sourceIndex = next.findIndex((n) => n.id === sourceId);
+      const targetIndex = next.findIndex((n) => n.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+        return { nodes: state.nodes };
+      }
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return { nodes: next };
+    }),
+
   // Edge CRUD
   addEdge: (edge) =>
     set((state) => ({ edges: [...state.edges, edge] })),
@@ -160,8 +215,9 @@ export const useTopologyStore = create<TopologyState>()(
     })),
 
   // 选中
-  selectNode: (id) => set({ selectedNodeId: id, selectedEdgeId: null }),
-  selectEdge: (id) => set({ selectedEdgeId: id, selectedNodeId: null }),
+  selectNode: (id) => set({ selectedNodeId: id, selectedEdgeId: null, selectedDomainId: null }),
+  selectEdge: (id) => set({ selectedEdgeId: id, selectedNodeId: null, selectedDomainId: null }),
+  selectDomain: (id) => set({ selectedDomainId: id, selectedNodeId: null, selectedEdgeId: null }),
 
   // 获取完整拓扑
   getTopology: () => {
@@ -218,7 +274,27 @@ export const useTopologyStore = create<TopologyState>()(
       error: null,
       selectedNodeId: null,
       selectedEdgeId: null,
+      selectedDomainId: null,
     }),
+
+  flushWorkspace: () =>
+    set((state) => ({
+      project: { ...defaultProject },
+      domains: [],
+      nodes: [],
+      edges: [],
+      history: [],
+      validateResult: null,
+      compileResult: null,
+      isCompiling: false,
+      isValidating: false,
+      error: null,
+      viewMode: 'topology',
+      selectedNodeId: null,
+      selectedEdgeId: null,
+      selectedDomainId: null,
+      language: state.language,
+    })),
 
   // API: 校验
   validate: async () => {
@@ -266,6 +342,10 @@ export const useTopologyStore = create<TopologyState>()(
       set((state) => ({ 
         compileResult: data, 
         isCompiling: false,
+        project: data.topology.project,
+        domains: data.topology.domains,
+        nodes: data.topology.nodes,
+        edges: data.topology.edges,
         history: [newHistoryEntry, ...state.history].slice(0, 50), // keep last 50
       }));
     } catch (err) {
@@ -289,12 +369,16 @@ export const useTopologyStore = create<TopologyState>()(
         const errData = await res.json();
         throw new Error(errData.error || '导出失败');
       }
-      // 下载 zip
+
       const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const inferredName = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || 'artifacts.tar.gz');
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${get().project.id}-artifacts.zip`;
+      a.download = inferredName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -317,6 +401,7 @@ export const useTopologyStore = create<TopologyState>()(
         nodes: state.nodes,
         edges: state.edges,
         history: state.history,
+        language: state.language,
       }),
     }
   )

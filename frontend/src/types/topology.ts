@@ -35,7 +35,18 @@ export interface Node {
   overlay_ip?: string;
   listen_port?: number;
   capabilities: NodeCapabilities;
+  fixed_private_key?: boolean;
+  wireguard_private_key?: string;
+  wireguard_public_key?: string;
+  public_endpoints?: PublicEndpoint[];
   extra_prefixes?: string[];
+}
+
+export interface PublicEndpoint {
+  id: string;
+  host: string;
+  port: number;
+  note?: string;
 }
 
 export interface NodeCapabilities {

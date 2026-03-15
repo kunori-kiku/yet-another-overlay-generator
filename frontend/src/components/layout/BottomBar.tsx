@@ -1,25 +1,26 @@
 import { useTopologyStore } from '../../stores/topologyStore';
+import { txt } from '../../i18n';
 
 export function BottomBar() {
-  const { validateResult, error, validate, isValidating, nodes, edges, domains } =
+  const { validateResult, error, validate, isValidating, nodes, edges, domains, language } =
     useTopologyStore();
 
   return (
     <div className="p-3 h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
-          校验 & 状态
+          {txt(language, '校验与状态', 'Validation & Status')}
         </h2>
         <div className="flex items-center gap-4">
           <span className="text-xs text-gray-500">
-            域: {domains.length} | 节点: {nodes.length} | 边: {edges.length}
+            {txt(language, '域', 'Domains')}: {domains.length} | {txt(language, '节点', 'Nodes')}: {nodes.length} | {txt(language, '边', 'Edges')}: {edges.length}
           </span>
           <button
             onClick={() => validate()}
             disabled={isValidating || nodes.length === 0}
             className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-xs"
           >
-            {isValidating ? '校验中...' : '🔍 校验拓扑'}
+            {isValidating ? txt(language, '校验中...', 'Validating...') : txt(language, '🔍 校验拓扑', '🔍 Validate Topology')}
           </button>
         </div>
       </div>
@@ -37,7 +38,7 @@ export function BottomBar() {
           <>
             {validateResult.valid && (
               <div className="text-sm text-green-400 bg-green-900/30 px-2 py-1 rounded">
-                ✅ 拓扑校验通过
+                {txt(language, '✅ 拓扑校验通过', '✅ Topology validation passed')}
               </div>
             )}
 
@@ -63,7 +64,7 @@ export function BottomBar() {
 
         {!validateResult && !error && (
           <p className="text-xs text-gray-500 italic">
-            点击"校验拓扑"检查配置是否正确
+            {txt(language, '点击“校验拓扑”检查配置是否正确', 'Click "Validate Topology" to check configuration')}
           </p>
         )}
       </div>

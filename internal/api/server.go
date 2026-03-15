@@ -5,13 +5,13 @@ import (
 	"net/http"
 )
 
-// Server HTTP API 服务器
+// Server HTTP API 
 type Server struct {
 	handler *Handler
 	mux     *http.ServeMux
 }
 
-// NewServer 创建新的 API 服务器
+// NewServer  API 
 func NewServer() *Server {
 	s := &Server{
 		handler: NewHandler(),
@@ -22,14 +22,14 @@ func NewServer() *Server {
 }
 
 func (s *Server) registerRoutes() {
-	// CORS 中间件包装
+	// CORS 
 	s.mux.HandleFunc("/api/health", s.cors(s.handler.HandleHealth))
 	s.mux.HandleFunc("/api/validate", s.cors(s.handler.HandleValidate))
 	s.mux.HandleFunc("/api/compile", s.cors(s.handler.HandleCompile))
 	s.mux.HandleFunc("/api/export", s.cors(s.handler.HandleExport))
 }
 
-// cors CORS 中间件
+// cors CORS 
 func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -45,18 +45,18 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Handler 返回 HTTP Handler 用于测试
+// Handler  HTTP Handler 
 func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
-// ListenAndServe 启动 HTTP 服务
+// ListenAndServe  HTTP 
 func (s *Server) ListenAndServe(addr string) error {
-	fmt.Printf("API 服务启动: http://%s\n", addr)
-	fmt.Println("端点:")
-	fmt.Println("  GET  /api/health   - 健康检查")
-	fmt.Println("  POST /api/validate - 校验拓扑")
-	fmt.Println("  POST /api/compile  - 编译拓扑")
-	fmt.Println("  POST /api/export   - 导出产物包")
+	fmt.Printf("API : http://%s\n", addr)
+	fmt.Println(":")
+	fmt.Println("  GET  /api/health   - ")
+	fmt.Println("  POST /api/validate - ")
+	fmt.Println("  POST /api/compile  - ")
+	fmt.Println("  POST /api/export   - ")
 	return http.ListenAndServe(addr, s.mux)
 }

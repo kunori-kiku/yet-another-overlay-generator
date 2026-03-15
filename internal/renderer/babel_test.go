@@ -34,34 +34,34 @@ func TestRenderBabelConfig_Router(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染 Babel 配置失败: %v", err)
+		t.Fatalf(" Babel : %v", err)
 	}
 
 	if config == "" {
-		t.Fatalf("Router 节点应生成 Babel 配置")
+		t.Fatalf("Router  Babel ")
 	}
 
-	// 检查接口声明
+	// 
 	if !strings.Contains(config, "interface wg-node-2") {
-		t.Errorf("配置应包含 wg-node-2 接口")
+		t.Errorf(" wg-node-2 ")
 	}
 	if !strings.Contains(config, "interface wg-node-3") {
-		t.Errorf("配置应包含 wg-node-3 接口")
+		t.Errorf(" wg-node-3 ")
 	}
 
-	// 检查接口类型
+	// 
 	if !strings.Contains(config, "type wired") {
-		t.Errorf("WireGuard 接口应标记为 wired 类型")
+		t.Errorf("WireGuard  wired ")
 	}
 
-	// 检查通告前缀
+	// 
 	if !strings.Contains(config, "10.10.0.1/32") {
-		t.Errorf("配置应通告自身 overlay IP /32")
+		t.Errorf(" overlay IP /32")
 	}
 
-	// 检查 redistribute deny
+	//  redistribute deny
 	if !strings.Contains(config, "redistribute local deny") {
-		t.Errorf("配置应包含 redistribute local deny")
+		t.Errorf(" redistribute local deny")
 	}
 }
 
@@ -90,17 +90,17 @@ func TestRenderBabelConfig_Peer(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// peer 也应运行 Babel（需要学习路由）
+	// peer  Babel（）
 	if config == "" {
-		t.Fatalf("Peer 节点在 babel 模式下也应生成 Babel 配置")
+		t.Fatalf("Peer  babel  Babel ")
 	}
 
-	// 应有接口
+	// 
 	if !strings.Contains(config, "interface wg-hub-1") {
-		t.Errorf("配置应包含 wg-hub-1 接口")
+		t.Errorf(" wg-hub-1 ")
 	}
 }
 
@@ -121,17 +121,17 @@ func TestRenderBabelConfig_NonBabelDomain(t *testing.T) {
 		ID:          "domain-1",
 		Name:        "test",
 		CIDR:        "10.10.0.0/24",
-		RoutingMode: "static", // 非 babel 模式
+		RoutingMode: "static", //  babel 
 	}
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 非 babel 模式不应生成 Babel 配置
+	//  babel  Babel 
 	if config != "" {
-		t.Errorf("非 babel 模式不应生成 Babel 配置")
+		t.Errorf(" babel  Babel ")
 	}
 }
 
@@ -144,7 +144,7 @@ func TestRenderBabelConfig_NoPeers(t *testing.T) {
 		OverlayIP: "10.10.0.1",
 	}
 
-	peers := []compiler.PeerInfo{} // 无 peer
+	peers := []compiler.PeerInfo{} //  peer
 
 	domain := &model.Domain{
 		ID:          "domain-1",
@@ -155,17 +155,17 @@ func TestRenderBabelConfig_NoPeers(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf(": %v", err)
 	}
 
-	// 即使没有 peer，也应生成基础配置（节点可能后续连接）
+	//  peer，（）
 	if config == "" {
-		t.Fatalf("即使没有 peer 也应生成基础 Babel 配置")
+		t.Fatalf(" peer  Babel ")
 	}
 
-	// 不应包含 interface 行
+	//  interface 
 	if strings.Contains(config, "interface wg-") {
-		t.Errorf("没有 peer 时不应有接口配置")
+		t.Errorf(" peer ")
 	}
 }
 
@@ -189,16 +189,16 @@ func TestRenderAllBabelConfigs(t *testing.T) {
 
 	configs, err := RenderAllBabelConfigs(topo, peerMap)
 	if err != nil {
-		t.Fatalf("渲染所有 Babel 配置失败: %v", err)
+		t.Fatalf(" Babel : %v", err)
 	}
 
 	if len(configs) != 2 {
-		t.Errorf("期望 2 个 Babel 配置, 得到 %d", len(configs))
+		t.Errorf(" 2  Babel ,  %d", len(configs))
 	}
 
 	for nodeID, config := range configs {
 		if config == "" {
-			t.Errorf("节点 %s 的 Babel 配置为空", nodeID)
+			t.Errorf(" %s  Babel ", nodeID)
 		}
 	}
 }
@@ -214,15 +214,15 @@ func TestRenderSysctlConfig_Forwarding(t *testing.T) {
 
 	config, err := RenderSysctlConfig(node)
 	if err != nil {
-		t.Fatalf("渲染 sysctl 配置失败: %v", err)
+		t.Fatalf(" sysctl : %v", err)
 	}
 
 	if !strings.Contains(config, "net.ipv4.ip_forward = 1") {
-		t.Errorf("转发节点应启用 ip_forward")
+		t.Errorf(" ip_forward")
 	}
 
 	if !strings.Contains(config, "net.ipv4.conf.all.rp_filter = 0") {
-		t.Errorf("转发节点应禁用 rp_filter")
+		t.Errorf(" rp_filter")
 	}
 }
 
@@ -237,15 +237,15 @@ func TestRenderSysctlConfig_NoForwarding(t *testing.T) {
 
 	config, err := RenderSysctlConfig(node)
 	if err != nil {
-		t.Fatalf("渲染 sysctl 配置失败: %v", err)
+		t.Fatalf(" sysctl : %v", err)
 	}
 
 	if strings.Contains(config, "net.ipv4.ip_forward = 1") {
-		t.Errorf("非转发节点不应启用 ip_forward")
+		t.Errorf(" ip_forward")
 	}
 
-	// 应使用松散模式 rp_filter
+	//  rp_filter
 	if !strings.Contains(config, "net.ipv4.conf.all.rp_filter = 2") {
-		t.Errorf("非转发节点应使用松散模式 rp_filter (=2)")
+		t.Errorf(" rp_filter (=2)")
 	}
 }

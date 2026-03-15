@@ -1,8 +1,9 @@
 package api
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,53 +17,54 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-// Handler HTTP API 处理器
+// Handler HTTP API
 type Handler struct {
 	compiler *compiler.Compiler
 }
 
-// NewHandler 创建新的 API 处理器
+// NewHandler  API
 func NewHandler() *Handler {
 	return &Handler{
 		compiler: compiler.NewCompiler(),
 	}
 }
 
-// apiError 统一错误响应
+// apiError
 type apiError struct {
 	Error   string `json:"error"`
 	Details any    `json:"details,omitempty"`
 }
 
-// HealthResponse 健康检查响应
+// HealthResponse
 type HealthResponse struct {
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp"`
 }
 
-// ValidateResponse 校验响应
+// ValidateResponse
 type ValidateResponse struct {
-	Valid    bool                       `json:"valid"`
+	Valid    bool                        `json:"valid"`
 	Errors   []validator.ValidationError `json:"errors,omitempty"`
 	Warnings []validator.ValidationError `json:"warnings,omitempty"`
 }
 
-// CompileResponse 编译响应
+// CompileResponse
 type CompileResponse struct {
-	Topology         *model.Topology            `json:"topology"`
-	WireGuardConfigs map[string]string           `json:"wireguard_configs"`
-	BabelConfigs     map[string]string           `json:"babel_configs"`
-	SysctlConfigs    map[string]string           `json:"sysctl_configs"`
-	InstallScripts   map[string]string           `json:"install_scripts"`
-	Manifest         compiler.CompileManifest    `json:"manifest"`
+	Topology         *model.Topology          `json:"topology"`
+	WireGuardConfigs map[string]string        `json:"wireguard_configs"`
+	BabelConfigs     map[string]string        `json:"babel_configs"`
+	SysctlConfigs    map[string]string        `json:"sysctl_configs"`
+	InstallScripts   map[string]string        `json:"install_scripts"`
+	Manifest         compiler.CompileManifest `json:"manifest"`
 }
 
-// HandleHealth 健康检查
+// HandleHealth
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "只支持 GET 方法")
+		writeError(w, http.StatusMethodNotAllowed, " GET ")
 		return
 	}
 
@@ -72,10 +74,10 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleValidate 校验拓扑
+// HandleValidate
 func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "只支持 POST 方法")
+		writeError(w, http.StatusMethodNotAllowed, " POST ")
 		return
 	}
 
@@ -85,12 +87,12 @@ func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Schema 校验
+	// Schema
 	schemaResult := validator.ValidateSchema(topo)
-	// 语义校验
+	//
 	semanticResult := validator.ValidateSemantic(topo)
 
-	// 合并结果
+	//
 	allErrors := append(schemaResult.Errors, semanticResult.Errors...)
 	allWarnings := append(schemaResult.Warnings, semanticResult.Warnings...)
 
@@ -101,10 +103,10 @@ func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleCompile 编译拓扑
+// HandleCompile
 func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "只支持 POST 方法")
+		writeError(w, http.StatusMethodNotAllowed, " POST ")
 		return
 	}
 
@@ -114,17 +116,20 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 生成假密钥（Phase 1 阶段，后续替换为真密钥）
-	keys := generateKeys(topo)
+	keys, err := generateKeys(topo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf(" WireGuard : %v", err))
+		return
+	}
 
-	// 编译
+	//
 	result, err := h.compiler.Compile(topo, keys)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
-	// 渲染所有配置
+	//
 	if err := renderAll(result, keys); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -140,10 +145,10 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleExport 导出产物压缩包
+// HandleExport
 func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "只支持 POST 方法")
+		writeError(w, http.StatusMethodNotAllowed, " POST ")
 		return
 	}
 
@@ -153,7 +158,11 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys := generateKeys(topo)
+	keys, err := generateKeys(topo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf(" WireGuard : %v", err))
+		return
+	}
 
 	result, err := h.compiler.Compile(topo, keys)
 	if err != nil {
@@ -166,93 +175,133 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 导出到临时目录
+	//
 	tmpDir, err := os.MkdirTemp("", "overlay-export-*")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "创建临时目录失败")
+		writeError(w, http.StatusInternalServerError, "")
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	if _, err := artifacts.Export(result, tmpDir); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("导出失败: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf(": %v", err))
 		return
 	}
 
-	// 打包为 zip
-	zipBuf, err := createZip(tmpDir)
+	archiveBuf, err := createTarGz(tmpDir)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("打包失败: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf(": %v", err))
 		return
 	}
 
-	filename := fmt.Sprintf("%s-artifacts.zip", topo.Project.ID)
-	w.Header().Set("Content-Type", "application/zip")
+	filename := fmt.Sprintf("%s-artifacts.tar.gz", topo.Project.ID)
+	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
-	w.Write(zipBuf.Bytes())
+	w.Write(archiveBuf.Bytes())
 }
 
-// --- 辅助函数 ---
+// ---  ---
 
 func readTopology(r *http.Request) (*model.Topology, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, fmt.Errorf("读取请求体失败: %w", err)
+		return nil, fmt.Errorf(": %w", err)
 	}
 	defer r.Body.Close()
 
 	if len(body) == 0 {
-		return nil, fmt.Errorf("请求体为空")
+		return nil, fmt.Errorf("")
 	}
 
 	var topo model.Topology
 	if err := json.Unmarshal(body, &topo); err != nil {
-		return nil, fmt.Errorf("JSON 解析失败: %w", err)
+		return nil, fmt.Errorf("JSON : %w", err)
 	}
 
 	return &topo, nil
 }
 
-func generateKeys(topo *model.Topology) map[string]compiler.KeyPair {
+func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 	keys := make(map[string]compiler.KeyPair)
-	for _, node := range topo.Nodes {
+	for i := range topo.Nodes {
+		node := &topo.Nodes[i]
+
+		if node.FixedPrivateKey {
+			if node.WireGuardPrivateKey != "" {
+				privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
+				if err != nil {
+					return nil, fmt.Errorf(" %s : %w", node.ID, err)
+				}
+
+				node.WireGuardPrivateKey = privateKey.String()
+				node.WireGuardPublicKey = privateKey.PublicKey().String()
+				keys[node.ID] = compiler.KeyPair{
+					PrivateKey: node.WireGuardPrivateKey,
+					PublicKey:  node.WireGuardPublicKey,
+				}
+				continue
+			}
+
+			privateKey, err := wgtypes.GeneratePrivateKey()
+			if err != nil {
+				return nil, fmt.Errorf(" %s : %w", node.ID, err)
+			}
+
+			node.WireGuardPrivateKey = privateKey.String()
+			node.WireGuardPublicKey = privateKey.PublicKey().String()
+			keys[node.ID] = compiler.KeyPair{
+				PrivateKey: node.WireGuardPrivateKey,
+				PublicKey:  node.WireGuardPublicKey,
+			}
+			continue
+		}
+
+		privateKey, err := wgtypes.GeneratePrivateKey()
+		if err != nil {
+			return nil, fmt.Errorf(" %s : %w", node.ID, err)
+		}
+
+		// ：，
+		node.WireGuardPrivateKey = ""
+		node.WireGuardPublicKey = ""
+
 		keys[node.ID] = compiler.KeyPair{
-			PrivateKey: fmt.Sprintf("FAKE_PRIVKEY_%s", node.ID),
-			PublicKey:  fmt.Sprintf("FAKE_PUBKEY_%s", node.ID),
+			PrivateKey: privateKey.String(),
+			PublicKey:  privateKey.PublicKey().String(),
 		}
 	}
-	return keys
+	return keys, nil
 }
 
 func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error {
 	// WireGuard
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
-		return fmt.Errorf("渲染 WireGuard 配置失败: %w", err)
+		return fmt.Errorf(" WireGuard : %w", err)
 	}
 	result.WireGuardConfigs = wgConfigs
 
 	// Babel
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
 	if err != nil {
-		return fmt.Errorf("渲染 Babel 配置失败: %w", err)
+		return fmt.Errorf(" Babel : %w", err)
 	}
 	result.BabelConfigs = babelConfigs
 
 	// Sysctl
 	sysctlConfigs, err := renderer.RenderAllSysctlConfigs(result.Topology)
 	if err != nil {
-		return fmt.Errorf("渲染 sysctl 配置失败: %w", err)
+		return fmt.Errorf(" sysctl : %w", err)
 	}
 	result.SysctlConfigs = sysctlConfigs
 
-	// 安装脚本
+	//
 	for _, node := range result.Topology.Nodes {
 		_, hasBabel := result.BabelConfigs[node.ID]
 		script, err := renderer.RenderInstallScript(&node, hasBabel)
 		if err != nil {
-			return fmt.Errorf("渲染节点 %s 安装脚本失败: %w", node.Name, err)
+			return fmt.Errorf(" %s : %w", node.Name, err)
 		}
 		result.InstallScripts[node.ID] = script
 	}
@@ -260,9 +309,10 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 	return nil
 }
 
-func createZip(dir string) (*bytes.Buffer, error) {
+func createTarGz(dir string) (*bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
-	zw := zip.NewWriter(buf)
+	gzw := gzip.NewWriter(buf)
+	tw := tar.NewWriter(gzw)
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -277,15 +327,13 @@ func createZip(dir string) (*bytes.Buffer, error) {
 			return err
 		}
 
-		header, err := zip.FileInfoHeader(info)
+		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
 		}
-		header.Name = relPath
-		header.Method = zip.Deflate
+		header.Name = filepath.ToSlash(relPath)
 
-		writer, err := zw.CreateHeader(header)
-		if err != nil {
+		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
 
@@ -295,14 +343,18 @@ func createZip(dir string) (*bytes.Buffer, error) {
 		}
 		defer file.Close()
 
-		_, err = io.Copy(writer, file)
+		_, err = io.Copy(tw, file)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := zw.Close(); err != nil {
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+
+	if err := gzw.Close(); err != nil {
 		return nil, err
 	}
 

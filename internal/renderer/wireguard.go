@@ -10,33 +10,33 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// WireGuardConfig WireGuard 配置渲染所需数据
+// WireGuardConfig WireGuard 
 type WireGuardConfig struct {
-	// 节点信息
+	// 
 	NodeName   string
 	PrivateKey string
 	OverlayIP  string
 	ListenPort int
 
-	// Peer 列表
+	// Peer 
 	Peers []WireGuardPeer
 }
 
-// WireGuardPeer WireGuard peer 渲染数据
+// WireGuardPeer WireGuard peer 
 type WireGuardPeer struct {
-	// 注释/名称
+	// /
 	Name string
 
-	// 公钥
+	// 
 	PublicKey string
 
 	// AllowedIPs
 	AllowedIPs string
 
-	// Endpoint（可选）
+	// Endpoint（）
 	Endpoint string
 
-	// PersistentKeepalive（可选，0 表示不设置）
+	// PersistentKeepalive（，0 ）
 	PersistentKeepalive int
 }
 
@@ -62,7 +62,7 @@ PersistentKeepalive = {{ .PersistentKeepalive }}
 {{- end }}
 {{ end }}`
 
-// RenderWireGuardConfig 渲染单个节点的 WireGuard 配置
+// RenderWireGuardConfig  WireGuard 
 func RenderWireGuardConfig(node *model.Node, peers []compiler.PeerInfo, keys compiler.KeyPair) (string, error) {
 	config := WireGuardConfig{
 		NodeName:   node.Name,
@@ -86,7 +86,7 @@ func RenderWireGuardConfig(node *model.Node, peers []compiler.PeerInfo, keys com
 	return renderTemplate("wg.conf", wgConfigTemplate, config)
 }
 
-// RenderAllWireGuardConfigs 渲染所有节点的 WireGuard 配置
+// RenderAllWireGuardConfigs  WireGuard 
 func RenderAllWireGuardConfigs(topo *model.Topology, peerMap map[string][]compiler.PeerInfo, keys map[string]compiler.KeyPair) (map[string]string, error) {
 	configs := make(map[string]string)
 
@@ -103,12 +103,12 @@ func RenderAllWireGuardConfigs(topo *model.Topology, peerMap map[string][]compil
 
 		key, ok := keys[nodeID]
 		if !ok {
-			return nil, fmt.Errorf("节点 %s 没有密钥", nodeID)
+			return nil, fmt.Errorf(" %s ", nodeID)
 		}
 
 		config, err := RenderWireGuardConfig(node, peers, key)
 		if err != nil {
-			return nil, fmt.Errorf("渲染节点 %s 的 WireGuard 配置失败: %w", node.Name, err)
+			return nil, fmt.Errorf(" %s  WireGuard : %w", node.Name, err)
 		}
 
 		configs[nodeID] = config
@@ -120,12 +120,12 @@ func RenderAllWireGuardConfigs(topo *model.Topology, peerMap map[string][]compil
 func renderTemplate(name, tmpl string, data interface{}) (string, error) {
 	t, err := template.New(name).Parse(tmpl)
 	if err != nil {
-		return "", fmt.Errorf("解析模板失败: %w", err)
+		return "", fmt.Errorf(": %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("渲染模板失败: %w", err)
+		return "", fmt.Errorf(": %w", err)
 	}
 
 	return buf.String(), nil

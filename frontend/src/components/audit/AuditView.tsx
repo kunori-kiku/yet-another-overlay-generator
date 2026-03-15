@@ -39,7 +39,7 @@ export function AuditView() {
     );
   };
 
-  const getFileContent = (result: any, type: string) => {
+  const getFileContent = (result: any) => {
     if (!result || !selectedNodeFileId) return '';
     const [nodeId, fileType] = selectedNodeFileId.split(':');
     if (fileType === 'wg' && result.wireguard_configs) return result.wireguard_configs[nodeId] || '';
@@ -49,8 +49,8 @@ export function AuditView() {
     return '';
   };
 
-  const currentText = getFileContent(currentResult, selectedNodeFileId);
-  const oldText = getFileContent(selectedHistory?.compileResult, selectedNodeFileId);
+  const currentText = getFileContent(currentResult);
+  const oldText = getFileContent(selectedHistory?.compileResult);
 
   // Security Audit list: Nodes that accept inbound or relay
   const exposedNodes = nodes.filter((n) => n.capabilities.can_accept_inbound || n.capabilities.can_relay);

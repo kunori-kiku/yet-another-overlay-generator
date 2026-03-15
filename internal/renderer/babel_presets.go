@@ -1,38 +1,38 @@
 package renderer
 
-// BabelRolePreset Babel 角色预设参数
+// BabelRolePreset Babel 
 type BabelRolePreset struct {
-	// 默认接口 cost（0 = 使用 Babel 默认值 96）
+	//  cost（0 =  Babel  96）
 	DefaultCost int
 
-	// hello interval（秒，0 = 使用默认值）
+	// hello interval（，0 = ）
 	HelloInterval int
 
-	// update interval（秒，0 = 使用默认值）
+	// update interval（，0 = ）
 	UpdateInterval int
 }
 
-// GetBabelRolePreset 获取角色的 Babel 预设参数
+// GetBabelRolePreset  Babel 
 func GetBabelRolePreset(role string) BabelRolePreset {
 	switch role {
 	case "router":
-		// router: 标准参数
+		// router: 
 		return BabelRolePreset{
-			DefaultCost:    0, // 使用 Babel 默认
+			DefaultCost:    0, //  Babel 
 			HelloInterval:  0,
 			UpdateInterval: 0,
 		}
 
 	case "relay":
-		// relay: 低 cost，高优先级路径
+		// relay:  cost，
 		return BabelRolePreset{
-			DefaultCost:    96, // 标准 wired cost
+			DefaultCost:    96, //  wired cost
 			HelloInterval:  0,
 			UpdateInterval: 0,
 		}
 
 	case "gateway":
-		// gateway: 标准参数，作为出口点
+		// gateway: ，
 		return BabelRolePreset{
 			DefaultCost:    0,
 			HelloInterval:  0,
@@ -40,9 +40,9 @@ func GetBabelRolePreset(role string) BabelRolePreset {
 		}
 
 	default: // "peer"
-		// peer: 较高 cost，不作为中转首选
+		// peer:  cost，
 		return BabelRolePreset{
-			DefaultCost:    0, // peer 不调整 cost（不中转）
+			DefaultCost:    0, // peer  cost（）
 			HelloInterval:  0,
 			UpdateInterval: 0,
 		}

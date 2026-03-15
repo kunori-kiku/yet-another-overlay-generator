@@ -4,7 +4,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// InstallScriptConfig 安装脚本渲染数据
+// InstallScriptConfig 
 type InstallScriptConfig struct {
 	NodeName       string
 	NodeRole       string
@@ -75,11 +75,63 @@ esac
 
 # Install dependencies
 echo "Installing dependencies..."
-apt-get update -qq
-apt-get install -y -qq wireguard wireguard-tools
+
+if [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+
+    ensure_pkg() {
+        local pkg="$1"
+        if dpkg -s "$pkg" >/dev/null 2>&1; then
+            echo "  - $pkg already installed"
+            return 0
+        fi
+        echo "  - installing $pkg"
+        apt-get install -y -qq "$pkg"
+    }
+
+    apt-get update -qq
+
+    # Base runtime tools
+    ensure_pkg iproute2
+    ensure_pkg ca-certificates
+    ensure_pkg coreutils
+
+    # WireGuard stack
+    ensure_pkg wireguard
+    ensure_pkg wireguard-tools
+
 {{ if .HasBabel -}}
-apt-get install -y -qq babeld
+    # Dynamic routing daemon
+    ensure_pkg babeld
 {{ end -}}
+else
+    echo "Automatic installation is not supported on $OS_ID; checking existing dependencies..."
+
+    missing_bins=""
+
+    require_bin() {
+        local bin="$1"
+        if ! command -v "$bin" >/dev/null 2>&1; then
+            missing_bins="$missing_bins $bin"
+        fi
+    }
+
+    require_bin wg
+    require_bin wg-quick
+    require_bin ip
+    require_bin sha256sum
+{{ if .HasBabel -}}
+    require_bin babeld
+{{ end -}}
+
+    if [ -n "$missing_bins" ]; then
+        echo "ERROR: Missing required commands on $OS_ID:$missing_bins" >&2
+        echo "Please install the corresponding packages manually, then rerun this script." >&2
+        exit 1
+    fi
+
+    echo "All required dependencies are present on $OS_ID."
+fi
 
 # Create directories
 mkdir -p /etc/wireguard
@@ -180,7 +232,7 @@ echo "Installation complete!"
 echo "Note: If peers are not yet online, connections will establish once they come up."
 `
 
-// RenderInstallScript 渲染单个节点的安装脚本
+// RenderInstallScript 
 func RenderInstallScript(node *model.Node, hasBabel bool) (string, error) {
 	config := InstallScriptConfig{
 		NodeName:       node.Name,
