@@ -14,9 +14,11 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { CustomNode } from './CustomNode';
+import { CustomEdge } from './CustomEdge';
 import { useTopologyStore } from '../../stores/topologyStore';
 
 const nodeTypes = { custom: CustomNode };
+const edgeTypes = { custom: CustomEdge };
 
 export function TopologyCanvas() {
   const {
@@ -41,7 +43,7 @@ export function TopologyCanvas() {
       topoNodes.map((n, i) => ({
         id: n.id,
         type: 'custom',
-        position: { x: 100 + (i % 4) * 200, y: 100 + Math.floor(i / 4) * 180 },
+        position: { x: 100 + (i % 4) * 250, y: 100 + Math.floor(i / 4) * 200 },
         data: {
           label: n.name,
           role: n.role,
@@ -52,31 +54,59 @@ export function TopologyCanvas() {
     [topoNodes, domainMap]
   );
 
-  // 将拓扑边转为 React Flow 边
+  // 计算平行边索引（同一对节点之间的多条边）
+  const parallelEdgeInfo = useMemo(() => {
+    const pairMap: Record<string, string[]> = {};
+    const enabledEdges = topoEdges.filter((e) => e.is_enabled);
+
+    for (const e of enabledEdges) {
+      // 双向合并: 将 A->B 和 B->A 归为同一对
+      const pairKey = [e.from_node_id, e.to_node_id].sort().join('::');
+      if (!pairMap[pairKey]) pairMap[pairKey] = [];
+      pairMap[pairKey].push(e.id);
+    }
+
+    const info: Record<string, { index: number; count: number }> = {};
+    for (const ids of Object.values(pairMap)) {
+      for (let i = 0; i < ids.length; i++) {
+        info[ids[i]] = { index: i, count: ids.length };
+      }
+    }
+    return info;
+  }, [topoEdges]);
+
+  // 将拓扑边转为 React Flow 边（使用自定义 edge）
   const flowEdges: FlowEdge[] = useMemo(
     () =>
       topoEdges
         .filter((e) => e.is_enabled)
-        .map((e) => ({
-          id: e.id,
-          source: e.from_node_id,
-          target: e.to_node_id,
-          animated: e.type === 'relay-path',
-          label: e.endpoint_host
+        .map((e) => {
+          const pInfo = parallelEdgeInfo[e.id] || { index: 0, count: 1 };
+          const label = e.endpoint_host
             ? `${e.endpoint_host}:${e.endpoint_port || ''}`
-            : e.type,
-          style: { stroke: e.type === 'public-endpoint' ? '#f59e0b' : '#6b7280' },
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-          labelStyle: { fill: '#9ca3af', fontSize: 10 },
-        })),
-    [topoEdges]
+            : e.type;
+
+          return {
+            id: e.id,
+            source: e.from_node_id,
+            target: e.to_node_id,
+            type: 'custom',
+            data: {
+              edgeType: e.type,
+              label,
+              parallelIndex: pInfo.index,
+              parallelCount: pInfo.count,
+            },
+            markerEnd: { type: MarkerType.ArrowClosed },
+          };
+        }),
+    [topoEdges, parallelEdgeInfo]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
   // 同步 React Flow 节点变化
-  // 当拓扑数据变化时重新设置
   useMemo(() => {
     setNodes(flowNodes);
   }, [flowNodes, setNodes]);
@@ -87,10 +117,8 @@ export function TopologyCanvas() {
 
   const onConnect = useCallback(
     (params: Connection) => {
-      // 在 React Flow 中添加边
-      setEdges((eds) => addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' } }, eds));
+      setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
 
-      // 在拓扑 store 中添加边
       if (params.source && params.target) {
         const id = `edge-${Date.now()}`;
         addTopoEdge({
@@ -136,6 +164,7 @@ export function TopologyCanvas() {
       onEdgeClick={onEdgeClick}
       onPaneClick={onPaneClick}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       fitView
       className="bg-gray-900"
     >

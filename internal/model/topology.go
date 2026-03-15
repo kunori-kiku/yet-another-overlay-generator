@@ -58,6 +58,9 @@ type Node struct {
 
 	// 节点能力
 	Capabilities NodeCapabilities `json:"capabilities"`
+
+	// 额外通告前缀（gateway 场景：通告默认路由或其他网段）
+	ExtraPrefixes []string `json:"extra_prefixes,omitempty"`
 }
 
 // NodeCapabilities 节点能力描述
@@ -96,7 +99,7 @@ type Edge struct {
 	Notes string `json:"notes,omitempty"`
 }
 
-// RoutePolicy 路由策略（第一阶段简化版）
+// RoutePolicy 路由策略（Phase 2 增强版）
 type RoutePolicy struct {
 	ID              string `json:"id"`
 	DomainID        string `json:"domain_id"`
@@ -104,4 +107,9 @@ type RoutePolicy struct {
 	NextHopNodeID   string `json:"next_hop_node_id,omitempty"`
 	Metric          int    `json:"metric,omitempty"`
 	Notes           string `json:"notes,omitempty"`
+
+	// Phase 2 增强字段
+	SourceSelector string `json:"source_selector,omitempty"` // 源节点 ID 或角色选择器
+	Action         string `json:"action,omitempty"`          // "allow" | "deny" | "metric-override"
+	ApplyToNodeID  string `json:"apply_to_node_id,omitempty"` // 仅应用于指定节点（空=全局）
 }

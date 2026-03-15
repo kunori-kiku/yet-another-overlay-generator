@@ -35,6 +35,7 @@ export interface Node {
   overlay_ip?: string;
   listen_port?: number;
   capabilities: NodeCapabilities;
+  extra_prefixes?: string[];
 }
 
 export interface NodeCapabilities {
@@ -65,6 +66,9 @@ export interface RoutePolicy {
   next_hop_node_id?: string;
   metric?: number;
   notes?: string;
+  source_selector?: string;
+  action?: 'allow' | 'deny' | 'metric-override';
+  apply_to_node_id?: string;
 }
 
 // API 响应类型

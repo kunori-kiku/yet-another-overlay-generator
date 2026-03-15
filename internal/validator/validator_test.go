@@ -191,6 +191,85 @@ func TestValidateSemantic_IsolatedNode(t *testing.T) {
 	assertHasWarning(t, result, "topology")
 }
 
+func TestValidateSemantic_NATDirectConnect(t *testing.T) {
+	topo := validTopology()
+	// 两个 NAT 后节点
+	topo.Nodes[0].Capabilities.HasPublicIP = false
+	topo.Nodes[0].Capabilities.CanAcceptInbound = false
+	topo.Nodes[1].Capabilities.HasPublicIP = false
+	topo.Nodes[1].Capabilities.CanAcceptInbound = false
+	result := ValidateSemantic(topo)
+	// 应有 NAT 直连警告
+	found := false
+	for _, w := range result.Warnings {
+		if containsSubstring(w.Message, "NAT") || containsSubstring(w.Message, "直连") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("两个 NAT 节点直连应有警告")
+	}
+}
+
+func TestValidateSemantic_NATNodeNoOutbound(t *testing.T) {
+	topo := &model.Topology{
+		Project: model.Project{ID: "test", Name: "Test"},
+		Domains: []model.Domain{{
+			ID: "domain-1", Name: "test", CIDR: "10.10.0.0/24",
+			AllocationMode: "auto", RoutingMode: "babel",
+		}},
+		Nodes: []model.Node{
+			{
+				ID: "nat-node", Name: "nat-peer", Role: "peer", DomainID: "domain-1",
+				Capabilities: model.NodeCapabilities{HasPublicIP: false, CanAcceptInbound: false},
+			},
+			{
+				ID: "pub-node", Name: "pub-server", Role: "router", DomainID: "domain-1",
+				Capabilities: model.NodeCapabilities{HasPublicIP: true, CanAcceptInbound: true},
+			},
+		},
+		// NAT 节点没有出站边
+		Edges: []model.Edge{},
+	}
+	result := ValidateSemantic(topo)
+	// 不应有NAT出站警告（因为没有任何边）
+	// 但应有孤立节点警告
+	if len(result.Warnings) == 0 {
+		t.Errorf("应有警告")
+	}
+}
+
+func TestValidateSemantic_NATViaRelay(t *testing.T) {
+	topo := &model.Topology{
+		Project: model.Project{ID: "test", Name: "Test"},
+		Domains: []model.Domain{{
+			ID: "domain-1", Name: "test", CIDR: "10.10.0.0/24",
+			AllocationMode: "auto", RoutingMode: "babel",
+		}},
+		Nodes: []model.Node{
+			{
+				ID: "nat-1", Name: "nat-peer-1", Role: "peer", DomainID: "domain-1",
+				Capabilities: model.NodeCapabilities{HasPublicIP: false, CanAcceptInbound: false},
+			},
+			{
+				ID: "relay-1", Name: "relay", Role: "relay", DomainID: "domain-1",
+				Capabilities: model.NodeCapabilities{HasPublicIP: true, CanAcceptInbound: true, CanRelay: true},
+			},
+		},
+		Edges: []model.Edge{
+			{ID: "e1", FromNodeID: "nat-1", ToNodeID: "relay-1", Type: "public-endpoint", IsEnabled: true},
+		},
+	}
+	result := ValidateSemantic(topo)
+	// NAT 节点通过 relay 连接，不应有"无出站"警告
+	for _, w := range result.Warnings {
+		if containsSubstring(w.Field, "nat_reachability") && containsSubstring(w.Message, "nat-peer-1") {
+			t.Errorf("NAT 节点经 relay 连接不应有出站警告, 但得到: %s", w.Message)
+		}
+	}
+}
+
 func TestValidateSemantic_NoIsolatedWarningForSingleNode(t *testing.T) {
 	topo := &model.Topology{
 		Project: model.Project{ID: "test", Name: "Test"},

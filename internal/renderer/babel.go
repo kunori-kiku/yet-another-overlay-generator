@@ -70,28 +70,43 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		return "", nil
 	}
 
+	// 获取角色语义和预设
+	semantics := compiler.DeriveRoleSemantics(node)
+	preset := GetBabelRolePreset(node.Role)
+
 	config := BabelConfig{
 		NodeName:         node.Name,
 		NodeRole:         node.Role,
-		EnableForwarding: node.Capabilities.CanForward,
+		EnableForwarding: semantics.EnableForwarding,
 	}
 
-	// 收集参与 Babel 的 WireGuard 接口
+	// 收集参与 Babel 的 WireGuard 接口，应用角色预设 cost
 	for _, p := range peers {
+		cost := preset.DefaultCost
 		iface := BabelInterface{
 			Name:     p.InterfaceName,
 			Type:     "wired",
 			IsTunnel: true,
+			Cost:     cost,
 		}
 		config.Interfaces = append(config.Interfaces, iface)
 	}
 
-	// 推导通告前缀：节点 overlay IP 所属 Domain 的 CIDR
-	if domain != nil && domain.CIDR != "" {
-		// 通告自身 overlay IP 的 /32
-		if node.OverlayIP != "" {
-			config.RedistributePrefixes = append(config.RedistributePrefixes, node.OverlayIP+"/32")
-		}
+	// 根据角色语义推导通告前缀
+	if semantics.BabelAnnounce.AnnounceSelf && node.OverlayIP != "" {
+		config.RedistributePrefixes = append(config.RedistributePrefixes, node.OverlayIP+"/32")
+	}
+
+	if semantics.BabelAnnounce.AnnounceDomainCIDR && domain != nil && domain.CIDR != "" {
+		config.RedistributePrefixes = append(config.RedistributePrefixes, domain.CIDR)
+	}
+
+	if semantics.BabelAnnounce.AnnounceExtraPrefixes {
+		config.RedistributePrefixes = append(config.RedistributePrefixes, node.ExtraPrefixes...)
+	}
+
+	if semantics.BabelAnnounce.AnnounceDefault {
+		config.RedistributePrefixes = append(config.RedistributePrefixes, "0.0.0.0/0")
 	}
 
 	return renderTemplate("babeld.conf", babelConfigTemplate, config)

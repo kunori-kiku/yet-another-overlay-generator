@@ -40,6 +40,17 @@ type PeerInfo struct {
 // DerivePeers 根据 Edge 推导每个节点的 WireGuard Peer 列表
 // 返回 map[nodeID][]PeerInfo
 func DerivePeers(topo *model.Topology, keys map[string]KeyPair) map[string][]PeerInfo {
+	// 构建 Domain 索引
+	domainMap := make(map[string]*model.Domain)
+	for i := range topo.Domains {
+		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
+	}
+
+	return derivePeersWithDomains(topo, keys, domainMap)
+}
+
+// derivePeersWithDomains 内部实现，带 Domain 索引，使用角色语义推导 AllowedIPs
+func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) map[string][]PeerInfo {
 	peerMap := make(map[string][]PeerInfo)
 
 	// 构建节点索引

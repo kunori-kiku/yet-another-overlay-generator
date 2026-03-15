@@ -34,6 +34,9 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// 检测孤立节点
 	detectIsolatedNodes(topo, result)
 
+	// NAT 可达性约束验证
+	validateNATReachability(topo, nodeMap, result)
+
 	return result
 }
 

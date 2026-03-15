@@ -85,6 +85,11 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		RoutePolicies: topo.RoutePolicies,
 	}
 
+	// Pass 3 续: 根据角色推导 capabilities
+	for i := range compiledTopo.Nodes {
+		compiledTopo.Nodes[i].Capabilities = InferCapabilitiesFromRole(&compiledTopo.Nodes[i])
+	}
+
 	// Pass 3 续: 推导 Peer 关系
 	peerMap := DerivePeers(compiledTopo, keys)
 
