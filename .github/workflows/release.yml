@@ -93,7 +93,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Download Frontend Dist Artifact
         uses: actions/download-artifact@v4
@@ -108,9 +109,26 @@ jobs:
           GOARM: ${{ matrix.target.goarm }}
           CGO_ENABLED: 0
         run: |
-          mkdir -p .tmp/bin
-          go build -trimpath -ldflags "-s -w" -o ".tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
-          go build -trimpath -ldflags "-s -w" -o ".tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE"
+
+          if [ ! -f go.mod ]; then
+            echo "go.mod not found in workspace root, searching for module root..."
+            MOD_FILE="$(find . -maxdepth 4 -name go.mod | head -n1)"
+            if [ -z "$MOD_FILE" ]; then
+              echo "ERROR: go.mod not found in checkout" >&2
+              ls -la
+              exit 1
+            fi
+            cd "$(dirname "$MOD_FILE")"
+          fi
+
+          echo "Using module: $(go env GOMOD)"
+
+          mkdir -p "$GITHUB_WORKSPACE/.tmp/bin"
+          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
+          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
 
       - name: Assemble Bundle Directory
         run: |

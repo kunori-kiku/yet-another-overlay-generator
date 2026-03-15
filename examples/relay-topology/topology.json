@@ -1,0 +1,89 @@
+{
+  "project": {
+    "id": "relay-topo-001",
+    "name": "Relay Topology",
+    "description": "1 中继节点 + 2 不可直连节点拓扑示例",
+    "version": "0.1.0"
+  },
+  "domains": [
+    {
+      "id": "domain-1",
+      "name": "relay-network",
+      "cidr": "10.30.0.0/24",
+      "allocation_mode": "auto",
+      "routing_mode": "babel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "relay-1",
+      "name": "relay-server",
+      "hostname": "relay.example.com",
+      "platform": "debian",
+      "role": "relay",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": true,
+        "has_public_ip": true
+      }
+    },
+    {
+      "id": "peer-1",
+      "name": "peer-behind-nat-1",
+      "hostname": "peer1.local",
+      "platform": "ubuntu",
+      "role": "peer",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": false,
+        "can_forward": false,
+        "can_relay": false,
+        "has_public_ip": false
+      }
+    },
+    {
+      "id": "peer-2",
+      "name": "peer-behind-nat-2",
+      "hostname": "peer2.local",
+      "platform": "debian",
+      "role": "peer",
+      "domain_id": "domain-1",
+      "overlay_ip": "10.30.0.100",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": false,
+        "can_forward": false,
+        "can_relay": false,
+        "has_public_ip": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from_node_id": "peer-1",
+      "to_node_id": "relay-1",
+      "type": "public-endpoint",
+      "endpoint_host": "192.0.2.1",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true,
+      "notes": "NAT 后 peer-1 主动连接中继"
+    },
+    {
+      "id": "edge-2",
+      "from_node_id": "peer-2",
+      "to_node_id": "relay-1",
+      "type": "public-endpoint",
+      "endpoint_host": "192.0.2.1",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true,
+      "notes": "NAT 后 peer-2 主动连接中继"
+    }
+  ]
+}

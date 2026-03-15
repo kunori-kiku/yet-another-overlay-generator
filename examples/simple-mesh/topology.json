@@ -1,0 +1,126 @@
+{
+  "project": {
+    "id": "simple-mesh-001",
+    "name": "Simple Mesh",
+    "description": "3 节点全互联拓扑示例",
+    "version": "0.1.0"
+  },
+  "domains": [
+    {
+      "id": "domain-1",
+      "name": "mesh-network",
+      "cidr": "10.10.0.0/24",
+      "allocation_mode": "auto",
+      "routing_mode": "babel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "node-alpha",
+      "hostname": "alpha.example.com",
+      "platform": "debian",
+      "role": "router",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": false,
+        "has_public_ip": true
+      }
+    },
+    {
+      "id": "node-2",
+      "name": "node-beta",
+      "hostname": "beta.example.com",
+      "platform": "ubuntu",
+      "role": "router",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": false,
+        "has_public_ip": true
+      }
+    },
+    {
+      "id": "node-3",
+      "name": "node-gamma",
+      "hostname": "gamma.example.com",
+      "platform": "debian",
+      "role": "router",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": false,
+        "has_public_ip": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from_node_id": "node-1",
+      "to_node_id": "node-2",
+      "type": "direct",
+      "endpoint_host": "203.0.113.2",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true
+    },
+    {
+      "id": "edge-2",
+      "from_node_id": "node-2",
+      "to_node_id": "node-1",
+      "type": "direct",
+      "endpoint_host": "203.0.113.1",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true
+    },
+    {
+      "id": "edge-3",
+      "from_node_id": "node-1",
+      "to_node_id": "node-3",
+      "type": "direct",
+      "endpoint_host": "203.0.113.3",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true
+    },
+    {
+      "id": "edge-4",
+      "from_node_id": "node-3",
+      "to_node_id": "node-1",
+      "type": "direct",
+      "endpoint_host": "203.0.113.1",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true
+    },
+    {
+      "id": "edge-5",
+      "from_node_id": "node-2",
+      "to_node_id": "node-3",
+      "type": "direct",
+      "endpoint_host": "203.0.113.3",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true
+    },
+    {
+      "id": "edge-6",
+      "from_node_id": "node-3",
+      "to_node_id": "node-2",
+      "type": "direct",
+      "endpoint_host": "203.0.113.2",
+      "endpoint_port": 51820,
+      "transport": "udp",
+      "is_enabled": true
+    }
+  ]
+}
