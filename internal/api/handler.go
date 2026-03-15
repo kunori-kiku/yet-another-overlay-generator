@@ -2,8 +2,10 @@ package api
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -188,14 +190,14 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	archiveBuf, err := createTarGz(tmpDir)
+	archiveBuf, err := createExportZip(tmpDir)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf(": %v", err))
 		return
 	}
 
-	filename := fmt.Sprintf("%s-artifacts.tar.gz", topo.Project.ID)
-	w.Header().Set("Content-Type", "application/gzip")
+	filename := fmt.Sprintf("%s-artifacts.zip", topo.Project.ID)
+	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
 	w.Write(archiveBuf.Bytes())
@@ -309,7 +311,60 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 	return nil
 }
 
-func createTarGz(dir string) (*bytes.Buffer, error) {
+func createExportZip(dir string) (*bytes.Buffer, error) {
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		nodeName := entry.Name()
+		nodeDir := filepath.Join(dir, nodeName)
+
+		tgz, err := tarGzDirectory(nodeDir)
+		if err != nil {
+			return nil, err
+		}
+
+		tgzWriter, err := zw.Create(nodeName + ".tar.gz")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tgzWriter.Write(tgz.Bytes()); err != nil {
+			return nil, err
+		}
+
+		installer, err := makeSelfExtractingInstaller(nodeName, tgz.Bytes())
+		if err != nil {
+			return nil, err
+		}
+
+		installHeader := &zip.FileHeader{Name: nodeName + ".install.sh", Method: zip.Deflate}
+		installHeader.SetMode(0755)
+		installWriter, err := zw.CreateHeader(installHeader)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := installWriter.Write(installer); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func tarGzDirectory(dir string) (*bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
 	gzw := gzip.NewWriter(buf)
 	tw := tar.NewWriter(gzw)
@@ -359,6 +414,53 @@ func createTarGz(dir string) (*bytes.Buffer, error) {
 	}
 
 	return buf, nil
+}
+
+func makeSelfExtractingInstaller(nodeName string, payload []byte) ([]byte, error) {
+	encoded := base64.StdEncoding.EncodeToString(payload)
+
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+
+NODE_NAME=%q
+WORKDIR="$(mktemp -d -t "${NODE_NAME}-install-XXXXXX")"
+ARCHIVE_PATH="${WORKDIR}/${NODE_NAME}.tar.gz"
+
+cleanup() {
+	rm -rf "${WORKDIR}"
+}
+trap cleanup EXIT
+
+PAYLOAD_LINE="$(awk '/^__PAYLOAD_BELOW__$/ {print NR + 1; exit 0; }' "$0")"
+if [[ -z "${PAYLOAD_LINE}" ]]; then
+	echo "ERROR: installer payload marker not found" >&2
+	exit 1
+fi
+
+tail -n +"${PAYLOAD_LINE}" "$0" | base64 -d > "${ARCHIVE_PATH}"
+tar -xzf "${ARCHIVE_PATH}" -C "${WORKDIR}"
+
+if [[ ! -f "${WORKDIR}/install.sh" ]]; then
+	echo "ERROR: install.sh not found in extracted payload" >&2
+	exit 1
+fi
+
+echo "Running node installer for ${NODE_NAME}..."
+if [[ "$(id -u)" -eq 0 ]]; then
+	bash "${WORKDIR}/install.sh"
+elif command -v sudo >/dev/null 2>&1; then
+	sudo bash "${WORKDIR}/install.sh"
+else
+	echo "ERROR: root privileges required (run as root or install sudo)" >&2
+	exit 1
+fi
+
+exit 0
+__PAYLOAD_BELOW__
+%s
+`, nodeName, encoded)
+
+	return []byte(script), nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

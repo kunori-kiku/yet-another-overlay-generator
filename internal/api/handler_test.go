@@ -2,6 +2,7 @@ package api
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -198,7 +199,7 @@ func TestHandleCompile_InvalidTopology(t *testing.T) {
 	}
 }
 
-func TestHandleExport_ReturnsTarGz(t *testing.T) {
+func TestHandleExport_ReturnsZipWithNodeInstallers(t *testing.T) {
 	server := NewServer()
 
 	body := validTopologyJSON()
@@ -214,8 +215,8 @@ func TestHandleExport_ReturnsTarGz(t *testing.T) {
 
 	//  Content-Type
 	ct := rec.Header().Get("Content-Type")
-	if ct != "application/gzip" {
-		t.Errorf(" Content-Type=application/gzip,  %s", ct)
+	if ct != "application/zip" {
+		t.Errorf(" Content-Type=application/zip,  %s", ct)
 	}
 
 	//  Content-Disposition
@@ -224,39 +225,60 @@ func TestHandleExport_ReturnsTarGz(t *testing.T) {
 		t.Errorf(" Content-Disposition header")
 	}
 
-	//  tar.gz
-	gzReader, err := gzip.NewReader(bytes.NewReader(rec.Body.Bytes()))
+	zipReader, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
 	if err != nil {
-		t.Fatalf(" failed to read gzip stream: %v", err)
+		t.Fatalf(" failed to read zip stream: %v", err)
+	}
+
+	entries := map[string]*zip.File{}
+	for _, f := range zipReader.File {
+		entries[f.Name] = f
+	}
+
+	alphaTar, ok := entries["node-alpha.tar.gz"]
+	if !ok {
+		t.Fatalf("zip missing node-alpha.tar.gz")
+	}
+
+	if _, ok := entries["node-alpha.install.sh"]; !ok {
+		t.Fatalf("zip missing node-alpha.install.sh")
+	}
+
+	rc, err := alphaTar.Open()
+	if err != nil {
+		t.Fatalf("failed to open node-alpha.tar.gz in zip: %v", err)
+	}
+	defer rc.Close()
+
+	tarBytes, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("failed to read node-alpha.tar.gz bytes: %v", err)
+	}
+
+	gzReader, err := gzip.NewReader(bytes.NewReader(tarBytes))
+	if err != nil {
+		t.Fatalf("failed to read gzip stream in node-alpha.tar.gz: %v", err)
 	}
 	defer gzReader.Close()
 
 	tarReader := tar.NewReader(gzReader)
-
-	//  wg0.conf
 	hasWgConf := false
-	entries := []string{}
 	for {
 		hdr, err := tarReader.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			t.Fatalf(" failed to read tar entry: %v", err)
+			t.Fatalf("failed to read tar entry from node-alpha.tar.gz: %v", err)
 		}
-
-		entries = append(entries, hdr.Name)
-		if hdr.Name == "node-alpha/wireguard/wg0.conf" {
+		if hdr.Name == "wireguard/wg0.conf" {
 			hasWgConf = true
 			break
 		}
 	}
+
 	if !hasWgConf {
-		t.Errorf("tar.gz missing node-alpha/wireguard/wg0.conf")
-		t.Log("tar.gz entries:")
-		for _, name := range entries {
-			t.Logf("  %s", name)
-		}
+		t.Errorf("node-alpha.tar.gz missing wireguard/wg0.conf")
 	}
 }
 
