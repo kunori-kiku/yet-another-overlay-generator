@@ -64,6 +64,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		peerMap[node.ID] = []PeerInfo{}
 	}
 
+	// ， keepalive 
+	enabledEdgeDirections := make(map[string]bool)
+	for _, edge := range topo.Edges {
+		if edge.IsEnabled {
+			enabledEdgeDirections[edge.FromNodeID+"->"+edge.ToNodeID] = true
+		}
+	}
+
 	//  peer（）
 	// key: "localNodeID->remoteNodeID"
 	addedPeers := make(map[string]bool)
@@ -105,9 +113,12 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 
 		//  PersistentKeepalive
-		//  from （NAT ），
+		// 1. from （NAT ），
+		// 2. （ B→A ），
+		//    from  keepalive ，
 		keepalive := 0
-		if !fromNode.Capabilities.CanAcceptInbound {
+		hasReverseEdge := enabledEdgeDirections[toNode.ID+"->"+fromNode.ID]
+		if !fromNode.Capabilities.CanAcceptInbound || !hasReverseEdge {
 			keepalive = 25
 		}
 
@@ -132,6 +143,15 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		reversePeerKey := toNode.ID + "->" + fromNode.ID
 		if !addedPeers[reversePeerKey] {
 			fromKey, _ := keys[fromNode.ID]
+
+			//  PersistentKeepalive
+			// ，  endpoint，
+			//  keepalive  NAT 
+			reverseKeepalive := 0
+			if !toNode.Capabilities.CanAcceptInbound {
+				reverseKeepalive = 25
+			}
+
 			reversePeer := PeerInfo{
 				NodeID:              fromNode.ID,
 				NodeName:            fromNode.Name,
@@ -139,7 +159,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				OverlayIP:           fromNode.OverlayIP,
 				AllowedIPs:          deriveAllowedIPs(fromNode),
 				Endpoint:            "", // ，
-				PersistentKeepalive: 0,  //  Keepalive
+				PersistentKeepalive: reverseKeepalive,
 				InterfaceName:       wgInterfaceName(toNode.ID, fromNode.ID),
 			}
 

@@ -201,6 +201,83 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	}
 }
 
+// unidirectionalPublicEndpointTopo 模拟两个都有公网IP的节点，但只画了一条单向edge (A→B)
+// 这种情况下 A 应该有 PersistentKeepalive，因为 B 没有反向 edge 去主动连 A
+func unidirectionalPublicEndpointTopo() *model.Topology {
+	return &model.Topology{
+		Project: model.Project{ID: "test-003", Name: "Unidirectional Public Endpoint"},
+		Domains: []model.Domain{{
+			ID: "domain-1", Name: "uni-net", CIDR: "10.30.0.0/24",
+			AllocationMode: "auto", RoutingMode: "babel",
+		}},
+		Nodes: []model.Node{
+			{
+				ID: "node-1", Name: "server-a", Hostname: "a.example.com",
+				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+			},
+			{
+				ID: "node-2", Name: "server-b", Hostname: "b.example.com",
+				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+			},
+		},
+		Edges: []model.Edge{
+			// 只有 A→B 这一条单向 edge，没有 B→A
+			{ID: "e1", FromNodeID: "node-1", ToNodeID: "node-2", Type: "public-endpoint", EndpointHost: "203.0.113.2", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
+		},
+	}
+}
+
+func TestDerivePeers_UnidirectionalKeepalive(t *testing.T) {
+	topo := unidirectionalPublicEndpointTopo()
+	topo.Nodes[0].OverlayIP = "10.30.0.1"
+	topo.Nodes[1].OverlayIP = "10.30.0.2"
+
+	keys := testKeys()
+	peerMap := DerivePeers(topo, keys)
+
+	// node-1 (发起方) 应该有 node-2 作为 peer
+	node1Peers := peerMap["node-1"]
+	if len(node1Peers) != 1 {
+		t.Fatalf("node-1 应该有 1 个 peer，实际 %d", len(node1Peers))
+	}
+
+	// node-1→node-2: 因为没有反向 edge (node-2→node-1)，所以必须有 keepalive
+	if node1Peers[0].PersistentKeepalive == 0 {
+		t.Errorf("单向 edge 场景: node-1→node-2 应该有 PersistentKeepalive (期望 25，实际 0)")
+	}
+
+	// node-2 应该有自动生成的反向 peer (node-1)
+	node2Peers := peerMap["node-2"]
+	if len(node2Peers) != 1 {
+		t.Fatalf("node-2 应该有 1 个自动生成的 peer，实际 %d", len(node2Peers))
+	}
+
+	// node-2 的反向 peer 没有 endpoint，但 node-2 可以接受入站，所以不需要 keepalive
+	if node2Peers[0].Endpoint != "" {
+		t.Errorf("自动生成的反向 peer 不应该有 endpoint，实际 %s", node2Peers[0].Endpoint)
+	}
+}
+
+func TestDerivePeers_BidirectionalNoExtraKeepalive(t *testing.T) {
+	topo := simpleMeshTopo()
+	topo.Nodes[0].OverlayIP = "10.10.0.1"
+	topo.Nodes[1].OverlayIP = "10.10.0.2"
+	topo.Nodes[2].OverlayIP = "10.10.0.3"
+
+	keys := testKeys()
+	peerMap := DerivePeers(topo, keys)
+
+	// 双向 edge + 都有公网IP 的情况下，不需要 keepalive
+	for _, p := range peerMap["node-1"] {
+		if p.PersistentKeepalive != 0 {
+			t.Errorf("双向 edge 场景: node-1→%s 不应该有 PersistentKeepalive (期望 0，实际 %d)",
+				p.NodeID, p.PersistentKeepalive)
+		}
+	}
+}
+
 func TestCompile_SimpleMesh(t *testing.T) {
 	topo := simpleMeshTopo()
 	keys := testKeys()
