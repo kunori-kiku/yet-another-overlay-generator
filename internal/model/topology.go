@@ -69,8 +69,19 @@ type Node struct {
 	WireGuardPrivateKey string `json:"wireguard_private_key,omitempty"`
 	WireGuardPublicKey  string `json:"wireguard_public_key,omitempty"`
 
+	// 公网可达地址映射（一个节点可以有多组 endpoint）
+	PublicEndpoints []PublicEndpoint `json:"public_endpoints,omitempty"`
+
 	// （gateway ：）
 	ExtraPrefixes []string `json:"extra_prefixes,omitempty"`
+}
+
+// PublicEndpoint 公网可达地址映射
+type PublicEndpoint struct {
+	ID   string `json:"id"`
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	Note string `json:"note,omitempty"`
 }
 
 // NodeCapabilities 
