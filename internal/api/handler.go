@@ -333,14 +333,6 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 			return nil, err
 		}
 
-		tgzWriter, err := zw.Create(nodeName + ".tar.gz")
-		if err != nil {
-			return nil, err
-		}
-		if _, err := tgzWriter.Write(tgz.Bytes()); err != nil {
-			return nil, err
-		}
-
 		installer, err := makeSelfExtractingInstaller(nodeName, tgz.Bytes())
 		if err != nil {
 			return nil, err

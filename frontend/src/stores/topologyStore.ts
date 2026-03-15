@@ -373,7 +373,7 @@ export const useTopologyStore = create<TopologyState>()(
       const blob = await res.blob();
       const disposition = res.headers.get('Content-Disposition') || '';
       const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
-      const inferredName = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || 'artifacts.tar.gz');
+      const inferredName = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || 'artifacts.zip');
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

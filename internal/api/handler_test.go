@@ -5,10 +5,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -235,24 +237,37 @@ func TestHandleExport_ReturnsZipWithNodeInstallers(t *testing.T) {
 		entries[f.Name] = f
 	}
 
-	alphaTar, ok := entries["node-alpha.tar.gz"]
-	if !ok {
-		t.Fatalf("zip missing node-alpha.tar.gz")
+	if _, ok := entries["node-alpha.tar.gz"]; ok {
+		t.Fatalf("zip should not include node-alpha.tar.gz; only node-alpha.install.sh is expected")
 	}
 
-	if _, ok := entries["node-alpha.install.sh"]; !ok {
+	alphaInstaller, ok := entries["node-alpha.install.sh"]
+	if !ok {
 		t.Fatalf("zip missing node-alpha.install.sh")
 	}
 
-	rc, err := alphaTar.Open()
+	rc, err := alphaInstaller.Open()
 	if err != nil {
-		t.Fatalf("failed to open node-alpha.tar.gz in zip: %v", err)
+		t.Fatalf("failed to open node-alpha.install.sh in zip: %v", err)
 	}
 	defer rc.Close()
 
-	tarBytes, err := io.ReadAll(rc)
+	installerBytes, err := io.ReadAll(rc)
 	if err != nil {
-		t.Fatalf("failed to read node-alpha.tar.gz bytes: %v", err)
+		t.Fatalf("failed to read node-alpha.install.sh bytes: %v", err)
+	}
+
+	installerText := string(installerBytes)
+	payloadMarker := "__PAYLOAD_BELOW__\n"
+	idx := strings.Index(installerText, payloadMarker)
+	if idx < 0 {
+		t.Fatalf("node-alpha.install.sh missing payload marker")
+	}
+
+	payloadBase64 := strings.TrimSpace(installerText[idx+len(payloadMarker):])
+	tarBytes, err := base64.StdEncoding.DecodeString(payloadBase64)
+	if err != nil {
+		t.Fatalf("failed to decode embedded payload from node-alpha.install.sh: %v", err)
 	}
 
 	gzReader, err := gzip.NewReader(bytes.NewReader(tarBytes))
