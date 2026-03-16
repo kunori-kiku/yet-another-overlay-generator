@@ -509,17 +509,33 @@ export function RightPanel() {
                 </summary>
 
                 <div className="mt-2 space-y-2">
-                  <details className="bg-gray-800/70 rounded p-2">
-                    <summary className="text-xs cursor-pointer text-cyan-300">
-                      wireguard/wg0.conf
-                    </summary>
-                    <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
-                      {txt(language, '预览', 'Preview')}:\n{previewText(compileResult.wireguard_configs[n.id])}
-                    </pre>
-                    <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
-                      {compileResult.wireguard_configs[n.id] || txt(language, '无内容', 'No content')}
-                    </pre>
-                  </details>
+                  {/* WireGuard per-peer interface configs */}
+                  {Object.entries(compileResult.wireguard_configs)
+                    .filter(([key]) => key.startsWith(n.id + ':'))
+                    .map(([key, config]) => {
+                      const interfaceName = key.split(':').slice(1).join(':');
+                      return (
+                        <details key={key} className="bg-gray-800/70 rounded p-2">
+                          <summary className="text-xs cursor-pointer text-cyan-300">
+                            wireguard/{interfaceName}.conf
+                          </summary>
+                          <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
+                            {txt(language, '预览', 'Preview')}:\n{previewText(config)}
+                          </pre>
+                          <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
+                            {config || txt(language, '无内容', 'No content')}
+                          </pre>
+                        </details>
+                      );
+                    })}
+                  {Object.keys(compileResult.wireguard_configs)
+                    .filter((key) => key.startsWith(n.id + ':')).length === 0 && (
+                    <details className="bg-gray-800/70 rounded p-2">
+                      <summary className="text-xs cursor-pointer text-cyan-300 text-gray-500">
+                        wireguard/ ({txt(language, '无配置', 'No configs')})
+                      </summary>
+                    </details>
+                  )}
 
                   <details className="bg-gray-800/70 rounded p-2">
                     <summary className="text-xs cursor-pointer text-amber-300">
