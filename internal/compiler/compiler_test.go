@@ -18,7 +18,7 @@ func simpleMeshTopo() *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "test-001", Name: "Test Mesh"},
 		Domains: []model.Domain{{
-			ID: "domain-1", Name: "mesh", CIDR: "10.10.0.0/24",
+			ID: "domain-1", Name: "mesh", CIDR: "10.11.0.0/24",
 			AllocationMode: "auto", RoutingMode: "babel",
 		}},
 		Nodes: []model.Node{
@@ -83,9 +83,9 @@ func natHubTopo() *model.Topology {
 func TestDerivePeers_SimpleMesh(t *testing.T) {
 	topo := simpleMeshTopo()
 	//  IP
-	topo.Nodes[0].OverlayIP = "10.10.0.1"
-	topo.Nodes[1].OverlayIP = "10.10.0.2"
-	topo.Nodes[2].OverlayIP = "10.10.0.3"
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
@@ -101,9 +101,9 @@ func TestDerivePeers_SimpleMesh(t *testing.T) {
 
 func TestDerivePeers_EdgeConsistency(t *testing.T) {
 	topo := simpleMeshTopo()
-	topo.Nodes[0].OverlayIP = "10.10.0.1"
-	topo.Nodes[1].OverlayIP = "10.10.0.2"
-	topo.Nodes[2].OverlayIP = "10.10.0.3"
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
@@ -124,9 +124,9 @@ func TestDerivePeers_EdgeConsistency(t *testing.T) {
 
 func TestDerivePeers_EndpointCorrect(t *testing.T) {
 	topo := simpleMeshTopo()
-	topo.Nodes[0].OverlayIP = "10.10.0.1"
-	topo.Nodes[1].OverlayIP = "10.10.0.2"
-	topo.Nodes[2].OverlayIP = "10.10.0.3"
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
@@ -143,18 +143,18 @@ func TestDerivePeers_EndpointCorrect(t *testing.T) {
 
 func TestDerivePeers_AllowedIPs(t *testing.T) {
 	topo := simpleMeshTopo()
-	topo.Nodes[0].OverlayIP = "10.10.0.1"
-	topo.Nodes[1].OverlayIP = "10.10.0.2"
-	topo.Nodes[2].OverlayIP = "10.10.0.3"
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
 
-	// ：AllowedIPs  /32
+	// per-peer 架构：AllowedIPs 使用宽松策略
 	for _, p := range peerMap["node-1"] {
 		if p.NodeID == "node-2" {
-			if len(p.AllowedIPs) != 1 || p.AllowedIPs[0] != "10.10.0.2/32" {
-				t.Errorf("AllowedIPs  [10.10.0.2/32],  %v", p.AllowedIPs)
+			if len(p.AllowedIPs) != 2 || p.AllowedIPs[0] != "0.0.0.0/0" || p.AllowedIPs[1] != "::/0" {
+				t.Errorf("AllowedIPs 应为 [0.0.0.0/0, ::/0]，实际 %v", p.AllowedIPs)
 			}
 		}
 	}
@@ -184,9 +184,9 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 
 func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo := simpleMeshTopo()
-	topo.Nodes[0].OverlayIP = "10.10.0.1"
-	topo.Nodes[1].OverlayIP = "10.10.0.2"
-	topo.Nodes[2].OverlayIP = "10.10.0.3"
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	//  node-1 <-> node-2 
 	topo.Edges[0].IsEnabled = false
@@ -262,9 +262,9 @@ func TestDerivePeers_UnidirectionalKeepalive(t *testing.T) {
 
 func TestDerivePeers_BidirectionalNoExtraKeepalive(t *testing.T) {
 	topo := simpleMeshTopo()
-	topo.Nodes[0].OverlayIP = "10.10.0.1"
-	topo.Nodes[1].OverlayIP = "10.10.0.2"
-	topo.Nodes[2].OverlayIP = "10.10.0.3"
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
 	peerMap := DerivePeers(topo, keys)
@@ -274,6 +274,135 @@ func TestDerivePeers_BidirectionalNoExtraKeepalive(t *testing.T) {
 		if p.PersistentKeepalive != 0 {
 			t.Errorf("双向 edge 场景: node-1→%s 不应该有 PersistentKeepalive (期望 0，实际 %d)",
 				p.NodeID, p.PersistentKeepalive)
+		}
+	}
+}
+
+func TestDerivePeers_PerPeerFields(t *testing.T) {
+	topo := simpleMeshTopo()
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
+
+	keys := testKeys()
+	peerMap := DerivePeers(topo, keys)
+
+	// 验证 node-1 的第一个 peer 的 per-peer 字段
+	node1Peers := peerMap["node-1"]
+	if len(node1Peers) != 2 {
+		t.Fatalf("node-1 应有 2 个 peer，实际 %d", len(node1Peers))
+	}
+
+	for _, p := range node1Peers {
+		// InterfaceName 格式：wg-<peername>
+		if p.InterfaceName == "" {
+			t.Errorf("peer %s 的 InterfaceName 不应为空", p.NodeID)
+		}
+		if len(p.InterfaceName) > 15 {
+			t.Errorf("peer %s 的 InterfaceName 超过 15 字符: %s", p.NodeID, p.InterfaceName)
+		}
+
+		// ListenPort 应有值且从 basePort 递增
+		if p.ListenPort == 0 {
+			t.Errorf("peer %s 的 ListenPort 不应为 0", p.NodeID)
+		}
+
+		// Transit IP 应有值
+		if p.LocalTransitIP == "" {
+			t.Errorf("peer %s 的 LocalTransitIP 不应为空", p.NodeID)
+		}
+		if p.RemoteTransitIP == "" {
+			t.Errorf("peer %s 的 RemoteTransitIP 不应为空", p.NodeID)
+		}
+
+		// Link-local 应有值
+		if p.LocalLinkLocal == "" {
+			t.Errorf("peer %s 的 LocalLinkLocal 不应为空", p.NodeID)
+		}
+		if p.RemoteLinkLocal == "" {
+			t.Errorf("peer %s 的 RemoteLinkLocal 不应为空", p.NodeID)
+		}
+	}
+
+	// 验证两个 peer 的 ListenPort 不同（递增分配）
+	if node1Peers[0].ListenPort == node1Peers[1].ListenPort {
+		t.Errorf("同一节点的两个 peer 接口 ListenPort 应不同，实际都为 %d", node1Peers[0].ListenPort)
+	}
+
+	// 验证 transit IP 互补：node-1 到 node-2 的 local 应等于 node-2 到 node-1 的 remote
+	var n1ToN2, n2ToN1 *PeerInfo
+	for i, p := range peerMap["node-1"] {
+		if p.NodeID == "node-2" {
+			n1ToN2 = &peerMap["node-1"][i]
+		}
+	}
+	for i, p := range peerMap["node-2"] {
+		if p.NodeID == "node-1" {
+			n2ToN1 = &peerMap["node-2"][i]
+		}
+	}
+	if n1ToN2 != nil && n2ToN1 != nil {
+		if n1ToN2.LocalTransitIP != n2ToN1.RemoteTransitIP {
+			t.Errorf("transit IP 不互补: n1→n2 local=%s, n2→n1 remote=%s",
+				n1ToN2.LocalTransitIP, n2ToN1.RemoteTransitIP)
+		}
+		if n1ToN2.RemoteTransitIP != n2ToN1.LocalTransitIP {
+			t.Errorf("transit IP 不互补: n1→n2 remote=%s, n2→n1 local=%s",
+				n1ToN2.RemoteTransitIP, n2ToN1.LocalTransitIP)
+		}
+	}
+}
+
+func TestGenerateRouterID(t *testing.T) {
+	// 验证 MAC-48 格式
+	rid := GenerateRouterID("node-1")
+	if len(rid) != 17 { // xx:xx:xx:xx:xx:xx = 17 chars
+		t.Errorf("RouterID 长度应为 17，实际 %d: %s", len(rid), rid)
+	}
+
+	// 验证格式包含 5 个冒号
+	colonCount := 0
+	for _, c := range rid {
+		if c == ':' {
+			colonCount++
+		}
+	}
+	if colonCount != 5 {
+		t.Errorf("RouterID 应包含 5 个冒号，实际 %d: %s", colonCount, rid)
+	}
+
+	// 验证稳定性（同输入 → 同输出）
+	rid2 := GenerateRouterID("node-1")
+	if rid != rid2 {
+		t.Errorf("RouterID 不稳定: 第一次=%s, 第二次=%s", rid, rid2)
+	}
+
+	// 验证不同输入 → 不同输出
+	rid3 := GenerateRouterID("node-2")
+	if rid == rid3 {
+		t.Errorf("不同节点的 RouterID 应不同: node-1=%s, node-2=%s", rid, rid3)
+	}
+}
+
+func TestWgInterfaceName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"beta", "wg-beta"},
+		{"Alpha", "wg-alpha"},          // 大写转小写
+		{"my_server", "wg-my-server"},   // 下划线转连字符
+		{"a.b.c", "wg-a-b-c"},          // 点转连字符
+		{"abcdefghijklmnop", "wg-abcdefghijkl"}, // 超过15字符截断
+	}
+
+	for _, tt := range tests {
+		got := wgInterfaceName(tt.input)
+		if got != tt.expected {
+			t.Errorf("wgInterfaceName(%q) = %q, 期望 %q", tt.input, got, tt.expected)
+		}
+		if len(got) > 15 {
+			t.Errorf("wgInterfaceName(%q) = %q 超过 15 字符", tt.input, got)
 		}
 	}
 }

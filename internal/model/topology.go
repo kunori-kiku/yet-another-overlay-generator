@@ -1,24 +1,24 @@
 package model
 
-// Topology ，
+// Topology 完整的网络拓扑定义
 type Topology struct {
-	// 
+	// 项目信息
 	Project Project `json:"project"`
 
-	// 
+	// 网络域列表
 	Domains []Domain `json:"domains"`
 
-	// 
+	// 节点列表
 	Nodes []Node `json:"nodes"`
 
-	// 
+	// 边（连接）列表
 	Edges []Edge `json:"edges"`
 
-	// （）
+	// 路由策略（可选）
 	RoutePolicies []RoutePolicy `json:"route_policies,omitempty"`
 }
 
-// Project 
+// Project 项目元信息
 type Project struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -26,7 +26,7 @@ type Project struct {
 	Version     string `json:"version,omitempty"`
 }
 
-// Domain ， overlay 
+// Domain 网络域定义，代表一个 overlay 地址空间
 type Domain struct {
 	ID             string   `json:"id"`
 	Name           string   `json:"name"`
@@ -35,44 +35,52 @@ type Domain struct {
 	AllocationMode string   `json:"allocation_mode"` // "auto" | "manual"
 	RoutingMode    string   `json:"routing_mode"`    // "static" | "babel" | "none"
 	ReservedRanges []string `json:"reserved_ranges,omitempty"`
+
+	// Transit（点对点链路）地址池，用于 per-peer WireGuard 接口地址分配
+	// 为空时自动使用 10.10.0.0/24
+	TransitCIDR string `json:"transit_cidr,omitempty"`
 }
 
-// Node ，
+// Node 网络节点定义
 type Node struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Hostname string `json:"hostname,omitempty"`
 	Platform string `json:"platform,omitempty"` // "debian" | "ubuntu"
 
-	// ：peer, router, relay, gateway
+	// 角色：peer, router, relay, gateway
 	Role string `json:"role"`
 
-	//  Domain ID（： Domain）
+	// 所属 Domain ID（必须引用已有 Domain）
 	DomainID string `json:"domain_id"`
 
-	// Overlay IP，
+	// Overlay IP，编译时自动分配
 	OverlayIP string `json:"overlay_ip,omitempty"`
 
-	// WireGuard 
+	// WireGuard 基础监听端口（每个 peer 接口会从此端口递增）
 	ListenPort int `json:"listen_port,omitempty"`
 
 	// WireGuard 接口 MTU（0 = 使用系统默认值，通常 1420）
 	MTU int `json:"mtu,omitempty"`
 
-	// 
+	// Babel router-id（MAC-48 格式，如 02:11:22:33:44:55）
+	// 留空时由编译器自动生成
+	RouterID string `json:"router_id,omitempty"`
+
+	// 节点能力
 	Capabilities NodeCapabilities `json:"capabilities"`
 
-	// ： WireGuard 
+	// 是否固定 WireGuard 密钥
 	FixedPrivateKey bool `json:"fixed_private_key,omitempty"`
 
-	// WireGuard （ fixed_private_key=true ）
+	// WireGuard 密钥（仅当 fixed_private_key=true 时有效）
 	WireGuardPrivateKey string `json:"wireguard_private_key,omitempty"`
 	WireGuardPublicKey  string `json:"wireguard_public_key,omitempty"`
 
 	// 公网可达地址映射（一个节点可以有多组 endpoint）
 	PublicEndpoints []PublicEndpoint `json:"public_endpoints,omitempty"`
 
-	// （gateway ：）
+	// 额外路由前缀（gateway 用：向外宣告的网段）
 	ExtraPrefixes []string `json:"extra_prefixes,omitempty"`
 }
 
@@ -84,7 +92,7 @@ type PublicEndpoint struct {
 	Note string `json:"note,omitempty"`
 }
 
-// NodeCapabilities 
+// NodeCapabilities 节点能力声明
 type NodeCapabilities struct {
 	CanAcceptInbound bool `json:"can_accept_inbound"`
 	CanForward       bool `json:"can_forward"`
@@ -92,35 +100,35 @@ type NodeCapabilities struct {
 	HasPublicIP      bool `json:"has_public_ip"`
 }
 
-// Edge ，
-//  "from  to "
+// Edge 边定义，表示两个节点之间的连接意图
+// 语义为 "from 主动连 to "
 type Edge struct {
 	ID         string `json:"id"`
 	FromNodeID string `json:"from_node_id"`
 	ToNodeID   string `json:"to_node_id"`
 
-	// ：direct, public-endpoint, relay-path, candidate
+	// 连接类型：direct, public-endpoint, relay-path, candidate
 	Type string `json:"type"`
 
-	//  endpoint
+	// 对端 endpoint
 	EndpointHost string `json:"endpoint_host,omitempty"`
 	EndpointPort int    `json:"endpoint_port,omitempty"`
 
-	// 
+	// 优先级
 	Priority int `json:"priority,omitempty"`
 	Weight   int `json:"weight,omitempty"`
 
-	// ：udp, tcp
+	// 传输协议：udp, tcp
 	Transport string `json:"transport,omitempty"`
 
-	// 
+	// 是否启用
 	IsEnabled bool `json:"is_enabled"`
 
-	// 
+	// 备注
 	Notes string `json:"notes,omitempty"`
 }
 
-// RoutePolicy （Phase 2 ）
+// RoutePolicy 路由策略定义
 type RoutePolicy struct {
 	ID              string `json:"id"`
 	DomainID        string `json:"domain_id"`
@@ -129,8 +137,7 @@ type RoutePolicy struct {
 	Metric          int    `json:"metric,omitempty"`
 	Notes           string `json:"notes,omitempty"`
 
-	// Phase 2 
-	SourceSelector string `json:"source_selector,omitempty"`  //  ID 
-	Action         string `json:"action,omitempty"`           // "allow" | "deny" | "metric-override"
-	ApplyToNodeID  string `json:"apply_to_node_id,omitempty"` // （=）
+	SourceSelector string `json:"source_selector,omitempty"`
+	Action         string `json:"action,omitempty"`
+	ApplyToNodeID  string `json:"apply_to_node_id,omitempty"`
 }

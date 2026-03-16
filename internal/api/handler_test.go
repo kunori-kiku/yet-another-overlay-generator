@@ -286,14 +286,15 @@ func TestHandleExport_ReturnsZipWithNodeInstallers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read tar entry from node-alpha.tar.gz: %v", err)
 		}
-		if hdr.Name == "wireguard/wg0.conf" {
+		// per-peer 架构：接口名为 wg-<peername>，node-alpha 的 peer 是 node-beta
+		if strings.HasPrefix(hdr.Name, "wireguard/wg-") && strings.HasSuffix(hdr.Name, ".conf") {
 			hasWgConf = true
 			break
 		}
 	}
 
 	if !hasWgConf {
-		t.Errorf("node-alpha.tar.gz missing wireguard/wg0.conf")
+		t.Errorf("node-alpha.tar.gz missing wireguard/wg-*.conf (per-peer interface config)")
 	}
 }
 

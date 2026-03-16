@@ -9,7 +9,7 @@
     {
       "id": "domain-1",
       "name": "mesh-network",
-      "cidr": "10.10.0.0/24",
+      "cidr": "10.11.0.0/24",
       "allocation_mode": "auto",
       "routing_mode": "babel"
     }

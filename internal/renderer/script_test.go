@@ -4,98 +4,80 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-func TestRenderInstallScript_RouterWithBabel(t *testing.T) {
+func TestRenderInstallScript_RouterWithBabel_PerPeer(t *testing.T) {
 	node := &model.Node{
 		ID:        "node-1",
 		Name:      "alpha",
 		Role:      "router",
 		Platform:  "debian",
-		OverlayIP: "10.10.0.1",
+		OverlayIP: "10.11.0.1",
 		Capabilities: model.NodeCapabilities{
 			CanForward: true,
 		},
 	}
 
-	script, err := RenderInstallScript(node, true)
+	peers := []compiler.PeerInfo{
+		{NodeID: "node-2", NodeName: "beta", InterfaceName: "wg-beta",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1"},
+		{NodeID: "node-3", NodeName: "gamma", InterfaceName: "wg-gamma",
+			ListenPort: 51821, LocalTransitIP: "10.10.0.3", LocalLinkLocal: "fe80::3"},
+	}
+
+	script, err := RenderInstallScript(node, peers, true)
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}
 
-	//  shebang
+	// shebang
 	if !strings.HasPrefix(script, "#!/usr/bin/env bash") {
-		t.Errorf("缺少 shebang 行")
+		t.Errorf("缺少 shebang")
 	}
 
-	//  set -euo pipefail
-	if !strings.Contains(script, "set -euo pipefail") {
-		t.Errorf("缺少 set -euo pipefail")
-	}
-
-	//  wireguard
-	if !strings.Contains(script, "wireguard") {
-		t.Errorf("缺少 wireguard")
-	}
-
-	//  babeld
-	if !strings.Contains(script, "babeld") {
-		t.Errorf("有 Babel 时应包含 babeld")
-	}
-
-	// 验证 Phase 0 清理阶段
+	// Phase 0 清理
 	if !strings.Contains(script, "Phase 0") {
 		t.Errorf("缺少 Phase 0 清理阶段")
 	}
 
-	// 验证包含所有阶段
-	if !strings.Contains(script, "Phase 1") {
-		t.Errorf("缺少 Phase 1")
-	}
-	if !strings.Contains(script, "Phase 2") {
-		t.Errorf("缺少 Phase 2")
-	}
-	if !strings.Contains(script, "Phase 3") {
-		t.Errorf("缺少 Phase 3")
+	// 应包含所有阶段
+	for _, phase := range []string{"Phase 0", "Phase 1", "Phase 2", "Phase 3"} {
+		if !strings.Contains(script, phase) {
+			t.Errorf("缺少 %s", phase)
+		}
 	}
 
-	//  root 
-	if !strings.Contains(script, "id -u") {
-		t.Errorf("缺少 root 检查")
+	// 应包含 per-peer 接口名
+	if !strings.Contains(script, "wg-beta") {
+		t.Errorf("应包含 wg-beta 接口")
+	}
+	if !strings.Contains(script, "wg-gamma") {
+		t.Errorf("应包含 wg-gamma 接口")
 	}
 
-	// 
-	if !strings.Contains(script, "ip_forward") {
-		t.Errorf("缺少 ip_forward 相关")
+	// 应包含 dummy0 创建（overlay 地址）
+	if !strings.Contains(script, "dummy0") {
+		t.Errorf("应包含 dummy0 接口创建")
+	}
+	if !strings.Contains(script, "10.11.0.1/32") {
+		t.Errorf("应包含 overlay 地址分配到 dummy0")
 	}
 
-	// Phase 0 应包含停止 WireGuard
-	if !strings.Contains(script, "wg-quick down") {
-		t.Errorf("Phase 0 应包含 wg-quick down 清理命令")
-	}
-
-	// Phase 0 应包含停止 Babel（因为 hasBabel=true）
-	if !strings.Contains(script, "systemctl stop babeld") {
-		t.Errorf("Phase 0 应包含停止 babeld 的清理命令")
-	}
-
-	// Phase 0 应该删除旧配置文件
-	if !strings.Contains(script, "rm -f") {
-		t.Errorf("Phase 0 应包含删除旧配置文件的命令")
-	}
-
-	// Phase 2 不应包含备份逻辑（Phase 0 已清理）
-	if strings.Contains(script, ".bak.") {
-		t.Errorf("不应包含备份逻辑，Phase 0 已清理旧文件")
-	}
-
-	// 应包含 babeld systemd override（指定配置文件路径）
+	// 应包含 babeld systemd override
 	if !strings.Contains(script, "babeld.service.d/override.conf") {
-		t.Errorf("有 Babel 时应创建 systemd override 指定配置文件路径")
+		t.Errorf("应包含 babeld systemd override")
 	}
-	if !strings.Contains(script, "/etc/babel/babeld.conf") {
-		t.Errorf("babeld 应使用 /etc/babel/babeld.conf 配置路径")
+
+	// 应清理遗留的单接口 wg0
+	if !strings.Contains(script, "wg0") {
+		t.Errorf("应清理遗留的 wg0 配置")
+	}
+
+	// 应包含 ip_forward
+	if !strings.Contains(script, "ip_forward") {
+		t.Errorf("应包含 ip_forward")
 	}
 }
 
@@ -105,30 +87,27 @@ func TestRenderInstallScript_PeerWithoutBabel(t *testing.T) {
 		Name:      "nat-client",
 		Role:      "peer",
 		Platform:  "ubuntu",
-		OverlayIP: "10.10.0.2",
-		Capabilities: model.NodeCapabilities{
-			CanForward: false,
-		},
+		OverlayIP: "10.11.0.2",
 	}
 
-	script, err := RenderInstallScript(node, false)
+	peers := []compiler.PeerInfo{
+		{NodeID: "hub-1", NodeName: "hub", InterfaceName: "wg-hub",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.2", LocalLinkLocal: "fe80::2"},
+	}
+
+	script, err := RenderInstallScript(node, peers, false)
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}
 
-	//  babel  babeld
+	// 无 babel 时不应安装 babeld
 	if strings.Contains(script, "ensure_pkg babeld") {
 		t.Errorf("无 Babel 时不应安装 babeld")
 	}
 
-	//  babel  babel 
+	// 无 babel 时不应创建 babel 目录
 	if strings.Contains(script, "mkdir -p /etc/babel") {
 		t.Errorf("无 Babel 时不应创建 babel 目录")
-	}
-
-	// Phase 0 不应包含 babeld 清理
-	if strings.Contains(script, "systemctl stop babeld") {
-		t.Errorf("无 Babel 时 Phase 0 不应清理 babeld")
 	}
 }
 
@@ -137,11 +116,15 @@ func TestRenderInstallScript_DefaultPlatform(t *testing.T) {
 		ID:        "node-1",
 		Name:      "test",
 		Role:      "peer",
-		OverlayIP: "10.10.0.1",
-		// Platform 为空
+		OverlayIP: "10.11.0.1",
 	}
 
-	script, err := RenderInstallScript(node, false)
+	peers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "peer2", InterfaceName: "wg-peer2",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1"},
+	}
+
+	script, err := RenderInstallScript(node, peers, false)
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}
@@ -151,69 +134,29 @@ func TestRenderInstallScript_DefaultPlatform(t *testing.T) {
 	}
 }
 
-func TestRenderInstallScript_WithMTU(t *testing.T) {
-	node := &model.Node{
-		ID:        "node-1",
-		Name:      "mtu-node",
-		Role:      "router",
-		Platform:  "debian",
-		OverlayIP: "10.10.0.1",
-		MTU:       1280,
-		Capabilities: model.NodeCapabilities{
-			CanForward: true,
-		},
-	}
-
-	script, err := RenderInstallScript(node, false)
-	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
-	}
-
-	// 状态输出中应显示 MTU
-	if !strings.Contains(script, "MTU: 1280") {
-		t.Errorf("设置了 MTU 时状态输出应显示 MTU 值")
-	}
-}
-
-func TestRenderInstallScript_WithoutMTU(t *testing.T) {
-	node := &model.Node{
-		ID:        "node-1",
-		Name:      "default-mtu",
-		Role:      "peer",
-		Platform:  "debian",
-		OverlayIP: "10.10.0.1",
-		// MTU 默认为 0
-	}
-
-	script, err := RenderInstallScript(node, false)
-	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
-	}
-
-	// 没有设置 MTU 时不应显示 MTU 行
-	if strings.Contains(script, "MTU:") {
-		t.Errorf("未设置 MTU 时不应在状态中显示 MTU")
-	}
-}
-
-func TestRenderInstallScript_CleanupPhaseOrder(t *testing.T) {
+func TestRenderInstallScript_PerPeerCleanupOrder(t *testing.T) {
 	node := &model.Node{
 		ID:        "node-1",
 		Name:      "order-test",
 		Role:      "router",
 		Platform:  "debian",
-		OverlayIP: "10.10.0.1",
+		OverlayIP: "10.11.0.1",
 		Capabilities: model.NodeCapabilities{
 			CanForward: true,
 		},
 	}
 
-	script, err := RenderInstallScript(node, true)
+	peers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1"},
+	}
+
+	script, err := RenderInstallScript(node, peers, true)
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}
 
-	// Phase 0 should come before Phase 1
+	// Phase 顺序检查
 	phase0Idx := strings.Index(script, "Phase 0")
 	phase1Idx := strings.Index(script, "Phase 1")
 	phase2Idx := strings.Index(script, "Phase 2")

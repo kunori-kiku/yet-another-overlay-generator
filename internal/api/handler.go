@@ -300,8 +300,9 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 
 	//
 	for _, node := range result.Topology.Nodes {
+		peers := result.PeerMap[node.ID]
 		_, hasBabel := result.BabelConfigs[node.ID]
-		script, err := renderer.RenderInstallScript(&node, hasBabel)
+		script, err := renderer.RenderInstallScript(&node, peers, hasBabel)
 		if err != nil {
 			return fmt.Errorf(" %s : %w", node.Name, err)
 		}
