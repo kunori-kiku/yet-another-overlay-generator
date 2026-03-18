@@ -27,6 +27,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/validate", s.cors(s.handler.HandleValidate))
 	s.mux.HandleFunc("/api/compile", s.cors(s.handler.HandleCompile))
 	s.mux.HandleFunc("/api/export", s.cors(s.handler.HandleExport))
+	s.mux.HandleFunc("/api/deploy-script", s.cors(s.handler.HandleDeployScript))
 }
 
 // cors CORS 
@@ -58,5 +59,6 @@ func (s *Server) ListenAndServe(addr string) error {
 	fmt.Println("  POST /api/validate - ")
 	fmt.Println("  POST /api/compile  - ")
 	fmt.Println("  POST /api/export   - ")
+	fmt.Println("  POST /api/deploy-script - 下载部署脚本")
 	return http.ListenAndServe(addr, s.mux)
 }

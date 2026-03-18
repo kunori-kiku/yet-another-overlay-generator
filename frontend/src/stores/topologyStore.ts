@@ -69,6 +69,7 @@ interface TopologyState {
   validate: () => Promise<void>;
   compile: () => Promise<void>;
   exportArtifacts: () => Promise<void>;
+  downloadDeployScript: (format: 'sh' | 'ps1') => Promise<void>;
 
   // 工具
   getTopology: () => Topology;
@@ -391,6 +392,37 @@ export const useTopologyStore = create<TopologyState>()(
   },
 
   clearHistory: () => set({ history: [] }),
+
+  // API: 下载部署脚本
+  downloadDeployScript: async (format: 'sh' | 'ps1') => {
+    try {
+      const topo = get().getTopology();
+      const res = await fetch(`/api/deploy-script?format=${format}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(topo),
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to generate deploy script');
+      }
+
+      const blob = await res.blob();
+      const filename = format === 'ps1' ? 'deploy-all.ps1' : 'deploy-all.sh';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : 'Deploy script download failed',
+      });
+    }
+  },
     }),
     {
       name: 'topology-storage',
