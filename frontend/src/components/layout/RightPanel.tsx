@@ -27,6 +27,7 @@ export function RightPanel() {
     compileResult,
     compile,
     exportArtifacts,
+    downloadDeployScript,
     isCompiling,
     language,
   } = useTopologyStore();
@@ -49,18 +50,11 @@ export function RightPanel() {
       : '__manual__'
     : '__none__';
 
-  // Compute the auto-assigned port for this edge's peer connection
-  const computedEdgePort = (() => {
+  // Get the compiled port for the selected edge from the compiled topology
+  const compiledEdgePort = (() => {
     if (!compileResult || !selectedEdge) return undefined;
-    const sourceNode = nodes.find((n) => n.id === selectedEdge.from_node_id);
-    const targetNode = nodes.find((n) => n.id === selectedEdge.to_node_id);
-    if (!sourceNode || !targetNode) return undefined;
-    // The target's interface for this source is named wg-<sourceName>
-    const ifaceName = `wg-${sourceNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
-    const configKey = `${targetNode.id}:${ifaceName}`;
-    const config = compileResult.wireguard_configs[configKey];
-    const portMatch = config?.match(/ListenPort\s*=\s*(\d+)/);
-    return portMatch ? parseInt(portMatch[1], 10) : undefined;
+    const compiledEdge = compileResult.topology.edges?.find((e) => e.id === selectedEdge.id);
+    return compiledEdge?.compiled_port || undefined;
   })();
 
   const updateNodeEndpoint = (
@@ -121,6 +115,22 @@ export function RightPanel() {
           >
             {txt(language, '📦 导出产物包', '📦 Export Artifacts')}
           </button>
+          <div className="flex gap-1">
+            <button
+              onClick={() => downloadDeployScript('sh')}
+              disabled={nodes.length === 0}
+              className="flex-1 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            >
+              {txt(language, '🚀 部署脚本 .sh', '🚀 Deploy .sh')}
+            </button>
+            <button
+              onClick={() => downloadDeployScript('ps1')}
+              disabled={nodes.length === 0}
+              className="flex-1 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            >
+              {txt(language, '🚀 部署脚本 .ps1', '🚀 Deploy .ps1')}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -225,17 +235,27 @@ export function RightPanel() {
               <label className="text-xs text-gray-400">{txt(language, '角色', 'Role')}</label>
               <select
                 value={selectedNode.role}
-                onChange={(e) =>
-                  updateNode(selectedNode.id, {
-                    role: e.target.value as 'peer' | 'router' | 'relay' | 'gateway',
-                  })
-                }
+                onChange={(e) =>{
+                  const newRole = e.target.value as 'peer' | 'router' | 'relay' | 'gateway' | 'client';
+                  const updates: Record<string, unknown> = { role: newRole };
+                  // Auto-uncheck "Publicly Reachable" when switching to client
+                  if (newRole === 'client') {
+                    updates.capabilities = {
+                      ...selectedNode.capabilities,
+                      has_public_ip: false,
+                      can_accept_inbound: false,
+                      can_forward: false,
+                    };
+                  }
+                  updateNode(selectedNode.id, updates);
+                }}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
               >
                 <option value="peer">Peer</option>
                 <option value="router">Router</option>
                 <option value="relay">Relay</option>
                 <option value="gateway">Gateway</option>
+                <option value="client">Client</option>
               </select>
             </div>
             <div>
@@ -279,6 +299,7 @@ export function RightPanel() {
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
+            {selectedNode.role !== 'client' && (
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -295,6 +316,7 @@ export function RightPanel() {
               />
               {txt(language, '公网可达', 'Publicly Reachable')}
             </label>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -324,6 +346,7 @@ export function RightPanel() {
                 </p>
               </div>
             )}
+            {selectedNode.role !== 'client' && (
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -339,6 +362,8 @@ export function RightPanel() {
               />
               {txt(language, '可转发流量', 'Can Forward Traffic')}
             </label>
+            )}
+            {selectedNode.role !== 'client' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs text-gray-400">{txt(language, '公网可达地址映射 (IP:端口)', 'Public endpoint mappings (IP:Port)')}</label>
@@ -396,6 +421,7 @@ export function RightPanel() {
                 </div>
               ))}
             </div>
+            )}
             {/* SSH Connection Details (collapsible) */}
             <details className="bg-gray-700/50 rounded p-2">
               <summary className="text-xs cursor-pointer text-gray-400 font-semibold">
@@ -516,35 +542,39 @@ export function RightPanel() {
             {/* Endpoint IP — pick from target's public IPs or manual */}
             <div>
               <label className="text-xs text-gray-400">{txt(language, '目标 IP (从目标节点公网地址选择)', 'Endpoint IP (from target public IPs)')}</label>
-              <select
-                value={matchedTargetHost}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === '__manual__') {
-                    return;
-                  }
-                  if (value === '__none__') {
+              {targetHostOptions.length > 0 && (
+                <select
+                  value={matchedTargetHost}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '__none__') {
+                      updateEdge(selectedEdge.id, {
+                        endpoint_host: undefined,
+                      });
+                      return;
+                    }
+                    if (value === '__manual__') {
+                      // Keep the current value — user will type in the text input below
+                      return;
+                    }
+                    const host = value.replace('host:', '');
                     updateEdge(selectedEdge.id, {
-                      endpoint_host: undefined,
+                      endpoint_host: host,
                     });
-                    return;
-                  }
-                  const host = value.replace('host:', '');
-                  updateEdge(selectedEdge.id, {
-                    endpoint_host: host,
-                  });
-                }}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
-              >
-                <option value="__manual__">{txt(language, '手动输入', 'Manual input')}</option>
-                <option value="__none__">{txt(language, '不设置', 'Unset')}</option>
-                {targetHostOptions.map((host) => (
-                  <option key={host} value={`host:${host}`}>
-                    {host}
-                  </option>
-                ))}
-              </select>
+                  }}
+                  className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+                >
+                  <option value="__none__">{txt(language, '不设置', 'Unset')}</option>
+                  {targetHostOptions.map((host) => (
+                    <option key={host} value={`host:${host}`}>
+                      {host}
+                    </option>
+                  ))}
+                  <option value="__manual__">{txt(language, '手动输入', 'Manual input')}</option>
+                </select>
+              )}
               <input
+                key={`ep-host-${selectedEdge.id}`}
                 type="text"
                 value={selectedEdge.endpoint_host || ''}
                 onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined })}
@@ -552,30 +582,37 @@ export function RightPanel() {
                 className="w-full mt-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
-            {/* Endpoint Port — auto from compiled interface or manual */}
+            {/* Endpoint Port — 0 or empty = auto, nonzero = NAT/port-forward override */}
             <div>
-              <label className="text-xs text-gray-400">{txt(language, '目标端口 (WG 接口监听端口)', 'Endpoint Port (WG interface listen port)')}</label>
+              <label className="text-xs text-gray-400">{txt(language, '目标端口 (0 = 自动分配, 非零 = NAT 覆盖)', 'Endpoint Port (0 = auto, nonzero = NAT override)')}</label>
               <div className="flex gap-1 items-center">
                 <input
+                  key={`ep-port-${selectedEdge.id}`}
                   type="number"
-                  value={selectedEdge.endpoint_port || ''}
-                  onChange={(e) => updateEdge(selectedEdge.id, { endpoint_port: parseInt(e.target.value) || undefined })}
-                  placeholder={computedEdgePort ? String(computedEdgePort) : txt(language, '端口', 'Port')}
+                  value={selectedEdge.endpoint_port ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      updateEdge(selectedEdge.id, { endpoint_port: undefined });
+                    } else {
+                      const parsed = parseInt(raw, 10);
+                      if (!isNaN(parsed)) {
+                        updateEdge(selectedEdge.id, { endpoint_port: parsed });
+                      }
+                    }
+                  }}
+                  placeholder={txt(language, '0 = 自动', '0 = auto')}
                   className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                 />
-                {computedEdgePort && (
-                  <button
-                    onClick={() => updateEdge(selectedEdge.id, { endpoint_port: computedEdgePort })}
-                    className="text-[10px] px-1.5 py-1 rounded bg-cyan-700 hover:bg-cyan-600 whitespace-nowrap"
-                    title={txt(language, '使用编译后的自动端口', 'Use compiled auto-port')}
-                  >
-                    Auto:{computedEdgePort}
-                  </button>
-                )}
               </div>
-              {computedEdgePort && selectedEdge.endpoint_port && selectedEdge.endpoint_port !== computedEdgePort && (
-                <p className="text-[10px] text-yellow-400 mt-0.5">
-                  {txt(language, '手动端口与编译端口不一致', 'Manual port differs from compiled port')} ({computedEdgePort})
+              {compiledEdgePort && (
+                <p className="text-[10px] text-cyan-400 mt-0.5 font-mono">
+                  {txt(language, '编译后端口', 'Compiled port')}: {compiledEdgePort}
+                  {selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0 && selectedEdge.endpoint_port !== compiledEdgePort && (
+                    <span className="text-yellow-400 ml-1">
+                      ({txt(language, 'NAT 覆盖生效', 'NAT override active')})
+                    </span>
+                  )}
                 </p>
               )}
             </div>

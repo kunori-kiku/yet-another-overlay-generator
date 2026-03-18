@@ -135,12 +135,12 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		}
 
 		// Role 
-		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true}
+		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true, "client": true}
 		if node.Role == "" {
 			result.AddError(prefix+".role", "")
 		} else if !validRoles[node.Role] {
 			result.AddError(prefix+".role",
-				fmt.Sprintf(": %s, : peer, router, relay, gateway", node.Role))
+				fmt.Sprintf(": %s, : peer, router, relay, gateway, client", node.Role))
 		}
 
 		// Platform （，）

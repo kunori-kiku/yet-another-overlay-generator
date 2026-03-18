@@ -6,6 +6,7 @@ const roleColors: Record<string, string> = {
   router: 'border-blue-500 bg-blue-900/50',
   relay: 'border-yellow-500 bg-yellow-900/50',
   gateway: 'border-purple-500 bg-purple-900/50',
+  client: 'border-cyan-500 bg-cyan-900/50',
 };
 
 const roleIcons: Record<string, string> = {
@@ -13,6 +14,7 @@ const roleIcons: Record<string, string> = {
   router: '🔀',
   relay: '🔁',
   gateway: '🌐',
+  client: '📱',
 };
 
 // Distinct colors for per-peer interface handles

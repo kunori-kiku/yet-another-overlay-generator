@@ -48,7 +48,7 @@ type Node struct {
 	Hostname string `json:"hostname,omitempty"`
 	Platform string `json:"platform,omitempty"` // "debian" | "ubuntu"
 
-	// 角色：peer, router, relay, gateway
+	// 角色：peer, router, relay, gateway, client
 	Role string `json:"role"`
 
 	// 所属 Domain ID（必须引用已有 Domain）
@@ -117,9 +117,12 @@ type Edge struct {
 	// 连接类型：direct, public-endpoint, relay-path, candidate
 	Type string `json:"type"`
 
-	// 对端 endpoint
+	// 对端 endpoint（用户输入：0 = 自动分配，非零 = NAT/端口转发覆盖）
 	EndpointHost string `json:"endpoint_host,omitempty"`
 	EndpointPort int    `json:"endpoint_port,omitempty"`
+
+	// 编译器分配的实际端口（只读，由编译器填充）
+	CompiledPort int `json:"compiled_port,omitempty"`
 
 	// 优先级
 	Priority int `json:"priority,omitempty"`

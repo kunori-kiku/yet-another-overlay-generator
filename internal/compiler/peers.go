@@ -57,12 +57,18 @@ type PeerInfo struct {
 
 	// 对端 IPv6 link-local 地址
 	RemoteLinkLocal string
+
+	// 是否为连接 client 的 router 侧接口
+	IsClientPeer bool
+
+	// Client 的 overlay IP（仅当 IsClientPeer=true 时有值，用于 PostUp 路由注入）
+	ClientOverlayIP string
 }
 
 // DerivePeers 根据 Edge 拓扑推导每个节点的 WireGuard Peer 列表
 // 新架构：每个 peer 一个独立接口
 // 返回 map[nodeID][]PeerInfo
-func DerivePeers(topo *model.Topology, keys map[string]KeyPair) map[string][]PeerInfo {
+func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]PeerInfo, map[string]*pairAllocation) {
 	// 构建 Domain 索引
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
@@ -87,7 +93,7 @@ type pairAllocation struct {
 // derivePeersWithDomains 核心推导逻辑（两阶段算法）
 // Pass 1: 预分配所有节点对的端口和地址资源
 // Pass 2: 使用预分配的端口构建 PeerInfo（确保 endpoint 端口 = 对端接口监听端口）
-func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) map[string][]PeerInfo {
+func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) (map[string][]PeerInfo, map[string]*pairAllocation) {
 	peerMap := make(map[string][]PeerInfo)
 
 	// 节点索引
@@ -148,21 +154,31 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		localLL, remoteLL := allocateLinkLocalPair(transitPairIndex)
 		transitPairIndex++
 
+		// Client 节点不参与 per-peer 端口分配（使用单一 wg0 接口）
+		isFromClient := fromNode.Role == "client"
+		isToClient := toNode.Role == "client"
+
 		// 分配 fromNode 的监听端口
-		fromBasePort := fromNode.ListenPort
-		if fromBasePort == 0 {
-			fromBasePort = 51820
+		var fromListenPort int
+		if !isFromClient {
+			fromBasePort := fromNode.ListenPort
+			if fromBasePort == 0 {
+				fromBasePort = 51820
+			}
+			fromListenPort = fromBasePort + nodePortOffset[fromNode.ID]
+			nodePortOffset[fromNode.ID]++
 		}
-		fromListenPort := fromBasePort + nodePortOffset[fromNode.ID]
-		nodePortOffset[fromNode.ID]++
 
 		// 分配 toNode 的监听端口
-		toBasePort := toNode.ListenPort
-		if toBasePort == 0 {
-			toBasePort = 51820
+		var toListenPort int
+		if !isToClient {
+			toBasePort := toNode.ListenPort
+			if toBasePort == 0 {
+				toBasePort = 51820
+			}
+			toListenPort = toBasePort + nodePortOffset[toNode.ID]
+			nodePortOffset[toNode.ID]++
 		}
-		toListenPort := toBasePort + nodePortOffset[toNode.ID]
-		nodePortOffset[toNode.ID]++
 
 		alloc := &pairAllocation{
 			fromNodeID:    fromNode.ID,
@@ -205,23 +221,77 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
+		// Client 节点不在 peerMap 中创建 PeerInfo（client 使用单一 wg0，由 DeriveClientConfigs 处理）
+		if fromNode.Role == "client" {
+			// 只创建 router 侧的 PeerInfo（router -> client 方向）
+			reversePeerKey := toNode.ID + "->" + fromNode.ID
+			if !addedPeers[reversePeerKey] {
+				fromKey, _ := keys[fromNode.ID]
+				isForward := alloc.fromNodeID == fromNode.ID
+
+				var routerListenPort int
+				var routerLocalTransit, routerRemoteTransit, routerLocalLL, routerRemoteLL string
+				if isForward {
+					routerListenPort = alloc.toPort
+					routerLocalTransit = alloc.remoteTransit
+					routerRemoteTransit = alloc.localTransit
+					routerLocalLL = alloc.remoteLL
+					routerRemoteLL = alloc.localLL
+				} else {
+					routerListenPort = alloc.fromPort
+					routerLocalTransit = alloc.localTransit
+					routerRemoteTransit = alloc.remoteTransit
+					routerLocalLL = alloc.localLL
+					routerRemoteLL = alloc.remoteLL
+				}
+
+				routerPeer := PeerInfo{
+					NodeID:              fromNode.ID,
+					NodeName:            fromNode.Name,
+					PublicKey:           fromKey.PublicKey,
+					OverlayIP:           fromNode.OverlayIP,
+					AllowedIPs:          []string{fromNode.OverlayIP + "/32"},
+					Endpoint:            "",
+					PersistentKeepalive: 0,
+					InterfaceName:       wgInterfaceName(fromNode.Name),
+					ListenPort:          routerListenPort,
+					LocalTransitIP:      routerLocalTransit,
+					RemoteTransitIP:     routerRemoteTransit,
+					LocalLinkLocal:      routerLocalLL,
+					RemoteLinkLocal:     routerRemoteLL,
+					IsClientPeer:        true,
+					ClientOverlayIP:     fromNode.OverlayIP,
+				}
+
+				peerMap[toNode.ID] = append(peerMap[toNode.ID], routerPeer)
+				addedPeers[reversePeerKey] = true
+			}
+			addedPeers[peerKey] = true
+			continue
+		}
+
 		// 判断当前 edge 的方向与 alloc 的方向是否一致
 		isForward := alloc.fromNodeID == fromNode.ID
 
 		toKey, _ := keys[toNode.ID]
 		fromKey, _ := keys[fromNode.ID]
 
-		// === 计算 endpoint（使用预分配的端口） ===
+		// === 计算 endpoint（用户指定端口优先，否则使用预分配的端口） ===
 		endpoint := ""
 		if edge.EndpointHost != "" {
-			// 使用对端接口的已分配监听端口
-			var allocatedPort int
-			if isForward {
-				allocatedPort = alloc.toPort
+			var portToUse int
+			if edge.EndpointPort > 0 {
+				// 用户指定了 NAT/端口转发覆盖端口
+				portToUse = edge.EndpointPort
 			} else {
-				allocatedPort = alloc.fromPort
+				// 自动分配：使用对端接口的已分配监听端口
+				if isForward {
+					portToUse = alloc.toPort
+				} else {
+					portToUse = alloc.fromPort
+				}
 			}
-			endpoint = formatEndpoint(edge.EndpointHost, allocatedPort)
+			endpoint = formatEndpoint(edge.EndpointHost, portToUse)
 		}
 
 		// === 计算 PersistentKeepalive ===
@@ -251,6 +321,9 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		ifaceName := wgInterfaceName(toNode.Name)
 		allowedIPs := []string{"0.0.0.0/0", "::/0"}
 
+		// 如果 toNode 是 client，创建 router 侧的带 IsClientPeer 标记的 PeerInfo
+		isToClient := toNode.Role == "client"
+
 		peer := PeerInfo{
 			NodeID:              toNode.ID,
 			NodeName:            toNode.Name,
@@ -265,12 +338,23 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			RemoteTransitIP:     remoteTransit,
 			LocalLinkLocal:      localLL,
 			RemoteLinkLocal:     remoteLL,
+			IsClientPeer:        isToClient,
+			ClientOverlayIP:     "",
+		}
+		if isToClient {
+			peer.AllowedIPs = []string{toNode.OverlayIP + "/32"}
+			peer.ClientOverlayIP = toNode.OverlayIP
 		}
 
 		peerMap[fromNode.ID] = append(peerMap[fromNode.ID], peer)
 		addedPeers[peerKey] = true
 
-		// === 自动生成反向 peer ===
+		// === 自动生成反向 peer（跳过 client 的反向——client 侧使用 wg0） ===
+		if isToClient {
+			addedPeers[toNode.ID+"->"+fromNode.ID] = true
+			continue
+		}
+
 		reversePeerKey := toNode.ID + "->" + fromNode.ID
 		if !addedPeers[reversePeerKey] {
 			reverseKeepalive := 0
@@ -280,18 +364,23 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 
 			reverseIfaceName := wgInterfaceName(fromNode.Name)
 
-			// 查找反向 edge 的 endpoint host，使用预分配的端口
+			// 查找反向 edge 的 endpoint host（用户指定端口优先，否则使用预分配的端口）
 			reverseEndpoint := ""
 			if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok {
 				if reverseEdge.EndpointHost != "" {
-					// 使用 fromNode 接口的已分配监听端口
-					var allocatedPort int
-					if isForward {
-						allocatedPort = alloc.fromPort
+					var portToUse int
+					if reverseEdge.EndpointPort > 0 {
+						// 用户指定了 NAT/端口转发覆盖端口
+						portToUse = reverseEdge.EndpointPort
 					} else {
-						allocatedPort = alloc.toPort
+						// 自动分配：使用 fromNode 接口的已分配监听端口
+						if isForward {
+							portToUse = alloc.fromPort
+						} else {
+							portToUse = alloc.toPort
+						}
 					}
-					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, allocatedPort)
+					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, portToUse)
 				}
 			}
 
@@ -333,7 +422,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	return peerMap
+	return peerMap, allocations
 }
 
 // allocateTransitPair 根据序号分配一对 transit IPv4 地址
@@ -425,4 +514,120 @@ func GenerateRouterID(nodeID string) string {
 	b5 := h[5]
 
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b0, b1, b2, b3, b4, b5)
+}
+
+// ClientPeerInfo 描述 client 节点的 wg0 配置所需信息
+type ClientPeerInfo struct {
+	// Client 节点信息
+	NodeID    string
+	NodeName  string
+	OverlayIP string
+	MTU       int
+
+	// Client 的 WireGuard 私钥
+	PrivateKey string
+
+	// Router 侧信息
+	RouterPublicKey string
+	RouterEndpoint  string // host:port
+
+	// 域 CIDR 列表（用作 AllowedIPs）
+	DomainCIDRs []string
+
+	// Client 的监听端口
+	ListenPort int
+}
+
+// DeriveClientConfigs 为所有 client 节点生成 wg0 配置信息
+func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocations map[string]*pairAllocation) map[string]*ClientPeerInfo {
+	configs := make(map[string]*ClientPeerInfo)
+
+	nodeMap := make(map[string]*model.Node)
+	for i := range topo.Nodes {
+		nodeMap[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+
+	domainMap := make(map[string]*model.Domain)
+	for i := range topo.Domains {
+		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
+	}
+
+	for _, node := range topo.Nodes {
+		if node.Role != "client" {
+			continue
+		}
+
+		// 找到 client 的唯一出站 edge
+		var clientEdge *model.Edge
+		for i := range topo.Edges {
+			e := &topo.Edges[i]
+			if e.IsEnabled && e.FromNodeID == node.ID {
+				clientEdge = e
+				break
+			}
+		}
+		if clientEdge == nil {
+			continue
+		}
+
+		routerNode := nodeMap[clientEdge.ToNodeID]
+		if routerNode == nil {
+			continue
+		}
+
+		routerKey, _ := keys[routerNode.ID]
+		clientKey, _ := keys[node.ID]
+
+		// 获取 router 侧的监听端口
+		peerKey := node.ID + "->" + routerNode.ID
+		alloc := allocations[peerKey]
+		var routerPort int
+		if alloc != nil {
+			if alloc.fromNodeID == node.ID {
+				routerPort = alloc.toPort
+			} else {
+				routerPort = alloc.fromPort
+			}
+		}
+
+		// 构建 endpoint（用户指定端口优先，否则使用自动分配的 router 端口）
+		routerEndpoint := ""
+		if clientEdge.EndpointHost != "" {
+			var portToUse int
+			if clientEdge.EndpointPort > 0 {
+				portToUse = clientEdge.EndpointPort
+			} else if routerPort > 0 {
+				portToUse = routerPort
+			}
+			if portToUse > 0 {
+				routerEndpoint = formatEndpoint(clientEdge.EndpointHost, portToUse)
+			}
+		}
+
+		// 域 CIDR
+		var domainCIDRs []string
+		if domain, ok := domainMap[node.DomainID]; ok && domain.CIDR != "" {
+			domainCIDRs = append(domainCIDRs, domain.CIDR)
+		}
+
+		// Client 监听端口
+		listenPort := node.ListenPort
+		if listenPort == 0 {
+			listenPort = 51820
+		}
+
+		configs[node.ID] = &ClientPeerInfo{
+			NodeID:          node.ID,
+			NodeName:        node.Name,
+			OverlayIP:       node.OverlayIP,
+			MTU:             node.MTU,
+			PrivateKey:      clientKey.PrivateKey,
+			RouterPublicKey: routerKey.PublicKey,
+			RouterEndpoint:  routerEndpoint,
+			DomainCIDRs:     domainCIDRs,
+			ListenPort:      listenPort,
+		}
+	}
+
+	return configs
 }

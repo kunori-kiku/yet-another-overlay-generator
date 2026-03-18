@@ -205,6 +205,44 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	w.Write(archiveBuf.Bytes())
 }
 
+// HandleDeployScript returns the deploy script (bash or PowerShell) as a downloadable file.
+// Query parameter ?format=ps1 returns PowerShell; default is bash.
+func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, " POST ")
+		return
+	}
+
+	topo, err := readTopology(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	bashScript, ps1Script, err := renderer.RenderDeployScripts(topo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("deploy script render: %v", err))
+		return
+	}
+
+	format := r.URL.Query().Get("format")
+	var script, filename, contentType string
+	if format == "ps1" {
+		script = ps1Script
+		filename = "deploy-all.ps1"
+		contentType = "text/plain; charset=utf-8"
+	} else {
+		script = bashScript
+		filename = "deploy-all.sh"
+		contentType = "text/x-shellscript; charset=utf-8"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(script))
+}
+
 // ---  ---
 
 func readTopology(r *http.Request) (*model.Topology, error) {
@@ -279,12 +317,21 @@ func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 }
 
 func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error {
-	// WireGuard
+	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
 		return fmt.Errorf(" WireGuard : %w", err)
 	}
 	result.WireGuardConfigs = wgConfigs
+
+	// WireGuard client configs (single wg0 for client nodes)
+	for nodeID, clientInfo := range result.ClientConfigs {
+		config, err := renderer.RenderClientWireGuardConfig(clientInfo)
+		if err != nil {
+			return fmt.Errorf(" client %s WireGuard : %w", clientInfo.NodeName, err)
+		}
+		result.WireGuardConfigs[nodeID+":wg0"] = config
+	}
 
 	// Babel
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
@@ -302,13 +349,21 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 
 	//
 	for _, node := range result.Topology.Nodes {
-		peers := result.PeerMap[node.ID]
-		_, hasBabel := result.BabelConfigs[node.ID]
-		script, err := renderer.RenderInstallScript(&node, peers, hasBabel)
-		if err != nil {
-			return fmt.Errorf(" %s : %w", node.Name, err)
+		if node.Role == "client" {
+			script, err := renderer.RenderClientInstallScript(&node)
+			if err != nil {
+				return fmt.Errorf(" client %s : %w", node.Name, err)
+			}
+			result.InstallScripts[node.ID] = script
+		} else {
+			peers := result.PeerMap[node.ID]
+			_, hasBabel := result.BabelConfigs[node.ID]
+			script, err := renderer.RenderInstallScript(&node, peers, hasBabel)
+			if err != nil {
+				return fmt.Errorf(" %s : %w", node.Name, err)
+			}
+			result.InstallScripts[node.ID] = script
 		}
-		result.InstallScripts[node.ID] = script
 	}
 
 	// Deploy scripts (bash + PowerShell)

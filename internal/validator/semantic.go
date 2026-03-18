@@ -34,8 +34,11 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// 
 	detectIsolatedNodes(topo, result)
 
-	// NAT 
+	// NAT
 	validateNATReachability(topo, nodeMap, result)
+
+	// Client 边验证
+	validateClientEdges(topo, nodeMap, result)
 
 	return result
 }
@@ -197,6 +200,77 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 		if !connectedNodes[node.ID] {
 			result.AddWarning("topology",
 				fmt.Sprintf(" %s (%s) ，", node.Name, node.ID))
+		}
+	}
+}
+
+// validateClientEdges 验证 client 节点的边约束
+func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	// 收集每个 client 的出站和入站 edge 数量
+	clientOutbound := make(map[string]int)    // nodeID -> count of enabled outbound edges
+	clientOutboundEdges := make(map[string][]int) // nodeID -> edge indices
+
+	for i, edge := range topo.Edges {
+		if !edge.IsEnabled {
+			continue
+		}
+
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+
+		// 拒绝以 client 为目标的入站边
+		if toNode != nil && toNode.Role == "client" {
+			result.AddError(fmt.Sprintf("edges[%d]", i),
+				fmt.Sprintf("Client node %s cannot accept inbound connections", toNode.Name))
+		}
+
+		// 统计 client 出站边
+		if fromNode != nil && fromNode.Role == "client" {
+			clientOutbound[fromNode.ID]++
+			clientOutboundEdges[fromNode.ID] = append(clientOutboundEdges[fromNode.ID], i)
+
+			// Client 的目标必须是 router/relay/gateway（不能是 peer 或 client）
+			if toNode != nil {
+				if toNode.Role == "peer" {
+					result.AddError(fmt.Sprintf("edges[%d]", i),
+						fmt.Sprintf("Client %s cannot connect to peer %s (peers don't forward traffic)", fromNode.Name, toNode.Name))
+				}
+				if toNode.Role == "client" {
+					result.AddError(fmt.Sprintf("edges[%d]", i),
+						fmt.Sprintf("Client %s cannot connect to another client %s", fromNode.Name, toNode.Name))
+				}
+			}
+
+			// Client 边必须有 endpoint_host
+			if edge.EndpointHost == "" {
+				result.AddError(fmt.Sprintf("edges[%d].endpoint_host", i),
+					fmt.Sprintf("Client %s requires endpoint_host to reach router", fromNode.Name))
+			}
+		}
+	}
+
+	// Client 必须恰好有一条启用的出站边
+	for _, node := range topo.Nodes {
+		if node.Role != "client" {
+			continue
+		}
+		count := clientOutbound[node.ID]
+		if count == 0 {
+			result.AddError("topology",
+				fmt.Sprintf("Client %s must have exactly one enabled outbound edge", node.Name))
+		} else if count > 1 {
+			result.AddError("topology",
+				fmt.Sprintf("Client %s has %d outbound edges but must have exactly one (single wg0 interface)", node.Name, count))
+		}
+
+		// 警告：client 设置了无意义的字段
+		if node.RouterID != "" {
+			result.AddWarning(fmt.Sprintf("node.%s.router_id", node.ID),
+				fmt.Sprintf("Client %s has router_id set but clients don't run Babel", node.Name))
+		}
+		if len(node.ExtraPrefixes) > 0 {
+			result.AddWarning(fmt.Sprintf("node.%s.extra_prefixes", node.ID),
+				fmt.Sprintf("Client %s has extra_prefixes set but clients don't announce routes", node.Name))
 		}
 	}
 }

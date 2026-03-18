@@ -33,6 +33,9 @@ type CompileResult struct {
 	// 自动部署脚本
 	DeployScripts map[string]string
 
+	// Client 节点的 wg0 配置信息
+	ClientConfigs map[string]*ClientPeerInfo
+
 	//
 	Manifest CompileManifest
 }
@@ -97,19 +100,24 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	}
 
 	// Pass 3 :  Peer
-	peerMap := DerivePeers(compiledTopo, keys)
+	peerMap, pairAllocations := DerivePeers(compiledTopo, keys)
 
-	// 将已分配的接口端口回写到 edge 的 endpoint_port 字段
-	// 确保前端和导出的拓扑中 endpoint_port 反映实际监听端口
+	// Client 配置
+	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations)
+
+	// 将编译器分配的实际端口写入 CompiledPort（不修改用户输入的 EndpointPort）
 	for i := range compiledTopo.Edges {
 		edge := &compiledTopo.Edges[i]
 		if !edge.IsEnabled || edge.EndpointHost == "" {
 			continue
 		}
-		for _, peer := range peerMap[edge.FromNodeID] {
-			if peer.NodeID == edge.ToNodeID && peer.Endpoint != "" {
-				edge.EndpointPort = peer.ListenPort
-				break
+		// 查找该 edge 对应的 pairAllocation，提取对端（toNode）的已分配监听端口
+		peerKey := edge.FromNodeID + "->" + edge.ToNodeID
+		if alloc, ok := pairAllocations[peerKey]; ok {
+			if alloc.fromNodeID == edge.FromNodeID {
+				edge.CompiledPort = alloc.toPort
+			} else {
+				edge.CompiledPort = alloc.fromPort
 			}
 		}
 	}
@@ -122,6 +130,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		SysctlConfigs:    make(map[string]string),
 		InstallScripts:   make(map[string]string),
 		DeployScripts:    make(map[string]string),
+		ClientConfigs:    clientConfigs,
 		Manifest: CompileManifest{
 			ProjectID:   topo.Project.ID,
 			ProjectName: topo.Project.Name,

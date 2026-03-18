@@ -108,6 +108,13 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		config.RedistributePrefixes = append(config.RedistributePrefixes, "0.0.0.0/0")
 	}
 
+	// Redistribute client overlay IPs on router nodes with client peers
+	for _, p := range peers {
+		if p.IsClientPeer && p.ClientOverlayIP != "" {
+			config.RedistributePrefixes = append(config.RedistributePrefixes, p.ClientOverlayIP+"/32")
+		}
+	}
+
 	return renderTemplate("babeld.conf", babelConfigTemplate, config)
 }
 
@@ -151,6 +158,10 @@ func RenderAllBabelConfigs(topo *model.Topology, peerMap map[string][]compiler.P
 
 // shouldRunBabel 判断节点是否需要运行 Babel
 func shouldRunBabel(node *model.Node, domain *model.Domain) bool {
+	// Client 节点不运行 Babel
+	if node.Role == "client" {
+		return false
+	}
 	// 非 babel 路由模式不启动
 	if domain != nil && domain.RoutingMode != "babel" {
 		return false

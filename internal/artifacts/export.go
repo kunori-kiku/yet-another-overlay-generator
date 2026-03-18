@@ -36,12 +36,15 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	// 按节点导出
 	for _, node := range result.Topology.Nodes {
 		nodeDir := filepath.Join(outputDir, node.Name)
+		isClient := node.Role == "client"
 
 		// 创建目录
 		dirs := []string{
 			filepath.Join(nodeDir, "wireguard"),
-			filepath.Join(nodeDir, "babel"),
 			filepath.Join(nodeDir, "sysctl"),
+		}
+		if !isClient {
+			dirs = append(dirs, filepath.Join(nodeDir, "babel"))
 		}
 		for _, dir := range dirs {
 			if err := os.MkdirAll(dir, 0755); err != nil {
@@ -114,7 +117,17 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		}
 
 		// 构建文件列表
-		allFiles := append(wgFiles, "babel/babeld.conf", "sysctl/99-overlay.conf", "install.sh")
+		var allFiles []string
+		allFiles = append(allFiles, wgFiles...)
+		if !isClient {
+			allFiles = append(allFiles, "babel/babeld.conf")
+		}
+		allFiles = append(allFiles, "sysctl/99-overlay.conf", "install.sh")
+
+		architecture := "per-peer-interface"
+		if isClient {
+			architecture = "single-interface"
+		}
 
 		manifest := map[string]interface{}{
 			"node_id":      node.ID,
@@ -127,7 +140,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			"version":      result.Manifest.Version,
 			"compiled_at":  result.Manifest.CompiledAt.Format("2006-01-02T15:04:05Z"),
 			"checksum":     result.Manifest.Checksum,
-			"architecture": "per-peer-interface",
+			"architecture": architecture,
 			"files":        allFiles,
 		}
 		manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
@@ -148,6 +161,18 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		}
 
 		exportResult.Nodes = append(exportResult.Nodes, node.Name)
+	}
+
+	// Write project-level deploy scripts to the root of the export directory
+	for name, script := range result.DeployScripts {
+		path := filepath.Join(outputDir, name)
+		perm := os.FileMode(0644)
+		if strings.HasSuffix(name, ".sh") {
+			perm = 0755
+		}
+		if err := os.WriteFile(path, []byte(script), perm); err != nil {
+			return nil, fmt.Errorf("写入部署脚本 %s 失败: %w", name, err)
+		}
 	}
 
 	return exportResult, nil
