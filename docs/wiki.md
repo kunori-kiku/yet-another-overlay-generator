@@ -1,357 +1,369 @@
-# Yet Another Overlay Generator Wiki
+# Yet Another Overlay Generator — Wiki
 
-## 1. 项目简介
+> Also available in: [中文](wiki-zh.md)
 
-Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配置生成系统。用户通过图形化拓扑界面定义节点、网络域和可达关系，系统自动分配地址、生成 WireGuard + Babel 配置文件及一键安装脚本。
+## 1. Overview
 
-### 设计哲学
+Yet Another Overlay Generator is a web-based interactive network design and configuration generation system. Users define nodes, network domains, and connectivity through a graphical topology interface. The system automatically allocates addresses and generates WireGuard + Babel configuration files along with one-click install scripts.
 
-系统遵循**设计 → 编译 → 部署**三层架构：
+### Design Philosophy
+
+The system follows a **Design → Compile → Deploy** three-layer architecture:
 
 ```text
-[Web 前端 / CLI]
+[Web Frontend / CLI]
         │  Topology JSON
         ▼
-[编译器]
-  ├─ Schema 校验
-  ├─ 语义校验
-  ├─ IP 分配器
-  ├─ Peer 推导器
-  └─ 配置渲染器
-        │  ├─ WireGuard 配置
-        │  ├─ Babel 配置
-        │  ├─ sysctl 内核参数
-        │  └─ 安装脚本
+[Compiler]
+  ├─ Schema Validation
+  ├─ Semantic Validation
+  ├─ IP Allocator
+  ├─ Peer Derivation
+  └─ Config Renderers
+        │  ├─ WireGuard configs
+        │  ├─ Babel configs
+        │  ├─ sysctl kernel params
+        │  ├─ Install scripts
+        │  └─ Deploy scripts
         ▼
-[产物导出器]
-        │  每节点部署包
+[Artifact Exporter]
+        │  Per-node deployment bundles
         ▼
-[目标主机]
-        └─ 执行 install.sh → 网络上线
+[Target Hosts]
+        └─ Run install.sh → network goes live
 ```
 
-核心原则：
-- **拓扑即代码**：JSON 拓扑是唯一真相源，所有配置确定性推导。
-- **离线编译**：密钥和配置在本地可信主机生成，不依赖在线控制面。
-- **幂等部署**：安装脚本可安全重复执行。
+Core principles:
+- **Topology as Code**: The JSON topology is the single source of truth; all configs are deterministically derived.
+- **Offline Compilation**: Keys and configs are generated on a local trusted host, no online control plane needed.
+- **Idempotent Deployment**: Install scripts can be safely re-run.
 
 ---
 
-## 2. 核心概念
+## 2. Core Concepts
 
-### 2.1 网域（Domain）
+### 2.1 Domain
 
-网域是一个 Overlay 地址空间，定义了可分配 IP 的范围。
+A Domain is an overlay address space defining the allocatable IP range.
 
-| 字段 | 说明 |
-|------|------|
-| 名称 | 显示名与逻辑标识 |
-| CIDR | 网段范围，如 `10.11.0.0/24` |
-| 分配模式 | `auto`（自动分配）/ `manual`（手工指定） |
-| 路由模式 | `babel`（动态路由）/ `static`（静态路由）/ `none`（不生成） |
+| Field | Description |
+|-------|-------------|
+| Name | Display name and logical identifier |
+| CIDR | Address range, e.g. `10.11.0.0/24` |
+| Allocation Mode | `auto` (automatic) / `manual` (user-specified) |
+| Routing Mode | `babel` (dynamic routing) / `static` / `none` |
 
-### 2.2 节点（Node）与角色
+### 2.2 Node and Roles
 
-节点代表一台机器（云主机、物理机、容器宿主）。
+A Node represents a machine (cloud VM, bare-metal server, container host).
 
-**基础字段：**
-- 节点名称、主机名（可选）、平台（`debian` / `ubuntu`）
-- 所属网域、Overlay IP（可选手动指定）
-- WireGuard 监听端口（默认 51820）、MTU（可选）
+**Basic fields:**
+- Name, Hostname (optional), Platform (`debian` / `ubuntu`)
+- Domain membership, Overlay IP (optional manual override)
+- WireGuard base listen port (default 51820), MTU (optional)
 
-**角色与能力：**
+**Roles and capabilities:**
 
-| 角色 | 转发 | 中继 | Babel 通告 | 典型用途 |
-|------|------|------|-----------|---------|
-| `peer` | ✗ | ✗ | 仅自身 IP | 终端客户端 |
-| `router` | ✓ | ✗ | 自身 IP + Domain CIDR | 骨干转发节点 |
-| `relay` | ✓ | ✓ | 自身 IP + Domain CIDR（cost 96） | NAT 场景中继 |
-| `gateway` | ✓ | ✗ | 自身 IP + Domain CIDR + 额外前缀 + 默认路由 | 桥接外部网段 |
+| Role | Forwarding | Relay | Babel Announces | Typical Use |
+|------|-----------|-------|-----------------|-------------|
+| `peer` | No | No | Own IP only | End-user client |
+| `router` | Yes | No | Own IP + Domain CIDR | Backbone forwarding node |
+| `relay` | Yes | Yes | Own IP + Domain CIDR (cost 96) | NAT traversal relay |
+| `gateway` | Yes | No | Own IP + Domain CIDR + extra prefixes + default route | Bridge to external networks |
 
-**能力字段：**
-- 公网可达：节点是否可被外部路径访问
-- 可入站：外部流量能否到达此节点
-- 可转发：是否可转发他人流量
-- 可中继：是否作为中继角色运行
+**Capability fields:**
+- Publicly Reachable: node is accessible from the public internet
+- Can Accept Inbound: external traffic can reach this node
+- Can Forward: can forward other nodes' traffic
+- Can Relay: operates as a relay node
 
-**多公网映射：** 节点支持配置多组 `Host:Port` 公网端点（支持域名），用于多出口、多 ISP、NAT 多重映射等场景。
+**Multiple Public Endpoints:** Nodes support multiple `Host:Port` public endpoint mappings (domains supported), for multi-exit, multi-ISP, and NAT multi-mapping scenarios.
 
-### 2.3 连线（Edge）与有向语义
+**SSH Connection Config (Auto-Deploy):** Nodes can optionally store SSH connection details for automated remote deployment:
 
-有向连线 `A → B` 的含义：**A 主动去连 B**。
+| Field | Description |
+|-------|-------------|
+| SSH Alias | Host alias from `~/.ssh/config`; if set, overrides manual fields below |
+| SSH Host | SSH target IP or hostname |
+| SSH Port | SSH port (default 22) |
+| SSH User | SSH login username (default root) |
+| SSH Key Path | Path to SSH private key file |
 
-| 字段 | 说明 |
-|------|------|
-| 类型 | `direct`（直连）/ `public-endpoint`（公网端点）/ `relay-path`（中继路径）/ `candidate`（候选） |
-| Endpoint | 目标 Host:Port，可从目标节点的公网映射下拉选择 |
-| Transport | `udp` / `tcp` 元数据 |
-| Priority / Weight | 路径偏好权重 |
-| Is Enabled | 该连线是否参与编译 |
+> Note: Password authentication is not supported. Use key-based auth. SSH details are collapsed by default in the node properties panel.
 
-### 2.4 两层地址分离
+### 2.3 Edge (Directed Connection)
 
-系统使用两个独立的 IP 地址池，避免链路地址与节点身份地址冲突：
+A directed edge `A → B` means: **A actively connects to B**.
 
-| | Overlay IP（业务地址） | Transit IP（链路地址） |
+| Field | Description |
+|-------|-------------|
+| Type | `direct` / `public-endpoint` / `relay-path` / `candidate` |
+| Endpoint IP | Target public IP or hostname; pick from target node's public endpoints or enter manually |
+| Endpoint Port | Target WireGuard interface listen port; after compilation, auto-fill with the allocated port |
+| Transport | `udp` / `tcp` metadata |
+| Priority / Weight | Path preference weights |
+| Is Enabled | Whether this edge participates in compilation |
+
+> **Split IP/Port Design:** Endpoint IP comes from the target node's public reachable addresses; Endpoint Port comes from the compiler-allocated WireGuard interface listen port for that peer connection. They are configured independently. After compilation, an `Auto:<port>` button appears next to the port field for one-click fill.
+
+### 2.4 Two-Layer Address Separation
+
+The system uses two independent IP address pools to avoid link addresses conflicting with node identity addresses:
+
+| | Overlay IP (Business Address) | Transit IP (Link Address) |
 |---|---|---|
-| 地址池 | 每个 Domain 定义（如 `10.11.0.0/24`） | `10.10.0.0/24`（全局共用） |
-| 分配到 | `dummy0` 接口 | 每个 per-peer WireGuard 接口 |
-| 用途 | 节点稳定身份地址（DNS、应用、监控） | 隧道点对点寻址 |
-| Babel 通告 | ✓ `redistribute local` | ✗ 内部使用 |
-| 稳定性 | 不随拓扑变化 | 随链路增删变化 |
+| Pool | Defined per Domain (e.g. `10.11.0.0/24`) | `10.10.0.0/24` (shared globally) |
+| Assigned to | `dummy0` interface | Each per-peer WireGuard interface |
+| Purpose | Stable node identity (DNS, apps, monitoring) | Tunnel point-to-point addressing |
+| Babel announces | Yes, via `redistribute local` | No, internal use only |
+| Stability | Does not change with topology | Changes with link additions/removals |
 
-另外，每条链路还分配一对 IPv6 link-local 地址（`fe80::X`），用于 Babel 邻居发现。
+Each link also gets a pair of IPv6 link-local addresses (`fe80::X`) for Babel neighbor discovery.
 
-### 2.5 Per-Peer WireGuard 接口模型
+### 2.5 Per-Peer WireGuard Interface Model
 
-**为什么不用单个 wg0 + 多 Peer？**
+**Why not a single wg0 with multiple Peers?**
 
-传统 WireGuard 单接口多 Peer 模型与 Babel 动态路由不兼容：
-- Babel 需要**每个邻居一个独立接口**才能独立跟踪链路质量
-- 单 wg0 多 peer 在 Babel 看来是一个广播域，无法区分各链路
-- 多 peer 的 `AllowedIPs` 容易产生地址冲突
+The traditional single-interface multi-peer WireGuard model is incompatible with Babel dynamic routing:
+- Babel needs **one independent interface per neighbor** to track link quality independently
+- A single wg0 with multiple peers looks like one broadcast domain to Babel
+- Multiple peers' `AllowedIPs` can produce address conflicts
 
-**Per-peer 设计：** 每条 peer 连接使用独立的 WireGuard 接口：
+**Per-peer design:** Each peer connection uses a dedicated WireGuard interface:
 
 ```
 Node alpha:
-  wg-node-beta   ← 到 beta 的隧道 (port 51820)
-  wg-node-gamma  ← 到 gamma 的隧道 (port 51821)
-  dummy0         ← 稳定 overlay 地址
+  wg-node-beta   ← tunnel to beta (port 51820)
+  wg-node-gamma  ← tunnel to gamma (port 51821)
+  dummy0         ← stable overlay address
 ```
 
-每个接口特点：
-- 独立监听端口（基础端口 + 偏移量递增）
-- 独立 transit IP（/32 点对点）+ IPv6 link-local
-- 仅一个 `[Peer]` 段
-- `Table = off`（阻止 wg-quick 添加路由，由 Babel 管理）
-- `AllowedIPs = 0.0.0.0/0, ::/0`（每接口仅一个 peer，安全）
+Each interface features:
+- Independent listen port (base port + incrementing offset)
+- Independent transit IP (/32 point-to-point) + IPv6 link-local
+- Only one `[Peer]` section
+- `Table = off` (prevents wg-quick from adding routes; Babel manages routing)
+- `AllowedIPs = 0.0.0.0/0, ::/0` (safe with one peer per interface)
 
-**接口命名规则：** `wg-<对端名称>`，小写、特殊字符替换为 `-`，Linux 15 字符限制截断。
-
----
-
-## 3. 使用指南
-
-### 3.1 拓扑编辑工作流
-
-标准操作顺序：
-
-1. **创建网域** — 定义地址空间（CIDR）、分配模式、路由模式
-2. **创建节点** — 设置名称、平台、角色，分配到网域
-3. **添加公网映射**（可选）— 为有公网入口的节点配置 Host:Port
-4. **画连线** — 在画布上从源节点拖向目标节点，设置 endpoint
-5. **校验** — 检查拓扑完整性和语义错误
-6. **编译** — 生成所有配置文件
-7. **导出** — 下载每节点部署包
-
-**界面布局：**
-- 中央画布：可视化节点与有向连线
-- 左侧面板：创建并排序网域、节点（支持拖拽排序）
-- 右侧面板：编辑当前选中的网域/节点/连线属性
-- 底部面板：校验结果与诊断信息
-
-### 3.2 参数全解
-
-#### 网域参数
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| Name | ✓ | 显示名与逻辑标识 |
-| CIDR | ✓ | Overlay 地址池，如 `10.11.0.0/24` |
-| Allocation Mode | ✓ | `auto` 自动分配 / `manual` 手动指定 |
-| Routing Mode | ✓ | `babel` 动态路由 / `static` 静态 / `none` 不生成 |
-
-#### 节点参数
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| Name | ✓ | 画布与列表显示名 |
-| Hostname | ✗ | 真实 hostname 或域名标签 |
-| Platform | ✓ | `debian` / `ubuntu` |
-| Domain | ✓ | 所属网域 |
-| Role | ✓ | `peer` / `router` / `relay` / `gateway` |
-| Overlay IP | ✗ | 手工指定时使用，否则自动分配 |
-| Listen Port | ✗ | WireGuard 基础监听端口，默认 51820 |
-| MTU | ✗ | WireGuard 接口 MTU，0 = 系统默认 |
-| Router ID | ✗ | Babel router-id（MAC-48），留空自动生成 |
-
-**能力字段：**
-
-| 参数 | 说明 |
-|------|------|
-| 公网可达 | 节点是否可从公网访问 |
-| 可入站 | 外部流量是否能到达 |
-| 可转发 | 是否转发他人流量 |
-| 可中继 | 是否作为中继节点 |
-
-**公网映射（每组）：**
-
-| 参数 | 说明 |
-|------|------|
-| Host | 公网 IP 或域名 |
-| Port | 公网端口 |
-| Note | 备注（如 "电信出口A"、"东京入口"） |
-
-#### 连线参数
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| Type | ✓ | `direct` / `public-endpoint` / `relay-path` / `candidate` |
-| Endpoint Host | ✗ | 目标 IP 或域名（可从目标节点公网映射下拉选择） |
-| Endpoint Port | ✗ | 目标端口 |
-| Transport | ✗ | `udp` / `tcp` 元数据 |
-| Priority | ✗ | 路径优先级 |
-| Weight | ✗ | 路径权重 |
-| Is Enabled | ✓ | 是否参与编译 |
-
-### 3.3 校验、编译与导出
-
-**校验** 检查两类问题：
-- **Schema 校验**：必填字段、类型正确性、引用有效性（如节点的 domain_id 指向已有网域）
-- **语义校验**：IP 是否重复、节点是否孤立、CIDR 是否合法
-
-**编译** 从拓扑 JSON 确定性生成：
-- 每个 per-peer WireGuard 配置文件
-- 每节点 Babel 路由配置
-- 每节点 sysctl 内核参数
-- 每节点一键安装脚本
-
-**导出** 打包为每节点独立的部署目录，包含所有配置文件、install.sh、manifest.json 和 checksums.sha256。
+**Interface naming:** `wg-<peer-name>`, lowercase, special chars replaced with `-`, truncated to Linux 15-char limit.
 
 ---
 
-## 4. 编译器工作原理
+## 3. Usage Guide
 
-### 4.1 编译流水线
+### 3.1 Topology Editing Workflow
 
-编译器（`internal/compiler/compiler.go`）按 5 个阶段处理拓扑：
+Standard workflow:
 
-**Pass 1：Schema 校验** — 校验 JSON 结构正确性：必填字段、类型、引用有效性。
+1. **Create Domain** — Define address space (CIDR), allocation mode, routing mode
+2. **Create Nodes** — Set name, platform, role, assign to domain
+3. **Add Public Endpoints** (optional) — Configure Host:Port for nodes with public ingress
+4. **Configure SSH** (optional) — Add SSH connection details for auto-deploy (collapsed by default)
+5. **Draw Edges** — Drag from source to target node on canvas; set endpoint IP and port
+6. **Validate** — Check topology completeness and semantic errors
+7. **Compile** — Generate all configuration files
+8. **Export** — Download per-node deployment bundles
 
-**Pass 2：语义校验** — 检查逻辑一致性：IP 冲突、孤立节点、非法边引用、CIDR 合法性。
+**UI Layout:**
+- Center canvas: Visualize nodes and directed edges with color-coded per-peer handles
+- Left panel: Create and reorder domains, nodes (drag-to-reorder)
+- Right panel: Edit properties of selected domain/node/edge
+- Bottom panel: Validation results and diagnostics
 
-**Pass 3：IP 分配 + Peer 推导**
-- **IP 分配器**（`internal/allocator/ip.go`）：为无手动 IP 的节点从 Domain CIDR 池顺序分配，跳过网络地址/广播地址/保留区间
-- **能力推导**（`internal/compiler/roles.go`）：根据角色推导能力字段（如 `router` → `can_forward=true`）
-- **Peer 推导**（`internal/compiler/peers.go`）：处理 Edge 生成每对节点的 PeerInfo（详见 4.2）
+### 3.2 Parameter Reference
 
-**Pass 4：配置渲染** — 四个独立渲染器：
+#### Domain Parameters
 
-| 渲染器 | 输出 | 源码位置 |
-|--------|------|----------|
-| WireGuard | 每 peer 一个 `.conf` | `internal/renderer/wireguard.go` |
-| Babel | 每节点 `babeld.conf` | `internal/renderer/babel.go` |
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| Name | Yes | Display name and logical identifier |
+| CIDR | Yes | Overlay address pool, e.g. `10.11.0.0/24` |
+| Allocation Mode | Yes | `auto` / `manual` |
+| Routing Mode | Yes | `babel` / `static` / `none` |
+
+#### Node Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| Name | Yes | Canvas and list display name |
+| Hostname | No | Actual hostname or domain label |
+| Platform | Yes | `debian` / `ubuntu` |
+| Domain | Yes | Parent domain |
+| Role | Yes | `peer` / `router` / `relay` / `gateway` |
+| Overlay IP | No | Manual override; otherwise auto-assigned |
+| Listen Port | No | WireGuard base listen port, default 51820 |
+| MTU | No | WireGuard interface MTU, 0 = system default |
+
+**Capability fields:**
+
+| Parameter | Description |
+|-----------|-------------|
+| Publicly Reachable | Node is accessible from the public internet |
+| Can Accept Inbound | External traffic can reach this node |
+| Can Forward | Can forward other nodes' traffic |
+| Can Relay | Operates as a relay node |
+
+**Public Endpoints (per entry):**
+
+| Parameter | Description |
+|-----------|-------------|
+| Host | Public IP or domain name |
+| Port | Public port |
+| Note | Remark (e.g. "ISP-A exit", "Tokyo ingress") |
+
+**SSH Connection (collapsible):**
+
+| Parameter | Description |
+|-----------|-------------|
+| SSH Alias | ssh_config Host alias (overrides manual fields if set) |
+| SSH Host | Target IP or hostname |
+| SSH Port | Port (default 22) |
+| SSH User | Username (default root) |
+| SSH Key Path | Path to private key file |
+
+#### Edge Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| Type | Yes | `direct` / `public-endpoint` / `relay-path` / `candidate` |
+| Endpoint IP | No | Target IP or domain (pick from target's public IPs or manual) |
+| Endpoint Port | No | Target WireGuard interface port (auto-fill available post-compile) |
+| Transport | No | `udp` / `tcp` metadata |
+| Priority | No | Path priority |
+| Weight | No | Path weight |
+| Is Enabled | Yes | Whether to include in compilation |
+
+### 3.3 Validation, Compilation, and Export
+
+**Validation** checks two categories:
+- **Schema validation**: Required fields, type correctness, reference validity (e.g. node's domain_id points to an existing domain)
+- **Semantic validation**: IP conflicts, isolated nodes, illegal CIDRs
+
+**Compilation** deterministically generates from the topology JSON:
+- Per-peer WireGuard config files
+- Per-node Babel routing config
+- Per-node sysctl kernel parameters
+- Per-node install scripts
+- **Auto-deploy scripts** (`deploy-all.sh` and `deploy-all.ps1`)
+
+**Export** packages per-node deployment directories containing all config files, install.sh, manifest.json, and checksums.sha256.
+
+---
+
+## 4. Compiler Internals
+
+### 4.1 Compilation Pipeline
+
+The compiler (`internal/compiler/compiler.go`) processes the topology in 5 passes:
+
+**Pass 1: Schema Validation** — Validates JSON structure: required fields, types, reference validity.
+
+**Pass 2: Semantic Validation** — Checks logical consistency: IP conflicts, isolated nodes, illegal edge references, CIDR validity.
+
+**Pass 3: IP Allocation + Peer Derivation**
+- **IP Allocator** (`internal/allocator/ip.go`): Sequentially assigns IPs from the Domain CIDR pool for nodes without manual IPs, skipping network/broadcast/reserved addresses
+- **Capability Derivation** (`internal/compiler/roles.go`): Infers capability fields from role (e.g. `router` → `can_forward=true`)
+- **Peer Derivation** (`internal/compiler/peers.go`): Processes edges to generate PeerInfo for each node pair (see 4.2)
+
+**Pass 4: Config Rendering** — Four independent renderers plus deploy scripts:
+
+| Renderer | Output | Source |
+|----------|--------|--------|
+| WireGuard | One `.conf` per peer | `internal/renderer/wireguard.go` |
+| Babel | `babeld.conf` per node | `internal/renderer/babel.go` |
 | sysctl | `99-overlay.conf` | `internal/renderer/sysctl.go` |
-| 安装脚本 | `install.sh` | `internal/renderer/script.go` |
+| Install script | `install.sh` | `internal/renderer/script.go` |
+| Deploy scripts | `deploy-all.sh` + `.ps1` | `internal/renderer/deploy.go` |
 
-**Pass 5：产物导出**（`internal/artifacts/export.go`）— 组织为每节点独立目录。
+**Pass 5: Artifact Export** (`internal/artifacts/export.go`) — Organizes into per-node directories.
 
-### 4.2 Peer 推导逻辑
+### 4.2 Peer Derivation Logic
 
-Peer 推导器是编译器中最复杂的部分，负责将拓扑 Edge 转换为具体的 WireGuard Peer 配置。
+The peer derivation engine is the most complex part of the compiler, converting topology edges into concrete WireGuard peer configurations.
 
-**输入 → 输出：**
-- 输入：Topology（节点 + 边）+ 密钥对
-- 输出：`map[nodeID][]PeerInfo` — 每节点的 peer 接口配置列表
+**Input → Output:**
+- Input: Topology (nodes + edges) + key pairs
+- Output: `map[nodeID][]PeerInfo` — per-node peer interface config list
 
-**Edge 处理规则：**
-1. 按顺序遍历所有启用的 edge
-2. 去重：某对节点 `A→B` 已处理过则跳过后续同对 edge
-3. 每对新节点同时生成正向 peer 和自动反向 peer
+**Two-pass algorithm:**
 
-**Endpoint 解析：**
-- **正向 peer**：直接使用 edge 的 `endpoint_host:endpoint_port`
-- **反向 peer**：查找是否存在反向 edge（`B→A`），如有则使用其 endpoint；如无则反向 peer 没有 endpoint（依赖正向侧发起连接）
+**Pass 1 — Pre-allocate resources:** For each unique node pair, allocates listen ports (using incremental offset per node), transit IPs, and link-local IPs. Stores in a `pairAllocation` struct keyed bidirectionally.
 
-```
-示例（双向 edge）:
-  Edge: node-1 → node-2, endpoint=203.0.113.2:51820
-  Edge: node-2 → node-1, endpoint=203.0.113.1:51820
+**Pass 2 — Build PeerInfo:** Iterates edges again, looks up the pre-allocated resources, and builds the PeerInfo using the correct allocated port (not the static base port).
 
-  结果:
-    node-1 的 peer 配置: Endpoint = 203.0.113.2:51820
-    node-2 的 peer 配置: Endpoint = 203.0.113.1:51820  ← 反向 edge 查找
-```
+**Endpoint resolution:**
+- **Forward peer**: Uses edge's `endpoint_host` + allocated target port
+- **Reverse peer**: Looks for a reverse edge (`B→A`); if found, uses its endpoint host + allocated source port; if not, reverse peer has no endpoint (relies on forward side to initiate)
 
-**PersistentKeepalive 判定：**
+**PersistentKeepalive:**
 
-| 条件 | Keepalive |
-|------|-----------|
-| 节点可入站 且 存在反向 edge | 0（不启用） |
-| 节点不可入站（NAT 后） | 25 秒 |
-| 无反向 edge（单向连接） | 25 秒 |
+| Condition | Keepalive |
+|-----------|-----------|
+| Node can accept inbound AND reverse edge exists | 0 (disabled) |
+| Node behind NAT (can't accept inbound) | 25 seconds |
+| No reverse edge (unidirectional) | 25 seconds |
 
-**Transit IP 分配：** 每对节点从 `10.10.0.0/24` 顺序分配一对地址：
+**Transit IP allocation:** Each node pair gets a pair from `10.10.0.0/24`:
 - Link 0: `10.10.0.1` ↔ `10.10.0.2`
 - Link N: `10.10.0.(2N+1)` ↔ `10.10.0.(2N+2)`
 
-**IPv6 Link-Local 分配：** 同步分配，Link 0: `fe80::1` ↔ `fe80::2`，依此类推。
+**Listen port allocation:** Each node starts from `listen_port` (default 51820), incrementing by 1 for each additional peer interface.
 
-**监听端口分配：** 每节点从 `listen_port`（默认 51820）开始，每增加一个 peer 接口递增 1。
+### 4.3 Babel Routing Integration
 
-### 4.3 Babel 路由集成
+Babel is the dynamic routing daemon that makes multi-hop overlay networks work.
 
-Babel 是使多跳 overlay 网络运转的动态路由守护程序。
+**When does Babel run?** When the node's Domain has `routing_mode` set to `"babel"`.
 
-**何时运行 Babel？** 当节点所属 Domain 的 `routing_mode` 为 `"babel"` 时生成 Babel 配置。
+**Router-ID generation:**
+1. Compute `SHA-256(node_id)`
+2. Take first 6 bytes as MAC-48 address
+3. Set locally administered bit (`| 0x02`), clear multicast bit (`& 0xFE`)
+4. Ensures stability (same node = same ID) and uniqueness (SHA-256 distribution)
+5. Users can manually specify `router_id` to override
 
-**Router-ID 生成：**
-1. 计算 `SHA-256(node_id)`
-2. 取前 6 字节作为 MAC-48 地址
-3. 设置 locally administered bit（`| 0x02`），清除 multicast bit（`& 0xFE`）
-4. 保证稳定性（同节点同 ID）和唯一性（SHA-256 分布均匀）
-5. 用户可手动指定 `router_id` 覆盖
-
-**接口声明：** 每个 per-peer WireGuard 接口声明为 Babel tunnel 接口：
+**Interface declaration:** Each per-peer WireGuard interface is declared as a Babel tunnel interface:
 ```
 interface wg-node-beta type tunnel hello-interval 4 update-interval 16
 ```
-- `type tunnel`：声明为点对点隧道
-- `hello-interval 4`：每 4 秒发送 hello
-- `update-interval 16`：每 16 秒发送完整路由更新
 
-**路由重分发策略（按角色）：**
+**Route redistribution by role:**
 
-| 角色 | 通告内容 | 默认 Cost |
-|------|---------|-----------|
-| `peer` | 自身 overlay IP | 0 |
-| `router` | 自身 overlay IP + Domain CIDR | 0 |
-| `relay` | 自身 overlay IP + Domain CIDR | 96（优先直连） |
-| `gateway` | 自身 overlay IP + Domain CIDR + 额外前缀 + 默认路由 | 0 |
+| Role | Announces | Default Cost |
+|------|-----------|-------------|
+| `peer` | Own overlay IP | 0 |
+| `router` | Own overlay IP + Domain CIDR | 0 |
+| `relay` | Own overlay IP + Domain CIDR | 96 (prefer direct) |
+| `gateway` | Own overlay IP + Domain CIDR + extra prefixes + default route | 0 |
 
-末尾的 `redistribute local deny` 至关重要——防止意外通告 transit IP 池或系统路由。
-
-**全局设置：**
-- `local-port 33123`：Babel 管理端口
-- `skip-kernel-setup false`：让 Babel 管理内核路由表
+The trailing `redistribute local deny` is critical — it prevents accidental advertisement of transit IPs or system routes.
 
 ---
 
-## 5. 生成产物
+## 5. Generated Artifacts
 
-### 5.1 产物目录结构
+### 5.1 Artifact Directory Structure
 
-每个节点的部署包包含上线所需的全部文件：
+Each node's deployment bundle contains everything needed to go live:
 
 ```
 node-alpha/
   ├── wireguard/
-  │   ├── wg-node-beta.conf      # 到 beta 的 WireGuard 隧道配置
-  │   └── wg-node-gamma.conf     # 到 gamma 的 WireGuard 隧道配置
+  │   ├── wg-node-beta.conf      # WireGuard tunnel config to beta
+  │   └── wg-node-gamma.conf     # WireGuard tunnel config to gamma
   ├── babel/
-  │   └── babeld.conf            # Babel 路由守护程序配置
+  │   └── babeld.conf            # Babel routing daemon config
   ├── sysctl/
-  │   └── 99-overlay.conf        # 内核参数（转发、rp_filter）
-  ├── install.sh                 # 一键安装脚本
-  ├── manifest.json              # 构建元信息与文件清单
-  ├── checksums.sha256           # SHA-256 完整性校验
-  └── README.txt                 # 快速上手说明
+  │   └── 99-overlay.conf        # Kernel params (forwarding, rp_filter)
+  ├── install.sh                 # One-click install script
+  ├── manifest.json              # Build metadata and file manifest
+  ├── checksums.sha256           # SHA-256 integrity verification
+  └── README.txt                 # Quick-start instructions
 ```
 
-### 5.2 WireGuard 配置详解
+### 5.2 WireGuard Config Details
 
-生成的 per-peer WireGuard 配置示例：
+Example generated per-peer WireGuard config:
 
 ```ini
 # WireGuard per-peer interface: wg-node-beta
@@ -372,63 +384,285 @@ AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = 203.0.113.2:51820
 ```
 
-**关键设计点：**
+**Key design points:**
 
-- **`Table = off`**：阻止 `wg-quick` 添加内核路由。由于 `AllowedIPs = 0.0.0.0/0`，不加此选项每个接口都会尝试添加默认路由、相互冲突。路由完全交给 Babel。
-- **`AllowedIPs = 0.0.0.0/0, ::/0`**：在 per-peer 模型中是安全的——每个接口仅一个 peer，允许任何流量通过隧道，由 Babel 决定使用哪条隧道。
-- **`PostUp`/`PostDown`**：添加 Babel 邻居发现所需的 IPv6 link-local 地址。
+- **`Table = off`**: Prevents `wg-quick` from adding kernel routes. Since `AllowedIPs = 0.0.0.0/0`, without this each interface would try to add a default route, conflicting with each other. Routing is entirely managed by Babel.
+- **`AllowedIPs = 0.0.0.0/0, ::/0`**: Safe in the per-peer model — each interface has only one peer, allowing any traffic through the tunnel. Babel decides which tunnel to use.
+- **`PostUp`/`PostDown`**: Adds IPv6 link-local addresses needed for Babel neighbor discovery.
 
-### 5.3 安装脚本三阶段逻辑
+### 5.3 Install Script Four-Phase Logic
 
-`install.sh` 遵循幂等的分阶段部署：
+`install.sh` follows an idempotent phased deployment:
 
-**Phase 0 — 清理**
-- 停止并移除现有的 WireGuard 接口和旧配置
-- 清理遗留的 `wg0` 单接口配置
-- 停止 Babel 守护程序
-- 移除旧 sysctl 配置
+**Phase 0 — Cleanup**
+- Stop and remove existing WireGuard interfaces and old configs
+- **Comprehensive legacy cleanup**: Scans all active `wg*` interfaces (`wg show interfaces`) and `/etc/wireguard/*.conf` files, removing anything not managed by the current overlay (catches `wg0`, `wg1`, `wg-overlay`, or any other leftover profile)
+- Stop Babel daemon
+- Remove old sysctl config
 
-**Phase 1 — 环境准备**
-- 校验文件完整性（checksums.sha256）
-- 检查 root 权限、检测 OS（Debian / Ubuntu）
-- 安装依赖包（`wireguard`、`wireguard-tools`、`babeld`）
-- 创建 `dummy0` 接口并分配 overlay IP
-- 安装 systemd 服务使 `dummy0` 在重启后持久化
+**Phase 1 — Environment Preparation**
+- Verify file integrity (checksums.sha256)
+- Check root privileges, detect OS (Debian / Ubuntu)
+- Install dependencies (`wireguard`, `wireguard-tools`, `babeld`)
+- Create `dummy0` interface and assign overlay IP
+- Install systemd service to persist `dummy0` across reboots
 
-**Phase 2 — 部署配置**
-- 复制 WireGuard 配置到 `/etc/wireguard/`
-- 复制 Babel 配置到 `/etc/babel/`
-- 复制 sysctl 配置到 `/etc/sysctl.d/`
+**Phase 2 — Deploy Configuration**
+- Copy WireGuard configs to `/etc/wireguard/`
+- Copy Babel config to `/etc/babel/`
+- Copy sysctl config to `/etc/sysctl.d/`
 
-**Phase 3 — 激活验证**
-- 应用 sysctl 设置
-- 启动所有 `wg-quick@<interface>` 服务
-- 配置 babeld systemd override（声明依赖所有 WireGuard 服务）
-- 启动并启用 babeld
-- 显示状态摘要
+**Phase 3 — Activate and Verify**
+- Apply sysctl settings
+- Start all `wg-quick@<interface>` services
+- Configure babeld systemd override (declares dependency on all WireGuard services)
+- Start and enable babeld
+- Display status summary
 
-### 5.4 dummy0 + Table=off 设计
+### 5.4 dummy0 + Table=off Design
 
-这个组合是 per-peer 接口与 Babel 协同工作的关键：
+This combination is the key to making per-peer interfaces work with Babel:
 
 ```
 ┌─────────────────────────────────────────┐
 │              Node alpha                   │
 │                                           │
 │  dummy0: 10.11.0.1/32  ← Overlay IP      │
-│  (稳定地址，Babel 通告)                     │
+│  (stable address, Babel announces)        │
 │                                           │
 │  wg-node-beta:  10.10.0.1/32 (Table=off) │
 │  wg-node-gamma: 10.10.0.3/32 (Table=off) │
 │                                           │
-│  Babel 管理所有路由决策                      │
-│  - 从邻居学习路由                           │
-│  - 在内核路由表中安装/移除路由                │
-│  - 自动处理链路故障切换                      │
+│  Babel manages all routing decisions      │
+│  - Learns routes from neighbors           │
+│  - Installs/removes kernel routes         │
+│  - Automatically handles link failover    │
 └─────────────────────────────────────────┘
 ```
 
-- `dummy0` 提供 Babel 通告的稳定地址——应用和 DNS 始终指向这里
-- 每个 WireGuard 接口 `Table = off`，`wg-quick` 不触碰路由表
-- Babel 将每个 `wg-*` 接口视为独立隧道链路，独立跟踪可达性
-- 某条链路故障时，Babel 自动通过存活链路重新路由——无需手动调整
+- `dummy0` provides the stable address that Babel announces — apps and DNS always point here
+- Each WireGuard interface has `Table = off`, so `wg-quick` doesn't touch the routing table
+- Babel treats each `wg-*` interface as an independent tunnel link, tracking reachability independently
+- When a link fails, Babel automatically reroutes through surviving links — no manual adjustment needed
+
+### 5.5 Auto-Deploy Scripts
+
+Compilation generates two project-level auto-deploy scripts:
+
+- `deploy-all.sh` (Bash, Linux/macOS)
+- `deploy-all.ps1` (PowerShell, Windows/Linux)
+
+**Usage:**
+
+```bash
+bash deploy-all.sh path/to/artifacts.zip
+```
+
+```powershell
+.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip
+```
+
+**Workflow:**
+1. Extract the artifacts ZIP to a temp directory
+2. For each node with SSH details configured:
+   - SCP the self-extracting installer to remote `/tmp/`
+   - SSH and run `sudo bash /tmp/<node>.install.sh`
+   - Clean up remote temp files after execution
+3. Skip nodes without SSH configuration
+4. Print deployment summary (success / skipped / failed counts)
+
+**SSH connection modes:**
+- If SSH Alias is set: connects via `ssh <alias>`
+- If manual SSH fields are set: connects via `ssh -p <port> -i <key> <user>@<host>`
+- Password authentication is not supported
+
+### 5.6 Canvas Visualization
+
+After compilation, the canvas displays rich visual information:
+
+**Multi-interface handles:**
+- Each node shows multiple connection points (top = inbound, bottom = outbound)
+- Each handle corresponds to a per-peer WireGuard interface
+- Different peers use different colors (red, orange, yellow, green, cyan, indigo, fuchsia, rose — cycling)
+- Hovering a handle shows interface name, listen port, and peer node name
+
+**Node info cards:**
+- After compilation, node cards display colored tags for each peer interface: `<peerName>:<port>`
+- Colors match the corresponding handles
+
+**Edge labels:**
+- Format: `<source> → <target> | <endpoint>`
+- Color-coded by type: direct=cyan, public-endpoint=amber, relay-path=violet, candidate=gray
+
+---
+
+## 6. Debugging and Troubleshooting
+
+### 6.1 Development Environment
+
+Use `dev.sh` for quick start/stop of the dev environment:
+
+```bash
+./dev.sh start     # Start backend :8080 + frontend :5173 (background)
+./dev.sh stop      # Stop all
+./dev.sh restart   # Stop then start
+./dev.sh status    # Show running status
+./dev.sh logs      # Tail both log files
+```
+
+Log files are in the project root:
+- `.dev-backend.log` — Go backend log
+- `.dev-frontend.log` — Vite frontend log
+
+### 6.2 Common Issues
+
+#### Port already in use
+
+```bash
+# See what's using the port
+lsof -i :8080
+lsof -i :5173
+
+# Force stop
+./dev.sh stop
+```
+
+`dev.sh stop` automatically kills processes on ports 8080/5173.
+
+#### Nodes overlap on canvas
+
+Node positions persist within the session after dragging. If nodes overlap:
+1. Drag nodes to new positions — they will persist across subsequent operations
+2. Refreshing the page resets to the default grid layout (4 columns, 280x250px spacing)
+
+#### Compilation fails
+
+**Common causes:**
+- Missing domain definition (at least one Domain required)
+- Node not assigned to a domain
+- Invalid CIDR format
+- Isolated node (no edges)
+
+**Debug steps:**
+1. Click "Compile" and read the error message
+2. Check browser DevTools Console for frontend errors
+3. Check backend log: `tail -f .dev-backend.log`
+
+#### WireGuard interface won't start
+
+```bash
+# Check interface status
+wg show
+
+# Check specific interface
+wg show wg-node-beta
+
+# Manually start an interface
+sudo wg-quick up wg-node-beta
+
+# Inspect the config file
+cat /etc/wireguard/wg-node-beta.conf
+
+# Check systemd service status
+systemctl status wg-quick@wg-node-beta
+```
+
+#### Babel routes not working
+
+```bash
+# Check babeld status
+systemctl status babeld
+
+# Dump Babel routing table
+echo "dump" | nc ::1 33123
+
+# Follow babeld logs
+journalctl -u babeld -f
+
+# Check kernel routing table
+ip route show table main | grep -E "^10\."
+
+# Verify dummy0 address
+ip addr show dummy0
+```
+
+#### Install script fails
+
+```bash
+# Run in verbose mode
+sudo bash -x install.sh
+
+# Verify checksums
+cd /path/to/node-dir && sha256sum -c checksums.sha256
+
+# Manual cleanup then retry
+sudo wg-quick down wg-node-beta 2>/dev/null
+sudo bash install.sh
+```
+
+#### SSH auto-deploy fails
+
+```bash
+# Test SSH connection (alias)
+ssh -v my-server-alias
+
+# Test SSH connection (manual params)
+ssh -v -p 22 -i ~/.ssh/id_ed25519 root@1.2.3.4
+
+# Check key permissions (should be 600)
+ls -la ~/.ssh/id_ed25519
+
+# Test SCP upload
+scp -P 22 -i ~/.ssh/id_ed25519 test.txt root@1.2.3.4:/tmp/
+```
+
+### 6.3 API Debugging
+
+Backend API endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/validate` | POST | Validate topology JSON |
+| `/api/compile` | POST | Compile and return all configs |
+| `/api/export` | POST | Compile and export ZIP artifact bundle |
+
+```bash
+# Health check
+curl http://localhost:8080/api/health
+
+# Manual compile (using exported JSON)
+curl -X POST http://localhost:8080/api/compile \
+  -H "Content-Type: application/json" \
+  -d @project.json | jq .
+
+# Validate topology
+curl -X POST http://localhost:8080/api/validate \
+  -H "Content-Type: application/json" \
+  -d @project.json | jq .
+```
+
+### 6.4 Network Debugging
+
+```bash
+# Test overlay connectivity
+ping -c 3 10.11.0.2
+
+# Test WireGuard tunnel (transit IP)
+ping -c 3 10.10.0.2
+
+# Trace route
+traceroute -n 10.11.0.2
+
+# Check WireGuard handshake status
+sudo wg show all | grep -A5 "latest handshake"
+
+# Check MTU
+ping -M do -s 1392 10.11.0.2
+
+# Capture WireGuard UDP traffic
+sudo tcpdump -i eth0 udp port 51820
+
+# Capture overlay tunnel traffic
+sudo tcpdump -i wg-node-beta
+```

@@ -20,6 +20,8 @@ interface CustomEdgeData {
   label?: string;
   parallelIndex?: number;
   parallelCount?: number;
+  sourceNodeName?: string;
+  targetNodeName?: string;
   [key: string]: unknown;
 }
 
@@ -36,7 +38,11 @@ export function CustomEdge({
 }: EdgeProps & { data: CustomEdgeData }) {
   const edgeType = data?.edgeType || 'direct';
   const colors = edgeColors[edgeType] || defaultColor;
-  const label = data?.label || edgeType;
+  const rawLabel = data?.label || edgeType;
+  const srcName = data?.sourceNodeName || '';
+  const tgtName = data?.targetNodeName || '';
+  const namePrefix = srcName && tgtName ? `${srcName} → ${tgtName}` : '';
+  const label = namePrefix ? `${namePrefix} | ${rawLabel}` : rawLabel;
 
   // 平行边偏移：根据 parallelIndex 和 parallelCount 计算偏移量
   const parallelIndex = data?.parallelIndex ?? 0;

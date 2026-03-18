@@ -417,14 +417,14 @@ func TestCompile_SimpleMesh(t *testing.T) {
 		t.Fatalf(": %v", err)
 	}
 
-	//  IP 
+	//  IP
 	for _, node := range result.Topology.Nodes {
 		if node.OverlayIP == "" {
 			t.Errorf(" %s  IP", node.Name)
 		}
 	}
 
-	//  PeerMap 
+	//  PeerMap
 	if len(result.PeerMap) != 3 {
 		t.Errorf("PeerMap  3 ,  %d", len(result.PeerMap))
 	}
@@ -432,5 +432,120 @@ func TestCompile_SimpleMesh(t *testing.T) {
 	//  Manifest
 	if result.Manifest.NodeCount != 3 {
 		t.Errorf("Manifest NodeCount  3,  %d", result.Manifest.NodeCount)
+	}
+}
+
+// extractPortFromEndpoint 从 "host:port" 或 "[ipv6]:port" 中提取端口号
+func extractPortFromEndpoint(endpoint string) int {
+	if endpoint == "" {
+		return 0
+	}
+	// 从末尾找最后一个冒号
+	lastColon := -1
+	for i := len(endpoint) - 1; i >= 0; i-- {
+		if endpoint[i] == ':' {
+			lastColon = i
+			break
+		}
+	}
+	if lastColon < 0 {
+		return 0
+	}
+	port := 0
+	for _, c := range endpoint[lastColon+1:] {
+		if c >= '0' && c <= '9' {
+			port = port*10 + int(c-'0')
+		}
+	}
+	return port
+}
+
+// TestDerivePeers_PortEndpointSymmetry 验证核心不变量：
+// 对于每对 (A, B)，A 用来连 B 的 endpoint 端口 == B 为 A 分配的接口 ListenPort
+func TestDerivePeers_PortEndpointSymmetry(t *testing.T) {
+	topo := simpleMeshTopo()
+	topo.Nodes[0].OverlayIP = "10.11.0.1"
+	topo.Nodes[1].OverlayIP = "10.11.0.2"
+	topo.Nodes[2].OverlayIP = "10.11.0.3"
+
+	keys := testKeys()
+	peerMap := DerivePeers(topo, keys)
+
+	// 对每个节点的每个 peer，验证端口对称性
+	for nodeID, peers := range peerMap {
+		for _, p := range peers {
+			if p.Endpoint == "" {
+				continue // 没有 endpoint 的 peer（如反向自动生成的无 endpoint peer）跳过
+			}
+
+			endpointPort := extractPortFromEndpoint(p.Endpoint)
+
+			// 在对端节点的 peer 列表中找到指向当前节点的条目
+			remotePeers := peerMap[p.NodeID]
+			found := false
+			for _, rp := range remotePeers {
+				if rp.NodeID == nodeID {
+					found = true
+					if endpointPort != rp.ListenPort {
+						t.Errorf("端口对称性违反: %s->%s endpoint 端口=%d, 但 %s 为 %s 分配的 ListenPort=%d",
+							nodeID, p.NodeID, endpointPort, p.NodeID, nodeID, rp.ListenPort)
+					}
+					break
+				}
+			}
+			if !found {
+				t.Errorf("对称性检查失败: %s 有 peer %s, 但 %s 没有反向 peer %s",
+					nodeID, p.NodeID, p.NodeID, nodeID)
+			}
+		}
+	}
+}
+
+// TestDerivePeers_MultiPeerPortIncrement 验证 hub 节点有多个 peer 时端口正确递增
+func TestDerivePeers_MultiPeerPortIncrement(t *testing.T) {
+	topo := natHubTopo()
+	topo.Nodes[0].OverlayIP = "10.20.0.1"
+	topo.Nodes[1].OverlayIP = "10.20.0.2"
+	topo.Nodes[2].OverlayIP = "10.20.0.3"
+
+	keys := testKeys()
+	peerMap := DerivePeers(topo, keys)
+
+	// Hub (node-1) 应该有 2 个 peer 接口，端口递增
+	hubPeers := peerMap["node-1"]
+	if len(hubPeers) != 2 {
+		t.Fatalf("Hub 应有 2 个 peer，实际 %d", len(hubPeers))
+	}
+
+	// Hub 的两个接口端口应该不同且从 base 递增
+	if hubPeers[0].ListenPort == hubPeers[1].ListenPort {
+		t.Errorf("Hub 的两个接口端口不应相同，都为 %d", hubPeers[0].ListenPort)
+	}
+
+	// 验证每个 client 的 endpoint 端口 == hub 为该 client 分配的 ListenPort
+	for _, clientID := range []string{"node-2", "node-3"} {
+		clientPeers := peerMap[clientID]
+		if len(clientPeers) != 1 {
+			t.Fatalf("Client %s 应有 1 个 peer，实际 %d", clientID, len(clientPeers))
+		}
+
+		cp := clientPeers[0]
+		if cp.Endpoint == "" {
+			t.Errorf("Client %s 的 endpoint 不应为空", clientID)
+			continue
+		}
+
+		endpointPort := extractPortFromEndpoint(cp.Endpoint)
+
+		// 找到 hub 中对应该 client 的 peer
+		for _, hp := range hubPeers {
+			if hp.NodeID == clientID {
+				if endpointPort != hp.ListenPort {
+					t.Errorf("Client %s endpoint 端口=%d, 但 Hub 为 %s 分配的 ListenPort=%d",
+						clientID, endpointPort, clientID, hp.ListenPort)
+				}
+				break
+			}
+		}
 	}
 }

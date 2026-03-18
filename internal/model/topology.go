@@ -82,6 +82,13 @@ type Node struct {
 
 	// 额外路由前缀（gateway 用：向外宣告的网段）
 	ExtraPrefixes []string `json:"extra_prefixes,omitempty"`
+
+	// SSH 连接信息（用于自动部署）
+	SSHAlias   string `json:"ssh_alias,omitempty"`   // ssh_config 中的 Host 别名
+	SSHHost    string `json:"ssh_host,omitempty"`     // SSH 主机地址
+	SSHPort    int    `json:"ssh_port,omitempty"`     // SSH 端口（默认 22）
+	SSHUser    string `json:"ssh_user,omitempty"`     // SSH 用户名
+	SSHKeyPath string `json:"ssh_key_path,omitempty"` // SSH 私钥路径
 }
 
 // PublicEndpoint 公网可达地址映射

@@ -72,7 +72,21 @@ func DerivePeers(topo *model.Topology, keys map[string]KeyPair) map[string][]Pee
 	return derivePeersWithDomains(topo, keys, domainMap)
 }
 
-// derivePeersWithDomains 核心推导逻辑
+// pairAllocation 预分配的节点对资源（端口、transit IP、link-local）
+type pairAllocation struct {
+	fromNodeID    string
+	toNodeID      string
+	fromPort      int // fromNode 接口的已分配监听端口
+	toPort        int // toNode 接口的已分配监听端口
+	localTransit  string
+	remoteTransit string
+	localLL       string
+	remoteLL      string
+}
+
+// derivePeersWithDomains 核心推导逻辑（两阶段算法）
+// Pass 1: 预分配所有节点对的端口和地址资源
+// Pass 2: 使用预分配的端口构建 PeerInfo（确保 endpoint 端口 = 对端接口监听端口）
 func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) map[string][]PeerInfo {
 	peerMap := make(map[string][]PeerInfo)
 
@@ -104,17 +118,12 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// 去重：已添加的 peer（避免重复生成）
-	// key: "localNodeID->remoteNodeID"
-	addedPeers := make(map[string]bool)
-
-	// 全局 transit 地址分配计数器
+	// ======== Pass 1: 预分配资源 ========
+	allocations := make(map[string]*pairAllocation) // key: "fromNodeID->toNodeID"
+	addedPairs := make(map[string]bool)
 	transitPairIndex := 0
-
-	// 每个节点的端口偏移计数器
 	nodePortOffset := make(map[string]int)
 
-	// 遍历每条 edge，生成对应的点对点接口配置
 	for _, edge := range topo.Edges {
 		if !edge.IsEnabled {
 			continue
@@ -126,27 +135,93 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
-		// 检查是否已处理过这对节点
+		peerKey := fromNode.ID + "->" + toNode.ID
+		reversePeerKey := toNode.ID + "->" + fromNode.ID
+
+		// 如果这对节点（任一方向）已分配过，跳过
+		if addedPairs[peerKey] || addedPairs[reversePeerKey] {
+			continue
+		}
+
+		// 分配 transit IP 对
+		localTransit, remoteTransit := allocateTransitPair(transitPairIndex)
+		localLL, remoteLL := allocateLinkLocalPair(transitPairIndex)
+		transitPairIndex++
+
+		// 分配 fromNode 的监听端口
+		fromBasePort := fromNode.ListenPort
+		if fromBasePort == 0 {
+			fromBasePort = 51820
+		}
+		fromListenPort := fromBasePort + nodePortOffset[fromNode.ID]
+		nodePortOffset[fromNode.ID]++
+
+		// 分配 toNode 的监听端口
+		toBasePort := toNode.ListenPort
+		if toBasePort == 0 {
+			toBasePort = 51820
+		}
+		toListenPort := toBasePort + nodePortOffset[toNode.ID]
+		nodePortOffset[toNode.ID]++
+
+		alloc := &pairAllocation{
+			fromNodeID:    fromNode.ID,
+			toNodeID:      toNode.ID,
+			fromPort:      fromListenPort,
+			toPort:        toListenPort,
+			localTransit:  localTransit,
+			remoteTransit: remoteTransit,
+			localLL:       localLL,
+			remoteLL:      remoteLL,
+		}
+
+		allocations[peerKey] = alloc
+		allocations[reversePeerKey] = alloc
+		addedPairs[peerKey] = true
+		addedPairs[reversePeerKey] = true
+	}
+
+	// ======== Pass 2: 使用预分配的端口构建 PeerInfo ========
+	addedPeers := make(map[string]bool)
+
+	for _, edge := range topo.Edges {
+		if !edge.IsEnabled {
+			continue
+		}
+
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		if fromNode == nil || toNode == nil {
+			continue
+		}
+
 		peerKey := fromNode.ID + "->" + toNode.ID
 		if addedPeers[peerKey] {
 			continue
 		}
 
+		alloc := allocations[peerKey]
+		if alloc == nil {
+			continue
+		}
+
+		// 判断当前 edge 的方向与 alloc 的方向是否一致
+		isForward := alloc.fromNodeID == fromNode.ID
+
 		toKey, _ := keys[toNode.ID]
 		fromKey, _ := keys[fromNode.ID]
 
-		// === 计算 endpoint ===
+		// === 计算 endpoint（使用预分配的端口） ===
 		endpoint := ""
 		if edge.EndpointHost != "" {
-			port := edge.EndpointPort
-			if port == 0 {
-				port = toNode.ListenPort
-			}
-			if port > 0 {
-				endpoint = formatEndpoint(edge.EndpointHost, port)
+			// 使用对端接口的已分配监听端口
+			var allocatedPort int
+			if isForward {
+				allocatedPort = alloc.toPort
 			} else {
-				endpoint = edge.EndpointHost
+				allocatedPort = alloc.fromPort
 			}
+			endpoint = formatEndpoint(edge.EndpointHost, allocatedPort)
 		}
 
 		// === 计算 PersistentKeepalive ===
@@ -156,25 +231,24 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			keepalive = 25
 		}
 
-		// === 分配 transit IP 对 ===
-		localTransit, remoteTransit := allocateTransitPair(transitPairIndex)
-		transitPairIndex++
-
-		// === 分配 IPv6 link-local 对 ===
-		localLL, remoteLL := allocateLinkLocalPair(transitPairIndex - 1) // use same index as transit pair
-
-		// === 分配 ListenPort ===
-		fromBasePort := fromNode.ListenPort
-		if fromBasePort == 0 {
-			fromBasePort = 51820
+		// === 确定本端资源 ===
+		var fromListenPort int
+		var localTransit, remoteTransit, localLL, remoteLL string
+		if isForward {
+			fromListenPort = alloc.fromPort
+			localTransit = alloc.localTransit
+			remoteTransit = alloc.remoteTransit
+			localLL = alloc.localLL
+			remoteLL = alloc.remoteLL
+		} else {
+			fromListenPort = alloc.toPort
+			localTransit = alloc.remoteTransit
+			remoteTransit = alloc.localTransit
+			localLL = alloc.remoteLL
+			remoteLL = alloc.localLL
 		}
-		fromListenPort := fromBasePort + nodePortOffset[fromNode.ID]
-		nodePortOffset[fromNode.ID]++
 
-		// === 生成接口名 ===
 		ifaceName := wgInterfaceName(toNode.Name)
-
-		// === AllowedIPs：宽松策略 ===
 		allowedIPs := []string{"0.0.0.0/0", "::/0"}
 
 		peer := PeerInfo{
@@ -199,36 +273,43 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		// === 自动生成反向 peer ===
 		reversePeerKey := toNode.ID + "->" + fromNode.ID
 		if !addedPeers[reversePeerKey] {
-			// 反向 keepalive
 			reverseKeepalive := 0
 			if !toNode.Capabilities.CanAcceptInbound {
 				reverseKeepalive = 25
 			}
 
-			// 反向端口
-			toBasePort := toNode.ListenPort
-			if toBasePort == 0 {
-				toBasePort = 51820
-			}
-			toListenPort := toBasePort + nodePortOffset[toNode.ID]
-			nodePortOffset[toNode.ID]++
-
 			reverseIfaceName := wgInterfaceName(fromNode.Name)
 
-			// 查找反向 edge 的 endpoint
+			// 查找反向 edge 的 endpoint host，使用预分配的端口
 			reverseEndpoint := ""
 			if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok {
 				if reverseEdge.EndpointHost != "" {
-					port := reverseEdge.EndpointPort
-					if port == 0 {
-						port = fromNode.ListenPort
-					}
-					if port > 0 {
-						reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, port)
+					// 使用 fromNode 接口的已分配监听端口
+					var allocatedPort int
+					if isForward {
+						allocatedPort = alloc.fromPort
 					} else {
-						reverseEndpoint = reverseEdge.EndpointHost
+						allocatedPort = alloc.toPort
 					}
+					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, allocatedPort)
 				}
+			}
+
+			// 反向 peer 的资源与正向互换
+			var toListenPort int
+			var revLocalTransit, revRemoteTransit, revLocalLL, revRemoteLL string
+			if isForward {
+				toListenPort = alloc.toPort
+				revLocalTransit = alloc.remoteTransit
+				revRemoteTransit = alloc.localTransit
+				revLocalLL = alloc.remoteLL
+				revRemoteLL = alloc.localLL
+			} else {
+				toListenPort = alloc.fromPort
+				revLocalTransit = alloc.localTransit
+				revRemoteTransit = alloc.remoteTransit
+				revLocalLL = alloc.localLL
+				revRemoteLL = alloc.remoteLL
 			}
 
 			reversePeer := PeerInfo{
@@ -240,13 +321,11 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				Endpoint:            reverseEndpoint,
 				PersistentKeepalive: reverseKeepalive,
 				InterfaceName:       reverseIfaceName,
-				// transit 地址互换
-				ListenPort:      toListenPort,
-				LocalTransitIP:  remoteTransit,
-				RemoteTransitIP: localTransit,
-				// link-local 也互换
-				LocalLinkLocal:  remoteLL,
-				RemoteLinkLocal: localLL,
+				ListenPort:          toListenPort,
+				LocalTransitIP:      revLocalTransit,
+				RemoteTransitIP:     revRemoteTransit,
+				LocalLinkLocal:      revLocalLL,
+				RemoteLinkLocal:     revRemoteLL,
 			}
 
 			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)

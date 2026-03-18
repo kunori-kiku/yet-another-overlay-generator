@@ -60,6 +60,7 @@ type CompileResponse struct {
 	BabelConfigs     map[string]string        `json:"babel_configs"`
 	SysctlConfigs    map[string]string        `json:"sysctl_configs"`
 	InstallScripts   map[string]string        `json:"install_scripts"`
+	DeployScripts    map[string]string        `json:"deploy_scripts"`
 	Manifest         compiler.CompileManifest `json:"manifest"`
 }
 
@@ -143,6 +144,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		BabelConfigs:     result.BabelConfigs,
 		SysctlConfigs:    result.SysctlConfigs,
 		InstallScripts:   result.InstallScripts,
+		DeployScripts:    result.DeployScripts,
 		Manifest:         result.Manifest,
 	})
 }
@@ -308,6 +310,14 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 		}
 		result.InstallScripts[node.ID] = script
 	}
+
+	// Deploy scripts (bash + PowerShell)
+	bashDeploy, ps1Deploy, err := renderer.RenderDeployScripts(result.Topology)
+	if err != nil {
+		return fmt.Errorf("deploy script render: %w", err)
+	}
+	result.DeployScripts["deploy-all.sh"] = bashDeploy
+	result.DeployScripts["deploy-all.ps1"] = ps1Deploy
 
 	return nil
 }

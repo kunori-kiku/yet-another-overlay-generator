@@ -41,6 +41,12 @@ export interface Node {
   wireguard_public_key?: string;
   public_endpoints?: PublicEndpoint[];
   extra_prefixes?: string[];
+  // SSH connection details (for auto-deploy)
+  ssh_alias?: string;
+  ssh_host?: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_key_path?: string;
 }
 
 export interface PublicEndpoint {
@@ -111,6 +117,7 @@ export interface CompileResponse {
   babel_configs: Record<string, string>;
   sysctl_configs: Record<string, string>;
   install_scripts: Record<string, string>;
+  deploy_scripts: Record<string, string>;
   manifest: CompileManifest;
 }
 

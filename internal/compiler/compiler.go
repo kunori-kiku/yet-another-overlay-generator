@@ -27,10 +27,13 @@ type CompileResult struct {
 	//  sysctl 
 	SysctlConfigs map[string]string
 
-	// 
+	//
 	InstallScripts map[string]string
 
-	// 
+	// 自动部署脚本
+	DeployScripts map[string]string
+
+	//
 	Manifest CompileManifest
 }
 
@@ -76,12 +79,15 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		return nil, fmt.Errorf("IP : %w", err)
 	}
 
-	// 
+	// 复制 edges 以避免修改输入
+	compiledEdges := make([]model.Edge, len(topo.Edges))
+	copy(compiledEdges, topo.Edges)
+
 	compiledTopo := &model.Topology{
 		Project:       topo.Project,
 		Domains:       topo.Domains,
 		Nodes:         allocatedNodes,
-		Edges:         topo.Edges,
+		Edges:         compiledEdges,
 		RoutePolicies: topo.RoutePolicies,
 	}
 
@@ -90,8 +96,23 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		compiledTopo.Nodes[i].Capabilities = InferCapabilitiesFromRole(&compiledTopo.Nodes[i])
 	}
 
-	// Pass 3 :  Peer 
+	// Pass 3 :  Peer
 	peerMap := DerivePeers(compiledTopo, keys)
+
+	// 将已分配的接口端口回写到 edge 的 endpoint_port 字段
+	// 确保前端和导出的拓扑中 endpoint_port 反映实际监听端口
+	for i := range compiledTopo.Edges {
+		edge := &compiledTopo.Edges[i]
+		if !edge.IsEnabled || edge.EndpointHost == "" {
+			continue
+		}
+		for _, peer := range peerMap[edge.FromNodeID] {
+			if peer.NodeID == edge.ToNodeID && peer.Endpoint != "" {
+				edge.EndpointPort = peer.ListenPort
+				break
+			}
+		}
+	}
 
 	result := &CompileResult{
 		Topology:         compiledTopo,
@@ -100,6 +121,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		BabelConfigs:     make(map[string]string),
 		SysctlConfigs:    make(map[string]string),
 		InstallScripts:   make(map[string]string),
+		DeployScripts:    make(map[string]string),
 		Manifest: CompileManifest{
 			ProjectID:   topo.Project.ID,
 			ProjectName: topo.Project.Name,

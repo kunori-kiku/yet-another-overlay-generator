@@ -56,15 +56,37 @@ if [ -f "/etc/wireguard/{{ .ConfName }}" ]; then
 fi
 {{ end -}}
 
-# Also clean up legacy single-interface config if present
-if command -v wg >/dev/null 2>&1 && wg show "wg0" > /dev/null 2>&1; then
-    echo "  Stopping legacy WireGuard interface: wg0..."
-    wg-quick down "wg0" 2>/dev/null || true
+# Clean up ALL legacy/stale WireGuard interfaces and configs
+# This catches wg0, wg1, wg-overlay, or any other leftover profiles
+if command -v wg >/dev/null 2>&1; then
+    for _legacy_iface in $(wg show interfaces 2>/dev/null); do
+        # Skip interfaces managed by this overlay (already handled above)
+        _is_managed=false
+        {{ range .WgInterfaces -}}
+        [ "$_legacy_iface" = "{{ .Name }}" ] && _is_managed=true
+        {{ end -}}
+        if [ "$_is_managed" = "false" ]; then
+            echo "  Stopping legacy WireGuard interface: $_legacy_iface..."
+            wg-quick down "$_legacy_iface" 2>/dev/null || true
+            if systemctl is-enabled "wg-quick@$_legacy_iface" >/dev/null 2>&1; then
+                systemctl disable "wg-quick@$_legacy_iface" 2>/dev/null || true
+            fi
+        fi
+    done
 fi
-if [ -f "/etc/wireguard/wg0.conf" ]; then
-    rm -f "/etc/wireguard/wg0.conf"
-    echo "  Removed legacy config: /etc/wireguard/wg0.conf"
-fi
+# Remove any leftover WireGuard config files not managed by this overlay
+for _legacy_conf in /etc/wireguard/*.conf; do
+    [ -f "$_legacy_conf" ] || continue
+    _legacy_name="$(basename "$_legacy_conf")"
+    _is_managed=false
+    {{ range .WgInterfaces -}}
+    [ "$_legacy_name" = "{{ .ConfName }}" ] && _is_managed=true
+    {{ end -}}
+    if [ "$_is_managed" = "false" ]; then
+        rm -f "$_legacy_conf"
+        echo "  Removed legacy config: $_legacy_conf"
+    fi
+done
 
 {{ if .HasBabel -}}
 # Stop Babel if running
