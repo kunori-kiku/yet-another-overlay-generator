@@ -347,7 +347,7 @@ export const useTopologyStore = create<TopologyState>()(
         domains: data.topology.domains,
         nodes: data.topology.nodes,
         edges: data.topology.edges,
-        history: [newHistoryEntry, ...state.history].slice(0, 50), // keep last 50
+        history: [newHistoryEntry, ...state.history].slice(0, 5), // keep last 5
       }));
     } catch (err) {
       set({
@@ -432,7 +432,6 @@ export const useTopologyStore = create<TopologyState>()(
         domains: state.domains,
         nodes: state.nodes,
         edges: state.edges,
-        history: state.history,
         language: state.language,
       }),
     }

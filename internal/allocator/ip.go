@@ -8,10 +8,10 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// IPAllocator IP 
+// IPAllocator IP
 type IPAllocator struct{}
 
-// NewIPAllocator  IP 
+// NewIPAllocator  IP
 func NewIPAllocator() *IPAllocator {
 	return &IPAllocator{}
 }
@@ -19,23 +19,43 @@ func NewIPAllocator() *IPAllocator {
 // AllocateIPs  OverlayIP  IP
 // （）
 func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
-	//  Domain 
+	//  Domain
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
 		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
 	}
 
-	//  IP（）
+	// 结果副本
+	result := make([]model.Node, len(topo.Nodes))
+	copy(result, topo.Nodes)
+
+	// Clear overlay IPs that fall outside their domain's CIDR
+	// (e.g., user changed the domain CIDR after a previous compile)
+	for i := range result {
+		if result[i].OverlayIP == "" {
+			continue
+		}
+		domain, ok := domainMap[result[i].DomainID]
+		if !ok {
+			continue
+		}
+		_, ipNet, err := net.ParseCIDR(domain.CIDR)
+		if err != nil {
+			continue
+		}
+		nodeIP := net.ParseIP(result[i].OverlayIP)
+		if nodeIP == nil || !ipNet.Contains(nodeIP) {
+			result[i].OverlayIP = "" // force re-allocation
+		}
+	}
+
+	// 记录已用 IP（after clearing stale ones）
 	usedIPs := make(map[string]bool)
-	for _, node := range topo.Nodes {
+	for _, node := range result {
 		if node.OverlayIP != "" {
 			usedIPs[node.OverlayIP] = true
 		}
 	}
-
-	// 
-	result := make([]model.Node, len(topo.Nodes))
-	copy(result, topo.Nodes)
 
 	//  IP
 	for i := range result {
@@ -68,7 +88,7 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 		return "", fmt.Errorf(" CIDR: %s", cidr)
 	}
 
-	// 
+	//
 	reservedNets := make([]*net.IPNet, 0)
 	reservedSingleIPs := make(map[string]bool)
 	for _, rr := range reservedRanges {
@@ -84,7 +104,7 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 		reservedNets = append(reservedNets, rNet)
 	}
 
-	//  CIDR 
+	//  CIDR
 	ones, bits := ipNet.Mask.Size()
 	hostBits := bits - ones
 
@@ -98,7 +118,7 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 	//  1 （）
 	//  2 （， IPv4 /30 ）
 	startHost := uint32(1)
-	endHost := totalHosts - 1 // 
+	endHost := totalHosts - 1 //
 
 	if hostBits <= 1 {
 		// /31 ，
@@ -112,17 +132,17 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 		candidateUint := networkIP + h
 		candidateIP := uint32ToIP(candidateUint).String()
 
-		// 
+		//
 		if usedIPs[candidateIP] {
 			continue
 		}
 
-		//  IP 
+		//  IP
 		if reservedSingleIPs[candidateIP] {
 			continue
 		}
 
-		// 
+		//
 		candidate := net.ParseIP(candidateIP)
 		reserved := false
 		for _, rNet := range reservedNets {
