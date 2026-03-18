@@ -579,8 +579,8 @@ bash deploy-all.sh --clean path/to/artifacts.zip
 **SSH 密钥重试：** 脚本不使用 `BatchMode=yes`，允许 SSH 客户端自动遍历 ssh-agent 中的密钥、`~/.ssh/config` 中的配置以及默认密钥路径，仅在所有密钥均尝试失败后才报告连接错误。
 
 **SSH 连接方式：**
-- 如果节点配置了 SSH 别名，使用 `ssh <alias>` 连接
-- 如果配置了手动 SSH 信息，使用 `ssh -p <port> -i <key> <user>@<host>` 连接
+- 如果节点配置了 SSH 别名，使用 `ssh <alias>` 连接（端口、用户、密钥均由 `~/.ssh/config` 决定，脚本不附加 `-p` 等参数）
+- 如果配置了手动 SSH 信息，使用 `ssh -p <port> -i <key> <user>@<host>` 连接（仅在显式配置时附加 `-p` 和 `-i`）
 - 不支持密码认证
 
 ### 5.6 画布可视化特性

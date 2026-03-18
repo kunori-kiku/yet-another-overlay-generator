@@ -39,6 +39,7 @@ func RenderDeployScripts(topo *model.Topology) (string, string, error) {
 
 		if node.SSHAlias != "" {
 			info.SSHTarget = node.SSHAlias
+			info.SSHPort = 0 // alias → let ssh_config decide
 			info.HasSSH = true
 		} else if node.SSHHost != "" {
 			user := node.SSHUser
@@ -147,11 +148,18 @@ SKIPPED=$((SKIPPED + 1))
 			continue
 		}
 
-		sshOpts := fmt.Sprintf("-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p %d", node.SSHPort)
-		scpPort := fmt.Sprintf("-P %d", node.SSHPort)
+		sshOpts := "-o ConnectTimeout=15"
+		scpOpts := ""
+		if node.SSHPort > 0 {
+			sshOpts += fmt.Sprintf(" -p %d", node.SSHPort)
+			scpOpts += fmt.Sprintf("-P %d", node.SSHPort)
+		}
 		if node.SSHKeyPath != "" {
 			sshOpts += fmt.Sprintf(" -i %q", node.SSHKeyPath)
-			scpPort += fmt.Sprintf(" -i %q", node.SSHKeyPath)
+			if scpOpts != "" {
+				scpOpts += " "
+			}
+			scpOpts += fmt.Sprintf("-i %q", node.SSHKeyPath)
 		}
 
 		b.WriteString(fmt.Sprintf(`echo ""
@@ -197,7 +205,7 @@ fi
 			node.NodeName,
 			sshOpts, node.SSHTarget, cleanCmd,
 			// SCP + install
-			scpPort, node.SSHTarget, installerFile,
+			scpOpts, node.SSHTarget, installerFile,
 			sshOpts, node.SSHTarget, installerFile, installerFile,
 			node.NodeName,
 			node.NodeName,
@@ -279,11 +287,18 @@ try {
 			continue
 		}
 
-		sshOpts := fmt.Sprintf("-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -p %d", node.SSHPort)
-		scpPort := fmt.Sprintf("-P %d", node.SSHPort)
+		sshOpts := "-o ConnectTimeout=15"
+		scpOpts := ""
+		if node.SSHPort > 0 {
+			sshOpts += fmt.Sprintf(" -p %d", node.SSHPort)
+			scpOpts += fmt.Sprintf("-P %d", node.SSHPort)
+		}
 		if node.SSHKeyPath != "" {
 			sshOpts += fmt.Sprintf(` -i "%s"`, node.SSHKeyPath)
-			scpPort += fmt.Sprintf(` -i "%s"`, node.SSHKeyPath)
+			if scpOpts != "" {
+				scpOpts += " "
+			}
+			scpOpts += fmt.Sprintf(`-i "%s"`, node.SSHKeyPath)
 		}
 
 		b.WriteString(fmt.Sprintf(`    Write-Host ""
@@ -332,7 +347,7 @@ try {
 			node.NodeName,
 			sshOpts, node.SSHTarget, cleanCmd,
 			// SCP + install
-			scpPort, node.SSHTarget, installerFile,
+			scpOpts, node.SSHTarget, installerFile,
 			node.NodeName,
 			sshOpts, node.SSHTarget, installerFile, installerFile,
 			node.NodeName,
