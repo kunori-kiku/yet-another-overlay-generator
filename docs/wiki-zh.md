@@ -576,12 +576,17 @@ bash deploy-all.sh --clean path/to/artifacts.zip
 - SCP 上传失败
 - 安装脚本执行失败
 
-**SSH 密钥重试：** 脚本不使用 `BatchMode=yes`，允许 SSH 客户端自动遍历 ssh-agent 中的密钥、`~/.ssh/config` 中的配置以及默认密钥路径，仅在所有密钥均尝试失败后才报告连接错误。
+**SSH 行为：** 脚本完全尊重用户的 SSH 配置，不覆盖任何 SSH 选项：
+- 不设置 `StrictHostKeyChecking`——由用户的 `~/.ssh/config` 或系统策略决定
+- 不设置 `ConnectTimeout`——避免干扰需要交互式确认的 SSH agent（如 Bitwarden SSH agent）
+- 不使用 `BatchMode=yes`——允许 SSH 客户端自动遍历 ssh-agent 中的密钥、`~/.ssh/config` 以及默认密钥路径
 
 **SSH 连接方式：**
 - 如果节点配置了 SSH 别名，使用 `ssh <alias>` 连接（端口、用户、密钥均由 `~/.ssh/config` 决定，脚本不附加 `-p` 等参数）
 - 如果配置了手动 SSH 信息，使用 `ssh -p <port> -i <key> <user>@<host>` 连接（仅在显式配置时附加 `-p` 和 `-i`）
 - 不支持密码认证
+
+**远程清理命令传递：** `--clean` 的远程清理脚本通过 `stdin` 管道传递（bash 使用 `<<'HEREDOC'`，PowerShell 使用单引号字符串管道），避免了嵌套引号和 `$` 转义问题。
 
 ### 5.6 画布可视化特性
 

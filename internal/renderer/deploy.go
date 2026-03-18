@@ -71,6 +71,35 @@ func RenderDeployScripts(topo *model.Topology) (string, string, error) {
 	return bash, ps1, nil
 }
 
+// buildSSHOpts returns (sshOpts, scpOpts) strings.
+// sshOpts has a leading space if non-empty (for "ssh%s target" formatting).
+// scpOpts has NO leading space (for "scp %s ..." formatting).
+func buildSSHOpts(node DeployNodeInfo, quoteStyle string) (string, string) {
+	var sshParts, scpParts []string
+
+	if node.SSHPort > 0 {
+		sshParts = append(sshParts, fmt.Sprintf("-p %d", node.SSHPort))
+		scpParts = append(scpParts, fmt.Sprintf("-P %d", node.SSHPort))
+	}
+	if node.SSHKeyPath != "" {
+		switch quoteStyle {
+		case "go": // Go %q quoting for bash
+			sshParts = append(sshParts, fmt.Sprintf("-i %q", node.SSHKeyPath))
+			scpParts = append(scpParts, fmt.Sprintf("-i %q", node.SSHKeyPath))
+		case "dquote": // double-quote for PowerShell
+			sshParts = append(sshParts, fmt.Sprintf(`-i "%s"`, node.SSHKeyPath))
+			scpParts = append(scpParts, fmt.Sprintf(`-i "%s"`, node.SSHKeyPath))
+		}
+	}
+
+	sshOpts := ""
+	if len(sshParts) > 0 {
+		sshOpts = " " + strings.Join(sshParts, " ")
+	}
+	scpOpts := strings.Join(scpParts, " ")
+	return sshOpts, scpOpts
+}
+
 func renderBashDeploy(config DeployScriptConfig) (string, error) {
 	var b strings.Builder
 
@@ -131,9 +160,6 @@ SUCCESS=0
 
 `)
 
-	// Build the remote clean command used when --clean is passed
-	cleanCmd := `for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print \\$2}' | tr -d ' '); do wg-quick down \\\"\\$iface\\\" 2>/dev/null || ip link del \\\"\\$iface\\\" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf`
-
 	for _, node := range config.Nodes {
 		b.WriteString(fmt.Sprintf("# --- Node: %s ---\n", node.NodeName))
 
@@ -148,18 +174,12 @@ SKIPPED=$((SKIPPED + 1))
 			continue
 		}
 
-		sshOpts := "-o ConnectTimeout=15"
-		scpOpts := ""
-		if node.SSHPort > 0 {
-			sshOpts += fmt.Sprintf(" -p %d", node.SSHPort)
-			scpOpts += fmt.Sprintf("-P %d", node.SSHPort)
-		}
-		if node.SSHKeyPath != "" {
-			sshOpts += fmt.Sprintf(" -i %q", node.SSHKeyPath)
-			if scpOpts != "" {
-				scpOpts += " "
-			}
-			scpOpts += fmt.Sprintf("-i %q", node.SSHKeyPath)
+		sshOpts, scpOpts := buildSSHOpts(node, "go")
+
+		// scpCmd: "scp -P 22 -i key" or just "scp" when no opts
+		scpCmd := "scp"
+		if scpOpts != "" {
+			scpCmd = "scp " + scpOpts
 		}
 
 		b.WriteString(fmt.Sprintf(`echo ""
@@ -170,18 +190,23 @@ if [ ! -f "$INSTALLER" ]; then
     SKIPPED=$((SKIPPED + 1))
 else
     # Test SSH connectivity first
-    if ! ssh %s %s "echo ok" >/dev/null 2>&1; then
-        echo "  ERROR: SSH connection to %s failed (timeout or auth error)." >&2
+    if ! ssh%s %s "echo ok" >/dev/null 2>&1; then
+        echo "  ERROR: SSH connection to %s failed." >&2
         FAILED=$((FAILED + 1))
     else
         # Clean previous WireGuard configs if requested
         if [ "$CLEAN" -eq 1 ]; then
             echo "  Cleaning existing WireGuard interfaces on %s..."
-            ssh %s %s "sudo bash -c '%s'" 2>/dev/null || true
+            ssh%s %s sudo bash -s <<'CLEAN_EOF' 2>/dev/null || true
+for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
+    wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
+done
+rm -f /etc/wireguard/wg*.conf
+CLEAN_EOF
         fi
 
-        if scp %s "$INSTALLER" %s:/tmp/%s; then
-            if ssh %s %s "sudo bash /tmp/%s && rm -f /tmp/%s"; then
+        if %s "$INSTALLER" %s:/tmp/%s; then
+            if ssh%s %s "sudo bash /tmp/%s && rm -f /tmp/%s"; then
                 echo "  SUCCESS: %s deployed."
                 SUCCESS=$((SUCCESS + 1))
             else
@@ -203,9 +228,9 @@ fi
 			node.NodeName,
 			// Clean step
 			node.NodeName,
-			sshOpts, node.SSHTarget, cleanCmd,
+			sshOpts, node.SSHTarget,
 			// SCP + install
-			scpOpts, node.SSHTarget, installerFile,
+			scpCmd, node.SSHTarget, installerFile,
 			sshOpts, node.SSHTarget, installerFile, installerFile,
 			node.NodeName,
 			node.NodeName,
@@ -263,6 +288,9 @@ if (-not (Test-Path $ArtifactsZip)) {
 $WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("overlay-deploy-" + [System.Guid]::NewGuid().ToString("N").Substring(0,8))
 New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 
+# Clean script sent to remote via stdin (single-quoted — no PS expansion)
+$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf'
+
 try {
     Write-Host "Extracting artifacts..."
     Expand-Archive -Path $ArtifactsZip -DestinationPath $WorkDir -Force
@@ -272,8 +300,6 @@ try {
     $Success = 0
 
 `)
-
-	cleanCmd := `for iface in \\$(ip -o link show type wireguard 2>/dev/null | awk -F: '{print \\$2}' | tr -d ' '); do wg-quick down \\$iface 2>/dev/null || ip link del \\$iface 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf`
 
 	for _, node := range config.Nodes {
 		installerFile := node.NodeName + ".install.sh"
@@ -287,18 +313,11 @@ try {
 			continue
 		}
 
-		sshOpts := "-o ConnectTimeout=15"
-		scpOpts := ""
-		if node.SSHPort > 0 {
-			sshOpts += fmt.Sprintf(" -p %d", node.SSHPort)
-			scpOpts += fmt.Sprintf("-P %d", node.SSHPort)
-		}
-		if node.SSHKeyPath != "" {
-			sshOpts += fmt.Sprintf(` -i "%s"`, node.SSHKeyPath)
-			if scpOpts != "" {
-				scpOpts += " "
-			}
-			scpOpts += fmt.Sprintf(`-i "%s"`, node.SSHKeyPath)
+		sshOpts, scpOpts := buildSSHOpts(node, "dquote")
+
+		scpCmd := "scp"
+		if scpOpts != "" {
+			scpCmd = "scp " + scpOpts
 		}
 
 		b.WriteString(fmt.Sprintf(`    Write-Host ""
@@ -309,23 +328,23 @@ try {
         $Skipped++
     } else {
         # Test SSH connectivity first
-        $sshTest = & ssh %s %s "echo ok" 2>&1
+        $sshTest = & ssh%s %s "echo ok" 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ERROR: SSH connection to %s failed (timeout or auth error)." -ForegroundColor Red
+            Write-Host "  ERROR: SSH connection to %s failed." -ForegroundColor Red
             $Failed++
         } else {
             # Clean previous WireGuard configs if requested
             if ($Clean) {
                 Write-Host "  Cleaning existing WireGuard interfaces on %s..."
-                & ssh %s %s "sudo bash -c '%s'" 2>$null
+                $CleanScript | & ssh%s %s sudo bash -s 2>$null
             }
 
-            & scp %s $Installer "%s:/tmp/%s"
+            & %s $Installer "%s:/tmp/%s"
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  ERROR: SCP upload to %s failed." -ForegroundColor Red
                 $Failed++
             } else {
-                & ssh %s %s "sudo bash /tmp/%s && rm -f /tmp/%s"
+                & ssh%s %s "sudo bash /tmp/%s && rm -f /tmp/%s"
                 if ($LASTEXITCODE -ne 0) {
                     Write-Host "  ERROR: Installation script failed on %s (exit code: $LASTEXITCODE)." -ForegroundColor Red
                     $Failed++
@@ -345,9 +364,9 @@ try {
 			node.NodeName,
 			// Clean step
 			node.NodeName,
-			sshOpts, node.SSHTarget, cleanCmd,
+			sshOpts, node.SSHTarget,
 			// SCP + install
-			scpOpts, node.SSHTarget, installerFile,
+			scpCmd, node.SSHTarget, installerFile,
 			node.NodeName,
 			sshOpts, node.SSHTarget, installerFile, installerFile,
 			node.NodeName,
