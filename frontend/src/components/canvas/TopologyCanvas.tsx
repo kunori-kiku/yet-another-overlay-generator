@@ -127,8 +127,9 @@ export function TopologyCanvas() {
         .filter((e) => e.is_enabled)
         .map((e) => {
           const pInfo = parallelEdgeInfo[e.id] || { index: 0, count: 1 };
+          const displayPort = e.compiled_port || e.endpoint_port || '';
           const label = e.endpoint_host
-            ? `${e.endpoint_host}:${e.endpoint_port || ''}`
+            ? `${e.endpoint_host}:${displayPort}`
             : e.type;
 
           let targetHandle: string | undefined;
@@ -301,6 +302,7 @@ export function TopologyCanvas() {
             case 'router': return '#3b82f6';
             case 'relay': return '#eab308';
             case 'gateway': return '#a855f7';
+            case 'client': return '#06b6d4';
             default: return '#22c55e';
           }
         }}

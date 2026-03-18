@@ -39,12 +39,12 @@ func simpleMeshTopo() *model.Topology {
 			},
 		},
 		Edges: []model.Edge{
-			{ID: "e1", FromNodeID: "node-1", ToNodeID: "node-2", Type: "direct", EndpointHost: "203.0.113.2", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
-			{ID: "e2", FromNodeID: "node-2", ToNodeID: "node-1", Type: "direct", EndpointHost: "203.0.113.1", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
-			{ID: "e3", FromNodeID: "node-1", ToNodeID: "node-3", Type: "direct", EndpointHost: "203.0.113.3", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
-			{ID: "e4", FromNodeID: "node-3", ToNodeID: "node-1", Type: "direct", EndpointHost: "203.0.113.1", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
-			{ID: "e5", FromNodeID: "node-2", ToNodeID: "node-3", Type: "direct", EndpointHost: "203.0.113.3", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
-			{ID: "e6", FromNodeID: "node-3", ToNodeID: "node-2", Type: "direct", EndpointHost: "203.0.113.2", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
+			{ID: "e1", FromNodeID: "node-1", ToNodeID: "node-2", Type: "direct", EndpointHost: "203.0.113.2", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+			{ID: "e2", FromNodeID: "node-2", ToNodeID: "node-1", Type: "direct", EndpointHost: "203.0.113.1", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+			{ID: "e3", FromNodeID: "node-1", ToNodeID: "node-3", Type: "direct", EndpointHost: "203.0.113.3", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+			{ID: "e4", FromNodeID: "node-3", ToNodeID: "node-1", Type: "direct", EndpointHost: "203.0.113.1", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+			{ID: "e5", FromNodeID: "node-2", ToNodeID: "node-3", Type: "direct", EndpointHost: "203.0.113.3", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+			{ID: "e6", FromNodeID: "node-3", ToNodeID: "node-2", Type: "direct", EndpointHost: "203.0.113.2", EndpointPort: 0, Transport: "udp", IsEnabled: true},
 		},
 	}
 }
@@ -74,8 +74,8 @@ func natHubTopo() *model.Topology {
 			},
 		},
 		Edges: []model.Edge{
-			{ID: "e1", FromNodeID: "node-2", ToNodeID: "node-1", Type: "public-endpoint", EndpointHost: "198.51.100.1", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
-			{ID: "e2", FromNodeID: "node-3", ToNodeID: "node-1", Type: "public-endpoint", EndpointHost: "198.51.100.1", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
+			{ID: "e1", FromNodeID: "node-2", ToNodeID: "node-1", Type: "public-endpoint", EndpointHost: "198.51.100.1", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+			{ID: "e2", FromNodeID: "node-3", ToNodeID: "node-1", Type: "public-endpoint", EndpointHost: "198.51.100.1", EndpointPort: 0, Transport: "udp", IsEnabled: true},
 		},
 	}
 }
@@ -88,7 +88,7 @@ func TestDerivePeers_SimpleMesh(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// ： 2  peer
 	for _, node := range topo.Nodes {
@@ -106,7 +106,7 @@ func TestDerivePeers_EdgeConsistency(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// node-1  peer  node-2  node-3
 	node1Peers := peerMap["node-1"]
@@ -129,7 +129,7 @@ func TestDerivePeers_EndpointCorrect(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// node-1 -> node-2  endpoint  203.0.113.2:51820
 	for _, p := range peerMap["node-1"] {
@@ -148,7 +148,7 @@ func TestDerivePeers_AllowedIPs(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// per-peer 架构：AllowedIPs 使用宽松策略
 	for _, p := range peerMap["node-1"] {
@@ -167,7 +167,7 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.20.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// NAT  (node-2, node-3)  hub  PersistentKeepalive
 	for _, p := range peerMap["node-2"] {
@@ -193,7 +193,7 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo.Edges[1].IsEnabled = false
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// node-1  1  peer（node-3）， node-2 
 	if len(peerMap["node-1"]) != 1 {
@@ -224,7 +224,7 @@ func unidirectionalPublicEndpointTopo() *model.Topology {
 		},
 		Edges: []model.Edge{
 			// 只有 A→B 这一条单向 edge，没有 B→A
-			{ID: "e1", FromNodeID: "node-1", ToNodeID: "node-2", Type: "public-endpoint", EndpointHost: "203.0.113.2", EndpointPort: 51820, Transport: "udp", IsEnabled: true},
+			{ID: "e1", FromNodeID: "node-1", ToNodeID: "node-2", Type: "public-endpoint", EndpointHost: "203.0.113.2", EndpointPort: 0, Transport: "udp", IsEnabled: true},
 		},
 	}
 }
@@ -235,7 +235,7 @@ func TestDerivePeers_UnidirectionalKeepalive(t *testing.T) {
 	topo.Nodes[1].OverlayIP = "10.30.0.2"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// node-1 (发起方) 应该有 node-2 作为 peer
 	node1Peers := peerMap["node-1"]
@@ -267,7 +267,7 @@ func TestDerivePeers_BidirectionalNoExtraKeepalive(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// 双向 edge + 都有公网IP 的情况下，不需要 keepalive
 	for _, p := range peerMap["node-1"] {
@@ -285,7 +285,7 @@ func TestDerivePeers_PerPeerFields(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// 验证 node-1 的第一个 peer 的 per-peer 字段
 	node1Peers := peerMap["node-1"]
@@ -469,7 +469,7 @@ func TestDerivePeers_PortEndpointSymmetry(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// 对每个节点的每个 peer，验证端口对称性
 	for nodeID, peers := range peerMap {
@@ -509,7 +509,7 @@ func TestDerivePeers_MultiPeerPortIncrement(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.20.0.3"
 
 	keys := testKeys()
-	peerMap := DerivePeers(topo, keys)
+	peerMap, _ := DerivePeers(topo, keys)
 
 	// Hub (node-1) 应该有 2 个 peer 接口，端口递增
 	hubPeers := peerMap["node-1"]

@@ -67,6 +67,9 @@ Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配
 | `router` | ✓ | ✗ | 自身 IP + Domain CIDR | 骨干转发节点 |
 | `relay` | ✓ | ✓ | 自身 IP + Domain CIDR（cost 96） | NAT 场景中继 |
 | `gateway` | ✓ | ✗ | 自身 IP + Domain CIDR + 额外前缀 + 默认路由 | 桥接外部网段 |
+| `client` | ✗ | ✗ | 不运行 Babel | 轻量终端（手机、笔记本） |
+
+> **Client 角色说明：** Client 是最轻量的角色，适用于不需要参与动态路由的终端设备。Client 使用单个 `wg0` 接口连接到一个 router/relay/gateway 节点，不运行 Babel，不使用 dummy0，不使用 per-peer 接口模型。Client 的可达性通过 router 侧的内核路由注入（`PostUp = ip route add <client_ip>/32 dev %i`）+ Babel 重分发实现，使 overlay 中的其他节点都能访问到 client。
 
 **能力字段：**
 - 公网可达：节点是否可被外部路径访问
@@ -96,12 +99,13 @@ Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配
 |------|------|
 | 类型 | `direct`（直连）/ `public-endpoint`（公网端点）/ `relay-path`（中继路径）/ `candidate`（候选） |
 | Endpoint IP | 目标公网 IP 或域名，可从目标节点的公网映射下拉选择，也可手动输入 |
-| Endpoint Port | 目标 WireGuard 接口监听端口，编译后可一键填充自动分配的端口 |
+| Endpoint Port | 用户指定端口：`0` = 自动分配（默认），非零 = NAT/端口转发覆盖（如外部端口 443 映射到内部 WireGuard 端口） |
+| Compiled Port | 编译器分配的实际端口（只读），编译后显示在端口字段下方 |
 | Transport | `udp` / `tcp` 元数据 |
 | Priority / Weight | 路径偏好权重 |
 | Is Enabled | 该连线是否参与编译 |
 
-> **IP 与端口分离设计：** Endpoint IP 来自目标节点的公网可达地址；Endpoint Port 来自编译器为该 peer 连接分配的 WireGuard 接口监听端口。两者独立配置，避免端口与 IP 绑定导致的混乱。编译后，端口字段旁会显示 `Auto:<port>` 按钮，点击即可填充正确端口。
+> **端口分离设计：** `endpoint_port` 是用户意图（0 = 让编译器自动分配，非零 = NAT 覆盖），`compiled_port` 是编译器输出的实际端口。这样设计支持 NAT/端口转发场景：例如外部通过 `8.8.8.8:443` 访问，但节点实际 WireGuard 监听在 `51821`。`endpoint_port=443` 不会被编译器覆盖，重新编译后用户的 NAT 配置得以保留。
 
 ### 2.4 两层地址分离
 
@@ -185,7 +189,7 @@ Node alpha:
 | Hostname | ✗ | 真实 hostname 或域名标签 |
 | Platform | ✓ | `debian` / `ubuntu` |
 | Domain | ✓ | 所属网域 |
-| Role | ✓ | `peer` / `router` / `relay` / `gateway` |
+| Role | ✓ | `peer` / `router` / `relay` / `gateway` / `client` |
 | Overlay IP | ✗ | 手工指定时使用，否则自动分配 |
 | Listen Port | ✗ | WireGuard 基础监听端口，默认 51820 |
 | MTU | ✗ | WireGuard 接口 MTU，0 = 系统默认 |
@@ -214,7 +218,8 @@ Node alpha:
 |------|------|------|
 | Type | ✓ | `direct` / `public-endpoint` / `relay-path` / `candidate` |
 | Endpoint IP | ✗ | 目标 IP 或域名（可从目标节点公网地址下拉选择或手动输入） |
-| Endpoint Port | ✗ | 目标 WireGuard 接口端口（编译后可一键自动填充） |
+| Endpoint Port | ✗ | 用户指定端口：`0` = 自动（默认），非零 = NAT/端口转发覆盖 |
+| Compiled Port | — | 编译器分配的实际端口（只读，编译后自动填充） |
 | Transport | ✗ | `udp` / `tcp` 元数据 |
 | Priority | ✗ | 路径优先级 |
 | Weight | ✗ | 路径权重 |
@@ -224,7 +229,7 @@ Node alpha:
 
 **校验** 检查两类问题：
 - **Schema 校验**：必填字段、类型正确性、引用有效性（如节点的 domain_id 指向已有网域）
-- **语义校验**：IP 是否重复、节点是否孤立、CIDR 是否合法
+- **语义校验**：IP 是否重复、节点是否孤立、CIDR 是否合法、Client 节点连线规则（必须恰好一条出站边、目标必须为 router/relay/gateway、不允许入站边）
 
 **编译** 从拓扑 JSON 确定性生成：
 - 每个 per-peer WireGuard 配置文件
@@ -304,13 +309,35 @@ Peer 推导器是编译器中最复杂的部分，负责将拓扑 Edge 转换为
 
 **IPv6 Link-Local 分配：** 同步分配，Link 0: `fe80::1` ↔ `fe80::2`，依此类推。
 
-**监听端口分配：** 每节点从 `listen_port`（默认 51820）开始，每增加一个 peer 接口递增 1。
+**监听端口分配：** 每节点从 `listen_port`（默认 51820）开始，每增加一个 peer 接口递增 1。Client 节点不参与 per-peer 端口分配（使用单一 wg0 接口）。
+
+**端口覆盖（NAT/端口转发）：** 当 Edge 的 `endpoint_port` 为非零值时，编译器使用用户指定的端口作为 endpoint 连接端口（适用于 NAT 映射，如外部 443 → 内部 51821）。`endpoint_port` 为 0 时使用自动分配的端口。两种情况下 `compiled_port` 都记录编译器分配的实际监听端口。
+
+**Client 节点的 Peer 推导：**
+
+Client 节点不使用 per-peer 接口模型，而是使用单个 `wg0` 接口。Peer 推导器对 client 的特殊处理：
+
+1. **Pass 1**：为 client edge 分配 transit IP 和 link-local，但**不为 client 侧分配端口偏移**（client 使用固定的 `listen_port`）
+2. **Pass 2**：
+   - 不在 peerMap 中为 client 创建 PeerInfo（client 的 wg0 由 `DeriveClientConfigs` 单独处理）
+   - 在 router 侧创建带 `IsClientPeer=true` 标记的 PeerInfo
+   - 不为 client 创建反向 peer
+3. **`DeriveClientConfigs`**：为每个 client 节点生成 `ClientPeerInfo`，包含 router 公钥、endpoint、域 CIDR（作为 AllowedIPs），以及固定的 `PersistentKeepalive=25`
+
+**Router 侧 Client 可达性：**
+
+Router 为 client 分配的 per-peer 接口添加内核路由注入：
+```ini
+PostUp = ip route add <client_overlay_ip>/32 dev %i
+PostDown = ip route del <client_overlay_ip>/32 dev %i 2>/dev/null || true
+```
+Babel 通过 `redistribute local` 发现该内核路由并向全网通告，使 overlay 中的任意节点都能访问 client。
 
 ### 4.3 Babel 路由集成
 
 Babel 是使多跳 overlay 网络运转的动态路由守护程序。
 
-**何时运行 Babel？** 当节点所属 Domain 的 `routing_mode` 为 `"babel"` 时生成 Babel 配置。
+**何时运行 Babel？** 当节点所属 Domain 的 `routing_mode` 为 `"babel"` 时生成 Babel 配置。**Client 角色例外**——Client 永远不运行 Babel，无论 Domain 路由模式如何。
 
 **Router-ID 生成：**
 1. 计算 `SHA-256(node_id)`
@@ -335,8 +362,11 @@ interface wg-node-beta type tunnel hello-interval 4 update-interval 16
 | `router` | 自身 overlay IP + Domain CIDR | 0 |
 | `relay` | 自身 overlay IP + Domain CIDR | 96（优先直连） |
 | `gateway` | 自身 overlay IP + Domain CIDR + 额外前缀 + 默认路由 | 0 |
+| `client` | 不运行 Babel | — |
 
 末尾的 `redistribute local deny` 至关重要——防止意外通告 transit IP 池或系统路由。
+
+**Client 可达性与路由重分发：** Client 不运行 Babel，但 overlay 中的其他节点仍然可以访问它。实现方式：Router 在连接 client 的 per-peer 接口上通过 `PostUp` 注入内核路由（`ip route add <client_overlay_ip>/32 dev %i`），Babel 通过 `redistribute local` 发现该内核路由并向全网通告。
 
 **全局设置：**
 - `local-port 33123`：Babel 管理端口
@@ -361,6 +391,20 @@ node-alpha/
   │   └── 99-overlay.conf        # 内核参数（转发、rp_filter）
   ├── install.sh                 # 一键安装脚本
   ├── manifest.json              # 构建元信息与文件清单
+  ├── checksums.sha256           # SHA-256 完整性校验
+  └── README.txt                 # 快速上手说明
+```
+
+**Client 节点目录结构**（单接口模型，无 Babel）：
+
+```
+client-phone/
+  ├── wireguard/
+  │   └── wg0.conf               # 单一 WireGuard 接口配置
+  ├── sysctl/
+  │   └── 99-overlay.conf        # 内核参数
+  ├── install.sh                 # 一键安装脚本（无 Babel）
+  ├── manifest.json              # 构建元信息（architecture: "single-interface"）
   ├── checksums.sha256           # SHA-256 完整性校验
   └── README.txt                 # 快速上手说明
 ```
@@ -394,6 +438,38 @@ Endpoint = 203.0.113.2:51820
 - **`AllowedIPs = 0.0.0.0/0, ::/0`**：在 per-peer 模型中是安全的——每个接口仅一个 peer，允许任何流量通过隧道，由 Babel 决定使用哪条隧道。
 - **`PostUp`/`PostDown`**：添加 Babel 邻居发现所需的 IPv6 link-local 地址。
 
+**Client 节点 WireGuard 配置（单接口 wg0）：**
+
+```ini
+# WireGuard client interface: wg0
+# Node: client-phone -> Router: node-alpha
+
+[Interface]
+PrivateKey = <private_key>
+Address = 10.11.0.5/32
+ListenPort = 51820
+
+[Peer]
+PublicKey = <router_public_key>
+AllowedIPs = 10.11.0.0/24
+Endpoint = 203.0.113.1:51820
+PersistentKeepalive = 25
+```
+
+**与 per-peer 模型的区别：**
+- 无 `Table = off`（wg0 是唯一接口，不会路由冲突）
+- `Address` 使用 overlay IP 而非 transit IP（无 dummy0）
+- `AllowedIPs` 限定为 Domain CIDR（非 `0.0.0.0/0`）
+- 固定 `PersistentKeepalive = 25`（client 通常在 NAT 后）
+- 无 PostUp/PostDown IPv6 link-local（不运行 Babel）
+
+**Router 侧 Client 路由注入：** 当 router 的 per-peer 接口连接 client 时，自动添加内核路由：
+
+```ini
+PostUp = ip route add 10.11.0.5/32 dev %i
+PostDown = ip route del 10.11.0.5/32 dev %i 2>/dev/null || true
+```
+
 ### 5.3 安装脚本三阶段逻辑
 
 `install.sh` 遵循幂等的分阶段部署：
@@ -423,6 +499,12 @@ Endpoint = 203.0.113.2:51820
 - 启动并启用 babeld
 - 显示状态摘要
 
+**Client 安装脚本：** Client 使用简化的安装流程，不包含 dummy0 和 Babel：
+- 无 Phase 0 Babel 清理（client 不运行 Babel）
+- Phase 1 仅安装 `wireguard` 和 `wireguard-tools`，不安装 `babeld`
+- 无 `dummy0` 接口（overlay IP 直接作为 wg0 的 `Address`）
+- Phase 3 仅启动 `wg-quick@wg0`，无 babeld 服务
+
 ### 5.4 dummy0 + Table=off 设计
 
 这个组合是 per-peer 接口与 Babel 协同工作的关键：
@@ -451,7 +533,7 @@ Endpoint = 203.0.113.2:51820
 
 ### 5.5 自动部署脚本
 
-编译后会生成两个项目级别的自动部署脚本：
+部署脚本通过 Web UI 的独立按钮下载（不包含在产物 ZIP 中），支持 Bash 和 PowerShell 两种格式：
 
 - `deploy-all.sh`（Bash，Linux/macOS）
 - `deploy-all.ps1`（PowerShell，Windows/Linux）
@@ -459,22 +541,42 @@ Endpoint = 203.0.113.2:51820
 **使用方式：**
 
 ```bash
-# 先从 Web UI 导出产物 ZIP
+# 先从 Web UI 导出产物 ZIP，再单独下载部署脚本
 bash deploy-all.sh path/to/artifacts.zip
+
+# 使用 --clean 选项清理所有现有 WireGuard 配置（适用于从 wg0 迁移到 per-peer 模型）
+bash deploy-all.sh --clean path/to/artifacts.zip
 ```
 
 ```powershell
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip
+
+# 使用 -Clean 选项
+.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Clean
 ```
+
+**`--clean` / `-Clean` 选项：** 在部署前移除目标节点上所有现有的 WireGuard 接口和配置文件。适用于：
+- 从单接口（wg0）布局迁移到 per-peer 接口模型
+- 从 per-peer 模型迁移回单接口
+- 清理遗留的 overlay 配置
 
 **工作流程：**
 1. 解压产物 ZIP 到临时目录
 2. 遍历所有节点，对每个配置了 SSH 信息的节点：
+   - 先测试 SSH 连通性（超时 15 秒）
+   - 如指定 `--clean`，远程清理所有 `wg*` 接口和 `/etc/wireguard/wg*.conf`
    - 使用 `scp` 上传自解压安装包到远程 `/tmp/`
    - 使用 `ssh` 执行 `sudo bash /tmp/<node>.install.sh`
    - 执行后自动清理远程临时文件
 3. 跳过未配置 SSH 信息的节点
 4. 输出部署摘要（成功 / 跳过 / 失败计数）
+
+**错误处理：** 每个节点的部署错误独立处理，单个节点失败不会中断整个部署流程。错误分为三级：
+- SSH 连接失败（超时或认证错误）
+- SCP 上传失败
+- 安装脚本执行失败
+
+**SSH 密钥重试：** 脚本不使用 `BatchMode=yes`，允许 SSH 客户端自动遍历 ssh-agent 中的密钥、`~/.ssh/config` 中的配置以及默认密钥路径，仅在所有密钥均尝试失败后才报告连接错误。
 
 **SSH 连接方式：**
 - 如果节点配置了 SSH 别名，使用 `ssh <alias>` 连接
@@ -640,6 +742,7 @@ scp -P 22 -i ~/.ssh/id_ed25519 test.txt root@1.2.3.4:/tmp/
 | `/api/validate` | POST | 校验拓扑 JSON |
 | `/api/compile` | POST | 编译并返回所有配置 |
 | `/api/export` | POST | 编译并导出 ZIP 产物包 |
+| `/api/deploy-script` | POST | 生成部署脚本（`?format=sh` 或 `?format=ps1`） |
 
 ```bash
 # 健康检查
