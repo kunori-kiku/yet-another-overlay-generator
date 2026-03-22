@@ -32,8 +32,89 @@ const installScriptTemplate = `#!/usr/bin/env bash
 # Platform: {{ .Platform }}
 # Role: {{ .NodeRole }}
 # Architecture: per-peer WireGuard interfaces
+#
+# Usage:
+#   sudo bash install.sh              # Install / upgrade overlay
+#   sudo bash install.sh --uninstall  # Completely remove overlay
 
 set -euo pipefail
+
+UNINSTALL=0
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall|-u) UNINSTALL=1 ;;
+    esac
+done
+
+# ============================================================
+# Uninstall All
+# ============================================================
+
+if [ "$UNINSTALL" -eq 1 ]; then
+    # Check root
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "ERROR: This script must be run as root" >&2
+        exit 1
+    fi
+
+    echo "=== Uninstalling overlay from node: {{ .NodeName }} ==="
+
+    # Stop and disable all managed WireGuard interfaces
+    {{ range .WgInterfaces -}}
+    if command -v wg >/dev/null 2>&1 && wg show "{{ .Name }}" > /dev/null 2>&1; then
+        echo "  Stopping WireGuard interface: {{ .Name }}..."
+        wg-quick down "{{ .Name }}" 2>/dev/null || true
+    fi
+    if systemctl is-enabled "wg-quick@{{ .Name }}" >/dev/null 2>&1; then
+        systemctl disable "wg-quick@{{ .Name }}" 2>/dev/null || true
+    fi
+    rm -f "/etc/wireguard/{{ .ConfName }}"
+    {{ end -}}
+
+    # Stop and disable ALL remaining WireGuard interfaces
+    if command -v wg >/dev/null 2>&1; then
+        for _iface in $(wg show interfaces 2>/dev/null); do
+            echo "  Stopping WireGuard interface: $_iface..."
+            wg-quick down "$_iface" 2>/dev/null || true
+            systemctl disable "wg-quick@$_iface" 2>/dev/null || true
+        done
+    fi
+    rm -f /etc/wireguard/*.conf
+
+{{ if .HasBabel -}}
+    # Stop and disable Babel
+    if systemctl is-active babeld >/dev/null 2>&1; then
+        echo "  Stopping Babel daemon..."
+        systemctl stop babeld 2>/dev/null || true
+    fi
+    if systemctl is-enabled babeld >/dev/null 2>&1; then
+        systemctl disable babeld 2>/dev/null || true
+    fi
+    rm -f "/etc/babel/{{ .BabelConfName }}" "/etc/{{ .BabelConfName }}"
+    rm -rf /etc/systemd/system/babeld.service.d
+{{ end -}}
+
+    # Remove sysctl config
+    rm -f "/etc/sysctl.d/{{ .SysctlConfName }}"
+    sysctl --system > /dev/null 2>&1
+
+    # Remove dummy0 overlay interface and its systemd service
+    if ip link show dummy0 >/dev/null 2>&1; then
+        echo "  Removing dummy0 interface..."
+        ip link del dummy0 2>/dev/null || true
+    fi
+    if systemctl is-enabled overlay-dummy.service >/dev/null 2>&1; then
+        systemctl disable overlay-dummy.service 2>/dev/null || true
+    fi
+    rm -f /etc/systemd/system/overlay-dummy.service
+    systemctl daemon-reload
+
+    echo ""
+    echo "============================================================"
+    echo "  Overlay completely removed from node: {{ .NodeName }}"
+    echo "============================================================"
+    exit 0
+fi
 
 # ============================================================
 # Phase 0: Cleanup Previous Installation
@@ -381,8 +462,63 @@ const clientInstallScriptTemplate = `#!/usr/bin/env bash
 # Platform: {{ .Platform }}
 # Role: {{ .NodeRole }}
 # Architecture: single-interface (client)
+#
+# Usage:
+#   sudo bash install.sh              # Install / upgrade overlay
+#   sudo bash install.sh --uninstall  # Completely remove overlay
 
 set -euo pipefail
+
+UNINSTALL=0
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall|-u) UNINSTALL=1 ;;
+    esac
+done
+
+# ============================================================
+# Uninstall All
+# ============================================================
+
+if [ "$UNINSTALL" -eq 1 ]; then
+    # Check root
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "ERROR: This script must be run as root" >&2
+        exit 1
+    fi
+
+    echo "=== Uninstalling overlay from client node: {{ .NodeName }} ==="
+
+    # Stop and disable wg0
+    if command -v wg >/dev/null 2>&1 && wg show "wg0" > /dev/null 2>&1; then
+        echo "  Stopping WireGuard interface: wg0..."
+        wg-quick down "wg0" 2>/dev/null || true
+    fi
+    if systemctl is-enabled "wg-quick@wg0" >/dev/null 2>&1; then
+        systemctl disable "wg-quick@wg0" 2>/dev/null || true
+    fi
+    rm -f "/etc/wireguard/wg0.conf"
+
+    # Stop and disable ALL remaining WireGuard interfaces
+    if command -v wg >/dev/null 2>&1; then
+        for _iface in $(wg show interfaces 2>/dev/null); do
+            echo "  Stopping WireGuard interface: $_iface..."
+            wg-quick down "$_iface" 2>/dev/null || true
+            systemctl disable "wg-quick@$_iface" 2>/dev/null || true
+        done
+    fi
+    rm -f /etc/wireguard/*.conf
+
+    # Remove sysctl config
+    rm -f "/etc/sysctl.d/{{ .SysctlConfName }}"
+    sysctl --system > /dev/null 2>&1
+
+    echo ""
+    echo "============================================================"
+    echo "  Overlay completely removed from client node: {{ .NodeName }}"
+    echo "============================================================"
+    exit 0
+fi
 
 # ============================================================
 # Phase 0: Cleanup Previous Installation
