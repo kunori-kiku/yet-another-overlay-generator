@@ -470,9 +470,26 @@ PostUp = ip route add 10.11.0.5/32 dev %i
 PostDown = ip route del 10.11.0.5/32 dev %i 2>/dev/null || true
 ```
 
-### 5.3 安装脚本三阶段逻辑
+### 5.3 安装脚本逻辑
 
 `install.sh` 遵循幂等的分阶段部署：
+
+**使用方式：**
+
+```bash
+sudo bash install.sh              # 安装 / 升级 overlay
+sudo bash install.sh --uninstall  # 从此节点完全卸载 overlay
+```
+
+**`--uninstall` / `-u` 选项：** 执行完整的卸载清理：
+- 停止并禁用所有托管和遗留的 WireGuard 接口
+- 移除 `/etc/wireguard/` 下所有 WireGuard 配置文件
+- 停止并禁用 Babel，移除 Babel 配置和 systemd override
+- 移除 sysctl overlay 配置并重新加载系统默认值
+- 移除 `dummy0` overlay 接口及其 `overlay-dummy.service` systemd 服务
+- 重载 systemd daemon
+
+**正常安装阶段：**
 
 **Phase 0 — 清理**
 - 停止并移除现有的 WireGuard 接口和旧配置
@@ -546,6 +563,9 @@ bash deploy-all.sh path/to/artifacts.zip
 
 # 使用 --clean 选项清理所有现有 WireGuard 配置（适用于从 wg0 迁移到 per-peer 模型）
 bash deploy-all.sh --clean path/to/artifacts.zip
+
+# 使用 --uninstall 选项从所有节点完全卸载 overlay
+bash deploy-all.sh --uninstall path/to/artifacts.zip
 ```
 
 ```powershell
@@ -553,7 +573,17 @@ bash deploy-all.sh --clean path/to/artifacts.zip
 
 # 使用 -Clean 选项
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Clean
+
+# 使用 -Uninstall 选项从所有节点完全卸载 overlay
+.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Uninstall
 ```
+
+**选项说明：**
+
+| 选项 (bash) | 选项 (PS1) | 说明 |
+|---|---|---|
+| `--clean` | `-Clean` | 部署前移除目标节点上所有现有 WireGuard 接口和配置（适用于接口模型迁移） |
+| `--uninstall` | `-Uninstall` | SSH 到每个节点并执行 `install.sh --uninstall`，完全卸载 overlay |
 
 **`--clean` / `-Clean` 选项：** 在部署前移除目标节点上所有现有的 WireGuard 接口和配置文件。适用于：
 - 从单接口（wg0）布局迁移到 per-peer 接口模型

@@ -66,10 +66,13 @@ A Node represents a machine (cloud VM, bare-metal server, container host).
 
 | Role | Forwarding | Relay | Babel Announces | Typical Use |
 |------|-----------|-------|-----------------|-------------|
-| `peer` | No | No | Own IP only | End-user client |
+| `peer` | No | No | Own IP only | End-user node |
 | `router` | Yes | No | Own IP + Domain CIDR | Backbone forwarding node |
 | `relay` | Yes | Yes | Own IP + Domain CIDR (cost 96) | NAT traversal relay |
 | `gateway` | Yes | No | Own IP + Domain CIDR + extra prefixes + default route | Bridge to external networks |
+| `client` | No | No | None (no Babel) | Lightweight endpoint (phone, laptop) |
+
+> **Client role:** Client is the lightest role, intended for devices that don't participate in dynamic routing. A client uses a single `wg0` interface to connect to one router/relay/gateway node. It does not run Babel, does not use `dummy0`, and does not use the per-peer interface model. Client reachability is achieved through kernel route injection on the router side (`PostUp = ip route add <client_ip>/32 dev %i`) + Babel redistribution.
 
 **Capability fields:**
 - Publicly Reachable: node is accessible from the public internet
@@ -394,6 +397,23 @@ Endpoint = 203.0.113.2:51820
 
 `install.sh` follows an idempotent phased deployment:
 
+**Usage:**
+
+```bash
+sudo bash install.sh              # Install / upgrade overlay
+sudo bash install.sh --uninstall  # Completely remove overlay from this node
+```
+
+**`--uninstall` / `-u` flag:** Performs a complete teardown:
+- Stops and disables all managed and legacy WireGuard interfaces
+- Removes all WireGuard config files from `/etc/wireguard/`
+- Stops and disables Babel, removes Babel configs and systemd overrides
+- Removes sysctl overlay config and re-applies system defaults
+- Removes the `dummy0` overlay interface and its `overlay-dummy.service`
+- Reloads systemd daemon
+
+**Normal install phases:**
+
 **Phase 0 — Cleanup**
 - Stop and remove existing WireGuard interfaces and old configs
 - **Comprehensive legacy cleanup**: Scans all active `wg*` interfaces (`wg show interfaces`) and `/etc/wireguard/*.conf` files, removing anything not managed by the current overlay (catches `wg0`, `wg1`, `wg-overlay`, or any other leftover profile)
@@ -456,11 +476,30 @@ Compilation generates two project-level auto-deploy scripts:
 
 ```bash
 bash deploy-all.sh path/to/artifacts.zip
+
+# Clean all existing WireGuard configs before deploying
+bash deploy-all.sh --clean path/to/artifacts.zip
+
+# Completely remove overlay from all nodes
+bash deploy-all.sh --uninstall path/to/artifacts.zip
 ```
 
 ```powershell
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip
+
+# Clean all existing WireGuard configs before deploying
+.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Clean
+
+# Completely remove overlay from all nodes
+.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Uninstall
 ```
+
+**Options:**
+
+| Flag (bash) | Flag (PS1) | Description |
+|---|---|---|
+| `--clean` | `-Clean` | Remove all existing WireGuard interfaces before deploying (useful when migrating between single-interface and per-peer layouts) |
+| `--uninstall` | `-Uninstall` | SSH into each node and run `install.sh --uninstall` to completely remove the overlay |
 
 **Workflow:**
 1. Extract the artifacts ZIP to a temp directory
