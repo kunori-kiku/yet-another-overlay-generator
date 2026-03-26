@@ -485,6 +485,7 @@ sudo bash install.sh --uninstall  # 从此节点完全卸载 overlay
 - 停止并禁用所有托管和遗留的 WireGuard 接口
 - 移除 `/etc/wireguard/` 下所有 WireGuard 配置文件
 - 停止并禁用 Babel，移除 Babel 配置和 systemd override
+- 移除 overlay SNAT 规则及 `overlay-snat.service`
 - 移除 sysctl overlay 配置并重新加载系统默认值
 - 移除 `dummy0` overlay 接口及其 `overlay-dummy.service` systemd 服务
 - 重载 systemd daemon
@@ -503,6 +504,7 @@ sudo bash install.sh --uninstall  # 从此节点完全卸载 overlay
 - 安装依赖包（`wireguard`、`wireguard-tools`、`babeld`）
 - 创建 `dummy0` 接口并分配 overlay IP
 - 安装 systemd 服务使 `dummy0` 在重启后持久化
+- 配置 overlay 源地址 SNAT 修正（详见 5.4b）
 
 **Phase 2 — 部署配置**
 - 复制 WireGuard 配置到 `/etc/wireguard/`
@@ -547,6 +549,44 @@ sudo bash install.sh --uninstall  # 从此节点完全卸载 overlay
 - 每个 WireGuard 接口 `Table = off`，`wg-quick` 不触碰路由表
 - Babel 将每个 `wg-*` 接口视为独立隧道链路，独立跟踪可达性
 - 某条链路故障时，Babel 自动通过存活链路重新路由——无需手动调整
+
+### 5.4b 源地址修正（Overlay SNAT）
+
+**问题：** 在 per-peer 接口模型中，每个 WireGuard 接口使用 transit IP 地址（如 `10.10.0.3/32`）。当内核向 overlay 目标发送数据包时，Babel 通过 `wg-*` 接口路由，内核选择 **transit IP** 作为源地址而非 `dummy0` 上的 overlay IP。这导致：
+
+- `ping 10.111.0.3` **静默失败**（远端收到数据包，但回复发往 `10.10.0.3`，该地址未被 Babel 通告，因此不可路由）
+- `ping -I 10.111.0.2 10.111.0.3` **正常工作**（显式指定了源地址）
+
+**修复方案：** 安装脚本在所有 `wg-*` 接口上添加 SNAT（源地址转换）规则，将来自 transit 地址池（`10.10.0.0/24`）的源地址改写为节点的 overlay IP：
+
+```
+# nftables（优先使用）：
+table inet overlay-snat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "wg-*" ip saddr 10.10.0.0/24 snat to <overlay_ip>
+    }
+}
+
+# iptables（回退）：
+iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source <overlay_ip>
+```
+
+安装脚本自动检测 `nft` 命令，不可用时回退到 `iptables`。持久化的 `overlay-snat.service` systemd 单元确保规则在重启后生效。
+
+**手动修复已部署的节点：**
+
+```bash
+# 将 <OVERLAY_IP> 替换为节点的 overlay IP（如 10.111.0.2）
+
+# nftables：
+sudo nft add table inet overlay-snat
+sudo nft add chain inet overlay-snat postrouting '{ type nat hook postrouting priority srcnat; policy accept; }'
+sudo nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to <OVERLAY_IP>
+
+# 或 iptables：
+sudo iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source <OVERLAY_IP>
+```
 
 ### 5.5 自动部署脚本
 

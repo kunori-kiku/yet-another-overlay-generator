@@ -408,6 +408,7 @@ sudo bash install.sh --uninstall  # Completely remove overlay from this node
 - Stops and disables all managed and legacy WireGuard interfaces
 - Removes all WireGuard config files from `/etc/wireguard/`
 - Stops and disables Babel, removes Babel configs and systemd overrides
+- Removes overlay SNAT rule and `overlay-snat.service`
 - Removes sysctl overlay config and re-applies system defaults
 - Removes the `dummy0` overlay interface and its `overlay-dummy.service`
 - Reloads systemd daemon
@@ -426,6 +427,7 @@ sudo bash install.sh --uninstall  # Completely remove overlay from this node
 - Install dependencies (`wireguard`, `wireguard-tools`, `babeld`)
 - Create `dummy0` interface and assign overlay IP
 - Install systemd service to persist `dummy0` across reboots
+- Configure overlay source NAT (SNAT) to fix source address selection (see 5.4b)
 
 **Phase 2 — Deploy Configuration**
 - Copy WireGuard configs to `/etc/wireguard/`
@@ -464,6 +466,44 @@ This combination is the key to making per-peer interfaces work with Babel:
 - Each WireGuard interface has `Table = off`, so `wg-quick` doesn't touch the routing table
 - Babel treats each `wg-*` interface as an independent tunnel link, tracking reachability independently
 - When a link fails, Babel automatically reroutes through surviving links — no manual adjustment needed
+
+### 5.4b Source Address Fix (Overlay SNAT)
+
+**The problem:** In the per-peer interface model, each WireGuard interface has a transit IP address (e.g., `10.10.0.3/32`). When the kernel sends a packet to an overlay destination (e.g., `10.111.0.3`), Babel routes it via a `wg-*` interface, and the kernel picks the **transit IP** as the source address — not the overlay IP on `dummy0`. This causes:
+
+- `ping 10.111.0.3` to **silently fail** (the remote receives the packet, but the reply to `10.10.0.3` is unroutable because transit IPs are not announced by Babel)
+- `ping -I 10.111.0.2 10.111.0.3` to **work correctly** (explicit source override)
+
+**The fix:** The install script adds an SNAT (Source Network Address Translation) rule that rewrites the source address of all packets leaving via `wg-*` interfaces with a transit source IP (`10.10.0.0/24`) to the node's overlay IP:
+
+```
+# nftables (preferred):
+table inet overlay-snat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "wg-*" ip saddr 10.10.0.0/24 snat to <overlay_ip>
+    }
+}
+
+# iptables (fallback):
+iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source <overlay_ip>
+```
+
+The install script auto-detects `nft` and falls back to `iptables`. A persistent `overlay-snat.service` systemd unit ensures the rule survives reboots.
+
+**Manual fix for existing deployments:**
+
+```bash
+# Replace <OVERLAY_IP> with the node's overlay IP (e.g. 10.111.0.2)
+
+# nftables:
+sudo nft add table inet overlay-snat
+sudo nft add chain inet overlay-snat postrouting '{ type nat hook postrouting priority srcnat; policy accept; }'
+sudo nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to <OVERLAY_IP>
+
+# OR iptables:
+sudo iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source <OVERLAY_IP>
+```
 
 ### 5.5 Auto-Deploy Scripts
 

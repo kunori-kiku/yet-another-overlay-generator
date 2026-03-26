@@ -414,6 +414,33 @@ sysctl -w net.ipv4.conf.all.rp_filter=0
 sysctl -w net.ipv4.conf.default.rp_filter=0
 ```
 
+### S9b. Verify overlay SNAT rule (source address fix)
+
+The per-peer model uses transit IPs on WG interfaces. Without an SNAT rule, `ping <overlay_ip>` fails because the kernel uses the transit IP as source, and the reply is unroutable.
+
+```bash
+# Check nftables SNAT rule
+sudo nft list table inet overlay-snat 2>/dev/null
+
+# Check iptables SNAT rule (if nft not used)
+sudo iptables -t nat -L POSTROUTING -n -v 2>/dev/null | grep SNAT
+
+# Check the systemd service
+systemctl status overlay-snat.service
+```
+
+**Expected:** One of the above should show an SNAT rule rewriting `10.10.0.0/24` to the node's overlay IP on `wg-*` interfaces.
+
+**If missing:**
+```bash
+# Quick fix — replace <OVERLAY_IP> with the node's overlay IP
+sudo nft add table inet overlay-snat
+sudo nft add chain inet overlay-snat postrouting '{ type nat hook postrouting priority srcnat; policy accept; }'
+sudo nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to <OVERLAY_IP>
+```
+
+**Symptom without SNAT:** `ping -I <overlay_ip> <target>` works but `ping <target>` does not.
+
 ### S10. Check firewall rules
 
 ```bash
@@ -600,7 +627,8 @@ echo "dump" | nc -q1 ::1 33123 | grep <client-overlay-ip>
 | 11 | Client can't reach non-router nodes | Router not redistributing client IP in Babel | Check router babeld.conf has client IP in redistribute |
 | 12 | Works then stops after minutes | PersistentKeepalive not set for NAT node | Verify keepalive=25 on NAT-side edges |
 | 13 | Docker FORWARD chain dropping | Docker's default iptables rules | `iptables -I DOCKER-USER -i wg-+ -j ACCEPT` |
-| 14 | Everything looks right, still fails | Stale WG interface from previous install | `--uninstall` then fresh install |
+| 14 | `ping <overlay>` fails, `ping -I <overlay> <target>` works | Missing SNAT rule — kernel uses transit IP as source | Add overlay SNAT rule (see S9b) |
+| 15 | Everything looks right, still fails | Stale WG interface from previous install | `--uninstall` then fresh install |
 
 ---
 
@@ -652,6 +680,18 @@ if pgrep -x babeld >/dev/null; then
         awk '{print $2, "metric", $6, "via", $8}'
 else
     echo "babeld: NOT running"
+fi
+echo ""
+
+echo "--- Overlay SNAT ---"
+if nft list table inet overlay-snat 2>/dev/null | grep -q snat; then
+    echo "nftables SNAT: active"
+    nft list chain inet overlay-snat postrouting 2>/dev/null | grep snat
+elif iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -q SNAT; then
+    echo "iptables SNAT: active"
+    iptables -t nat -L POSTROUTING -n 2>/dev/null | grep SNAT
+else
+    echo "WARNING: No overlay SNAT rule found! ping without -I will fail."
 fi
 echo ""
 
