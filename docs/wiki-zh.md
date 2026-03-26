@@ -564,8 +564,8 @@ bash deploy-all.sh path/to/artifacts.zip
 # 使用 --clean 选项清理所有现有 WireGuard 配置（适用于从 wg0 迁移到 per-peer 模型）
 bash deploy-all.sh --clean path/to/artifacts.zip
 
-# 使用 --uninstall 选项从所有节点完全卸载 overlay
-bash deploy-all.sh --uninstall path/to/artifacts.zip
+# 使用 --uninstall 选项从所有节点完全卸载 overlay（不需要产物 ZIP）
+bash deploy-all.sh --uninstall
 ```
 
 ```powershell
@@ -574,8 +574,8 @@ bash deploy-all.sh --uninstall path/to/artifacts.zip
 # 使用 -Clean 选项
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Clean
 
-# 使用 -Uninstall 选项从所有节点完全卸载 overlay
-.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Uninstall
+# 使用 -Uninstall 选项从所有节点完全卸载 overlay（不需要产物 ZIP）
+.\deploy-all.ps1 -Uninstall
 ```
 
 **选项说明：**
@@ -583,7 +583,7 @@ bash deploy-all.sh --uninstall path/to/artifacts.zip
 | 选项 (bash) | 选项 (PS1) | 说明 |
 |---|---|---|
 | `--clean` | `-Clean` | 部署前移除目标节点上所有现有 WireGuard 接口和配置（适用于接口模型迁移） |
-| `--uninstall` | `-Uninstall` | SSH 到每个节点并执行 `install.sh --uninstall`，完全卸载 overlay |
+| `--uninstall` | `-Uninstall` | SSH 到每个节点直接执行卸载命令：停止所有已命名的 WireGuard 接口、移除配置、停止 Babel、移除 dummy0、重载 systemd。无需上传安装包。 |
 
 **`--clean` / `-Clean` 选项：** 在部署前移除目标节点上所有现有的 WireGuard 接口和配置文件。适用于：
 - 从单接口（wg0）布局迁移到 per-peer 接口模型

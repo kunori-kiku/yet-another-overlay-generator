@@ -219,7 +219,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bashScript, ps1Script, err := renderer.RenderDeployScripts(topo)
+	bashScript, ps1Script, err := renderer.RenderDeployScripts(topo, nil, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("deploy script render: %v", err))
 		return
@@ -367,7 +367,7 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 	}
 
 	// Deploy scripts (bash + PowerShell)
-	bashDeploy, ps1Deploy, err := renderer.RenderDeployScripts(result.Topology)
+	bashDeploy, ps1Deploy, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
 	if err != nil {
 		return fmt.Errorf("deploy script render: %w", err)
 	}

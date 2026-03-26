@@ -397,8 +397,8 @@ Generated per-node bash script with phases:
 
 `deploy-all.sh` (bash) and `deploy-all.ps1` (PowerShell):
 - Iterates all nodes with SSH details
-- Uploads self-extracting installer via SCP
-- Executes remotely via `sudo bash`
+- **Deploy mode**: Uploads self-extracting installer via SCP, executes remotely via `sudo bash`
+- **Uninstall mode** (`--uninstall` / `-Uninstall`): SSHs into each node and runs teardown commands directly — stops all named WireGuard interfaces, removes configs, stops Babel, removes dummy0, reloads systemd. No installer upload needed.
 - Optional `--clean` flag to remove all existing WG interfaces before deploying
 - Per-node error handling (failures don't abort the run)
 

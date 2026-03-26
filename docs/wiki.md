@@ -480,8 +480,8 @@ bash deploy-all.sh path/to/artifacts.zip
 # Clean all existing WireGuard configs before deploying
 bash deploy-all.sh --clean path/to/artifacts.zip
 
-# Completely remove overlay from all nodes
-bash deploy-all.sh --uninstall path/to/artifacts.zip
+# Completely remove overlay from all nodes (no artifacts ZIP needed)
+bash deploy-all.sh --uninstall
 ```
 
 ```powershell
@@ -490,8 +490,8 @@ bash deploy-all.sh --uninstall path/to/artifacts.zip
 # Clean all existing WireGuard configs before deploying
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Clean
 
-# Completely remove overlay from all nodes
-.\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Uninstall
+# Completely remove overlay from all nodes (no artifacts ZIP needed)
+.\deploy-all.ps1 -Uninstall
 ```
 
 **Options:**
@@ -499,7 +499,7 @@ bash deploy-all.sh --uninstall path/to/artifacts.zip
 | Flag (bash) | Flag (PS1) | Description |
 |---|---|---|
 | `--clean` | `-Clean` | Remove all existing WireGuard interfaces before deploying (useful when migrating between single-interface and per-peer layouts) |
-| `--uninstall` | `-Uninstall` | SSH into each node and run `install.sh --uninstall` to completely remove the overlay |
+| `--uninstall` | `-Uninstall` | SSH into each node and directly tear down the overlay: stop all named WireGuard interfaces, remove configs, stop Babel, remove dummy0, reload systemd. No installer upload needed. |
 
 **Workflow:**
 1. Extract the artifacts ZIP to a temp directory
