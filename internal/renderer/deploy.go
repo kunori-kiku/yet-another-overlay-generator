@@ -72,9 +72,15 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 			info.WgInterfaces = []string{"wg0"}
 		}
 
-		// Check if this node runs Babel
-		if _, ok := babelConfigs[node.ID]; ok {
-			info.HasBabel = true
+		// Check if this node runs Babel: use compiled configs if available,
+		// otherwise fall back to role (non-client nodes always attempt Babel
+		// cleanup during uninstall even without compiled data).
+		if babelConfigs != nil {
+			if _, ok := babelConfigs[node.ID]; ok {
+				info.HasBabel = true
+			}
+		} else {
+			info.HasBabel = node.Role != "client"
 		}
 
 		config.Nodes = append(config.Nodes, info)
@@ -586,7 +592,7 @@ try {
         exit 1
     }
 } finally {
-    Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue
+    if ($WorkDir) { Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue }
 }
 `)
 
