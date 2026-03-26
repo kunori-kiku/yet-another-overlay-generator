@@ -11,6 +11,7 @@ type InstallScriptConfig struct {
 	NodeRole       string
 	Platform       string
 	OverlayIP      string
+	DomainCIDR     string // domain CIDR for source routing rule
 	MTU            int
 	HasBabel       bool
 	HasForward     bool
@@ -97,6 +98,18 @@ if [ "$UNINSTALL" -eq 1 ]; then
     # Remove sysctl config
     rm -f "/etc/sysctl.d/{{ .SysctlConfName }}"
     sysctl --system > /dev/null 2>&1
+
+    # Remove overlay SNAT rule and service
+    if command -v nft >/dev/null 2>&1; then
+        nft delete table inet overlay-snat 2>/dev/null || true
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -t nat -D POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true
+    fi
+    if systemctl is-enabled overlay-snat.service >/dev/null 2>&1; then
+        systemctl disable overlay-snat.service 2>/dev/null || true
+    fi
+    rm -f /etc/systemd/system/overlay-snat.service
 
     # Remove dummy0 overlay interface and its systemd service
     if ip link show dummy0 >/dev/null 2>&1; then
@@ -309,6 +322,57 @@ WantedBy=multi-user.target
 DUMMY_SVC
 systemctl daemon-reload
 systemctl enable overlay-dummy.service 2>/dev/null || true
+
+# Fix source address selection for overlay traffic
+# Without this, packets to overlay IPs use the transit IP (10.10.0.x) as source
+# instead of the overlay IP, causing silent failures for plain `ping <overlay_ip>`
+echo "Configuring overlay source address fix..."
+
+# Remove any previous overlay SNAT rules
+_overlay_snat_cleanup() {
+    if command -v nft >/dev/null 2>&1; then
+        nft delete table inet overlay-snat 2>/dev/null || true
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -t nat -D POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true
+    fi
+}
+_overlay_snat_cleanup
+
+# Add SNAT rule: rewrite transit source IPs to overlay IP on WG interfaces
+# Use nftables if available, fall back to iptables
+if command -v nft >/dev/null 2>&1; then
+    nft -f - <<'NFT_EOF'
+table inet overlay-snat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "wg-*" ip saddr 10.10.0.0/24 snat to {{ .OverlayIP }}
+    }
+}
+NFT_EOF
+    echo "  SNAT (nftables): transit 10.10.0.0/24 → {{ .OverlayIP }} on wg-* interfaces"
+elif command -v iptables >/dev/null 2>&1; then
+    iptables -t nat -A POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}
+    echo "  SNAT (iptables): transit 10.10.0.0/24 → {{ .OverlayIP }} on wg-* interfaces"
+fi
+
+# Persist SNAT rule via systemd
+cat > /etc/systemd/system/overlay-snat.service << 'SNAT_SVC'
+[Unit]
+Description=Overlay SNAT rule for source address fix
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft add table inet overlay-snat; nft add chain inet overlay-snat postrouting "{ type nat hook postrouting priority srcnat; policy accept; }"; nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to {{ .OverlayIP }}; else iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}; fi'
+ExecStop=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; else iptables -t nat -D POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true; fi'
+
+[Install]
+WantedBy=multi-user.target
+SNAT_SVC
+systemctl daemon-reload
+systemctl enable overlay-snat.service 2>/dev/null || true
 
 echo "Phase 1 complete."
 

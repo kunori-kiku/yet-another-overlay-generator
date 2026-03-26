@@ -249,6 +249,11 @@ SKIPPED=$((SKIPPED + 1))
 		uninstallCmds.WriteString("sysctl --system > /dev/null 2>&1\n")
 
 		if !node.IsClient {
+			// Remove overlay SNAT rule and service
+			uninstallCmds.WriteString("nft delete table inet overlay-snat 2>/dev/null || true\n")
+			uninstallCmds.WriteString("iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source $(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \\K[^/]+' || echo 0.0.0.0) 2>/dev/null || true\n")
+			uninstallCmds.WriteString("systemctl disable overlay-snat.service 2>/dev/null || true\n")
+			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-snat.service\n")
 			// Remove dummy0 overlay interface
 			uninstallCmds.WriteString("ip link del dummy0 2>/dev/null || true\n")
 			uninstallCmds.WriteString("systemctl disable overlay-dummy.service 2>/dev/null || true\n")
@@ -295,6 +300,11 @@ for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}'
     wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
 done
 rm -f /etc/wireguard/wg*.conf
+nft delete table inet overlay-snat 2>/dev/null || true
+_snat_ip=$(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \K[^/]+' || true)
+[ -n "$_snat_ip" ] && iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source "$_snat_ip" 2>/dev/null || true
+systemctl disable overlay-snat.service 2>/dev/null || true
+rm -f /etc/systemd/system/overlay-snat.service
 CLEAN_EOF
             fi
 
@@ -404,7 +414,7 @@ if (-not [string]::IsNullOrEmpty($ArtifactsZip)) {
 }
 
 # Clean script sent to remote via stdin (single-quoted — no PS expansion)
-$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf'
+$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf; nft delete table inet overlay-snat 2>/dev/null || true; _snat_ip=$(ip -4 addr show dummy0 2>/dev/null | grep -oP ''inet \K[^/]+'' || true); [ -n "$_snat_ip" ] && iptables -t nat -D POSTROUTING -o ''wg-+'' -s 10.10.0.0/24 -j SNAT --to-source "$_snat_ip" 2>/dev/null || true; systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service'
 
 try {
     if ($WorkDir) {
@@ -458,6 +468,9 @@ try {
 		}
 		uninstallCmds.WriteString("rm -f /etc/sysctl.d/99-overlay.conf; sysctl --system > /dev/null 2>&1; ")
 		if !node.IsClient {
+			uninstallCmds.WriteString("nft delete table inet overlay-snat 2>/dev/null || true; ")
+			uninstallCmds.WriteString("iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source $(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \\K[^/]+' || echo 0.0.0.0) 2>/dev/null || true; ")
+			uninstallCmds.WriteString("systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service; ")
 			uninstallCmds.WriteString("ip link del dummy0 2>/dev/null || true; systemctl disable overlay-dummy.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-dummy.service; ")
 		}
 		uninstallCmds.WriteString("systemctl daemon-reload")
