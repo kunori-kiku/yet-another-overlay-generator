@@ -352,7 +352,8 @@ table inet overlay-snat {
 NFT_EOF
     echo "  SNAT (nftables): transit 10.10.0.0/24 → {{ .OverlayIP }} on wg-* interfaces"
 elif command -v iptables >/dev/null 2>&1; then
-    iptables -t nat -A POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}
+    iptables -t nat -C POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}
     echo "  SNAT (iptables): transit 10.10.0.0/24 → {{ .OverlayIP }} on wg-* interfaces"
 fi
 
@@ -365,7 +366,7 @@ After=network.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft add table inet overlay-snat; nft add chain inet overlay-snat postrouting "{ type nat hook postrouting priority srcnat; policy accept; }"; nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to {{ .OverlayIP }}; else iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}; fi'
+ExecStart=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; nft add table inet overlay-snat; nft add chain inet overlay-snat postrouting "{ type nat hook postrouting priority srcnat; policy accept; }"; nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to {{ .OverlayIP }}; else iptables -t nat -D POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true; iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}; fi'
 ExecStop=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; else iptables -t nat -D POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true; fi'
 
 [Install]

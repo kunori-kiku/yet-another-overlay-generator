@@ -2,7 +2,9 @@ package compiler
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -68,7 +70,7 @@ type PeerInfo struct {
 // DerivePeers 根据 Edge 拓扑推导每个节点的 WireGuard Peer 列表
 // 新架构：每个 peer 一个独立接口
 // 返回 map[nodeID][]PeerInfo
-func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]PeerInfo, map[string]*pairAllocation) {
+func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	// 构建 Domain 索引
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
@@ -93,7 +95,7 @@ type pairAllocation struct {
 // derivePeersWithDomains 核心推导逻辑（两阶段算法）
 // Pass 1: 预分配所有节点对的端口和地址资源
 // Pass 2: 使用预分配的端口构建 PeerInfo（确保 endpoint 端口 = 对端接口监听端口）
-func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) (map[string][]PeerInfo, map[string]*pairAllocation) {
+func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	peerMap := make(map[string][]PeerInfo)
 
 	// 节点索引
@@ -149,8 +151,17 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
+		// 获取 domain 的 TransitCIDR
+		var transitCIDR string
+		if domain := domainMap[fromNode.DomainID]; domain != nil {
+			transitCIDR = domain.TransitCIDR
+		}
+
 		// 分配 transit IP 对
-		localTransit, remoteTransit := allocateTransitPair(transitPairIndex)
+		localTransit, remoteTransit, err := allocateTransitPair(transitPairIndex, transitCIDR)
+		if err != nil {
+			return nil, nil, fmt.Errorf("节点 %s<->%s 的 transit 地址分配失败: %w", fromNode.Name, toNode.Name, err)
+		}
 		localLL, remoteLL := allocateLinkLocalPair(transitPairIndex)
 		transitPairIndex++
 
@@ -422,17 +433,41 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	return peerMap, allocations
+	return peerMap, allocations, nil
 }
 
-// allocateTransitPair 根据序号分配一对 transit IPv4 地址
-// 使用 10.10.0.0/24 地址池，每对占 2 个地址
-func allocateTransitPair(index int) (string, string) {
-	// pair 0: 10.10.0.1, 10.10.0.2
-	// pair 1: 10.10.0.3, 10.10.0.4
-	// pair N: 10.10.0.(2N+1), 10.10.0.(2N+2)
+// allocateTransitPair 根据序号和 transitCIDR 分配一对 transit IPv4 地址
+// 如果 transitCIDR 为空，使用默认 10.10.0.0/24
+// 每对占 2 个地址：pair N → (base+2N+1, base+2N+2)
+// 当地址超出子网范围时返回错误
+func allocateTransitPair(index int, transitCIDR string) (string, string, error) {
+	if transitCIDR == "" {
+		transitCIDR = "10.10.0.0/24"
+	}
+
+	_, ipNet, err := net.ParseCIDR(transitCIDR)
+	if err != nil {
+		return "", "", fmt.Errorf("无效的 transit CIDR %q: %w", transitCIDR, err)
+	}
+
+	baseIP := ipNet.IP.To4()
+	if baseIP == nil {
+		return "", "", fmt.Errorf("transit CIDR 必须为 IPv4: %q", transitCIDR)
+	}
+
 	base := 2*index + 1
-	return fmt.Sprintf("10.10.0.%d", base), fmt.Sprintf("10.10.0.%d", base+1)
+	baseAddr := binary.BigEndian.Uint32(baseIP)
+
+	ip1 := make(net.IP, 4)
+	ip2 := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip1, baseAddr+uint32(base))
+	binary.BigEndian.PutUint32(ip2, baseAddr+uint32(base+1))
+
+	if !ipNet.Contains(ip1) || !ipNet.Contains(ip2) {
+		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，index: %d）", transitCIDR, index)
+	}
+
+	return ip1.String(), ip2.String(), nil
 }
 
 // allocateLinkLocalPair 根据序号分配一对 IPv6 link-local 地址
@@ -453,6 +488,7 @@ func deriveAllowedIPs(node *model.Node) []string {
 
 // wgInterfaceName 生成 WireGuard 接口名
 // 格式：wg-<peername>，Linux 限制 15 字符
+// 对于超过 15 字符的名称，使用哈希后缀避免截断冲突
 func wgInterfaceName(remoteName string) string {
 	// 清理名称：小写、替换非法字符
 	clean := strings.ToLower(remoteName)
@@ -464,10 +500,25 @@ func wgInterfaceName(remoteName string) string {
 	}, clean)
 
 	name := "wg-" + clean
-	if len(name) > 15 {
-		name = name[:15]
+	if len(name) <= 15 {
+		return name
 	}
-	return name
+
+	// For names that would exceed 15 chars, use a hash suffix to avoid
+	// deterministic conflicts from truncation. sha256.Sum256 computes the full
+	// hash but we only need 4 hex chars (16 bits); the full computation is
+	// unavoidable with the standard library.
+	const maxLen = 15
+	const prefix = "wg-"
+	const hashSuffixLen = 4 // 4 hex chars, low collision probability
+
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(remoteName)))
+	// remainForClean = 15 - 3 - 4 = 8; the min/max guards are defensive.
+	remainForClean := maxLen - len(prefix) - hashSuffixLen
+	if remainForClean > len(clean) {
+		remainForClean = len(clean)
+	}
+	return prefix + clean[:remainForClean] + hash[:hashSuffixLen]
 }
 
 // formatEndpoint 格式化 endpoint 地址

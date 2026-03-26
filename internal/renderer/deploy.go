@@ -2,22 +2,26 @@ package renderer
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
+var multiHyphen = regexp.MustCompile(`-{2,}`)
+
 // DeployNodeInfo holds per-node SSH and artifact info for deploy script generation
 type DeployNodeInfo struct {
-	NodeName     string
-	SSHTarget    string // ssh_alias or user@host
-	SSHPort      int
-	SSHKeyPath   string
-	HasSSH       bool
-	WgInterfaces []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
-	HasBabel     bool     // whether this node runs Babel
-	IsClient     bool     // client nodes use wg0 instead of per-peer interfaces
+	NodeName         string
+	SafeInstallerName string // safe file name for the installer (e.g. "node-name.install.sh")
+	SSHTarget        string // ssh_alias or user@host
+	SSHPort          int
+	SSHKeyPath       string
+	HasSSH           bool
+	WgInterfaces     []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
+	HasBabel         bool     // whether this node runs Babel
+	IsClient         bool     // client nodes use wg0 instead of per-peer interfaces
 }
 
 // DeployScriptConfig holds all nodes for one combined deploy script
@@ -39,9 +43,10 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 
 	for _, node := range topo.Nodes {
 		info := DeployNodeInfo{
-			NodeName: node.Name,
-			SSHPort:  22,
-			IsClient: node.Role == "client",
+			NodeName:          node.Name,
+			SafeInstallerName: safeInstallerFileName(node.Name),
+			SSHPort:           22,
+			IsClient:          node.Role == "client",
 		}
 
 		if node.SSHAlias != "" {
@@ -208,8 +213,7 @@ SUCCESS=0
 	for _, node := range config.Nodes {
 		b.WriteString(fmt.Sprintf("# --- Node: %s ---\n", node.NodeName))
 
-		installerFile := node.NodeName + ".install.sh"
-
+		installerFile := node.SafeInstallerName
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`echo ""
 echo "=== %s: SKIPPED (no SSH details configured) ==="
@@ -444,7 +448,7 @@ try {
 `)
 
 	for _, node := range config.Nodes {
-		installerFile := node.NodeName + ".install.sh"
+		installerFile := node.SafeInstallerName
 
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`    Write-Host ""
@@ -597,4 +601,24 @@ try {
 `)
 
 	return b.String(), nil
+}
+
+// safeInstallerFileName converts a node name to a safe file name for use as an
+// installer script name. It lowercases the name, replaces spaces and unsafe
+// characters with hyphens, and appends the ".install.sh" suffix.
+func safeInstallerFileName(nodeName string) string {
+	safe := strings.ToLower(nodeName)
+	safe = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, safe)
+	// Collapse multiple consecutive hyphens
+	safe = multiHyphen.ReplaceAllString(safe, "-")
+	safe = strings.Trim(safe, "-")
+	if safe == "" {
+		safe = "node"
+	}
+	return safe + ".install.sh"
 }

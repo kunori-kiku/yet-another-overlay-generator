@@ -137,10 +137,10 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		// Role 
 		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true, "client": true}
 		if node.Role == "" {
-			result.AddError(prefix+".role", "")
+			result.AddError(prefix+".role", "role is required")
 		} else if !validRoles[node.Role] {
 			result.AddError(prefix+".role",
-				fmt.Sprintf(": %s, : peer, router, relay, gateway, client", node.Role))
+				fmt.Sprintf("invalid role %q, must be one of: peer, router, relay, gateway, client", node.Role))
 		}
 
 		// Platform （，）
@@ -148,7 +148,7 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			validPlatforms := map[string]bool{"debian": true, "ubuntu": true}
 			if !validPlatforms[strings.ToLower(node.Platform)] {
 				result.AddWarning(prefix+".platform",
-					fmt.Sprintf(": %s, : debian, ubuntu", node.Platform))
+					fmt.Sprintf("unsupported platform %q, supported values are: debian, ubuntu", node.Platform))
 			}
 		}
 

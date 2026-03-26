@@ -35,6 +35,10 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 
 	// 按节点导出
 	for _, node := range result.Topology.Nodes {
+		// Validate node name to prevent path traversal
+		if err := validateSafeName(node.Name); err != nil {
+			return nil, fmt.Errorf("节点名称不安全，跳过导出: %w", err)
+		}
 		nodeDir := filepath.Join(outputDir, node.Name)
 		isClient := node.Role == "client"
 
@@ -176,4 +180,25 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	}
 
 	return exportResult, nil
+}
+
+// validateSafeName checks that a name is safe to use as a directory or file name
+// component, rejecting names that could cause path traversal or other issues.
+func validateSafeName(name string) error {
+	if name == "" {
+		return fmt.Errorf("名称不能为空")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("名称不合法: %q", name)
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("名称不能包含路径分隔符: %q", name)
+	}
+	if filepath.IsAbs(name) {
+		return fmt.Errorf("名称不能为绝对路径: %q", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("名称不能包含 '..': %q", name)
+	}
+	return nil
 }
