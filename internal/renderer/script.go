@@ -325,7 +325,7 @@ systemctl enable overlay-dummy.service 2>/dev/null || true
 
 # Fix source address selection for overlay traffic
 # Without this, packets to overlay IPs use the transit IP (10.10.0.x) as source
-# instead of the overlay IP, causing silent failures for plain `ping <overlay_ip>`
+# instead of the overlay IP, causing silent failures for plain "ping <overlay_ip>"
 echo "Configuring overlay source address fix..."
 
 # Remove any previous overlay SNAT rules
