@@ -100,7 +100,10 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	}
 
 	// Pass 3 :  Peer
-	peerMap, pairAllocations := DerivePeers(compiledTopo, keys)
+	peerMap, pairAllocations, err := DerivePeers(compiledTopo, keys)
+	if err != nil {
+		return nil, fmt.Errorf("推导 WireGuard peer 配置失败: %w", err)
+	}
 
 	// Client 配置
 	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations)

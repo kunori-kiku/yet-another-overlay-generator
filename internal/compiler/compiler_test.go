@@ -88,7 +88,7 @@ func TestDerivePeers_SimpleMesh(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// ： 2  peer
 	for _, node := range topo.Nodes {
@@ -106,7 +106,7 @@ func TestDerivePeers_EdgeConsistency(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// node-1  peer  node-2  node-3
 	node1Peers := peerMap["node-1"]
@@ -129,7 +129,7 @@ func TestDerivePeers_EndpointCorrect(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// node-1 -> node-2  endpoint  203.0.113.2:51820
 	for _, p := range peerMap["node-1"] {
@@ -148,7 +148,7 @@ func TestDerivePeers_AllowedIPs(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// per-peer 架构：AllowedIPs 使用宽松策略
 	for _, p := range peerMap["node-1"] {
@@ -167,7 +167,7 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.20.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// NAT  (node-2, node-3)  hub  PersistentKeepalive
 	for _, p := range peerMap["node-2"] {
@@ -193,7 +193,7 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo.Edges[1].IsEnabled = false
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// node-1  1  peer（node-3）， node-2 
 	if len(peerMap["node-1"]) != 1 {
@@ -235,7 +235,7 @@ func TestDerivePeers_UnidirectionalKeepalive(t *testing.T) {
 	topo.Nodes[1].OverlayIP = "10.30.0.2"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// node-1 (发起方) 应该有 node-2 作为 peer
 	node1Peers := peerMap["node-1"]
@@ -267,7 +267,7 @@ func TestDerivePeers_BidirectionalNoExtraKeepalive(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// 双向 edge + 都有公网IP 的情况下，不需要 keepalive
 	for _, p := range peerMap["node-1"] {
@@ -285,7 +285,7 @@ func TestDerivePeers_PerPeerFields(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// 验证 node-1 的第一个 peer 的 per-peer 字段
 	node1Peers := peerMap["node-1"]
@@ -393,7 +393,7 @@ func TestWgInterfaceName(t *testing.T) {
 		{"Alpha", "wg-alpha"},          // 大写转小写
 		{"my_server", "wg-my-server"},   // 下划线转连字符
 		{"a.b.c", "wg-a-b-c"},          // 点转连字符
-		{"abcdefghijklmnop", "wg-abcdefghijkl"}, // 超过15字符截断
+		{"abcdefghijklmnop", "wg-abcdefghf39d"}, // 超过15字符：使用哈希后缀避免截断冲突
 	}
 
 	for _, tt := range tests {
@@ -469,7 +469,7 @@ func TestDerivePeers_PortEndpointSymmetry(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// 对每个节点的每个 peer，验证端口对称性
 	for nodeID, peers := range peerMap {
@@ -509,7 +509,7 @@ func TestDerivePeers_MultiPeerPortIncrement(t *testing.T) {
 	topo.Nodes[2].OverlayIP = "10.20.0.3"
 
 	keys := testKeys()
-	peerMap, _ := DerivePeers(topo, keys)
+	peerMap, _, _ := DerivePeers(topo, keys)
 
 	// Hub (node-1) 应该有 2 个 peer 接口，端口递增
 	hubPeers := peerMap["node-1"]

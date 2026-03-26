@@ -69,7 +69,7 @@ PostUp = ip -6 addr add {{ .LocalLinkLocal }}/64 dev %i 2>/dev/null || true
 PostDown = ip -6 addr del {{ .LocalLinkLocal }}/64 dev %i 2>/dev/null || true
 {{- if .ClientOverlayIP }}
 # Route client overlay IP through this interface (discovered by Babel)
-PostUp = ip route add {{ .ClientOverlayIP }}/32 dev %i
+PostUp = ip route replace {{ .ClientOverlayIP }}/32 dev %i 2>/dev/null || true
 PostDown = ip route del {{ .ClientOverlayIP }}/32 dev %i 2>/dev/null || true
 {{- end }}
 
