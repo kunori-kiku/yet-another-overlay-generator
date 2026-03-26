@@ -30,7 +30,7 @@ export interface Node {
   name: string;
   hostname?: string;
   platform?: 'debian' | 'ubuntu';
-  role: 'peer' | 'router' | 'relay' | 'gateway';
+  role: 'peer' | 'router' | 'relay' | 'gateway' | 'client';
   domain_id: string;
   overlay_ip?: string;
   listen_port?: number;
@@ -41,6 +41,12 @@ export interface Node {
   wireguard_public_key?: string;
   public_endpoints?: PublicEndpoint[];
   extra_prefixes?: string[];
+  // SSH connection details (for auto-deploy)
+  ssh_alias?: string;
+  ssh_host?: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_key_path?: string;
 }
 
 export interface PublicEndpoint {
@@ -63,7 +69,8 @@ export interface Edge {
   to_node_id: string;
   type: 'direct' | 'public-endpoint' | 'relay-path' | 'candidate';
   endpoint_host?: string;
-  endpoint_port?: number;
+  endpoint_port?: number;  // user input: 0 = auto, nonzero = NAT override
+  compiled_port?: number;  // read-only: actual port set by compiler
   priority?: number;
   weight?: number;
   transport?: 'udp' | 'tcp';
@@ -111,6 +118,7 @@ export interface CompileResponse {
   babel_configs: Record<string, string>;
   sysctl_configs: Record<string, string>;
   install_scripts: Record<string, string>;
+  deploy_scripts: Record<string, string>;
   manifest: CompileManifest;
 }
 

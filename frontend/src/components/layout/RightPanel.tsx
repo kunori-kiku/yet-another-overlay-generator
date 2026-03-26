@@ -27,6 +27,7 @@ export function RightPanel() {
     compileResult,
     compile,
     exportArtifacts,
+    downloadDeployScript,
     isCompiling,
     language,
   } = useTopologyStore();
@@ -39,14 +40,22 @@ export function RightPanel() {
     : undefined;
 
   const targetEndpointOptions = selectedEdgeTarget?.public_endpoints || [];
-  const matchedTargetEndpoint = targetEndpointOptions.find(
-    (ep) =>
-      ep.host === selectedEdge?.endpoint_host &&
-      ep.port === selectedEdge?.endpoint_port
+  // Deduplicate hosts from target's public endpoints for IP picker
+  const targetHostOptions = Array.from(
+    new Set(targetEndpointOptions.map((ep) => ep.host).filter(Boolean))
   );
-  const selectedEdgeEndpointValue = matchedTargetEndpoint
-    ? `ep:${matchedTargetEndpoint.id}`
-    : '__manual__';
+  const matchedTargetHost = selectedEdge?.endpoint_host
+    ? targetHostOptions.includes(selectedEdge.endpoint_host)
+      ? `host:${selectedEdge.endpoint_host}`
+      : '__manual__'
+    : '__none__';
+
+  // Get the compiled port for the selected edge from the compiled topology
+  const compiledEdgePort = (() => {
+    if (!compileResult || !selectedEdge) return undefined;
+    const compiledEdge = compileResult.topology.edges?.find((e) => e.id === selectedEdge.id);
+    return compiledEdge?.compiled_port || undefined;
+  })();
 
   const updateNodeEndpoint = (
     nodeId: string,
@@ -106,6 +115,22 @@ export function RightPanel() {
           >
             {txt(language, '📦 导出产物包', '📦 Export Artifacts')}
           </button>
+          <div className="flex gap-1">
+            <button
+              onClick={() => downloadDeployScript('sh')}
+              disabled={nodes.length === 0}
+              className="flex-1 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            >
+              {txt(language, '🚀 部署脚本 .sh', '🚀 Deploy .sh')}
+            </button>
+            <button
+              onClick={() => downloadDeployScript('ps1')}
+              disabled={nodes.length === 0}
+              className="flex-1 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            >
+              {txt(language, '🚀 部署脚本 .ps1', '🚀 Deploy .ps1')}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -210,17 +235,27 @@ export function RightPanel() {
               <label className="text-xs text-gray-400">{txt(language, '角色', 'Role')}</label>
               <select
                 value={selectedNode.role}
-                onChange={(e) =>
-                  updateNode(selectedNode.id, {
-                    role: e.target.value as 'peer' | 'router' | 'relay' | 'gateway',
-                  })
-                }
+                onChange={(e) =>{
+                  const newRole = e.target.value as 'peer' | 'router' | 'relay' | 'gateway' | 'client';
+                  const updates: Record<string, unknown> = { role: newRole };
+                  // Auto-uncheck "Publicly Reachable" when switching to client
+                  if (newRole === 'client') {
+                    updates.capabilities = {
+                      ...selectedNode.capabilities,
+                      has_public_ip: false,
+                      can_accept_inbound: false,
+                      can_forward: false,
+                    };
+                  }
+                  updateNode(selectedNode.id, updates);
+                }}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
               >
                 <option value="peer">Peer</option>
                 <option value="router">Router</option>
                 <option value="relay">Relay</option>
                 <option value="gateway">Gateway</option>
+                <option value="client">Client</option>
               </select>
             </div>
             <div>
@@ -264,6 +299,7 @@ export function RightPanel() {
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
+            {selectedNode.role !== 'client' && (
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -280,6 +316,7 @@ export function RightPanel() {
               />
               {txt(language, '公网可达', 'Publicly Reachable')}
             </label>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -309,6 +346,7 @@ export function RightPanel() {
                 </p>
               </div>
             )}
+            {selectedNode.role !== 'client' && (
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -324,6 +362,8 @@ export function RightPanel() {
               />
               {txt(language, '可转发流量', 'Can Forward Traffic')}
             </label>
+            )}
+            {selectedNode.role !== 'client' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs text-gray-400">{txt(language, '公网可达地址映射 (IP:端口)', 'Public endpoint mappings (IP:Port)')}</label>
@@ -381,6 +421,90 @@ export function RightPanel() {
                 </div>
               ))}
             </div>
+            )}
+            {/* SSH Connection Details (collapsible) */}
+            <details className="bg-gray-700/50 rounded p-2">
+              <summary className="text-xs cursor-pointer text-gray-400 font-semibold">
+                {txt(language, 'SSH 连接配置 (自动部署)', 'SSH Connection (Auto-Deploy)')}
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <label className="text-xs text-gray-400">{txt(language, 'SSH 别名 (ssh_config Host)', 'SSH Alias (ssh_config Host)')}</label>
+                  <input
+                    type="text"
+                    value={selectedNode.ssh_alias || ''}
+                    onChange={(e) =>
+                      updateNode(selectedNode.id, {
+                        ssh_alias: e.target.value || undefined,
+                      })
+                    }
+                    placeholder={txt(language, '如 my-server', 'e.g. my-server')}
+                    className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {txt(language, '设置别名后将忽略下方手动配置', 'If set, overrides manual host/port/user/key below')}
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400">{txt(language, 'SSH 主机', 'SSH Host')}</label>
+                  <input
+                    type="text"
+                    value={selectedNode.ssh_host || ''}
+                    onChange={(e) =>
+                      updateNode(selectedNode.id, {
+                        ssh_host: e.target.value || undefined,
+                      })
+                    }
+                    placeholder={txt(language, 'IP 或域名', 'IP or hostname')}
+                    className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-400">{txt(language, 'SSH 端口', 'SSH Port')}</label>
+                    <input
+                      type="number"
+                      value={selectedNode.ssh_port || ''}
+                      onChange={(e) =>
+                        updateNode(selectedNode.id, {
+                          ssh_port: parseInt(e.target.value) || undefined,
+                        })
+                      }
+                      placeholder="22"
+                      className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400">{txt(language, 'SSH 用户', 'SSH User')}</label>
+                    <input
+                      type="text"
+                      value={selectedNode.ssh_user || ''}
+                      onChange={(e) =>
+                        updateNode(selectedNode.id, {
+                          ssh_user: e.target.value || undefined,
+                        })
+                      }
+                      placeholder="root"
+                      className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400">{txt(language, 'SSH 密钥路径', 'SSH Key Path')}</label>
+                  <input
+                    type="text"
+                    value={selectedNode.ssh_key_path || ''}
+                    onChange={(e) =>
+                      updateNode(selectedNode.id, {
+                        ssh_key_path: e.target.value || undefined,
+                      })
+                    }
+                    placeholder={txt(language, '如 ~/.ssh/id_ed25519', 'e.g. ~/.ssh/id_ed25519')}
+                    className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                  />
+                </div>
+              </div>
+            </details>
             <button
               onClick={() => removeNode(selectedNode.id)}
               className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
@@ -415,63 +539,104 @@ export function RightPanel() {
                 <option value="candidate">Candidate</option>
               </select>
             </div>
+            {/* Endpoint IP — pick from target's public IPs or manual */}
             <div>
-              <label className="text-xs text-gray-400">{txt(language, '目标节点公网映射', 'Target node endpoint mapping')}</label>
-              <select
-                value={selectedEdgeEndpointValue}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === '__manual__') {
-                    return;
-                  }
-                  if (value === '__none__') {
+              <label className="text-xs text-gray-400">{txt(language, '目标 IP (从目标节点公网地址选择)', 'Endpoint IP (from target public IPs)')}</label>
+              {targetHostOptions.length > 0 && (
+                <select
+                  value={matchedTargetHost}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '__none__') {
+                      updateEdge(selectedEdge.id, {
+                        endpoint_host: undefined,
+                      });
+                      return;
+                    }
+                    if (value === '__manual__') {
+                      // Keep the current value — user will type in the text input below
+                      return;
+                    }
+                    const host = value.replace('host:', '');
                     updateEdge(selectedEdge.id, {
-                      endpoint_host: undefined,
-                      endpoint_port: undefined,
+                      endpoint_host: host,
                     });
-                    return;
-                  }
-                  const endpointId = value.replace('ep:', '');
-                  const endpoint = targetEndpointOptions.find((ep) => ep.id === endpointId);
-                  if (!endpoint) {
-                    return;
-                  }
-                  updateEdge(selectedEdge.id, {
-                    endpoint_host: endpoint.host,
-                    endpoint_port: endpoint.port,
-                  });
-                }}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
-              >
-                <option value="__manual__">{txt(language, '手动输入', 'Manual input')}</option>
-                <option value="__none__">{txt(language, '不设置 endpoint', 'Unset endpoint')}</option>
-                {targetEndpointOptions.map((ep) => (
-                  <option key={ep.id} value={`ep:${ep.id}`}>
-                    {ep.host}:{ep.port} {ep.note ? `(${ep.note})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-gray-400">Endpoint Host</label>
+                  }}
+                  className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+                >
+                  <option value="__none__">{txt(language, '不设置', 'Unset')}</option>
+                  {targetHostOptions.map((host) => (
+                    <option key={host} value={`host:${host}`}>
+                      {host}
+                    </option>
+                  ))}
+                  <option value="__manual__">{txt(language, '手动输入', 'Manual input')}</option>
+                </select>
+              )}
               <input
+                key={`ep-host-${selectedEdge.id}`}
                 type="text"
                 value={selectedEdge.endpoint_host || ''}
                 onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined })}
-                placeholder={txt(language, 'IP 或域名', 'IP or domain')}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                placeholder={txt(language, 'IP 或域名', 'IP or hostname')}
+                className="w-full mt-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
+            {/* Endpoint Port — 0 or empty = auto, nonzero = NAT/port-forward override */}
             <div>
-              <label className="text-xs text-gray-400">Endpoint Port</label>
-              <input
-                type="number"
-                value={selectedEdge.endpoint_port || ''}
-                onChange={(e) => updateEdge(selectedEdge.id, { endpoint_port: parseInt(e.target.value) || undefined })}
-                placeholder={txt(language, '端口', 'Port')}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
-              />
+              <label className="text-xs text-gray-400">{txt(language, '目标端口 (0 = 自动分配, 非零 = NAT 覆盖)', 'Endpoint Port (0 = auto, nonzero = NAT override)')}</label>
+              <div className="flex gap-1 items-center">
+                <input
+                  key={`ep-port-${selectedEdge.id}`}
+                  type="number"
+                  value={selectedEdge.endpoint_port ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      updateEdge(selectedEdge.id, { endpoint_port: undefined });
+                    } else {
+                      const parsed = parseInt(raw, 10);
+                      if (!isNaN(parsed)) {
+                        updateEdge(selectedEdge.id, { endpoint_port: parsed });
+                      }
+                    }
+                  }}
+                  placeholder={txt(language, '0 = 自动', '0 = auto')}
+                  className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                />
+              </div>
+              {compiledEdgePort && (
+                <p className="text-[10px] text-cyan-400 mt-0.5 font-mono">
+                  {txt(language, '编译后端口', 'Compiled port')}: {compiledEdgePort}
+                  {selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0 && selectedEdge.endpoint_port !== compiledEdgePort && (
+                    <span className="text-yellow-400 ml-1">
+                      ({txt(language, 'NAT 覆盖生效', 'NAT override active')})
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
+            {compileResult && (() => {
+              const toNode = nodes.find(n => n.id === selectedEdge.to_node_id);
+              if (!toNode) return null;
+              const ifaceName = `wg-${toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
+              const configKey = `${selectedEdge.from_node_id}:${ifaceName}`;
+              const config = compileResult.wireguard_configs[configKey];
+              const endpointMatch = config?.match(/Endpoint\s*=\s*(.+)/);
+              const listenMatch = config?.match(/ListenPort\s*=\s*(\d+)/);
+              if (!endpointMatch && !listenMatch) return null;
+              return (
+                <div className="p-2 bg-gray-700/50 rounded space-y-1">
+                  <p className="text-xs text-gray-400 font-semibold">{txt(language, '编译后实际值', 'Compiled values')}</p>
+                  {endpointMatch && (
+                    <p className="text-xs text-cyan-300 font-mono">{txt(language, '实际 Endpoint', 'Endpoint')}: {endpointMatch[1]}</p>
+                  )}
+                  {listenMatch && (
+                    <p className="text-xs text-cyan-300 font-mono">{txt(language, '本端 ListenPort', 'Local ListenPort')}: {listenMatch[1]}</p>
+                  )}
+                </div>
+              );
+            })()}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -509,17 +674,35 @@ export function RightPanel() {
                 </summary>
 
                 <div className="mt-2 space-y-2">
-                  <details className="bg-gray-800/70 rounded p-2">
-                    <summary className="text-xs cursor-pointer text-cyan-300">
-                      wireguard/wg0.conf
-                    </summary>
-                    <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
-                      {txt(language, '预览', 'Preview')}:\n{previewText(compileResult.wireguard_configs[n.id])}
-                    </pre>
-                    <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
-                      {compileResult.wireguard_configs[n.id] || txt(language, '无内容', 'No content')}
-                    </pre>
-                  </details>
+                  {/* WireGuard per-peer interface configs */}
+                  {Object.entries(compileResult.wireguard_configs)
+                    .filter(([key]) => key.startsWith(n.id + ':'))
+                    .map(([key, config]) => {
+                      const interfaceName = key.split(':').slice(1).join(':');
+                      const portMatch = config?.match(/ListenPort\s*=\s*(\d+)/);
+                      const portLabel = portMatch ? ` (port: ${portMatch[1]})` : '';
+                      return (
+                        <details key={key} className="bg-gray-800/70 rounded p-2">
+                          <summary className="text-xs cursor-pointer text-cyan-300">
+                            wireguard/{interfaceName}.conf{portLabel}
+                          </summary>
+                          <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
+                            {txt(language, '预览', 'Preview')}:\n{previewText(config)}
+                          </pre>
+                          <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
+                            {config || txt(language, '无内容', 'No content')}
+                          </pre>
+                        </details>
+                      );
+                    })}
+                  {Object.keys(compileResult.wireguard_configs)
+                    .filter((key) => key.startsWith(n.id + ':')).length === 0 && (
+                    <details className="bg-gray-800/70 rounded p-2">
+                      <summary className="text-xs cursor-pointer text-cyan-300 text-gray-500">
+                        wireguard/ ({txt(language, '无配置', 'No configs')})
+                      </summary>
+                    </details>
+                  )}
 
                   <details className="bg-gray-800/70 rounded p-2">
                     <summary className="text-xs cursor-pointer text-amber-300">
@@ -560,6 +743,24 @@ export function RightPanel() {
               </details>
             ))}
           </div>
+          {/* Deploy Scripts (project-wide) */}
+          {compileResult.deploy_scripts && Object.keys(compileResult.deploy_scripts).length > 0 && (
+            <div className="mt-3 space-y-2">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                {txt(language, '自动部署脚本', 'Auto-Deploy Scripts')}
+              </h3>
+              {Object.entries(compileResult.deploy_scripts).map(([name, script]) => (
+                <details key={name} className="bg-gray-700 rounded p-2">
+                  <summary className="text-sm cursor-pointer text-orange-300">
+                    {name}
+                  </summary>
+                  <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
+                    {script}
+                  </pre>
+                </details>
+              ))}
+            </div>
+          )}
         </section>
       )}
 

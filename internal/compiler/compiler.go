@@ -27,10 +27,16 @@ type CompileResult struct {
 	//  sysctl 
 	SysctlConfigs map[string]string
 
-	// 
+	//
 	InstallScripts map[string]string
 
-	// 
+	// 自动部署脚本
+	DeployScripts map[string]string
+
+	// Client 节点的 wg0 配置信息
+	ClientConfigs map[string]*ClientPeerInfo
+
+	//
 	Manifest CompileManifest
 }
 
@@ -76,12 +82,15 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		return nil, fmt.Errorf("IP : %w", err)
 	}
 
-	// 
+	// 复制 edges 以避免修改输入
+	compiledEdges := make([]model.Edge, len(topo.Edges))
+	copy(compiledEdges, topo.Edges)
+
 	compiledTopo := &model.Topology{
 		Project:       topo.Project,
 		Domains:       topo.Domains,
 		Nodes:         allocatedNodes,
-		Edges:         topo.Edges,
+		Edges:         compiledEdges,
 		RoutePolicies: topo.RoutePolicies,
 	}
 
@@ -90,8 +99,31 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		compiledTopo.Nodes[i].Capabilities = InferCapabilitiesFromRole(&compiledTopo.Nodes[i])
 	}
 
-	// Pass 3 :  Peer 
-	peerMap := DerivePeers(compiledTopo, keys)
+	// Pass 3 :  Peer
+	peerMap, pairAllocations, err := DerivePeers(compiledTopo, keys)
+	if err != nil {
+		return nil, fmt.Errorf("推导 WireGuard peer 配置失败: %w", err)
+	}
+
+	// Client 配置
+	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations)
+
+	// 将编译器分配的实际端口写入 CompiledPort（不修改用户输入的 EndpointPort）
+	for i := range compiledTopo.Edges {
+		edge := &compiledTopo.Edges[i]
+		if !edge.IsEnabled || edge.EndpointHost == "" {
+			continue
+		}
+		// 查找该 edge 对应的 pairAllocation，提取对端（toNode）的已分配监听端口
+		peerKey := edge.FromNodeID + "->" + edge.ToNodeID
+		if alloc, ok := pairAllocations[peerKey]; ok {
+			if alloc.fromNodeID == edge.FromNodeID {
+				edge.CompiledPort = alloc.toPort
+			} else {
+				edge.CompiledPort = alloc.fromPort
+			}
+		}
+	}
 
 	result := &CompileResult{
 		Topology:         compiledTopo,
@@ -100,6 +132,8 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		BabelConfigs:     make(map[string]string),
 		SysctlConfigs:    make(map[string]string),
 		InstallScripts:   make(map[string]string),
+		DeployScripts:    make(map[string]string),
+		ClientConfigs:    clientConfigs,
 		Manifest: CompileManifest{
 			ProjectID:   topo.Project.ID,
 			ProjectName: topo.Project.Name,

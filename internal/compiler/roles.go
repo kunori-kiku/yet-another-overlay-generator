@@ -80,6 +80,15 @@ func DeriveRoleSemantics(node *model.Node) RoleSemantics {
 			AllowedIPsMode: "gateway",
 		}
 
+	case "client":
+		return RoleSemantics{
+			EnableForwarding: false,
+			AcceptAllInbound: false,
+			RunBabel:         false,
+			BabelAnnounce:    BabelAnnouncePolicy{},
+			AllowedIPsMode:   "client",
+		}
+
 	default: // "peer"
 		return RoleSemantics{
 			EnableForwarding: false,
@@ -109,6 +118,10 @@ func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 		caps.CanForward = true
 	case "peer":
 		// peer ，
+	case "client":
+		caps.CanForward = false
+		caps.CanRelay = false
+		caps.CanAcceptInbound = false
 	}
 
 	return caps

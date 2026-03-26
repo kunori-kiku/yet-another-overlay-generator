@@ -1,1 +1,6 @@
 reference_materials/
+CLAUDE.md
+.dev-backend.log
+.dev-backend.pid
+.dev-frontend.log
+.dev-frontend.pid

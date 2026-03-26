@@ -27,8 +27,8 @@ func TestExport_BasicStructure(t *testing.T) {
 			"n2": {{NodeID: "n1", NodeName: "alpha"}},
 		},
 		WireGuardConfigs: map[string]string{
-			"n1": "[Interface]\nPrivateKey = test\n",
-			"n2": "[Interface]\nPrivateKey = test\n",
+			"n1:wg-beta":  "[Interface]\nPrivateKey = test\n",
+			"n2:wg-alpha": "[Interface]\nPrivateKey = test\n",
 		},
 		BabelConfigs: map[string]string{
 			"n1": "router-id alpha\n",
@@ -68,13 +68,26 @@ func TestExport_BasicStructure(t *testing.T) {
 	for _, nodeName := range []string{"alpha", "beta"} {
 		nodeDir := filepath.Join(outputDir, nodeName)
 
-		expectedFiles := []string{
-			"wireguard/wg0.conf",
-			"babel/babeld.conf",
-			"sysctl/99-overlay.conf",
-			"install.sh",
-			"manifest.json",
-			"README.txt",
+		// per-peer 架构：每个节点的 wireguard 目录包含对应 peer 的接口配置
+		var expectedFiles []string
+		if nodeName == "alpha" {
+			expectedFiles = []string{
+				"wireguard/wg-beta.conf",
+				"babel/babeld.conf",
+				"sysctl/99-overlay.conf",
+				"install.sh",
+				"manifest.json",
+				"README.txt",
+			}
+		} else {
+			expectedFiles = []string{
+				"wireguard/wg-alpha.conf",
+				"babel/babeld.conf",
+				"sysctl/99-overlay.conf",
+				"install.sh",
+				"manifest.json",
+				"README.txt",
+			}
 		}
 
 		for _, f := range expectedFiles {
@@ -96,7 +109,7 @@ func TestExport_WireGuardPermissions(t *testing.T) {
 	}
 
 	// WireGuard  0600
-	wgPath := filepath.Join(outputDir, "alpha", "wireguard", "wg0.conf")
+	wgPath := filepath.Join(outputDir, "alpha", "wireguard", "wg-beta.conf")
 	info, err := os.Stat(wgPath)
 	if err != nil {
 		t.Fatalf(": %v", err)
@@ -170,8 +183,8 @@ func minimalCompileResult() *compiler.CompileResult {
 				{ID: "n1", Name: "alpha", OverlayIP: "10.10.0.1", Role: "router", DomainID: "d1"},
 			},
 		},
-		PeerMap:          map[string][]compiler.PeerInfo{"n1": {}},
-		WireGuardConfigs: map[string]string{"n1": "[Interface]\nPrivateKey = test\n"},
+		PeerMap:          map[string][]compiler.PeerInfo{"n1": {{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta"}}},
+		WireGuardConfigs: map[string]string{"n1:wg-beta": "[Interface]\nPrivateKey = test\n"},
 		BabelConfigs:     map[string]string{"n1": "router-id alpha\n"},
 		SysctlConfigs:    map[string]string{"n1": "net.ipv4.ip_forward = 1\n"},
 		InstallScripts:   map[string]string{"n1": "#!/bin/bash\necho install\n"},

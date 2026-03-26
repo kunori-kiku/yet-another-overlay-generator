@@ -4,9 +4,13 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 
 ## Features
 
-- **Visual Topology Builder:** Drag-and-drop React Flow interface to design your network nodes and connect their links.
+- **Visual Topology Builder:** Drag-and-drop React Flow interface to design your network nodes and connect their links. Color-coded per-peer interface handles appear after compilation.
+- **Per-Peer WireGuard Interfaces:** Each peer connection gets a dedicated WireGuard interface with an independently allocated listen port, compatible with Babel dynamic routing.
 - **Smart Validation:** Early-fail checks catch logical errors such as missing public IPs, broken NAT requirements, and dangling isolated nodes.
 - **Automatic Cryptographic Key Management:** Generates and distributes secure `wg` keys for your active topology automatically (during compilation).
+- **Split Endpoint Configuration:** Endpoint IP (from target node's public addresses) and Port (from compiler-allocated WireGuard interface) are configured independently, with auto-fill support.
+- **SSH Auto-Deploy:** Configure SSH connection details per node, then use the generated `deploy-all.sh` / `deploy-all.ps1` scripts to deploy to all nodes via SSH in one command.
+- **Comprehensive Legacy Cleanup:** Install scripts automatically detect and remove all stale WireGuard interfaces and configs (not just `wg0`), ensuring clean upgrades.
 - **Offline Configuration Bundles:** One-click deployment bundle generation — download portable `.zip` archives containing safe Bash installation scripts, sysctl modifications, Babel daemons, and WireGuard interfaces.
 - **Immutable Artifacts:** Generated scripts hash and verify checksums (`sha256`) explicitly mitigating tamper attacks.
 
@@ -17,9 +21,26 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - Go `1.21+`
 - Node.js `v18+` (LTS recommended)
 
-### 1. Running the Backend Server
+### 1. Quick Start (Dev Script)
 
-The backend generates configurations based on REST API requests and handles compilation logic.
+The easiest way to run both backend and frontend:
+
+```bash
+./dev.sh start
+```
+
+This starts the Go backend on `:8080` and Vite frontend on `:5173` in the background. Visit `http://localhost:5173`.
+
+```bash
+./dev.sh stop      # Stop all
+./dev.sh restart   # Restart both
+./dev.sh status    # Check if running
+./dev.sh logs      # Tail both log files
+```
+
+### 2. Manual Setup
+
+#### Backend
 
 ```bash
 # From the project root
@@ -28,33 +49,51 @@ go run ./cmd/server/main.go
 
 The server will begin listening on `:8080`.
 
-### 2. Running the Frontend Dev Server
-
-The frontend provides the interactive Topology Canvas and History/Audit UI.
+#### Frontend
 
 ```bash
-# Navigate to frontend folder
 cd frontend
-
-# Install dependencies (use legacy-peer-deps if Vite/Tailwind clashes occur)
 npm install --legacy-peer-deps
-
-# Start the development server
 npm run dev
 ```
 
-Visit `http://localhost:5174` (or whatever Vite outputs) in your browser.
+Visit `http://localhost:5173` in your browser.
 
 ## Basic Usage Guide
 
-1. **Add Domains:** Open exploring panels, and add a logical IP Domain (e.g., `10.10.0.0/24`) with an intuitive name. Set allocation mode to Automatic.
-2. **Add Nodes:** Drop nodes onto the Topology Canvas via the Right Panel. Make sure to define their Roles (Peer for standard endpoints, Hub/Router for traffic management) and tag their actual network capabilities (e.g., `Has Public IP` / `Can Accept Inbound`).
-3. **Draw Edges:** Connect nodes by dragging wires between them. Edges dictate connection direction geometry. *(Note: You don't need to manually configure reverse paths. If NAT-Node `A` connects to Public-Node `B`, the generator automatically sets up complementary endpoints and keepalive tunnels!)*.
-4. **Compile & Export:** Hit `Compile` to allocate dynamic IPs and deduce WireGuard config properties. If everything validates successfully, hit `Export` to generate structural Zip deployment packages for all target systems.
+1. **Add Domains:** Open the left panel and add a logical IP Domain (e.g., `10.10.0.0/24`). Set allocation mode to Automatic.
+2. **Add Nodes:** Create nodes via the left panel. Define their Roles (Peer, Router, Relay, Gateway) and capabilities (e.g., `Publicly Reachable` / `Can Forward`).
+3. **Configure SSH (optional):** Expand the SSH Connection section in node properties to set SSH alias or host/port/user/key for auto-deploy.
+4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown) and port separately.
+5. **Compile:** Hit `Compile` to allocate IPs, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles.
+6. **Auto-fill Ports:** After compilation, click the `Auto:<port>` button on each edge to fill in the compiler-allocated port.
+7. **Export & Deploy:** Hit `Export` to download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
 
 ## Documentation
 
-- Check out our [Terminology Wiki](docs/wiki.md) for in-depth insights into Overlay networking definitions used within this generator.
+- [Wiki (English)](docs/wiki.md) — Full documentation including architecture, parameters, and troubleshooting
+- [Wiki (中文)](docs/wiki-zh.md) — 完整中文文档
+
+## Debugging
+
+Quick debugging reference (see the [Wiki](docs/wiki.md#6-debugging-and-troubleshooting) for full details):
+
+```bash
+# Dev environment logs
+./dev.sh logs
+
+# API health check
+curl http://localhost:8080/api/health
+
+# WireGuard status
+sudo wg show
+
+# Babel routing table
+echo "dump" | nc ::1 33123
+
+# Test overlay connectivity
+ping 10.11.0.2
+```
 
 ## One-Click Deploy (Prebuilt Binaries)
 

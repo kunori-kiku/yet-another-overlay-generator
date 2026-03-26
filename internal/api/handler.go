@@ -60,6 +60,7 @@ type CompileResponse struct {
 	BabelConfigs     map[string]string        `json:"babel_configs"`
 	SysctlConfigs    map[string]string        `json:"sysctl_configs"`
 	InstallScripts   map[string]string        `json:"install_scripts"`
+	DeployScripts    map[string]string        `json:"deploy_scripts"`
 	Manifest         compiler.CompileManifest `json:"manifest"`
 }
 
@@ -143,6 +144,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		BabelConfigs:     result.BabelConfigs,
 		SysctlConfigs:    result.SysctlConfigs,
 		InstallScripts:   result.InstallScripts,
+		DeployScripts:    result.DeployScripts,
 		Manifest:         result.Manifest,
 	})
 }
@@ -201,6 +203,44 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
 	w.Write(archiveBuf.Bytes())
+}
+
+// HandleDeployScript returns the deploy script (bash or PowerShell) as a downloadable file.
+// Query parameter ?format=ps1 returns PowerShell; default is bash.
+func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, " POST ")
+		return
+	}
+
+	topo, err := readTopology(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	bashScript, ps1Script, err := renderer.RenderDeployScripts(topo, nil, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("deploy script render: %v", err))
+		return
+	}
+
+	format := r.URL.Query().Get("format")
+	var script, filename, contentType string
+	if format == "ps1" {
+		script = ps1Script
+		filename = "deploy-all.ps1"
+		contentType = "text/plain; charset=utf-8"
+	} else {
+		script = bashScript
+		filename = "deploy-all.sh"
+		contentType = "text/x-shellscript; charset=utf-8"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(script))
 }
 
 // ---  ---
@@ -277,12 +317,21 @@ func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 }
 
 func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error {
-	// WireGuard
+	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
 		return fmt.Errorf(" WireGuard : %w", err)
 	}
 	result.WireGuardConfigs = wgConfigs
+
+	// WireGuard client configs (single wg0 for client nodes)
+	for nodeID, clientInfo := range result.ClientConfigs {
+		config, err := renderer.RenderClientWireGuardConfig(clientInfo)
+		if err != nil {
+			return fmt.Errorf(" client %s WireGuard : %w", clientInfo.NodeName, err)
+		}
+		result.WireGuardConfigs[nodeID+":wg0"] = config
+	}
 
 	// Babel
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
@@ -300,13 +349,30 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 
 	//
 	for _, node := range result.Topology.Nodes {
-		_, hasBabel := result.BabelConfigs[node.ID]
-		script, err := renderer.RenderInstallScript(&node, hasBabel)
-		if err != nil {
-			return fmt.Errorf(" %s : %w", node.Name, err)
+		if node.Role == "client" {
+			script, err := renderer.RenderClientInstallScript(&node)
+			if err != nil {
+				return fmt.Errorf(" client %s : %w", node.Name, err)
+			}
+			result.InstallScripts[node.ID] = script
+		} else {
+			peers := result.PeerMap[node.ID]
+			_, hasBabel := result.BabelConfigs[node.ID]
+			script, err := renderer.RenderInstallScript(&node, peers, hasBabel)
+			if err != nil {
+				return fmt.Errorf(" %s : %w", node.Name, err)
+			}
+			result.InstallScripts[node.ID] = script
 		}
-		result.InstallScripts[node.ID] = script
 	}
+
+	// Deploy scripts (bash + PowerShell)
+	bashDeploy, ps1Deploy, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
+	if err != nil {
+		return fmt.Errorf("deploy script render: %w", err)
+	}
+	result.DeployScripts["deploy-all.sh"] = bashDeploy
+	result.DeployScripts["deploy-all.ps1"] = ps1Deploy
 
 	return nil
 }
@@ -439,9 +505,9 @@ fi
 
 echo "Running node installer for ${NODE_NAME}..."
 if [[ "$(id -u)" -eq 0 ]]; then
-	bash "${WORKDIR}/install.sh"
+	bash "${WORKDIR}/install.sh" "$@"
 elif command -v sudo >/dev/null 2>&1; then
-	sudo bash "${WORKDIR}/install.sh"
+	sudo bash "${WORKDIR}/install.sh" "$@"
 else
 	echo "ERROR: root privileges required (run as root or install sudo)" >&2
 	exit 1

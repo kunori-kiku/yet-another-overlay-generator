@@ -41,8 +41,15 @@ export function AuditView() {
 
   const getFileContent = (result: any) => {
     if (!result || !selectedNodeFileId) return '';
-    const [nodeId, fileType] = selectedNodeFileId.split(':');
-    if (fileType === 'wg' && result.wireguard_configs) return result.wireguard_configs[nodeId] || '';
+    // Format: "nodeId:fileType" or "nodeId:wg:interfaceName"
+    const parts = selectedNodeFileId.split(':');
+    const nodeId = parts[0];
+    const fileType = parts[1];
+    if (fileType === 'wg' && result.wireguard_configs) {
+      // per-peer key format: "nodeId:interfaceName"
+      const interfaceName = parts.slice(2).join(':');
+      return result.wireguard_configs[nodeId + ':' + interfaceName] || '';
+    }
     if (fileType === 'babel' && result.babel_configs) return result.babel_configs[nodeId] || '';
     if (fileType === 'install' && result.install_scripts) return result.install_scripts[nodeId] || '';
     if (fileType === 'sysctl' && result.sysctl_configs) return result.sysctl_configs[nodeId] || '';
@@ -135,14 +142,29 @@ export function AuditView() {
               onChange={(e) => setSelectedNodeFileId(e.target.value)}
             >
               <option value="">Select a file to diff...</option>
-              {nodes.map(n => (
-                <optgroup key={n.id} label={n.name}>
-                  <option value={`${n.id}:wg`}>wg0.conf</option>
-                  <option value={`${n.id}:babel`}>babeld.conf</option>
-                  <option value={`${n.id}:sysctl`}>sysctl.conf</option>
-                  <option value={`${n.id}:install`}>install.sh</option>
-                </optgroup>
-              ))}
+              {nodes.map(n => {
+                // Collect per-peer WireGuard interface names from compile result
+                const wgKeys = currentResult
+                  ? Object.keys(currentResult.wireguard_configs)
+                      .filter((key) => key.startsWith(n.id + ':'))
+                      .map((key) => key.split(':').slice(1).join(':'))
+                  : [];
+                return (
+                  <optgroup key={n.id} label={n.name}>
+                    {wgKeys.length > 0
+                      ? wgKeys.map((ifName) => (
+                          <option key={`${n.id}:wg:${ifName}`} value={`${n.id}:wg:${ifName}`}>
+                            {ifName}.conf
+                          </option>
+                        ))
+                      : <option value={`${n.id}:wg:`} disabled>({'\u00A0'}no wg configs{'\u00A0'})</option>
+                    }
+                    <option value={`${n.id}:babel`}>babeld.conf</option>
+                    <option value={`${n.id}:sysctl`}>sysctl.conf</option>
+                    <option value={`${n.id}:install`}>install.sh</option>
+                  </optgroup>
+                );
+              })}
             </select>
           </div>
           <div className="flex-1 p-4 overflow-y-auto bg-gray-950">

@@ -135,12 +135,12 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		}
 
 		// Role 
-		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true}
+		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true, "client": true}
 		if node.Role == "" {
-			result.AddError(prefix+".role", "")
+			result.AddError(prefix+".role", "角色不能为空")
 		} else if !validRoles[node.Role] {
 			result.AddError(prefix+".role",
-				fmt.Sprintf(": %s, : peer, router, relay, gateway", node.Role))
+				fmt.Sprintf("角色无效: %s，可选值: peer, router, relay, gateway, client", node.Role))
 		}
 
 		// Platform （，）
@@ -148,7 +148,7 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			validPlatforms := map[string]bool{"debian": true, "ubuntu": true}
 			if !validPlatforms[strings.ToLower(node.Platform)] {
 				result.AddWarning(prefix+".platform",
-					fmt.Sprintf(": %s, : debian, ubuntu", node.Platform))
+					fmt.Sprintf("平台不受支持: %s，可选值: debian, ubuntu", node.Platform))
 			}
 		}
 

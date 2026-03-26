@@ -43,8 +43,8 @@ func TestLoadSimpleMesh(t *testing.T) {
 	if len(topo.Domains) != 1 {
 		t.Fatalf(" 1  Domain,  %d", len(topo.Domains))
 	}
-	if topo.Domains[0].CIDR != "10.10.0.0/24" {
-		t.Errorf("Domain CIDR  10.10.0.0/24,  %s", topo.Domains[0].CIDR)
+	if topo.Domains[0].CIDR != "10.11.0.0/24" {
+		t.Errorf("Domain CIDR  10.11.0.0/24,  %s", topo.Domains[0].CIDR)
 	}
 	if topo.Domains[0].RoutingMode != "babel" {
 		t.Errorf("Domain RoutingMode  babel,  %s", topo.Domains[0].RoutingMode)

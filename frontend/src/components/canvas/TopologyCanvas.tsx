@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -27,6 +27,7 @@ export function TopologyCanvas() {
     nodes: topoNodes,
     edges: topoEdges,
     domains,
+    compileResult,
     addEdge: addTopoEdge,
     removeNode: removeTopoNode,
     removeEdge: removeTopoEdge,
@@ -35,6 +36,9 @@ export function TopologyCanvas() {
     selectDomain,
   } = useTopologyStore();
 
+  // Persist node positions across re-renders so dragging is not lost
+  const positionMap = useRef<Record<string, { x: number; y: number }>>({});
+
   // 构建 domain 名称索引
   const domainMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -42,21 +46,58 @@ export function TopologyCanvas() {
     return m;
   }, [domains]);
 
+  // 构建每个节点的已编译接口详情（用于多 handle 显示）
+  interface IfaceInfo {
+    name: string;       // e.g. "wg-beta"
+    listenPort: number; // allocated listen port
+    peerName: string;   // remote node name (e.g. "beta")
+  }
+  const nodeInterfaceMap = useMemo(() => {
+    const m: Record<string, IfaceInfo[]> = {};
+    if (!compileResult) return m;
+    for (const [key, config] of Object.entries(compileResult.wireguard_configs)) {
+      const colonIdx = key.indexOf(':');
+      if (colonIdx < 0) continue;
+      const nodeId = key.slice(0, colonIdx);
+      const ifaceName = key.slice(colonIdx + 1);
+
+      const portMatch = config?.match(/ListenPort\s*=\s*(\d+)/);
+      const listenPort = portMatch ? parseInt(portMatch[1], 10) : 0;
+
+      // Derive peer name from interface name: "wg-beta" → "beta"
+      const peerName = ifaceName.startsWith('wg-') ? ifaceName.slice(3) : ifaceName;
+
+      if (!m[nodeId]) m[nodeId] = [];
+      m[nodeId].push({ name: ifaceName, listenPort, peerName });
+    }
+    return m;
+  }, [compileResult]);
+
   // 将拓扑节点转为 React Flow 节点
   const flowNodes: FlowNode[] = useMemo(
     () =>
-      topoNodes.map((n, i) => ({
-        id: n.id,
-        type: 'custom',
-        position: { x: 100 + (i % 4) * 250, y: 100 + Math.floor(i / 4) * 200 },
-        data: {
-          label: n.name,
-          role: n.role,
-          overlayIp: n.overlay_ip || '',
-          domainName: domainMap[n.domain_id] || '',
-        },
-      })),
-    [topoNodes, domainMap]
+      topoNodes.map((n, i) => {
+        // Use persisted position if available, otherwise assign grid position
+        if (!positionMap.current[n.id]) {
+          positionMap.current[n.id] = {
+            x: 100 + (i % 4) * 280,
+            y: 100 + Math.floor(i / 4) * 250,
+          };
+        }
+        return {
+          id: n.id,
+          type: 'custom',
+          position: positionMap.current[n.id],
+          data: {
+            label: n.name,
+            role: n.role,
+            overlayIp: n.overlay_ip || '',
+            domainName: domainMap[n.domain_id] || '',
+            interfaces: nodeInterfaceMap[n.id] || [],
+          },
+        };
+      }),
+    [topoNodes, domainMap, nodeInterfaceMap]
   );
 
   // 计算平行边索引（同一对节点之间的多条边）
@@ -65,7 +106,6 @@ export function TopologyCanvas() {
     const enabledEdges = topoEdges.filter((e) => e.is_enabled);
 
     for (const e of enabledEdges) {
-      // 双向合并: 将 A->B 和 B->A 归为同一对
       const pairKey = [e.from_node_id, e.to_node_id].sort().join('::');
       if (!pairMap[pairKey]) pairMap[pairKey] = [];
       pairMap[pairKey].push(e.id);
@@ -87,25 +127,61 @@ export function TopologyCanvas() {
         .filter((e) => e.is_enabled)
         .map((e) => {
           const pInfo = parallelEdgeInfo[e.id] || { index: 0, count: 1 };
+          const displayPort = e.compiled_port || e.endpoint_port || '';
           const label = e.endpoint_host
-            ? `${e.endpoint_host}:${e.endpoint_port || ''}`
+            ? `${e.endpoint_host}:${displayPort}`
             : e.type;
+
+          let targetHandle: string | undefined;
+          let sourceHandle: string | undefined;
+          let sourceNodeName = '';
+          let targetNodeName = '';
+          if (compileResult) {
+            const sourceNode = topoNodes.find((n) => n.id === e.from_node_id);
+            const targetNode = topoNodes.find((n) => n.id === e.to_node_id);
+            sourceNodeName = sourceNode?.name || '';
+            targetNodeName = targetNode?.name || '';
+
+            if (sourceNode && targetNode) {
+              const targetIfaces = nodeInterfaceMap[e.to_node_id] || [];
+              const sourceIfaces = nodeInterfaceMap[e.from_node_id] || [];
+
+              const srcIfaceName = `wg-${sourceNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
+              if (targetIfaces.some((iface) => iface.name === srcIfaceName)) {
+                targetHandle = srcIfaceName;
+              }
+
+              const tgtIfaceName = `wg-${targetNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
+              if (sourceIfaces.some((iface) => iface.name === tgtIfaceName)) {
+                sourceHandle = tgtIfaceName;
+              }
+            }
+          } else {
+            const sourceNode = topoNodes.find((n) => n.id === e.from_node_id);
+            const targetNode = topoNodes.find((n) => n.id === e.to_node_id);
+            sourceNodeName = sourceNode?.name || '';
+            targetNodeName = targetNode?.name || '';
+          }
 
           return {
             id: e.id,
             source: e.from_node_id,
             target: e.to_node_id,
             type: 'custom',
+            ...(targetHandle ? { targetHandle } : {}),
+            ...(sourceHandle ? { sourceHandle } : {}),
             data: {
               edgeType: e.type,
               label,
               parallelIndex: pInfo.index,
               parallelCount: pInfo.count,
+              sourceNodeName,
+              targetNodeName,
             },
             markerEnd: { type: MarkerType.ArrowClosed },
           };
         }),
-    [topoEdges, parallelEdgeInfo]
+    [topoEdges, parallelEdgeInfo, compileResult, topoNodes, nodeInterfaceMap]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
@@ -116,7 +192,12 @@ export function TopologyCanvas() {
       onNodesChange(changes);
       for (const change of changes) {
         if (change.type === 'remove') {
+          delete positionMap.current[change.id];
           removeTopoNode(change.id);
+        }
+        // Persist drag position
+        if (change.type === 'position' && change.position) {
+          positionMap.current[change.id] = change.position;
         }
       }
     },
@@ -135,9 +216,17 @@ export function TopologyCanvas() {
     [onEdgesChange, removeTopoEdge]
   );
 
-  // 同步 React Flow 节点变化
+  // Sync data changes (name, role, interfaces, etc.) without overwriting positions
   useMemo(() => {
-    setNodes(flowNodes);
+    setNodes((currentNodes) =>
+      flowNodes.map((fn) => {
+        const existing = currentNodes.find((n) => n.id === fn.id);
+        return {
+          ...fn,
+          position: positionMap.current[fn.id] || existing?.position || fn.position,
+        };
+      })
+    );
   }, [flowNodes, setNodes]);
 
   useMemo(() => {
@@ -213,6 +302,7 @@ export function TopologyCanvas() {
             case 'router': return '#3b82f6';
             case 'relay': return '#eab308';
             case 'gateway': return '#a855f7';
+            case 'client': return '#06b6d4';
             default: return '#22c55e';
           }
         }}
