@@ -505,9 +505,9 @@ fi
 
 echo "Running node installer for ${NODE_NAME}..."
 if [[ "$(id -u)" -eq 0 ]]; then
-	bash "${WORKDIR}/install.sh"
+	bash "${WORKDIR}/install.sh" "$@"
 elif command -v sudo >/dev/null 2>&1; then
-	sudo bash "${WORKDIR}/install.sh"
+	sudo bash "${WORKDIR}/install.sh" "$@"
 else
 	echo "ERROR: root privileges required (run as root or install sudo)" >&2
 	exit 1
