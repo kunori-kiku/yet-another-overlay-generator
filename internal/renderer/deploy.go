@@ -456,34 +456,40 @@ try {
 			scpCmd = "scp " + scpOpts
 		}
 
-		// Build the inline uninstall script for this node
+		// Build the inline uninstall script for this node (multi-line, for PS1 here-string)
 		var uninstallCmds strings.Builder
-		uninstallCmds.WriteString("set -uo pipefail; ")
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on %s...'; ", node.NodeName))
+		uninstallCmds.WriteString("set -uo pipefail\n")
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on %s...'\n", node.NodeName))
 		for _, iface := range node.WgInterfaces {
-			uninstallCmds.WriteString(fmt.Sprintf("wg-quick down %s 2>/dev/null || true; ", iface))
-			uninstallCmds.WriteString(fmt.Sprintf("systemctl disable wg-quick@%s 2>/dev/null || true; ", iface))
-			uninstallCmds.WriteString(fmt.Sprintf("rm -f /etc/wireguard/%s.conf; ", iface))
+			uninstallCmds.WriteString(fmt.Sprintf("wg-quick down %s 2>/dev/null || true\n", iface))
+			uninstallCmds.WriteString(fmt.Sprintf("systemctl disable wg-quick@%s 2>/dev/null || true\n", iface))
+			uninstallCmds.WriteString(fmt.Sprintf("rm -f /etc/wireguard/%s.conf\n", iface))
 		}
-		uninstallCmds.WriteString("for _i in $(wg show interfaces 2>/dev/null); do wg-quick down \"$_i\" 2>/dev/null || true; systemctl disable \"wg-quick@$_i\" 2>/dev/null || true; done; ")
-		uninstallCmds.WriteString("rm -f /etc/wireguard/*.conf; ")
+		uninstallCmds.WriteString("for _i in $(wg show interfaces 2>/dev/null); do wg-quick down \"$_i\" 2>/dev/null || true; systemctl disable \"wg-quick@$_i\" 2>/dev/null || true; done\n")
+		uninstallCmds.WriteString("rm -f /etc/wireguard/*.conf\n")
 		if node.HasBabel {
-			uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 2/4] Stopping Babel routing daemon on %s...'; ", node.NodeName))
-			uninstallCmds.WriteString("systemctl stop babeld 2>/dev/null || true; systemctl disable babeld 2>/dev/null || true; rm -f /etc/babel/babeld.conf /etc/babeld.conf; rm -rf /etc/systemd/system/babeld.service.d; ")
+			uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 2/4] Stopping Babel routing daemon on %s...'\n", node.NodeName))
+			uninstallCmds.WriteString("systemctl stop babeld 2>/dev/null || true\n")
+			uninstallCmds.WriteString("systemctl disable babeld 2>/dev/null || true\n")
+			uninstallCmds.WriteString("rm -f /etc/babel/babeld.conf /etc/babeld.conf\n")
+			uninstallCmds.WriteString("rm -rf /etc/systemd/system/babeld.service.d\n")
 		}
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 3/4] Removing overlay network configuration on %s...'; ", node.NodeName))
-		uninstallCmds.WriteString("rm -f /etc/sysctl.d/99-overlay.conf; sysctl --system > /dev/null 2>&1 || true; ")
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 3/4] Removing overlay network configuration on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString("rm -f /etc/sysctl.d/99-overlay.conf\n")
+		uninstallCmds.WriteString("sysctl --system > /dev/null 2>&1 || true\n")
 		if !node.IsClient {
-			uninstallCmds.WriteString("nft delete table inet overlay-snat 2>/dev/null || true; ")
-			uninstallCmds.WriteString("iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source $(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \\K[^/]+' || echo 0.0.0.0) 2>/dev/null || true; ")
-			uninstallCmds.WriteString("systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service; ")
-			uninstallCmds.WriteString("ip link del dummy0 2>/dev/null || true; systemctl disable overlay-dummy.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-dummy.service; ")
+			uninstallCmds.WriteString("nft delete table inet overlay-snat 2>/dev/null || true\n")
+			uninstallCmds.WriteString("_snat_ip=$(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \\K[^/]+' || true)\n")
+			uninstallCmds.WriteString("[ -n \"$_snat_ip\" ] && iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source \"$_snat_ip\" 2>/dev/null || true\n")
+			uninstallCmds.WriteString("systemctl disable overlay-snat.service 2>/dev/null || true\n")
+			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-snat.service\n")
+			uninstallCmds.WriteString("ip link del dummy0 2>/dev/null || true\n")
+			uninstallCmds.WriteString("systemctl disable overlay-dummy.service 2>/dev/null || true\n")
+			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-dummy.service\n")
 		}
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on %s...'; ", node.NodeName))
-		uninstallCmds.WriteString("systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }")
-
-		// Escape single quotes for PS1 string embedding
-		psUninstallCmd := strings.ReplaceAll(uninstallCmds.String(), "'", "''")
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString("systemctl daemon-reload\n")
+		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from %s.'\n", node.NodeName))
 
 		b.WriteString(fmt.Sprintf(`    Write-Host ""
     if ($Uninstall) {
@@ -493,7 +499,8 @@ try {
             Write-Host "  ERROR: SSH connection to %s failed." -ForegroundColor Red
             $Failed++
         } else {
-            $uninstallScript = '%s'
+            $uninstallScript = @'
+%s'@
             $uninstallScript | & ssh%s %s sudo bash -s
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  ERROR: Uninstall failed on %s." -ForegroundColor Red
@@ -542,7 +549,7 @@ try {
 			node.NodeName, node.SSHTarget,
 			sshOpts, node.SSHTarget,
 			node.NodeName,
-			psUninstallCmd,
+			uninstallCmds.String(),
 			sshOpts, node.SSHTarget,
 			node.NodeName,
 			node.NodeName,
