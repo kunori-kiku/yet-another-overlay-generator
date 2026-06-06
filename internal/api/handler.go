@@ -18,6 +18,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -241,7 +242,32 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bashScript, ps1Script, err := renderer.RenderDeployScripts(topo, nil, nil)
+	// 部署脚本的卸载分支需要每条 per-peer 隧道的接口名才能逐一拆除（wg-quick down / 删除
+	// 配置），而接口名只有在完整编译后才存在于 PeerMap 中。因此本端点必须运行与 /api/compile
+	// 相同的流水线（生成密钥 → 编译 → 渲染 Babel 配置），否则生成的卸载块缺失全部 per-peer
+	// 拆除步骤（审计阻断项 D36）。
+	keys, err := generateKeys(topo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
+		return
+	}
+
+	result, err := h.compiler.Compile(topo, keys)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	// 部署脚本的 HasBabel 判定按 node.ID 查 BabelConfigs（见 renderer.RenderDeployScripts），
+	// 因此必须先按编译路径渲染出 Babel 配置，再渲染部署脚本。
+	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("渲染 Babel 配置失败: %v", err))
+		return
+	}
+	result.BabelConfigs = babelConfigs
+
+	bashScript, ps1Script, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("deploy script render: %v", err))
 		return
@@ -449,7 +475,10 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 			return nil, err
 		}
 
-		installHeader := &zip.FileHeader{Name: nodeName + ".install.sh", Method: zip.Deflate}
+		// 安装器 ZIP 条目名必须使用与部署脚本相同的规范化文件名（naming.SafeInstallerFileName），
+		// 而非原始目录名。两侧若使用不同的名称推导规则，凡是含大写、空格或特殊字符的节点
+		// 都会被写成一个名字、被部署脚本按另一个名字查找，从而被静默跳过（审计阻断项 D3/D32）。
+		installHeader := &zip.FileHeader{Name: naming.SafeInstallerFileName(nodeName), Method: zip.Deflate}
 		installHeader.SetMode(0755)
 		installWriter, err := zw.CreateHeader(installHeader)
 		if err != nil {

@@ -2,26 +2,25 @@ package renderer
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
-
-var multiHyphen = regexp.MustCompile(`-{2,}`)
 
 // DeployNodeInfo holds per-node SSH and artifact info for deploy script generation
 type DeployNodeInfo struct {
-	NodeName         string
+	NodeID            string // unique node ID; keys the remote upload path (/tmp/<NodeID>-install.sh)
+	NodeName          string
 	SafeInstallerName string // safe file name for the installer (e.g. "node-name.install.sh")
-	SSHTarget        string // ssh_alias or user@host
-	SSHPort          int
-	SSHKeyPath       string
-	HasSSH           bool
-	WgInterfaces     []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
-	HasBabel         bool     // whether this node runs Babel
-	IsClient         bool     // client nodes use wg0 instead of per-peer interfaces
+	SSHTarget         string // ssh_alias or user@host
+	SSHPort           int
+	SSHKeyPath        string
+	HasSSH            bool
+	WgInterfaces      []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
+	HasBabel          bool     // whether this node runs Babel
+	IsClient          bool     // client nodes use wg0 instead of per-peer interfaces
 }
 
 // DeployScriptConfig holds all nodes for one combined deploy script
@@ -41,10 +40,19 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 		ProjectName: topo.Project.Name,
 	}
 
-	for _, node := range topo.Nodes {
+	// Domain 索引：HasBabel 的回退判断需要按节点所属域的 routing_mode 决定，
+	// 与 shouldRunBabel 一致（见下方 D61 修复）。
+	domainMap := make(map[string]*model.Domain)
+	for i := range topo.Domains {
+		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
+	}
+
+	for i := range topo.Nodes {
+		node := topo.Nodes[i]
 		info := DeployNodeInfo{
+			NodeID:            node.ID,
 			NodeName:          node.Name,
-			SafeInstallerName: safeInstallerFileName(node.Name),
+			SafeInstallerName: naming.SafeInstallerFileName(node.Name),
 			SSHPort:           22,
 			IsClient:          node.Role == "client",
 		}
@@ -78,14 +86,17 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 		}
 
 		// Check if this node runs Babel: use compiled configs if available,
-		// otherwise fall back to role (non-client nodes always attempt Babel
-		// cleanup during uninstall even without compiled data).
+		// otherwise fall back to a domain-aware decision that mirrors
+		// shouldRunBabel (D61). The previous role-only fallback marked every
+		// non-client node as Babel-bearing, which is wrong when the node's
+		// domain uses a non-babel routing_mode — uninstall would then try to
+		// tear down a Babel daemon that was never deployed.
 		if babelConfigs != nil {
 			if _, ok := babelConfigs[node.ID]; ok {
 				info.HasBabel = true
 			}
 		} else {
-			info.HasBabel = node.Role != "client"
+			info.HasBabel = shouldRunBabel(&topo.Nodes[i], domainMap[node.DomainID])
 		}
 
 		config.Nodes = append(config.Nodes, info)
@@ -213,7 +224,13 @@ SUCCESS=0
 	for _, node := range config.Nodes {
 		b.WriteString(fmt.Sprintf("# --- Node: %s ---\n", node.NodeName))
 
+		// installerFile is the ZIP-entry / local-lookup name (canonical safe
+		// name). remoteInstaller is the remote upload path, keyed on the unique
+		// node ID so two nodes whose names sanitize identically cannot clobber
+		// each other's payload at /tmp (D31). The SCP destination, the ssh
+		// execute path, and the rm cleanup MUST all use remoteInstaller.
 		installerFile := node.SafeInstallerName
+		remoteInstaller := node.NodeID + "-install.sh"
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`echo ""
 echo "=== %s: SKIPPED (no SSH details configured) ==="
@@ -354,9 +371,9 @@ fi
 			// Clean step
 			node.NodeName,
 			sshOpts, node.SSHTarget,
-			// SCP + install
-			scpCmd, node.SSHTarget, installerFile,
-			sshOpts, node.SSHTarget, installerFile, installerFile,
+			// SCP + install (remote path keyed on node ID, D31)
+			scpCmd, node.SSHTarget, remoteInstaller,
+			sshOpts, node.SSHTarget, remoteInstaller, remoteInstaller,
 			node.NodeName,
 			node.NodeName,
 			node.NodeName,
@@ -448,7 +465,12 @@ try {
 `)
 
 	for _, node := range config.Nodes {
+		// installerFile is the ZIP-entry / local-lookup name (canonical safe
+		// name). remoteInstaller is the remote upload path, keyed on the unique
+		// node ID so identically-sanitizing names cannot clobber each other at
+		// /tmp (D31). SCP destination, ssh execute, and rm cleanup use it.
 		installerFile := node.SafeInstallerName
+		remoteInstaller := node.NodeID + "-install.sh"
 
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`    Write-Host ""
@@ -572,10 +594,10 @@ try {
 			// Clean step
 			node.NodeName,
 			sshOpts, node.SSHTarget,
-			// SCP + install
-			scpCmd, node.SSHTarget, installerFile,
+			// SCP + install (remote path keyed on node ID, D31)
+			scpCmd, node.SSHTarget, remoteInstaller,
 			node.NodeName,
-			sshOpts, node.SSHTarget, installerFile, installerFile,
+			sshOpts, node.SSHTarget, remoteInstaller, remoteInstaller,
 			node.NodeName,
 			node.NodeName,
 		))
@@ -601,24 +623,4 @@ try {
 `)
 
 	return b.String(), nil
-}
-
-// safeInstallerFileName converts a node name to a safe file name for use as an
-// installer script name. It lowercases the name, replaces spaces and unsafe
-// characters with hyphens, and appends the ".install.sh" suffix.
-func safeInstallerFileName(nodeName string) string {
-	safe := strings.ToLower(nodeName)
-	safe = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '-'
-	}, safe)
-	// Collapse multiple consecutive hyphens
-	safe = multiHyphen.ReplaceAllString(safe, "-")
-	safe = strings.Trim(safe, "-")
-	if safe == "" {
-		safe = "node"
-	}
-	return safe + ".install.sh"
 }
