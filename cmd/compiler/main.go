@@ -36,22 +36,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf(": %s (%s)\n", topo.Project.Name, topo.Project.ID)
-	fmt.Printf(": %d, : %d, : %d\n",
+	fmt.Printf("项目: %s (%s)\n", topo.Project.Name, topo.Project.ID)
+	fmt.Printf("节点数: %d, 边数: %d, 网络域数: %d\n",
 		len(topo.Nodes), len(topo.Edges), len(topo.Domains))
 
 	// （Phase 0 ， wg genkey）
 	keys := generateFakeKeys(&topo)
 
-	// 
+	// 编译拓扑
 	c := compiler.NewCompiler()
 	result, err := c.Compile(&topo, keys)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, ": %v\n", err)
+		fmt.Fprintf(os.Stderr, "编译失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("IP :\n")
+	// 编译成功后仍需向用户展示的非致命告警（NAT 不可达、无 endpoint 的边、孤立节点等）。
+	// 这些告警与 API /api/compile 返回的 warnings 同源，确保 CLI 与 API 行为一致。
+	if len(result.Warnings) > 0 {
+		fmt.Fprintf(os.Stderr, "\n编译告警 (%d 条):\n", len(result.Warnings))
+		for _, w := range result.Warnings {
+			fmt.Fprintf(os.Stderr, "  [%s] %s: %s\n", w.Level, w.Field, w.Message)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+
+	fmt.Printf("IP 分配结果:\n")
 	for _, node := range result.Topology.Nodes {
 		fmt.Printf("  %s -> %s\n", node.Name, node.OverlayIP)
 	}

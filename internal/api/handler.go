@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,19 +56,23 @@ type ValidateResponse struct {
 
 // CompileResponse
 type CompileResponse struct {
-	Topology         *model.Topology          `json:"topology"`
-	WireGuardConfigs map[string]string        `json:"wireguard_configs"`
-	BabelConfigs     map[string]string        `json:"babel_configs"`
-	SysctlConfigs    map[string]string        `json:"sysctl_configs"`
-	InstallScripts   map[string]string        `json:"install_scripts"`
-	DeployScripts    map[string]string        `json:"deploy_scripts"`
-	Manifest         compiler.CompileManifest `json:"manifest"`
+	Topology         *model.Topology             `json:"topology"`
+	WireGuardConfigs map[string]string           `json:"wireguard_configs"`
+	BabelConfigs     map[string]string           `json:"babel_configs"`
+	SysctlConfigs    map[string]string           `json:"sysctl_configs"`
+	InstallScripts   map[string]string           `json:"install_scripts"`
+	DeployScripts    map[string]string           `json:"deploy_scripts"`
+	// 编译成功后仍需向用户展示的非致命告警（NAT 不可达、无 endpoint 的边、孤立节点等）。
+	// 这些告警在编译期由语义校验产生，必须随成功响应返回，否则操作员会在绿色编译上
+	// 部署一条注定不通的隧道（审计阻断项 UX-1）。
+	Warnings []validator.ValidationError `json:"warnings,omitempty"`
+	Manifest compiler.CompileManifest    `json:"manifest"`
 }
 
 // HandleHealth
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, " GET ")
+		writeError(w, http.StatusMethodNotAllowed, "仅支持 GET 请求")
 		return
 	}
 
@@ -80,12 +85,16 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // HandleValidate
 func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, " POST ")
+		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
 		return
 	}
 
-	topo, err := readTopology(r)
+	topo, err := readTopology(w, r)
 	if err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -109,19 +118,23 @@ func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 // HandleCompile
 func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, " POST ")
+		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
 		return
 	}
 
-	topo, err := readTopology(r)
+	topo, err := readTopology(w, r)
 	if err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	keys, err := generateKeys(topo)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf(" WireGuard : %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
 		return
 	}
 
@@ -145,6 +158,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		SysctlConfigs:    result.SysctlConfigs,
 		InstallScripts:   result.InstallScripts,
 		DeployScripts:    result.DeployScripts,
+		Warnings:         result.Warnings,
 		Manifest:         result.Manifest,
 	})
 }
@@ -152,19 +166,23 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 // HandleExport
 func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, " POST ")
+		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
 		return
 	}
 
-	topo, err := readTopology(r)
+	topo, err := readTopology(w, r)
 	if err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	keys, err := generateKeys(topo)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf(" WireGuard : %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
 		return
 	}
 
@@ -179,22 +197,22 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//
+	// 创建临时目录用于写出导出产物
 	tmpDir, err := os.MkdirTemp("", "overlay-export-*")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "")
+		writeError(w, http.StatusInternalServerError, "创建临时目录失败")
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	if _, err := artifacts.Export(result, tmpDir); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf(": %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("导出产物失败: %v", err))
 		return
 	}
 
 	archiveBuf, err := createExportZip(tmpDir)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf(": %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("打包 ZIP 失败: %v", err))
 		return
 	}
 
@@ -209,12 +227,16 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 // Query parameter ?format=ps1 returns PowerShell; default is bash.
 func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, " POST ")
+		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
 		return
 	}
 
-	topo, err := readTopology(r)
+	topo, err := readTopology(w, r)
 	if err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -245,20 +267,43 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 
 // ---  ---
 
-func readTopology(r *http.Request) (*model.Topology, error) {
+// maxRequestBodyBytes 限制每个 POST 请求体的最大长度（4 MiB）。
+// 超过该上限的请求体不会被缓冲到内存，而是被 http.MaxBytesReader 截断并报错，
+// 由调用方映射为 413 Payload Too Large，防止无上限的 io.ReadAll 造成 OOM DoS（D34）。
+const maxRequestBodyBytes int64 = 4 << 20 // 4 MiB
+
+// errBodyTooLarge 标识请求体超出 maxRequestBodyBytes 的哨兵错误。
+// 调用方据此返回 413（http.StatusRequestEntityTooLarge），其余读取/解析错误返回 400。
+var errBodyTooLarge = fmt.Errorf("请求体超出大小上限（最大 %d 字节）", maxRequestBodyBytes)
+
+// isBodyTooLarge 判断 readTopology 返回的错误是否为请求体过大。
+func isBodyTooLarge(err error) bool {
+	return errors.Is(err, errBodyTooLarge)
+}
+
+// readTopology 读取并解析请求体中的 Topology。
+// 请求体被 http.MaxBytesReader 限制在 maxRequestBodyBytes 以内；
+// 超限时返回 errBodyTooLarge（调用方映射为 413），其余错误为可读性/格式问题（映射为 400）。
+func readTopology(w http.ResponseWriter, r *http.Request) (*model.Topology, error) {
+	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return nil, fmt.Errorf(": %w", err)
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, errBodyTooLarge
+		}
+		return nil, fmt.Errorf("读取请求体失败: %w", err)
 	}
-	defer r.Body.Close()
 
 	if len(body) == 0 {
-		return nil, fmt.Errorf("")
+		return nil, fmt.Errorf("请求体为空")
 	}
 
 	var topo model.Topology
 	if err := json.Unmarshal(body, &topo); err != nil {
-		return nil, fmt.Errorf("JSON : %w", err)
+		return nil, fmt.Errorf("JSON 解析失败: %w", err)
 	}
 
 	return &topo, nil
@@ -273,7 +318,7 @@ func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 			if node.WireGuardPrivateKey != "" {
 				privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
 				if err != nil {
-					return nil, fmt.Errorf(" %s : %w", node.ID, err)
+					return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
 				}
 
 				node.WireGuardPrivateKey = privateKey.String()
@@ -287,7 +332,7 @@ func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 
 			privateKey, err := wgtypes.GeneratePrivateKey()
 			if err != nil {
-				return nil, fmt.Errorf(" %s : %w", node.ID, err)
+				return nil, fmt.Errorf("为节点 %s 生成 WireGuard 私钥失败: %w", node.ID, err)
 			}
 
 			node.WireGuardPrivateKey = privateKey.String()
@@ -301,10 +346,10 @@ func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 
 		privateKey, err := wgtypes.GeneratePrivateKey()
 		if err != nil {
-			return nil, fmt.Errorf(" %s : %w", node.ID, err)
+			return nil, fmt.Errorf("为节点 %s 生成 WireGuard 私钥失败: %w", node.ID, err)
 		}
 
-		// ：，
+		// 非固定密钥：不在拓扑中持久化密钥，仅在本次渲染的内存密钥表中使用
 		node.WireGuardPrivateKey = ""
 		node.WireGuardPublicKey = ""
 
@@ -320,7 +365,7 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
-		return fmt.Errorf(" WireGuard : %w", err)
+		return fmt.Errorf("渲染 WireGuard 配置失败: %w", err)
 	}
 	result.WireGuardConfigs = wgConfigs
 
@@ -328,7 +373,7 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 	for nodeID, clientInfo := range result.ClientConfigs {
 		config, err := renderer.RenderClientWireGuardConfig(clientInfo)
 		if err != nil {
-			return fmt.Errorf(" client %s WireGuard : %w", clientInfo.NodeName, err)
+			return fmt.Errorf("渲染 client %s 的 WireGuard 配置失败: %w", clientInfo.NodeName, err)
 		}
 		result.WireGuardConfigs[nodeID+":wg0"] = config
 	}
@@ -336,14 +381,14 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 	// Babel
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
 	if err != nil {
-		return fmt.Errorf(" Babel : %w", err)
+		return fmt.Errorf("渲染 Babel 配置失败: %w", err)
 	}
 	result.BabelConfigs = babelConfigs
 
 	// Sysctl
 	sysctlConfigs, err := renderer.RenderAllSysctlConfigs(result.Topology)
 	if err != nil {
-		return fmt.Errorf(" sysctl : %w", err)
+		return fmt.Errorf("渲染 sysctl 配置失败: %w", err)
 	}
 	result.SysctlConfigs = sysctlConfigs
 
@@ -352,7 +397,7 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 		if node.Role == "client" {
 			script, err := renderer.RenderClientInstallScript(&node)
 			if err != nil {
-				return fmt.Errorf(" client %s : %w", node.Name, err)
+				return fmt.Errorf("渲染 client %s 的安装脚本失败: %w", node.Name, err)
 			}
 			result.InstallScripts[node.ID] = script
 		} else {
@@ -360,7 +405,7 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 			_, hasBabel := result.BabelConfigs[node.ID]
 			script, err := renderer.RenderInstallScript(&node, peers, hasBabel)
 			if err != nil {
-				return fmt.Errorf(" %s : %w", node.Name, err)
+				return fmt.Errorf("渲染节点 %s 的安装脚本失败: %w", node.Name, err)
 			}
 			result.InstallScripts[node.ID] = script
 		}

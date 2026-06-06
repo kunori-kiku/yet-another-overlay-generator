@@ -120,6 +120,9 @@ export interface CompileResponse {
   install_scripts: Record<string, string>;
   deploy_scripts: Record<string, string>;
   manifest: CompileManifest;
+  // 非致命提示（双重 NAT、缺少端点的边、孤立节点等）。
+  // 编译路径会运行语义校验并把这些 warning 一并返回，UI 在编译成功后展示。
+  warnings?: ValidationError[];
 }
 
 export interface CompileHistoryEntry {

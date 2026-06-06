@@ -108,9 +108,15 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 	ones, bits := ipNet.Mask.Size()
 	hostBits := bits - ones
 
-	//  /32  /128，
+	//  /32  /128，无可分配主机位
 	if hostBits == 0 {
-		return "", fmt.Errorf("CIDR %s ", cidr)
+		return "", fmt.Errorf("CIDR %s 没有可分配的主机地址（前缀过长）", cidr)
+	}
+
+	// 主机位溢出防御：uint32(1) << 32 会溢出，导致退化的循环边界。
+	// 在 schema 校验加入 CIDR 大小下限后此分支不可达，保留为安全网。
+	if hostBits >= 32 {
+		return "", fmt.Errorf("CIDR %s 主机位过多，无法枚举（需为 IPv4 且前缀不小于 /8）", cidr)
 	}
 
 	totalHosts := uint32(1) << uint(hostBits)
@@ -126,7 +132,10 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 		endHost = totalHosts
 	}
 
-	networkIP := ipToUint32(ipNet.IP.To4())
+	networkIP, err := ipToUint32(ipNet.IP)
+	if err != nil {
+		return "", fmt.Errorf("CIDR %s 不是有效的 IPv4 网络地址: %w", cidr, err)
+	}
 
 	for h := startHost; h < endHost; h++ {
 		candidateUint := networkIP + h
@@ -161,11 +170,15 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 	return "", fmt.Errorf("CIDR %s  IP ", cidr)
 }
 
-func ipToUint32(ip net.IP) uint32 {
-	if len(ip) == 4 {
-		return binary.BigEndian.Uint32(ip)
+// ipToUint32 将 IPv4 地址转换为 uint32。
+// 深度防御：对 nil 或无法表示为 4 字节 IPv4 的地址返回错误，
+// 而不是越界切片导致 panic（IPv6 CIDR 不应到达 IPv4-only 的分配器）。
+func ipToUint32(ip net.IP) (uint32, error) {
+	v4 := ip.To4()
+	if v4 == nil || len(v4) != 4 {
+		return 0, fmt.Errorf("地址 %q 不是有效的 IPv4 地址", ip.String())
 	}
-	return binary.BigEndian.Uint32(ip[12:16])
+	return binary.BigEndian.Uint32(v4), nil
 }
 
 func uint32ToIP(n uint32) net.IP {
