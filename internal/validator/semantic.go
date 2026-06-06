@@ -40,6 +40,9 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// Client 边验证
 	validateClientEdges(topo, nodeMap, result)
 
+	// Edge endpoint 与目标节点 public endpoints 一致性检查
+	validateEdgeEndpointConsistency(topo, nodeMap, result)
+
 	return result
 }
 
@@ -271,6 +274,38 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 		if len(node.ExtraPrefixes) > 0 {
 			result.AddWarning(fmt.Sprintf("node.%s.extra_prefixes", node.ID),
 				fmt.Sprintf("Client %s has extra_prefixes set but clients don't announce routes", node.Name))
+		}
+	}
+}
+
+// validateEdgeEndpointConsistency 检查 edge 的 endpoint_host 是否与目标节点的 public endpoints 一致。
+// 当一个启用的 edge 设置了 endpoint_host，目标节点也声明了至少一个 public endpoint，
+// 但目标节点的所有 public_endpoints[].host 都不等于该 endpoint_host 时，发出警告——
+// 这通常意味着 edge 上的快照在节点 endpoint 被编辑后变得陈旧。
+// 仅警告而非报错：在 NAT/端口转发或 hairpin 场景下，dial 的 host 与节点自身声明的 host 可以合法地不同。
+func validateEdgeEndpointConsistency(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	for i, edge := range topo.Edges {
+		if !edge.IsEnabled || edge.EndpointHost == "" {
+			continue
+		}
+
+		toNode := nodeMap[edge.ToNodeID]
+		if toNode == nil || len(toNode.PublicEndpoints) == 0 {
+			continue
+		}
+
+		matched := false
+		for _, ep := range toNode.PublicEndpoints {
+			if ep.Host == edge.EndpointHost {
+				matched = true
+				break
+			}
+		}
+
+		if !matched {
+			result.AddWarning(fmt.Sprintf("edges[%d].endpoint_host", i),
+				fmt.Sprintf("Edge %s dials %s but target %s has no matching public endpoint (the endpoint snapshot may be stale after a node edit)",
+					edge.ID, edge.EndpointHost, toNode.Name))
 		}
 	}
 }

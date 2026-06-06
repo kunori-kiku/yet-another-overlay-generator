@@ -68,7 +68,6 @@
       "to_node_id": "node-2",
       "type": "direct",
       "endpoint_host": "203.0.113.2",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true
     },
@@ -78,7 +77,6 @@
       "to_node_id": "node-1",
       "type": "direct",
       "endpoint_host": "203.0.113.1",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true
     },
@@ -88,7 +86,6 @@
       "to_node_id": "node-3",
       "type": "direct",
       "endpoint_host": "203.0.113.3",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true
     },
@@ -98,7 +95,6 @@
       "to_node_id": "node-1",
       "type": "direct",
       "endpoint_host": "203.0.113.1",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true
     },
@@ -108,7 +104,6 @@
       "to_node_id": "node-3",
       "type": "direct",
       "endpoint_host": "203.0.113.3",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true
     },
@@ -118,7 +113,6 @@
       "to_node_id": "node-2",
       "type": "direct",
       "endpoint_host": "203.0.113.2",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true
     }

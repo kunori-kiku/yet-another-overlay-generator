@@ -68,7 +68,6 @@
       "to_node_id": "hub-1",
       "type": "public-endpoint",
       "endpoint_host": "198.51.100.1",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true,
       "notes": "NAT 客户端 A 主动连接公网 Hub"
@@ -79,7 +78,6 @@
       "to_node_id": "hub-1",
       "type": "public-endpoint",
       "endpoint_host": "198.51.100.1",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true,
       "notes": "NAT 客户端 B 主动连接公网 Hub"

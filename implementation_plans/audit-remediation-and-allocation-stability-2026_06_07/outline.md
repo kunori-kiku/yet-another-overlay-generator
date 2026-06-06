@@ -157,7 +157,7 @@ Each milestone = one plan file = one session = one PR. Detail lives in the plan 
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-1 | pending | — | |
+| plan-1 | in-review | [#3](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/3) | spec freeze + CI |
 | plan-2 | pending | — | |
 | plan-3 | pending | — | |
 | plan-4 | pending | — | |

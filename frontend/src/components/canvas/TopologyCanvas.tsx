@@ -242,13 +242,14 @@ export function TopologyCanvas() {
         const targetNode = topoNodes.find((n) => n.id === params.target);
         const preferredEndpoint = targetNode?.public_endpoints?.[0];
 
+        // 只填充 endpoint_host（目标节点的可达性提示），endpoint_port 保持为空 →
+        // 由后端作为唯一端口权威自动分配监听端口。仅当运营商显式输入端口时才视为 NAT 覆盖。
         addTopoEdge({
           id,
           from_node_id: params.source,
           to_node_id: params.target,
           type: 'direct',
           endpoint_host: preferredEndpoint?.host,
-          endpoint_port: preferredEndpoint?.port,
           transport: 'udp',
           is_enabled: true,
         });
