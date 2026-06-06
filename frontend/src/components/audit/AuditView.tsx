@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import * as diff from 'diff';
+import type { CompileResponse } from '../../types/topology';
 
 export function AuditView() {
   const history = useTopologyStore((s) => s.history);
@@ -39,7 +40,7 @@ export function AuditView() {
     );
   };
 
-  const getFileContent = (result: any) => {
+  const getFileContent = (result: CompileResponse | null | undefined) => {
     if (!result || !selectedNodeFileId) return '';
     // Format: "nodeId:fileType" or "nodeId:wg:interfaceName"
     const parts = selectedNodeFileId.split(':');
