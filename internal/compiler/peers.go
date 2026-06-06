@@ -65,6 +65,10 @@ type PeerInfo struct {
 
 	// Client 的 overlay IP（仅当 IsClientPeer=true 时有值，用于 PostUp 路由注入）
 	ClientOverlayIP string
+
+	// 该链路的 Babel rxcost 覆盖值，由对应 edge 推导（D63）。
+	// 0 表示采用角色 preset 的默认 cost（由 Babel 渲染器决定）。
+	LinkCost int
 }
 
 // DerivePeers 根据 Edge 拓扑推导每个节点的 WireGuard Peer 列表
@@ -345,6 +349,9 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		ifaceName := wgInterfaceName(toNode.Name)
 		allowedIPs := []string{"0.0.0.0/0", "::/0"}
 
+		// 该链路的 rxcost 覆盖值（D63）：正向与反向 peer 共用同一条 edge，因此取同一值。
+		linkCost := deriveLinkCost(&edge)
+
 		// 如果 toNode 是 client，创建 router 侧的带 IsClientPeer 标记的 PeerInfo
 		isToClient := toNode.Role == "client"
 
@@ -364,6 +371,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			RemoteLinkLocal:     remoteLL,
 			IsClientPeer:        isToClient,
 			ClientOverlayIP:     "",
+			LinkCost:            linkCost,
 		}
 		if isToClient {
 			peer.AllowedIPs = []string{toNode.OverlayIP + "/32"}
@@ -444,6 +452,8 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				RemoteTransitIP:     revRemoteTransit,
 				LocalLinkLocal:      revLocalLL,
 				RemoteLinkLocal:     revRemoteLL,
+				// 反向 peer 与正向共用同一条 edge，沿用同一 rxcost 覆盖值（D63）。
+				LinkCost: linkCost,
 			}
 
 			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)
@@ -486,6 +496,22 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 	}
 
 	return ip1.String(), ip2.String(), nil
+}
+
+// deriveLinkCost 从 edge 推导该链路的 Babel rxcost 覆盖值（D63）。
+// 优先使用 Priority（>0），否则退回 Weight（>0），两者皆未设置时返回 0
+// （0 表示交由角色 preset 的默认 cost 处理，渲染器据此决定是否省略 rxcost token）。
+func deriveLinkCost(edge *model.Edge) int {
+	if edge == nil {
+		return 0
+	}
+	if edge.Priority > 0 {
+		return edge.Priority
+	}
+	if edge.Weight > 0 {
+		return edge.Weight
+	}
+	return 0
 }
 
 // allocateLinkLocalPair 根据序号分配一对 IPv6 link-local 地址
@@ -590,11 +616,6 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 		nodeMap[topo.Nodes[i].ID] = &topo.Nodes[i]
 	}
 
-	domainMap := make(map[string]*model.Domain)
-	for i := range topo.Domains {
-		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
-	}
-
 	for _, node := range topo.Nodes {
 		if node.Role != "client" {
 			continue
@@ -647,10 +668,30 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			}
 		}
 
-		// 域 CIDR
+		// AllowedIPs 前缀集合（D30，Decision 6）：
+		// client 的 wg0 是它通往整个 overlay 的唯一隧道，因此 AllowedIPs 不能只覆盖
+		// 自身所在域，否则跨域 overlay、router 的域外 /32、以及 transit 网段都会在 client
+		// 侧黑洞。这里取「所有域的 CIDR」并集「每个域解析后的 transit CIDR」（domain.TransitCIDR
+		// 为空时回退默认 10.10.0.0/24，与 allocateTransitPair 的解析规则一致）。
+		// 按 topo.Domains 的切片顺序遍历以保证确定性，并去重。
 		var domainCIDRs []string
-		if domain, ok := domainMap[node.DomainID]; ok && domain.CIDR != "" {
-			domainCIDRs = append(domainCIDRs, domain.CIDR)
+		seenCIDR := make(map[string]bool)
+		appendCIDR := func(cidr string) {
+			if cidr == "" || seenCIDR[cidr] {
+				return
+			}
+			seenCIDR[cidr] = true
+			domainCIDRs = append(domainCIDRs, cidr)
+		}
+		for i := range topo.Domains {
+			appendCIDR(topo.Domains[i].CIDR)
+		}
+		for i := range topo.Domains {
+			transitCIDR := topo.Domains[i].TransitCIDR
+			if transitCIDR == "" {
+				transitCIDR = "10.10.0.0/24"
+			}
+			appendCIDR(transitCIDR)
 		}
 
 		// Client 监听端口

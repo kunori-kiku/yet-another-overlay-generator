@@ -84,7 +84,10 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 		return
 	}
 
-	for i, domain := range topo.Domains {
+	for i := range topo.Domains {
+		// 通过下标取指针访问，确保对 RoutingMode 等字段的归一写回能持久化进拓扑对象
+		// （range 出的副本写回不会生效，见 Spec C 的 round-trip 要求）。
+		domain := &topo.Domains[i]
 		prefix := fmt.Sprintf("domains[%d]", i)
 
 		if domain.ID == "" {
@@ -122,11 +125,24 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 				fmt.Sprintf(": %s, : auto, manual", domain.AllocationMode))
 		}
 
-		// RoutingMode 
-		validRoutingModes := map[string]bool{"static": true, "babel": true, "none": true}
-		if domain.RoutingMode != "" && !validRoutingModes[domain.RoutingMode] {
+		// RoutingMode 归一化与校验（D2/D72，Spec C：docs/spec/compiler/routing-modes.md）。
+		// 先将空值归一为 babel 并写回拓扑对象，使其能 round-trip（编译结果与持久化拓扑都
+		// 显式携带 babel），消除「空 routing_mode 静默关闭路由守护进程却编译成功」的失败模式。
+		// 枚举校验必须在归一之后执行，空值才无法绕过它。
+		if domain.RoutingMode == "" {
+			domain.RoutingMode = "babel"
+		}
+		// babel 是当前唯一实现的路由模式；static 与 none 为保留值，尚未实现路由安装器，
+		// 直接拒绝而非渲染出零路由的死 overlay。
+		switch domain.RoutingMode {
+		case "babel":
+			// 唯一实现的模式，放行。
+		case "static", "none":
 			result.AddError(prefix+".routing_mode",
-				fmt.Sprintf(": %s, : static, babel, none", domain.RoutingMode))
+				fmt.Sprintf("路由模式 %s 尚未实现：当前仅支持 babel（唯一已实现的路由模式）", domain.RoutingMode))
+		default:
+			result.AddError(prefix+".routing_mode",
+				fmt.Sprintf("路由模式无效: %s，当前仅支持 babel（唯一已实现的路由模式）", domain.RoutingMode))
 		}
 
 		// ReservedRanges 校验：每项需为可解析的 CIDR 或 IP，且必须为 IPv4
@@ -223,7 +239,9 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 }
 
 func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
-	for i, edge := range topo.Edges {
+	for i := range topo.Edges {
+		// 通过下标取指针访问，确保对 Transport 等字段的归一写回能持久化进拓扑对象。
+		edge := &topo.Edges[i]
 		prefix := fmt.Sprintf("edges[%d]", i)
 
 		if edge.ID == "" {
@@ -245,13 +263,16 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 				fmt.Sprintf(": %s", edge.Type))
 		}
 
-		// Transport 
-		if edge.Transport != "" {
-			validTransports := map[string]bool{"udp": true, "tcp": true}
-			if !validTransports[edge.Transport] {
-				result.AddError(prefix+".transport",
-					fmt.Sprintf(": %s, : udp, tcp", edge.Transport))
-			}
+		// Transport 归一化与校验（D72，Spec C）。
+		// 先将空值归一为 udp 并写回拓扑对象，再做枚举校验——与 routing_mode 同样的归一模式，
+		// 使枚举校验在归一之后执行。
+		if edge.Transport == "" {
+			edge.Transport = "udp"
+		}
+		validTransports := map[string]bool{"udp": true, "tcp": true}
+		if !validTransports[edge.Transport] {
+			result.AddError(prefix+".transport",
+				fmt.Sprintf("传输协议无效: %s，可选值: udp, tcp", edge.Transport))
 		}
 
 		// EndpointPort 

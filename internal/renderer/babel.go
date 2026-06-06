@@ -5,6 +5,11 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
+// babelLocalPort 是 babeld 控制套接字（local-port）的默认端口。
+// Spec（docs/spec/compiler/routing-modes.md「Role-preset timers and control port」）要求
+// 它来自一个带文档说明的命名常量，而不是模板里的字面量，以便统一调整（dossier D78）。
+const babelLocalPort = 33123
+
 // BabelConfig Babel 配置
 type BabelConfig struct {
 	// 节点信息
@@ -14,11 +19,31 @@ type BabelConfig struct {
 	// Babel router-id（MAC-48 格式）
 	RouterID string
 
+	// babeld 控制套接字端口（来自 babelLocalPort 常量）
+	LocalPort int
+
+	// 接口计时器（来自角色预设；0 = 省略对应 token，使用 babeld 内置默认）。
+	HelloInterval  int
+	UpdateInterval int
+
 	// Babel 绑定的 WireGuard 接口列表
 	Interfaces []BabelInterface
 
-	// 重分发前缀
-	RedistributePrefixes []string
+	// LocalRedistributePrefixes：走 `redistribute local ip <prefix> allow` 的前缀。
+	// `redistribute local` 只匹配内核 local/connected 路由，因此这里只放当前
+	// 在节点上确有对应内核路由（或属于已知延期项）的类别：
+	//   - self-/32      ：dummy0 上的 overlay IP（已部署集群上唯一真正生效的路径，受保护不变量）
+	//   - client-/32    ：router 侧通过 PostUp 的 ip route replace 注入的 client overlay IP
+	//   - domain-CIDR   ：聚合路由在任何节点上都没有对应内核路由，属 plan-6.5 延期项，
+	//                     按延期决策保持当前无操作 local 行不变（见下方写入处的注释）
+	LocalRedistributePrefixes []string
+
+	// KernelRedistributePrefixes：走 `redistribute ip <prefix> allow`（不带 local 关键字）的前缀。
+	// 这些前缀在节点上有真实的内核路由，但不是 dummy0 的连接路由，因此必须用非 local 形式
+	// 让 babeld 匹配真实内核路由（dossier D40/D41）：
+	//   - 默认路由 0.0.0.0/0 ：网关上真实的 WAN 默认路由
+	//   - extra_prefixes     ：节点真实 LAN 网段的连接路由
+	KernelRedistributePrefixes []string
 
 	// 是否启用 IP 转发
 	EnableForwarding bool
@@ -32,7 +57,7 @@ type BabelInterface struct {
 	// 类型：tunnel（WireGuard 点对点接口应该用 tunnel）
 	Type string
 
-	// rxcost（可选，0 表示使用默认值）
+	// rxcost（可选，0 表示省略 rxcost token，使用 babeld 内置默认值）
 	Cost int
 }
 
@@ -41,19 +66,22 @@ const babelConfigTemplate = `# Babel configuration for {{ .NodeName }}
 # Role: {{ .NodeRole }}
 
 router-id {{ .RouterID }}
-local-port 33123
+local-port {{ .LocalPort }}
 skip-kernel-setup false
 
 # Route redistribution
-{{ range .RedistributePrefixes -}}
+{{ range .LocalRedistributePrefixes -}}
 redistribute local ip {{ . }} allow
+{{ end -}}
+{{ range .KernelRedistributePrefixes -}}
+redistribute ip {{ . }} allow
 {{ end -}}
 # Deny all other local routes
 redistribute local deny
 
 # WireGuard tunnel interfaces
 {{ range .Interfaces -}}
-interface {{ .Name }} type {{ .Type }} hello-interval 4 update-interval 16{{ if gt .Cost 0 }} rxcost {{ .Cost }}{{ end }}
+interface {{ .Name }} type {{ .Type }}{{ if gt $.HelloInterval 0 }} hello-interval {{ $.HelloInterval }}{{ end }}{{ if gt $.UpdateInterval 0 }} update-interval {{ $.UpdateInterval }}{{ end }}{{ if gt .Cost 0 }} rxcost {{ .Cost }}{{ end }}
 {{ end }}`
 
 // RenderBabelConfig 渲染单个节点的 Babel 配置
@@ -77,12 +105,26 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		NodeName:         node.Name,
 		NodeRole:         node.Role,
 		RouterID:         routerID,
+		LocalPort:        babelLocalPort,
+		HelloInterval:    preset.HelloInterval,
+		UpdateInterval:   preset.UpdateInterval,
 		EnableForwarding: semantics.EnableForwarding,
 	}
 
-	// 每个 peer 对应一个 WireGuard tunnel 接口
+	// 每个 peer 对应一个 WireGuard tunnel 接口。
+	// D73：连接 client 的隧道（IsClientPeer）必须跳过——client 不跑 babeld，
+	// 把该隧道声明为 babel 接口会让 router 永远向其单播 hello/update。client 的
+	// 可达性改由下方 client-/32 重分发承载。
 	for _, p := range peers {
+		if p.IsClientPeer {
+			continue
+		}
+		// D63：rxcost 优先取边上的 LinkCost（> 0 表示操作员显式设置了优先级/权重），
+		// 未设置（0）时回退到角色预设的 DefaultCost。
 		cost := preset.DefaultCost
+		if p.LinkCost > 0 {
+			cost = p.LinkCost
+		}
 		iface := BabelInterface{
 			Name: p.InterfaceName,
 			Type: "tunnel",
@@ -91,27 +133,40 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		config.Interfaces = append(config.Interfaces, iface)
 	}
 
-	// 重分发规则
+	// ===== 重分发规则 =====
+	//
+	// self-/32：走 `redistribute local`——dummy0 携带 OverlayIP/32 的连接路由，
+	// 是当前在已部署集群上唯一真正生效的宣告路径，必须逐字节保持不变（受保护不变量）。
 	if semantics.BabelAnnounce.AnnounceSelf && node.OverlayIP != "" {
-		config.RedistributePrefixes = append(config.RedistributePrefixes, node.OverlayIP+"/32")
+		config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, node.OverlayIP+"/32")
 	}
 
+	// domain-CIDR 聚合：任何节点上都没有对应内核路由（没有节点拥有该聚合）。
+	// 修复其匹配问题需要在安装脚本里锚定一条聚合本地路由，属于 plan-6.5 延期项
+	// （见 docs/spec/compiler/routing-modes.md 的 stop-loss 说明）。在此之前，
+	// 保持其当前的 `redistribute local` 无操作行不变，不改成非 local 形式。
 	if semantics.BabelAnnounce.AnnounceDomainCIDR && domain != nil && domain.CIDR != "" {
-		config.RedistributePrefixes = append(config.RedistributePrefixes, domain.CIDR)
+		config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, domain.CIDR)
 	}
 
+	// extra_prefixes：对应节点真实 LAN 网段的内核连接路由，因此走非 local 形式
+	// `redistribute ip <prefix> allow`，让 babeld 匹配真实内核路由（D41）。
 	if semantics.BabelAnnounce.AnnounceExtraPrefixes {
-		config.RedistributePrefixes = append(config.RedistributePrefixes, node.ExtraPrefixes...)
+		config.KernelRedistributePrefixes = append(config.KernelRedistributePrefixes, node.ExtraPrefixes...)
 	}
 
+	// 默认路由 0.0.0.0/0：网关上真实的 WAN 默认路由，走非 local 形式让 babeld
+	// 匹配该真实内核路由，从而把出口宣告进 overlay（D40）。
 	if semantics.BabelAnnounce.AnnounceDefault {
-		config.RedistributePrefixes = append(config.RedistributePrefixes, "0.0.0.0/0")
+		config.KernelRedistributePrefixes = append(config.KernelRedistributePrefixes, "0.0.0.0/0")
 	}
 
-	// Redistribute client overlay IPs on router nodes with client peers
+	// client-/32：router 侧通过隧道 PostUp 的 ip route replace 注入了 client overlay IP
+	// 的内核路由，因此走 `redistribute local`——这是 client 可达性的承载方式
+	// （client 自身不跑 babeld）。
 	for _, p := range peers {
 		if p.IsClientPeer && p.ClientOverlayIP != "" {
-			config.RedistributePrefixes = append(config.RedistributePrefixes, p.ClientOverlayIP+"/32")
+			config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, p.ClientOverlayIP+"/32")
 		}
 	}
 
