@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -73,30 +73,26 @@ export function TopologyCanvas() {
     return m;
   }, [compileResult]);
 
-  // 将拓扑节点转为 React Flow 节点
+  // 将拓扑节点转为 React Flow 节点。
+  // 纯计算：渲染期间不读写 positionMap ref（react-hooks/refs 约束）。
+  // 这里只给出默认网格位置；已拖拽/持久化的位置在下方同步 effect 中合并。
   const flowNodes: FlowNode[] = useMemo(
     () =>
-      topoNodes.map((n, i) => {
-        // Use persisted position if available, otherwise assign grid position
-        if (!positionMap.current[n.id]) {
-          positionMap.current[n.id] = {
-            x: 100 + (i % 4) * 280,
-            y: 100 + Math.floor(i / 4) * 250,
-          };
-        }
-        return {
-          id: n.id,
-          type: 'custom',
-          position: positionMap.current[n.id],
-          data: {
-            label: n.name,
-            role: n.role,
-            overlayIp: n.overlay_ip || '',
-            domainName: domainMap[n.domain_id] || '',
-            interfaces: nodeInterfaceMap[n.id] || [],
-          },
-        };
-      }),
+      topoNodes.map((n, i) => ({
+        id: n.id,
+        type: 'custom',
+        position: {
+          x: 100 + (i % 4) * 280,
+          y: 100 + Math.floor(i / 4) * 250,
+        },
+        data: {
+          label: n.name,
+          role: n.role,
+          overlayIp: n.overlay_ip || '',
+          domainName: domainMap[n.domain_id] || '',
+          interfaces: nodeInterfaceMap[n.id] || [],
+        },
+      })),
     [topoNodes, domainMap, nodeInterfaceMap]
   );
 
@@ -216,10 +212,17 @@ export function TopologyCanvas() {
     [onEdgesChange, removeTopoEdge]
   );
 
-  // Sync data changes (name, role, interfaces, etc.) without overwriting positions
-  useMemo(() => {
+  // 数据变更（名称、角色、接口等）同步进 React Flow 状态，但不覆盖拖拽位置。
+  // setState 与 positionMap ref 的读写属于副作用，必须在 effect 中执行，
+  // 而不是渲染期间的 useMemo（修复审计发现 D18：渲染期副作用导致节点
+  // 在无关编辑后跳回旧坐标）。
+  useEffect(() => {
     setNodes((currentNodes) =>
       flowNodes.map((fn) => {
+        // 首次见到该节点时，把默认网格位置登记为持久化位置
+        if (!positionMap.current[fn.id]) {
+          positionMap.current[fn.id] = fn.position;
+        }
         const existing = currentNodes.find((n) => n.id === fn.id);
         return {
           ...fn,
@@ -229,7 +232,7 @@ export function TopologyCanvas() {
     );
   }, [flowNodes, setNodes]);
 
-  useMemo(() => {
+  useEffect(() => {
     setEdges(flowEdges);
   }, [flowEdges, setEdges]);
 
