@@ -230,6 +230,12 @@ export function RightPanel() {
                 type="text"
                 value={selectedNode.name}
                 onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
+                pattern="^[A-Za-z0-9 ._-]+$"
+                title={txt(
+                  language,
+                  '仅允许字母、数字、空格、点(.)、下划线(_)、连字符(-)，禁止引号、反引号、$、; 等 shell 元字符',
+                  'Only letters, digits, space, . _ - are allowed; no quotes, backticks, $, ; or other shell metacharacters',
+                )}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
@@ -453,6 +459,12 @@ export function RightPanel() {
                         ssh_alias: e.target.value || undefined,
                       })
                     }
+                    pattern="^[A-Za-z0-9._:@-]+$"
+                    title={txt(
+                      language,
+                      '仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符',
+                      'Only letters, digits, . _ : @ - are allowed; no whitespace or shell metacharacters',
+                    )}
                     placeholder={txt(language, '如 my-server', 'e.g. my-server')}
                     className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                   />
@@ -470,6 +482,12 @@ export function RightPanel() {
                         ssh_host: e.target.value || undefined,
                       })
                     }
+                    pattern="^[A-Za-z0-9._:@-]+$"
+                    title={txt(
+                      language,
+                      '仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符',
+                      'Only letters, digits, . _ : @ - are allowed; no whitespace or shell metacharacters',
+                    )}
                     placeholder={txt(language, 'IP 或域名', 'IP or hostname')}
                     className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                   />
@@ -499,6 +517,12 @@ export function RightPanel() {
                           ssh_user: e.target.value || undefined,
                         })
                       }
+                      pattern="^[A-Za-z0-9._:@-]+$"
+                      title={txt(
+                        language,
+                        '仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符',
+                        'Only letters, digits, . _ : @ - are allowed; no whitespace or shell metacharacters',
+                      )}
                       placeholder="root"
                       className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                     />

@@ -32,8 +32,11 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// 节点名称冲突（原始名称、安装脚本文件名、WireGuard 接口名）
 	validateNodeNameCollisions(topo, result)
 
-	//  listen port 
+	//  listen port
 	validateListenPortConflicts(topo, result)
+
+	// 生效监听端口范围：每节点 base..base+(对端接口数-1) 是否越界，以及同主机节点范围是否重叠
+	validateEffectivePortRanges(topo, result)
 
 	// 
 	detectIsolatedNodes(topo, result)
@@ -240,6 +243,146 @@ func validateListenPortConflicts(topo *model.Topology, result *ValidationResult)
 					node.Name, existingNode, node.Hostname, node.ListenPort))
 		} else {
 			seen[hp] = node.Name
+		}
+	}
+}
+
+// defaultListenPort 是节点未显式设置 listen_port 时编译器采用的基准端口，
+// 必须与 peers.go Pass 1 中的默认值（51820）保持一致。
+const defaultListenPort = 51820
+
+// effectivePortRange 描述一个节点在 per-peer 接口模型下实际占用的监听端口范围。
+//
+//	[base, base+count-1]
+//
+// 其中 base 为节点的基准 listen_port（未设置时取 defaultListenPort），
+// count 为该节点作为「非 client 端点」参与的去重节点对数量——
+// 这正是编译器为它分配的 WireGuard 接口个数。
+type effectivePortRange struct {
+	nodeIndex int    // 节点在 topo.Nodes 中的下标，用于定位错误字段
+	nodeName  string // 节点名称，用于错误消息
+	hostname  string // 节点 hostname（可能为空）
+	base      int    // 基准监听端口
+	count     int    // 该节点占用的接口数（= 去重对端数）
+}
+
+// high 返回该节点占用的最高监听端口（base + count - 1）。
+func (r effectivePortRange) high() int {
+	return r.base + r.count - 1
+}
+
+// validateEffectivePortRanges 校验 per-peer 接口模型下每个节点的「生效监听端口范围」
+// （D47 + D11 的一部分）。
+//
+// 编译器为每条启用边的每个非 client 端点分配一个独立 WireGuard 接口，监听端口从
+// 节点基准端口起按 base+offset 递增（见 peers.go Pass 1 中 nodePortOffset 的逻辑）。
+// 这里完全镜像该计数方式：
+//   - 仅统计启用且两端节点均存在的边；
+//   - 以无序节点对去重（任一方向已计入则跳过），与 addedPairs 一致；
+//   - 每个去重节点对，为其两端中的「非 client」端点各 +1。
+//
+// 计算出每个节点的占用区间 [base, base+count-1] 后：
+//  1. 当区间最高端口超过 65535 时报错（D11：base+offset 越界会被原样渲染进 WireGuard 配置）。
+//  2. 当两个共享同一非空 hostname 的节点区间发生重叠时报错（D47：今日仅对完全相同的 base 端口告警，
+//     无法发现共置节点的范围交叠）。
+func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult) {
+	// 节点索引（与 peers.go 一致：以 ID 查找）。
+	nodeMap := make(map[string]*model.Node)
+	nodeIndex := make(map[string]int)
+	for i := range topo.Nodes {
+		nodeMap[topo.Nodes[i].ID] = &topo.Nodes[i]
+		nodeIndex[topo.Nodes[i].ID] = i
+	}
+
+	// 镜像 peers.go Pass 1：以无序节点对去重，为每个非 client 端点累计接口数。
+	addedPairs := make(map[string]bool)
+	interfaceCount := make(map[string]int) // nodeID -> 接口数（去重对端数）
+
+	for _, edge := range topo.Edges {
+		if !edge.IsEnabled {
+			continue
+		}
+
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		if fromNode == nil || toNode == nil {
+			continue
+		}
+
+		peerKey := fromNode.ID + "->" + toNode.ID
+		reversePeerKey := toNode.ID + "->" + fromNode.ID
+
+		// 任一方向已计入则跳过，确保无序对只计一次。
+		if addedPairs[peerKey] || addedPairs[reversePeerKey] {
+			continue
+		}
+
+		// client 节点使用单一 wg0，不参与 per-peer 端口分配（与 peers.go 的
+		// isFromClient / isToClient 守卫一致）。
+		if fromNode.Role != "client" {
+			interfaceCount[fromNode.ID]++
+		}
+		if toNode.Role != "client" {
+			interfaceCount[toNode.ID]++
+		}
+
+		addedPairs[peerKey] = true
+		addedPairs[reversePeerKey] = true
+	}
+
+	// 为占用了至少一个接口的节点构建生效端口范围。
+	var ranges []effectivePortRange
+	for _, node := range topo.Nodes {
+		count := interfaceCount[node.ID]
+		if count == 0 {
+			// 没有 per-peer 接口（无启用边，或为 client 节点）：无生效范围可校验。
+			continue
+		}
+		base := node.ListenPort
+		if base == 0 {
+			base = defaultListenPort
+		}
+		r := effectivePortRange{
+			nodeIndex: nodeIndex[node.ID],
+			nodeName:  node.Name,
+			hostname:  node.Hostname,
+			base:      base,
+			count:     count,
+		}
+		ranges = append(ranges, r)
+
+		// 规则 1：生效范围最高端口越界。
+		if r.high() > 65535 {
+			result.AddError(fmt.Sprintf("nodes[%d].listen_port", r.nodeIndex),
+				fmt.Sprintf("节点 %s 的生效监听端口范围为 %d-%d（基准端口 %d + %d 个对端接口），最高端口 %d 超过 65535，将生成无法部署的 WireGuard 配置",
+					r.nodeName, r.base, r.high(), r.base, r.count, r.high()))
+		}
+	}
+
+	// 规则 2：共享同一非空 hostname 的节点之间，生效范围不得重叠。
+	// 两两比较（节点数量很小），仅对 hostname 非空且相同的节点对生效。
+	for a := 0; a < len(ranges); a++ {
+		for b := a + 1; b < len(ranges); b++ {
+			ra := ranges[a]
+			rb := ranges[b]
+			if ra.hostname == "" || ra.hostname != rb.hostname {
+				continue
+			}
+			// 区间重叠判定：max(low) <= min(high)。
+			if ra.base <= rb.high() && rb.base <= ra.high() {
+				// 在下标较大的节点上报错，便于测试与定位。
+				later := rb
+				earlier := ra
+				if ra.nodeIndex > rb.nodeIndex {
+					later = ra
+					earlier = rb
+				}
+				result.AddError(fmt.Sprintf("nodes[%d].listen_port", later.nodeIndex),
+					fmt.Sprintf("节点 %s（端口 %d-%d）与节点 %s（端口 %d-%d）共享主机 %s 且生效监听端口范围重叠，同一主机上的 WireGuard 接口会争用相同端口",
+						earlier.nodeName, earlier.base, earlier.high(),
+						later.nodeName, later.base, later.high(),
+						later.hostname))
+			}
 		}
 	}
 }

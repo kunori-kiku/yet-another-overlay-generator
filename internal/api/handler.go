@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -551,10 +552,18 @@ func tarGzDirectory(dir string) (*bytes.Buffer, error) {
 func makeSelfExtractingInstaller(nodeName string, payload []byte) ([]byte, error) {
 	encoded := base64.StdEncoding.EncodeToString(payload)
 
+	// 自解包装脚本此前直接 base64 解码并以 root 执行 payload，对 payload 没有任何完整性锚定
+	// （审计项 D25）。这里在 Go 侧对 tar.gz payload 计算 SHA-256，并作为字面量嵌入脚本；
+	// 脚本在 base64 解码之后、tar 解包/执行之前，用 sha256sum -c 风格的比对来验证解码出的
+	// 归档与该期望哈希一致，不一致则带中文错误中止。期望哈希对应的正是写入 ARCHIVE_PATH 的
+	// 那份字节（即 decode(encoded) == payload），因此对 payload 求哈希即可。
+	expectedPayloadSHA256 := fmt.Sprintf("%x", sha256.Sum256(payload))
+
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 
 NODE_NAME=%q
+EXPECTED_PAYLOAD_SHA256=%q
 WORKDIR="$(mktemp -d -t "${NODE_NAME}-install-XXXXXX")"
 ARCHIVE_PATH="${WORKDIR}/${NODE_NAME}.tar.gz"
 
@@ -570,6 +579,14 @@ if [[ -z "${PAYLOAD_LINE}" ]]; then
 fi
 
 tail -n +"${PAYLOAD_LINE}" "$0" | base64 -d > "${ARCHIVE_PATH}"
+
+# 完整性校验：在解包/执行之前，核对解码出的归档 SHA-256 与构建时嵌入的期望值。
+# 不一致说明 payload 被篡改或损坏，必须以 root 身份执行前立即中止（审计项 D25）。
+echo "${EXPECTED_PAYLOAD_SHA256}  ${ARCHIVE_PATH}" | sha256sum -c - >/dev/null 2>&1 || {
+	echo "错误：安装包完整性校验失败（SHA-256 不匹配），已中止。payload 可能被篡改或在传输中损坏。" >&2
+	exit 1
+}
+
 tar -xzf "${ARCHIVE_PATH}" -C "${WORKDIR}"
 
 if [[ ! -f "${WORKDIR}/install.sh" ]]; then
@@ -590,7 +607,7 @@ fi
 exit 0
 __PAYLOAD_BELOW__
 %s
-`, nodeName, encoded)
+`, nodeName, expectedPayloadSHA256, encoded)
 
 	return []byte(script), nil
 }

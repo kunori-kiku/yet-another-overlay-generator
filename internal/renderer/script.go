@@ -7,7 +7,12 @@ import (
 
 // InstallScriptConfig 安装脚本配置
 type InstallScriptConfig struct {
-	NodeName       string
+	NodeName string // 原始节点名，仅用于脚本头部注释（注释在 bash 中不会被求值）
+	// NodeNameQuoted 是经 bashSingleQuote 转义后的节点名，作为单引号 shell token
+	// 拼接进 root 身份执行的 echo 行。模板里凡是把节点名放入 echo 的位置都必须用
+	// 这个字段而非 NodeName，否则形如 x$(touch /tmp/pwned) 的节点名会在 root 下
+	// 触发命令替换（审计 T4 / D15）。把转义放在数据装填阶段，使模板保持可读。
+	NodeNameQuoted string
 	NodeRole       string
 	Platform       string
 	OverlayIP      string
@@ -58,7 +63,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
         exit 1
     fi
 
-    echo "=== Uninstalling overlay from node: {{ .NodeName }} ==="
+    echo "=== Uninstalling overlay from node: "{{ .NodeNameQuoted }}" ==="
 
     # Stop and disable all managed WireGuard interfaces
     {{ range .WgInterfaces -}}
@@ -124,7 +129,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 
     echo ""
     echo "============================================================"
-    echo "  Overlay completely removed from node: {{ .NodeName }}"
+    echo "  Overlay completely removed from node: "{{ .NodeNameQuoted }}
     echo "============================================================"
     exit 0
 fi
@@ -456,7 +461,7 @@ echo "  Babel daemon started"
 # Show status
 echo ""
 echo "============================================================"
-echo "  Node: {{ .NodeName }}"
+echo "  Node: "{{ .NodeNameQuoted }}
 echo "  Overlay IP: {{ .OverlayIP }} (on dummy0)"
 echo "  Role: {{ .NodeRole }}"
 echo "  WireGuard interfaces: {{ range .WgInterfaces }}{{ .Name }} {{ end }}"
@@ -493,6 +498,7 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 
 	config := InstallScriptConfig{
 		NodeName:       node.Name,
+		NodeNameQuoted: bashSingleQuote(node.Name),
 		NodeRole:       node.Role,
 		Platform:       node.Platform,
 		OverlayIP:      node.OverlayIP,
@@ -513,7 +519,10 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 
 // ClientInstallScriptConfig client 安装脚本配置
 type ClientInstallScriptConfig struct {
-	NodeName       string
+	NodeName string // 原始节点名，仅用于脚本头部注释（注释在 bash 中不会被求值）
+	// NodeNameQuoted 同 InstallScriptConfig.NodeNameQuoted：经 bashSingleQuote
+	// 转义的节点名，用于 root 身份执行的 echo 行，防止命令替换注入（D15）。
+	NodeNameQuoted string
 	NodeRole       string
 	Platform       string
 	OverlayIP      string
@@ -552,7 +561,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
         exit 1
     fi
 
-    echo "=== Uninstalling overlay from client node: {{ .NodeName }} ==="
+    echo "=== Uninstalling overlay from client node: "{{ .NodeNameQuoted }}" ==="
 
     # Stop and disable wg0
     if command -v wg >/dev/null 2>&1 && wg show "wg0" > /dev/null 2>&1; then
@@ -580,7 +589,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 
     echo ""
     echo "============================================================"
-    echo "  Overlay completely removed from client node: {{ .NodeName }}"
+    echo "  Overlay completely removed from client node: "{{ .NodeNameQuoted }}
     echo "============================================================"
     exit 0
 fi
@@ -748,7 +757,7 @@ systemctl enable wg-quick@"wg0" 2>/dev/null || true
 # Show status
 echo ""
 echo "============================================================"
-echo "  Node: {{ .NodeName }}"
+echo "  Node: "{{ .NodeNameQuoted }}
 echo "  Overlay IP: {{ .OverlayIP }} (on wg0)"
 echo "  Role: {{ .NodeRole }}"
 echo "  WireGuard interface: wg0"
@@ -769,6 +778,7 @@ echo "Note: If the router is not yet online, connection will establish once it c
 func RenderClientInstallScript(node *model.Node) (string, error) {
 	config := ClientInstallScriptConfig{
 		NodeName:       node.Name,
+		NodeNameQuoted: bashSingleQuote(node.Name),
 		NodeRole:       node.Role,
 		Platform:       node.Platform,
 		OverlayIP:      node.OverlayIP,

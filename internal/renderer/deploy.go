@@ -224,6 +224,18 @@ SUCCESS=0
 	for _, node := range config.Nodes {
 		b.WriteString(fmt.Sprintf("# --- Node: %s ---\n", node.NodeName))
 
+		// Shell-escaped forms used at every interpolation site below. SSHTarget
+		// (ssh_alias or user@ssh_host) and NodeName are user-supplied and are
+		// spliced into a script that runs on the OPERATOR's machine; without
+		// quoting an ssh_host of "x; rm -rf $HOME #" injects commands locally
+		// (D7) and a single quote in a node name breaks the echo / heredoc
+		// (D16). targetQuoted is a single-quoted bash token suitable wherever
+		// the target was a bare argument (ssh / scp), and nameQuoted is the same
+		// for echo arguments. This mirrors the existing %q treatment of
+		// SSHKeyPath in buildSSHOpts.
+		targetQuoted := bashSingleQuote(node.SSHTarget)
+		nameQuoted := bashSingleQuote(node.NodeName)
+
 		// installerFile is the ZIP-entry / local-lookup name (canonical safe
 		// name). remoteInstaller is the remote upload path, keyed on the unique
 		// node ID so two nodes whose names sanitize identically cannot clobber
@@ -233,9 +245,9 @@ SUCCESS=0
 		remoteInstaller := node.NodeID + "-install.sh"
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`echo ""
-echo "=== %s: SKIPPED (no SSH details configured) ==="
+echo "=== "%s": SKIPPED (no SSH details configured) ==="
 SKIPPED=$((SKIPPED + 1))
-`, node.NodeName))
+`, nameQuoted))
 			b.WriteString("\n")
 			continue
 		}
@@ -248,10 +260,15 @@ SKIPPED=$((SKIPPED + 1))
 			scpCmd = "scp " + scpOpts
 		}
 
-		// Build the inline uninstall script for this node
+		// Build the inline uninstall script for this node. These echo lines run
+		// on the REMOTE node inside a quoted heredoc, but NodeName is still
+		// interpolated into single-quoted echo strings here — a single quote in
+		// the name would terminate the echo string early (D16). Splice the
+		// bashSingleQuote token rather than the raw name so the name is always a
+		// single inert shell token.
 		var uninstallCmds strings.Builder
 		uninstallCmds.WriteString("set -uo pipefail\n")
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on '%s'...'\n", nameQuoted))
 
 		// Stop and disable WireGuard interfaces
 		for _, iface := range node.WgInterfaces {
@@ -265,7 +282,7 @@ SKIPPED=$((SKIPPED + 1))
 		uninstallCmds.WriteString("rm -f /etc/wireguard/*.conf\n")
 
 		if node.HasBabel {
-			uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 2/4] Stopping Babel routing daemon on %s...'\n", node.NodeName))
+			uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 2/4] Stopping Babel routing daemon on '%s'...'\n", nameQuoted))
 			uninstallCmds.WriteString("systemctl stop babeld 2>/dev/null || true\n")
 			uninstallCmds.WriteString("systemctl disable babeld 2>/dev/null || true\n")
 			uninstallCmds.WriteString("rm -f /etc/babel/babeld.conf /etc/babeld.conf\n")
@@ -273,7 +290,7 @@ SKIPPED=$((SKIPPED + 1))
 		}
 
 		// Remove sysctl overlay config
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 3/4] Removing overlay network configuration on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 3/4] Removing overlay network configuration on '%s'...'\n", nameQuoted))
 		uninstallCmds.WriteString("rm -f /etc/sysctl.d/99-overlay.conf\n")
 		uninstallCmds.WriteString("sysctl --system > /dev/null 2>&1 || true\n")
 
@@ -289,29 +306,37 @@ SKIPPED=$((SKIPPED + 1))
 			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-dummy.service\n")
 		}
 
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on '%s'...'\n", nameQuoted))
 		uninstallCmds.WriteString("systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }\n")
-		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from %s.'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from '%s'.'\n", nameQuoted))
 
+		// Every %s that carries SSHTarget is filled with targetQuoted (a
+		// single-quoted bash token), and every %s that carries NodeName is
+		// filled with nameQuoted. The echo lines break out of their surrounding
+		// double quotes ("...text..."<token>"...text...") so the spliced token
+		// stays single-quoted and inert; the ssh / scp argument sites take the
+		// token in place of the previously-bare target. The scp destination
+		// renders as 'target':/tmp/<id>-install.sh — the :/tmp suffix sits
+		// outside the closing quote, which is valid scp syntax.
 		b.WriteString(fmt.Sprintf(`echo ""
 if [ "$UNINSTALL" -eq 1 ]; then
-    echo "=== Uninstalling from %s (%s) ==="
+    echo "=== Uninstalling from "%s" ("%s") ==="
     if ! ssh%s %s "echo ok" >/dev/null 2>&1; then
-        echo "  ERROR: SSH connection to %s failed." >&2
+        echo "  ERROR: SSH connection to "%s" failed." >&2
         FAILED=$((FAILED + 1))
     else
         if ssh%s %s sudo bash -s <<'UNINSTALL_EOF'; then
 %s
 UNINSTALL_EOF
-            echo "  SUCCESS: %s uninstalled."
+            echo "  SUCCESS: "%s" uninstalled."
             SUCCESS=$((SUCCESS + 1))
         else
-            echo "  ERROR: Uninstall failed on %s (exit code: $?)." >&2
+            echo "  ERROR: Uninstall failed on "%s" (exit code: $?)." >&2
             FAILED=$((FAILED + 1))
         fi
     fi
 else
-    echo "=== Deploying to %s (%s) ==="
+    echo "=== Deploying to "%s" ("%s") ==="
     INSTALLER="$WORKDIR/%s"
     if [ ! -f "$INSTALLER" ]; then
         echo "  WARNING: Installer %s not found in archive, skipping."
@@ -319,12 +344,12 @@ else
     else
         # Test SSH connectivity first
         if ! ssh%s %s "echo ok" >/dev/null 2>&1; then
-            echo "  ERROR: SSH connection to %s failed." >&2
+            echo "  ERROR: SSH connection to "%s" failed." >&2
             FAILED=$((FAILED + 1))
         else
             # Clean previous WireGuard configs if requested
             if [ "$CLEAN" -eq 1 ]; then
-                echo "  Cleaning existing WireGuard interfaces on %s..."
+                echo "  Cleaning existing WireGuard interfaces on "%s"..."
                 ssh%s %s sudo bash -s <<'CLEAN_EOF' 2>/dev/null || true
 for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
     wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
@@ -340,14 +365,14 @@ CLEAN_EOF
 
             if %s "$INSTALLER" %s:/tmp/%s; then
                 if ssh%s %s "sudo bash /tmp/%s && rm -f /tmp/%s"; then
-                    echo "  SUCCESS: %s deployed."
+                    echo "  SUCCESS: "%s" deployed."
                     SUCCESS=$((SUCCESS + 1))
                 else
-                    echo "  ERROR: Installation script failed on %s (exit code: $?)." >&2
+                    echo "  ERROR: Installation script failed on "%s" (exit code: $?)." >&2
                     FAILED=$((FAILED + 1))
                 fi
             else
-                echo "  ERROR: SCP upload to %s failed." >&2
+                echo "  ERROR: SCP upload to "%s" failed." >&2
                 FAILED=$((FAILED + 1))
             fi
         fi
@@ -355,28 +380,28 @@ CLEAN_EOF
 fi
 `,
 			// Uninstall branch
-			node.NodeName, node.SSHTarget,
-			sshOpts, node.SSHTarget,
-			node.NodeName,
-			sshOpts, node.SSHTarget,
+			nameQuoted, targetQuoted,
+			sshOpts, targetQuoted,
+			nameQuoted,
+			sshOpts, targetQuoted,
 			uninstallCmds.String(),
-			node.NodeName,
-			node.NodeName,
+			nameQuoted,
+			nameQuoted,
 			// Deploy branch
-			node.NodeName, node.SSHTarget,
+			nameQuoted, targetQuoted,
 			installerFile,
 			installerFile,
-			sshOpts, node.SSHTarget,
-			node.NodeName,
+			sshOpts, targetQuoted,
+			nameQuoted,
 			// Clean step
-			node.NodeName,
-			sshOpts, node.SSHTarget,
+			nameQuoted,
+			sshOpts, targetQuoted,
 			// SCP + install (remote path keyed on node ID, D31)
-			scpCmd, node.SSHTarget, remoteInstaller,
-			sshOpts, node.SSHTarget, remoteInstaller, remoteInstaller,
-			node.NodeName,
-			node.NodeName,
-			node.NodeName,
+			scpCmd, targetQuoted, remoteInstaller,
+			sshOpts, targetQuoted, remoteInstaller, remoteInstaller,
+			nameQuoted,
+			nameQuoted,
+			nameQuoted,
 		))
 		b.WriteString("\n")
 	}
@@ -472,11 +497,25 @@ try {
 		installerFile := node.SafeInstallerName
 		remoteInstaller := node.NodeID + "-install.sh"
 
+		// Shell-escaped forms for the two distinct quoting contexts of the PS1
+		// script. PowerShell contexts (the & ssh / & scp call-operator arguments
+		// and the Write-Host strings) take powerShellArgQuote: an unquoted target
+		// splits on spaces and an embedded double quote breaks the one quoted scp
+		// site (D43). The bash here-string body (@'...'@ piped to ssh ... bash)
+		// is interpreted by the REMOTE shell, so NodeName interpolated into its
+		// single-quoted echo lines takes bashSingleQuote, same idiom as the bash
+		// renderer. scpDestPSArg wraps the whole "target:/tmp/<id>-install.sh"
+		// destination as one escaped PowerShell argument.
+		targetPSArg := powerShellArgQuote(node.SSHTarget)
+		namePSStr := powerShellArgQuote(node.NodeName)
+		nameBashQuoted := bashSingleQuote(node.NodeName)
+		scpDestPSArg := powerShellArgQuote(node.SSHTarget + ":/tmp/" + remoteInstaller)
+
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`    Write-Host ""
-    Write-Host "=== %s: SKIPPED (no SSH details configured) ==="
+    Write-Host ("=== " + %s + ": SKIPPED (no SSH details configured) ===")
     $Skipped++
-`, node.NodeName))
+`, namePSStr))
 			b.WriteString("\n")
 			continue
 		}
@@ -488,10 +527,14 @@ try {
 			scpCmd = "scp " + scpOpts
 		}
 
-		// Build the inline uninstall script for this node (multi-line, for PS1 here-string)
+		// Build the inline uninstall script for this node (multi-line, for PS1
+		// here-string). The @'...'@ here-string is literal in PowerShell, but the
+		// body is piped to ssh ... sudo bash -s and run on the REMOTE node, so
+		// NodeName interpolated into these single-quoted echo lines is escaped for
+		// the bash single-quote context (D16/D43) via nameBashQuoted.
 		var uninstallCmds strings.Builder
 		uninstallCmds.WriteString("set -uo pipefail\n")
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on '%s'...'\n", nameBashQuoted))
 		for _, iface := range node.WgInterfaces {
 			uninstallCmds.WriteString(fmt.Sprintf("wg-quick down %s 2>/dev/null || true\n", iface))
 			uninstallCmds.WriteString(fmt.Sprintf("systemctl disable wg-quick@%s 2>/dev/null || true\n", iface))
@@ -500,13 +543,13 @@ try {
 		uninstallCmds.WriteString("for _i in $(wg show interfaces 2>/dev/null); do wg-quick down \"$_i\" 2>/dev/null || true; systemctl disable \"wg-quick@$_i\" 2>/dev/null || true; done\n")
 		uninstallCmds.WriteString("rm -f /etc/wireguard/*.conf\n")
 		if node.HasBabel {
-			uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 2/4] Stopping Babel routing daemon on %s...'\n", node.NodeName))
+			uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 2/4] Stopping Babel routing daemon on '%s'...'\n", nameBashQuoted))
 			uninstallCmds.WriteString("systemctl stop babeld 2>/dev/null || true\n")
 			uninstallCmds.WriteString("systemctl disable babeld 2>/dev/null || true\n")
 			uninstallCmds.WriteString("rm -f /etc/babel/babeld.conf /etc/babeld.conf\n")
 			uninstallCmds.WriteString("rm -rf /etc/systemd/system/babeld.service.d\n")
 		}
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 3/4] Removing overlay network configuration on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 3/4] Removing overlay network configuration on '%s'...'\n", nameBashQuoted))
 		uninstallCmds.WriteString("rm -f /etc/sysctl.d/99-overlay.conf\n")
 		uninstallCmds.WriteString("sysctl --system > /dev/null 2>&1 || true\n")
 		if !node.IsClient {
@@ -519,31 +562,38 @@ try {
 			uninstallCmds.WriteString("systemctl disable overlay-dummy.service 2>/dev/null || true\n")
 			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-dummy.service\n")
 		}
-		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on %s...'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on '%s'...'\n", nameBashQuoted))
 		uninstallCmds.WriteString("systemctl daemon-reload\n")
-		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from %s.'\n", node.NodeName))
+		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from '%s'.'\n", nameBashQuoted))
 
+		// Each Write-Host line uses string concatenation (+) so the escaped
+		// PowerShell value (namePSStr / targetPSArg, both already double-quoted
+		// by powerShellArgQuote) is a complete sub-expression rather than text
+		// spliced inside another double-quoted string where its own quotes would
+		// collide. The & ssh / & scp call sites take targetPSArg in place of the
+		// previously-bare target, and the one scp destination takes the whole
+		// "target:/tmp/<id>-install.sh" pre-quoted as scpDestPSArg.
 		b.WriteString(fmt.Sprintf(`    Write-Host ""
     if ($Uninstall) {
-        Write-Host "=== Uninstalling from %s (%s) ==="
+        Write-Host ("=== Uninstalling from " + %s + " (" + %s + ") ===")
         $sshTest = & ssh%s %s "echo ok" 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ERROR: SSH connection to %s failed." -ForegroundColor Red
+            Write-Host ("  ERROR: SSH connection to " + %s + " failed.") -ForegroundColor Red
             $Failed++
         } else {
             $uninstallScript = @'
 %s'@
             $uninstallScript | & ssh%s %s sudo bash -s
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "  ERROR: Uninstall failed on %s." -ForegroundColor Red
+                Write-Host ("  ERROR: Uninstall failed on " + %s + ".") -ForegroundColor Red
                 $Failed++
             } else {
-                Write-Host "  SUCCESS: %s uninstalled."
+                Write-Host ("  SUCCESS: " + %s + " uninstalled.")
                 $Success++
             }
         }
     } else {
-        Write-Host "=== Deploying to %s (%s) ==="
+        Write-Host ("=== Deploying to " + %s + " (" + %s + ") ===")
         $Installer = Join-Path $WorkDir "%s"
         if (-not (Test-Path $Installer)) {
             Write-Warning "Installer %s not found in archive, skipping."
@@ -551,25 +601,25 @@ try {
         } else {
             $sshTest = & ssh%s %s "echo ok" 2>&1
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "  ERROR: SSH connection to %s failed." -ForegroundColor Red
+                Write-Host ("  ERROR: SSH connection to " + %s + " failed.") -ForegroundColor Red
                 $Failed++
             } else {
                 if ($Clean) {
-                    Write-Host "  Cleaning existing WireGuard interfaces on %s..."
+                    Write-Host ("  Cleaning existing WireGuard interfaces on " + %s + "...")
                     $CleanScript | & ssh%s %s sudo bash -s 2>$null
                 }
 
-                & %s $Installer "%s:/tmp/%s"
+                & %s $Installer %s
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Host "  ERROR: SCP upload to %s failed." -ForegroundColor Red
+                    Write-Host ("  ERROR: SCP upload to " + %s + " failed.") -ForegroundColor Red
                     $Failed++
                 } else {
                     & ssh%s %s "sudo bash /tmp/%s && rm -f /tmp/%s"
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Host "  ERROR: Installation script failed on %s (exit code: $LASTEXITCODE)." -ForegroundColor Red
+                        Write-Host ("  ERROR: Installation script failed on " + %s + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
                         $Failed++
                     } else {
-                        Write-Host "  SUCCESS: %s deployed."
+                        Write-Host ("  SUCCESS: " + %s + " deployed.")
                         $Success++
                     }
                 }
@@ -578,28 +628,28 @@ try {
     }
 `,
 			// Uninstall branch
-			node.NodeName, node.SSHTarget,
-			sshOpts, node.SSHTarget,
-			node.NodeName,
+			namePSStr, targetPSArg,
+			sshOpts, targetPSArg,
+			namePSStr,
 			uninstallCmds.String(),
-			sshOpts, node.SSHTarget,
-			node.NodeName,
-			node.NodeName,
+			sshOpts, targetPSArg,
+			namePSStr,
+			namePSStr,
 			// Deploy branch
-			node.NodeName, node.SSHTarget,
+			namePSStr, targetPSArg,
 			installerFile,
 			installerFile,
-			sshOpts, node.SSHTarget,
-			node.NodeName,
+			sshOpts, targetPSArg,
+			namePSStr,
 			// Clean step
-			node.NodeName,
-			sshOpts, node.SSHTarget,
-			// SCP + install (remote path keyed on node ID, D31)
-			scpCmd, node.SSHTarget, remoteInstaller,
-			node.NodeName,
-			sshOpts, node.SSHTarget, remoteInstaller, remoteInstaller,
-			node.NodeName,
-			node.NodeName,
+			namePSStr,
+			sshOpts, targetPSArg,
+			// SCP + install (destination pre-quoted, remote path keyed on node ID, D31)
+			scpCmd, scpDestPSArg,
+			namePSStr,
+			sshOpts, targetPSArg, remoteInstaller, remoteInstaller,
+			namePSStr,
+			namePSStr,
 		))
 		b.WriteString("\n")
 	}

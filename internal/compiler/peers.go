@@ -178,6 +178,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			}
 			fromListenPort = fromBasePort + nodePortOffset[fromNode.ID]
 			nodePortOffset[fromNode.ID]++
+			// 编译器侧端口越界硬校验（审计项 D11）：per-peer 接口在 base+offset 处监听，
+			// 当该有效端口超过 65535 时，wg-quick 会拒绝渲染出的配置。验证器在另一分区里
+			// 加了同等的前置检查，但直接调用编译器 API/CLI 的调用方会绕过验证器，因此这里
+			// 必须把它作为编译器不变量重新断言一次，避免在部署期才暴露。
+			if fromListenPort > 65535 {
+				return nil, nil, fmt.Errorf("节点 %s 的有效监听端口 %d 超过上限 65535（基础端口 %d，第 %d 个 peer 接口）：请降低该节点的 listen_port 或减少其连接数",
+					fromNode.Name, fromListenPort, fromBasePort, nodePortOffset[fromNode.ID])
+			}
 		}
 
 		// 分配 toNode 的监听端口
@@ -189,6 +197,11 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			}
 			toListenPort = toBasePort + nodePortOffset[toNode.ID]
 			nodePortOffset[toNode.ID]++
+			// 同上：toNode 接口的有效监听端口同样不得越界（审计项 D11）。
+			if toListenPort > 65535 {
+				return nil, nil, fmt.Errorf("节点 %s 的有效监听端口 %d 超过上限 65535（基础端口 %d，第 %d 个 peer 接口）：请降低该节点的 listen_port 或减少其连接数",
+					toNode.Name, toListenPort, toBasePort, nodePortOffset[toNode.ID])
+			}
 		}
 
 		alloc := &pairAllocation{
