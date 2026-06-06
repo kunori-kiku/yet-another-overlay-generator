@@ -35,3 +35,22 @@ All API calls are made from the Zustand store actions:
 - `compile()` → `POST /api/compile` (updates topology state from response, saves to history)
 - `exportArtifacts()` → `POST /api/export` (downloads ZIP via blob URL)
 - `downloadDeployScript(format)` → `POST /api/deploy-script?format=sh|ps1`
+
+### Consume compiled names — never reconstruct them
+
+The backend is the sole authority for WireGuard interface names (and every other compiled,
+name-derived value). The frontend MUST consume these names from the compile response and MUST NOT
+reconstruct them. Specifically:
+
+- Per-peer WireGuard config keys in `CompileResponse.wireguard_configs` have the form
+  `"<nodeID>:<interfaceName>"`. To display or look up a peer's compiled interface name, the frontend
+  MUST parse the `interfaceName` out of that key, not recompute it from the node name.
+- The frontend MUST NOT reimplement the `wgInterfaceName` algorithm (see
+  [../artifacts/naming.md](../artifacts/naming.md)). That algorithm has a hashed branch for names
+  longer than 12 characters that plain client-side truncation cannot reproduce; any reconstruction
+  diverges from the backend for such names.
+
+> **Compliance:** the RightPanel "Compiled values" lookup rebuilds the interface name client-side as
+> `` `wg-${toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15) `` at
+> `frontend/src/components/layout/RightPanel.tsx:622`, so the lookup silently misses for any node name
+> longer than 12 characters. Closed by Plan 4 (PR #4).

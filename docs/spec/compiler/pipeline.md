@@ -11,6 +11,14 @@ The compiler (`internal/compiler/compiler.go`) operates as a multi-pass pipeline
 | 3c | Peer Derivation (`DerivePeers`) | [peer-derivation.md](peer-derivation.md) |
 | 3d | CompiledPort Write-back | below |
 
+## Enum normalization during validation
+
+Validation MUST normalize the `Domain.routing_mode` enum before the value reaches any renderer: an
+empty `routing_mode` is written back as `babel`, and `static`/`none` are rejected as
+not-yet-implemented. The normalization is a write-back into the topology object so the value
+round-trips. See [routing-modes.md](routing-modes.md) for the full enum contract, the rejection
+rule, and why `Table = off` and `redistribute local` depend on it.
+
 ## Pass 3b: Capability Inference (`InferCapabilitiesFromRole`)
 
 - Applies role-based capability overrides to each node

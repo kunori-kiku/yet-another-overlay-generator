@@ -24,20 +24,26 @@ docs/spec/
 │   └── roles.md                   # Role semantics table, capability inference
 ├── compiler/
 │   ├── pipeline.md                # Multi-pass pipeline overview, CompileResult
-│   ├── validation.md              # Pass 1 (schema) + Pass 2 (semantic)
+│   ├── validation.md              # Pass 1 (schema) + Pass 2 (semantic), coverage table
 │   ├── ip-allocation.md           # Pass 3: overlay IP allocation algorithm
 │   ├── peer-derivation.md         # Pass 3c: two-phase peer derivation, transit IPs,
-│   │                              #   ports, interface naming, keepalive logic
-│   └── allocation-stability.md    # Allocation Stability & Growth invariants (draft)
+│   │                              #   ports, endpoint resolution contract, keepalive
+│   ├── routing-modes.md           # Routing-mode contract: babel default, route
+│   │                              #   installation prerequisites
+│   └── allocation-stability.md    # Allocation Stability & Growth: invariants I1–I10,
+│                                  #   sticky-pin mechanism, migration
 ├── artifacts/
 │   ├── wireguard.md               # Per-peer + client wg0 config rendering
 │   ├── babel.md                   # babeld.conf rendering, router-id generation
 │   ├── sysctl.md                  # Forwarding / rp_filter settings
 │   ├── install-script.md          # Install script phases, SNAT fix, uninstall support
 │   ├── deploy-scripts.md          # SSH deploy scripts, self-extracting installer
+│   ├── naming.md                  # Canonical artifact naming, uniqueness invariants,
+│   │                              #   interface-name algorithm
 │   └── export-bundle.md           # Export directory structure, checksums
 ├── api/
-│   └── http-api.md                # HTTP API endpoints and contracts
+│   ├── http-api.md                # HTTP API endpoints and contracts
+│   └── wire-contract.md           # FE↔BE field parity table, round-trip rules
 ├── frontend/
 │   └── architecture.md            # State management, components, types, API integration
 ├── operations/
