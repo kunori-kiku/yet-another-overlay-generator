@@ -200,30 +200,22 @@ func transportTopology(transport string) *model.Topology {
 	}
 }
 
-// TestValidateSchema_TcpTransportReservedWarning 覆盖：tcp 是合法但保留的传输值——
-// 不报错（拓扑仍可编译），但必须发出"保留/未实现，按 UDP 生成"的告警，
-// 避免"已接受但被静默忽略"。udp 边则不应产生该告警。
-func TestValidateSchema_TcpTransportReservedWarning(t *testing.T) {
-	tcpResult := ValidateSchema(transportTopology("tcp"))
-	for _, e := range tcpResult.Errors {
-		if containsSubstring(e.Field, "transport") {
-			t.Fatalf("tcp 是合法保留值，不应产生 transport 错误，实际: %v", tcpResult.Errors)
+// TestValidateSchema_TcpTransportNoReservedWarning 覆盖 mimic-tcp-transport 落地后的新契约：
+// tcp 现在是已实现的合法值（链路由 mimic 包裹），schema 阶段既不报 transport 错误，也不再
+// 产生 v1.3.0 的"保留/未实现"告警（该告警已移除）。Linux 端点的语义校验由
+// validateMimicTransport 负责（见 mimic_test.go），不在 schema 层。udp 同样无告警。
+func TestValidateSchema_TcpTransportNoReservedWarning(t *testing.T) {
+	for _, transport := range []string{"tcp", "udp"} {
+		result := ValidateSchema(transportTopology(transport))
+		for _, e := range result.Errors {
+			if containsSubstring(e.Field, "transport") {
+				t.Fatalf("%s 是合法传输值，不应产生 transport 错误，实际: %v", transport, result.Errors)
+			}
 		}
-	}
-	foundWarn := false
-	for _, w := range tcpResult.Warnings {
-		if containsSubstring(w.Field, "transport") && containsSubstring(w.Message, "tcp") {
-			foundWarn = true
-		}
-	}
-	if !foundWarn {
-		t.Errorf("tcp 传输应产生保留值告警，实际告警: %v", tcpResult.Warnings)
-	}
-
-	udpResult := ValidateSchema(transportTopology("udp"))
-	for _, w := range udpResult.Warnings {
-		if containsSubstring(w.Field, "transport") {
-			t.Errorf("udp 传输不应产生 transport 告警，实际: %v", udpResult.Warnings)
+		for _, w := range result.Warnings {
+			if containsSubstring(w.Field, "transport") {
+				t.Errorf("%s 传输不应再产生 transport 告警（保留告警已移除），实际: %v", transport, result.Warnings)
+			}
 		}
 	}
 }

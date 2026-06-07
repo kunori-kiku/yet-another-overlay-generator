@@ -1,6 +1,8 @@
 package renderer
 
 import (
+	"sort"
+
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
@@ -27,6 +29,14 @@ type InstallScriptConfig struct {
 	MTU          int
 	HasBabel     bool
 	HasForward   bool
+	// HasMimic 表示本节点有至少一条 transport=="tcp" 的链路，需要在安装/卸载脚本里
+	// 装配 mimic（eBPF UDP→伪 TCP 整形）。见 docs/spec/artifacts/mimic.md。
+	HasMimic bool
+	// MimicPorts 是本节点所有 mimic 接口的监听端口（已排序、去重）。mimic 附着在
+	// egress NIC 上（运行时探测），每个监听端口下发一条 filter 行
+	// （local=<egress_ip>:<port>）。YAOG 只提供端口集合；egress if/ip 由 bash 在
+	// 安装时探测——见 docs/spec/artifacts/mimic.md「Attaches to the egress NIC」。
+	MimicPorts []int
 	// per-peer 接口列表
 	WgInterfaces   []WgIfaceInfo
 	BabelConfName  string
@@ -71,6 +81,18 @@ if [ "$UNINSTALL" -eq 1 ]; then
     fi
 
     echo "=== Uninstalling overlay from node: "{{ .NodeNameQuoted }}" ==="
+
+{{ if .HasMimic -}}
+    # Tear down mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): stop/disable the
+    # mimic@<egress> unit and remove its config. Re-detect the egress NIC the same way the
+    # installer did; tolerate absence (mimic may already be gone / no default route).
+    _mimic_egress_if="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+    if [ -n "$_mimic_egress_if" ]; then
+        echo "  Stopping mimic@$_mimic_egress_if..."
+        systemctl disable --now "mimic@$_mimic_egress_if" 2>/dev/null || true
+        rm -f "/etc/mimic/$_mimic_egress_if.conf"
+    fi
+{{ end -}}
 
     # Stop and disable all managed WireGuard interfaces
     {{ range .WgInterfaces -}}
@@ -296,6 +318,16 @@ if [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
 {{ if .HasBabel -}}
     ensure_pkg babeld
 {{ end -}}
+{{ if .HasMimic -}}
+    # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): one or more links use
+    # transport="tcp". YAOG does not bundle mimic; install it from the distro.
+    ensure_pkg mimic
+    # Kernel/eBPF sanity: mimic is an eBPF (TC/XDP) program. The mimic@<egress> unit pulls in
+    # the kernel module via Requires=modprobe@mimic.service, but warn early if BPF looks absent.
+    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+    fi
+{{ end -}}
 else
     echo "Checking dependencies on $OS_ID..."
     missing_bins=""
@@ -310,10 +342,21 @@ else
 {{ if .HasBabel -}}
     require_bin babeld
 {{ end -}}
+{{ if .HasMimic -}}
+    # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): require the mimic binary on
+    # non-Debian platforms (YAOG ships no binary — install from the distro / AUR).
+    require_bin mimic
+{{ end -}}
     if [ -n "$missing_bins" ]; then
         echo "ERROR: Missing:$missing_bins" >&2
         exit 1
     fi
+{{ if .HasMimic -}}
+    # Kernel/eBPF sanity check (mimic is an eBPF program).
+    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+    fi
+{{ end -}}
 fi
 
 mkdir -p /etc/wireguard
@@ -475,6 +518,36 @@ sysctl --system > /dev/null 2>&1
 echo "  IPv4 forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
 {{ end -}}
 
+{{ if .HasMimic -}}
+# Provision mimic TCP-shaping transport BEFORE bringing WireGuard up, so the shaping is in
+# place when the tunnel handshakes (docs/spec/artifacts/mimic.md «Ordering»).
+#
+# mimic attaches to the EGRESS NIC (the default-route interface), NOT the wg interface; the
+# egress if/ip are not known at compile time, so detect them here at runtime. YAOG only supplies
+# the mimic listen-port set via the template.
+echo "Provisioning mimic TCP-shaping transport..."
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
+    echo "ERROR: could not detect egress interface/IP for mimic (no default route?)" >&2
+    exit 1
+fi
+echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
+mkdir -p /etc/mimic
+# One filter per mimic listen port on this node; all OR'ed by mimic. xdp_mode=skb for portability.
+{
+    {{ range .MimicPorts -}}
+    echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
+    {{ end -}}
+    echo "xdp_mode = skb"
+} > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
+echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
+# The distro mimic package ships mimic@<iface>.service (Requires=modprobe@mimic.service, so the
+# kernel module auto-loads). Enable+start it on the egress NIC before WireGuard comes up.
+systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"
+echo "  Started mimic@${MIMIC_EGRESS_IF}"
+{{ end -}}
+
 # Start all WireGuard per-peer interfaces
 #
 # D53: 脚本运行在 set -euo pipefail 下。如果某个接口的 wg-quick up 失败而不容错，
@@ -579,6 +652,10 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 
 	resolvedTransitCIDRs := resolveTransitCIDRs(transitCIDRs)
 
+	// mimic 端口集合：扫描 peers 收集所有 mimic 接口（p.Mimic）的监听端口，去重并排序。
+	// renderer 据此为该节点的 egress NIC 下发每端口一条 filter 行（docs/spec/artifacts/mimic.md）。
+	mimicPorts := collectMimicPorts(peers)
+
 	config := InstallScriptConfig{
 		NodeName:       node.Name,
 		NodeNameQuoted: bashSingleQuote(node.Name),
@@ -589,6 +666,8 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 		MTU:            node.MTU,
 		HasBabel:       hasBabel,
 		HasForward:     node.Capabilities.CanForward,
+		HasMimic:       len(mimicPorts) > 0,
+		MimicPorts:     mimicPorts,
 		WgInterfaces:   wgIfaces,
 		BabelConfName:  "babeld.conf",
 		SysctlConfName: "99-overlay.conf",
@@ -599,6 +678,24 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 	}
 
 	return renderTemplate("install.sh", installScriptTemplate, config)
+}
+
+// collectMimicPorts 扫描一组 peer，收集所有 mimic 接口（p.Mimic==true）的监听端口，
+// 去重并升序排序。mimic 附着在节点的 egress NIC 上，每个 mimic 监听端口对应 egress
+// 配置里的一条 filter 行（local=<egress_ip>:<port>），见 docs/spec/artifacts/mimic.md。
+// 仅收集 ListenPort>0 的端口：0 表示该接口未绑定监听端口，无法成为 mimic filter。
+func collectMimicPorts(peers []compiler.PeerInfo) []int {
+	seen := make(map[int]bool)
+	var ports []int
+	for _, p := range peers {
+		if !p.Mimic || p.ListenPort <= 0 || seen[p.ListenPort] {
+			continue
+		}
+		seen[p.ListenPort] = true
+		ports = append(ports, p.ListenPort)
+	}
+	sort.Ints(ports)
+	return ports
 }
 
 // NodeTransitCIDRs 解析某节点 SNAT 修复应覆盖的 transit 地址池。
@@ -653,6 +750,11 @@ type ClientInstallScriptConfig struct {
 	OverlayIP      string
 	MTU            int
 	SysctlConfName string
+	// HasMimic / MimicPorts 同 InstallScriptConfig：当 client 的唯一 wg0 链路
+	// transport=="tcp" 时为真，MimicPorts 即 client wg0 的监听端口（单端口）。
+	// 见 docs/spec/artifacts/mimic.md。
+	HasMimic   bool
+	MimicPorts []int
 }
 
 const clientInstallScriptTemplate = `#!/usr/bin/env bash
@@ -687,6 +789,17 @@ if [ "$UNINSTALL" -eq 1 ]; then
     fi
 
     echo "=== Uninstalling overlay from client node: "{{ .NodeNameQuoted }}" ==="
+
+{{ if .HasMimic -}}
+    # Tear down mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): re-detect the egress
+    # NIC, stop/disable mimic@<egress> and remove its config. Tolerate absence.
+    _mimic_egress_if="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+    if [ -n "$_mimic_egress_if" ]; then
+        echo "  Stopping mimic@$_mimic_egress_if..."
+        systemctl disable --now "mimic@$_mimic_egress_if" 2>/dev/null || true
+        rm -f "/etc/mimic/$_mimic_egress_if.conf"
+    fi
+{{ end -}}
 
     # Stop and disable wg0
     if command -v wg >/dev/null 2>&1 && wg show "wg0" > /dev/null 2>&1; then
@@ -823,6 +936,14 @@ if [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
     ensure_pkg coreutils
     ensure_pkg wireguard
     ensure_pkg wireguard-tools
+{{ if .HasMimic -}}
+    # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): the client wg0 link uses
+    # transport="tcp". YAOG does not bundle mimic; install it from the distro.
+    ensure_pkg mimic
+    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+    fi
+{{ end -}}
 else
     echo "Checking dependencies on $OS_ID..."
     missing_bins=""
@@ -834,10 +955,18 @@ else
     require_bin wg
     require_bin wg-quick
     require_bin ip
+{{ if .HasMimic -}}
+    require_bin mimic
+{{ end -}}
     if [ -n "$missing_bins" ]; then
         echo "ERROR: Missing:$missing_bins" >&2
         exit 1
     fi
+{{ if .HasMimic -}}
+    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+    fi
+{{ end -}}
 fi
 
 mkdir -p /etc/wireguard
@@ -874,6 +1003,29 @@ echo "=== Phase 3: Activate and Verify ==="
 echo "Applying sysctl settings..."
 sysctl --system > /dev/null 2>&1
 
+{{ if .HasMimic -}}
+# Provision mimic TCP-shaping transport BEFORE bringing wg0 up (docs/spec/artifacts/mimic.md
+# «Ordering»). mimic attaches to the EGRESS NIC, detected at runtime; YAOG supplies the port set.
+echo "Provisioning mimic TCP-shaping transport..."
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
+    echo "ERROR: could not detect egress interface/IP for mimic (no default route?)" >&2
+    exit 1
+fi
+echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
+mkdir -p /etc/mimic
+{
+    {{ range .MimicPorts -}}
+    echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
+    {{ end -}}
+    echo "xdp_mode = skb"
+} > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
+echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
+systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"
+echo "  Started mimic@${MIMIC_EGRESS_IF}"
+{{ end -}}
+
 # Start WireGuard wg0
 echo "Starting WireGuard wg0..."
 wg-quick up "wg0"
@@ -899,8 +1051,13 @@ echo "Installation complete!"
 echo "Note: If the router is not yet online, connection will establish once it comes up."
 `
 
-// RenderClientInstallScript 渲染 client 节点的安装脚本
-func RenderClientInstallScript(node *model.Node) (string, error) {
+// RenderClientInstallScript 渲染 client 节点的安装脚本。
+//
+// clientInfo 为可选变参，向后兼容既有的单参调用（不传时 mimic 字段保持零值，输出与旧实现
+// 逐字节一致）。当 client 的唯一 wg0 链路 transport=="tcp"（clientInfo.Mimic==true）时，
+// 取其 ListenPort 作为 mimic filter 端口，装配 mimic（见 docs/spec/artifacts/mimic.md）。
+// 调用方（internal/render）应传入该 client 的 ClientPeerInfo 以启用 mimic 支持。
+func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
 	config := ClientInstallScriptConfig{
 		NodeName:       node.Name,
 		NodeNameQuoted: bashSingleQuote(node.Name),
@@ -909,6 +1066,16 @@ func RenderClientInstallScript(node *model.Node) (string, error) {
 		OverlayIP:      node.OverlayIP,
 		MTU:            node.MTU,
 		SysctlConfName: "99-overlay.conf",
+	}
+
+	// client wg0 是单一链路：若其 transport=="tcp"（Mimic==true）且监听端口有效，
+	// 装配 mimic，filter 端口即该 wg0 的监听端口。
+	if len(clientInfo) > 0 && clientInfo[0] != nil {
+		ci := clientInfo[0]
+		if ci.Mimic && ci.ListenPort > 0 {
+			config.HasMimic = true
+			config.MimicPorts = []int{ci.ListenPort}
+		}
 	}
 
 	if config.Platform == "" {
