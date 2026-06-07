@@ -328,10 +328,19 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 				fmt.Sprintf("传输协议无效: %s，可选值: udp, tcp", edge.Transport))
 		}
 
-		// EndpointPort 
+		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {
 			result.AddError(prefix+".endpoint_port",
 				fmt.Sprintf(": %d", edge.EndpointPort))
+		}
+
+		// Role 校验（并行链路 / 故障切换）：仅允许空值、"primary"、"backup"。
+		// 空值与 "primary" 同属 primary class（同一对节点折叠为一条主链路），
+		// "backup" 则每条 edge 各自成为一条独立备份链路。语义见
+		// docs/spec/compiler/allocation-stability.md（Link identity with parallel edges）。
+		if edge.Role != "" && edge.Role != model.EdgeRolePrimary && edge.Role != model.EdgeRoleBackup {
+			result.AddError(prefix+".role",
+				fmt.Sprintf("链路角色无效: %s，可选值: primary, backup（留空等价于 primary）", edge.Role))
 		}
 
 		// 

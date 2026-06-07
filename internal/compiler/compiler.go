@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocator"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
@@ -141,9 +142,10 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 			continue
 		}
 
-		// 查找该 edge 对应的 pairAllocation（双向键都指向同一 struct）。
-		peerKey := edge.FromNodeID + "->" + edge.ToNodeID
-		alloc, ok := pairAllocations[peerKey]
+		// 查找该 edge 对应的 pairAllocation，键为 linkid.LinkKey(edge)（规范 I3：
+		// per-peer 分配身份即 linkKey）。primary class 的同对节点全部 edge 共享统一链路的
+		// alloc（定向按本 edge）；每条 backup edge 取它自己链路的 alloc。
+		alloc, ok := pairAllocations[linkid.LinkKey(edge)]
 		if !ok {
 			continue
 		}

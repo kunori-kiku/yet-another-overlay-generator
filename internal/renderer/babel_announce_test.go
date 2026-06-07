@@ -283,6 +283,60 @@ func TestBabelAnnounce_RelayPresetDefaultCost(t *testing.T) {
 	}
 }
 
+// TestBabelAnnounce_ParallelLinks_TwoStanzasDistinctCost 验证并行链路的 Babel 渲染契约
+// （docs/spec/artifacts/babel.md）：一个节点向同一对端同时拥有 primary 与 backup 两条链路时，
+// 必须渲染出两条接口声明（interface 行），接口名互异；primary（LinkCost 0，router 预设 DefaultCost
+// 也为 0）省略 rxcost token，backup（LinkCost 384）带 `rxcost 384`，两者之间形成故障切换所需的
+// cost 落差。
+func TestBabelAnnounce_ParallelLinks_TwoStanzasDistinctCost(t *testing.T) {
+	_, routerNode, _, _, domain := representativeBabelTopology()
+
+	const (
+		primaryIface = "wg-peernode"  // primary class 接口名（== naming.WgInterfaceName(remote)）
+		backupIface  = "wg-peernod1a" // backup 的 edge-aware 接口名（形态不同即可，仅需与 primary 互异）
+	)
+
+	peers := []compiler.PeerInfo{
+		// 同一对端（node-peer）的两条并行链路：primary 无 cost，backup cost 384。
+		{NodeID: "node-peer", NodeName: "peernode", InterfaceName: primaryIface, LinkCost: 0},
+		{NodeID: "node-peer", NodeName: "peernode", InterfaceName: backupIface, LinkCost: 384},
+	}
+
+	config, err := RenderBabelConfig(routerNode, peers, domain)
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+
+	// 两条接口声明都必须出现，且接口名互异。
+	if !strings.Contains(config, "interface "+primaryIface) {
+		t.Errorf("应渲染 primary 接口声明 %q，实际配置:\n%s", "interface "+primaryIface, config)
+	}
+	if !strings.Contains(config, "interface "+backupIface) {
+		t.Errorf("应渲染 backup 接口声明 %q，实际配置:\n%s", "interface "+backupIface, config)
+	}
+
+	// backup 接口必须带 `rxcost 384`。
+	if !strings.Contains(config, "rxcost 384") {
+		t.Errorf("backup 链路应渲染 `rxcost 384`，实际配置:\n%s", config)
+	}
+
+	// primary 接口必须在「cost 0 省略 rxcost」路径上：其接口行不得携带任何 rxcost token。
+	// 逐行定位 primary 的接口行（router 预设 DefaultCost 为 0，故 LinkCost 0 时不写 rxcost）。
+	var primaryLine string
+	for _, line := range strings.Split(config, "\n") {
+		if strings.HasPrefix(line, "interface "+primaryIface+" ") || line == "interface "+primaryIface {
+			primaryLine = line
+			break
+		}
+	}
+	if primaryLine == "" {
+		t.Fatalf("未能定位 primary 接口行，实际配置:\n%s", config)
+	}
+	if strings.Contains(primaryLine, "rxcost") {
+		t.Errorf("primary 链路（cost 0）的接口行不应带 rxcost token，实际行: %q", primaryLine)
+	}
+}
+
 // TestBabelAnnounce_PresetTimersPresent 验证 D78：hello-interval / update-interval
 // 来自角色预设（默认 4 / 16），且 local-port 来自命名常量（默认 33123）。
 func TestBabelAnnounce_PresetTimersPresent(t *testing.T) {

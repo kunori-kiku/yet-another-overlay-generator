@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
@@ -52,6 +53,18 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 
 	// 同一节点对的重复启用边检测（编译器只取首条，后续边的 endpoint 覆盖会被静默丢弃）
 	detectDuplicateEnabledEdges(topo, result)
+
+	// 并行链路：每节点 WireGuard 接口名唯一性（不变式 N4）
+	validateInterfaceNameUniqueness(topo, nodeMap, result)
+
+	// 并行链路：同一对节点至多一条显式 primary 边
+	validateSinglePrimaryPerPair(topo, nodeMap, result)
+
+	// 并行链路：client 边不得为 backup（client 用单一 wg0，不参与并行链路）
+	validateBackupClientEdges(topo, nodeMap, result)
+
+	// 并行链路：多链路节点对的等代价告警、无 primary 告警
+	validateParallelLinkCosts(topo, nodeMap, result)
 
 	// 分配 pin 校验：pin 在被预留之前必须先校验（不变式 I7）
 	validateAllocationPins(topo, domainMap, nodeMap, result)
@@ -278,14 +291,15 @@ const defaultListenPort = 51820
 //	[base, base+count-1]
 //
 // 其中 base 为节点的基准 listen_port（未设置时取 defaultListenPort），
-// count 为该节点作为「非 client 端点」参与的去重节点对数量——
+// count 为该节点作为「非 client 端点」参与的去重链路数量（并行链路下，同一对节点的
+// primary class 折叠为一条链路、每条 backup 各为一条链路）——
 // 这正是编译器为它分配的 WireGuard 接口个数。
 type effectivePortRange struct {
 	nodeIndex int    // 节点在 topo.Nodes 中的下标，用于定位错误字段
 	nodeName  string // 节点名称，用于错误消息
 	hostname  string // 节点 hostname（可能为空）
 	base      int    // 基准监听端口
-	count     int    // 该节点占用的接口数（= 去重对端数）
+	count     int    // 该节点占用的接口数（= 去重链路数）
 }
 
 // high 返回该节点占用的最高监听端口（base + count - 1）。
@@ -296,12 +310,14 @@ func (r effectivePortRange) high() int {
 // validateEffectivePortRanges 校验 per-peer 接口模型下每个节点的「生效监听端口范围」
 // （D47 + D11 的一部分）。
 //
-// 编译器为每条启用边的每个非 client 端点分配一个独立 WireGuard 接口，监听端口从
+// 编译器为每条链路的每个非 client 端点分配一个独立 WireGuard 接口，监听端口从
 // 节点基准端口起按 base+offset 递增（见 peers.go Pass 1 中 nodePortOffset 的逻辑）。
-// 这里完全镜像该计数方式：
+// 接口数按「链路」而非「节点对」统计，与编译器的 unify 规则一致（并行链路）：
 //   - 仅统计启用且两端节点均存在的边；
-//   - 以无序节点对去重（任一方向已计入则跳过），与 addedPairs 一致；
-//   - 每个去重节点对，为其两端中的「非 client」端点各 +1。
+//   - 以 linkid.LinkKey 去重——同一对节点的 primary class（Role != backup）折叠为一条链路，
+//     每条 backup 边各自成为一条独立链路；
+//   - 因此一对节点若有 1 条 primary 链路 + 2 条 backup，会为其两端各贡献 3 个接口；
+//   - 每条链路为其两端中的「非 client」端点各 +1。
 //
 // 计算出每个节点的占用区间 [base, base+count-1] 后：
 //  1. 当区间最高端口超过 65535 时报错（D11：base+offset 越界会被原样渲染进 WireGuard 配置）。
@@ -316,11 +332,12 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 		nodeIndex[topo.Nodes[i].ID] = i
 	}
 
-	// 镜像 peers.go Pass 1：以无序节点对去重，为每个非 client 端点累计接口数。
-	addedPairs := make(map[string]bool)
-	interfaceCount := make(map[string]int) // nodeID -> 接口数（去重对端数）
+	// 镜像 peers.go Pass 1 的 unify 分组：以 linkKey 去重，为每个非 client 端点累计接口数。
+	seenLinks := make(map[string]bool)
+	interfaceCount := make(map[string]int) // nodeID -> 接口数（去重链路数）
 
-	for _, edge := range topo.Edges {
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
 		if !edge.IsEnabled {
 			continue
 		}
@@ -331,13 +348,13 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 			continue
 		}
 
-		peerKey := fromNode.ID + "->" + toNode.ID
-		reversePeerKey := toNode.ID + "->" + fromNode.ID
-
-		// 任一方向已计入则跳过，确保无序对只计一次。
-		if addedPairs[peerKey] || addedPairs[reversePeerKey] {
+		// 链路键：primary class 的正反边与同向多余 primary 边共享同一 linkKey（折叠为一条链路）；
+		// 每条 backup 边携带自身 edge.ID，各自成为一条独立链路。
+		lk := linkid.LinkKey(edge)
+		if seenLinks[lk] {
 			continue
 		}
+		seenLinks[lk] = true
 
 		// client 节点使用单一 wg0，不参与 per-peer 端口分配（与 peers.go 的
 		// isFromClient / isToClient 守卫一致）。
@@ -347,9 +364,6 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 		if toNode.Role != "client" {
 			interfaceCount[toNode.ID]++
 		}
-
-		addedPairs[peerKey] = true
-		addedPairs[reversePeerKey] = true
 	}
 
 	// 为占用了至少一个接口的节点构建生效端口范围。
@@ -522,20 +536,17 @@ func edgeTransitCIDR(edge model.Edge, domainMap map[string]*model.Domain, nodeMa
 	return defaultTransitCIDR
 }
 
-// pinKey 返回一条链路的规范键：两端节点 ID 的无序对（字符串 min|max）。
-// pinKey(a,b) == pinKey(b,a)，因此一条边与其反向边落在同一个键上，
-// 跨链路去重时不会把同一物理链路的正反两条边误判为两条不同链路。
-func pinKey(a, b string) string {
-	if a <= b {
-		return a + "|" + b
-	}
-	return b + "|" + a
-}
+// 链路规范键与链路键由 internal/linkid 提供（linkid.PinKey / linkid.LinkKey），
+// 编译器与验证器共用同一份语义，避免重复字面量。
+//   - linkid.PinKey(a,b)：两端节点 ID 的无序对（字符串 min|max），方向无关；
+//     一条边与其反向边、同一对节点的所有 primary class 边都落在同一个 PinKey 上。
+//   - linkid.LinkKey(edge)：primary class 边等于 PinKey（正反边、同向多余 primary 边共享一个键）；
+//     backup 边为 PinKey + "#" + edge.ID，每条 backup 各自成为一条独立链路。
 
 // nodePortPin 描述某个节点在某条链路上被钉住的监听端口，用于跨链路去重时定位冲突。
 type nodePortPin struct {
 	port   int
-	linkID string // 首个声明该 (节点, 端口) 的链路 pinKey
+	linkID string // 首个声明该 (节点, 端口) 的链路键 linkKey
 	edge   string // 首个声明该 (节点, 端口) 的边 ID，用于错误消息
 }
 
@@ -554,8 +565,9 @@ type pinOwner struct {
 // PinnedToPort 是 B 侧端口；反向边 B->A 携带同一对值的镜像（其 PinnedFromPort 即 B 侧端口）。
 // 因此本函数：
 //   - 结构性规则（部分 pin、端口越界、transit 越池、client 边端口 pin）逐边校验，作用于该边自身；
-//   - 去重规则（同一节点端口、同一 transit IP、同一 link-local 被两条不同链路占用）按 pinKey
-//     归并后跨链路比较，避免把同一链路的正反边当作两条链路。
+//   - 去重规则（同一节点端口、同一 transit IP、同一 link-local 被两条不同链路占用）按 linkKey
+//     归并后跨链路比较：primary class 的正反边共享同一 linkKey 不算冲突，
+//     而 backup 边各有独立 linkKey，与 primary 链路的 pin 碰撞会被如实标记。
 func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Domain, nodeMap map[string]*model.Node, result *ValidationResult) {
 	// 去重表：跨「不同链路」检测同一资源被重复钉住。
 	//   - 节点端口：键为 nodeID，值记录首个占用该端口的 (端口, 链路, 边)。
@@ -578,7 +590,10 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 			continue
 		}
 
-		link := pinKey(edge.FromNodeID, edge.ToNodeID)
+		// 链路键用于跨链路去重：primary class 的正反边与同向多余 primary 边共享同一 linkKey
+		// （它们合并为同一条物理链路，pin 值合法地相同）；backup 边的 linkKey 携带自身 edge.ID，
+		// 因此与 primary 链路的 pin 碰撞会被如实标记为跨链路冲突。
+		link := linkid.LinkKey(&edge)
 
 		// --- 规则：client 边携带 pin（client 用单一 wg0，无 per-peer 资源）。 ---
 		// 先于其它规则处理：client 边的所有 per-peer pin 都会被忽略，因此端口 pin 报错、
@@ -683,7 +698,7 @@ func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, resul
 }
 
 // checkDuplicatePortOnNode 跨「不同链路」检测同一节点上被重复钉住的监听端口。
-// 同一链路（同一 pinKey）的正反两条边携带镜像后的同一端口，不视为冲突。
+// 同一链路（同一 linkKey）的正反两条边携带镜像后的同一端口，不视为冲突。
 func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID string, portsByNode map[string][]nodePortPin, result *ValidationResult) {
 	if port == 0 {
 		return
@@ -705,7 +720,7 @@ func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID stri
 
 // checkDuplicateTransitIP 跨「不同链路」检测被重复钉住的 transit IP。
 // 地址按解析后的规范形式比较，避免 "10.10.0.1" 与等价写法逃过去重。
-// 同一链路（同一 pinKey）的正反两条边携带镜像后的同一地址，不视为冲突。
+// 同一链路（同一 linkKey）的正反两条边携带镜像后的同一地址，不视为冲突。
 func checkDuplicateTransitIP(prefix, value, link, edgeID string, transitByValue map[string]pinOwner, result *ValidationResult) {
 	if value == "" {
 		return
@@ -723,7 +738,7 @@ func checkDuplicateTransitIP(prefix, value, link, edgeID string, transitByValue 
 }
 
 // checkDuplicateLinkLocal 跨「不同链路」检测被重复钉住的 IPv6 link-local 地址。
-// 同一链路（同一 pinKey）的正反两条边携带镜像后的同一地址，不视为冲突。
+// 同一链路（同一 linkKey）的正反两条边携带镜像后的同一地址，不视为冲突。
 func checkDuplicateLinkLocal(prefix, value, link, edgeID string, linkLocalByValue map[string]pinOwner, result *ValidationResult) {
 	if value == "" {
 		return
@@ -781,22 +796,308 @@ func validateEdgeEndpointConsistency(topo *model.Topology, nodeMap map[string]*m
 	}
 }
 
-// detectDuplicateEnabledEdges 对同一对节点（同方向）存在多条启用边的情况发出警告（D71）。
-// 编译器在 Pass 1/Pass 2 中按节点对去重，只有首条边生效——后续边携带的
-// endpoint_host/endpoint_port 覆盖会被静默忽略，操作员看见两条边却只有一条起作用。
-// 仅警告而非报错：拓扑仍可编译，但操作员应删除或禁用多余的边。
+// detectDuplicateEnabledEdges 对同一对节点（同方向）存在多条 primary class 启用边的情况
+// 发出警告（D71，并行链路重定范围）。
+// 同向多余的 primary class 边（Role 为空或 "primary"）会被编译器折叠进同一条链路：
+// 只有首条生效，后续边携带的 endpoint_host/endpoint_port 覆盖会被静默忽略，
+// 操作员看见两条边却只有一条起作用。
+// backup 边（Role == "backup"）各自成为一条独立链路，是有意的并行链路而非意外重复，
+// 因此从不触发本告警。
+// 仅警告而非报错：拓扑仍可编译，但操作员应删除或禁用多余的边——
+// 若本意是冗余备份，应将多余的边设为 role "backup" 使其成为独立的备份链路。
 func detectDuplicateEnabledEdges(topo *model.Topology, result *ValidationResult) {
-	firstEdgeByDirection := make(map[string]string) // "from->to" -> 首条边 ID
-	for i, edge := range topo.Edges {
+	firstEdgeByDirection := make(map[string]string) // "from->to" -> 首条 primary class 边 ID
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
 		if !edge.IsEnabled {
+			continue
+		}
+		// backup 边是独立链路，不参与同向去重告警。
+		if linkid.IsBackup(edge) {
 			continue
 		}
 		direction := edge.FromNodeID + "->" + edge.ToNodeID
 		if firstID, exists := firstEdgeByDirection[direction]; exists {
 			result.AddWarning(fmt.Sprintf("edges[%d]", i),
-				fmt.Sprintf("边 %s 与边 %s 连接同一对节点（同方向），编译时只有首条生效，本条边的 endpoint 设置会被忽略；请删除或禁用多余的边", edge.ID, firstID))
+				fmt.Sprintf("边 %s 与边 %s 连接同一对节点（同方向）且同属 primary class，编译时只有首条生效，本条边的 endpoint 设置会被忽略；请删除或禁用多余的边——若本意是冗余备份，请将本条边的 role 设为 backup，使其成为一条独立的备份链路", edge.ID, firstID))
 			continue
 		}
 		firstEdgeByDirection[direction] = edge.ID
+	}
+}
+
+// backupDefaultLinkCost 是 backup 链路的默认 Babel rxcost（4× babeld 有线默认 96），
+// 必须与 compiler/peers.go 的同名常量保持一致——等代价告警要用编译器实际解析出的代价
+// 来比较，二者若不一致会让校验放行编译器随后视为有故障切换偏好（或反之）的配置。
+// 规范见 docs/spec/artifacts/babel.md（Link cost resolution）。
+const backupDefaultLinkCost = 384
+
+// babeldWiredDefaultCost 是 babeld 对有线 / tunnel 接口的内建默认 rxcost。
+// 编译器把「未显式设置且非 backup」的链路代价解析为 0（省略 rxcost token，交由 babeld 默认），
+// 比较等代价时必须把 0 视为该内建默认值，否则两条都未设代价的链路会被误判为不等代价。
+const babeldWiredDefaultCost = 96
+
+// effectiveLinkCost 完全镜像编译器的链路代价解析顺序（contract item 4 / babel.md）：
+//  1. 显式 priority/weight 映射（D63：priority>0 取 priority，否则 weight>0 取 weight）优先；
+//  2. 否则 backup 链路 → backupDefaultLinkCost（384）；
+//  3. 否则 0（编译器省略 rxcost，babeld 采用内建默认 96）。
+//
+// 返回值为编译器写入的原始代价（0 表示交由 babeld 默认）。等代价比较时由调用方
+// 通过 comparableCost 把 0 归一为 96。rep 为该链路的代表边：unify 后的 primary 链路取首条
+// primary class 边，backup 链路取该 backup 边自身。
+func effectiveLinkCost(rep *model.Edge) int {
+	if rep == nil {
+		return 0
+	}
+	if rep.Priority > 0 {
+		return rep.Priority
+	}
+	if rep.Weight > 0 {
+		return rep.Weight
+	}
+	if linkid.IsBackup(rep) {
+		return backupDefaultLinkCost
+	}
+	return 0
+}
+
+// comparableCost 把链路代价归一为可比较值：0（未设、交由 babeld 默认）视为内建默认 96。
+func comparableCost(cost int) int {
+	if cost == 0 {
+		return babeldWiredDefaultCost
+	}
+	return cost
+}
+
+// validateInterfaceNameUniqueness 校验不变式 N4：同一节点上所有 per-peer WireGuard 接口名
+// （含 primary 与 backup、面向任意对端）必须互不相同。
+//
+// 一个节点可能朝同一对端持有多条接口（primary 链路 + 若干 backup），接口名由对端名称
+// （primary）或对端名称叠加 backup 边 ID 的 4 位 hash（backup）派生。两条接口名相撞会让
+// 一份 WireGuard 配置与一条 Babel 接口行覆盖另一条——16 位 hash 碰撞的确定性答案是「重命名其一」，
+// 因此这里报错并点名两条相撞的链路（命名规范见 docs/spec/artifacts/naming.md §Edge-aware names）。
+//
+// 接口名按编译器的口径计算：
+//   - primary 链路朝对端 R → naming.WgInterfaceName(R.Name)；
+//   - backup 边 e 朝对端 R → naming.WgInterfaceNameForEdge(R.Name, e.ID, true)。
+//
+// client 节点使用单一 wg0、不参与 per-peer 接口分配，故跳过 client 端点侧。
+func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	// nodeID -> (接口名 -> 首个占用该接口名的链路描述)，用于跨链路检测同名。
+	ifaceByNode := make(map[string]map[string]string)
+
+	// register 在某节点上登记一个接口名；若已存在则报错并点名两条链路。
+	register := func(nodeIndex int, nodeID, ifaceName, linkDesc string) {
+		if ifaceByNode[nodeID] == nil {
+			ifaceByNode[nodeID] = make(map[string]string)
+		}
+		if first, exists := ifaceByNode[nodeID][ifaceName]; exists {
+			node := nodeMap[nodeID]
+			nodeName := nodeID
+			if node != nil {
+				nodeName = node.Name
+			}
+			result.AddError(fmt.Sprintf("nodes[%d]", nodeIndex),
+				fmt.Sprintf("节点 %s 上有两条链路生成了相同的 WireGuard 接口名 %q：%s 与 %s 相撞，一份接口配置会覆盖另一份；请重命名相撞节点之一以消除 4 位 hash 碰撞",
+					nodeName, ifaceName, first, linkDesc))
+			return
+		}
+		ifaceByNode[nodeID][ifaceName] = linkDesc
+	}
+
+	// 节点下标查找，用于错误字段定位。
+	nodeIndex := make(map[string]int)
+	for i := range topo.Nodes {
+		nodeIndex[topo.Nodes[i].ID] = i
+	}
+
+	// 以 linkKey 去重链路：primary class 折叠为一条链路（用首条 primary class 边作代表），
+	// 每条 backup 边各为一条独立链路。
+	seenLinks := make(map[string]bool)
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		if fromNode == nil || toNode == nil {
+			continue
+		}
+		lk := linkid.LinkKey(edge)
+		if seenLinks[lk] {
+			continue
+		}
+		seenLinks[lk] = true
+
+		backup := linkid.IsBackup(edge)
+
+		// from 端点的接口朝 to（对端 = to），to 端点的接口朝 from（对端 = from）。
+		// 接口名以对端名称派生；client 端点不分配 per-peer 接口，跳过。
+		if fromNode.Role != "client" {
+			var ifaceName string
+			if backup {
+				ifaceName = naming.WgInterfaceNameForEdge(toNode.Name, edge.ID, true)
+			} else {
+				ifaceName = naming.WgInterfaceName(toNode.Name)
+			}
+			register(nodeIndex[fromNode.ID], fromNode.ID, ifaceName, linkDescription(edge, toNode.Name, backup))
+		}
+		if toNode.Role != "client" {
+			var ifaceName string
+			if backup {
+				ifaceName = naming.WgInterfaceNameForEdge(fromNode.Name, edge.ID, true)
+			} else {
+				ifaceName = naming.WgInterfaceName(fromNode.Name)
+			}
+			register(nodeIndex[toNode.ID], toNode.ID, ifaceName, linkDescription(edge, fromNode.Name, backup))
+		}
+	}
+}
+
+// linkDescription 为错误消息构造一条链路的可读描述：标明朝向的对端、链路类别（primary/backup）
+// 与代表边 ID，便于操作员定位需重命名的链路。
+func linkDescription(edge *model.Edge, remoteName string, backup bool) string {
+	kind := "primary 链路"
+	if backup {
+		kind = "backup 边 " + edge.ID
+	}
+	return fmt.Sprintf("朝 %s 的%s", remoteName, kind)
+}
+
+// validateSinglePrimaryPerPair 校验：同一对节点至多有一条显式标记 role=="primary" 的边。
+// 空 role 与 "primary" 同属 primary class，但显式写两条 "primary" 通常是操作员误解
+// （以为可借此表达双主），编译器只会折叠为一条主链路并静默忽略其余——故直接报错要求澄清。
+// 注意：只统计显式 "primary"，不含空 role（空 role 的同向重复由 detectDuplicateEnabledEdges 告警）。
+func validateSinglePrimaryPerPair(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	// pinKey -> 首条显式 primary 边 ID。
+	firstPrimary := make(map[string]string)
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+		if edge.Role != model.EdgeRolePrimary {
+			continue
+		}
+		if nodeMap[edge.FromNodeID] == nil || nodeMap[edge.ToNodeID] == nil {
+			continue
+		}
+		pk := linkid.PinKey(edge.FromNodeID, edge.ToNodeID)
+		if firstID, exists := firstPrimary[pk]; exists {
+			result.AddError(fmt.Sprintf("edges[%d].role", i),
+				fmt.Sprintf("边 %s 与边 %s 连接同一对节点且都显式标记为 role primary：每对节点至多只能有一条 primary 链路，编译器会折叠 primary class 并忽略多余者；请将其中一条改为 backup 或清除其 role", edge.ID, firstID))
+			continue
+		}
+		firstPrimary[pk] = edge.ID
+	}
+}
+
+// validateBackupClientEdges 校验：role=="backup" 的边不得触及 client 节点。
+// client 使用单一 wg0、不运行 Babel，也就没有 per-peer 接口与基于代价的故障切换语义，
+// 备份链路对其毫无意义（与 validateClientEdges 中「client 恰好一条出站边、单一 wg0」的约束一致）。
+func validateBackupClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+		if !linkid.IsBackup(edge) {
+			continue
+		}
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		if (fromNode != nil && fromNode.Role == "client") || (toNode != nil && toNode.Role == "client") {
+			result.AddError(fmt.Sprintf("edges[%d].role", i),
+				fmt.Sprintf("边 %s 触及 client 节点却被标记为 backup：client 使用单一 wg0、不运行 Babel，没有 per-peer 接口与基于代价的故障切换，备份链路对其无意义；请清除该边的 role 或删除该边", edge.ID))
+		}
+	}
+}
+
+// pairLinkSummary 汇总一对节点的全部链路，用于等代价 / 无 primary 告警。
+type pairLinkSummary struct {
+	edgeIndex  int    // 触发告警时定位用的代表边下标（取该对节点首条启用边）
+	hasPrimary bool   // 是否存在 primary class 链路
+	costs      []int  // 各链路的可比较代价（已把 0 归一为 96）
+	fromName   string // 用于错误消息
+	toName     string
+}
+
+// validateParallelLinkCosts 对多链路节点对发出两类告警（并行链路 / 故障切换）：
+//   - 等代价告警：一对节点有 >=2 条链路、但所有链路解析出的可比较代价都相同——
+//     Babel 无从偏好任何一条，配置表达不出故障切换意图（规范见 docs/spec/artifacts/babel.md）。
+//   - 无 primary 告警：一对节点的所有链路都是 backup（例如某次 role 翻转后遗漏了 primary）。
+//
+// 链路按 unify 规则分组：primary class 折叠为一条链路（代表边 = 首条 primary class 边），
+// 每条 backup 边各为一条链路。代价解析完全镜像编译器（effectiveLinkCost），
+// 比较前由 comparableCost 把 0 归一为 babeld 内建默认 96。
+func validateParallelLinkCosts(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	// pinKey -> 该对节点的链路汇总。pinKey 方向无关，保证正反边落在同一对。
+	summaries := make(map[string]*pairLinkSummary)
+	order := make([]string, 0) // 保持首次出现顺序，使告警稳定可测
+
+	// primaryCounted 记录每对节点的 primary class 是否已计入代价：primary class 折叠为一条链路，
+	// 其代价取首条 primary class 边（代表边），只计一次。
+	primaryCounted := make(map[string]bool)
+
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		if fromNode == nil || toNode == nil {
+			continue
+		}
+		pk := linkid.PinKey(edge.FromNodeID, edge.ToNodeID)
+		s := summaries[pk]
+		if s == nil {
+			s = &pairLinkSummary{
+				edgeIndex: i,
+				fromName:  fromNode.Name,
+				toName:    toNode.Name,
+			}
+			summaries[pk] = s
+			order = append(order, pk)
+		}
+
+		if linkid.IsBackup(edge) {
+			// 每条 backup 边各为一条链路。
+			s.costs = append(s.costs, comparableCost(effectiveLinkCost(edge)))
+			continue
+		}
+
+		// primary class：所有非 backup 边折叠为一条链路，仅计代表边（首条）的代价一次。
+		s.hasPrimary = true
+		if !primaryCounted[pk] {
+			primaryCounted[pk] = true
+			s.costs = append(s.costs, comparableCost(effectiveLinkCost(edge)))
+		}
+	}
+
+	for _, pk := range order {
+		s := summaries[pk]
+
+		// 无 primary 告警：该对节点存在链路但无 primary class 链路（全是 backup）。
+		if len(s.costs) > 0 && !s.hasPrimary {
+			result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex),
+				fmt.Sprintf("节点 %s 与 %s 之间的链路全部为 backup、没有 primary 主链路：Babel 将在备份链路间转发而无主备之分（可能是某次 role 翻转后遗漏了 primary）；请将其中一条改为 primary 或清除其 role", s.fromName, s.toName))
+		}
+
+		// 等代价告警：>=2 条链路且可比较代价全相同。
+		if len(s.costs) >= 2 {
+			allEqual := true
+			for _, c := range s.costs[1:] {
+				if c != s.costs[0] {
+					allEqual = false
+					break
+				}
+			}
+			if allEqual {
+				result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex),
+					fmt.Sprintf("节点 %s 与 %s 之间有 %d 条链路但解析出的代价全部相同（%d）：Babel 无从偏好任何一条，配置表达不出故障切换；请通过 role backup 或 priority/weight 为各链路设置不同代价", s.fromName, s.toName, len(s.costs), s.costs[0]))
+			}
+		}
 	}
 }
