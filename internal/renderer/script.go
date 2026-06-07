@@ -537,7 +537,8 @@ if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
 fi
 echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
 mkdir -p /etc/mimic
-# One filter per mimic listen port on this node; all OR'ed by mimic. xdp_mode=skb for portability.
+# One filter per mimic listen port on this node; all OR'ed by mimic. xdp_mode is operator-selectable
+# per node (default skb for portability; native opt-in via Node.xdp_mode) — see mimic.md.
 {
     {{ range .MimicPorts -}}
     echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
