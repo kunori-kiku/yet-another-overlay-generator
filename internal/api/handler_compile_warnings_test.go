@@ -11,10 +11,9 @@ import (
 // TestHandleCompile_SurfacesWarnings 验证 /api/compile 在编译成功（200）的同时，
 // 把语义校验产生的非致命告警通过 warnings 数组返回（关闭审计阻断项 UX-1）。
 //
-// 构造一个可成功编译但会触发 NAT 告警的拓扑：两个均位于 NAT 之后（无公网 IP、
-// 角色为 peer）的节点，之间有一条启用的 direct 边且未设置 endpoint_host。
-// 这正是 validator.validateNATReachability 中 AddWarning 的触发条件——双 NAT 的
-// direct 链路以及目标节点无公网可达地址——但不会产生任何硬性语义错误，因此编译成功。
+// 构造一个可成功编译但会触发告警的拓扑：一条 alpha→beta 的可用链路（beta 公网
+// 可达且边上带 endpoint_host，避免触发 D50 的「确凿死链」硬错误），外加一个没有任何
+// 边的孤立节点——孤立节点检测是稳定的 warning 级校验，不阻断编译。
 func TestHandleCompile_SurfacesWarnings(t *testing.T) {
 	server := NewServer()
 
@@ -35,7 +34,7 @@ func TestHandleCompile_SurfacesWarnings(t *testing.T) {
 	}
 
 	if len(resp.Warnings) == 0 {
-		t.Fatalf("期望编译响应携带非空 warnings 数组（双 NAT direct 链路应产生 NAT 告警），实际为空")
+		t.Fatalf("期望编译响应携带非空 warnings 数组（孤立节点应产生告警），实际为空")
 	}
 
 	// 每条告警都应是 warning 级别，且字段/消息非空，确保前端可直接渲染。
@@ -49,8 +48,8 @@ func TestHandleCompile_SurfacesWarnings(t *testing.T) {
 	}
 }
 
-// natWarningTopologyJSON 返回一个可成功编译但会触发 NAT 告警的拓扑。
-// 两个 peer 节点均无公网 IP（NAT 之后），之间一条启用的 direct 边且无 endpoint_host。
+// natWarningTopologyJSON 返回一个可成功编译但会触发孤立节点告警的拓扑：
+// alpha→beta 链路完整可用（beta 公网可达、边带 endpoint_host），gamma 无任何边。
 func natWarningTopologyJSON() []byte {
 	topo := map[string]interface{}{
 		"project": map[string]interface{}{
@@ -92,6 +91,28 @@ func natWarningTopologyJSON() []byte {
 				"domain_id":   "domain-1",
 				"listen_port": 51820,
 				"capabilities": map[string]interface{}{
+					"can_accept_inbound": true,
+					"can_forward":        false,
+					"can_relay":          false,
+					"has_public_ip":      true,
+				},
+				"public_endpoints": []interface{}{
+					map[string]interface{}{
+						"id":   "ep-beta-1",
+						"host": "beta.example.com",
+						"port": 51820,
+					},
+				},
+			},
+			map[string]interface{}{
+				"id":          "node-3",
+				"name":        "node-gamma",
+				"hostname":    "gamma.internal",
+				"platform":    "debian",
+				"role":        "peer",
+				"domain_id":   "domain-1",
+				"listen_port": 51820,
+				"capabilities": map[string]interface{}{
 					"can_accept_inbound": false,
 					"can_forward":        false,
 					"can_relay":          false,
@@ -101,12 +122,13 @@ func natWarningTopologyJSON() []byte {
 		},
 		"edges": []interface{}{
 			map[string]interface{}{
-				"id":           "edge-1",
-				"from_node_id": "node-1",
-				"to_node_id":   "node-2",
-				"type":         "direct",
-				"transport":    "udp",
-				"is_enabled":   true,
+				"id":            "edge-1",
+				"from_node_id":  "node-1",
+				"to_node_id":    "node-2",
+				"type":          "direct",
+				"endpoint_host": "beta.example.com",
+				"transport":     "udp",
+				"is_enabled":    true,
 			},
 		},
 	}

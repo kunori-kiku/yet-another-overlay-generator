@@ -156,11 +156,12 @@ func TestRenderInstallScript_PerPeerCleanupOrder(t *testing.T) {
 		t.Fatalf("渲染失败: %v", err)
 	}
 
-	// Phase 顺序检查
-	phase0Idx := strings.Index(script, "Phase 0")
-	phase1Idx := strings.Index(script, "Phase 1")
-	phase2Idx := strings.Index(script, "Phase 2")
-	phase3Idx := strings.Index(script, "Phase 3")
+	// Phase 顺序检查——锚定无歧义的阶段标题标记（裸 "Phase N" 子串会被
+	// 模板里的说明性注释抢先匹配，例如卸载段引用 Phase 1 清理函数的注释）。
+	phase0Idx := strings.Index(script, "=== Phase 0:")
+	phase1Idx := strings.Index(script, "=== Phase 1:")
+	phase2Idx := strings.Index(script, "=== Phase 2:")
+	phase3Idx := strings.Index(script, "=== Phase 3:")
 
 	if phase0Idx >= phase1Idx {
 		t.Errorf("Phase 0 应在 Phase 1 之前")
