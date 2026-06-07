@@ -1,10 +1,15 @@
 # Key Custody (Phase 1a — zero-knowledge split-render)
 
-This document defines **how WireGuard private keys are (not) handled** when a fleet is rendered by
-the controller. It is the code half of the zero-knowledge custody decision in the
-[controller-panel design spike](../../design/controller-panel-design-spike-2026_06_07.md): for
-controller-managed nodes, private keys are generated and held **agent-side** and never reach the
-controller, its database, or its bundles. The controller stores **public keys only**.
+This document defines **how WireGuard private keys are (not) handled** when a fleet is rendered for
+controller custody. It is the code half of the zero-knowledge custody decision in the
+[controller-panel design spike](../../design/controller-panel-design-spike-2026_06_07.md).
+
+**Scope of Phase 1a (this milestone).** Phase 1a delivers only the **render capability**: the
+renderer can produce a whole fleet from public keys alone, emitting a placeholder for each node's own
+private key (the `AgentHeld` mode below). The end-to-end zero-knowledge guarantee — private keys
+generated and held **agent-side**, the **controller storing public keys only** in its database — is
+completed by the agent (Phase 1b) and the controller/persistence layer (Phase 2), which build on this
+primitive. This document describes the rendering contract those phases rely on.
 
 ## Two custody modes
 
@@ -41,12 +46,18 @@ key appears in exactly **one** place — its own `[Interface]`:
 
 So the `keys` map carries the placeholder from `GenerateKeys` straight through compile and render. The
 agent (Phase 1b) splices its **locally-held** private key into the placeholder before the config is
-applied — see [../artifacts/install-script.md](../artifacts/install-script.md) and the agent spec.
+applied; that splice is the agent's responsibility and is specified with the agent (Phase 1b), not in
+[../artifacts/install-script.md](../artifacts/install-script.md) yet.
 
-Everything else in the bundle (peer public keys, transit IPs, ports, MTU, Babel, sysctl, install.sh,
-checksums, `bundle.sig`) is identical to the AirGap render for the same topology. A perpetual diff
+Everything else the renderer produces (peer public keys, transit IPs, ports, MTU, Babel, sysctl,
+install.sh, deploy scripts) is identical to the AirGap render for the same topology. A perpetual diff
 test (`internal/render/custody_diff_test.go`) pins this: AgentHeld output equals AirGap output line
 for line except the node's own `PrivateKey` line.
+
+The per-node `checksums.sha256` — and therefore `bundle.sig` (Phase 0) — **does** differ between the
+two modes: it hashes the rendered config bytes, and the node's own `PrivateKey` line differs
+(placeholder vs real key), so the digest of that file and the signature over the checksums differ.
+That is expected and correct: each rendered bundle is signed over its own content.
 
 ## Invariant I5 under AgentHeld
 
@@ -65,4 +76,5 @@ only the placeholder. This gate never retires; it is the standing guard against 
 regression reintroducing a key vault.
 
 See also [../security/security.md](../security/security.md) (custody in the threat model) and
-[signing.md](signing.md) (the bundle is signed over the same public-key-only content).
+[signing.md](signing.md) (each rendered bundle — including a placeholder-bearing AgentHeld bundle — is
+signed over its own `checksums.sha256`).

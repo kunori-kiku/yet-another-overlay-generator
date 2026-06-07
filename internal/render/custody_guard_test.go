@@ -68,15 +68,14 @@ func privateKeyLineValues(result *compiler.CompileResult) []string {
 	for _, m := range groups {
 		for _, content := range m {
 			for _, line := range strings.Split(content, "\n") {
-				t := strings.TrimSpace(line)
-				if !strings.HasPrefix(t, "PrivateKey") {
+				ln := strings.TrimSpace(line)
+				// Match the WireGuard key token exactly ("PrivateKey =" / "PrivateKey="),
+				// not looser prefixes like a hypothetical "PrivateKeyFile =".
+				if !strings.HasPrefix(ln, "PrivateKey =") && !strings.HasPrefix(ln, "PrivateKey=") {
 					continue
 				}
-				eq := strings.Index(t, "=")
-				if eq < 0 {
-					continue
-				}
-				vals = append(vals, strings.TrimSpace(t[eq+1:]))
+				eq := strings.Index(ln, "=")
+				vals = append(vals, strings.TrimSpace(ln[eq+1:]))
 			}
 		}
 	}
@@ -111,6 +110,21 @@ func TestGenerateKeys_AgentHeld_NoPrivateKeyEmitted(t *testing.T) {
 		t.Fatalf("render.All: %v", err)
 	}
 
+	// Completeness floor: both the per-peer path and the client wg0 path must have
+	// actually rendered, so the guard can't pass vacuously if one path regresses.
+	if _, ok := result.WireGuardConfigs["client-1:wg0"]; !ok {
+		t.Error("expected client-1:wg0 to be rendered (client custody path coverage)")
+	}
+	perPeer := 0
+	for k := range result.WireGuardConfigs {
+		if k != "client-1:wg0" {
+			perPeer++
+		}
+	}
+	if perPeer == 0 {
+		t.Error("expected at least one per-peer WG config (per-peer custody path coverage)")
+	}
+
 	vals := privateKeyLineValues(result)
 	if len(vals) == 0 {
 		t.Fatal("expected at least one PrivateKey line in the rendered fleet")
@@ -119,6 +133,41 @@ func TestGenerateKeys_AgentHeld_NoPrivateKeyEmitted(t *testing.T) {
 		if v != PrivateKeyPlaceholder {
 			t.Errorf("AgentHeld render emitted a non-placeholder PrivateKey %q (zero-knowledge custody violated)", v)
 		}
+	}
+}
+
+// TestGenerateKeys_AgentHeld_BothKeysPresent pins the most security-sensitive
+// branch: a node carrying BOTH a (stray) private key and a registered public key.
+// AgentHeld must use the registered public key verbatim, discard the stray private
+// key from the node, and emit only the placeholder — never re-deriving from or
+// leaking the stray private key.
+func TestGenerateKeys_AgentHeld_BothKeysPresent(t *testing.T) {
+	stray := mustGenerateKey(t)      // a private key that should be discarded
+	registered := mustGenerateKey(t) // a DIFFERENT keypair; its public half is authoritative
+	topo := &model.Topology{
+		Project: model.Project{ID: "c", Name: "c", Version: "1"},
+		Domains: []model.Domain{{ID: "d", Name: "d", CIDR: "10.42.0.0/24", AllocationMode: "auto", RoutingMode: "babel"}},
+		Nodes: []model.Node{{
+			ID: "n", Name: "n", Role: "router", DomainID: "d",
+			WireGuardPrivateKey: stray.String(),
+			WireGuardPublicKey:  registered.PublicKey().String(),
+		}},
+	}
+	keys, err := GenerateKeys(topo, AgentHeld)
+	if err != nil {
+		t.Fatalf("GenerateKeys(AgentHeld): %v", err)
+	}
+	if keys["n"].PrivateKey != PrivateKeyPlaceholder {
+		t.Errorf("private key must become the placeholder even when both keys are present, got %q", keys["n"].PrivateKey)
+	}
+	if keys["n"].PublicKey != registered.PublicKey().String() {
+		t.Errorf("must use the registered public key verbatim")
+	}
+	if keys["n"].PublicKey == stray.PublicKey().String() {
+		t.Errorf("must NOT re-derive the public key from the stray private key")
+	}
+	if topo.Nodes[0].WireGuardPrivateKey != "" {
+		t.Errorf("stray private key must be cleared from the node (must not persist in the controller topology)")
 	}
 }
 

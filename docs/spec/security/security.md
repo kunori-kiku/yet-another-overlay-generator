@@ -19,13 +19,14 @@
 
   **Zero-knowledge custody (controller fleets).** The above describes the **AirGap** custody mode,
   where private keys round-trip through the topology JSON. For controller-managed fleets, rendering
-  uses the **AgentHeld** mode instead: each node generates and keeps its own private key agent-side
-  and registers only a public key, and the renderer emits `PRIVATEKEY_PLACEHOLDER` on the node's own
-  `[Interface] PrivateKey` line — **no private key ever reaches the controller, its database, or its
-  bundles**. I5's *guarantee* (stable key identified by public key) holds; only the *mechanism*
-  downgrades to public-key-only. A perpetual CI gate asserts no AgentHeld bundle contains a parseable
-  private key. The AirGap path is unchanged and byte-identical. Full contract:
-  [../controller/key-custody.md](../controller/key-custody.md).
+  uses the **AgentHeld** mode: the renderer emits `PRIVATEKEY_PLACEHOLDER` on each node's own
+  `[Interface] PrivateKey` line and renders the fleet from public keys alone, so **no private key is
+  present in a controller-rendered bundle**. A perpetual CI gate asserts this. I5's *guarantee*
+  (stable key identified by public key) holds; only the *mechanism* downgrades to public-key-only, and
+  the AirGap path is unchanged and byte-identical. The complementary halves of the end-to-end
+  guarantee — each node generating and holding its own private key agent-side, and the controller
+  storing public keys only — are delivered by the agent (Phase 1b) and the persistence layer
+  (Phase 2). Full contract: [../controller/key-custody.md](../controller/key-custody.md).
 
   **Secret material — explicit.** Because the private key round-trips, the **topology JSON and the
   browser's localStorage now carry WireGuard private keys** (this generalizes the trust surface the

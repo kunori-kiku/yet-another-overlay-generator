@@ -73,6 +73,10 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 		node := &topo.Nodes[i]
 
 		if custody == AgentHeld {
+			// The registered public key is authoritative: when present it is trusted
+			// verbatim (the agent holds the matching private key), and a stray private
+			// key on the node is never preferred over it — only used to derive the
+			// public half when no public key was registered, then discarded.
 			pub := node.WireGuardPublicKey
 			if pub == "" {
 				// Defensive: an air-gap topology carrying a private key may be
