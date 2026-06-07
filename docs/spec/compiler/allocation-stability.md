@@ -196,9 +196,12 @@ historical behavior). Every `role: "backup"` edge is its **own link** regardless
 
 **Stability properties (normative):**
 
-1. **Single-edge reduction.** A pair with one enabled edge has `linkKey == pinKey` — fresh-compile
-   gap-fill order and values are byte-identical to the pre-parallel-links compiler. This is the
-   no-drift guarantee for every existing fleet, pinned by the perpetual stability gate.
+1. **Single-edge reduction.** A pair with one enabled **primary-class** edge has
+   `linkKey == pinKey` — fresh-compile gap-fill order and values are byte-identical to the
+   pre-parallel-links compiler. This is the no-drift guarantee for every existing fleet (whose
+   edges are all roleless, hence primary-class), pinned by the perpetual stability gate. (A pair
+   whose sole edge is a backup keys as `pinKey#edgeID` per property 3 — backups are discriminated
+   even when alone.)
 2. **Verbatim-pin immunity.** Pinned values are reserved from each edge's own `pinned_*` fields
    verbatim; linkKey governs only gap-fill ordering, validator grouping, and unification. No
    identity re-keying can move an already-pinned value.
