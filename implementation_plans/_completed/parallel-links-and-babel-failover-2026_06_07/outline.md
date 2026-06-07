@@ -125,17 +125,31 @@ N>3 → follow-up marker, do not block.
 
 ## 9. Closure criteria
 
-- [ ] All 3 PRs merged, CI green on main.
-- [ ] Extended I1/I2 gate (incl. parallel fixtures) in perpetual suite.
-- [ ] Manual failover smoke narrative recorded in plan-2/3 PR descriptions.
-- [ ] specs consistent with shipped behavior; D71 re-scope documented.
-- [ ] STATUS.md refreshed; subject archived to `_completed/`.
-- [ ] Test retirement dispositions recorded (default: keep, all gates cheap).
+- [x] All 3 PRs merged, CI green on main (2026-06-07, `bb1ee78..1af83db`; every PR CI-green and
+  independently review-approved 3/3 before merge).
+- [x] Extended I1/I2 gate (incl. parallel fixtures) in perpetual suite — pre-existing fixtures
+  untouched (verified additive-only by the #15 reviewer); passed on first CI contact.
+- [x] Manual failover smoke narrative recorded in the PR #16 description.
+- [x] specs consistent with shipped behavior; D71 re-scope documented; reviewer-found property-1
+  wording contradiction fixed pre-merge (`2478b37`).
+- [x] STATUS.md refreshed; subject archived to `_completed/`.
+- [x] Test retirement dispositions recorded — **keep all** (every suite is a sub-second unit
+  test; the parallel I1/I2 fixtures, linkid/naming tests, and babel two-stanza golden are
+  perpetual; validator parallel_links_test stays per the cheap-to-keep rule).
+
+Carried-forward (non-blocking reviewer notes):
+- No end-to-end compile test for a pair whose ONLY edge is a backup (validator + identity paths
+  covered; compile path verified by static trace) — add if compile coverage is revisited.
+- Node-ID charset is not restricted from the reserved separators `|`/`#`/`->` (pre-existing,
+  self-consistent either way) — optional hardening.
+- Lone backup edge (no surviving primary) renders no bN marker on node chips — graceful display
+  choice, revisit with bundled rendering.
+- `roleChip` TS union is loosely typed (`string` for bN) — cosmetic.
 
 ## 10. Plan status table
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-1 | pending | — | spec contract freeze |
-| plan-2 | pending | — | backend link identity |
-| plan-3 | pending | — | frontend + focus-dim |
+| plan-1 | merged | [#14](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/14) | spec contract freeze + property-1 fix |
+| plan-2 | merged | [#15](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/15) | backend link identity; perpetual gate green on first contact |
+| plan-3 | merged | [#16](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/16) | frontend + focus-transparency; subject closed 2026-06-07 |

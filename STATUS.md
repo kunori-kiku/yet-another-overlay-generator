@@ -1,15 +1,16 @@
 # STATUS
-<!-- regenerated: 2026-06-07 (parallel-links subject drafted) -->
-<!-- by: draft-implementation-plan -->
+<!-- regenerated: 2026-06-07 (parallel-links subject closed) -->
+<!-- by: program closure (parallel-links-and-babel-failover) -->
 
 ## Active work
 
-- **Subject:** parallel-links-and-babel-failover-2026_06_07 (drafted, plan-1 ready to execute)
-- **Branch:** plan/parallel-links-2026-06
-- **Current plan:** plan-1-2026_06_07.md (spec contract freeze; this PR carries the plan folder)
-- **Last shipped:** canvas UX rework (PR #13, main @ bb1ee78) on top of the full
-  audit-remediation chain (#3–#12, `d5065ed..fe93788`): sticky-pin allocation + I1/I2 perpetual
-  gate, specs frozen under `docs/spec/`, all 84 findings dispositioned.
+- **Subject:** none — between subjects.
+- **Last shipped:** parallel-links-and-babel-failover (2026-06-07, PRs #14–#16, `bb1ee78..1af83db`):
+  N parallel links per node pair with Babel cost failover. Per-edge link identity
+  (`internal/linkid`, primary-class keeps bare pinKey → zero drift, proven by the untouched
+  perpetual I1/I2 fixtures), edge-aware interface naming (N4), role→cost presets (backup 384),
+  Add-backup gesture + role-chip fan + edge-aware interface chips (shared pinned-port resolver),
+  and the focus-transparency canvas interaction.
 
 ## Open questions / blockers
 
@@ -18,15 +19,17 @@
 
 ## Next actions
 
-- Execute plan-1: amend the six spec files freezing the parallel-links contract (linkKey, unify
-  rule, edge-aware naming, role/cost mapping, validator rows).
-- Then plan-2 (backend per-edge link identity, perpetual-gate extension), plan-3 (frontend:
-  Add-backup gesture, role-chip fan, focus-dim).
-- **plan-6.5 (open design marker, prior subject):** domain-CIDR aggregate announcement.
-- Carried-forward polish: RightPanel prefix-match lookup (closes in plan-3 step 4), D71 validator
-  test (plan-2 re-scope work touches it), deploy.go fallback-branch test.
+- **plan-6.5 (open design marker, audit subject):** domain-CIDR aggregate announcement design.
+- Future-subject candidates: ECMP/load-balancing across parallel links; per-edge WG keypairs
+  (escape hatch documented in security.md); bundled/hybrid canvas rendering for N>3 fans;
+  route_policies implementation; static-route renderer; additive-apply installer; IPv6 overlay.
+- Carried-forward polish (non-blocking reviewer notes, see both archived outlines §9):
+  sole-backup-pair compile test; node-ID charset hardening vs reserved separators;
+  deploy.go fallback-branch test (audit subject).
 
 ## Recently closed subjects (last 3)
 
+- [parallel-links-and-babel-failover-2026_06_07](implementation_plans/_completed/parallel-links-and-babel-failover-2026_06_07/outline.md)
+  — 3 stacked PRs: per-edge link identity, babel cost failover, focus-transparency UX.
 - [audit-remediation-and-allocation-stability-2026_06_07](implementation_plans/_completed/audit-remediation-and-allocation-stability-2026_06_07/outline.md)
   — 10 stacked PRs, 84 findings closed/deferred/refuted, sticky-pin allocation, contract freeze.
