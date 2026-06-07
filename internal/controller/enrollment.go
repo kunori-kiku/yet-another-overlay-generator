@@ -204,13 +204,20 @@ func (c *DevCA) IssueClientCert(csrDER []byte, nodeID string, now time.Time) (ce
 	if err != nil {
 		return nil, "", fmt.Errorf("controller: generating client cert serial: %w", err)
 	}
+	// A client cert must never outlive the CA that signed it: cap NotAfter at the
+	// CA's own expiry (relevant if clientCertTTL is configured longer than caTTL, or
+	// late in the CA's life).
+	notAfter := now.Add(c.clientCertTTL)
+	if notAfter.After(c.caCert.NotAfter) {
+		notAfter = c.caCert.NotAfter
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName: wantCN,
 		},
 		NotBefore:             now,
-		NotAfter:              now.Add(c.clientCertTTL),
+		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,

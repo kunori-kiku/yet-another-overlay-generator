@@ -48,9 +48,10 @@ authenticated endpoints; the registry ends with an **approved** `Node` carrying 
 An `EnrollmentToken` ([store.go](../../../internal/controller/store.go)) authorizes **one** node to
 enroll. It is **single-use, short-TTL, and node-scoped**, and the plaintext is **never stored**.
 
-- **`NewEnrollmentToken(nodeID, ttl) (plaintext string, EnrollmentToken)`** — generates a
-  `crypto/rand` plaintext token, computes `TokenHash = hex(SHA-256(plaintext))`, and sets
-  `ExpiresAt = now + ttl`, `NodeID = nodeID`, `ConsumedAt = nil`. The operator persists the **record**
+- **`NewEnrollmentToken(nodeID string, ttl time.Duration, now time.Time) (plaintext string, EnrollmentToken)`**
+  — generates a `crypto/rand` plaintext token, computes `TokenHash = hex(SHA-256(plaintext))`, and sets
+  `ExpiresAt = now + ttl`, `NodeID = nodeID`, `ConsumedAt = nil`. (`now` is passed in, not read from the
+  clock, so callers/tests are deterministic.) The operator persists the **record**
   (hashed) via `CreateEnrollmentToken` and hands the **plaintext** to the node **out-of-band** (the
   same trust assumption as copying a public key by hand in Phase 1b). A store/DB read can never recover
   a usable token — only its SHA-256 hash is on disk.
@@ -97,7 +98,8 @@ identity — possession of the mTLS key the node will authenticate with — is f
 
 ## The dev controller-CA — ephemeral by design
 
-`DevCA` (`NewDevCA(tenant TenantID, ttl) (*DevCA, error)`) generates an **ephemeral Ed25519 CA key**
+`DevCA` (`NewDevCA(tenant TenantID, now time.Time, caTTL, clientCertTTL time.Duration) (*DevCA, error)`)
+generates an **ephemeral Ed25519 CA key**
 and a self-signed CA certificate **in memory**. The CA key is **never persisted** — not to the
 `FileStore`, not anywhere on disk.
 
@@ -111,28 +113,31 @@ This is a deliberate **breach-bounding** decision, not a limitation to apologize
   acceptable — re-enrollment is the same cheap ceremony, and the operator already gates it with tokens.
 - A **persistent / KMS-backed CA** (sign-only key handle, no exportable private key), OCSP/CRL, and
   cert rotation are **Plan 5** hardening. The `DevCA` establishes the issuance *contract* —
-  `IssueClientCert` and `CAPoolPEM` — so Plan 5 swaps *where the CA key lives* without changing the
+  `IssueClientCert` and `CACertPEM` — so Plan 5 swaps *where the CA key lives* without changing the
   ceremony.
 
-**`(*DevCA).IssueClientCert(csrDER []byte, nodeID string, ttl) (certPEM []byte, fp string, err error)`**
+**`(*DevCA).IssueClientCert(csrDER []byte, nodeID string, now time.Time) (certPEM []byte, fp string, err error)`**
 parses the CSR, **verifies its self-signature (the PoP above)**, **requires `CN == "<tenant>:<nodeID>"`**
 (the subject names exactly the tenant-scoped node — the same `tenant:node` identity Plan 5's mTLS
 middleware will derive a `TenantID` from), then issues an X.509 **client** certificate
-(`ExtKeyUsageClientAuth`) signed by the CA, valid for `ttl`. It returns the PEM-encoded cert and the
-issued cert's **SHA-256 fingerprint** (hex). A bad self-signature or a CN mismatch is a **hard refusal**
-— no cert is issued.
+(`ExtKeyUsageClientAuth`) signed by the CA, valid for the DevCA's configured `clientCertTTL` (capped so
+it never outlives the CA's own validity). It returns the PEM-encoded cert and the issued cert's
+**SHA-256 fingerprint** (hex). A bad self-signature or a CN mismatch is a **hard refusal** — no cert is
+issued.
 
-**`(*DevCA).CAPoolPEM()`** returns the CA certificate as PEM for use as the `ClientCAs` pool in
+**`(*DevCA).CACertPEM()`** returns the CA certificate as PEM for use as the `ClientCAs` pool in
 [4.3](#what-43-adds)'s mTLS termination (the controller trusts client certs that chain to this CA).
 
 ## The Enroll ceremony
 
 `Enroll(ctx, store Store, ca *DevCA, t TenantID, req EnrollRequest, now time.Time) (EnrollResult, error)`
-with `EnrollRequest{NodeID, CSRDER []byte, WGPublicKey string}` runs the steps in **fail-safe order**:
+with `EnrollRequest{Token string, NodeID, CSRDER []byte, WGPublicKey string}` runs the steps in
+**fail-safe order** (`Token` is the **plaintext** the node presents; `Enroll` hashes it with
+`HashToken` before the burn — the controller only ever compares hashes):
 
-1. **`ConsumeEnrollmentToken(ctx, t, req token hash, req.NodeID, now)`** — atomic burn (above). On
+1. **`ConsumeEnrollmentToken(ctx, t, HashToken(req.Token), req.NodeID, now)`** — atomic burn (above). On
    `ErrTokenInvalid` / `ErrTokenConsumed` the ceremony aborts and **nothing is provisioned**.
-2. **`ca.IssueClientCert(req.CSRDER, req.NodeID, certTTL)`** — verify CSR self-signature (PoP),
+2. **`ca.IssueClientCert(req.CSRDER, req.NodeID, now)`** — verify CSR self-signature (PoP),
    require `CN == "<t>:<req.NodeID>"`, issue the per-node client cert + fingerprint. (The token is
    **already burned** at this point; a failure here needs a fresh token — the single-use safety
    property.)
@@ -161,7 +166,7 @@ Plan **4.3** puts this ceremony on the wire:
 - An HTTP **`POST /enroll`** endpoint that accepts `{token, CSR DER, WG public key}` and returns the
   issued client cert + CA cert (this is the **one** endpoint reachable *without* a client cert, since
   the node has none yet — it is gated by the single-use token + PoP instead).
-- **mTLS termination** for every *other* controller endpoint, with `DevCA.CAPoolPEM()` wired as the
+- **mTLS termination** for every *other* controller endpoint, with `DevCA.CACertPEM()` wired into the
   TLS **`ClientCAs`** pool so the controller only accepts client certs that chain to its CA (the certs
   this ceremony issues).
 - The agent **`enroll` subcommand** — generate the mTLS keypair + CSR, read the WG public key from the
