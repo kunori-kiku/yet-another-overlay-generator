@@ -140,6 +140,66 @@ func TestRenderInstallScript_D53_WgQuickFailureTolerant(t *testing.T) {
 	}
 }
 
+// parallelLinksPeers 返回指向同一对端的两条并行链路（primary + backup），接口名互异，
+// 监听端口 / transit 互异——模拟节点对某一邻居同时持有 primary 与 backup 隧道。
+func parallelLinksPeers() []compiler.PeerInfo {
+	return []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1"},
+		// backup：edge-aware 接口名（形态不同即可），独立端口与 transit。
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta-bk1",
+			ListenPort: 51821, LocalTransitIP: "10.10.0.3", LocalLinkLocal: "fe80::3", LinkCost: 384},
+	}
+}
+
+// TestRenderInstallScript_ParallelLinks_BothInterfacesEveryPhase 验证并行链路（primary + backup）
+// 节点的安装脚本在每一个 per-interface 阶段都同时列出两条接口：
+//   - Phase 3 启动（D53 的 `if ! wg-quick up "<iface>"`）
+//   - Phase 3 开机自启（systemctl enable wg-quick@"<iface>"）
+//   - 卸载段的停止 / 禁用 / 删除配置（wg-quick down / systemctl disable / rm 配置文件）
+//
+// 安装脚本按 PeerInfo 列表逐接口展开模板的 {{ range .WgInterfaces }} 区段，因此两条链路
+// （两个 InterfaceName）都必须在每个 per-interface 区段各出现一次，缺一即意味着某条隧道
+// 不会被启动 / 启用 / 清理。
+func TestRenderInstallScript_ParallelLinks_BothInterfacesEveryPhase(t *testing.T) {
+	script, err := RenderInstallScript(robustnessTestNode(), parallelLinksPeers(), true)
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+
+	ifaces := []string{"wg-beta", "wg-beta-bk1"}
+
+	for _, iface := range ifaces {
+		// Phase 3 启动：D53 容错形式的 wg-quick up。
+		if !strings.Contains(script, `if ! wg-quick up "`+iface+`"; then`) {
+			t.Errorf("启动阶段缺少接口 %s 的 wg-quick up 行", iface)
+		}
+		// Phase 3 开机自启。
+		if !strings.Contains(script, `systemctl enable wg-quick@"`+iface+`"`) {
+			t.Errorf("启动阶段缺少接口 %s 的 systemctl enable 行", iface)
+		}
+		// 卸载段停止：wg-quick down。
+		if !strings.Contains(script, `wg-quick down "`+iface+`"`) {
+			t.Errorf("卸载/清理阶段缺少接口 %s 的 wg-quick down 行", iface)
+		}
+		// 卸载段禁用 systemd unit。
+		if !strings.Contains(script, `systemctl disable "wg-quick@`+iface+`"`) {
+			t.Errorf("卸载/清理阶段缺少接口 %s 的 systemctl disable 行", iface)
+		}
+		// 配置文件清理（卸载段与 Phase 0 各有一次删除）。
+		if !strings.Contains(script, `/etc/wireguard/`+iface+`.conf`) {
+			t.Errorf("脚本缺少接口 %s 的配置文件路径引用", iface)
+		}
+	}
+
+	// 非空门禁：backup 接口（wg-beta-bk1）确实是新增的——它必须区别于 primary（wg-beta），
+	// 否则模板可能只展开了一条链路而测试假性通过。统计两条 up 行各出现。
+	if strings.Count(script, `if ! wg-quick up "wg-beta"; then`) < 1 ||
+		strings.Count(script, `if ! wg-quick up "wg-beta-bk1"; then`) < 1 {
+		t.Errorf("primary 与 backup 两条接口的启动行都必须出现且各异，实际脚本:\n%s", script)
+	}
+}
+
 // TestRenderClientInstallScript_RobustnessUnaffected 验证 client 安装脚本不受
 // D52/D53 改动影响：client 走单接口 wg0、无 Babel、无 SNAT，因此既不应出现
 // per-peer 的 FAILED_INTERFACES 容错块，也不应出现 iptables-save loop-delete。

@@ -345,6 +345,184 @@ func TestPinnedValuesHonoredVerbatim(t *testing.T) {
 	}
 }
 
+// backupEdge 构造一条带 Role=backup 的 A->B direct edge（带 endpoint_host，使 CompiledPort 也参与比较）。
+// 与 abEdge 同构，只多一个 Role 字段——backup edge 在 link identity 上各自成为一条独立链路
+// （linkKey = pinKey + "#" + edge.ID），因此它会获得与 primary class 链路相互区分的独立分配。
+func backupEdge(id, from, to, endpointHost string) model.Edge {
+	e := abEdge(id, from, to, endpointHost)
+	e.Role = model.EdgeRoleBackup
+	return e
+}
+
+// pinsNonEmpty 判定一组抓取到的分配值是否「全部非空」——端口、transit、link-local 三类资源
+// 都已被分配。用于断言 backup 链路确实拿到了一套完整、独立的分配。
+func pinsNonEmpty(p abPins) bool {
+	return p.fromPort != 0 && p.toPort != 0 &&
+		p.fromTransitIP != "" && p.toTransitIP != "" &&
+		p.fromLinkLocal != "" && p.toLinkLocal != ""
+}
+
+// pinsDisjoint 判定两组分配值是否在每一类资源上都不相同——primary 与 backup 是两条不同链路
+// （不同 linkKey），它们的端口（同一节点上）、transit IP 对、link-local 对都必须互不重叠。
+func pinsDisjoint(a, b abPins) bool {
+	return a.fromPort != b.fromPort && a.toPort != b.toPort &&
+		a.fromTransitIP != b.fromTransitIP && a.toTransitIP != b.toTransitIP &&
+		a.fromLinkLocal != b.fromLinkLocal && a.toLinkLocal != b.toLinkLocal
+}
+
+// TestParallelBackup_PrimaryStableBackupDistinct 是并行链路稳定性的主门禁，覆盖
+// docs/spec/compiler/allocation-stability.md「Link identity with parallel edges」的
+// 稳定性属性 1（single-edge reduction）、属性 3（identity never migrates on growth）：
+//
+//	compile 1：[A,B] + A-B（primary class）          →  抓取 primary 的全部分配值
+//	compile 2：[A,B] + A-B(带 pin) + A-B-backup(新 id)  →  primary 必须逐字节相同，
+//	                                                       backup 取到一套完整且与 primary 互斥的分配
+//	compile 3：删除 backup，仅留带 pin 的 primary       →  primary 仍逐字节相同
+//
+// 追加一条 backup 永不改变既有 primary 链路的 linkKey、接口名或分配值（属性 3）：
+// backup 始终以自身 edge.ID 区分，因此 primary 在 compile 1 拿到的值在 compile 2/3 里不动。
+func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
+	c := NewCompiler()
+	keys := stableKeys()
+
+	// ---- compile 1：[A,B] + A-B（单条 primary class 边） ----
+	topo1 := &model.Topology{
+		Project: model.Project{ID: "parallel-001", Name: "Parallel Stability"},
+		Domains: []model.Domain{stableDomain()},
+		Nodes: []model.Node{
+			stableRouterNode("node-a", "alpha", "10.50.0.1"),
+			stableRouterNode("node-b", "beta", "10.50.0.2"),
+		},
+		Edges: []model.Edge{
+			abEdge("e-ab", "node-a", "node-b", "beta.example.com"),
+		},
+	}
+	res1, err := c.Compile(topo1, keys)
+	if err != nil {
+		t.Fatalf("compile 1 失败: %v", err)
+	}
+	primaryBase := capturePins(t, res1.Topology, "e-ab")
+	if !pinsNonEmpty(primaryBase) {
+		t.Fatalf("compile 1 应把 primary 链路的全部分配写回 pin，实际: %+v", primaryBase)
+	}
+
+	// primary 携带 compile 1 写回的 pin 进入后续编译（既有链路被先预留、逐字遵循）。
+	pinnedPrimary := abEdge("e-ab", "node-a", "node-b", "beta.example.com")
+	applyPins(&pinnedPrimary, primaryBase)
+
+	// ---- compile 2：追加一条 backup（全新 id，无 pin）到同一对节点 ----
+	topo2 := &model.Topology{
+		Project: model.Project{ID: "parallel-001", Name: "Parallel Stability"},
+		Domains: []model.Domain{stableDomain()},
+		Nodes: []model.Node{
+			stableRouterNode("node-a", "alpha", "10.50.0.1"),
+			stableRouterNode("node-b", "beta", "10.50.0.2"),
+		},
+		Edges: []model.Edge{
+			pinnedPrimary,
+			backupEdge("e-ab-backup", "node-a", "node-b", "beta.example.com"),
+		},
+	}
+	res2, err := c.Compile(topo2, keys)
+	if err != nil {
+		t.Fatalf("compile 2（追加 backup）失败: %v", err)
+	}
+
+	// 属性 3：追加 backup 后 primary 的六个 pinned_* + CompiledPort 逐字节不变。
+	gotPrimary2 := capturePins(t, res2.Topology, "e-ab")
+	assertPinsEqual(t, "追加 backup 后 primary 链路", primaryBase, gotPrimary2)
+
+	// backup 必须拿到一套完整、非空、且与 primary 在每一类资源上都互斥的分配。
+	gotBackup := capturePins(t, res2.Topology, "e-ab-backup")
+	if !pinsNonEmpty(gotBackup) {
+		t.Errorf("backup 链路应获得一套完整的独立分配，实际: %+v", gotBackup)
+	}
+	if !pinsDisjoint(primaryBase, gotBackup) {
+		t.Errorf("backup 与 primary 是两条不同链路，分配值应在每类资源上互斥。\nprimary: %+v\nbackup:  %+v", primaryBase, gotBackup)
+	}
+
+	// ---- compile 3：删除 backup，primary 的值必须不变 ----
+	topo3 := &model.Topology{
+		Project: model.Project{ID: "parallel-001", Name: "Parallel Stability"},
+		Domains: []model.Domain{stableDomain()},
+		Nodes: []model.Node{
+			stableRouterNode("node-a", "alpha", "10.50.0.1"),
+			stableRouterNode("node-b", "beta", "10.50.0.2"),
+		},
+		Edges: []model.Edge{
+			pinnedPrimary,
+		},
+	}
+	res3, err := c.Compile(topo3, keys)
+	if err != nil {
+		t.Fatalf("compile 3（删除 backup）失败: %v", err)
+	}
+	gotPrimary3 := capturePins(t, res3.Topology, "e-ab")
+	assertPinsEqual(t, "删除 backup 后 primary 链路", primaryBase, gotPrimary3)
+}
+
+// TestParallelBackup_OrderIndependence 覆盖稳定性属性「I2 with a parallel pair present」：
+// 在已存在一对并行链路（primary + backup）的拓扑里，把 backup 追加 vs 前插到 topo.Edges，
+// 其余所有不相关链路（这里是 A-C）的分配值必须逐字节一致——backup 仅在自身资源上是位置相关的，
+// 绝不影响他人（属性 5 的「backups are positional only in their own resources」）。
+//
+// 注意：本测试不对 backup 自身的值跨两次编译做相等断言（属性 5 明确接受 backup 的
+// delete/re-add 不幂等，且这里 backup 的 edge.ID 在两次拓扑中相同但数组位置不同）。
+// 门禁锁定的是「其它链路不被 backup 的位置扰动」。
+func TestParallelBackup_OrderIndependence(t *testing.T) {
+	c := NewCompiler()
+	keys := stableKeys()
+
+	nodes := func() []model.Node {
+		return []model.Node{
+			stableRouterNode("node-a", "alpha", "10.50.0.1"),
+			stableRouterNode("node-b", "beta", "10.50.0.2"),
+			stableRouterNode("node-c", "gamma", "10.50.0.3"),
+		}
+	}
+
+	primary := abEdge("e-ab", "node-a", "node-b", "beta.example.com")
+	backup := backupEdge("e-ab-backup", "node-a", "node-b", "beta.example.com")
+	other := abEdge("e-ac", "node-a", "node-c", "gamma.example.com")
+
+	// ---- 编排 1：backup 追加在 A-C 之后 ----
+	topoAppend := &model.Topology{
+		Project: model.Project{ID: "parallel-002", Name: "Parallel Order"},
+		Domains: []model.Domain{stableDomain()},
+		Nodes:   nodes(),
+		Edges:   []model.Edge{primary, other, backup},
+	}
+	resAppend, err := c.Compile(topoAppend, keys)
+	if err != nil {
+		t.Fatalf("compile（backup 追加）失败: %v", err)
+	}
+	acAppend := capturePins(t, resAppend.Topology, "e-ac")
+	if !pinsNonEmpty(acAppend) {
+		t.Fatalf("A-C 应获得完整分配，实际: %+v", acAppend)
+	}
+
+	// ---- 编排 2：backup 前插在所有边之前 ----
+	topoPrepend := &model.Topology{
+		Project: model.Project{ID: "parallel-002", Name: "Parallel Order"},
+		Domains: []model.Domain{stableDomain()},
+		Nodes:   nodes(),
+		Edges:   []model.Edge{backup, primary, other},
+	}
+	resPrepend, err := c.Compile(topoPrepend, keys)
+	if err != nil {
+		t.Fatalf("compile（backup 前插）失败: %v", err)
+	}
+	acPrepend := capturePins(t, resPrepend.Topology, "e-ac")
+
+	// 不相关链路 A-C：backup 的数组位置变化不得改变其分配值（I2）。
+	assertPinsEqual(t, "backup 前插/追加下不相关链路 A-C", acAppend, acPrepend)
+
+	// primary 同样不受 backup 位置影响（它属 primary class，linkKey == pinKey）。
+	primAppend := capturePins(t, resAppend.Topology, "e-ab")
+	primPrepend := capturePins(t, resPrepend.Topology, "e-ab")
+	assertPinsEqual(t, "backup 前插/追加下 primary 链路 A-B", primAppend, primPrepend)
+}
+
 // TestPrePinTopologyCompiles 是 I10 + 向后兼容的门禁：一个 v1.2.0 形态的拓扑
 // （无任何 pin 字段、无 alloc_schema_version）应能正常编译，且结果带上
 // 写回的 pin 与 AllocSchemaVersion=1。

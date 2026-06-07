@@ -7,6 +7,7 @@ import (
 	"net"
 	"sort"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
@@ -16,6 +17,11 @@ import (
 // 为键，从而与 allocateTransitPair 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs
 // 解析保持一致——同一池绝不会被记成两份。
 const defaultTransitCIDR = "10.10.0.0/24"
+
+// backupDefaultLinkCost 是 backup 链路在没有显式 Priority/Weight 时采用的 Babel rxcost
+// 预设值：384 = 4× babeld 有线默认 cost（96）。这样 Babel 在主链路存活时绝不优先 backup，
+// 而多跳备选路径仍能正常参与 cost 比较。详见 docs/spec/artifacts/babel.md（Link cost resolution）。
+const backupDefaultLinkCost = 384
 
 // KeyPair WireGuard 密钥对
 type KeyPair struct {
@@ -120,19 +126,26 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		peerMap[node.ID] = []PeerInfo{}
 	}
 
-	// 预扫描所有启用的 edge 方向，用于 keepalive 判断
+	// 预扫描所有启用的「primary class」edge 方向，用于 keepalive 判断。
+	// 仅统计非 backup edge（linkid.IsBackup==false）：反向可达性是统一 primary 链路的属性，
+	// backup edge 自成独立链路、绝不充当某对节点的「反向 primary」（规范 unify rule：反向解析
+	// 只考虑同对节点的对向 primary-class edge）。单 edge 对里该 edge 即 primary class，行为不变。
 	enabledEdgeDirections := make(map[string]bool)
-	for _, edge := range topo.Edges {
-		if edge.IsEnabled {
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if edge.IsEnabled && !linkid.IsBackup(edge) {
 			enabledEdgeDirections[edge.FromNodeID+"->"+edge.ToNodeID] = true
 		}
 	}
 
-	// 构建 edge 反向查找索引：key="fromNodeID->toNodeID" -> Edge
+	// 构建 edge 反向查找索引：key="fromNodeID->toNodeID" -> Edge。
+	// 同样只收录 primary-class edge：统一 primary 链路的反向 endpoint 解析只能命中
+	// 对向的 primary-class edge，绝不命中 backup（规范：Reverse-edge resolution considers
+	// ONLY primary-class opposite-direction edges）。
 	edgeMap := make(map[string]*model.Edge)
 	for i := range topo.Edges {
 		e := &topo.Edges[i]
-		if e.IsEnabled {
+		if e.IsEnabled && !linkid.IsBackup(e) {
 			edgeMap[e.FromNodeID+"->"+e.ToNodeID] = e
 		}
 	}
@@ -144,19 +157,28 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 	// gap-fill 按 pinKey 排序遍历、池内取最低空闲槽位（Spec B 规范要求的 pinKey-deterministic 顺序）：
 	// 一条链路看到的预留集合只取决于全拓扑当前的 pin 与 pinKey 更小的未 pin 链路，与数组位置、
 	// 以及该链路自身的删除/重加历史无关，从而保证 delete/re-add 幂等（I9/G1）。
-	allocations := make(map[string]*pairAllocation) // key: "fromNodeID->toNodeID"（双向都指向同一 struct）
+	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge)（外加 primary 链路的双向 "from->to" 别名，见 Pass 1 阶段 4 末尾）
 
-	// 把每个 enabled edge 折叠到其规范 pinKey；同一对节点（任一方向）只处理一次。
-	// primaryEdge 记录该 pinKey 首次出现的 edge，用以确定 pairAllocation 的 from/to 定向。
+	// 把每个 enabled edge 按 unify rule 折叠成链路实体（规范：docs/spec/compiler/
+	// allocation-stability.md「Link identity with parallel edges」/「Reserve-all-pins-first」）：
+	//   - PRIMARY CLASS：同一对节点的全部「非 backup」edge（linkid.IsBackup==false）折叠为
+	//     唯一一条双向链路。primaryEdge = topo.Edges 顺序里首个 enabled primary-class edge
+	//     （沿用旧规则：决定 pairAllocation 的 from/to 定向）；同向多出来的 primary-class edge
+	//     是「意外重复」，仍映射到这条统一链路用于写回（历史行为，验证器另行告警）。
+	//   - 每条 role=="backup" 的 edge 各自成为一条独立链路：primaryEdge = 它自己，linkKey 带
+	//     "#edgeID" 后缀以与同对节点的 primary 链路区分。
+	// 链路身份 = linkid.LinkKey(primaryEdge)：primary 链路约简为 pinKey（单 edge 对里
+	// linkKey==pinKey，gap-fill 顺序与取值与并行链路改造前逐字节一致——既有机群的零漂移保证）。
 	type linkEntity struct {
-		pinKey      string
-		primaryEdge *model.Edge // 决定 from/to 定向
+		linkKey     string
+		backup      bool
+		primaryEdge *model.Edge // 决定 from/to 定向、interface 名后缀与 LinkCost
 		fromNode    *model.Node
 		toNode      *model.Node
 		transitCIDR string // 解析后的 transit CIDR（per-pool 键）
 	}
 	links := make([]*linkEntity, 0, len(topo.Edges))
-	seenPinKey := make(map[string]bool)
+	linkByKey := make(map[string]*linkEntity) // linkKey -> 链路实体（Pass 2 / 写回按 LinkKey 反查）
 
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -168,11 +190,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		if fromNode == nil || toNode == nil {
 			continue
 		}
-		pk := pinKey(fromNode.ID, toNode.ID)
-		if seenPinKey[pk] {
+
+		lk := linkid.LinkKey(edge)
+		// primary class 的同对节点多条 edge 共享同一 linkKey：首次出现建实体，后续 edge
+		// （含反向与同向重复）折叠进同一实体、不重复建。backup edge 的 linkKey 带 "#edgeID"
+		// 后缀，天然唯一，因此每条 backup 各建一条实体。
+		if _, seen := linkByKey[lk]; seen {
 			continue
 		}
-		seenPinKey[pk] = true
 
 		// 解析该链路所属域的 transit CIDR（空值回退默认池）。必须与 allocateTransitPair
 		// 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs 解析保持一致（审计项 D12）。
@@ -181,13 +206,16 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			transitCIDR = domain.TransitCIDR
 		}
 
-		links = append(links, &linkEntity{
-			pinKey:      pk,
+		link := &linkEntity{
+			linkKey:     lk,
+			backup:      linkid.IsBackup(edge),
 			primaryEdge: edge,
 			fromNode:    fromNode,
 			toNode:      toNode,
 			transitCIDR: transitCIDR,
-		})
+		}
+		links = append(links, link)
+		linkByKey[lk] = link
 	}
 
 	// ---- 预留集合 ----
@@ -216,8 +244,10 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 	// ======== Pass 1 阶段 3：预留所有 pin ========
 	// 在任何 gap-fill 之前，把每条链路携带的（成对完整的）pin 逐资源预留。partial pin
 	// （单端有值）在此一律按「该资源未 pin」处理并跳过——成对校验由验证器分区负责。
-	pinnedAllocations := make(map[string]*pairAllocation) // pinKey -> 直接由 pin 构造的分配
+	pinnedAllocations := make(map[string]*pairAllocation) // linkKey -> 直接由 pin 构造的分配
 	for _, link := range links {
+		// pin 取自该链路的 primaryEdge：统一 primary 链路的 pin 钉在它的 primary edge 上，
+		// backup 链路的 pin 钉在 backup edge 自己身上（此时 primaryEdge 即该 backup edge）。
 		edge := link.primaryEdge
 		isFromClient := link.fromNode.Role == "client"
 		isToClient := link.toNode.Role == "client"
@@ -256,15 +286,16 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 
 		if hasAnyPin {
-			pinnedAllocations[link.pinKey] = alloc
+			pinnedAllocations[link.linkKey] = alloc
 		}
 	}
 
 	// ======== Pass 1 阶段 4：gap-fill 未 pin 的资源 ========
-	// 按 pinKey 排序遍历，保证候选顺序与数组位置无关（Spec B 规范要求的 pinKey-deterministic 顺序）。
-	// 每个资源在其池内取最低空闲槽位；因预留在前、遍历顺序仅由 pinKey 决定，删除再重加同一对节点
-	// 会看到相同的预留集合从而重现同一值（I2/I9）。
-	sort.Slice(links, func(i, j int) bool { return links[i].pinKey < links[j].pinKey })
+	// 按 linkKey 排序遍历，保证候选顺序与数组位置无关（规范要求的 identity-ordered gap-fill）。
+	// 单 edge 对里 linkKey==pinKey，排序顺序与每个取值因此与并行链路改造前逐字节一致。
+	// 每个资源在其池内取最低空闲槽位；因预留在前、遍历顺序仅由 linkKey 决定，删除再重加同一链路
+	// 身份会看到相同的预留集合从而重现同一值（I2/I9）。
+	sort.Slice(links, func(i, j int) bool { return links[i].linkKey < links[j].linkKey })
 
 	for _, link := range links {
 		fromNode := link.fromNode
@@ -272,8 +303,8 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		isFromClient := fromNode.Role == "client"
 		isToClient := toNode.Role == "client"
 
-		// 取该 pinKey 的（部分）pin 分配作为起点，未 pin 的资源在其上补齐。
-		alloc := pinnedAllocations[link.pinKey]
+		// 取该 linkKey 的（部分）pin 分配作为起点，未 pin 的资源在其上补齐。
+		alloc := pinnedAllocations[link.linkKey]
 		if alloc == nil {
 			alloc = &pairAllocation{fromNodeID: fromNode.ID, toNodeID: toNode.ID}
 		}
@@ -326,16 +357,30 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			alloc.remoteLL = remoteLL
 		}
 
-		peerKey := fromNode.ID + "->" + toNode.ID
-		reversePeerKey := toNode.ID + "->" + fromNode.ID
-		allocations[peerKey] = alloc
-		allocations[reversePeerKey] = alloc
+		// 链路分配以 linkid.LinkKey 为规范键（规范 I3：per-peer 分配身份即 linkKey）。
+		// Pass 2 / 写回 / DeriveClientConfigs 一律按 linkid.LinkKey(edge) 反查。
+		allocations[link.linkKey] = alloc
+
+		// 额外为 primary class 链路登记双向 "from->to" 别名（向后兼容：旧调用方与现有测试
+		// 仍按有向键查 allocations）。primary 链路的有向键无歧义且与改造前一致；backup 链路
+		// 各自独占 linkKey，不再登记有向别名（避免同向多 backup 互相覆盖）。
+		// linkKey（含 "|"/"#"）与有向键（含 "->"）字符集不相交，绝不冲突。
+		if !link.backup {
+			allocations[fromNode.ID+"->"+toNode.ID] = alloc
+			allocations[toNode.ID+"->"+fromNode.ID] = alloc
+		}
 	}
 
 	// ======== Pass 2: 使用预分配的端口构建 PeerInfo ========
-	addedPeers := make(map[string]bool)
+	// 每条「链路」只产出一对 PeerInfo（正向 + 反向），以 linkid.LinkKey 去重：
+	//   - primary class 的同对节点全部 edge 共享同一 linkKey → 折叠为一对 PeerInfo（首个
+	//     primary-class edge 在 topo.Edges 顺序里驱动创建，沿用旧的「首边定向」语义）；
+	//   - 每条 backup edge 自带唯一 linkKey → 各自产出独立的一对 PeerInfo。
+	// 仍按 edge 遍历但用 linkKey 闸门（规范允许的等价实现），单 edge 对里行为与改造前一致。
+	addedLinks := make(map[string]bool) // linkKey -> 是否已为该链路产出 PeerInfo
 
-	for _, edge := range topo.Edges {
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
 		if !edge.IsEnabled {
 			continue
 		}
@@ -346,21 +391,26 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
-		peerKey := fromNode.ID + "->" + toNode.ID
-		if addedPeers[peerKey] {
+		// 该 edge 所属链路身份。primary-class edge → pinKey；backup edge → pinKey#edgeID。
+		lk := linkid.LinkKey(edge)
+		if addedLinks[lk] {
 			continue
 		}
 
-		alloc := allocations[peerKey]
+		link := linkByKey[lk]
+		if link == nil {
+			continue
+		}
+		alloc := allocations[lk]
 		if alloc == nil {
 			continue
 		}
 
 		// Client 节点不在 peerMap 中创建 PeerInfo（client 使用单一 wg0，由 DeriveClientConfigs 处理）
 		if fromNode.Role == "client" {
-			// 只创建 router 侧的 PeerInfo（router -> client 方向）
-			reversePeerKey := toNode.ID + "->" + fromNode.ID
-			if !addedPeers[reversePeerKey] {
+			// 只创建 router 侧的 PeerInfo（router -> client 方向）。client 边不会是 backup，
+			// 故 interface 名走非 backup 短路径（与改造前逐字节一致）。
+			{
 				fromKey, _ := keys[fromNode.ID]
 				isForward := alloc.fromNodeID == fromNode.ID
 
@@ -388,7 +438,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 					AllowedIPs:          []string{fromNode.OverlayIP + "/32"},
 					Endpoint:            "",
 					PersistentKeepalive: 0,
-					InterfaceName:       wgInterfaceName(fromNode.Name),
+					InterfaceName:       naming.WgInterfaceNameForEdge(fromNode.Name, link.primaryEdge.ID, link.backup),
 					ListenPort:          routerListenPort,
 					LocalTransitIP:      routerLocalTransit,
 					RemoteTransitIP:     routerRemoteTransit,
@@ -399,9 +449,8 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				}
 
 				peerMap[toNode.ID] = append(peerMap[toNode.ID], routerPeer)
-				addedPeers[reversePeerKey] = true
 			}
-			addedPeers[peerKey] = true
+			addedLinks[lk] = true
 			continue
 		}
 
@@ -453,11 +502,16 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			remoteLL = alloc.localLL
 		}
 
-		ifaceName := wgInterfaceName(toNode.Name)
+		// 接口名按链路身份 + backup 标记生成（规范 naming.md「Edge-aware names」）：
+		// backup 链路用「primaryEdge.ID（即 backup edge 自身 ID）」哈希区分，与同对节点的
+		// primary 链路接口不同名；非 backup 链路 byte-identical 回退到 WgInterfaceName。
+		ifaceName := naming.WgInterfaceNameForEdge(toNode.Name, link.primaryEdge.ID, link.backup)
 		allowedIPs := []string{"0.0.0.0/0", "::/0"}
 
-		// 该链路的 rxcost 覆盖值（D63）：正向与反向 peer 共用同一条 edge，因此取同一值。
-		linkCost := deriveLinkCost(&edge)
+		// 该链路的 rxcost 覆盖值：正向与反向 peer 同属一条链路，取同一值。
+		// 解析顺序（规范 babel.md「Link cost resolution」/ 契约 item 4）：
+		// 显式 Priority/Weight（D63）> backup 预设 384 > 默认 0。
+		linkCost := deriveLinkCost(link.primaryEdge, link.backup)
 
 		// 如果 toNode 是 client，创建 router 侧的带 IsClientPeer 标记的 PeerInfo
 		isToClient := toNode.Role == "client"
@@ -486,22 +540,24 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 
 		peerMap[fromNode.ID] = append(peerMap[fromNode.ID], peer)
-		addedPeers[peerKey] = true
 
 		// === 自动生成反向 peer（跳过 client 的反向——client 侧使用 wg0） ===
 		if isToClient {
-			addedPeers[toNode.ID+"->"+fromNode.ID] = true
+			addedLinks[lk] = true
 			continue
 		}
 
-		reversePeerKey := toNode.ID + "->" + fromNode.ID
-		if !addedPeers[reversePeerKey] {
+		// 本链路已产出 PeerInfo：以 linkKey 闸门，确保同对节点的 primary class 多条 edge
+		// （含反向、含同向重复）不再重复产出，每条 backup 独立产出（各自 linkKey）。
+		addedLinks[lk] = true
+		{
 			reverseKeepalive := 0
 			if !toNode.Capabilities.CanAcceptInbound {
 				reverseKeepalive = 25
 			}
 
-			reverseIfaceName := wgInterfaceName(fromNode.Name)
+			// 反向接口命名 fromNode 的隧道；同属一条链路，沿用同一 edgeID + backup 标记。
+			reverseIfaceName := naming.WgInterfaceNameForEdge(fromNode.Name, link.primaryEdge.ID, link.backup)
 
 			// fromNode 接口的已分配监听端口（反向 peer 回连 fromNode 时使用）
 			fromSideListenPort := alloc.fromPort
@@ -564,7 +620,6 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			}
 
 			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)
-			addedPeers[reversePeerKey] = true
 		}
 	}
 
@@ -626,15 +681,9 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 	return ip1.String(), ip2.String(), nil
 }
 
-// pinKey 计算一条链路的规范标识：两个节点 ID 排序后用竖线拼接。
-// 方向无关——pinKey(A, B) == pinKey(B, A)——因此反向画 edge 不改变其分配身份（I3）。
-// 详见 docs/spec/compiler/allocation-stability.md（Canonical link key）。
-func pinKey(nodeA, nodeB string) string {
-	if nodeA <= nodeB {
-		return nodeA + "|" + nodeB
-	}
-	return nodeB + "|" + nodeA
-}
+// 链路规范标识已上移至 internal/linkid（leaf 包，仅依赖 model + stdlib），
+// 由编译器与验证器共用同一套 PinKey/LinkKey/IsBackup 语义，消除重复字面量。
+// 详见 docs/spec/compiler/allocation-stability.md（Canonical link key / Link identity）。
 
 // transitPoolPairCount 返回某个 transit CIDR 池可用的 pair 数量（pair index 上界）。
 // 与 allocateTransitPair 同一套掩码推导：可用主机区间为 (network, broadcast)，
@@ -727,18 +776,22 @@ func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, e
 		node.Name, base)
 }
 
-// deriveLinkCost 从 edge 推导该链路的 Babel rxcost 覆盖值（D63）。
-// 优先使用 Priority（>0），否则退回 Weight（>0），两者皆未设置时返回 0
-// （0 表示交由角色 preset 的默认 cost 处理，渲染器据此决定是否省略 rxcost token）。
-func deriveLinkCost(edge *model.Edge) int {
-	if edge == nil {
-		return 0
+// deriveLinkCost 推导一条链路的 Babel rxcost 覆盖值。
+// 解析顺序（规范 docs/spec/artifacts/babel.md「Link cost resolution」/ 契约 item 4）：
+//  1. 显式运营商设置（D63）：edge.Priority（>0）优先，否则 edge.Weight（>0）——逐字采用；
+//  2. backup 预设：链路为 backup（backup==true）且无显式设置 → backupDefaultLinkCost（384）；
+//  3. 默认：返回 0（交由角色 preset 的默认 cost 处理，渲染器据此决定是否省略 rxcost token）。
+func deriveLinkCost(edge *model.Edge, backup bool) int {
+	if edge != nil {
+		if edge.Priority > 0 {
+			return edge.Priority
+		}
+		if edge.Weight > 0 {
+			return edge.Weight
+		}
 	}
-	if edge.Priority > 0 {
-		return edge.Priority
-	}
-	if edge.Weight > 0 {
-		return edge.Weight
+	if backup {
+		return backupDefaultLinkCost
 	}
 	return 0
 }
@@ -874,9 +927,9 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 		routerKey, _ := keys[routerNode.ID]
 		clientKey, _ := keys[node.ID]
 
-		// 获取 router 侧的监听端口
-		peerKey := node.ID + "->" + routerNode.ID
-		alloc := allocations[peerKey]
+		// 获取 router 侧的监听端口：按 client 出站 edge 的 linkid.LinkKey 反查分配
+		// （client 边经验证保证恰一条、且不可为 backup，linkKey 即 pinKey）。
+		alloc := allocations[linkid.LinkKey(clientEdge)]
 		var routerPort int
 		if alloc != nil {
 			if alloc.fromNodeID == node.ID {

@@ -113,6 +113,14 @@ type NodeCapabilities struct {
 	HasPublicIP      bool `json:"has_public_ip"`
 }
 
+// Edge.Role 的取值常量。空值与 EdgeRolePrimary 等价（同归 primary class）。
+const (
+	// EdgeRolePrimary 主链路：与其它非 backup edge 一起折叠为一对节点的唯一一条链路。
+	EdgeRolePrimary = "primary"
+	// EdgeRoleBackup 备份链路：每条 backup edge 各自成为一条独立链路（独立分配 + 独立接口名）。
+	EdgeRoleBackup = "backup"
+)
+
 // Edge 边定义，表示两个节点之间的连接意图
 // 语义为 "from 主动连 to "
 type Edge struct {
@@ -133,6 +141,12 @@ type Edge struct {
 	// 优先级
 	Priority int `json:"priority,omitempty"`
 	Weight   int `json:"weight,omitempty"`
+
+	// 链路角色：区分一对节点之间的主链路（primary class）与备份链路。
+	// 空值 / "primary" 归入 primary class——同一对节点的所有非 backup edge 折叠为一条链路；
+	// "backup" 则每条 edge 各自成为一条独立链路，用于 Babel 基于 cost 的故障切换。
+	// 详见 docs/spec/compiler/allocation-stability.md（Link identity with parallel edges）。
+	Role string `json:"role,omitempty"`
 
 	// 传输协议：udp, tcp
 	Transport string `json:"transport,omitempty"`
