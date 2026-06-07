@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
+import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
 
 export function NodeForm() {
   const { addNode, domains, language } = useTopologyStore();
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState('');
-  const [role, setRole] = useState<'peer' | 'router' | 'relay' | 'gateway'>('peer');
+  const [role, setRole] = useState<NodeRole>('peer');
   const [domainId, setDomainId] = useState('');
   const [hostname, setHostname] = useState('');
   const [listenPort, setListenPort] = useState(51820);
@@ -29,7 +30,13 @@ export function NodeForm() {
       return;
     }
 
-    const id = `node-${Date.now()}`;
+    const id = `node-${crypto.randomUUID()}`;
+    const capabilities = deriveCapabilitiesFromRole(role, hasPublicIP);
+    // 保留操作员显式勾选的“可转发”（与后端保留显式置位 true 的行为一致）；
+    // client 角色不允许转发，因此不叠加。
+    if (canForward && role !== 'client') {
+      capabilities.can_forward = true;
+    }
     addNode({
       id,
       name: name.trim(),
@@ -38,16 +45,11 @@ export function NodeForm() {
       domain_id: targetDomain,
       listen_port: listenPort,
       mtu: mtu > 0 ? mtu : undefined,
-      capabilities: {
-        can_accept_inbound: hasPublicIP,
-        can_forward: canForward || role === 'router' || role === 'relay' || role === 'gateway',
-        can_relay: role === 'relay',
-        has_public_ip: hasPublicIP,
-      },
+      capabilities,
       fixed_private_key: fixedPrivateKey,
       public_endpoints:
-        hasPublicIP && endpointHost.trim()
-          ? [{ id: `${id}-ep-1`, host: endpointHost.trim(), port: endpointPort || 51820 }]
+        role !== 'client' && hasPublicIP && endpointHost.trim()
+          ? [{ id: `${id}-ep-${crypto.randomUUID()}`, host: endpointHost.trim(), port: endpointPort || 51820 }]
           : [],
     });
 
@@ -102,13 +104,14 @@ export function NodeForm() {
       </select>
       <select
         value={role}
-        onChange={(e) => setRole(e.target.value as typeof role)}
+        onChange={(e) => setRole(e.target.value as NodeRole)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
       >
         <option value="peer">Peer</option>
         <option value="router">Router</option>
         <option value="relay">Relay</option>
         <option value="gateway">Gateway</option>
+        <option value="client">Client</option>
       </select>
       <input
         type="number"
@@ -119,6 +122,8 @@ export function NodeForm() {
       />
       <input
         type="number"
+        min={576}
+        max={65535}
         placeholder={txt(language, 'MTU (留空使用默认值 1420)', 'MTU (leave empty for default 1420)')}
         value={mtu || ''}
         onChange={(e) => setMtu(parseInt(e.target.value) || 0)}

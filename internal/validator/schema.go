@@ -20,6 +20,19 @@ var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
 // 因此必须排除空白字符与一切 shell 元字符。仅允许：字母、数字、点、下划线、冒号、@、连字符。
 var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 
+// routerIDMAC48 约束 Babel router-id 的 MAC-48 形式（D66）：六组以冒号分隔的十六进制对，
+// 如 02:11:22:33:44:55。babeld 也接受 IPv4 形式的 router-id，因此 IPv4 形式由 net.ParseIP
+// 单独判定（见 validateNodesSchema），二者满足其一即合法。
+var routerIDMAC48 = regexp.MustCompile(`^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`)
+
+const (
+	// mtuMinimum 是 WireGuard 接口 MTU 的实用下限：576 为 IPv4 数据报必须支持的最小重组缓冲，
+	// 低于此值 wg-quick 会拒绝接口（生成无法部署的配置）。D64。
+	mtuMinimum = 576
+	// mtuMaximum 是 MTU 的理论上限（16 位无符号字段）。D64。
+	mtuMaximum = 65535
+)
+
 // ValidationError 
 type ValidationError struct {
 	Field   string `json:"field"`
@@ -219,6 +232,46 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		if node.ListenPort < 0 || node.ListenPort > 65535 {
 			result.AddError(prefix+".listen_port",
 				fmt.Sprintf(": %d", node.ListenPort))
+		}
+
+		// MTU 校验（D64）：0 表示使用系统默认值（通常 1420），跳过。
+		// 非零时必须落在 [576, 65535] 内——低于 576（IPv4 数据报最小重组缓冲）
+		// 或高于 65535 的 MTU 会被 wg-quick 拒绝，生成无法部署的 WireGuard 配置。
+		if node.MTU != 0 && (node.MTU < mtuMinimum || node.MTU > mtuMaximum) {
+			result.AddError(prefix+".mtu",
+				fmt.Sprintf("MTU %d 越界：必须在 %d–%d 之间（576 为 IPv4 数据报最小值，越界的 MTU 会被 wg-quick 拒绝）",
+					node.MTU, mtuMinimum, mtuMaximum))
+		}
+
+		// SSHPort 校验（D65）：0 表示使用默认端口 22，跳过。
+		// 非零时必须落在 1–65535 内，否则会被插值进无法连接的 SSH 部署命令。
+		if node.SSHPort != 0 && (node.SSHPort < 1 || node.SSHPort > 65535) {
+			result.AddError(prefix+".ssh_port",
+				fmt.Sprintf("ssh_port %d 越界：必须在 1–65535 之间", node.SSHPort))
+		}
+
+		// RouterID 校验（D66）：留空时由编译器自动生成，跳过。
+		// 非空时必须为 MAC-48 形式（六组冒号分隔的十六进制对，如 02:11:22:33:44:55）
+		// 或可解析为 IPv4 地址——babeld 两种形式都接受；其它取值会被 babeld 拒绝。
+		if node.RouterID != "" {
+			if !routerIDMAC48.MatchString(node.RouterID) && net.ParseIP(node.RouterID).To4() == nil {
+				result.AddError(prefix+".router_id",
+					fmt.Sprintf("router_id %q 格式无效：必须为 MAC-48 形式（六组冒号分隔的十六进制对，如 02:11:22:33:44:55）或 IPv4 地址，否则会被 babeld 拒绝", node.RouterID))
+			}
+		}
+
+		// ExtraPrefixes 校验（D67）：每项必须可解析为 IPv4 CIDR（镜像 reserved_ranges 的 IPv4 守卫风格）。
+		// 这些前缀会被宣告进 Babel 路由表；非 IPv4 或非 CIDR 的前缀会生成无法部署的 babeld 配置。
+		for j, prefixCIDR := range node.ExtraPrefixes {
+			epPrefix := fmt.Sprintf("%s.extra_prefixes[%d]", prefix, j)
+			_, epNet, err := net.ParseCIDR(prefixCIDR)
+			if err != nil {
+				result.AddError(epPrefix,
+					fmt.Sprintf("额外路由前缀格式无效: %s（必须为 CIDR 形式，如 192.168.0.0/24）", prefixCIDR))
+			} else if epNet.IP.To4() == nil {
+				result.AddError(epPrefix,
+					fmt.Sprintf("额外路由前缀必须为 IPv4: %s（暂不支持 IPv6 及其他地址族）", prefixCIDR))
+			}
 		}
 
 		// SSH 字段字符集校验（D44）：非空时各字段都会被插值进操作员本机执行的

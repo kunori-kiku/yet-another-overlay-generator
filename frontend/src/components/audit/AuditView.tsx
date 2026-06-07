@@ -1,13 +1,27 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { txt } from '../../i18n';
 import * as diff from 'diff';
-import type { CompileResponse } from '../../types/topology';
+import type { CompileResponse, Node as TopologyNode } from '../../types/topology';
+
+// 文件选择器编码：把 nodeId / fileType / interfaceName 三段分别 encodeURIComponent 后用 '|'
+// 连接。早先实现用 ':' 直接拼接并按 ':' 切分，含 ':' 的 ID 会破坏所有查找（修复 D58）。
+const FILE_SELECTOR_DELIMITER = '|';
+
+function encodeFileSelector(...segments: string[]): string {
+  return segments.map((segment) => encodeURIComponent(segment)).join(FILE_SELECTOR_DELIMITER);
+}
+
+function decodeFileSelector(encoded: string): string[] {
+  return encoded.split(FILE_SELECTOR_DELIMITER).map((segment) => decodeURIComponent(segment));
+}
 
 export function AuditView() {
   const history = useTopologyStore((s) => s.history);
   const clearHistory = useTopologyStore((s) => s.clearHistory);
   const nodes = useTopologyStore((s) => s.nodes);
   const edges = useTopologyStore((s) => s.edges);
+  const language = useTopologyStore((s) => s.language);
 
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [selectedNodeFileId, setSelectedNodeFileId] = useState<string>('');
@@ -16,20 +30,61 @@ export function AuditView() {
 
   const selectedHistory = history.find((h) => h.id === selectedHistoryId);
 
+  // 折叠未变更区块时保留首尾各 3 行上下文，中间用计数标记折叠，便于审阅者定位改动位置
+  // （修复 D77：原实现整段丢弃上下文，无法判断改动落在文件何处）。
+  const DIFF_CONTEXT_LINES = 3;
+
   const renderDiff = (oldText: string, newText: string) => {
     const changes = diff.diffLines(oldText || '', newText || '');
+
+    // 把一段未变更文本拆成「首部上下文 + 折叠标记 + 尾部上下文」，仅当行数超过
+    // 2*上下文+1 时才折叠，否则原样显示。
+    const renderUnchangedPart = (value: string, key: number) => {
+      const lines = value.split('\n');
+      // diff.diffLines 的块通常以换行结尾，产生末尾空串；剔除它再计数。
+      const hasTrailingEmpty = lines.length > 0 && lines[lines.length - 1] === '';
+      const contentLines = hasTrailingEmpty ? lines.slice(0, -1) : lines;
+
+      const renderLines = (linesToRender: string[], keyPrefix: string) =>
+        linesToRender.map((line, i) => (
+          <div key={`${keyPrefix}-${i}`}>{`  ${line}`}</div>
+        ));
+
+      if (contentLines.length <= DIFF_CONTEXT_LINES * 2 + 1) {
+        return (
+          <span key={key} className="text-gray-300">
+            {renderLines(contentLines, `u${key}`)}
+          </span>
+        );
+      }
+
+      const head = contentLines.slice(0, DIFF_CONTEXT_LINES);
+      const tail = contentLines.slice(contentLines.length - DIFF_CONTEXT_LINES);
+      const collapsedCount = contentLines.length - DIFF_CONTEXT_LINES * 2;
+
+      return (
+        <span key={key} className="text-gray-300">
+          {renderLines(head, `u${key}-head`)}
+          <div className="text-gray-500">
+            {txt(
+              language,
+              `... ${collapsedCount} 行未变更已折叠 ...`,
+              `... ${collapsedCount} unchanged lines collapsed ...`
+            )}
+          </div>
+          {renderLines(tail, `u${key}-tail`)}
+        </span>
+      );
+    };
+
     return (
       <div className="font-mono text-xs whitespace-pre pl-2">
         {changes.map((part, index) => {
+          if (!part.added && !part.removed && index !== 0 && index !== changes.length - 1) {
+            return renderUnchangedPart(part.value, index);
+          }
           const color = part.added ? 'bg-green-900/40 text-green-400' : part.removed ? 'bg-red-900/40 text-red-400' : 'text-gray-300';
           const prefix = part.added ? '+ ' : part.removed ? '- ' : '  ';
-          if (!part.added && !part.removed && part.value.split('\n').length > 5 && index !== 0 && index !== changes.length - 1) {
-            return (
-              <span key={index} className="text-gray-500">
-                {`\n... unchanged lines skipped ...\n`}
-              </span>
-            );
-          }
           return (
             <span key={index} className={color}>
               {part.value.split('\n').map((line, i, arr) => (i === arr.length - 1 && line === '' ? null : <div key={i}>{prefix}{line}</div>))}
@@ -42,12 +97,13 @@ export function AuditView() {
 
   const getFileContent = (result: CompileResponse | null | undefined) => {
     if (!result || !selectedNodeFileId) return '';
-    // Format: "nodeId:fileType" or "nodeId:wg:interfaceName"
-    const parts = selectedNodeFileId.split(':');
+    // 编码格式（'|' 分隔，每段 encodeURIComponent）：
+    //   "nodeId|fileType"  或  "nodeId|wg|interfaceName"
+    const parts = decodeFileSelector(selectedNodeFileId);
     const nodeId = parts[0];
     const fileType = parts[1];
     if (fileType === 'wg' && result.wireguard_configs) {
-      // per-peer key format: "nodeId:interfaceName"
+      // wireguard_configs 的 key 仍是后端约定的 "nodeId:interfaceName" 形式
       const interfaceName = parts.slice(2).join(':');
       return result.wireguard_configs[nodeId + ':' + interfaceName] || '';
     }
@@ -60,8 +116,14 @@ export function AuditView() {
   const currentText = getFileContent(currentResult);
   const oldText = getFileContent(selectedHistory?.compileResult);
 
+  // 安全审计的暴露节点列表必须基于后端推断的能力（capabilities）。角色一改，前端本地
+  // store 里的能力立刻过时（后端要等到重新编译才会重新推断），直接读 store 会漏报暴露的
+  // relay/inbound 节点（修复 D26）。有编译结果时以 compileResult.topology.nodes 为准，并提示
+  // 「反映上次编译，重新编译刷新」；无编译结果时回退到 store 节点，并标注为编译前估计值。
+  const auditNodes: TopologyNode[] = currentResult ? currentResult.topology.nodes : nodes;
+  const auditNodesAreBackendInferred = currentResult !== null;
   // Security Audit list: Nodes that accept inbound or relay
-  const exposedNodes = nodes.filter((n) => n.capabilities.can_accept_inbound || n.capabilities.can_relay);
+  const exposedNodes = auditNodes.filter((n) => n.capabilities.can_accept_inbound || n.capabilities.can_relay);
 
   return (
     <div className="h-full flex flex-col p-6 space-y-6 overflow-y-auto">
@@ -76,6 +138,19 @@ export function AuditView() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <h4 className="text-sm text-gray-400 mb-2">Exposed Nodes (Public / Relays)</h4>
+            <p className="text-xs text-gray-500 mb-2 italic">
+              {auditNodesAreBackendInferred
+                ? txt(
+                    language,
+                    '基于上次编译时后端推断的能力；重新编译可刷新此审计。',
+                    'Based on backend-inferred capabilities from the last compile; recompile to refresh this audit.'
+                  )
+                : txt(
+                    language,
+                    '编译前估计值（基于本地角色推断），编译后以后端结果为准。',
+                    'Pre-compile estimate (from local role inference); will be authoritative after a compile.'
+                  )}
+            </p>
             {exposedNodes.length === 0 ? <span className="text-xs text-gray-500">No exposed nodes</span> : (
               <ul className="text-sm space-y-1">
                 {exposedNodes.map(n => {
@@ -144,25 +219,26 @@ export function AuditView() {
             >
               <option value="">Select a file to diff...</option>
               {nodes.map(n => {
-                // Collect per-peer WireGuard interface names from compile result
+                // \u4ECE\u7F16\u8BD1\u7ED3\u679C\u6536\u96C6\u6BCF\u4E2A peer \u7684 WireGuard \u63A5\u53E3\u540D\u3002wireguard_configs \u7684 key \u662F
+                // \u540E\u7AEF\u7EA6\u5B9A\u7684 "nodeId:interfaceName"\uFF0C\u8FD9\u91CC\u4EE5 nodeId \u524D\u7F00\u5207\u51FA\u63A5\u53E3\u540D\u90E8\u5206\u3002
                 const wgKeys = currentResult
                   ? Object.keys(currentResult.wireguard_configs)
                       .filter((key) => key.startsWith(n.id + ':'))
-                      .map((key) => key.split(':').slice(1).join(':'))
+                      .map((key) => key.slice(n.id.length + 1))
                   : [];
                 return (
                   <optgroup key={n.id} label={n.name}>
                     {wgKeys.length > 0
                       ? wgKeys.map((ifName) => (
-                          <option key={`${n.id}:wg:${ifName}`} value={`${n.id}:wg:${ifName}`}>
+                          <option key={encodeFileSelector(n.id, 'wg', ifName)} value={encodeFileSelector(n.id, 'wg', ifName)}>
                             {ifName}.conf
                           </option>
                         ))
-                      : <option value={`${n.id}:wg:`} disabled>({'\u00A0'}no wg configs{'\u00A0'})</option>
+                      : <option value={encodeFileSelector(n.id, 'wg', '')} disabled>({'\u00A0'}no wg configs{'\u00A0'})</option>
                     }
-                    <option value={`${n.id}:babel`}>babeld.conf</option>
-                    <option value={`${n.id}:sysctl`}>sysctl.conf</option>
-                    <option value={`${n.id}:install`}>install.sh</option>
+                    <option value={encodeFileSelector(n.id, 'babel')}>babeld.conf</option>
+                    <option value={encodeFileSelector(n.id, 'sysctl')}>sysctl.conf</option>
+                    <option value={encodeFileSelector(n.id, 'install')}>install.sh</option>
                   </optgroup>
                 );
               })}

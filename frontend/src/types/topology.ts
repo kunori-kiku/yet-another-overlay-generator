@@ -26,6 +26,9 @@ export interface Domain {
   allocation_mode: 'auto' | 'manual';
   routing_mode: 'static' | 'babel' | 'none';
   reserved_ranges?: string[];
+  // 每个 domain 的 transit 地址池，缺省 10.10.0.0/24；transit IP 现按 CIDR 逐域分配。
+  // 对应 Go 模型的 Domain.TransitCIDR；参见 docs/spec/api/wire-contract.md（Domain 字段表）。
+  transit_cidr?: string;
 }
 
 export interface Node {
@@ -90,6 +93,9 @@ export interface Edge {
   pinned_to_link_local?: string;
 }
 
+// 保留特性（RESERVED）：route_policies 目前未接入任何 renderer，语义校验会拒绝非空数组。
+// 该类型仅为线缆（wire）兼容保留——请勿基于它构建功能。
+// 参见 docs/spec/api/wire-contract.md（“route_policies is RESERVED”）。
 export interface RoutePolicy {
   id: string;
   domain_id: string;
