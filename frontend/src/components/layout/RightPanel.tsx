@@ -638,9 +638,27 @@ export function RightPanel() {
             {compileResult && (() => {
               const toNode = nodes.find(n => n.id === selectedEdge.to_node_id);
               if (!toNode) return null;
-              const ifaceName = `wg-${toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
-              const configKey = `${selectedEdge.from_node_id}:${ifaceName}`;
-              const config = compileResult.wireguard_configs[configKey];
+              // Spec D 禁止前端重建接口名（>12 字符时后端走 hash 后缀分支，
+              // 而前端纯截断会与之分叉，导致查找静默落空）。改为直接从编译响应的
+              // wireguard_configs 键中取出后端实际生成的接口名。键的格式是
+              // "<nodeID>:<interfaceName>"，与 TopologyCanvas 的 nodeInterfaceMap 解析一致。
+              // 在源节点（from_node_id）拥有的全部接口里，定位通往目标节点（toNode）的那一个：
+              // 接口名编码了远端 peer 名称（短路径 wg-<clean>，长路径 wg-<clean[:8]><hash>），
+              // 因此用目标名称的规范化前缀去匹配解析出的 peer 名，而非重建带 hash 的完整接口名。
+              const cleanTarget = toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+              const targetPrefix = cleanTarget.slice(0, 8);
+              let config: string | undefined;
+              for (const [key, value] of Object.entries(compileResult.wireguard_configs)) {
+                const colonIdx = key.indexOf(':');
+                if (colonIdx < 0) continue;
+                if (key.slice(0, colonIdx) !== selectedEdge.from_node_id) continue;
+                const interfaceName = key.slice(colonIdx + 1);
+                const peerName = interfaceName.startsWith('wg-') ? interfaceName.slice(3) : interfaceName;
+                if (peerName === cleanTarget || (cleanTarget.length > 8 && peerName.startsWith(targetPrefix))) {
+                  config = value;
+                  break;
+                }
+              }
               const endpointMatch = config?.match(/Endpoint\s*=\s*(.+)/);
               const listenMatch = config?.match(/ListenPort\s*=\s*(\d+)/);
               if (!endpointMatch && !listenMatch) return null;

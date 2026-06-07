@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
 // KeyPair WireGuard 密钥对
@@ -491,39 +491,13 @@ func deriveAllowedIPs(node *model.Node) []string {
 	return []string{node.OverlayIP + "/32"}
 }
 
-// wgInterfaceName 生成 WireGuard 接口名
-// 格式：wg-<peername>，Linux 限制 15 字符
-// 对于超过 15 字符的名称，使用哈希后缀避免截断冲突
+// wgInterfaceName 生成 WireGuard 接口名（薄封装）。
+// 规范实现已上移至 internal/naming（Spec D，docs/spec/artifacts/naming.md），
+// 由 renderer、compiler、validator 三层共用，消除此前的重复实现并打破导入环。
+// 此处保留未导出名称仅为继续供包内调用方与既有测试使用，行为与
+// naming.WgInterfaceName 完全一致。
 func wgInterfaceName(remoteName string) string {
-	// 清理名称：小写、替换非法字符
-	clean := strings.ToLower(remoteName)
-	clean = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, clean)
-
-	name := "wg-" + clean
-	if len(name) <= 15 {
-		return name
-	}
-
-	// For names that would exceed 15 chars, use a hash suffix to avoid
-	// deterministic conflicts from truncation. sha256.Sum256 computes the full
-	// hash but we only need 4 hex chars (16 bits); the full computation is
-	// unavoidable with the standard library.
-	const maxLen = 15
-	const prefix = "wg-"
-	const hashSuffixLen = 4 // 4 hex chars, low collision probability
-
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(remoteName)))
-	// remainForClean = 15 - 3 - 4 = 8; the min/max guards are defensive.
-	remainForClean := maxLen - len(prefix) - hashSuffixLen
-	if remainForClean > len(clean) {
-		remainForClean = len(clean)
-	}
-	return prefix + clean[:remainForClean] + hash[:hashSuffixLen]
+	return naming.WgInterfaceName(remoteName)
 }
 
 // formatEndpoint 格式化 endpoint 地址

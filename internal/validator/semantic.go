@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
 // ValidateSemantic （ Pass 2）
@@ -25,8 +26,11 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	//  IP 
 	validateIPSemantics(topo, domainMap, result)
 
-	//  ID 
+	//  ID
 	validateIDUniqueness(topo, result)
+
+	// 节点名称冲突（原始名称、安装脚本文件名、WireGuard 接口名）
+	validateNodeNameCollisions(topo, result)
 
 	//  listen port 
 	validateListenPortConflicts(topo, result)
@@ -157,6 +161,62 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 				fmt.Sprintf("Edge ID : %s", e.ID))
 		}
 		edgeIDs[e.ID] = true
+	}
+}
+
+// validateNodeNameCollisions 检查节点名称在三种规范化形式下的冲突（Spec D 的 N1–N3 不变式）。
+// 任意两个不同节点若在以下任一形式上相同，都会导致命名派生的产物相互覆盖或被静默跳过：
+//   - 原始名称（N1）：操作员与一切基于名称派生的产物都无法区分两个同名节点。
+//   - 安装脚本文件名 SafeInstallerFileName（N2）：相同的安装包文件名会造成静默跳过与身份错位的部署。
+//   - WireGuard 接口名 WgInterfaceName（N3）：相同的接口名会让一个 WireGuard 配置与一条 Babel 接口行覆盖另一个。
+//
+// 对每种规范化形式各维护一张「规范化键 -> 首个使用该键的节点名称」映射，
+// 在遇到第二个落入同一键的节点时报错，并在错误消息中同时点出两个冲突节点的名称。
+func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) {
+	// 各映射的键是一种规范化形式，值是首个使用该键的节点名称。
+	rawNames := make(map[string]string)       // 原始名称 -> 首个节点名称
+	installerNames := make(map[string]string) // 安装脚本文件名 -> 首个节点名称
+	interfaceNames := make(map[string]string) // WireGuard 接口名 -> 首个节点名称
+
+	for i, node := range topo.Nodes {
+		if node.Name == "" {
+			//  schema 校验已覆盖空名称，这里跳过以免与空字符串归一冲突。
+			continue
+		}
+		prefix := fmt.Sprintf("nodes[%d].name", i)
+
+		// N1：原始名称冲突。
+		if firstNode, exists := rawNames[node.Name]; exists {
+			result.AddError(prefix,
+				fmt.Sprintf("节点名称重复：节点 %s 与节点 %s 使用了相同的名称 %q",
+					firstNode, node.Name, node.Name))
+		} else {
+			rawNames[node.Name] = node.Name
+		}
+
+		// N2：安装脚本文件名冲突（例如 "Web 1" 与 "web-1" 都归一为 web-1.install.sh）。
+		installerName := naming.SafeInstallerFileName(node.Name)
+		if firstNode, exists := installerNames[installerName]; exists {
+			if firstNode != node.Name {
+				result.AddError(prefix,
+					fmt.Sprintf("节点名称会生成相同的安装脚本文件名：节点 %s 与节点 %s 都归一为 %q，将造成部署时静默跳过或身份错位",
+						firstNode, node.Name, installerName))
+			}
+		} else {
+			installerNames[installerName] = node.Name
+		}
+
+		// N3：WireGuard 接口名冲突（例如 "db.east" 与 "db-east" 都归一为 wg-db-east）。
+		interfaceName := naming.WgInterfaceName(node.Name)
+		if firstNode, exists := interfaceNames[interfaceName]; exists {
+			if firstNode != node.Name {
+				result.AddError(prefix,
+					fmt.Sprintf("节点名称会生成相同的 WireGuard 接口名：节点 %s 与节点 %s 都归一为 %q，将造成一个接口配置覆盖另一个",
+						firstNode, node.Name, interfaceName))
+			}
+		} else {
+			interfaceNames[interfaceName] = node.Name
+		}
 	}
 }
 
