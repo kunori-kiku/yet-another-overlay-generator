@@ -21,25 +21,85 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
+// KeyCustody selects how GenerateKeys treats a node's WireGuard key material.
+//
+// It is the code half of the zero-knowledge custody decision (see
+// docs/spec/controller/key-custody.md). The air-gap path (compiler CLI, the
+// existing HTTP API) uses AirGap; only the controller renders in AgentHeld.
+type KeyCustody int
+
+const (
+	// AirGap is the historical behavior: private keys round-trip through the
+	// topology JSON so a stateless recompile reproduces them (invariant I5). A
+	// node with a public key but no private key is a hard error. This is the
+	// default for every existing caller and is byte-for-byte unchanged.
+	AirGap KeyCustody = iota
+	// AgentHeld is zero-knowledge custody: each node keeps its own private key
+	// agent-side and registers only a public key. GenerateKeys emits
+	// PrivateKeyPlaceholder for every node and NEVER returns a real private key,
+	// so the controller can render a whole fleet from public keys alone; the
+	// agent splices its locally-held key into the placeholder at install time.
+	AgentHeld
+)
+
+// PrivateKeyPlaceholder is the sentinel emitted on a node's own
+// [Interface] PrivateKey line under AgentHeld custody. It is intentionally NOT
+// valid base64, so no WireGuard key parser can mistake it for a real key, and it
+// is spliced with the agent's locally-held private key before the config is used.
+const PrivateKeyPlaceholder = "PRIVATEKEY_PLACEHOLDER"
+
 // GenerateKeys 为每个节点解析或生成 WireGuard 密钥对，并把结果写回节点以便随拓扑 JSON
 // 持久化、在下次编译时被原样复用（不变式 I5：密钥稳定）。
 //
-// 无状态编译器要求私钥能随拓扑 JSON 往返：只持久化公钥的节点在下次编译时无法渲染出自身
-// Interface 段的 PrivateKey。因此密钥处理按节点当前两枚密钥字段的状态分三种情形，
-// 不再以 fixed_private_key 这个布尔标志本身作为分支条件（它仅是操作员「粘贴私钥」的入口，
-// 其存在意味着私钥已被设置，即落入情形 (a)）：
+// custody selects the custody model:
 //
-//	(a) wireguard_private_key 非空（无论 fixed_private_key 是否为真）：解析该私钥、由它派生
-//	    公钥并复用；同时把派生出的公钥写回节点，修复缺失或陈旧的公钥。
-//	(b) wireguard_private_key 为空但 wireguard_public_key 非空：硬错误。该节点被视为密钥固定，
-//	    但私钥缺失，无状态编译器无法重建其私钥。提示操作员从主机 /etc/wireguard 粘贴在用私钥，
-//	    或同时清空两个密钥字段以显式轮换。
-//	(c) 两者皆空：生成全新密钥对，并把私钥与公钥都写回节点使其持久化、可往返；此后每次编译
-//	    都复用同一对密钥（取代旧的「编译后清空密钥」行为）。
-func GenerateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
+//   - AirGap (default for the air-gap CLI/API): private keys round-trip through
+//     the topology JSON. Key handling branches on the node's two key fields:
+//     (a) wireguard_private_key 非空：解析该私钥、由它派生公钥并复用；把派生出的公钥写回，
+//     修复缺失或陈旧的公钥。
+//     (b) wireguard_private_key 为空但 wireguard_public_key 非空：硬错误。无状态编译器无法
+//     重建其私钥。提示操作员从主机 /etc/wireguard 粘贴在用私钥，或同时清空两个密钥字段以
+//     显式轮换。
+//     (c) 两者皆空：生成全新密钥对并写回，使其持久化、可往返，此后复用同一对密钥。
+//   - AgentHeld (controller, zero-knowledge custody): never emit a real private
+//     key. Use the node's registered public key (deriving it from a stray private
+//     key and discarding that private key if one is present; hard error if neither
+//     is present — the agent must register a public key first), emit
+//     PrivateKeyPlaceholder for the private half, and clear any private key on the
+//     node so the controller's topology never carries one.
+func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler.KeyPair, error) {
 	keys := make(map[string]compiler.KeyPair)
 	for i := range topo.Nodes {
 		node := &topo.Nodes[i]
+
+		if custody == AgentHeld {
+			// The registered public key is authoritative: when present it is trusted
+			// verbatim (the agent holds the matching private key), and a stray private
+			// key on the node is never preferred over it — only used to derive the
+			// public half when no public key was registered, then discarded.
+			pub := node.WireGuardPublicKey
+			if pub == "" {
+				// Defensive: an air-gap topology carrying a private key may be
+				// imported into the controller. Derive the public half and DISCARD
+				// the private one — it must never reach a controller-rendered bundle.
+				if node.WireGuardPrivateKey == "" {
+					return nil, fmt.Errorf("节点 %s 在 AgentHeld 托管模式下缺少 WireGuard 公钥：代理需先注册公钥，控制器才能渲染该节点", node.ID)
+				}
+				privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
+				if err != nil {
+					return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
+				}
+				pub = privateKey.PublicKey().String()
+			}
+			// Persist only the public key; guarantee no private key lingers.
+			node.WireGuardPublicKey = pub
+			node.WireGuardPrivateKey = ""
+			keys[node.ID] = compiler.KeyPair{
+				PrivateKey: PrivateKeyPlaceholder,
+				PublicKey:  pub,
+			}
+			continue
+		}
 
 		switch {
 		case node.WireGuardPrivateKey != "":

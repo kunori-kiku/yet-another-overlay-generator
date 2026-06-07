@@ -59,7 +59,7 @@ func signingTestTopology(t *testing.T) *model.Topology {
 // renderAll runs the shared GenerateKeys → Compile → All path and returns the result.
 func renderAll(t *testing.T, topo *model.Topology) *compiler.CompileResult {
 	t.Helper()
-	keys, err := GenerateKeys(topo)
+	keys, err := GenerateKeys(topo, AirGap)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestAll_BadSigningKeyFailsClosed(t *testing.T) {
 	t.Setenv(bundlesig.EnvSigningKey, filepath.Join(t.TempDir(), "does-not-exist.pem"))
 
 	topo := signingTestTopology(t)
-	keys, err := GenerateKeys(topo)
+	keys, err := GenerateKeys(topo, AirGap)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}

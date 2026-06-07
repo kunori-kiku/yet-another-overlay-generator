@@ -53,7 +53,8 @@ docs/spec/
 ├── security/
 │   └── security.md                # Security considerations
 ├── controller/
-│   └── signing.md                 # Canonical bundle serialization + Ed25519 bundle signing
+│   ├── signing.md                 # Canonical bundle serialization + Ed25519 bundle signing
+│   └── key-custody.md             # Zero-knowledge key custody (AgentHeld split-render)
 └── glossary.md                    # Terminology
 ```
 

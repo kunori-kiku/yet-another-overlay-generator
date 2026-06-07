@@ -74,7 +74,7 @@ func TestEntrypointParity(t *testing.T) {
 	}
 
 	// 走与 API/CLI 完全相同的共享路径。
-	keys, err := GenerateKeys(topo)
+	keys, err := GenerateKeys(topo, AirGap)
 	if err != nil {
 		t.Fatalf("GenerateKeys 失败: %v", err)
 	}
