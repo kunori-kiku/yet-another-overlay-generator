@@ -56,11 +56,39 @@ func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 		assertDiffersOnlyOnPrivateKey(t, key, airCfg, heldCfg)
 	}
 
-	// Everything else must be byte-identical between the two custody modes.
+	// Babel/sysctl/deploy artifacts must stay byte-identical between the two custody modes.
 	assertMapsEqual(t, "BabelConfigs", air.BabelConfigs, held.BabelConfigs)
 	assertMapsEqual(t, "SysctlConfigs", air.SysctlConfigs, held.SysctlConfigs)
-	assertMapsEqual(t, "InstallScripts", air.InstallScripts, held.InstallScripts)
 	assertMapsEqual(t, "DeployScripts", air.DeployScripts, held.DeployScripts)
+
+	// InstallScripts legitimately diverge: the AgentHeld install.sh gains a custody-splice block
+	// (it must splice the agent-held private key into the copied conf at install time), while the
+	// AirGap install.sh must NOT, so it stays frozen. Pin that asymmetry via the "agent.key" marker
+	// instead of byte-equality.
+	assertSpliceMarkerAsymmetry(t, air.InstallScripts, held.InstallScripts)
+}
+
+// assertSpliceMarkerAsymmetry verifies that, per node, the AirGap install.sh carries no custody
+// splice (no /etc/wireguard/agent.key reference) while the AgentHeld install.sh does.
+func assertSpliceMarkerAsymmetry(t *testing.T, air, held map[string]string) {
+	t.Helper()
+	const spliceMarker = "agent.key"
+	if len(air) != len(held) {
+		t.Errorf("InstallScripts: size differs (air=%d held=%d)", len(air), len(held))
+	}
+	for k, airScript := range air {
+		heldScript, ok := held[k]
+		if !ok {
+			t.Errorf("InstallScripts: AgentHeld missing %q", k)
+			continue
+		}
+		if strings.Contains(airScript, spliceMarker) {
+			t.Errorf("InstallScripts[%q]: AirGap install.sh must NOT contain custody splice marker %q", k, spliceMarker)
+		}
+		if !strings.Contains(heldScript, spliceMarker) {
+			t.Errorf("InstallScripts[%q]: AgentHeld install.sh must contain custody splice marker %q", k, spliceMarker)
+		}
+	}
 }
 
 // assertDiffersOnlyOnPrivateKey fails unless air and held are identical except for
