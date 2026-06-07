@@ -39,11 +39,15 @@ does not distribute mimic, mimic's GPL-2.0 license imposes no obligation on YAOG
   source during implementation; this spec fixes the model, not the byte format.)
 - **MTU −12** on each mimic WireGuard interface, emitted explicitly in the `.conf`
   (`(node MTU or 1420) − 12`).
-- **Kernel/eBPF required**: `modprobe mimic` (persisted via `/etc/modules-load.d/mimic.conf`) and an
-  install-time eBPF capability check that fails clearly when unavailable.
+- **Kernel/eBPF required**: the `mimic` kernel module is loaded by the packaged systemd unit's
+  `Requires=modprobe@mimic.service` (verified in `mimic@.service`), so enabling `mimic@<egress>`
+  pulls the module in at start and at boot — an explicit `/etc/modules-load.d` entry is not
+  required. The installer additionally emits an advisory eBPF/bpffs check; the **authoritative gate**
+  is that `systemctl enable --now mimic@<egress>` runs under `set -euo pipefail`, so on a kernel
+  without eBPF the service fails to start and the install aborts (a clear, hard failure).
 - **Ordering**: mimic is provisioned and `mimic@<egress>` is started **before** `wg-quick up`, so the
   shaping is in place when the tunnel comes up. Uninstall stops/disables `mimic@<egress>`, removes
-  the config and modules-load entry, and detaches.
+  its config, and detaches.
 
 ## Verification
 

@@ -46,8 +46,10 @@ A node pair MAY carry multiple enabled edges. Semantics (normative; identity con
 
 ## TCP transport (mimic)
 
-`transport: "tcp"` wraps the link's WireGuard interface(s) with [mimic](https://github.com/hack3ric/mimic),
-an eBPF program that rewrites UDP packets to look like TCP on the wire. Full contract:
+`transport: "tcp"` wraps the link's WireGuard traffic with [mimic](https://github.com/hack3ric/mimic),
+an eBPF program that rewrites UDP packets to look like TCP on the wire. (mimic attaches to the node's
+**egress NIC**, not the WG interface — one filter per mimic listen port; see
+[../artifacts/mimic.md](../artifacts/mimic.md) for the deployment model.) Full contract:
 [../artifacts/mimic.md](../artifacts/mimic.md).
 
 - **Purpose: UDP-hostile networks** — paths that throttle UDP (QoS), block UDP ports, or degrade

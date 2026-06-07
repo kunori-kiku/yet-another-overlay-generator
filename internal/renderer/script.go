@@ -86,7 +86,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     # Tear down mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): stop/disable the
     # mimic@<egress> unit and remove its config. Re-detect the egress NIC the same way the
     # installer did; tolerate absence (mimic may already be gone / no default route).
-    _mimic_egress_if="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+    _mimic_egress_if="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
     if [ -n "$_mimic_egress_if" ]; then
         echo "  Stopping mimic@$_mimic_egress_if..."
         systemctl disable --now "mimic@$_mimic_egress_if" 2>/dev/null || true
@@ -526,7 +526,7 @@ echo "  IPv4 forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
 # egress if/ip are not known at compile time, so detect them here at runtime. YAOG only supplies
 # the mimic listen-port set via the template.
 echo "Provisioning mimic TCP-shaping transport..."
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
 MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
 if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
     echo "ERROR: could not detect egress interface/IP for mimic (no default route?)" >&2
@@ -793,7 +793,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 {{ if .HasMimic -}}
     # Tear down mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): re-detect the egress
     # NIC, stop/disable mimic@<egress> and remove its config. Tolerate absence.
-    _mimic_egress_if="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+    _mimic_egress_if="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
     if [ -n "$_mimic_egress_if" ]; then
         echo "  Stopping mimic@$_mimic_egress_if..."
         systemctl disable --now "mimic@$_mimic_egress_if" 2>/dev/null || true
@@ -1007,7 +1007,7 @@ sysctl --system > /dev/null 2>&1
 # Provision mimic TCP-shaping transport BEFORE bringing wg0 up (docs/spec/artifacts/mimic.md
 # «Ordering»). mimic attaches to the EGRESS NIC, detected at runtime; YAOG supplies the port set.
 echo "Provisioning mimic TCP-shaping transport..."
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')"
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
 MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
 if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
     echo "ERROR: could not detect egress interface/IP for mimic (no default route?)" >&2
