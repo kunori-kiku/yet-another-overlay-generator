@@ -52,6 +52,8 @@ docs/spec/
 │   └── examples.md                # Example topologies
 ├── security/
 │   └── security.md                # Security considerations
+├── controller/
+│   └── signing.md                 # Canonical bundle serialization + Ed25519 bundle signing
 └── glossary.md                    # Terminology
 ```
 

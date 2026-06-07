@@ -14,6 +14,7 @@ package render
 import (
 	"fmt"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
@@ -114,12 +115,28 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	}
 	result.SysctlConfigs = sysctlConfigs
 
+	// Optional bundle signing (opt-in via bundlesig.EnvSigningKey). When a signing
+	// key is configured, the install scripts embed the verifying public key and a
+	// signature-verify step that runs before the existing sha256sum -c; the export
+	// path signs the canonical checksums alongside (internal/artifacts/export.go).
+	// When signing is off, signingPubPEM stays empty and the *Signed renderers emit
+	// byte-identical output to the plain renderers (see script_signature_test.go), so
+	// the air-gap path is unchanged. A misconfigured key fails closed here.
+	signing, err := bundlesig.LoadSigningFromEnv()
+	if err != nil {
+		return fmt.Errorf("加载 bundle 签名密钥失败: %w", err)
+	}
+	var signingPubPEM string
+	if signing != nil {
+		signingPubPEM = string(signing.PubKeyPEM)
+	}
+
 	//
 	for _, node := range result.Topology.Nodes {
 		if node.Role == "client" {
 			// 传入该 client 的 ClientPeerInfo，使其单一 wg0 链路在 transport=="tcp" 时
 			// 也装配 mimic（决策 #5：client 也支持）。键缺失时为 nil，renderer 已做空值保护。
-			script, err := renderer.RenderClientInstallScript(&node, result.ClientConfigs[node.ID])
+			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, result.ClientConfigs[node.ID])
 			if err != nil {
 				return fmt.Errorf("渲染 client %s 的安装脚本失败: %w", node.Name, err)
 			}
@@ -128,7 +145,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 			peers := result.PeerMap[node.ID]
 			_, hasBabel := result.BabelConfigs[node.ID]
 			transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
-			script, err := renderer.RenderInstallScript(&node, peers, hasBabel, transitCIDRs...)
+			script, err := renderer.RenderInstallScriptSigned(&node, peers, hasBabel, signingPubPEM, transitCIDRs...)
 			if err != nil {
 				return fmt.Errorf("渲染节点 %s 的安装脚本失败: %w", node.Name, err)
 			}

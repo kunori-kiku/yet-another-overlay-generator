@@ -40,8 +40,30 @@
   encryption, authentication, or confidentiality, and adds **no secret material** to the topology;
   WireGuard remains the sole source of crypto and the only secret (its keys). mimic is **not** a
   censorship/DPI-circumvention mechanism. See [../artifacts/mimic.md](../artifacts/mimic.md).
-- **Checksum Verification**: Install scripts verify `checksums.sha256` (SHA-256) before deploying
-  configs.
+- **Integrity & Authenticity (signed bundles)**: Install scripts verify `checksums.sha256`
+  (SHA-256) before deploying configs — this is **integrity / tamper-detection**: any changed file no
+  longer matches its recorded digest. Phase 0 adds optional **authenticity** on top.
+  - `checksums.sha256` is now a **canonical, sorted, deterministic** serialization
+    (`internal/bundlesig.Canonicalize`): one `sha256sum`-format line per file, sorted by path,
+    LF-only, trailing newline. It covers every shipped file including `install.sh`.
+  - **Signing is opt-in** via the `YAOG_BUNDLE_SIGNING_KEY` environment variable (path to an
+    Ed25519 PKCS#8 PEM private key) at export time. When set, each per-node bundle is shipped with a
+    detached **Ed25519 signature** (`bundle.sig`, base64) over the canonical `checksums.sha256` plus
+    the verifying public key (`signing-pubkey.pem`, also embedded in `install.sh`). The signed object
+    is the canonical checksum list, **never** the manifest's truncated `computeChecksum`. When the
+    key is unset, bundles are hash-only and byte-identical to before (back-compat / air-gap path
+    unchanged).
+  - At install, when `bundle.sig` is present, `install.sh` **verifies the Ed25519 signature before**
+    running `sha256sum -c`, and **fails loudly** (nonzero exit) if `openssl` is missing or lacks
+    Ed25519 — it never silently downgrades a signed bundle to hash-only.
+  - **Out-of-band-pin caveat (honest limitation):** Phase 0 authenticity is only as strong as the
+    operator's trust in the verifying key, and Phase 0 ships that key *inside the bundle*. Against a
+    bundle from an **untrusted source**, an attacker who rewrites the bundle can swap in their own
+    pubkey and re-sign — so the signature then proves only internal consistency, not provenance. It
+    is a genuine authenticity anchor only when the verifying key is **pinned out of band** (e.g. an
+    operator-built air-gapped bundle whose key the operator configured themselves, or — later — a
+    trust anchor delivered with the agent at install time in Phase 1b/3). See
+    [../controller/signing.md](../controller/signing.md).
 - **File Permissions**: WireGuard configs are written with `0600` permissions.
 - **Privilege Escalation**: Install scripts require root and verify with `id -u` check.
 - **Transport**: The API server has no built-in TLS — should be reverse-proxied in production.
