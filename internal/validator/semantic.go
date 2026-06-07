@@ -50,6 +50,9 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// Edge endpoint 与目标节点 public endpoints 一致性检查
 	validateEdgeEndpointConsistency(topo, nodeMap, result)
 
+	// 同一节点对的重复启用边检测（编译器只取首条，后续边的 endpoint 覆盖会被静默丢弃）
+	detectDuplicateEnabledEdges(topo, result)
+
 	// 分配 pin 校验：pin 在被预留之前必须先校验（不变式 I7）
 	validateAllocationPins(topo, domainMap, nodeMap, result)
 
@@ -775,5 +778,25 @@ func validateEdgeEndpointConsistency(topo *model.Topology, nodeMap map[string]*m
 				fmt.Sprintf("Edge %s dials %s but target %s has no matching public endpoint (the endpoint snapshot may be stale after a node edit)",
 					edge.ID, edge.EndpointHost, toNode.Name))
 		}
+	}
+}
+
+// detectDuplicateEnabledEdges 对同一对节点（同方向）存在多条启用边的情况发出警告（D71）。
+// 编译器在 Pass 1/Pass 2 中按节点对去重，只有首条边生效——后续边携带的
+// endpoint_host/endpoint_port 覆盖会被静默忽略，操作员看见两条边却只有一条起作用。
+// 仅警告而非报错：拓扑仍可编译，但操作员应删除或禁用多余的边。
+func detectDuplicateEnabledEdges(topo *model.Topology, result *ValidationResult) {
+	firstEdgeByDirection := make(map[string]string) // "from->to" -> 首条边 ID
+	for i, edge := range topo.Edges {
+		if !edge.IsEnabled {
+			continue
+		}
+		direction := edge.FromNodeID + "->" + edge.ToNodeID
+		if firstID, exists := firstEdgeByDirection[direction]; exists {
+			result.AddWarning(fmt.Sprintf("edges[%d]", i),
+				fmt.Sprintf("边 %s 与边 %s 连接同一对节点（同方向），编译时只有首条生效，本条边的 endpoint 设置会被忽略；请删除或禁用多余的边", edge.ID, firstID))
+			continue
+		}
+		firstEdgeByDirection[direction] = edge.ID
 	}
 }

@@ -64,10 +64,15 @@ Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配
 | 角色 | 转发 | 中继 | Babel 通告 | 典型用途 |
 |------|------|------|-----------|---------|
 | `peer` | ✗ | ✗ | 仅自身 IP | 终端客户端 |
-| `router` | ✓ | ✗ | 自身 IP + Domain CIDR | 骨干转发节点 |
-| `relay` | ✓ | ✓ | 自身 IP + Domain CIDR（cost 96） | NAT 场景中继 |
+| `router` | ✓ | ✗ | 自身 IP + Domain CIDR + 额外前缀（设置时） | 骨干转发节点 |
+| `relay` | ✓ | ✓ | 自身 IP + Domain CIDR + 额外前缀（设置时），cost 96 | NAT 场景中继 |
 | `gateway` | ✓ | ✗ | 自身 IP + Domain CIDR + 额外前缀 + 默认路由 | 桥接外部网段 |
 | `client` | ✗ | ✗ | 不运行 Babel | 轻量终端（手机、笔记本） |
+
+> **额外前缀（extra_prefixes）：** 只要 `extra_prefixes` 非空，`router` 与 `relay` 都会通告它，
+> 并非仅 `gateway`（`internal/compiler/roles.go`）。额外前缀和 gateway 的默认路由通过内核路由机制
+> 通告（`redistribute ip <prefix> allow`，匹配真实的连接路由 / WAN 默认路由），而非
+> `redistribute local`；详见 [spec/roles/roles.md](spec/roles/roles.md) 及审计档案 D40/D41。
 
 > **Client 角色说明：** Client 是最轻量的角色，适用于不需要参与动态路由的终端设备。Client 使用单个 `wg0` 接口连接到一个 router/relay/gateway 节点，不运行 Babel，不使用 dummy0，不使用 per-peer 接口模型。Client 的可达性通过 router 侧的内核路由注入（`PostUp = ip route add <client_ip>/32 dev %i`）+ Babel 重分发实现，使 overlay 中的其他节点都能访问到 client。
 
@@ -113,7 +118,7 @@ Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配
 
 | | Overlay IP（业务地址） | Transit IP（链路地址） |
 |---|---|---|
-| 地址池 | 每个 Domain 定义（如 `10.11.0.0/24`） | `10.10.0.0/24`（全局共用） |
+| 地址池 | 每个 Domain 的 CIDR 定义（如 `10.11.0.0/24`） | 每个 Domain 的 `transit_cidr`（默认 `10.10.0.0/24`） |
 | 分配到 | `dummy0` 接口 | 每个 per-peer WireGuard 接口 |
 | 用途 | 节点稳定身份地址（DNS、应用、监控） | 隧道点对点寻址 |
 | Babel 通告 | ✓ `redistribute local` | ✗ 内部使用 |
@@ -146,7 +151,12 @@ Node alpha:
 - `Table = off`（阻止 wg-quick 添加路由，由 Babel 管理）
 - `AllowedIPs = 0.0.0.0/0, ::/0`（每接口仅一个 peer，安全）
 
-**接口命名规则：** `wg-<对端名称>`，小写、特殊字符替换为 `-`，Linux 15 字符限制截断。
+**接口命名规则：** `wg-<对端名称>`，小写，且把所有 `[a-z0-9-]` 之外的字符（含 `_`）替换为 `-`。
+Linux 内核将接口名限制为 15 字符，因此算法分两条路径：若 `wg-<清理后名称>` 不超过 15 字符则原样使用；
+否则走长名路径——返回 `wg-` + 清理后名称的前 8 个字符 + `sha256(对端名称)` 的前 4 个十六进制字符
+（3 + 8 + 4 = 15 字符）。hash 后缀确保两个共享前缀的长名不会截断成同一接口名。该名称由后端
+（`internal/naming`）唯一权威生成，前端必须消费编译输出的名称，不得自行重建。完整算法见
+[spec/artifacts/naming.md](spec/artifacts/naming.md)。
 
 ---
 
@@ -303,15 +313,17 @@ Peer 推导器是编译器中最复杂的部分，负责将拓扑 Edge 转换为
 | 节点不可入站（NAT 后） | 25 秒 |
 | 无反向 edge（单向连接） | 25 秒 |
 
-**Transit IP 分配：** 每对节点从 `10.10.0.0/24` 顺序分配一对地址：
+**Transit IP 分配：** 每对节点从所属 Domain 的 `transit_cidr`（默认 `10.10.0.0/24`）顺序分配一对地址：
 - Link 0: `10.10.0.1` ↔ `10.10.0.2`
 - Link N: `10.10.0.(2N+1)` ↔ `10.10.0.(2N+2)`
 
 **IPv6 Link-Local 分配：** 同步分配，Link 0: `fe80::1` ↔ `fe80::2`，依此类推。
 
-**监听端口分配：** 每节点从 `listen_port`（默认 51820）开始，每增加一个 peer 接口递增 1。Client 节点不参与 per-peer 端口分配（使用单一 wg0 接口）。
+**监听端口分配：** 每节点从 `listen_port`（默认 51820）开始，为每个额外 peer 接口向上 gap-fill。Client 节点不参与 per-peer 端口分配（使用单一 wg0 接口）。
 
-**端口覆盖（NAT/端口转发）：** 当 Edge 的 `endpoint_port` 为非零值时，编译器使用用户指定的端口作为 endpoint 连接端口（适用于 NAT 映射，如外部 443 → 内部 51821）。`endpoint_port` 为 0 时使用自动分配的端口。两种情况下 `compiled_port` 都记录编译器分配的实际监听端口。
+**Pinned（粘性）分配：** 一旦某条链路的监听端口、transit IP 对和 IPv6 link-local 被选定，编译器会把它们作为 `pinned_*` 字段回写到对应的 edge 上，并在下一次编译时原样复用。这样在新增节点时，既有服务器的部署包保持逐字节稳定——新增一个节点不会影响无关节点。WireGuard 密钥以同样方式持久化（见 4.4）。完整的「先预留所有 pin、再 gap-fill」契约与不变量见 [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md)。
+
+**端口覆盖（NAT/端口转发）：** 当 Edge 的 `endpoint_port` 为非零值时，编译器使用用户指定的端口作为 endpoint 连接端口（适用于 NAT 映射，如外部 443 → 内部 51821）。`endpoint_port` 为 0 时使用自动分配的端口。两种情况下 `compiled_port` 都记录该条 edge 实际拨号的端口。
 
 **Client 节点的 Peer 推导：**
 
@@ -354,15 +366,26 @@ interface wg-node-beta type tunnel hello-interval 4 update-interval 16
 - `hello-interval 4`：每 4 秒发送 hello
 - `update-interval 16`：每 16 秒发送完整路由更新
 
+`hello-interval 4` 与 `update-interval 16` 这两个默认值现在由按角色的 Babel 预设提供
+（`internal/renderer/babel_presets.go`），不再硬编码在模板里，便于后续按角色调参。下表的「默认 Cost」
+（`rxcost`）同样取自该预设；边上设置了 `priority`/`weight` 链路 cost 时覆盖预设值。
+
 **路由重分发策略（按角色）：**
 
 | 角色 | 通告内容 | 默认 Cost |
 |------|---------|-----------|
 | `peer` | 自身 overlay IP | 0 |
-| `router` | 自身 overlay IP + Domain CIDR | 0 |
-| `relay` | 自身 overlay IP + Domain CIDR | 96（优先直连） |
+| `router` | 自身 overlay IP + Domain CIDR + 额外前缀（设置时） | 0 |
+| `relay` | 自身 overlay IP + Domain CIDR + 额外前缀（设置时） | 96（优先直连） |
 | `gateway` | 自身 overlay IP + Domain CIDR + 额外前缀 + 默认路由 | 0 |
 | `client` | 不运行 Babel | — |
+
+通告使用两种重分发机制（`internal/renderer/babel.go`）：
+- **`redistribute local ip <prefix> allow`** —— 用于有 `dummy0` 连接路由支撑的前缀：节点自身的
+  overlay `/32`，以及（router 侧）注入的 client `/32`。
+- **`redistribute ip <prefix> allow`**（不带 `local` 关键字）—— 用于有真实内核路由、但不是 `dummy0`
+  连接路由的前缀：节点的 `extra_prefixes`（LAN 网段）和 gateway 的默认路由 `0.0.0.0/0`（WAN 默认）。
+  采用非 `local` 形式才能真正匹配内核路由并向全网传播（审计档案 D40/D41）。
 
 末尾的 `redistribute local deny` 至关重要——防止意外通告 transit IP 池或系统路由。
 
@@ -371,6 +394,21 @@ interface wg-node-beta type tunnel hello-interval 4 update-interval 16
 **全局设置：**
 - `local-port 33123`：Babel 管理端口
 - `skip-kernel-setup false`：让 Babel 管理内核路由表
+
+### 4.4 密钥管理与持久化
+
+WireGuard 密钥是**持久化**的，不会每次编译都重新生成。新节点首次编译时生成一对新密钥，并把私钥和
+公钥**都**回写到拓扑 JSON 的节点上（私钥按设计随拓扑往返，以便无状态编译器能再次渲染该节点自己的
+`Interface PrivateKey`）。此后每次编译都复用同一对密钥，因此新增无关节点绝不会轮换既有节点的密钥。
+
+- **轮换是显式操作：** 只有当操作员**同时清空**两个密钥字段（触发重新生成）或粘贴一把不同的私钥时，
+  节点密钥才会改变。任何其他编辑都不会作为副作用轮换密钥。
+- **迁移契约：** 若某节点带有公钥但缺少私钥，则为硬错误——操作员必须粘贴真实私钥（从主机的
+  `/etc/wireguard/<iface>.conf` 读取），或清空两个密钥字段以显式轮换。从旧的「每次编译都轮换」行为
+  迁移的一次性流程见 [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md)。
+
+由于持久化的拓扑（及浏览器 localStorage）现在携带真实私钥，应将其视为机密材料。完整契约见
+[spec/data-model/node.md](spec/data-model/node.md) 与 [spec/security/security.md](spec/security/security.md)。
 
 ---
 

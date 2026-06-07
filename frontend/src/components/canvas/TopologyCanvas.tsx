@@ -284,6 +284,26 @@ export function TopologyCanvas() {
     selectDomain(null);
   }, [selectNode, selectEdge, selectDomain]);
 
+  // 连线合法性校验（拖拽期间被高频调用，必须保持纯函数 + O(边数) 轻量）：
+  // 1) 拒绝自环（source === target）—— 一个节点连自己没有意义；
+  // 2) 拒绝与现有「已启用」边重复的节点对（任一方向）—— 平行边由 parallelEdgeInfo
+  //    可视化，但同一对节点的重复直连边只会产生混淆且无新增语义。
+  // 读取 topoEdges（拓扑真源），而非 React Flow 的 edges 派生状态。
+  const isValidConnection = useCallback(
+    (connection: Connection | FlowEdge) => {
+      const { source, target } = connection;
+      if (!source || !target) return false;
+      if (source === target) return false;
+      return !topoEdges.some(
+        (e) =>
+          e.is_enabled &&
+          ((e.from_node_id === source && e.to_node_id === target) ||
+            (e.from_node_id === target && e.to_node_id === source))
+      );
+    },
+    [topoEdges]
+  );
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -291,6 +311,7 @@ export function TopologyCanvas() {
       onNodesChange={handleNodesChange}
       onEdgesChange={handleEdgesChange}
       onConnect={onConnect}
+      isValidConnection={isValidConnection}
       onNodeClick={onNodeClick}
       onEdgeClick={onEdgeClick}
       onPaneClick={onPaneClick}
