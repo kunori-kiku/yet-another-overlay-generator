@@ -10,6 +10,10 @@
 ./dev.sh logs       # Tail log files
 ```
 
+`start`/`restart` auto-install frontend dependencies (`npm install --legacy-peer-deps`)
+when `frontend/node_modules` is missing or `package-lock.json` changed since the last
+install (stamp: `frontend/node_modules/.dev-deps-hash`); otherwise the install is skipped.
+
 ## Manual Start
 
 ```bash

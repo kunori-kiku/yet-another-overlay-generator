@@ -22,11 +22,31 @@ start_backend() {
   echo "Backend started (pid $!) — log: $LOG_BACKEND"
 }
 
+# Install frontend deps only when needed: first run (no node_modules) or
+# package-lock.json changed since the last successful install (e.g. after a
+# pull that added a dependency). The stamp lives inside node_modules so a
+# wiped node_modules naturally forces a reinstall. Without this, `npx vite`
+# on a fresh clone silently fetches vite into the npx cache and then dies
+# resolving the config's imports against an empty node_modules.
+ensure_frontend_deps() {
+  local lock="frontend/package-lock.json"
+  local stamp="frontend/node_modules/.dev-deps-hash"
+  local want
+  want=$(sha256sum "$lock" | cut -d' ' -f1)
+  if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+    return
+  fi
+  echo "Installing frontend dependencies (first run or package-lock.json changed)..."
+  (cd frontend && npm install --legacy-peer-deps)
+  echo "$want" > "$stamp"
+}
+
 start_frontend() {
   if [ -f "$PIDFILE_FRONTEND" ] && kill -0 "$(cat "$PIDFILE_FRONTEND")" 2>/dev/null; then
     echo "Frontend already running (pid $(cat "$PIDFILE_FRONTEND"))"
     return
   fi
+  ensure_frontend_deps
   echo "Starting Vite frontend on :5173..."
   nohup bash -c 'cd frontend && npx vite --host' > "$LOG_FRONTEND" 2>&1 &
   echo $! > "$PIDFILE_FRONTEND"

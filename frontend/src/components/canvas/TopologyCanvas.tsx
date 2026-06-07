@@ -4,6 +4,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   addEdge,
   useNodesState,
   useEdgesState,
@@ -12,15 +13,41 @@ import {
   type Node as FlowNode,
   type NodeChange,
   type EdgeChange,
+  type ReactFlowInstance,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import dagre from '@dagrejs/dagre';
 import { CustomNode } from './CustomNode';
 import { CustomEdge } from './CustomEdge';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { txt, STRINGS } from '../../i18n';
 
 const nodeTypes = { custom: CustomNode };
 const edgeTypes = { custom: CustomEdge };
+
+// 自动布局的节点尺寸缺省值（React Flow 尚未量测时使用）
+const DEFAULT_NODE_WIDTH = 180;
+const DEFAULT_NODE_HEIGHT = 110;
+
+// 边的渲染等价判定：keyed 同步用。只有渲染相关字段变化时才替换边对象，
+// 保持对象身份稳定 → React Flow 跳过未变边的重渲染（消除整层边闪烁）。
+function edgeRenderEqual(a: FlowEdge, b: FlowEdge): boolean {
+  if (a.source !== b.source || a.target !== b.target) return false;
+  const da = (a.data ?? {}) as Record<string, unknown>;
+  const db = (b.data ?? {}) as Record<string, unknown>;
+  const keys = [
+    'edgeType',
+    'label',
+    'pending',
+    'port',
+    'parallelIndex',
+    'parallelCount',
+    'sourceNodeName',
+    'targetNodeName',
+  ];
+  return keys.every((k) => da[k] === db[k]);
+}
 
 export function TopologyCanvas() {
   const {
@@ -28,6 +55,9 @@ export function TopologyCanvas() {
     edges: topoEdges,
     domains,
     compileResult,
+    language,
+    showInterfaces,
+    setShowInterfaces,
     addEdge: addTopoEdge,
     removeNode: removeTopoNode,
     removeEdge: removeTopoEdge,
@@ -38,6 +68,10 @@ export function TopologyCanvas() {
 
   // Persist node positions across re-renders so dragging is not lost
   const positionMap = useRef<Record<string, { x: number; y: number }>>({});
+  // onInit 捕获实例：自动布局完成后做带动画的 fitView（无需 ReactFlowProvider 包裹）。
+  const rfInstance = useRef<ReactFlowInstance | null>(null);
+  // 自动布局动画帧句柄：重复点击/卸载时取消未完成的动画。
+  const layoutAnimation = useRef<number | null>(null);
 
   // 构建 domain 名称索引
   const domainMap = useMemo(() => {
@@ -46,7 +80,8 @@ export function TopologyCanvas() {
     return m;
   }, [domains]);
 
-  // 构建每个节点的已编译接口详情（用于多 handle 显示）
+  // 构建每个节点的已编译接口详情（节点卡片上的展示徽标，受「显示接口详情」开关控制）。
+  // 注意：接口不再充当连接手柄 —— 连线手势是节点对节点，端口由后端编译时分配。
   interface IfaceInfo {
     name: string;       // e.g. "wg-beta"
     listenPort: number; // allocated listen port
@@ -116,68 +151,48 @@ export function TopologyCanvas() {
     return info;
   }, [topoEdges]);
 
-  // 将拓扑边转为 React Flow 边（使用自定义 edge）
+  // 将拓扑边转为 React Flow 边（使用自定义 edge）。
+  // 边始终在节点级锚点之间渲染（不再路由到接口手柄）：边是节点对节点的逻辑链路，
+  // 接口/端口是它的编译产物。端口语义拆成结构化字段交给 CustomEdge 渲染徽标：
+  //   port    —— compiled_port（后端分配真值）或显式 endpoint_port 覆盖；
+  //   pending —— 「待编译」信号 → 虚线。注意 compiled_port 只对带 endpoint_host 的
+  //   边写回（compiler.go 的 CompiledPort 写回规则），无 endpoint_host 的被动边要用
+  //   pin 字段（每条 enabled 边编译后都有）判断是否已编译，否则会永远显示虚线。
+  //   带 endpoint_host 的边仍以 compiled_port 为准：拨号相关编辑会清掉它（D19），
+  //   虚线回退正是「需要重新编译」的可视反馈。
   const flowEdges: FlowEdge[] = useMemo(
     () =>
       topoEdges
         .filter((e) => e.is_enabled)
         .map((e) => {
           const pInfo = parallelEdgeInfo[e.id] || { index: 0, count: 1 };
-          const displayPort = e.compiled_port || e.endpoint_port || '';
-          const label = e.endpoint_host
-            ? `${e.endpoint_host}:${displayPort}`
-            : e.type;
-
-          let targetHandle: string | undefined;
-          let sourceHandle: string | undefined;
-          let sourceNodeName = '';
-          let targetNodeName = '';
-          if (compileResult) {
-            const sourceNode = topoNodes.find((n) => n.id === e.from_node_id);
-            const targetNode = topoNodes.find((n) => n.id === e.to_node_id);
-            sourceNodeName = sourceNode?.name || '';
-            targetNodeName = targetNode?.name || '';
-
-            if (sourceNode && targetNode) {
-              const targetIfaces = nodeInterfaceMap[e.to_node_id] || [];
-              const sourceIfaces = nodeInterfaceMap[e.from_node_id] || [];
-
-              const srcIfaceName = `wg-${sourceNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
-              if (targetIfaces.some((iface) => iface.name === srcIfaceName)) {
-                targetHandle = srcIfaceName;
-              }
-
-              const tgtIfaceName = `wg-${targetNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15);
-              if (sourceIfaces.some((iface) => iface.name === tgtIfaceName)) {
-                sourceHandle = tgtIfaceName;
-              }
-            }
-          } else {
-            const sourceNode = topoNodes.find((n) => n.id === e.from_node_id);
-            const targetNode = topoNodes.find((n) => n.id === e.to_node_id);
-            sourceNodeName = sourceNode?.name || '';
-            targetNodeName = targetNode?.name || '';
-          }
+          const port = e.compiled_port || e.endpoint_port || undefined;
+          const hasPins =
+            e.pinned_from_port !== undefined || e.pinned_to_port !== undefined;
+          const pending = e.endpoint_host ? !e.compiled_port : !hasPins;
+          const label = e.endpoint_host || e.type;
+          const sourceNode = topoNodes.find((n) => n.id === e.from_node_id);
+          const targetNode = topoNodes.find((n) => n.id === e.to_node_id);
 
           return {
             id: e.id,
             source: e.from_node_id,
             target: e.to_node_id,
             type: 'custom',
-            ...(targetHandle ? { targetHandle } : {}),
-            ...(sourceHandle ? { sourceHandle } : {}),
             data: {
               edgeType: e.type,
               label,
+              pending,
+              port,
               parallelIndex: pInfo.index,
               parallelCount: pInfo.count,
-              sourceNodeName,
-              targetNodeName,
+              sourceNodeName: sourceNode?.name || '',
+              targetNodeName: targetNode?.name || '',
             },
             markerEnd: { type: MarkerType.ArrowClosed },
           };
         }),
-    [topoEdges, parallelEdgeInfo, compileResult, topoNodes, nodeInterfaceMap]
+    [topoEdges, parallelEdgeInfo, topoNodes]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
@@ -226,19 +241,110 @@ export function TopologyCanvas() {
         const existing = currentNodes.find((n) => n.id === fn.id);
         return {
           ...fn,
+          // 保留 React Flow 标记的选中态，避免同步时选中描边闪断
+          selected: existing?.selected,
           position: positionMap.current[fn.id] || existing?.position || fn.position,
         };
       })
     );
   }, [flowNodes, setNodes]);
 
+  // keyed 边同步：渲染字段未变的边保留原对象身份（含 selected 标记），
+  // 避免旧版整批 setEdges(flowEdges) 在任何 store 变更时重建全部边对象、
+  // 触发整层边重渲染的卡顿/闪烁。
   useEffect(() => {
-    setEdges(flowEdges);
+    setEdges((current) => {
+      const prevById = new Map(current.map((e) => [e.id, e]));
+      let changed = current.length !== flowEdges.length;
+      const next = flowEdges.map((fe) => {
+        const prev = prevById.get(fe.id);
+        if (prev && edgeRenderEqual(prev, fe)) {
+          return prev;
+        }
+        changed = true;
+        return { ...fe, selected: prev?.selected };
+      });
+      return changed ? next : current;
+    });
   }, [flowEdges, setEdges]);
+
+  // 卸载时取消未完成的布局动画帧
+  useEffect(
+    () => () => {
+      if (layoutAnimation.current !== null) {
+        cancelAnimationFrame(layoutAnimation.current);
+      }
+    },
+    []
+  );
+
+  // 自动布局：dagre 分层布局算出目标坐标，再用 easeOutCubic 插值平滑过渡。
+  // 不用 CSS transform 过渡 —— React Flow 拖拽也走 transform，二者会互相打架；
+  // 逐帧更新 position 状态是官方推荐的动画方式。动画过程同步写 positionMap，
+  // 让布局结果像手动拖拽一样被持久化。
+  const runAutoLayout = useCallback(() => {
+    if (nodes.length === 0) return;
+
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'TB', nodesep: 70, ranksep: 110, marginx: 40, marginy: 40 });
+    g.setDefaultEdgeLabel(() => ({}));
+    for (const n of nodes) {
+      g.setNode(n.id, {
+        width: n.measured?.width ?? DEFAULT_NODE_WIDTH,
+        height: n.measured?.height ?? DEFAULT_NODE_HEIGHT,
+      });
+    }
+    for (const e of edges) {
+      g.setEdge(e.source, e.target);
+    }
+    dagre.layout(g);
+
+    // dagre 返回中心点坐标；React Flow position 是左上角。
+    const targets: Record<string, { x: number; y: number }> = {};
+    const from: Record<string, { x: number; y: number }> = {};
+    for (const n of nodes) {
+      const gn = g.node(n.id);
+      if (!gn) continue;
+      const w = n.measured?.width ?? DEFAULT_NODE_WIDTH;
+      const h = n.measured?.height ?? DEFAULT_NODE_HEIGHT;
+      targets[n.id] = { x: gn.x - w / 2, y: gn.y - h / 2 };
+      from[n.id] = { ...n.position };
+    }
+
+    if (layoutAnimation.current !== null) {
+      cancelAnimationFrame(layoutAnimation.current);
+    }
+    const duration = 450;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      setNodes((curr) =>
+        curr.map((n) => {
+          const f = from[n.id];
+          const to = targets[n.id];
+          if (!f || !to) return n;
+          const pos = {
+            x: f.x + (to.x - f.x) * ease,
+            y: f.y + (to.y - f.y) * ease,
+          };
+          positionMap.current[n.id] = pos;
+          return { ...n, position: pos };
+        })
+      );
+      if (t < 1) {
+        layoutAnimation.current = requestAnimationFrame(step);
+      } else {
+        layoutAnimation.current = null;
+        rfInstance.current?.fitView({ padding: 0.2, duration: 300 });
+      }
+    };
+    layoutAnimation.current = requestAnimationFrame(step);
+  }, [nodes, edges, setNodes]);
 
   const onConnect = useCallback(
     (params: Connection) => {
-      setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
+      setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', pending: true, parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
 
       if (params.source && params.target) {
         // 用 crypto.randomUUID() 而非毫秒时间戳生成边 ID：两次快速连线会落在同一毫秒，
@@ -311,6 +417,9 @@ export function TopologyCanvas() {
       onNodesChange={handleNodesChange}
       onEdgesChange={handleEdgesChange}
       onConnect={onConnect}
+      onInit={(instance) => {
+        rfInstance.current = instance;
+      }}
       isValidConnection={isValidConnection}
       onNodeClick={onNodeClick}
       onEdgeClick={onEdgeClick}
@@ -318,10 +427,29 @@ export function TopologyCanvas() {
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       fitView
+      fitViewOptions={{ padding: 0.2, duration: 400 }}
       className="bg-gray-900"
     >
       <Background color="#374151" gap={20} />
       <Controls className="!bg-gray-700 !border-gray-600 !text-gray-300" />
+      {/* 画布工具栏：自动布局 + 接口详情开关 */}
+      <Panel position="top-left" className="flex items-center gap-2">
+        <button
+          onClick={runAutoLayout}
+          className="px-2.5 py-1 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-xs text-gray-200 transition-colors duration-150"
+        >
+          ✨ {txt(language, ...STRINGS.autoLayoutLabel)}
+        </button>
+        <label className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 border border-gray-600 rounded text-xs text-gray-200 cursor-pointer transition-colors duration-150 hover:bg-gray-600">
+          <input
+            type="checkbox"
+            checked={showInterfaces}
+            onChange={(e) => setShowInterfaces(e.target.checked)}
+            className="rounded"
+          />
+          {txt(language, ...STRINGS.showInterfacesLabel)}
+        </label>
+      </Panel>
       <MiniMap
         nodeColor={(n) => {
           const role = (n.data as Record<string, unknown>)?.role as string;

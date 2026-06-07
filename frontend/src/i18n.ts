@@ -26,4 +26,10 @@ export const STRINGS = {
     '留空表示该节点在 NAT 之后（由对端主动连入）。',
     'Leave empty if this node is behind NAT (peers dial in to it).',
   ] as const,
+  // 画布工具栏：一键整理布局（dagre 分层布局 + 平滑动画过渡）。
+  autoLayoutLabel: ['自动布局', 'Auto layout'] as const,
+  // 画布工具栏：展开/收起节点卡片上的已编译接口详情（纯展示，不影响连线手势）。
+  showInterfacesLabel: ['显示接口详情', 'Show interfaces'] as const,
+  // 边端口标签占位：边已绘制但尚未编译，端口由后端在下次编译时分配（后端是唯一端口权威）。
+  portPendingLabel: ['待分配', 'auto'] as const,
 } as const;
