@@ -47,10 +47,14 @@ const ifaceChipColors = [
   { bg: '#fb7185', border: '#e11d48' }, // rose
 ];
 
-interface IfaceInfo {
-  name: string;
-  listenPort: number;
-  peerName: string;
+// 节点接口徽标的数据形态：由 TopologyCanvas 通过共享解析器 resolveNodeInterfaces
+// （edge-aware，Decisions #12）算好后传入。绝不在前端重算接口名 / 反推 peer 名。
+interface IfaceChip {
+  name: string;        // 真实接口名（tooltip 用，永不剥离 'wg-'）
+  listenPort: number;  // 后端分配的监听端口
+  peerName: string;    // 对端节点名（resolver 解析；'unknown' 时回退为接口名）
+  // 角色标记，与边扇形序号一致：'★' 主链路 / 'b1','b2',... 备份 / undefined 未知或单边。
+  roleMarker?: string;
 }
 
 interface CustomNodeData {
@@ -58,7 +62,9 @@ interface CustomNodeData {
   role: string;
   overlayIp: string;
   domainName: string;
-  interfaces?: IfaceInfo[];
+  interfaces?: IfaceChip[];
+  // 焦点透明度（Decisions #11）：被弱化的节点保持挂载、可见、可点击，仅淡出到 0.15。
+  deemphasized?: boolean;
   [key: string]: unknown;
 }
 
@@ -69,12 +75,20 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
   const role = data.role || 'peer';
   const colorClass = roleColors[role] || roleColors.peer;
   const icon = roleIcons[role] || '💻';
-  const interfaces: IfaceInfo[] = (data.interfaces as IfaceInfo[]) || [];
+  const interfaces: IfaceChip[] = (data.interfaces as IfaceChip[]) || [];
   const handleClass = `${roleHandleColorClass[role] || roleHandleColorClass.peer} ${handleClassBase}`;
   const dragHint = txt(language, '拖拽以连接', 'drag to connect');
+  const deemphasized = data.deemphasized === true;
 
   return (
-    <>
+    // 根容器包裹焦点透明度：弱化时整张卡片淡出到 0.15，但手柄仍渲染且可点击
+    //（透明度不影响命中测试 → 点击透明节点照样把焦点切过去）。
+    <div
+      style={{
+        opacity: deemphasized ? 0.15 : 1,
+        transition: 'opacity 150ms',
+      }}
+    >
       <Handle
         type="target"
         position={Position.Top}
@@ -104,6 +118,10 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
           <div className="mt-1 flex flex-wrap justify-center gap-1">
             {interfaces.map((iface, i) => {
               const color = ifaceChipColors[i % ifaceChipColors.length];
+              // roleMarker 与边扇形序号一致（★ / bN）：可解析的链路显示角色标记；
+              // 'unknown' 由 TopologyCanvas 让 peerName 回退为接口名（永不剥离 'wg-'），
+              // 此时不带 roleMarker。tooltip 始终展示真实接口名 + 端口。
+              const marker = iface.roleMarker;
               return (
                 <span
                   key={iface.name}
@@ -111,6 +129,7 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
                   style={{ backgroundColor: `${color.bg}30`, color: color.bg }}
                   title={`${iface.name} :${iface.listenPort}`}
                 >
+                  {marker ? `${marker} ` : ''}
                   {iface.peerName}:{iface.listenPort}
                 </span>
               );
@@ -125,6 +144,6 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
         title={dragHint}
         className={handleClass}
       />
-    </>
+    </div>
   );
 }

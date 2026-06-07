@@ -66,6 +66,11 @@ interface TopologyState {
 
   // Edge CRUD
   addEdge: (edge: Edge) => void;
+  // 为指定主链路 edge 创建一条备份链路（role: 'backup'）：复制 from/to/type/transport/
+  // endpoint_host，但不复制端口与任何 pin（备份链路自有独立分配，由后端按 edge 重新 pin）。
+  // 追加后选中新边并返回其 id；primaryEdgeId 不存在时返回 null。
+  // 参见 docs/spec/data-model/edge.md（§Parallel links）。
+  addBackupEdge: (primaryEdgeId: string) => string | null;
   updateEdge: (id: string, updates: Partial<Edge>) => void;
   removeEdge: (id: string) => void;
   // 当某节点的 public_endpoints 主机变更/移除时，同步指向它的 edge 上快照的 endpoint_host
@@ -241,6 +246,34 @@ export const useTopologyStore = create<TopologyState>()(
   // Edge CRUD
   addEdge: (edge) =>
     set((state) => ({ edges: [...state.edges, edge] })),
+
+  // 复制主链路 edge → 备份链路（role: 'backup'）。只复制逻辑链路意图字段
+  // （from/to/type/transport/endpoint_host），不复制 compiled_port/endpoint_port 与
+  // 任何 pin：备份链路必须拥有独立的端口 / transit IP / 链路本地地址，由后端按 edge 重新分配。
+  // 追加后通过 selectEdge 语义选中新边（清空 node/domain 选中），返回新边 id；找不到则返回 null。
+  // 参见 docs/spec/data-model/edge.md（§Parallel links）。
+  addBackupEdge: (primaryEdgeId) => {
+    const primary = get().edges.find((e) => e.id === primaryEdgeId);
+    if (!primary) return null;
+    const newId = `edge-${crypto.randomUUID()}`;
+    const backup: Edge = {
+      id: newId,
+      from_node_id: primary.from_node_id,
+      to_node_id: primary.to_node_id,
+      type: primary.type,
+      role: 'backup',
+      transport: primary.transport,
+      is_enabled: true,
+      endpoint_host: primary.endpoint_host,
+    };
+    set((state) => ({
+      edges: [...state.edges, backup],
+      selectedEdgeId: newId,
+      selectedNodeId: null,
+      selectedDomainId: null,
+    }));
+    return newId;
+  },
 
   updateEdge: (id, updates) =>
     set((state) => ({

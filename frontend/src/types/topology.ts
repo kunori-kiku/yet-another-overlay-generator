@@ -79,6 +79,10 @@ export interface Edge {
   compiled_port?: number;  // read-only: actual port set by compiler
   priority?: number;
   weight?: number;
+  // 平行链路的链路角色：'backup' 自成一条独立链路（独立 WG 接口/端口/transit/链路本地地址），
+  // 无角色或 'primary' 归入「主链路类」（同一节点对的 A→B + B→A 仍合并为单条双向隧道）。
+  // 参见 docs/spec/data-model/edge.md（§Parallel links）。
+  role?: 'primary' | 'backup';
   transport?: 'udp' | 'tcp';
   is_enabled: boolean;
   notes?: string;

@@ -32,4 +32,17 @@ export const STRINGS = {
   showInterfacesLabel: ['显示接口详情', 'Show interfaces'] as const,
   // 边端口标签占位：边已绘制但尚未编译，端口由后端在下次编译时分配（后端是唯一端口权威）。
   portPendingLabel: ['待分配', 'auto'] as const,
+  // RightPanel 边编辑器：为选中的主链路添加一条备份链路（自成独立 WG 接口，Babel 做成本故障切换）。
+  addBackupLink: ['添加备份链路', 'Add backup link'] as const,
+  // 添加备份链路后的提示：备份链路当前复制了主链路的公网地址，建议改成不同地址以获得路径分集。
+  backupEndpointNudge: [
+    '为备份链路指定不同的公网地址以获得路径分集（当前复制了主链路的地址）。',
+    'Point the backup at a distinct endpoint for path diversity (it copied the primary’s address).',
+  ] as const,
+  // 链路角色选择器标签（主/备）。
+  roleLabel: ['链路角色', 'Link role'] as const,
+  rolePrimary: ['主链路', 'Primary'] as const,
+  roleBackup: ['备份链路', 'Backup'] as const,
+  // 同方向意外重复边的告警徽标（非刻意创建的备份；建议改用 role: backup）。
+  duplicateChip: ['重复?', 'duplicate?'] as const,
 } as const;
