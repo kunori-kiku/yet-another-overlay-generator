@@ -27,6 +27,7 @@ import (
 //	topology.json                       the current TopologyRecord (with Version)
 //	bundles/<nodeID>.staged.json        the node's staged SignedBundle (if any)
 //	bundles/<nodeID>.current.json       the node's current SignedBundle (if any)
+//	tokens/<tokenHash>.json             one EnrollmentToken record (keyed by hash)
 //	generation.json                     the tenant's current generation counter
 //	audit.json                          the full []AuditEntry, in Seq order
 //
@@ -89,7 +90,7 @@ func (fs *FileStore) ensureTenantDir(t TenantID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, sub := range []string{"", "nodes", "bundles"} {
+	for _, sub := range []string{"", "nodes", "bundles", "tokens"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return "", fmt.Errorf("controller: create tenant dir: %w", err)
 		}
@@ -113,6 +114,17 @@ func (fs *FileStore) bundlePath(dir, nodeID, kind string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "bundles", nc+"."+kind+".json"), nil
+}
+
+// tokenPath returns the on-disk path for an enrollment token after validating the
+// tokenHash is a safe single path component (it is a hex SHA-256 in practice, but
+// it is sanitized like any other untrusted key to prevent path traversal).
+func (fs *FileStore) tokenPath(dir, tokenHash string) (string, error) {
+	tc, err := sanitizeComponent("token hash", tokenHash)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "tokens", tc+".json"), nil
 }
 
 // --- atomic JSON IO ---------------------------------------------------------
@@ -603,6 +615,68 @@ func (fs *FileStore) lockedGeneration(t TenantID) (int64, error) {
 		return 0, err
 	}
 	return fs.readGeneration(dir)
+}
+
+// =========================== Enrollment tokens =============================
+
+// CreateEnrollmentToken stores a single-use, node-scoped, TTL token as JSON under
+// <root>/<tenant>/tokens/<tokenHash>.json (0700 dir / 0600 file, atomic write). A
+// later CreateEnrollmentToken with the same hash overwrites the prior record.
+func (fs *FileStore) CreateEnrollmentToken(ctx context.Context, t TenantID, tok EnrollmentToken) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.tokenPath(dir, tok.TokenHash)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(p, tok)
+}
+
+// ConsumeEnrollmentToken atomically validates and burns a token under the mutex:
+// it reads the token at tokens/<tokenHash>.json and returns ErrTokenInvalid if it
+// is absent, if its NodeID != nodeID, or if now is at/after ExpiresAt;
+// ErrTokenConsumed if it was already burned; otherwise it sets ConsumedAt=now and
+// writes the record back atomically. Holding fs.mu across the read-modify-write
+// makes the check-and-burn race-safe within this process.
+func (fs *FileStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.tokenPath(dir, tokenHash)
+	if err != nil {
+		return err
+	}
+	var tok EnrollmentToken
+	if err := readJSON(p, &tok); err != nil {
+		if os.IsNotExist(err) {
+			return ErrTokenInvalid
+		}
+		return err
+	}
+	if tok.NodeID != nodeID || !now.Before(tok.ExpiresAt) {
+		return ErrTokenInvalid
+	}
+	if tok.ConsumedAt != nil {
+		return ErrTokenConsumed
+	}
+	consumed := now
+	tok.ConsumedAt = &consumed
+	return writeJSONAtomic(p, tok)
 }
 
 // ================================ Audit ====================================

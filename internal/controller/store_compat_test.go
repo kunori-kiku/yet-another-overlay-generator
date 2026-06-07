@@ -2,11 +2,21 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"testing"
 	"time"
 )
+
+// tokenHash returns the hex SHA-256 of a plaintext, matching the on-the-wire
+// TokenHash convention (the plaintext token itself is never stored). Using a real
+// hash keeps the key a clean path component, which FileStore sanitizes on disk.
+func tokenHash(plaintext string) string {
+	sum := sha256.Sum256([]byte(plaintext))
+	return hex.EncodeToString(sum[:])
+}
 
 // storeFactory builds a fresh, empty Store for one sub-test. FileStore variants
 // use t.TempDir() so nothing ever touches real /var or /etc.
@@ -520,6 +530,72 @@ func TestStoreWaitForGeneration(t *testing.T) {
 					t.Fatalf("WaitForGeneration did not return after ctx cancel")
 				}
 			})
+		})
+	}
+}
+
+// TestStoreEnrollmentTokens covers the enrollment-token contract across both Store
+// impls: create then consume (happy path under TTL), single-use (a second consume
+// is ErrTokenConsumed), and the three ErrTokenInvalid paths (unknown hash, wrong
+// nodeID, expired). The check-and-burn is atomic in each impl; this test pins the
+// observable error mapping, not the concurrency (that holds by construction under
+// the store lock).
+func TestStoreEnrollmentTokens(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+			expires := now.Add(15 * time.Minute)
+			tok := EnrollmentToken{
+				TokenHash: tokenHash("plaintext-alpha"),
+				NodeID:    "alpha",
+				ExpiresAt: expires,
+			}
+			if err := s.CreateEnrollmentToken(ctx, tenant, tok); err != nil {
+				t.Fatalf("CreateEnrollmentToken: %v", err)
+			}
+
+			// Consuming an unknown hash -> ErrTokenInvalid.
+			if err := s.ConsumeEnrollmentToken(ctx, tenant, tokenHash("nope"), "alpha", now); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("Consume(unknown hash): err = %v, want ErrTokenInvalid", err)
+			}
+
+			// Consuming the right hash with the wrong nodeID -> ErrTokenInvalid (the
+			// token is node-scoped; it is not visible to any other node).
+			if err := s.ConsumeEnrollmentToken(ctx, tenant, tok.TokenHash, "beta", now); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("Consume(wrong node): err = %v, want ErrTokenInvalid", err)
+			}
+
+			// Happy path: now < ExpiresAt and the nodeID matches -> nil (burned).
+			if err := s.ConsumeEnrollmentToken(ctx, tenant, tok.TokenHash, "alpha", now); err != nil {
+				t.Fatalf("Consume(happy): err = %v, want nil", err)
+			}
+
+			// Single-use: a second consume of the same token -> ErrTokenConsumed.
+			if err := s.ConsumeEnrollmentToken(ctx, tenant, tok.TokenHash, "alpha", now.Add(time.Minute)); !errors.Is(err, ErrTokenConsumed) {
+				t.Fatalf("Consume(second): err = %v, want ErrTokenConsumed", err)
+			}
+
+			// Expiry: a fresh, never-consumed token is ErrTokenInvalid once now is at
+			// or after ExpiresAt. Consume exactly at ExpiresAt (the boundary is
+			// exclusive: valid only while now.Before(ExpiresAt)).
+			expTok := EnrollmentToken{
+				TokenHash: tokenHash("plaintext-gamma"),
+				NodeID:    "gamma",
+				ExpiresAt: expires,
+			}
+			if err := s.CreateEnrollmentToken(ctx, tenant, expTok); err != nil {
+				t.Fatalf("CreateEnrollmentToken(gamma): %v", err)
+			}
+			if err := s.ConsumeEnrollmentToken(ctx, tenant, expTok.TokenHash, "gamma", expires); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("Consume(at ExpiresAt): err = %v, want ErrTokenInvalid", err)
+			}
+			if err := s.ConsumeEnrollmentToken(ctx, tenant, expTok.TokenHash, "gamma", expires.Add(time.Hour)); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("Consume(after ExpiresAt): err = %v, want ErrTokenInvalid", err)
+			}
 		})
 	}
 }
