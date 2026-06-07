@@ -326,13 +326,9 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		if !validTransports[edge.Transport] {
 			result.AddError(prefix+".transport",
 				fmt.Sprintf("传输协议无效: %s，可选值: udp, tcp", edge.Transport))
-		} else if edge.Transport == "tcp" {
-			// tcp 是保留值：WireGuard 协议本身仅支持 UDP，目前没有任何渲染器消费此字段，
-			// 该链路实际仍以 UDP 生成。明确告警以免"已接受但被静默忽略"（审计反复治理的缺陷类）。
-			// 未来若引入 TCP 封装/混淆隧道（如 xray-core/sing-box）再赋予其真实语义。
-			result.AddWarning(prefix+".transport",
-				"tcp 传输为保留值，尚未实现：该链路仍按 UDP 生成（WireGuard 仅支持 UDP）")
 		}
+		// tcp 现已实现（mimic eBPF UDP→伪 TCP 封装），是合法取值、不再告警。
+		// 「两端必须为可部署 Linux」这一语义约束由 semantic.go 的 validateMimicTransport 负责。
 
 		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {

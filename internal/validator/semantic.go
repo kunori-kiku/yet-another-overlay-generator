@@ -3,6 +3,7 @@ package validator
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -47,6 +48,9 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 
 	// Client 边验证
 	validateClientEdges(topo, nodeMap, result)
+
+	// mimic（tcp 传输）：tcp 边两端必须均为可部署 Linux（eBPF/内核特性）
+	validateMimicTransport(topo, nodeMap, result)
 
 	// Edge endpoint 与目标节点 public endpoints 一致性检查
 	validateEdgeEndpointConsistency(topo, nodeMap, result)
@@ -513,6 +517,59 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 		if len(node.ExtraPrefixes) > 0 {
 			result.AddWarning(fmt.Sprintf("node.%s.extra_prefixes", node.ID),
 				fmt.Sprintf("Client %s has extra_prefixes set but clients don't announce routes", node.Name))
+		}
+	}
+}
+
+// mimicLinuxDeployable 判定某节点的平台是否可部署 mimic（eBPF/内核特性）。
+// mimic 仅在 Linux 上可用，YAOG 当前支持的 Linux 发行版为 debian / ubuntu。
+// 空 platform 视为 Linux（放行）：与 schema.go validateNodesSchema 中「空 platform 跳过校验」
+// 的处理一致，避免对未设置 platform 的节点产生误报。
+func mimicLinuxDeployable(node *model.Node) bool {
+	if node == nil {
+		// 节点缺失由 validateEdgeNodeRefs 报错，这里不重复，按放行处理。
+		return true
+	}
+	if node.Platform == "" {
+		return true
+	}
+	switch strings.ToLower(node.Platform) {
+	case "debian", "ubuntu":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateMimicTransport 校验 transport=="tcp"（mimic）边的平台约束（Spec：docs/spec/artifacts/mimic.md、
+// docs/spec/data-model/edge.md §TCP transport、docs/spec/compiler/validation.md mimic 规则）。
+//
+// mimic 是 eBPF/内核特性，仅能在可部署的 Linux（debian / ubuntu）上运行；因此一条 tcp 边的
+// 两个端点节点都必须是可部署 Linux，否则编译出的配置在该端点上无法部署。任一端点平台不被支持
+// 即报错，并在错误消息中点名该边与违规节点。
+//
+// 内核/eBPF 的实际可用性是安装期检查（见 mimic.md），不在编译期报错；mimic 无密钥，无需做任何
+// 密钥校验。空 platform 视为 Linux（放行），与其它平台校验对空值的处理一致。
+func validateMimicTransport(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+		if edge.Transport != "tcp" {
+			continue
+		}
+
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+
+		if !mimicLinuxDeployable(fromNode) {
+			result.AddError(fmt.Sprintf("edges[%d].transport", i),
+				fmt.Sprintf("边 %s 使用 tcp 传输（mimic），但端点节点 %s 的平台 %q 不是可部署 Linux：mimic 是 eBPF/内核特性，tcp 边两端都必须为 Linux（debian / ubuntu）", edge.ID, fromNode.Name, fromNode.Platform))
+		}
+		if !mimicLinuxDeployable(toNode) {
+			result.AddError(fmt.Sprintf("edges[%d].transport", i),
+				fmt.Sprintf("边 %s 使用 tcp 传输（mimic），但端点节点 %s 的平台 %q 不是可部署 Linux：mimic 是 eBPF/内核特性，tcp 边两端都必须为 Linux（debian / ubuntu）", edge.ID, toNode.Name, toNode.Platform))
 		}
 	}
 }

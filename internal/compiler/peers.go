@@ -23,6 +23,43 @@ const defaultTransitCIDR = "10.10.0.0/24"
 // 而多跳备选路径仍能正常参与 cost 比较。详见 docs/spec/artifacts/babel.md（Link cost resolution）。
 const backupDefaultLinkCost = 384
 
+// transportTCP 是 edge.Transport 取「tcp」（mimic 整形传输）的字面量。mimic 无密钥、无新字段，
+// transport=="tcp" 是链路被 mimic 包裹的唯一信号（docs/spec/data-model/edge.md §TCP transport）。
+const transportTCP = "tcp"
+
+// defaultMimicBaseMTU 是 mimic 链路在节点未显式设置 MTU 时的基准 WireGuard MTU。
+// node.MTU==0 通常意味着「用系统默认（约 1420）」；但 mimic 链路必须显式写出降低后的 MTU，
+// 因此对 mimic 链路把 0 解析成 1420 作为基准，再扣减 mimic 开销。详见
+// docs/spec/artifacts/mimic.md（MTU −12）。
+const defaultMimicBaseMTU = 1420
+
+// mimicMTUOverhead 是 mimic（UDP→伪 TCP）在每个 WireGuard 接口上引入的字节开销。
+// docs/spec/artifacts/mimic.md：「MTU −12 on each mimic WireGuard interface」。
+const mimicMTUOverhead = 12
+
+// isMimicEdge 判定一条 edge 是否启用 mimic（tcp 整形传输）。
+// 规范：链路是否 mimic 完全由其 primaryEdge 的 transport 决定（docs/spec/data-model/edge.md
+// §TCP transport）——primary class 链路的 mimic 性取决于其 primaryEdge，每条 backup 链路取它
+// 自己（其 primaryEdge 即该 backup edge 本身）。
+func isMimicEdge(edge *model.Edge) bool {
+	return edge != nil && edge.Transport == transportTCP
+}
+
+// effectiveMTU 计算一条链路上某个 WireGuard 接口应写出的有效 MTU。
+// 规范（docs/spec/artifacts/mimic.md「MTU −12」/ docs/spec/data-model/edge.md §TCP transport）：
+//   - 非 mimic：保持 node.MTU 原样（0 ⇒ 仍 0 ⇒ 渲染器省略 MTU 行，与改造前逐字节一致）；
+//   - mimic：((node.MTU>0 ? node.MTU : 1420) − 12)，把 mimic 的 12 字节开销显式扣出。
+func effectiveMTU(nodeMTU int, mimic bool) int {
+	if !mimic {
+		return nodeMTU
+	}
+	base := nodeMTU
+	if base <= 0 {
+		base = defaultMimicBaseMTU
+	}
+	return base - mimicMTUOverhead
+}
+
 // KeyPair WireGuard 密钥对
 type KeyPair struct {
 	PrivateKey string
@@ -82,6 +119,17 @@ type PeerInfo struct {
 	// 该链路的 Babel rxcost 覆盖值，由对应 edge 推导（D63）。
 	// 0 表示采用角色 preset 的默认 cost（由 Babel 渲染器决定）。
 	LinkCost int
+
+	// 该链路是否启用 mimic（tcp 整形传输）：等价于 link.primaryEdge.Transport=="tcp"。
+	// mimic 无密钥、无新字段，transport=="tcp" 是唯一信号（docs/spec/data-model/edge.md
+	// §TCP transport）。渲染器据此（连同 ListenPort）推导本节点的 mimic 监听端口集合。
+	Mimic bool
+
+	// 该接口写出的有效 WireGuard MTU。
+	// 非 mimic：保持 node.MTU 原样（0 ⇒ 渲染器省略 MTU 行，逐字节不变）。
+	// mimic：((node.MTU>0 ? node.MTU : 1420) − 12)，扣出 mimic 的 12 字节开销
+	// （docs/spec/artifacts/mimic.md「MTU −12」）。
+	MTU int
 }
 
 // DerivePeers 根据 Edge 拓扑推导每个节点的 WireGuard Peer 列表
@@ -410,6 +458,9 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		if fromNode.Role == "client" {
 			// 只创建 router 侧的 PeerInfo（router -> client 方向）。client 边不会是 backup，
 			// 故 interface 名走非 backup 短路径（与改造前逐字节一致）。
+			// 本链路的 mimic 性取决于 primaryEdge.Transport（docs/spec/data-model/edge.md
+			// §TCP transport）；MTU 用 router（toNode）节点 MTU 按 mimic 公式推导。
+			mimic := isMimicEdge(link.primaryEdge)
 			{
 				fromKey, _ := keys[fromNode.ID]
 				isForward := alloc.fromNodeID == fromNode.ID
@@ -446,6 +497,8 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 					RemoteLinkLocal:     routerRemoteLL,
 					IsClientPeer:        true,
 					ClientOverlayIP:     fromNode.OverlayIP,
+					Mimic:               mimic,
+					MTU:                 effectiveMTU(toNode.MTU, mimic),
 				}
 
 				peerMap[toNode.ID] = append(peerMap[toNode.ID], routerPeer)
@@ -513,6 +566,11 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		// 显式 Priority/Weight（D63）> backup 预设 384 > 默认 0。
 		linkCost := deriveLinkCost(link.primaryEdge, link.backup)
 
+		// 本链路是否 mimic：取决于 link.primaryEdge.Transport（docs/spec/data-model/edge.md
+		// §TCP transport）。正向与反向 peer 同属一条链路，取同一 mimic 标记；MTU 各按本端
+		// 节点 MTU 套 mimic 公式（docs/spec/artifacts/mimic.md「MTU −12」）。
+		mimic := isMimicEdge(link.primaryEdge)
+
 		// 如果 toNode 是 client，创建 router 侧的带 IsClientPeer 标记的 PeerInfo
 		isToClient := toNode.Role == "client"
 
@@ -533,6 +591,9 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			IsClientPeer:        isToClient,
 			ClientOverlayIP:     "",
 			LinkCost:            linkCost,
+			Mimic:               mimic,
+			// 本端接口属于 fromNode，故按 fromNode.MTU 推导。
+			MTU: effectiveMTU(fromNode.MTU, mimic),
 		}
 		if isToClient {
 			peer.AllowedIPs = []string{toNode.OverlayIP + "/32"}
@@ -617,6 +678,10 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				RemoteLinkLocal:     revRemoteLL,
 				// 反向 peer 与正向共用同一条 edge，沿用同一 rxcost 覆盖值（D63）。
 				LinkCost: linkCost,
+				// 反向 peer 同属一条链路 → 同一 mimic 标记；本端接口属于 toNode，
+				// 故按 toNode.MTU 推导（docs/spec/artifacts/mimic.md「MTU −12」）。
+				Mimic: mimic,
+				MTU:   effectiveMTU(toNode.MTU, mimic),
 			}
 
 			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)
@@ -876,7 +941,15 @@ type ClientPeerInfo struct {
 	NodeID    string
 	NodeName  string
 	OverlayIP string
-	MTU       int
+
+	// wg0 接口的有效 MTU。
+	// 非 mimic：保持 node.MTU 原样（0 ⇒ 渲染器省略 MTU 行，逐字节不变）。
+	// mimic：((node.MTU>0 ? node.MTU : 1420) − 12)（docs/spec/artifacts/mimic.md「MTU −12」）。
+	MTU int
+
+	// client 的唯一出站 edge 是否启用 mimic（transport=="tcp"）。
+	// 渲染器据此（连同 ListenPort）推导 client 节点的 mimic 监听端口集合。
+	Mimic bool
 
 	// Client 的 WireGuard 私钥
 	PrivateKey string
@@ -985,11 +1058,17 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			listenPort = 51820
 		}
 
+		// mimic 性取自 client 的唯一出站 edge 的 transport（docs/spec/data-model/edge.md
+		// §TCP transport）；MTU 用 client（node）MTU 按 mimic 公式推导
+		// （docs/spec/artifacts/mimic.md「MTU −12」）。非 mimic 时与改造前逐字节一致（node.MTU 原样）。
+		mimic := isMimicEdge(clientEdge)
+
 		configs[node.ID] = &ClientPeerInfo{
 			NodeID:          node.ID,
 			NodeName:        node.Name,
 			OverlayIP:       node.OverlayIP,
-			MTU:             node.MTU,
+			MTU:             effectiveMTU(node.MTU, mimic),
+			Mimic:           mimic,
 			PrivateKey:      clientKey.PrivateKey,
 			RouterPublicKey: routerKey.PublicKey,
 			RouterEndpoint:  routerEndpoint,

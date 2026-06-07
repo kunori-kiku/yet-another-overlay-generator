@@ -143,7 +143,11 @@ func RenderClientWireGuardConfig(clientInfo *compiler.ClientPeerInfo) (string, e
 	return renderTemplate("wg0.conf", wgClientConfigTemplate, config)
 }
 
-// RenderPerPeerWireGuardConfig 渲染单个 per-peer WireGuard 接口配置
+// RenderPerPeerWireGuardConfig 渲染单个 per-peer WireGuard 接口配置。
+//
+// 接口 MTU 取自 peer.MTU（而非 node.MTU）：compiler 已按链路传输计算每个接口的有效 MTU——
+// mimic 链路为 (node.MTU 或 1420) − 12（扣 mimic 的 12 字节开销，见 docs/spec/artifacts/mimic.md
+// 「MTU −12」），非 mimic 链路 peer.MTU == node.MTU，因此非 mimic 输出与旧实现逐字节一致。
 func RenderPerPeerWireGuardConfig(node *model.Node, peer compiler.PeerInfo, keys compiler.KeyPair) (string, error) {
 	config := WireGuardInterfaceConfig{
 		NodeName:        node.Name,
@@ -151,7 +155,7 @@ func RenderPerPeerWireGuardConfig(node *model.Node, peer compiler.PeerInfo, keys
 		PrivateKey:      keys.PrivateKey,
 		TransitIP:       peer.LocalTransitIP,
 		ListenPort:      peer.ListenPort,
-		MTU:             node.MTU,
+		MTU:             peer.MTU, // 见函数 doc：mimic 链路 -12，非 mimic == node.MTU（逐字节不变）
 		LocalLinkLocal:  peer.LocalLinkLocal,
 		ClientOverlayIP: peer.ClientOverlayIP,
 		Peer: WireGuardPeer{

@@ -142,6 +142,8 @@ func TestRenderPerPeerWireGuardConfig_WithMTU(t *testing.T) {
 		AllowedIPs:     []string{"0.0.0.0/0", "::/0"},
 		InterfaceName:  "wg-beta",
 		ListenPort:     51820,
+		// MTU 现由 per-interface 的 PeerInfo.MTU 决定（mimic 链路 -12），渲染器读 peer.MTU 而非 node.MTU。
+		MTU:            1280,
 		LocalTransitIP: "10.10.0.1",
 		LocalLinkLocal: "fe80::1",
 	}

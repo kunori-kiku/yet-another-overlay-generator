@@ -117,7 +117,9 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	//
 	for _, node := range result.Topology.Nodes {
 		if node.Role == "client" {
-			script, err := renderer.RenderClientInstallScript(&node)
+			// 传入该 client 的 ClientPeerInfo，使其单一 wg0 链路在 transport=="tcp" 时
+			// 也装配 mimic（决策 #5：client 也支持）。键缺失时为 nil，renderer 已做空值保护。
+			script, err := renderer.RenderClientInstallScript(&node, result.ClientConfigs[node.ID])
 			if err != nil {
 				return fmt.Errorf("渲染 client %s 的安装脚本失败: %w", node.Name, err)
 			}
