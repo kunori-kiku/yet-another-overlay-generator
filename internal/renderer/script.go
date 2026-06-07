@@ -112,12 +112,26 @@ if [ "$UNINSTALL" -eq 1 ]; then
     sysctl --system > /dev/null 2>&1
 
     # Remove overlay SNAT rule and service
+    #
+    # D52: 同 _overlay_snat_cleanup——按 wg 接口 + transit 源池整条删除，忽略 --to-source，
+    # 这样即便此前 overlay IP 变更过、留下了不同 --to-source 的旧规则，卸载也能彻底清除。
     if command -v nft >/dev/null 2>&1; then
         nft delete table inet overlay-snat 2>/dev/null || true
     fi
-    if command -v iptables >/dev/null 2>&1; then
+    if command -v iptables >/dev/null 2>&1 && command -v iptables-save >/dev/null 2>&1; then
         {{ range .TransitCIDRs -}}
-        iptables -t nat -D POSTROUTING -o "wg-+" -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || true
+        # 链式 grep -F 整条删除，顺序无关；见 Phase 1 的 _overlay_snat_cleanup 同样说明。
+        # grep 无匹配返回 1，叠加 set -o pipefail 会让管道非零、在 set -e 下中止；末尾 || true 兜底。
+        iptables-save -t nat 2>/dev/null \
+            | grep -E '^-A POSTROUTING ' \
+            | grep -F -- '-j SNAT' \
+            | grep -F -- '-o wg-+' \
+            | grep -F -- '-s {{ . }}' \
+            | while IFS= read -r _snat_rule; do
+                _snat_del="${_snat_rule/#-A/-D}"
+                # shellcheck disable=SC2086
+                iptables -t nat $_snat_del 2>/dev/null || true
+            done || true
         {{ end -}}
     fi
     if systemctl is-enabled overlay-snat.service >/dev/null 2>&1; then
@@ -343,13 +357,33 @@ systemctl enable overlay-dummy.service 2>/dev/null || true
 echo "Configuring overlay source address fix..."
 
 # Remove any previous overlay SNAT rules
+#
+# D52: 不能按精确规则（含 --to-source <当前 overlay IP>）删除——overlay IP 变更后
+# 重装会把旧的 --to-source 规则留在 POSTROUTING 里，导致包被错误地源改写为旧地址。
+# 改为：解析 iptables-save，把每条匹配 wg 接口 + transit 源池的 POSTROUTING SNAT 规则
+# 整条删除，无论其 --to-source 是什么。nft 路径直接删整张表，无此问题，保持原样。
 _overlay_snat_cleanup() {
     if command -v nft >/dev/null 2>&1; then
         nft delete table inet overlay-snat 2>/dev/null || true
     fi
-    if command -v iptables >/dev/null 2>&1; then
+    if command -v iptables >/dev/null 2>&1 && command -v iptables-save >/dev/null 2>&1; then
         {{ range .TransitCIDRs -}}
-        iptables -t nat -D POSTROUTING -o "wg-+" -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || true
+        # 逐条删除：iptables-save 输出里凡是 POSTROUTING 链中、出接口为 wg-+、源为 {{ . }}
+        # 且动作为 SNAT 的规则，都按其完整参数转成 -D 删除（忽略 --to-source 的具体值）。
+        # 用链式 grep -F 而非单条带顺序假设的正则：iptables-save 会规范化参数顺序
+        # （通常 -s 在 -o 之前），固定字符串匹配既不受顺序影响、也无需转义 CIDR 里的 . 和 /。
+        # grep 在无匹配时返回 1，叠加 set -o pipefail 会让整条管道返回非零；在 set -e 下
+        # 这会中止脚本。这里 || true 把「没有可删的旧规则」这一正常情形吞掉。
+        iptables-save -t nat 2>/dev/null \
+            | grep -E '^-A POSTROUTING ' \
+            | grep -F -- '-j SNAT' \
+            | grep -F -- '-o wg-+' \
+            | grep -F -- '-s {{ . }}' \
+            | while IFS= read -r _snat_rule; do
+                _snat_del="${_snat_rule/#-A/-D}"
+                # shellcheck disable=SC2086
+                iptables -t nat $_snat_del 2>/dev/null || true
+            done || true
         {{ end -}}
     fi
 }
@@ -442,10 +476,21 @@ echo "  IPv4 forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
 {{ end -}}
 
 # Start all WireGuard per-peer interfaces
+#
+# D53: 脚本运行在 set -euo pipefail 下。如果某个接口的 wg-quick up 失败而不容错，
+# 整个脚本会在 babeld 配置之前中止，留下一个「半启动」的节点（部分隧道起来了、
+# 路由守护进程却没配）。因此把每个接口的启动失败收集起来（FAILED_INTERFACES 累加），
+# 向 stderr 告警并继续，让 babeld 等后续步骤照常执行；脚本末尾打印失败汇总，并在
+# 有任何失败时以非零码退出（保证部署工具仍能感知失败），但退出发生在其余步骤之后。
+# 注意 set -e 的交互：必须用 if ! wg-quick up ...; then 形式，否则非零返回会直接中止。
 echo "Starting WireGuard interfaces..."
+FAILED_INTERFACES=""
 {{ range .WgInterfaces -}}
 echo "  Starting {{ .Name }}..."
-wg-quick up "{{ .Name }}"
+if ! wg-quick up "{{ .Name }}"; then
+    echo "WARNING: failed to bring up WireGuard interface {{ .Name }}; continuing with remaining setup" >&2
+    FAILED_INTERFACES="$FAILED_INTERFACES {{ .Name }}"
+fi
 systemctl enable wg-quick@"{{ .Name }}" 2>/dev/null || true
 {{ end -}}
 
@@ -500,6 +545,16 @@ echo ""
 {{ end -}}
 echo "Installation complete!"
 echo "Note: If peers are not yet online, connections will establish once they come up."
+
+# D53: 汇总 WireGuard 接口启动结果。若有接口未能启动，打印失败清单并以非零码退出，
+# 让上层部署工具能感知失败——但此退出发生在 babeld 配置、状态展示等其余步骤全部完成之后，
+# 所以节点不会被留在「半启动」状态。
+if [ -n "$FAILED_INTERFACES" ]; then
+    echo ""
+    echo "WARNING: the following WireGuard interface(s) failed to start:$FAILED_INTERFACES" >&2
+    echo "         the rest of the installation completed; re-run 'wg-quick up <iface>' to retry." >&2
+    exit 1
+fi
 `
 
 // defaultTransitCIDR 是 transit 地址池的默认值，与 allocateTransitPair 的回退一致。

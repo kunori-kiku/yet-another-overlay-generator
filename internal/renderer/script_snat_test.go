@@ -65,8 +65,9 @@ func TestRenderInstallScript_SNAT_CustomTransitCIDR(t *testing.T) {
 		`iptables -t nat -C POSTROUTING -o "wg-+" -s ` + customCIDR + ` -j SNAT --to-source 10.21.0.1`,
 		`iptables -t nat -A POSTROUTING -o "wg-+" -s ` + customCIDR + ` -j SNAT --to-source 10.21.0.1`,
 		`SNAT (iptables): transit ` + customCIDR + ` → 10.21.0.1`,
-		// 安装前清理（_overlay_snat_cleanup）
-		`iptables -t nat -D POSTROUTING -o "wg-+" -s ` + customCIDR + ` -j SNAT --to-source 10.21.0.1 2>/dev/null || true`,
+		// 安装前清理（_overlay_snat_cleanup）：D52 改为链式 grep -F 按池循环删除
+		// （与 --to-source 无关，陈旧 overlay IP 的规则同样会被清掉），断言按池过滤的片段。
+		`grep -F -- '-s ` + customCIDR + `'`,
 		// systemd 持久化单元（D39）
 		`nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr ` + customCIDR + ` snat to 10.21.0.1`,
 		`iptables -t nat -A POSTROUTING -o wg-+ -s ` + customCIDR + ` -j SNAT --to-source 10.21.0.1`,
