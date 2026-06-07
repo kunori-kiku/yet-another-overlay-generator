@@ -93,7 +93,8 @@ func main() {
 	// 
 	for _, node := range result.Topology.Nodes {
 		_, hasBabel := result.BabelConfigs[node.ID]
-		script, err := renderer.RenderInstallScript(&node, result.PeerMap[node.ID], hasBabel)
+		transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
+		script, err := renderer.RenderInstallScript(&node, result.PeerMap[node.ID], hasBabel, transitCIDRs...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, ": %v\n", err)
 			os.Exit(1)

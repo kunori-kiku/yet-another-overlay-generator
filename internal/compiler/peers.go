@@ -5,10 +5,17 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sort"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
+
+// defaultTransitCIDR 是域未显式配置 transit_cidr 时回退使用的默认 transit 地址池。
+// 在分配点把空值解析到这个常量，可让 per-CIDR 计数器（审计项 D12）以「解析后的 CIDR」
+// 为键，从而与 allocateTransitPair 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs
+// 解析保持一致——同一池绝不会被记成两份。
+const defaultTransitCIDR = "10.10.0.0/24"
 
 // KeyPair WireGuard 密钥对
 type KeyPair struct {
@@ -130,99 +137,199 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// ======== Pass 1: 预分配资源 ========
-	allocations := make(map[string]*pairAllocation) // key: "fromNodeID->toNodeID"
-	addedPairs := make(map[string]bool)
-	transitPairIndex := 0
-	nodePortOffset := make(map[string]int)
+	// ======== Pass 1: 预分配资源（reserve-then-gap-fill，Spec B） ========
+	//
+	// 顺序无关性（I2）由构造保证：先把全拓扑所有 pin 预留进各资源池，再为未 pin 的链路
+	// gap-fill。因此新增链路绝不会拿到既有链路已占用的值，既有链路的值也永不移动（I1/I3/I4）。
+	// gap-fill 按 pinKey 排序遍历、池内取最低空闲槽位（Spec B 规范要求的 pinKey-deterministic 顺序）：
+	// 一条链路看到的预留集合只取决于全拓扑当前的 pin 与 pinKey 更小的未 pin 链路，与数组位置、
+	// 以及该链路自身的删除/重加历史无关，从而保证 delete/re-add 幂等（I9/G1）。
+	allocations := make(map[string]*pairAllocation) // key: "fromNodeID->toNodeID"（双向都指向同一 struct）
 
-	for _, edge := range topo.Edges {
+	// 把每个 enabled edge 折叠到其规范 pinKey；同一对节点（任一方向）只处理一次。
+	// primaryEdge 记录该 pinKey 首次出现的 edge，用以确定 pairAllocation 的 from/to 定向。
+	type linkEntity struct {
+		pinKey      string
+		primaryEdge *model.Edge // 决定 from/to 定向
+		fromNode    *model.Node
+		toNode      *model.Node
+		transitCIDR string // 解析后的 transit CIDR（per-pool 键）
+	}
+	links := make([]*linkEntity, 0, len(topo.Edges))
+	seenPinKey := make(map[string]bool)
+
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
 		if !edge.IsEnabled {
 			continue
 		}
-
 		fromNode := nodeMap[edge.FromNodeID]
 		toNode := nodeMap[edge.ToNodeID]
 		if fromNode == nil || toNode == nil {
 			continue
 		}
-
-		peerKey := fromNode.ID + "->" + toNode.ID
-		reversePeerKey := toNode.ID + "->" + fromNode.ID
-
-		// 如果这对节点（任一方向）已分配过，跳过
-		if addedPairs[peerKey] || addedPairs[reversePeerKey] {
+		pk := pinKey(fromNode.ID, toNode.ID)
+		if seenPinKey[pk] {
 			continue
 		}
+		seenPinKey[pk] = true
 
-		// 获取 domain 的 TransitCIDR
-		var transitCIDR string
-		if domain := domainMap[fromNode.DomainID]; domain != nil {
+		// 解析该链路所属域的 transit CIDR（空值回退默认池）。必须与 allocateTransitPair
+		// 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs 解析保持一致（审计项 D12）。
+		transitCIDR := defaultTransitCIDR
+		if domain := domainMap[fromNode.DomainID]; domain != nil && domain.TransitCIDR != "" {
 			transitCIDR = domain.TransitCIDR
 		}
 
-		// 分配 transit IP 对
-		localTransit, remoteTransit, err := allocateTransitPair(transitPairIndex, transitCIDR)
-		if err != nil {
-			return nil, nil, fmt.Errorf("节点 %s<->%s 的 transit 地址分配失败: %w", fromNode.Name, toNode.Name, err)
-		}
-		localLL, remoteLL := allocateLinkLocalPair(transitPairIndex)
-		transitPairIndex++
+		links = append(links, &linkEntity{
+			pinKey:      pk,
+			primaryEdge: edge,
+			fromNode:    fromNode,
+			toNode:      toNode,
+			transitCIDR: transitCIDR,
+		})
+	}
 
-		// Client 节点不参与 per-peer 端口分配（使用单一 wg0 接口）
+	// ---- 预留集合 ----
+	// 端口按节点定向；transit IP 按 CIDR 池逐字存 IP 字符串（不做 index 反查——见 Spec B 的稳健选择）；
+	// link-local 全局唯一。
+	usedPorts := make(map[string]map[int]bool)         // nodeID -> 端口集合
+	usedTransitIPs := make(map[string]map[string]bool) // cidr -> IP 字符串集合
+	usedLinkLocals := make(map[string]bool)            // link-local 字符串集合
+
+	markPort := func(nodeID string, port int) {
+		if usedPorts[nodeID] == nil {
+			usedPorts[nodeID] = make(map[int]bool)
+		}
+		usedPorts[nodeID][port] = true
+	}
+	markTransit := func(cidr, ip string) {
+		if usedTransitIPs[cidr] == nil {
+			usedTransitIPs[cidr] = make(map[string]bool)
+		}
+		usedTransitIPs[cidr][ip] = true
+	}
+	transitUsed := func(cidr, ip string) bool {
+		return usedTransitIPs[cidr] != nil && usedTransitIPs[cidr][ip]
+	}
+
+	// ======== Pass 1 阶段 3：预留所有 pin ========
+	// 在任何 gap-fill 之前，把每条链路携带的（成对完整的）pin 逐资源预留。partial pin
+	// （单端有值）在此一律按「该资源未 pin」处理并跳过——成对校验由验证器分区负责。
+	pinnedAllocations := make(map[string]*pairAllocation) // pinKey -> 直接由 pin 构造的分配
+	for _, link := range links {
+		edge := link.primaryEdge
+		isFromClient := link.fromNode.Role == "client"
+		isToClient := link.toNode.Role == "client"
+
+		alloc := &pairAllocation{
+			fromNodeID: link.fromNode.ID,
+			toNodeID:   link.toNode.ID,
+		}
+		hasAnyPin := false
+
+		// 端口 pin（成对完整且非 client 侧才视为已 pin）。
+		if !isFromClient && !isToClient && edge.PinnedFromPort > 0 && edge.PinnedToPort > 0 {
+			alloc.fromPort = edge.PinnedFromPort
+			alloc.toPort = edge.PinnedToPort
+			markPort(link.fromNode.ID, edge.PinnedFromPort)
+			markPort(link.toNode.ID, edge.PinnedToPort)
+			hasAnyPin = true
+		}
+
+		// transit IP pin（成对完整才视为已 pin）。
+		if edge.PinnedFromTransitIP != "" && edge.PinnedToTransitIP != "" {
+			alloc.localTransit = edge.PinnedFromTransitIP
+			alloc.remoteTransit = edge.PinnedToTransitIP
+			markTransit(link.transitCIDR, edge.PinnedFromTransitIP)
+			markTransit(link.transitCIDR, edge.PinnedToTransitIP)
+			hasAnyPin = true
+		}
+
+		// link-local pin（成对完整才视为已 pin）。
+		if edge.PinnedFromLinkLocal != "" && edge.PinnedToLinkLocal != "" {
+			alloc.localLL = edge.PinnedFromLinkLocal
+			alloc.remoteLL = edge.PinnedToLinkLocal
+			usedLinkLocals[edge.PinnedFromLinkLocal] = true
+			usedLinkLocals[edge.PinnedToLinkLocal] = true
+			hasAnyPin = true
+		}
+
+		if hasAnyPin {
+			pinnedAllocations[link.pinKey] = alloc
+		}
+	}
+
+	// ======== Pass 1 阶段 4：gap-fill 未 pin 的资源 ========
+	// 按 pinKey 排序遍历，保证候选顺序与数组位置无关（Spec B 规范要求的 pinKey-deterministic 顺序）。
+	// 每个资源在其池内取最低空闲槽位；因预留在前、遍历顺序仅由 pinKey 决定，删除再重加同一对节点
+	// 会看到相同的预留集合从而重现同一值（I2/I9）。
+	sort.Slice(links, func(i, j int) bool { return links[i].pinKey < links[j].pinKey })
+
+	for _, link := range links {
+		fromNode := link.fromNode
+		toNode := link.toNode
 		isFromClient := fromNode.Role == "client"
 		isToClient := toNode.Role == "client"
 
-		// 分配 fromNode 的监听端口
-		var fromListenPort int
-		if !isFromClient {
-			fromBasePort := fromNode.ListenPort
-			if fromBasePort == 0 {
-				fromBasePort = 51820
+		// 取该 pinKey 的（部分）pin 分配作为起点，未 pin 的资源在其上补齐。
+		alloc := pinnedAllocations[link.pinKey]
+		if alloc == nil {
+			alloc = &pairAllocation{fromNodeID: fromNode.ID, toNodeID: toNode.ID}
+		}
+
+		// ---- 端口：未 pin 则逐侧取「不低于节点 base 的最低空闲端口」 ----
+		// client 侧不参与 per-peer 端口分配（使用单一 wg0），端口保持 0、不预留；
+		// 但触及 client 的边其「非 client 侧」（router/relay/gateway）仍需分配监听端口，
+		// 否则 DeriveClientConfigs 无法得知 client 该拨哪个端口。因此逐侧独立判断。
+		// 端口 pin 是成对的（验证器保证），故只要任一侧已 pin 即视为整对已 pin、跳过分配。
+		portsPinned := alloc.fromPort > 0 || alloc.toPort > 0
+		if !portsPinned {
+			if !isFromClient {
+				fromPort, err := lowestFreePort(fromNode, usedPorts)
+				if err != nil {
+					return nil, nil, err
+				}
+				markPort(fromNode.ID, fromPort)
+				alloc.fromPort = fromPort
 			}
-			fromListenPort = fromBasePort + nodePortOffset[fromNode.ID]
-			nodePortOffset[fromNode.ID]++
-			// 编译器侧端口越界硬校验（审计项 D11）：per-peer 接口在 base+offset 处监听，
-			// 当该有效端口超过 65535 时，wg-quick 会拒绝渲染出的配置。验证器在另一分区里
-			// 加了同等的前置检查，但直接调用编译器 API/CLI 的调用方会绕过验证器，因此这里
-			// 必须把它作为编译器不变量重新断言一次，避免在部署期才暴露。
-			if fromListenPort > 65535 {
-				return nil, nil, fmt.Errorf("节点 %s 的有效监听端口 %d 超过上限 65535（基础端口 %d，第 %d 个 peer 接口）：请降低该节点的 listen_port 或减少其连接数",
-					fromNode.Name, fromListenPort, fromBasePort, nodePortOffset[fromNode.ID])
+			if !isToClient {
+				toPort, err := lowestFreePort(toNode, usedPorts)
+				if err != nil {
+					return nil, nil, err
+				}
+				markPort(toNode.ID, toPort)
+				alloc.toPort = toPort
 			}
 		}
 
-		// 分配 toNode 的监听端口
-		var toListenPort int
-		if !isToClient {
-			toBasePort := toNode.ListenPort
-			if toBasePort == 0 {
-				toBasePort = 51820
+		// ---- transit IP 对：未 pin 则在 per-CIDR 池里取最低空闲 pair ----
+		transitPinned := alloc.localTransit != "" && alloc.remoteTransit != ""
+		if !transitPinned {
+			localTransit, remoteTransit, err := gapFillTransitPair(link.transitCIDR, transitUsed)
+			if err != nil {
+				return nil, nil, fmt.Errorf("节点 %s<->%s 的 transit 地址分配失败: %w", fromNode.Name, toNode.Name, err)
 			}
-			toListenPort = toBasePort + nodePortOffset[toNode.ID]
-			nodePortOffset[toNode.ID]++
-			// 同上：toNode 接口的有效监听端口同样不得越界（审计项 D11）。
-			if toListenPort > 65535 {
-				return nil, nil, fmt.Errorf("节点 %s 的有效监听端口 %d 超过上限 65535（基础端口 %d，第 %d 个 peer 接口）：请降低该节点的 listen_port 或减少其连接数",
-					toNode.Name, toListenPort, toBasePort, nodePortOffset[toNode.ID])
-			}
+			markTransit(link.transitCIDR, localTransit)
+			markTransit(link.transitCIDR, remoteTransit)
+			alloc.localTransit = localTransit
+			alloc.remoteTransit = remoteTransit
 		}
 
-		alloc := &pairAllocation{
-			fromNodeID:    fromNode.ID,
-			toNodeID:      toNode.ID,
-			fromPort:      fromListenPort,
-			toPort:        toListenPort,
-			localTransit:  localTransit,
-			remoteTransit: remoteTransit,
-			localLL:       localLL,
-			remoteLL:      remoteLL,
+		// ---- link-local 对：未 pin 则取最低空闲 pair ----
+		llPinned := alloc.localLL != "" && alloc.remoteLL != ""
+		if !llPinned {
+			localLL, remoteLL := gapFillLinkLocalPair(usedLinkLocals)
+			usedLinkLocals[localLL] = true
+			usedLinkLocals[remoteLL] = true
+			alloc.localLL = localLL
+			alloc.remoteLL = remoteLL
 		}
 
+		peerKey := fromNode.ID + "->" + toNode.ID
+		reversePeerKey := toNode.ID + "->" + fromNode.ID
 		allocations[peerKey] = alloc
 		allocations[reversePeerKey] = alloc
-		addedPairs[peerKey] = true
-		addedPairs[reversePeerKey] = true
 	}
 
 	// ======== Pass 2: 使用预分配的端口构建 PeerInfo ========
@@ -465,12 +572,16 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 }
 
 // allocateTransitPair 根据序号和 transitCIDR 分配一对 transit IPv4 地址
-// 如果 transitCIDR 为空，使用默认 10.10.0.0/24
-// 每对占 2 个地址：pair N → (base+2N+1, base+2N+2)
-// 当地址超出子网范围时返回错误
+// 如果 transitCIDR 为空，使用默认 defaultTransitCIDR（10.10.0.0/24）
+// 每对占 2 个地址：pair N → (network+2N+1, network+2N+2)
+// 地址池只跨可用主机区间 [network+1, broadcast-1]：网络地址与广播地址绝不分配（审计项 D48）。
+// 当任一地址需要落到网络地址、广播地址或子网范围之外时，返回地址池耗尽错误。
+//
+// 签名稳定：后续阶段会在此函数之上重写 pair 分配主循环以支持 pin，
+// 因此保持 (index, transitCIDR) -> (ip1, ip2, error) 的形态不变。
 func allocateTransitPair(index int, transitCIDR string) (string, string, error) {
 	if transitCIDR == "" {
-		transitCIDR = "10.10.0.0/24"
+		transitCIDR = defaultTransitCIDR
 	}
 
 	_, ipNet, err := net.ParseCIDR(transitCIDR)
@@ -483,19 +594,137 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 		return "", "", fmt.Errorf("transit CIDR 必须为 IPv4: %q", transitCIDR)
 	}
 
-	base := 2*index + 1
-	baseAddr := binary.BigEndian.Uint32(baseIP)
+	// 从掩码通用地推导网络地址与广播地址（不针对 /24 硬编码）。
+	networkAddr := binary.BigEndian.Uint32(baseIP)
+	maskBits, _ := ipNet.Mask.Size()
+	// hostBits = 32 - maskBits；广播地址 = 网络地址 | (2^hostBits - 1)。
+	// 对 /31、/32 这类没有可用广播位的掩码做保守处理：直接判定地址池容不下任何一对。
+	hostBits := 32 - maskBits
+	if hostBits < 2 {
+		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，index: %d）", transitCIDR, index)
+	}
+	hostMask := uint32(1)<<uint(hostBits) - 1
+	broadcastAddr := networkAddr | hostMask
 
-	ip1 := make(net.IP, 4)
-	ip2 := make(net.IP, 4)
-	binary.BigEndian.PutUint32(ip1, baseAddr+uint32(base))
-	binary.BigEndian.PutUint32(ip2, baseAddr+uint32(base+1))
+	offset := uint32(2*index + 1)
+	addr1 := networkAddr + offset
+	addr2 := networkAddr + offset + 1
 
-	if !ipNet.Contains(ip1) || !ipNet.Contains(ip2) {
+	// 越界（包含整数回绕导致的 addr2 < addr1）、命中网络地址或广播地址，一律视为地址池耗尽。
+	// 可用主机区间是开区间 (networkAddr, broadcastAddr)，即 [networkAddr+1, broadcastAddr-1]。
+	if addr2 < addr1 ||
+		addr1 <= networkAddr || addr1 >= broadcastAddr ||
+		addr2 <= networkAddr || addr2 >= broadcastAddr {
 		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，index: %d）", transitCIDR, index)
 	}
 
+	ip1 := make(net.IP, 4)
+	ip2 := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip1, addr1)
+	binary.BigEndian.PutUint32(ip2, addr2)
+
 	return ip1.String(), ip2.String(), nil
+}
+
+// pinKey 计算一条链路的规范标识：两个节点 ID 排序后用竖线拼接。
+// 方向无关——pinKey(A, B) == pinKey(B, A)——因此反向画 edge 不改变其分配身份（I3）。
+// 详见 docs/spec/compiler/allocation-stability.md（Canonical link key）。
+func pinKey(nodeA, nodeB string) string {
+	if nodeA <= nodeB {
+		return nodeA + "|" + nodeB
+	}
+	return nodeB + "|" + nodeA
+}
+
+// transitPoolPairCount 返回某个 transit CIDR 池可用的 pair 数量（pair index 上界）。
+// 与 allocateTransitPair 同一套掩码推导：可用主机区间为 (network, broadcast)，
+// 即 2^hostBits - 2 个主机地址，每对占两个 → (2^hostBits - 2) / 2 对。
+// /24 → 127 对，/29 → 3 对，/30 → 1 对；hostBits < 2（/31、/32）→ 0 对。
+func transitPoolPairCount(transitCIDR string) (int, error) {
+	if transitCIDR == "" {
+		transitCIDR = defaultTransitCIDR
+	}
+	_, ipNet, err := net.ParseCIDR(transitCIDR)
+	if err != nil {
+		return 0, fmt.Errorf("无效的 transit CIDR %q: %w", transitCIDR, err)
+	}
+	if ipNet.IP.To4() == nil {
+		return 0, fmt.Errorf("transit CIDR 必须为 IPv4: %q", transitCIDR)
+	}
+	maskBits, _ := ipNet.Mask.Size()
+	hostBits := 32 - maskBits
+	if hostBits < 2 {
+		return 0, nil
+	}
+	usableHosts := (uint64(1) << uint(hostBits)) - 2
+	return int(usableHosts / 2), nil
+}
+
+// gapFillTransitPair 为一条未 pin 的链路在 per-CIDR 池里分配一对 transit IP。
+//
+// 取值策略：在 per-CIDR 池里从 index 0 起向上扫描，跳过任一地址已被预留（usedTransitIPs）的
+// pair，命中首个两端都空闲的 pair 即返回；整池都满则返回干净的耗尽错误。
+//
+// 该函数本身是「池 + 预留集合」的纯函数；其 delete/re-add 幂等（Spec B G1）由调用侧保证：
+// Pass 1 阶段 4 先预留所有 pin、再按 pinKey 排序遍历未 pin 链路。因此一条链路看到的预留集合
+// 只取决于「全拓扑当前的 pin」与「pinKey 更小的未 pin 链路」，而与该链路自身的删除/重加历史、
+// 以及数组位置无关——删除再重加同一对节点会重现同一最低空闲 pair（满足 I2/I9）。
+//
+// 这正是 docs/spec/compiler/allocation-stability.md「Hash-seeded gap-fill」一节的规范要求：
+// 「the order in which candidate links are assigned MUST be deterministic in pinKey
+// （iterate unpinned links sorted by pinKey, and within a pool pick the lowest free slot）」。
+func gapFillTransitPair(transitCIDR string, transitUsed func(cidr, ip string) bool) (string, string, error) {
+	poolPairs, err := transitPoolPairCount(transitCIDR)
+	if err != nil {
+		return "", "", err
+	}
+	if poolPairs <= 0 {
+		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s）", transitCIDR)
+	}
+	for index := 0; index < poolPairs; index++ {
+		ip1, ip2, err := allocateTransitPair(index, transitCIDR)
+		if err != nil {
+			// 池内 index 理应都可用；防御性跳过任何意外的越界 index。
+			continue
+		}
+		if transitUsed(transitCIDR, ip1) || transitUsed(transitCIDR, ip2) {
+			continue
+		}
+		return ip1, ip2, nil
+	}
+	return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，共 %d 对均已占用）", transitCIDR, poolPairs)
+}
+
+// gapFillLinkLocalPair 为一条未 pin 的链路分配一对 IPv6 link-local。
+// 与 transit 同构：从 index 0 起向上扫描，跳过任一端已被预留（usedLinkLocals）的 pair，
+// 命中首个两端都空闲的 pair 即返回。fe80::/10 对任何实际机群规模都「事实上无限」（I6），
+// 故扫描必然在有限步内成功。delete/re-add 幂等同样由调用侧的「先预留、再按 pinKey 遍历」保证。
+func gapFillLinkLocalPair(usedLinkLocals map[string]bool) (string, string) {
+	for index := 0; ; index++ {
+		local, remote := allocateLinkLocalPair(index)
+		if usedLinkLocals[local] || usedLinkLocals[remote] {
+			continue
+		}
+		return local, remote
+	}
+}
+
+// lowestFreePort 返回某节点不低于其 base listen_port 的最低空闲端口（在 usedPorts 中跳过已用值）。
+// base 默认 51820。有效端口不得超过 65535（审计项 D11）：超过即返回干净的编译期错误，
+// 避免渲染出 wg-quick 在部署期才会拒绝的非法端口。
+func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, error) {
+	base := node.ListenPort
+	if base == 0 {
+		base = 51820
+	}
+	used := usedPorts[node.ID]
+	for port := base; port <= 65535; port++ {
+		if used == nil || !used[port] {
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("节点 %s 的有效监听端口已无法在 [%d, 65535] 区间内分配：请降低该节点的 listen_port 或减少其连接数",
+		node.Name, base)
 }
 
 // deriveLinkCost 从 edge 推导该链路的 Babel rxcost 覆盖值（D63）。
@@ -514,12 +743,15 @@ func deriveLinkCost(edge *model.Edge) int {
 	return 0
 }
 
-// allocateLinkLocalPair 根据序号分配一对 IPv6 link-local 地址
+// allocateLinkLocalPair 根据序号分配一对 IPv6 link-local 地址。
+// IPv6 文本是十六进制（审计项 D70）：必须用 %x 而非 %d，否则 fe80::11 会被解析成十进制 17——
+// 与文档承诺的「连续十六进制编号」相矛盾。link-local 序号沿用同一池的 pair index。
+// pair 0: fe80::1, fe80::2
+// pair 1: fe80::3, fe80::4
+// pair 5: fe80::b, fe80::c
 func allocateLinkLocalPair(index int) (string, string) {
-	// pair 0: fe80::1, fe80::2
-	// pair 1: fe80::3, fe80::4
 	base := 2*index + 1
-	return fmt.Sprintf("fe80::%d", base), fmt.Sprintf("fe80::%d", base+1)
+	return fmt.Sprintf("fe80::%x", base), fmt.Sprintf("fe80::%x", base+1)
 }
 
 // deriveAllowedIPs 计算 AllowedIPs（保留兼容函数）
@@ -689,7 +921,7 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 		for i := range topo.Domains {
 			transitCIDR := topo.Domains[i].TransitCIDR
 			if transitCIDR == "" {
-				transitCIDR = "10.10.0.0/24"
+				transitCIDR = defaultTransitCIDR
 			}
 			appendCIDR(transitCIDR)
 		}

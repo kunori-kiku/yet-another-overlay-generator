@@ -16,6 +16,12 @@ type Topology struct {
 
 	// 路由策略（可选）
 	RoutePolicies []RoutePolicy `json:"route_policies,omitempty"`
+
+	// 分配方案版本号（粘性 pin 分配的 schema 版本，见 I10）。
+	// 让未来对 pin 格式的改动能够检测并迁移旧拓扑，而不是把旧格式当成新格式静默误读。
+	// 编译器在写回时统一标记为 compiler.AllocationSchemaVersion（当前为 1）。
+	// 详见 docs/spec/compiler/allocation-stability.md（不变量 I10）。
+	AllocSchemaVersion int `json:"alloc_schema_version,omitempty"`
 }
 
 // Project 项目元信息
@@ -136,6 +142,29 @@ type Edge struct {
 
 	// 备注
 	Notes string `json:"notes,omitempty"`
+
+	// === 分配 pin（读写）：编译器写回、前端持久化并原样回传 ===
+	// 这六个字段把本链路分配到的资源（监听端口、transit IP 对、IPv6 link-local 对）
+	// 绑定到具体的 edge 上，复用 overlay_ip / compiled_port 已有的「写回 + localStorage」
+	// 往返路径（无新增传输）。下次编译时编译器优先沿用已存在的 pin，而非按数组位置重算，
+	// 从而让 superset 拓扑对每条既有 edge 重现逐字节相同的分配值（增量扩展不打扰未变动的节点）。
+	//
+	// pin 按所属 edge 的 FromNodeID/ToNodeID 定向：from_* 是本 edge from 侧的值，
+	// to_* 是 to 侧的值；同一对节点的反向 edge 携带的是镜像后的同一对取值。
+	// 每个资源要么成对完整 pin、要么完全不 pin；单端 pin（partial）由验证器拒绝。
+	// 详见 docs/spec/compiler/allocation-stability.md 与 docs/spec/data-model/edge.md（Allocation pins）。
+
+	// from / to 侧接口的监听端口 pin（client 角色不使用 per-peer 端口，故不 pin）。
+	PinnedFromPort int `json:"pinned_from_port,omitempty"`
+	PinnedToPort   int `json:"pinned_to_port,omitempty"`
+
+	// from / to 侧的 transit IP pin（取自所属域的 transit_cidr 地址池）。
+	PinnedFromTransitIP string `json:"pinned_from_transit_ip,omitempty"`
+	PinnedToTransitIP   string `json:"pinned_to_transit_ip,omitempty"`
+
+	// from / to 侧的 IPv6 link-local pin（取自 fe80::/10）。
+	PinnedFromLinkLocal string `json:"pinned_from_link_local,omitempty"`
+	PinnedToLinkLocal   string `json:"pinned_to_link_local,omitempty"`
 }
 
 // RoutePolicy 路由策略定义

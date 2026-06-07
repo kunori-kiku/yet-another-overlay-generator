@@ -183,7 +183,7 @@ edge's draw direction does not change its allocation.
 
 Pass 1 of peer derivation MUST run in two ordered stages. Order independence (I2) holds **by
 construction** because every pinned value is reserved before any unpinned value is chosen, and the
-gap-fill choice for an unpinned link does not depend on array order (see hash-seeded gap-fill).
+gap-fill choice for an unpinned link does not depend on array order (see identity-ordered gap-fill).
 
 1. **Collect.** Enumerate all enabled edges. For each, compute `pinKey(from, to)` and collapse
    reverse/duplicate edges to a single link entity (the same dedup the current code does).
@@ -194,7 +194,7 @@ gap-fill choice for an unpinned link does not depend on array order (see hash-se
    keyed by `transit_cidr`; global link-local set). This stage reserves **all** pins across the
    whole topology before stage 4 begins.
 4. **Gap-fill unpinned.** For every link with no pins (a new or re-added link), choose the lowest
-   free values not already reserved, using the hash-seeded ordering below. Write the chosen values
+   free values not already reserved, using the identity-ordered gap-fill below. Write the chosen values
    back as `pinned_*` so they become sticky on the next compile.
 5. **Write back.** Stamp the chosen/honored values onto the Edge's `pinned_*` fields and onto the
    read-only `compiled_port` for UI display.
@@ -203,7 +203,7 @@ Because stage 3 reserves every pin before stage 4 runs, a newly added link can n
 value an existing link already owns, and an existing link's values never move. This is the
 mechanism behind I1, I3, and I4.
 
-### Hash-seeded gap-fill (delete/re-add idempotence)
+### Identity-ordered gap-fill (delete/re-add idempotence)
 
 When gap-filling an unpinned link, the order in which candidate links are assigned MUST be
 deterministic in `pinKey` (e.g. iterate unpinned links sorted by `pinKey`, and within a pool pick

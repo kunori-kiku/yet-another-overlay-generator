@@ -706,6 +706,55 @@ export function RightPanel() {
               />
               {txt(language, '启用', 'Enabled')}
             </label>
+            {/* 已固定的分配：编译器写回的 pin 值（端口 / transit IP / 链路本地地址）。
+                只读展示；操作员可显式解除固定以便下次编译重新分配。
+                参见 docs/spec/compiler/allocation-stability.md。 */}
+            {(selectedEdge.pinned_from_port !== undefined ||
+              selectedEdge.pinned_to_port !== undefined ||
+              selectedEdge.pinned_from_transit_ip !== undefined ||
+              selectedEdge.pinned_to_transit_ip !== undefined ||
+              selectedEdge.pinned_from_link_local !== undefined ||
+              selectedEdge.pinned_to_link_local !== undefined) && (
+              <div className="p-2 bg-gray-700/50 rounded space-y-1">
+                <p className="text-xs text-gray-400 font-semibold">
+                  {txt(language, '已固定的分配', 'Pinned allocation')}
+                </p>
+                {(selectedEdge.pinned_from_port !== undefined ||
+                  selectedEdge.pinned_to_port !== undefined) && (
+                  <p className="text-xs text-cyan-300 font-mono">
+                    {txt(language, '端口', 'Ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
+                  </p>
+                )}
+                {(selectedEdge.pinned_from_transit_ip !== undefined ||
+                  selectedEdge.pinned_to_transit_ip !== undefined) && (
+                  <p className="text-xs text-cyan-300 font-mono break-all">
+                    {txt(language, 'Transit IP', 'Transit IPs')}: {selectedEdge.pinned_from_transit_ip ?? '—'} → {selectedEdge.pinned_to_transit_ip ?? '—'}
+                  </p>
+                )}
+                {(selectedEdge.pinned_from_link_local !== undefined ||
+                  selectedEdge.pinned_to_link_local !== undefined) && (
+                  <p className="text-xs text-cyan-300 font-mono break-all">
+                    {txt(language, '链路本地地址', 'Link-locals')}: {selectedEdge.pinned_from_link_local ?? '—'} → {selectedEdge.pinned_to_link_local ?? '—'}
+                  </p>
+                )}
+                <button
+                  onClick={() =>
+                    updateEdge(selectedEdge.id, {
+                      pinned_from_port: undefined,
+                      pinned_to_port: undefined,
+                      pinned_from_transit_ip: undefined,
+                      pinned_to_transit_ip: undefined,
+                      pinned_from_link_local: undefined,
+                      pinned_to_link_local: undefined,
+                      compiled_port: undefined,
+                    })
+                  }
+                  className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
+                >
+                  {txt(language, '解除固定（下次编译重新分配）', 'Unpin - reallocate on next compile')}
+                </button>
+              </div>
+            )}
             <button
               onClick={() => removeEdge(selectedEdge.id)}
               className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"

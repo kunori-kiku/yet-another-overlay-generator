@@ -23,9 +23,11 @@ in [../compiler/allocation-stability.md](../compiler/allocation-stability.md).
 
 - The compiler MUST stamp the current scheme version onto the topology when it writes back pinned
   values.
-- An absent or zero value denotes a pre-pinning topology (allocations were positional and not
-  bound to link identity); the compiler MUST treat such a topology as eligible for one-time
-  pin-seeding rather than assuming its pinned fields are authoritative.
+- An absent or zero value denotes a topology from the pre-pinning era (or a frontend that does
+  not yet echo the field). Any `pinned_*` values present are interpreted as the current format
+  (version 1) and honored when valid — the version exists to branch on or migrate FUTURE format
+  changes, not to gate whether pins are honored today. The compiler restamps the current version
+  on every compile.
 - The version MUST be bumped only when the meaning or format of the `pinned_*` fields changes, so
   that older topologies can be branched on or migrated.
 
