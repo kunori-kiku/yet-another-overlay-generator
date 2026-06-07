@@ -312,6 +312,13 @@ YAOG_SIGNING_PUBKEY_PEM
     echo "Bundle signature verification passed."
     cleanup_sig
     trap - EXIT
+else
+    # This install.sh was rendered with signing enabled, so bundle.sig is MANDATORY: a missing
+    # signature is signature-stripping tamper, not an unsigned bundle. We KNOW the bundle was
+    # signed at generation time (the verifying key is pinned above), so refuse to proceed rather
+    # than fall through to the bare checksum check an attacker could satisfy with rewritten files.
+    echo "ERROR: bundle was signed at generation but bundle.sig is missing; refusing to proceed (possible signature-stripping tamper)" >&2
+    exit 1
 fi
 
 {{ end -}}
@@ -1011,6 +1018,13 @@ YAOG_SIGNING_PUBKEY_PEM
     echo "Bundle signature verification passed."
     cleanup_sig
     trap - EXIT
+else
+    # This install.sh was rendered with signing enabled, so bundle.sig is MANDATORY: a missing
+    # signature is signature-stripping tamper, not an unsigned bundle. We KNOW the bundle was
+    # signed at generation time (the verifying key is pinned above), so refuse to proceed rather
+    # than fall through to the bare checksum check an attacker could satisfy with rewritten files.
+    echo "ERROR: bundle was signed at generation but bundle.sig is missing; refusing to proceed (possible signature-stripping tamper)" >&2
+    exit 1
 fi
 
 {{ end -}}

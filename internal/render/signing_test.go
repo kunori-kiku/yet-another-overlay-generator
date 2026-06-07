@@ -4,12 +4,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -89,9 +91,15 @@ func writeSigningKey(t *testing.T) string {
 	return path
 }
 
-// signingMarkers are strings the signed install.sh must contain (the verify block)
-// and the unsigned install.sh must NOT contain.
-var signingMarkers = []string{"Verifying bundle signature", "openssl pkeyutl -verify", "bundle.sig"}
+// signingMarkers are strings the signed install.sh must contain (the verify block
+// plus the mandatory-signature downgrade guard) and the unsigned install.sh must
+// NOT contain.
+var signingMarkers = []string{
+	"Verifying bundle signature",
+	"openssl pkeyutl -verify",
+	"bundle.sig",
+	"refusing to proceed (possible signature-stripping tamper)",
+}
 
 // TestAll_SignedInstallScripts asserts render.All embeds the bundle-signature
 // verify block into BOTH the per-peer and client install scripts when a signing
@@ -115,7 +123,7 @@ func TestAll_SignedInstallScripts(t *testing.T) {
 		// The verify step must run BEFORE the checksum check (fail-closed ordering).
 		vi := strings.Index(script, "openssl pkeyutl -verify")
 		ci := strings.Index(script, "sha256sum --status -c checksums.sha256")
-		if vi < 0 || ci < 0 || vi > ci {
+		if vi < 0 || ci < 0 || vi >= ci {
 			t.Errorf("%s: signature verify must precede checksum check (verify=%d, checksum=%d)", nodeID, vi, ci)
 		}
 	}
@@ -155,5 +163,95 @@ func TestAll_BadSigningKeyFailsClosed(t *testing.T) {
 	}
 	if err := All(result, keys); err == nil {
 		t.Fatal("render.All must fail closed when the signing key path is unreadable")
+	}
+}
+
+// extractEmbeddedPubPEM pulls the verifying public key embedded in install.sh
+// between the YAOG_SIGNING_PUBKEY_PEM heredoc markers — the Go-emitted trust
+// anchor the script verifies against.
+func extractEmbeddedPubPEM(t *testing.T, script string) []byte {
+	t.Helper()
+	const marker = "YAOG_SIGNING_PUBKEY_PEM"
+	openTok := "<< '" + marker + "'\n"
+	o := strings.Index(script, openTok)
+	if o < 0 {
+		t.Fatal("install.sh missing the pubkey heredoc open marker")
+	}
+	rest := script[o+len(openTok):]
+	c := strings.Index(rest, "\n"+marker)
+	if c < 0 {
+		t.Fatal("install.sh missing the pubkey heredoc close marker")
+	}
+	return []byte(rest[:c])
+}
+
+// parsePub parses a PKIX PEM Ed25519 public key the way openssl/install.sh would.
+func parsePub(t *testing.T, pemBytes []byte) ed25519.PublicKey {
+	t.Helper()
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		t.Fatalf("not valid PEM: %q", pemBytes)
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse PKIX public key: %v", err)
+	}
+	edPub, ok := pub.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("not an Ed25519 key: %T", pub)
+	}
+	return edPub
+}
+
+// TestSignedExport_EmbeddedPubkeyMatchesShippedAndVerifies is the end-to-end seam
+// test: render.All -> artifacts.Export with a signing key set must (1) embed the
+// SAME public key into install.sh as it ships in signing-pubkey.pem, (2) produce a
+// bundle.sig that verifies over checksums.sha256 under that embedded key, and (3)
+// reject a tampered checksums. This guards the render<->export signing seam that a
+// divergent env read or a missing *Signed call would silently break.
+func TestSignedExport_EmbeddedPubkeyMatchesShippedAndVerifies(t *testing.T) {
+	t.Setenv(bundlesig.EnvSigningKey, writeSigningKey(t))
+
+	result := renderAll(t, signingTestTopology(t))
+	outDir := t.TempDir()
+	if _, err := artifacts.Export(result, outDir); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	// router-1 is a non-client node with a real signed install.sh in the bundle.
+	const nodeID = "router-1"
+	nodeDir := filepath.Join(outDir, nodeID)
+
+	embedded := extractEmbeddedPubPEM(t, result.InstallScripts[nodeID])
+	shipped, err := os.ReadFile(filepath.Join(nodeDir, "signing-pubkey.pem"))
+	if err != nil {
+		t.Fatalf("read signing-pubkey.pem: %v", err)
+	}
+	embPub := parsePub(t, embedded)
+	if !embPub.Equal(parsePub(t, shipped)) {
+		t.Error("pubkey embedded in install.sh does not match the shipped signing-pubkey.pem")
+	}
+
+	checksums, err := os.ReadFile(filepath.Join(nodeDir, "checksums.sha256"))
+	if err != nil {
+		t.Fatalf("read checksums.sha256: %v", err)
+	}
+	sigB64, err := os.ReadFile(filepath.Join(nodeDir, "bundle.sig"))
+	if err != nil {
+		t.Fatalf("read bundle.sig: %v", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	if err != nil {
+		t.Fatalf("decode bundle.sig: %v", err)
+	}
+	if !bundlesig.Verify(checksums, sig, embPub) {
+		t.Error("bundle.sig does not verify over checksums.sha256 with the embedded pubkey")
+	}
+
+	// Tamper: the signature is bound to the exact checksums bytes.
+	tampered := append([]byte(nil), checksums...)
+	tampered[0] ^= 0xff
+	if bundlesig.Verify(tampered, sig, embPub) {
+		t.Error("tampered checksums.sha256 must not verify")
 	}
 }

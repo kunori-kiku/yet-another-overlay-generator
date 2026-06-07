@@ -99,16 +99,19 @@ Added next to the existing per-node files (see
   `openssl` (and any operator) can verify `bundle.sig` against `checksums.sha256` out of band, and
   so the install-time verifier has a file form to feed `openssl pkeyutl -pubin`.
 
-Both files are present **only** when signing is enabled. When absent, the bundle is unsigned and
-`install.sh` falls back to the hash-only path.
+Both files are present **only** when signing is enabled. An `install.sh` that was rendered with
+signing enabled carries the embedded verifying key and therefore **requires** `bundle.sig` (see
+below); an `install.sh` rendered without signing has no verify block and uses the hash-only path.
 
 ## Install-time verification order
 
-When `bundle.sig` is present, `install.sh` verifies the signature **before** the existing
+When the script was rendered signed, `install.sh` verifies the signature **before** the existing
 `sha256sum -c`, so a recipient never even computes the hash list of an unsigned-by-the-expected-key
 bundle:
 
-1. Write the embedded/shipped public key to a temp file (`signing-pubkey.pem`).
+1. Write the **embedded** verifying public key — a Go-emitted value baked into `install.sh` at
+   generation time, *not* the shipped `signing-pubkey.pem` (which an attacker rewriting the bundle
+   could swap) — to a temp file.
 2. Decode `bundle.sig` (Base64) to a raw 64-byte signature file.
 3. `openssl pkeyutl -verify -pubin -inkey <pub.pem> -rawin -sigfile <sig> -in checksums.sha256`
    (`-rawin` makes `openssl` hash-and-verify the file directly under Ed25519's PureEdDSA rules,
@@ -116,11 +119,32 @@ bundle:
 4. **Only on success**, run the existing `sha256sum --status -c checksums.sha256` to confirm each
    file matches its signed digest.
 
-If `bundle.sig` is present but `openssl` is missing or its build lacks Ed25519 support, the script
+**Mandatory signature (downgrade protection).** Because a signed `install.sh` embeds the verifying
+key, it *knows* it was signed at generation time. A **missing** `bundle.sig` is therefore treated as
+signature-stripping tamper, not as an unsigned bundle: the script **refuses to proceed** rather than
+fall through to the bare `sha256sum -c` (which an attacker could satisfy with rewritten files +
+rewritten checksums). Likewise, if `bundle.sig` is present but `openssl` is missing or its build
+lacks Ed25519 / `-rawin` support (**OpenSSL 3.0+** is required for `pkeyutl -rawin`), the script
 **fails loudly with a nonzero exit** — it never silently downgrades to hash-only when a signature
-was expected. If `bundle.sig` is absent (unsigned bundle / opt-in off), the script behaves exactly
-as today: hash-only `sha256sum -c`. Full ordering in
+was expected. An `install.sh` rendered **without** signing (opt-in off) has no verify block and
+behaves exactly as today: hash-only `sha256sum -c`. Full ordering in
 [../artifacts/install-script.md](../artifacts/install-script.md).
+
+## Second signed object — the self-extracting installer wrapper
+
+The `/api/export` ZIP wraps each node bundle in a **self-extracting installer** (a bash script with a
+base64 tar.gz payload appended; see [../artifacts/deploy-scripts.md](../artifacts/deploy-scripts.md)).
+When signing is enabled, the wrapper carries a **second, independent** Ed25519 signature — over the
+**raw tar.gz payload bytes**, not the `checksums.sha256` digest. The same `YAOG_BUNDLE_SIGNING_KEY`
+signs both. The wrapper embeds the base64 signature and base64 public-key PEM and verifies
+(`openssl pkeyutl -verify -pubin -rawin -sigfile <sig> -in <archive>`) **before** the existing
+`EXPECTED_PAYLOAD_SHA256` payload check, with the same fail-clear discipline.
+
+So a signed export has two signed objects at two layers: the **inner bundle** (`bundle.sig` over
+`checksums.sha256`, verified by `install.sh` after extraction) and the **outer wrapper** (over the
+tar.gz payload, verified before extraction). They are complementary — the outer rejects a tampered
+payload before anything is unpacked; the inner protects the bundle once it is on disk, including the
+air-gapped directory export, which has no wrapper.
 
 ## Honest limitation — Phase 0 authenticity is relative to an out-of-band pin
 

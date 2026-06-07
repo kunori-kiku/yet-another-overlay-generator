@@ -177,6 +177,20 @@ func TestExportSignedDeterministic(t *testing.T) {
 		if !bytes.Equal(c1, c2) {
 			t.Errorf("%s: checksums.sha256 not deterministic across runs:\n--- run1 ---\n%s\n--- run2 ---\n%s", node, c1, c2)
 		}
+
+		// Ed25519 is deterministic (RFC 8032) and the canonical input is stable, so
+		// the same key must yield a byte-identical bundle.sig across runs.
+		s1, err := os.ReadFile(filepath.Join(out1, node, "bundle.sig"))
+		if err != nil {
+			t.Fatalf("%s: read bundle.sig run 1: %v", node, err)
+		}
+		s2, err := os.ReadFile(filepath.Join(out2, node, "bundle.sig"))
+		if err != nil {
+			t.Fatalf("%s: read bundle.sig run 2: %v", node, err)
+		}
+		if !bytes.Equal(s1, s2) {
+			t.Errorf("%s: bundle.sig not deterministic across runs", node)
+		}
 	}
 }
 

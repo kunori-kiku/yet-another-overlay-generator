@@ -2,7 +2,9 @@ package bundlesig
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -77,7 +79,7 @@ func TestLoadSigningFromEnv_BadPath(t *testing.T) {
 	}
 }
 
-// TestLoadSigningFromEnv_NotEd25519 rejects a non-Ed25519 (malformed) PEM.
+// TestLoadSigningFromEnv_Malformed rejects input with no PEM block.
 func TestLoadSigningFromEnv_Malformed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.pem")
 	if err := os.WriteFile(path, []byte("not a pem\n"), 0600); err != nil {
@@ -86,5 +88,26 @@ func TestLoadSigningFromEnv_Malformed(t *testing.T) {
 	t.Setenv(EnvSigningKey, path)
 	if _, err := LoadSigningFromEnv(); err == nil {
 		t.Fatal("expected an error for a malformed signing key")
+	}
+}
+
+// TestLoadSigningFromEnv_NotEd25519 rejects a valid PKCS#8 PEM that holds a
+// non-Ed25519 key, exercising the type-assert branch in LoadPrivateKeyPEM.
+func TestLoadSigningFromEnv_NotEd25519(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ecdsa key: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal pkcs8: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "ecdsa.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv(EnvSigningKey, path)
+	if _, err := LoadSigningFromEnv(); err == nil {
+		t.Fatal("expected an error for a non-Ed25519 PKCS#8 key")
 	}
 }
