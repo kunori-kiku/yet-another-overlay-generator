@@ -164,8 +164,12 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		}
 
 		// 写入 README
-		readme := fmt.Sprintf("Node: %s\nOverlay IP: %s\nRole: %s\nArchitecture: per-peer WireGuard interfaces\n\nUsage:\n  1. Copy this directory to the target host\n  2. Run: sudo bash install.sh\n",
-			node.Name, node.OverlayIP, node.Role)
+		//
+		// D76: README 的 Architecture 行此前硬编码为 "per-peer WireGuard interfaces"，
+		// 即使是 client bundle（单接口 wg0）也照写，与同目录 manifest.json 的 architecture
+		// 字段自相矛盾。改为复用上面 manifest 用的同一个 architecture 值，保持二者一致。
+		readme := fmt.Sprintf("Node: %s\nOverlay IP: %s\nRole: %s\nArchitecture: %s\n\nUsage:\n  1. Copy this directory to the target host\n  2. Run: sudo bash install.sh\n",
+			node.Name, node.OverlayIP, node.Role, architecture)
 		readmePath := filepath.Join(nodeDir, "README.txt")
 		if err := os.WriteFile(readmePath, []byte(readme), 0644); err != nil {
 			return nil, fmt.Errorf("写入 README 失败: %w", err)

@@ -1,0 +1,146 @@
+// Package render 是 API 与 CLI 两个入口共享的「密钥准备 + 全量渲染」层。
+//
+// 在此包出现之前，密钥生成与渲染逻辑只存在于 internal/api/handler.go 内（generateKeys /
+// renderAll），CLI（cmd/compiler）则各自维护一份退化实现——它向每份配置塞入字面量
+// FAKE_PRIVKEY_*，从不渲染 client 的 wg0.conf，也不生成 deploy-all 脚本（审计主题 T6：
+// D6 / D27–29 / D59）。把这两个函数抽到本共享包后，两个入口走完全相同的渲染路径，CLI
+// 自动获得真实密钥（遵守密钥持久化规则）、client wg0 配置与安装脚本、以及 deploy-all 脚本，
+// 整个 T6 主题被一次性消除。
+//
+// 依赖方向：本包仅依赖 compiler / renderer / model / wgtypes，绝不反向依赖 api，
+// 以免形成 api → render → api 的导入环（render 必须可被 api 与 cmd/compiler 同时引用）。
+package render
+
+import (
+	"fmt"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+)
+
+// GenerateKeys 为每个节点解析或生成 WireGuard 密钥对，并把结果写回节点以便随拓扑 JSON
+// 持久化、在下次编译时被原样复用（不变式 I5：密钥稳定）。
+//
+// 无状态编译器要求私钥能随拓扑 JSON 往返：只持久化公钥的节点在下次编译时无法渲染出自身
+// Interface 段的 PrivateKey。因此密钥处理按节点当前两枚密钥字段的状态分三种情形，
+// 不再以 fixed_private_key 这个布尔标志本身作为分支条件（它仅是操作员「粘贴私钥」的入口，
+// 其存在意味着私钥已被设置，即落入情形 (a)）：
+//
+//	(a) wireguard_private_key 非空（无论 fixed_private_key 是否为真）：解析该私钥、由它派生
+//	    公钥并复用；同时把派生出的公钥写回节点，修复缺失或陈旧的公钥。
+//	(b) wireguard_private_key 为空但 wireguard_public_key 非空：硬错误。该节点被视为密钥固定，
+//	    但私钥缺失，无状态编译器无法重建其私钥。提示操作员从主机 /etc/wireguard 粘贴在用私钥，
+//	    或同时清空两个密钥字段以显式轮换。
+//	(c) 两者皆空：生成全新密钥对，并把私钥与公钥都写回节点使其持久化、可往返；此后每次编译
+//	    都复用同一对密钥（取代旧的「编译后清空密钥」行为）。
+func GenerateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
+	keys := make(map[string]compiler.KeyPair)
+	for i := range topo.Nodes {
+		node := &topo.Nodes[i]
+
+		switch {
+		case node.WireGuardPrivateKey != "":
+			// 情形 (a)：私钥在场。解析并由它派生公钥，复用整对密钥；把派生出的公钥写回，
+			// 借此修复节点上缺失或与私钥不一致（陈旧）的公钥。
+			privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
+			if err != nil {
+				return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
+			}
+
+			node.WireGuardPrivateKey = privateKey.String()
+			node.WireGuardPublicKey = privateKey.PublicKey().String()
+
+		case node.WireGuardPublicKey != "":
+			// 情形 (b)：公钥在场但私钥缺失。无状态编译器无法重建私钥，无法渲染该节点自身的
+			// Interface PrivateKey，因此必须硬错误而非静默轮换或留空。
+			return nil, fmt.Errorf("节点 %s 已固定 WireGuard 公钥，但缺少对应私钥：无状态编译器无法重建私钥。请从该主机的 /etc/wireguard/<接口>.conf 粘贴在用私钥到 wireguard_private_key，或同时清空 wireguard_private_key 与 wireguard_public_key 两个字段以显式轮换密钥", node.ID)
+
+		default:
+			// 情形 (c)：两枚密钥字段皆空，是全新节点。生成新密钥对，并把私钥与公钥都写回
+			// 节点，使其随拓扑持久化、可往返，下次编译复用同一对密钥。
+			privateKey, err := wgtypes.GeneratePrivateKey()
+			if err != nil {
+				return nil, fmt.Errorf("为节点 %s 生成 WireGuard 私钥失败: %w", node.ID, err)
+			}
+
+			node.WireGuardPrivateKey = privateKey.String()
+			node.WireGuardPublicKey = privateKey.PublicKey().String()
+		}
+
+		keys[node.ID] = compiler.KeyPair{
+			PrivateKey: node.WireGuardPrivateKey,
+			PublicKey:  node.WireGuardPublicKey,
+		}
+	}
+	return keys, nil
+}
+
+// All 把一份编译结果渲染成全部部署产物，并把结果写回 result 的各 map 字段：
+// per-peer WireGuard 配置、client 的单一 wg0 配置、Babel 配置、sysctl 配置、
+// 每节点安装脚本（含 client 角色分支与 transit-CIDR 解析），以及 deploy-all 脚本（bash + ps1）。
+//
+// 这是 API 与 CLI 共享的唯一渲染入口——两个入口走完全相同的路径，
+// 从而保证产物一致性（入口等价性，见 equivalence_test.go）。
+func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error {
+	// WireGuard (per-peer configs for non-client nodes)
+	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
+	if err != nil {
+		return fmt.Errorf("渲染 WireGuard 配置失败: %w", err)
+	}
+	result.WireGuardConfigs = wgConfigs
+
+	// WireGuard client configs (single wg0 for client nodes)
+	for nodeID, clientInfo := range result.ClientConfigs {
+		config, err := renderer.RenderClientWireGuardConfig(clientInfo)
+		if err != nil {
+			return fmt.Errorf("渲染 client %s 的 WireGuard 配置失败: %w", clientInfo.NodeName, err)
+		}
+		result.WireGuardConfigs[nodeID+":wg0"] = config
+	}
+
+	// Babel
+	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
+	if err != nil {
+		return fmt.Errorf("渲染 Babel 配置失败: %w", err)
+	}
+	result.BabelConfigs = babelConfigs
+
+	// Sysctl
+	sysctlConfigs, err := renderer.RenderAllSysctlConfigs(result.Topology)
+	if err != nil {
+		return fmt.Errorf("渲染 sysctl 配置失败: %w", err)
+	}
+	result.SysctlConfigs = sysctlConfigs
+
+	//
+	for _, node := range result.Topology.Nodes {
+		if node.Role == "client" {
+			script, err := renderer.RenderClientInstallScript(&node)
+			if err != nil {
+				return fmt.Errorf("渲染 client %s 的安装脚本失败: %w", node.Name, err)
+			}
+			result.InstallScripts[node.ID] = script
+		} else {
+			peers := result.PeerMap[node.ID]
+			_, hasBabel := result.BabelConfigs[node.ID]
+			transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
+			script, err := renderer.RenderInstallScript(&node, peers, hasBabel, transitCIDRs...)
+			if err != nil {
+				return fmt.Errorf("渲染节点 %s 的安装脚本失败: %w", node.Name, err)
+			}
+			result.InstallScripts[node.ID] = script
+		}
+	}
+
+	// Deploy scripts (bash + PowerShell)
+	bashDeploy, ps1Deploy, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
+	if err != nil {
+		return fmt.Errorf("deploy script render: %w", err)
+	}
+	result.DeployScripts["deploy-all.sh"] = bashDeploy
+	result.DeployScripts["deploy-all.ps1"] = ps1Deploy
+
+	return nil
+}

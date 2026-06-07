@@ -9,7 +9,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 )
 
 func main() {
@@ -40,8 +40,15 @@ func main() {
 	fmt.Printf("节点数: %d, 边数: %d, 网络域数: %d\n",
 		len(topo.Nodes), len(topo.Edges), len(topo.Domains))
 
-	// （Phase 0 ， wg genkey）
-	keys := generateFakeKeys(&topo)
+	// 为每个节点解析或生成真实 WireGuard 密钥对（与 API 入口共用同一持久化规则：
+	// 私钥往返复用、只持久化公钥时硬错误、全新节点生成并写回新密钥）。
+	// 取代旧的 generateFakeKeys——后者向每份配置塞入字面量 FAKE_PRIVKEY_*，
+	// 产物无法被 wg-quick 接受、不可部署（审计阻断项 D6）。
+	keys, err := render.GenerateKeys(&topo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "生成 WireGuard 密钥失败: %v\n", err)
+		os.Exit(1)
+	}
 
 	// 编译拓扑
 	c := compiler.NewCompiler()
@@ -66,43 +73,15 @@ func main() {
 		fmt.Printf("  %s -> %s\n", node.Name, node.OverlayIP)
 	}
 
-	//  WireGuard 
-	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, " WireGuard : %v\n", err)
+	// 渲染全部部署产物，走与 API 入口完全相同的共享路径（render.All）：per-peer WireGuard
+	// 配置、client 的单一 wg0 配置与 client 安装脚本（D27/D28/D29）、Babel 配置、sysctl 配置、
+	// 每节点安装脚本，以及 deploy-all.sh/.ps1（D59）。CLI 由此与 API 产物逐字一致。
+	if err := render.All(result, keys); err != nil {
+		fmt.Fprintf(os.Stderr, "渲染部署产物失败: %v\n", err)
 		os.Exit(1)
 	}
-	result.WireGuardConfigs = wgConfigs
 
-	//  Babel 
-	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, " Babel : %v\n", err)
-		os.Exit(1)
-	}
-	result.BabelConfigs = babelConfigs
-
-	//  sysctl 
-	sysctlConfigs, err := renderer.RenderAllSysctlConfigs(result.Topology)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, " sysctl : %v\n", err)
-		os.Exit(1)
-	}
-	result.SysctlConfigs = sysctlConfigs
-
-	// 
-	for _, node := range result.Topology.Nodes {
-		_, hasBabel := result.BabelConfigs[node.ID]
-		transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
-		script, err := renderer.RenderInstallScript(&node, result.PeerMap[node.ID], hasBabel, transitCIDRs...)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, ": %v\n", err)
-			os.Exit(1)
-		}
-		result.InstallScripts[node.ID] = script
-	}
-
-	// 
+	//
 	exportResult, err := artifacts.Export(result, *outputDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, ": %v\n", err)
@@ -114,15 +93,4 @@ func main() {
 		fmt.Printf("  📦 %s/\n", nodeName)
 	}
 	fmt.Printf("\n! checksum: %s\n", result.Manifest.Checksum)
-}
-
-func generateFakeKeys(topo *model.Topology) map[string]compiler.KeyPair {
-	keys := make(map[string]compiler.KeyPair)
-	for _, node := range topo.Nodes {
-		keys[node.ID] = compiler.KeyPair{
-			PrivateKey: fmt.Sprintf("FAKE_PRIVKEY_%s", node.ID),
-			PublicKey:  fmt.Sprintf("FAKE_PUBKEY_%s", node.ID),
-		}
-	}
-	return keys
 }
