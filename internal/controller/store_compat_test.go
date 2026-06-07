@@ -273,6 +273,84 @@ func TestStoreBundlePromotion(t *testing.T) {
 	}
 }
 
+// TestStorePromoteMultiNode covers the load-bearing promote semantics that the
+// single-node test cannot: a promote flips ALL staged bundles at once, bumps
+// DesiredGeneration on each PROMOTED node, and a node that is NOT re-staged keeps
+// its prior current bundle and its prior DesiredGeneration across a later promote.
+func TestStorePromoteMultiNode(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+			created := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+
+			ids := []string{"alpha", "beta", "gamma"}
+			for _, id := range ids {
+				if err := s.UpsertNode(ctx, tenant, Node{NodeID: id, Status: NodeApproved}); err != nil {
+					t.Fatalf("UpsertNode(%s): %v", id, err)
+				}
+				if err := s.StageBundle(ctx, tenant, SignedBundle{
+					NodeID: id, Generation: 1, IsStaged: true, CreatedAt: created,
+					Files: map[string][]byte{"install.sh": []byte("# " + id + " v1\n")},
+				}); err != nil {
+					t.Fatalf("StageBundle(%s): %v", id, err)
+				}
+			}
+
+			// First promote: all three become current at generation 1.
+			if gen, err := s.PromoteStaged(ctx, tenant); err != nil || gen != 1 {
+				t.Fatalf("PromoteStaged #1 = (%d, %v), want (1, nil)", gen, err)
+			}
+			for _, id := range ids {
+				b, err := s.GetCurrentBundle(ctx, tenant, id)
+				if err != nil || b.Generation != 1 || !b.IsCurrent {
+					t.Fatalf("%s current after promote#1 = (%+v, %v), want gen1 current", id, b, err)
+				}
+				n, _ := s.GetNode(ctx, tenant, id)
+				if n.DesiredGeneration != 1 {
+					t.Fatalf("%s DesiredGeneration = %d, want 1", id, n.DesiredGeneration)
+				}
+			}
+
+			// Re-stage ONLY beta and promote again -> generation 2.
+			if err := s.StageBundle(ctx, tenant, SignedBundle{
+				NodeID: "beta", Generation: 2, IsStaged: true, CreatedAt: created,
+				Files: map[string][]byte{"install.sh": []byte("# beta v2\n")},
+			}); err != nil {
+				t.Fatalf("StageBundle(beta v2): %v", err)
+			}
+			if gen, err := s.PromoteStaged(ctx, tenant); err != nil || gen != 2 {
+				t.Fatalf("PromoteStaged #2 = (%d, %v), want (2, nil)", gen, err)
+			}
+
+			// beta advanced; alpha & gamma kept their gen-1 current bundle AND their
+			// gen-1 DesiredGeneration (they were not re-staged).
+			betaCur, _ := s.GetCurrentBundle(ctx, tenant, "beta")
+			if betaCur.Generation != 2 || string(betaCur.Files["install.sh"]) != "# beta v2\n" {
+				t.Fatalf("beta current after promote#2 = %+v, want gen2 v2", betaCur)
+			}
+			betaNode, _ := s.GetNode(ctx, tenant, "beta")
+			if betaNode.DesiredGeneration != 2 {
+				t.Fatalf("beta DesiredGeneration = %d, want 2", betaNode.DesiredGeneration)
+			}
+			for _, id := range []string{"alpha", "gamma"} {
+				b, err := s.GetCurrentBundle(ctx, tenant, id)
+				if err != nil || b.Generation != 1 {
+					t.Fatalf("%s current after promote#2 = (%+v, %v), want UNCHANGED gen1", id, b, err)
+				}
+				n, _ := s.GetNode(ctx, tenant, id)
+				if n.DesiredGeneration != 1 {
+					t.Fatalf("%s DesiredGeneration = %d, want UNCHANGED 1 (not re-staged)", id, n.DesiredGeneration)
+				}
+			}
+			if cur, err := s.CurrentGeneration(ctx, tenant); err != nil || cur != 2 {
+				t.Fatalf("CurrentGeneration = (%d, %v), want (2, nil)", cur, err)
+			}
+		})
+	}
+}
+
 // TestStoreAgentReports covers SetAppliedGeneration and TouchLastSeen reflecting
 // into the node record returned by GetNode.
 func TestStoreAgentReports(t *testing.T) {

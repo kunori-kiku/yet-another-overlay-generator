@@ -84,9 +84,13 @@ matching **public** key and renders against it every time. A `SignedBundle`'s `F
 the placeholder on each `[Interface] PrivateKey =` line; the agent splices its locally-held key in
 `install.sh` after verifying the pristine, signed bundle.
 
-The same standing guard that protects the renderer (`internal/render/custody_guard_test.go`) protects
-what reaches the Store: a bundle is signed and checked custody-clean *before* it is staged, so a
-private key cannot enter persistence by way of a bundle.
+Two layers keep private keys out of persistence. At the **type** level (enforced now, by this
+package), `Node` exposes only `WGPublicKey` — the registry structurally cannot hold a private key. At
+the **bundle** level, a `SignedBundle`'s `Files` are the renderer's output, which the standing
+custody guard (`internal/render/custody_guard_test.go`) already proves carry only the placeholder, not
+a real key. The controller wiring that stages bundles (plan-4.3) is responsible for staging only
+renderer-produced, custody-clean bundles; the Store does not re-scan bundle bytes, so that pre-stage
+discipline is the caller's contract, not a guarantee the Store enforces at write time.
 
 ## The two stdlib implementations
 
@@ -114,15 +118,28 @@ Durability discipline:
 - **Permissions:** the root directory is **0700**; written files are **0600**. The store can hold
   signed bundles and tenant topology, so it is treated as sensitive even though it carries no private
   keys.
-- **Atomic writes:** every mutation is written to a **temporary file then `rename`d** into place, so a
-  crash mid-write never leaves a half-written, unparseable record — a reader sees either the old
-  complete file or the new complete file.
-- **Long-poll:** `FileStore` provides the same `WaitForGeneration` primitive as `MemStore` (it holds
-  the same in-process generation/waiter synchronization in addition to persisting the counter), so the
-  plan-4.3 `/poll` endpoint behaves identically regardless of the backing store. (Cross-process
-  long-poll wake-up is out of scope for a single-process v1.)
+- **Atomic per-file writes (torn-write safe, not crash-durable):** every single record is written to a
+  **temporary file then `rename`d** into place, so a concurrent reader sees either the old complete
+  file or the new complete file — never a half-written one. This is *torn-write* protection, not full
+  *crash durability*: the temp file is not `fsync`ed before rename, so a power loss can still lose a
+  just-written record that the OS had only buffered. For v1 this is acceptable (the agent re-pulls and
+  re-applies; the operator can re-deploy); real crash-durability + multi-record transactionality is a
+  property of the future Postgres adapter.
+- **`PromoteStaged` is atomic for concurrent in-process callers, best-effort across a crash.** The flip
+  writes several files in sequence (each node's current bundle, removing its staged marker, bumping its
+  node record) and commits `generation.json` **last**, so an in-process caller (guarded by the store
+  mutex) and any reader only ever observe a consistent generation. A crash *mid-flip* can leave a
+  partially-flipped on-disk state (some nodes flipped, `generation.json` not yet bumped); because the
+  generation is committed last, a retry re-promotes the still-staged remainder and converges. True
+  cross-record crash-atomicity (a single transaction) is a Postgres-adapter property, deferred.
+- **Long-poll:** `FileStore` satisfies the same `WaitForGeneration` **contract** as `MemStore`, but by
+  a different mechanism: it **polls the persisted `generation.json` on a short interval** (no in-process
+  condition variable), returning as soon as the counter advances past `afterGen` or `ctx` is done. The
+  plan-4.3 `/poll` endpoint therefore behaves equivalently regardless of the backing store; the polling
+  approach also generalizes naturally to cross-process once a shared store (Postgres) is used.
 
-Both implementations satisfy **identical semantics** — the only difference is where the bytes live.
+Both implementations satisfy the **same Store contract** — the only differences are where the bytes
+live and the (documented) crash-durability and ctx-cancellation properties noted above.
 
 ## Generation, stage → promote, and the long-poll primitive
 

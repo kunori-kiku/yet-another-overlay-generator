@@ -355,9 +355,11 @@ func (fs *FileStore) PutTopology(ctx context.Context, t TenantID, jsonBytes []by
 		prevVersion = prev.Version
 	}
 
+	// Defensive copy so the returned record does not alias the caller's slice
+	// (parity with MemStore: a caller mutating its input must not affect the store).
 	rec := TopologyRecord{
 		Version:   prevVersion + 1,
-		JSON:      jsonBytes,
+		JSON:      append([]byte(nil), jsonBytes...),
 		UpdatedAt: time.Now().UTC(),
 	}
 	if err := writeJSONAtomic(p, rec); err != nil {

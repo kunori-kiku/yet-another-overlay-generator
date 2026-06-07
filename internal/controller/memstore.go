@@ -295,7 +295,14 @@ func (s *MemStore) WaitForGeneration(ctx context.Context, t TenantID, afterGen i
 	go func() {
 		select {
 		case <-ctx.Done():
+			// Broadcast under the lock: this forces the watcher to wait until the
+			// waiter has parked inside cond.Wait (which releases mu), so the wakeup
+			// can never be lost in the gap between the waiter's predicate check and
+			// its cond.Wait call. A lockless Broadcast here can race into that gap
+			// and be dropped, hanging the waiter until an unrelated promote.
+			s.mu.Lock()
 			s.cond.Broadcast()
+			s.mu.Unlock()
 		case <-watchDone:
 		}
 	}()

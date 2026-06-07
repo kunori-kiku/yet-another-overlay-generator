@@ -114,6 +114,10 @@ type AuditEntry struct {
 //     never visible to another (enforced by tenant_isolation_test.go).
 //   - No method ever stores or returns a WireGuard private key.
 //   - Reads of a missing record return ErrNotFound.
+//   - Only the blocking method WaitForGeneration is required to honor ctx
+//     cancellation. The non-blocking point methods complete synchronously; an
+//     implementation MAY check ctx.Err() up front (FileStore does, for its I/O),
+//     but callers must not rely on cancellation interrupting a point read/write.
 //
 // Enrollment-token methods are added by plan-4.2; the HTTP/deploy wiring that
 // consumes WaitForGeneration is plan-4.3.
