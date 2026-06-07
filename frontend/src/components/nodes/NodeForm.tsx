@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt, STRINGS } from '../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
+import type { Node } from '../../types/topology';
 
 const DEFAULT_LISTEN_PORT = 51820;
 
