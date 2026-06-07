@@ -110,12 +110,17 @@ func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 	switch node.Role {
 	case "router":
 		caps.CanForward = true
+		// router 在具备公网 IP 时接受入站连接，与 DeriveRoleSemantics 的
+		// AcceptAllInbound 保持一致（D49）。保留已显式置位的 true。
+		caps.CanAcceptInbound = caps.CanAcceptInbound || node.Capabilities.HasPublicIP
 	case "relay":
 		caps.CanForward = true
 		caps.CanRelay = true
 		caps.CanAcceptInbound = true
 	case "gateway":
 		caps.CanForward = true
+		// gateway 同样在具备公网 IP 时接受入站连接（D49），与 DeriveRoleSemantics 一致。
+		caps.CanAcceptInbound = caps.CanAcceptInbound || node.Capabilities.HasPublicIP
 	case "peer":
 		// peer ，
 	case "client":

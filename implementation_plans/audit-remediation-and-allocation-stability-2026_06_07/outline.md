@@ -157,12 +157,12 @@ Each milestone = one plan file = one session = one PR. Detail lives in the plan 
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-1 | in-review | [#3](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/3) | spec freeze + CI |
+| plan-1 | in-review (CI green) | [#3](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/3) | spec freeze + CI |
 | plan-1.5 | done (awaiting CI) | — | D18 pulled forward: react-hooks/refs lint errors blocked all CI |
 | plan-2 | in-review | [#4](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/4) | headline port fix |
-| plan-3 | pending | — | |
-| plan-4 | pending | — | |
-| plan-5 | pending | — | |
+| plan-3 | in-review | [#5](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/5) | compile warnings + hardening — CI green |
+| plan-4 | in-review | [#6](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/6) | internal/naming + collisions — CI green |
+| plan-5 | in-review | [#7](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/7) | shell-quoting + integrity chain |
 | plan-6 | pending | — | |
 | plan-7 | pending | — | |
 | plan-8 | pending | — | |
