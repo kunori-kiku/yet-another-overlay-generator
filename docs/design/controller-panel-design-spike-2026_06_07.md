@@ -70,6 +70,11 @@ pull only their own signed bundle, verify signature + bound header + anti-rollba
   can never exfiltrate the key; a cross-tenant bundle can't verify against another tenant's anchor.
 - **Stage → Promote with an out-of-band promotion factor** the breached web tier alone can't satisfy
   + instant rollback. (This is what keeps "breach ≠ fleet takeover".)
+- **Trust-list / membership changes require a human hardware-key signature over the change content**
+  (content-bound, verified against a public key pinned at install). The controller has no autonomous
+  ability to admit/evict/rekey a node, so a headless breach cannot alter fleet membership — the
+  catastrophic slice of the live-breach window is closed, not merely bounded. Routine config keeps
+  the automated KMS key + step-up promote (two-tier; see resolved decision #1).
 - Deny-by-default per-tenant authz: `tenant_id` from the authenticated principal only, one chokepoint,
   `/config` returns only the caller's node; cross-tenant access CI gate.
 - Per-node mTLS device identity (outbound only); single-use, short-TTL, tenant+node-scoped enrollment
@@ -98,11 +103,14 @@ pull only their own signed bundle, verify signature + bound header + anti-rollba
 
 ## Top residual risks
 
-- **Live-breach signing + promotion window** — the single largest deviation from today's "server
-  compromise can't act on a node": a deep compromise of the *running* controller can request a valid
-  signature AND flip the pointer during the breach. KMS stops offline forgery; the out-of-band
-  promotion factor + anti-rollback + instant rollback + audit alarms bound it; the air-gap path is the
-  full escape. **This residual power is the price of a controller and must be accepted consciously.**
+- **Live-breach signing window (now narrowed to routine config only).** With the two-tier model,
+  **membership/trust-list changes are NOT in this window** — they require a human hardware-key
+  signature the controller can't produce, so a headless breach cannot admit a rogue node or redirect
+  trust. The residual is confined to **Tier B routine config**: a live breach could KMS-sign and
+  promote a malicious *routine* recompile (e.g. shift a port/cost) for already-trusted nodes during
+  the breach. KMS stops offline forgery; step-up promote + anti-rollback + instant rollback + audit
+  alarms bound it; the air-gap path is the full escape. Lower stakes than membership and consciously
+  accepted as the price of a one-click routine deploy.
 - Signing-input determinism (must sign canonical rendered bytes, not `computeChecksum`).
 - Split-render private-key leak regression (CI guard).
 - Multi-tenant isolation regression (was structurally impossible; now a per-request authz check).
@@ -112,19 +120,38 @@ pull only their own signed bundle, verify signature + bound header + anti-rollba
 
 ## Resolved decisions (2026-06-07, user-confirmed)
 
-1. **Promotion gate — step-up auth by default, one-click as a warned fallback.** Production promote
-   requires a WebAuthn/FIDO step-up the breached web tier can't satisfy. Because FIDO/WebAuthn is
-   not universally available (headless ops, some orgs/hardware), a tenant MAY fall back to one-click
-   promote — but ONLY behind a **loud, explicitly-acknowledged warning** that it forfeits the
-   "breach ≠ fleet takeover" guarantee (reducing it to "breach = transient fleet control until
-   detected"). When one-click is enabled, compensate with **mandatory loud promote audit-alarms**
-   (anomalous change-set / unexpected promoter) since the cryptographic gate is gone.
+1. **Promotion gate — two-tier, with a hardware-signed membership tier.** Split updates by stakes:
+   - **Tier A — membership / trust-list changes** (admit, evict, rekey a node — i.e. changing *who*
+     is trusted): require a **human hardware-key signature over the change content itself** (a hash
+     of the canonical trust-list bytes + monotonic version). The agent verifies it against the
+     hardware key's public key **pinned at install time** (under the at-deployment-safety
+     assumption). Because the signature is content-bound and the token requires a human touch, a
+     **headless controller breach cannot forge or alter fleet membership at all** — this closes the
+     catastrophic slice of the live-breach window. The hardware key may be a PIV/PGP token (signs
+     content directly) or a WebAuthn/passkey (signs a challenge committing to the content hash).
+     This supersedes a mere step-up *auth* gate: the controller has **no autonomous capability** to
+     change membership.
+   - **Tier B — routine config recompiles** (ports, MTU, babel costs, mimic/xdp): signed by the
+     automated per-tenant KMS key + anti-rollback, with a **WebAuthn/FIDO step-up on promote** by
+     default. Because FIDO is not universal (headless ops, some orgs/hardware), a tenant MAY fall
+     back to one-click promote for Tier B — but ONLY behind a **loud, explicitly-acknowledged
+     warning** that it forfeits breach-containment for routine changes, compensated with
+     **mandatory loud promote audit-alarms**. Tier A never has a one-click fallback.
+
+   Rationale: membership changes are rare and catastrophic if forged (a rogue node admitted, trust
+   redirected) → worth a human hardware touch every time; routine config is frequent and lower-stakes
+   → keep it usable. (User refinement, 2026-06-07: hardware-*sign the content*, don't unlock an OTP —
+   an OTP proves hardware-touch but isn't bound to the update's content and leaves a replayable
+   cleartext secret on the host; a content-bound signature has neither flaw.)
 2. **Existing-fleet migration: zero rotation.** The agent reads the key already in `/etc/wireguard`
    and publishes only the public half (I5 zero-rotation on-ramp inverted). Fleet-wide rotation stays
    available as an explicit operator choice.
-3. **Signing key: per-tenant + trust-set pinning.** Per-tenant Ed25519 key (cross-tenant bundles
-   cryptographically can't verify); agents pin a trust *set* so rotation = add-new / overlap /
-   retire without re-pinning every node.
+3. **Signing keys: per-tenant + trust-set pinning, with TWO roles.** (a) An automated **config-signing
+   key** in per-tenant KMS for Tier-B routine recompiles; (b) a **membership-signing hardware key**
+   (human-held token) for Tier-A trust-list changes. Both are per-tenant (cross-tenant bundles can't
+   verify) and both are pinned as trust *sets* so rotation = add-new / overlap / retire without
+   re-pinning every node. The two roles are distinct keys so the automated key can never authorize a
+   membership change.
 4. **Agent auto-update: opt-in staged + dual-control signing.** Operator-approved canary→fleet
    rollout; release-signing key separate from the config-signing key, under dual control;
    verify-before-update; no silent fleet-wide root-code update. Security updates surfaced prominently
