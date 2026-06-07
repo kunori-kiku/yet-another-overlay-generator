@@ -27,6 +27,7 @@
 SHA-256 of the string representation of the compiled topology, truncated to 16 hex characters.
 Written to manifest and verified by install scripts.
 
-Per-node `checksums.sha256` covers the rendered wireguard/babel/sysctl config files;
-`manifest.json` (including `compiled_at`) is written separately and is not part of the checksum
-set.
+Per-node `checksums.sha256` covers the rendered wireguard/babel/sysctl config files **and
+`install.sh` itself** (D24, Plan 5 / PR #7) — the bytes checksummed are identical for client and
+non-client bundles; `manifest.json` (including `compiled_at`) is written separately and is not
+part of the checksum set.

@@ -1,29 +1,31 @@
 # STATUS
-<!-- regenerated: 2026-06-07 (late) -->
-<!-- by: program execution (plan 10 closure) -->
+<!-- regenerated: 2026-06-07 (post-merge closure) -->
+<!-- by: program closure (audit-remediation-and-allocation-stability) -->
 
 ## Active work
 
-- **Subject:** audit-remediation-and-allocation-stability-2026_06_07 (ALL 10 PLANS IMPLEMENTED — awaiting PR merges)
-- **PR chain (each base = previous):** #3 specs+CI+plan-1.5 ← #4 port ownership ← #5 compile feedback
-  ← #6 naming ← #7 security ← #8 routing ← #9 sticky pins ← #10 render entrypoint ← #11 wire contract ← #12 bridging UX
-- **Current plan:** all in-review; closure (archive to _completed/) after merges
-- **Last shipped:** v1.2.0 (`main` @ d5065ed) — per-peer WireGuard interface model
+- **Subject:** none — between subjects.
+- **Last shipped:** audit-remediation-and-allocation-stability (2026-06-07): the full 10-PR
+  remediation chain (#3–#12) merged into `main` (`d5065ed..fe93788`). All 84 audit findings
+  dispositioned (dossier Appendix B); sticky-pin allocation live with the I1/I2 superset
+  property gate in the perpetual suite; specs frozen under `docs/spec/`.
 
 ## Open questions / blockers
 
-- Remote ultraplan cloud session may land a PR at any time → reconcile via plan-N.5 insertion
-  (do NOT merge it ahead of this program; see outline Decisions log).
-- None else at draft time.
+- Remote ultraplan cloud session never landed its PR. If it ever appears: reconcile via a
+  plan-N.5-style insertion; the frozen `docs/spec/` contracts win conflicts.
 
 ## Next actions
 
-- Merge the PR chain bottom-up (#3 first); each merge auto-retargets the next PR.
-- After merges: `git mv` the subject folder to `implementation_plans/_completed/`, retire
-  subject-scoped tests per their retirement triggers (see plan files).
-- plan-6.5 marker remains open: domain-CIDR aggregate announcement design.
-- Remote ultraplan PR (if it ever lands): reconcile via plan-N.5; this program's frozen specs win.
+- **plan-6.5 (open design marker):** domain-CIDR aggregate announcement — deferred from Plan 6
+  under the byte-identical self-/32 stop-loss. Needs its own design pass before any babel change.
+- Future-subject candidates recorded in the outline's out-of-scope list: route_policies
+  implementation, static-route renderer, additive-apply installer, per-node deploy selector,
+  IPv6 overlay support.
+- Small carried-forward polish (non-blocking reviewer notes, listed in the archived outline §9):
+  RightPanel prefix-match lookup tightening, D71 validator test, deploy.go fallback-branch test.
 
 ## Recently closed subjects (last 3)
 
-- none yet
+- [audit-remediation-and-allocation-stability-2026_06_07](implementation_plans/_completed/audit-remediation-and-allocation-stability-2026_06_07/outline.md)
+  — 10 stacked PRs, 84 findings closed/deferred/refuted, sticky-pin allocation, contract freeze.

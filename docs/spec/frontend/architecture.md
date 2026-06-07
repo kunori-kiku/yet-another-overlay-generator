@@ -53,4 +53,4 @@ reconstruct them. Specifically:
 > **Compliance:** the RightPanel "Compiled values" lookup rebuilds the interface name client-side as
 > `` `wg-${toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15) `` at
 > `frontend/src/components/layout/RightPanel.tsx:622`, so the lookup silently misses for any node name
-> longer than 12 characters. Closed by Plan 4 (PR #4).
+> longer than 12 characters. Closed by Plan 4 (PR #6).

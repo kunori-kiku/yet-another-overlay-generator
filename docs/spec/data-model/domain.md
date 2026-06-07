@@ -28,4 +28,4 @@ on the mode being `babel` — lives in [../compiler/routing-modes.md](../compile
 > **Compliance:** the schema validator accepts `static`, `babel`, and `none` as equally valid and
 > skips the check for an empty value (`internal/validator/schema.go:103-107`), so non-babel and
 > empty modes pass validation but render no working routes (dossier D2/D72). Closed by Plan 6
-> (PR #6).
+> (PR #8).

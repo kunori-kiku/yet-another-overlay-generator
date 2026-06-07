@@ -46,7 +46,7 @@ infer, or write a dial port into an Edge.
 > **Compliance:** the frontend currently stamps `endpoint_port: preferredEndpoint?.port` from
 > `public_endpoints[0]` at edge-draw time (frontend/src/components/canvas/TopologyCanvas.tsx:251),
 > so the backend dials a port nothing listens on (the remote interface binds the auto-allocated
-> `base+offset`, internal/compiler/peers.go:174-191). Closed by Plan 2 (PR #2): the frontend
+> `base+offset`, internal/compiler/peers.go:174-191). Closed by Plan 2 (PR #4): the frontend
 > stamps `endpoint_host` only.
 
 ### `endpoint_port` semantics
@@ -74,7 +74,7 @@ it on every enabled edge that has a non-empty `endpoint_host`:
 > **Compliance:** the write-back currently sets `compiled_port` to the allocated remote listen
 > port unconditionally and never reflects an `endpoint_port` override
 > (internal/compiler/compiler.go:111-126), so for an overridden edge the UI shows a port that
-> differs from the rendered `Endpoint`. Closed by Plan 2 (PR #2).
+> differs from the rendered `Endpoint`. Closed by Plan 2 (PR #4).
 
 ## Field contract
 
@@ -113,5 +113,5 @@ canonical pin identity and the reserve-all-pins-first-then-gap-fill algorithm ar
 > **Compliance:** the Edge model currently has no `pinned_*` fields
 > (internal/model/topology.go:110-139); listen ports, transit pairs and link-locals are derived
 > from positional counters over `topo.Edges` order, so any reorder/delete-re-add shifts them.
-> Added and closed by Plan 7 (PR #7); cross-referenced from
+> Added and closed by Plan 7 (PR #9); cross-referenced from
 > [../compiler/allocation-stability.md](../compiler/allocation-stability.md).

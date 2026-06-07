@@ -41,7 +41,7 @@ divergent name derivations.
 > at `internal/artifacts/export.go:42`), while the deploy renderer looks up and uploads
 > `safeInstallerFileName(node.Name)` at `internal/renderer/deploy.go:47,216,324`. Any node whose raw
 > name differs from its sanitized name (uppercase, space, or special character) is written under one
-> name and sought under another, so it is silently skipped. Closed by Plan 4 (PR #4).
+> name and sought under another, so it is silently skipped. Closed by Plan 4 (PR #6).
 
 ## Export directory naming
 
@@ -61,7 +61,7 @@ paths, or names containing `..`).
 > **Compliance:** path-component safety is enforced by `validateSafeName` at
 > `internal/artifacts/export.go:39,187-204`, but the installer ZIP entry is still keyed on the raw
 > directory name (`internal/api/handler.go:407`) rather than the canonical name. Closed by Plan 4
-> (PR #4).
+> (PR #6).
 
 ## Remote upload path keyed by node ID
 
@@ -81,7 +81,7 @@ node's installer with the other's.
 > **Compliance:** the upload destination is currently `target:/tmp/<installerFile>` where
 > `installerFile` is the sanitized installer name, and the subsequent `sudo bash /tmp/<installerFile>`
 > reads the same name — `internal/renderer/deploy.go:324,325,358-359`. Two nodes whose names sanitize
-> identically share `/tmp/<name>.install.sh`. Closed by Plan 4 (PR #4).
+> identically share `/tmp/<name>.install.sh`. Closed by Plan 4 (PR #6).
 
 ## Uniqueness invariants
 
@@ -101,7 +101,7 @@ locale style used by the rest of the semantic validator.
 > **Compliance:** the semantic validator rejects duplicate node IDs and duplicate overlay IPs
 > (`internal/validator/semantic.go`) but performs none of N1–N3. Colliding `wg-<name>` interface
 > names overwrite each other at the renderer (`internal/compiler/peers.go:492-522`). Closed by Plan 4
-> (PR #4).
+> (PR #6).
 
 ## Deterministic de-collision
 
@@ -142,7 +142,7 @@ longer than 12 characters and MUST NOT be used.
 
 > **Compliance:** the algorithm is implemented at `internal/compiler/peers.go:492-522` and called on
 > the remote node name at `internal/compiler/peers.go:267,332,376`. The contract holds in the backend;
-> the deviation is in the frontend (below). Closed by Plan 4 (PR #4).
+> the deviation is in the frontend (below). Closed by Plan 4 (PR #6).
 
 ### The frontend MUST NOT reimplement this
 
@@ -157,4 +157,4 @@ the frontend cannot faithfully reproduce the hashed long path and will diverge f
 > `frontend/src/components/layout/RightPanel.tsx:622`. This is plain truncation with no hash branch,
 > so the "Compiled values" lookup silently misses for any node name longer than 12 characters. The
 > normative consumption rule is stated in [../frontend/architecture.md](../frontend/architecture.md).
-> Closed by Plan 4 (PR #4).
+> Closed by Plan 4 (PR #6).

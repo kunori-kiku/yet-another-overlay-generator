@@ -88,8 +88,9 @@ attributable compile error **before** any silent collision or out-of-range value
 
 - **Listen ports:** a node's per-peer ports start at its base `listen_port` (default `51820`) and
   the highest assigned port MUST NOT exceed `65535`.
-- **Transit pool:** a `/24` transit CIDR yields at most 126 usable pairs (pair index 0..125);
-  index 127 would hand out the `.255` broadcast and MUST be rejected, not emitted.
+- **Transit pool:** a `/24` transit CIDR yields at most 127 usable pairs (pair index 0..126,
+  drawn from hosts `.1`–`.254`); pair index 127 would require the `.255` broadcast and MUST be
+  rejected, not emitted.
 - **Link-local pool:** `fe80::/10` is effectively unbounded for practical fleet sizes; pairs MUST
   be formatted and parsed in a single consistent radix (see I3 / [pin validation](#pin-validation)).
 

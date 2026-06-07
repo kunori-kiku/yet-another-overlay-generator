@@ -145,26 +145,46 @@ Each milestone = one plan file = one session = one PR. Detail lives in the plan 
 
 ## 9. Closure criteria
 
-- [ ] All 10 PRs merged, CI green on main.
-- [ ] G4 property test + endpoint matrix + injection fixtures + self-/32 gate in perpetual suite.
-- [ ] Every dossier finding ID mapped to: fixed-in-PR-#N | deferred-by-decision-# | superseded.
-- [ ] `docs/spec/` consistent with shipped behavior (final reconciliation pass in Plan 10).
-- [ ] Stale docs (T14) fixed; DEVELOPMENT_SPEC.md stub intact.
-- [ ] STATUS.md refreshed; subject folder moved to `_completed/`.
-- [ ] Subject-scoped tests retired per their retirement triggers.
+- [x] All 10 PRs merged, CI green on main. (Merged bottom-up 2026-06-07, `d5065ed..fe93788`;
+  each PR's stacked CI was green on the exact tree that landed.)
+- [x] G4 property test + endpoint matrix + injection fixtures + self-/32 gate in perpetual suite.
+- [x] Every dossier finding ID mapped to: fixed-in-PR-#N | deferred-by-decision-# | superseded
+  (dossier Appendix B).
+- [x] `docs/spec/` consistent with shipped behavior (final reconciliation pass in Plan 10 +
+  post-merge fixups: PR cross-references corrected to merged PR numbers, transit-pool pair count
+  126→127, router_id compliance note reconciled with refuted-claims appendix, export-bundle
+  checksum prose now includes install.sh).
+- [x] Stale docs (T14) fixed; DEVELOPMENT_SPEC.md stub intact.
+- [x] STATUS.md refreshed; subject folder moved to `_completed/`.
+- [x] Subject-scoped tests retired per their retirement triggers — **disposition: keep all.**
+  Every conditional trigger was "fold/retire if not trivially cheap"; all subject-scoped tests
+  are sub-second Go unit tests, so the cheap-to-keep branch applies. The 10 independent pre-merge
+  reviewers found every suite non-vacuous. Folding test cases between files post-merge would be
+  unverifiable churn (CI runs on PRs only).
+
+Post-merge review notes carried forward (all non-blocking, from the 10-reviewer pre-merge pass):
+- RightPanel compiled-config lookup uses an 8-char cleaned-name prefix match on the long-name
+  branch — display-only, can mismatch on shared prefixes; tighten later.
+- D71 `detectDuplicateEnabledEdges` ships without a dedicated test (disclosed scope decision);
+  add `TestValidateSemantic_DuplicateEnabledEdges` if validator coverage is revisited.
+- D61 domain-aware `shouldRunBabel` fallback branch in deploy.go is correct by inspection but
+  unpinned by a dedicated test.
+- `peers.go` hard-codes `"10.10.0.0/24"` in the client-union loop instead of reusing
+  `defaultTransitCIDR` — value-correct, drift risk only.
+- D52 grep -F filters are coupled to iptables-save normalization (fine for /24 pools today).
 
 ## 10. Plan status table
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-1 | in-review (CI green) | [#3](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/3) | spec freeze + CI |
-| plan-1.5 | done (awaiting CI) | — | D18 pulled forward: react-hooks/refs lint errors blocked all CI |
-| plan-2 | in-review | [#4](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/4) | headline port fix |
-| plan-3 | in-review (CI green) | [#5](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/5) | compile warnings + hardening |
-| plan-4 | in-review (CI green) | [#6](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/6) | internal/naming + collisions |
-| plan-5 | in-review (CI green) | [#7](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/7) | shell-quoting + integrity chain |
-| plan-6 | in-review | [#8](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/8) | routing/babel; D41 domain-CIDR → plan-6.5 marker |
-| plan-7 | in-review | [#9](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/9) | sticky pins; I1/I2 property gate passed first CI contact |
-| plan-8 | in-review | [#10](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/10) | internal/render entrypoint parity |
-| plan-9 | in-review | [#11](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/11) | wire contract + FE state (D18 done in plan-1.5) |
-| plan-10 | in-review | [#12](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/12) | bridging UX + docs sync + D71; closure pending merges |
+| plan-1 | merged | [#3](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/3) | spec freeze + CI |
+| plan-1.5 | merged | (in #3) | D18 pulled forward: react-hooks/refs lint errors blocked all CI |
+| plan-2 | merged | [#4](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/4) | headline port fix |
+| plan-3 | merged | [#5](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/5) | compile warnings + hardening |
+| plan-4 | merged | [#6](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/6) | internal/naming + collisions |
+| plan-5 | merged | [#7](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/7) | shell-quoting + integrity chain |
+| plan-6 | merged | [#8](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/8) | routing/babel; D41 domain-CIDR → plan-6.5 marker stays open |
+| plan-7 | merged | [#9](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/9) | sticky pins; I1/I2 property gate passed first CI contact |
+| plan-8 | merged | [#10](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/10) | internal/render entrypoint parity |
+| plan-9 | merged | [#11](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/11) | wire contract + FE state (D18 done in plan-1.5) |
+| plan-10 | merged | [#12](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/12) | bridging UX + docs sync + D71; subject closed 2026-06-07 |

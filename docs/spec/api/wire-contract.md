@@ -86,7 +86,7 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `overlay_ip` | `OverlayIP` | `overlay_ip` | read-back | ✅ | compiler-allocated, preserved across recompile |
 | `listen_port` | `ListenPort` | `listen_port` | yes | ✅ | base port; per-peer ports derived by compiler |
 | `mtu` | `MTU` | `mtu` | yes | ✅ | unvalidated (D64) |
-| `router_id` | `RouterID` | — | yes (form) | ⚠️ | present in form; absent from TS `Node` interface |
+| `router_id` | `RouterID` | — | none | ⚠️ | absent from TS interface; survives via untyped import passthrough |
 | `capabilities` | `Capabilities` | `capabilities` | derived | ⚠️ | FE-stamped caps can contradict role inference (D69/D54) |
 | `fixed_private_key` | `FixedPrivateKey` | `fixed_private_key` | yes | ✅ | live-key capture path (Decisions #7) |
 | `wireguard_private_key` | `WireGuardPrivateKey` | `wireguard_private_key` | yes | see key-blanking | |
@@ -99,10 +99,11 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `ssh_user` | `SSHUser` | `ssh_user` | yes | ✅ | validated nowhere (D44) |
 | `ssh_key_path` | `SSHKeyPath` | `ssh_key_path` | yes | ✅ | |
 
-> **Compliance:** `Node.router_id` exists in the Go model (`topology.go:68`) and the node form, but
-> is absent from the TS `Node` interface (`topology.ts:28-50`); the field therefore survives only
-> through untyped store writes and is not part of the declared contract. The TS interface MUST add
-> `router_id?: string`. Closed by Plan 9.
+> **Compliance:** `Node.router_id` exists in the Go model (`topology.go:68`) but has no frontend
+> editor and is absent from the TS `Node` interface (`topology.ts`); imported topologies retain it
+> through untyped store writes, so it round-trips (the "unreachable from frontend" claim is refuted
+> — dossier Appendix A). Backend format validation shipped in Plan 9 (PR #11). Declaring
+> `router_id?: string` in the TS interface is optional future hardening, not required.
 
 ### Edge
 

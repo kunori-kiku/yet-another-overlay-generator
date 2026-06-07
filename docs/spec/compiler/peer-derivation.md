@@ -70,7 +70,7 @@ without any operator action beyond marking each node publicly reachable.
 > **Compliance:** the reverse peer currently emits an `Endpoint` only when an explicit reverse
 > edge with a non-empty host exists (internal/compiler/peers.go:378-396); there is no
 > `fromNode.public_endpoints` fallback, so one drawn edge yields an asymmetric config where only
-> the drag-target can dial (audit UX-2). Closed by Plan 2 (PR #2). The forward rule itself
+> the drag-target can dial (audit UX-2). Closed by Plan 2 (PR #4). The forward rule itself
 > matches this spec (internal/compiler/peers.go:290-306); its only defect is being fed a bogus
 > override by the frontend (see [../data-model/edge.md](../data-model/edge.md#the-backend-is-the-sole-port-authority)).
 

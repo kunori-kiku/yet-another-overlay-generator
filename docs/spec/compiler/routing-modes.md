@@ -35,7 +35,7 @@ mode suppressed the routing daemon while the compile still reported success.
 > (`internal/validator/schema.go:103-107` skips the check when `domain.RoutingMode != ""` is
 > false), and `shouldRunBabel` treats any value other than the literal `"babel"` — including
 > `""` — as "do not run Babel" (`internal/renderer/babel.go:160-169`). The combination produces a
-> green compile with zero routes (dossier D2). Closed by Plan 6 (PR #6).
+> green compile with zero routes (dossier D2). Closed by Plan 6 (PR #8).
 
 ### Rejection of unimplemented modes
 
@@ -48,7 +48,7 @@ resulting value against the supported set.
 
 > **Compliance:** the schema validator currently lists `static`, `babel`, and `none` as equally
 > valid (`internal/validator/schema.go:103`), so `static`/`none` pass validation but render no
-> routing artifacts (dossier D72). Closed by Plan 6 (PR #6).
+> routing artifacts (dossier D72). Closed by Plan 6 (PR #8).
 
 A future subject MAY implement `static` (kernel-route rendering) and/or `none`; until then they are
 reserved. This mirrors the treatment of the reserved `route_policies` field
@@ -73,7 +73,7 @@ cryptokey routes).
 > (`internal/renderer/wireguard.go:59`) regardless of `routing_mode`, so a non-babel mode produces
 > tunnels that carry no routes from any source (dossier D2). The client `wg0` template does not set
 > `Table = off` and relies on cryptokey routing instead — see
-> [../artifacts/wireguard.md](../artifacts/wireguard.md). Closed by Plan 6 (PR #6).
+> [../artifacts/wireguard.md](../artifacts/wireguard.md). Closed by Plan 6 (PR #8).
 
 ## Kernel-route prerequisite for announced prefixes
 
@@ -108,7 +108,7 @@ gateway default route are **dead announcements** — rendered but never routed.
 > route for the aggregate, the LAN prefixes, or the default. Per the babeld manual,
 > `redistribute local` matches connected/local routes only, so these rules match nothing: gateway
 > internet egress (dossier D40) and domain-CIDR / extra-prefix announcement (dossier D41) are
-> currently dead. Closed by Plan 6 (PR #6).
+> currently dead. Closed by Plan 6 (PR #8).
 
 ### Target mechanism: anchor routes in the install script
 
@@ -154,7 +154,7 @@ carried by the per-interface client-`/32` redistribution already described above
 
 > **Compliance:** the interface loop iterates over all derived peers without filtering
 > (`internal/renderer/babel.go:84-92`), so a router's `babeld.conf` declares the client tunnel as a
-> peering interface (dossier D73). Closed by Plan 6 (PR #6).
+> peering interface (dossier D73). Closed by Plan 6 (PR #8).
 
 ### Edge priority/weight MUST map to per-interface rxcost
 
@@ -168,7 +168,7 @@ token.
 
 > **Compliance:** the interface loop uses only `preset.DefaultCost` and never reads
 > `Edge.Priority`/`Edge.Weight` (`internal/renderer/babel.go:84-90`), so those fields have no
-> effect (dossier D63). Closed by Plan 6 (PR #6).
+> effect (dossier D63). Closed by Plan 6 (PR #8).
 
 ## Role-preset timers and control port
 
@@ -190,4 +190,4 @@ per-role tuning is reachable.
 > **Compliance:** the template hardcodes `local-port 33123`, `hello-interval 4`, and
 > `update-interval 16` (`internal/renderer/babel.go:44,56`), while the preset's `HelloInterval` and
 > `UpdateInterval` fields are present but never read (`internal/renderer/babel_presets.go:8-12`,
-> all roles return `0`) (dossier D78). Closed by Plan 6 (PR #6).
+> all roles return `0`) (dossier D78). Closed by Plan 6 (PR #8).
