@@ -55,7 +55,9 @@ docs/spec/
 ├── controller/
 │   ├── signing.md                 # Canonical bundle serialization + Ed25519 bundle signing
 │   ├── key-custody.md             # Zero-knowledge key custody (AgentHeld split-render)
-│   └── agent.md                   # Node agent (keygen→pull→verify→apply via install.sh splice)
+│   ├── agent.md                   # Node agent (keygen→pull→verify→apply via install.sh splice)
+│   └── persistence.md             # Controller Store interface, MemStore/FileStore, tenant
+│                                  #   chokepoint, generation/stage-promote, audit hash chain
 └── glossary.md                    # Terminology
 ```
 
