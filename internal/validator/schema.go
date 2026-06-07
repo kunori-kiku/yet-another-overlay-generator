@@ -3,10 +3,22 @@ package validator
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
+
+// nodeNameCharset 约束节点名称的合法字符集（D15 的纵深防御）。
+// 节点名称会被派生为 WireGuard 接口名，并被插值进以 root 身份执行的安装脚本，
+// 因此必须排除引号、反引号、美元符、分号等 shell 元字符以杜绝命令注入。
+// 仅允许：字母、数字、空格、点、下划线、连字符。
+var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
+
+// sshFieldCharset 约束 SSH 连接字段（ssh_host / ssh_alias / ssh_user）的合法字符集（D44）。
+// 这些字段会被插值进操作员本机执行的 bash 与 PowerShell 部署脚本，
+// 因此必须排除空白字符与一切 shell 元字符。仅允许：字母、数字、点、下划线、冒号、@、连字符。
+var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 
 // ValidationError 
 type ValidationError struct {
@@ -151,6 +163,11 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		}
 		if node.Name == "" {
 			result.AddError(prefix+".name", "")
+		} else if !nodeNameCharset.MatchString(node.Name) {
+			// 节点名称字符集校验（D15 纵深防御）：名称会派生 WireGuard 接口名，
+			// 并被插值进以 root 身份执行的安装脚本，禁止引号、反引号、$、; 等 shell 元字符。
+			result.AddError(prefix+".name",
+				fmt.Sprintf("节点名称 %q 含有非法字符：仅允许字母、数字、空格、点(.)、下划线(_)、连字符(-)，禁止引号、反引号、$、; 等 shell 元字符", node.Name))
 		}
 		if node.DomainID == "" {
 			result.AddError(prefix+".domain_id", " Domain")
@@ -182,10 +199,25 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// ListenPort 
+		// ListenPort
 		if node.ListenPort < 0 || node.ListenPort > 65535 {
 			result.AddError(prefix+".listen_port",
 				fmt.Sprintf(": %d", node.ListenPort))
+		}
+
+		// SSH 字段字符集校验（D44）：非空时各字段都会被插值进操作员本机执行的
+		// bash 与 PowerShell 部署脚本，必须排除空白与一切 shell 元字符。
+		if node.SSHHost != "" && !sshFieldCharset.MatchString(node.SSHHost) {
+			result.AddError(prefix+".ssh_host",
+				fmt.Sprintf("ssh_host %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHHost))
+		}
+		if node.SSHAlias != "" && !sshFieldCharset.MatchString(node.SSHAlias) {
+			result.AddError(prefix+".ssh_alias",
+				fmt.Sprintf("ssh_alias %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHAlias))
+		}
+		if node.SSHUser != "" && !sshFieldCharset.MatchString(node.SSHUser) {
+			result.AddError(prefix+".ssh_user",
+				fmt.Sprintf("ssh_user %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHUser))
 		}
 	}
 }

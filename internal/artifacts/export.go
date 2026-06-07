@@ -114,6 +114,13 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
 			checksumLines = append(checksumLines, fmt.Sprintf("%x  sysctl/99-overlay.conf", sha256.Sum256([]byte(sysctlConf))))
 		}
+		// install.sh 是以 root 执行的信任锚点，此前却是唯一未被 checksums.sha256 覆盖的产物
+		// （审计项 D24）。它必须先于此处被完整写出（见上方安装脚本写入分支），再对同一份字节
+		// 计算 SHA-256，确保校验值与落盘内容一致。manifest.json 仍然刻意排除：它携带 compiled_at
+		// 等编译期时间戳，不属于完整性校验范围（详见 docs/spec/security/security.md）。
+		if script, ok := result.InstallScripts[node.ID]; ok {
+			checksumLines = append(checksumLines, fmt.Sprintf("%x  install.sh", sha256.Sum256([]byte(script))))
+		}
 
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
 		if err := os.WriteFile(checksumsPath, []byte(strings.Join(checksumLines, "\n")), 0644); err != nil {
