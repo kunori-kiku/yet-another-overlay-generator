@@ -96,14 +96,36 @@ const defaultProject: Project = {
   version: '0.1.0',
 };
 
+// UX-3：新工作区预置一个默认网络域，使“连接两台公网服务器”的首位用户无需先理解
+// CIDR/分配模式就能立即添加节点（去掉了“先建域”的不透明前置门槛）。
+// CIDR 选用 10.20.0.0/24 —— 刻意避开 10.10.0.0/24（transit 地址池），否则会与
+// 每条链路的 transit IP 冲突。transit_cidr 留空，让后端沿用其 10.10.0.0/24 默认值。
+// 每次调用返回全新对象/数组，避免共享引用被后续状态变更原地改写。
+const defaultDomainId = 'domain-default';
+
+function makeDefaultDomains(): Domain[] {
+  return [
+    {
+      id: defaultDomainId,
+      name: 'overlay',
+      cidr: '10.20.0.0/24',
+      allocation_mode: 'auto',
+      routing_mode: 'babel',
+    },
+  ];
+}
+
 const defaultLanguage: UILanguage = detectSystemLanguage();
 
 export const useTopologyStore = create<TopologyState>()(
   persist(
     (set, get) => ({
       // 初始数据
+      // UX-3：种入默认网络域（见 makeDefaultDomains 注释）。已持久化的工作区在 rehydrate
+      // 时会用 localStorage 中的 domains 覆盖此初始值（persist 默认浅合并 + partialize 持久化
+      // domains），因此既有项目不受影响，只有全新工作区才会看到这个默认域。
       project: { ...defaultProject },
-      domains: [],
+      domains: makeDefaultDomains(),
       nodes: [],
       edges: [],
       allocSchemaVersion: 0,
@@ -335,7 +357,9 @@ export const useTopologyStore = create<TopologyState>()(
   reset: () =>
     set({
       project: { ...defaultProject },
-      domains: [],
+      // UX-3：与初始状态保持一致 —— 重置后仍预置默认网络域，避免把用户重新丢回
+      // “没有域、添加节点按钮被禁用”的死胡同。
+      domains: makeDefaultDomains(),
       nodes: [],
       edges: [],
       allocSchemaVersion: 0,
@@ -351,7 +375,8 @@ export const useTopologyStore = create<TopologyState>()(
   flushWorkspace: () =>
     set((state) => ({
       project: { ...defaultProject },
-      domains: [],
+      // UX-3：与 reset / 初始状态保持一致，预置默认网络域。
+      domains: makeDefaultDomains(),
       nodes: [],
       edges: [],
       allocSchemaVersion: 0,

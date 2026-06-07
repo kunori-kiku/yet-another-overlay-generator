@@ -1,5 +1,7 @@
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
+import { useTopologyStore } from '../../stores/topologyStore';
+import { txt } from '../../i18n';
 
 const roleColors: Record<string, string> = {
   peer: 'border-green-500 bg-green-900/50',
@@ -7,6 +9,23 @@ const roleColors: Record<string, string> = {
   relay: 'border-yellow-500 bg-yellow-900/50',
   gateway: 'border-purple-500 bg-purple-900/50',
   client: 'border-cyan-500 bg-cyan-900/50',
+};
+
+// Pre-compile fallback connection handles reuse the node's role color (above) so the
+// connection affordance is visible and role-keyed BEFORE the first compile — the rich
+// per-interface handles only exist once compileResult is present. Larger than the old
+// 8px gray dots, with a hover-grow transition; the `title` carries the drag hint tooltip.
+const fallbackHandleClassBase =
+  '!w-3.5 !h-3.5 !border-2 transition-all duration-150 hover:!w-4 hover:!h-4';
+
+// react-flow's `.react-flow__handle` ships a default background; reuse roleColors but with
+// the `!` important prefix (as the old `!bg-gray-400` did) so the role tint actually wins.
+const roleHandleColorClass: Record<string, string> = {
+  peer: '!border-green-500 !bg-green-500',
+  router: '!border-blue-500 !bg-blue-500',
+  relay: '!border-yellow-500 !bg-yellow-500',
+  gateway: '!border-purple-500 !bg-purple-500',
+  client: '!border-cyan-500 !bg-cyan-500',
 };
 
 const roleIcons: Record<string, string> = {
@@ -45,11 +64,15 @@ interface CustomNodeData {
 }
 
 export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeData }) {
+  const language = useTopologyStore((state) => state.language);
   const role = data.role || 'peer';
   const colorClass = roleColors[role] || roleColors.peer;
   const icon = roleIcons[role] || '💻';
   const interfaces: IfaceInfo[] = (data.interfaces as IfaceInfo[]) || [];
   const hasInterfaces = interfaces.length > 0;
+  // Role-keyed fallback handle color (same palette as roleColors) + sizing/hover-grow class.
+  const fallbackHandleClass = `${roleHandleColorClass[role] || roleHandleColorClass.peer} ${fallbackHandleClassBase}`;
+  const dragHint = txt(language, '拖拽以连接', 'drag to connect');
 
   return (
     <>
@@ -75,7 +98,12 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
           );
         })
       ) : (
-        <Handle type="target" position={Position.Top} className="!bg-gray-400 !w-2 !h-2" />
+        <Handle
+          type="target"
+          position={Position.Top}
+          title={dragHint}
+          className={fallbackHandleClass}
+        />
       )}
 
       <div
@@ -133,7 +161,12 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
           );
         })
       ) : (
-        <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-2 !h-2" />
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          title={dragHint}
+          className={fallbackHandleClass}
+        />
       )}
     </>
   );

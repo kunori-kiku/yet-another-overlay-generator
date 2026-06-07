@@ -160,11 +160,11 @@ Each milestone = one plan file = one session = one PR. Detail lives in the plan 
 | plan-1 | in-review (CI green) | [#3](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/3) | spec freeze + CI |
 | plan-1.5 | done (awaiting CI) | — | D18 pulled forward: react-hooks/refs lint errors blocked all CI |
 | plan-2 | in-review | [#4](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/4) | headline port fix |
-| plan-3 | in-review | [#5](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/5) | compile warnings + hardening — CI green |
-| plan-4 | in-review | [#6](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/6) | internal/naming + collisions — CI green |
-| plan-5 | in-review | [#7](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/7) | shell-quoting + integrity chain |
-| plan-6 | pending | — | |
-| plan-7 | pending | — | |
-| plan-8 | pending | — | |
-| plan-9 | pending | — | |
-| plan-10 | pending | — | |
+| plan-3 | in-review (CI green) | [#5](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/5) | compile warnings + hardening |
+| plan-4 | in-review (CI green) | [#6](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/6) | internal/naming + collisions |
+| plan-5 | in-review (CI green) | [#7](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/7) | shell-quoting + integrity chain |
+| plan-6 | in-review | [#8](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/8) | routing/babel; D41 domain-CIDR → plan-6.5 marker |
+| plan-7 | in-review | [#9](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/9) | sticky pins; I1/I2 property gate passed first CI contact |
+| plan-8 | in-review | [#10](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/10) | internal/render entrypoint parity |
+| plan-9 | in-review | [#11](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/11) | wire contract + FE state (D18 done in plan-1.5) |
+| plan-10 | in-review | [#12](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/12) | bridging UX + docs sync + D71; closure pending merges |

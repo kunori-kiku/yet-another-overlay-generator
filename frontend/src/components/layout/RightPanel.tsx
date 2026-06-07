@@ -109,6 +109,34 @@ export function RightPanel() {
     }
   };
 
+  // extra_prefixes 是纯字符串数组（无稳定 id），因此按下标增删改，
+  // 与上面的公网地址列表（对象数组、按 id 操作）形成对照。
+  const addExtraPrefix = (nodeId: string) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    updateNode(nodeId, {
+      extra_prefixes: [...(node.extra_prefixes || []), ''],
+    });
+  };
+
+  const updateExtraPrefix = (nodeId: string, index: number, value: string) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    updateNode(nodeId, {
+      extra_prefixes: (node.extra_prefixes || []).map((prefix, i) =>
+        i === index ? value : prefix
+      ),
+    });
+  };
+
+  const removeExtraPrefix = (nodeId: string, index: number) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    updateNode(nodeId, {
+      extra_prefixes: (node.extra_prefixes || []).filter((_, i) => i !== index),
+    });
+  };
+
   return (
     <div className="p-3 space-y-4">
       {/* 操作按钮 */}
@@ -408,7 +436,7 @@ export function RightPanel() {
             {selectedNode.role !== 'client' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs text-gray-400">{txt(language, '公网可达地址映射 (IP:端口)', 'Public endpoint mappings (IP:Port)')}</label>
+                <label className="text-xs text-gray-400">{txt(language, '公网地址（其他节点如何访问）', 'Public addresses (how peers reach this node)')}</label>
                 <button
                   onClick={() => addNodeEndpoint(selectedNode.id)}
                   className="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500"
@@ -417,7 +445,7 @@ export function RightPanel() {
                 </button>
               </div>
               {(selectedNode.public_endpoints || []).length === 0 && (
-                <p className="text-xs text-gray-500 italic">{txt(language, '尚未配置映射地址', 'No endpoint mappings configured')}</p>
+                <p className="text-xs text-gray-500 italic">{txt(language, '尚未配置公网地址', 'No public addresses configured')}</p>
               )}
               {(selectedNode.public_endpoints || []).map((ep) => (
                 <div key={ep.id} className="p-2 bg-gray-700 rounded space-y-1">
@@ -460,6 +488,59 @@ export function RightPanel() {
                       {txt(language, '删除', 'Delete')}
                     </button>
                   </div>
+                </div>
+              ))}
+            </div>
+            )}
+            {/* 对外通告的局域网网段（extra_prefixes）。角色门控严格对应 roles.go 的
+                BabelAnnounce.AnnounceExtraPrefixes：gateway 恒为 true（始终展示，无提示）；
+                router/relay 在设置后才通告（展示并附提示）；peer/client 为 no-op（不展示）。 */}
+            {(selectedNode.role === 'gateway' ||
+              selectedNode.role === 'router' ||
+              selectedNode.role === 'relay') && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-gray-400">{txt(language, '对外通告的局域网网段', 'Advertised LAN prefixes')}</label>
+                <button
+                  onClick={() => addExtraPrefix(selectedNode.id)}
+                  className="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500"
+                >
+                  + {txt(language, '添加', 'Add')}
+                </button>
+              </div>
+              {(selectedNode.role === 'router' || selectedNode.role === 'relay') && (
+                <p className="text-[10px] text-gray-500">
+                  {txt(
+                    language,
+                    '设置后该节点会通告这些网段（未设置则不通告）',
+                    'When set, this node announces these prefixes (no-op if left empty)',
+                  )}
+                </p>
+              )}
+              {(selectedNode.extra_prefixes || []).length === 0 && (
+                <p className="text-xs text-gray-500 italic">{txt(language, '尚未配置局域网网段', 'No LAN prefixes configured')}</p>
+              )}
+              {(selectedNode.extra_prefixes || []).map((prefix, index) => (
+                <div key={`extra-prefix-${index}`} className="flex gap-1">
+                  <input
+                    type="text"
+                    value={prefix}
+                    onChange={(e) => updateExtraPrefix(selectedNode.id, index, e.target.value)}
+                    pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$"
+                    title={txt(
+                      language,
+                      'IPv4 CIDR 格式，例: 192.168.1.0/24',
+                      'IPv4 CIDR format, e.g. 192.168.1.0/24',
+                    )}
+                    placeholder="192.168.1.0/24"
+                    className="flex-1 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
+                  />
+                  <button
+                    onClick={() => removeExtraPrefix(selectedNode.id, index)}
+                    className="px-2 py-1 text-xs bg-red-600 hover:bg-red-500 rounded"
+                  >
+                    {txt(language, '删除', 'Delete')}
+                  </button>
                 </div>
               ))}
             </div>

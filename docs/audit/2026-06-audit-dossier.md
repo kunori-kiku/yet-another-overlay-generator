@@ -278,3 +278,28 @@ refuted framing had wrong mechanism), "router_id unreachable from frontend", "Zu
 lacks version/migrate", "uninstall/deploy.go SNAT hardcode variants" (only the install-path
 hardcodes D38/D39 are real), "babeld IPv6 redistribution gap", ZIP ':0' dial-target, and the
 RightPanel '__manual__' no-op. Full list in the deep-audit output.
+
+---
+
+## Appendix B — Disposition of every finding (closure record, 2026-06-07)
+
+Program: `implementation_plans/audit-remediation-and-allocation-stability-2026_06_07/`.
+Stacked PR chain: #3 (specs+CI+plan-1.5) ← #4 ← #5 ← #6 ← #7 ← #8 ← #9 ← #10 ← #11 ← #12.
+
+| Disposition | Findings |
+|---|---|
+| **PR #3** (plan-1.5 insertions) | D18 (pulled forward from Plan 9; ESLint independently flagged it) |
+| **PR #4** — port ownership | D1, D8, D9, D19, D21, D22, D23, D51, D57, UX-2 |
+| **PR #5** — compile feedback + hardening | UX-1, D4, D20, D33, D34, D35, D42, D56, D60 (+ CJK string restoration) |
+| **PR #6** — naming & deploy identity | D3, D5, D13, D14, D31, D32, D36, D61 (+ FE interface-name reconstruction spec-gap) |
+| **PR #7** — security & integrity | D7, D11, D15, D16, D24, D25, D43, D44, D47 |
+| **PR #8** — routing & Babel | D2, D30, D40, D49, D50, D63, D72, D73, D78; **D41 narrowed**: extra_prefixes + gateway default fixed via non-local `redistribute ip`; domain-CIDR aggregate **deferred to plan-6.5** (no kernel route exists; pre-declared stop-loss) |
+| **PR #9** — sticky-pin allocation | T13 (growth matrix), D12, D38, D39, D48, D70; invariants I1–I10 implemented, G4 property gate perpetual |
+| **PR #10** — shared entrypoint + install robustness | D6, D27, D28, D29, D52, D53, D59, D76 |
+| **PR #11** — wire contract + frontend state | D10, D17, D26, D37, D45, D46, D54, D55, D58, D62, D64, D65, D66, D67, D68, D69, D74, D75, D77 |
+| **PR #12** — bridging UX + docs sync | UX-3, UX-4, UX-5, UX-6, T14, D71 |
+| **Deferred by decision** | route_policies implementation (Decision 2 — reserved, validator rejects non-empty); domain-CIDR aggregate announcement (plan-6.5 marker); additive-apply installer + per-node deploy selector + IPv6 overlay (Decision 10 — future subjects) |
+| **Refuted (never bugs)** | the 13 claims in Appendix A — no action taken, by design |
+
+Every confirmed finding D1–D78 and UX-1–6 is accounted for above; none silently dropped
+(closure criterion 3 of the outline).

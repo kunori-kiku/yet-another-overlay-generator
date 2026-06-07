@@ -7,8 +7,8 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Visual Topology Builder:** Drag-and-drop React Flow interface to design your network nodes and connect their links. Color-coded per-peer interface handles appear after compilation.
 - **Per-Peer WireGuard Interfaces:** Each peer connection gets a dedicated WireGuard interface with an independently allocated listen port, compatible with Babel dynamic routing.
 - **Smart Validation:** Early-fail checks catch logical errors such as missing public IPs, broken NAT requirements, and dangling isolated nodes.
-- **Automatic Cryptographic Key Management:** Generates and distributes secure `wg` keys for your active topology automatically (during compilation).
-- **Split Endpoint Configuration:** Endpoint IP (from target node's public addresses) and Port (from compiler-allocated WireGuard interface) are configured independently, with auto-fill support.
+- **Persistent Cryptographic Key Management:** Generates `wg` keys for new nodes on first compile and persists them back onto the topology, so subsequent recompiles reuse the same keys. Key rotation is an explicit operator action (see [`docs/spec/data-model/node.md`](docs/spec/data-model/node.md)).
+- **Compiler-Owned Ports:** The compiler is the sole authority for WireGuard listen ports. `compiled_port` is read-only output; `endpoint_port` is an explicit operator NAT/port-forward override only. Allocations are pinned per link, so values stay stable across recompiles when you add nodes (see [`docs/spec/data-model/edge.md`](docs/spec/data-model/edge.md) and [`docs/spec/compiler/allocation-stability.md`](docs/spec/compiler/allocation-stability.md)).
 - **SSH Auto-Deploy:** Configure SSH connection details per node, then use the generated `deploy-all.sh` / `deploy-all.ps1` scripts to deploy to all nodes via SSH in one command.
 - **Comprehensive Legacy Cleanup:** Install scripts automatically detect and remove all stale WireGuard interfaces and configs (not just `wg0`), ensuring clean upgrades.
 - **Offline Configuration Bundles:** One-click deployment bundle generation — download portable `.zip` archives containing safe Bash installation scripts, sysctl modifications, Babel daemons, and WireGuard interfaces.
@@ -62,12 +62,11 @@ Visit `http://localhost:5173` in your browser.
 ## Basic Usage Guide
 
 1. **Add Domains:** Open the left panel and add a logical IP Domain (e.g., `10.10.0.0/24`). Set allocation mode to Automatic.
-2. **Add Nodes:** Create nodes via the left panel. Define their Roles (Peer, Router, Relay, Gateway) and capabilities (e.g., `Publicly Reachable` / `Can Forward`).
+2. **Add Nodes:** Create nodes via the left panel. Define their Roles (Peer, Router, Relay, Gateway, Client) and capabilities (e.g., `Publicly Reachable` / `Can Forward`).
 3. **Configure SSH (optional):** Expand the SSH Connection section in node properties to set SSH alias or host/port/user/key for auto-deploy.
-4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown) and port separately.
-5. **Compile:** Hit `Compile` to allocate IPs, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles.
-6. **Auto-fill Ports:** After compilation, click the `Auto:<port>` button on each edge to fill in the compiler-allocated port.
-7. **Export & Deploy:** Hit `Export` to download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
+4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown). Leave the port at `0` so the compiler allocates it; only set `endpoint_port` when you need an explicit NAT/port-forward override.
+5. **Compile:** Hit `Compile` to allocate IPs and ports, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
+6. **Export & Deploy:** Hit `Export` to download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
 
 ## Documentation
 

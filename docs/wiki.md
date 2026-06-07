@@ -67,10 +67,16 @@ A Node represents a machine (cloud VM, bare-metal server, container host).
 | Role | Forwarding | Relay | Babel Announces | Typical Use |
 |------|-----------|-------|-----------------|-------------|
 | `peer` | No | No | Own IP only | End-user node |
-| `router` | Yes | No | Own IP + Domain CIDR | Backbone forwarding node |
-| `relay` | Yes | Yes | Own IP + Domain CIDR (cost 96) | NAT traversal relay |
+| `router` | Yes | No | Own IP + Domain CIDR + extra prefixes (when set) | Backbone forwarding node |
+| `relay` | Yes | Yes | Own IP + Domain CIDR + extra prefixes (when set), cost 96 | NAT traversal relay |
 | `gateway` | Yes | No | Own IP + Domain CIDR + extra prefixes + default route | Bridge to external networks |
 | `client` | No | No | None (no Babel) | Lightweight endpoint (phone, laptop) |
+
+> **Extra prefixes:** `router` and `relay` announce their `extra_prefixes` whenever the field is
+> non-empty, not only `gateway` (`internal/compiler/roles.go`). Extra prefixes and the gateway
+> default route are announced via the kernel-route mechanism (`redistribute ip <prefix> allow`,
+> matching a real connected/WAN kernel route) rather than `redistribute local`; see
+> [spec/roles/roles.md](spec/roles/roles.md) and the audit dossier (D40/D41) for the rationale.
 
 > **Client role:** Client is the lightest role, intended for devices that don't participate in dynamic routing. A client uses a single `wg0` interface to connect to one router/relay/gateway node. It does not run Babel, does not use `dummy0`, and does not use the per-peer interface model. Client reachability is achieved through kernel route injection on the router side (`PostUp = ip route add <client_ip>/32 dev %i`) + Babel redistribution.
 
@@ -102,12 +108,19 @@ A directed edge `A → B` means: **A actively connects to B**.
 |-------|-------------|
 | Type | `direct` / `public-endpoint` / `relay-path` / `candidate` |
 | Endpoint IP | Target public IP or hostname; pick from target node's public endpoints or enter manually |
-| Endpoint Port | Target WireGuard interface listen port; after compilation, auto-fill with the allocated port |
+| Endpoint Port | Operator NAT/port-forward override: `0` (default) = compiler auto-allocates; nonzero = the external port the from-side dials verbatim |
+| Compiled Port | Read-only: the port the from-side actually dials, displayed under the port field after compilation |
 | Transport | `udp` / `tcp` metadata |
 | Priority / Weight | Path preference weights |
 | Is Enabled | Whether this edge participates in compilation |
 
-> **Split IP/Port Design:** Endpoint IP comes from the target node's public reachable addresses; Endpoint Port comes from the compiler-allocated WireGuard interface listen port for that peer connection. They are configured independently. After compilation, an `Auto:<port>` button appears next to the port field for one-click fill.
+> **Port ownership:** The compiler is the sole authority for WireGuard listen ports. `endpoint_port`
+> is *not* a copy of the allocated port and there is no "Auto-fill" button — leave it at `0` and the
+> compiler dials the remote interface's auto-allocated listen port, writing the result to the
+> read-only `compiled_port`. Set `endpoint_port` to a nonzero value only as an explicit NAT /
+> port-forward override (e.g. a router DNATs external `:51900` → the node's internal `:51820`); the
+> override is honored verbatim and preserved across recompiles. The full authority contract is in
+> [spec/data-model/edge.md](spec/data-model/edge.md).
 
 ### 2.4 Two-Layer Address Separation
 
@@ -115,7 +128,7 @@ The system uses two independent IP address pools to avoid link addresses conflic
 
 | | Overlay IP (Business Address) | Transit IP (Link Address) |
 |---|---|---|
-| Pool | Defined per Domain (e.g. `10.11.0.0/24`) | `10.10.0.0/24` (shared globally) |
+| Pool | Defined per Domain CIDR (e.g. `10.11.0.0/24`) | Per-domain `transit_cidr` (default `10.10.0.0/24`) |
 | Assigned to | `dummy0` interface | Each per-peer WireGuard interface |
 | Purpose | Stable node identity (DNS, apps, monitoring) | Tunnel point-to-point addressing |
 | Babel announces | Yes, via `redistribute local` | No, internal use only |
@@ -148,7 +161,14 @@ Each interface features:
 - `Table = off` (prevents wg-quick from adding routes; Babel manages routing)
 - `AllowedIPs = 0.0.0.0/0, ::/0` (safe with one peer per interface)
 
-**Interface naming:** `wg-<peer-name>`, lowercase, special chars replaced with `-`, truncated to Linux 15-char limit.
+**Interface naming:** `wg-<peer-name>`, lowercase, with every character outside `[a-z0-9-]`
+(including `_`) replaced by `-`. The Linux kernel caps interface names at 15 characters, so the
+algorithm has two paths: if `wg-<clean-name>` is at most 15 characters it is used verbatim;
+otherwise the long path returns `wg-` + the first 8 cleaned characters + the first 4 hex characters
+of `sha256(peer-name)` (3 + 8 + 4 = 15 chars). The hash suffix prevents two distinct long names
+that share a prefix from truncating to the same interface. The backend is the sole authority for
+this name (`internal/naming`); the frontend must consume the compiled name, never re-derive it. Full
+algorithm in [spec/artifacts/naming.md](spec/artifacts/naming.md).
 
 ---
 
@@ -162,7 +182,7 @@ Standard workflow:
 2. **Create Nodes** — Set name, platform, role, assign to domain
 3. **Add Public Endpoints** (optional) — Configure Host:Port for nodes with public ingress
 4. **Configure SSH** (optional) — Add SSH connection details for auto-deploy (collapsed by default)
-5. **Draw Edges** — Drag from source to target node on canvas; set endpoint IP and port
+5. **Draw Edges** — Drag from source to target node on canvas; set the endpoint IP (leave the port at `0` unless you need a NAT override)
 6. **Validate** — Check topology completeness and semantic errors
 7. **Compile** — Generate all configuration files
 8. **Export** — Download per-node deployment bundles
@@ -192,10 +212,11 @@ Standard workflow:
 | Hostname | No | Actual hostname or domain label |
 | Platform | Yes | `debian` / `ubuntu` |
 | Domain | Yes | Parent domain |
-| Role | Yes | `peer` / `router` / `relay` / `gateway` |
+| Role | Yes | `peer` / `router` / `relay` / `gateway` / `client` |
 | Overlay IP | No | Manual override; otherwise auto-assigned |
 | Listen Port | No | WireGuard base listen port, default 51820 |
 | MTU | No | WireGuard interface MTU, 0 = system default |
+| Router ID | No | Babel router-id (MAC-48); blank = auto-generated |
 
 **Capability fields:**
 
@@ -230,7 +251,8 @@ Standard workflow:
 |-----------|----------|-------------|
 | Type | Yes | `direct` / `public-endpoint` / `relay-path` / `candidate` |
 | Endpoint IP | No | Target IP or domain (pick from target's public IPs or manual) |
-| Endpoint Port | No | Target WireGuard interface port (auto-fill available post-compile) |
+| Endpoint Port | No | Explicit NAT/port-forward override: `0` (default) = compiler auto-allocates; nonzero = dialed verbatim |
+| Compiled Port | — | Read-only: actual dialed port (filled post-compile) |
 | Transport | No | `udp` / `tcp` metadata |
 | Priority | No | Path priority |
 | Weight | No | Path weight |
@@ -306,11 +328,20 @@ The peer derivation engine is the most complex part of the compiler, converting 
 | Node behind NAT (can't accept inbound) | 25 seconds |
 | No reverse edge (unidirectional) | 25 seconds |
 
-**Transit IP allocation:** Each node pair gets a pair from `10.10.0.0/24`:
+**Transit IP allocation:** Each node pair gets a pair from its domain's `transit_cidr`
+(default `10.10.0.0/24`):
 - Link 0: `10.10.0.1` ↔ `10.10.0.2`
 - Link N: `10.10.0.(2N+1)` ↔ `10.10.0.(2N+2)`
 
-**Listen port allocation:** Each node starts from `listen_port` (default 51820), incrementing by 1 for each additional peer interface.
+**Listen port allocation:** Each node starts from `listen_port` (default 51820), gap-filling upward
+for each additional peer interface.
+
+**Pinned (sticky) allocations:** Once a link's listen ports, transit IP pair, and IPv6 link-locals
+are chosen, the compiler writes them back onto the edge as `pinned_*` fields and reuses them
+verbatim on the next compile. This keeps existing servers byte-stable when you add nodes — adding a
+new node leaves unrelated nodes' bundles unchanged. WireGuard keys persist the same way (see 4.4).
+The full reserve-pins-first-then-gap-fill contract and invariants are in
+[spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md).
 
 ### 4.3 Babel Routing Integration
 
@@ -330,16 +361,51 @@ Babel is the dynamic routing daemon that makes multi-hop overlay networks work.
 interface wg-node-beta type tunnel hello-interval 4 update-interval 16
 ```
 
+The `hello-interval 4` (hello every 4s) and `update-interval 16` (full route update every 16s)
+defaults are now supplied by per-role Babel presets (`internal/renderer/babel_presets.go`), not
+hardcoded in the template, so they can be tuned per role later. The `rxcost` (Default Cost below)
+comes from the same preset, overridden by an edge's `priority`/`weight` link cost when set.
+
 **Route redistribution by role:**
 
 | Role | Announces | Default Cost |
 |------|-----------|-------------|
 | `peer` | Own overlay IP | 0 |
-| `router` | Own overlay IP + Domain CIDR | 0 |
-| `relay` | Own overlay IP + Domain CIDR | 96 (prefer direct) |
+| `router` | Own overlay IP + Domain CIDR + extra prefixes (when set) | 0 |
+| `relay` | Own overlay IP + Domain CIDR + extra prefixes (when set) | 96 (prefer direct) |
 | `gateway` | Own overlay IP + Domain CIDR + extra prefixes + default route | 0 |
+| `client` | None (no Babel) | — |
+
+Announcements use two redistribution mechanisms (`internal/renderer/babel.go`):
+- **`redistribute local ip <prefix> allow`** — for prefixes backed by a `dummy0` connected route:
+  the node's own overlay `/32`, and (on the router side) injected client `/32`s.
+- **`redistribute ip <prefix> allow`** (no `local` keyword) — for prefixes backed by a real
+  kernel route that is *not* a `dummy0` connected route: a node's `extra_prefixes` (LAN segments)
+  and the gateway's default route `0.0.0.0/0` (the WAN default). Using the non-`local` form is what
+  lets these actually match a kernel route and propagate (audit dossier D40/D41).
 
 The trailing `redistribute local deny` is critical — it prevents accidental advertisement of transit IPs or system routes.
+
+### 4.4 Key Management and Persistence
+
+WireGuard keys are **persistent**, not regenerated on every compile. The first compile of a new
+node generates a fresh key pair and writes **both** the private and public keys back onto the node
+in the topology JSON (the private key round-trips by design so a stateless compiler can re-render
+the node's own `Interface PrivateKey`). Every subsequent compile reuses that pair, so adding an
+unrelated node never rotates an existing node's key.
+
+- **Rotation is explicit:** a node's key changes only when the operator clears **both** key fields
+  (forcing a fresh generation) or pastes a different private key. No edit rotates a key as a side
+  effect.
+- **Migration contract:** a node that carries a public key but no private key is a hard error — the
+  operator must paste the live private key (read from the host's `/etc/wireguard/<iface>.conf`) or
+  clear both key fields to rotate. The one-time migration from the older rotate-every-compile
+  behavior is described in
+  [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md).
+
+Because the persisted topology (and browser localStorage) now carries live private keys, treat it
+as secret material. The full contract is in [spec/data-model/node.md](spec/data-model/node.md) and
+[spec/security/security.md](spec/security/security.md).
 
 ---
 
