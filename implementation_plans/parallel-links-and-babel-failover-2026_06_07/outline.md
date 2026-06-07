@@ -91,7 +91,7 @@ merge parent → delete branch (GitHub auto-retarget races; see memory).
 | 8 | Unify rule | Role-as-disambiguator: roleless opposite-direction pairs unify (legacy); `role=backup` always its own link; roleless same-direction extras stay warned |
 | 9 | Backup default cost | 384 (4× babeld wired 96) when no explicit priority/weight; warn on all-equal effective costs |
 | 10 | Out of scope | ECMP, per-edge WG keypairs (escape-hatch note only), bundled/hybrid rendering, client multi-edge |
-| 11 | Focus-dim UX | Node selected → only it + incident edges opaque; edge selected → only it + endpoints opaque; connection drag → all edges dim, nodes visible. Plan-3. |
+| 11 | Focus-transparency UX | De-emphasis is TRANSPARENCY, not hiding: non-focused elements stay rendered and clickable at very low opacity (~0.15), smoothly transitioned — present but not distracting. Node selected → everything except it + its incident edges goes transparent; edge selected → everything except it + its two endpoint nodes goes transparent; connection drag → all edges go transparent, all nodes stay fully opaque (they are the drop targets). Never `display:none`/unmount. Plan-3. |
 
 ## 7. Milestones
 
