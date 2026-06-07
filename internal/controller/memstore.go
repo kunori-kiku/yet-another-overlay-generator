@@ -23,6 +23,9 @@ type tenantState struct {
 	staged map[string]SignedBundle
 	// current maps NodeID -> the node's current (promoted) bundle.
 	current map[string]SignedBundle
+	// tokens maps an enrollment token's hash -> the EnrollmentToken record. The
+	// plaintext token is never stored; only its hash keys this map.
+	tokens map[string]EnrollmentToken
 	// generation is the tenant's current generation (0 before any promote).
 	generation int64
 	// audit is the append-only, hash-chained audit log in Seq order.
@@ -38,6 +41,7 @@ func newTenantState() *tenantState {
 		nodes:   make(map[string]Node),
 		staged:  make(map[string]SignedBundle),
 		current: make(map[string]SignedBundle),
+		tokens:  make(map[string]EnrollmentToken),
 		nextSeq: 1,
 	}
 }
@@ -317,6 +321,51 @@ func (s *MemStore) WaitForGeneration(ctx context.Context, t TenantID, afterGen i
 		// Cond.Wait atomically unlocks mu, sleeps until Broadcast, and relocks mu.
 		s.cond.Wait()
 	}
+}
+
+// --- Enrollment tokens ---
+
+// cloneToken returns a deep copy of an EnrollmentToken, copying the ConsumedAt
+// pointer's pointee so stored/returned tokens share no *time.Time with the caller.
+func cloneToken(tok EnrollmentToken) EnrollmentToken {
+	if tok.ConsumedAt != nil {
+		c := *tok.ConsumedAt
+		tok.ConsumedAt = &c
+	}
+	return tok
+}
+
+// CreateEnrollmentToken stores a single-use, node-scoped, TTL token keyed by its
+// TokenHash within the tenant. A later CreateEnrollmentToken with the same hash
+// overwrites the prior record (parity with the registry's upsert semantics).
+func (s *MemStore) CreateEnrollmentToken(ctx context.Context, t TenantID, tok EnrollmentToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	ts.tokens[tok.TokenHash] = cloneToken(tok)
+	return nil
+}
+
+// ConsumeEnrollmentToken atomically validates and burns a token under the lock:
+// it returns ErrTokenInvalid if no token matches tokenHash for the tenant, if its
+// NodeID != nodeID, or if now is at/after ExpiresAt; ErrTokenConsumed if it was
+// already burned; otherwise it sets ConsumedAt=now and returns nil. The whole
+// check-and-burn runs under s.mu so two concurrent enrollments cannot both succeed.
+func (s *MemStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	tok, ok := ts.tokens[tokenHash]
+	if !ok || tok.NodeID != nodeID || !now.Before(tok.ExpiresAt) {
+		return ErrTokenInvalid
+	}
+	if tok.ConsumedAt != nil {
+		return ErrTokenConsumed
+	}
+	consumed := now
+	tok.ConsumedAt = &consumed
+	ts.tokens[tokenHash] = tok
+	return nil
 }
 
 // --- Audit (append-only, hash-chained) ---

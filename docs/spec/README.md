@@ -56,8 +56,10 @@ docs/spec/
 │   ├── signing.md                 # Canonical bundle serialization + Ed25519 bundle signing
 │   ├── key-custody.md             # Zero-knowledge key custody (AgentHeld split-render)
 │   ├── agent.md                   # Node agent (keygen→pull→verify→apply via install.sh splice)
-│   └── persistence.md             # Controller Store interface, MemStore/FileStore, tenant
-│                                  #   chokepoint, generation/stage-promote, audit hash chain
+│   ├── persistence.md             # Controller Store interface, MemStore/FileStore, tenant
+│   │                              #   chokepoint, generation/stage-promote, audit hash chain
+│   └── enrollment.md              # Enrollment ceremony: single-use token, mTLS CSR PoP,
+│                                  #   ephemeral dev controller-CA, per-node cert issuance
 └── glossary.md                    # Terminology
 ```
 

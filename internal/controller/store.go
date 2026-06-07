@@ -36,6 +36,12 @@ var (
 	ErrNotFound = errors.New("controller: not found")
 	// ErrNoStagedBundle is returned by PromoteStaged when nothing is staged.
 	ErrNoStagedBundle = errors.New("controller: no staged bundle to promote")
+	// ErrTokenInvalid is returned by ConsumeEnrollmentToken when the token is
+	// unknown, scoped to a different node, or expired.
+	ErrTokenInvalid = errors.New("controller: enrollment token invalid or expired")
+	// ErrTokenConsumed is returned by ConsumeEnrollmentToken when the token was
+	// already burned (single-use).
+	ErrTokenConsumed = errors.New("controller: enrollment token already consumed")
 )
 
 // NodeStatus is the lifecycle state of a registry node.
@@ -107,6 +113,17 @@ type AuditEntry struct {
 	Hash      string
 }
 
+// EnrollmentToken authorizes one node to enroll: single-use, short-TTL, and scoped
+// to a NodeID. The plaintext token is NEVER stored — only TokenHash (hex SHA-256 of
+// the plaintext) — so a store/DB read cannot recover a usable token.
+type EnrollmentToken struct {
+	TokenHash string
+	NodeID    string
+	ExpiresAt time.Time
+	// ConsumedAt is nil until the token is burned (single-use).
+	ConsumedAt *time.Time
+}
+
 // Store is the single tenant-scoped data-access chokepoint for the controller.
 //
 // Contract for every implementation:
@@ -163,6 +180,18 @@ type Store interface {
 	// greater than afterGen, then returns it; or returns ctx.Err() if ctx is done
 	// first. This is the long-poll primitive consumed by plan-4.3's /poll endpoint.
 	WaitForGeneration(ctx context.Context, t TenantID, afterGen int64) (int64, error)
+
+	// --- Enrollment tokens (added by plan-4.2) ---
+
+	// CreateEnrollmentToken stores a single-use, node-scoped, TTL token (by its
+	// hash). It is the operator-side step that authorizes one node to enroll.
+	CreateEnrollmentToken(ctx context.Context, t TenantID, tok EnrollmentToken) error
+	// ConsumeEnrollmentToken atomically validates and burns a token: it returns
+	// ErrTokenInvalid if no token matches tokenHash for nodeID or it is expired
+	// (relative to now), ErrTokenConsumed if it was already burned, otherwise it
+	// marks the token consumed (ConsumedAt=now) and returns nil. Single-use is
+	// enforced atomically so two concurrent enrollments cannot both succeed.
+	ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error
 
 	// --- Audit (append-only, hash-chained) ---
 
