@@ -69,7 +69,6 @@
       "to_node_id": "relay-1",
       "type": "public-endpoint",
       "endpoint_host": "192.0.2.1",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true,
       "notes": "NAT 后 peer-1 主动连接中继"
@@ -80,7 +79,6 @@
       "to_node_id": "relay-1",
       "type": "public-endpoint",
       "endpoint_host": "192.0.2.1",
-      "endpoint_port": 51820,
       "transport": "udp",
       "is_enabled": true,
       "notes": "NAT 后 peer-2 主动连接中继"

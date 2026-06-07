@@ -24,6 +24,7 @@ export function RightPanel() {
     removeNode,
     updateEdge,
     removeEdge,
+    reconcileEdgeEndpoints,
     compileResult,
     compile,
     exportArtifacts,
@@ -64,11 +65,20 @@ export function RightPanel() {
   ) => {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    const previous = (node.public_endpoints || []).find((ep) => ep.id === endpointId);
     updateNode(nodeId, {
       public_endpoints: (node.public_endpoints || []).map((ep) =>
         ep.id === endpointId ? { ...ep, ...updates } : ep
       ),
     });
+    // 主机被改名时，同步指向该节点、且快照了旧主机的 edge，避免拨向陈旧目标
+    if (
+      updates.host !== undefined &&
+      previous?.host &&
+      updates.host !== previous.host
+    ) {
+      reconcileEdgeEndpoints(nodeId, previous.host, updates.host);
+    }
   };
 
   const addNodeEndpoint = (nodeId: string) => {
@@ -88,9 +98,14 @@ export function RightPanel() {
   const removeNodeEndpoint = (nodeId: string, endpointId: string) => {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    const removed = (node.public_endpoints || []).find((ep) => ep.id === endpointId);
     updateNode(nodeId, {
       public_endpoints: (node.public_endpoints || []).filter((ep) => ep.id !== endpointId),
     });
+    // 该主机被移除时，清空指向它的 edge 的 endpoint，让连接退回后端自动解析
+    if (removed?.host) {
+      reconcileEdgeEndpoints(nodeId, removed.host, null);
+    }
   };
 
   return (
@@ -529,6 +544,8 @@ export function RightPanel() {
                 onChange={(e) =>
                   updateEdge(selectedEdge.id, {
                     type: e.target.value as 'direct' | 'public-endpoint' | 'relay-path' | 'candidate',
+                    // 清空陈旧的编译端口，画布标签随即反映最新意图（直到重新编译）
+                    compiled_port: undefined,
                   })
                 }
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
@@ -550,6 +567,7 @@ export function RightPanel() {
                     if (value === '__none__') {
                       updateEdge(selectedEdge.id, {
                         endpoint_host: undefined,
+                        compiled_port: undefined,
                       });
                       return;
                     }
@@ -560,6 +578,7 @@ export function RightPanel() {
                     const host = value.replace('host:', '');
                     updateEdge(selectedEdge.id, {
                       endpoint_host: host,
+                      compiled_port: undefined,
                     });
                   }}
                   className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
@@ -577,7 +596,7 @@ export function RightPanel() {
                 key={`ep-host-${selectedEdge.id}`}
                 type="text"
                 value={selectedEdge.endpoint_host || ''}
-                onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined })}
+                onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined, compiled_port: undefined })}
                 placeholder={txt(language, 'IP 或域名', 'IP or hostname')}
                 className="w-full mt-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
@@ -593,11 +612,11 @@ export function RightPanel() {
                   onChange={(e) => {
                     const raw = e.target.value;
                     if (raw === '') {
-                      updateEdge(selectedEdge.id, { endpoint_port: undefined });
+                      updateEdge(selectedEdge.id, { endpoint_port: undefined, compiled_port: undefined });
                     } else {
                       const parsed = parseInt(raw, 10);
                       if (!isNaN(parsed)) {
-                        updateEdge(selectedEdge.id, { endpoint_port: parsed });
+                        updateEdge(selectedEdge.id, { endpoint_port: parsed, compiled_port: undefined });
                       }
                     }
                   }}

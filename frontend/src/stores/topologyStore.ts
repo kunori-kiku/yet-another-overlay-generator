@@ -59,6 +59,12 @@ interface TopologyState {
   addEdge: (edge: Edge) => void;
   updateEdge: (id: string, updates: Partial<Edge>) => void;
   removeEdge: (id: string) => void;
+  // 当某节点的 public_endpoints 主机变更/移除时，同步指向它的 edge 上快照的 endpoint_host
+  reconcileEdgeEndpoints: (
+    nodeId: string,
+    oldHost: string,
+    newHost: string | null
+  ) => void;
 
   // 选中
   selectNode: (id: string | null) => void;
@@ -214,6 +220,32 @@ export const useTopologyStore = create<TopologyState>()(
       edges: state.edges.filter((e) => e.id !== id),
       selectedEdgeId: state.selectedEdgeId === id ? null : state.selectedEdgeId,
     })),
+
+  // 节点 public_endpoints 发生变更时，把指向该节点、且快照了旧主机的 edge 同步过来。
+  // newHost 为字符串：主机被改名 → 改写 endpoint_host 并清空陈旧的 compiled_port。
+  // newHost 为 null：该主机被移除 → 清空 endpoint_host / endpoint_port / compiled_port，
+  // 让连接退回“后端自动解析”状态，避免拨向已不存在的目标。
+  reconcileEdgeEndpoints: (nodeId, oldHost, newHost) =>
+    set((state) => {
+      if (!oldHost) return { edges: state.edges };
+      let changed = false;
+      const edges = state.edges.map((e) => {
+        if (e.to_node_id !== nodeId || e.endpoint_host !== oldHost) {
+          return e;
+        }
+        changed = true;
+        if (newHost === null) {
+          return {
+            ...e,
+            endpoint_host: undefined,
+            endpoint_port: undefined,
+            compiled_port: undefined,
+          };
+        }
+        return { ...e, endpoint_host: newHost, compiled_port: undefined };
+      });
+      return changed ? { edges } : { edges: state.edges };
+    }),
 
   // 选中
   selectNode: (id) => set({ selectedNodeId: id, selectedEdgeId: null, selectedDomainId: null }),

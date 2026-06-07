@@ -375,24 +375,29 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 
 			reverseIfaceName := wgInterfaceName(fromNode.Name)
 
-			// 查找反向 edge 的 endpoint host（用户指定端口优先，否则使用预分配的端口）
+			// fromNode 接口的已分配监听端口（反向 peer 回连 fromNode 时使用）
+			fromSideListenPort := alloc.fromPort
+			if !isForward {
+				fromSideListenPort = alloc.toPort
+			}
+
+			// 解析反向 peer 的 endpoint：
+			//  1. 存在显式反向 edge 且带 host 时，按正向规则解析（用户指定端口优先，否则用 fromNode 已分配端口）；
+			//  2. 否则若 fromNode 具备公网可达能力且配置了 public endpoint，回退到 fromNode 的公网 host
+			//     + fromNode 已分配的监听端口（绝不使用 public_endpoints[0].Port——那是节点可达提示，
+			//     而非本链路的监听端口，误用会在服务端重现端口归属 bug）。
 			reverseEndpoint := ""
-			if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok {
-				if reverseEdge.EndpointHost != "" {
-					var portToUse int
-					if reverseEdge.EndpointPort > 0 {
-						// 用户指定了 NAT/端口转发覆盖端口
-						portToUse = reverseEdge.EndpointPort
-					} else {
-						// 自动分配：使用 fromNode 接口的已分配监听端口
-						if isForward {
-							portToUse = alloc.fromPort
-						} else {
-							portToUse = alloc.toPort
-						}
-					}
-					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, portToUse)
+			if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok && reverseEdge.EndpointHost != "" {
+				if reverseEdge.EndpointPort > 0 {
+					// 用户指定了 NAT/端口转发覆盖端口
+					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, reverseEdge.EndpointPort)
+				} else {
+					// 自动分配：使用 fromNode 接口的已分配监听端口
+					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, fromSideListenPort)
 				}
+			} else if fromNode.Capabilities.HasPublicIP && len(fromNode.PublicEndpoints) > 0 {
+				// 回退：无反向 edge（或其 host 为空）且 fromNode 公网可达
+				reverseEndpoint = formatEndpoint(fromNode.PublicEndpoints[0].Host, fromSideListenPort)
 			}
 
 			// 反向 peer 的资源与正向互换

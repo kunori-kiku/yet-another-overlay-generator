@@ -108,10 +108,17 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	// Client 配置
 	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations)
 
-	// 将编译器分配的实际端口写入 CompiledPort（不修改用户输入的 EndpointPort）
+	// 将该 edge from 侧实际拨号的端口写入 CompiledPort（只读输出，不修改用户输入的 EndpointPort）。
+	// CompiledPort 必须等于渲染出的 Endpoint 中携带的端口：
+	//   - EndpointPort > 0（运营商显式 NAT/端口转发覆盖）时，逐字反映该覆盖值；
+	//   - 否则使用对端接口的已分配监听端口（编译器自动分配）。
 	for i := range compiledTopo.Edges {
 		edge := &compiledTopo.Edges[i]
 		if !edge.IsEnabled || edge.EndpointHost == "" {
+			continue
+		}
+		if edge.EndpointPort > 0 {
+			edge.CompiledPort = edge.EndpointPort
 			continue
 		}
 		// 查找该 edge 对应的 pairAllocation，提取对端（toNode）的已分配监听端口
