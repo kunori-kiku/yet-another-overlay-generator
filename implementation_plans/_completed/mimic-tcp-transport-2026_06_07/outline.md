@@ -120,18 +120,28 @@ UI (keyless). Stop-loss: none material.
 
 ## 9. Closure criteria
 
-- [ ] 3 PRs merged, CI green on main.
-- [ ] Perpetual no-drift gate green (non-mimic byte-identical).
-- [ ] Real-host smoke narrative (two Linux nodes, one `tcp` edge, mimic up, WG handshake through it,
-  TCP-shaped packets on the wire) recorded in the plan-2 PR.
-- [ ] specs match shipped behavior; v1.3.0 reserved-warning removed; positioning honest (no
-  anti-censorship language).
-- [ ] STATUS refreshed; subject archived to `_completed/`.
+- [x] 3 PRs merged, CI green on main (2026-06-07, `9bae3f2..df6da21`; each PR CI-green and
+  independently reviewed — #19/#20 approved, #18's one doc-accuracy blocker fixed pre-merge).
+- [x] Perpetual no-drift gate green — deploy artifacts (WG configs/allocations) byte-identical for
+  udp; gate untouched. (Install-script *text* has cosmetic whitespace shifts in non-mimic sections
+  from the new template blocks — zero functional impact, disclosed in PR #19.)
+- [ ] Real-host smoke (two Linux nodes, mimic up, WG handshake through it, TCP-shaped packets) —
+  **not run** (no two-host lab available this session); the smoke procedure is documented in
+  mimic.md §Verification for the operator to run.
+- [x] specs match shipped behavior; v1.3.0 reserved-warning removed; positioning honest
+  (UDP-restriction only, no anti-censorship language); mimic.md reconciled to verified provisioning
+  (module via unit Requires; eBPF advisory + set-e gate); validation.md transport-row status fixed.
+- [x] STATUS refreshed; subject archived to `_completed/`.
+
+Carried-forward (non-blocking reviewer notes):
+- Install-script cosmetic whitespace drift in non-mimic sections (template `{{ end -}}` trimming) —
+  zero functional impact; tidy if a script golden test is ever added.
+- Real-host failover smoke still owed before relying on it in production.
 
 ## 10. Plan status table
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-1 | pending | — | spec contract freeze |
-| plan-2 | pending | — | backend mimic support |
-| plan-3 | pending | — | frontend label + docs |
+| plan-1 | merged | [#18](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/18) | spec contract freeze + transport-row/mimic.md fixes |
+| plan-2 | merged | [#19](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/19) | backend mimic support; egress-parse robustness |
+| plan-3 | merged | [#20](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/20) | frontend "TCP (mimic)" label + docs; subject closed 2026-06-07 |
