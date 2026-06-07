@@ -155,7 +155,11 @@ export function TopologyCanvas() {
   // 边始终在节点级锚点之间渲染（不再路由到接口手柄）：边是节点对节点的逻辑链路，
   // 接口/端口是它的编译产物。端口语义拆成结构化字段交给 CustomEdge 渲染徽标：
   //   port    —— compiled_port（后端分配真值）或显式 endpoint_port 覆盖；
-  //   pending —— compiled_port 为空（未编译，或被拨号相关编辑失效）→ 虚线。
+  //   pending —— 「待编译」信号 → 虚线。注意 compiled_port 只对带 endpoint_host 的
+  //   边写回（compiler.go 的 CompiledPort 写回规则），无 endpoint_host 的被动边要用
+  //   pin 字段（每条 enabled 边编译后都有）判断是否已编译，否则会永远显示虚线。
+  //   带 endpoint_host 的边仍以 compiled_port 为准：拨号相关编辑会清掉它（D19），
+  //   虚线回退正是「需要重新编译」的可视反馈。
   const flowEdges: FlowEdge[] = useMemo(
     () =>
       topoEdges
@@ -163,7 +167,9 @@ export function TopologyCanvas() {
         .map((e) => {
           const pInfo = parallelEdgeInfo[e.id] || { index: 0, count: 1 };
           const port = e.compiled_port || e.endpoint_port || undefined;
-          const pending = !e.compiled_port;
+          const hasPins =
+            e.pinned_from_port !== undefined || e.pinned_to_port !== undefined;
+          const pending = e.endpoint_host ? !e.compiled_port : !hasPins;
           const label = e.endpoint_host || e.type;
           const sourceNode = topoNodes.find((n) => n.id === e.from_node_id);
           const targetNode = topoNodes.find((n) => n.id === e.to_node_id);
