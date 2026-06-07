@@ -135,6 +135,7 @@ func TestEnrollHappyPath(t *testing.T) {
 
 	csr := newCSR(t, string(tnt)+":node-1")
 	res, err := Enroll(ctx, store, ca, tnt, EnrollRequest{
+		Token:       plaintext,
 		NodeID:      "node-1",
 		CSRDER:      csr,
 		WGPublicKey: "wg-pub-node-1",
@@ -227,16 +228,16 @@ func TestEnrollFailures(t *testing.T) {
 
 	t.Run("burned-token-cannot-re-enroll", func(t *testing.T) {
 		store := NewMemStore()
-		_, tok := NewEnrollmentToken("node-1", time.Hour, now)
+		plaintext, tok := NewEnrollmentToken("node-1", time.Hour, now)
 		if err := store.CreateEnrollmentToken(ctx, tnt, tok); err != nil {
 			t.Fatalf("CreateEnrollmentToken: %v", err)
 		}
-		req := EnrollRequest{NodeID: "node-1", CSRDER: newCSR(t, string(tnt)+":node-1"), WGPublicKey: "wg-pub-node-1"}
+		req := EnrollRequest{Token: plaintext, NodeID: "node-1", CSRDER: newCSR(t, string(tnt)+":node-1"), WGPublicKey: "wg-pub-node-1"}
 		if _, err := Enroll(ctx, store, ca, tnt, req, now); err != nil {
 			t.Fatalf("Enroll(first): %v", err)
 		}
 		// Second enroll with the same (now-burned) token -> ErrTokenConsumed.
-		req2 := EnrollRequest{NodeID: "node-1", CSRDER: newCSR(t, string(tnt)+":node-1"), WGPublicKey: "wg-pub-node-1"}
+		req2 := EnrollRequest{Token: plaintext, NodeID: "node-1", CSRDER: newCSR(t, string(tnt)+":node-1"), WGPublicKey: "wg-pub-node-1"}
 		_, err := Enroll(ctx, store, ca, tnt, req2, now)
 		if !errors.Is(err, ErrTokenConsumed) {
 			t.Fatalf("Enroll(burned token): err = %v, want ErrTokenConsumed", err)
@@ -245,13 +246,14 @@ func TestEnrollFailures(t *testing.T) {
 
 	t.Run("cn-mismatch", func(t *testing.T) {
 		store := NewMemStore()
-		_, tok := NewEnrollmentToken("node-1", time.Hour, now)
+		plaintext, tok := NewEnrollmentToken("node-1", time.Hour, now)
 		if err := store.CreateEnrollmentToken(ctx, tnt, tok); err != nil {
 			t.Fatalf("CreateEnrollmentToken: %v", err)
 		}
 		// CSR CN names a different node than EnrollRequest.NodeID.
 		csr := newCSR(t, string(tnt)+":wrong-node")
 		_, err := Enroll(ctx, store, ca, tnt, EnrollRequest{
+			Token:       plaintext,
 			NodeID:      "node-1",
 			CSRDER:      csr,
 			WGPublicKey: "wg-pub-node-1",
