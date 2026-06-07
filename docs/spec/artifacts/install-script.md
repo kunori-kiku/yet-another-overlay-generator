@@ -4,9 +4,10 @@ Generated per-node bash script with phases:
 - **Uninstall mode** (`--uninstall` / `-u`): Complete teardown — stops all WG interfaces, disables
   Babel, removes configs, removes SNAT rules, removes dummy0, removes systemd services
 - **Phase 0**: Cleanup previous installation (managed + legacy interfaces)
-- **Phase 1**: Environment preparation — checksum verification, dependency installation, dummy0
-  interface creation with overlay IP, SNAT source address fix. When any link uses `transport: "tcp"`,
-  also installs the `mimic` package, `modprobe mimic` (persisted), and checks kernel-eBPF support
+- **Phase 1**: Environment preparation — bundle verification (signature, then checksums; see below),
+  dependency installation, dummy0 interface creation with overlay IP, SNAT source address fix. When
+  any link uses `transport: "tcp"`, also installs the `mimic` package, `modprobe mimic` (persisted),
+  and checks kernel-eBPF support
 - **Phase 2**: Configuration deployment — copies WG configs, Babel config, sysctl config
 - **Phase 3**: Activation — applies sysctl; for mimic nodes, detects the egress NIC, writes
   `/etc/mimic/<egress>.conf` (one filter per mimic listen port) and starts `mimic@<egress>` **before**
@@ -15,6 +16,47 @@ Generated per-node bash script with phases:
 mimic teardown (one filter per mimic link on the egress NIC, MTU −12 per mimic interface) is detailed
 in [mimic.md](./mimic.md); uninstall stops/disables `mimic@<egress>`, removes its config and
 modules-load entry, and detaches.
+
+## Bundle Verification (Phase 1)
+
+Before any configuration is touched, Phase 1 verifies the bundle. The ordering depends on whether
+the bundle is signed (i.e. whether `bundle.sig` was shipped — see
+[../controller/signing.md](../controller/signing.md)):
+
+**Signed bundle (rendered with signing enabled):**
+
+1. Write the **embedded** verifying public key to a temp file. The key is baked into `install.sh` at
+   generation time and is the trust anchor; `signing-pubkey.pem` ships the same key for out-of-band
+   `openssl` verification but is *not* what the script trusts.
+2. Base64-decode `bundle.sig` into a raw 64-byte signature file.
+3. Verify the Ed25519 signature over the canonical `checksums.sha256`:
+   `openssl pkeyutl -verify -pubin -inkey <pub.pem> -rawin -sigfile <sig> -in checksums.sha256`
+   (`-rawin` requires **OpenSSL 3.0+**).
+4. **Only if the signature verifies**, run the existing `sha256sum --status -c checksums.sha256` to
+   confirm every file matches its signed digest.
+
+The signature check **precedes** the `sha256sum -c` check by design: authenticity is established
+before integrity. Because the verifying key is embedded, a signed `install.sh` **requires**
+`bundle.sig`: a **missing** signature is treated as signature-stripping tamper and the script
+**refuses to proceed** (it does not fall back to the bare `sha256sum -c`, which an attacker could
+satisfy with rewritten files + rewritten checksums). If `bundle.sig` is present but `openssl` is
+missing or its build lacks Ed25519 / `-rawin` support, the script **fails loudly with a nonzero
+exit** — it never silently downgrades to hash-only when a signature was expected. This mirrors the
+self-extracting installer's fail-clear style, which as of Phase 0 performs **both** the
+`EXPECTED_PAYLOAD_SHA256` payload-hash check **and** (when signing is enabled) an Ed25519
+payload-signature check (see [deploy-scripts.md](deploy-scripts.md)).
+
+**Unsigned bundle (rendered without signing):**
+
+The script behaves exactly as before Phase 0 — `sha256sum --status -c checksums.sha256` only — so the
+hash-only / air-gap path is unchanged. Signing is opt-in; an operator who never sets
+`YAOG_BUNDLE_SIGNING_KEY` sees identical install-time behavior.
+
+> **Trust caveat:** when the verifying public key ships *inside* the bundle, the signature proves
+> internal consistency, not provenance, against a bundle from an untrusted source — an attacker who
+> rewrites the bundle can swap the bundled pubkey too. The signature is only an authenticity anchor
+> when the key is pinned out of band. See the limitation in
+> [../controller/signing.md](../controller/signing.md) and [../security/security.md](../security/security.md).
 
 ## Source Address Fix (SNAT)
 

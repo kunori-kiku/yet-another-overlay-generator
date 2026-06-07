@@ -1,13 +1,14 @@
 package artifacts
 
 import (
-	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 )
 
@@ -32,6 +33,18 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	exportResult := &ExportResult{
 		OutputDir: outputDir,
 	}
+
+	// Signing is opt-in via bundlesig.EnvSigningKey. Load the key once up front
+	// (through the shared loader so the env-var name and PEM handling stay in one
+	// place, identical to the install-script renderer and the self-extracting
+	// installer) so a malformed key fails the whole export early — before any node
+	// dir is touched — rather than mid-loop. When the env var is unset/empty,
+	// signing is nil and the export remains hash-only: byte-for-byte today's output.
+	signing, err := bundlesig.LoadSigningFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	signEnabled := signing != nil
 
 	// 按节点导出
 	for _, node := range result.Topology.Nodes {
@@ -98,32 +111,44 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
-		// 生成 checksums
-		var checksumLines []string
+		// Build the canonical bundle file set as a path->content map and let
+		// bundlesig.Canonicalize emit the checksums.sha256 content. This replaces
+		// the previous ad-hoc, append-ordered checksum writing: the output is now
+		// SORTED by path and deterministic across runs. sha256sum -c is order
+		// insensitive, so sorting is safe and is precisely the determinism fix.
+		//
+		// The set must match the rest of the bundle exactly: every per-peer
+		// wireguard/<iface>.conf, babel/babeld.conf (non-client only), sysctl/
+		// 99-overlay.conf, and install.sh — written above before this point so the
+		// hashes describe the same bytes that landed on disk. install.sh is the
+		// root-executed trust anchor and was historically the only artifact not
+		// covered by checksums.sha256 (audit item D24). manifest.json is still
+		// deliberately excluded: it carries compile-time timestamps (compiled_at,
+		// etc.) and is out of integrity-check scope (see docs/spec/security/security.md).
+		// bundle.sig and signing-pubkey.pem (when signing is enabled) are also
+		// excluded by construction: bundle.sig signs this very content and the
+		// pubkey is the verification anchor, so neither can self-reference.
+		bundleFiles := make(map[string]string)
 		for configKey, wgConf := range result.WireGuardConfigs {
 			parts := strings.SplitN(configKey, ":", 2)
 			if len(parts) != 2 || parts[0] != node.ID {
 				continue
 			}
-			confFileName := parts[1] + ".conf"
-			checksumLines = append(checksumLines, fmt.Sprintf("%x  wireguard/%s", sha256.Sum256([]byte(wgConf)), confFileName))
+			bundleFiles["wireguard/"+parts[1]+".conf"] = wgConf
 		}
 		if babelConf, ok := result.BabelConfigs[node.ID]; ok {
-			checksumLines = append(checksumLines, fmt.Sprintf("%x  babel/babeld.conf", sha256.Sum256([]byte(babelConf))))
+			bundleFiles["babel/babeld.conf"] = babelConf
 		}
 		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
-			checksumLines = append(checksumLines, fmt.Sprintf("%x  sysctl/99-overlay.conf", sha256.Sum256([]byte(sysctlConf))))
+			bundleFiles["sysctl/99-overlay.conf"] = sysctlConf
 		}
-		// install.sh 是以 root 执行的信任锚点，此前却是唯一未被 checksums.sha256 覆盖的产物
-		// （审计项 D24）。它必须先于此处被完整写出（见上方安装脚本写入分支），再对同一份字节
-		// 计算 SHA-256，确保校验值与落盘内容一致。manifest.json 仍然刻意排除：它携带 compiled_at
-		// 等编译期时间戳，不属于完整性校验范围（详见 docs/spec/security/security.md）。
 		if script, ok := result.InstallScripts[node.ID]; ok {
-			checksumLines = append(checksumLines, fmt.Sprintf("%x  install.sh", sha256.Sum256([]byte(script))))
+			bundleFiles["install.sh"] = script
 		}
 
+		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
-		if err := os.WriteFile(checksumsPath, []byte(strings.Join(checksumLines, "\n")), 0644); err != nil {
+		if err := os.WriteFile(checksumsPath, canonical, 0644); err != nil {
 			return nil, fmt.Errorf("写入 checksums.sha256 失败: %w", err)
 		}
 
@@ -134,6 +159,28 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			allFiles = append(allFiles, "babel/babeld.conf")
 		}
 		allFiles = append(allFiles, "sysctl/99-overlay.conf", "install.sh")
+
+		// When signing is enabled, sign the canonical checksums and write the
+		// detached signature (base64) plus the verifying public key (PKIX PEM)
+		// into each node dir. The signature covers the exact bytes written to
+		// checksums.sha256 above. Both files are listed in the manifest but are
+		// NOT part of the canonical/checksummed set (they are the authenticity
+		// layer over it, not members of it). The public key embedded into
+		// install.sh is the script renderer's responsibility (it reads the same
+		// env var at render time); here we only ship the openssl-consumable PEM.
+		if signEnabled {
+			sig := bundlesig.Sign(canonical, signing.Priv)
+			sigB64 := base64.StdEncoding.EncodeToString(sig)
+			sigPath := filepath.Join(nodeDir, "bundle.sig")
+			if err := os.WriteFile(sigPath, []byte(sigB64+"\n"), 0644); err != nil {
+				return nil, fmt.Errorf("写入 bundle.sig 失败: %w", err)
+			}
+			pubPath := filepath.Join(nodeDir, "signing-pubkey.pem")
+			if err := os.WriteFile(pubPath, signing.PubKeyPEM, 0644); err != nil {
+				return nil, fmt.Errorf("写入 signing-pubkey.pem 失败: %w", err)
+			}
+			allFiles = append(allFiles, "bundle.sig", "signing-pubkey.pem")
+		}
 
 		architecture := "per-peer-interface"
 		if isClient {

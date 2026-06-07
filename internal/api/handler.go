@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
@@ -340,6 +342,13 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
 
+	// Load the optional bundle-signing key once for the whole archive. nil means signing is off
+	// (no YAOG_BUNDLE_SIGNING_KEY) and every wrapper stays byte-identical to today (opt-in).
+	signing, err := loadInstallerSigning()
+	if err != nil {
+		return nil, err
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -358,7 +367,7 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 			return nil, err
 		}
 
-		installer, err := makeSelfExtractingInstaller(nodeName, tgz.Bytes())
+		installer, err := makeSelfExtractingInstaller(nodeName, tgz.Bytes(), signing)
 		if err != nil {
 			return nil, err
 		}
@@ -436,7 +445,42 @@ func tarGzDirectory(dir string) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-func makeSelfExtractingInstaller(nodeName string, payload []byte) ([]byte, error) {
+// installerSigning carries the optional Ed25519 signing material for the self-extracting installer.
+// It is non-nil only when bundle signing is enabled (operator key configured via
+// YAOG_BUNDLE_SIGNING_KEY). When nil, makeSelfExtractingInstaller emits the wrapper byte-identical
+// to the pre-signing output (opt-in back-compat). See docs/spec/controller/signing.md.
+type installerSigning struct {
+	priv      ed25519.PrivateKey // signs the tar.gz payload bytes
+	pubkeyPEM string             // PKIX/PKCS8 PEM of the verifying public key, pinned into the wrapper
+}
+
+// loadInstallerSigning loads the optional bundle-signing key via the shared
+// bundlesig.LoadSigningFromEnv (bundlesig.EnvSigningKey). It returns (nil, nil)
+// when the env var is unset/empty, i.e. signing is off and bundles stay hash-only
+// exactly as today (opt-in). A non-empty-but-broken key path is a configuration
+// error surfaced to the caller. The shared loader keeps the env-var name and PEM
+// handling identical to the export path and the install-script renderer.
+func loadInstallerSigning() (*installerSigning, error) {
+	signing, err := bundlesig.LoadSigningFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if signing == nil {
+		return nil, nil
+	}
+	return &installerSigning{
+		priv:      signing.Priv,
+		pubkeyPEM: string(signing.PubKeyPEM),
+	}, nil
+}
+
+// makeSelfExtractingInstaller builds the self-extracting installer wrapper for one node's tar.gz
+// payload. When signing is non-nil, the wrapper additionally carries a base64 Ed25519 signature
+// over the payload bytes plus the pinned verifying public key, and verifies the signature (openssl)
+// BEFORE the existing SHA-256 integrity check — with the same fail-clear discipline (a present
+// signature that cannot be verified aborts; openssl/Ed25519 missing aborts). When signing is nil
+// the emitted wrapper is byte-identical to the pre-signing output.
+func makeSelfExtractingInstaller(nodeName string, payload []byte, signing *installerSigning) ([]byte, error) {
 	encoded := base64.StdEncoding.EncodeToString(payload)
 
 	// 自解包装脚本此前直接 base64 解码并以 root 执行 payload，对 payload 没有任何完整性锚定
@@ -445,6 +489,55 @@ func makeSelfExtractingInstaller(nodeName string, payload []byte) ([]byte, error
 	// 归档与该期望哈希一致，不一致则带中文错误中止。期望哈希对应的正是写入 ARCHIVE_PATH 的
 	// 那份字节（即 decode(encoded) == payload），因此对 payload 求哈希即可。
 	expectedPayloadSHA256 := fmt.Sprintf("%x", sha256.Sum256(payload))
+
+	// Build the optional signature-verification block. When signing is off it is empty, so the
+	// wrapper renders byte-identical to today (opt-in). When on, we sign the SAME payload bytes
+	// whose SHA-256 is pinned above, base64-encode the raw signature, and emit a block that runs
+	// BEFORE the SHA-256 check.
+	sigBlock := ""
+	if signing != nil {
+		sig := bundlesig.Sign(payload, signing.priv)
+		sigB64 := base64.StdEncoding.EncodeToString(sig)
+		// Carry both the signature and the PEM as base64 to avoid any shell quoting/newline issues:
+		// %q would Go-escape the PEM's newlines as literal backslash-n, which bash double quotes do
+		// NOT re-interpret, corrupting the key. base64 round-trips the exact bytes safely.
+		pubkeyB64 := base64.StdEncoding.EncodeToString([]byte(signing.pubkeyPEM))
+		// All shell vars quoted; pinned pubkey written to a temp file for openssl pkeyutl -pubin.
+		// openssl missing, or lacking Ed25519 support, exits nonzero and aborts (never silently skip).
+		sigBlock = fmt.Sprintf(`PAYLOAD_SIG_B64=%q
+SIGNING_PUBKEY_PEM_B64=%q
+
+# Verify the payload's Ed25519 signature BEFORE the SHA-256 check (docs/spec/controller/signing.md).
+# Signs the raw tar.gz payload bytes against the public key pinned at generation time, so a tampered
+# payload is rejected before any root action.
+if ! command -v openssl >/dev/null 2>&1; then
+	echo "ERROR: installer is signed but openssl is not installed; cannot verify signature" >&2
+	exit 1
+fi
+SIG_PUBKEY_FILE="$(mktemp)"
+SIG_RAW_FILE="$(mktemp)"
+cleanup_sig() {
+	rm -f "${SIG_PUBKEY_FILE}" "${SIG_RAW_FILE}"
+}
+trap 'cleanup_sig; cleanup' EXIT
+printf '%%s' "${SIGNING_PUBKEY_PEM_B64}" | base64 -d > "${SIG_PUBKEY_FILE}" 2>/dev/null || {
+	echo "ERROR: failed to decode embedded signing public key" >&2
+	exit 1
+}
+printf '%%s' "${PAYLOAD_SIG_B64}" | base64 -d > "${SIG_RAW_FILE}" 2>/dev/null || {
+	echo "ERROR: failed to decode embedded payload signature" >&2
+	exit 1
+}
+# Ed25519 is a one-shot (raw) signature: -rawin feeds the message directly, no pre-hash.
+if ! openssl pkeyutl -verify -pubin -inkey "${SIG_PUBKEY_FILE}" -rawin -sigfile "${SIG_RAW_FILE}" -in "${ARCHIVE_PATH}" >/dev/null 2>&1; then
+	echo "错误：安装包签名校验失败（Ed25519，openssl 缺少 Ed25519 支持或签名无效），已中止。" >&2
+	exit 1
+fi
+cleanup_sig
+trap cleanup EXIT
+
+`, sigB64, pubkeyB64)
+	}
 
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
@@ -467,7 +560,7 @@ fi
 
 tail -n +"${PAYLOAD_LINE}" "$0" | base64 -d > "${ARCHIVE_PATH}"
 
-# 完整性校验：在解包/执行之前，核对解码出的归档 SHA-256 与构建时嵌入的期望值。
+%s# 完整性校验：在解包/执行之前，核对解码出的归档 SHA-256 与构建时嵌入的期望值。
 # 不一致说明 payload 被篡改或损坏，必须以 root 身份执行前立即中止（审计项 D25）。
 echo "${EXPECTED_PAYLOAD_SHA256}  ${ARCHIVE_PATH}" | sha256sum -c - >/dev/null 2>&1 || {
 	echo "错误：安装包完整性校验失败（SHA-256 不匹配），已中止。payload 可能被篡改或在传输中损坏。" >&2
@@ -494,7 +587,7 @@ fi
 exit 0
 __PAYLOAD_BELOW__
 %s
-`, nodeName, expectedPayloadSHA256, encoded)
+`, nodeName, expectedPayloadSHA256, sigBlock, encoded)
 
 	return []byte(script), nil
 }

@@ -44,6 +44,15 @@ type InstallScriptConfig struct {
 	WgInterfaces   []WgIfaceInfo
 	BabelConfName  string
 	SysctlConfName string
+	// SigningPubkeyPEM is the Ed25519 verifying public key (PKIX/PKCS8 PEM) pinned into the
+	// install script when bundle signing is enabled. The export path sets it (via
+	// RenderInstallScriptSigned) only when the operator configured a signing key; otherwise it
+	// is empty and the template emits no signature-verification block, so an unsigned bundle's
+	// install.sh is byte-identical to the pre-signing output (opt-in back-compat). When non-empty
+	// the template, before the existing sha256sum -c, verifies bundle.sig (raw Ed25519, base64)
+	// over checksums.sha256 against this pinned key using openssl, failing clearly if bundle.sig
+	// is present but openssl/Ed25519 is unavailable. See docs/spec/controller/signing.md.
+	SigningPubkeyPEM string
 }
 
 // WgIfaceInfo 单个 WireGuard 接口信息
@@ -267,6 +276,52 @@ echo "=== Phase 1: Environment Preparation ==="
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+{{ if .SigningPubkeyPEM -}}
+# Verify the bundle's Ed25519 signature BEFORE the checksum check (docs/spec/controller/signing.md).
+# bundle.sig is base64(raw 64-byte Ed25519 signature) over the exact bytes of checksums.sha256
+# (the canonical bundle digest). The verifying public key is pinned below at generation time, so a
+# tampered checksums.sha256 (even with matching file hashes) is rejected before any root action.
+if [ -f "$SCRIPT_DIR/bundle.sig" ]; then
+    echo "Verifying bundle signature..."
+    if ! command -v openssl >/dev/null 2>&1; then
+        # bundle.sig is present but we cannot verify it: fail clearly, never silently skip.
+        echo "ERROR: bundle.sig present but openssl is not installed; cannot verify signature" >&2
+        exit 1
+    fi
+    # Write the pinned verifying public key to a temp file for openssl pkeyutl -pubin.
+    _sig_pubkey="$(mktemp)"
+    _sig_raw="$(mktemp)"
+    cleanup_sig() {
+        rm -f "$_sig_pubkey" "$_sig_raw"
+    }
+    trap cleanup_sig EXIT
+    cat > "$_sig_pubkey" << 'YAOG_SIGNING_PUBKEY_PEM'
+{{ .SigningPubkeyPEM }}
+YAOG_SIGNING_PUBKEY_PEM
+    # Decode base64 signature to raw bytes for openssl -rawin verification.
+    if ! base64 -d "$SCRIPT_DIR/bundle.sig" > "$_sig_raw" 2>/dev/null; then
+        echo "ERROR: failed to decode bundle.sig (not valid base64)" >&2
+        exit 1
+    fi
+    # Ed25519 is a one-shot (raw) signature: -rawin feeds the message directly, no pre-hash.
+    # openssl without Ed25519 support exits nonzero here, satisfying the fail-clear requirement.
+    if ! openssl pkeyutl -verify -pubin -inkey "$_sig_pubkey" -rawin -sigfile "$_sig_raw" -in "$SCRIPT_DIR/checksums.sha256" >/dev/null 2>&1; then
+        echo "ERROR: bundle signature verification failed (openssl missing Ed25519 support or signature invalid)" >&2
+        exit 1
+    fi
+    echo "Bundle signature verification passed."
+    cleanup_sig
+    trap - EXIT
+else
+    # This install.sh was rendered with signing enabled, so bundle.sig is MANDATORY: a missing
+    # signature is signature-stripping tamper, not an unsigned bundle. We KNOW the bundle was
+    # signed at generation time (the verifying key is pinned above), so refuse to proceed rather
+    # than fall through to the bare checksum check an attacker could satisfy with rewritten files.
+    echo "ERROR: bundle was signed at generation but bundle.sig is missing; refusing to proceed (possible signature-stripping tamper)" >&2
+    exit 1
+fi
+
+{{ end -}}
 # Verify checksums if available
 if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
     echo "Verifying file integrity..."
@@ -645,6 +700,27 @@ const defaultTransitCIDR = "10.10.0.0/24"
 // 兜底为默认池，行为与历史一致。空字符串项会被忽略并以默认池补位，重复项去重，
 // 以保证「每个 distinct CIDR 一条 SNAT 规则」。
 func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, transitCIDRs ...string) (string, error) {
+	config := buildInstallScriptConfig(node, peers, hasBabel, transitCIDRs)
+	return renderTemplate("install.sh", installScriptTemplate, config)
+}
+
+// RenderInstallScriptSigned renders the per-peer install script with bundle-signature verification
+// enabled: the rendered install.sh, before its existing sha256sum -c, verifies bundle.sig over
+// checksums.sha256 against the pinned signingPubkeyPEM (PKIX/PKCS8 PEM) using openssl.
+//
+// This is the entry point the export path calls only when an operator signing key is configured
+// (YAOG_BUNDLE_SIGNING_KEY). When signingPubkeyPEM is empty, the output is byte-identical to
+// RenderInstallScript (opt-in back-compat). All other parameters match RenderInstallScript. See
+// docs/spec/controller/signing.md.
+func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, transitCIDRs ...string) (string, error) {
+	config := buildInstallScriptConfig(node, peers, hasBabel, transitCIDRs)
+	config.SigningPubkeyPEM = signingPubkeyPEM
+	return renderTemplate("install.sh", installScriptTemplate, config)
+}
+
+// buildInstallScriptConfig assembles the per-peer InstallScriptConfig shared by the plain and
+// signed renderers. SigningPubkeyPEM is left empty here; signed callers set it after.
+func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, transitCIDRs []string) InstallScriptConfig {
 	// 构建 WireGuard 接口列表
 	var wgIfaces []WgIfaceInfo
 	for _, p := range peers {
@@ -682,7 +758,7 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 		config.Platform = "debian"
 	}
 
-	return renderTemplate("install.sh", installScriptTemplate, config)
+	return config
 }
 
 // resolveMimicXDPMode 把节点的 XDPMode 归一为写入 mimic 配置的值。
@@ -772,6 +848,10 @@ type ClientInstallScriptConfig struct {
 	HasMimic     bool
 	MimicPorts   []int
 	MimicXDPMode string // 归一后的 xdp_mode（"skb"/"native"），见 InstallScriptConfig
+	// SigningPubkeyPEM is the pinned Ed25519 verifying public key (PEM) for bundle-signature
+	// verification; same semantics as InstallScriptConfig.SigningPubkeyPEM. Empty when signing is
+	// off (opt-in), keeping the client install.sh byte-identical to the pre-signing output.
+	SigningPubkeyPEM string
 }
 
 const clientInstallScriptTemplate = `#!/usr/bin/env bash
@@ -902,6 +982,52 @@ echo "=== Phase 1: Environment Preparation ==="
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+{{ if .SigningPubkeyPEM -}}
+# Verify the bundle's Ed25519 signature BEFORE the checksum check (docs/spec/controller/signing.md).
+# bundle.sig is base64(raw 64-byte Ed25519 signature) over the exact bytes of checksums.sha256
+# (the canonical bundle digest). The verifying public key is pinned below at generation time, so a
+# tampered checksums.sha256 (even with matching file hashes) is rejected before any root action.
+if [ -f "$SCRIPT_DIR/bundle.sig" ]; then
+    echo "Verifying bundle signature..."
+    if ! command -v openssl >/dev/null 2>&1; then
+        # bundle.sig is present but we cannot verify it: fail clearly, never silently skip.
+        echo "ERROR: bundle.sig present but openssl is not installed; cannot verify signature" >&2
+        exit 1
+    fi
+    # Write the pinned verifying public key to a temp file for openssl pkeyutl -pubin.
+    _sig_pubkey="$(mktemp)"
+    _sig_raw="$(mktemp)"
+    cleanup_sig() {
+        rm -f "$_sig_pubkey" "$_sig_raw"
+    }
+    trap cleanup_sig EXIT
+    cat > "$_sig_pubkey" << 'YAOG_SIGNING_PUBKEY_PEM'
+{{ .SigningPubkeyPEM }}
+YAOG_SIGNING_PUBKEY_PEM
+    # Decode base64 signature to raw bytes for openssl -rawin verification.
+    if ! base64 -d "$SCRIPT_DIR/bundle.sig" > "$_sig_raw" 2>/dev/null; then
+        echo "ERROR: failed to decode bundle.sig (not valid base64)" >&2
+        exit 1
+    fi
+    # Ed25519 is a one-shot (raw) signature: -rawin feeds the message directly, no pre-hash.
+    # openssl without Ed25519 support exits nonzero here, satisfying the fail-clear requirement.
+    if ! openssl pkeyutl -verify -pubin -inkey "$_sig_pubkey" -rawin -sigfile "$_sig_raw" -in "$SCRIPT_DIR/checksums.sha256" >/dev/null 2>&1; then
+        echo "ERROR: bundle signature verification failed (openssl missing Ed25519 support or signature invalid)" >&2
+        exit 1
+    fi
+    echo "Bundle signature verification passed."
+    cleanup_sig
+    trap - EXIT
+else
+    # This install.sh was rendered with signing enabled, so bundle.sig is MANDATORY: a missing
+    # signature is signature-stripping tamper, not an unsigned bundle. We KNOW the bundle was
+    # signed at generation time (the verifying key is pinned above), so refuse to proceed rather
+    # than fall through to the bare checksum check an attacker could satisfy with rewritten files.
+    echo "ERROR: bundle was signed at generation but bundle.sig is missing; refusing to proceed (possible signature-stripping tamper)" >&2
+    exit 1
+fi
+
+{{ end -}}
 # Verify checksums if available
 if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
     echo "Verifying file integrity..."
@@ -1075,6 +1201,24 @@ echo "Note: If the router is not yet online, connection will establish once it c
 // 取其 ListenPort 作为 mimic filter 端口，装配 mimic（见 docs/spec/artifacts/mimic.md）。
 // 调用方（internal/render）应传入该 client 的 ClientPeerInfo 以启用 mimic 支持。
 func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
+	config := buildClientInstallScriptConfig(node, clientInfo)
+	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
+}
+
+// RenderClientInstallScriptSigned renders the client install script with bundle-signature
+// verification enabled (openssl Ed25519 verify of bundle.sig over checksums.sha256 against the
+// pinned signingPubkeyPEM, before the existing sha256sum -c). Empty signingPubkeyPEM yields output
+// byte-identical to RenderClientInstallScript (opt-in). The export path calls this only when an
+// operator signing key is configured. See docs/spec/controller/signing.md.
+func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
+	config := buildClientInstallScriptConfig(node, clientInfo)
+	config.SigningPubkeyPEM = signingPubkeyPEM
+	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
+}
+
+// buildClientInstallScriptConfig assembles the ClientInstallScriptConfig shared by the plain and
+// signed client renderers. SigningPubkeyPEM is left empty here; signed callers set it after.
+func buildClientInstallScriptConfig(node *model.Node, clientInfo []*compiler.ClientPeerInfo) ClientInstallScriptConfig {
 	config := ClientInstallScriptConfig{
 		NodeName:       node.Name,
 		NodeNameQuoted: bashSingleQuote(node.Name),
@@ -1100,5 +1244,5 @@ func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientP
 		config.Platform = "debian"
 	}
 
-	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
+	return config
 }

@@ -14,4 +14,12 @@
 The export endpoint creates a ZIP containing per-node `.install.sh` files that are
 self-extracting:
 - Base64-encoded tar.gz payload appended after `__PAYLOAD_BELOW__` marker
+- Before extraction, the wrapper verifies the decoded payload against a Go-embedded
+  `EXPECTED_PAYLOAD_SHA256` (integrity; aborts on mismatch)
+- When bundle signing is enabled (`YAOG_BUNDLE_SIGNING_KEY`), the wrapper *also* verifies an
+  Ed25519 signature over the raw tar.gz payload **before** the SHA-256 check, with fail-clear
+  discipline (a present-but-unverifiable signature, or missing `openssl`, aborts). This is the
+  outer of the two signed objects; see [../controller/signing.md](../controller/signing.md). The
+  inner bundle's `bundle.sig` (over `checksums.sha256`) is verified later by the extracted
+  `install.sh`.
 - Extracts to temp dir, runs the inner `install.sh`, cleans up
