@@ -13,6 +13,7 @@ An Edge represents a unidirectional connection intent ("from actively connects t
 | `compiled_port` | int | Read-only: the port the from-side actually dials (reflects an override when set) |
 | `priority` | int | Connection priority |
 | `weight` | int | Connection weight |
+| `role` | `"primary" \| "backup" \| ""` | Link role for parallel links (see [Parallel links](#parallel-links-primary--backups)); empty = primary class |
 | `transport` | `"udp" \| "tcp"` | Transport protocol |
 | `is_enabled` | bool | Whether this edge is active |
 | `notes` | string | Free-form notes |
@@ -21,6 +22,27 @@ An Edge represents a unidirectional connection intent ("from actively connects t
 The endpoint resolution rule (how `endpoint_host`/`endpoint_port` produce the rendered
 WireGuard `Endpoint` line, and how the reverse peer dials back) is specified in
 [../compiler/peer-derivation.md](../compiler/peer-derivation.md).
+
+## Parallel links (primary + backups)
+
+A node pair MAY carry multiple enabled edges. Semantics (normative; identity contract in
+[../compiler/allocation-stability.md](../compiler/allocation-stability.md) §linkKey):
+
+- All edges of a pair with `role != "backup"` form the **primary class** and compile to ONE link
+  (one WireGuard tunnel) — a roleless `A→B` + `B→A` pair remains today's single bidirectional
+  tunnel. At most one edge of a pair may carry the explicit `role: "primary"` label (validator).
+- Every `role: "backup"` edge compiles to its **own link**: its own WireGuard interface
+  (edge-aware name, [naming.md](../artifacts/naming.md)), its own listen ports, transit pair, and
+  link-locals — all owned per-edge in that edge's `pinned_*` fields.
+- Babel performs failover between a pair's links by per-interface cost
+  ([babel.md](../artifacts/babel.md) §Link cost resolution): backups default to a higher rxcost
+  (384) than the primary, so routes shift to a backup only when the primary link dies or degrades
+  past the cost gap.
+- A roleless second edge in the SAME direction as an existing primary-class edge is an accidental
+  duplicate: warned (suggesting `role: "backup"` if redundancy was intended) and mapped to the
+  primary link for write-back — the historical behavior.
+- Edges to or from a `client`-role node cannot be parallel: clients keep the exactly-one-enabled-
+  outbound-edge rule (single `wg0`, no Babel).
 
 ## Port and endpoint ownership
 
@@ -106,8 +128,10 @@ the edge via six read-write pin fields, written by the compiler and round-trippe
 **Round-trip rule.** On compile the backend MUST stamp these fields with the allocated values.
 The frontend MUST persist them and send them back unchanged on the next compile. A subsequent
 compile MUST honor a present pin rather than recompute the value from array position, so a
-recompiled superset topology reproduces byte-identical values for every pre-existing edge. The
-canonical pin identity and the reserve-all-pins-first-then-gap-fill algorithm are specified in
+recompiled superset topology reproduces byte-identical values for every pre-existing edge.
+Ownership is **per edge**: each parallel link's pins live on its own edge and are reserved
+verbatim, independent of every other edge of the same pair. The link identity and the
+reserve-all-pins-first-then-gap-fill algorithm are specified in
 [../compiler/allocation-stability.md](../compiler/allocation-stability.md).
 
 > **Compliance:** the Edge model currently has no `pinned_*` fields

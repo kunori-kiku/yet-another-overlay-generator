@@ -122,6 +122,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `compiled_port` | — | compiler-written | n/a |
 | `priority` | — | optional | none-yet |
 | `weight` | — | optional | none-yet |
+| `role` | schema + semantic | enum `primary`/`backup`/empty; at most one explicit `primary` per pair; no `backup` on client edges | planned (parallel-links plan-2) |
 | `transport` | schema | enum `udp`/`tcp` | schema |
 | `is_enabled` | — | flag | n/a |
 | `notes` | — | free-form | n/a |
@@ -152,3 +153,12 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
   (see [../api/http-api.md](../api/http-api.md) compile contract).
 - Client edge constraints — exactly one enabled outbound edge, target must be router/relay/gateway,
   must carry `endpoint_host`, must not be an inbound target (`validateClientEdges`).
+- Parallel links (planned, parallel-links plan-2):
+  - **Interface-name uniqueness (N4)** — per node, across all primary and backup peer interfaces;
+    collision = compile-blocking error naming the colliding pair ([naming.md](../artifacts/naming.md)).
+  - **One explicit primary per pair** — at most one edge of a pair carries `role: "primary"`.
+  - **Equal-cost multi-link warning** — every link of a multi-link pair resolving to the same
+    effective cost expresses no failover preference ([babel.md](../artifacts/babel.md)).
+  - **No-primary warning** — a pair whose links are all `role: "backup"` (e.g. after a role flip).
+  - **Accidental-duplicate warning (D71 re-scope)** — a roleless same-direction second edge is
+    still warned, with the message now suggesting `role: "backup"` if redundancy was intended.

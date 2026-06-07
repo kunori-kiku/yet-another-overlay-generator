@@ -51,8 +51,9 @@ arrays.
 ### I3 — Identity binding
 
 Every allocated value MUST be bound to a stable entity identity and honored on the next compile,
-not recomputed from ordinal position. The identity of a per-peer allocation is the **canonical
-link key** `pinKey(a, b)` (defined below); the identity of overlay IP and key is the node ID.
+not recomputed from ordinal position. The identity of a per-peer allocation is the **link key**
+`linkKey(edge)` (defined below) — which reduces to the canonical pair key `pinKey(a, b)` for a
+pair's primary link; the identity of overlay IP and key is the node ID.
 
 > **Violation example:** deriving a transit pair as `2 * transitPairIndex + 1` ties the value to
 > loop position. Deleting an earlier edge shifts every later edge's index by one and renumbers
@@ -175,6 +176,47 @@ pinKey(a, b) = min(a, b) + "|" + max(a, b)        // string min/max of node IDs
 not the directed `from->to` string — to identify a link's reserved values, so that reversing an
 edge's draw direction does not change its allocation.
 
+### Link identity with parallel edges — `linkKey(edge)`
+
+A node pair MAY carry multiple enabled edges (one primary link plus backups for Babel cost-based
+failover — see [../data-model/edge.md](../data-model/edge.md) §Parallel links). Link identity
+generalizes from the pair to the edge:
+
+```
+linkKey(edge) = pinKey(from, to)                       // edge.role != "backup"  (primary class)
+linkKey(edge) = pinKey(from, to) + "#" + edge.ID       // edge.role == "backup"
+```
+
+**Unify rule (primary class).** All enabled edges of a pair whose `role` is not `backup` form the
+pair's **primary class** and collapse to ONE link entity — exactly today's semantics: a roleless
+`A→B` + `B→A` pair is one bidirectional tunnel, and the primary edge (first enabled primary-class
+edge in `topo.Edges` order) keeps today's selection rule. Additional same-direction primary-class
+edges remain accidental duplicates: warned, and mapped to the primary link for write-back (their
+historical behavior). Every `role: "backup"` edge is its **own link** regardless of direction.
+
+**Stability properties (normative):**
+
+1. **Single-edge reduction.** A pair with one enabled edge has `linkKey == pinKey` — fresh-compile
+   gap-fill order and values are byte-identical to the pre-parallel-links compiler. This is the
+   no-drift guarantee for every existing fleet, pinned by the perpetual stability gate.
+2. **Verbatim-pin immunity.** Pinned values are reserved from each edge's own `pinned_*` fields
+   verbatim; linkKey governs only gap-fill ordering, validator grouping, and unification. No
+   identity re-keying can move an already-pinned value.
+3. **Identity never migrates on growth.** Backups are ALWAYS discriminated by their own edge ID —
+   even when a backup is the pair's only edge. Adding or removing a backup therefore never changes
+   any other link's linkKey or interface name. (A lowest-edge-ID canonicality rule was considered
+   and rejected: edge UUIDs sort randomly, so a new backup could steal the bare pinKey and rename
+   the deployed primary's interface.)
+4. **Role flips are deliberate identity changes.** Setting `role: "backup"` on a previously
+   primary-class edge moves it to a discriminated linkKey and an edge-aware interface name
+   ([naming.md](../artifacts/naming.md)). Its pinned values survive (property 2), but the
+   interface renames — the operator changed what the link *is*. The validator warns when a role
+   flip leaves a pair with no primary-class link.
+5. **I9 with parallel edges.** Delete/re-add idempotence holds per link identity: re-adding a
+   deleted primary-class link (same pair) reproduces its clean gap-fill values as before;
+   re-adding a backup mints a new edge ID → a new identity → a fresh gap-fill. Documented and
+   accepted: backups are positional only in their own resources, never in anyone else's.
+
 > **Compliance:** current pre-allocation keys both directions in a `from->to` / `to->from` map and
 > dedupes by an `addedPairs` set (`internal/compiler/peers.go:130,146-152,205-208`), which is
 > direction-tolerant for dedup but is still positional for the values it assigns. Plan 7 replaces
@@ -186,8 +228,10 @@ Pass 1 of peer derivation MUST run in two ordered stages. Order independence (I2
 construction** because every pinned value is reserved before any unpinned value is chosen, and the
 gap-fill choice for an unpinned link does not depend on array order (see identity-ordered gap-fill).
 
-1. **Collect.** Enumerate all enabled edges. For each, compute `pinKey(from, to)` and collapse
-   reverse/duplicate edges to a single link entity (the same dedup the current code does).
+1. **Collect.** Enumerate all enabled edges and group by `pinKey(from, to)`. Within a pair,
+   collapse the primary class (all edges with `role != "backup"`) to a single link entity under
+   the unify rule above; every `role: "backup"` edge becomes its own link entity keyed by
+   `linkKey(edge)`.
 2. **Validate pins.** Run the [pin validation](#pin-validation) rules over every `pinned_*` value.
    Reject the compile on any violation. No reservation happens until validation passes.
 3. **Reserve pins.** For every link that carries pins, insert its pinned ports, transit pair, and
@@ -207,8 +251,10 @@ mechanism behind I1, I3, and I4.
 ### Identity-ordered gap-fill (delete/re-add idempotence)
 
 When gap-filling an unpinned link, the order in which candidate links are assigned MUST be
-deterministic in `pinKey` (e.g. iterate unpinned links sorted by `pinKey`, and within a pool pick
-the lowest free slot), **not** in array position. The rationale is **delete/re-add idempotence**:
+deterministic in `linkKey` (e.g. iterate unpinned links sorted by `linkKey`, and within a pool
+pick the lowest free slot), **not** in array position. For single-edge pairs `linkKey == pinKey`,
+so the sort order — and therefore every assigned value — is unchanged from the pre-parallel-links
+compiler. The rationale is **delete/re-add idempotence**:
 deleting an edge and re-adding the same link (same node pair) MUST, on the next compile, reproduce
 the same values it would have received from a clean gap-fill of that `pinKey`, independent of the
 deletion/re-addition history of unrelated links.
@@ -227,7 +273,7 @@ failure is a compile-blocking error, not a warning.
 
 | Rule | Condition | Error |
 |---|---|---|
-| **Duplicate pin** | two distinct links reserve the same port-on-a-node, the same transit IP, or the same link-local | reject: pinned value reused across links |
+| **Duplicate pin** | two distinct **linkKeys** reserve the same port-on-a-node, the same transit IP, or the same link-local (forward/reverse edges of one link share values legitimately; parallel links of the same pair are distinct linkKeys and MUST NOT share) | reject: pinned value reused across links |
 | **Out-of-CIDR transit** | a `pinned_*_transit_ip` value is not inside the link's domain `transit_cidr` | reject: pinned transit address outside pool |
 | **Out-of-range port** | a `pinned_*_port` is `< 1` or `> 65535`, or below the node's base `listen_port` | reject: pinned port out of range |
 | **Stale base** | a pin references a pool that no longer applies — e.g. `transit_cidr` was narrowed so the pinned transit IP is now out of pool, or the node's `listen_port` base moved above the pinned port | reject: stale pin; operator must clear it to renumber (I7) |

@@ -118,6 +118,7 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `compiled_port` | `CompiledPort` | `compiled_port` | read-back | ✅ | read-only; MUST reflect the actually-dialed port |
 | `priority` | `Priority` | `priority` | none | ⚠️ | no editor (D68); not read by Babel yet (D63) |
 | `weight` | `Weight` | `weight` | none | ⚠️ | no editor (D68); not read by Babel yet (D63) |
+| `role` | `Role` | `role?` | RightPanel select + Add-backup button | yes | `primary`/`backup`/empty; drives parallel-link identity + babel cost preset (edge.md §Parallel links) |
 | `transport` | `Transport` | `transport` | none | ⚠️ | no editor; FE stamps `'udp'` on draw (D68) |
 | `is_enabled` | `IsEnabled` | `is_enabled` | form | ✅ | |
 | `notes` | `Notes` | `notes` | none | ⚠️ | no editor (D68) |
