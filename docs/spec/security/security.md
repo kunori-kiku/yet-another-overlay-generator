@@ -35,6 +35,11 @@
   (per-interface keys are upstream best practice, not a requirement). **Per-edge keypairs are a
   documented escape hatch, not implemented** — if parallel-link handshakes ever misbehave in the
   field, introducing optional per-edge keys is the designed fallback.
+- **mimic transport is shaping, not security**: a `transport: "tcp"` edge wraps the link with mimic
+  (eBPF UDP→fake-TCP) to traverse UDP-hostile networks. mimic is **keyless** — it provides no
+  encryption, authentication, or confidentiality, and adds **no secret material** to the topology;
+  WireGuard remains the sole source of crypto and the only secret (its keys). mimic is **not** a
+  censorship/DPI-circumvention mechanism. See [../artifacts/mimic.md](../artifacts/mimic.md).
 - **Checksum Verification**: Install scripts verify `checksums.sha256` (SHA-256) before deploying
   configs.
 - **File Permissions**: WireGuard configs are written with `0600` permissions.

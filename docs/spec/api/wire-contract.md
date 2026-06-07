@@ -119,7 +119,7 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `priority` | `Priority` | `priority` | none | ⚠️ | no editor (D68); not read by Babel yet (D63) |
 | `weight` | `Weight` | `weight` | none | ⚠️ | no editor (D68); not read by Babel yet (D63) |
 | `role` | `Role` | `role?` | RightPanel select + Add-backup button | yes | `primary`/`backup`/empty; drives parallel-link identity + babel cost preset (edge.md §Parallel links) |
-| `transport` | `Transport` | `transport` | none | ⚠️ | no editor; FE stamps `'udp'` on draw (D68) |
+| `transport` | `Transport` | `transport` | RightPanel select | ✅ | `udp` plain WG; `tcp` = mimic-wrapped (no new wire field — mimic is keyless); FE labels it "TCP (mimic)" |
 | `is_enabled` | `IsEnabled` | `is_enabled` | form | ✅ | |
 | `notes` | `Notes` | `notes` | none | ⚠️ | no editor (D68) |
 

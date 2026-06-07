@@ -1,11 +1,16 @@
 # STATUS
-<!-- regenerated: 2026-06-07 (parallel-links subject closed) -->
-<!-- by: program closure (parallel-links-and-babel-failover) -->
+<!-- regenerated: 2026-06-07 (mimic-tcp-transport subject drafted) -->
+<!-- by: draft-implementation-plan -->
 
 ## Active work
 
-- **Subject:** none — between subjects.
-- **Last shipped:** parallel-links-and-babel-failover (2026-06-07, PRs #14–#16, `bb1ee78..1af83db`):
+- **Subject:** mimic-tcp-transport-2026_06_07 (drafted; plan-1 spec amendments written, executing)
+- **Branch:** plan/mimic-transport-2026-06
+- **Goal:** `transport: "tcp"` = wrap the link with [mimic](https://github.com/hack3ric/mimic)
+  (eBPF UDP→fake-TCP) for UDP-hostile networks (QoS/port-block/throughput) — NOT censorship. Keyless
+  (no new field), egress-attach (`mimic@<egress>`), MTU −12, distro-installed (not bundled).
+  3 plans: spec → backend → frontend label.
+- **Last shipped:** v1.3.0 (2026-06-07): parallel-links-and-babel-failover (PRs #14–#16,
   N parallel links per node pair with Babel cost failover. Per-edge link identity
   (`internal/linkid`, primary-class keeps bare pinKey → zero drift, proven by the untouched
   perpetual I1/I2 fixtures), edge-aware interface naming (N4), role→cost presets (backup 384),
