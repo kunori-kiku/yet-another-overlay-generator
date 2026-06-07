@@ -4,6 +4,8 @@ import {
   getBezierPath,
   type EdgeProps,
 } from '@xyflow/react';
+import { useTopologyStore } from '../../stores/topologyStore';
+import { txt, STRINGS } from '../../i18n';
 
 // 每种 edge type 的颜色方案
 const edgeColors: Record<string, { stroke: string; label: string; bg: string }> = {
@@ -18,6 +20,10 @@ const defaultColor = { stroke: '#6b7280', label: '#e5e7eb', bg: '#374151' };
 interface CustomEdgeData {
   edgeType?: string;
   label?: string;
+  // 编译状态语义：pending = 已绘制但尚未编译（compiled_port 为空），端口由后端
+  // 在下次编译时分配 → 虚线 + 「待分配」端口徽标；编译后实线 + 实际端口徽标。
+  pending?: boolean;
+  port?: number;
   parallelIndex?: number;
   parallelCount?: number;
   sourceNodeName?: string;
@@ -36,6 +42,7 @@ export function CustomEdge({
   data,
   selected,
 }: EdgeProps & { data: CustomEdgeData }) {
+  const language = useTopologyStore((state) => state.language);
   const edgeType = data?.edgeType || 'direct';
   const colors = edgeColors[edgeType] || defaultColor;
   const rawLabel = data?.label || edgeType;
@@ -43,6 +50,8 @@ export function CustomEdge({
   const tgtName = data?.targetNodeName || '';
   const namePrefix = srcName && tgtName ? `${srcName} → ${tgtName}` : '';
   const label = namePrefix ? `${namePrefix} | ${rawLabel}` : rawLabel;
+  const pending = data?.pending === true;
+  const port = data?.port;
 
   // 平行边偏移：根据 parallelIndex 和 parallelCount 计算偏移量
   const parallelIndex = data?.parallelIndex ?? 0;
@@ -77,8 +86,11 @@ export function CustomEdge({
         style={{
           stroke: colors.stroke,
           strokeWidth,
-          opacity: selected ? 1 : 0.8,
+          opacity: selected ? 1 : pending ? 0.65 : 0.8,
+          // pending（未编译）边用虚线区分「端口尚未分配」状态
+          strokeDasharray: pending ? '7 5' : undefined,
           filter: selected ? `drop-shadow(0 0 4px ${colors.stroke})` : undefined,
+          transition: 'stroke 150ms, stroke-width 150ms, opacity 150ms',
         }}
         markerEnd={`url(#marker-${edgeType})`}
         className={animated ? 'react-flow__edge-path-animated' : ''}
@@ -96,6 +108,9 @@ export function CustomEdge({
         >
           <div
             style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
               background: colors.bg,
               color: colors.label,
               border: `1.5px solid ${colors.stroke}`,
@@ -107,9 +122,27 @@ export function CustomEdge({
               boxShadow: selected
                 ? `0 0 8px ${colors.stroke}80`
                 : '0 1px 3px rgba(0,0,0,0.4)',
+              transition: 'box-shadow 150ms',
             }}
           >
-            {label}
+            <span>{label}</span>
+            {/* 端口徽标：已编译 → 实际监听端口（后端分配的真值）；
+                未编译 → 「待分配」占位，避免旧版 "host:" 悬空冒号式的误导。 */}
+            {(port !== undefined || pending) && (
+              <span
+                style={{
+                  fontFamily: 'monospace',
+                  background: `${colors.stroke}30`,
+                  color: colors.label,
+                  borderRadius: '3px',
+                  padding: '0 4px',
+                  fontStyle: pending ? 'italic' : 'normal',
+                  opacity: pending ? 0.8 : 1,
+                }}
+              >
+                {port !== undefined ? `:${port}` : txt(language, ...STRINGS.portPendingLabel)}
+              </span>
+            )}
           </div>
         </div>
       </EdgeLabelRenderer>

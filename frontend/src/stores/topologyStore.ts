@@ -36,6 +36,12 @@ interface TopologyState {
   viewMode: 'topology' | 'audit';
   setViewMode: (mode: 'topology' | 'audit') => void;
 
+  // 画布 UI 偏好：是否在节点卡片上展开已编译接口详情（纯展示）。
+  // 接口是编译产物而非绘图原语 —— 连线手势始终是节点对节点，端口由后端分配；
+  // 因此接口详情默认收起，按需展开，避免误导用户「连线 = 选择某个接口/端口」。
+  showInterfaces: boolean;
+  setShowInterfaces: (show: boolean) => void;
+
   // 选中状态
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
@@ -136,6 +142,7 @@ export const useTopologyStore = create<TopologyState>()(
       isValidating: false,
       error: null,
       viewMode: 'topology',
+      showInterfaces: false,
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,
@@ -145,6 +152,7 @@ export const useTopologyStore = create<TopologyState>()(
 
   // UI
   setViewMode: (mode) => set({ viewMode: mode }),
+  setShowInterfaces: (show) => set({ showInterfaces: show }),
 
   // Project
   setProject: (updates) =>
@@ -537,6 +545,8 @@ export const useTopologyStore = create<TopologyState>()(
         // Spec E 规则 R0：版本号也要持久化，刷新页面后仍能往返编译器写入的分配方案。
         allocSchemaVersion: state.allocSchemaVersion,
         language: state.language,
+        // 画布偏好与语言同级持久化：刷新后保持用户选择的接口详情展开状态。
+        showInterfaces: state.showInterfaces,
       }),
     }
   )

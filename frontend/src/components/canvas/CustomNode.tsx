@@ -11,15 +11,14 @@ const roleColors: Record<string, string> = {
   client: 'border-cyan-500 bg-cyan-900/50',
 };
 
-// Pre-compile fallback connection handles reuse the node's role color (above) so the
-// connection affordance is visible and role-keyed BEFORE the first compile — the rich
-// per-interface handles only exist once compileResult is present. Larger than the old
-// 8px gray dots, with a hover-grow transition; the `title` carries the drag hint tooltip.
-const fallbackHandleClassBase =
+// 连接手柄：节点级、角色配色、永久存在（编译前后形态一致）。
+// 接口是编译产物而非绘图原语 —— onConnect 只用节点 ID（忽略 handle id），端口由
+// 后端在编译时分配；因此不再渲染「每接口一个手柄」（旧形态在编译后只剩被占用的
+// 接口手柄，看起来像"端口已饱和、无法再连线"，且暗示新连线会复用既有端口）。
+const handleClassBase =
   '!w-3.5 !h-3.5 !border-2 transition-all duration-150 hover:!w-4 hover:!h-4';
 
-// react-flow's `.react-flow__handle` ships a default background; reuse roleColors but with
-// the `!` important prefix (as the old `!bg-gray-400` did) so the role tint actually wins.
+// react-flow 的 `.react-flow__handle` 自带默认背景；用 `!` important 前缀让角色色生效。
 const roleHandleColorClass: Record<string, string> = {
   peer: '!border-green-500 !bg-green-500',
   router: '!border-blue-500 !bg-blue-500',
@@ -36,8 +35,8 @@ const roleIcons: Record<string, string> = {
   client: '📱',
 };
 
-// Distinct colors for per-peer interface handles
-const peerHandleColors = [
+// 接口详情徽标的区分配色（展示用）
+const ifaceChipColors = [
   { bg: '#f87171', border: '#dc2626' }, // red
   { bg: '#fb923c', border: '#ea580c' }, // orange
   { bg: '#facc15', border: '#ca8a04' }, // yellow
@@ -65,51 +64,30 @@ interface CustomNodeData {
 
 export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeData }) {
   const language = useTopologyStore((state) => state.language);
+  // 「显示接口详情」画布开关：接口/端口信息按需展开，默认收起。
+  const showInterfaces = useTopologyStore((state) => state.showInterfaces);
   const role = data.role || 'peer';
   const colorClass = roleColors[role] || roleColors.peer;
   const icon = roleIcons[role] || '💻';
   const interfaces: IfaceInfo[] = (data.interfaces as IfaceInfo[]) || [];
-  const hasInterfaces = interfaces.length > 0;
-  // Role-keyed fallback handle color (same palette as roleColors) + sizing/hover-grow class.
-  const fallbackHandleClass = `${roleHandleColorClass[role] || roleHandleColorClass.peer} ${fallbackHandleClassBase}`;
+  const handleClass = `${roleHandleColorClass[role] || roleHandleColorClass.peer} ${handleClassBase}`;
   const dragHint = txt(language, '拖拽以连接', 'drag to connect');
 
   return (
     <>
-      {/* Target handles (top): per-interface after compilation, single default otherwise */}
-      {hasInterfaces ? (
-        interfaces.map((iface, i) => {
-          const color = peerHandleColors[i % peerHandleColors.length];
-          return (
-            <Handle
-              key={`target-${iface.name}`}
-              type="target"
-              id={iface.name}
-              position={Position.Top}
-              title={`${iface.name} :${iface.listenPort} (← ${iface.peerName})`}
-              style={{
-                left: `${((i + 1) / (interfaces.length + 1)) * 100}%`,
-                backgroundColor: color.bg,
-                border: `2px solid ${color.border}`,
-                width: '10px',
-                height: '10px',
-              }}
-            />
-          );
-        })
-      ) : (
-        <Handle
-          type="target"
-          position={Position.Top}
-          title={dragHint}
-          className={fallbackHandleClass}
-        />
-      )}
+      <Handle
+        type="target"
+        position={Position.Top}
+        title={dragHint}
+        className={handleClass}
+      />
 
       <div
         className={`px-3 py-2 rounded-lg border-2 ${colorClass} ${
           selected ? 'ring-2 ring-white' : ''
-        } min-w-[120px] text-center`}
+        } min-w-[120px] text-center transition-shadow duration-150 ${
+          selected ? 'shadow-lg' : 'shadow'
+        }`}
       >
         <div className="text-lg">{icon}</div>
         <div className="text-sm font-bold text-white">{data.label}</div>
@@ -120,10 +98,12 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
         {data.domainName && (
           <div className="text-xs text-blue-300">{data.domainName}</div>
         )}
-        {hasInterfaces && (
+        {/* 已编译接口详情（纯展示，开关控制）：wg-<peer> 接口名 + 监听端口。
+            手柄不再与接口绑定，这里是接口信息的唯一画布载体。 */}
+        {showInterfaces && interfaces.length > 0 && (
           <div className="mt-1 flex flex-wrap justify-center gap-1">
             {interfaces.map((iface, i) => {
-              const color = peerHandleColors[i % peerHandleColors.length];
+              const color = ifaceChipColors[i % ifaceChipColors.length];
               return (
                 <span
                   key={iface.name}
@@ -139,35 +119,12 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
         )}
       </div>
 
-      {/* Source handles (bottom): per-interface after compilation, single default otherwise */}
-      {hasInterfaces ? (
-        interfaces.map((iface, i) => {
-          const color = peerHandleColors[i % peerHandleColors.length];
-          return (
-            <Handle
-              key={`source-${iface.name}`}
-              type="source"
-              id={iface.name}
-              position={Position.Bottom}
-              title={`${iface.name} :${iface.listenPort} (→ ${iface.peerName})`}
-              style={{
-                left: `${((i + 1) / (interfaces.length + 1)) * 100}%`,
-                backgroundColor: color.bg,
-                border: `2px solid ${color.border}`,
-                width: '10px',
-                height: '10px',
-              }}
-            />
-          );
-        })
-      ) : (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          title={dragHint}
-          className={fallbackHandleClass}
-        />
-      )}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        title={dragHint}
+        className={handleClass}
+      />
     </>
   );
 }
