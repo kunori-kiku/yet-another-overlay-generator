@@ -53,6 +53,18 @@ type InstallScriptConfig struct {
 	// over checksums.sha256 against this pinned key using openssl, failing clearly if bundle.sig
 	// is present but openssl/Ed25519 is unavailable. See docs/spec/controller/signing.md.
 	SigningPubkeyPEM string
+	// SplicePlaceholder enables the AgentHeld custody splice block in Phase 2: after each
+	// per-peer conf is copied to /etc/wireguard, the copied conf's placeholder PrivateKey line is
+	// replaced in place with the node's locally-held private key read from /etc/wireguard/agent.key.
+	// False (the default) emits no splice block, so the air-gap install.sh stays byte-identical to
+	// the pre-splice output. The bundled confs are never touched, so the signed bundle stays pristine
+	// and re-runs remain idempotent. See docs/spec/controller/key-custody.md.
+	SplicePlaceholder bool
+	// SplicePlaceholderToken is the exact sentinel that appears as the value of the [Interface]
+	// PrivateKey line under AgentHeld custody (PrivateKeyPlaceholder, e.g. "PRIVATEKEY_PLACEHOLDER").
+	// The splice block matches the literal line 'PrivateKey = <token>' and replaces only that line.
+	// Only meaningful when SplicePlaceholder is true.
+	SplicePlaceholderToken string
 }
 
 // WgIfaceInfo 单个 WireGuard 接口信息
@@ -548,6 +560,38 @@ echo "Deploying WireGuard per-peer configurations..."
 cp "$SCRIPT_DIR/wireguard/{{ .ConfName }}" /etc/wireguard/{{ .ConfName }}
 chmod 600 /etc/wireguard/{{ .ConfName }}
 echo "  Deployed: /etc/wireguard/{{ .ConfName }}"
+{{ if $.SplicePlaceholder -}}
+# AgentHeld custody: splice the node's locally-held private key into the COPIED conf (never the
+# bundle conf — the signed bundle stays pristine so re-runs keep passing sha256sum -c). This runs
+# in Phase 2, AFTER the Phase-1 signature/checksum verify (over the pristine placeholder bundle) and
+# BEFORE wg-quick up. Injection-safe: no sed/regex; the key is read once and the file rewritten line
+# by line. Re-run safe: the preceding cp restores the placeholder conf, so each run re-splices the
+# same stable key deterministically; the grep guard skips only a conf that carries no placeholder
+# (e.g. an air-gap bundle, which never renders this block).
+if grep -qxF 'PrivateKey = {{ $.SplicePlaceholderToken }}' "/etc/wireguard/{{ .ConfName }}"; then
+    if [ ! -s /etc/wireguard/agent.key ]; then
+        echo "ERROR: /etc/wireguard/{{ .ConfName }} expects an agent-held private key but /etc/wireguard/agent.key is missing or empty" >&2
+        exit 1
+    fi
+    # Command substitution strips the trailing newline, yielding the bare base64 key.
+    _agent_key="$(cat /etc/wireguard/agent.key)"
+    _spliced="$(mktemp)"
+    # The scratch file transiently holds the real private key; remove it on any exit.
+    trap 'rm -f "$_spliced"' EXIT
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$line" = 'PrivateKey = {{ $.SplicePlaceholderToken }}' ]; then
+            printf 'PrivateKey = %s\n' "$_agent_key" >> "$_spliced"
+        else
+            printf '%s\n' "$line" >> "$_spliced"
+        fi
+    done < "/etc/wireguard/{{ .ConfName }}"
+    cat "$_spliced" > "/etc/wireguard/{{ .ConfName }}"
+    rm -f "$_spliced"
+    trap - EXIT
+    chmod 600 /etc/wireguard/{{ .ConfName }}
+    echo "  Spliced agent-held private key into /etc/wireguard/{{ .ConfName }}"
+fi
+{{ end -}}
 {{ end -}}
 
 {{ if .HasBabel -}}
@@ -704,17 +748,34 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 	return renderTemplate("install.sh", installScriptTemplate, config)
 }
 
+// CustodySplice carries the AgentHeld custody-splice parameters into the *Signed renderers.
+//
+// When Enabled is true, the rendered install.sh gains a Phase-2 block that, after copying each conf
+// to /etc/wireguard, replaces the placeholder PrivateKey line (value == Token) in the COPIED conf
+// with the node's locally-held key from /etc/wireguard/agent.key. The zero value (Enabled:false)
+// emits no splice block, so the air-gap install.sh stays byte-identical to the pre-splice output.
+// See docs/spec/controller/key-custody.md.
+type CustodySplice struct {
+	// Enabled turns the custody-splice block on. False = no splice = byte-identical to today.
+	Enabled bool
+	// Token is the exact PrivateKey value to match for replacement (PrivateKeyPlaceholder).
+	Token string
+}
+
 // RenderInstallScriptSigned renders the per-peer install script with bundle-signature verification
 // enabled: the rendered install.sh, before its existing sha256sum -c, verifies bundle.sig over
 // checksums.sha256 against the pinned signingPubkeyPEM (PKIX/PKCS8 PEM) using openssl.
 //
-// This is the entry point the export path calls only when an operator signing key is configured
-// (YAOG_BUNDLE_SIGNING_KEY). When signingPubkeyPEM is empty, the output is byte-identical to
-// RenderInstallScript (opt-in back-compat). All other parameters match RenderInstallScript. See
-// docs/spec/controller/signing.md.
-func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, transitCIDRs ...string) (string, error) {
+// splice gates the AgentHeld custody-splice block (CustodySplice{} disables it, keeping output
+// byte-identical to the pre-splice path). This is the entry point the export path calls only when an
+// operator signing key is configured (YAOG_BUNDLE_SIGNING_KEY). When signingPubkeyPEM is empty, the
+// output is byte-identical to RenderInstallScript (opt-in back-compat). All other parameters match
+// RenderInstallScript. See docs/spec/controller/signing.md and docs/spec/controller/key-custody.md.
+func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, splice CustodySplice, transitCIDRs ...string) (string, error) {
 	config := buildInstallScriptConfig(node, peers, hasBabel, transitCIDRs)
 	config.SigningPubkeyPEM = signingPubkeyPEM
+	config.SplicePlaceholder = splice.Enabled
+	config.SplicePlaceholderToken = splice.Token
 	return renderTemplate("install.sh", installScriptTemplate, config)
 }
 
@@ -852,6 +913,14 @@ type ClientInstallScriptConfig struct {
 	// verification; same semantics as InstallScriptConfig.SigningPubkeyPEM. Empty when signing is
 	// off (opt-in), keeping the client install.sh byte-identical to the pre-signing output.
 	SigningPubkeyPEM string
+	// SplicePlaceholder enables the AgentHeld custody splice block on the copied wg0.conf in Phase 2;
+	// same semantics as InstallScriptConfig.SplicePlaceholder. False keeps the client install.sh
+	// byte-identical to the pre-splice output. See docs/spec/controller/key-custody.md.
+	SplicePlaceholder bool
+	// SplicePlaceholderToken is the exact PrivateKey value to match for replacement
+	// (PrivateKeyPlaceholder); same semantics as InstallScriptConfig.SplicePlaceholderToken. Only
+	// meaningful when SplicePlaceholder is true.
+	SplicePlaceholderToken string
 }
 
 const clientInstallScriptTemplate = `#!/usr/bin/env bash
@@ -1129,6 +1198,38 @@ echo "Deploying WireGuard client configuration..."
 cp "$SCRIPT_DIR/wireguard/wg0.conf" /etc/wireguard/wg0.conf
 chmod 600 /etc/wireguard/wg0.conf
 echo "  Deployed: /etc/wireguard/wg0.conf"
+{{ if .SplicePlaceholder -}}
+# AgentHeld custody: splice the node's locally-held private key into the COPIED wg0.conf (never the
+# bundle conf — the signed bundle stays pristine so re-runs keep passing sha256sum -c). This runs
+# in Phase 2, AFTER the Phase-1 signature/checksum verify (over the pristine placeholder bundle) and
+# BEFORE wg-quick up. Injection-safe: no sed/regex; the key is read once and the file rewritten line
+# by line. Re-run safe: the preceding cp restores the placeholder conf, so each run re-splices the
+# same stable key deterministically; the grep guard skips only a conf that carries no placeholder
+# (e.g. an air-gap bundle, which never renders this block).
+if grep -qxF 'PrivateKey = {{ .SplicePlaceholderToken }}' /etc/wireguard/wg0.conf; then
+    if [ ! -s /etc/wireguard/agent.key ]; then
+        echo "ERROR: /etc/wireguard/wg0.conf expects an agent-held private key but /etc/wireguard/agent.key is missing or empty" >&2
+        exit 1
+    fi
+    # Command substitution strips the trailing newline, yielding the bare base64 key.
+    _agent_key="$(cat /etc/wireguard/agent.key)"
+    _spliced="$(mktemp)"
+    # The scratch file transiently holds the real private key; remove it on any exit.
+    trap 'rm -f "$_spliced"' EXIT
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$line" = 'PrivateKey = {{ .SplicePlaceholderToken }}' ]; then
+            printf 'PrivateKey = %s\n' "$_agent_key" >> "$_spliced"
+        else
+            printf '%s\n' "$line" >> "$_spliced"
+        fi
+    done < /etc/wireguard/wg0.conf
+    cat "$_spliced" > /etc/wireguard/wg0.conf
+    rm -f "$_spliced"
+    trap - EXIT
+    chmod 600 /etc/wireguard/wg0.conf
+    echo "  Spliced agent-held private key into /etc/wireguard/wg0.conf"
+fi
+{{ end -}}
 
 # Deploy sysctl configuration
 cp "$SCRIPT_DIR/sysctl/{{ .SysctlConfName }}" /etc/sysctl.d/{{ .SysctlConfName }}
@@ -1207,12 +1308,16 @@ func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientP
 
 // RenderClientInstallScriptSigned renders the client install script with bundle-signature
 // verification enabled (openssl Ed25519 verify of bundle.sig over checksums.sha256 against the
-// pinned signingPubkeyPEM, before the existing sha256sum -c). Empty signingPubkeyPEM yields output
-// byte-identical to RenderClientInstallScript (opt-in). The export path calls this only when an
-// operator signing key is configured. See docs/spec/controller/signing.md.
-func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
+// pinned signingPubkeyPEM, before the existing sha256sum -c). splice gates the AgentHeld
+// custody-splice block on the copied wg0.conf (CustodySplice{} disables it, keeping output
+// byte-identical to the pre-splice path). Empty signingPubkeyPEM yields output byte-identical to
+// RenderClientInstallScript (opt-in). The export path calls this only when an operator signing key
+// is configured. See docs/spec/controller/signing.md and docs/spec/controller/key-custody.md.
+func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, splice CustodySplice, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
 	config := buildClientInstallScriptConfig(node, clientInfo)
 	config.SigningPubkeyPEM = signingPubkeyPEM
+	config.SplicePlaceholder = splice.Enabled
+	config.SplicePlaceholderToken = splice.Token
 	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
 }
 

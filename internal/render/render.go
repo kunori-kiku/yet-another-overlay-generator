@@ -193,10 +193,16 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 
 	//
 	for _, node := range result.Topology.Nodes {
+		// AgentHeld custody is detected per-node from the rendered private key: when the node's key
+		// is the placeholder, the install.sh must splice the agent-held key at install time. Air-gap
+		// nodes carry a real private key here, so custody=false and no splice block is emitted
+		// (keeping the air-gap install.sh byte-identical). See docs/spec/controller/key-custody.md.
+		custody := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
+		splice := renderer.CustodySplice{Enabled: custody, Token: PrivateKeyPlaceholder}
 		if node.Role == "client" {
 			// 传入该 client 的 ClientPeerInfo，使其单一 wg0 链路在 transport=="tcp" 时
 			// 也装配 mimic（决策 #5：client 也支持）。键缺失时为 nil，renderer 已做空值保护。
-			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, result.ClientConfigs[node.ID])
+			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, splice, result.ClientConfigs[node.ID])
 			if err != nil {
 				return fmt.Errorf("渲染 client %s 的安装脚本失败: %w", node.Name, err)
 			}
@@ -205,7 +211,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 			peers := result.PeerMap[node.ID]
 			_, hasBabel := result.BabelConfigs[node.ID]
 			transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
-			script, err := renderer.RenderInstallScriptSigned(&node, peers, hasBabel, signingPubPEM, transitCIDRs...)
+			script, err := renderer.RenderInstallScriptSigned(&node, peers, hasBabel, signingPubPEM, splice, transitCIDRs...)
 			if err != nil {
 				return fmt.Errorf("渲染节点 %s 的安装脚本失败: %w", node.Name, err)
 			}

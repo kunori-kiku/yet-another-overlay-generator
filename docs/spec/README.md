@@ -54,7 +54,8 @@ docs/spec/
 │   └── security.md                # Security considerations
 ├── controller/
 │   ├── signing.md                 # Canonical bundle serialization + Ed25519 bundle signing
-│   └── key-custody.md             # Zero-knowledge key custody (AgentHeld split-render)
+│   ├── key-custody.md             # Zero-knowledge key custody (AgentHeld split-render)
+│   └── agent.md                   # Node agent (keygen→pull→verify→apply via install.sh splice)
 └── glossary.md                    # Terminology
 ```
 

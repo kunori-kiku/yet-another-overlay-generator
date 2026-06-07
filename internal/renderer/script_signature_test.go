@@ -64,7 +64,7 @@ func sigTestClientNode() *model.Node {
 func TestRenderInstallScriptSigned_VerifyStepPrecedesChecksum(t *testing.T) {
 	pubPEM := sigTestPubkeyPEM(t)
 
-	script, err := RenderInstallScriptSigned(sigTestRouterNode(), sigTestPeers(), true, pubPEM)
+	script, err := RenderInstallScriptSigned(sigTestRouterNode(), sigTestPeers(), true, pubPEM, CustodySplice{})
 	if err != nil {
 		t.Fatalf("render signed install script: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRenderInstallScript_UnsignedByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render plain install script: %v", err)
 	}
-	signedEmpty, err := RenderInstallScriptSigned(node, peers, true, "")
+	signedEmpty, err := RenderInstallScriptSigned(node, peers, true, "", CustodySplice{})
 	if err != nil {
 		t.Fatalf("render signed-empty install script: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRenderInstallScript_UnsignedByteIdentical(t *testing.T) {
 func TestRenderClientInstallScriptSigned_VerifyStepPrecedesChecksum(t *testing.T) {
 	pubPEM := sigTestPubkeyPEM(t)
 
-	script, err := RenderClientInstallScriptSigned(sigTestClientNode(), pubPEM)
+	script, err := RenderClientInstallScriptSigned(sigTestClientNode(), pubPEM, CustodySplice{})
 	if err != nil {
 		t.Fatalf("render signed client install script: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestRenderClientInstallScript_UnsignedByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render plain client install script: %v", err)
 	}
-	signedEmpty, err := RenderClientInstallScriptSigned(node, "")
+	signedEmpty, err := RenderClientInstallScriptSigned(node, "", CustodySplice{})
 	if err != nil {
 		t.Fatalf("render signed-empty client install script: %v", err)
 	}
