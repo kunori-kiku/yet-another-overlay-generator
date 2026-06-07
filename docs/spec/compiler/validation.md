@@ -123,7 +123,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `priority` | — | optional | none-yet |
 | `weight` | — | optional | none-yet |
 | `role` | schema + semantic | enum `primary`/`backup`/empty; at most one explicit `primary` per pair; no `backup` on client edges | planned (parallel-links plan-2) |
-| `transport` | schema + semantic | enum `udp`/`tcp`; empty→`udp`; `tcp` = mimic-wrapped (no warning); semantic: both endpoints must be Linux-deployable | schema + semantic |
+| `transport` | schema + semantic | enum `udp`/`tcp`; empty→`udp`; `tcp` = mimic-wrapped; semantic: both endpoints must be Linux-deployable | schema; semantic planned (mimic-tcp-transport) |
 | `is_enabled` | — | flag | n/a |
 | `notes` | — | free-form | n/a |
 
