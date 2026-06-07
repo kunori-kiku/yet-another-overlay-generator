@@ -110,7 +110,7 @@ A directed edge `A → B` means: **A actively connects to B**.
 | Endpoint IP | Target public IP or hostname; pick from target node's public endpoints or enter manually |
 | Endpoint Port | Operator NAT/port-forward override: `0` (default) = compiler auto-allocates; nonzero = the external port the from-side dials verbatim |
 | Compiled Port | Read-only: the port the from-side actually dials, displayed under the port field after compilation |
-| Transport | `udp` / `tcp` metadata |
+| Transport | `udp` = plain WireGuard. `tcp` = the link is wrapped by [mimic](https://github.com/hack3ric/mimic) (eBPF UDP→fake-TCP) for networks that throttle or block UDP. Both ends must be Linux with eBPF; MTU is auto-lowered 12 bytes; the installer provisions mimic from the distro. **Not** a censorship/DPI-circumvention feature. See `docs/spec/artifacts/mimic.md` |
 | Priority / Weight | Path preference weights |
 | Is Enabled | Whether this edge participates in compilation |
 
