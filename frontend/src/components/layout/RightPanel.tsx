@@ -837,8 +837,13 @@ export function RightPanel() {
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
               >
                 <option value="udp">UDP</option>
-                <option value="tcp">TCP</option>
+                <option value="tcp">{txt(language, 'TCP（mimic）', 'TCP (mimic)')}</option>
               </select>
+              {selectedEdge.transport === 'tcp' && (
+                <p className="mt-1 text-xs text-gray-400">
+                  {txt(language, ...STRINGS.mimicHint)}
+                </p>
+              )}
             </div>
             {/* 链路角色（edge.md 并行链路）：空 = 主链路类；backup = 独立的备份链路。
                 角色变更会改变链路身份（重新 key），属拨号相关编辑 ⇒ 与本文件其他拨号相关编辑一致，

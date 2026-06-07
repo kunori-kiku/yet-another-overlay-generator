@@ -106,7 +106,7 @@ Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配
 | Endpoint IP | 目标公网 IP 或域名，可从目标节点的公网映射下拉选择，也可手动输入 |
 | Endpoint Port | 用户指定端口：`0` = 自动分配（默认），非零 = NAT/端口转发覆盖（如外部端口 443 映射到内部 WireGuard 端口） |
 | Compiled Port | 编译器分配的实际端口（只读），编译后显示在端口字段下方 |
-| Transport | `udp` / `tcp` 元数据 |
+| Transport | `udp` = 普通 WireGuard。`tcp` = 该链路由 [mimic](https://github.com/hack3ric/mimic)（eBPF UDP→伪 TCP）包裹，适用于限速或封锁 UDP 的网络。两端均需支持 eBPF 的 Linux；MTU 自动下调 12 字节；安装脚本从发行版仓库装配 mimic。**不是**绕过审查（DPI）的功能。详见 `docs/spec/artifacts/mimic.md` |
 | Priority / Weight | 路径偏好权重 |
 | Is Enabled | 该连线是否参与编译 |
 

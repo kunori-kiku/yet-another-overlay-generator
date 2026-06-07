@@ -45,4 +45,9 @@ export const STRINGS = {
   roleBackup: ['备份链路', 'Backup'] as const,
   // 同方向意外重复边的告警徽标（非刻意创建的备份；建议改用 role: backup）。
   duplicateChip: ['重复?', 'duplicate?'] as const,
+  // transport=tcp（mimic）提示：诚实定位为「UDP 受限网络」用途，不是反审查工具。
+  mimicHint: [
+    '用 mimic 把该链路伪装成 TCP，适用于限速/封锁 UDP 的网络；两端均需 Linux（eBPF），MTU 会自动下调。注意：这不是用于绕过审查（DPI）的功能。',
+    'Wraps this link as TCP via mimic for networks that throttle or block UDP. Both ends must be Linux (eBPF); MTU is auto-lowered. Not a censorship/DPI-circumvention feature.',
+  ] as const,
 } as const;
