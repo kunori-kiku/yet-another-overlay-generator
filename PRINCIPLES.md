@@ -35,8 +35,9 @@ principle-risk assessment.
   verified to work; changes near `babel.go` redistribute logic must prove it byte-identical.
 - **Minimal dependencies (LOW):** Go stdlib `net/http` only; sole external dep is
   `golang.zx2c4.com/wireguard/wgctrl`.
-- **Local toolchain absence:** Go and npm are NOT installed on the dev machine; all
-  verification runs in CI on PRs.
+- **Local toolchain:** Go is NOT installed on the dev machine — all Go verification runs in CI
+  on PRs. npm/node (v20) ARE available locally as of 2026-06-07: run
+  `cd frontend && npm run lint && npm run build` before pushing frontend changes.
 - **No `--no-verify`, no amends, no force-push.**
 
 ## Domain context

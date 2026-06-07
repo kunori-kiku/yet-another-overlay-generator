@@ -144,6 +144,25 @@ longer than 12 characters and MUST NOT be used.
 > the remote node name at `internal/compiler/peers.go:267,332,376`. The contract holds in the backend;
 > the deviation is in the frontend (below). Closed by Plan 4 (PR #6).
 
+### Edge-aware names for backup links (parallel links)
+
+With parallel links ([../data-model/edge.md](../data-model/edge.md) §Parallel links) a node can
+host several interfaces toward the SAME remote peer, so the remote name alone no longer
+identifies the interface. The naming authority gains an edge-aware variant:
+
+- **Primary link** (the pair's primary class): `WgInterfaceName(remoteName)` — byte-identical to
+  the algorithm above. Deployed fleets see zero interface renames.
+- **Backup link** (`role: "backup"`, always): `"wg-" + clean[:8] + sha256(remoteName + "|" + edge.ID)[:4]`
+  — the long-path shape with the edge ID folded into the hash input, applied UNCONDITIONALLY
+  (no short path), so two backups toward the same peer differ in their 4-hex suffix while staying
+  within the `3 + 8 + 4 = 15` budget. Stable across recompiles because the edge ID is stable.
+
+The variant lives in the same single authority (`internal/naming`). Both the compiler and the
+validator MUST obtain backup-link names from it; per-node uniqueness across ALL of a node's peer
+interfaces (primary and backup, any remote) is a new invariant **N4**, validator-enforced as a
+compile-blocking error — the deterministic answer to a 16-bit hash collision is "rename one node",
+and the validator names the colliding pair.
+
 ### The frontend MUST NOT reimplement this
 
 The frontend MUST NOT recompute interface names. It MUST read the compiled interface names out of the

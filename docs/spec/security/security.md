@@ -26,6 +26,15 @@
   > **Compliance:** `generateKeys` previously rotated the key of every non-fixed node on every
   > compile and blanked the node's stored key (`internal/api/handler.go:308-314`). Closed by the
   > sticky-pin allocation work: keys now round-trip and are reused.
+
+  **Parallel links share node keys.** Parallel tunnels between the same host pair
+  ([../data-model/edge.md](../data-model/edge.md) §Parallel links) reuse the two nodes' existing
+  keypairs on every link. This is sound: each link is a separate WireGuard device with its own
+  UDP socket and listen port on both ends, so sessions cannot cross-talk; the known shared-key
+  hazards apply to duplicate keys *within one device's peer table*, not across devices
+  (per-interface keys are upstream best practice, not a requirement). **Per-edge keypairs are a
+  documented escape hatch, not implemented** — if parallel-link handshakes ever misbehave in the
+  field, introducing optional per-edge keys is the designed fallback.
 - **Checksum Verification**: Install scripts verify `checksums.sha256` (SHA-256) before deploying
   configs.
 - **File Permissions**: WireGuard configs are written with `0600` permissions.

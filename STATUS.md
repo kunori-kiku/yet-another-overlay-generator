@@ -1,14 +1,15 @@
 # STATUS
-<!-- regenerated: 2026-06-07 (post-merge closure) -->
-<!-- by: program closure (audit-remediation-and-allocation-stability) -->
+<!-- regenerated: 2026-06-07 (parallel-links subject drafted) -->
+<!-- by: draft-implementation-plan -->
 
 ## Active work
 
-- **Subject:** none — between subjects.
-- **Last shipped:** audit-remediation-and-allocation-stability (2026-06-07): the full 10-PR
-  remediation chain (#3–#12) merged into `main` (`d5065ed..fe93788`). All 84 audit findings
-  dispositioned (dossier Appendix B); sticky-pin allocation live with the I1/I2 superset
-  property gate in the perpetual suite; specs frozen under `docs/spec/`.
+- **Subject:** parallel-links-and-babel-failover-2026_06_07 (drafted, plan-1 ready to execute)
+- **Branch:** plan/parallel-links-2026-06
+- **Current plan:** plan-1-2026_06_07.md (spec contract freeze; this PR carries the plan folder)
+- **Last shipped:** canvas UX rework (PR #13, main @ bb1ee78) on top of the full
+  audit-remediation chain (#3–#12, `d5065ed..fe93788`): sticky-pin allocation + I1/I2 perpetual
+  gate, specs frozen under `docs/spec/`, all 84 findings dispositioned.
 
 ## Open questions / blockers
 
@@ -17,13 +18,13 @@
 
 ## Next actions
 
-- **plan-6.5 (open design marker):** domain-CIDR aggregate announcement — deferred from Plan 6
-  under the byte-identical self-/32 stop-loss. Needs its own design pass before any babel change.
-- Future-subject candidates recorded in the outline's out-of-scope list: route_policies
-  implementation, static-route renderer, additive-apply installer, per-node deploy selector,
-  IPv6 overlay support.
-- Small carried-forward polish (non-blocking reviewer notes, listed in the archived outline §9):
-  RightPanel prefix-match lookup tightening, D71 validator test, deploy.go fallback-branch test.
+- Execute plan-1: amend the six spec files freezing the parallel-links contract (linkKey, unify
+  rule, edge-aware naming, role/cost mapping, validator rows).
+- Then plan-2 (backend per-edge link identity, perpetual-gate extension), plan-3 (frontend:
+  Add-backup gesture, role-chip fan, focus-dim).
+- **plan-6.5 (open design marker, prior subject):** domain-CIDR aggregate announcement.
+- Carried-forward polish: RightPanel prefix-match lookup (closes in plan-3 step 4), D71 validator
+  test (plan-2 re-scope work touches it), deploy.go fallback-branch test.
 
 ## Recently closed subjects (last 3)
 
