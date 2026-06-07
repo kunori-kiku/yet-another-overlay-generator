@@ -110,22 +110,35 @@ pull only their own signed bundle, verify signature + bound header + anti-rollba
 - Enrollment-token theft before redemption (bounded by single-use + TTL + scope + audit).
 - No controller-side key recovery (lost node disk → re-enroll, not recompile-from-JSON).
 
-## Open decisions for the user (needed before a plan)
+## Resolved decisions (2026-06-07, user-confirmed)
 
-1. **Promotion gate strength** — out-of-band/multi-party approval (keeps "breach ≠ fleet takeover")
-   vs one-click automated promote (convenience, but collapses the guarantee to "breach = transient
-   fleet control"). *Most consequential.*
-2. **Existing-fleet migration default** — agent reads the live `/etc/wireguard` key (zero rotation)
-   vs one fleet-wide rotation.
-3. **Signing-key granularity + rotation** — per-tenant (recommended) vs per-fleet; cadence; single
-   pinned key vs trust set.
-4. **Agent auto-update policy** — silent (patching) vs operator-opt-in staged (supply-chain safety;
-   recommended).
-5. **Availability/degradation contract** — agent keeps last-good config on controller-unreachable /
-   expired-signature, fail-closed on apply (recommended).
-6. **Data-at-rest** — per-tenant envelope encryption for stored topologies/public keys vs standard
-   at-rest encryption for v1.
-7. **Revocation latency** — short-lived cert rotation vs CRL/OCSP for the pull-only fleet.
+1. **Promotion gate — step-up auth by default, one-click as a warned fallback.** Production promote
+   requires a WebAuthn/FIDO step-up the breached web tier can't satisfy. Because FIDO/WebAuthn is
+   not universally available (headless ops, some orgs/hardware), a tenant MAY fall back to one-click
+   promote — but ONLY behind a **loud, explicitly-acknowledged warning** that it forfeits the
+   "breach ≠ fleet takeover" guarantee (reducing it to "breach = transient fleet control until
+   detected"). When one-click is enabled, compensate with **mandatory loud promote audit-alarms**
+   (anomalous change-set / unexpected promoter) since the cryptographic gate is gone.
+2. **Existing-fleet migration: zero rotation.** The agent reads the key already in `/etc/wireguard`
+   and publishes only the public half (I5 zero-rotation on-ramp inverted). Fleet-wide rotation stays
+   available as an explicit operator choice.
+3. **Signing key: per-tenant + trust-set pinning.** Per-tenant Ed25519 key (cross-tenant bundles
+   cryptographically can't verify); agents pin a trust *set* so rotation = add-new / overlap /
+   retire without re-pinning every node.
+4. **Agent auto-update: opt-in staged + dual-control signing.** Operator-approved canary→fleet
+   rollout; release-signing key separate from the config-signing key, under dual control;
+   verify-before-update; no silent fleet-wide root-code update. Security updates surfaced prominently
+   to offset patch lag.
+5. **Availability/degradation: keep last-good, fail-closed on new applies.** Controller-unreachable
+   → node keeps running its last-good config (an outage must never brick a working fleet). A new
+   bundle failing signature/rollback/expiry is refused. Signature expiry gates *new* applies, not
+   the already-running tunnel.
+6. **Data-at-rest: standard at-rest for v1.** The DB holds only public keys + topology (no private
+   keys, by design); per-tenant envelope encryption is a later upgrade when an enterprise/compliance
+   deal requires it.
+7. **Revocation: short-lived agent certs + immediate overlay-layer eviction.** Quarantine = the
+   controller stops distributing the node's public key to its peers (cut off at next pull, cert
+   state aside). No CRL/OCSP — unnecessary for a pull-only fleet.
 
 ## Out of scope (v1)
 
