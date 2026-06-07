@@ -123,7 +123,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `priority` | — | optional | none-yet |
 | `weight` | — | optional | none-yet |
 | `role` | schema + semantic | enum `primary`/`backup`/empty; at most one explicit `primary` per pair; no `backup` on client edges | planned (parallel-links plan-2) |
-| `transport` | schema | enum `udp`/`tcp` | schema |
+| `transport` | schema | enum `udp`/`tcp`; empty→`udp`; `tcp` accepted but **warned as reserved** (renders as UDP) | schema |
 | `is_enabled` | — | flag | n/a |
 | `notes` | — | free-form | n/a |
 

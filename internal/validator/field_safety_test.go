@@ -180,6 +180,54 @@ func portRangeTopology(base, peerCount int, hostname string) *model.Topology {
 	return topo
 }
 
+// transportTopology 构造一个两节点单边拓扑，边的 transport 由参数指定，用于
+// 覆盖 tcp 保留值告警。
+func transportTopology(transport string) *model.Topology {
+	return &model.Topology{
+		Project: model.Project{ID: "test-transport", Name: "Transport Test"},
+		Domains: []model.Domain{
+			{ID: "domain-1", Name: "net", CIDR: "10.10.0.0/24", AllocationMode: "auto", RoutingMode: "babel"},
+		},
+		Nodes: []model.Node{
+			{ID: "a", Name: "a", Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true}},
+			{ID: "b", Name: "b", Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true}},
+		},
+		Edges: []model.Edge{
+			{ID: "edge-1", FromNodeID: "a", ToNodeID: "b", Type: "direct", Transport: transport, IsEnabled: true},
+		},
+	}
+}
+
+// TestValidateSchema_TcpTransportReservedWarning 覆盖：tcp 是合法但保留的传输值——
+// 不报错（拓扑仍可编译），但必须发出"保留/未实现，按 UDP 生成"的告警，
+// 避免"已接受但被静默忽略"。udp 边则不应产生该告警。
+func TestValidateSchema_TcpTransportReservedWarning(t *testing.T) {
+	tcpResult := ValidateSchema(transportTopology("tcp"))
+	for _, e := range tcpResult.Errors {
+		if containsSubstring(e.Field, "transport") {
+			t.Fatalf("tcp 是合法保留值，不应产生 transport 错误，实际: %v", tcpResult.Errors)
+		}
+	}
+	foundWarn := false
+	for _, w := range tcpResult.Warnings {
+		if containsSubstring(w.Field, "transport") && containsSubstring(w.Message, "tcp") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("tcp 传输应产生保留值告警，实际告警: %v", tcpResult.Warnings)
+	}
+
+	udpResult := ValidateSchema(transportTopology("udp"))
+	for _, w := range udpResult.Warnings {
+		if containsSubstring(w.Field, "transport") {
+			t.Errorf("udp 传输不应产生 transport 告警，实际: %v", udpResult.Warnings)
+		}
+	}
+}
+
 // itoaTest 是测试内的小整数转字符串助手，避免引入标准库 strconv 以保持测试自包含。
 func itoaTest(n int) string {
 	if n == 0 {

@@ -14,7 +14,7 @@ An Edge represents a unidirectional connection intent ("from actively connects t
 | `priority` | int | Connection priority |
 | `weight` | int | Connection weight |
 | `role` | `"primary" \| "backup" \| ""` | Link role for parallel links (see [Parallel links](#parallel-links-primary--backups)); empty = primary class |
-| `transport` | `"udp" \| "tcp"` | Transport protocol |
+| `transport` | `"udp" \| "tcp"` | Transport protocol. `udp` is the only implemented value; `tcp` is **reserved** (WireGuard is UDP-only) — accepted with a warning and rendered as UDP until a TCP-encapsulation/obfuscation layer exists |
 | `is_enabled` | bool | Whether this edge is active |
 | `notes` | string | Free-form notes |
 | `pinned_*` | int/string | Read-write allocation pins (see [Allocation pins](#allocation-pins)) |
