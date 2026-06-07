@@ -17,9 +17,16 @@ type InstallScriptConfig struct {
 	Platform       string
 	OverlayIP      string
 	DomainCIDR     string // domain CIDR for source routing rule
-	MTU            int
-	HasBabel       bool
-	HasForward     bool
+	// TransitCIDRs 是该节点所属域解析后的 transit 地址池（domain.TransitCIDR，
+	// 留空时回退默认 10.10.0.0/24）。SNAT 源地址修复必须按这些池下发规则：把落在
+	// transit 池里的源地址改写为 overlay IP。硬编码 10.10.0.0/24 会让任何自定义
+	// transit_cidr 的节点静默失效——包到达后源地址仍是未改写的 transit 地址，
+	// 路由不可达（审计 D38/D39）。模板对每个 CIDR各下发一条规则；为空时由
+	// RenderInstallScript 兜底为默认池，保证旧调用方行为不变。
+	TransitCIDRs []string
+	MTU          int
+	HasBabel     bool
+	HasForward   bool
 	// per-peer 接口列表
 	WgInterfaces   []WgIfaceInfo
 	BabelConfName  string
@@ -109,7 +116,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
         nft delete table inet overlay-snat 2>/dev/null || true
     fi
     if command -v iptables >/dev/null 2>&1; then
-        iptables -t nat -D POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true
+        {{ range .TransitCIDRs -}}
+        iptables -t nat -D POSTROUTING -o "wg-+" -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || true
+        {{ end -}}
     fi
     if systemctl is-enabled overlay-snat.service >/dev/null 2>&1; then
         systemctl disable overlay-snat.service 2>/dev/null || true
@@ -339,7 +348,9 @@ _overlay_snat_cleanup() {
         nft delete table inet overlay-snat 2>/dev/null || true
     fi
     if command -v iptables >/dev/null 2>&1; then
-        iptables -t nat -D POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true
+        {{ range .TransitCIDRs -}}
+        iptables -t nat -D POSTROUTING -o "wg-+" -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || true
+        {{ end -}}
     fi
 }
 _overlay_snat_cleanup
@@ -351,15 +362,21 @@ if command -v nft >/dev/null 2>&1; then
 table inet overlay-snat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        oifname "wg-*" ip saddr 10.10.0.0/24 snat to {{ .OverlayIP }}
+        {{ range .TransitCIDRs -}}
+        oifname "wg-*" ip saddr {{ . }} snat to {{ $.OverlayIP }}
+        {{ end -}}
     }
 }
 NFT_EOF
-    echo "  SNAT (nftables): transit 10.10.0.0/24 → {{ .OverlayIP }} on wg-* interfaces"
+    {{ range .TransitCIDRs -}}
+    echo "  SNAT (nftables): transit {{ . }} → {{ $.OverlayIP }} on wg-* interfaces"
+    {{ end -}}
 elif command -v iptables >/dev/null 2>&1; then
-    iptables -t nat -C POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -o "wg-+" -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}
-    echo "  SNAT (iptables): transit 10.10.0.0/24 → {{ .OverlayIP }} on wg-* interfaces"
+    {{ range .TransitCIDRs -}}
+    iptables -t nat -C POSTROUTING -o "wg-+" -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || \
+        iptables -t nat -A POSTROUTING -o "wg-+" -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }}
+    echo "  SNAT (iptables): transit {{ . }} → {{ $.OverlayIP }} on wg-* interfaces"
+    {{ end -}}
 fi
 
 # Persist SNAT rule via systemd
@@ -371,8 +388,8 @@ After=network.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; nft add table inet overlay-snat; nft add chain inet overlay-snat postrouting "{ type nat hook postrouting priority srcnat; policy accept; }"; nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to {{ .OverlayIP }}; else iptables -t nat -D POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true; iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }}; fi'
-ExecStop=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; else iptables -t nat -D POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source {{ .OverlayIP }} 2>/dev/null || true; fi'
+ExecStart=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; nft add table inet overlay-snat; nft add chain inet overlay-snat postrouting "{ type nat hook postrouting priority srcnat; policy accept; }"; {{ range .TransitCIDRs }}nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr {{ . }} snat to {{ $.OverlayIP }}; {{ end }}else {{ range .TransitCIDRs }}iptables -t nat -D POSTROUTING -o wg-+ -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || true; iptables -t nat -A POSTROUTING -o wg-+ -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }}; {{ end }}fi'
+ExecStop=/bin/bash -c 'if command -v nft >/dev/null 2>&1; then nft delete table inet overlay-snat 2>/dev/null || true; else {{ range .TransitCIDRs }}iptables -t nat -D POSTROUTING -o wg-+ -s {{ . }} -j SNAT --to-source {{ $.OverlayIP }} 2>/dev/null || true; {{ end }}fi'
 
 [Install]
 WantedBy=multi-user.target
@@ -485,8 +502,17 @@ echo "Installation complete!"
 echo "Note: If peers are not yet online, connections will establish once they come up."
 `
 
-// RenderInstallScript 渲染安装脚本
-func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel bool) (string, error) {
+// defaultTransitCIDR 是 transit 地址池的默认值，与 allocateTransitPair 的回退一致。
+const defaultTransitCIDR = "10.10.0.0/24"
+
+// RenderInstallScript 渲染安装脚本。
+//
+// transitCIDRs 是该节点所属域解析后的 transit 地址池列表，用于参数化 SNAT 源地址
+// 修复规则（审计 D38/D39）。调用方应传入 node 所属 domain 的 transit_cidr（留空时
+// 回退默认 10.10.0.0/24）。该参数为可变参以保持对既有三参调用方的兼容：不传时
+// 兜底为默认池，行为与历史一致。空字符串项会被忽略并以默认池补位，重复项去重，
+// 以保证「每个 distinct CIDR 一条 SNAT 规则」。
+func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, transitCIDRs ...string) (string, error) {
 	// 构建 WireGuard 接口列表
 	var wgIfaces []WgIfaceInfo
 	for _, p := range peers {
@@ -496,12 +522,15 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 		})
 	}
 
+	resolvedTransitCIDRs := resolveTransitCIDRs(transitCIDRs)
+
 	config := InstallScriptConfig{
 		NodeName:       node.Name,
 		NodeNameQuoted: bashSingleQuote(node.Name),
 		NodeRole:       node.Role,
 		Platform:       node.Platform,
 		OverlayIP:      node.OverlayIP,
+		TransitCIDRs:   resolvedTransitCIDRs,
 		MTU:            node.MTU,
 		HasBabel:       hasBabel,
 		HasForward:     node.Capabilities.CanForward,
@@ -515,6 +544,47 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 	}
 
 	return renderTemplate("install.sh", installScriptTemplate, config)
+}
+
+// NodeTransitCIDRs 解析某节点 SNAT 修复应覆盖的 transit 地址池。
+//
+// 节点的 per-peer transit 地址来自其所属 domain 的 transit 池（domain.TransitCIDR，
+// 留空时回退默认 10.10.0.0/24，与 allocator/compiler 的解析规则一致）。一个节点只属于
+// 一个 domain，因此通常返回单个 CIDR；返回切片是为了与 InstallScriptConfig.TransitCIDRs
+// 的契约一致，并在未来跨域链路出现时无需改签名。调用方应把结果传给 RenderInstallScript。
+func NodeTransitCIDRs(topo *model.Topology, node *model.Node) []string {
+	if topo == nil || node == nil {
+		return []string{defaultTransitCIDR}
+	}
+	for i := range topo.Domains {
+		if topo.Domains[i].ID != node.DomainID {
+			continue
+		}
+		if cidr := topo.Domains[i].TransitCIDR; cidr != "" {
+			return []string{cidr}
+		}
+		return []string{defaultTransitCIDR}
+	}
+	return []string{defaultTransitCIDR}
+}
+
+// resolveTransitCIDRs 把调用方传入的 transit 地址池规整为「去重、非空、稳定顺序」的列表。
+// 空字符串项被丢弃；整体为空时回退为默认池 [10.10.0.0/24]，保证 SNAT 规则始终有源池可写，
+// 同时让既有三参调用方（不传 transitCIDRs）的行为与历史完全一致。
+func resolveTransitCIDRs(transitCIDRs []string) []string {
+	seen := make(map[string]bool)
+	resolved := make([]string, 0, len(transitCIDRs))
+	for _, cidr := range transitCIDRs {
+		if cidr == "" || seen[cidr] {
+			continue
+		}
+		seen[cidr] = true
+		resolved = append(resolved, cidr)
+	}
+	if len(resolved) == 0 {
+		return []string{defaultTransitCIDR}
+	}
+	return resolved
 }
 
 // ClientInstallScriptConfig client 安装脚本配置

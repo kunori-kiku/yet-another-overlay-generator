@@ -50,6 +50,9 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// Edge endpoint 与目标节点 public endpoints 一致性检查
 	validateEdgeEndpointConsistency(topo, nodeMap, result)
 
+	// 分配 pin 校验：pin 在被预留之前必须先校验（不变式 I7）
+	validateAllocationPins(topo, domainMap, nodeMap, result)
+
 	return result
 }
 
@@ -479,6 +482,252 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 				fmt.Sprintf("Client %s has extra_prefixes set but clients don't announce routes", node.Name))
 		}
 	}
+}
+
+// defaultTransitCIDR 是域未显式配置 transit_cidr 时回退使用的默认 transit 地址池，
+// 必须与 compiler/peers.go 的同名常量保持一致——pin 的 out-of-CIDR 校验要用编译器实际
+// 解析出的池来判定，二者若不一致会让校验放行编译器随后拒绝（或反之）的 pin。
+const defaultTransitCIDR = "10.10.0.0/24"
+
+// edgeTransitCIDR 解析一条边实际使用的 transit 地址池。
+// 与 compiler/peers.go Pass 1 的解析规则一致：取 from 节点所属 domain 的 transit_cidr，
+// 留空时回退默认 10.10.0.0/24。
+func edgeTransitCIDR(edge model.Edge, domainMap map[string]*model.Domain, nodeMap map[string]*model.Node) string {
+	fromNode := nodeMap[edge.FromNodeID]
+	if fromNode == nil {
+		return defaultTransitCIDR
+	}
+	if domain := domainMap[fromNode.DomainID]; domain != nil && domain.TransitCIDR != "" {
+		return domain.TransitCIDR
+	}
+	return defaultTransitCIDR
+}
+
+// pinKey 返回一条链路的规范键：两端节点 ID 的无序对（字符串 min|max）。
+// pinKey(a,b) == pinKey(b,a)，因此一条边与其反向边落在同一个键上，
+// 跨链路去重时不会把同一物理链路的正反两条边误判为两条不同链路。
+func pinKey(a, b string) string {
+	if a <= b {
+		return a + "|" + b
+	}
+	return b + "|" + a
+}
+
+// nodePortPin 描述某个节点在某条链路上被钉住的监听端口，用于跨链路去重时定位冲突。
+type nodePortPin struct {
+	port   int
+	linkID string // 首个声明该 (节点, 端口) 的链路 pinKey
+	edge   string // 首个声明该 (节点, 端口) 的边 ID，用于错误消息
+}
+
+// pinOwner 记录某个被钉住的地址（transit IP 或 link-local）的首个占用者：
+// linkID 用于让同一链路的正反边互不冲突，edge 用于在错误消息中点名首个占用边。
+type pinOwner struct {
+	linkID string
+	edge   string
+}
+
+// validateAllocationPins 校验边上的分配 pin（不变式 I7，pin 校验规则见
+// docs/spec/compiler/allocation-stability.md「Pin validation」表）。
+// 每条规则的违例都是阻断编译的错误（而非告警），且必须在任何资源被预留之前完成。
+//
+// pin 按边存储，并由「该边自身的 from/to」定向：边 A->B 的 PinnedFromPort 是 A 侧端口，
+// PinnedToPort 是 B 侧端口；反向边 B->A 携带同一对值的镜像（其 PinnedFromPort 即 B 侧端口）。
+// 因此本函数：
+//   - 结构性规则（部分 pin、端口越界、transit 越池、client 边端口 pin）逐边校验，作用于该边自身；
+//   - 去重规则（同一节点端口、同一 transit IP、同一 link-local 被两条不同链路占用）按 pinKey
+//     归并后跨链路比较，避免把同一链路的正反边当作两条链路。
+func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Domain, nodeMap map[string]*model.Node, result *ValidationResult) {
+	// 去重表：跨「不同链路」检测同一资源被重复钉住。
+	//   - 节点端口：键为 nodeID，值记录首个占用该端口的 (端口, 链路, 边)。
+	//   - transit IP / link-local：键为规范化后的地址字符串，值记录首个占用者 (链路, 边)。
+	portsByNode := make(map[string][]nodePortPin)
+	transitByValue := make(map[string]pinOwner)   // 规范化 transit IP -> 首个占用者
+	linkLocalByValue := make(map[string]pinOwner) // 规范化 link-local -> 首个占用者
+
+	for i := range topo.Edges {
+		edge := topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+
+		prefix := fmt.Sprintf("edges[%d]", i)
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		// 两端节点缺失的边由 validateEdgeNodeRefs 报错，这里不重复，跳过 pin 校验。
+		if fromNode == nil || toNode == nil {
+			continue
+		}
+
+		link := pinKey(edge.FromNodeID, edge.ToNodeID)
+
+		// --- 规则：client 边携带 pin（client 用单一 wg0，无 per-peer 资源）。 ---
+		// 先于其它规则处理：client 边的所有 per-peer pin 都会被忽略，因此端口 pin 报错、
+		// 其余 pin（transit / link-local）告警「将被忽略」，并跳过其余只对 per-peer 链路
+		// 有意义的检查（成对完整性、范围、越池、去重）。
+		clientTouched := fromNode.Role == "client" || toNode.Role == "client"
+		if clientTouched {
+			if edge.PinnedFromPort != 0 || edge.PinnedToPort != 0 {
+				result.AddError(prefix,
+					fmt.Sprintf("边 %s 触及 client 节点却设置了端口 pin：client 使用单一 wg0，没有 per-peer 监听端口，请清除该边的 pinned_from_port / pinned_to_port", edge.ID))
+			}
+			if edge.PinnedFromTransitIP != "" || edge.PinnedToTransitIP != "" ||
+				edge.PinnedFromLinkLocal != "" || edge.PinnedToLinkLocal != "" {
+				result.AddWarning(prefix,
+					fmt.Sprintf("边 %s 触及 client 节点，其分配 pin 将被忽略：client 使用单一 wg0，不参与 per-peer transit/link-local 分配", edge.ID))
+			}
+			continue
+		}
+
+		// --- 规则：部分 pin（一端钉住、另一端为空）。逐资源检查。 ---
+		validatePinPairCompleteness(prefix, edge, result)
+
+		// --- 规则：端口越界（< 1、> 65535，或低于节点基准 listen_port）。 ---
+		validatePinnedPortRange(prefix, "pinned_from_port", edge.PinnedFromPort, fromNode, result)
+		validatePinnedPortRange(prefix, "pinned_to_port", edge.PinnedToPort, toNode, result)
+
+		// --- 规则：transit IP 越池（不在该边解析出的 domain transit CIDR 内）。 ---
+		transitCIDR := edgeTransitCIDR(edge, domainMap, nodeMap)
+		validatePinnedTransitInCIDR(prefix, "pinned_from_transit_ip", edge.PinnedFromTransitIP, transitCIDR, result)
+		validatePinnedTransitInCIDR(prefix, "pinned_to_transit_ip", edge.PinnedToTransitIP, transitCIDR, result)
+
+		// --- 规则：跨链路去重。 ---
+		// 节点端口：from 侧端口归 from 节点，to 侧端口归 to 节点。
+		checkDuplicatePortOnNode(prefix, edge.FromNodeID, edge.PinnedFromPort, link, edge.ID, portsByNode, result)
+		checkDuplicatePortOnNode(prefix, edge.ToNodeID, edge.PinnedToPort, link, edge.ID, portsByNode, result)
+
+		// transit IP 与 link-local：按规范化后的地址值跨链路去重。
+		checkDuplicateTransitIP(prefix, edge.PinnedFromTransitIP, link, edge.ID, transitByValue, result)
+		checkDuplicateTransitIP(prefix, edge.PinnedToTransitIP, link, edge.ID, transitByValue, result)
+		checkDuplicateLinkLocal(prefix, edge.PinnedFromLinkLocal, link, edge.ID, linkLocalByValue, result)
+		checkDuplicateLinkLocal(prefix, edge.PinnedToLinkLocal, link, edge.ID, linkLocalByValue, result)
+	}
+}
+
+// validatePinPairCompleteness 校验「成对 pin」：对每一种资源，一端钉住而另一端为空都非法。
+// pin 必须以完整成对的形式出现，否则编译器无法构造一条链路的双端配置。
+func validatePinPairCompleteness(prefix string, edge model.Edge, result *ValidationResult) {
+	if (edge.PinnedFromPort != 0) != (edge.PinnedToPort != 0) {
+		result.AddError(prefix,
+			fmt.Sprintf("边 %s 的监听端口 pin 不完整（仅一端被钉住）：pin 必须成对设置，请补全 pinned_from_port 与 pinned_to_port，或同时清空两者", edge.ID))
+	}
+	if (edge.PinnedFromTransitIP != "") != (edge.PinnedToTransitIP != "") {
+		result.AddError(prefix,
+			fmt.Sprintf("边 %s 的 transit IP pin 不完整（仅一端被钉住）：pin 必须成对设置，请补全 pinned_from_transit_ip 与 pinned_to_transit_ip，或同时清空两者", edge.ID))
+	}
+	if (edge.PinnedFromLinkLocal != "") != (edge.PinnedToLinkLocal != "") {
+		result.AddError(prefix,
+			fmt.Sprintf("边 %s 的 link-local pin 不完整（仅一端被钉住）：pin 必须成对设置，请补全 pinned_from_link_local 与 pinned_to_link_local，或同时清空两者", edge.ID))
+	}
+}
+
+// validatePinnedPortRange 校验单个被钉住的端口是否落在合法区间内：
+// 必须 >= 节点基准 listen_port（未设置时取 defaultListenPort），且 <= 65535。
+// 端口为 0 表示未钉住，跳过（成对完整性由 validatePinPairCompleteness 负责）。
+func validatePinnedPortRange(prefix, field string, port int, node *model.Node, result *ValidationResult) {
+	if port == 0 {
+		return
+	}
+	base := node.ListenPort
+	if base == 0 {
+		base = defaultListenPort
+	}
+	if port < base || port > 65535 {
+		result.AddError(prefix+"."+field,
+			fmt.Sprintf("节点 %s 的端口 pin %d 越界：必须不低于节点基准监听端口 %d 且不超过 65535（若需重新编号请清除该 pin）",
+				node.Name, port, base))
+	}
+}
+
+// validatePinnedTransitInCIDR 校验单个被钉住的 transit IP 是否落在该边解析出的 transit 池内。
+// 空字符串表示未钉住，跳过。无法解析的地址同样报错（陈旧或手误的 pin）。
+func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, result *ValidationResult) {
+	if value == "" {
+		return
+	}
+	ip := net.ParseIP(value)
+	if ip == nil {
+		result.AddError(prefix+"."+field,
+			fmt.Sprintf("transit IP pin %q 不是合法的 IP 地址", value))
+		return
+	}
+	_, cidrNet, err := net.ParseCIDR(transitCIDR)
+	if err != nil {
+		// transit CIDR 本身非法由 schema/编译器报错，这里不重复判定越池。
+		return
+	}
+	if !cidrNet.Contains(ip) {
+		result.AddError(prefix+"."+field,
+			fmt.Sprintf("transit IP pin %s 不在该边的 transit 地址池 %s 内（地址池可能被收窄，请清除该 pin 以重新编号）",
+				value, transitCIDR))
+	}
+}
+
+// checkDuplicatePortOnNode 跨「不同链路」检测同一节点上被重复钉住的监听端口。
+// 同一链路（同一 pinKey）的正反两条边携带镜像后的同一端口，不视为冲突。
+func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID string, portsByNode map[string][]nodePortPin, result *ValidationResult) {
+	if port == 0 {
+		return
+	}
+	for _, existing := range portsByNode[nodeID] {
+		if existing.port != port {
+			continue
+		}
+		if existing.linkID == link {
+			// 同一链路（正反边），不是跨链路冲突。
+			return
+		}
+		result.AddError(prefix,
+			fmt.Sprintf("端口 pin %d 在节点上被两条不同链路重复占用：边 %s 与边 %s 钉住了同一节点的同一监听端口", port, existing.edge, edgeID))
+		return
+	}
+	portsByNode[nodeID] = append(portsByNode[nodeID], nodePortPin{port: port, linkID: link, edge: edgeID})
+}
+
+// checkDuplicateTransitIP 跨「不同链路」检测被重复钉住的 transit IP。
+// 地址按解析后的规范形式比较，避免 "10.10.0.1" 与等价写法逃过去重。
+// 同一链路（同一 pinKey）的正反两条边携带镜像后的同一地址，不视为冲突。
+func checkDuplicateTransitIP(prefix, value, link, edgeID string, transitByValue map[string]pinOwner, result *ValidationResult) {
+	if value == "" {
+		return
+	}
+	key := canonicalIP(value)
+	if owner, exists := transitByValue[key]; exists {
+		if owner.linkID == link {
+			return
+		}
+		result.AddError(prefix,
+			fmt.Sprintf("transit IP pin %s 被两条不同链路重复占用：边 %s 与边 %s 钉住了同一 transit 地址", value, owner.edge, edgeID))
+		return
+	}
+	transitByValue[key] = pinOwner{linkID: link, edge: edgeID}
+}
+
+// checkDuplicateLinkLocal 跨「不同链路」检测被重复钉住的 IPv6 link-local 地址。
+// 同一链路（同一 pinKey）的正反两条边携带镜像后的同一地址，不视为冲突。
+func checkDuplicateLinkLocal(prefix, value, link, edgeID string, linkLocalByValue map[string]pinOwner, result *ValidationResult) {
+	if value == "" {
+		return
+	}
+	key := canonicalIP(value)
+	if owner, exists := linkLocalByValue[key]; exists {
+		if owner.linkID == link {
+			return
+		}
+		result.AddError(prefix,
+			fmt.Sprintf("link-local pin %s 被两条不同链路重复占用：边 %s 与边 %s 钉住了同一 link-local 地址", value, owner.edge, edgeID))
+		return
+	}
+	linkLocalByValue[key] = pinOwner{linkID: link, edge: edgeID}
+}
+
+// canonicalIP 把地址字符串归一为可比较的规范形式；不可解析时原样返回，
+// 让去重退化为字符串相等（不可解析地址的合法性由其它规则报错）。
+func canonicalIP(value string) string {
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	return value
 }
 
 // validateEdgeEndpointConsistency 检查 edge 的 endpoint_host 是否与目标节点的 public endpoints 一致。

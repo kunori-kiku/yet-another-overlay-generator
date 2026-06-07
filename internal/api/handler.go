@@ -336,27 +336,46 @@ func readTopology(w http.ResponseWriter, r *http.Request) (*model.Topology, erro
 	return &topo, nil
 }
 
+// generateKeys 为每个节点解析或生成 WireGuard 密钥对，并把结果写回节点以便随拓扑 JSON
+// 持久化、在下次编译时被原样复用（不变式 I5：密钥稳定）。
+//
+// 无状态编译器要求私钥能随拓扑 JSON 往返：只持久化公钥的节点在下次编译时无法渲染出自身
+// Interface 段的 PrivateKey。因此密钥处理按节点当前两枚密钥字段的状态分三种情形，
+// 不再以 fixed_private_key 这个布尔标志本身作为分支条件（它仅是操作员「粘贴私钥」的入口，
+// 其存在意味着私钥已被设置，即落入情形 (a)）：
+//
+//	(a) wireguard_private_key 非空（无论 fixed_private_key 是否为真）：解析该私钥、由它派生
+//	    公钥并复用；同时把派生出的公钥写回节点，修复缺失或陈旧的公钥。
+//	(b) wireguard_private_key 为空但 wireguard_public_key 非空：硬错误。该节点被视为密钥固定，
+//	    但私钥缺失，无状态编译器无法重建其私钥。提示操作员从主机 /etc/wireguard 粘贴在用私钥，
+//	    或同时清空两个密钥字段以显式轮换。
+//	(c) 两者皆空：生成全新密钥对，并把私钥与公钥都写回节点使其持久化、可往返；此后每次编译
+//	    都复用同一对密钥（取代旧的「编译后清空密钥」行为）。
 func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 	keys := make(map[string]compiler.KeyPair)
 	for i := range topo.Nodes {
 		node := &topo.Nodes[i]
 
-		if node.FixedPrivateKey {
-			if node.WireGuardPrivateKey != "" {
-				privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
-				if err != nil {
-					return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
-				}
-
-				node.WireGuardPrivateKey = privateKey.String()
-				node.WireGuardPublicKey = privateKey.PublicKey().String()
-				keys[node.ID] = compiler.KeyPair{
-					PrivateKey: node.WireGuardPrivateKey,
-					PublicKey:  node.WireGuardPublicKey,
-				}
-				continue
+		switch {
+		case node.WireGuardPrivateKey != "":
+			// 情形 (a)：私钥在场。解析并由它派生公钥，复用整对密钥；把派生出的公钥写回，
+			// 借此修复节点上缺失或与私钥不一致（陈旧）的公钥。
+			privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
+			if err != nil {
+				return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
 			}
 
+			node.WireGuardPrivateKey = privateKey.String()
+			node.WireGuardPublicKey = privateKey.PublicKey().String()
+
+		case node.WireGuardPublicKey != "":
+			// 情形 (b)：公钥在场但私钥缺失。无状态编译器无法重建私钥，无法渲染该节点自身的
+			// Interface PrivateKey，因此必须硬错误而非静默轮换或留空。
+			return nil, fmt.Errorf("节点 %s 已固定 WireGuard 公钥，但缺少对应私钥：无状态编译器无法重建私钥。请从该主机的 /etc/wireguard/<接口>.conf 粘贴在用私钥到 wireguard_private_key，或同时清空 wireguard_private_key 与 wireguard_public_key 两个字段以显式轮换密钥", node.ID)
+
+		default:
+			// 情形 (c)：两枚密钥字段皆空，是全新节点。生成新密钥对，并把私钥与公钥都写回
+			// 节点，使其随拓扑持久化、可往返，下次编译复用同一对密钥。
 			privateKey, err := wgtypes.GeneratePrivateKey()
 			if err != nil {
 				return nil, fmt.Errorf("为节点 %s 生成 WireGuard 私钥失败: %w", node.ID, err)
@@ -364,25 +383,11 @@ func generateKeys(topo *model.Topology) (map[string]compiler.KeyPair, error) {
 
 			node.WireGuardPrivateKey = privateKey.String()
 			node.WireGuardPublicKey = privateKey.PublicKey().String()
-			keys[node.ID] = compiler.KeyPair{
-				PrivateKey: node.WireGuardPrivateKey,
-				PublicKey:  node.WireGuardPublicKey,
-			}
-			continue
 		}
-
-		privateKey, err := wgtypes.GeneratePrivateKey()
-		if err != nil {
-			return nil, fmt.Errorf("为节点 %s 生成 WireGuard 私钥失败: %w", node.ID, err)
-		}
-
-		// 非固定密钥：不在拓扑中持久化密钥，仅在本次渲染的内存密钥表中使用
-		node.WireGuardPrivateKey = ""
-		node.WireGuardPublicKey = ""
 
 		keys[node.ID] = compiler.KeyPair{
-			PrivateKey: privateKey.String(),
-			PublicKey:  privateKey.PublicKey().String(),
+			PrivateKey: node.WireGuardPrivateKey,
+			PublicKey:  node.WireGuardPublicKey,
 		}
 	}
 	return keys, nil
@@ -430,7 +435,8 @@ func renderAll(result *compiler.CompileResult, keys map[string]compiler.KeyPair)
 		} else {
 			peers := result.PeerMap[node.ID]
 			_, hasBabel := result.BabelConfigs[node.ID]
-			script, err := renderer.RenderInstallScript(&node, peers, hasBabel)
+			transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
+			script, err := renderer.RenderInstallScript(&node, peers, hasBabel, transitCIDRs...)
 			if err != nil {
 				return fmt.Errorf("渲染节点 %s 的安装脚本失败: %w", node.Name, err)
 			}

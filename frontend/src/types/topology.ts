@@ -6,6 +6,9 @@ export interface Topology {
   nodes: Node[];
   edges: Edge[];
   route_policies?: RoutePolicy[];
+  // 分配方案版本号：由编译器写入并原样回传，使将来 pin 格式变更可以检测/迁移旧分配。
+  // 参见 docs/spec/compiler/allocation-stability.md（不变量 I10）。
+  alloc_schema_version?: number;
 }
 
 export interface Project {
@@ -76,6 +79,15 @@ export interface Edge {
   transport?: 'udp' | 'tcp';
   is_enabled: boolean;
   notes?: string;
+  // 分配 pin：由编译器写入，并原样回传，使重新编译时保留既有分配（端口 / transit IP /
+  // 链路本地地址），从而新增节点不会扰动既有链路。参见
+  // docs/spec/compiler/allocation-stability.md。
+  pinned_from_port?: number;
+  pinned_to_port?: number;
+  pinned_from_transit_ip?: string;
+  pinned_to_transit_ip?: string;
+  pinned_from_link_local?: string;
+  pinned_to_link_local?: string;
 }
 
 export interface RoutePolicy {
