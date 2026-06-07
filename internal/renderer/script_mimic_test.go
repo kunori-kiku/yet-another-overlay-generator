@@ -144,3 +144,51 @@ func TestRenderInstallScript_UdpOnly_NoMimic(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderInstallScript_MimicXDPMode 覆盖 per-node xdp_mode 覆写：
+// 默认（XDPMode 留空）写 "xdp_mode = skb"（通用 XDP，兼容不支持 native 的 VPS 网卡）；
+// 节点显式设 "native" 时写 "xdp_mode = native"。
+func TestRenderInstallScript_MimicXDPMode(t *testing.T) {
+	mimicPeers := []compiler.PeerInfo{
+		{NodeID: "node-2", NodeName: "beta", InterfaceName: "wg-beta",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1",
+			Mimic: true, MTU: 1408},
+	}
+
+	// 默认（留空）→ skb
+	defNode := mimicRenderNode()
+	defScript, err := RenderInstallScript(defNode, mimicPeers, true)
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+	if !strings.Contains(defScript, "xdp_mode = skb") {
+		t.Errorf("默认应写 'xdp_mode = skb'，实际缺失")
+	}
+	if strings.Contains(defScript, "xdp_mode = native") {
+		t.Errorf("默认不应写 'xdp_mode = native'，但出现了")
+	}
+
+	// 显式 native → native
+	natNode := mimicRenderNode()
+	natNode.XDPMode = "native"
+	natScript, err := RenderInstallScript(natNode, mimicPeers, true)
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+	if !strings.Contains(natScript, "xdp_mode = native") {
+		t.Errorf("XDPMode=native 应写 'xdp_mode = native'，实际缺失")
+	}
+	if strings.Contains(natScript, "xdp_mode = skb") {
+		t.Errorf("XDPMode=native 不应写 'xdp_mode = skb'，但出现了")
+	}
+}
+
+// TestResolveMimicXDPMode 直接覆盖归一函数：仅 "native" 透传，其余（空/skb/非法）回落 skb。
+func TestResolveMimicXDPMode(t *testing.T) {
+	cases := map[string]string{"": "skb", "skb": "skb", "native": "native", "Native": "skb", "generic": "skb"}
+	for in, want := range cases {
+		if got := resolveMimicXDPMode(in); got != want {
+			t.Errorf("resolveMimicXDPMode(%q) = %q, 期望 %q", in, got, want)
+		}
+	}
+}

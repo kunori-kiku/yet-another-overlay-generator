@@ -396,6 +396,20 @@ export function RightPanel() {
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
+            {/* mimic XDP 模式：仅当该节点有 transport=tcp 的链路时才起作用。默认 skb（通用，
+                兼容不支持 native 的 VPS 网卡）；操作员确认网卡支持时可选 native 以提升性能。 */}
+            <div>
+              <label className="text-xs text-gray-400">{txt(language, ...STRINGS.xdpModeLabel)}</label>
+              <select
+                value={selectedNode.xdp_mode || 'skb'}
+                onChange={(e) => updateNode(selectedNode.id, { xdp_mode: e.target.value === 'native' ? 'native' : undefined })}
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+              >
+                <option value="skb">{txt(language, 'skb（通用，默认）', 'skb (generic, default)')}</option>
+                <option value="native">{txt(language, 'native（更快，需网卡支持）', 'native (faster, needs NIC support)')}</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-500">{txt(language, ...STRINGS.xdpModeHint)}</p>
+            </div>
             {selectedNode.role !== 'client' && (
             <label className="flex items-center gap-2 text-sm">
               <input

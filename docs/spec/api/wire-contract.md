@@ -86,6 +86,7 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `overlay_ip` | `OverlayIP` | `overlay_ip` | read-back | ✅ | compiler-allocated, preserved across recompile |
 | `listen_port` | `ListenPort` | `listen_port` | yes | ✅ | base port; per-peer ports derived by compiler |
 | `mtu` | `MTU` | `mtu` | yes | ✅ | unvalidated (D64) |
+| `xdp_mode` | `XDPMode` | `xdp_mode` | RightPanel select | ✅ | mimic XDP mode for tcp links; empty→`skb`; enum `skb`/`native` (validated) |
 | `router_id` | `RouterID` | — | none | ⚠️ | absent from TS interface; survives via untyped import passthrough |
 | `capabilities` | `Capabilities` | `capabilities` | derived | ⚠️ | FE-stamped caps can contradict role inference (D69/D54) |
 | `fixed_private_key` | `FixedPrivateKey` | `fixed_private_key` | yes | ✅ | live-key capture path (Decisions #7) |

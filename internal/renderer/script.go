@@ -37,6 +37,9 @@ type InstallScriptConfig struct {
 	// （local=<egress_ip>:<port>）。YAOG 只提供端口集合；egress if/ip 由 bash 在
 	// 安装时探测——见 docs/spec/artifacts/mimic.md「Attaches to the egress NIC」。
 	MimicPorts []int
+	// MimicXDPMode 是写入 mimic 配置的 xdp_mode（"skb" 或 "native"，已归一，绝不为空）。
+	// 默认 "skb"（通用 XDP，兼容不支持 native 的 VPS 网卡）；节点显式设 "native" 时为 "native"。
+	MimicXDPMode string
 	// per-peer 接口列表
 	WgInterfaces   []WgIfaceInfo
 	BabelConfName  string
@@ -539,7 +542,7 @@ mkdir -p /etc/mimic
     {{ range .MimicPorts -}}
     echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
     {{ end -}}
-    echo "xdp_mode = skb"
+    echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
 echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
 # The distro mimic package ships mimic@<iface>.service (Requires=modprobe@mimic.service, so the
@@ -668,6 +671,7 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 		HasForward:     node.Capabilities.CanForward,
 		HasMimic:       len(mimicPorts) > 0,
 		MimicPorts:     mimicPorts,
+		MimicXDPMode:   resolveMimicXDPMode(node.XDPMode),
 		WgInterfaces:   wgIfaces,
 		BabelConfName:  "babeld.conf",
 		SysctlConfName: "99-overlay.conf",
@@ -678,6 +682,17 @@ func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel b
 	}
 
 	return renderTemplate("install.sh", installScriptTemplate, config)
+}
+
+// resolveMimicXDPMode 把节点的 XDPMode 归一为写入 mimic 配置的值。
+// 仅 "native" 透传；空、"skb" 及任何已被校验拒绝之外的值都回落到 "skb"（通用 XDP，
+// 兼容不支持 native 的网卡）——这是默认且对 VPS virtio 网卡最稳妥的模式。
+// 取值合法性由 validator 的 schema 阶段保证（""/"skb"/"native"）；这里仅做安全归一。
+func resolveMimicXDPMode(mode string) string {
+	if mode == "native" {
+		return "native"
+	}
+	return "skb"
 }
 
 // collectMimicPorts 扫描一组 peer，收集所有 mimic 接口（p.Mimic==true）的监听端口，
@@ -753,8 +768,9 @@ type ClientInstallScriptConfig struct {
 	// HasMimic / MimicPorts 同 InstallScriptConfig：当 client 的唯一 wg0 链路
 	// transport=="tcp" 时为真，MimicPorts 即 client wg0 的监听端口（单端口）。
 	// 见 docs/spec/artifacts/mimic.md。
-	HasMimic   bool
-	MimicPorts []int
+	HasMimic     bool
+	MimicPorts   []int
+	MimicXDPMode string // 归一后的 xdp_mode（"skb"/"native"），见 InstallScriptConfig
 }
 
 const clientInstallScriptTemplate = `#!/usr/bin/env bash
@@ -1019,7 +1035,7 @@ mkdir -p /etc/mimic
     {{ range .MimicPorts -}}
     echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
     {{ end -}}
-    echo "xdp_mode = skb"
+    echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
 echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
 systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"
@@ -1065,6 +1081,7 @@ func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientP
 		Platform:       node.Platform,
 		OverlayIP:      node.OverlayIP,
 		MTU:            node.MTU,
+		MimicXDPMode:   resolveMimicXDPMode(node.XDPMode),
 		SysctlConfName: "99-overlay.conf",
 	}
 

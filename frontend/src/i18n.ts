@@ -50,4 +50,11 @@ export const STRINGS = {
     '用 mimic 把该链路伪装成 TCP，适用于限速/封锁 UDP 的网络；两端均需 Linux（eBPF），MTU 会自动下调。注意：这不是用于绕过审查（DPI）的功能。',
     'Wraps this link as TCP via mimic for networks that throttle or block UDP. Both ends must be Linux (eBPF); MTU is auto-lowered. Not a censorship/DPI-circumvention feature.',
   ] as const,
+  // 节点级 mimic XDP 模式选择器标签。
+  xdpModeLabel: ['mimic XDP 模式', 'mimic XDP mode'] as const,
+  // XDP 模式提示：仅对 transport=tcp 的链路生效；部分 VPS 网卡不支持 native，故默认 skb。
+  xdpModeHint: [
+    '仅影响 transport=tcp（mimic）的链路。部分 VPS 网卡不支持 native XDP，故默认用 skb；确认网卡支持时再选 native。',
+    'Affects only transport=tcp (mimic) links. Some VPS NICs do not support native XDP, so skb is the default; choose native only if you know this NIC supports it.',
+  ] as const,
 } as const;

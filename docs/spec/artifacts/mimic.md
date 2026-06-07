@@ -33,6 +33,14 @@ does not distribute mimic, mimic's GPL-2.0 license imposes no obligation on YAOG
 - **Attaches to the egress NIC**, not the WireGuard interface: one `mimic@<egress>` systemd unit
   reading `/etc/mimic/<egress>.conf`. The egress NIC is the node's default-route interface, detected
   at install time (`ip route show default`), not known at compile time.
+- **XDP attach mode is per-node and operator-controlled** via `Node.xdp_mode`. The generated config
+  writes `xdp_mode = <mode>`: the default (empty → `skb`) uses **generic/SKB XDP**, which works on
+  virtually all NICs including VPS virtio NICs that lack native-XDP driver support — so the overlay
+  comes up out of the box without NIC detection. An operator who knows a node's NIC supports
+  driver-level XDP MAY set `xdp_mode: "native"` for higher throughput. YAOG does **not** auto-detect
+  native capability (reliably probing it from a shell script is fragile, and mimic already probes
+  internally); the explicit per-node override is the supported mechanism. Validator accepts only
+  empty/`skb`/`native`.
 - **One filter per mimic link**, keyed on that link's allocated listen port. mimic's filter form is
   `"{local|remote}={ip}:{port}"` (IPv6 in brackets); a node aggregates one filter per local mimic
   listen port into its single egress config. (Exact directive/file syntax is taken from mimic's

@@ -13,6 +13,7 @@ A Node represents a physical or virtual host in the overlay.
 | `overlay_ip` | string | Assigned overlay IP (auto or manual) |
 | `listen_port` | int | WireGuard base listen port (default: 51820) |
 | `mtu` | int | WireGuard MTU (0 = system default, typically 1420) |
+| `xdp_mode` | `"skb" \| "native" \| ""` | mimic XDP attach mode for `transport: "tcp"` links; empty = `skb` (generic XDP, compatible with NICs lacking native-XDP support, the default). `native` is faster but needs driver support. See [../artifacts/mimic.md](../artifacts/mimic.md) |
 | `router_id` | string | Babel router-id in MAC-48 format (auto-generated from SHA-256 of node ID) |
 | `capabilities` | NodeCapabilities | Network capabilities |
 | `fixed_private_key` | bool | Operator-pasted private key opt-in (the paste affordance; see below). No behavior keys on the flag alone — its presence implies a private key is set |

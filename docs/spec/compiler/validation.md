@@ -72,6 +72,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `overlay_ip` | schema + semantic | parseable; inside domain CIDR; no collision | schema + semantic |
 | `listen_port` | schema | range 0–65535; **effective per-peer range** also in-bounds | partial — see below |
 | `mtu` | schema | sane WireGuard MTU range (else `wg-quick` rejects) | none-yet |
+| `xdp_mode` | schema | enum `skb`/`native`; empty allowed (→`skb`) | schema |
 | `router_id` | schema | MAC-48 format (else `babeld` rejects) | none-yet |
 | `capabilities` | — | derived from role; FE-supplied caps reconciled | none-yet |
 | `fixed_private_key` | — | flag | n/a |

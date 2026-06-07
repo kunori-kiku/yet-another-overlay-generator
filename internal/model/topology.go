@@ -69,6 +69,12 @@ type Node struct {
 	// WireGuard 接口 MTU（0 = 使用系统默认值，通常 1420）
 	MTU int `json:"mtu,omitempty"`
 
+	// mimic（transport=="tcp"）的 XDP 附着模式：空 / "skb" / "native"。
+	// 空与 "skb" 等价：通用（generic）XDP，兼容几乎所有网卡（含不支持 native XDP 的
+	// VPS virtio 网卡），是默认值。"native" 为驱动级 XDP，更快但需网卡/驱动支持；
+	// 仅当操作员确认该节点网卡支持时才设置。详见 docs/spec/artifacts/mimic.md。
+	XDPMode string `json:"xdp_mode,omitempty"`
+
 	// Babel router-id（MAC-48 格式，如 02:11:22:33:44:55）
 	// 留空时由编译器自动生成
 	RouterID string `json:"router_id,omitempty"`
