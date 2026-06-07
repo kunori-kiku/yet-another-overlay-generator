@@ -44,7 +44,7 @@ func main() {
 	// 私钥往返复用、只持久化公钥时硬错误、全新节点生成并写回新密钥）。
 	// 取代旧的 generateFakeKeys——后者向每份配置塞入字面量 FAKE_PRIVKEY_*，
 	// 产物无法被 wg-quick 接受、不可部署（审计阻断项 D6）。
-	keys, err := render.GenerateKeys(&topo)
+	keys, err := render.GenerateKeys(&topo, render.AirGap)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "生成 WireGuard 密钥失败: %v\n", err)
 		os.Exit(1)

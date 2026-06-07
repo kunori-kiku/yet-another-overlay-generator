@@ -71,6 +71,14 @@ means the private key is set, it lands in case (a); no behavior is keyed on the 
 Secret-handling rules apply to any pasted private key — and now to every persisted node key — they
 are live credentials.
 
+**Controller custody (AgentHeld).** The cases above describe the **AirGap** custody mode (the
+default for the air-gap CLI and HTTP API). When a node is rendered by the controller in **AgentHeld**
+mode, the node persists **only** `wireguard_public_key`: the private key lives agent-side and never
+reaches the controller, and the renderer emits a placeholder for the node's own `Interface
+PrivateKey`. Case (b) — public key without a private key — is then the *normal* path rather than a
+hard error. The air-gap cases are unchanged. See
+[../controller/key-custody.md](../controller/key-custody.md).
+
 ## PublicEndpoint
 
 ```go

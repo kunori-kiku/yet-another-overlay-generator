@@ -136,7 +136,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys, err := render.GenerateKeys(topo)
+	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
 		return
@@ -184,7 +184,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys, err := render.GenerateKeys(topo)
+	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
 		return
@@ -249,7 +249,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	// 配置），而接口名只有在完整编译后才存在于 PeerMap 中。因此本端点必须运行与 /api/compile
 	// 相同的流水线（生成密钥 → 编译 → 渲染 Babel 配置），否则生成的卸载块缺失全部 per-peer
 	// 拆除步骤（审计阻断项 D36）。
-	keys, err := render.GenerateKeys(topo)
+	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
 		return
