@@ -220,6 +220,17 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
+		// XDPMode：mimic（transport=="tcp"）的 XDP 附着模式。仅 skb/native 合法；
+		// 空等价于 skb（默认通用 XDP）。非法值会被渲染器静默回落到 skb，故在此显式拒绝，
+		// 避免 "Native"/"generic" 等拼写被悄悄当成 skb（docs/spec/artifacts/mimic.md）。
+		if node.XDPMode != "" {
+			validXDPModes := map[string]bool{"skb": true, "native": true}
+			if !validXDPModes[node.XDPMode] {
+				result.AddError(prefix+".xdp_mode",
+					fmt.Sprintf("XDP 模式无效: %s，可选值: skb, native（留空等价于 skb）", node.XDPMode))
+			}
+		}
+
 		// OverlayIP （）
 		if node.OverlayIP != "" {
 			if net.ParseIP(node.OverlayIP) == nil {

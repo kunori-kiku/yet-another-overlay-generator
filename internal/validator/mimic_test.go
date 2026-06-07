@@ -138,3 +138,32 @@ func TestValidate_UdpEdge_UnaffectedByMimic(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_XDPModeEnum 覆盖 per-node xdp_mode 枚举校验：
+// 空 / "skb" / "native" 合法（无 xdp_mode 错误）；其它值（含大小写错误）应在 schema 阶段报错。
+func TestValidate_XDPModeEnum(t *testing.T) {
+	hasXDPErr := func(r *ValidationResult) bool {
+		for _, e := range r.Errors {
+			if containsSubstring(e.Field, "xdp_mode") {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, mode := range []string{"", "skb", "native"} {
+		topo := mimicTransportTopology("tcp", "debian", "debian")
+		topo.Nodes[0].XDPMode = mode
+		if hasXDPErr(ValidateSchema(topo)) {
+			t.Errorf("xdp_mode=%q 合法，不应报错", mode)
+		}
+	}
+
+	for _, mode := range []string{"Native", "generic", "xdp", "SKB"} {
+		topo := mimicTransportTopology("tcp", "debian", "debian")
+		topo.Nodes[0].XDPMode = mode
+		if !hasXDPErr(ValidateSchema(topo)) {
+			t.Errorf("xdp_mode=%q 非法，应在 schema 报 xdp_mode 错误", mode)
+		}
+	}
+}
