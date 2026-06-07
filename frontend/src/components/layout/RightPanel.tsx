@@ -1,6 +1,7 @@
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { txt, STRINGS } from '../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
+import { resolveEdgeInterface } from '../../lib/compiledInterfaces';
 
 function previewText(content: string | undefined, maxLines = 4, maxChars = 220): string {
   if (!content) return 'N/A';
@@ -25,6 +26,7 @@ export function RightPanel() {
     removeNode,
     updateEdge,
     removeEdge,
+    addBackupEdge,
     reconcileEdgeEndpoints,
     compileResult,
     compile,
@@ -58,6 +60,31 @@ export function RightPanel() {
     const compiledEdge = compileResult.topology.edges?.find((e) => e.id === selectedEdge.id);
     return compiledEdge?.compiled_port || undefined;
   })();
+
+  // 并行链路（edge.md）：备份链路从主链路派生。
+  // 选中边的源节点（client 角色门控备份按钮：后端拒绝 client 上的备份链路）。
+  const selectedEdgeFrom = selectedEdge
+    ? nodes.find((n) => n.id === selectedEdge.from_node_id)
+    : undefined;
+  const selectedEdgeIsBackup = selectedEdge?.role === 'backup';
+  const selectedEdgeTouchesClient =
+    selectedEdgeFrom?.role === 'client' || selectedEdgeTarget?.role === 'client';
+  // 备份按钮：源/目标任一为 client 时隐藏（后端拒绝），选中边本身已是 backup 时隐藏
+  //（备份从主链路添加，而非从备份再派生）。
+  const showAddBackupButton = !!selectedEdge && !selectedEdgeIsBackup && !selectedEdgeTouchesClient;
+  // 路径分集提示：选中的备份链路与同一节点对的另一条边共用了同一公网地址，
+  // 说明备份未指向独立路径（addBackupEdge 复制了主链路的 endpoint_host），提示操作员另指地址。
+  const showBackupEndpointNudge =
+    !!selectedEdge &&
+    selectedEdgeIsBackup &&
+    !!selectedEdge.endpoint_host &&
+    edges.some(
+      (e) =>
+        e.id !== selectedEdge.id &&
+        e.from_node_id === selectedEdge.from_node_id &&
+        e.to_node_id === selectedEdge.to_node_id &&
+        e.endpoint_host === selectedEdge.endpoint_host,
+    );
 
   const updateNodeEndpoint = (
     nodeId: string,
@@ -764,41 +791,28 @@ export function RightPanel() {
               )}
             </div>
             {compileResult && (() => {
-              const toNode = nodes.find(n => n.id === selectedEdge.to_node_id);
-              if (!toNode) return null;
-              // Spec D 禁止前端重建接口名（>12 字符时后端走 hash 后缀分支，
-              // 而前端纯截断会与之分叉，导致查找静默落空）。改为直接从编译响应的
-              // wireguard_configs 键中取出后端实际生成的接口名。键的格式是
-              // "<nodeID>:<interfaceName>"，与 TopologyCanvas 的 nodeInterfaceMap 解析一致。
-              // 在源节点（from_node_id）拥有的全部接口里，定位通往目标节点（toNode）的那一个：
-              // 接口名编码了远端 peer 名称（短路径 wg-<clean>，长路径 wg-<clean[:8]><hash>），
-              // 因此用目标名称的规范化前缀去匹配解析出的 peer 名，而非重建带 hash 的完整接口名。
-              const cleanTarget = toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-              const targetPrefix = cleanTarget.slice(0, 8);
-              let config: string | undefined;
-              for (const [key, value] of Object.entries(compileResult.wireguard_configs)) {
-                const colonIdx = key.indexOf(':');
-                if (colonIdx < 0) continue;
-                if (key.slice(0, colonIdx) !== selectedEdge.from_node_id) continue;
-                const interfaceName = key.slice(colonIdx + 1);
-                const peerName = interfaceName.startsWith('wg-') ? interfaceName.slice(3) : interfaceName;
-                if (peerName === cleanTarget || (cleanTarget.length > 8 && peerName.startsWith(targetPrefix))) {
-                  config = value;
-                  break;
-                }
-              }
+              // Spec（naming.md / Decisions #12）禁止前端重建接口名（>12 字符时后端走 hash
+              // 后缀分支，并行链路下 backup 还把 edge.ID 折进 hash，前端无从复现）。改用共享解析器
+              // resolveEdgeInterface 按 pin 的端口反查后端实际生成的接口（端口在单节点内唯一 ⇒
+              // 确定性匹配），再用解析出的接口名从 wireguard_configs（键格式 "<nodeID>:<接口名>"）
+              // 取出本端配置体读出 Endpoint 行。取本边的 from 侧接口（from_node_id + pinned_from_port）。
+              const fromIface = resolveEdgeInterface(
+                selectedEdge,
+                true,
+                compileResult.wireguard_configs,
+              );
+              if (!fromIface) return null;
+              const config =
+                compileResult.wireguard_configs[`${selectedEdge.from_node_id}:${fromIface.interfaceName}`];
               const endpointMatch = config?.match(/Endpoint\s*=\s*(.+)/);
-              const listenMatch = config?.match(/ListenPort\s*=\s*(\d+)/);
-              if (!endpointMatch && !listenMatch) return null;
               return (
                 <div className="p-2 bg-gray-700/50 rounded space-y-1">
                   <p className="text-xs text-gray-400 font-semibold">{txt(language, '编译后实际值', 'Compiled values')}</p>
+                  <p className="text-xs text-cyan-300 font-mono break-all">{txt(language, '本端接口', 'Local interface')}: {fromIface.interfaceName}</p>
                   {endpointMatch && (
-                    <p className="text-xs text-cyan-300 font-mono">{txt(language, '实际 Endpoint', 'Endpoint')}: {endpointMatch[1]}</p>
+                    <p className="text-xs text-cyan-300 font-mono break-all">{txt(language, '实际 Endpoint', 'Endpoint')}: {endpointMatch[1]}</p>
                   )}
-                  {listenMatch && (
-                    <p className="text-xs text-cyan-300 font-mono">{txt(language, '本端 ListenPort', 'Local ListenPort')}: {listenMatch[1]}</p>
-                  )}
+                  <p className="text-xs text-cyan-300 font-mono">{txt(language, '本端 ListenPort', 'Local ListenPort')}: {fromIface.listenPort}</p>
                 </div>
               );
             })()}
@@ -825,6 +839,34 @@ export function RightPanel() {
                 <option value="udp">UDP</option>
                 <option value="tcp">TCP</option>
               </select>
+            </div>
+            {/* 链路角色（edge.md 并行链路）：空 = 主链路类；backup = 独立的备份链路。
+                角色变更会改变链路身份（重新 key），属拨号相关编辑 ⇒ 与本文件其他拨号相关编辑一致，
+                一并清空陈旧的 compiled_port。 */}
+            <div>
+              <label className="text-xs text-gray-400">{txt(language, ...STRINGS.roleLabel)}</label>
+              <select
+                value={selectedEdge.role || ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  updateEdge(selectedEdge.id, {
+                    role: value === '' ? undefined : (value as 'primary' | 'backup'),
+                    compiled_port: undefined,
+                  });
+                }}
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+              >
+                <option value="">{txt(language, ...STRINGS.rolePrimary)} ({txt(language, '默认', 'default')})</option>
+                <option value="primary">{txt(language, ...STRINGS.rolePrimary)}</option>
+                <option value="backup">{txt(language, ...STRINGS.roleBackup)}</option>
+              </select>
+              <p className="text-[10px] text-gray-500 mt-0.5">
+                {txt(
+                  language,
+                  '备份链路默认开销 384（高于主链路），仅在主链路失效时切换；显式设置的优先级/权重会覆盖此默认值。',
+                  'Backup links default to cost 384 (higher than primary), used only when the primary fails; an explicit priority/weight overrides this default.',
+                )}
+              </p>
             </div>
             <div>
               <label className="text-xs text-gray-400">
@@ -882,6 +924,23 @@ export function RightPanel() {
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
+            {/* 添加备份链路（edge.md 并行链路）：从当前（主）链路派生一条 role=backup 的并行边，
+                由 store 的 addBackupEdge 复制 from/to/type/transport/endpoint_host（不复制端口与 pin）
+                并自动选中。源/目标任一为 client 时隐藏（后端拒绝 client 上的备份），
+                选中边本身已是备份时也隐藏（备份从主链路添加）。 */}
+            {showAddBackupButton && (
+              <button
+                onClick={() => addBackupEdge(selectedEdge.id)}
+                className="w-full py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm"
+              >
+                + {txt(language, ...STRINGS.addBackupLink)}
+              </button>
+            )}
+            {showBackupEndpointNudge && (
+              <p className="text-[10px] text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+                {txt(language, ...STRINGS.backupEndpointNudge)}
+              </p>
+            )}
             {/* 已固定的分配：编译器写回的 pin 值（端口 / transit IP / 链路本地地址）。
                 只读展示；操作员可显式解除固定以便下次编译重新分配。
                 参见 docs/spec/compiler/allocation-stability.md。 */}

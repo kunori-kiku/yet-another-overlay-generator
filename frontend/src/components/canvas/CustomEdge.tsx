@@ -28,6 +28,15 @@ interface CustomEdgeData {
   parallelCount?: number;
   sourceNodeName?: string;
   targetNodeName?: string;
+  // 链路角色徽标（并行链路语义，contract item 5 / Decisions #5）：
+  //   'primary'             → ★（主链路代表边）
+  //   'b1' | 'b2' | ...     → 备份链路在本节点对内的序号（按出现顺序）
+  //   'duplicate'           → 同向多余的 roleless/primary 边（镜像后端 D71 告警）
+  //   undefined             → 单边节点对，不显示徽标（保持简洁观感）
+  roleChip?: 'primary' | 'duplicate' | string;
+  // 焦点透明度（Decisions #11，逐字实现）：被弱化的元素保持挂载、可见、可点击，
+  // 仅以 0.15 不透明度淡出，配合既有 150ms 过渡。绝不 display:none / 卸载 / 屏蔽点击。
+  deemphasized?: boolean;
   [key: string]: unknown;
 }
 
@@ -52,11 +61,13 @@ export function CustomEdge({
   const label = namePrefix ? `${namePrefix} | ${rawLabel}` : rawLabel;
   const pending = data?.pending === true;
   const port = data?.port;
+  const roleChip = data?.roleChip;
+  const deemphasized = data?.deemphasized === true;
 
   // 平行边偏移：根据 parallelIndex 和 parallelCount 计算偏移量
   const parallelIndex = data?.parallelIndex ?? 0;
   const parallelCount = data?.parallelCount ?? 1;
-  const offsetStep = 30; // 每条平行边偏移 30px
+  const offsetStep = 48; // 每条平行边偏移 48px（30px 弧间距读起来像渲染故障，加宽到 48px）
   const totalOffset = (parallelIndex - (parallelCount - 1) / 2) * offsetStep;
 
   // 通过调整 curvature 实现偏移效果 (弹性效果)
@@ -78,6 +89,10 @@ export function CustomEdge({
   const strokeWidth = selected ? 3.5 : 2.5;
   const animated = edgeType === 'relay-path';
 
+  // 焦点弱化压倒一切：被弱化时一律 0.15，无论 selected / pending。
+  const baseEdgeOpacity = selected ? 1 : pending ? 0.65 : 0.8;
+  const edgeOpacity = deemphasized ? 0.15 : baseEdgeOpacity;
+
   return (
     <>
       <BaseEdge
@@ -86,7 +101,7 @@ export function CustomEdge({
         style={{
           stroke: colors.stroke,
           strokeWidth,
-          opacity: selected ? 1 : pending ? 0.65 : 0.8,
+          opacity: edgeOpacity,
           // pending（未编译）边用虚线区分「端口尚未分配」状态
           strokeDasharray: pending ? '7 5' : undefined,
           filter: selected ? `drop-shadow(0 0 4px ${colors.stroke})` : undefined,
@@ -104,6 +119,9 @@ export function CustomEdge({
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
             pointerEvents: 'all',
             cursor: 'pointer',
+            // 弱化时淡出标签（与 BaseEdge 同步），保持挂载与可点击。
+            opacity: deemphasized ? 0.15 : 1,
+            transition: 'opacity 150ms',
           }}
         >
           <div
@@ -125,6 +143,57 @@ export function CustomEdge({
               transition: 'box-shadow 150ms',
             }}
           >
+            {/* 链路角色徽标（contract item 5）：★ 主链路 / bN 备份 / ⚠ 同向重复。
+                单边节点对不设 roleChip → 不渲染，保持简洁。 */}
+            {roleChip === 'primary' && (
+              <span
+                title="primary"
+                style={{
+                  color: '#fde68a',
+                  fontSize: '12px',
+                  lineHeight: 1,
+                }}
+              >
+                ★
+              </span>
+            )}
+            {roleChip === 'duplicate' && (
+              <span
+                title="duplicate"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '2px',
+                  background: '#78350f',
+                  color: '#fde68a',
+                  border: '1px solid #f59e0b',
+                  borderRadius: '3px',
+                  padding: '0 3px',
+                  fontSize: '9px',
+                  fontWeight: 700,
+                }}
+              >
+                ⚠ {txt(language, ...STRINGS.duplicateChip)}
+              </span>
+            )}
+            {roleChip !== undefined &&
+              roleChip !== 'primary' &&
+              roleChip !== 'duplicate' && (
+                <span
+                  title={`backup ${roleChip}`}
+                  style={{
+                    fontFamily: 'monospace',
+                    background: `${colors.stroke}30`,
+                    color: colors.label,
+                    borderRadius: '3px',
+                    padding: '0 4px',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                  }}
+                >
+                  {roleChip}
+                </span>
+              )}
             <span>{label}</span>
             {/* 端口徽标：已编译 → 实际监听端口（后端分配的真值）；
                 未编译 → 「待分配」占位，避免旧版 "host:" 悬空冒号式的误导。 */}
