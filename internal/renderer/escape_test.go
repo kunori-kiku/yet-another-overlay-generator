@@ -173,12 +173,11 @@ func TestRenderDeployScripts_BashRendersPayloadInert(t *testing.T) {
 	assertMarkerOnlyInToken(t, "bash deploy / ssh target (separator)", bash, "; rm -rf", targetToken)
 	assertMarkerOnlyInToken(t, "bash deploy / ssh target (var)", bash, "$HOME", targetToken)
 
-	// Defence-in-depth sanity: there must be no bare `ssh root@x;` form (an
-	// unquoted target followed by the injected separator). The escaped target
-	// is always single-quoted, so this exact unquoted sequence must be absent.
-	if strings.Contains(bash, "root@x; rm -rf") {
-		t.Errorf("bash deploy: found unquoted ssh target with injected separator")
-	}
+	// Defence-in-depth sanity: the full target+separator sequence may appear
+	// ONLY inside the single-quoted token. (A naive absence check would be
+	// self-contradictory: the correctly quoted token necessarily contains
+	// this substring between its quotes.)
+	assertMarkerOnlyInToken(t, "bash deploy / ssh target (full sequence)", bash, "root@x; rm -rf", targetToken)
 }
 
 func TestRenderDeployScripts_PowerShellRendersPayloadInert(t *testing.T) {
