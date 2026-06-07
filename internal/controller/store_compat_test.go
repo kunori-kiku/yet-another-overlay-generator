@@ -173,6 +173,13 @@ func TestStoreBundlePromotion(t *testing.T) {
 			ctx := context.Background()
 			s := impl.factory(t)
 
+			// A node is registered at enrollment before any bundle is staged for it.
+			// Register it so PromoteStaged has a registry record whose DesiredGeneration
+			// it can bump (promote updates existing nodes only — it does not create them).
+			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode: %v", err)
+			}
+
 			// CurrentGeneration is 0 before any promote.
 			if gen, err := s.CurrentGeneration(ctx, tenant); err != nil || gen != 0 {
 				t.Fatalf("CurrentGeneration(initial) = (%d, %v), want (0, nil)", gen, err)

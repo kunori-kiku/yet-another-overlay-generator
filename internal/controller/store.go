@@ -145,8 +145,11 @@ type Store interface {
 	// Staging replaces any prior staged bundle for that node.
 	StageBundle(ctx context.Context, t TenantID, b SignedBundle) error
 	// PromoteStaged atomically flips all staged bundles to current, increments the
-	// tenant's generation, sets each promoted node's DesiredGeneration, and wakes
-	// any WaitForGeneration waiters. Returns the new generation, or ErrNoStagedBundle.
+	// tenant's generation, sets DesiredGeneration on each promoted node that has a
+	// registry record (a node is registered at enrollment before any bundle is
+	// staged for it; promote updates existing records, it does not create them), and
+	// wakes any WaitForGeneration waiters. Returns the new generation, or
+	// ErrNoStagedBundle when nothing is staged.
 	PromoteStaged(ctx context.Context, t TenantID) (generation int64, err error)
 	// GetCurrentBundle returns the node's current (promoted) bundle, or ErrNotFound.
 	GetCurrentBundle(ctx context.Context, t TenantID, nodeID string) (SignedBundle, error)
