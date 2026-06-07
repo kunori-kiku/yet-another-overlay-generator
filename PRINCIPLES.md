@@ -30,11 +30,21 @@ principle-risk assessment.
   prior releases must load and compile after every change; new model fields are
   `omitempty`/optional.
 - **Stateless compiler (MEDIUM):** all allocation state rides the topology JSON; no server-side
-  databases or files.
+  databases or files. *Scoped exception (controller-panel 2.0):* the COMPILER/RENDERER packages stay
+  pure and stateless; the new opt-in CONTROLLER (`internal/controller`, `cmd/agent`) is stateful by
+  design (registry, audit log) — state + new deps are quarantined there and the air-gap path is
+  unaffected. See `docs/design/controller-panel-design-spike-2026_06_07.md`.
 - **Protect the working self-/32 Babel announce path (MEDIUM):** it is the one announce mechanism
   verified to work; changes near `babel.go` redistribute logic must prove it byte-identical.
 - **Minimal dependencies (LOW):** Go stdlib `net/http` only; sole external dep is
-  `golang.zx2c4.com/wireguard/wgctrl`.
+  `golang.zx2c4.com/wireguard/wgctrl`. *Scoped exception (controller-panel 2.0):* new deps
+  (Postgres driver, OIDC, KMS client) are permitted ONLY inside `internal/controller` / `cmd/agent`;
+  the compiler/renderer dep set stays frozen, and signing uses stdlib `crypto/ed25519`.
+- **Key custody (HIGH, controller fleets):** for nodes managed by the controller, WireGuard PRIVATE
+  keys are generated and held agent-side and NEVER reach the controller, its DB, or its bundles
+  (zero-knowledge custody). The controller stores public keys only. This downgrades I5's *mechanism*
+  (private-key round-trip in JSON) to public-key-only for controller fleets while preserving I5's
+  *guarantee* (stable key, identified by public key). The air-gap path's I5 behavior is unchanged.
 - **Local toolchain:** Go is NOT installed on the dev machine — all Go verification runs in CI
   on PRs. npm/node (v20) ARE available locally as of 2026-06-07: run
   `cd frontend && npm run lint && npm run build` before pushing frontend changes.
