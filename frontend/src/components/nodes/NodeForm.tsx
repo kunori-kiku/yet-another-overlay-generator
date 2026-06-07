@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt, STRINGS } from '../../i18n';
-import type { NodeCapabilities, Node } from '../../types/topology';
-
-export type NodeRole = Node['role'];
+import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
 
 const DEFAULT_LISTEN_PORT = 51820;
 
@@ -12,7 +10,7 @@ const DEFAULT_LISTEN_PORT = 51820;
 //   既支持 203.0.113.10:51820 / example.com:51820，又不会误伤裸 IPv6（多冒号）。
 // - 端口缺省/非法时回落到 51820。
 // - 入参为空（去空白后）时返回 null，表示该节点位于 NAT 之后（不写 public_endpoints）。
-export function parsePublicAddress(
+function parsePublicAddress(
   raw: string
 ): { host: string; port: number } | null {
   const trimmed = raw.trim();
@@ -30,50 +28,6 @@ export function parsePublicAddress(
   }
   // 没有可识别的端口后缀（裸 host / IPv6 / 非法端口）：整串作为 host，端口取默认。
   return { host: trimmed, port: DEFAULT_LISTEN_PORT };
-}
-
-// 从角色推导 capabilities，与后端 roles.go 的 InferCapabilitiesFromRole 保持一致：
-// router/relay/gateway 可转发；relay 额外接受入站并中继；client 全部为 false。
-// 这样前端发送的 caps 不会与角色推断相矛盾（D69/D54）。保留操作员显式设置的 has_public_ip。
-export function deriveCapabilitiesFromRole(role: NodeRole, hasPublicIP: boolean): NodeCapabilities {
-  switch (role) {
-    case 'router':
-      return {
-        can_forward: true,
-        // router/gateway 在具备公网 IP 时接受入站连接（与后端 D49 一致）
-        can_accept_inbound: hasPublicIP,
-        can_relay: false,
-        has_public_ip: hasPublicIP,
-      };
-    case 'gateway':
-      return {
-        can_forward: true,
-        can_accept_inbound: hasPublicIP,
-        can_relay: false,
-        has_public_ip: hasPublicIP,
-      };
-    case 'relay':
-      return {
-        can_forward: true,
-        can_accept_inbound: true,
-        can_relay: true,
-        has_public_ip: hasPublicIP,
-      };
-    case 'client':
-      return {
-        can_forward: false,
-        can_accept_inbound: false,
-        can_relay: false,
-        has_public_ip: false,
-      };
-    default: // 'peer'
-      return {
-        can_forward: false,
-        can_accept_inbound: hasPublicIP,
-        can_relay: false,
-        has_public_ip: hasPublicIP,
-      };
-  }
 }
 
 export function NodeForm() {

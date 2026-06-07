@@ -1,6 +1,6 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
-import { deriveCapabilitiesFromRole, type NodeRole } from '../nodes/NodeForm';
+import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
 
 function previewText(content: string | undefined, maxLines = 4, maxChars = 220): string {
   if (!content) return 'N/A';
