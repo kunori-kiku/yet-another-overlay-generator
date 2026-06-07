@@ -1,5 +1,6 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
+import { deriveCapabilitiesFromRole, type NodeRole } from '../nodes/NodeForm';
 
 function previewText(content: string | undefined, maxLines = 4, maxChars = 220): string {
   if (!content) return 'N/A';
@@ -85,7 +86,7 @@ export function RightPanel() {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const newEndpoint = {
-      id: `${nodeId}-ep-${Date.now()}`,
+      id: `${nodeId}-ep-${crypto.randomUUID()}`,
       host: '',
       port: node.listen_port || 51820,
       note: '',
@@ -177,6 +178,26 @@ export function RightPanel() {
               />
             </div>
             <div>
+              <label className="text-xs text-gray-400">{txt(language, 'Transit CIDR (可选)', 'Transit CIDR (optional)')}</label>
+              <input
+                type="text"
+                value={selectedDomain.transit_cidr || ''}
+                onChange={(e) =>
+                  updateDomain(selectedDomain.id, {
+                    transit_cidr: e.target.value.trim() || undefined,
+                  })
+                }
+                pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$"
+                title={txt(
+                  language,
+                  'IPv4 CIDR 格式，例: 10.10.0.0/24；留空使用默认 10.10.0.0/24',
+                  'IPv4 CIDR format, e.g. 10.10.0.0/24; empty uses default 10.10.0.0/24',
+                )}
+                placeholder="10.10.0.0/24"
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              />
+            </div>
+            <div>
               <label className="text-xs text-gray-400">{txt(language, '路由模式', 'Routing Mode')}</label>
               <select
                 value={selectedDomain.routing_mode}
@@ -256,19 +277,17 @@ export function RightPanel() {
               <label className="text-xs text-gray-400">{txt(language, '角色', 'Role')}</label>
               <select
                 value={selectedNode.role}
-                onChange={(e) =>{
-                  const newRole = e.target.value as 'peer' | 'router' | 'relay' | 'gateway' | 'client';
-                  const updates: Record<string, unknown> = { role: newRole };
-                  // Auto-uncheck "Publicly Reachable" when switching to client
-                  if (newRole === 'client') {
-                    updates.capabilities = {
-                      ...selectedNode.capabilities,
-                      has_public_ip: false,
-                      can_accept_inbound: false,
-                      can_forward: false,
-                    };
-                  }
-                  updateNode(selectedNode.id, updates);
+                onChange={(e) => {
+                  const newRole = e.target.value as NodeRole;
+                  // 每次角色变更都重新推导 can_forward/can_relay/can_accept_inbound（D54），
+                  // 与 NodeForm/roles.go 的推断保持一致；client 角色强制 has_public_ip=false，
+                  // 其余角色保留操作员已设置的 has_public_ip。
+                  const operatorHasPublicIP =
+                    newRole === 'client' ? false : selectedNode.capabilities.has_public_ip;
+                  updateNode(selectedNode.id, {
+                    role: newRole,
+                    capabilities: deriveCapabilitiesFromRole(newRole, operatorHasPublicIP),
+                  });
                 }}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
               >
@@ -314,6 +333,8 @@ export function RightPanel() {
               <label className="text-xs text-gray-400">{txt(language, 'MTU (留空使用默认值 1420)', 'MTU (empty for default 1420)')}</label>
               <input
                 type="number"
+                min={576}
+                max={65535}
                 value={selectedNode.mtu || ''}
                 onChange={(e) => updateNode(selectedNode.id, { mtu: parseInt(e.target.value) || undefined })}
                 placeholder="1420"
@@ -497,6 +518,8 @@ export function RightPanel() {
                     <label className="text-xs text-gray-400">{txt(language, 'SSH 端口', 'SSH Port')}</label>
                     <input
                       type="number"
+                      min={1}
+                      max={65535}
                       value={selectedNode.ssh_port || ''}
                       onChange={(e) =>
                         updateNode(selectedNode.id, {
@@ -706,6 +729,78 @@ export function RightPanel() {
               />
               {txt(language, '启用', 'Enabled')}
             </label>
+            {/* 传输协议 / 优先级 / 权重 / 备注（D68）。priority 与 weight 影响 Babel 的链路开销。 */}
+            <div>
+              <label className="text-xs text-gray-400">{txt(language, '传输协议', 'Transport')}</label>
+              <select
+                value={selectedEdge.transport || 'udp'}
+                onChange={(e) =>
+                  updateEdge(selectedEdge.id, {
+                    transport: e.target.value as 'udp' | 'tcp',
+                  })
+                }
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+              >
+                <option value="udp">UDP</option>
+                <option value="tcp">TCP</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-gray-400">
+                {txt(language, '优先级 (影响 Babel 链路开销)', 'Priority (drives Babel link cost)')}
+              </label>
+              <input
+                type="number"
+                value={selectedEdge.priority ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    updateEdge(selectedEdge.id, { priority: undefined });
+                    return;
+                  }
+                  const parsed = parseInt(raw, 10);
+                  if (!isNaN(parsed)) {
+                    updateEdge(selectedEdge.id, { priority: parsed });
+                  }
+                }}
+                placeholder={txt(language, '默认', 'default')}
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400">
+                {txt(language, '权重 (影响 Babel 链路开销)', 'Weight (drives Babel link cost)')}
+              </label>
+              <input
+                type="number"
+                value={selectedEdge.weight ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    updateEdge(selectedEdge.id, { weight: undefined });
+                    return;
+                  }
+                  const parsed = parseInt(raw, 10);
+                  if (!isNaN(parsed)) {
+                    updateEdge(selectedEdge.id, { weight: parsed });
+                  }
+                }}
+                placeholder={txt(language, '默认', 'default')}
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400">{txt(language, '备注', 'Notes')}</label>
+              <input
+                type="text"
+                value={selectedEdge.notes || ''}
+                onChange={(e) =>
+                  updateEdge(selectedEdge.id, { notes: e.target.value || undefined })
+                }
+                placeholder={txt(language, '备注 (可选)', 'Notes (optional)')}
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              />
+            </div>
             {/* 已固定的分配：编译器写回的 pin 值（端口 / transit IP / 链路本地地址）。
                 只读展示；操作员可显式解除固定以便下次编译重新分配。
                 参见 docs/spec/compiler/allocation-stability.md。 */}
@@ -814,7 +909,7 @@ export function RightPanel() {
                             wireguard/{interfaceName}.conf{portLabel}
                           </summary>
                           <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
-                            {txt(language, '预览', 'Preview')}:\n{previewText(config)}
+                            {txt(language, '预览', 'Preview')}:{'\n'}{previewText(config)}
                           </pre>
                           <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
                             {config || txt(language, '无内容', 'No content')}
@@ -836,7 +931,7 @@ export function RightPanel() {
                       babel/babeld.conf
                     </summary>
                     <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
-                      {txt(language, '预览', 'Preview')}:\n{previewText(compileResult.babel_configs[n.id])}
+                      {txt(language, '预览', 'Preview')}:{'\n'}{previewText(compileResult.babel_configs[n.id])}
                     </pre>
                     <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
                       {compileResult.babel_configs[n.id] || txt(language, '无内容', 'No content')}
@@ -848,7 +943,7 @@ export function RightPanel() {
                       sysctl/99-overlay.conf
                     </summary>
                     <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
-                      {txt(language, '预览', 'Preview')}:\n{previewText(compileResult.sysctl_configs[n.id])}
+                      {txt(language, '预览', 'Preview')}:{'\n'}{previewText(compileResult.sysctl_configs[n.id])}
                     </pre>
                     <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
                       {compileResult.sysctl_configs[n.id] || txt(language, '无内容', 'No content')}
@@ -860,7 +955,7 @@ export function RightPanel() {
                       scripts/install.sh
                     </summary>
                     <pre className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">
-                      {txt(language, '预览', 'Preview')}:\n{previewText(compileResult.install_scripts[n.id])}
+                      {txt(language, '预览', 'Preview')}:{'\n'}{previewText(compileResult.install_scripts[n.id])}
                     </pre>
                     <pre className="text-xs text-gray-300 mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">
                       {compileResult.install_scripts[n.id] || txt(language, '无内容', 'No content')}

@@ -53,7 +53,23 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// 分配 pin 校验：pin 在被预留之前必须先校验（不变式 I7）
 	validateAllocationPins(topo, domainMap, nodeMap, result)
 
+	// route_policies 为保留特性：非空即拒绝（Decisions log #2，Spec E）
+	validateRoutePoliciesReserved(topo, result)
+
 	return result
+}
+
+// validateRoutePoliciesReserved 拒绝任何非空的 route_policies（D10/D37/D62，Spec E）。
+// route_policies 在 Go 与 TS 两侧均有声明，却没有任何 renderer 消费、也没有编辑器入口，
+// 编译器仅原样透传（compiler.go）。按绑定决策（Decisions log #2）它是「为未来主题保留」的
+// 特性，而非可用功能：携带非空 route_policies 的拓扑会编译出一份与用户意图不符、却看不出
+// 任何路由策略生效的死配置。因此语义校验在此直接报错，要求该数组必须为空。
+// LAN 桥接 / 路由注入这一用例由 extra_prefixes 与路由层承载，而非 route_policies。
+func validateRoutePoliciesReserved(topo *model.Topology, result *ValidationResult) {
+	if len(topo.RoutePolicies) > 0 {
+		result.AddError("route_policies",
+			fmt.Sprintf("route_policies 为保留特性，尚未实现：当前没有任何渲染器消费它，编译器仅原样透传，必须为空（检测到 %d 条策略，请清空 route_policies；LAN 桥接 / 路由注入请改用 extra_prefixes）", len(topo.RoutePolicies)))
+	}
 }
 
 func buildDomainMap(topo *model.Topology) map[string]*model.Domain {

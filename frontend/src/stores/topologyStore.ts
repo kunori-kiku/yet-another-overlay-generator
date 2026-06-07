@@ -10,7 +10,7 @@ import type {
   CompileResponse,
   CompileHistoryEntry,
 } from '../types/topology';
-import { detectSystemLanguage, type UILanguage } from '../i18n';
+import { detectSystemLanguage, txt, type UILanguage } from '../i18n';
 
 interface TopologyState {
   // 数据
@@ -18,6 +18,9 @@ interface TopologyState {
   domains: Domain[];
   nodes: Node[];
   edges: Edge[];
+  // 分配方案版本号（Spec E 规则 R0）：由编译器写入并原样回传/持久化。
+  // 缺省 0 表示尚未编译；getTopology 仅在 >0 时回送，避免污染从未编译的拓扑。
+  allocSchemaVersion: number;
 
   // 历史快照
   history: CompileHistoryEntry[];
@@ -103,6 +106,7 @@ export const useTopologyStore = create<TopologyState>()(
       domains: [],
       nodes: [],
       edges: [],
+      allocSchemaVersion: 0,
       history: [],
       validateResult: null,
       compileResult: null,
@@ -254,8 +258,13 @@ export const useTopologyStore = create<TopologyState>()(
 
   // 获取完整拓扑
   getTopology: () => {
-    const { project, domains, nodes, edges } = get();
-    return { project, domains, nodes, edges };
+    const { project, domains, nodes, edges, allocSchemaVersion } = get();
+    const topo: Topology = { project, domains, nodes, edges };
+    // Spec E 规则 R0：仅在已编译（>0）时回送版本号，让编译器写入的值原样往返。
+    if (allocSchemaVersion > 0) {
+      topo.alloc_schema_version = allocSchemaVersion;
+    }
+    return topo;
   },
 
   exportProject: () => {
@@ -274,7 +283,26 @@ export const useTopologyStore = create<TopologyState>()(
       const text = await file.text();
       const topo = JSON.parse(text) as Topology;
       if (topo.project && topo.domains && topo.nodes && topo.edges) {
+        // D45/D55：route_policies 为保留特性，校验会拒绝非空数组。导入时若文件携带了
+        // 非空 route_policies，则剥离它并通过 error 状态给出可见提示，避免静默丢弃。
+        const hasReservedRoutePolicies =
+          Array.isArray(topo.route_policies) && topo.route_policies.length > 0;
+        if (hasReservedRoutePolicies) {
+          delete topo.route_policies;
+        }
+        // loadTopology 只接收四个切片 + 版本号，这里先加载再补提示，
+        // 因为 loadTopology 会清空 error。
         get().loadTopology(topo);
+        if (hasReservedRoutePolicies) {
+          const { language } = get();
+          set({
+            error: txt(
+              language,
+              'route_policies 为保留特性（尚未实现），已从导入的项目中移除。',
+              'route_policies is a reserved feature (not yet implemented) and was removed from the imported project.'
+            ),
+          });
+        }
       } else {
         throw new Error('Invalid project file format');
       }
@@ -283,25 +311,35 @@ export const useTopologyStore = create<TopologyState>()(
     }
   },
 
-  // 加载拓扑
+  // 加载拓扑（导入项目 / 恢复快照）。保持四切片语义：只接收 project/domains/nodes/edges，
+  // 外加 Spec E 规则 R0 的 alloc_schema_version（文件中存在时读取，否则归零）。
+  // D75：清空历史与选中状态，避免导入的新项目与上一份项目的快照做无意义的 diff。
   loadTopology: (topo) =>
     set({
       project: topo.project,
       domains: topo.domains,
       nodes: topo.nodes,
       edges: topo.edges,
+      allocSchemaVersion: topo.alloc_schema_version ?? 0,
+      history: [],
       validateResult: null,
       compileResult: null,
       error: null,
+      selectedNodeId: null,
+      selectedEdgeId: null,
+      selectedDomainId: null,
     }),
 
   // 重置
+  // D75：与 loadTopology 一致，连同历史与版本号一并清空，避免残留快照在下一份项目里继续 diff。
   reset: () =>
     set({
       project: { ...defaultProject },
       domains: [],
       nodes: [],
       edges: [],
+      allocSchemaVersion: 0,
+      history: [],
       validateResult: null,
       compileResult: null,
       error: null,
@@ -316,6 +354,7 @@ export const useTopologyStore = create<TopologyState>()(
       domains: [],
       nodes: [],
       edges: [],
+      allocSchemaVersion: 0,
       history: [],
       validateResult: null,
       compileResult: null,
@@ -376,13 +415,15 @@ export const useTopologyStore = create<TopologyState>()(
         compileResult: data,
       };
 
-      set((state) => ({ 
-        compileResult: data, 
+      set((state) => ({
+        compileResult: data,
         isCompiling: false,
         project: data.topology.project,
         domains: data.topology.domains,
         nodes: data.topology.nodes,
         edges: data.topology.edges,
+        // Spec E 规则 R0：把编译器写入的分配方案版本号回吸到 store，保证下次编译与持久化都带上它。
+        allocSchemaVersion: data.topology.alloc_schema_version ?? state.allocSchemaVersion,
         history: [newHistoryEntry, ...state.history].slice(0, 5), // keep last 5
       }));
     } catch (err) {
@@ -468,6 +509,8 @@ export const useTopologyStore = create<TopologyState>()(
         domains: state.domains,
         nodes: state.nodes,
         edges: state.edges,
+        // Spec E 规则 R0：版本号也要持久化，刷新页面后仍能往返编译器写入的分配方案。
+        allocSchemaVersion: state.allocSchemaVersion,
         language: state.language,
       }),
     }

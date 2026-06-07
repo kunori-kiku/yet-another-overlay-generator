@@ -7,8 +7,12 @@ export function DomainForm() {
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState('');
   const [cidr, setCidr] = useState('');
+  const [transitCidr, setTransitCidr] = useState('');
   const [routingMode, setRoutingMode] = useState<'babel' | 'static' | 'none'>('babel');
   const [error, setError] = useState('');
+
+  // 与 cidr 同款的简单 IPv4 CIDR 格式校验
+  const cidrRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
 
   const handleSubmit = () => {
     if (!name.trim()) {
@@ -20,23 +24,29 @@ export function DomainForm() {
       return;
     }
     // 简单 CIDR 格式校验
-    const cidrRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
     if (!cidrRegex.test(cidr)) {
       setError(txt(language, 'CIDR 格式无效，例: 10.10.0.0/24', 'Invalid CIDR format, e.g. 10.10.0.0/24'));
       return;
     }
+    // transit_cidr 可选；填写时按同样的格式校验
+    if (transitCidr.trim() && !cidrRegex.test(transitCidr.trim())) {
+      setError(txt(language, 'Transit CIDR 格式无效，例: 10.10.0.0/24', 'Invalid transit CIDR format, e.g. 10.10.0.0/24'));
+      return;
+    }
 
-    const id = `domain-${Date.now()}`;
+    const id = `domain-${crypto.randomUUID()}`;
     addDomain({
       id,
       name: name.trim(),
       cidr: cidr.trim(),
+      transit_cidr: transitCidr.trim() || undefined,
       allocation_mode: 'auto',
       routing_mode: routingMode,
     });
 
     setName('');
     setCidr('');
+    setTransitCidr('');
     setError('');
     setIsOpen(false);
   };
@@ -66,6 +76,13 @@ export function DomainForm() {
         placeholder={txt(language, 'CIDR (如 10.10.0.0/24)', 'CIDR (e.g. 10.10.0.0/24)')}
         value={cidr}
         onChange={(e) => setCidr(e.target.value)}
+        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+      />
+      <input
+        type="text"
+        placeholder={txt(language, 'Transit CIDR (可选, 默认 10.10.0.0/24)', 'Transit CIDR (optional, default 10.10.0.0/24)')}
+        value={transitCidr}
+        onChange={(e) => setTransitCidr(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
       />
       <select
