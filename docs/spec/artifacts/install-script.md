@@ -5,10 +5,16 @@ Generated per-node bash script with phases:
   Babel, removes configs, removes SNAT rules, removes dummy0, removes systemd services
 - **Phase 0**: Cleanup previous installation (managed + legacy interfaces)
 - **Phase 1**: Environment preparation — checksum verification, dependency installation, dummy0
-  interface creation with overlay IP, SNAT source address fix
+  interface creation with overlay IP, SNAT source address fix. When any link uses `transport: "tcp"`,
+  also installs the `mimic` package, `modprobe mimic` (persisted), and checks kernel-eBPF support
 - **Phase 2**: Configuration deployment — copies WG configs, Babel config, sysctl config
-- **Phase 3**: Activation — applies sysctl, starts WG interfaces, configures babeld systemd
-  override, shows status
+- **Phase 3**: Activation — applies sysctl; for mimic nodes, detects the egress NIC, writes
+  `/etc/mimic/<egress>.conf` (one filter per mimic listen port) and starts `mimic@<egress>` **before**
+  bringing up WireGuard; then starts WG interfaces, configures babeld systemd override, shows status
+
+mimic teardown (one filter per mimic link on the egress NIC, MTU −12 per mimic interface) is detailed
+in [mimic.md](./mimic.md); uninstall stops/disables `mimic@<egress>`, removes its config and
+modules-load entry, and detaches.
 
 ## Source Address Fix (SNAT)
 

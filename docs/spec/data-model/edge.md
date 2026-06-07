@@ -14,7 +14,7 @@ An Edge represents a unidirectional connection intent ("from actively connects t
 | `priority` | int | Connection priority |
 | `weight` | int | Connection weight |
 | `role` | `"primary" \| "backup" \| ""` | Link role for parallel links (see [Parallel links](#parallel-links-primary--backups)); empty = primary class |
-| `transport` | `"udp" \| "tcp"` | Transport protocol. `udp` is the only implemented value; `tcp` is **reserved** (WireGuard is UDP-only) — accepted with a warning and rendered as UDP until a TCP-encapsulation/obfuscation layer exists |
+| `transport` | `"udp" \| "tcp"` | `udp` = plain WireGuard. `tcp` = the link is wrapped by **mimic** (eBPF UDP→fake-TCP) for UDP-hostile networks — see [TCP transport (mimic)](#tcp-transport-mimic). No new field: `tcp` is the whole signal (mimic is keyless) |
 | `is_enabled` | bool | Whether this edge is active |
 | `notes` | string | Free-form notes |
 | `pinned_*` | int/string | Read-write allocation pins (see [Allocation pins](#allocation-pins)) |
@@ -43,6 +43,26 @@ A node pair MAY carry multiple enabled edges. Semantics (normative; identity con
   primary link for write-back — the historical behavior.
 - Edges to or from a `client`-role node cannot be parallel: clients keep the exactly-one-enabled-
   outbound-edge rule (single `wg0`, no Babel).
+
+## TCP transport (mimic)
+
+`transport: "tcp"` wraps the link's WireGuard interface(s) with [mimic](https://github.com/hack3ric/mimic),
+an eBPF program that rewrites UDP packets to look like TCP on the wire. Full contract:
+[../artifacts/mimic.md](../artifacts/mimic.md).
+
+- **Purpose: UDP-hostile networks** — paths that throttle UDP (QoS), block UDP ports, or degrade
+  UDP throughput. It is **not** a censorship/DPI-circumvention feature; it does not resist active
+  probing or deep packet inspection. Do not describe or use it as anti-censorship.
+- **Keyless — no new field.** mimic carries no password/PSK; WireGuard provides all encryption and
+  authentication. `transport: "tcp"` is the entire signal; nothing else is stored on the edge.
+- **Per-interface, MTU −12.** Each mimic interface keeps its own allocated listen port; the
+  compiler lowers that interface's MTU by 12 bytes (mimic's overhead). Non-mimic interfaces and all
+  `udp` edges are unaffected (byte-identical output).
+- **Both ends must be Linux with eBPF.** mimic is an eBPF/kernel feature; a `tcp` edge whose
+  endpoint is not Linux-deployable is a validation error ([../compiler/validation.md](../compiler/validation.md)).
+  Kernel-eBPF availability is checked at install time.
+- **Pairs with parallel links.** A plain `udp` primary + a `tcp` backup lets Babel fail over to the
+  TCP-shaped path when the plain UDP one is throttled or blocked.
 
 ## Port and endpoint ownership
 

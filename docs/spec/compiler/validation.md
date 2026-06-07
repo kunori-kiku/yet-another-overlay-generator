@@ -123,7 +123,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `priority` | — | optional | none-yet |
 | `weight` | — | optional | none-yet |
 | `role` | schema + semantic | enum `primary`/`backup`/empty; at most one explicit `primary` per pair; no `backup` on client edges | planned (parallel-links plan-2) |
-| `transport` | schema | enum `udp`/`tcp`; empty→`udp`; `tcp` accepted but **warned as reserved** (renders as UDP) | schema |
+| `transport` | schema + semantic | enum `udp`/`tcp`; empty→`udp`; `tcp` = mimic-wrapped (no warning); semantic: both endpoints must be Linux-deployable | schema + semantic |
 | `is_enabled` | — | flag | n/a |
 | `notes` | — | free-form | n/a |
 
@@ -153,6 +153,11 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
   (see [../api/http-api.md](../api/http-api.md) compile contract).
 - Client edge constraints — exactly one enabled outbound edge, target must be router/relay/gateway,
   must carry `endpoint_host`, must not be an inbound target (`validateClientEdges`).
+- mimic transport (planned, mimic-tcp-transport plan-2): a `transport: "tcp"` edge requires **both
+  endpoints be Linux-deployable** (platform `debian`/`ubuntu`) — mimic is an eBPF/kernel feature;
+  error otherwise. The v1.3.0 `tcp` reserved-warning is REMOVED (the value is now implemented).
+  Kernel-eBPF availability is an install-time check, not a compile error
+  ([../artifacts/mimic.md](../artifacts/mimic.md)).
 - Parallel links (planned, parallel-links plan-2):
   - **Interface-name uniqueness (N4)** — per node, across all primary and backup peer interfaces;
     collision = compile-blocking error naming the colliding pair ([naming.md](../artifacts/naming.md)).
