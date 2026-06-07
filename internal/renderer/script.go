@@ -563,9 +563,11 @@ echo "  Deployed: /etc/wireguard/{{ .ConfName }}"
 {{ if $.SplicePlaceholder -}}
 # AgentHeld custody: splice the node's locally-held private key into the COPIED conf (never the
 # bundle conf — the signed bundle stays pristine so re-runs keep passing sha256sum -c). This runs
-# AFTER the Phase-0 signature/checksum verify (which ran over the pristine placeholder bundle) and
-# BEFORE wg-quick up. Injection-safe: no sed/regex; we read the key once and rewrite line by line.
-# Idempotent: if the placeholder line is absent (already spliced, or air-gap), this is a no-op.
+# in Phase 2, AFTER the Phase-1 signature/checksum verify (over the pristine placeholder bundle) and
+# BEFORE wg-quick up. Injection-safe: no sed/regex; the key is read once and the file rewritten line
+# by line. Re-run safe: the preceding cp restores the placeholder conf, so each run re-splices the
+# same stable key deterministically; the grep guard skips only a conf that carries no placeholder
+# (e.g. an air-gap bundle, which never renders this block).
 if grep -qxF 'PrivateKey = {{ $.SplicePlaceholderToken }}' "/etc/wireguard/{{ .ConfName }}"; then
     if [ ! -s /etc/wireguard/agent.key ]; then
         echo "ERROR: /etc/wireguard/{{ .ConfName }} expects an agent-held private key but /etc/wireguard/agent.key is missing or empty" >&2
@@ -574,6 +576,8 @@ if grep -qxF 'PrivateKey = {{ $.SplicePlaceholderToken }}' "/etc/wireguard/{{ .C
     # Command substitution strips the trailing newline, yielding the bare base64 key.
     _agent_key="$(cat /etc/wireguard/agent.key)"
     _spliced="$(mktemp)"
+    # The scratch file transiently holds the real private key; remove it on any exit.
+    trap 'rm -f "$_spliced"' EXIT
     while IFS= read -r line || [ -n "$line" ]; do
         if [ "$line" = 'PrivateKey = {{ $.SplicePlaceholderToken }}' ]; then
             printf 'PrivateKey = %s\n' "$_agent_key" >> "$_spliced"
@@ -583,6 +587,7 @@ if grep -qxF 'PrivateKey = {{ $.SplicePlaceholderToken }}' "/etc/wireguard/{{ .C
     done < "/etc/wireguard/{{ .ConfName }}"
     cat "$_spliced" > "/etc/wireguard/{{ .ConfName }}"
     rm -f "$_spliced"
+    trap - EXIT
     chmod 600 /etc/wireguard/{{ .ConfName }}
     echo "  Spliced agent-held private key into /etc/wireguard/{{ .ConfName }}"
 fi
@@ -1196,9 +1201,11 @@ echo "  Deployed: /etc/wireguard/wg0.conf"
 {{ if .SplicePlaceholder -}}
 # AgentHeld custody: splice the node's locally-held private key into the COPIED wg0.conf (never the
 # bundle conf — the signed bundle stays pristine so re-runs keep passing sha256sum -c). This runs
-# AFTER the Phase-0 signature/checksum verify (which ran over the pristine placeholder bundle) and
-# BEFORE wg-quick up. Injection-safe: no sed/regex; we read the key once and rewrite line by line.
-# Idempotent: if the placeholder line is absent (already spliced, or air-gap), this is a no-op.
+# in Phase 2, AFTER the Phase-1 signature/checksum verify (over the pristine placeholder bundle) and
+# BEFORE wg-quick up. Injection-safe: no sed/regex; the key is read once and the file rewritten line
+# by line. Re-run safe: the preceding cp restores the placeholder conf, so each run re-splices the
+# same stable key deterministically; the grep guard skips only a conf that carries no placeholder
+# (e.g. an air-gap bundle, which never renders this block).
 if grep -qxF 'PrivateKey = {{ .SplicePlaceholderToken }}' /etc/wireguard/wg0.conf; then
     if [ ! -s /etc/wireguard/agent.key ]; then
         echo "ERROR: /etc/wireguard/wg0.conf expects an agent-held private key but /etc/wireguard/agent.key is missing or empty" >&2
@@ -1207,6 +1214,8 @@ if grep -qxF 'PrivateKey = {{ .SplicePlaceholderToken }}' /etc/wireguard/wg0.con
     # Command substitution strips the trailing newline, yielding the bare base64 key.
     _agent_key="$(cat /etc/wireguard/agent.key)"
     _spliced="$(mktemp)"
+    # The scratch file transiently holds the real private key; remove it on any exit.
+    trap 'rm -f "$_spliced"' EXIT
     while IFS= read -r line || [ -n "$line" ]; do
         if [ "$line" = 'PrivateKey = {{ .SplicePlaceholderToken }}' ]; then
             printf 'PrivateKey = %s\n' "$_agent_key" >> "$_spliced"
@@ -1216,6 +1225,7 @@ if grep -qxF 'PrivateKey = {{ .SplicePlaceholderToken }}' /etc/wireguard/wg0.con
     done < /etc/wireguard/wg0.conf
     cat "$_spliced" > /etc/wireguard/wg0.conf
     rm -f "$_spliced"
+    trap - EXIT
     chmod 600 /etc/wireguard/wg0.conf
     echo "  Spliced agent-held private key into /etc/wireguard/wg0.conf"
 fi

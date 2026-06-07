@@ -86,6 +86,15 @@ func TestRenderInstallScriptSigned_SpliceDisabledByteIdentical(t *testing.T) {
 	if zero != explicitDisabled {
 		t.Errorf("CustodySplice{} must be byte-identical to an explicitly-disabled splice")
 	}
+	// Stronger: a disabled splice (with no signing key) must be byte-identical to the
+	// plain renderer — proving the splice param adds nothing on the air-gap path.
+	plain, err := RenderInstallScript(node, peers, true)
+	if err != nil {
+		t.Fatalf("render plain install script: %v", err)
+	}
+	if zero != plain {
+		t.Errorf("disabled-splice, unsigned install.sh must be byte-identical to RenderInstallScript")
+	}
 	if strings.Contains(zero, "agent.key") {
 		t.Errorf("disabled-splice install.sh must contain no agent.key remnant")
 	}
@@ -148,6 +157,15 @@ func TestRenderClientInstallScriptSigned_SpliceDisabledByteIdentical(t *testing.
 
 	if zero != explicitDisabled {
 		t.Errorf("client CustodySplice{} must be byte-identical to an explicitly-disabled splice")
+	}
+	// Stronger: a disabled splice (with no signing key) must be byte-identical to the plain
+	// client renderer.
+	plain, err := RenderClientInstallScript(node)
+	if err != nil {
+		t.Fatalf("render plain client install script: %v", err)
+	}
+	if zero != plain {
+		t.Errorf("disabled-splice, unsigned client install.sh must be byte-identical to RenderClientInstallScript")
 	}
 	if strings.Contains(zero, "agent.key") {
 		t.Errorf("disabled-splice client install.sh must contain no agent.key remnant")

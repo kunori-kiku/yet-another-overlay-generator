@@ -77,7 +77,6 @@ func runRun(args []string) int {
 	nodeID := fs.String("node-id", "", "configured node identity (bundle subdir / state key)")
 	sourceSpec := fs.String("source", "", "bundle source: dir:PATH or http(s)://...")
 	pubkeyPath := fs.String("pubkey", "", "path to the pinned signing public-key PEM (optional; when set, a signature is required)")
-	keyPath := fs.String("key", agent.DefaultKeyPath, "path to the local WireGuard private-key file")
 	stateDir := fs.String("state-dir", agent.DefaultStateDir, "directory for the agent's persisted state")
 	stagingDir := fs.String("staging-dir", "", "directory to materialize the verified bundle (default: a fresh temp dir)")
 	_ = fs.Parse(args)
@@ -106,11 +105,13 @@ func runRun(args []string) int {
 		}
 	}
 
+	// NOTE: the private-key splice path is fixed at agent.DefaultKeyPath
+	// (/etc/wireguard/agent.key) inside the rendered install.sh, so `run` has no --key
+	// flag; `agent keygen` writes the key there. Config.KeyPath is left empty (unused by Run).
 	cfg := &agent.Config{
 		NodeID:       *nodeID,
 		Source:       src,
 		PinnedPubPEM: pinned,
-		KeyPath:      *keyPath,
 		StateDir:     *stateDir,
 		StagingDir:   *stagingDir,
 		Stdout:       os.Stdout,

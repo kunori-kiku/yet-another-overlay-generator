@@ -332,6 +332,25 @@ func TestRunAppliesValidBundle(t *testing.T) {
 	}
 }
 
+// TestRunRefusesNodeIDMismatch confirms Run refuses a bundle whose manifest node_id
+// does not match the configured --node-id, so a misconfigured or malicious source
+// cannot get the agent to apply another node's (validly-signed) bundle.
+func TestRunRefusesNodeIDMismatch(t *testing.T) {
+	b := newSignedBundle(t, "2026-06-08T12:00:00Z") // manifest node_id = "alpha"
+	root := writeBundleToDir(t, "bravo", b.files)    // served under "bravo"
+	cfg := &Config{
+		NodeID:       "bravo", // matches the fetch path, but NOT the manifest node_id ("alpha")
+		Source:       NewDirSource(root),
+		PinnedPubPEM: b.pubPEM,
+		StateDir:     t.TempDir(),
+		Stdout:       &strings.Builder{},
+		Stderr:       &strings.Builder{},
+	}
+	if _, err := Run(cfg); err == nil {
+		t.Fatal("Run must refuse a bundle whose manifest node_id != configured node id")
+	}
+}
+
 // resign recomputes checksums.sha256 over the current checksummed file set and
 // re-signs it, keeping the fixture internally consistent after a test mutates a
 // checksummed file (e.g. install.sh).

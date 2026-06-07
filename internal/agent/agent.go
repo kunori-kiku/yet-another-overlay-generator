@@ -92,6 +92,14 @@ func Run(cfg *Config) (*RunResult, error) {
 		return nil, err
 	}
 
+	// Fail closed if the bundle's manifest identifies a different node than this agent is
+	// configured for: a misconfigured or malicious source must not get us to apply another
+	// node's (validly-signed) bundle. An empty node_id is tolerated (older bundles may omit it).
+	if man.NodeID != "" && man.NodeID != cfg.NodeID {
+		recordFailure(cfg, prev, fmt.Sprintf("manifest node_id %q != configured node id %q", man.NodeID, cfg.NodeID))
+		return nil, fmt.Errorf("agent: bundle manifest node_id %q does not match configured node id %q", man.NodeID, cfg.NodeID)
+	}
+
 	res := &RunResult{CompiledAt: man.CompiledAt, Checksum: man.Checksum}
 
 	// 2. verify (fail-closed, BEFORE anything root-side runs)
@@ -102,7 +110,11 @@ func Run(cfg *Config) (*RunResult, error) {
 	}
 	res.Verify = vr
 
-	// 3. anti-rollback
+	// 3. anti-rollback. NOTE: compiled_at comes from manifest.json, which export deliberately
+	// leaves OUT of the signed/checksummed set, so this stub only guards against an honest source
+	// accidentally serving a stale bundle — NOT an active attacker/MITM, who could forge compiled_at
+	// to force a rollback to any previously signed bundle. Attacker-resistant anti-rollback (a signed
+	// version/generation bound into the bundle) is a Phase 2/3 item (docs/spec/controller/agent.md).
 	if err := CheckRollback(prev, man.CompiledAt); err != nil {
 		recordFailure(cfg, prev, err.Error())
 		return res, err
