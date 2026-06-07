@@ -339,6 +339,10 @@ export const useTopologyStore = create<TopologyState>()(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(topo),
       });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || '校验失败');
+      }
       const data: ValidateResponse = await res.json();
       set({ validateResult: data, isValidating: false });
     } catch (err) {

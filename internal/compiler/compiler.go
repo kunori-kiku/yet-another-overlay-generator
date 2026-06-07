@@ -36,6 +36,11 @@ type CompileResult struct {
 	// Client 节点的 wg0 配置信息
 	ClientConfigs map[string]*ClientPeerInfo
 
+	// 非致命告警（schema + semantic 两个阶段产生的 warning），
+	// 供调用方（API/CLI）在编译成功后向用户展示，避免绿色编译掩盖
+	// NAT/无 endpoint 边等"哑链路"问题（审计阻断项 UX-1）。
+	Warnings []validator.ValidationError
+
 	//
 	Manifest CompileManifest
 }
@@ -70,11 +75,17 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		return nil, fmt.Errorf("schema : %v", schemaResult.Errors)
 	}
 
-	// Pass 2: 
+	// Pass 2:
 	semanticResult := validator.ValidateSemantic(topo)
 	if !semanticResult.IsValid() {
 		return nil, fmt.Errorf(": %v", semanticResult.Errors)
 	}
+
+	// 汇总两个验证阶段产生的非致命告警，随编译结果一并返回，
+	// 确保每个调用方（API 与 CLI）都能拿到这些告警。
+	warnings := make([]validator.ValidationError, 0, len(schemaResult.Warnings)+len(semanticResult.Warnings))
+	warnings = append(warnings, schemaResult.Warnings...)
+	warnings = append(warnings, semanticResult.Warnings...)
 
 	// Pass 3: IP 
 	allocatedNodes, err := c.ipAllocator.AllocateIPs(topo)
@@ -141,6 +152,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		InstallScripts:   make(map[string]string),
 		DeployScripts:    make(map[string]string),
 		ClientConfigs:    clientConfigs,
+		Warnings:         warnings,
 		Manifest: CompileManifest{
 			ProjectID:   topo.Project.ID,
 			ProjectName: topo.Project.Name,

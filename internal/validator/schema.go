@@ -82,13 +82,24 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".name", "Domain ")
 		}
 
-		// CIDR 
+		// CIDR 格式校验
 		if domain.CIDR == "" {
-			result.AddError(prefix+".cidr", "CIDR ")
+			result.AddError(prefix+".cidr", "CIDR 不能为空")
 		} else {
-			_, _, err := net.ParseCIDR(domain.CIDR)
+			_, ipNet, err := net.ParseCIDR(domain.CIDR)
 			if err != nil {
-				result.AddError(prefix+".cidr", fmt.Sprintf("CIDR : %s", domain.CIDR))
+				result.AddError(prefix+".cidr", fmt.Sprintf("CIDR 格式无效: %s", domain.CIDR))
+			} else if ipNet.IP.To4() == nil {
+				// IPv4-only：分配器仅支持 IPv4，IPv6/其他地址族会使分配器崩溃
+				result.AddError(prefix+".cidr",
+					fmt.Sprintf("CIDR 必须为 IPv4 网段: %s（暂不支持 IPv6 及其他地址族）", domain.CIDR))
+			} else {
+				// CIDR 大小下限：前缀短于 /8 的网段过大，无法枚举分配
+				ones, _ := ipNet.Mask.Size()
+				if ones < 8 {
+					result.AddError(prefix+".cidr",
+						fmt.Sprintf("CIDR %s 过大，前缀长度不能小于 /8（无法枚举分配）", domain.CIDR))
+				}
 			}
 		}
 
@@ -106,15 +117,26 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 				fmt.Sprintf(": %s, : static, babel, none", domain.RoutingMode))
 		}
 
-		// ReservedRanges CIDR 
+		// ReservedRanges 校验：每项需为可解析的 CIDR 或 IP，且必须为 IPv4
 		for j, rr := range domain.ReservedRanges {
-			_, _, err := net.ParseCIDR(rr)
-			if err != nil {
-				//  IP
-				if net.ParseIP(rr) == nil {
-					result.AddError(fmt.Sprintf("%s.reserved_ranges[%d]", prefix, j),
-						fmt.Sprintf(": %s", rr))
+			rrPrefix := fmt.Sprintf("%s.reserved_ranges[%d]", prefix, j)
+			_, rNet, err := net.ParseCIDR(rr)
+			if err == nil {
+				// 解析为 CIDR：要求 IPv4 地址族
+				if rNet.IP.To4() == nil {
+					result.AddError(rrPrefix,
+						fmt.Sprintf("保留网段必须为 IPv4: %s（暂不支持 IPv6 及其他地址族）", rr))
 				}
+				continue
+			}
+			// 退化为单个 IP：要求可解析且为 IPv4
+			ip := net.ParseIP(rr)
+			if ip == nil {
+				result.AddError(rrPrefix,
+					fmt.Sprintf("保留范围格式无效: %s", rr))
+			} else if ip.To4() == nil {
+				result.AddError(rrPrefix,
+					fmt.Sprintf("保留地址必须为 IPv4: %s（暂不支持 IPv6 及其他地址族）", rr))
 			}
 		}
 	}

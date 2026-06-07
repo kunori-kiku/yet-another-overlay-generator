@@ -685,6 +685,23 @@ export function RightPanel() {
             <p>Checksum: {compileResult.manifest.checksum}</p>
             <p>{txt(language, '编译时间', 'Compiled at')}: {compileResult.manifest.compiled_at}</p>
           </div>
+          {/* 编译告警：语义校验产生的非致命提示（双重 NAT、缺少端点的边、孤立节点等），
+              在编译成功后展示，避免操作员在一个“绿色”编译上发布事实上不可达的覆盖网络。 */}
+          {compileResult.warnings && compileResult.warnings.length > 0 && (
+            <div className="mt-2 space-y-1">
+              <h3 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider">
+                {txt(language, '编译告警', 'Compile Warnings')}
+              </h3>
+              {compileResult.warnings.map((w, i) => (
+                <div
+                  key={`compile-warn-${i}`}
+                  className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded"
+                >
+                  ⚠️ [{w.field}] {w.message}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="mt-2 space-y-2">
             {compileResult.topology.nodes.map((n) => (
               <details key={n.id} className="bg-gray-700 rounded p-2">
