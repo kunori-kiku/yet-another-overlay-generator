@@ -124,6 +124,34 @@ type AuditEntry struct {
 	Hash      string
 }
 
+// OperatorCredential is the pinned OFF-HOST signer the operator uses to sign the
+// membership trust-list (the keystone, plan-5.1b). It is the public half only —
+// never a private key — and is the trust anchor the controller verifies a submitted
+// trust-list signature against. Alg names the signing algorithm (ed25519 /
+// webauthn-es256 / webauthn-eddsa); PublicKeyPEM is the PKIX ("PUBLIC KEY") PEM the
+// algorithm parser consumes; RPID/Origin are the WebAuthn relying-party binding
+// values (empty for raw Ed25519). Pinning a credential turns KEYSTONE ON; with none
+// pinned the controller behaves exactly as before (no trust-list).
+type OperatorCredential struct {
+	Alg          string `json:"alg"`
+	CredentialID string `json:"credential_id"`
+	PublicKeyPEM string `json:"public_key_pem"`
+	RPID         string `json:"rpid"`
+	Origin       string `json:"origin"`
+}
+
+// StoredTrustList is the operator-signed membership trust-list at rest. TrustListJSON
+// is the canonical bytes the operator signed (trustlist.Canonical of the built
+// trust-list); SignatureJSON is the json.Marshal of the trustlist.SignedTrustList;
+// Epoch is the monotonic membership epoch those bytes were signed at. The compiler
+// embeds both byte fields verbatim into every node bundle so nodes verify membership
+// offline against their pinned credential.
+type StoredTrustList struct {
+	TrustListJSON []byte `json:"trustlist_json"`
+	SignatureJSON []byte `json:"signature_json"`
+	Epoch         int64  `json:"epoch"`
+}
+
 // EnrollmentToken authorizes one node to enroll: single-use, short-TTL, and scoped
 // to a NodeID. The plaintext token is NEVER stored — only TokenHash (hex SHA-256 of
 // the plaintext) — so a store/DB read cannot recover a usable token.
@@ -244,4 +272,20 @@ type Store interface {
 	AppendAudit(ctx context.Context, t TenantID, e AuditEntry) (AuditEntry, error)
 	// ListAudit returns the tenant's audit entries in Seq order.
 	ListAudit(ctx context.Context, t TenantID) ([]AuditEntry, error)
+
+	// --- Keystone: operator credential + signed trust-list (plan-5.1b) ---
+
+	// SetOperatorCredential pins (or replaces) the tenant's off-host operator signing
+	// credential — the trust anchor membership signatures are verified against. Pinning
+	// one turns KEYSTONE ON for the tenant.
+	SetOperatorCredential(ctx context.Context, t TenantID, c OperatorCredential) error
+	// GetOperatorCredential returns the tenant's pinned operator credential, or
+	// ErrNotFound when none is pinned (keystone OFF — behave as today).
+	GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error)
+	// PutSignedTrustList stores (replacing any prior) the operator-signed membership
+	// trust-list for the tenant.
+	PutSignedTrustList(ctx context.Context, t TenantID, s StoredTrustList) error
+	// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
+	// ErrNotFound when none has been signed yet.
+	GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error)
 }

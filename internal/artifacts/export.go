@@ -29,6 +29,14 @@ type ExportResult struct {
 }
 
 // Export 导出所有节点的配置产物
+//
+// The exported bundle's checksums.sha256 (and, when signing is on, bundle.sig) cover
+// ONLY the rendered artifacts — every per-peer wireguard/<iface>.conf, babel/babeld.conf
+// (non-client only), sysctl/99-overlay.conf, and install.sh. The keystone trust-list
+// files (trustlist.json / trustlist.sig) are deliberately NOT exported here: the
+// off-host-signed manifest binds each node's checksums.sha256 DIGEST, so those files
+// cannot live inside the very checksum set they bind. The controller appends them to the
+// SERVED file map at /config time instead (plan-5.1 CORRECTION, 2026-06-08).
 func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, error) {
 	exportResult := &ExportResult{
 		OutputDir: outputDir,

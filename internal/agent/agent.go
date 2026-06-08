@@ -22,6 +22,14 @@ type Config struct {
 	// PinnedPubPEM is the operator-pinned signing public key in PKIX PEM, or nil
 	// when no key is pinned (unsigned bundles then permitted).
 	PinnedPubPEM []byte
+	// OperatorCredPEM is the off-host operator credential's public key (PKIX PEM)
+	// for the keystone trust-list gate, or nil when keystone is OFF (opt-in). When
+	// set, Run requires a valid, off-host-signed trust-list in the bundle (see
+	// VerifyMembership). OperatorCredAlg/RPID/Origin describe that credential.
+	OperatorCredPEM []byte
+	OperatorCredAlg string
+	OperatorRPID    string
+	OperatorOrigin  string
 	// KeyPath is the local WireGuard private-key file (default DefaultKeyPath).
 	KeyPath string
 	// StateDir holds the agent's persisted last-applied state (default
@@ -110,6 +118,23 @@ func Run(cfg *Config) (*RunResult, error) {
 	}
 	res.Verify = vr
 
+	// 2b. membership keystone (fail-closed, AFTER tier-1 integrity, BEFORE apply).
+	// When an off-host operator credential is pinned, the bundle's membership must be
+	// signed by that credential — a breached controller cannot forge it. No-op when
+	// keystone is OFF (no OperatorCredPEM). On success it returns the verified epoch,
+	// which a successful apply persists as the new anti-rollback floor.
+	membershipEpoch, err := VerifyMembership(files, MembershipConfig{
+		NodeID:          cfg.NodeID,
+		OperatorCredPEM: cfg.OperatorCredPEM,
+		OperatorCredAlg: cfg.OperatorCredAlg,
+		OperatorRPID:    cfg.OperatorRPID,
+		OperatorOrigin:  cfg.OperatorOrigin,
+	}, prev.MembershipEpoch)
+	if err != nil {
+		recordFailure(cfg, prev, fmt.Sprintf("membership verify failed: %v", err))
+		return res, fmt.Errorf("agent: membership verify: %w", err)
+	}
+
 	// 3. anti-rollback. NOTE: compiled_at comes from manifest.json, which export deliberately
 	// leaves OUT of the signed/checksummed set, so this stub only guards against an honest source
 	// accidentally serving a stale bundle — NOT an active attacker/MITM, who could forge compiled_at
@@ -139,7 +164,7 @@ func Run(cfg *Config) (*RunResult, error) {
 	res.Applied = true
 
 	// 6. report (record success, POST best-effort)
-	recordSuccess(cfg, man, vr)
+	recordSuccess(cfg, man, vr, membershipEpoch)
 	return res, nil
 }
 
@@ -225,16 +250,19 @@ func apply(cfg *Config, staging string) error {
 }
 
 // recordSuccess persists a successful apply to the state file and POSTs the
-// report to the source when it is a Reporter (best-effort).
-func recordSuccess(cfg *Config, man *manifestInfo, vr *VerifyResult) {
+// report to the source when it is a Reporter (best-effort). membershipEpoch is the
+// verified trust-list epoch this apply locked in (0 when keystone is OFF); it becomes
+// the new anti-rollback floor for the next VerifyMembership.
+func recordSuccess(cfg *Config, man *manifestInfo, vr *VerifyResult, membershipEpoch int64) {
 	s := &State{
-		NodeID:         cfg.NodeID,
-		LastCompiledAt: man.CompiledAt,
-		LastChecksum:   man.Checksum,
-		LastResult:     "ok",
-		LastSigned:     vr != nil && vr.Signed,
-		AppliedAt:      time.Now().UTC().Format(compiledAtLayout),
-		Health:         "applied",
+		NodeID:          cfg.NodeID,
+		LastCompiledAt:  man.CompiledAt,
+		LastChecksum:    man.Checksum,
+		LastResult:      "ok",
+		LastSigned:      vr != nil && vr.Signed,
+		MembershipEpoch: membershipEpoch,
+		AppliedAt:       time.Now().UTC().Format(compiledAtLayout),
+		Health:          "applied",
 	}
 	persistAndReport(cfg, s)
 }
@@ -256,6 +284,9 @@ func recordFailure(cfg *Config, prev *State, detail string) {
 		s.LastCompiledAt = prev.LastCompiledAt
 		s.LastChecksum = prev.LastChecksum
 		s.LastSigned = prev.LastSigned
+		// Keep the membership anti-rollback floor: a failed apply must never lower it,
+		// or a rejected older trust-list could be retried successfully afterward.
+		s.MembershipEpoch = prev.MembershipEpoch
 	}
 	if s.NodeID == "" {
 		s.NodeID = cfg.NodeID

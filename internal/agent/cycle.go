@@ -29,6 +29,14 @@ type CycleConfig struct {
 	// PinnedPubPEM is the operator-pinned signing public key (PKIX PEM), or nil when
 	// no key is pinned (unsigned bundles then permitted).
 	PinnedPubPEM []byte
+	// OperatorCredPEM is the off-host operator credential's public key (PKIX PEM) for
+	// the keystone trust-list gate, or nil when keystone is OFF (opt-in). When set,
+	// the apply requires a valid off-host-signed trust-list in the bundle.
+	// OperatorCredAlg/RPID/Origin describe that credential.
+	OperatorCredPEM []byte
+	OperatorCredAlg string
+	OperatorRPID    string
+	OperatorOrigin  string
 	// StateDir holds the agent's persisted last-applied state.
 	StateDir string
 	// StagingDir is where the verified bundle is materialized before install.sh runs
@@ -145,13 +153,17 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 	// the auto-Report itself, since this client is a Reporter.
 	client.SetPriorGeneration(after)
 	res, runErr := Run(&Config{
-		NodeID:       cfg.NodeID,
-		Source:       client,
-		PinnedPubPEM: cfg.PinnedPubPEM,
-		StateDir:     cfg.StateDir,
-		StagingDir:   cfg.StagingDir,
-		Stdout:       cfg.Stdout,
-		Stderr:       cfg.Stderr,
+		NodeID:          cfg.NodeID,
+		Source:          client,
+		PinnedPubPEM:    cfg.PinnedPubPEM,
+		OperatorCredPEM: cfg.OperatorCredPEM,
+		OperatorCredAlg: cfg.OperatorCredAlg,
+		OperatorRPID:    cfg.OperatorRPID,
+		OperatorOrigin:  cfg.OperatorOrigin,
+		StateDir:        cfg.StateDir,
+		StagingDir:      cfg.StagingDir,
+		Stdout:          cfg.Stdout,
+		Stderr:          cfg.Stderr,
 	})
 	if runErr != nil {
 		return after, false, fmt.Errorf("run: %w", runErr) // keep-last-good

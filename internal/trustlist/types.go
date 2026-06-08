@@ -23,24 +23,40 @@ import (
 	"crypto/ed25519"
 )
 
-// Member is one entry in a trust list: a node identity and the WireGuard public
-// key that identity is authorized to present. Field tags pin the on-the-wire
-// JSON names; canonicalization (canonical.go) sorts members by NodeID and
-// rejects duplicates so the signed bytes are deterministic.
+// Member is one entry in a trust list: a node identity, the WireGuard public
+// key that identity is authorized to present, and a digest that binds the
+// node's deployed BUNDLE. Field tags pin the on-the-wire JSON names;
+// canonicalization (canonical.go) sorts members by NodeID and rejects
+// duplicates so the signed bytes are deterministic.
+//
+// BundleSHA256 is the lowercase-hex SHA-256 of that node's checksums.sha256
+// bytes. checksums.sha256 covers install.sh AND every config in the bundle, so
+// binding this digest into the OFF-HOST-signed membership makes the off-host
+// signature cover what RUNS on the node, not merely the membership list: a
+// breached controller that tampers with install.sh changes checksums.sha256,
+// which changes this digest, which it cannot re-sign without the off-host key —
+// so the node rejects the bundle (see the agent's VerifyMembership). It is the
+// keystone's install.sh-coverage fix (plan-5.1 CORRECTION, 2026-06-08).
 type Member struct {
-	NodeID      string `json:"node_id"`
-	WGPublicKey string `json:"wg_public_key"`
+	NodeID       string `json:"node_id"`
+	WGPublicKey  string `json:"wg_public_key"`
+	BundleSHA256 string `json:"bundle_sha256"`
 }
 
 // TrustList is the user-authored, signable document. The canonical JSON
 // encoding of this struct (see Canonical) is BOTH the trustlist.json artifact
 // distributed to nodes AND the exact byte payload that is signed and verified.
+//
+// There is deliberately NO CreatedAt / timestamp field: it would stamp a
+// non-deterministic time.Now() into the canonical bytes, so the same membership
+// would sign to DIFFERENT bytes across calls and break the GET-sign-POST
+// round-trip. Freshness/identity comes from Epoch (monotonic anti-rollback) and
+// the per-member BundleSHA256 digests instead.
 type TrustList struct {
 	SchemaVersion int      `json:"schema_version"`
 	Tenant        string   `json:"tenant"`
 	Epoch         int64    `json:"epoch"`
 	Members       []Member `json:"members"`
-	CreatedAt     string   `json:"created_at"`
 }
 
 // Alg names a signing/verification algorithm. The verifier dispatches on the

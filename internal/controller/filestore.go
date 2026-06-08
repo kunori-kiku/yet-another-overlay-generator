@@ -31,6 +31,8 @@ import (
 //	apitokens/<hash>.json               node API token reverse index ({NodeID}), keyed by hash
 //	generation.json                     the tenant's current generation counter
 //	audit.json                          the full []AuditEntry, in Seq order
+//	operator_credential.json            the pinned off-host operator credential (keystone)
+//	signed_trustlist.json               the operator-signed membership trust-list (keystone)
 //
 // Directories are created 0700 and files written 0600. SignedBundle.Files
 // (map[string][]byte) serializes as base64 under encoding/json, which round-trips
@@ -868,6 +870,89 @@ func (fs *FileStore) RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID 
 		return fmt.Errorf("controller: delete api token index: %w", err)
 	}
 	return nil
+}
+
+// ===================== Keystone: operator credential + trust-list ==========
+
+// SetOperatorCredential pins (or replaces) the tenant's off-host operator signing
+// credential as <root>/<tenant>/operator_credential.json (0700 dir / 0600 file,
+// atomic write). Pinning one turns KEYSTONE ON for the tenant.
+func (fs *FileStore) SetOperatorCredential(ctx context.Context, t TenantID, c OperatorCredential) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(filepath.Join(dir, "operator_credential.json"), c)
+}
+
+// GetOperatorCredential returns the tenant's pinned operator credential, or
+// ErrNotFound when operator_credential.json is absent (keystone OFF).
+func (fs *FileStore) GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error) {
+	if err := ctx.Err(); err != nil {
+		return OperatorCredential{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return OperatorCredential{}, err
+	}
+	var c OperatorCredential
+	if err := readJSON(filepath.Join(dir, "operator_credential.json"), &c); err != nil {
+		if os.IsNotExist(err) {
+			return OperatorCredential{}, ErrNotFound
+		}
+		return OperatorCredential{}, err
+	}
+	return c, nil
+}
+
+// PutSignedTrustList stores (replacing any prior) the operator-signed membership
+// trust-list as <root>/<tenant>/signed_trustlist.json (0700 dir / 0600 file, atomic
+// write). The byte fields serialize as base64 under encoding/json, round-tripping the
+// raw bytes faithfully.
+func (fs *FileStore) PutSignedTrustList(ctx context.Context, t TenantID, sl StoredTrustList) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(filepath.Join(dir, "signed_trustlist.json"), sl)
+}
+
+// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
+// ErrNotFound when signed_trustlist.json is absent (none signed yet).
+func (fs *FileStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
+	if err := ctx.Err(); err != nil {
+		return StoredTrustList{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return StoredTrustList{}, err
+	}
+	var sl StoredTrustList
+	if err := readJSON(filepath.Join(dir, "signed_trustlist.json"), &sl); err != nil {
+		if os.IsNotExist(err) {
+			return StoredTrustList{}, ErrNotFound
+		}
+		return StoredTrustList{}, err
+	}
+	return sl, nil
 }
 
 // ================================ Audit ====================================

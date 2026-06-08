@@ -40,6 +40,12 @@ type State struct {
 	LastError string `json:"last_error,omitempty"`
 	// LastSigned records whether the last applied bundle was signature-verified.
 	LastSigned bool `json:"last_signed"`
+	// MembershipEpoch is the off-host-signed trust-list epoch of the last
+	// successfully applied bundle (keystone, plan-5.1c). It backs anti-rollback for
+	// the membership trust-list: VerifyMembership refuses a trust-list whose Epoch is
+	// strictly less than this value. Zero means no signed membership has been applied
+	// yet (also the keystone-OFF case, where it stays zero and is never consulted).
+	MembershipEpoch int64 `json:"membership_epoch"`
 	// AppliedAt is the agent-side wall-clock time of the last apply attempt.
 	AppliedAt string `json:"applied_at"`
 	// Health is a short human-readable health line.

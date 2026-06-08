@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -841,6 +842,111 @@ func TestStoreAPITokens(t *testing.T) {
 			}
 			if err := s.RevokeNodeAPIToken(ctx, tenant, "never-issued"); err != nil {
 				t.Fatalf("RevokeNodeAPIToken(absent node): %v", err)
+			}
+		})
+	}
+}
+
+// TestStoreOperatorCredential covers the keystone operator-credential contract across
+// both Store impls: ErrNotFound before any pin (keystone OFF), a SetOperatorCredential
+// round-trips every field, and a second Set replaces the prior credential in place.
+func TestStoreOperatorCredential(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			// No credential pinned -> ErrNotFound (keystone OFF, behave as today).
+			if _, err := s.GetOperatorCredential(ctx, tenant); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetOperatorCredential(unpinned): err = %v, want ErrNotFound", err)
+			}
+
+			want := OperatorCredential{
+				Alg:          "ed25519",
+				CredentialID: "cred-abc",
+				PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQ==\n-----END PUBLIC KEY-----\n",
+				RPID:         "yaog.example",
+				Origin:       "https://yaog.example",
+			}
+			if err := s.SetOperatorCredential(ctx, tenant, want); err != nil {
+				t.Fatalf("SetOperatorCredential: %v", err)
+			}
+			got, err := s.GetOperatorCredential(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetOperatorCredential after set: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("OperatorCredential round-trip mismatch:\n got = %+v\nwant = %+v", got, want)
+			}
+
+			// A second Set replaces the prior credential in place.
+			want2 := want
+			want2.Alg = "webauthn-es256"
+			want2.CredentialID = "cred-xyz"
+			if err := s.SetOperatorCredential(ctx, tenant, want2); err != nil {
+				t.Fatalf("SetOperatorCredential(replace): %v", err)
+			}
+			got2, err := s.GetOperatorCredential(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetOperatorCredential after replace: %v", err)
+			}
+			if !reflect.DeepEqual(got2, want2) {
+				t.Fatalf("OperatorCredential replace mismatch:\n got = %+v\nwant = %+v", got2, want2)
+			}
+		})
+	}
+}
+
+// TestStoreSignedTrustList covers the keystone signed-trust-list contract across both
+// Store impls: ErrNotFound before any sign, a PutSignedTrustList round-trips the raw
+// byte fields and the epoch (the FileStore path serializes the bytes as base64), and a
+// second Put replaces the prior trust-list in place.
+func TestStoreSignedTrustList(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			// No trust-list signed -> ErrNotFound.
+			if _, err := s.GetCurrentSignedTrustList(ctx, tenant); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetCurrentSignedTrustList(none): err = %v, want ErrNotFound", err)
+			}
+
+			want := StoredTrustList{
+				TrustListJSON: []byte(`{"schema_version":1,"tenant":"compat-tenant","epoch":0,"members":[]}` + "\n"),
+				SignatureJSON: []byte(`{"alg":"ed25519","credential_id":"k","public_key":"p","signature":"s"}`),
+				Epoch:         0,
+			}
+			if err := s.PutSignedTrustList(ctx, tenant, want); err != nil {
+				t.Fatalf("PutSignedTrustList: %v", err)
+			}
+			got, err := s.GetCurrentSignedTrustList(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetCurrentSignedTrustList after put: %v", err)
+			}
+			if !bytes.Equal(got.TrustListJSON, want.TrustListJSON) ||
+				!bytes.Equal(got.SignatureJSON, want.SignatureJSON) ||
+				got.Epoch != want.Epoch {
+				t.Fatalf("StoredTrustList round-trip mismatch:\n got = %+v\nwant = %+v", got, want)
+			}
+
+			// A second Put replaces the prior trust-list in place (new epoch + bytes).
+			want2 := StoredTrustList{
+				TrustListJSON: []byte(`{"epoch":1}` + "\n"),
+				SignatureJSON: []byte(`{"alg":"ed25519"}`),
+				Epoch:         1,
+			}
+			if err := s.PutSignedTrustList(ctx, tenant, want2); err != nil {
+				t.Fatalf("PutSignedTrustList(replace): %v", err)
+			}
+			got2, err := s.GetCurrentSignedTrustList(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetCurrentSignedTrustList after replace: %v", err)
+			}
+			if !bytes.Equal(got2.TrustListJSON, want2.TrustListJSON) || got2.Epoch != 1 {
+				t.Fatalf("StoredTrustList replace mismatch:\n got = %+v\nwant = %+v", got2, want2)
 			}
 		})
 	}
