@@ -274,6 +274,9 @@ export const useControllerStore = create<ControllerState>()(
           nodes: [],
           audit: [],
           auditVerified: false,
+          // Clear settings too, so a different operator signing in re-fetches them
+          // (the guarded loadSettings effect re-fires on settings===null).
+          settings: null,
           error: null,
         });
       },
