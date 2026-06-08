@@ -1,20 +1,31 @@
-import { useControllerStore, selectRekeyingCount } from '../../stores/controllerStore';
+import {
+  useControllerStore,
+  selectRekeyingCount,
+  selectOperatorEnrolled,
+} from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
 
 // 部署条：把当前拓扑发布到 fleet。controllerStore.deploy() 串联
-// update-topology → (step-up seam) → stage → promote → refresh，整套 promote-to-fleet。
-// 这里只负责触发与回显结果（staged / skippedUnenrolled / generation）+ 错误。
-// requireUserKey 的 step-up（Plan-5 签名钩子）在 store 内部、stage/promote 之前。
+// update-topology → stage →（KEYSTONE 签名）→ promote → refresh，整套 promote-to-fleet。
+// 这里负责触发、回显结果（staged / skippedUnenrolled / generation）+ 错误，并提供
+// off-host operator 签名密钥（passkey / YubiKey）的注册入口与「触碰安全密钥」提示。
+// KEYSTONE 签名钩子（plan-5.1d）在 store 内部、stage 之后 promote 之前（仅当节点要求签名）。
 export function DeployBar() {
   const language = useTopologyStore((s) => s.language);
 
   const deploy = useControllerStore((s) => s.deploy);
   const rollKeys = useControllerStore((s) => s.rollKeys);
+  const enrollOperator = useControllerStore((s) => s.enrollOperator);
   const loading = useControllerStore((s) => s.loading);
+  const signing = useControllerStore((s) => s.signing);
+  const enrolling = useControllerStore((s) => s.enrolling);
   const error = useControllerStore((s) => s.error);
   const lastDeploy = useControllerStore((s) => s.lastDeploy);
   const operatorToken = useControllerStore((s) => s.operatorToken);
+  // 是否已 pin off-host 签名凭据（决定签名区回显与提示）。
+  const operatorEnrolled = useControllerStore(selectOperatorEnrolled);
+  const operatorCredentialAlg = useControllerStore((s) => s.operatorCredentialAlg);
   // 仍处于 rekey_requested 的节点数：>0 时禁用 Deploy（见下方说明）。
   const rekeyingCount = useControllerStore(selectRekeyingCount);
 
@@ -92,6 +103,69 @@ export function DeployBar() {
           'Roll keys asks each node to regenerate its WireGuard key; once nodes re-register their new public keys, Deploy once more to converge the fleet.',
         )}
       </p>
+
+      {/* KEYSTONE（plan-5.1d）：off-host operator 签名密钥（passkey / YubiKey）。
+          回显是否已注册 + 注册按钮；并提示 keystone 开启时 Deploy 会要求触碰安全密钥。 */}
+      <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-semibold text-amber-300">
+            {txt(language, '🔐 操作员签名密钥', '🔐 Operator signing key')}
+          </h4>
+          {operatorEnrolled ? (
+            <span className="text-xs text-green-300 bg-green-900/20 px-2 py-0.5 rounded">
+              {txt(language, '已注册', 'Enrolled')}
+              {operatorCredentialAlg ? ` (${operatorCredentialAlg})` : ''}
+            </span>
+          ) : (
+            <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
+              {txt(language, '未注册', 'Not enrolled')}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-400">
+          {txt(
+            language,
+            '在浏览器外（passkey / YubiKey）pin 一个签名凭据，用于为每次发布的成员清单签名。私钥永不离开你的安全密钥；控制器只保存它的公钥。',
+            'Pin an off-host credential (passkey / YubiKey) used to sign each deploy’s trust-list. The private key never leaves your security key; the controller stores only its public key.',
+          )}
+        </p>
+        <button
+          onClick={() => enrollOperator()}
+          disabled={enrolling || loading || noToken}
+          className="px-4 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+        >
+          {enrolling
+            ? txt(language, '等待安全密钥...', 'Waiting for security key...')
+            : operatorEnrolled
+              ? txt(language, '🔐 重新注册签名密钥（passkey / YubiKey）', '🔐 Re-enroll signing key (passkey / YubiKey)')
+              : txt(language, '🔐 注册签名密钥（passkey / YubiKey）', '🔐 Enroll signing key (passkey / YubiKey)')}
+        </button>
+        <p className="text-[10px] text-gray-500">
+          {txt(
+            language,
+            'keystone 开启时，发布会要求你触碰一次安全密钥以授权本次部署。',
+            'When the keystone is on, Deploy will prompt for a tap on your security key to authorize the deploy.',
+          )}
+        </p>
+      </div>
+
+      {/* WebAuthn 提示弹出、等待用户触碰安全密钥时的醒目提示。文案区分 enroll（注册签名
+          密钥，此时并无部署在进行）与 deploy 签名（授权本次部署）两种 ceremony。 */}
+      {(signing || enrolling) && (
+        <p className="text-sm text-amber-200 bg-amber-900/30 border border-amber-700/50 px-3 py-2 rounded animate-pulse">
+          {enrolling
+            ? txt(
+                language,
+                '👆 请触碰你的安全密钥以注册签名密钥...',
+                '👆 Touch your security key to enroll your signing key...',
+              )
+            : txt(
+                language,
+                '👆 请触碰你的安全密钥以授权本次部署...',
+                '👆 Touch your security key to authorize this deploy...',
+              )}
+        </p>
+      )}
 
       {noToken && (
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">

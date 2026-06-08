@@ -21,6 +21,65 @@ export interface ControllerConfig {
   operatorToken: string;
 }
 
+// --- keystone (off-host operator signing) wire types ---
+//
+// These mirror internal/trustlist/types.go (SignedTrustList) and the keystone
+// routes in internal/api/handler_controller.go. The byte-level contract — every
+// base64url field is RFC4648 url-alphabet WITHOUT padding (Go base64.RawURLEncoding),
+// the challenge binding, and the rpid binding — lives in ../lib/webauthn.ts, which
+// is the single place that builds these structs.
+
+// WebAuthnAlg is the keystone signing algorithm. Only ES256 and EdDSA WebAuthn
+// assertions are accepted by the node verifier; RS256 etc. are rejected.
+export type WebAuthnAlg = 'webauthn-es256' | 'webauthn-eddsa';
+
+// Wire constants for the two accepted algorithms (kept here so both the client
+// and the webauthn helper import the literal from one place).
+export const AlgWebAuthnES256 = 'webauthn-es256' as const;
+export const AlgWebAuthnEdDSA = 'webauthn-eddsa' as const;
+
+// SignedTrustList is the detached-signature artifact the operator's authenticator
+// produces over a deploy's canonical membership manifest. Field names + base64url
+// encodings match trustlist.SignedTrustList exactly (snake_case JSON, RawURLEncoding
+// on every base64url field). It is carried as the `signed` field of POST
+// /trustlist-signature.
+export interface SignedTrustList {
+  alg: WebAuthnAlg;
+  credential_id: string; // base64url(rawId)
+  public_key: string; // pinned PKIX PEM (audit only; node verifies the PINNED key)
+  signature: string; // base64url(response.signature) — ES256 is ASN.1 DER
+  authenticator_data: string; // base64url(response.authenticatorData)
+  client_data_json: string; // base64url(response.clientDataJSON)
+}
+
+// trustListResponseJSON shape from GET /trustlist: the canonical manifest bytes
+// (STANDARD base64) to be signed, plus the membership epoch they carry.
+interface TrustListResponseJSON {
+  trustlist_json: string; // standard base64 of the canonical manifest bytes
+  epoch: number;
+}
+
+// The panel-facing GET /trustlist result: trustlistJson is STANDARD base64 (the
+// caller base64-decodes it to recover the canonical bytes whose SHA-256 is the
+// WebAuthn challenge). A null return means the keystone is OFF for the tenant
+// (404 = no operator credential pinned / nothing staged to sign).
+export interface TrustListToSign {
+  trustlistJson: string;
+  epoch: number;
+}
+
+// operatorCredentialRequestJSON shape for POST /operator-credential: the pinned
+// off-host signing credential. public_key_pem is the PKIX "PUBLIC KEY" PEM; rpid
+// MUST equal the rp.id used at create() time (the node binds SHA256(rpid) to the
+// assertion rpIdHash); origin is advisory on the node.
+export interface OperatorCredentialBody {
+  alg: WebAuthnAlg;
+  credentialId: string; // base64url(rawId)
+  publicKeyPEM: string; // PKIX "PUBLIC KEY" PEM
+  rpId: string; // location.hostname
+  origin: string; // location.origin
+}
+
 // 把用户输入的 secret path 前缀规范化为 "" 或 "/<seg>"（单个前导斜杠、无尾随斜杠），
 // 与后端 SetPathPrefix 的归一化规则保持一致。
 function normalizePrefix(prefix: string): string {
@@ -239,4 +298,69 @@ export async function rekeyAll(cfg: ControllerConfig): Promise<{ requested: numb
   const res = await postJSON(cfg, 'rekey-all', '');
   const data = (await res.json()) as RekeyAllResponseJSON;
   return { requested: data.requested };
+}
+
+// --- keystone (off-host operator signing) ---
+
+// getTrustlist fetches the STAGED membership manifest the operator must sign
+// (operator-only). It returns the canonical bytes as STANDARD base64 plus the
+// epoch — the panel base64-decodes trustlistJson and signs SHA-256 of those bytes.
+//
+// A 404 means the keystone is OFF (no operator credential pinned, or nothing
+// staged): the handler returns 404 from GET /trustlist when there is no staged
+// manifest, and the keystone is only ON once a credential is pinned. We map 404
+// to null so deploy() can promote directly (today's behavior) when the keystone
+// is off, and only run the signing ceremony when a manifest comes back.
+export async function getTrustlist(cfg: ControllerConfig): Promise<TrustListToSign | null> {
+  const headers = new Headers();
+  headers.set('Authorization', `Bearer ${cfg.operatorToken}`);
+  const res = await fetch(ctlURL(cfg, 'trustlist'), { method: 'GET', headers });
+  if (res.status === 404) {
+    // Drain the body to release the connection; 404 = keystone OFF.
+    await res.text();
+    return null;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status} ${body}`);
+  }
+  const data = (await res.json()) as TrustListResponseJSON;
+  return { trustlistJson: data.trustlist_json, epoch: data.epoch };
+}
+
+// postTrustlistSignature submits the operator's off-host signature over the
+// staged manifest (operator-only). trustlistJson is the STANDARD base64 of the
+// exact bytes signed (server-side substitution guard) and signed is the
+// SignedTrustList assembled by ../lib/webauthn.ts. A non-2xx (e.g. 400 verify
+// failure, 409 manifest changed, 412 no credential pinned) throws as usual.
+export async function postTrustlistSignature(
+  cfg: ControllerConfig,
+  body: { trustlistJson: string; signed: SignedTrustList },
+): Promise<void> {
+  await postJSON(
+    cfg,
+    'trustlist-signature',
+    JSON.stringify({ trustlist_json: body.trustlistJson, signed: body.signed }),
+  );
+}
+
+// postOperatorCredential pins the off-host operator signing credential, turning
+// the keystone ON for the tenant (operator-only). The body's PEM must parse for
+// the declared alg server-side (a malformed pin is a 400). rpid/origin carry the
+// WebAuthn relying-party binding the node enforces.
+export async function postOperatorCredential(
+  cfg: ControllerConfig,
+  body: OperatorCredentialBody,
+): Promise<void> {
+  await postJSON(
+    cfg,
+    'operator-credential',
+    JSON.stringify({
+      alg: body.alg,
+      credential_id: body.credentialId,
+      public_key_pem: body.publicKeyPEM,
+      rpid: body.rpId,
+      origin: body.origin,
+    }),
+  );
 }
