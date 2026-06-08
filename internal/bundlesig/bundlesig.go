@@ -31,7 +31,8 @@ import (
 // `openssl genpkey -algorithm ed25519`). When unset or empty, exports stay
 // hash-only — today's back-compatible default. This is the single source of
 // truth for the variable name; the export path, the install-script renderer,
-// and the self-extracting installer all read it through LoadSigningFromEnv.
+// and the self-extracting installer all read it through the ConfigSigner
+// constructor LoadConfigSignerFromEnv (which delegates to LoadSigningFromEnv).
 const EnvSigningKey = "YAOG_BUNDLE_SIGNING_KEY"
 
 // Signing carries loaded Ed25519 signing material: the private key used to sign
@@ -90,7 +91,11 @@ func LoadSigningFromEnv() (*Signing, error) {
 // live in their own packages that import bundlesig for this seam.
 //
 // Sign returns an error because a networked backend can fail mid-call; the
-// in-process Ed25519 signer never does (its error is always nil).
+// in-process Ed25519 signer never does (its error is always nil). When a
+// networked backend is actually introduced, Sign should also take a
+// context.Context for cancellation/deadline; it is omitted now to keep the
+// in-process default and its call sites minimal (this is an internal interface
+// with no external consumers, so widening it later is a contained change).
 type ConfigSigner interface {
 	// Sign returns the raw 64-byte Ed25519 signature over message.
 	Sign(message []byte) (sig []byte, err error)

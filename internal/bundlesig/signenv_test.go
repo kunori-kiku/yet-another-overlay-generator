@@ -104,6 +104,9 @@ func TestLoadConfigSignerFromEnv(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		// This is precisely the typed-nil guard: a (*Signing)(nil) wrapped in the
+		// ConfigSigner interface would be != nil here, so this assertion fails unless
+		// the constructor returns a BARE nil interface when signing is off.
 		if signer != nil {
 			t.Fatalf("expected a nil ConfigSigner when unset, got %T", signer)
 		}
