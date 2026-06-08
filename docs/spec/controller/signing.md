@@ -69,6 +69,29 @@ Ed25519 is chosen for being in the Go standard library, deterministic (no per-si
 to mis-handle), small (32-byte keys, 64-byte signatures), and verifiable by stock `openssl` on the
 node — no third-party crypto dependency on either side.
 
+### Signer seam (`ConfigSigner`)
+
+The export / install-script / self-extracting-installer paths do not call `Sign` directly; they
+resolve a `bundlesig.ConfigSigner` via `LoadConfigSignerFromEnv`:
+
+- `ConfigSigner.Sign(message []byte) ([]byte, error)` — a raw 64-byte Ed25519 detached signature
+  over `message` (the canonical `checksums.sha256` bytes for the export path, or the
+  self-extracting `tar.gz` payload for the installer wrapper).
+- `ConfigSigner.PublicKeyPEM() []byte` — the PKIX public-key PEM pinned into `install.sh`.
+
+The default (and today's only) backend is the in-process Ed25519 key `*Signing` loaded from
+`YAOG_BUNDLE_SIGNING_KEY`. `LoadConfigSignerFromEnv` returns an **explicit nil interface** when
+signing is off (never a typed-nil `*Signing`), so call-site `!= nil` checks stay correct. The
+interface lives in `bundlesig` (stdlib-only), so a future **host-isolated backend** — HashiCorp
+Vault / OpenBao transit (stdlib REST), GCP Cloud KMS, or a YubiHSM, all Ed25519-capable so the
+node-side `openssl` verify path stays unchanged — plugs in by implementing the same interface in
+its own package, with no change to the call sites. The `Sign` error return exists for such
+networked backends; the in-process signer's error is always nil. Because the off-host WebAuthn
+keystone (the operator's hardware-key-signed trust-list, plan 5.1) already bounds the
+network-takeover blast radius, this tier-1 key only needs exfiltration resistance, so the software
+default (protected at rest by `systemd-creds` / `0600`) is proportionate and a remote KMS is
+strictly optional.
+
 ## Opt-in configuration
 
 Signing is controlled by a single environment variable read at export time:

@@ -182,13 +182,13 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	// When signing is off, signingPubPEM stays empty and the *Signed renderers emit
 	// byte-identical output to the plain renderers (see script_signature_test.go), so
 	// the air-gap path is unchanged. A misconfigured key fails closed here.
-	signing, err := bundlesig.LoadSigningFromEnv()
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
 		return fmt.Errorf("加载 bundle 签名密钥失败: %w", err)
 	}
 	var signingPubPEM string
-	if signing != nil {
-		signingPubPEM = string(signing.PubKeyPEM)
+	if signer != nil {
+		signingPubPEM = string(signer.PublicKeyPEM())
 	}
 
 	//

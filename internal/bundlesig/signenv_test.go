@@ -91,6 +91,56 @@ func TestLoadSigningFromEnv_Malformed(t *testing.T) {
 	}
 }
 
+// TestLoadConfigSignerFromEnv covers the ConfigSigner seam constructor: a nil
+// interface when unset (opt-in off — and explicitly a nil interface, not a
+// non-nil interface wrapping a nil *Signing), a working in-process Ed25519 signer
+// when configured, and a fail-closed error on an unreadable path. It exercises the
+// ConfigSigner methods end to end: Sign produces a signature Verify accepts under
+// the configured key, and PublicKeyPEM matches the pinned PEM.
+func TestLoadConfigSignerFromEnv(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(EnvSigningKey, "")
+		signer, err := LoadConfigSignerFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// This is precisely the typed-nil guard: a (*Signing)(nil) wrapped in the
+		// ConfigSigner interface would be != nil here, so this assertion fails unless
+		// the constructor returns a BARE nil interface when signing is off.
+		if signer != nil {
+			t.Fatalf("expected a nil ConfigSigner when unset, got %T", signer)
+		}
+	})
+	t.Run("valid", func(t *testing.T) {
+		path, pub := writePKCS8Key(t)
+		t.Setenv(EnvSigningKey, path)
+		signer, err := LoadConfigSignerFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if signer == nil {
+			t.Fatal("expected a non-nil ConfigSigner")
+		}
+		if !bytes.Equal(signer.PublicKeyPEM(), MarshalPublicKeyPEM(pub)) {
+			t.Error("ConfigSigner.PublicKeyPEM does not match the configured key")
+		}
+		canonical := Canonicalize(map[string]string{"install.sh": "echo hi\n"})
+		sig, err := signer.Sign(canonical)
+		if err != nil {
+			t.Fatalf("ConfigSigner.Sign: %v", err)
+		}
+		if !Verify(canonical, sig, pub) {
+			t.Error("ConfigSigner.Sign output does not verify under the configured key")
+		}
+	})
+	t.Run("bad-path", func(t *testing.T) {
+		t.Setenv(EnvSigningKey, filepath.Join(t.TempDir(), "missing.pem"))
+		if _, err := LoadConfigSignerFromEnv(); err == nil {
+			t.Fatal("expected an error for an unreadable signing key path")
+		}
+	})
+}
+
 // TestLoadSigningFromEnv_NotEd25519 rejects a valid PKCS#8 PEM that holds a
 // non-Ed25519 key, exercising the type-assert branch in LoadPrivateKeyPEM.
 func TestLoadSigningFromEnv_NotEd25519(t *testing.T) {

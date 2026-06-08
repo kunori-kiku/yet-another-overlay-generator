@@ -31,7 +31,8 @@ import (
 // `openssl genpkey -algorithm ed25519`). When unset or empty, exports stay
 // hash-only — today's back-compatible default. This is the single source of
 // truth for the variable name; the export path, the install-script renderer,
-// and the self-extracting installer all read it through LoadSigningFromEnv.
+// and the self-extracting installer all read it through the ConfigSigner
+// constructor LoadConfigSignerFromEnv (which delegates to LoadSigningFromEnv).
 const EnvSigningKey = "YAOG_BUNDLE_SIGNING_KEY"
 
 // Signing carries loaded Ed25519 signing material: the private key used to sign
@@ -72,6 +73,71 @@ func LoadSigningFromEnv() (*Signing, error) {
 		Priv:      priv,
 		PubKeyPEM: MarshalPublicKeyPEM(priv.Public().(ed25519.PublicKey)),
 	}, nil
+}
+
+// ConfigSigner is the tier-1 config-bundle signing seam: it produces a detached
+// Ed25519 signature over a message (the canonical checksums bytes for the export
+// path, or the self-extracting tar.gz payload for the installer wrapper) and
+// exposes the PKIX public-key PEM pinned into install.sh / the wrapper as the
+// verification anchor.
+//
+// The default implementation is *Signing — an in-process Ed25519 key loaded from
+// EnvSigningKey. A future host-isolated backend (HashiCorp Vault / OpenBao
+// transit, GCP Cloud KMS, a YubiHSM) plugs in by implementing this SAME interface
+// in its own package, with no change to the export / render / installer call
+// sites: only the constructor (LoadConfigSignerFromEnv, or a caller that injects a
+// ConfigSigner) changes. The interface lives here — not in a package that pulls a
+// KMS SDK — so bundlesig keeps its stdlib-only contract; the heavy KMS clients
+// live in their own packages that import bundlesig for this seam.
+//
+// Sign returns an error because a networked backend can fail mid-call; the
+// in-process Ed25519 signer never does (its error is always nil). When a
+// networked backend is actually introduced, Sign should also take a
+// context.Context for cancellation/deadline; it is omitted now to keep the
+// in-process default and its call sites minimal (this is an internal interface
+// with no external consumers, so widening it later is a contained change).
+type ConfigSigner interface {
+	// Sign returns the raw 64-byte Ed25519 signature over message.
+	Sign(message []byte) (sig []byte, err error)
+	// PublicKeyPEM returns the PKIX ("PUBLIC KEY") PEM of the verifying key,
+	// identical for every node bundle.
+	PublicKeyPEM() []byte
+}
+
+// Sign implements ConfigSigner using the in-process Ed25519 private key. The
+// error is always nil — ed25519.Sign cannot fail for a valid key — but the
+// signature matches the interface so networked backends can report failures.
+func (s *Signing) Sign(message []byte) ([]byte, error) {
+	return Sign(message, s.Priv), nil
+}
+
+// PublicKeyPEM implements ConfigSigner, returning the pinned PKIX public-key PEM.
+func (s *Signing) PublicKeyPEM() []byte {
+	return s.PubKeyPEM
+}
+
+// Compile-time assertion that the in-process signer satisfies the seam.
+var _ ConfigSigner = (*Signing)(nil)
+
+// LoadConfigSignerFromEnv returns the configured tier-1 ConfigSigner, or
+// (nil, nil) when signing is not configured (opt-in; bundles stay hash-only,
+// byte-for-byte today's output). Today the only backend is the in-process
+// Ed25519 signer loaded from EnvSigningKey; future KMS/HSM backends are selected
+// here (or injected by the caller) without touching the export / render /
+// installer call sites.
+//
+// It returns an explicit nil INTERFACE (never a non-nil interface wrapping a nil
+// *Signing) when signing is off, so callers can compare the result against nil
+// directly without tripping Go's typed-nil gotcha.
+func LoadConfigSignerFromEnv() (ConfigSigner, error) {
+	signing, err := LoadSigningFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if signing == nil {
+		return nil, nil
+	}
+	return signing, nil
 }
 
 // Canonicalize produces the canonical checksums byte string for a bundle.

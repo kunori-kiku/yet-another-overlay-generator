@@ -42,17 +42,18 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		OutputDir: outputDir,
 	}
 
-	// Signing is opt-in via bundlesig.EnvSigningKey. Load the key once up front
-	// (through the shared loader so the env-var name and PEM handling stay in one
-	// place, identical to the install-script renderer and the self-extracting
+	// Signing is opt-in via bundlesig.EnvSigningKey. Resolve the ConfigSigner once
+	// up front (through the shared seam so the env-var name and PEM handling stay in
+	// one place, identical to the install-script renderer and the self-extracting
 	// installer) so a malformed key fails the whole export early — before any node
-	// dir is touched — rather than mid-loop. When the env var is unset/empty,
-	// signing is nil and the export remains hash-only: byte-for-byte today's output.
-	signing, err := bundlesig.LoadSigningFromEnv()
+	// dir is touched — rather than mid-loop. When the env var is unset/empty, the
+	// signer is nil and the export remains hash-only: byte-for-byte today's output.
+	// A future KMS/HSM backend swaps in here with no change to the loop below.
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
 		return nil, err
 	}
-	signEnabled := signing != nil
+	signEnabled := signer != nil
 
 	// 按节点导出
 	for _, node := range result.Topology.Nodes {
@@ -177,14 +178,17 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		// install.sh is the script renderer's responsibility (it reads the same
 		// env var at render time); here we only ship the openssl-consumable PEM.
 		if signEnabled {
-			sig := bundlesig.Sign(canonical, signing.Priv)
+			sig, err := signer.Sign(canonical)
+			if err != nil {
+				return nil, fmt.Errorf("签名 bundle 失败: %w", err)
+			}
 			sigB64 := base64.StdEncoding.EncodeToString(sig)
 			sigPath := filepath.Join(nodeDir, "bundle.sig")
 			if err := os.WriteFile(sigPath, []byte(sigB64+"\n"), 0644); err != nil {
 				return nil, fmt.Errorf("写入 bundle.sig 失败: %w", err)
 			}
 			pubPath := filepath.Join(nodeDir, "signing-pubkey.pem")
-			if err := os.WriteFile(pubPath, signing.PubKeyPEM, 0644); err != nil {
+			if err := os.WriteFile(pubPath, signer.PublicKeyPEM(), 0644); err != nil {
 				return nil, fmt.Errorf("写入 signing-pubkey.pem 失败: %w", err)
 			}
 			allFiles = append(allFiles, "bundle.sig", "signing-pubkey.pem")
