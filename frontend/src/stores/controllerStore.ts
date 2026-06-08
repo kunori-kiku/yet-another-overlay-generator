@@ -18,6 +18,8 @@ import {
   getTrustlist,
   postTrustlistSignature,
   postOperatorCredential,
+  login as ctlLogin,
+  logout as ctlLogout,
 } from '../api/controllerClient';
 import { enrollOperatorCredential, signManifest } from '../lib/webauthn';
 import { useTopologyStore } from './topologyStore';
@@ -31,7 +33,16 @@ interface ControllerState {
   baseURL: string;
   pathPrefix: string;
   agentBaseURL: string;
+  // operatorToken 是可选的 BREAK-GLASS 令牌（恢复用），仅在内存中。日常鉴权用密码登录
+  // 换来的 session（sessionToken）。两者都不持久化（密钥不落 localStorage）。
   operatorToken: string;
+
+  // 登录会话（plan-5.2）：密码登录后服务端签发的 bearer session token，仅在内存中保存
+  // （刷新页面后需重新登录），绝不落 localStorage。operatorName/sessionExpiresAt 仅用于
+  // 回显「已登录为 X，到期时间」。
+  sessionToken: string;
+  operatorName: string | null;
+  sessionExpiresAt: string | null;
 
   // fleet 视图
   nodes: ControllerNode[];
@@ -63,6 +74,8 @@ interface ControllerState {
   // actions
   setConfig: (partial: Partial<ControllerConfig & { agentBaseURL: string }>) => void;
   refresh: () => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
   mintToken: (nodeId: string, ttl: number) => Promise<string>;
   enrollOperator: () => Promise<void>;
   deploy: () => Promise<void>;
@@ -71,12 +84,20 @@ interface ControllerState {
 }
 
 // 从连接字段切出 controllerClient 需要的 ControllerConfig（不含 agentBaseURL）。
+// EFFECTIVE bearer = 登录 session 优先，否则 break-glass operatorToken。这样客户端层
+// 无需感知会话/令牌的区别——它只附上 operatorToken 字段作为 Bearer。
 function configOf(state: ControllerState): ControllerConfig {
   return {
     baseURL: state.baseURL,
     pathPrefix: state.pathPrefix,
-    operatorToken: state.operatorToken,
+    operatorToken: state.sessionToken || state.operatorToken,
   };
+}
+
+// 派生选择器：是否已通过密码登录（持有有效 session）。DeployPanel 用它在登录区切换
+// 「登录表单 / 已登录为 X」。break-glass operatorToken 不算「已登录」（它是恢复路径）。
+export function selectLoggedIn(state: ControllerState): boolean {
+  return state.sessionToken !== '';
 }
 
 // 把标准 base64（带 padding，GET /trustlist 的 trustlist_json 编码）解码回原始字节。
@@ -127,6 +148,10 @@ export const useControllerStore = create<ControllerState>()(
       agentBaseURL: 'http://localhost:9090',
       operatorToken: '',
 
+      sessionToken: '',
+      operatorName: null,
+      sessionExpiresAt: null,
+
       nodes: [],
       audit: [],
       auditVerified: false,
@@ -164,6 +189,49 @@ export const useControllerStore = create<ControllerState>()(
             loading: false,
           });
         }
+      },
+
+      // 操作员密码登录（plan-5.2）：POST /login 换取 session token，仅存内存。成功后立即
+      // refresh 拉取 fleet 视图。session 优先于 break-glass token（见 configOf）。失败把
+      // 控制器原始报错（401 invalid username or password / 429 too many attempts）回显。
+      login: async (username, password) => {
+        set({ loading: true, error: null });
+        try {
+          const result = await ctlLogin(configOf(get()), username, password);
+          set({
+            sessionToken: result.sessionToken,
+            operatorName: result.operator,
+            sessionExpiresAt: result.expiresAt,
+            loading: false,
+          });
+          await get().refresh();
+        } catch (err) {
+          set({
+            error: err instanceof Error ? err.message : 'Login failed',
+            loading: false,
+          });
+        }
+      },
+
+      // 登出：best-effort 调 POST /logout 撤销服务端 session，然后无论成败都清空本地
+      // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。
+      logout: async () => {
+        try {
+          if (get().sessionToken) {
+            await ctlLogout(configOf(get()));
+          }
+        } catch {
+          // 撤销失败不阻塞本地登出（session 仍会在服务端按 TTL 过期）。
+        }
+        set({
+          sessionToken: '',
+          operatorName: null,
+          sessionExpiresAt: null,
+          nodes: [],
+          audit: [],
+          auditVerified: false,
+          error: null,
+        });
       },
 
       // 为某节点铸造一次性 enrollment token，返回明文 token（仅此一次可见）。

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { useControllerStore } from '../../stores/controllerStore';
+import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { txt } from '../../i18n';
 import { NodeRegistry } from './NodeRegistry';
 import { EnrollmentFlow } from './EnrollmentFlow';
@@ -32,8 +32,16 @@ export function DeployPanel() {
   const loading = useControllerStore((s) => s.loading);
   const error = useControllerStore((s) => s.error);
   const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
+  // 密码登录（plan-5.2）：session 优先于 break-glass operatorToken（见 store.configOf）。
+  const login = useControllerStore((s) => s.login);
+  const logout = useControllerStore((s) => s.logout);
+  const loggedIn = useControllerStore(selectLoggedIn);
+  const operatorName = useControllerStore((s) => s.operatorName);
 
   const [mode, setMode] = useState<DeployMode>('local');
+  // 登录表单的本地输入（密码只在内存里，登录成功后清空）。
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
 
   const noNodes = nodes.length === 0;
 
@@ -175,15 +183,76 @@ export function DeployPanel() {
                   className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                 />
               </div>
-              <div>
+              {/* 密码登录（plan-5.2）：日常鉴权路径。已登录显示身份 + 登出；未登录显示
+                  用户名/密码 + 登录。下方的 Operator Token 是可选的 break-glass 恢复凭据。 */}
+              <div className="border-t border-gray-600 pt-3 space-y-2">
+                <label className="text-xs text-gray-400 font-medium">
+                  {txt(language, '登录', 'Sign in')}
+                </label>
+                {loggedIn ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-green-300">
+                      {txt(language, '已登录为', 'Signed in as')}{' '}
+                      <span className="font-mono">{operatorName}</span>
+                    </span>
+                    <button
+                      onClick={() => logout()}
+                      disabled={loading}
+                      className="px-3 py-1 text-xs bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 rounded text-white"
+                    >
+                      {txt(language, '登出', 'Sign out')}
+                    </button>
+                  </div>
+                ) : (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void login(loginUser, loginPass).then(() => {
+                        // 登录成功后清空密码输入（不在 React 状态里多留）。
+                        if (useControllerStore.getState().sessionToken) {
+                          setLoginPass('');
+                        }
+                      });
+                    }}
+                    className="space-y-2"
+                  >
+                    <input
+                      type="text"
+                      value={loginUser}
+                      onChange={(e) => setLoginUser(e.target.value)}
+                      placeholder={txt(language, '用户名', 'Username')}
+                      autoComplete="username"
+                      className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                    />
+                    <input
+                      type="password"
+                      value={loginPass}
+                      onChange={(e) => setLoginPass(e.target.value)}
+                      placeholder={txt(language, '密码', 'Password')}
+                      autoComplete="current-password"
+                      className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={loading || loginUser.trim() === '' || loginPass === ''}
+                      className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+                    >
+                      {loading
+                        ? txt(language, '登录中...', 'Signing in...')
+                        : txt(language, '登录', 'Sign in')}
+                    </button>
+                  </form>
+                )}
+              </div>
+              <div className="border-t border-gray-600 pt-3">
                 <label className="text-xs text-gray-400">
-                  {txt(language, 'Operator Token', 'Operator Token')}
+                  {txt(language, 'Operator Token（恢复用 / 可选）', 'Operator token (break-glass, optional)')}
                 </label>
                 <input
                   type="password"
                   value={operatorToken}
                   onChange={(e) => setConfig({ operatorToken: e.target.value })}
-                  placeholder={txt(language, '不会被持久化', 'Never persisted')}
+                  placeholder={txt(language, '可选；不会被持久化', 'Optional; never persisted')}
                   autoComplete="off"
                   className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                 />
@@ -192,8 +261,8 @@ export function DeployPanel() {
             <p className="text-[10px] text-gray-500">
               {txt(
                 language,
-                'Operator Token 仅保存在内存中（刷新页面后需重新输入），其余连接端点会持久化。',
-                'The operator token is kept in memory only (re-enter after a page refresh); the other endpoints are persisted.',
+                '日常请用密码登录。Operator Token 是可选的 break-glass 恢复凭据（仅当后端设置了 YAOG_CONTROLLER_OPERATOR_TOKEN 时可用）。session 与 token 都仅存内存（刷新后需重新登录/输入），其余连接端点会持久化。',
+                'Use password sign-in for day-to-day. The operator token is an optional break-glass credential (only when the backend sets YAOG_CONTROLLER_OPERATOR_TOKEN). Both the session and the token are kept in memory only (re-enter after a page refresh); the other endpoints are persisted.',
               )}
             </p>
             {error && (

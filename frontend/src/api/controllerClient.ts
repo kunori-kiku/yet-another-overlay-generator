@@ -18,7 +18,26 @@ import type {
 export interface ControllerConfig {
   baseURL: string;
   pathPrefix: string;
+  // operatorToken is the EFFECTIVE operator bearer: a login session token when logged
+  // in, else the optional break-glass operator token. The store's configOf() picks it
+  // (session preferred); this layer just attaches `Authorization: Bearer <it>`.
   operatorToken: string;
+}
+
+// LoginResult is the result of a successful POST /login: the session bearer token
+// (held in MEMORY only — never persisted), the operator identity, and the session
+// expiry (RFC3339).
+export interface LoginResult {
+  sessionToken: string;
+  operator: string;
+  expiresAt: string;
+}
+
+// LoginResponseJSON mirrors loginResponseJSON in internal/api/handler_login.go.
+interface LoginResponseJSON {
+  session_token: string;
+  operator: string;
+  expires_at: string;
 }
 
 // --- keystone (off-host operator signing) wire types ---
@@ -183,6 +202,41 @@ function postJSON(
     headers: { 'Content-Type': 'application/json' },
     body,
   });
+}
+
+// --- operator login (plan-5.2) ---
+
+// login authenticates an operator (username + password) and returns a session.
+// UNAUTHENTICATED: it sends NO bearer (you log in to OBTAIN one). On a non-2xx it
+// throws Error(`${status} ${body}`) so the store can surface the controller's message
+// verbatim (401 invalid username or password / 429 too many attempts).
+export async function login(
+  cfg: ControllerConfig,
+  username: string,
+  password: string
+): Promise<LoginResult> {
+  const res = await fetch(ctlURL(cfg, 'login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status} ${body}`);
+  }
+  const data = (await res.json()) as LoginResponseJSON;
+  return {
+    sessionToken: data.session_token,
+    operator: data.operator,
+    expiresAt: data.expires_at,
+  };
+}
+
+// logout revokes the current session (POST /logout, authed by the session bearer in
+// cfg.operatorToken). Best-effort: the caller clears local session state regardless.
+export async function logout(cfg: ControllerConfig): Promise<void> {
+  const res = await request(cfg, 'logout', { method: 'POST' });
+  await res.text();
 }
 
 // --- snake_case → camelCase 映射 ---
