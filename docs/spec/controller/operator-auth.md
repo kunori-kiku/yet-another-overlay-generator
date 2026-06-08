@@ -69,6 +69,12 @@ dependency; see `internal/controller/totp.go`).
 - **Enrol:** `POST /totp/enroll` mints a secret + `otpauth://` URI (not yet active);
   `POST /totp/confirm` activates it only after the operator proves they can generate a code.
   `POST /totp/disable` requires a current code. `GET /totp/status` reports enrolment.
+- **Panel UX:** the Deploy → Controller panel drives all of the above (a "Two-Factor
+  (TOTP)" section: enable → show the base32 setup key + `otpauth://` link → confirm a code;
+  disable with a code), and the sign-in form reveals a 6-digit code field when the backend
+  answers `totp_required`. Enrolment is **dependency-free** — the panel shows the setup key
+  for manual entry rather than rendering a QR, so the secret never leaves the panel for a
+  third-party QR service.
 - **At login:** when TOTP is enrolled, a correct password returns `401 {totp_required:true}`
   until a valid code is supplied; a wrong/replayed code is a counted failure (so a code
   brute-force via `/login` is rate-limited), a correct code mints the session. Codes accept
@@ -119,5 +125,6 @@ one, or leave it unset and rely on `create-operator` on the host for recovery.
   filesystem (Linux — the controller's only supported host). On a case-folding
   filesystem (macOS/Windows) `Admin` and `admin` would map to the same file; that is not
   a supported deployment.
-- **2FA (TOTP / passkey-login) is a follow-up slice.** A passkey login factor will be its
-  own random-challenge WebAuthn assertion — NOT the content-bound keystone verifier.
+- **TOTP 2FA is shipped** (backend + panel UI). **Passkey login is the remaining 2FA
+  slice:** a passkey login factor will be its own random-challenge WebAuthn assertion — NOT
+  the content-bound keystone verifier.

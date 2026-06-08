@@ -33,6 +33,16 @@ export interface LoginResult {
   expiresAt: string;
 }
 
+// LoginOutcome is what login() returns. Either the password (and any required second
+// factor) verified and a session was minted ('success'), or the password was correct
+// but the operator has TOTP 2FA enrolled and must resubmit with a code
+// ('totp_required'). The latter is the backend's 401 {error, totp_required:true} — it
+// is NOT a hard failure, so the panel branches to "collect a code" instead of showing
+// an error. A wrong password / lockout / any other non-2xx still throws.
+export type LoginOutcome =
+  | { kind: 'success'; result: LoginResult }
+  | { kind: 'totp_required' };
+
 // LoginResponseJSON mirrors loginResponseJSON in internal/api/handler_login.go.
 interface LoginResponseJSON {
   session_token: string;
@@ -206,30 +216,106 @@ function postJSON(
 
 // --- operator login (plan-5.2) ---
 
-// login authenticates an operator (username + password) and returns a session.
-// UNAUTHENTICATED: it sends NO bearer (you log in to OBTAIN one). On a non-2xx it
-// throws Error(`${status} ${body}`) so the store can surface the controller's message
-// verbatim (401 invalid username or password / 429 too many attempts).
+// login authenticates an operator (username + password, plus an optional TOTP code
+// when 2FA is enrolled) and returns a LoginOutcome. UNAUTHENTICATED: it sends NO bearer
+// (you log in to OBTAIN one). A 401 carrying {"totp_required":true} is returned as the
+// 'totp_required' outcome (password accepted, second factor needed) rather than thrown;
+// any other non-2xx throws Error(`${status} ${body}`) so the store can surface the
+// controller's message verbatim (401 invalid username or password / 429 too many
+// attempts).
 export async function login(
   cfg: ControllerConfig,
   username: string,
-  password: string
-): Promise<LoginResult> {
+  password: string,
+  totp?: string
+): Promise<LoginOutcome> {
   const res = await fetch(ctlURL(cfg, 'login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, totp: totp ?? '' }),
   });
   if (!res.ok) {
     const body = await res.text();
+    // A 401 with {"totp_required":true} means the password verified but a TOTP code is
+    // needed — branch to "collect a code", do not treat as a hard error. A wrong-password
+    // 401 (writeError JSON, no totp_required flag) and every other status still throw.
+    if (res.status === 401) {
+      try {
+        const j = JSON.parse(body) as { totp_required?: boolean };
+        if (j.totp_required === true) {
+          return { kind: 'totp_required' };
+        }
+      } catch {
+        /* not JSON — fall through to the generic error */
+      }
+    }
     throw new Error(`${res.status} ${body}`);
   }
   const data = (await res.json()) as LoginResponseJSON;
   return {
-    sessionToken: data.session_token,
-    operator: data.operator,
-    expiresAt: data.expires_at,
+    kind: 'success',
+    result: {
+      sessionToken: data.session_token,
+      operator: data.operator,
+      expiresAt: data.expires_at,
+    },
   };
+}
+
+// --- operator TOTP 2FA (plan-5.2) ---
+//
+// These four routes manage the CURRENTLY LOGGED-IN operator's optional second factor
+// (internal/api/handler_totp.go). All require a real operator session — the break-glass
+// token has no account, so the controller answers 403 (surfaced as a thrown Error).
+
+// TOTPEnrollment is the just-minted, NOT-yet-active second factor from POST /totp/enroll:
+// the base32 shared secret (shown so the operator can type it into an authenticator) and
+// an otpauth:// URI for QR/import. It is persisted only after confirmTOTP verifies a code
+// derived from it — an abandoned enroll leaves 2FA untouched.
+export interface TOTPEnrollment {
+  secret: string;
+  otpauthURI: string;
+}
+
+interface TOTPStatusJSON {
+  enabled: boolean;
+}
+
+interface TOTPEnrollJSON {
+  secret: string;
+  otpauth_uri: string;
+}
+
+// getTOTPStatus reports whether the current operator account has 2FA enrolled.
+export async function getTOTPStatus(cfg: ControllerConfig): Promise<boolean> {
+  const res = await request(cfg, 'totp/status', { method: 'GET' });
+  return ((await res.json()) as TOTPStatusJSON).enabled;
+}
+
+// enrollTOTP mints a fresh secret + otpauth URI. NOTHING is persisted yet — the operator
+// proves possession via confirmTOTP before 2FA turns on.
+export async function enrollTOTP(cfg: ControllerConfig): Promise<TOTPEnrollment> {
+  const res = await postJSON(cfg, 'totp/enroll', '');
+  const d = (await res.json()) as TOTPEnrollJSON;
+  return { secret: d.secret, otpauthURI: d.otpauth_uri };
+}
+
+// confirmTOTP activates 2FA: it echoes the secret from enrollTOTP plus a current code;
+// the controller persists the secret only when the code verifies (else a 400 throws).
+export async function confirmTOTP(
+  cfg: ControllerConfig,
+  secret: string,
+  code: string
+): Promise<void> {
+  const res = await postJSON(cfg, 'totp/confirm', JSON.stringify({ secret, code }));
+  await res.text();
+}
+
+// disableTOTP turns 2FA off; a current code is required so a hijacked session cannot
+// trivially strip the second factor (else a 400 throws).
+export async function disableTOTP(cfg: ControllerConfig, code: string): Promise<void> {
+  const res = await postJSON(cfg, 'totp/disable', JSON.stringify({ code }));
+  await res.text();
 }
 
 // logout revokes the current session (POST /logout, authed by the session bearer in

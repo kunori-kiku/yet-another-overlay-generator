@@ -5,6 +5,7 @@ import { txt } from '../../i18n';
 import { NodeRegistry } from './NodeRegistry';
 import { EnrollmentFlow } from './EnrollmentFlow';
 import { BootstrapSettings } from './BootstrapSettings';
+import { TwoFactorSettings } from './TwoFactorSettings';
 import { DeployBar } from './DeployBar';
 import { AuditLog } from './AuditLog';
 
@@ -39,11 +40,14 @@ export function DeployPanel() {
   const loggedIn = useControllerStore(selectLoggedIn);
   const operatorName = useControllerStore((s) => s.operatorName);
   const sessionExpiresAt = useControllerStore((s) => s.sessionExpiresAt);
+  // 二次因子（plan-5.2）：登录密码正确但需 TOTP 码时后端置 totpRequired，表单据此展开验证码框。
+  const totpRequired = useControllerStore((s) => s.totpRequired);
 
   const [mode, setMode] = useState<DeployMode>('local');
-  // 登录表单的本地输入（密码只在内存里，登录成功后清空）。
+  // 登录表单的本地输入（密码/验证码只在内存里，登录成功后清空）。
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
+  const [loginTotp, setLoginTotp] = useState('');
 
   const noNodes = nodes.length === 0;
 
@@ -217,10 +221,13 @@ export function DeployPanel() {
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
-                      void login(loginUser, loginPass).then(() => {
-                        // 登录成功后清空密码输入（不在 React 状态里多留）。
+                      // 仅当后端要求二次码时才带上 totp（未启用 2FA 的账户不必填）。
+                      const totp = totpRequired ? loginTotp : undefined;
+                      void login(loginUser, loginPass, totp).then(() => {
+                        // 登录成功后清空密码与验证码（不在 React 状态里多留）。
                         if (useControllerStore.getState().sessionToken) {
                           setLoginPass('');
+                          setLoginTotp('');
                         }
                       });
                     }}
@@ -242,15 +249,44 @@ export function DeployPanel() {
                       autoComplete="current-password"
                       className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                     />
+                    {/* 二次因子：仅当后端返回 totp_required（密码已对、需验证码）时出现。 */}
+                    {totpRequired && (
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={loginTotp}
+                        onChange={(e) => setLoginTotp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder={txt(language, '验证码 (6 位)', 'Code (6 digits)')}
+                        autoComplete="one-time-code"
+                        autoFocus
+                        className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono tracking-widest border border-blue-500 focus:border-blue-400 outline-none"
+                      />
+                    )}
                     <button
                       type="submit"
-                      disabled={loading || loginUser.trim() === '' || loginPass === ''}
+                      disabled={
+                        loading ||
+                        loginUser.trim() === '' ||
+                        loginPass === '' ||
+                        (totpRequired && loginTotp.length < 6)
+                      }
                       className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
                     >
                       {loading
                         ? txt(language, '登录中...', 'Signing in...')
+                        : totpRequired
+                        ? txt(language, '验证并登录', 'Verify & sign in')
                         : txt(language, '登录', 'Sign in')}
                     </button>
+                    {totpRequired && (
+                      <p className="text-[10px] text-sky-300">
+                        {txt(
+                          language,
+                          '此账户启用了两步验证，请输入验证器 App 的 6 位码。',
+                          'This account has 2FA enabled — enter the 6-digit code from your authenticator.',
+                        )}
+                      </p>
+                    )}
                   </form>
                 )}
               </div>
@@ -287,6 +323,7 @@ export function DeployPanel() {
             )}
           </section>
 
+          <TwoFactorSettings />
           <NodeRegistry />
           <BootstrapSettings />
           <EnrollmentFlow />
