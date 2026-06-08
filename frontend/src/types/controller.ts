@@ -1,0 +1,38 @@
+// 控制器面板（plan-4.5 networked controller）的前端数据模型。
+// 这些类型镜像 internal/api/handler_controller.go 的 operator-facing JSON 形状，
+// 但统一用 camelCase（从后端的 snake_case 映射而来，映射发生在 controllerClient.ts）。
+
+// 节点在控制器注册表中的生命周期状态。镜像 controller.NodeStatus：
+// 'pending'（已 enroll、待 operator approve）/ 'approved'（已纳入编译子图）/
+// 'revoked'（已驱逐，bearer 凭据立即失效）。
+export type ControllerNodeStatus = 'pending' | 'approved' | 'revoked';
+
+// 一台注册节点的 operator 视图。刻意不含任何密钥材料（既无 WG 公钥字节，也无 API
+// token 哈希）：hasWGPublicKey 仅表明公钥已在档。镜像 handler_controller.go 的 nodeJSON。
+export interface ControllerNode {
+  nodeId: string;
+  status: ControllerNodeStatus;
+  hasWGPublicKey: boolean;
+  desiredGeneration: number;
+  appliedGeneration: number;
+  lastChecksum: string;
+  lastHealth: string;
+  lastSeen: string;
+  enrolledAt: string;
+}
+
+// 审计链中的一条记录。镜像 controller.AuditEntry 的 operator-facing 字段。
+export interface ControllerAuditEntry {
+  timestamp: string;
+  actor: string;
+  action: string;
+  nodeId: string;
+}
+
+// /stage 的结果：被编译进本代的节点、因未 enroll 被跳过的节点、以及暂存代号。
+// 镜像 handler_controller.go 的 stageResponseJSON。
+export interface StageResult {
+  staged: string[];
+  skippedUnenrolled: string[];
+  generation: number;
+}
