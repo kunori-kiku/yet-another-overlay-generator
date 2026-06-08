@@ -268,6 +268,14 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 		t.Fatalf("Fetch(node-1): bundle missing checksums.sha256 (keys: %v)", keysOf(files))
 	}
 
+	// Fetch records the bundle's own generation; LastFetchedGeneration exposes it so the
+	// daemon loop can advance its resume cursor to the generation actually fetched/applied
+	// (not merely the one polled), closing the poll->fetch race. It must equal the promoted
+	// generation here (no concurrent promote raced in this single-threaded test).
+	if got := agentClient.LastFetchedGeneration(); got != gen {
+		t.Fatalf("LastFetchedGeneration after Fetch = %d, want %d (the fetched bundle's generation)", got, gen)
+	}
+
 	// VerifyBundle passes over the fetched bundle. CI bundles are unsigned
 	// (YAOG_BUNDLE_SIGNING_KEY unset), so pin nothing. This is the SAME gate agent.Run
 	// runs before apply — asserting it passes is the unit-test stand-in for "would apply"
@@ -357,6 +365,19 @@ func TestControllerClient_BadOrEmptyToken(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("raw bad-token /config: status %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestControllerClient_LastFetchedGenerationZeroBeforeFetch confirms the getter the
+// daemon loop reads is zero on a freshly-constructed client (before any Fetch), so the
+// resume-cursor advance never picks up a stale generation from a prior client instance.
+func TestControllerClient_LastFetchedGenerationZeroBeforeFetch(t *testing.T) {
+	c, err := agent.NewControllerClient("http://example.invalid", "tok")
+	if err != nil {
+		t.Fatalf("NewControllerClient: %v", err)
+	}
+	if got := c.LastFetchedGeneration(); got != 0 {
+		t.Fatalf("LastFetchedGeneration before Fetch = %d, want 0", got)
 	}
 }
 

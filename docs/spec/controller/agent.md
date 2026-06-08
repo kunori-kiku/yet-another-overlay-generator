@@ -326,6 +326,45 @@ pull→verify→anti-rollback→apply→report core as static-source mode — on
 never sends an auth header, and the run loop fails fast if its token file is empty rather than calling the
 controller anonymously.
 
+### Single-shot vs `--daemon`
+
+`run --controller` is **single-shot by default**: it runs exactly one poll→apply→report cycle and exits
+(`0` on a successful apply or a timed-out long-poll with nothing to do, non-zero on a fatal error). That
+cycle is the **deterministic unit** the daemon loops over and the unit the e2e test exercises — keeping
+the default single-shot makes v1 trivially testable and lets an operator drive cadence from an external
+scheduler (cron/systemd timer) if they prefer.
+
+Passing **`--daemon`** keeps the process running and loops that same cycle continuously for
+**near-real-time** updates:
+
+1. **Long-poll → apply → report, repeated.** Each iteration long-polls `/poll?after=<watermark>`; the call
+   returns within a round-trip of an operator **promote** (push-like, no new transport), so a freshly
+   promoted generation is fetched, verified, applied, and reported within one round-trip of going live. A
+   **204** (server-side long-poll deadline with no advance) simply re-polls with the **same** watermark —
+   no busy-wait, no churn.
+2. **Watermark advance — the generation actually applied.** On a successful apply the loop advances its
+   resume cursor to `ControllerClient.LastFetchedGeneration()` — the generation of the bundle the cycle
+   actually **fetched and applied** — **not** the generation the poll merely observed. This closes a
+   **poll→fetch race**: if a promote lands between `Poll` returning gen `N` and `Fetch` returning the newer
+   gen `N+1`, the bundle carried `N+1`, so the watermark advances to `N+1` and the next poll asks for
+   anything strictly newer than `N+1`. Advancing only to the *polled* `N` would leave the loop re-fetching
+   and re-applying the same generation next cycle; keying the cursor on the fetched generation keeps the
+   watermark from lagging the fleet under that race.
+3. **Keep-last-good with backoff.** A transport error (poll/config), a `VerifyBundle` refusal, a
+   rolled-back bundle, a missing `/etc/wireguard/agent.key`, or a non-zero `install.sh` exit **does not
+   advance the watermark and does not tear down the running overlay** — the loop logs the failure, keeps
+   the last-good configuration, sleeps a short fixed backoff, and retries from the unchanged watermark. The
+   daemon therefore never crashes a node off the overlay on a single bad cycle; it converges once the
+   controller (or the bundle) is healthy again. On a **failed apply** the auto-`Report` still fires,
+   reporting the **unchanged prior watermark** (`SetPriorGeneration`), so the registry never shows a
+   generation the node did not actually apply.
+
+The daemon owns **no** new trust-critical logic: it is the single-shot cycle in a loop with a watermark and
+a backoff. Verify and apply are byte-identical to single-shot (and to static-source mode); the only
+addition is the loop and the fetched-generation cursor. A production deployment runs the daemon under a
+process supervisor (systemd) so a hard crash still restarts; `--daemon` is the in-process near-real-time
+path, the supervisor is the crash-recovery backstop.
+
 ### Anti-rollback in controller mode (honest)
 
 Controller mode **reuses Phase 1b's anti-rollback decision unchanged**: the `agent.Run` core still

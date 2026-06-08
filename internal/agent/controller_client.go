@@ -123,6 +123,16 @@ func (c *ControllerClient) SetPriorGeneration(gen int64) {
 	c.priorGen = gen
 }
 
+// LastFetchedGeneration returns the generation of the bundle returned by the most recent
+// successful Fetch (the /config envelope's generation). The daemon loop reads it AFTER a
+// successful apply to advance its resume cursor to the generation actually fetched and
+// applied — not the one the poll merely observed — so the watermark cannot lag under a
+// poll->fetch race (a promote landing between Poll returning gen N and Fetch returning gen
+// N+1). It is zero before the first Fetch.
+func (c *ControllerClient) LastFetchedGeneration() int64 {
+	return c.lastFetchedGen
+}
+
 // NewControllerClient builds a ControllerClient for baseURL over plain net/http. The
 // nodeToken is the per-node bearer credential presented on config/poll/report; pass
 // "" to build the pre-enrollment client used only for Enroll (which is unauthenticated

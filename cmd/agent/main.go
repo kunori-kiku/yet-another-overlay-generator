@@ -301,7 +301,10 @@ func runControllerMode(o controllerModeOpts) int {
 	// applied. On error it returns the unchanged watermark (keep-last-good: the running
 	// overlay is untouched, so the caller never advances past a failed apply).
 	cycle := func() (resumeGen int64, applied bool, err error) {
-		gen, changed, err := client.Poll(lastAppliedGen)
+		// The polled generation is only a change SIGNAL here; the resume cursor comes from
+		// the generation actually fetched (LastFetchedGeneration), so the polled value is
+		// intentionally discarded once we know a change occurred (see below).
+		_, changed, err := client.Poll(lastAppliedGen)
 		if err != nil {
 			return lastAppliedGen, false, fmt.Errorf("poll: %w", err)
 		}
@@ -326,8 +329,15 @@ func runControllerMode(o controllerModeOpts) int {
 			return lastAppliedGen, false, fmt.Errorf("run: %w", runErr) // keep-last-good
 		}
 		printApplied(res)
-		fmt.Fprintf(os.Stderr, "agent: applied controller generation %d\n", gen)
-		return gen, true, nil
+		// Resume from the generation actually FETCHED and applied, not the one the poll
+		// observed: a promote landing between Poll returning gen N and Fetch returning gen
+		// N+1 means the bundle carried N+1, and resuming from N would re-fetch+re-apply it
+		// next cycle. Advancing the watermark to LastFetchedGeneration() keeps it from
+		// lagging under that poll->fetch race. (It coincides with the polled generation when
+		// no promote raced in between.)
+		appliedGen := client.LastFetchedGeneration()
+		fmt.Fprintf(os.Stderr, "agent: applied controller generation %d\n", appliedGen)
+		return appliedGen, true, nil
 	}
 
 	if !o.daemon {

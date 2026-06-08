@@ -154,9 +154,9 @@ func (s *MemStore) ListNodes(ctx context.Context, t TenantID) ([]Node, error) {
 	return out, nil
 }
 
-// SetAppliedGeneration records what an agent reported applying. Returns ErrNotFound
-// if the node does not exist.
-func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum string) error {
+// SetAppliedGeneration records what an agent reported applying (generation,
+// checksum, and health). Returns ErrNotFound if the node does not exist.
+func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
@@ -166,6 +166,7 @@ func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID 
 	}
 	n.AppliedGeneration = gen
 	n.LastChecksum = checksum
+	n.LastHealth = health
 	ts.nodes[nodeID] = n
 	return nil
 }
@@ -378,10 +379,9 @@ func (s *MemStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, token
 
 // IssueNodeAPIToken stamps tokenHash onto the node's APITokenHash and writes the
 // reverse index apiTokens[hash]=nodeID, all under s.mu. It returns ErrNotFound if
-// no node record exists for nodeID. A node may be re-issued a token (e.g. a fresh
-// enrollment): the prior index entry is left in place only if it pointed at this
-// same node, but the canonical authorization is APITokenHash, and LookupNodeByAPIToken
-// resolves via the index — so callers that rotate tokens should revoke first.
+// no node record exists for nodeID. Rotation is self-cleaning: if the node already
+// carried a different APITokenHash, that prior reverse-index entry is deleted before
+// the new one is written, so a rotated (stale) token leaves no orphan in the index.
 func (s *MemStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -390,6 +390,11 @@ func (s *MemStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, to
 	if !ok {
 		return ErrNotFound
 	}
+	// Drop any prior reverse-index entry for this node's old token so a rotated
+	// token can never linger and resolve to the node.
+	if n.APITokenHash != "" && n.APITokenHash != tokenHash {
+		delete(ts.apiTokens, n.APITokenHash)
+	}
 	n.APITokenHash = tokenHash
 	ts.nodes[nodeID] = n
 	ts.apiTokens[tokenHash] = nodeID
@@ -397,8 +402,11 @@ func (s *MemStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, to
 }
 
 // LookupNodeByAPIToken resolves a presented token's hash to its Node via the
-// reverse index. It returns ErrTokenInvalid if the hash is unmapped, if the mapped
-// node has since disappeared, or if the resolved node's Status is NodeRevoked.
+// reverse index, self-consistently: it returns ErrTokenInvalid unless the index
+// resolves to a live node whose own APITokenHash still equals tokenHash AND whose
+// Status is NodeApproved. This rejects an unmapped hash, a vanished node, a
+// stale/orphaned index entry that no longer matches the node's current token, and
+// any non-approved (pending or revoked) node.
 func (s *MemStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -408,7 +416,7 @@ func (s *MemStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHa
 		return Node{}, ErrTokenInvalid
 	}
 	n, ok := ts.nodes[nodeID]
-	if !ok || n.Status == NodeRevoked {
+	if !ok || n.APITokenHash != tokenHash || n.Status != NodeApproved {
 		return Node{}, ErrTokenInvalid
 	}
 	return n, nil

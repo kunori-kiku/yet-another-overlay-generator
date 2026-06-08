@@ -24,8 +24,8 @@ package api
 // Roles. Two kinds of route:
 //   - agent routes (/config,/poll,/report): any token that resolves to an active
 //     (non-revoked) node is accepted (requireNode).
-//   - operator routes (/update-topology,/stage,/promote,/nodes,/audit,/topology,
-//     /enrollment-token): the presented token's hash MUST equal the configured
+//   - operator routes (/update-topology,/stage,/promote,/nodes,/revoke,/audit,
+//     /topology,/enrollment-token): the presented token's hash MUST equal the configured
 //     operator token hash (constant-time compare); a node token on an operator
 //     route is a 403 (operatorAuth).
 //
@@ -94,18 +94,18 @@ func bearerToken(r *http.Request) (string, bool) {
 
 // authenticateNode resolves the caller's per-node bearer token to its node
 // identity. It returns the parsed identity, or an HTTP status + message to reject
-// with. It enforces, in order:
+// with. It enforces:
 //
 //	401 — no bearer token, or the token does not resolve to an active node.
-//	403 — the token resolves to a node whose Status is NodeRevoked.
 //
 // The lookup is hash-keyed: only the hex SHA-256 of the token is ever compared (the
 // Store holds APITokenHash, never plaintext). Per the Store contract,
-// LookupNodeByAPIToken returns ErrTokenInvalid for both an unmapped hash AND a
-// NodeRevoked node, so in practice a revoked node surfaces as a 401 here. The
-// explicit NodeRevoked check below is defense in depth: if a future store ever
-// returns a revoked node instead of an error, it is still forbidden (403 — its
-// identity is known, it is just denied — rather than 401).
+// LookupNodeByAPIToken returns ErrTokenInvalid whenever the presented hash does not
+// resolve to an APPROVED node whose own APITokenHash still matches — i.e. an unmapped
+// hash, a stale/rotated hash, or a non-approved (pending/revoked) node all surface as
+// the same opaque 401. There is therefore no separate revoked-node branch here: a
+// revoked node's token is indistinguishable from any other invalid token, which is
+// the desired behaviour (a revoked credential simply stops resolving).
 func (h *ControllerHandler) authenticateNode(r *http.Request) (authResult, int, string) {
 	tok, ok := bearerToken(r)
 	if !ok {
@@ -113,15 +113,9 @@ func (h *ControllerHandler) authenticateNode(r *http.Request) (authResult, int, 
 	}
 	node, err := h.store.LookupNodeByAPIToken(r.Context(), h.tenant, controller.HashToken(tok))
 	if err != nil {
-		// ErrTokenInvalid covers both an unmapped token and a NodeRevoked node (Store
-		// contract); either way the caller is not an authenticated active node.
+		// ErrTokenInvalid covers an unmapped/stale token AND any non-approved node
+		// (Store contract); either way the caller is not an authenticated active node.
 		return authResult{}, http.StatusUnauthorized, "invalid bearer token"
-	}
-	// Defense in depth: even if a future store returns a node for a revoked token,
-	// a revoked node is forbidden (403, not 401 — its identity is known, it is just
-	// denied).
-	if node.Status == controller.NodeRevoked {
-		return authResult{}, http.StatusForbidden, "node is revoked"
 	}
 	return authResult{tenant: h.tenant, node: node.NodeID}, 0, ""
 }

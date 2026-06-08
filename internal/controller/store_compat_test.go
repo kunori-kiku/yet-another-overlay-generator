@@ -374,7 +374,7 @@ func TestStoreAgentReports(t *testing.T) {
 				t.Fatalf("UpsertNode: %v", err)
 			}
 
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7"); err != nil {
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy"); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 			seen := time.Date(2026, 6, 8, 15, 30, 0, 0, time.UTC)
@@ -391,6 +391,9 @@ func TestStoreAgentReports(t *testing.T) {
 			}
 			if got.LastChecksum != "checksum-7" {
 				t.Fatalf("LastChecksum = %q, want %q", got.LastChecksum, "checksum-7")
+			}
+			if got.LastHealth != "healthy" {
+				t.Fatalf("LastHealth = %q, want %q", got.LastHealth, "healthy")
 			}
 			if !got.LastSeen.Equal(seen) {
 				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, seen)
@@ -682,6 +685,60 @@ func TestStoreAPITokens(t *testing.T) {
 			}
 			if err := s.RevokeNodeAPIToken(ctx, tenant, "never-issued"); err != nil {
 				t.Fatalf("RevokeNodeAPIToken(absent node): %v", err)
+			}
+		})
+	}
+}
+
+// TestStoreAPITokenRotation pins the rotation invariant across both Store impls:
+// issuing a fresh token for a node that already has one must invalidate the OLD
+// token at the lookup chokepoint. This is the re-enroll-leaves-old-token bug: a
+// second IssueNodeAPIToken (e.g. a re-enrollment) used to leave the prior
+// reverse-index entry in place, so the stale token kept resolving. IssueNodeAPIToken
+// now drops the old index entry on rotation, and LookupNodeByAPIToken additionally
+// requires the resolved node's APITokenHash to still equal the presented hash, so a
+// stale token can never authorize.
+func TestStoreAPITokenRotation(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			hashA := tokenHash("plaintext-api-A")
+			hashB := tokenHash("plaintext-api-B")
+
+			// Register the node (approved) then issue token A.
+			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", WGPublicKey: "pub-alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode: %v", err)
+			}
+			if err := s.IssueNodeAPIToken(ctx, tenant, "alpha", hashA); err != nil {
+				t.Fatalf("IssueNodeAPIToken(A): %v", err)
+			}
+			gotA, err := s.LookupNodeByAPIToken(ctx, tenant, hashA)
+			if err != nil {
+				t.Fatalf("LookupNodeByAPIToken(A) before rotation: %v", err)
+			}
+			if gotA.NodeID != "alpha" {
+				t.Fatalf("LookupNodeByAPIToken(A) = %+v, want alpha", gotA)
+			}
+
+			// Rotate: issue token B for the same node. This must invalidate A.
+			if err := s.IssueNodeAPIToken(ctx, tenant, "alpha", hashB); err != nil {
+				t.Fatalf("IssueNodeAPIToken(B): %v", err)
+			}
+
+			// The OLD token A no longer authorizes (rotation invalidated it).
+			if _, err := s.LookupNodeByAPIToken(ctx, tenant, hashA); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupNodeByAPIToken(A) after rotation: err = %v, want ErrTokenInvalid", err)
+			}
+			// The NEW token B resolves to the node.
+			gotB, err := s.LookupNodeByAPIToken(ctx, tenant, hashB)
+			if err != nil {
+				t.Fatalf("LookupNodeByAPIToken(B) after rotation: %v", err)
+			}
+			if gotB.NodeID != "alpha" || gotB.APITokenHash != hashB {
+				t.Fatalf("LookupNodeByAPIToken(B) = %+v, want alpha with APITokenHash=B", gotB)
 			}
 		})
 	}

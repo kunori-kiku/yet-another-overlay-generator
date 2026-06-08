@@ -444,6 +444,140 @@ func TestControllerHTTP_AirGapOpen(t *testing.T) {
 	}
 }
 
+// promoteSmallTopo drives the operator update-topology → stage → promote sequence
+// for smallTopo over the operator mux, so the enrolled nodes have a current bundle
+// to fetch on /config. It fails the test on any non-200 step.
+func (e *ctlTestEnv) promoteSmallTopo(t *testing.T) {
+	t.Helper()
+	topoJSON, err := json.Marshal(smallTopo())
+	if err != nil {
+		t.Fatalf("marshal topology: %v", err)
+	}
+	if status := doRaw(t, http.MethodPost, e.opURL("update-topology"), testOperatorToken, topoJSON); status != http.StatusOK {
+		t.Fatalf("update-topology: status %d, want 200", status)
+	}
+	if status := doJSON(t, http.MethodPost, e.opURL("stage"), testOperatorToken, struct{}{}, &stageResponseJSON{}); status != http.StatusOK {
+		t.Fatalf("stage: status %d, want 200", status)
+	}
+	if status := doJSON(t, http.MethodPost, e.opURL("promote"), testOperatorToken, struct{}{}, &generationResponseJSON{}); status != http.StatusOK {
+		t.Fatalf("promote: status %d, want 200", status)
+	}
+}
+
+// TestControllerHTTP_Revoke confirms the operator /revoke route immediately voids a
+// node's bearer credential: the node enrolls and its token works on /config, the
+// operator POSTs /revoke {node_id}, and the SAME token now 401s on /config (the
+// revoke flipped Status to NodeRevoked AND cleared the API token, so the bearer no
+// longer resolves to an approved node). Revoking an unknown node is a 404.
+func TestControllerHTTP_Revoke(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// The freshly enrolled, approved node's token works on /config.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, nil); status != http.StatusOK {
+		t.Fatalf("config before revoke: status %d, want 200", status)
+	}
+
+	// Revoking an unknown node → 404 (nothing to revoke).
+	if status := doJSON(t, http.MethodPost, env.opURL("revoke"), testOperatorToken, revokeRequestJSON{NodeID: "ghost"}, nil); status != http.StatusNotFound {
+		t.Fatalf("revoke unknown node: status %d, want 404", status)
+	}
+
+	// Operator revokes node-1.
+	var rev revokeResponseJSON
+	if status := doJSON(t, http.MethodPost, env.opURL("revoke"), testOperatorToken, revokeRequestJSON{NodeID: "node-1"}, &rev); status != http.StatusOK {
+		t.Fatalf("revoke node-1: status %d, want 200", status)
+	}
+	if rev.NodeID != "node-1" || !rev.Revoked {
+		t.Fatalf("revoke node-1: response %+v, want {node_id:node-1 revoked:true}", rev)
+	}
+
+	// The SAME token now 401s on /config: the bearer credential stops resolving.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("config after revoke: status %d, want 401 (revoked token must stop resolving)", status)
+	}
+
+	// The registry reflects the revoked status and the cleared token hash.
+	node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1): %v", err)
+	}
+	if node.Status != controller.NodeRevoked {
+		t.Fatalf("GetNode status %q, want %q", node.Status, controller.NodeRevoked)
+	}
+	if node.APITokenHash != "" {
+		t.Fatalf("GetNode APITokenHash %q, want empty after revoke", node.APITokenHash)
+	}
+}
+
+// TestControllerHTTP_ReEnrollRotation confirms re-enrolling a node rotates its bearer
+// token AND invalidates the old one at the lookup chokepoint: node-1 enrolls (token1
+// works), the operator mints a fresh enrollment token and node-1 enrolls again
+// (token2), after which token1 401s and token2 works on /config. This is the
+// re-enroll-leaves-old-token bug: a stale token must never authorize.
+func TestControllerHTTP_ReEnrollRotation(t *testing.T) {
+	env := newCtlTestEnv(t)
+	token1 := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// token1 works on /config.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), token1, nil, nil); status != http.StatusOK {
+		t.Fatalf("config with token1: status %d, want 200", status)
+	}
+
+	// Operator mints a fresh enrollment token; node-1 re-enrolls and gets token2.
+	token2 := env.enrollNode(t, "node-1")
+	if token2 == token1 {
+		t.Fatalf("re-enroll returned the same api_token; expected a rotated token")
+	}
+
+	// token1 (the OLD token) now 401s — rotation invalidated it.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), token1, nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("config with old token1 after re-enroll: status %d, want 401 (stale token must not authorize)", status)
+	}
+
+	// token2 (the NEW token) works.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), token2, nil, nil); status != http.StatusOK {
+		t.Fatalf("config with new token2: status %d, want 200", status)
+	}
+}
+
+// TestControllerHTTP_HealthSurfaced confirms a node's reported health is persisted and
+// surfaced to the operator: the node POSTs /report with a health string, and the
+// operator GET /nodes view shows it in last_health.
+func TestControllerHTTP_HealthSurfaced(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	const wantHealth = "degraded: babel reconverging"
+	if status := doJSON(t, http.MethodPost, env.agentURL("report"), node1Token, reportRequestJSON{
+		AppliedGeneration: 1,
+		Checksum:          "cafebabe",
+		Health:            wantHealth,
+	}, nil); status != http.StatusOK {
+		t.Fatalf("report: status %d, want 200", status)
+	}
+
+	var nodes []nodeJSON
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("nodes: status %d, want 200", status)
+	}
+	var found bool
+	for _, n := range nodes {
+		if n.NodeID == "node-1" {
+			found = true
+			if n.LastHealth != wantHealth {
+				t.Fatalf("node-1 last_health %q, want %q", n.LastHealth, wantHealth)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("nodes view did not include node-1")
+	}
+}
+
 // keysOfMap returns a map's keys for diagnostic messages.
 func keysOfMap(m map[string]string) []string {
 	out := make([]string, 0, len(m))

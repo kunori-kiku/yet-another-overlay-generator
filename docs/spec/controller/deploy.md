@@ -162,21 +162,28 @@ nothing to record). The entry is hash-chained like every other (`AppendAudit`,
 
 ## Revocation — clear the token + evict from the subgraph
 
-Revoking a node is **two complementary moves**, and the deploy model owns the second:
+Revoking a node is **two complementary moves**, both driven by a **single operator call**: the operator
+route **`POST /revoke`** ([controller-api.md](controller-api.md), operator port) takes `{node_id}` and
+performs the pair atomically — there is no separate "clear the token" and "set revoked" call for the
+operator to forget one of. (`404` if the node is unknown; on success it returns `{node_id, revoked:true}`
+and appends a `{Action:"revoke", NodeID:<node_id>, Actor:operator}` audit entry.) The two moves it makes:
 
-1. **Clear the bearer token (immediate).** `RevokeNodeAPIToken(ctx, t, nodeID)`
+1. **Clear the bearer token (immediate).** `/revoke` calls `RevokeNodeAPIToken(ctx, t, nodeID)`
    ([persistence.md](persistence.md) §The per-node API-token index, [enrollment.md](enrollment.md)
-   §Revocation) clears the node's `APITokenHash` and deletes its reverse-index entry, so the node's
+   §Revocation), which clears the node's `APITokenHash` and deletes its reverse-index entry, so the node's
    **very next** `/config` / `/poll` / `/report` call fails authentication at the chokepoint
-   ([controller-api.md](controller-api.md)). There is no TTL, no CRL, no propagation delay — control-plane
-   access stops at once. This replaces the withdrawn mTLS model's certificate revocation, which could only
-   be approximated (a still-time-valid client cert kept working until the ephemeral CA rotated).
-2. **Evict from the rendered subgraph (durable).** Setting the node `NodeRevoked` excludes it from every
-   subsequent `CompileAndStage` (§The render-what's-ready policy: a `NodeRevoked` node is **not** admitted,
-   and edges to it are dropped), so even a node that somehow still held a credential could obtain **no new
-   configuration**, and its peers stop carrying the peer interface to it on the next deploy. `LookupNodeByAPIToken`
-   also fail-closes a still-mapped token whose node is `NodeRevoked` to `ErrTokenInvalid`, so the two moves
-   reinforce each other.
+   ([controller-api.md](controller-api.md)) — the bearer token **stops resolving immediately**. There is no
+   TTL, no CRL, no propagation delay — control-plane access stops at once. This replaces the withdrawn mTLS
+   model's certificate revocation, which could only be approximated (a still-time-valid client cert kept
+   working until the ephemeral CA rotated).
+2. **Evict from the rendered subgraph (durable).** `/revoke` also sets the node `NodeRevoked` (preserving
+   the node's other registry fields), which excludes it from every subsequent `CompileAndStage` (§The
+   render-what's-ready policy: a `NodeRevoked` node is **not** admitted, and edges to it are dropped), so
+   even a node that somehow still held a credential could obtain **no new configuration**, and its peers
+   stop carrying the peer interface to it on the next deploy. `LookupNodeByAPIToken` also fail-closes at the
+   lookup chokepoint — a token whose node is no longer `NodeApproved` (e.g. `NodeRevoked`) or whose stored
+   `APITokenHash` no longer matches the presented token resolves to `ErrTokenInvalid` — so the two moves
+   reinforce each other and a stale/orphaned index entry can never authorize.
 
 Together: clearing the token is the **immediate** cut (the node can no longer authenticate), and
 `NodeRevoked` is the **durable** eviction (the node disappears from future renders and its peers

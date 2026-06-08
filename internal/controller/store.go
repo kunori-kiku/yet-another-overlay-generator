@@ -75,8 +75,11 @@ type Node struct {
 	AppliedGeneration int64
 	// LastChecksum is the manifest checksum the agent last reported.
 	LastChecksum string
-	LastSeen     time.Time
-	EnrolledAt   time.Time
+	// LastHealth is the free-form health string the agent last reported alongside
+	// its applied generation ("" until the first report carries one).
+	LastHealth string
+	LastSeen   time.Time
+	EnrolledAt time.Time
 }
 
 // TopologyRecord is the operator's stored topology for a tenant. The JSON is
@@ -149,8 +152,9 @@ type Store interface {
 	GetNode(ctx context.Context, t TenantID, nodeID string) (Node, error)
 	// ListNodes returns all nodes for the tenant (stable order by NodeID).
 	ListNodes(ctx context.Context, t TenantID) ([]Node, error)
-	// SetAppliedGeneration records what an agent reported applying.
-	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum string) error
+	// SetAppliedGeneration records what an agent reported applying (the applied
+	// generation, the manifest checksum, and the free-form health string).
+	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 
@@ -200,11 +204,18 @@ type Store interface {
 	// IssueNodeAPIToken stamps tokenHash onto the node's APITokenHash AND writes a
 	// reverse index hash->nodeID so a presented token can be resolved in O(1). It
 	// returns ErrNotFound if no node record exists for nodeID. The plaintext token
-	// is never stored — only its hex SHA-256 hash.
+	// is never stored — only its hex SHA-256 hash. Rotation is self-cleaning: if the
+	// node already carried a different APITokenHash, the prior reverse-index entry is
+	// deleted before the new one is written so no orphaned (stale) token lingers in
+	// the index.
 	IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error
 	// LookupNodeByAPIToken resolves a presented token's hash to its Node via the
-	// reverse index. It returns ErrTokenInvalid if the hash is unmapped OR the
-	// resolved node's Status is NodeRevoked (a revoked node's token never authorizes).
+	// reverse index. The lookup is self-consistent: it returns ErrTokenInvalid unless
+	// the index resolves to a live node whose own APITokenHash still equals tokenHash
+	// AND whose Status is NodeApproved. This rejects an unmapped hash, a stale/orphaned
+	// index entry that no longer matches the node's current token, and any node that
+	// is not approved (pending or revoked) — so a rotated, revoked, or non-approved
+	// token can never authorize.
 	LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error)
 	// RevokeNodeAPIToken clears the node's APITokenHash and deletes the reverse index
 	// entry, immediately invalidating the node's bearer token. It is idempotent: a

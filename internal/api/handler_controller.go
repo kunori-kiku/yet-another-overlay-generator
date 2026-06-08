@@ -105,6 +105,7 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"stage", h.operatorAuth(h.HandleStage))
 	mux.HandleFunc(base+"promote", h.operatorAuth(h.HandlePromote))
 	mux.HandleFunc(base+"nodes", h.operatorAuth(h.HandleNodes))
+	mux.HandleFunc(base+"revoke", h.operatorAuth(h.HandleRevoke))
 	mux.HandleFunc(base+"audit", h.operatorAuth(h.HandleAudit))
 	mux.HandleFunc(base+"topology", h.operatorAuth(h.HandleTopology))
 	mux.HandleFunc(base+"enrollment-token", h.operatorAuth(h.HandleEnrollmentToken))
@@ -172,8 +173,23 @@ type nodeJSON struct {
 	DesiredGeneration int64     `json:"desired_generation"`
 	AppliedGeneration int64     `json:"applied_generation"`
 	LastChecksum      string    `json:"last_checksum"`
+	LastHealth        string    `json:"last_health"`
 	LastSeen          time.Time `json:"last_seen"`
 	EnrolledAt        time.Time `json:"enrolled_at"`
+}
+
+// revokeRequestJSON is the operator's request to revoke (evict) a node: the target
+// node id. Revocation flips the node to NodeRevoked and clears its API token so the
+// node's bearer credential stops resolving immediately.
+type revokeRequestJSON struct {
+	NodeID string `json:"node_id"`
+}
+
+// revokeResponseJSON confirms a revoke: the node id and a revoked flag (always true
+// on success, so a caller can branch without re-reading the registry).
+type revokeResponseJSON struct {
+	NodeID  string `json:"node_id"`
+	Revoked bool   `json:"revoked"`
 }
 
 // auditResponseJSON is the operator-facing view of the audit chain: the entries in
@@ -348,7 +364,7 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 	}
 
 	now := time.Now()
-	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum); err != nil {
+	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "node not found")
 			return
@@ -476,11 +492,74 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			DesiredGeneration: n.DesiredGeneration,
 			AppliedGeneration: n.AppliedGeneration,
 			LastChecksum:      n.LastChecksum,
+			LastHealth:        n.LastHealth,
 			LastSeen:          n.LastSeen,
 			EnrolledAt:        n.EnrolledAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// HandleRevoke evicts a node from the fleet (operator-only). It flips the node's
+// Status to NodeRevoked (preserving every other field) AND clears its API token via
+// RevokeNodeAPIToken, so the node's bearer credential stops resolving immediately
+// (LookupNodeByAPIToken no longer maps it to an approved node). It is the operator
+// counterpart to enrollment: 404 when the node is unknown, otherwise it records a
+// "revoke" audit entry and returns {node_id, revoked:true}.
+func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+	tenant, operator, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	var req revokeRequestJSON
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.NodeID == "" {
+		writeError(w, http.StatusBadRequest, "node_id is required")
+		return
+	}
+
+	// Load the existing record so we can preserve every field while flipping Status;
+	// an unknown node is a 404 (there is nothing to revoke).
+	node, err := h.store.GetNode(r.Context(), tenant, req.NodeID)
+	if err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load node")
+		return
+	}
+
+	// Flip to revoked, preserving all other fields. UpsertNode matches by NodeID.
+	node.Status = controller.NodeRevoked
+	if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to revoke node")
+		return
+	}
+	// Clear the API token + reverse index so the bearer credential stops resolving
+	// immediately (idempotent: a no-op success if the node had no token).
+	if err := h.store.RevokeNodeAPIToken(r.Context(), tenant, req.NodeID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to revoke node token")
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "revoke",
+		NodeID:    req.NodeID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, revokeResponseJSON{NodeID: req.NodeID, Revoked: true})
 }
 
 // HandleAudit returns the tenant's audit chain plus whether it verifies intact

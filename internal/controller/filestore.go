@@ -303,8 +303,9 @@ func (fs *FileStore) listNodesLocked(dir string) ([]Node, error) {
 	return out, nil
 }
 
-// SetAppliedGeneration records what an agent reported applying.
-func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum string) error {
+// SetAppliedGeneration records what an agent reported applying (generation,
+// checksum, and health).
+func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -328,6 +329,7 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 	}
 	n.AppliedGeneration = gen
 	n.LastChecksum = checksum
+	n.LastHealth = health
 	return writeJSONAtomic(p, n)
 }
 
@@ -701,9 +703,12 @@ func (fs *FileStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tok
 
 // IssueNodeAPIToken stamps tokenHash onto the node record's APITokenHash AND writes
 // the reverse index apitokens/<hash>.json ({node_id}) under the mutex. It returns
-// ErrNotFound if no node record exists for nodeID. Both writes are individually
-// atomic (temp-file + rename); the in-process mutex makes the pair logically atomic
-// for any other caller of this Store.
+// ErrNotFound if no node record exists for nodeID. Rotation is self-cleaning: if the
+// node already carried a different APITokenHash, that prior apitokens/<oldhash>.json
+// entry is removed before the new one is written (a not-exist removal is tolerated),
+// so a rotated (stale) token leaves no orphan index file. Each write is individually
+// atomic (temp-file + rename); the in-process mutex makes the sequence logically
+// atomic for any other caller of this Store.
 func (fs *FileStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -730,6 +735,17 @@ func (fs *FileStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, 
 	if err != nil {
 		return err
 	}
+	// Drop any prior reverse-index file for this node's old token so a rotated
+	// token can never linger and resolve to the node.
+	if n.APITokenHash != "" && n.APITokenHash != tokenHash {
+		oldIP, err := fs.apiTokenPath(dir, n.APITokenHash)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(oldIP); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("controller: delete stale api token index: %w", err)
+		}
+	}
 	n.APITokenHash = tokenHash
 	if err := writeJSONAtomic(np, n); err != nil {
 		return err
@@ -738,9 +754,12 @@ func (fs *FileStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, 
 }
 
 // LookupNodeByAPIToken resolves a presented token's hash to its Node by reading the
-// reverse index apitokens/<hash>.json, then the referenced node record. It returns
-// ErrTokenInvalid if the index entry is absent, if the referenced node record is
-// missing, or if the resolved node's Status is NodeRevoked.
+// reverse index apitokens/<hash>.json, then the referenced node record, self-
+// consistently: it returns ErrTokenInvalid unless the index resolves to a live node
+// whose own APITokenHash still equals tokenHash AND whose Status is NodeApproved.
+// This rejects an absent index entry, a missing node record, a stale/orphaned index
+// file that no longer matches the node's current token, and any non-approved
+// (pending or revoked) node.
 func (fs *FileStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error) {
 	if err := ctx.Err(); err != nil {
 		return Node{}, err
@@ -774,7 +793,7 @@ func (fs *FileStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, token
 		}
 		return Node{}, err
 	}
-	if n.Status == NodeRevoked {
+	if n.APITokenHash != tokenHash || n.Status != NodeApproved {
 		return Node{}, ErrTokenInvalid
 	}
 	return n, nil
