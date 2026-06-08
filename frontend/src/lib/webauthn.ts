@@ -57,6 +57,7 @@ export type WebAuthnErrorKind =
   | 'cancelled' // user dismissed the prompt or it timed out (NotAllowedError)
   | 'unsupported-algorithm' // authenticator returned a non-ES256/EdDSA key
   | 'no-public-key' // getPublicKey() returned null (no SPKI available)
+  | 'invalid-rp-id' // RP ID is an IP literal (e.g. panel opened at http://127.0.0.1)
   | 'failed'; // any other ceremony failure
 
 export class WebAuthnError extends Error {
@@ -66,6 +67,35 @@ export class WebAuthnError extends Error {
     this.name = 'WebAuthnError';
     this.kind = kind;
   }
+}
+
+// WebAuthn forbids IP-address RP IDs: per spec the RP ID must be a registrable
+// domain, and 'localhost' is the only non-domain browsers special-case. When the
+// panel is opened at http://127.0.0.1:PORT (or [::1]), location.hostname is an IP
+// literal, so navigator.credentials.create()/.get() reject it with an opaque
+// "This is an invalid domain." Catch it up front and tell the operator exactly how
+// to fix it — browse to http://localhost:PORT, which resolves to the same loopback
+// container but presents a valid RP ID.
+// `host` is always a window.location.hostname value, which the URL parser has
+// already normalized — IPv4 shorthand (127.1, 2130706433) is expanded to a
+// dotted-quad before it reaches us, so the strict 4-octet regex still catches it.
+function isIpLiteralHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, ''); // strip IPv6 brackets if location kept them
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true; // IPv4 dotted-quad
+  if (h.includes(':')) return true; // IPv6 — a colon never appears in a DNS hostname
+  return false;
+}
+
+function assertRegistrableRpId(rpId: string): void {
+  if (!isIpLiteralHost(rpId)) return;
+  const port =
+    typeof location !== 'undefined' && location.port ? `:${location.port}` : '';
+  throw new WebAuthnError(
+    'invalid-rp-id',
+    `WebAuthn can't use the IP address "${rpId}" as its domain. Open the panel at ` +
+      `http://localhost${port} (not an IP address like 127.0.0.1 or ::1), or use a ` +
+      `real hostname behind a reverse proxy, then register the passkey again.`,
+  );
 }
 
 // The result of pinning an operator credential: everything the panel needs to
@@ -182,6 +212,9 @@ export async function enrollOperatorCredential(
   origin: string,
 ): Promise<EnrolledOperatorCredential> {
   assertWebAuthnAvailable();
+  // Reject an IP-literal RP ID with actionable guidance before the browser throws
+  // its opaque "invalid domain" (panel opened at http://127.0.0.1 instead of localhost).
+  assertRegistrableRpId(rpId);
 
   // Sanity-check the caller's recorded origin against the live browser origin: the
   // credential is created in THIS context, and that same origin is what the node's
@@ -343,6 +376,9 @@ async function runAssertion(
   failMessage: string,
 ): Promise<SignedTrustList> {
   assertWebAuthnAvailable();
+  // Same IP-literal guard as enrollment: .get() rejects an IP RP ID identically, so
+  // surface the actionable "use localhost" message instead of the opaque browser error.
+  assertRegistrableRpId(rpId);
 
   // Restrict the assertion to the pinned credential so the browser uses exactly the key
   // the controller has on file. Pin rpId explicitly (do not rely on the effective-domain
