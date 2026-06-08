@@ -26,6 +26,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -33,6 +34,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"time"
 )
 
@@ -231,6 +233,104 @@ func (c *DevCA) IssueClientCert(csrDER []byte, nodeID string, now time.Time) (ce
 	fingerprint = hex.EncodeToString(sum[:])
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	return certPEM, fingerprint, nil
+}
+
+// caCertPool returns an x509.CertPool containing only this CA's self-signed
+// certificate. It is the trust anchor for both ends of the controller's mTLS:
+// the server uses it as ClientCAs (to verify node/operator client certs), and a
+// node/test uses the same material as RootCAs (to verify the controller's server
+// cert). Both certs chain to this single ephemeral CA.
+func (c *DevCA) caCertPool() *x509.CertPool {
+	pool := x509.NewCertPool()
+	pool.AddCert(c.caCert)
+	return pool
+}
+
+// IssueServerCert issues the controller's TLS SERVER certificate, signed by this
+// CA. The host argument names the controller (placed in the SAN DNSNames or
+// IPAddresses as appropriate); "localhost" and 127.0.0.1 are always included so
+// in-process httptest servers and loopback agents validate without extra config.
+//
+// The returned tls.Certificate carries the issued cert (leaf) plus the CA cert in
+// its chain and the freshly generated server private key, ready to drop into a
+// tls.Config's Certificates. The server keypair is independent of the CA keypair:
+// the CA only signs; it never serves TLS with its own key.
+func (c *DevCA) IssueServerCert(host string, now time.Time) (tls.Certificate, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("controller: generating server key: %w", err)
+	}
+	serial, err := randomSerial()
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("controller: generating server cert serial: %w", err)
+	}
+
+	// Build the SAN set. "localhost" + 127.0.0.1 are always present (loopback /
+	// httptest); the caller's host is added as an IP SAN if it parses as one,
+	// otherwise as a DNS SAN.
+	dnsNames := []string{"localhost"}
+	ipAddrs := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	if host != "" && host != "localhost" {
+		if ip := net.ParseIP(host); ip != nil {
+			ipAddrs = append(ipAddrs, ip)
+		} else {
+			dnsNames = append(dnsNames, host)
+		}
+	}
+
+	// A server cert must never outlive the CA that signed it (same cap as client certs).
+	notAfter := now.Add(c.clientCertTTL)
+	if notAfter.After(c.caCert.NotAfter) {
+		notAfter = c.caCert.NotAfter
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName: "yaog-controller:" + string(c.tenant),
+		},
+		NotBefore:             now,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddrs,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.caCert, pub, c.caPriv)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("controller: issuing server cert: %w", err)
+	}
+
+	return tls.Certificate{
+		// Leaf first, then the CA cert, so a client that does not already hold the CA
+		// can still build the chain; RootCAs/ClientCAs anchors trust to the CA.
+		Certificate: [][]byte{der, c.caCertDER},
+		PrivateKey:  priv,
+	}, nil
+}
+
+// ServerTLSConfig builds the controller's mTLS server tls.Config from an issued
+// server cert (see IssueServerCert). It enforces TLS 1.3, presents serverCert, and
+// sets ClientCAs to this CA's pool with ClientAuth=VerifyClientCertIfGiven: a
+// client cert is OPTIONAL at the handshake (so certless /enroll is reachable) but,
+// when presented, MUST verify against the CA. The per-route requirement that a
+// verified client cert is actually present is enforced by the auth middleware, not
+// here — TLS only guarantees that any cert that IS presented is genuine.
+func (c *DevCA) ServerTLSConfig(serverCert tls.Certificate) *tls.Config {
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{serverCert},
+		ClientCAs:    c.caCertPool(),
+		ClientAuth:   tls.VerifyClientCertIfGiven,
+	}
+}
+
+// CACertPool returns a fresh x509.CertPool trusting only this CA. It is the
+// trust anchor a node/test installs as RootCAs to verify the controller's server
+// cert (the mirror of the ClientCAs the server uses). Exported so the HTTP layer
+// and tests can build a client without re-parsing CACertPEM.
+func (c *DevCA) CACertPool() *x509.CertPool {
+	return c.caCertPool()
 }
 
 // EnrollRequest is the node's enrollment payload: the plaintext enrollment

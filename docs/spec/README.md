@@ -60,8 +60,10 @@ docs/spec/
 │   │                              #   chokepoint, generation/stage-promote, audit hash chain
 │   ├── enrollment.md              # Enrollment ceremony: single-use token, mTLS CSR PoP,
 │   │                              #   ephemeral dev controller-CA, per-node cert issuance
-│   └── deploy.md                  # Compile/stage/promote model, render-what's-ready
-│                                  #   subgraph filter, frozen-pipeline reuse via temp-dir
+│   ├── deploy.md                  # Compile/stage/promote model, render-what's-ready
+│   │                              #   subgraph filter, frozen-pipeline reuse via temp-dir
+│   └── controller-api.md          # Controller HTTP routes, TLS 1.3 + mTLS auth chokepoint
+│                                  #   (tenant:node from cert CN), env-gated controller mode
 └── glossary.md                    # Terminology
 ```
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,13 +9,19 @@ import (
 	"time"
 )
 
-// Server HTTP API 
+// Server HTTP API
 type Server struct {
 	handler *Handler
 	mux     *http.ServeMux
+
+	// controllerTLS is the mTLS server config used by ListenAndServeTLS. It is nil
+	// in air-gap mode (the default); only EnableController sets it. When nil the
+	// air-gap HTTP path (ListenAndServe) is the only serving path and the mux is
+	// byte-identical to a server that never knew about the controller.
+	controllerTLS *tls.Config
 }
 
-// NewServer  API 
+// NewServer  API
 func NewServer() *Server {
 	s := &Server{
 		handler: NewHandler(),
@@ -22,6 +29,21 @@ func NewServer() *Server {
 	}
 	s.registerRoutes()
 	return s
+}
+
+// EnableController registers the networked controller routes on this server's mux
+// and arms the mTLS serving path. It is the single opt-in seam for controller mode:
+// when it is NOT called, the air-gap routes and the HTTP ListenAndServe path are
+// exactly as before (controllerTLS stays nil). cmd/server calls this only under the
+// controller env gate.
+//
+// ch supplies the controller dependencies (Store/DevCA/tenant/operator) and its
+// route set; tlsConfig is the DevCA-built TLS 1.3 + mTLS config the controller is
+// served with (see DevCA.ServerTLSConfig). The controller routes live under
+// /api/v1/controller/ and never collide with the air-gap /api/ routes.
+func (s *Server) EnableController(ch *ControllerHandler, tlsConfig *tls.Config) {
+	ch.Routes(s.mux)
+	s.controllerTLS = tlsConfig
 }
 
 func (s *Server) registerRoutes() {
@@ -123,4 +145,44 @@ func (s *Server) ListenAndServe(addr string) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 	return srv.ListenAndServe()
+}
+
+// ListenAndServeTLS serves the controller over TLS 1.3 + mTLS. It requires that
+// EnableController has armed controllerTLS; otherwise it is a programming error and
+// returns one. The server uses the same Slowloris timeouts as the air-gap path
+// (D33) but a longer WriteTimeout to accommodate the /poll long-poll (~55s) without
+// the server tearing the connection down mid-wait.
+//
+// The certificate + key are carried inside controllerTLS.Certificates (issued by the
+// DevCA), so ListenAndServeTLS is called with empty cert/key paths — TLSConfig
+// supplies the keypair.
+func (s *Server) ListenAndServeTLS(addr string) error {
+	if s.controllerTLS == nil {
+		return fmt.Errorf("api: controller TLS not configured (call EnableController first)")
+	}
+	fmt.Printf("Controller service (TLS 1.3 + mTLS): https://%s\n", addr)
+	fmt.Println("Controller endpoints (under /api/v1/controller/):")
+	fmt.Println("  POST /enroll          - node enrollment (no client cert)")
+	fmt.Println("  GET  /config          - fetch current bundle (mTLS)")
+	fmt.Println("  GET  /poll?after=N     - long-poll for a new generation (mTLS)")
+	fmt.Println("  POST /report          - report applied generation (mTLS)")
+	fmt.Println("  POST /update-topology - store topology (operator)")
+	fmt.Println("  POST /stage           - compile + stage bundles (operator)")
+	fmt.Println("  POST /promote         - promote staged bundles (operator)")
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s.mux,
+		TLSConfig:         s.controllerTLS,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		// WriteTimeout must exceed the /poll long-poll deadline (~55s) so a waiting
+		// poll is answered rather than killed by the write deadline; 90s leaves margin.
+		WriteTimeout:   90 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	// Cert + key come from TLSConfig.Certificates (DevCA-issued), so the path args
+	// are empty.
+	return srv.ListenAndServeTLS("", "")
 }
