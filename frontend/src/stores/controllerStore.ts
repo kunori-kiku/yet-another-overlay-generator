@@ -100,6 +100,9 @@ interface ControllerState {
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
+  // 复位待处理的二次验证步骤：当操作员改动了凭据对（或一次硬失败之后），让验证码框只对
+  // 后端实际标记的那一对 username+password 出现，而非粘滞到换了账号/改了密码之后。
+  resetTOTPChallenge: () => void;
   // TOTP 2FA 自助管理（plan-5.2）：仅对密码 session 有效（break-glass token 无账户）。
   loadTOTPStatus: () => Promise<void>;
   enrollTOTP: () => Promise<TOTPEnrollment>;
@@ -292,12 +295,19 @@ export const useControllerStore = create<ControllerState>()(
           // 拉取本账户的 2FA 状态（供「两步验证」区回显启用/未启用）。失败不阻塞登录。
           await get().loadTOTPStatus();
         } catch (err) {
+          // 硬失败（密码错 / 429 锁定 / 网络 / 500，均在到达「需二次码」之前抛出）：复位
+          // totpRequired，回到纯密码表单——避免「输入用户名或密码错误」却仍显示验证码框的
+          // 错位提示。真正需要二次码的下一次（密码正确）会重新干净地触发 totp_required。
           set({
             error: err instanceof Error ? err.message : 'Login failed',
+            totpRequired: false,
             loading: false,
           });
         }
       },
+
+      // 复位二次验证步骤（见接口注释）：仅清 totpRequired；验证码输入框的本地值由组件清空。
+      resetTOTPChallenge: () => set({ totpRequired: false }),
 
       // 登出：best-effort 调 POST /logout 撤销服务端 session，然后无论成败都清空本地
       // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。

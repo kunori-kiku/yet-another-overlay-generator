@@ -42,12 +42,22 @@ export function DeployPanel() {
   const sessionExpiresAt = useControllerStore((s) => s.sessionExpiresAt);
   // 二次因子（plan-5.2）：登录密码正确但需 TOTP 码时后端置 totpRequired，表单据此展开验证码框。
   const totpRequired = useControllerStore((s) => s.totpRequired);
+  const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
 
   const [mode, setMode] = useState<DeployMode>('local');
   // 登录表单的本地输入（密码/验证码只在内存里，登录成功后清空）。
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginTotp, setLoginTotp] = useState('');
+
+  // 改动凭据对（用户名/密码）即丢弃任何待处理的二次验证步骤：验证码框只应对后端实际标记的
+  // 那一对凭据出现。否则换个无 2FA 的账号后，提交按钮仍会被「需 6 位码」的守卫卡住。
+  const onCredentialEdit = () => {
+    if (totpRequired) {
+      resetTOTPChallenge();
+      setLoginTotp('');
+    }
+  };
 
   const noNodes = nodes.length === 0;
 
@@ -236,7 +246,10 @@ export function DeployPanel() {
                     <input
                       type="text"
                       value={loginUser}
-                      onChange={(e) => setLoginUser(e.target.value)}
+                      onChange={(e) => {
+                        setLoginUser(e.target.value);
+                        onCredentialEdit();
+                      }}
                       placeholder={txt(language, '用户名', 'Username')}
                       autoComplete="username"
                       className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -244,7 +257,10 @@ export function DeployPanel() {
                     <input
                       type="password"
                       value={loginPass}
-                      onChange={(e) => setLoginPass(e.target.value)}
+                      onChange={(e) => {
+                        setLoginPass(e.target.value);
+                        onCredentialEdit();
+                      }}
                       placeholder={txt(language, '密码', 'Password')}
                       autoComplete="current-password"
                       className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
