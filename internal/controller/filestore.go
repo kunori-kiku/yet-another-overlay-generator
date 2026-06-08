@@ -96,7 +96,7 @@ func (fs *FileStore) ensureTenantDir(t TenantID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, sub := range []string{"", "nodes", "bundles", "tokens", "apitokens", "operators", "sessions"} {
+	for _, sub := range []string{"", "nodes", "bundles", "tokens", "login-challenges", "apitokens", "operators", "sessions"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return "", fmt.Errorf("controller: create tenant dir: %w", err)
 		}
@@ -131,6 +131,17 @@ func (fs *FileStore) tokenPath(dir, tokenHash string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "tokens", tc+".json"), nil
+}
+
+// loginChallengePath returns the on-disk path for a passkey login challenge after
+// validating the challengeHash is a safe single path component (a hex SHA-256 in
+// practice, sanitized like any untrusted key to prevent path traversal).
+func (fs *FileStore) loginChallengePath(dir, challengeHash string) (string, error) {
+	cc, err := sanitizeComponent("login challenge hash", challengeHash)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "login-challenges", cc+".json"), nil
 }
 
 // apiTokenPath returns the on-disk path for a node API token's reverse-index entry
@@ -752,6 +763,65 @@ func (fs *FileStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tok
 	consumed := now
 	tok.ConsumedAt = &consumed
 	return writeJSONAtomic(p, tok)
+}
+
+// ====================== Passkey login challenges ===========================
+
+func (fs *FileStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.loginChallengePath(dir, lc.ChallengeHash)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(p, lc)
+}
+
+// ConsumeLoginChallenge atomically validates and burns a login challenge under the mutex
+// by DELETING its file: it reads login-challenges/<challengeHash>.json and returns
+// ErrChallengeInvalid if it is absent, if its Operator != operator, or if now is at/after
+// ExpiresAt; otherwise it removes the file and returns nil. Holding fs.mu across the
+// read-and-delete makes the check-and-burn race-safe within this process, so a captured
+// assertion cannot be replayed (the file is gone) and two concurrent logins cannot both
+// win. An expired file is removed (lazy GC); a wrong-operator file is left intact.
+func (fs *FileStore) ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.loginChallengePath(dir, challengeHash)
+	if err != nil {
+		return err
+	}
+	var lc LoginChallenge
+	if err := readJSON(p, &lc); err != nil {
+		if os.IsNotExist(err) {
+			return ErrChallengeInvalid
+		}
+		return err
+	}
+	if !now.Before(lc.ExpiresAt) {
+		_ = os.Remove(p) // expired: lazy GC
+		return ErrChallengeInvalid
+	}
+	if lc.Operator != operator {
+		return ErrChallengeInvalid // not the caller's challenge to burn
+	}
+	return os.Remove(p) // success: single-use consume
 }
 
 // ========================== Node API tokens ================================

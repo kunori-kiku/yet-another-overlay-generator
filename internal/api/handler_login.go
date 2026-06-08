@@ -13,16 +13,20 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
-// loginRequestJSON is the POST /login body: operator username + plaintext password,
-// and an optional TOTP code (the second factor, when the operator has 2FA enrolled).
-// The password is consumed to verify against the stored argon2id hash; it is never
-// stored or logged.
+// loginRequestJSON is the POST /login body: operator username + plaintext password, and
+// an OPTIONAL second factor — either a TOTP code or a passkey WebAuthn assertion, when
+// the operator has 2FA enrolled. The password is consumed to verify against the stored
+// argon2id hash; it is never stored or logged. The passkey assertion (when present)
+// carries the random-challenge WebAuthn proof; its wire shape is the same as the keystone
+// SignedTrustList (alg, credential_id, signature, authenticator_data, client_data_json).
 type loginRequestJSON struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	TOTP     string `json:"totp"`
+	Username string                     `json:"username"`
+	Password string                     `json:"password"`
+	TOTP     string                     `json:"totp"`
+	Passkey  *trustlist.SignedTrustList `json:"passkey,omitempty"`
 }
 
 // totpRequiredJSON is the 401 returned when the password is correct but the operator's
@@ -97,11 +101,28 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Second factor: if the operator enrolled TOTP, require a valid (non-replayed) code.
-	// A missing OR wrong code leaves the reserved limiter slot COUNTED (so a code
-	// brute-force via the password endpoint is rate-limited — not refunded), and tells
-	// the panel to collect a code. Only a fully successful login refunds (succeed below).
-	if op.TOTPEnabled() {
+	// Second factor (precedence: PASSKEY over TOTP). If the operator registered a login
+	// passkey, require a passkey assertion (the stronger factor); else if TOTP is enrolled,
+	// require a code. A missing/invalid second factor leaves the reserved limiter slot
+	// COUNTED (so brute-force via the password endpoint is rate-limited — not refunded);
+	// only a fully successful login refunds (succeed below).
+	if op.PasskeyEnabled() {
+		// Two legs, mirroring TOTP: leg 1 (no assertion) issues a single-use random
+		// challenge and returns passkey_required for the browser to satisfy with
+		// navigator.credentials.get; leg 2 (assertion present) verifies it. A missing,
+		// invalid, expired, or replayed assertion re-issues a fresh challenge (counted).
+		if req.Passkey == nil {
+			h.auditLockout(r.Context(), now, req.Username, justLocked)
+			h.writePasskeyChallenge(w, r.Context(), op, now)
+			return
+		}
+		if err := h.verifyLoginAssertion(r.Context(), h.tenant, op, *req.Passkey, now); err != nil {
+			h.auditLockout(r.Context(), now, req.Username, justLocked)
+			h.writePasskeyChallenge(w, r.Context(), op, now)
+			return
+		}
+		// Passkey verified → fall through to session mint.
+	} else if op.TOTPEnabled() {
 		totpOK := false
 		var step int64
 		if c := strings.TrimSpace(req.TOTP); c != "" {
@@ -132,17 +153,25 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Success: mint a session, persist it (hash only), clear the limiter for these
-	// keys. The audit write is best-effort: login availability must not depend on the
-	// audit log (operational visibility only, not a security boundary — see audit.go),
-	// and the session is the real artifact.
+	// Success: mint and return a session, clearing the limiter for these keys.
+	h.mintSessionResponse(w, r.Context(), op, now, userKey, ipKey)
+}
+
+// mintSessionResponse mints a session for op, persists it (hash only), clears the login
+// limiter for the attempt's keys, best-effort audits the success, and writes the
+// loginResponseJSON. It is the shared tail of EVERY successful operator login —
+// password(+TOTP/+passkey) via HandleLogin and the passwordless passkey finish — so the
+// session contract (256-bit bearer, hash-stored, TTL'd) is identical regardless of path.
+// The audit write is best-effort: login availability must not depend on the audit log
+// (operational visibility only, not a security boundary — see audit.go).
+func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx context.Context, op controller.Operator, now time.Time, userKey, ipKey string) {
 	plaintext, sess := controller.NewSession(op.Username, h.sessionTTL, now)
-	if err := h.store.CreateSession(r.Context(), h.tenant, sess); err != nil {
+	if err := h.store.CreateSession(ctx, h.tenant, sess); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
 	h.loginLimiter.succeed(userKey, ipKey)
-	_, _ = h.store.AppendAudit(r.Context(), h.tenant, controller.AuditEntry{
+	_, _ = h.store.AppendAudit(ctx, h.tenant, controller.AuditEntry{
 		Timestamp: now,
 		Actor:     "operator:" + op.Username,
 		Action:    "login-success",

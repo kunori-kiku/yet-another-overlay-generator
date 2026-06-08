@@ -20,8 +20,70 @@ const authDataMinLen = 37
 // (authData[33:37]) because synced passkeys legitimately emit a counter of 0.
 const flagUserPresent = 0x01
 
-// verifyWebAuthn verifies a WebAuthn (FIDO2) assertion over a trust list,
-// stdlib only, and binds the assertion to THIS trust list's content.
+// verifyWebAuthn verifies a WebAuthn (FIDO2) assertion over a trust list, stdlib
+// only, and binds the assertion to THIS trust list's CONTENT: the expected challenge
+// is Challenge(tl) = SHA256(Canonical(tl)). It is a thin content-bound wrapper over
+// verifyAssertion (the challenge-agnostic core); the operator passkey LOGIN path
+// reuses that same core through VerifyAssertion with a server-issued RANDOM nonce.
+func verifyWebAuthn(tl TrustList, art SignedTrustList, pin PinnedCredential) error {
+	// CONTENT BINDING: the challenge the assertion must carry is base64url(Challenge(tl)),
+	// proving the user authorized these exact trust-list bytes (not a random nonce).
+	chal, err := Challenge(tl)
+	if err != nil {
+		return err
+	}
+	return verifyAssertion(art, pin, chal)
+}
+
+// VerifyAssertion verifies a WebAuthn (FIDO2) assertion against a pinned credential and
+// an EXPECTED challenge — the RAW challenge bytes; clientDataJSON.challenge must equal
+// their base64url encoding. It is the challenge-agnostic sibling of the keystone path,
+// exported for callers whose challenge is NOT content-bound: operator passkey LOGIN,
+// where the challenge is a server-issued, single-use RANDOM nonce rather than the
+// manifest hash. The structural, relying-party, user-presence, and signature checks are
+// byte-for-byte identical to the keystone verifier; ONLY the source of the expected
+// challenge differs.
+//
+// Like Verify, dispatch is on pin.Alg and an art.Alg != pin.Alg is rejected
+// (ErrAlgMismatch) before any cryptography. Only the WebAuthn algorithms are accepted: a
+// raw (non-WebAuthn) Ed25519 pin has no assertion to verify and is rejected as
+// unsupported here.
+func VerifyAssertion(art SignedTrustList, pin PinnedCredential, challenge []byte) error {
+	if art.Alg != pin.Alg {
+		return fmt.Errorf("%w: pinned=%q artifact=%q", ErrAlgMismatch, pin.Alg, art.Alg)
+	}
+	switch pin.Alg {
+	case AlgWebAuthnES256, AlgWebAuthnEdDSA:
+		return verifyAssertion(art, pin, challenge)
+	default:
+		return fmt.Errorf("%w: %q (passkey login requires a WebAuthn credential)", ErrUnsupportedAlg, pin.Alg)
+	}
+}
+
+// AssertionChallenge extracts the base64url challenge string embedded in a WebAuthn
+// assertion's clientDataJSON. A caller that issued a RANDOM server-side challenge (e.g.
+// operator passkey login) uses it as the lookup key for the single-use challenge record
+// it stored, then passes the DECODED bytes to VerifyAssertion. The keystone path does
+// NOT need this — its expected challenge is recomputed from the manifest, never looked
+// up. It does no signature work; it only parses the (still-to-be-verified) client data.
+func AssertionChallenge(art SignedTrustList) (string, error) {
+	cData, err := base64.RawURLEncoding.DecodeString(art.ClientDataJSON)
+	if err != nil {
+		return "", fmt.Errorf("trustlist: decode client_data_json: %w", err)
+	}
+	var cd struct {
+		Challenge string `json:"challenge"`
+	}
+	if err := json.Unmarshal(cData, &cd); err != nil {
+		return "", fmt.Errorf("trustlist: parse client_data_json: %w", err)
+	}
+	return cd.Challenge, nil
+}
+
+// verifyAssertion is the challenge-agnostic WebAuthn assertion verifier, stdlib only.
+// The caller supplies the EXPECTED challenge bytes (wantChallenge); everything else is
+// shared between the content-bound keystone path (wantChallenge = Challenge(tl)) and the
+// random-nonce login path (wantChallenge = the issued nonce).
 //
 // Security-critical sequence (every failure is fail-closed):
 //  1. Decode authenticatorData and clientDataJSON from base64url. Note: the
@@ -31,8 +93,8 @@ const flagUserPresent = 0x01
 //  2. Bounds-check authenticatorData length (>= 37) before indexing.
 //  3. Parse clientDataJSON for type / challenge / origin.
 //  4. type must be "webauthn.get" (an assertion, not a registration).
-//  5. challenge must equal base64url(Challenge(tl)) — the CONTENT BINDING that
-//     proves the user authorized these exact trust-list bytes.
+//  5. challenge must equal base64url(wantChallenge) — the binding to the exact bytes
+//     the verifier expected (content hash for the keystone, random nonce for login).
 //  6. rpIdHash (authData[0:32]) must equal sha256(pin.RPID).
 //  7. User-Present flag must be set.
 //  8. signedMessage = authenticatorData || sha256(clientDataJSON).
@@ -46,7 +108,7 @@ const flagUserPresent = 0x01
 // browser origin a user used months earlier), so a mismatch is reported but the
 // origin check is documented as advisory; the content binding (step 5) is the
 // real authority.
-func verifyWebAuthn(tl TrustList, art SignedTrustList, pin PinnedCredential) error {
+func verifyAssertion(art SignedTrustList, pin PinnedCredential, wantChallenge []byte) error {
 	// 0. Pin config precondition: an empty RPID makes the rpIdHash check meaningless
 	//    (sha256("") is a known constant), silently disabling relying-party binding.
 	//    A keystone anchor must have a real RPID — reject fail-closed.
@@ -85,12 +147,8 @@ func verifyWebAuthn(tl TrustList, art SignedTrustList, pin PinnedCredential) err
 		return fmt.Errorf("trustlist: client_data type = %q, want \"webauthn.get\"", cd.Type)
 	}
 
-	// 5. CONTENT BINDING: challenge must be base64url(Challenge(tl)).
-	chal, err := Challenge(tl)
-	if err != nil {
-		return err
-	}
-	want := base64.RawURLEncoding.EncodeToString(chal)
+	// 5. CHALLENGE BINDING: challenge must be base64url(wantChallenge).
+	want := base64.RawURLEncoding.EncodeToString(wantChallenge)
 	if cd.Challenge != want {
 		return ErrChallengeMismatch
 	}
