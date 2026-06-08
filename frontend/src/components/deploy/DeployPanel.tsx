@@ -4,6 +4,7 @@ import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore
 import { txt } from '../../i18n';
 import { NodeRegistry } from './NodeRegistry';
 import { EnrollmentFlow } from './EnrollmentFlow';
+import { BootstrapSettings } from './BootstrapSettings';
 import { DeployBar } from './DeployBar';
 import { AuditLog } from './AuditLog';
 
@@ -287,6 +288,7 @@ export function DeployPanel() {
           </section>
 
           <NodeRegistry />
+          <BootstrapSettings />
           <EnrollmentFlow />
           <DeployBar />
           <AuditLog />
