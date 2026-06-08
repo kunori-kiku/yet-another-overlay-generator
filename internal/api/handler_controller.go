@@ -127,7 +127,7 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 // It normalizes to "" (no prefix) or "/<trimmed>" (single leading slash, no trailing
 // slash). Call it before RegisterAgentRoutes/RegisterOperatorRoutes.
 func (h *ControllerHandler) SetPathPrefix(prefix string) {
-	if p := strings.Trim(prefix, "/"); p != "" {
+	if p := strings.Trim(strings.TrimSpace(prefix), "/"); p != "" {
 		h.pathPrefix = "/" + p
 	} else {
 		h.pathPrefix = ""
@@ -149,6 +149,7 @@ func (h *ControllerHandler) cors(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "600") // cache the preflight; the panel re-polls often
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

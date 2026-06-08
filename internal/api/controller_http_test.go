@@ -653,4 +653,18 @@ func TestControllerHTTP_PathPrefix(t *testing.T) {
 	if st := doJSON(t, http.MethodGet, srv.URL+"/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
 		t.Errorf("bare /nodes status %d, want 404 (only the prefixed path is mounted)", st)
 	}
+
+	// The AGENT routes are prefixed too (both ports share basePath()): an agent route
+	// is reachable only under the prefix. /config with no token -> 401 (mounted), while
+	// the bare path -> 404 (not mounted).
+	agentMux := http.NewServeMux()
+	ch.RegisterAgentRoutes(agentMux)
+	asrv := httptest.NewServer(agentMux)
+	t.Cleanup(asrv.Close)
+	if st := doJSON(t, http.MethodGet, asrv.URL+"/s3cr3t/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
+		t.Errorf("prefixed agent /config status %d, want 401 (mounted, needs a token)", st)
+	}
+	if st := doJSON(t, http.MethodGet, asrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+		t.Errorf("bare agent /config status %d, want 404 (only the prefixed path is mounted)", st)
+	}
 }
