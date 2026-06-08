@@ -580,6 +580,24 @@ func (s *MemStore) DeleteOperator(ctx context.Context, t TenantID, username stri
 	return nil
 }
 
+// AdvanceTOTPStep atomically bumps the operator's TOTP replay watermark to step iff
+// step > the stored value (the whole check-and-set under one lock). See the Store doc.
+func (s *MemStore) AdvanceTOTPStep(ctx context.Context, t TenantID, username string, step int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	op, ok := ts.operators[username]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if step <= op.TOTPLastUsedStep {
+		return false, nil
+	}
+	op.TOTPLastUsedStep = step
+	ts.operators[username] = op
+	return true, nil
+}
+
 // CreateSession stores a minted operator session, keyed by its TokenHash.
 func (s *MemStore) CreateSession(ctx context.Context, t TenantID, sess Session) error {
 	s.mu.Lock()

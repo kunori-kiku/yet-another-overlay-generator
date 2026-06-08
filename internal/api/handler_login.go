@@ -9,17 +9,28 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
-// loginRequestJSON is the POST /login body: operator username + plaintext password.
+// loginRequestJSON is the POST /login body: operator username + plaintext password,
+// and an optional TOTP code (the second factor, when the operator has 2FA enrolled).
 // The password is consumed to verify against the stored argon2id hash; it is never
 // stored or logged.
 type loginRequestJSON struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	TOTP     string `json:"totp"`
+}
+
+// totpRequiredJSON is the 401 returned when the password is correct but the operator's
+// TOTP second factor is missing or invalid. totp_required tells the panel to collect a
+// code and resubmit. (Revealing "password accepted, code needed" is standard for 2FA.)
+type totpRequiredJSON struct {
+	Error        string `json:"error"`
+	TOTPRequired bool   `json:"totp_required"`
 }
 
 // loginResponseJSON is returned on a successful login: the plaintext session bearer
@@ -84,6 +95,41 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		h.auditLockout(r.Context(), now, req.Username, justLocked)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
+	}
+
+	// Second factor: if the operator enrolled TOTP, require a valid (non-replayed) code.
+	// A missing OR wrong code leaves the reserved limiter slot COUNTED (so a code
+	// brute-force via the password endpoint is rate-limited — not refunded), and tells
+	// the panel to collect a code. Only a fully successful login refunds (succeed below).
+	if op.TOTPEnabled() {
+		totpOK := false
+		var step int64
+		if c := strings.TrimSpace(req.TOTP); c != "" {
+			totpOK, step = controller.VerifyTOTP(op.TOTPSecret, c, now, op.TOTPLastUsedStep)
+		}
+		// Atomically burn the code's step (a single check-and-set under the store lock).
+		// This closes the read-modify-write TOCTOU a separate Get/Put pair would leave:
+		// two concurrent logins with the SAME fresh code both pass VerifyTOTP, but only
+		// the first AdvanceTOTPStep wins — the loser gets advanced=false and is rejected.
+		advanced := false
+		if totpOK {
+			a, aerr := h.store.AdvanceTOTPStep(r.Context(), h.tenant, op.Username, step)
+			if aerr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update operator")
+				return
+			}
+			advanced = a
+		}
+		if !advanced {
+			// Missing, wrong, replayed, or lost-the-race code: leave the limiter slot
+			// counted (so a code brute-force is rate-limited) and ask for a fresh code.
+			h.auditLockout(r.Context(), now, req.Username, justLocked)
+			writeJSON(w, http.StatusUnauthorized, totpRequiredJSON{
+				Error:        "two-factor code required",
+				TOTPRequired: true,
+			})
+			return
+		}
 	}
 
 	// Success: mint a session, persist it (hash only), clear the limiter for these
