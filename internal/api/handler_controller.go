@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
@@ -62,6 +63,13 @@ type ControllerHandler struct {
 	operatorName      string
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
 	pollDeadline time.Duration
+	// pathPrefix is an optional secret path segment the controller routes mount under
+	// (e.g. "/s3cr3t" -> "/s3cr3t/api/v1/controller/..."). Empty = the bare
+	// "/api/v1/controller/..." paths. This is defense-in-depth obscurity (it hides the
+	// surface from drive-by scanners and is CDN-friendly), NOT a security boundary —
+	// the boundary is the bearer tokens + the off-host signed trust-list. Normalized by
+	// SetPathPrefix to "" or "/<seg>" (single leading slash, no trailing slash).
+	pathPrefix string
 }
 
 // NewControllerHandler builds a ControllerHandler. operatorTokenHash is the hex
@@ -83,12 +91,13 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 }
 
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
-// on the agent port). /enroll is registered WITHOUT auth (reachable before the node
+// on the agent port), under basePath() (the optional secret prefix + the fixed
+// /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the node
 // has an API token); /config,/poll,/report go through requireNode (per-node bearer
 // token). recoverPanics/cors are NOT applied here — controller requests are
 // machine-to-machine JSON, with no browser CORS concern.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
-	const base = "/api/v1/controller/"
+	base := h.basePath()
 	mux.HandleFunc(base+"enroll", h.HandleEnroll)
 	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
@@ -96,19 +105,56 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
-// (served on the operator/panel port). All routes go through operatorAuth (the
-// shared operator bearer token). recoverPanics/cors are NOT applied here for the
-// same reason as the agent routes.
+// (served on the operator/panel port), under basePath(). Each is wrapped with cors()
+// so the browser panel — served from a possibly different origin and pointed at a
+// configurable controller URL — can call it, and its CORS preflight (which carries no
+// Authorization header) is answered before operatorAuth. All routes go through
+// operatorAuth (the shared operator bearer token).
 func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
-	const base = "/api/v1/controller/"
-	mux.HandleFunc(base+"update-topology", h.operatorAuth(h.HandleUpdateTopology))
-	mux.HandleFunc(base+"stage", h.operatorAuth(h.HandleStage))
-	mux.HandleFunc(base+"promote", h.operatorAuth(h.HandlePromote))
-	mux.HandleFunc(base+"nodes", h.operatorAuth(h.HandleNodes))
-	mux.HandleFunc(base+"revoke", h.operatorAuth(h.HandleRevoke))
-	mux.HandleFunc(base+"audit", h.operatorAuth(h.HandleAudit))
-	mux.HandleFunc(base+"topology", h.operatorAuth(h.HandleTopology))
-	mux.HandleFunc(base+"enrollment-token", h.operatorAuth(h.HandleEnrollmentToken))
+	base := h.basePath()
+	op := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
+	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
+	mux.HandleFunc(base+"stage", op(h.HandleStage))
+	mux.HandleFunc(base+"promote", op(h.HandlePromote))
+	mux.HandleFunc(base+"nodes", op(h.HandleNodes))
+	mux.HandleFunc(base+"revoke", op(h.HandleRevoke))
+	mux.HandleFunc(base+"audit", op(h.HandleAudit))
+	mux.HandleFunc(base+"topology", op(h.HandleTopology))
+	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
+}
+
+// SetPathPrefix sets the optional secret path prefix the controller routes mount under.
+// It normalizes to "" (no prefix) or "/<trimmed>" (single leading slash, no trailing
+// slash). Call it before RegisterAgentRoutes/RegisterOperatorRoutes.
+func (h *ControllerHandler) SetPathPrefix(prefix string) {
+	if p := strings.Trim(prefix, "/"); p != "" {
+		h.pathPrefix = "/" + p
+	} else {
+		h.pathPrefix = ""
+	}
+}
+
+// basePath is the route prefix for all controller endpoints: the optional secret path
+// prefix followed by the fixed "/api/v1/controller/".
+func (h *ControllerHandler) basePath() string {
+	return h.pathPrefix + "/api/v1/controller/"
+}
+
+// cors answers a browser CORS preflight (OPTIONS, which carries no auth) and stamps the
+// headers the operator panel needs onto every response. Allow-Origin is "*" because the
+// panel authenticates with a Bearer token (not cookies), so no credentialed-origin
+// pinning is required; a deployment fronting the controller with a proxy may tighten it.
+func (h *ControllerHandler) cors(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
 }
 
 // --- JSON request/response types ---

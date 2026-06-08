@@ -32,6 +32,10 @@ const (
 	envOperatorToken = "YAOG_CONTROLLER_OPERATOR_TOKEN"
 	// envAgentAddr overrides the default agent-port listen address.
 	envAgentAddr = "YAOG_CONTROLLER_AGENT_ADDR"
+	// envPathPrefix is an optional secret path segment the controller routes mount
+	// under (both ports), e.g. "s3cr3t" -> "/s3cr3t/api/v1/controller/...". Empty =
+	// the bare paths. Defense-in-depth obscurity, not a security boundary.
+	envPathPrefix = "YAOG_CONTROLLER_PATH_PREFIX"
 )
 
 func main() {
@@ -85,6 +89,7 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	}
 
 	ch := api.NewControllerHandler(store, controller.TenantID(tenant), controller.HashToken(opToken), api.DefaultOperatorName)
+	ch.SetPathPrefix(os.Getenv(envPathPrefix))
 	server.EnableController(ch)
 
 	// Serve both ports concurrently; the first error from either wins. A buffered
