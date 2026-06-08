@@ -4,6 +4,9 @@
 **/node_modules
 frontend/dist
 output
+data
+caddy-data
+caddy-config
 *.log
 .env
 *.pem

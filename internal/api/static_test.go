@@ -43,4 +43,7 @@ func TestSpaHandler(t *testing.T) {
 	if code, _ := get("/api/anything"); code != 404 {
 		t.Errorf("/api path: code=%d, want 404 (never the SPA)", code)
 	}
+	if code, _ := get("/s3cr3t/api/v1/controller/missing"); code != 404 {
+		t.Errorf("prefixed controller path: code=%d, want 404 (never the SPA)", code)
+	}
 }

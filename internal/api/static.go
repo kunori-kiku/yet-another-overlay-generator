@@ -21,7 +21,11 @@ func spaHandler(dir string) http.HandlerFunc {
 	fileServer := http.FileServer(http.Dir(dir))
 	index := filepath.Join(dir, "index.html")
 	return func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		// Never serve the SPA for an API path. Cover both the bare "/api/" surface and
+		// the controller namespace under an optional secret path prefix
+		// ("/<prefix>/api/v1/controller/..."), so an unregistered/typo'd API path 404s
+		// instead of falling through to index.html (which would mask routing mistakes).
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.Contains(r.URL.Path, "/api/v1/controller/") {
 			http.NotFound(w, r)
 			return
 		}

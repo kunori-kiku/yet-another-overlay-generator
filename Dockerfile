@@ -40,4 +40,10 @@ EXPOSE 8080 9090
 # /data is owned by uid 65532 above, so a fresh named volume inherits that ownership.
 VOLUME ["/data"]
 USER yaog
-ENTRYPOINT ["/usr/local/bin/yaog-server", "--addr", ":8080", "--agent-addr", ":9090"]
+# ENTRYPOINT is the bare binary; CMD holds the serve flags. This way
+# `docker compose run --rm controller create-operator ...` REPLACES the CMD, so argv is
+# `yaog-server create-operator ...` and the subcommand dispatch in main.go fires. (An
+# entrypoint with baked-in serve flags would instead APPEND the subcommand after them
+# and silently keep serving — the documented first-operator bootstrap would not run.)
+ENTRYPOINT ["/usr/local/bin/yaog-server"]
+CMD ["--addr", ":8080", "--agent-addr", ":9090"]

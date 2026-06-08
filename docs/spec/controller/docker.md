@@ -8,20 +8,40 @@ systemd and installs via the one-shot host bootstrap (see [bootstrap.md](bootstr
 ## Deploy
 
 ```
+# State persists to ./data next to the compose file; the container runs as uid 65532,
+# so create that folder with the right owner once:
+mkdir -p data && sudo chown 65532:65532 data
 docker compose up -d
 # create the first operator account (interactive password prompt):
 docker compose run --rm controller create-operator \
     --state-dir /data --tenant default --username admin
 ```
 
-`docker-compose.yml` mounts a named volume at `/data` (the FileStore — survives restarts),
-exposes both ports, and sets controller mode via `YAOG_TENANT_ID` + `YAOG_CONTROLLER_STATE_DIR`.
-Front it with a TLS-terminating reverse proxy in production (the commented `caddy` service):
-`POST /login` carries a plaintext password, so TLS at the proxy is required.
+`docker-compose.yml` **bind-mounts** the FileStore to `./data` next to the file (so backing
+up the controller is just snapshotting that folder), exposes both ports, and sets controller
+mode via `YAOG_TENANT_ID` + `YAOG_CONTROLLER_STATE_DIR`. Front it with a TLS-terminating reverse
+proxy in production (the commented `caddy` service): `POST /login` carries a plaintext password,
+so TLS at the proxy is required.
+
+The image's `ENTRYPOINT` is the bare binary and the serve flags are a `CMD`, so
+`docker compose run --rm controller create-operator …` correctly replaces the command and
+reaches the subcommand dispatch (an entrypoint with baked-in flags would silently keep serving).
 
 The image is self-contained because the server serves the built frontend from
 `YAOG_WEB_DIR` (`/app/web`, baked in) on the operator port — the `/api/*` routes take
 precedence, the SPA catch-all serves everything else with an index.html fallback.
+
+## Backups
+
+The whole controller state is `./data` — back it up by copying/snapshotting that directory.
+It holds the registry, topology, bundles, audit log, operator accounts (argon2id hashes), and
+the pinned operator credential (public key only). It does NOT hold any WireGuard private key
+(zero-knowledge custody) or any plaintext password/token.
+
+**Future direction (not yet built):** push encrypted snapshots of `./data` to an object-storage
+bucket (S3/R2/GCS), encrypted under the operator's off-host hardware/passkey (Bitwarden) key —
+so backups are confidential at rest and recoverable only with the same off-host key that anchors
+the keystone. Tracked as a follow-up.
 
 ## Where the image is published
 
