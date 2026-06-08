@@ -105,4 +105,13 @@ export const STRINGS = {
     '控制器部署：在下方的部署条进行编排、签名与推送。',
     'Controller deploy: stage, sign, and promote in the deploy bar below.',
   ] as const,
+
+  // ── Design canvas toolbar + Fleet node detail (P3) ──
+  toolbarLists: ['域与节点', 'Domains & Nodes'] as const,
+  fleetBack: ['← 返回机群', '← Back to fleet'] as const,
+  fleetNodeDetailTitle: ['节点详情', 'Node detail'] as const,
+  fleetNodeNotFound: [
+    '未找到该节点——请在「设置」中连接并刷新控制器。',
+    'Node not found — connect and refresh the controller in Settings.',
+  ] as const,
 } as const;

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
@@ -80,7 +81,14 @@ export function NodeRegistry() {
                 const drift = isDrifting(n.appliedGeneration, n.desiredGeneration);
                 return (
                   <tr key={n.nodeId} className="border-b border-gray-700/50">
-                    <td className="py-2 pr-3 font-mono text-gray-200 break-all">{n.nodeId}</td>
+                    <td className="py-2 pr-3 font-mono break-all">
+                      <Link
+                        to={`/fleet/nodes/${encodeURIComponent(n.nodeId)}`}
+                        className="text-blue-300 hover:underline"
+                      >
+                        {n.nodeId}
+                      </Link>
+                    </td>
                     <td className="py-2 pr-3">
                       <span className={`px-2 py-0.5 rounded text-xs border ${statusClass(n.status)}`}>
                         {n.status}

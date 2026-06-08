@@ -1,19 +1,35 @@
-import { AppLayout } from '../layout/AppLayout';
-import { LeftPanel } from '../layout/LeftPanel';
-import { RightPanel } from '../layout/RightPanel';
-import { BottomBar } from '../layout/BottomBar';
+import { useState } from 'react';
 import { TopologyCanvas } from '../canvas/TopologyCanvas';
+import { BottomBar } from '../layout/BottomBar';
+import { CanvasToolbar } from '../design/CanvasToolbar';
+import { ElementsLists } from '../design/ElementsLists';
+import { DesignAside } from '../design/DesignAside';
 
-// /design — the topology editing scene (left panel + canvas + right panel +
-// validation footer). Mounted under a route-scoped ReactFlowProvider (App.tsx),
-// so the canvas only initializes here. P3 restructures the panels into an aside.
+// /design — topology editing. Node manipulation is demoted from an always-on
+// docked panel to: a canvas toolbar (create entry points + Domains&Nodes list
+// drawer) and a selection-driven right aside (DesignAside, only when something is
+// selected). The canvas is full-width otherwise. BottomBar stays as the
+// validation footer. Mounted under a route-scoped ReactFlowProvider (App.tsx).
 export function DesignPage() {
+  const [listsOpen, setListsOpen] = useState(false);
+
   return (
-    <AppLayout
-      leftPanel={<LeftPanel />}
-      canvas={<TopologyCanvas />}
-      rightPanel={<RightPanel />}
-      bottomBar={<BottomBar />}
-    />
+    <div className="flex h-full flex-col bg-gray-900 text-gray-100">
+      <CanvasToolbar listsOpen={listsOpen} onToggleLists={() => setListsOpen((open) => !open)} />
+      <div className="flex flex-1 overflow-hidden">
+        {listsOpen && (
+          <aside className="w-72 shrink-0 overflow-y-auto border-r border-gray-700 bg-gray-800">
+            <ElementsLists />
+          </aside>
+        )}
+        <main className="relative flex-1 overflow-auto bg-gray-900">
+          <TopologyCanvas />
+        </main>
+        <DesignAside />
+      </div>
+      <footer className="h-40 shrink-0 overflow-y-auto border-t border-gray-700 bg-gray-800">
+        <BottomBar />
+      </footer>
+    </div>
   );
 }
