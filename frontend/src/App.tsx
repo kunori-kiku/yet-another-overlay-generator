@@ -2,6 +2,8 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { ReactFlowProvider } from '@xyflow/react';
 import { Shell } from './components/shell/Shell';
 import { ThemeProvider } from './theme/ThemeProvider';
+import { useControllerStore } from './stores/controllerStore';
+import { landingPathForMode } from './components/shell/nav';
 import { DesignPage } from './components/pages/DesignPage';
 import { OverviewPage } from './components/pages/OverviewPage';
 import { FleetPage } from './components/pages/FleetPage';
@@ -10,14 +12,20 @@ import { DeployPage } from './components/pages/DeployPage';
 import { SecurityPage } from './components/pages/SecurityPage';
 import { SettingsPage } from './components/pages/SettingsPage';
 
+// Mode-aware landing: controller → /overview, local → /design (P4).
+function IndexRedirect() {
+  const mode = useControllerStore((s) => s.mode);
+  return <Navigate to={landingPathForMode(mode)} replace />;
+}
+
 // Deep-linkable routes under the persistent app-shell. ReactFlowProvider is
-// scoped to /design so the canvas only initializes on that route. The index and
-// unknown paths redirect to /design (mode-aware landing arrives in P4).
+// scoped to /design so the canvas only initializes on that route. The index
+// redirects to the mode's landing; unknown paths fall back to /design.
 const router = createBrowserRouter([
   {
     element: <Shell />,
     children: [
-      { index: true, element: <Navigate to="/design" replace /> },
+      { index: true, element: <IndexRedirect /> },
       {
         path: 'design',
         element: (

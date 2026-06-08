@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useControllerStore } from '../../stores/controllerStore';
 import { useUiStore } from '../../stores/uiStore';
 import { txt, STRINGS } from '../../i18n';
 import { ChevronLeftIcon } from './icons';
-import { NAV_ITEMS } from './nav';
+import { navItemsForMode } from './nav';
 import { FOCUS_RING } from './styles';
 
 // Collapsible left sidebar. Default expanded; the fold button persists the
@@ -11,8 +12,10 @@ import { FOCUS_RING } from './styles';
 // the current route (NavLink sets aria-current="page" automatically).
 export function Sidebar() {
   const language = useTopologyStore((s) => s.language);
+  const mode = useControllerStore((s) => s.mode);
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const navItems = navItemsForMode(mode);
   const foldLabel = collapsed
     ? txt(language, ...STRINGS.sidebarExpand)
     : txt(language, ...STRINGS.sidebarCollapse);
@@ -36,7 +39,7 @@ export function Sidebar() {
         aria-label={txt(language, ...STRINGS.primaryNavLabel)}
         className="flex-1 space-y-1 overflow-y-auto p-2"
       >
-        {NAV_ITEMS.map(({ key, path, label, Icon }) => {
+        {navItems.map(({ key, path, label, Icon }) => {
           const itemLabel = txt(language, ...label);
           return (
             <NavLink

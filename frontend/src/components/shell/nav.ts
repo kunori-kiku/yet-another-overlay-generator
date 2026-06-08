@@ -14,22 +14,39 @@ import {
 // when sections become real routes; P4 adds per-mode visibility.
 export type NavKey = 'overview' | 'design' | 'fleet' | 'deploy' | 'security' | 'settings';
 
+export type PanelMode = 'local' | 'controller';
+
 export interface NavItem {
   key: NavKey;
   /** Route path this item links to (P2). */
   path: string;
   label: readonly [string, string];
   Icon: ComponentType<SVGProps<SVGSVGElement>>;
+  /** Whether this section appears in the sidebar in Local mode (P4). Overview and
+   *  Fleet are controller-only; Security stays visible because it also hosts the
+   *  local "Compile History" (so no local feature is stranded). Routes remain
+   *  reachable by deep link regardless. */
+  localVisible: boolean;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { key: 'overview', path: '/overview', label: STRINGS.navOverview, Icon: OverviewIcon },
-  { key: 'design', path: '/design', label: STRINGS.navDesign, Icon: DesignIcon },
-  { key: 'fleet', path: '/fleet', label: STRINGS.navFleet, Icon: FleetIcon },
-  { key: 'deploy', path: '/deploy', label: STRINGS.navDeploy, Icon: DeployIcon },
-  { key: 'security', path: '/security', label: STRINGS.navSecurity, Icon: SecurityIcon },
-  { key: 'settings', path: '/settings', label: STRINGS.navSettings, Icon: SettingsIcon },
+  { key: 'overview', path: '/overview', label: STRINGS.navOverview, Icon: OverviewIcon, localVisible: false },
+  { key: 'design', path: '/design', label: STRINGS.navDesign, Icon: DesignIcon, localVisible: true },
+  { key: 'fleet', path: '/fleet', label: STRINGS.navFleet, Icon: FleetIcon, localVisible: false },
+  { key: 'deploy', path: '/deploy', label: STRINGS.navDeploy, Icon: DeployIcon, localVisible: true },
+  { key: 'security', path: '/security', label: STRINGS.navSecurity, Icon: SecurityIcon, localVisible: true },
+  { key: 'settings', path: '/settings', label: STRINGS.navSettings, Icon: SettingsIcon, localVisible: true },
 ];
+
+/** Sidebar items visible for the current mode (controller shows all). */
+export function navItemsForMode(mode: PanelMode): readonly NavItem[] {
+  return mode === 'controller' ? NAV_ITEMS : NAV_ITEMS.filter((item) => item.localVisible);
+}
+
+/** The landing route for a mode: controller → Overview, local → Design. */
+export function landingPathForMode(mode: PanelMode): string {
+  return mode === 'controller' ? '/overview' : '/design';
+}
 
 /** Match a pathname to its nav item (exact or as a path prefix for nested routes). */
 export function activeNavItem(pathname: string): NavItem | undefined {

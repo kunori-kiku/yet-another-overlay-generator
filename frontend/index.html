@@ -21,6 +21,9 @@
             (theme === 'system' &&
               window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (dark) document.documentElement.classList.add('dark');
+          if (parsed && parsed.state && parsed.state.translucency === false) {
+            document.documentElement.classList.add('no-translucency');
+          }
         } catch (e) {
           /* ignore — ThemeProvider applies the class after mount */
         }

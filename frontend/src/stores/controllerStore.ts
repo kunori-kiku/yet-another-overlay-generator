@@ -700,8 +700,12 @@ export const useControllerStore = create<ControllerState>()(
     {
       name: 'controller-storage',
       // 仅持久化连接端点 + 已 pin 的 operator 签名凭据的非密标识（credential_id/alg/rpId/
-      // 公钥 PEM 都不是密钥材料——私钥从不离开 authenticator）。绝不持久化 operatorToken
-      // （密钥不落 localStorage），也不持久化易失的 fleet 视图 / loading / error / signing。
+      // 公钥 PEM 都不是密钥材料——私钥从不离开 authenticator）。绝不持久化 operatorToken /
+      // sessionToken / CSRF（密钥不落 localStorage），也不持久化 loading / error / signing。
+      //
+      // P4 新增的非密缓存（mode / nodes / settings / lastSyncedAt）仅供刷新后「即时上色」：
+      // 它们是 advisory / paint-only —— 绝不用于门控 Deploy 决策（门控读取刚 refresh() 的实时
+      // 状态）。nodes 只含 nodeId/状态/代号/时间戳等非密字段，不含任何密钥材料。
       partialize: (state) => ({
         baseURL: state.baseURL,
         pathPrefix: state.pathPrefix,
@@ -710,6 +714,10 @@ export const useControllerStore = create<ControllerState>()(
         operatorCredentialAlg: state.operatorCredentialAlg,
         operatorRpId: state.operatorRpId,
         operatorPublicKeyPEM: state.operatorPublicKeyPEM,
+        mode: state.mode,
+        nodes: state.nodes,
+        settings: state.settings,
+        lastSyncedAt: state.lastSyncedAt,
       }),
     }
   )

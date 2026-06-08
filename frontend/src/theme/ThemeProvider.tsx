@@ -13,13 +13,15 @@ function applyTheme(theme: ThemePref) {
 }
 
 /**
- * Owns the side effect of reflecting the theme preference onto <html>. The
- * initial class is set pre-paint by the inline script in index.html (anti-FOUC);
- * this keeps it in sync as the user toggles, and live-tracks the OS when the
- * preference is `system`. Renders children untouched.
+ * Owns appearance side effects on <html>: the `.dark` theme class and the
+ * `.no-translucency` vibrancy class. The initial classes are set pre-paint by
+ * the inline script in index.html (anti-FOUC); this keeps them in sync as the
+ * user toggles, and live-tracks the OS when the theme preference is `system`.
+ * Renders children untouched.
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const theme = useUiStore((state) => state.theme);
+  const translucency = useUiStore((state) => state.translucency);
 
   useEffect(() => {
     applyTheme(theme);
@@ -29,6 +31,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     media.addEventListener('change', onChange);
     return () => media.removeEventListener('change', onChange);
   }, [theme]);
+
+  useEffect(() => {
+    // `.no-translucency` is consumed by the P6 vibrancy CSS to swap blur/opacity
+    // for solid surfaces. Toggling it here makes the plumbing live now.
+    document.documentElement.classList.toggle('no-translucency', !translucency);
+  }, [translucency]);
 
   return <>{children}</>;
 }

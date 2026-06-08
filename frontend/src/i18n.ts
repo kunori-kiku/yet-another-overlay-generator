@@ -114,4 +114,13 @@ export const STRINGS = {
     '未找到该节点——请在「设置」中连接并刷新控制器。',
     'Node not found — connect and refresh the controller in Settings.',
   ] as const,
+
+  // ── Appearance settings + Connection submit (P4) ──
+  appearanceTheme: ['主题', 'Theme'] as const,
+  appearanceTranslucency: ['半透明', 'Translucency'] as const,
+  appearanceTranslucencyHint: [
+    '关闭后改用纯色背景（更朴素的极简风格）。',
+    'Off uses solid surfaces (a plainer minimalism).',
+  ] as const,
+  connectRefresh: ['连接 / 刷新', 'Connect / Refresh'] as const,
 } as const;
