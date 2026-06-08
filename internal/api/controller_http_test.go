@@ -668,3 +668,42 @@ func TestControllerHTTP_PathPrefix(t *testing.T) {
 		t.Errorf("bare agent /config status %d, want 404 (only the prefixed path is mounted)", st)
 	}
 }
+
+// TestControllerHTTP_AuditWireShape locks the /audit JSON contract: entries must
+// serialize in snake_case (the operator DTO) so the browser panel can read them. An
+// enroll appends an "enroll" entry; GET /audit must return it with snake_case keys and
+// verified=true. (Regression guard: controller.AuditEntry has no json tags, so without
+// the DTO it would serialize PascalCase and the panel's audit table would render blank.)
+func TestControllerHTTP_AuditWireShape(t *testing.T) {
+	env := newCtlTestEnv(t)
+	env.enrollNode(t, "node-1")
+
+	var resp struct {
+		Entries []struct {
+			Seq       int64  `json:"seq"`
+			Timestamp string `json:"timestamp"`
+			Actor     string `json:"actor"`
+			Action    string `json:"action"`
+			NodeID    string `json:"node_id"`
+		} `json:"entries"`
+		Verified bool `json:"verified"`
+	}
+	if st := doJSON(t, http.MethodGet, env.opURL("audit"), testOperatorToken, nil, &resp); st != http.StatusOK {
+		t.Fatalf("GET /audit status %d, want 200", st)
+	}
+	if !resp.Verified {
+		t.Errorf("audit verified = false, want true")
+	}
+	found := false
+	for _, e := range resp.Entries {
+		if e.Action == "enroll" && e.NodeID == "node-1" {
+			found = true
+			if e.Timestamp == "" || e.Actor == "" {
+				t.Errorf("enroll entry missing timestamp/actor (snake_case mapping broken): %+v", e)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no snake_case enroll audit entry for node-1 in %+v", resp.Entries)
+	}
+}

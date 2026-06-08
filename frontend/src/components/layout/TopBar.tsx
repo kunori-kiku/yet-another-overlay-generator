@@ -61,12 +61,28 @@ export function TopBar() {
           </button>
         </div>
         <button
-          onClick={() => setViewMode(viewMode === 'topology' ? 'audit' : 'topology')}
-          className="px-3 py-1.5 text-sm bg-indigo-700 hover:bg-indigo-600 rounded text-white font-medium transition-colors border border-indigo-500 mr-4"
+          onClick={() => setViewMode(viewMode === 'audit' ? 'topology' : 'audit')}
+          className={`px-3 py-1.5 text-sm rounded text-white font-medium transition-colors border ${
+            viewMode === 'audit'
+              ? 'bg-indigo-600 border-indigo-400'
+              : 'bg-indigo-700 hover:bg-indigo-600 border-indigo-500'
+          }`}
         >
-          {viewMode === 'topology'
-            ? txt(language, '🛡️ 审计与历史', '🛡️ Audit & History')
-            : txt(language, '✏️ 编辑拓扑', '✏️ Edit Topology')}
+          {viewMode === 'audit'
+            ? txt(language, '✏️ 编辑拓扑', '✏️ Edit Topology')
+            : txt(language, '🛡️ 审计与历史', '🛡️ Audit & History')}
+        </button>
+        <button
+          onClick={() => setViewMode(viewMode === 'deploy' ? 'topology' : 'deploy')}
+          className={`px-3 py-1.5 text-sm rounded text-white font-medium transition-colors border mr-4 ${
+            viewMode === 'deploy'
+              ? 'bg-teal-600 border-teal-400'
+              : 'bg-teal-700 hover:bg-teal-600 border-teal-500'
+          }`}
+        >
+          {viewMode === 'deploy'
+            ? txt(language, '✏️ 编辑拓扑', '✏️ Edit Topology')
+            : txt(language, '🚀 部署', '🚀 Deploy')}
         </button>
         <input
           type="file"

@@ -33,8 +33,8 @@ interface TopologyState {
   error: string | null;
 
   // 界面状态
-  viewMode: 'topology' | 'audit';
-  setViewMode: (mode: 'topology' | 'audit') => void;
+  viewMode: 'topology' | 'audit' | 'deploy';
+  setViewMode: (mode: 'topology' | 'audit' | 'deploy') => void;
 
   // 画布 UI 偏好：是否在节点卡片上展开已编译接口详情（纯展示）。
   // 接口是编译产物而非绘图原语 —— 连线手势始终是节点对节点，端口由后端分配；
