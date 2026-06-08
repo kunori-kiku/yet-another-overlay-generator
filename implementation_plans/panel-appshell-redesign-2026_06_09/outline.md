@@ -115,7 +115,7 @@ Each links its plan file. Goal / Proposed solution / Hazards / Verification / St
 
 | Plan | Milestone | Status |
 |---|---|---|
-| plan-1 | Shell scaffold + theme | pending |
+| plan-1 | Shell scaffold + theme | done — d1dadd6 (PR #53); review: 0 confirmed blocker/major, a11y+persistence fixups applied |
 | plan-2 | Sections → routes | pending |
 | plan-3 | Right aside + toolbar | pending |
 | plan-4 | Persisted mode + caches + appearance | pending |
