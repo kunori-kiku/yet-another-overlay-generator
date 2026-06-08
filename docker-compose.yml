@@ -1,0 +1,54 @@
+# YAOG controller — one-command deploy.
+#
+# State persists to ./data NEXT TO this file (a bind mount), so backing up the
+# controller is just copying that folder. The container runs as uid 65532, so create
+# the folder with that owner ONCE before the first `up`:
+#
+#   mkdir -p data && sudo chown 65532:65532 data
+#   docker compose up -d
+#
+# Then create the first operator account (interactive password prompt):
+#
+#   docker compose run --rm controller create-operator \
+#       --state-dir /data --tenant "${YAOG_TENANT_ID:-default}" --username admin
+#
+# The panel + operator API are on :8080, the agent API on :9090. Front it with a
+# TLS-terminating reverse proxy in production (see the commented `caddy` service /
+# docs/spec/controller/docker.md) — POST /login carries a plaintext password.
+
+services:
+  controller:
+    image: ghcr.io/kunori-kiku/yaog-controller:latest
+    # To build locally instead of pulling, comment `image:` and uncomment:
+    # build: .
+    restart: unless-stopped
+    environment:
+      # Turning on controller mode requires BOTH a state dir and a tenant id.
+      YAOG_TENANT_ID: "${YAOG_TENANT_ID:-default}"
+      YAOG_CONTROLLER_STATE_DIR: /data
+      YAOG_WEB_DIR: /app/web
+      # Optional break-glass operator token (recovery). Prefer `create-operator`.
+      # YAOG_CONTROLLER_OPERATOR_TOKEN: "${YAOG_CONTROLLER_OPERATOR_TOKEN:-}"
+      # Optional secret path prefix (defense-in-depth obscurity).
+      # YAOG_CONTROLLER_PATH_PREFIX: "${YAOG_CONTROLLER_PATH_PREFIX:-}"
+    ports:
+      - "8080:8080" # operator / panel
+      - "9090:9090" # agent
+    volumes:
+      # Bind-mount the FileStore state to ./data alongside this file (easy to back up /
+      # snapshot). See the header note for the one-time `chown 65532:65532 data`.
+      - ./data:/data
+
+  # Optional TLS-terminating reverse proxy. Uncomment, add a Caddyfile next to this
+  # file, and point your domain at it. Caddy fetches/renews Let's Encrypt certs.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   depends_on: [controller]
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - ./caddy-data:/data
+  #     - ./caddy-config:/config

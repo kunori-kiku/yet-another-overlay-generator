@@ -1,5 +1,9 @@
 reference_materials/
 CLAUDE.md
+# docker-compose bind-mounted controller state (./data) + optional caddy dirs
+/data/
+/caddy-data/
+/caddy-config/
 .dev-backend.log
 .dev-backend.pid
 .dev-frontend.log
