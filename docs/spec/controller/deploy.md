@@ -191,10 +191,60 @@ re-converge without it). The honest bound is that a token leaked **before** revo
 the revoke lands ([controller-api.md](controller-api.md) §the honest trade-off); immediate revocation is
 how that window is closed.
 
+## Fleet-wide key rotation — wake, rotate, re-register, then ONE operator Deploy
+
+Rotating every node's WireGuard key is **operator-driven** and converges through the **same**
+compile→stage→promote deploy model — never auto-deployed. It is a **four-step sequence**, and the
+operator must wait for one step to finish before triggering the next:
+
+1. **Operator: Roll keys.** `POST /rekey-all` ([controller-api.md](controller-api.md), operator port)
+   flags every `NodeApproved` node with `RekeyRequested=true` (pending/revoked nodes are skipped, so the
+   returned `{requested}` is the approved count) **and then `Store.BumpGeneration`s the tenant generation**
+   to **WAKE** the fleet. The bump is a **WAKE, not a deploy**: it advances the generation counter (so any
+   parked daemon agent's `WaitForGeneration` long-poll fires — that primitive wakes **only** on a
+   generation advance) **without changing any bundle** — `GetCurrentBundle` keeps returning the last
+   promoted bundle for every node. Without this bump a flagged agent would never wake to see the signal
+   (the deadlock this design fixes). One `rekey-request` audit entry (actor `operator:*`, empty `node_id`)
+   is appended.
+
+2. **Each agent: rotate + re-register, SKIP apply.** A woken agent runs one
+   `agent.RunControllerCycle` ([agent.md](agent.md)): it `Fetch`es `/config`, sees `rekey_requested=true`,
+   `RegenerateKey`s its **local** private key, and `POST /rekey`s the **new PUBLIC key** (zero-knowledge —
+   the controller never sees a private key), which **clears** the node's `RekeyRequested` flag and appends a
+   per-node `rekey` audit entry (actor `agent:<id>`, `node_id=<id>`). The agent **does NOT apply** the woken
+   bundle: that bundle was compiled with peers' **OLD** public keys, so applying it would be a regression.
+   It instead **advances its resume watermark PAST the wake generation** so it will never re-fetch+re-apply
+   that stale bundle; the next generation it applies will be **strictly greater**. (The bumped generation
+   reports the OLD bundle's smaller generation on `/config` because the bundle was not re-compiled, so the
+   agent resumes from the **polled wake generation**, not the fetched bundle generation — see
+   [agent.md](agent.md) §watermark advance.)
+
+3. **Operator: wait for the badges to clear.** The operator panel renders a "rotating keys" badge per node
+   from `nodeJSON.rekey_requested`. The operator **waits until every badge has cleared** (every node has
+   re-registered its new public key) before deploying. Deploying mid-rotation would recompile the topology
+   while some nodes still carry old and others carry new public keys — a **mixed-key** render that would not
+   converge. The panel's Deploy control is **disabled while any node still shows the badge** to enforce this.
+
+4. **Operator: Deploy ONCE.** With all nodes re-registered, a single normal **compile+stage+promote**
+   recompiles the fleet from the **new** public keys now in the registry and promotes a strictly-greater
+   generation. Every agent applies it on its next cycle and the fleet converges on the rotated keys.
+
+**Honest cost — a brief per-link flap.** The post-rotation Deploy is a **rolling** apply: as each agent
+picks up the new generation it re-handshakes its tunnels with the new keys, so a link flaps briefly until
+**both** of its endpoints have applied. Babel re-converges around each flap, so connectivity is restored
+within a re-convergence interval per link rather than a fleet-wide outage. This brief, rolling per-link flap
+is the **accepted cost** of a zero-knowledge rotation that never exposes a private key and never trusts the
+controller with one.
+
 ## Summary
 
 - A deploy is **compile+stage** (mechanical, reversible) then operator-gated **promote** (commits a new
   generation, wakes agents).
+- **Fleet-wide key rotation** is `POST /rekey-all` (flag approved nodes **+** `BumpGeneration` to WAKE the
+  fleet, a generation advance with NO bundle change) → each agent **rotates + re-registers + skips apply**
+  (advancing its watermark past the wake) → the operator **waits for every badge to clear** → **one** normal
+  Deploy recompiles from the new public keys. A brief, rolling per-link flap during that Deploy is the
+  accepted cost.
 - The render-what's-ready policy renders **only** approved nodes with a public key, **drops** edges to
   unenrolled peers, and **fills them in** on re-deploy — incremental fleet bring-up without perturbing
   live nodes.

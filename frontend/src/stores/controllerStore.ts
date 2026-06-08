@@ -14,6 +14,7 @@ import {
   stage,
   promote,
   revoke,
+  rekeyAll,
 } from '../api/controllerClient';
 import { useTopologyStore } from './topologyStore';
 
@@ -45,6 +46,7 @@ interface ControllerState {
   mintToken: (nodeId: string, ttl: number) => Promise<string>;
   deploy: () => Promise<void>;
   revoke: (nodeId: string) => Promise<void>;
+  rollKeys: () => Promise<void>;
 }
 
 // 从连接字段切出 controllerClient 需要的 ControllerConfig（不含 agentBaseURL）。
@@ -54,6 +56,15 @@ function configOf(state: ControllerState): ControllerConfig {
     pathPrefix: state.pathPrefix,
     operatorToken: state.operatorToken,
   };
+}
+
+// 派生选择器：fleet 中是否仍有节点处于 rekey_requested（已请求轮换、尚未重新注册新公钥）。
+// DeployBar 用它在轮换收口前禁用 Deploy——否则中途 Deploy 会用「旧+新」混合公钥重编译，
+// 导致 fleet 收敛错乱。返回仍在轮换中的节点数，便于回显「N 个节点仍在轮换密钥」。
+export function selectRekeyingCount(state: ControllerState): number {
+  // Only APPROVED nodes can re-register (a revoked node never clears its flag), so
+  // exclude non-approved to avoid permanently gating Deploy on a stale flag.
+  return state.nodes.filter((n) => n.rekeyRequested && n.status === 'approved').length;
 }
 
 // step-up SEAM（Plan-5）：在 stage/promote 这类敏感的 promote-to-fleet 操作之前要求一次
@@ -149,6 +160,24 @@ export const useControllerStore = create<ControllerState>()(
         } catch (err) {
           set({
             error: err instanceof Error ? err.message : 'Revoke failed',
+            loading: false,
+          });
+        }
+      },
+
+      // 为整个 fleet 请求 WG 密钥轮换（plan-4.6 ROUTINE tier）：把每个已审批节点标记为
+      // rekey_requested，随后刷新视图（注册表里会显示 rekeying 徽标）。这只是 zero-knowledge
+      // 轮换流程的第一步——各 agent 会自行重生密钥并经 /rekey 注册新公钥；待节点重新注册后，
+      // operator 需再 Deploy 一次，新一代配置携带全员新公钥使 fleet 收敛。
+      rollKeys: async () => {
+        set({ loading: true, error: null });
+        try {
+          await rekeyAll(configOf(get()));
+          set({ loading: false });
+          await get().refresh();
+        } catch (err) {
+          set({
+            error: err instanceof Error ? err.message : 'Roll keys failed',
             loading: false,
           });
         }

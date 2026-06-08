@@ -295,49 +295,25 @@ func runControllerMode(o controllerModeOpts) int {
 	// generation, so the cursor is a flag here; a daemon advances it per cycle.)
 	lastAppliedGen := o.after
 
-	// cycle runs ONE poll->apply->report iteration from the current watermark. It
-	// returns the generation to resume from (the applied generation on success, or the
-	// unchanged watermark on a timed-out long-poll) and whether a new generation was
-	// applied. On error it returns the unchanged watermark (keep-last-good: the running
-	// overlay is untouched, so the caller never advances past a failed apply).
+	// cycle runs ONE poll->apply->report iteration from the current watermark via the
+	// testable agent.RunControllerCycle (the deterministic unit the daemon loops over).
+	// It returns the generation to resume from (the applied/fetched generation on
+	// success, the polled wake generation on a rekey wake (so the stale pre-rekey bundle is
+	// never re-applied, or the unchanged watermark on a timed-out long-poll) and whether
+	// a new generation was applied. On error it returns the unchanged watermark
+	// (keep-last-good: the running overlay is untouched, so the caller never advances
+	// past a failed apply).
 	cycle := func() (resumeGen int64, applied bool, err error) {
-		// The polled generation is only a change SIGNAL here; the resume cursor comes from
-		// the generation actually fetched (LastFetchedGeneration), so the polled value is
-		// intentionally discarded once we know a change occurred (see below).
-		_, changed, err := client.Poll(lastAppliedGen)
-		if err != nil {
-			return lastAppliedGen, false, fmt.Errorf("poll: %w", err)
-		}
-		if !changed {
-			return lastAppliedGen, false, nil // long-poll timed out; nothing new
-		}
-		// Record the prior watermark so a FAILED apply reports it unchanged (never
-		// falsely advancing); a successful apply reports the generation actually fetched.
-		// agent.Run fetches the bundle (setting the fetched generation) and fires the
-		// auto-Report itself, since this client is a Reporter.
-		client.SetPriorGeneration(lastAppliedGen)
-		res, runErr := agent.Run(&agent.Config{
+		return agent.RunControllerCycle(client, agent.CycleConfig{
 			NodeID:       o.nodeID,
-			Source:       client,
+			After:        lastAppliedGen,
 			PinnedPubPEM: pinned,
 			StateDir:     o.stateDir,
 			StagingDir:   o.stagingDir,
+			KeyPath:      agent.DefaultKeyPath,
 			Stdout:       os.Stdout,
 			Stderr:       os.Stderr,
 		})
-		if runErr != nil {
-			return lastAppliedGen, false, fmt.Errorf("run: %w", runErr) // keep-last-good
-		}
-		printApplied(res)
-		// Resume from the generation actually FETCHED and applied, not the one the poll
-		// observed: a promote landing between Poll returning gen N and Fetch returning gen
-		// N+1 means the bundle carried N+1, and resuming from N would re-fetch+re-apply it
-		// next cycle. Advancing the watermark to LastFetchedGeneration() keeps it from
-		// lagging under that poll->fetch race. (It coincides with the polled generation when
-		// no promote raced in between.)
-		appliedGen := client.LastFetchedGeneration()
-		fmt.Fprintf(os.Stderr, "agent: applied controller generation %d\n", appliedGen)
-		return appliedGen, true, nil
 	}
 
 	if !o.daemon {
@@ -347,7 +323,9 @@ func runControllerMode(o controllerModeOpts) int {
 			fmt.Fprintf(os.Stderr, "agent: %v\n", err)
 			return 1
 		}
-		if !applied {
+		if !applied && resumeGen == lastAppliedGen {
+			// A timed-out long-poll (no advance). A rekey wake advances resumeGen and is
+			// logged by RunControllerCycle, so do not print "nothing to do" over a rotation.
 			fmt.Fprintf(os.Stderr, "agent: no new generation (still at %d); nothing to do\n", resumeGen)
 		}
 		return 0
@@ -357,7 +335,9 @@ func runControllerMode(o controllerModeOpts) int {
 	// returns within a round-trip of a promote (so this is push-like without a new
 	// transport); a timed-out poll simply re-polls with no busy-wait. On a transport or
 	// apply error we keep last-good and retry after a short backoff — never tearing down
-	// the running overlay.
+	// the running overlay. On a rekey wake the watermark advances to the polled wake
+	// generation (so the stale pre-rekey bundle is never re-applied); the next applied
+	// generation is the operator's post-rekey Deploy.
 	const errBackoff = 5 * time.Second
 	fmt.Fprintf(os.Stderr, "agent: controller daemon started (node %s, resume @%d)\n", o.nodeID, lastAppliedGen)
 	for {
@@ -367,7 +347,7 @@ func runControllerMode(o controllerModeOpts) int {
 			time.Sleep(errBackoff)
 			continue
 		}
-		lastAppliedGen = resumeGen // advance on success; unchanged on a timed-out poll
+		lastAppliedGen = resumeGen // advance on success or rekey wake; unchanged on a timed-out poll
 	}
 }
 

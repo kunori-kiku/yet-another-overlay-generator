@@ -282,6 +282,22 @@ func (s *MemStore) CurrentGeneration(ctx context.Context, t TenantID) (int64, er
 	return s.tenant(t).generation, nil
 }
 
+// BumpGeneration increments the tenant's generation and broadcasts to wake any
+// WaitForGeneration waiters, WITHOUT touching any bundle (current/staged are left
+// untouched, so GetCurrentBundle keeps returning the last promoted bundle). It uses
+// the same ts.generation++ + s.cond.Broadcast() pattern as PromoteStaged, so a parked
+// agent's long-poll fires; the agent then Fetches /config and acts on the (unchanged-
+// bundle) signal rather than re-applying. Returns the new generation.
+func (s *MemStore) BumpGeneration(ctx context.Context, t TenantID) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	ts.generation++
+	// Wake all WaitForGeneration waiters across tenants; each rechecks its predicate.
+	s.cond.Broadcast()
+	return ts.generation, nil
+}
+
 // WaitForGeneration blocks until the tenant's generation is strictly greater than
 // afterGen (returning it), or until ctx is done (returning 0, ctx.Err()). It uses
 // the shared sync.Cond plus a watcher goroutine that broadcasts on ctx.Done() so a

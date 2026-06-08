@@ -72,6 +72,98 @@ func TestEnsureKeyRejectsCorruptKey(t *testing.T) {
 	}
 }
 
+// TestRegenerateKeyRotates verifies RegenerateKey always rotates: it overwrites an
+// existing key with a fresh one (new public key differs), the stored private key matches
+// the returned public key, and the file is written mode 0600. This is the explicit
+// rotation path driven by a controller-requested fleet rekey (unlike EnsureKey, which is
+// idempotent and never rotates).
+func TestRegenerateKeyRotates(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "wg", "agent.key")
+
+	// Seed an initial key via EnsureKey (created on disk, mode 0600).
+	pub1, created, err := EnsureKey(keyPath)
+	if err != nil {
+		t.Fatalf("EnsureKey seed: %v", err)
+	}
+	if !created {
+		t.Fatalf("EnsureKey seed: expected created=true")
+	}
+
+	// RegenerateKey must produce a DIFFERENT public key (it rotated the identity).
+	pub2, err := RegenerateKey(keyPath)
+	if err != nil {
+		t.Fatalf("RegenerateKey: %v", err)
+	}
+	if pub2 == "" {
+		t.Fatalf("RegenerateKey: empty public key")
+	}
+	if pub2 == pub1 {
+		t.Fatalf("RegenerateKey did not rotate the key: pub %s unchanged", pub2)
+	}
+
+	// The on-disk key must be the NEW one (overwritten), mode 0600, and its public half
+	// must match what RegenerateKey returned.
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat key: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("key mode = %o, want 0600", perm)
+	}
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	priv, err := wgtypes.ParseKey(trimNL(raw))
+	if err != nil {
+		t.Fatalf("stored key not parseable: %v", err)
+	}
+	if priv.PublicKey().String() != pub2 {
+		t.Fatalf("returned pubkey does not match stored private key after regenerate")
+	}
+
+	// A second RegenerateKey rotates again (each call is a fresh key).
+	pub3, err := RegenerateKey(keyPath)
+	if err != nil {
+		t.Fatalf("second RegenerateKey: %v", err)
+	}
+	if pub3 == pub2 {
+		t.Fatalf("second RegenerateKey did not rotate: pub %s unchanged", pub3)
+	}
+}
+
+// TestRegenerateKeyCreatesWhenAbsent confirms RegenerateKey also serves as a create when
+// no key exists yet (it does not require a prior key to rotate from).
+func TestRegenerateKeyCreatesWhenAbsent(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "nested", "agent.key")
+	pub, err := RegenerateKey(keyPath)
+	if err != nil {
+		t.Fatalf("RegenerateKey on absent path: %v", err)
+	}
+	if pub == "" {
+		t.Fatalf("RegenerateKey on absent path: empty public key")
+	}
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	priv, err := wgtypes.ParseKey(trimNL(raw))
+	if err != nil {
+		t.Fatalf("stored key not parseable: %v", err)
+	}
+	if priv.PublicKey().String() != pub {
+		t.Fatalf("returned pubkey does not match stored private key")
+	}
+}
+
+// TestRegenerateKeyRejectsEmptyPath confirms RegenerateKey guards the empty path the same
+// way EnsureKey does.
+func TestRegenerateKeyRejectsEmptyPath(t *testing.T) {
+	if _, err := RegenerateKey("   "); err == nil {
+		t.Fatalf("expected error on empty key path, got nil")
+	}
+}
+
 func trimNL(b []byte) string {
 	s := string(b)
 	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {

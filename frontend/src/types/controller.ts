@@ -19,6 +19,9 @@ export interface ControllerNode {
   lastHealth: string;
   lastSeen: string;
   enrolledAt: string;
+  // plan-4.6 fleet-wide key rotation：operator 已为该节点请求轮换 WG 密钥，等待 agent
+  // 重新生成本地私钥并经 POST /rekey 注册新公钥（注册成功后由后端清零此标志）。
+  rekeyRequested: boolean;
 }
 
 // 审计链中的一条记录。镜像 controller.AuditEntry 的 operator-facing 字段。

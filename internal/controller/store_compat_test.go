@@ -131,6 +131,62 @@ func TestStoreNodeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStoreRekeyRequestedRoundTrip pins that the Node.RekeyRequested flag persists
+// across an UpsertNode/GetNode round-trip on both Store impls (the FileStore path is
+// the one that must serialize/deserialize it to disk). It also confirms the flag is
+// independently flippable via a whole-Node upsert (set true, then clear back to
+// false) without disturbing the other fields — the shape the /rekey-all and /rekey
+// handlers rely on.
+func TestStoreRekeyRequestedRoundTrip(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			want := Node{
+				NodeID:      "alpha",
+				WGPublicKey: "pubkey-alpha",
+				Status:      NodeApproved,
+				// RekeyRequested defaults false; flip it on so the round-trip is meaningful.
+				RekeyRequested: true,
+			}
+			if err := s.UpsertNode(ctx, tenant, want); err != nil {
+				t.Fatalf("UpsertNode(rekey true): %v", err)
+			}
+			got, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode(alpha): %v", err)
+			}
+			if !got.RekeyRequested {
+				t.Fatalf("RekeyRequested did not round-trip: got %+v", got)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Node round-trip mismatch:\n got = %+v\nwant = %+v", got, want)
+			}
+
+			// Clearing the flag via a whole-Node upsert (the /rekey shape) preserves the
+			// other fields and drops the flag back to false.
+			cleared := got
+			cleared.RekeyRequested = false
+			cleared.WGPublicKey = "pubkey-alpha-rotated"
+			if err := s.UpsertNode(ctx, tenant, cleared); err != nil {
+				t.Fatalf("UpsertNode(rekey clear): %v", err)
+			}
+			again, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode(alpha) after clear: %v", err)
+			}
+			if again.RekeyRequested {
+				t.Fatalf("RekeyRequested still set after clear: %+v", again)
+			}
+			if again.WGPublicKey != "pubkey-alpha-rotated" {
+				t.Fatalf("WGPublicKey = %q, want pubkey-alpha-rotated", again.WGPublicKey)
+			}
+		})
+	}
+}
+
 // TestStoreTopologyVersioning covers PutTopology version increment and the
 // GetTopology round-trip (including ErrNotFound before any put).
 func TestStoreTopologyVersioning(t *testing.T) {
@@ -531,6 +587,106 @@ func TestStoreWaitForGeneration(t *testing.T) {
 					}
 				case <-time.After(5 * time.Second):
 					t.Fatalf("WaitForGeneration did not return after ctx cancel")
+				}
+			})
+		})
+	}
+}
+
+// TestStoreBumpGeneration covers the WAKE primitive across both impls: BumpGeneration
+// advances CurrentGeneration by one WITHOUT touching any bundle, and a concurrent
+// WaitForGeneration(prev) blocked at the prior generation returns the new generation.
+// This is the BLOCKER-1 fix — a rekey-all bumps the generation so parked daemon agents
+// (waiting on WaitForGeneration, which only fires on an advance) wake to observe the
+// rekey signal — so the test asserts both the counter advance and that the bumped (no-
+// bundle-change) generation still wakes a waiter.
+func TestStoreBumpGeneration(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			t.Run("advances-current-generation", func(t *testing.T) {
+				ctx := context.Background()
+				s := impl.factory(t)
+
+				if gen, err := s.CurrentGeneration(ctx, tenant); err != nil || gen != 0 {
+					t.Fatalf("CurrentGeneration(initial) = (%d, %v), want (0, nil)", gen, err)
+				}
+
+				// A bump with a promoted bundle present must NOT change the bundle: stage +
+				// promote one generation first, then bump and confirm the bundle is intact.
+				if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+					t.Fatalf("UpsertNode: %v", err)
+				}
+				if err := s.StageBundle(ctx, tenant, SignedBundle{
+					NodeID: "alpha", Generation: 1, IsStaged: true,
+					Files: map[string][]byte{"install.sh": []byte("# promoted v1\n")},
+				}); err != nil {
+					t.Fatalf("StageBundle: %v", err)
+				}
+				if gen, err := s.PromoteStaged(ctx, tenant); err != nil || gen != 1 {
+					t.Fatalf("PromoteStaged = (%d, %v), want (1, nil)", gen, err)
+				}
+
+				// Bump advances the counter to 2 without staging/promoting anything.
+				newGen, err := s.BumpGeneration(ctx, tenant)
+				if err != nil {
+					t.Fatalf("BumpGeneration: %v", err)
+				}
+				if newGen != 2 {
+					t.Fatalf("BumpGeneration returned %d, want 2", newGen)
+				}
+				if cur, err := s.CurrentGeneration(ctx, tenant); err != nil || cur != 2 {
+					t.Fatalf("CurrentGeneration after bump = (%d, %v), want (2, nil)", cur, err)
+				}
+
+				// The current bundle is UNCHANGED: GetCurrentBundle still returns the gen-1
+				// bundle (a bump is a WAKE, not a deploy — it must not flip a new bundle live).
+				b, err := s.GetCurrentBundle(ctx, tenant, "alpha")
+				if err != nil {
+					t.Fatalf("GetCurrentBundle after bump: %v", err)
+				}
+				if b.Generation != 1 || string(b.Files["install.sh"]) != "# promoted v1\n" {
+					t.Fatalf("bump changed the current bundle: got gen %d content %q, want gen 1 unchanged", b.Generation, b.Files["install.sh"])
+				}
+
+				// A second bump advances again.
+				if gen, err := s.BumpGeneration(ctx, tenant); err != nil || gen != 3 {
+					t.Fatalf("second BumpGeneration = (%d, %v), want (3, nil)", gen, err)
+				}
+			})
+
+			t.Run("wakes-waiter", func(t *testing.T) {
+				ctx := context.Background()
+				s := impl.factory(t)
+
+				type result struct {
+					gen int64
+					err error
+				}
+				done := make(chan result, 1)
+				go func() {
+					gen, err := s.WaitForGeneration(ctx, tenant, 0)
+					done <- result{gen, err}
+				}()
+
+				// Give the waiter time to block, then BUMP (not promote) from this goroutine.
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					if _, err := s.BumpGeneration(ctx, tenant); err != nil {
+						t.Errorf("BumpGeneration: %v", err)
+					}
+				}()
+
+				select {
+				case r := <-done:
+					if r.err != nil {
+						t.Fatalf("WaitForGeneration: %v", r.err)
+					}
+					if r.gen != 1 {
+						t.Fatalf("WaitForGeneration gen = %d, want 1 (the bumped generation)", r.gen)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("WaitForGeneration did not return after BumpGeneration (BLOCKER-1: a bump must wake a parked waiter)")
 				}
 			})
 		})
