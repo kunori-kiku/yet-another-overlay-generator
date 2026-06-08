@@ -254,9 +254,10 @@ echo ">> downloading agent: $URL"
 install -d -m 0755 /usr/local/bin
 tmp_bin="$(mktemp)"
 trap 'rm -f "$tmp_bin"' EXIT
-# Pin the allowed protocols (http/https only) so a redirect cannot pivot to file://,
-# scp://, etc. --proto has been in curl since 7.20; no scheme-widening fallback.
-curl -fL --retry 3 --proto '=https' --proto '=http' "$URL" -o "$tmp_bin"
+# Pin the allowed protocols to https/http ONLY (one comma list — a SECOND '--proto
+# =...' would REPLACE the allow-list rather than extend it, leaving http-only), so a
+# redirect cannot pivot to file://, scp://, etc. --proto has been in curl since 7.20.
+curl -fL --retry 3 --proto '=https,http' "$URL" -o "$tmp_bin"
 install -m 0755 "$tmp_bin" /usr/local/bin/yaog-agent
 
 # Build the keystone (off-host operator credential) flags when the controller baked a

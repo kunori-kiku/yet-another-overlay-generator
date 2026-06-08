@@ -127,7 +127,7 @@ func TestRenderBootstrapScript_SafeShellForms(t *testing.T) {
 		`shift; [ $# -gt 0 ] && shift ;;`, // safe shift
 		`ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}"`, // quoted
 		`trap 'rm -f "$tmp_bin"' EXIT`,            // temp cleanup
-		`--proto '=https' --proto '=http' "$URL"`, // proto pin (single curl)
+		`--proto '=https,http' "$URL"`, // proto pin (single comma list — both schemes)
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered script missing %q", want)
