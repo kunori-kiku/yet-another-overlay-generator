@@ -109,7 +109,7 @@ The panel + operator API is at **`http://localhost:8080`** (the node-facing agen
 
 By default both ports bind to **loopback only** (`127.0.0.1`) — the login form carries a plaintext password, so nothing is exposed on other interfaces out of the box. Reach the panel from the same host, or tunnel it: `ssh -L 8080:127.0.0.1:8080 <host>`.
 
-> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony.
+> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. ⚠️ Use the hostname **`localhost`**, not the IP `http://127.0.0.1` — WebAuthn forbids IP-address domains, so passkey enrollment at `127.0.0.1` fails with *"invalid domain."* For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony.
 
 ### 4. Deploy to a node (agent pull)
 
