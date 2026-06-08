@@ -1,24 +1,24 @@
 # STATUS
-<!-- regenerated: 2026-06-08 (controller-panel 2.0 — keystone-complete checkpoint) -->
-<!-- by: execution session (post plan-5.1d merge) -->
+<!-- regenerated: 2026-06-09 (panel-appshell-redesign drafted, awaiting approval) -->
+<!-- by: draft-implementation-plan -->
 
 ## Active work
 
-- **Subject:** controller-panel-2026_06_08 (2.0 program) — **CHECKPOINT: off-host signing keystone
-  complete, paused at a clean boundary by user request.**
-- **Branch:** main (all controller work merged; no active feature branch).
-- **Where it stands:** Phase 0 → Phase 1 (custody + agent) → Phase 2 (single-tenant controller +
-  panel + key rotation) → **Plan 5.1 keystone** are ALL merged to main. Design:
-  `docs/design/controller-panel-design-spike-2026_06_07.md`; plans in
-  `implementation_plans/controller-panel-2026_06_08/`.
-- **Last shipped:** **v2.0.0-preview.2** (2026-06-08, `c658170`) — the off-host signing keystone.
-  Plan 5.1, PRs #35/#36/#37: `internal/trustlist` (WebAuthn ES256/EdDSA + Ed25519 verifier,
-  fail-closed); controller stages-unsigned + `PromoteStaged` refuses (422) without a valid off-host
-  signature + agent `VerifyMembership`; browser WebAuthn enroll/sign ceremony. install.sh-bypass
-  closed via "sign the bundle per Deploy" (`Member.BundleSHA256 = hex(sha256(checksums.sha256))`).
-  Net: a breached controller — even with the operator token + host bundle key — cannot forge
-  membership or alter what runs as root, lacking the off-host signature. Prior: v2.0.0-preview.1
-  (controller panel single-tenant preview), v1.4.0 (signed bundles + custody + agent).
+- **Subject:** panel-appshell-redesign-2026_06_09 — **DRAFTED, awaiting user approval to build.**
+  Restructure the operator panel (a PoC) into a dashboard app-shell (collapsible sidebar + top app
+  bar + top-right user/theme menu + selection-driven right aside), Apple-minimal styling (auto
+  dark/light, theme-scoped accent, optional translucency), persisted mode + non-secret caches, and
+  refresh-surviving httpOnly-cookie login (cross-origin-capable). 6 phases (P1 shell+theme → P6
+  polish). Plans: `implementation_plans/panel-appshell-redesign-2026_06_09/`. Approved mirror:
+  `.claude/plans/valiant-wondering-crab.md`. Frozen: compiler/renderer/air-gap.
+- **Prior subject:** controller-panel-2026_06_08 (2.0 program) — CHECKPOINTED, all merged to main;
+  design `docs/design/controller-panel-design-spike-2026_06_07.md`.
+- **Branch:** main (no active feature branch until P1 is approved).
+- **Last shipped:** **v2.0.0-preview.3** (2026-06-09) — controller-panel operator auth stack
+  (#38–#48: ConfigSigner, password login, one-shot bootstrap, Docker, TOTP, passkey, signing
+  at-rest) + #49 loopback bind + #50 docker README + #51 webauthn IP-RP-ID guard + #52 path-prefix
+  hint. Prior: v2.0.0-preview.2 (off-host signing keystone, #35/#36/#37); v1.4.0 (signed bundles
+  + custody + agent).
 
 ## Open questions / blockers
 
@@ -31,6 +31,9 @@
 
 ## Next actions
 
+- **panel-appshell-redesign — awaiting approval:** once approved, execute `plan-1` (app-shell
+  scaffold + theme foundation) as the first reviewed PR, then P2–P6. See the subject folder +
+  `.claude/plans/valiant-wondering-crab.md`. **Do not build until the user approves.**
 - **Owed manual gate (keystone) — needs user hardware (no authenticator in CI):** a browser smoke —
   enroll a passkey/YubiKey and run a keystone-ON deploy that taps the key and promotes.
 - **Owed:** real-host two-node agent smoke (enroll → pull → verify → apply → report) and real-host
