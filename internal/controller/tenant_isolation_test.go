@@ -56,6 +56,9 @@ func TestTenantIsolation(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("CreateEnrollmentToken(A): %v", err)
 			}
+			if err := s.IssueNodeAPIToken(ctx, tenantA, "alpha", tokenHash("a-api-secret")); err != nil {
+				t.Fatalf("IssueNodeAPIToken(A): %v", err)
+			}
 
 			// Tenant B must see nothing: point reads -> ErrNotFound.
 			if _, err := s.GetNode(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
@@ -96,10 +99,22 @@ func TestTenantIsolation(t *testing.T) {
 				t.Fatalf("ConsumeEnrollmentToken(B, A's token): err = %v, want ErrTokenInvalid", err)
 			}
 
+			// Tenant B must NOT be able to resolve tenant A's node API token, even
+			// with the exact hash (the reverse index lives only under tenant A).
+			if _, err := s.LookupNodeByAPIToken(ctx, tenantB, tokenHash("a-api-secret")); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupNodeByAPIToken(B, A's api token): err = %v, want ErrTokenInvalid", err)
+			}
+
 			// Sanity: tenant A still sees its own data (isolation is symmetric, not
 			// a blanket wipe).
 			if _, err := s.GetNode(ctx, tenantA, "alpha"); err != nil {
 				t.Fatalf("GetNode(A, alpha) after isolation checks: %v", err)
+			}
+			// ...and tenant A CAN resolve its own node API token to its node.
+			if n, err := s.LookupNodeByAPIToken(ctx, tenantA, tokenHash("a-api-secret")); err != nil {
+				t.Fatalf("LookupNodeByAPIToken(A, A's api token): %v", err)
+			} else if n.NodeID != "alpha" {
+				t.Fatalf("LookupNodeByAPIToken(A) NodeID = %q, want alpha", n.NodeID)
 			}
 			if gen, err := s.CurrentGeneration(ctx, tenantA); err != nil || gen != 1 {
 				t.Fatalf("CurrentGeneration(A) = (%d, %v), want (1, nil)", gen, err)

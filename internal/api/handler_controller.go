@@ -1,14 +1,22 @@
 package api
 
 // handler_controller.go is the HTTP surface of the networked controller
-// (plan-4.3b). It exposes the controller core (Store + enrollment + compile) under
+// (plan-4.5). It exposes the controller core (Store + enrollment + compile) under
 // /api/v1/controller/, with JSON request/response bodies. Authentication and the
 // tenant/node identity are handled entirely by the auth chokepoint in
 // auth_controller.go: every handler here reads the caller's node from the request
 // context (nodeFromCtx) rather than from the request, so a node can only ever act
 // as itself. The single exception is /enroll, which is registered WITHOUT the auth
-// middleware (it must be reachable before the node has any client cert) and is
-// instead gated by the single-use enrollment token + CSR proof-of-possession.
+// middleware (it must be reachable before the node has any API token) and is
+// instead gated by the single-use enrollment token.
+//
+// The routes are split across two muxes (served on two plain-HTTP ports):
+//   - agent routes (/enroll,/config,/poll,/report) → RegisterAgentRoutes.
+//   - operator routes (everything else) → RegisterOperatorRoutes.
+//
+// Transport is plain HTTP; TLS is delegated to a reverse proxy (plan-4.5). Bearer
+// tokens authenticate both kinds of caller (per-node tokens for agents, a single
+// operator token for the operator).
 
 import (
 	"context"
@@ -23,10 +31,10 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
-// DefaultOperatorName is the node component of the operator's client-cert CN
-// ("<tenant>:operator"). Operator-only routes require a cert with this identity.
-// It is a constant under single-tenant v1; Plan 5 (OIDC/RBAC) replaces this with a
-// real principal model.
+// DefaultOperatorName is the operator's identity stamped into the request context
+// (and audit actor) for operator routes. Under single-tenant v1 the operator is
+// authenticated by a single shared operator token (YAOG_CONTROLLER_OPERATOR_TOKEN);
+// Plan 5 (OIDC/RBAC) replaces this with a real per-operator principal model.
 const DefaultOperatorName = "operator"
 
 // defaultPollDeadline bounds a single /poll long-poll on the server side. The
@@ -44,68 +52,80 @@ const defaultPollDeadline = 55 * time.Second
 const controllerMaxBodyBytes = maxRequestBodyBytes
 
 // ControllerHandler holds the dependencies shared by every controller route: the
-// tenant-scoped Store, the ephemeral DevCA (issuer for enrollment + the TLS server
-// cert), the configured tenant (single-tenant v1, pinned from YAOG_TENANT_ID), and
-// the operator identity that operator-only routes require.
+// tenant-scoped Store, the configured tenant (single-tenant v1, pinned from
+// YAOG_TENANT_ID), the hex SHA-256 of the operator's bearer token (never the
+// plaintext), and the operator identity stamped onto operator-route requests.
 type ControllerHandler struct {
-	store        controller.Store
-	ca           *controller.DevCA
-	tenant       controller.TenantID
-	operatorName string
+	store             controller.Store
+	tenant            controller.TenantID
+	operatorTokenHash string
+	operatorName      string
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
 	pollDeadline time.Duration
 }
 
-// NewControllerHandler builds a ControllerHandler. operatorName defaults to
-// DefaultOperatorName when empty; the poll deadline defaults to defaultPollDeadline.
-func NewControllerHandler(store controller.Store, ca *controller.DevCA, tenant controller.TenantID, operatorName string) *ControllerHandler {
+// NewControllerHandler builds a ControllerHandler. operatorTokenHash is the hex
+// SHA-256 of the operator's bearer token (callers hash the plaintext via
+// controller.HashToken; the plaintext never reaches the handler). operatorName
+// defaults to DefaultOperatorName when empty; the poll deadline defaults to
+// defaultPollDeadline.
+func NewControllerHandler(store controller.Store, tenant controller.TenantID, operatorTokenHash, operatorName string) *ControllerHandler {
 	if operatorName == "" {
 		operatorName = DefaultOperatorName
 	}
 	return &ControllerHandler{
-		store:        store,
-		ca:           ca,
-		tenant:       tenant,
-		operatorName: operatorName,
-		pollDeadline: defaultPollDeadline,
+		store:             store,
+		tenant:            tenant,
+		operatorTokenHash: operatorTokenHash,
+		operatorName:      operatorName,
+		pollDeadline:      defaultPollDeadline,
 	}
 }
 
-// Routes registers the controller routes on mux. /enroll is registered WITHOUT the
-// auth middleware (reachable certless); agent routes go through requireNode;
-// operator routes through requireOperator. recoverPanics/cors are NOT applied here
-// — controller requests are machine-to-machine JSON over mTLS, with no browser CORS
-// concern; panic recovery for these routes is a documented follow-up if needed.
-// Keeping registration here (not in Server.registerRoutes) keeps the air-gap mux
-// byte-identical when controller mode is off.
-func (h *ControllerHandler) Routes(mux *http.ServeMux) {
+// RegisterAgentRoutes registers the agent-facing controller routes on mux (served
+// on the agent port). /enroll is registered WITHOUT auth (reachable before the node
+// has an API token); /config,/poll,/report go through requireNode (per-node bearer
+// token). recoverPanics/cors are NOT applied here — controller requests are
+// machine-to-machine JSON, with no browser CORS concern.
+func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	const base = "/api/v1/controller/"
 	mux.HandleFunc(base+"enroll", h.HandleEnroll)
 	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
 	mux.HandleFunc(base+"report", h.requireNode(h.HandleReport))
-	mux.HandleFunc(base+"update-topology", h.requireOperator(h.HandleUpdateTopology))
-	mux.HandleFunc(base+"stage", h.requireOperator(h.HandleStage))
-	mux.HandleFunc(base+"promote", h.requireOperator(h.HandlePromote))
+}
+
+// RegisterOperatorRoutes registers the operator-facing controller routes on mux
+// (served on the operator/panel port). All routes go through operatorAuth (the
+// shared operator bearer token). recoverPanics/cors are NOT applied here for the
+// same reason as the agent routes.
+func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
+	const base = "/api/v1/controller/"
+	mux.HandleFunc(base+"update-topology", h.operatorAuth(h.HandleUpdateTopology))
+	mux.HandleFunc(base+"stage", h.operatorAuth(h.HandleStage))
+	mux.HandleFunc(base+"promote", h.operatorAuth(h.HandlePromote))
+	mux.HandleFunc(base+"nodes", h.operatorAuth(h.HandleNodes))
+	mux.HandleFunc(base+"audit", h.operatorAuth(h.HandleAudit))
+	mux.HandleFunc(base+"topology", h.operatorAuth(h.HandleTopology))
+	mux.HandleFunc(base+"enrollment-token", h.operatorAuth(h.HandleEnrollmentToken))
 }
 
 // --- JSON request/response types ---
 
-// enrollRequestJSON is the wire form of an enrollment request. The CSR and CA-bound
-// material are DER bytes carried base64 (JSON cannot hold raw bytes).
+// enrollRequestJSON is the wire form of an enrollment request: the single-use
+// enrollment token, the claimed node id, and the node's WireGuard PUBLIC key
+// (never a private key).
 type enrollRequestJSON struct {
-	Token       string `json:"token"`
+	Token       string `json:"enrollment_token"`
 	NodeID      string `json:"node_id"`
-	CSRDER      string `json:"csr_der"` // base64(DER) of the node's mTLS CSR
 	WGPublicKey string `json:"wg_public_key"`
 }
 
-// enrollResponseJSON is the wire form of a successful enrollment: PEM strings + the
-// issued cert fingerprint.
+// enrollResponseJSON is the wire form of a successful enrollment: the node's issued
+// per-node bearer token (returned ONCE, never stored in plaintext) and its node id.
 type enrollResponseJSON struct {
-	ClientCertPEM string `json:"client_cert_pem"`
-	CACertPEM     string `json:"ca_cert_pem"`
-	Fingerprint   string `json:"fingerprint"`
+	ApiToken string `json:"api_token"`
+	NodeID   string `json:"node_id"`
 }
 
 // configResponseJSON is the wire form of a node's current bundle: the generation
@@ -141,12 +161,49 @@ type generationResponseJSON struct {
 	Generation int64 `json:"generation"`
 }
 
+// nodeJSON is the operator-facing view of one registry node. It deliberately
+// exposes NO key material (neither the WG public key bytes nor the API token hash):
+// only a boolean that a public key is on file. The operator panel lists fleet state
+// without ever seeing secrets.
+type nodeJSON struct {
+	NodeID            string    `json:"node_id"`
+	Status            string    `json:"status"`
+	HasWGPublicKey    bool      `json:"has_wg_public_key"`
+	DesiredGeneration int64     `json:"desired_generation"`
+	AppliedGeneration int64     `json:"applied_generation"`
+	LastChecksum      string    `json:"last_checksum"`
+	LastSeen          time.Time `json:"last_seen"`
+	EnrolledAt        time.Time `json:"enrolled_at"`
+}
+
+// auditResponseJSON is the operator-facing view of the audit chain: the entries in
+// Seq order plus whether the hash chain verifies intact.
+type auditResponseJSON struct {
+	Entries  []controller.AuditEntry `json:"entries"`
+	Verified bool                    `json:"verified"`
+}
+
+// enrollmentTokenRequestJSON is the operator's request to mint a single-use
+// enrollment token for a node, with a TTL in seconds.
+type enrollmentTokenRequestJSON struct {
+	NodeID     string `json:"node_id"`
+	TTLSeconds int64  `json:"ttl_seconds"`
+}
+
+// enrollmentTokenResponseJSON returns the freshly minted plaintext enrollment
+// token ONCE. The controller stores only its hash, so this is the only chance to
+// capture the plaintext.
+type enrollmentTokenResponseJSON struct {
+	Token string `json:"token"`
+}
+
 // --- handlers ---
 
-// HandleEnroll runs the node-enrollment ceremony. It requires NO client cert (it is
-// the route a node calls before it has one); the single-use token + CSR PoP from
-// plan-4.2 are the authentication. The tenant is the configured one (single-tenant
-// v1) — never taken from the request body.
+// HandleEnroll runs the node-enrollment ceremony. It requires NO bearer token (it
+// is the route a node calls before it has one); the single-use enrollment token is
+// the authentication. The tenant is the configured one (single-tenant v1) — never
+// taken from the request body. On success it returns the node's per-node API token
+// ONCE.
 func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
@@ -157,31 +214,25 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Reserve the operator identity: a node must never enroll AS the operator. Doing so
-	// would mint a cert with CN "<tenant>:operator" and grant operator privileges
-	// (update-topology/stage/promote). The operator cert is issued out-of-band via
-	// DevCA.IssueClientCert, never through this node-enrollment path.
+	// Reserve the operator identity: a node must never enroll AS the operator. Doing
+	// so would mint a node whose identity collides with the operator name stamped on
+	// operator routes. The operator is authenticated by its own out-of-band token,
+	// never through this node-enrollment path.
 	if req.NodeID == h.operatorName {
 		writeError(w, http.StatusForbidden, "node id is reserved")
 		return
 	}
-	csrDER, err := base64.StdEncoding.DecodeString(req.CSRDER)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "csr_der must be base64-encoded DER")
-		return
-	}
 
-	result, err := controller.Enroll(r.Context(), h.store, h.ca, h.tenant, controller.EnrollRequest{
+	result, err := controller.Enroll(r.Context(), h.store, h.tenant, controller.EnrollRequest{
 		Token:       req.Token,
 		NodeID:      req.NodeID,
-		CSRDER:      csrDER,
 		WGPublicKey: req.WGPublicKey,
 	}, time.Now())
 	if err != nil {
 		// Token errors are an authorization failure (bad/expired/consumed token);
-		// everything else here is a malformed request (bad CSR, CN mismatch). We map
-		// token errors to 401 and the rest to 400 so a caller can distinguish "your
-		// token is no good" from "your CSR is wrong".
+		// everything else here is a malformed request. We map token errors to 401 and
+		// the rest to 400 so a caller can distinguish "your token is no good" from a
+		// malformed request.
 		if errors.Is(err, controller.ErrTokenInvalid) || errors.Is(err, controller.ErrTokenConsumed) {
 			writeError(w, http.StatusUnauthorized, err.Error())
 			return
@@ -191,14 +242,13 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, enrollResponseJSON{
-		ClientCertPEM: string(result.ClientCertPEM),
-		CACertPEM:     string(result.CACertPEM),
-		Fingerprint:   result.Fingerprint,
+		ApiToken: result.APIToken,
+		NodeID:   result.NodeID,
 	})
 }
 
-// HandleConfig returns the CALLER's current bundle (the node taken from the verified
-// cert, never the request). 404 before the first promote for that node. It also
+// HandleConfig returns the CALLER's current bundle (the node taken from the bearer
+// token, never the request). 404 before the first promote for that node. It also
 // TouchLastSeen-s the node so the registry reflects the check-in.
 func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -237,7 +287,8 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 // HandlePoll long-polls for a generation strictly greater than ?after=N. It blocks
 // on Store.WaitForGeneration under a ~55s server deadline derived from the request
 // context. On advance it returns {generation}; on the deadline it returns 204 so the
-// agent re-polls. The node identity comes from the cert (TouchLastSeen the caller).
+// agent re-polls. The node identity comes from the bearer token (TouchLastSeen the
+// caller).
 func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
@@ -278,8 +329,8 @@ func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleReport records an agent's apply outcome for ITSELF: SetAppliedGeneration +
-// TouchLastSeen + an audit entry. The node is the cert's node; the report body
-// carries only the applied generation, checksum, and a health string.
+// TouchLastSeen + an audit entry. The node is the bearer token's node; the report
+// body carries only the applied generation, checksum, and a health string.
 func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
@@ -397,6 +448,143 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, generationResponseJSON{Generation: gen})
+}
+
+// HandleNodes lists the fleet registry for the operator panel (operator-only). It
+// returns a []nodeJSON view that carries fleet state but NO key material.
+func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	nodes, err := h.store.ListNodes(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list nodes")
+		return
+	}
+	out := make([]nodeJSON, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, nodeJSON{
+			NodeID:            n.NodeID,
+			Status:            string(n.Status),
+			HasWGPublicKey:    n.WGPublicKey != "",
+			DesiredGeneration: n.DesiredGeneration,
+			AppliedGeneration: n.AppliedGeneration,
+			LastChecksum:      n.LastChecksum,
+			LastSeen:          n.LastSeen,
+			EnrolledAt:        n.EnrolledAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// HandleAudit returns the tenant's audit chain plus whether it verifies intact
+// (operator-only). verified is true when VerifyAuditChain finds no break.
+func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	entries, err := h.store.ListAudit(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, auditResponseJSON{
+		Entries:  entries,
+		Verified: controller.VerifyAuditChain(entries) == -1,
+	})
+}
+
+// HandleTopology returns the currently stored topology JSON (operator-only). The
+// stored bytes are public-keys-only and are returned verbatim. 404 before the first
+// update-topology.
+func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	rec, err := h.store.GetTopology(r.Context(), tenant)
+	if err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no topology stored yet")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load topology")
+		return
+	}
+	// The stored JSON is returned verbatim (it is already valid JSON, validated at
+	// update-topology time).
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rec.JSON)
+}
+
+// HandleEnrollmentToken mints a single-use, node-scoped enrollment token
+// (operator-only) and returns its plaintext ONCE. The controller stores only the
+// token hash (CreateEnrollmentToken), so the plaintext cannot be recovered later.
+func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	var req enrollmentTokenRequestJSON
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.NodeID == "" {
+		writeError(w, http.StatusBadRequest, "node_id is required")
+		return
+	}
+	// A node must never be granted an enrollment token AS the operator (the operator
+	// identity is reserved; enrolling under it is rejected at /enroll, but reject the
+	// token mint too for a clear, early error).
+	if req.NodeID == h.operatorName {
+		writeError(w, http.StatusForbidden, "node id is reserved")
+		return
+	}
+	if req.TTLSeconds <= 0 {
+		writeError(w, http.StatusBadRequest, "ttl_seconds must be positive")
+		return
+	}
+
+	now := time.Now()
+	plaintext, tok := controller.NewEnrollmentToken(req.NodeID, time.Duration(req.TTLSeconds)*time.Second, now)
+	if err := h.store.CreateEnrollmentToken(r.Context(), tenant, tok); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create enrollment token")
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: now,
+		Actor:     "operator:" + h.operatorName,
+		Action:    "enrollment-token",
+		NodeID:    req.NodeID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, enrollmentTokenResponseJSON{Token: plaintext})
 }
 
 // --- helpers ---

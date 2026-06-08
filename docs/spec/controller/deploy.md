@@ -12,10 +12,11 @@ custody contract of [key-custody.md](key-custody.md).
 **Scope of this milestone (plan-4.3a).** This document and the `CompileAndStage` step
 (`internal/controller/compile.go`) are the **compile/stage core**: pure, in-process, no HTTP. The
 operator-facing **HTTP endpoints** (`/stage`, `/promote`, `/config`, `/poll`, `/report`) and the
-**TLS/mTLS** server that authenticates them are **plan-4.3b**; the **node-agent integration** (the
-agent's keygen→enroll→pull→verify→apply loop wired against the live controller) and the **end-to-end**
-tests are **plan-4.3c**. The promote half of the model is the existing `Store.PromoteStaged`
-([persistence.md](persistence.md)); this milestone produces the staged bundles it flips. See
+**plain-HTTP server** that **bearer-token-authenticates** them are [controller-api.md](controller-api.md)
+(plan-4.5); the **node-agent integration** (the agent's keygen→enroll→pull→verify→apply loop wired against
+the live controller) and the **end-to-end** tests are [agent.md](agent.md) (plan-4.5). The promote half
+of the model is the existing `Store.PromoteStaged` ([persistence.md](persistence.md)); this milestone
+produces the staged bundles it flips. See
 [../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md](../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md).
 
 ## The compile / stage / promote model
@@ -159,6 +160,30 @@ topology** and **no enrolled node** — return before the audit append (they sta
 nothing to record). The entry is hash-chained like every other (`AppendAudit`,
 [persistence.md](persistence.md) §audit hash chain). Promote appends its own entry separately.
 
+## Revocation — clear the token + evict from the subgraph
+
+Revoking a node is **two complementary moves**, and the deploy model owns the second:
+
+1. **Clear the bearer token (immediate).** `RevokeNodeAPIToken(ctx, t, nodeID)`
+   ([persistence.md](persistence.md) §The per-node API-token index, [enrollment.md](enrollment.md)
+   §Revocation) clears the node's `APITokenHash` and deletes its reverse-index entry, so the node's
+   **very next** `/config` / `/poll` / `/report` call fails authentication at the chokepoint
+   ([controller-api.md](controller-api.md)). There is no TTL, no CRL, no propagation delay — control-plane
+   access stops at once. This replaces the withdrawn mTLS model's certificate revocation, which could only
+   be approximated (a still-time-valid client cert kept working until the ephemeral CA rotated).
+2. **Evict from the rendered subgraph (durable).** Setting the node `NodeRevoked` excludes it from every
+   subsequent `CompileAndStage` (§The render-what's-ready policy: a `NodeRevoked` node is **not** admitted,
+   and edges to it are dropped), so even a node that somehow still held a credential could obtain **no new
+   configuration**, and its peers stop carrying the peer interface to it on the next deploy. `LookupNodeByAPIToken`
+   also fail-closes a still-mapped token whose node is `NodeRevoked` to `ErrTokenInvalid`, so the two moves
+   reinforce each other.
+
+Together: clearing the token is the **immediate** cut (the node can no longer authenticate), and
+`NodeRevoked` is the **durable** eviction (the node disappears from future renders and its peers
+re-converge without it). The honest bound is that a token leaked **before** revocation is replayable until
+the revoke lands ([controller-api.md](controller-api.md) §the honest trade-off); immediate revocation is
+how that window is closed.
+
 ## Summary
 
 - A deploy is **compile+stage** (mechanical, reversible) then operator-gated **promote** (commits a new
@@ -171,4 +196,7 @@ nothing to record). The entry is hash-chained like every other (`AppendAudit`,
 - **Zero-knowledge** is preserved: AgentHeld placeholder keys, public-keys-only registry, signing inside
   Export.
 - The controller bridges the **`node.Name`-vs-`node.ID`** mapping via the topology.
-- **HTTP endpoints + TLS/mTLS** are plan-4.3b; **agent integration + e2e** are plan-4.3c.
+- **Revocation** is **clear the bearer token** (immediate cut) **+** `NodeRevoked` eviction from the
+  rendered subgraph (durable).
+- **HTTP endpoints + bearer-token auth + two plain-HTTP ports** are [controller-api.md](controller-api.md)
+  (plan-4.5); **agent integration + e2e** are [agent.md](agent.md) (plan-4.5).

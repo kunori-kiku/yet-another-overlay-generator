@@ -1,59 +1,48 @@
 package controller
 
-// enrollment.go implements the node-enrollment crypto and ceremony for the
-// controller panel (plan-4.2). It turns a single-use, node-scoped enrollment
-// token plus a node-generated mTLS CSR into an issued client certificate, and
-// records the node's WireGuard PUBLIC key in the registry.
+// enrollment.go implements the node-enrollment ceremony for the controller panel
+// (plan-4.5). The mTLS model of plan-4.2/4.3 is withdrawn: there is no CA, no CSR,
+// and no in-app TLS. Enrollment now turns a single-use, node-scoped enrollment
+// token plus the node's WireGuard PUBLIC key into a per-node bearer API TOKEN, and
+// records the public key in the registry.
 //
-// Two cryptographic facts shape this file:
+// Two facts shape this file:
 //
-//   - WireGuard keys are Curve25519 (Diffie-Hellman only) and CANNOT produce a
-//     signature. They therefore cannot serve as a proof-of-possession primitive.
-//     The PoP in this ceremony is over the node's mTLS keypair: the node signs
-//     its own CSR, and CheckSignature on that CSR proves the node holds the
-//     corresponding private key. The WireGuard public key is registered as-is,
-//     trusted only insofar as it arrives on the already-PoP'd enrollment call.
+//   - The proof-of-possession that used to be carried by an mTLS CSR is gone. The
+//     enrollment token IS the authorization: it is single-use, short-TTL, and scoped
+//     to a NodeID, minted out-of-band by an operator and burned atomically here. The
+//     WireGuard public key is registered as-is, trusted only insofar as it arrives on
+//     the already-authorized enroll call. WireGuard keys are Curve25519 (DH-only) and
+//     cannot sign, so they were never the PoP primitive and are not one now.
 //
-//   - The controller CA is EPHEMERAL (DevCA): its private key is generated in
-//     memory at startup and never persisted. This deliberately bounds the breach
-//     surface — there is no on-disk CA key to steal — at the cost that a
-//     controller restart invalidates issued certs, so nodes must re-enroll. A
-//     persisted/HSM-backed CA is a documented future swap; the issuance shape
-//     here does not change.
+//   - The issued credential is a bearer token, not a certificate. The controller
+//     stores only its hex SHA-256 (APITokenHash); the plaintext is returned to the
+//     node exactly once and never persisted. A bearer token is replayable if leaked,
+//     so transport confidentiality is delegated to a reverse proxy's TLS (nginx/caddy)
+//     — this is the conscious v1 trade-off recorded in docs/spec/controller/.
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net"
 	"time"
 )
 
-// enrollTokenBytes is the number of crypto/rand bytes behind a plaintext
-// enrollment token. 32 bytes (256 bits) of entropy makes the token unguessable;
-// it is base64url-encoded (no padding) for transport and hashed for storage.
+// enrollTokenBytes is the number of crypto/rand bytes behind a plaintext token
+// (both enrollment tokens and per-node API tokens). 32 bytes (256 bits) of entropy
+// makes the token unguessable; it is base64url-encoded (no padding) for transport
+// and hashed for storage.
 const enrollTokenBytes = 32
 
-// serialBits bounds the random certificate serial number. RFC 5280 requires a
-// positive serial no longer than 20 octets (160 bits); we use 128 bits of
-// crypto/rand, which is comfortably unique and within the limit.
-const serialBits = 128
-
-// HashToken returns the hex-encoded SHA-256 of a plaintext enrollment token.
-// This is the ONLY representation of a token the controller ever stores: the
-// Store keeps TokenHash, never the plaintext, so a store/DB read cannot recover
-// a usable token. The Enroll path hashes the presented plaintext through this
-// same function before handing it to Store.ConsumeEnrollmentToken, so the lookup
-// is hash-vs-hash.
+// HashToken returns the hex-encoded SHA-256 of a plaintext token. This is the ONLY
+// representation of a token the controller ever stores: the Store keeps TokenHash /
+// APITokenHash, never the plaintext, so a store/DB read cannot recover a usable
+// token. Both the enrollment path and the per-node bearer-auth path hash the
+// presented plaintext through this same function before comparing against stored
+// hashes, so every lookup is hash-vs-hash.
 func HashToken(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
@@ -88,268 +77,48 @@ func NewEnrollmentToken(nodeID string, ttl time.Duration, now time.Time) (plaint
 	return plaintext, tok
 }
 
-// DevCA is an ephemeral, self-signed Ed25519 controller certificate authority.
-// Its private key is held only in memory and is never written anywhere: a
-// controller restart discards it, after which previously issued client certs no
-// longer chain and nodes re-enroll. This bounds the blast radius of a controller
-// compromise (no CA key at rest) at the cost of cert durability — an intentional
-// dev/single-tenant tradeoff. A future persisted or HSM-backed CA is a drop-in
-// replacement for this type.
-type DevCA struct {
-	tenant TenantID
-	// caCert is the parsed self-signed CA certificate (the issuer for client certs).
-	caCert *x509.Certificate
-	// caCertDER is the raw DER of caCert, retained so CACertPEM never re-marshals.
-	caCertDER []byte
-	// caPriv is the ephemeral CA signing key. It NEVER leaves this process and is
-	// never persisted (see the type doc).
-	caPriv ed25519.PrivateKey
-	// clientCertTTL is how long each issued client cert is valid from its NotBefore.
-	clientCertTTL time.Duration
-}
-
-// randomSerial returns a positive, cryptographically random certificate serial
-// number of serialBits bits. A unique unpredictable serial avoids serial
-// collisions and does not leak an issuance counter.
-func randomSerial() (*big.Int, error) {
-	// rand.Int draws a uniform value in [0, max); we only need positivity and
-	// uniqueness, not a fixed bit length, so max = 2^serialBits suffices.
-	limit := new(big.Int).Lsh(big.NewInt(1), serialBits)
-	serial, err := rand.Int(rand.Reader, limit)
-	if err != nil {
-		return nil, err
-	}
-	// A zero serial is technically valid but unconventional; bump it to 1 so the
-	// serial is always strictly positive.
-	if serial.Sign() == 0 {
-		serial = big.NewInt(1)
-	}
-	return serial, nil
-}
-
-// NewDevCA generates a fresh ephemeral Ed25519 CA for the tenant, valid from now
-// for caTTL, and configured to issue client certs valid for clientCertTTL. The
-// generated CA private key is retained in the returned *DevCA and never persisted.
-func NewDevCA(tenant TenantID, now time.Time, caTTL, clientCertTTL time.Duration) (*DevCA, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("controller: generating CA key: %w", err)
-	}
-	serial, err := randomSerial()
-	if err != nil {
-		return nil, fmt.Errorf("controller: generating CA serial: %w", err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName: "yaog-controller-ca:" + string(tenant),
-		},
-		NotBefore:             now,
-		NotAfter:              now.Add(caTTL),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-	// Self-signed: parent == template, public/private both the CA's own keys.
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
-	if err != nil {
-		return nil, fmt.Errorf("controller: self-signing CA cert: %w", err)
-	}
-	caCert, err := x509.ParseCertificate(der)
-	if err != nil {
-		return nil, fmt.Errorf("controller: parsing CA cert: %w", err)
-	}
-	return &DevCA{
-		tenant:        tenant,
-		caCert:        caCert,
-		caCertDER:     der,
-		caPriv:        priv,
-		clientCertTTL: clientCertTTL,
-	}, nil
-}
-
-// CACertPEM returns the CA certificate as a PEM ("CERTIFICATE") block. It is the
-// trust anchor handed back in the enroll response and pinned by the agent, and
-// it is the ClientCAs material for plan-4.3's mTLS server.
-func (c *DevCA) CACertPEM() []byte {
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.caCertDER})
-}
-
-// IssueClientCert validates a node's CSR and issues a client certificate for it.
+// NewNodeAPIToken mints a fresh per-node bearer API token. It mirrors
+// NewEnrollmentToken's entropy and encoding: 32 bytes of crypto/rand, base64url
+// (no padding), hashed with HashToken for storage.
 //
-// The CSR's self-signature is the proof-of-possession of the node's mTLS private
-// key: CheckSignature confirms the requester holds the key behind csr.PublicKey.
-// (This is why PoP is over the mTLS keypair and not the WireGuard key, which is
-// DH-only and cannot sign.) The CSR's Common Name MUST equal
-// "<tenant>:<nodeID>"; this binds the issued identity to the enrolling node and
-// is re-asserted as the issued cert's Subject CN, so a node cannot obtain a cert
-// for a name other than the one it is enrolling under.
+// It returns the plaintext (returned to the enrolling node exactly once, then
+// discarded by the controller) and the hash (stamped on the node as APITokenHash
+// and written to the reverse index by Store.IssueNodeAPIToken). The plaintext is
+// NEVER stored: a store/DB read can only ever recover the hash, which is not a
+// usable token. The agent presents the plaintext as "Authorization: Bearer <t>";
+// the auth layer hashes it and compares hash-vs-hash.
 //
-// On success it returns the client cert as a PEM ("CERTIFICATE") block and the
-// cert's fingerprint = hex(SHA-256(certDER)), which is recorded as the node's
-// MTLSCertFP in the registry.
-func (c *DevCA) IssueClientCert(csrDER []byte, nodeID string, now time.Time) (certPEM []byte, fingerprint string, err error) {
-	csr, err := x509.ParseCertificateRequest(csrDER)
-	if err != nil {
-		return nil, "", fmt.Errorf("controller: parsing CSR: %w", err)
-	}
-	// Proof-of-possession: the CSR is self-signed by the node's mTLS private key.
-	if err := csr.CheckSignature(); err != nil {
-		return nil, "", fmt.Errorf("controller: CSR signature invalid (proof-of-possession failed): %w", err)
-	}
-	// Bind the issued identity to the enrolling node: CN must be "<tenant>:<nodeID>".
-	wantCN := string(c.tenant) + ":" + nodeID
-	if csr.Subject.CommonName != wantCN {
-		return nil, "", fmt.Errorf("controller: CSR CommonName %q does not match required %q", csr.Subject.CommonName, wantCN)
-	}
-	serial, err := randomSerial()
-	if err != nil {
-		return nil, "", fmt.Errorf("controller: generating client cert serial: %w", err)
-	}
-	// A client cert must never outlive the CA that signed it: cap NotAfter at the
-	// CA's own expiry (relevant if clientCertTTL is configured longer than caTTL, or
-	// late in the CA's life).
-	notAfter := now.Add(c.clientCertTTL)
-	if notAfter.After(c.caCert.NotAfter) {
-		notAfter = c.caCert.NotAfter
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName: wantCN,
-		},
-		NotBefore:             now,
-		NotAfter:              notAfter,
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-	}
-	// Issuer is the CA; the certified public key is the CSR's; signed by caPriv.
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.caCert, csr.PublicKey, c.caPriv)
-	if err != nil {
-		return nil, "", fmt.Errorf("controller: issuing client cert: %w", err)
-	}
-	sum := sha256.Sum256(der)
-	fingerprint = hex.EncodeToString(sum[:])
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	return certPEM, fingerprint, nil
-}
-
-// caCertPool returns an x509.CertPool containing only this CA's self-signed
-// certificate. It is the trust anchor for both ends of the controller's mTLS:
-// the server uses it as ClientCAs (to verify node/operator client certs), and a
-// node/test uses the same material as RootCAs (to verify the controller's server
-// cert). Both certs chain to this single ephemeral CA.
-func (c *DevCA) caCertPool() *x509.CertPool {
-	pool := x509.NewCertPool()
-	pool.AddCert(c.caCert)
-	return pool
-}
-
-// IssueServerCert issues the controller's TLS SERVER certificate, signed by this
-// CA. The host argument names the controller (placed in the SAN DNSNames or
-// IPAddresses as appropriate); "localhost" and 127.0.0.1 are always included so
-// in-process httptest servers and loopback agents validate without extra config.
+// The now parameter is accepted to mirror NewEnrollmentToken's shape (and to keep
+// the call sites uniform); the token itself carries no embedded timestamp — its
+// validity is governed by the node's lifecycle (revocation clears the hash), not by
+// an expiry baked into the token.
 //
-// The returned tls.Certificate carries the issued cert (leaf) plus the CA cert in
-// its chain and the freshly generated server private key, ready to drop into a
-// tls.Config's Certificates. The server keypair is independent of the CA keypair:
-// the CA only signs; it never serves TLS with its own key.
-func (c *DevCA) IssueServerCert(host string, now time.Time) (tls.Certificate, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("controller: generating server key: %w", err)
+// It panics if the system CSPRNG fails, for the same reason NewEnrollmentToken does.
+func NewNodeAPIToken(now time.Time) (plaintext, hash string) {
+	raw := make([]byte, enrollTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		panic(fmt.Sprintf("controller: system CSPRNG failed generating node API token: %v", err))
 	}
-	serial, err := randomSerial()
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("controller: generating server cert serial: %w", err)
-	}
-
-	// Build the SAN set. "localhost" + 127.0.0.1 are always present (loopback /
-	// httptest); the caller's host is added as an IP SAN if it parses as one,
-	// otherwise as a DNS SAN.
-	dnsNames := []string{"localhost"}
-	ipAddrs := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
-	if host != "" && host != "localhost" {
-		if ip := net.ParseIP(host); ip != nil {
-			ipAddrs = append(ipAddrs, ip)
-		} else {
-			dnsNames = append(dnsNames, host)
-		}
-	}
-
-	// A server cert must never outlive the CA that signed it (same cap as client certs).
-	notAfter := now.Add(c.clientCertTTL)
-	if notAfter.After(c.caCert.NotAfter) {
-		notAfter = c.caCert.NotAfter
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName: "yaog-controller:" + string(c.tenant),
-		},
-		NotBefore:             now,
-		NotAfter:              notAfter,
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              dnsNames,
-		IPAddresses:           ipAddrs,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.caCert, pub, c.caPriv)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("controller: issuing server cert: %w", err)
-	}
-
-	return tls.Certificate{
-		// Leaf first, then the CA cert, so a client that does not already hold the CA
-		// can still build the chain; RootCAs/ClientCAs anchors trust to the CA.
-		Certificate: [][]byte{der, c.caCertDER},
-		PrivateKey:  priv,
-	}, nil
+	plaintext = base64.RawURLEncoding.EncodeToString(raw)
+	hash = HashToken(plaintext)
+	return plaintext, hash
 }
 
-// ServerTLSConfig builds the controller's mTLS server tls.Config from an issued
-// server cert (see IssueServerCert). It enforces TLS 1.3, presents serverCert, and
-// sets ClientCAs to this CA's pool with ClientAuth=VerifyClientCertIfGiven: a
-// client cert is OPTIONAL at the handshake (so certless /enroll is reachable) but,
-// when presented, MUST verify against the CA. The per-route requirement that a
-// verified client cert is actually present is enforced by the auth middleware, not
-// here — TLS only guarantees that any cert that IS presented is genuine.
-func (c *DevCA) ServerTLSConfig(serverCert tls.Certificate) *tls.Config {
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{serverCert},
-		ClientCAs:    c.caCertPool(),
-		ClientAuth:   tls.VerifyClientCertIfGiven,
-	}
-}
-
-// CACertPool returns a fresh x509.CertPool trusting only this CA. It is the
-// trust anchor a node/test installs as RootCAs to verify the controller's server
-// cert (the mirror of the ClientCAs the server uses). Exported so the HTTP layer
-// and tests can build a client without re-parsing CACertPEM.
-func (c *DevCA) CACertPool() *x509.CertPool {
-	return c.caCertPool()
-}
-
-// EnrollRequest is the node's enrollment payload: the plaintext enrollment
-// token, the claimed NodeID, the DER-encoded mTLS CSR (self-signed, carrying the
-// PoP), and the node's WireGuard PUBLIC key (registered as-is; never a private key).
+// EnrollRequest is the node's enrollment payload: the plaintext enrollment token,
+// the claimed NodeID, and the node's WireGuard PUBLIC key (registered as-is; never
+// a private key). There is no CSR — the enrollment token is the authorization.
 type EnrollRequest struct {
 	Token       string
 	NodeID      string
-	CSRDER      []byte
 	WGPublicKey string
 }
 
-// EnrollResult is returned to a successfully enrolled node: its issued client
-// cert (PEM), the CA cert (PEM) to pin as the trust anchor, and the issued cert's
-// SHA-256 fingerprint (also stored as the node's MTLSCertFP).
+// EnrollResult is returned to a successfully enrolled node: its NodeID and the
+// freshly minted per-node bearer API token (plaintext, returned exactly once). The
+// controller retains only the token's hash; this plaintext is the node's sole copy.
 type EnrollResult struct {
-	ClientCertPEM []byte
-	CACertPEM     []byte
-	Fingerprint   string
+	NodeID   string
+	APIToken string
 }
 
 // Enroll runs the full enrollment ceremony for one node:
@@ -358,47 +127,55 @@ type EnrollResult struct {
 //     the token (hash, node scope, expiry) and marks it consumed under the store
 //     lock. Single-use is enforced here, so two concurrent enrollments with the
 //     same token cannot both pass this step.
-//  2. Issue the client cert from the CSR (proof-of-possession + CN binding).
-//  3. Register the node (WG PUBLIC key + mTLS fingerprint) as NodeApproved.
-//  4. Append an audit entry for the enrollment.
+//  2. Mint a fresh per-node bearer API token (NewNodeAPIToken): plaintext returned
+//     to the node, hash retained by the controller.
+//  3. Register the node (WG PUBLIC key + APITokenHash) as NodeApproved.
+//  4. Issue the API token in the Store (stamp APITokenHash + write the reverse
+//     hash->nodeID index) so the node's later bearer-authed calls resolve.
+//  5. Append an audit entry for the enrollment.
 //
-// IMPORTANT — single-use ordering: the token is burned in step 1, BEFORE the
-// cert is issued in step 2. If a later step fails (e.g. a malformed CSR), the
-// token is NOT un-burned: the same token cannot be retried. This is deliberate.
-// Single-use is the safety property we are protecting; making the burn
-// best-effort-reversible would reopen the replay window. To retry after a
-// post-burn failure, the operator issues a fresh token. The burn-first ordering
-// trades a small operator inconvenience for a hard single-use guarantee.
-func Enroll(ctx context.Context, store Store, ca *DevCA, t TenantID, req EnrollRequest, now time.Time) (EnrollResult, error) {
+// IMPORTANT — single-use ordering: the token is burned in step 1, BEFORE anything
+// else. If a later step fails, the burned token is NOT un-burned: the same token
+// cannot be retried. This is deliberate. Single-use is the safety property we are
+// protecting; making the burn best-effort-reversible would reopen the replay
+// window. To retry after a post-burn failure, the operator issues a fresh token.
+// The burn-first ordering trades a small operator inconvenience for a hard
+// single-use guarantee.
+func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now time.Time) (EnrollResult, error) {
 	// (a) Atomically validate-and-burn the token. On any token error (invalid,
-	// expired, or already consumed) we return immediately without touching the CA
-	// or registry — an unauthorized caller learns nothing and changes nothing.
+	// expired, or already consumed) we return immediately without touching the
+	// registry — an unauthorized caller learns nothing and changes nothing.
 	if err := store.ConsumeEnrollmentToken(ctx, t, HashToken(req.Token), req.NodeID, now); err != nil {
 		return EnrollResult{}, err
 	}
 
-	// (b) Issue the client cert: this checks the CSR PoP and the CN binding. A
-	// failure here leaves the token burned (see the ordering note above).
-	certPEM, fingerprint, err := ca.IssueClientCert(req.CSRDER, req.NodeID, now)
-	if err != nil {
-		return EnrollResult{}, err
-	}
+	// (b) Mint the per-node bearer token. Plaintext is returned to the node once;
+	// only the hash is stored.
+	plaintext, hash := NewNodeAPIToken(now)
 
-	// (c) Register the node with its WireGuard PUBLIC key (as-is) and the issued
-	// cert fingerprint, marked approved and stamped with the enrollment time.
+	// (c) Register the node with its WireGuard PUBLIC key (as-is) and the API token
+	// hash, marked approved and stamped with the enrollment time. UpsertNode must
+	// run before IssueNodeAPIToken so the latter finds a node to stamp.
 	node := Node{
-		NodeID:      req.NodeID,
-		WGPublicKey: req.WGPublicKey,
-		MTLSCertFP:  fingerprint,
-		Status:      NodeApproved,
-		EnrolledAt:  now,
+		NodeID:       req.NodeID,
+		WGPublicKey:  req.WGPublicKey,
+		APITokenHash: hash,
+		Status:       NodeApproved,
+		EnrolledAt:   now,
 	}
 	if err := store.UpsertNode(ctx, t, node); err != nil {
 		return EnrollResult{}, fmt.Errorf("controller: registering enrolled node: %w", err)
 	}
 
-	// (d) Audit the enrollment. The actor is the agent itself (the enroll call is
-	// authenticated by the burned token, not by an operator session).
+	// (d) Issue the API token in the Store: stamp APITokenHash on the node and write
+	// the reverse hash->nodeID index that authenticateNode resolves on every authed
+	// agent call.
+	if err := store.IssueNodeAPIToken(ctx, t, req.NodeID, hash); err != nil {
+		return EnrollResult{}, fmt.Errorf("controller: issuing node API token: %w", err)
+	}
+
+	// (e) Audit the enrollment. The actor is the agent itself (the enroll call is
+	// authorized by the burned token, not by an operator session).
 	if _, err := store.AppendAudit(ctx, t, AuditEntry{
 		Timestamp: now,
 		Actor:     "agent:" + req.NodeID,
@@ -409,8 +186,7 @@ func Enroll(ctx context.Context, store Store, ca *DevCA, t TenantID, req EnrollR
 	}
 
 	return EnrollResult{
-		ClientCertPEM: certPEM,
-		CACertPEM:     ca.CACertPEM(),
-		Fingerprint:   fingerprint,
+		NodeID:   req.NodeID,
+		APIToken: plaintext,
 	}, nil
 }

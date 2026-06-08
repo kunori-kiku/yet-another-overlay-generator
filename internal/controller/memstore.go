@@ -26,6 +26,11 @@ type tenantState struct {
 	// tokens maps an enrollment token's hash -> the EnrollmentToken record. The
 	// plaintext token is never stored; only its hash keys this map.
 	tokens map[string]EnrollmentToken
+	// apiTokens is the reverse index for per-node bearer auth: a node API token's
+	// hash -> the owning NodeID. IssueNodeAPIToken populates it, RevokeNodeAPIToken
+	// deletes the entry, and LookupNodeByAPIToken resolves it. The plaintext token
+	// is never stored; only its hash keys this map.
+	apiTokens map[string]string
 	// generation is the tenant's current generation (0 before any promote).
 	generation int64
 	// audit is the append-only, hash-chained audit log in Seq order.
@@ -38,11 +43,12 @@ type tenantState struct {
 
 func newTenantState() *tenantState {
 	return &tenantState{
-		nodes:   make(map[string]Node),
-		staged:  make(map[string]SignedBundle),
-		current: make(map[string]SignedBundle),
-		tokens:  make(map[string]EnrollmentToken),
-		nextSeq: 1,
+		nodes:     make(map[string]Node),
+		staged:    make(map[string]SignedBundle),
+		current:   make(map[string]SignedBundle),
+		tokens:    make(map[string]EnrollmentToken),
+		apiTokens: make(map[string]string),
+		nextSeq:   1,
 	}
 }
 
@@ -365,6 +371,61 @@ func (s *MemStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, token
 	consumed := now
 	tok.ConsumedAt = &consumed
 	ts.tokens[tokenHash] = tok
+	return nil
+}
+
+// --- Node API tokens (per-node bearer auth) ---
+
+// IssueNodeAPIToken stamps tokenHash onto the node's APITokenHash and writes the
+// reverse index apiTokens[hash]=nodeID, all under s.mu. It returns ErrNotFound if
+// no node record exists for nodeID. A node may be re-issued a token (e.g. a fresh
+// enrollment): the prior index entry is left in place only if it pointed at this
+// same node, but the canonical authorization is APITokenHash, and LookupNodeByAPIToken
+// resolves via the index — so callers that rotate tokens should revoke first.
+func (s *MemStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	n, ok := ts.nodes[nodeID]
+	if !ok {
+		return ErrNotFound
+	}
+	n.APITokenHash = tokenHash
+	ts.nodes[nodeID] = n
+	ts.apiTokens[tokenHash] = nodeID
+	return nil
+}
+
+// LookupNodeByAPIToken resolves a presented token's hash to its Node via the
+// reverse index. It returns ErrTokenInvalid if the hash is unmapped, if the mapped
+// node has since disappeared, or if the resolved node's Status is NodeRevoked.
+func (s *MemStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	nodeID, ok := ts.apiTokens[tokenHash]
+	if !ok {
+		return Node{}, ErrTokenInvalid
+	}
+	n, ok := ts.nodes[nodeID]
+	if !ok || n.Status == NodeRevoked {
+		return Node{}, ErrTokenInvalid
+	}
+	return n, nil
+}
+
+// RevokeNodeAPIToken clears the node's APITokenHash and deletes its reverse index
+// entry, immediately invalidating the bearer token. It is idempotent: a missing
+// node or a node with no issued token is a no-op success (no ErrNotFound).
+func (s *MemStore) RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	if n, ok := ts.nodes[nodeID]; ok && n.APITokenHash != "" {
+		delete(ts.apiTokens, n.APITokenHash)
+		n.APITokenHash = ""
+		ts.nodes[nodeID] = n
+	}
 	return nil
 }
 

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,36 +13,41 @@ type Server struct {
 	handler *Handler
 	mux     *http.ServeMux
 
-	// controllerTLS is the mTLS server config used by ListenAndServeTLS. It is nil
-	// in air-gap mode (the default); only EnableController sets it. When nil the
-	// air-gap HTTP path (ListenAndServe) is the only serving path and the mux is
-	// byte-identical to a server that never knew about the controller.
-	controllerTLS *tls.Config
+	// agentMux serves the agent-facing controller routes on a SEPARATE port from the
+	// operator/panel mux. It is nil in air-gap mode (the default); only
+	// EnableController populates it. Splitting the agent and operator surfaces onto
+	// two muxes/ports lets a deployment expose the agent port to the fleet while
+	// keeping the operator port behind a tighter network boundary. Both are plain
+	// HTTP — TLS is delegated to a reverse proxy (plan-4.5).
+	agentMux *http.ServeMux
 }
 
 // NewServer  API
 func NewServer() *Server {
 	s := &Server{
-		handler: NewHandler(),
-		mux:     http.NewServeMux(),
+		handler:  NewHandler(),
+		mux:      http.NewServeMux(),
+		agentMux: http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
 }
 
-// EnableController registers the networked controller routes on this server's mux
-// and arms the mTLS serving path. It is the single opt-in seam for controller mode:
-// when it is NOT called, the air-gap routes and the HTTP ListenAndServe path are
-// exactly as before (controllerTLS stays nil). cmd/server calls this only under the
+// EnableController registers the networked controller routes across this server's
+// two muxes: the operator routes go on s.mux (the operator/panel port) and the
+// agent routes go on s.agentMux (the agent port). It is the single opt-in seam for
+// controller mode: when it is NOT called, the air-gap routes on s.mux are exactly as
+// before and s.agentMux serves nothing. cmd/server calls this only under the
 // controller env gate.
 //
-// ch supplies the controller dependencies (Store/DevCA/tenant/operator) and its
-// route set; tlsConfig is the DevCA-built TLS 1.3 + mTLS config the controller is
-// served with (see DevCA.ServerTLSConfig). The controller routes live under
-// /api/v1/controller/ and never collide with the air-gap /api/ routes.
-func (s *Server) EnableController(ch *ControllerHandler, tlsConfig *tls.Config) {
-	ch.Routes(s.mux)
-	s.controllerTLS = tlsConfig
+// Both ports are served as PLAIN HTTP (plan-4.5); confidentiality is delegated to a
+// reverse proxy's TLS. Authentication is per-node bearer tokens (agent) and a shared
+// operator token (operator), enforced by the auth chokepoint in auth_controller.go.
+// The controller routes live under /api/v1/controller/ and never collide with the
+// air-gap /api/ routes on s.mux.
+func (s *Server) EnableController(ch *ControllerHandler) {
+	ch.RegisterOperatorRoutes(s.mux)
+	ch.RegisterAgentRoutes(s.agentMux)
 }
 
 func (s *Server) registerRoutes() {
@@ -61,7 +65,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/deploy-script", wrap(s.handler.HandleDeployScript))
 }
 
-// cors CORS 
+// cors CORS
 func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -118,14 +122,24 @@ func (s *Server) recoverPanics(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Handler  HTTP Handler
+// Handler returns the operator/panel mux (air-gap routes + operator controller
+// routes). Exposed for tests that drive it via httptest.
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+// AgentHandler returns the agent mux (agent controller routes). It serves nothing
+// until EnableController is called. Exposed for tests that drive it via httptest.
+func (s *Server) AgentHandler() http.Handler {
+	return s.agentMux
 }
 
 // ListenAndServe 启动 HTTP 服务。
 // 使用配置了读/写/空闲超时的 *http.Server，而非裸 http.ListenAndServe，
 // 以抵御 Slowloris / 慢速请求体类 DoS（D33）。
+//
+// This serves s.mux: the air-gap routes plus, when controller mode is on, the
+// operator/panel controller routes. It is plain HTTP.
 func (s *Server) ListenAndServe(addr string) error {
 	fmt.Printf("API 服务地址: http://%s\n", addr)
 	fmt.Println("可用接口:")
@@ -147,33 +161,22 @@ func (s *Server) ListenAndServe(addr string) error {
 	return srv.ListenAndServe()
 }
 
-// ListenAndServeTLS serves the controller over TLS 1.3 + mTLS. It requires that
-// EnableController has armed controllerTLS; otherwise it is a programming error and
-// returns one. The server uses the same Slowloris timeouts as the air-gap path
-// (D33) but a longer WriteTimeout to accommodate the /poll long-poll (~55s) without
-// the server tearing the connection down mid-wait.
-//
-// The certificate + key are carried inside controllerTLS.Certificates (issued by the
-// DevCA), so ListenAndServeTLS is called with empty cert/key paths — TLSConfig
-// supplies the keypair.
-func (s *Server) ListenAndServeTLS(addr string) error {
-	if s.controllerTLS == nil {
-		return fmt.Errorf("api: controller TLS not configured (call EnableController first)")
-	}
-	fmt.Printf("Controller service (TLS 1.3 + mTLS): https://%s\n", addr)
-	fmt.Println("Controller endpoints (under /api/v1/controller/):")
-	fmt.Println("  POST /enroll          - node enrollment (no client cert)")
-	fmt.Println("  GET  /config          - fetch current bundle (mTLS)")
-	fmt.Println("  GET  /poll?after=N     - long-poll for a new generation (mTLS)")
-	fmt.Println("  POST /report          - report applied generation (mTLS)")
-	fmt.Println("  POST /update-topology - store topology (operator)")
-	fmt.Println("  POST /stage           - compile + stage bundles (operator)")
-	fmt.Println("  POST /promote         - promote staged bundles (operator)")
+// ListenAndServeAgent serves the agent-facing controller routes (s.agentMux) on a
+// separate port as PLAIN HTTP. It uses the same Slowloris timeouts as the air-gap
+// path (D33) but a longer WriteTimeout to accommodate the /poll long-poll (~55s)
+// without the server tearing the connection down mid-wait (90s leaves margin). TLS
+// is delegated to a reverse proxy (plan-4.5).
+func (s *Server) ListenAndServeAgent(addr string) error {
+	fmt.Printf("Controller agent service (HTTP): http://%s\n", addr)
+	fmt.Println("Agent endpoints (under /api/v1/controller/):")
+	fmt.Println("  POST /enroll          - node enrollment (no auth)")
+	fmt.Println("  GET  /config          - fetch current bundle (bearer)")
+	fmt.Println("  GET  /poll?after=N     - long-poll for a new generation (bearer)")
+	fmt.Println("  POST /report          - report applied generation (bearer)")
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           s.mux,
-		TLSConfig:         s.controllerTLS,
+		Handler:           s.agentMux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout must exceed the /poll long-poll deadline (~55s) so a waiting
@@ -182,7 +185,5 @@ func (s *Server) ListenAndServeTLS(addr string) error {
 		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	// Cert + key come from TLSConfig.Certificates (DevCA-issued), so the path args
-	// are empty.
-	return srv.ListenAndServeTLS("", "")
+	return srv.ListenAndServe()
 }

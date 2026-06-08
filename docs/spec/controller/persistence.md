@@ -9,9 +9,11 @@ home for the signed bundles that [signing.md](signing.md) produces and [agent.md
 
 **Scope of Phase 2 (this milestone, plan-4.1).** This is the **foundation** sub-plan: the interface,
 the two implementations, the audit chain, and the perpetual tenant-isolation gate — CI-green, with **no
-HTTP surface**. Enrollment-token methods extend the `Store` in plan-4.2; the HTTP/TLS/mTLS wiring that
-consumes `WaitForGeneration` for the `/poll` long-poll endpoint is plan-4.3; the frontend panel is
-plan-4.4. This document describes the data-access contract those sub-plans build on. See
+HTTP surface**. Enrollment-token methods extend the `Store` in plan-4.2; the per-node API-token methods
+(`IssueNodeAPIToken` / `LookupNodeByAPIToken` / `RevokeNodeAPIToken`) extend it in plan-4.5; the plain-HTTP
+controller wiring that consumes `WaitForGeneration` for the `/poll` long-poll endpoint and
+`LookupNodeByAPIToken` for the auth chokepoint is plan-4.5; the frontend panel is plan-4.4. This document
+describes the data-access contract those sub-plans build on. See
 [../../design/controller-panel-design-spike-2026_06_07.md](../../design/controller-panel-design-spike-2026_06_07.md)
 and [../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md](../../../implementation_plans/controller-panel-2026_06_08/plan-4-2026_06_08.md).
 
@@ -50,20 +52,20 @@ The `TenantID` derivation evolves across plans **without changing the data-acces
    — the point is to build the chokepoint correctly *now*, so multi-tenant is a derivation change, not
   a data-layer rewrite.
 - **Multi-tenant (Plan 5):** `TenantID` becomes **principal-derived** — read from the authenticated
-  caller (the mTLS client-cert CN, `tenant:node`) at the HTTP middleware and threaded down. Only *how a
-  `TenantID` is produced* changes; the Store contract, the method set, and the isolation gate are
-  identical.
+  caller (the OIDC operator principal / a per-tenant routing key) at the HTTP middleware and threaded
+  down. Only *how a `TenantID` is produced* changes; the Store contract, the method set, and the
+  isolation gate are identical.
 
 ### Stored shapes (public-keys-only)
 
 The Store holds the records defined alongside the interface:
 
 - **`Node`** — one fleet node's registry record: `NodeID`, `WGPublicKey` (base64 WireGuard **public**
-  key, bound at enrollment; empty while pending), `MTLSCertFP` (SHA-256 fingerprint of the issued mTLS
-  client cert, set in plan-4.2), `Status` (`NodePending` / `NodeApproved` / `NodeRevoked`),
-  `DesiredGeneration` / `AppliedGeneration`, `LastChecksum`, `LastSeen`, `EnrolledAt`. `UpsertNode`
-  matches by `NodeID`; `GetNode` returns `ErrNotFound` when absent; `ListNodes` returns a stable order
-  by `NodeID`.
+  key, bound at enrollment; empty while pending), `APITokenHash` (**hex SHA-256 of the node's bearer
+  API token**, stamped at enrollment; empty while pending and after revocation; **never plaintext**),
+  `Status` (`NodePending` / `NodeApproved` / `NodeRevoked`), `DesiredGeneration` / `AppliedGeneration`,
+  `LastChecksum`, `LastSeen`, `EnrolledAt`. `UpsertNode` matches by `NodeID`; `GetNode` returns
+  `ErrNotFound` when absent; `ListNodes` returns a stable order by `NodeID`.
 - **`TopologyRecord`** — the operator's stored topology JSON for the tenant, **public-keys-only** (it
   must not carry WireGuard private keys). `PutTopology` assigns an incrementing `Version` (1, 2, 3, …)
   on each call; `GetTopology` returns the current record or `ErrNotFound`.
@@ -92,6 +94,37 @@ a real key. The controller wiring that stages bundles (plan-4.3) is responsible 
 renderer-produced, custody-clean bundles; the Store does not re-scan bundle bytes, so that pre-stage
 discipline is the caller's contract, not a guarantee the Store enforces at write time.
 
+## The per-node API-token index
+
+Authenticating an agent request means resolving a presented bearer token back to its `Node`
+([controller-api.md](controller-api.md) §The single auth chokepoint). The Store owns that resolution
+through three tenant-scoped methods and a reverse index keyed by the token's **hash** — the plaintext
+token is **never** stored (the same hash-at-rest discipline as the enrollment token):
+
+- **`IssueNodeAPIToken(ctx, t TenantID, nodeID, tokenHash string) error`** — stamps `tokenHash` onto the
+  node's `APITokenHash` **and** writes the reverse index entry `tokenHash → nodeID`, both under one lock.
+  Returns `ErrNotFound` if no node with `nodeID` exists for the tenant. Called by `Enroll`
+  ([enrollment.md](enrollment.md)) once the node record has been upserted.
+- **`LookupNodeByAPIToken(ctx, t TenantID, tokenHash string) (Node, error)`** — resolves a presented
+  token's hash to its `Node` via the reverse index. Returns `ErrTokenInvalid` if the hash is **unmapped**
+  **or** the resolved node is `NodeRevoked` (a revoked node's token is dead even if the index entry has
+  not yet been cleared — the status check is fail-closed). This is the lookup the HTTP auth chokepoint
+  calls on every agent request.
+- **`RevokeNodeAPIToken(ctx, t TenantID, nodeID string) error`** — clears the node's `APITokenHash`
+  **and** deletes the reverse-index entry, so the token stops authenticating **immediately** (no TTL,
+  no CRL, no propagation delay). It is **idempotent**: revoking a node that has no token (already revoked,
+  or never enrolled) is a benign no-op, not an error.
+
+No **new error type** is introduced — the methods reuse the existing `ErrNotFound` / `ErrTokenInvalid`.
+The index reuses the **same tenant predicate** as every other Store method, so a token issued under
+tenant A is structurally invisible to a lookup under tenant B (the perpetual `tenant_isolation_test.go`
+gate covers the API-token path the same way it covers every other method: issue under A → lookup under
+B returns `ErrTokenInvalid`, lookup under A returns the node).
+
+Because the index keys on the **hash**, a read of the backing store can never recover a usable token —
+only its SHA-256. The plaintext is emitted **exactly once**, in the `/enroll` response, and lives only
+on the enrolling node's disk thereafter ([agent.md](agent.md) §The enroll subcommand).
+
 ## The two stdlib implementations
 
 Phase 2 ships **two** `Store` implementations, both **stdlib only** (no new `go.mod` dependency). Each
@@ -107,17 +140,32 @@ condition variable / channel broadcast guarded by the store mutex). All Phase 2 
 tests — the tenant-isolation gate, the stage/promote semantics, the audit-chain verification — run
 against `MemStore`.
 
+The per-node API-token index is a per-tenant `apiTokens map[string]string` (`tokenHash → nodeID`) held
+on the same `tenantState` as the node registry and initialized in `newTenantState`. It is **deep-copied**
+on read exactly like the other per-tenant maps, and every `IssueNodeAPIToken` / `LookupNodeByAPIToken` /
+`RevokeNodeAPIToken` operation runs under the store mutex `s.mu`, so an issue/lookup/revoke race resolves
+to a single consistent outcome.
+
 ### FileStore — durable JSON on disk (single-tenant v1)
 
 `func NewFileStore(root string) (*FileStore, error)` returns a store that persists state as JSON under
 `root`, which it creates with mode **0700**. It is the **durable** backing for a single-tenant v1
 deployment: state survives a controller restart.
 
+The per-node API-token reverse index is persisted as one small JSON file per token under an
+**`apitokens/`** sub-dir of the tenant directory: `apitokens/<hash>.json` holding `{"NodeID": "<id>"}`,
+where `<hash>` is the token's hex SHA-256 run through `sanitizeComponent` (the same path-safety guard the
+store uses for every on-disk key) and written via `writeJSONAtomic` (temp-file-then-`rename`, **0600**).
+`ensureTenantDir` creates `apitokens` alongside the other per-tenant sub-dirs at startup. `IssueNodeAPIToken`
+writes the file (and stamps the node record); `RevokeNodeAPIToken` removes it (and clears the node's
+`APITokenHash`); `LookupNodeByAPIToken` reads it, then loads the named node and applies the
+`NodeRevoked`-is-`ErrTokenInvalid` check. Only the **hash** is ever on disk — never the plaintext token.
+
 Durability discipline:
 
 - **Permissions:** the root directory is **0700**; written files are **0600**. The store can hold
-  signed bundles and tenant topology, so it is treated as sensitive even though it carries no private
-  keys.
+  signed bundles, tenant topology, and the API-token index, so it is treated as sensitive even though it
+  carries no private keys (and no plaintext tokens — only their hashes).
 - **Atomic per-file writes (torn-write safe, not crash-durable):** every single record is written to a
   **temporary file then `rename`d** into place, so a concurrent reader sees either the old complete
   file or the new complete file — never a half-written one. This is *torn-write* protection, not full
@@ -222,7 +270,8 @@ keeping the rest of the controller driver-agnostic. A brief schema sketch — ev
 
 | Table            | Key columns                                | Notes                                                        |
 | ---------------- | ------------------------------------------ | ----------------------------------------------------------- |
-| `nodes`          | `(tenant_id, node_id)`                      | WG **public** key, mTLS cert FP, status, desired/applied gen, last_seen, enrolled_at — **never** a private key |
+| `nodes`          | `(tenant_id, node_id)`                      | WG **public** key, API-token **hash**, status, desired/applied gen, last_seen, enrolled_at — **never** a private key or a plaintext token |
+| `api_tokens`     | `(tenant_id, token_hash)`                   | reverse index `token_hash → node_id`; hash only, never plaintext |
 | `topologies`     | `(tenant_id, version)`                      | public-keys-only JSON; `version` increments per `PutTopology` |
 | `signed_bundles` | `(tenant_id, node_id, generation)`          | bundle files, `is_staged` / `is_current` flags               |
 | `audit_log`      | `(tenant_id, seq)`                          | append-only; `prev_hash` / `hash` chain, timestamp, actor, action, node_id |
