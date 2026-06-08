@@ -15,6 +15,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Comprehensive Legacy Cleanup:** Install scripts automatically detect and remove all stale WireGuard interfaces and configs (not just `wg0`), ensuring clean upgrades.
 - **Offline Configuration Bundles:** One-click deployment bundle generation — download portable `.zip` archives containing safe Bash installation scripts, sysctl modifications, Babel daemons, and WireGuard interfaces.
 - **Immutable Artifacts:** Generated scripts hash and verify checksums (`sha256`) explicitly mitigating tamper attacks.
+- **Controller Mode (Agent-Pull Deploy):** Optionally run YAOG as a long-lived **controller** — a single Docker image (panel + API) where each node **pulls** its own keystone-signed config instead of you exporting a bundle. Operator login (password + optional TOTP / passkey 2FA), one-line node enrollment, and one-click Deploy. See [Controller Mode (Docker)](#controller-mode-docker).
 
 ## Getting Started
 
@@ -69,6 +70,63 @@ Visit `http://localhost:5173` in your browser.
 4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown). Leave the port at `0` so the compiler allocates it; only set `endpoint_port` when you need an explicit NAT/port-forward override.
 5. **Compile:** Hit `Compile` to allocate IPs and ports, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
 6. **Export & Deploy:** Hit `Export` to download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
+
+## Controller Mode (Docker)
+
+> **New in 2.0 (preview).** Instead of exporting an air-gapped bundle, you can run YAOG as a long-lived **controller** and let each node **pull** its own signed config. The controller is a single Docker image (the SPA panel + API); the per-node agent is a small host binary the controller hands you a one-line installer for. The classic generator/export flow above is unchanged.
+
+Requires Docker Engine with the Compose plugin (`docker compose`, v2).
+
+### 1. Start the controller
+
+```bash
+# Grab the compose file (or clone the repo and use the one at the root)
+curl -fsSLO https://raw.githubusercontent.com/kunori-kiku/yet-another-overlay-generator/main/docker-compose.yml
+
+# State lives in ./data (a bind mount). The container runs as uid 65532,
+# so create that directory with the right owner ONCE:
+mkdir -p data && sudo chown 65532:65532 data
+
+docker compose up -d
+```
+
+All controller state persists to `./data` next to the compose file, so backing up the controller is just snapshotting that folder. No `.env` is required — the compose file ships with working defaults.
+
+> **Image visibility:** the compose pulls `ghcr.io/kunori-kiku/yaog-controller:latest`. If the pull is denied (the GHCR package is private), either run `docker login ghcr.io` first, or build locally — comment `image:` and uncomment `build: .` in `docker-compose.yml` (needs a repo checkout).
+
+### 2. Create an operator account
+
+```bash
+docker compose run --rm controller create-operator \
+    --state-dir /data --tenant default --username admin
+```
+
+You'll be prompted for a password (entered without echo). This is the account you log into the panel with. Re-run with `--force` to reset an existing operator's password.
+
+### 3. Open the panel
+
+The panel + operator API is at **`http://localhost:8080`** (the node-facing agent API is on `:9090`). Log in as `admin`.
+
+By default both ports bind to **loopback only** (`127.0.0.1`) — the login form carries a plaintext password, so nothing is exposed on other interfaces out of the box. Reach the panel from the same host, or tunnel it: `ssh -L 8080:127.0.0.1:8080 <host>`.
+
+> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony.
+
+### 4. Deploy to a node (agent pull)
+
+To let a remote node pull its config, first expose the agent port — for a lab, `YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`; for production, the TLS proxy above. Then, in the panel:
+
+1. In the **Bootstrap Settings** section, set the **Public Agent URL** to where nodes reach the controller (e.g. `https://overlay.example.com` or `http://<host>:9090`).
+2. Add a node and generate a single-use **enrollment token**.
+3. On the target host (Linux + systemd), as root:
+
+```bash
+bash <(curl -fsSL https://<public-agent-url>/api/v1/controller/bootstrap) \
+     --token <enrollment-token> --node-id <id>
+```
+
+This downloads the `yaog-agent` binary, enrolls the node, applies the current generation, and installs a systemd daemon so future **Deploy**s auto-apply. Add `--once` to apply a single generation without the daemon. With the keystone enabled, each Deploy is signed by your off-host hardware key and the node verifies the signature before applying.
+
+Full reference: [`docs/spec/controller/docker.md`](docs/spec/controller/docker.md) and [`docs/spec/controller/bootstrap.md`](docs/spec/controller/bootstrap.md).
 
 ## Documentation
 
