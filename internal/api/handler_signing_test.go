@@ -36,10 +36,11 @@ func TestMakeSelfExtractingInstaller_Signed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	signing := &installerSigning{priv: priv, pubkeyPEM: string(bundlesig.MarshalPublicKeyPEM(pub))}
+	// The in-process *bundlesig.Signing is the default bundlesig.ConfigSigner.
+	signer := &bundlesig.Signing{Priv: priv, PubKeyPEM: bundlesig.MarshalPublicKeyPEM(pub)}
 	payload := []byte("pretend tar.gz payload bytes\x00\x01\x02")
 
-	out, err := makeSelfExtractingInstaller("alpha", payload, signing)
+	out, err := makeSelfExtractingInstaller("alpha", payload, signer)
 	if err != nil {
 		t.Fatalf("makeSelfExtractingInstaller: %v", err)
 	}
@@ -95,25 +96,4 @@ func TestMakeSelfExtractingInstaller_Unsigned(t *testing.T) {
 	if !strings.Contains(s, "| sha256sum -c -") {
 		t.Error("unsigned wrapper must still perform the SHA-256 payload check")
 	}
-}
-
-// TestLoadInstallerSigning mirrors the bundlesig env-loader contract at the api
-// layer: nil when unset, error on an unreadable path, populated otherwise.
-func TestLoadInstallerSigning(t *testing.T) {
-	t.Run("unset", func(t *testing.T) {
-		t.Setenv(bundlesig.EnvSigningKey, "")
-		s, err := loadInstallerSigning()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if s != nil {
-			t.Fatalf("expected nil when unset, got %+v", s)
-		}
-	})
-	t.Run("bad-path", func(t *testing.T) {
-		t.Setenv(bundlesig.EnvSigningKey, t.TempDir()+"/missing.pem")
-		if _, err := loadInstallerSigning(); err == nil {
-			t.Fatal("expected an error for an unreadable signing key path")
-		}
-	})
 }

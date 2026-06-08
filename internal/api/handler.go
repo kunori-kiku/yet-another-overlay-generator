@@ -5,7 +5,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -60,12 +59,12 @@ type ValidateResponse struct {
 
 // CompileResponse
 type CompileResponse struct {
-	Topology         *model.Topology             `json:"topology"`
-	WireGuardConfigs map[string]string           `json:"wireguard_configs"`
-	BabelConfigs     map[string]string           `json:"babel_configs"`
-	SysctlConfigs    map[string]string           `json:"sysctl_configs"`
-	InstallScripts   map[string]string           `json:"install_scripts"`
-	DeployScripts    map[string]string           `json:"deploy_scripts"`
+	Topology         *model.Topology   `json:"topology"`
+	WireGuardConfigs map[string]string `json:"wireguard_configs"`
+	BabelConfigs     map[string]string `json:"babel_configs"`
+	SysctlConfigs    map[string]string `json:"sysctl_configs"`
+	InstallScripts   map[string]string `json:"install_scripts"`
+	DeployScripts    map[string]string `json:"deploy_scripts"`
 	// 编译成功后仍需向用户展示的非致命告警（NAT 不可达、无 endpoint 的边、孤立节点等）。
 	// 这些告警在编译期由语义校验产生，必须随成功响应返回，否则操作员会在绿色编译上
 	// 部署一条注定不通的隧道（审计阻断项 UX-1）。
@@ -342,9 +341,11 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
 
-	// Load the optional bundle-signing key once for the whole archive. nil means signing is off
+	// Resolve the optional ConfigSigner once for the whole archive. nil means signing is off
 	// (no YAOG_BUNDLE_SIGNING_KEY) and every wrapper stays byte-identical to today (opt-in).
-	signing, err := loadInstallerSigning()
+	// The shared seam keeps the env-var name + PEM handling identical to the export path and the
+	// install-script renderer, and lets a future KMS/HSM backend swap in without touching this loop.
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +368,7 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 			return nil, err
 		}
 
-		installer, err := makeSelfExtractingInstaller(nodeName, tgz.Bytes(), signing)
+		installer, err := makeSelfExtractingInstaller(nodeName, tgz.Bytes(), signer)
 		if err != nil {
 			return nil, err
 		}
@@ -445,42 +446,15 @@ func tarGzDirectory(dir string) (*bytes.Buffer, error) {
 	return buf, nil
 }
 
-// installerSigning carries the optional Ed25519 signing material for the self-extracting installer.
-// It is non-nil only when bundle signing is enabled (operator key configured via
-// YAOG_BUNDLE_SIGNING_KEY). When nil, makeSelfExtractingInstaller emits the wrapper byte-identical
-// to the pre-signing output (opt-in back-compat). See docs/spec/controller/signing.md.
-type installerSigning struct {
-	priv      ed25519.PrivateKey // signs the tar.gz payload bytes
-	pubkeyPEM string             // PKIX/PKCS8 PEM of the verifying public key, pinned into the wrapper
-}
-
-// loadInstallerSigning loads the optional bundle-signing key via the shared
-// bundlesig.LoadSigningFromEnv (bundlesig.EnvSigningKey). It returns (nil, nil)
-// when the env var is unset/empty, i.e. signing is off and bundles stay hash-only
-// exactly as today (opt-in). A non-empty-but-broken key path is a configuration
-// error surfaced to the caller. The shared loader keeps the env-var name and PEM
-// handling identical to the export path and the install-script renderer.
-func loadInstallerSigning() (*installerSigning, error) {
-	signing, err := bundlesig.LoadSigningFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	if signing == nil {
-		return nil, nil
-	}
-	return &installerSigning{
-		priv:      signing.Priv,
-		pubkeyPEM: string(signing.PubKeyPEM),
-	}, nil
-}
-
 // makeSelfExtractingInstaller builds the self-extracting installer wrapper for one node's tar.gz
-// payload. When signing is non-nil, the wrapper additionally carries a base64 Ed25519 signature
+// payload. When signer is non-nil, the wrapper additionally carries a base64 Ed25519 signature
 // over the payload bytes plus the pinned verifying public key, and verifies the signature (openssl)
 // BEFORE the existing SHA-256 integrity check — with the same fail-clear discipline (a present
-// signature that cannot be verified aborts; openssl/Ed25519 missing aborts). When signing is nil
-// the emitted wrapper is byte-identical to the pre-signing output.
-func makeSelfExtractingInstaller(nodeName string, payload []byte, signing *installerSigning) ([]byte, error) {
+// signature that cannot be verified aborts; openssl/Ed25519 missing aborts). When signer is nil
+// the emitted wrapper is byte-identical to the pre-signing output. signer is the shared
+// bundlesig.ConfigSigner seam (today an in-process Ed25519 key from YAOG_BUNDLE_SIGNING_KEY; a
+// future KMS/HSM backend swaps in transparently). See docs/spec/controller/signing.md.
+func makeSelfExtractingInstaller(nodeName string, payload []byte, signer bundlesig.ConfigSigner) ([]byte, error) {
 	encoded := base64.StdEncoding.EncodeToString(payload)
 
 	// 自解包装脚本此前直接 base64 解码并以 root 执行 payload，对 payload 没有任何完整性锚定
@@ -495,13 +469,16 @@ func makeSelfExtractingInstaller(nodeName string, payload []byte, signing *insta
 	// whose SHA-256 is pinned above, base64-encode the raw signature, and emit a block that runs
 	// BEFORE the SHA-256 check.
 	sigBlock := ""
-	if signing != nil {
-		sig := bundlesig.Sign(payload, signing.priv)
+	if signer != nil {
+		sig, err := signer.Sign(payload)
+		if err != nil {
+			return nil, fmt.Errorf("sign installer payload: %w", err)
+		}
 		sigB64 := base64.StdEncoding.EncodeToString(sig)
 		// Carry both the signature and the PEM as base64 to avoid any shell quoting/newline issues:
 		// %q would Go-escape the PEM's newlines as literal backslash-n, which bash double quotes do
 		// NOT re-interpret, corrupting the key. base64 round-trips the exact bytes safely.
-		pubkeyB64 := base64.StdEncoding.EncodeToString([]byte(signing.pubkeyPEM))
+		pubkeyB64 := base64.StdEncoding.EncodeToString(signer.PublicKeyPEM())
 		// All shell vars quoted; pinned pubkey written to a temp file for openssl pkeyutl -pubin.
 		// openssl missing, or lacking Ed25519 support, exits nonzero and aborts (never silently skip).
 		sigBlock = fmt.Sprintf(`PAYLOAD_SIG_B64=%q
