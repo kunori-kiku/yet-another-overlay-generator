@@ -18,10 +18,25 @@ docker compose run --rm controller create-operator \
 ```
 
 `docker-compose.yml` **bind-mounts** the FileStore to `./data` next to the file (so backing
-up the controller is just snapshotting that folder), exposes both ports, and sets controller
+up the controller is just snapshotting that folder), publishes both ports, and sets controller
 mode via `YAOG_TENANT_ID` + `YAOG_CONTROLLER_STATE_DIR`. Front it with a TLS-terminating reverse
 proxy in production (the commented `caddy` service): `POST /login` carries a plaintext password,
 so TLS at the proxy is required.
+
+### Network exposure (loopback by default)
+
+Both ports are published to the **loopback interface only** (`127.0.0.1`) by default — the
+panel's `POST /login` carries a plaintext password and the agent API authorizes nodes, so
+neither is reachable from other hosts out of the box. Access patterns:
+
+- **Reverse proxy (recommended):** the proxy reaches the controller over the compose network,
+  so the published host ports stay on loopback while the proxy terminates TLS and faces the
+  internet. Point your operators and the agents' configured agent URL at the proxy.
+- **SSH tunnel:** `ssh -L 8080:127.0.0.1:8080 host` to reach the panel from your workstation.
+- **Direct exposure (opt-in):** to publish on all interfaces — e.g. for remote agents pulling
+  without a proxy — set the bind address: `YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`.
+  `YAOG_BIND_ADDR` overrides the host IP for **both** published ports; leave it unset for the
+  secure loopback default. (With a reverse proxy you usually don't publish host ports at all.)
 
 The image's `ENTRYPOINT` is the bare binary and the serve flags are a `CMD`, so
 `docker compose run --rm controller create-operator …` correctly replaces the command and
