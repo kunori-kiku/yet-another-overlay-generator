@@ -1,4 +1,4 @@
-import { useControllerStore } from '../../stores/controllerStore';
+import { useControllerStore, selectRekeyingCount } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
 
@@ -15,9 +15,16 @@ export function DeployBar() {
   const error = useControllerStore((s) => s.error);
   const lastDeploy = useControllerStore((s) => s.lastDeploy);
   const operatorToken = useControllerStore((s) => s.operatorToken);
+  // 仍处于 rekey_requested 的节点数：>0 时禁用 Deploy（见下方说明）。
+  const rekeyingCount = useControllerStore(selectRekeyingCount);
 
   // 未填 operator token 时无法发起 operator 请求，禁用按钮并给出提示。
   const noToken = operatorToken.trim() === '';
+
+  // 轮换收口前（仍有节点 rekey_requested）禁用 Deploy：此时各 agent 尚未全部重生密钥并
+  // 重新注册新公钥，若此刻 Deploy 会用「旧+新」混合公钥重编译，导致 fleet 收敛错乱。
+  // 待所有「轮换中」徽标消失（节点已重新注册）后再 Deploy 一次即可收敛。
+  const anyRekeying = rekeyingCount > 0;
 
   // 「Roll keys」是 plan-4.6 ROUTINE tier 的全 fleet 密钥轮换：标记每个已审批节点 rekey，
   // 各 agent 会自行重生本地 WG 私钥并注册新公钥（控制器从不接触私钥）。操作不可一键完成
@@ -26,8 +33,8 @@ export function DeployBar() {
     const ok = window.confirm(
       txt(
         language,
-        '将为整个 fleet 请求 WireGuard 密钥轮换。各节点会重生本地私钥并注册新公钥；随后你需要再「发布」一次以使 fleet 收敛（滚动重部署期间各链路会短暂抖动）。是否继续？',
-        'This requests a WireGuard key rotation across the whole fleet. Each node regenerates its local private key and registers a new public key; you will then need to Deploy once more for the fleet to converge (links flap briefly during the rolling redeploy). Continue?',
+        '将为整个 fleet 请求 WireGuard 密钥轮换。流程：① 各节点重生本地私钥并向控制器重新注册新公钥（注册表里的「🔑 轮换中」徽标随之逐个消失）；② 待所有徽标消失后，再「发布」一次——新一代配置携带全员新公钥，使 fleet 收敛（滚动应用期间各链路会短暂抖动）。请勿在仍有节点轮换中时发布。是否继续？',
+        'This requests a WireGuard key rotation across the whole fleet. Sequence: (1) each node regenerates its local private key and re-registers a new public key with the controller (its "🔑 rekeying" badge in the registry clears one by one); (2) once every badge has cleared, Deploy once — the new generation carries everyone’s new public keys and the fleet converges (links flap briefly during the rolling apply). Do not Deploy while any node is still rotating. Continue?',
       ),
     );
     if (ok) {
@@ -51,7 +58,16 @@ export function DeployBar() {
           </button>
           <button
             onClick={() => deploy()}
-            disabled={loading || noToken}
+            disabled={loading || noToken || anyRekeying}
+            title={
+              anyRekeying
+                ? txt(
+                    language,
+                    `${rekeyingCount} 个节点仍在轮换密钥——待全部重新注册后再发布`,
+                    `${rekeyingCount} node(s) still rotating keys — Deploy when all have re-registered`,
+                  )
+                : undefined
+            }
             className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {loading
@@ -83,6 +99,16 @@ export function DeployBar() {
             language,
             '请先在上方填写 Operator Token。',
             'Enter the operator token above first.',
+          )}
+        </p>
+      )}
+
+      {anyRekeying && (
+        <p className="text-xs text-purple-300 bg-purple-900/20 px-2 py-1 rounded">
+          {txt(
+            language,
+            `${rekeyingCount} 个节点仍在轮换密钥——待全部重新注册后再发布（否则会用旧+新混合公钥重编译）。`,
+            `${rekeyingCount} node(s) still rotating keys — Deploy when all have re-registered (deploying now would recompile with mixed old+new public keys).`,
           )}
         </p>
       )}

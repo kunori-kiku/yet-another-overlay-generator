@@ -778,11 +778,17 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 // HandleRekeyAll requests a fleet-wide WireGuard key rotation (operator-only). It
 // flags every APPROVED node with RekeyRequested=true (read-modify-write via
 // GetNode/UpsertNode so every other field is preserved); pending/revoked nodes are
-// left untouched. Each flagged node's agent learns of the request on its next
-// /config fetch (rekey_requested=true), regenerates its key, and re-registers the
-// new PUBLIC key via /rekey (which clears the flag). This is the ROUTINE security
-// tier: rolling EXISTING members' keys never adds or removes a member, so the
-// operator token authorizes it in v1. Returns {requested:<count>}.
+// left untouched. After flagging, it calls Store.BumpGeneration to WAKE every parked
+// daemon agent: those agents long-poll WaitForGeneration, which fires ONLY on a
+// generation advance, so without the bump a flagged agent would never wake to see
+// rekey_requested (the deadlock this fixes). The bump changes NO bundle —
+// GetCurrentBundle still returns the last promoted bundle — so a woken agent sees the
+// rekey signal on /config and skip-applies (rotate+re-register) rather than treating
+// the bumped generation as a deploy. Each flagged node's agent then learns of the
+// request on its next /config fetch (rekey_requested=true), regenerates its key, and
+// re-registers the new PUBLIC key via /rekey (which clears the flag). This is the
+// ROUTINE security tier: rolling EXISTING members' keys never adds or removes a
+// member, so the operator token authorizes it in v1. Returns {requested:<count>}.
 func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
@@ -820,6 +826,16 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		requested++
+	}
+	// WAKE the fleet: bump the generation so parked daemon agents (blocked in
+	// WaitForGeneration, which only wakes on an advance) wake, Fetch /config, and see
+	// rekey_requested. This bumps the counter ONLY — it changes no bundle, so a woken
+	// agent skip-applies on the rekey signal instead of treating it as a deploy. Done
+	// even when requested==0 so the bump is unconditional and idempotent (a no-op-flag
+	// rekey-all still records the audit entry below).
+	if _, err := h.store.BumpGeneration(r.Context(), tenant); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to wake agents for rekey")
+		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
 		Timestamp: time.Now(),

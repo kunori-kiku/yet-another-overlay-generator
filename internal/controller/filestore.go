@@ -587,6 +587,35 @@ func (fs *FileStore) CurrentGeneration(ctx context.Context, t TenantID) (int64, 
 	return fs.readGeneration(dir)
 }
 
+// BumpGeneration increments the persisted generation counter (generation.json)
+// atomically, WITHOUT touching any bundle: the staged/current bundle files are left
+// in place, so GetCurrentBundle keeps returning the last promoted bundle. It mirrors
+// how PromoteStaged advances generation.json (read current, write current+1 via the
+// atomic temp-file + rename), so the ~200ms WaitForGeneration poller picks it up and
+// a parked agent's long-poll fires. Returns the new generation. Use PromoteStaged to
+// actually flip a staged bundle set live; BumpGeneration is a WAKE-only advance.
+func (fs *FileStore) BumpGeneration(ctx context.Context, t TenantID) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return 0, err
+	}
+	cur, err := fs.readGeneration(dir)
+	if err != nil {
+		return 0, err
+	}
+	newGen := cur + 1
+	if err := writeJSONAtomic(filepath.Join(dir, "generation.json"), generationFile{Generation: newGen}); err != nil {
+		return 0, err
+	}
+	return newGen, nil
+}
+
 // WaitForGeneration blocks until the tenant's current generation is strictly
 // greater than afterGen, then returns it; or returns ctx.Err() if ctx is done
 // first. It polls generation.json on a short interval (the disk Store has no

@@ -36,6 +36,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -529,6 +530,119 @@ func TestControllerClient_LastFetchedGenerationZeroBeforeFetch(t *testing.T) {
 	}
 	if got := c.LastFetchedGeneration(); got != 0 {
 		t.Fatalf("LastFetchedGeneration before Fetch = %d, want 0", got)
+	}
+}
+
+// TestControllerCycle_RekeyWakeSkipsApply is the agent-cycle test for the redesigned
+// rotation flow (BLOCKER 1+2), driving the REAL two-mux controller handler over plain
+// HTTP. It enrolls + promotes (so /config returns a bundle), has the OPERATOR POST
+// /rekey-all (which flags node-1 AND bumps the generation — the WAKE), then runs ONE
+// agent.RunControllerCycle and asserts:
+//
+//	(1) the cycle SKIPPED apply (applied=false) — the woken bundle is the pre-rekey
+//	    bundle compiled with peers' OLD pubkeys, so it must NOT be applied (re-applying
+//	    it is the BLOCKER-2 outage). We prove the skip by pointing StagingDir at an empty
+//	    temp dir and asserting agent.Run never materialized install.sh there.
+//	(2) the node's registry WireGuard public key CHANGED (RegenerateKey + /rekey ran).
+//	(3) the node's rekey_requested flag was CLEARED by /rekey.
+//	(4) the returned resume cursor == the WAKE generation (the generation the cycle
+//	    FETCHED), NOT the unchanged watermark — so a strictly-greater later generation
+//	    (the operator's post-rekey Deploy) still applies (the BLOCKER-2 fix).
+func TestControllerCycle_RekeyWakeSkipsApply(t *testing.T) {
+	env := newCtlEnv(t)
+
+	// Both nodes enroll (approved); the whole graph compiles on promote.
+	node1Token := env.enrollViaAgent(t, "node-1")
+	_ = env.enrollViaAgent(t, "node-2")
+
+	// Promote a generation so /config returns 200 and the wake has a bundle to surface.
+	promotedGen := env.stageAndPromote(t)
+
+	// Capture node-1's current public key so we can prove the rotation changed it.
+	before, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1) before rekey: %v", err)
+	}
+	if before.WGPublicKey == "" {
+		t.Fatalf("node-1 has no WG public key before rekey")
+	}
+
+	// Operator rolls keys fleet-wide: flags node-1 AND bumps the generation (the WAKE).
+	env.doOperatorJSON(t, http.MethodPost, env.opSrv.URL+"/api/v1/controller/rekey-all", []byte("{}"))
+
+	// The wake bumped the generation past the promoted one.
+	wakeGen, err := env.store.CurrentGeneration(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("CurrentGeneration after rekey-all: %v", err)
+	}
+	if wakeGen != promotedGen+1 {
+		t.Fatalf("wake generation = %d, want %d (rekey-all bumps the generation)", wakeGen, promotedGen+1)
+	}
+
+	// A real WG private key on disk (in a temp dir, never /etc/wireguard) so RegenerateKey
+	// can rotate it during the cycle.
+	keyDir := t.TempDir()
+	keyPath := keyDir + "/agent.key"
+	if _, _, err := agent.EnsureKey(keyPath); err != nil {
+		t.Fatalf("EnsureKey: %v", err)
+	}
+
+	// An EMPTY staging dir: the rekey branch must return BEFORE agent.Run, so install.sh
+	// is never materialized here. If apply ran, agent.Run would write install.sh into it.
+	stagingDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	agentClient, err := agent.NewControllerClient(env.agentSrv.URL, node1Token)
+	if err != nil {
+		t.Fatalf("NewControllerClient(bearer): %v", err)
+	}
+
+	// Run ONE cycle from the promoted-generation watermark. The cycle polls (sees the
+	// wake), fetches (reads rekey_requested), rotates the key, re-registers, and SKIPS
+	// apply.
+	var logBuf bytes.Buffer
+	resumeGen, applied, err := agent.RunControllerCycle(agentClient, agent.CycleConfig{
+		NodeID:     "node-1",
+		After:      promotedGen,
+		StateDir:   stateDir,
+		StagingDir: stagingDir,
+		KeyPath:    keyPath,
+		Stderr:     &logBuf,
+	})
+	if err != nil {
+		t.Fatalf("RunControllerCycle: %v\nlog: %s", err, logBuf.String())
+	}
+
+	// (1) Apply was SKIPPED: applied=false and no install.sh landed in the staging dir.
+	if applied {
+		t.Fatalf("RunControllerCycle applied=true, want false (a rekey wake must SKIP apply)")
+	}
+	if _, statErr := os.Stat(stagingDir + "/install.sh"); statErr == nil {
+		t.Fatalf("install.sh was materialized in the staging dir; the wake bundle must NOT be applied")
+	}
+
+	// (2) The registry public key CHANGED (RegenerateKey + /rekey ran).
+	after, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1) after cycle: %v", err)
+	}
+	if after.WGPublicKey == before.WGPublicKey {
+		t.Fatalf("node-1 WGPublicKey unchanged after rekey cycle (%q); the cycle must rotate + re-register", after.WGPublicKey)
+	}
+	if after.WGPublicKey == "" {
+		t.Fatalf("node-1 WGPublicKey empty after rekey cycle")
+	}
+
+	// (3) The rekey_requested flag was cleared by /rekey.
+	if after.RekeyRequested {
+		t.Fatalf("node-1 RekeyRequested still set after rekey cycle, want cleared")
+	}
+
+	// (4) The resume cursor == the WAKE generation (the fetched one), so a strictly-
+	// greater later generation (the operator's post-rekey Deploy) still applies and the
+	// stale wake bundle is never re-applied.
+	if resumeGen != wakeGen {
+		t.Fatalf("RunControllerCycle resumeGen = %d, want %d (the wake/fetched generation, NOT the unchanged watermark %d)", resumeGen, wakeGen, promotedGen)
 	}
 }
 

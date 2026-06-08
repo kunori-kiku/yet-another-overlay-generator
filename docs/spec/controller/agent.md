@@ -350,7 +350,21 @@ Passing **`--daemon`** keeps the process running and loops that same cycle conti
    anything strictly newer than `N+1`. Advancing only to the *polled* `N` would leave the loop re-fetching
    and re-applying the same generation next cycle; keying the cursor on the fetched generation keeps the
    watermark from lagging the fleet under that race.
-3. **Keep-last-good with backoff.** A transport error (poll/config), a `VerifyBundle` refusal, a
+   The cycle is the exported, unit-tested `agent.RunControllerCycle(client, CycleConfig) (resumeGen,
+   applied, err)`; the daemon and single-shot loops both call it, so the watermark/skip/keep-last-good
+   semantics below are covered once.
+3. **Rekey wake — rotate, re-register, SKIP apply, advance PAST the wake.** When the `Fetch` envelope
+   carries `rekey_requested=true` (the operator's `POST /rekey-all` flagged this node **and**
+   `BumpGeneration`-woke the fleet — see [deploy.md](deploy.md) §Fleet-wide key rotation), the cycle does
+   **not** apply the woken bundle (it was compiled with peers' OLD public keys). It `RegenerateKey`s the
+   local private key, `POST /rekey`s the new **public** key (clearing the flag), and resumes from the
+   **wake generation** — `max(polled, LastFetchedGeneration())`, `applied=false`. The bump advanced the
+   tenant generation without re-compiling the bundle, so `/config` still reports the OLD bundle's smaller
+   generation; resuming from that smaller value (or the unchanged watermark) would leave the bumped
+   generation strictly greater than the cursor and the next poll would re-fire this branch in a tight loop
+   — or re-apply the stale bundle. Resuming from the polled wake guarantees the next generation the agent
+   applies is **strictly greater**: the operator's post-rekey Deploy carrying everyone's new public keys.
+4. **Keep-last-good with backoff.** A transport error (poll/config), a `VerifyBundle` refusal, a
    rolled-back bundle, a missing `/etc/wireguard/agent.key`, or a non-zero `install.sh` exit **does not
    advance the watermark and does not tear down the running overlay** — the loop logs the failure, keeps
    the last-good configuration, sleeps a short fixed backoff, and retries from the unchanged watermark. The

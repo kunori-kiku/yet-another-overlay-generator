@@ -188,6 +188,15 @@ type Store interface {
 	GetCurrentBundle(ctx context.Context, t TenantID, nodeID string) (SignedBundle, error)
 	// CurrentGeneration returns the tenant's current generation (0 if none promoted).
 	CurrentGeneration(ctx context.Context, t TenantID) (int64, error)
+	// BumpGeneration atomically increments the tenant's generation and wakes any
+	// WaitForGeneration waiters, WITHOUT changing any bundle: GetCurrentBundle keeps
+	// returning the last promoted bundle for every node. It is a WAKE, not a deploy —
+	// it lets a non-deploy signal (e.g. a fleet-wide rekey request flagged on the
+	// registry) rouse parked daemon agents, which Fetch /config and observe the signal
+	// rather than apply this generation's (unchanged) bundle. Returns the new
+	// generation. Use PromoteStaged when a new bundle set should actually go live;
+	// BumpGeneration only advances the counter so the long-poll fires.
+	BumpGeneration(ctx context.Context, t TenantID) (int64, error)
 	// WaitForGeneration blocks until the tenant's current generation is strictly
 	// greater than afterGen, then returns it; or returns ctx.Err() if ctx is done
 	// first. This is the long-poll primitive consumed by plan-4.3's /poll endpoint.
