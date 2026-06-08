@@ -173,7 +173,18 @@ type Operator struct {
 	PasswordHash string    `json:"password_hash"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	// TOTPSecret is the operator's base32 TOTP shared secret for optional login 2FA
+	// (plan-5.2). Empty = no 2FA enrolled. It is SYMMETRIC, so it is stored at rest
+	// (unlike a passkey, which stores only a public key); TOTP gates the panel login
+	// only and is NEVER a keystone signing mechanism. See totp.go.
+	TOTPSecret string `json:"totp_secret,omitempty"`
+	// TOTPLastUsedStep is the most recent accepted TOTP step counter, for replay
+	// rejection (a code at or before this step is refused). 0 until the first use.
+	TOTPLastUsedStep int64 `json:"totp_last_used_step,omitempty"`
 }
+
+// TOTPEnabled reports whether the operator has TOTP login 2FA enrolled.
+func (o Operator) TOTPEnabled() bool { return o.TOTPSecret != "" }
 
 // Session is a server-side operator session minted at a successful /login. The
 // controller stores only TokenHash (hex SHA-256 of the bearer session token); the

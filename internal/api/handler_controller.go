@@ -135,6 +135,11 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// presented session.
 	mux.HandleFunc(base+"login", h.cors(h.HandleLogin))
 	mux.HandleFunc(base+"logout", op(h.HandleLogout))
+	// TOTP login 2FA (plan-5.2): manage the current operator's optional second factor.
+	mux.HandleFunc(base+"totp/status", op(h.HandleTOTPStatus))
+	mux.HandleFunc(base+"totp/enroll", op(h.HandleTOTPEnroll))
+	mux.HandleFunc(base+"totp/confirm", op(h.HandleTOTPConfirm))
+	mux.HandleFunc(base+"totp/disable", op(h.HandleTOTPDisable))
 	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
 	mux.HandleFunc(base+"stage", op(h.HandleStage))
 	mux.HandleFunc(base+"promote", op(h.HandlePromote))

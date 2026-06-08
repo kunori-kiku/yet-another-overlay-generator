@@ -60,6 +60,34 @@ reads it on the next login).
   log (individual non-lockout failures are not, to keep the log bounded under attack).
 - **Sessions:** short-lived, revocable (logout), hash-stored, lazily deleted on expiry.
 
+## Two-factor: TOTP (optional, login only)
+
+An operator may enrol **TOTP** (RFC 6238, the standard authenticator-app code) as a second
+factor on password login — implemented in stdlib (HMAC-SHA1 + dynamic truncation, no new
+dependency; see `internal/controller/totp.go`).
+
+- **Enrol:** `POST /totp/enroll` mints a secret + `otpauth://` URI (not yet active);
+  `POST /totp/confirm` activates it only after the operator proves they can generate a code.
+  `POST /totp/disable` requires a current code. `GET /totp/status` reports enrolment.
+- **At login:** when TOTP is enrolled, a correct password returns `401 {totp_required:true}`
+  until a valid code is supplied; a wrong/replayed code is a counted failure (so a code
+  brute-force via `/login` is rate-limited), a correct code mints the session. Codes accept
+  ±1 step (clock drift) and are **replay-protected** (the last accepted step is recorded;
+  a code at or before it is refused).
+- **Honest limit:** TOTP's secret is **symmetric**, so it is stored at rest (unlike a
+  passkey, where only a public key is stored). A store breach reveals TOTP secrets. TOTP is
+  a convenience second factor; a passkey is strictly stronger.
+
+### TOTP is NOT a signing mechanism
+
+TOTP gates the **panel login** only. It can **never** be a keystone signing factor: it is
+symmetric (the controller holds the secret, so a breached controller could forge codes —
+the exact forgery the keystone prevents) and it produces a time-based code, not an
+asymmetric content-bound signature a node can verify offline. For **off-host signing
+without a hardware key**, use a **synced/software passkey** — a Bitwarden, iCloud Keychain,
+or 1Password passkey needs no YubiKey and produces the WebAuthn signature the keystone
+already accepts — or an off-host Ed25519 key (a keypair you hold on your own machine).
+
 ## Transport (hard requirement)
 
 `/login` carries a plaintext password. The controller speaks plain HTTP (TLS is delegated
