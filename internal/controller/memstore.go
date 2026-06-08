@@ -26,6 +26,10 @@ type tenantState struct {
 	// tokens maps an enrollment token's hash -> the EnrollmentToken record. The
 	// plaintext token is never stored; only its hash keys this map.
 	tokens map[string]EnrollmentToken
+	// loginChallenges maps a passkey login challenge's hash -> the LoginChallenge
+	// record. The plaintext challenge is never stored; only its hash keys this map
+	// (the login-challenge analogue of tokens). Single-use is enforced under s.mu.
+	loginChallenges map[string]LoginChallenge
 	// apiTokens is the reverse index for per-node bearer auth: a node API token's
 	// hash -> the owning NodeID. IssueNodeAPIToken populates it, RevokeNodeAPIToken
 	// deletes the entry, and LookupNodeByAPIToken resolves it. The plaintext token
@@ -62,11 +66,12 @@ func newTenantState() *tenantState {
 		nodes:     make(map[string]Node),
 		staged:    make(map[string]SignedBundle),
 		current:   make(map[string]SignedBundle),
-		tokens:    make(map[string]EnrollmentToken),
-		apiTokens: make(map[string]string),
-		operators: make(map[string]Operator),
-		sessions:  make(map[string]Session),
-		nextSeq:   1,
+		tokens:          make(map[string]EnrollmentToken),
+		loginChallenges: make(map[string]LoginChallenge),
+		apiTokens:       make(map[string]string),
+		operators:       make(map[string]Operator),
+		sessions:        make(map[string]Session),
+		nextSeq:         1,
 	}
 }
 
@@ -376,6 +381,29 @@ func cloneToken(tok EnrollmentToken) EnrollmentToken {
 	return tok
 }
 
+// cloneLoginChallenge deep-copies a LoginChallenge (its *ConsumedAt) so a stored and a
+// returned value share no pointer.
+func cloneLoginChallenge(lc LoginChallenge) LoginChallenge {
+	if lc.ConsumedAt != nil {
+		c := *lc.ConsumedAt
+		lc.ConsumedAt = &c
+	}
+	return lc
+}
+
+// cloneOperator deep-copies an Operator's pointer fields (its *LoginCredential) so the
+// store never shares mutable state with a caller — a GetOperator caller that mutates the
+// returned credential, or a PutOperator caller that retains its pointer, cannot reach
+// into the stored map. LoginCredential has no nested reference types, so a shallow copy
+// of the pointee suffices.
+func cloneOperator(op Operator) Operator {
+	if op.LoginCredential != nil {
+		lc := *op.LoginCredential
+		op.LoginCredential = &lc
+	}
+	return op
+}
+
 // CreateEnrollmentToken stores a single-use, node-scoped, TTL token keyed by its
 // TokenHash within the tenant. A later CreateEnrollmentToken with the same hash
 // overwrites the prior record (parity with the registry's upsert semantics).
@@ -406,6 +434,39 @@ func (s *MemStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, token
 	consumed := now
 	tok.ConsumedAt = &consumed
 	ts.tokens[tokenHash] = tok
+	return nil
+}
+
+// --- Passkey login challenges (plan-5.2) ---
+
+func (s *MemStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	ts.loginChallenges[lc.ChallengeHash] = cloneLoginChallenge(lc)
+	return nil
+}
+
+// ConsumeLoginChallenge atomically validates and burns a login challenge under the lock:
+// it returns ErrChallengeInvalid if no challenge matches challengeHash for the tenant, if
+// its Operator != operator, or if now is at/after ExpiresAt; ErrChallengeConsumed if it
+// was already burned; otherwise it sets ConsumedAt=now and returns nil. The whole
+// check-and-burn runs under s.mu so a captured assertion cannot be replayed and two
+// concurrent logins cannot both consume the same challenge.
+func (s *MemStore) ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	lc, ok := ts.loginChallenges[challengeHash]
+	if !ok || lc.Operator != operator || !now.Before(lc.ExpiresAt) {
+		return ErrChallengeInvalid
+	}
+	if lc.ConsumedAt != nil {
+		return ErrChallengeConsumed
+	}
+	consumed := now
+	lc.ConsumedAt = &consumed
+	ts.loginChallenges[challengeHash] = lc
 	return nil
 }
 
@@ -540,7 +601,7 @@ func (s *MemStore) PutOperator(ctx context.Context, t TenantID, op Operator) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
-	ts.operators[op.Username] = op
+	ts.operators[op.Username] = cloneOperator(op)
 	return nil
 }
 
@@ -553,7 +614,7 @@ func (s *MemStore) GetOperator(ctx context.Context, t TenantID, username string)
 	if !ok {
 		return Operator{}, ErrNotFound
 	}
-	return op, nil
+	return cloneOperator(op), nil
 }
 
 // ListOperators returns all operator accounts for the tenant, stably ordered by
@@ -564,7 +625,7 @@ func (s *MemStore) ListOperators(ctx context.Context, t TenantID) ([]Operator, e
 	ts := s.tenant(t)
 	out := make([]Operator, 0, len(ts.operators))
 	for _, op := range ts.operators {
-		out = append(out, op)
+		out = append(out, cloneOperator(op))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out, nil

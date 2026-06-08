@@ -135,11 +135,21 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// presented session.
 	mux.HandleFunc(base+"login", h.cors(h.HandleLogin))
 	mux.HandleFunc(base+"logout", op(h.HandleLogout))
+	// Passwordless passkey login (plan-5.2): UNAUTHENTICATED (reachable before a session),
+	// cors-wrapped but NOT operatorAuth. begin issues a single-use random challenge for a
+	// username; finish verifies the WebAuthn assertion and mints a session (no password).
+	mux.HandleFunc(base+"login/passkey/begin", h.cors(h.HandlePasskeyLoginBegin))
+	mux.HandleFunc(base+"login/passkey/finish", h.cors(h.HandlePasskeyLoginFinish))
 	// TOTP login 2FA (plan-5.2): manage the current operator's optional second factor.
 	mux.HandleFunc(base+"totp/status", op(h.HandleTOTPStatus))
 	mux.HandleFunc(base+"totp/enroll", op(h.HandleTOTPEnroll))
 	mux.HandleFunc(base+"totp/confirm", op(h.HandleTOTPConfirm))
 	mux.HandleFunc(base+"totp/disable", op(h.HandleTOTPDisable))
+	// Passkey login management (plan-5.2): register/disable the current operator's login
+	// passkey (the password+passkey 2FA factor and the passwordless credential).
+	mux.HandleFunc(base+"passkey/status", op(h.HandlePasskeyStatus))
+	mux.HandleFunc(base+"passkey/register", op(h.HandlePasskeyRegister))
+	mux.HandleFunc(base+"passkey/disable", op(h.HandlePasskeyDisable))
 	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
 	mux.HandleFunc(base+"stage", op(h.HandleStage))
 	mux.HandleFunc(base+"promote", op(h.HandlePromote))
@@ -1015,25 +1025,28 @@ func (h *ControllerHandler) stagedManifest(ctx context.Context, t controller.Ten
 	return stored.TrustListJSON, stored.Epoch, nil
 }
 
-// pinFromCredential builds the trustlist.PinnedCredential the verifier checks against
-// from a stored OperatorCredential, parsing the PEM by the credential's algorithm and
-// carrying through the WebAuthn RPID/Origin binding values.
-func pinFromCredential(c controller.OperatorCredential) (trustlist.PinnedCredential, error) {
+// pinFromParts builds the trustlist.PinnedCredential the verifier checks against from a
+// credential's raw fields, parsing the PEM by algorithm and carrying through the WebAuthn
+// RPID/Origin binding values. It is shared by the keystone membership credential
+// (pinFromCredential) and the per-operator passkey LOGIN credential
+// (pinFromLoginCredential, handler_passkey.go) — the same WebAuthn verification, two
+// callers.
+func pinFromParts(alg, credentialID, publicKeyPEM, rpid, origin string) (trustlist.PinnedCredential, error) {
 	pin := trustlist.PinnedCredential{
-		Alg:          trustlist.Alg(c.Alg),
-		CredentialID: c.CredentialID,
-		RPID:         c.RPID,
-		Origin:       c.Origin,
+		Alg:          trustlist.Alg(alg),
+		CredentialID: credentialID,
+		RPID:         rpid,
+		Origin:       origin,
 	}
-	switch trustlist.Alg(c.Alg) {
+	switch trustlist.Alg(alg) {
 	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
-		pub, err := trustlist.ParseEd25519PinPEM([]byte(c.PublicKeyPEM))
+		pub, err := trustlist.ParseEd25519PinPEM([]byte(publicKeyPEM))
 		if err != nil {
 			return trustlist.PinnedCredential{}, err
 		}
 		pin.Ed25519Pub = pub
 	case trustlist.AlgWebAuthnES256:
-		pub, err := trustlist.ParseES256Pin([]byte(c.PublicKeyPEM))
+		pub, err := trustlist.ParseES256Pin([]byte(publicKeyPEM))
 		if err != nil {
 			return trustlist.PinnedCredential{}, err
 		}
@@ -1042,6 +1055,12 @@ func pinFromCredential(c controller.OperatorCredential) (trustlist.PinnedCredent
 		return trustlist.PinnedCredential{}, errors.New("unsupported operator credential algorithm")
 	}
 	return pin, nil
+}
+
+// pinFromCredential builds the trustlist.PinnedCredential the verifier checks against
+// from a stored keystone OperatorCredential.
+func pinFromCredential(c controller.OperatorCredential) (trustlist.PinnedCredential, error) {
+	return pinFromParts(c.Alg, c.CredentialID, c.PublicKeyPEM, c.RPID, c.Origin)
 }
 
 // HandleOperatorCredential pins the off-host operator signing credential (operator-only),

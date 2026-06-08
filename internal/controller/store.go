@@ -42,6 +42,12 @@ var (
 	// ErrTokenConsumed is returned by ConsumeEnrollmentToken when the token was
 	// already burned (single-use).
 	ErrTokenConsumed = errors.New("controller: enrollment token already consumed")
+	// ErrChallengeInvalid is returned by ConsumeLoginChallenge when no challenge
+	// matches the hash for the operator, or it is expired.
+	ErrChallengeInvalid = errors.New("controller: login challenge invalid or expired")
+	// ErrChallengeConsumed is returned by ConsumeLoginChallenge when the challenge was
+	// already burned (single-use).
+	ErrChallengeConsumed = errors.New("controller: login challenge already consumed")
 )
 
 // NodeStatus is the lifecycle state of a registry node.
@@ -181,10 +187,51 @@ type Operator struct {
 	// TOTPLastUsedStep is the most recent accepted TOTP step counter, for replay
 	// rejection (a code at or before this step is refused). 0 until the first use.
 	TOTPLastUsedStep int64 `json:"totp_last_used_step,omitempty"`
+	// LoginCredential is the operator's OPTIONAL registered WebAuthn LOGIN passkey
+	// (plan-5.2). nil = none registered. It is the PUBLIC half only (a private key never
+	// reaches the controller) and is used to prove possession at login against a
+	// server-issued RANDOM challenge — a SIBLING to, and deliberately SEPARATE from, the
+	// tenant-level keystone OperatorCredential (the membership trust anchor, which signs
+	// a CONTENT-BOUND manifest). See passkey login, handler_passkey.go.
+	LoginCredential *LoginCredential `json:"login_credential,omitempty"`
 }
 
 // TOTPEnabled reports whether the operator has TOTP login 2FA enrolled.
 func (o Operator) TOTPEnabled() bool { return o.TOTPSecret != "" }
+
+// PasskeyEnabled reports whether the operator has a WebAuthn login passkey registered.
+func (o Operator) PasskeyEnabled() bool { return o.LoginCredential != nil }
+
+// LoginCredential is the PUBLIC half of an operator's registered WebAuthn LOGIN passkey
+// (plan-5.2). It proves possession at panel login via a server-issued RANDOM challenge,
+// and is distinct from the keystone OperatorCredential (membership trust anchor). Alg is
+// always a WebAuthn algorithm ("webauthn-es256" | "webauthn-eddsa") — a raw Ed25519 has
+// no authenticator assertion and is rejected at registration. PublicKeyPEM is the PKIX
+// ("PUBLIC KEY") PEM; RPID/Origin are the WebAuthn relying-party binding (the node-style
+// rpIdHash check: sha256(RPID) == authenticatorData[0:32]); CredentialID is base64url of
+// the raw credential id, returned in allowCredentials so the browser selects this key.
+type LoginCredential struct {
+	Alg          string `json:"alg"`
+	CredentialID string `json:"credential_id"`
+	PublicKeyPEM string `json:"public_key_pem"`
+	RPID         string `json:"rpid"`
+	Origin       string `json:"origin"`
+}
+
+// LoginChallenge is a single-use, short-TTL, operator-scoped random nonce issued for a
+// passkey login (plan-5.2). The plaintext challenge (base64url) is returned to the
+// browser to feed navigator.credentials.get; only ChallengeHash (hex SHA-256 of that
+// base64url string) is stored — the same hash-not-plaintext discipline as enrollment
+// and session tokens. It is the RANDOM-challenge analogue of the keystone's
+// content-bound manifest hash: its presence in the store proves the controller issued
+// it, and single-use consumption is the anti-replay.
+type LoginChallenge struct {
+	ChallengeHash string `json:"challenge_hash"`
+	Operator      string `json:"operator"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	// ConsumedAt is nil until the challenge is burned (single-use).
+	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+}
 
 // Session is a server-side operator session minted at a successful /login. The
 // controller stores only TokenHash (hex SHA-256 of the bearer session token); the
@@ -297,6 +344,21 @@ type Store interface {
 	// marks the token consumed (ConsumedAt=now) and returns nil. Single-use is
 	// enforced atomically so two concurrent enrollments cannot both succeed.
 	ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error
+
+	// --- Passkey login challenges (plan-5.2) ---
+
+	// CreateLoginChallenge stores a single-use, operator-scoped, TTL login challenge
+	// (by its hash). It is the controller-side step that issues a random nonce for a
+	// passkey login (the password+passkey 2FA leg, the passwordless begin, or a
+	// disable re-auth).
+	CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error
+	// ConsumeLoginChallenge atomically validates and burns a login challenge: it
+	// returns ErrChallengeInvalid if no challenge matches challengeHash for operator or
+	// it is expired (relative to now), ErrChallengeConsumed if it was already burned,
+	// otherwise it marks the challenge consumed (ConsumedAt=now) and returns nil.
+	// Single-use is enforced atomically so a captured assertion cannot be replayed and
+	// two concurrent logins cannot both consume the same challenge.
+	ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error
 
 	// --- Node API tokens (per-node bearer auth) ---
 

@@ -94,6 +94,42 @@ without a hardware key**, use a **synced/software passkey** — a Bitwarden, iCl
 or 1Password passkey needs no YubiKey and produces the WebAuthn signature the keystone
 already accepts — or an off-host Ed25519 key (a keypair you hold on your own machine).
 
+## Passkey login (optional, password+passkey 2FA AND passwordless)
+
+An operator may register a **WebAuthn login passkey** as a second factor — the
+phishing-resistant, asymmetric sibling of TOTP. It supports **both** login models (a
+deployment/operator can use either):
+
+- **Password + passkey (2FA):** at `POST /login`, a correct password for an operator with
+  a passkey returns `401 {passkey_required:true, challenge, allow_credentials, rpid}`; the
+  panel runs `navigator.credentials.get` and resubmits `POST /login` with the assertion in
+  a `passkey` field. Passkey takes **precedence over TOTP** when both are registered (it is
+  the stronger factor); TOTP remains the fallback for operators without a passkey.
+- **Passwordless:** `POST /login/passkey/begin {username}` issues a challenge +
+  `allow_credentials`; `POST /login/passkey/finish {username, passkey}` verifies the
+  assertion and mints a session with **no password**. Rate-limited per username+IP by the
+  same limiter as password login (a locked account is locked across both paths).
+
+The login challenge is a **server-issued, single-use, short-TTL (5 min) random nonce**,
+scoped to the operator and stored hash-only (`internal/controller/login_challenge.go`);
+`ConsumeLoginChallenge` burns it atomically, so a captured assertion cannot be replayed and
+two concurrent logins cannot both consume one. Registration (`POST /passkey/register`,
+operator-authed) stores only the **public** half (`Operator.LoginCredential`, distinct from
+the keystone `OperatorCredential`); disable (`POST /passkey/disable`) is two-phase and
+requires a **fresh assertion** so a hijacked session cannot strip the factor without the
+authenticator. The assertion is verified by the **same** `internal/trustlist` core as the
+keystone (`VerifyAssertion`); ONLY the challenge differs — a random nonce here vs the
+content-bound manifest hash there. A login passkey must be a WebAuthn credential
+(`webauthn-es256` / `webauthn-eddsa`); a raw Ed25519 (no authenticator assertion) is
+rejected at registration.
+
+This is the **same primitive** as the keystone — proving control of a hardware/synced
+passkey — pointed at a *random* challenge to authenticate the panel session rather than the
+*content* challenge that authorizes a membership change. A synced passkey (Bitwarden,
+iCloud Keychain, 1Password) needs no hardware key. **Honest limit:** passwordless `begin`
+reveals whether a username has a passkey (the `allow_credentials` is empty for none) — a
+low-value signal; the actual authentication is rate-limited at `finish`.
+
 ## Transport (hard requirement)
 
 `/login` carries a plaintext password. The controller speaks plain HTTP (TLS is delegated
@@ -125,6 +161,6 @@ one, or leave it unset and rely on `create-operator` on the host for recovery.
   filesystem (Linux — the controller's only supported host). On a case-folding
   filesystem (macOS/Windows) `Admin` and `admin` would map to the same file; that is not
   a supported deployment.
-- **TOTP 2FA is shipped** (backend + panel UI). **Passkey login is the remaining 2FA
-  slice:** a passkey login factor will be its own random-challenge WebAuthn assertion — NOT
-  the content-bound keystone verifier.
+- **TOTP 2FA is shipped** (backend + panel UI). **Passkey login backend is shipped**
+  (password+passkey 2FA AND passwordless, both over a random-challenge WebAuthn assertion —
+  NOT the content-bound keystone verifier); its panel UI is the remaining slice.
