@@ -360,6 +360,14 @@ type Store interface {
 	// is a no-op success. Existing sessions are NOT cascaded here (a session expires on
 	// its own TTL); a caller wanting immediate lockout deletes the sessions too.
 	DeleteOperator(ctx context.Context, t TenantID, username string) error
+	// AdvanceTOTPStep atomically advances the operator's TOTP replay watermark
+	// (TOTPLastUsedStep) to step ONLY IF step is strictly greater than the stored
+	// value, returning advanced=true when it advanced (the presented code may be
+	// accepted) and false when the step was already consumed (a replay / concurrent
+	// reuse). This single atomic check-and-set closes the read-modify-write TOCTOU that
+	// a separate Get/Put pair would leave open under concurrent logins. Returns
+	// ErrNotFound if the operator is absent.
+	AdvanceTOTPStep(ctx context.Context, t TenantID, username string, step int64) (advanced bool, err error)
 
 	// CreateSession stores a minted operator session, keyed by its TokenHash (hex
 	// SHA-256 of the session bearer token; the plaintext is never stored).

@@ -1087,6 +1087,41 @@ func (fs *FileStore) DeleteOperator(ctx context.Context, t TenantID, username st
 	return nil
 }
 
+// AdvanceTOTPStep atomically bumps the operator's TOTP replay watermark to step iff
+// step > the stored value. The read-modify-write is held under fs.mu for the whole
+// operation (in-process atomic), closing the login TOCTOU. See the Store doc.
+func (fs *FileStore) AdvanceTOTPStep(ctx context.Context, t TenantID, username string, step int64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return false, err
+	}
+	p, err := fs.operatorPath(dir, username)
+	if err != nil {
+		return false, err
+	}
+	var op Operator
+	if err := readJSON(p, &op); err != nil {
+		if os.IsNotExist(err) {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	if step <= op.TOTPLastUsedStep {
+		return false, nil
+	}
+	op.TOTPLastUsedStep = step
+	if err := writeJSONAtomic(p, op); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // CreateSession stores a minted operator session as sessions/<tokenHash>.json (0700
 // dir / 0600 file, atomic write), keyed by the token's hash.
 func (fs *FileStore) CreateSession(ctx context.Context, t TenantID, sess Session) error {

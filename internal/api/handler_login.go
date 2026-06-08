@@ -107,19 +107,27 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		if c := strings.TrimSpace(req.TOTP); c != "" {
 			totpOK, step = controller.VerifyTOTP(op.TOTPSecret, c, now, op.TOTPLastUsedStep)
 		}
-		if !totpOK {
+		// Atomically burn the code's step (a single check-and-set under the store lock).
+		// This closes the read-modify-write TOCTOU a separate Get/Put pair would leave:
+		// two concurrent logins with the SAME fresh code both pass VerifyTOTP, but only
+		// the first AdvanceTOTPStep wins — the loser gets advanced=false and is rejected.
+		advanced := false
+		if totpOK {
+			a, aerr := h.store.AdvanceTOTPStep(r.Context(), h.tenant, op.Username, step)
+			if aerr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update operator")
+				return
+			}
+			advanced = a
+		}
+		if !advanced {
+			// Missing, wrong, replayed, or lost-the-race code: leave the limiter slot
+			// counted (so a code brute-force is rate-limited) and ask for a fresh code.
 			h.auditLockout(r.Context(), now, req.Username, justLocked)
 			writeJSON(w, http.StatusUnauthorized, totpRequiredJSON{
 				Error:        "two-factor code required",
 				TOTPRequired: true,
 			})
-			return
-		}
-		// Accepted: advance the replay watermark so this code cannot be reused.
-		op.TOTPLastUsedStep = step
-		op.UpdatedAt = now
-		if err := h.store.PutOperator(r.Context(), h.tenant, op); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update operator")
 			return
 		}
 	}
