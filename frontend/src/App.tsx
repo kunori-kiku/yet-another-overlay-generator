@@ -5,6 +5,7 @@ import { ThemeProvider } from './theme/ThemeProvider';
 import { DesignPage } from './components/pages/DesignPage';
 import { OverviewPage } from './components/pages/OverviewPage';
 import { FleetPage } from './components/pages/FleetPage';
+import { FleetNodeDetailPage } from './components/pages/FleetNodeDetailPage';
 import { DeployPage } from './components/pages/DeployPage';
 import { SecurityPage } from './components/pages/SecurityPage';
 import { SettingsPage } from './components/pages/SettingsPage';
@@ -27,6 +28,7 @@ const router = createBrowserRouter([
       },
       { path: 'overview', element: <OverviewPage /> },
       { path: 'fleet', element: <FleetPage /> },
+      { path: 'fleet/nodes/:id', element: <FleetNodeDetailPage /> },
       { path: 'deploy', element: <DeployPage /> },
       { path: 'security', element: <SecurityPage /> },
       { path: 'settings', element: <SettingsPage /> },

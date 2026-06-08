@@ -3,6 +3,7 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { txt, STRINGS } from '../../i18n';
 import { LocalDeploy } from '../deploy/LocalDeploy';
 import { DeployBar } from '../deploy/DeployBar';
+import { CompilePreview } from '../deploy/CompilePreview';
 
 // /deploy — local/manual deploy actions in local mode; the controller deploy bar
 // (stage/sign/promote) in controller mode. (Compile-result preview gets a stable
@@ -21,6 +22,8 @@ export function DeployPage() {
           <DeployBar />
         </>
       )}
+      {/* 编译结果预览：从 RightPanel 迁来的稳定落点（有编译结果时才渲染）。 */}
+      <CompilePreview />
     </div>
   );
 }
