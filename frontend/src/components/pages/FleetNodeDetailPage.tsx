@@ -33,6 +33,10 @@ export function FleetNodeDetailPage() {
         {txt(language, ...STRINGS.fleetBack)}
       </Link>
 
+      <h1 className="text-xl font-semibold text-gray-100">
+        {txt(language, ...STRINGS.fleetNodeDetailTitle)}
+      </h1>
+
       {!node ? (
         <p className="text-sm text-gray-400">{txt(language, ...STRINGS.fleetNodeNotFound)}</p>
       ) : (

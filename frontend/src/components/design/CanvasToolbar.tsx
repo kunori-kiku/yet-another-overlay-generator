@@ -31,11 +31,12 @@ export function CanvasToolbar({
         type="button"
         onClick={onToggleLists}
         aria-pressed={listsOpen}
+        aria-controls="design-lists-drawer"
         className={`h-8 rounded px-3 text-sm ${
           listsOpen ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
         }`}
       >
-        ☰ {txt(language, ...STRINGS.toolbarLists)}
+        <span aria-hidden="true">☰</span> {txt(language, ...STRINGS.toolbarLists)}
       </button>
       <div className="flex-1" />
       <button
