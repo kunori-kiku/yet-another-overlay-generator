@@ -72,6 +72,9 @@ func TestTenantIsolation(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("CreateSession(A): %v", err)
 			}
+			if err := s.PutSettings(ctx, tenantA, ControllerSettings{PublicAgentURL: "https://a"}); err != nil {
+				t.Fatalf("PutSettings(A): %v", err)
+			}
 
 			// Tenant B must see nothing: point reads -> ErrNotFound.
 			if _, err := s.GetNode(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
@@ -132,6 +135,9 @@ func TestTenantIsolation(t *testing.T) {
 			sessNow := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 			if _, err := s.LookupSession(ctx, tenantB, tokenHash("a-session"), sessNow); !errors.Is(err, ErrTokenInvalid) {
 				t.Fatalf("LookupSession(B, A's session): err = %v, want ErrTokenInvalid", err)
+			}
+			if _, err := s.GetSettings(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetSettings(B): err = %v, want ErrNotFound", err)
 			}
 
 			// Sanity: tenant A still sees its own data (isolation is symmetric, not

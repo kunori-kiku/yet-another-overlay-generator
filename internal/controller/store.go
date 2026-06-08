@@ -188,6 +188,26 @@ type Session struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// ControllerSettings holds operator-editable, server-persisted controller settings
+// that drive the one-shot agent bootstrap (plan-5.2). All fields are NON-SECRET
+// (public URLs / proxy prefixes), so they are safe to persist server-side and to bake
+// into the publicly-served bootstrap script. Defaults are applied by DefaultSettings.
+type ControllerSettings struct {
+	// PublicAgentURL is the controller's public AGENT base URL (scheme://host[:port]),
+	// where nodes enroll/pull. The bootstrap passes it as the agent's --controller (the
+	// controller's secret path prefix, if any, is appended by the server when it renders
+	// the script). Empty until the operator configures it.
+	PublicAgentURL string `json:"public_agent_url"`
+	// GithubProxy is an optional prefix applied to GitHub downloads in the bootstrap
+	// (e.g. "https://gh-proxy.com/", producing "<proxy>https://github.com/..."). Empty
+	// = off (the default). CDN-friendly for networks where github.com is slow/blocked.
+	GithubProxy string `json:"github_proxy"`
+	// AgentReleaseBaseURL is where the per-arch yaog-agent binary is downloaded from;
+	// the bootstrap fetches "<AgentReleaseBaseURL>/yaog-agent-linux-<arch>". Defaults to
+	// the project's "releases/latest/download".
+	AgentReleaseBaseURL string `json:"agent_release_base_url"`
+}
+
 // Store is the single tenant-scoped data-access chokepoint for the controller.
 //
 // Contract for every implementation:
@@ -342,4 +362,12 @@ type Store interface {
 	// DeleteSession removes a session (logout / revoke). It is idempotent: a missing
 	// session is a no-op success.
 	DeleteSession(ctx context.Context, t TenantID, tokenHash string) error
+
+	// --- Controller settings (bootstrap, plan-5.2) ---
+
+	// GetSettings returns the tenant's saved controller settings, or ErrNotFound when
+	// none has been saved (the caller applies DefaultSettings).
+	GetSettings(ctx context.Context, t TenantID) (ControllerSettings, error)
+	// PutSettings stores (replacing any prior) the tenant's controller settings.
+	PutSettings(ctx context.Context, t TenantID, s ControllerSettings) error
 }
