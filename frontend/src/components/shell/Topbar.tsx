@@ -81,7 +81,7 @@ export function Topbar() {
         <button
           type="button"
           onClick={() => setLanguage('zh')}
-          className={`px-2 py-1 text-xs transition-colors ${
+          className={`px-2 py-1 text-xs transition-colors ${FOCUS_RING} ${
             language === 'zh'
               ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
               : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)]'
@@ -92,7 +92,7 @@ export function Topbar() {
         <button
           type="button"
           onClick={() => setLanguage('en')}
-          className={`px-2 py-1 text-xs transition-colors ${
+          className={`px-2 py-1 text-xs transition-colors ${FOCUS_RING} ${
             language === 'en'
               ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
               : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)]'

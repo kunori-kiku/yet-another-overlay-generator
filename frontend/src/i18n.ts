@@ -95,8 +95,6 @@ export const STRINGS = {
   ] as const,
   modeLocal: ['本地 / 手动', 'Local / Manual'] as const,
   modeController: ['控制器', 'Controller'] as const,
-  settingsConnectionHeading: ['连接', 'Connection'] as const,
-  settingsBootstrapHeading: ['Bootstrap', 'Bootstrap'] as const,
   settingsAppearanceHeading: ['外观', 'Appearance'] as const,
   settingsAppearanceComingSoon: [
     '外观设置（主题与半透明）将在后续阶段接入。',
