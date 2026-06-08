@@ -292,48 +292,87 @@ export async function signManifest(
   // RAW — the browser base64url-encodes it into clientDataJSON for us; do NOT
   // pre-encode it (that would double-encode and break the content binding).
   const digest = await crypto.subtle.digest('SHA-256', manifestBytes as BufferSource);
-  const challenge = new Uint8Array(digest);
-
-  // Restrict the assertion to the pinned credential so the browser uses exactly
-  // the key the controller has on file.
-  const allowId = base64UrlToBytes(credentialId);
-
-  const options: PublicKeyCredentialRequestOptions = {
-    challenge,
-    // Pin rpId to the enrolled value; do NOT rely on the implicit
-    // effective-domain default (see the function doc above).
+  return runAssertion(
+    new Uint8Array(digest),
+    credentialId,
+    alg,
     rpId,
-    allowCredentials: [
-      {
-        type: 'public-key',
-        id: allowId as BufferSource,
-      },
-    ],
+    publicKeyPEM,
+    'failed to sign the deploy manifest',
+  );
+}
+
+// --- login: produce a random-challenge SignedTrustList (operator passkey login) ---
+
+// assertLogin drives navigator.credentials.get() to prove possession of a registered
+// LOGIN passkey over a server-issued RANDOM challenge (the sibling of signManifest's
+// content-bound manifest hash). It is used by both the password+passkey 2FA leg and the
+// passwordless flow. challengeB64 is the base64url nonce from the controller (passkey_
+// required / begin); credentialId + alg + rpId come from the same response. The returned
+// SignedTrustList's public_key is empty: the controller verifies against the PINNED
+// credential it stored, never this audit-only field.
+export async function assertLogin(
+  challengeB64: string,
+  credentialId: string,
+  alg: WebAuthnAlg,
+  rpId: string,
+): Promise<SignedTrustList> {
+  // The login challenge is a RANDOM nonce, not content-bound — decode it to the raw
+  // bytes the browser signs over (do NOT hash it, unlike signManifest).
+  return runAssertion(
+    base64UrlToBytes(challengeB64),
+    credentialId,
+    alg,
+    rpId,
+    '',
+    'failed to complete the passkey login',
+  );
+}
+
+// runAssertion is the shared navigator.credentials.get() ceremony: it asserts the pinned
+// credential over `challenge` (raw bytes the browser base64url-encodes into
+// clientDataJSON) and assembles the SignedTrustList wire struct. Both signManifest
+// (challenge = manifest hash) and assertLogin (challenge = random nonce) delegate here;
+// only the challenge bytes and the audit-only public_key differ.
+async function runAssertion(
+  challenge: Uint8Array,
+  credentialId: string,
+  alg: WebAuthnAlg,
+  rpId: string,
+  publicKeyPEM: string,
+  failMessage: string,
+): Promise<SignedTrustList> {
+  assertWebAuthnAvailable();
+
+  // Restrict the assertion to the pinned credential so the browser uses exactly the key
+  // the controller has on file. Pin rpId explicitly (do not rely on the effective-domain
+  // default), matching the rpid the node binds SHA256(rpid)==rpIdHash against.
+  const options: PublicKeyCredentialRequestOptions = {
+    challenge: challenge as BufferSource,
+    rpId,
+    allowCredentials: [{ type: 'public-key', id: base64UrlToBytes(credentialId) as BufferSource }],
     userVerification: 'required',
     timeout: 120000,
   };
 
   let cred: PublicKeyCredential | null;
   try {
-    cred = (await navigator.credentials.get({
-      publicKey: options,
-    })) as PublicKeyCredential | null;
+    cred = (await navigator.credentials.get({ publicKey: options })) as PublicKeyCredential | null;
   } catch (err) {
-    throw toWebAuthnError(err, 'failed to sign the deploy manifest');
+    throw toWebAuthnError(err, failMessage);
   }
   if (!cred) {
     throw new WebAuthnError('failed', 'no assertion was returned');
   }
 
   const response = cred.response as AuthenticatorAssertionResponse;
-
   return {
     alg,
     credential_id: bytesToBase64Url(new Uint8Array(cred.rawId)),
-    // Audit-only on the wire; the node verifies against the PINNED key, never
-    // this field. We echo the enrolled PEM so the artifact is self-describing.
+    // Audit-only on the wire; the node/controller verifies against the PINNED key, never
+    // this field. signManifest echoes the enrolled PEM; login leaves it empty.
     public_key: publicKeyPEM,
-    // ES256 assertions are ASN.1 DER (ecdsa.VerifyASN1 on the Go side); we pass
+    // ES256 assertions are ASN.1 DER (ecdsa.VerifyASN1 on the Go side); pass
     // response.signature through verbatim, base64url-encoded.
     signature: bytesToBase64Url(new Uint8Array(response.signature)),
     authenticator_data: bytesToBase64Url(new Uint8Array(response.authenticatorData)),

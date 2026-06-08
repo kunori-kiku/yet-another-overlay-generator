@@ -6,6 +6,7 @@ import { NodeRegistry } from './NodeRegistry';
 import { EnrollmentFlow } from './EnrollmentFlow';
 import { BootstrapSettings } from './BootstrapSettings';
 import { TwoFactorSettings } from './TwoFactorSettings';
+import { PasskeySettings } from './PasskeySettings';
 import { DeployBar } from './DeployBar';
 import { AuditLog } from './AuditLog';
 
@@ -43,6 +44,10 @@ export function DeployPanel() {
   // 二次因子（plan-5.2）：登录密码正确但需 TOTP 码时后端置 totpRequired，表单据此展开验证码框。
   const totpRequired = useControllerStore((s) => s.totpRequired);
   const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
+  // 无密码 passkey 登录 + 「触碰你的安全密钥」提示（loginCeremony 在登录 passkey ceremony
+  // 期间为真——含 password+passkey 2FA 步骤与无密码登录；与 keystone 的 signing 分开）。
+  const loginWithPasskey = useControllerStore((s) => s.loginWithPasskey);
+  const loginCeremony = useControllerStore((s) => s.loginCeremony);
 
   const [mode, setMode] = useState<DeployMode>('local');
   // 登录表单的本地输入（密码/验证码只在内存里，登录成功后清空）。
@@ -228,6 +233,7 @@ export function DeployPanel() {
                     </button>
                   </div>
                 ) : (
+                  <div className="space-y-2">
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -304,6 +310,27 @@ export function DeployPanel() {
                       </p>
                     )}
                   </form>
+                  {/* 无密码 passkey 登录：输入用户名后直接用安全密钥登录（password+passkey 的
+                      2FA 步骤由 store.login 在收到 passkey_required 后自动完成，无需额外输入）。 */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <div className="flex-1 border-t border-gray-700" />
+                    <span className="text-[10px] text-gray-500">{txt(language, '或', 'or')}</span>
+                    <div className="flex-1 border-t border-gray-700" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loginWithPasskey(loginUser)}
+                    disabled={loading || loginUser.trim() === ''}
+                    className="w-full px-4 py-1.5 text-sm bg-fuchsia-700 hover:bg-fuchsia-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+                  >
+                    {txt(language, '🔑 用 passkey 登录', '🔑 Sign in with passkey')}
+                  </button>
+                  {loginCeremony && (
+                    <p className="text-[10px] text-fuchsia-300">
+                      {txt(language, '请触碰你的安全密钥...', 'Touch your security key...')}
+                    </p>
+                  )}
+                  </div>
                 )}
               </div>
               <div className="border-t border-gray-600 pt-3">
@@ -340,6 +367,7 @@ export function DeployPanel() {
           </section>
 
           <TwoFactorSettings />
+          <PasskeySettings />
           <NodeRegistry />
           <BootstrapSettings />
           <EnrollmentFlow />

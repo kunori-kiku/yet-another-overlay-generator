@@ -50,6 +50,11 @@ type passkeyRequiredJSON struct {
 	Challenge        string                `json:"challenge"`
 	AllowCredentials []allowCredentialJSON `json:"allow_credentials"`
 	RPID             string                `json:"rpid"`
+	// Alg is the registered credential's WebAuthn algorithm. The browser needs it to
+	// build the SignedTrustList (the verifier requires art.Alg == pin.Alg) — the .get()
+	// assertion response, unlike .create(), does not reveal the COSE algorithm, so the
+	// server supplies it here.
+	Alg string `json:"alg"`
 }
 
 // passkeyChallengeResponseJSON is the 200 carrying a fresh login challenge for a
@@ -58,6 +63,9 @@ type passkeyChallengeResponseJSON struct {
 	Challenge        string                `json:"challenge"`
 	AllowCredentials []allowCredentialJSON `json:"allow_credentials"`
 	RPID             string                `json:"rpid"`
+	// Alg is the registered credential's algorithm (empty for the passwordless decoy);
+	// see passkeyRequiredJSON.Alg.
+	Alg string `json:"alg"`
 }
 
 type passkeyStatusResponseJSON struct {
@@ -128,6 +136,7 @@ func (h *ControllerHandler) writePasskeyChallenge(w http.ResponseWriter, ctx con
 		Challenge:        challenge,
 		AllowCredentials: allowCredentialsFor(op.LoginCredential),
 		RPID:             op.LoginCredential.RPID,
+		Alg:              op.LoginCredential.Alg,
 	})
 }
 
@@ -277,6 +286,7 @@ func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.
 			Challenge:        challenge,
 			AllowCredentials: allowCredentialsFor(op.LoginCredential),
 			RPID:             op.LoginCredential.RPID,
+			Alg:              op.LoginCredential.Alg,
 		})
 		return
 	}
@@ -343,6 +353,7 @@ func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *ht
 			Challenge:        challenge,
 			AllowCredentials: allowCredentialsFor(op.LoginCredential),
 			RPID:             op.LoginCredential.RPID,
+			Alg:              op.LoginCredential.Alg,
 		})
 		return
 	}

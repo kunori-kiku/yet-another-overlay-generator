@@ -41,7 +41,41 @@ export interface LoginResult {
 // an error. A wrong password / lockout / any other non-2xx still throws.
 export type LoginOutcome =
   | { kind: 'success'; result: LoginResult }
-  | { kind: 'totp_required' };
+  | { kind: 'totp_required' }
+  | { kind: 'passkey_required'; challenge: PasskeyChallenge };
+
+// PasskeyChallenge is a server-issued login challenge the panel feeds to assertLogin:
+// the base64url random nonce, the registered credential to assert with (credentialId =
+// allow_credentials[0].id, or null when the server returned none — a passwordless decoy
+// for an unknown / passkey-less username), the rpid binding, and the credential's alg
+// (needed to build the SignedTrustList; an assertion response cannot reveal it). It backs
+// the /login passkey_required 401, passwordless begin, and the disable re-auth leg.
+export interface PasskeyChallenge {
+  challenge: string;
+  credentialId: string | null;
+  rpid: string;
+  alg: WebAuthnAlg | '';
+}
+
+// passkeyChallengeJSON mirrors the backend's passkey challenge payloads (the
+// passkey_required 401 fields, passkeyChallengeResponseJSON). allow_credentials is the
+// WebAuthn list (0 or 1 entry here).
+interface passkeyChallengeJSON {
+  challenge: string;
+  allow_credentials: { type: string; id: string }[] | null;
+  rpid: string;
+  alg: string;
+}
+
+function mapPasskeyChallenge(d: passkeyChallengeJSON): PasskeyChallenge {
+  const creds = d.allow_credentials ?? [];
+  return {
+    challenge: d.challenge,
+    credentialId: creds.length > 0 ? creds[0].id : null,
+    rpid: d.rpid,
+    alg: (d.alg as WebAuthnAlg) || '',
+  };
+}
 
 // LoginResponseJSON mirrors loginResponseJSON in internal/api/handler_login.go.
 interface LoginResponseJSON {
@@ -227,21 +261,33 @@ export async function login(
   cfg: ControllerConfig,
   username: string,
   password: string,
-  totp?: string
+  totp?: string,
+  passkey?: SignedTrustList
 ): Promise<LoginOutcome> {
+  const body: Record<string, unknown> = { username, password, totp: totp ?? '' };
+  if (passkey) {
+    body.passkey = passkey;
+  }
   const res = await fetch(ctlURL(cfg, 'login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password, totp: totp ?? '' }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text();
-    // A 401 with {"totp_required":true} means the password verified but a TOTP code is
-    // needed — branch to "collect a code", do not treat as a hard error. A wrong-password
-    // 401 (writeError JSON, no totp_required flag) and every other status still throw.
+    const text = await res.text();
+    // A 401 carrying a second-factor flag means the password verified but a passkey
+    // assertion (passkey_required) or TOTP code (totp_required) is needed — branch to the
+    // ceremony, do not treat as a hard error. A wrong-password 401 (no flag) and every
+    // other status still throw. Passkey takes precedence when both are checked server-side.
     if (res.status === 401) {
       try {
-        const j = JSON.parse(body) as { totp_required?: boolean };
+        const j = JSON.parse(text) as passkeyChallengeJSON & {
+          passkey_required?: boolean;
+          totp_required?: boolean;
+        };
+        if (j.passkey_required === true) {
+          return { kind: 'passkey_required', challenge: mapPasskeyChallenge(j) };
+        }
         if (j.totp_required === true) {
           return { kind: 'totp_required' };
         }
@@ -249,7 +295,7 @@ export async function login(
         /* not JSON — fall through to the generic error */
       }
     }
-    throw new Error(`${res.status} ${body}`);
+    throw new Error(`${res.status} ${text}`);
   }
   const data = (await res.json()) as LoginResponseJSON;
   return {
@@ -316,6 +362,105 @@ export async function confirmTOTP(
 export async function disableTOTP(cfg: ControllerConfig, code: string): Promise<void> {
   const res = await postJSON(cfg, 'totp/disable', JSON.stringify({ code }));
   await res.text();
+}
+
+// --- operator passkey login (plan-5.2) ---
+//
+// A login passkey is the phishing-resistant second factor (and passwordless credential),
+// distinct from the keystone signing credential. status/register/disable are operator-
+// authed; the passwordless begin/finish are UNAUTHENTICATED (you log in to OBTAIN a
+// session). The assertion wire shape is SignedTrustList (same as keystone signing).
+
+// RegisterPasskeyBody is the POST /passkey/register payload: the PUBLIC half of a freshly
+// created WebAuthn credential (from enrollOperatorCredential) plus the rp binding.
+export interface RegisterPasskeyBody {
+  alg: WebAuthnAlg;
+  credentialId: string;
+  publicKeyPEM: string;
+  rpId: string;
+  origin: string;
+}
+
+// DisablePasskeyOutcome: the two-phase disable returns either a challenge to assert
+// (re-auth) or 'done' (idempotent — there was no passkey to remove).
+export type DisablePasskeyOutcome =
+  | { kind: 'challenge'; challenge: PasskeyChallenge }
+  | { kind: 'done' };
+
+// getPasskeyStatus reports whether the current operator has a login passkey registered.
+export async function getPasskeyStatus(cfg: ControllerConfig): Promise<boolean> {
+  const res = await request(cfg, 'passkey/status', { method: 'GET' });
+  return ((await res.json()) as { registered: boolean }).registered;
+}
+
+// registerPasskey stores the operator's login passkey (operator-authed).
+export async function registerPasskey(cfg: ControllerConfig, body: RegisterPasskeyBody): Promise<void> {
+  const res = await postJSON(
+    cfg,
+    'passkey/register',
+    JSON.stringify({
+      alg: body.alg,
+      credential_id: body.credentialId,
+      public_key_pem: body.publicKeyPEM,
+      rpid: body.rpId,
+      origin: body.origin,
+    }),
+  );
+  await res.text();
+}
+
+// disablePasskeyBegin requests the disable re-auth challenge (operator-authed). An empty
+// body asks the server to either issue a challenge (a passkey is registered) or report
+// 'done' (none registered — idempotent).
+export async function disablePasskeyBegin(cfg: ControllerConfig): Promise<DisablePasskeyOutcome> {
+  const res = await postJSON(cfg, 'passkey/disable', '{}');
+  const j = (await res.json()) as passkeyChallengeJSON & { registered?: boolean };
+  if (j.challenge) {
+    return { kind: 'challenge', challenge: mapPasskeyChallenge(j) };
+  }
+  return { kind: 'done' };
+}
+
+// disablePasskeyFinish submits the re-auth assertion to remove the passkey (operator-authed).
+export async function disablePasskeyFinish(cfg: ControllerConfig, assertion: SignedTrustList): Promise<void> {
+  const res = await postJSON(cfg, 'passkey/disable', JSON.stringify({ passkey: assertion }));
+  await res.text();
+}
+
+// passkeyLoginBegin issues a passwordless login challenge for a username (UNAUTHENTICATED).
+// A returned challenge with credentialId === null means the username has no passkey (a
+// decoy); the caller should surface "no passkey for this account".
+export async function passkeyLoginBegin(cfg: ControllerConfig, username: string): Promise<PasskeyChallenge> {
+  const res = await fetch(ctlURL(cfg, 'login/passkey/begin'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+  if (!res.ok) {
+    const b = await res.text();
+    throw new Error(`${res.status} ${b}`);
+  }
+  return mapPasskeyChallenge((await res.json()) as passkeyChallengeJSON);
+}
+
+// passkeyLoginFinish completes a passwordless login: it submits the assertion and returns
+// the minted session (UNAUTHENTICATED). A non-2xx (uniform 401 on any failure) throws.
+export async function passkeyLoginFinish(
+  cfg: ControllerConfig,
+  username: string,
+  assertion: SignedTrustList,
+): Promise<LoginResult> {
+  const res = await fetch(ctlURL(cfg, 'login/passkey/finish'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, passkey: assertion }),
+  });
+  if (!res.ok) {
+    const b = await res.text();
+    throw new Error(`${res.status} ${b}`);
+  }
+  const d = (await res.json()) as LoginResponseJSON;
+  return { sessionToken: d.session_token, operator: d.operator, expiresAt: d.expires_at };
 }
 
 // logout revokes the current session (POST /logout, authed by the session bearer in
