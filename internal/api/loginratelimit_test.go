@@ -1,6 +1,8 @@
 package api
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -59,6 +61,38 @@ func TestLoginLimiterCapIsHard(t *testing.T) {
 	}
 	if admitted != maxLoginFailures {
 		t.Fatalf("admitted %d attempts, want exactly %d", admitted, maxLoginFailures)
+	}
+}
+
+// TestLoginLimiterCapIsHardConcurrent proves the check-and-reserve gate has no
+// overshoot UNDER CONCURRENCY — the actual TOCTOU the atomic registerAttempt closed.
+// Many goroutines hammering one key in one window admit EXACTLY maxLoginFailures in
+// total; the old non-atomic blocked()+fail() pair would overshoot here. Run under
+// -race to also assert there is no data race in the gate.
+func TestLoginLimiterCapIsHardConcurrent(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	const key = "user:alice"
+	const goroutines = 100
+
+	var admitted int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // line everyone up to maximize contention on the gate
+			if allowed, _, _ := l.registerAttempt(now, key); allowed {
+				atomic.AddInt64(&admitted, 1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if admitted != int64(maxLoginFailures) {
+		t.Fatalf("admitted %d attempts under concurrency, want exactly %d", admitted, maxLoginFailures)
 	}
 }
 
