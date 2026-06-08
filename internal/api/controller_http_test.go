@@ -909,3 +909,43 @@ func TestControllerHTTP_AuditWireShape(t *testing.T) {
 		t.Errorf("no snake_case enroll audit entry for node-1 in %+v", resp.Entries)
 	}
 }
+
+// TestControllerHTTP_RevokeClearsRekey is a regression guard: revoking a node that was
+// flagged for rekey must clear RekeyRequested, else the panel's "rotating" gate (which
+// counts rekey_requested nodes) would stay stuck forever on a node that can never
+// re-register.
+func TestControllerHTTP_RevokeClearsRekey(t *testing.T) {
+	env := newCtlTestEnv(t)
+	env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// Flag the fleet for rekey, then revoke node-1 before it re-registers.
+	var ra struct {
+		Requested int `json:"requested"`
+	}
+	if st := doJSON(t, http.MethodPost, env.opURL("rekey-all"), testOperatorToken, struct{}{}, &ra); st != http.StatusOK {
+		t.Fatalf("rekey-all: status %d, want 200", st)
+	}
+	if st := doJSON(t, http.MethodPost, env.opURL("revoke"), testOperatorToken, map[string]string{"node_id": "node-1"}, nil); st != http.StatusOK {
+		t.Fatalf("revoke: status %d, want 200", st)
+	}
+
+	var nodes []struct {
+		NodeID         string `json:"node_id"`
+		Status         string `json:"status"`
+		RekeyRequested bool   `json:"rekey_requested"`
+	}
+	if st := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); st != http.StatusOK {
+		t.Fatalf("nodes: status %d, want 200", st)
+	}
+	for _, n := range nodes {
+		if n.NodeID == "node-1" {
+			if n.Status != "revoked" {
+				t.Errorf("node-1 status = %q, want revoked", n.Status)
+			}
+			if n.RekeyRequested {
+				t.Errorf("node-1 rekey_requested still true after revoke (would stick the Deploy gate)")
+			}
+		}
+	}
+}

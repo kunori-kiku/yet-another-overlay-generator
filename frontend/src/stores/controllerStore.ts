@@ -62,7 +62,9 @@ function configOf(state: ControllerState): ControllerConfig {
 // DeployBar 用它在轮换收口前禁用 Deploy——否则中途 Deploy 会用「旧+新」混合公钥重编译，
 // 导致 fleet 收敛错乱。返回仍在轮换中的节点数，便于回显「N 个节点仍在轮换密钥」。
 export function selectRekeyingCount(state: ControllerState): number {
-  return state.nodes.filter((n) => n.rekeyRequested).length;
+  // Only APPROVED nodes can re-register (a revoked node never clears its flag), so
+  // exclude non-approved to avoid permanently gating Deploy on a stale flag.
+  return state.nodes.filter((n) => n.rekeyRequested && n.status === 'approved').length;
 }
 
 // step-up SEAM（Plan-5）：在 stage/promote 这类敏感的 promote-to-fleet 操作之前要求一次

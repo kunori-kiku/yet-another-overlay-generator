@@ -637,8 +637,12 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Flip to revoked, preserving all other fields. UpsertNode matches by NodeID.
+	// Flip to revoked, preserving all other fields. Also clear any pending rekey flag:
+	// a revoked node will never re-register, so a left-over RekeyRequested would keep the
+	// panel's "rotating" gate stuck forever (a revoked node is excluded from the deploy
+	// subgraph anyway). UpsertNode matches by NodeID.
 	node.Status = controller.NodeRevoked
+	node.RekeyRequested = false
 	if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to revoke node")
 		return

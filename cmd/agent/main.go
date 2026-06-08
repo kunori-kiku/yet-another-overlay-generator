@@ -298,7 +298,7 @@ func runControllerMode(o controllerModeOpts) int {
 	// cycle runs ONE poll->apply->report iteration from the current watermark via the
 	// testable agent.RunControllerCycle (the deterministic unit the daemon loops over).
 	// It returns the generation to resume from (the applied/fetched generation on
-	// success, the FETCHED generation on a rekey wake so the stale pre-rekey bundle is
+	// success, the polled wake generation on a rekey wake (so the stale pre-rekey bundle is
 	// never re-applied, or the unchanged watermark on a timed-out long-poll) and whether
 	// a new generation was applied. On error it returns the unchanged watermark
 	// (keep-last-good: the running overlay is untouched, so the caller never advances
@@ -323,7 +323,9 @@ func runControllerMode(o controllerModeOpts) int {
 			fmt.Fprintf(os.Stderr, "agent: %v\n", err)
 			return 1
 		}
-		if !applied {
+		if !applied && resumeGen == lastAppliedGen {
+			// A timed-out long-poll (no advance). A rekey wake advances resumeGen and is
+			// logged by RunControllerCycle, so do not print "nothing to do" over a rotation.
 			fmt.Fprintf(os.Stderr, "agent: no new generation (still at %d); nothing to do\n", resumeGen)
 		}
 		return 0
@@ -333,7 +335,7 @@ func runControllerMode(o controllerModeOpts) int {
 	// returns within a round-trip of a promote (so this is push-like without a new
 	// transport); a timed-out poll simply re-polls with no busy-wait. On a transport or
 	// apply error we keep last-good and retry after a short backoff — never tearing down
-	// the running overlay. On a rekey wake the watermark advances to the fetched
+	// the running overlay. On a rekey wake the watermark advances to the polled wake
 	// generation (so the stale pre-rekey bundle is never re-applied); the next applied
 	// generation is the operator's post-rekey Deploy.
 	const errBackoff = 5 * time.Second
