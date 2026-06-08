@@ -43,11 +43,9 @@ var (
 	// already burned (single-use).
 	ErrTokenConsumed = errors.New("controller: enrollment token already consumed")
 	// ErrChallengeInvalid is returned by ConsumeLoginChallenge when no challenge
-	// matches the hash for the operator, or it is expired.
+	// matches the hash for the operator, it is expired, or it was already consumed
+	// (a consumed challenge is DELETED, so a replay simply finds nothing).
 	ErrChallengeInvalid = errors.New("controller: login challenge invalid or expired")
-	// ErrChallengeConsumed is returned by ConsumeLoginChallenge when the challenge was
-	// already burned (single-use).
-	ErrChallengeConsumed = errors.New("controller: login challenge already consumed")
 )
 
 // NodeStatus is the lifecycle state of a registry node.
@@ -225,12 +223,18 @@ type LoginCredential struct {
 // and session tokens. It is the RANDOM-challenge analogue of the keystone's
 // content-bound manifest hash: its presence in the store proves the controller issued
 // it, and single-use consumption is the anti-replay.
+//
+// Single-use is enforced by DELETION on consume (not a ConsumedAt flag), so a completed
+// or expired challenge leaves no residue — this caps store growth without a sweep. A
+// challenge carries no purpose discriminator beyond Operator: the /login 2FA leg,
+// passwordless begin, and the disable re-auth leg mint interchangeable per-operator
+// challenges. That is safe because every issuer is gated (the 2FA leg behind a correct
+// password, disable behind an authenticated session) and each only ever yields a login
+// or an already-authenticated disable — never a privilege escalation.
 type LoginChallenge struct {
-	ChallengeHash string `json:"challenge_hash"`
-	Operator      string `json:"operator"`
+	ChallengeHash string    `json:"challenge_hash"`
+	Operator      string    `json:"operator"`
 	ExpiresAt     time.Time `json:"expires_at"`
-	// ConsumedAt is nil until the challenge is burned (single-use).
-	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
 }
 
 // Session is a server-side operator session minted at a successful /login. The
@@ -352,12 +356,14 @@ type Store interface {
 	// passkey login (the password+passkey 2FA leg, the passwordless begin, or a
 	// disable re-auth).
 	CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error
-	// ConsumeLoginChallenge atomically validates and burns a login challenge: it
-	// returns ErrChallengeInvalid if no challenge matches challengeHash for operator or
-	// it is expired (relative to now), ErrChallengeConsumed if it was already burned,
-	// otherwise it marks the challenge consumed (ConsumedAt=now) and returns nil.
-	// Single-use is enforced atomically so a captured assertion cannot be replayed and
-	// two concurrent logins cannot both consume the same challenge.
+	// ConsumeLoginChallenge atomically validates and burns a login challenge by DELETING
+	// it: it returns ErrChallengeInvalid if no challenge matches challengeHash, if its
+	// Operator != operator, or if it is expired (relative to now); otherwise it deletes
+	// the record and returns nil. Single-use is enforced atomically by the delete under
+	// the store lock, so a captured assertion cannot be replayed (the record is gone) and
+	// two concurrent logins cannot both consume the same challenge. An expired record
+	// encountered here is also deleted (lazy GC); a wrong-operator record is left intact
+	// (it may be another operator's valid challenge — not the caller's to burn).
 	ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error
 
 	// --- Node API tokens (per-node bearer auth) ---

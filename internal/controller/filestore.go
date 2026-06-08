@@ -785,12 +785,13 @@ func (fs *FileStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc Lo
 	return writeJSONAtomic(p, lc)
 }
 
-// ConsumeLoginChallenge atomically validates and burns a login challenge under the
-// mutex: it reads login-challenges/<challengeHash>.json and returns ErrChallengeInvalid
-// if it is absent, if its Operator != operator, or if now is at/after ExpiresAt;
-// ErrChallengeConsumed if it was already burned; otherwise it sets ConsumedAt=now and
-// writes the record back atomically. Holding fs.mu across the read-modify-write makes
-// the check-and-burn race-safe within this process.
+// ConsumeLoginChallenge atomically validates and burns a login challenge under the mutex
+// by DELETING its file: it reads login-challenges/<challengeHash>.json and returns
+// ErrChallengeInvalid if it is absent, if its Operator != operator, or if now is at/after
+// ExpiresAt; otherwise it removes the file and returns nil. Holding fs.mu across the
+// read-and-delete makes the check-and-burn race-safe within this process, so a captured
+// assertion cannot be replayed (the file is gone) and two concurrent logins cannot both
+// win. An expired file is removed (lazy GC); a wrong-operator file is left intact.
 func (fs *FileStore) ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -813,15 +814,14 @@ func (fs *FileStore) ConsumeLoginChallenge(ctx context.Context, t TenantID, chal
 		}
 		return err
 	}
-	if lc.Operator != operator || !now.Before(lc.ExpiresAt) {
+	if !now.Before(lc.ExpiresAt) {
+		_ = os.Remove(p) // expired: lazy GC
 		return ErrChallengeInvalid
 	}
-	if lc.ConsumedAt != nil {
-		return ErrChallengeConsumed
+	if lc.Operator != operator {
+		return ErrChallengeInvalid // not the caller's challenge to burn
 	}
-	consumed := now
-	lc.ConsumedAt = &consumed
-	return writeJSONAtomic(p, lc)
+	return os.Remove(p) // success: single-use consume
 }
 
 // ========================== Node API tokens ================================

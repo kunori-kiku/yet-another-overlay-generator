@@ -251,6 +251,30 @@ func TestPasskeyLoginRejectsForgeries(t *testing.T) {
 	_ = sessionFrom(t, string(gb))
 }
 
+// TestPasskeyLoginBeginRateLimited proves the unauthenticated passwordless begin endpoint
+// is rate-limited (it persists a challenge per call for a passkey username, so an ungated
+// begin is an unbounded-growth footgun). It must start returning 429 within the cap.
+func TestPasskeyLoginBeginRateLimited(t *testing.T) {
+	srv, _ := newLoginEnv(t, "")
+	got429 := false
+	for i := 0; i < maxLoginFailures+3; i++ {
+		body, _ := json.Marshal(passkeyLoginBeginRequestJSON{Username: "admin"})
+		resp, err := srv.Client().Post(srv.URL+ctlBase+"login/passkey/begin", "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatalf("begin POST: %v", err)
+		}
+		code := resp.StatusCode
+		resp.Body.Close()
+		if code == http.StatusTooManyRequests {
+			got429 = true
+			break
+		}
+	}
+	if !got429 {
+		t.Fatalf("begin never returned 429 within %d attempts — endpoint is not rate-limited", maxLoginFailures+3)
+	}
+}
+
 // TestPasskeyDisableRequiresAssertion: disable is two-phase — an empty body returns a
 // challenge, and only a valid assertion removes the credential.
 func TestPasskeyDisableRequiresAssertion(t *testing.T) {

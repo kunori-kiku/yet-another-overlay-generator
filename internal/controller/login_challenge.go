@@ -44,7 +44,6 @@ func NewLoginChallenge(operator string, ttl time.Duration, now time.Time) (chall
 		ChallengeHash: HashToken(challenge),
 		Operator:      operator,
 		ExpiresAt:     now.Add(ttl),
-		ConsumedAt:    nil,
 	}
 	return challenge, lc
 }

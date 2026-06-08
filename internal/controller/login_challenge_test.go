@@ -27,7 +27,7 @@ func TestLoginChallengeSingleUseAndScope(t *testing.T) {
 			if lc.ChallengeHash != HashToken(challenge) {
 				t.Fatalf("ChallengeHash != HashToken(challenge)")
 			}
-			if lc.Operator != "admin" || lc.ConsumedAt != nil {
+			if lc.Operator != "admin" {
 				t.Fatalf("unexpected challenge record: %+v", lc)
 			}
 			if err := s.CreateLoginChallenge(ctx, tn, lc); err != nil {
@@ -38,13 +38,13 @@ func TestLoginChallengeSingleUseAndScope(t *testing.T) {
 			if err := s.ConsumeLoginChallenge(ctx, tn, lc.ChallengeHash, "mallory", now); !errors.Is(err, ErrChallengeInvalid) {
 				t.Fatalf("wrong-operator consume = %v, want ErrChallengeInvalid", err)
 			}
-			// Right operator -> ok (single use).
+			// Right operator -> ok (single use; the record is deleted).
 			if err := s.ConsumeLoginChallenge(ctx, tn, lc.ChallengeHash, "admin", now); err != nil {
 				t.Fatalf("consume = %v, want nil", err)
 			}
-			// Replay -> already consumed.
-			if err := s.ConsumeLoginChallenge(ctx, tn, lc.ChallengeHash, "admin", now); !errors.Is(err, ErrChallengeConsumed) {
-				t.Fatalf("replay consume = %v, want ErrChallengeConsumed", err)
+			// Replay -> the consumed challenge was deleted, so it is now simply invalid.
+			if err := s.ConsumeLoginChallenge(ctx, tn, lc.ChallengeHash, "admin", now); !errors.Is(err, ErrChallengeInvalid) {
+				t.Fatalf("replay consume = %v, want ErrChallengeInvalid", err)
 			}
 			// Unknown hash -> invalid.
 			if err := s.ConsumeLoginChallenge(ctx, tn, "deadbeef", "admin", now); !errors.Is(err, ErrChallengeInvalid) {

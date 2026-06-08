@@ -112,8 +112,11 @@ deployment/operator can use either):
 
 The login challenge is a **server-issued, single-use, short-TTL (5 min) random nonce**,
 scoped to the operator and stored hash-only (`internal/controller/login_challenge.go`);
-`ConsumeLoginChallenge` burns it atomically, so a captured assertion cannot be replayed and
-two concurrent logins cannot both consume one. Registration (`POST /passkey/register`,
+`ConsumeLoginChallenge` burns it atomically **by deleting it**, so a captured assertion
+cannot be replayed (the record is gone) and two concurrent logins cannot both consume one;
+completed and expired challenges leave no residue. The unauthenticated `begin` is
+**rate-limited** per username+IP by the same limiter as password login (so an attacker
+cannot spam it to grow the store, and a locked account is locked across every login path). Registration (`POST /passkey/register`,
 operator-authed) stores only the **public** half (`Operator.LoginCredential`, distinct from
 the keystone `OperatorCredential`); disable (`POST /passkey/disable`) is two-phase and
 requires a **fresh assertion** so a hijacked session cannot strip the factor without the
@@ -128,7 +131,7 @@ passkey — pointed at a *random* challenge to authenticate the panel session ra
 *content* challenge that authorizes a membership change. A synced passkey (Bitwarden,
 iCloud Keychain, 1Password) needs no hardware key. **Honest limit:** passwordless `begin`
 reveals whether a username has a passkey (the `allow_credentials` is empty for none) — a
-low-value signal; the actual authentication is rate-limited at `finish`.
+low-value signal, and both `begin` and `finish` are rate-limited.
 
 ## Transport (hard requirement)
 

@@ -321,6 +321,17 @@ func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *ht
 		return
 	}
 	now := time.Now().UTC()
+	// Rate-limit challenge issuance per username + source IP (the SAME limiter as password
+	// /login and passkey finish, so a locked account is locked across all login paths).
+	// This endpoint is UNAUTHENTICATED and each call for a passkey-registered username
+	// persists a single-use challenge; gating it bounds both store growth and
+	// username-enumeration probing. A subsequent successful finish refunds the slot.
+	allowed, _, retry := h.loginLimiter.registerAttempt(now, "user:"+req.Username, "ip:"+clientIP(r))
+	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		return
+	}
 	op, err := h.store.GetOperator(r.Context(), h.tenant, req.Username)
 	if err == nil && op.LoginCredential != nil {
 		challenge, err := h.issueLoginChallenge(r.Context(), op.Username, now)

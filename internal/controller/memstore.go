@@ -381,16 +381,6 @@ func cloneToken(tok EnrollmentToken) EnrollmentToken {
 	return tok
 }
 
-// cloneLoginChallenge deep-copies a LoginChallenge (its *ConsumedAt) so a stored and a
-// returned value share no pointer.
-func cloneLoginChallenge(lc LoginChallenge) LoginChallenge {
-	if lc.ConsumedAt != nil {
-		c := *lc.ConsumedAt
-		lc.ConsumedAt = &c
-	}
-	return lc
-}
-
 // cloneOperator deep-copies an Operator's pointer fields (its *LoginCredential) so the
 // store never shares mutable state with a caller — a GetOperator caller that mutates the
 // returned credential, or a PutOperator caller that retains its pointer, cannot reach
@@ -443,30 +433,33 @@ func (s *MemStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc Logi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
-	ts.loginChallenges[lc.ChallengeHash] = cloneLoginChallenge(lc)
+	// LoginChallenge has no reference fields, so the map stores a full value copy.
+	ts.loginChallenges[lc.ChallengeHash] = lc
 	return nil
 }
 
-// ConsumeLoginChallenge atomically validates and burns a login challenge under the lock:
-// it returns ErrChallengeInvalid if no challenge matches challengeHash for the tenant, if
-// its Operator != operator, or if now is at/after ExpiresAt; ErrChallengeConsumed if it
-// was already burned; otherwise it sets ConsumedAt=now and returns nil. The whole
-// check-and-burn runs under s.mu so a captured assertion cannot be replayed and two
-// concurrent logins cannot both consume the same challenge.
+// ConsumeLoginChallenge atomically validates and burns a login challenge under the lock
+// by DELETING it: it returns ErrChallengeInvalid if no challenge matches challengeHash, if
+// its Operator != operator, or if now is at/after ExpiresAt; otherwise it deletes the
+// record and returns nil. The check-and-delete runs under s.mu so a captured assertion
+// cannot be replayed (the record is gone) and two concurrent logins cannot both win. An
+// expired record is deleted (lazy GC); a wrong-operator record is left intact.
 func (s *MemStore) ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
 	lc, ok := ts.loginChallenges[challengeHash]
-	if !ok || lc.Operator != operator || !now.Before(lc.ExpiresAt) {
+	if !ok {
 		return ErrChallengeInvalid
 	}
-	if lc.ConsumedAt != nil {
-		return ErrChallengeConsumed
+	if !now.Before(lc.ExpiresAt) {
+		delete(ts.loginChallenges, challengeHash) // expired: lazy GC
+		return ErrChallengeInvalid
 	}
-	consumed := now
-	lc.ConsumedAt = &consumed
-	ts.loginChallenges[challengeHash] = lc
+	if lc.Operator != operator {
+		return ErrChallengeInvalid // not the caller's challenge to burn
+	}
+	delete(ts.loginChallenges, challengeHash) // success: single-use consume
 	return nil
 }
 
