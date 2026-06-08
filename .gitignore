@@ -8,3 +8,7 @@ CLAUDE.md
 .dev-backend.pid
 .dev-frontend.log
 .dev-frontend.pid
+# private key material must never be committed (bundle signing key, TLS, etc.)
+*.pem
+*.key
+*.cred

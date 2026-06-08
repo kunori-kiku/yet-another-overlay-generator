@@ -110,6 +110,34 @@ Phase 0's key is **operator-configured and single** (one key for the whole expor
 and KMS-held sign-only handles arrive in Phase 3; this variable is the Phase 0 stop-gap, not the
 long-term custody model.
 
+## At-rest protection of the signing key (operator requirement)
+
+The file at `YAOG_BUNDLE_SIGNING_KEY` is a **private** Ed25519 key. Anyone who can read it can forge
+config bundles that pass the `install.sh` signature check, so it MUST be protected like any private
+key. The off-host WebAuthn keystone (plan 5.1) bounds the blast radius — a forged bundle still cannot
+alter the hardware-key-signed membership a node verifies — so this tier-1 key needs **exfiltration
+resistance**, not HSM-grade isolation. Concretely:
+
+- **Permissions.** Own the file by the controller's service user and `chmod 600` (or `400`). It must
+  never be group- or world-readable. Treat a key that has been on a loosely-permissioned path as
+  compromised and rotate it (re-key, re-export, re-pin the public key into `install.sh`).
+- **Prefer keeping the plaintext off persistent disk — systemd.** Use
+  [`systemd-creds`](https://www.freedesktop.org/software/systemd/man/systemd-creds.html): encrypt the
+  key once (`systemd-creds encrypt key.pem key.cred`), reference it with `LoadCredential=` /
+  `SetCredentialEncrypted=` in the unit, and point `YAOG_BUNDLE_SIGNING_KEY` at
+  `${CREDENTIALS_DIRECTORY}/<name>`. systemd decrypts it into a per-service `0600` tmpfs at start, so
+  the cleartext key never lands on durable storage and is scoped to the one service.
+- **Containers / compose.** Do not bake the key into the image and do not commit it. Mount it
+  read-only with restrictive ownership, or (better) deliver it via the orchestrator's secret store
+  (Docker/Swarm secrets, Kubernetes Secrets, a mounted vault agent) rather than a bind-mounted file
+  on the host. It is excluded from the repo via `.gitignore`/`.dockerignore`.
+- **Loading is fail-closed.** `LoadSigningFromEnv` returns an error (the export aborts) if the path is
+  set but unreadable or unparsable, so a misconfigured key never silently ships unsigned bundles.
+
+The long-term removal of the at-rest key entirely is the **KMS/HSM path**: a Vault/OpenBao-transit or
+Cloud-KMS backend implements the `ConfigSigner` seam (above) with a sign-only handle, so no private
+key material ever lives on the controller host. Until then, the controls above are the requirement.
+
 ## New bundle artifacts (when signing is enabled)
 
 Added next to the existing per-node files (see
