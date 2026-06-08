@@ -16,21 +16,25 @@ export type NavKey = 'overview' | 'design' | 'fleet' | 'deploy' | 'security' | '
 
 export interface NavItem {
   key: NavKey;
+  /** Route path this item links to (P2). */
+  path: string;
   label: readonly [string, string];
   Icon: ComponentType<SVGProps<SVGSVGElement>>;
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { key: 'overview', label: STRINGS.navOverview, Icon: OverviewIcon },
-  { key: 'design', label: STRINGS.navDesign, Icon: DesignIcon },
-  { key: 'fleet', label: STRINGS.navFleet, Icon: FleetIcon },
-  { key: 'deploy', label: STRINGS.navDeploy, Icon: DeployIcon },
-  { key: 'security', label: STRINGS.navSecurity, Icon: SecurityIcon },
-  { key: 'settings', label: STRINGS.navSettings, Icon: SettingsIcon },
+  { key: 'overview', path: '/overview', label: STRINGS.navOverview, Icon: OverviewIcon },
+  { key: 'design', path: '/design', label: STRINGS.navDesign, Icon: DesignIcon },
+  { key: 'fleet', path: '/fleet', label: STRINGS.navFleet, Icon: FleetIcon },
+  { key: 'deploy', path: '/deploy', label: STRINGS.navDeploy, Icon: DeployIcon },
+  { key: 'security', path: '/security', label: STRINGS.navSecurity, Icon: SecurityIcon },
+  { key: 'settings', path: '/settings', label: STRINGS.navSettings, Icon: SettingsIcon },
 ];
 
-// Single source of truth for the highlighted section. P1 renders the topology
-// scene at the index route, so "design" is active; P2 derives this from the
-// current route instead of pinning it here.
-export const ACTIVE_NAV_KEY: NavKey = 'design';
+/** Match a pathname to its nav item (exact or as a path prefix for nested routes). */
+export function activeNavItem(pathname: string): NavItem | undefined {
+  return NAV_ITEMS.find(
+    (item) => pathname === item.path || pathname.startsWith(`${item.path}/`),
+  );
+}
 

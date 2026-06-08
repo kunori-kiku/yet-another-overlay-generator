@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { txt, STRINGS } from '../../i18n';
 import * as diff from 'diff';
 import type { CompileResponse, Node as TopologyNode } from '../../types/topology';
 
@@ -126,9 +126,11 @@ export function AuditView() {
   const exposedNodes = auditNodes.filter((n) => n.capabilities.can_accept_inbound || n.capabilities.can_relay);
 
   return (
-    <div className="h-full flex flex-col p-6 space-y-6 overflow-y-auto">
+    // Self-sizing section (was a full-screen h-full view): now stacks inside the
+    // /security page, which owns the scroll.
+    <div className="flex flex-col p-6 space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-white">Security Audit & Compilation History</h2>
+        <h2 className="text-xl font-bold text-white">{txt(language, ...STRINGS.compileHistoryTitle)}</h2>
         <button onClick={clearHistory} className="px-3 py-1.5 bg-red-800 hover:bg-red-700 text-sm rounded">Clear History</button>
       </div>
 

@@ -32,10 +32,6 @@ interface TopologyState {
   isValidating: boolean;
   error: string | null;
 
-  // 界面状态
-  viewMode: 'topology' | 'audit' | 'deploy';
-  setViewMode: (mode: 'topology' | 'audit' | 'deploy') => void;
-
   // 画布 UI 偏好：是否在节点卡片上展开已编译接口详情（纯展示）。
   // 接口是编译产物而非绘图原语 —— 连线手势始终是节点对节点，端口由后端分配；
   // 因此接口详情默认收起，按需展开，避免误导用户「连线 = 选择某个接口/端口」。
@@ -146,7 +142,6 @@ export const useTopologyStore = create<TopologyState>()(
       isCompiling: false,
       isValidating: false,
       error: null,
-      viewMode: 'topology',
       showInterfaces: false,
       selectedNodeId: null,
       selectedEdgeId: null,
@@ -156,7 +151,6 @@ export const useTopologyStore = create<TopologyState>()(
       setLanguage: (lang) => set({ language: lang }),
 
   // UI
-  setViewMode: (mode) => set({ viewMode: mode }),
   setShowInterfaces: (show) => set({ showInterfaces: show }),
 
   // Project
@@ -427,7 +421,6 @@ export const useTopologyStore = create<TopologyState>()(
       isCompiling: false,
       isValidating: false,
       error: null,
-      viewMode: 'topology',
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,

@@ -74,4 +74,35 @@ export const STRINGS = {
   themeLight: ['浅色', 'Light'] as const,
   themeDark: ['深色', 'Dark'] as const,
   userMenuLabel: ['账户', 'Account'] as const,
+
+  // ── Route pages (P2) ──
+  overviewTopologyHeading: ['拓扑', 'Topology'] as const,
+  overviewControllerHeading: ['控制器机群', 'Controller Fleet'] as const,
+  overviewDomains: ['域', 'Domains'] as const,
+  overviewNodes: ['节点', 'Nodes'] as const,
+  overviewEdges: ['边', 'Edges'] as const,
+  overviewFleetNodes: ['已注册节点', 'Registered nodes'] as const,
+  overviewLastDeploy: ['上次部署', 'Last deploy'] as const,
+  overviewLastSynced: ['上次同步', 'Last synced'] as const,
+  overviewNotSynced: [
+    '尚未同步——请在「设置」中连接控制器。',
+    'Not synced yet — connect a controller in Settings.',
+  ] as const,
+  settingsModeHeading: ['模式', 'Mode'] as const,
+  settingsModeHint: [
+    '选择本地/手动工作流，或控制器机群工作流。',
+    'Choose the local/manual workflow or the controller fleet workflow.',
+  ] as const,
+  modeLocal: ['本地 / 手动', 'Local / Manual'] as const,
+  modeController: ['控制器', 'Controller'] as const,
+  settingsAppearanceHeading: ['外观', 'Appearance'] as const,
+  settingsAppearanceComingSoon: [
+    '外观设置（主题与半透明）将在后续阶段接入。',
+    'Appearance settings (theme & translucency) arrive in a later phase.',
+  ] as const,
+  compileHistoryTitle: ['编译历史', 'Compile History'] as const,
+  deployControllerHint: [
+    '控制器部署：在下方的部署条进行编排、签名与推送。',
+    'Controller deploy: stage, sign, and promote in the deploy bar below.',
+  ] as const,
 } as const;

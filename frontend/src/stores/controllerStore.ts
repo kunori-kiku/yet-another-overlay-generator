@@ -54,6 +54,12 @@ interface ControllerState {
   // 换来的 session（sessionToken）。两者都不持久化（密钥不落 localStorage）。
   operatorToken: string;
 
+  // 工作流模式：local（本地/手动）或 controller（控制器机群）。P2 把它从 DeployPanel 的
+  // useState 提升到 store，供各路由页读取（导航可见性 / 落地页 / 部署区分流）。P2 仅存内存
+  // （刷新回到 local，与原 useState 行为一致）；P4 把它加入 partialize 实现持久化。
+  mode: 'local' | 'controller';
+  setMode: (mode: 'local' | 'controller') => void;
+
   // 登录会话（plan-5.2）：密码登录后服务端签发的 bearer session token，仅在内存中保存
   // （刷新页面后需重新登录），绝不落 localStorage。operatorName/sessionExpiresAt 仅用于
   // 回显「已登录为 X，到期时间」。
@@ -212,6 +218,8 @@ export const useControllerStore = create<ControllerState>()(
       agentBaseURL: 'http://localhost:9090',
       operatorToken: '',
 
+      mode: 'local',
+
       sessionToken: '',
       operatorName: null,
       sessionExpiresAt: null,
@@ -239,6 +247,8 @@ export const useControllerStore = create<ControllerState>()(
       loginCeremony: false,
 
       setConfig: (partial) => set(partial),
+
+      setMode: (mode) => set({ mode }),
 
       // 刷新 fleet 视图：并行拉取 nodes + audit + bootstrap 设置。任一失败则记录 error，
       // 并保持已有视图不变。settings 拉取失败不影响 nodes/audit（best-effort，单独 catch）。
