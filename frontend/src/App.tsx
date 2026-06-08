@@ -40,7 +40,7 @@ const router = createBrowserRouter([
       { path: 'deploy', element: <DeployPage /> },
       { path: 'security', element: <SecurityPage /> },
       { path: 'settings', element: <SettingsPage /> },
-      { path: '*', element: <Navigate to="/design" replace /> },
+      { path: '*', element: <IndexRedirect /> },
     ],
   },
 ]);

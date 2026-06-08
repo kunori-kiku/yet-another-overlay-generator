@@ -59,8 +59,8 @@ export function NodeRegistry() {
         <p className="text-sm text-gray-500 italic">
           {txt(
             language,
-            '暂无已注册节点。配置控制器连接并点击「刷新」，或在下方为节点签发注册令牌。',
-            'No registered nodes. Configure the controller connection and click Refresh, or mint an enrollment token below.',
+            '暂无已注册节点。在「设置」中配置控制器连接并点击「连接 / 刷新」，或在下方为节点签发注册令牌。',
+            'No registered nodes. Configure the controller connection in Settings and click Connect / Refresh, or mint an enrollment token below.',
           )}
         </p>
       ) : (

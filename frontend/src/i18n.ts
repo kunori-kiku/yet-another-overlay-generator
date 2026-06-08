@@ -96,10 +96,6 @@ export const STRINGS = {
   modeLocal: ['本地 / 手动', 'Local / Manual'] as const,
   modeController: ['控制器', 'Controller'] as const,
   settingsAppearanceHeading: ['外观', 'Appearance'] as const,
-  settingsAppearanceComingSoon: [
-    '外观设置（主题与半透明）将在后续阶段接入。',
-    'Appearance settings (theme & translucency) arrive in a later phase.',
-  ] as const,
   compileHistoryTitle: ['编译历史', 'Compile History'] as const,
   deployControllerHint: [
     '控制器部署：在下方的部署条进行编排、签名与推送。',
