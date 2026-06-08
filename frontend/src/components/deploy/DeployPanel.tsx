@@ -44,9 +44,10 @@ export function DeployPanel() {
   // 二次因子（plan-5.2）：登录密码正确但需 TOTP 码时后端置 totpRequired，表单据此展开验证码框。
   const totpRequired = useControllerStore((s) => s.totpRequired);
   const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
-  // 无密码 passkey 登录 + 「触碰你的安全密钥」提示（signing 在 passkey ceremony 期间为真）。
+  // 无密码 passkey 登录 + 「触碰你的安全密钥」提示（loginCeremony 在登录 passkey ceremony
+  // 期间为真——含 password+passkey 2FA 步骤与无密码登录；与 keystone 的 signing 分开）。
   const loginWithPasskey = useControllerStore((s) => s.loginWithPasskey);
-  const signing = useControllerStore((s) => s.signing);
+  const loginCeremony = useControllerStore((s) => s.loginCeremony);
 
   const [mode, setMode] = useState<DeployMode>('local');
   // 登录表单的本地输入（密码/验证码只在内存里，登录成功后清空）。
@@ -324,7 +325,7 @@ export function DeployPanel() {
                   >
                     {txt(language, '🔑 用 passkey 登录', '🔑 Sign in with passkey')}
                   </button>
-                  {signing && (
+                  {loginCeremony && (
                     <p className="text-[10px] text-fuchsia-300">
                       {txt(language, '请触碰你的安全密钥...', 'Touch your security key...')}
                     </p>

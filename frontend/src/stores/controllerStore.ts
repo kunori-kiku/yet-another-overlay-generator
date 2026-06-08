@@ -101,8 +101,15 @@ interface ControllerState {
   lastSyncedAt: number | null;
   // signing 为真表示 WebAuthn 提示已弹出、正在等待用户触碰安全密钥（enroll 或 deploy 期间）。
   // UI 用它显示「触碰你的安全密钥」提示。enrolling 区分 enroll 与 deploy-sign 两种 ceremony。
+  // 注意：signing/enrolling 专属 KEYSTONE 流程（deploy 签名 / 签名密钥注册），DeployBar 的
+  // 「授权本次部署」横幅据此显示。登录 passkey 的 ceremony 用下面独立的 loginCeremony 标志，
+  // 以免在登录/注册/移除登录 passkey 时错误点亮「授权部署」横幅。
   signing: boolean;
   enrolling: boolean;
+  // loginCeremony 为真表示一次「登录 passkey」WebAuthn 提示进行中（password+passkey 2FA、
+  // 无密码登录、注册或移除登录 passkey）。与 keystone 的 signing/enrolling 分开，驱动登录区/
+  // 账户安全区的「触碰你的安全密钥」提示，但不触发 DeployBar 的部署横幅。
+  loginCeremony: boolean;
 
   // actions
   setConfig: (partial: Partial<ControllerConfig & { agentBaseURL: string }>) => void;
@@ -229,6 +236,7 @@ export const useControllerStore = create<ControllerState>()(
       lastSyncedAt: null,
       signing: false,
       enrolling: false,
+      loginCeremony: false,
 
       setConfig: (partial) => set(partial),
 
@@ -296,7 +304,7 @@ export const useControllerStore = create<ControllerState>()(
               set({ error: 'This account requires a passkey, but none is registered.', loading: false });
               return;
             }
-            set({ signing: true });
+            set({ loginCeremony: true });
             try {
               const assertion = await assertLogin(
                 ch.challenge,
@@ -311,7 +319,7 @@ export const useControllerStore = create<ControllerState>()(
                   operatorName: after.result.operator,
                   sessionExpiresAt: after.result.expiresAt,
                   totpRequired: false,
-                  signing: false,
+                  loginCeremony: false,
                   loading: false,
                 });
                 await get().refresh();
@@ -320,11 +328,11 @@ export const useControllerStore = create<ControllerState>()(
                 return;
               }
               // A passkey resubmit should either succeed or throw; anything else is unexpected.
-              set({ error: 'Passkey login did not complete — please try again.', signing: false, loading: false });
+              set({ error: 'Passkey login did not complete — please try again.', loginCeremony: false, loading: false });
             } catch (err) {
               set({
                 error: err instanceof Error ? err.message : 'Passkey login failed',
-                signing: false,
+                loginCeremony: false,
                 loading: false,
               });
             }
@@ -441,7 +449,7 @@ export const useControllerStore = create<ControllerState>()(
             set({ error: 'No passkey is registered for this account.', loading: false });
             return;
           }
-          set({ signing: true });
+          set({ loginCeremony: true });
           let assertion;
           try {
             assertion = await assertLogin(
@@ -451,7 +459,7 @@ export const useControllerStore = create<ControllerState>()(
               ch.rpid || window.location.hostname,
             );
           } finally {
-            set({ signing: false });
+            set({ loginCeremony: false });
           }
           const result = await passkeyLoginFinish(cfg, username, assertion);
           set({
@@ -467,7 +475,7 @@ export const useControllerStore = create<ControllerState>()(
           set({
             error: err instanceof Error ? err.message : 'Passkey login failed',
             loading: false,
-            signing: false,
+            loginCeremony: false,
           });
         }
       },
@@ -482,12 +490,13 @@ export const useControllerStore = create<ControllerState>()(
       },
 
       // 注册登录 passkey：复用 keystone 的 create() ceremony（enrollOperatorCredential 取
-      // SPKI + alg），POST /passkey/register 存公钥。仅公钥离开 authenticator。enrolling 标志
-      // 复用以驱动「触碰你的安全密钥」提示。
+      // SPKI + alg），POST /passkey/register 存公钥。仅公钥离开 authenticator。loginCeremony
+      // 驱动「触碰你的安全密钥」提示（不触发 DeployBar 部署横幅）。错误向调用方抛出，由
+      // PasskeySettings 就地展示（与 TwoFactorSettings 的本地错误一致）。
       registerPasskey: async () => {
         const rpId = window.location.hostname;
         const origin = window.location.origin;
-        set({ enrolling: true, error: null });
+        set({ loginCeremony: true });
         try {
           const cred = await enrollOperatorCredential(rpId, origin);
           await ctlRegisterPasskey(configOf(get()), {
@@ -497,51 +506,41 @@ export const useControllerStore = create<ControllerState>()(
             rpId,
             origin,
           });
-          set({ passkeyRegistered: true, enrolling: false });
+          set({ passkeyRegistered: true, loginCeremony: false });
         } catch (err) {
-          set({
-            error: err instanceof Error ? err.message : 'Failed to register passkey',
-            enrolling: false,
-          });
+          set({ loginCeremony: false });
+          throw err;
         }
       },
 
       // 关闭登录 passkey（两段式）：begin 取再认证挑战 → assertLogin → finish 删除凭据。需新鲜
       // 断言，防被劫持的 session 直接摘掉因子。begin 返回 done 表示本就没有 passkey（幂等）。
+      // 错误向调用方抛出，由 PasskeySettings 就地展示。
       disablePasskey: async () => {
-        set({ loading: true, error: null });
+        set({ loginCeremony: true });
         try {
           const cfg = configOf(get());
           const begin = await disablePasskeyBegin(cfg);
           if (begin.kind === 'done') {
-            set({ passkeyRegistered: false, loading: false });
+            set({ passkeyRegistered: false, loginCeremony: false });
             return;
           }
           const ch = begin.challenge;
           if (!ch.credentialId || !ch.alg) {
-            set({ error: 'Cannot disable: no credential to re-authenticate with.', loading: false });
-            return;
+            set({ loginCeremony: false });
+            throw new Error('Cannot disable: no credential to re-authenticate with.');
           }
-          set({ signing: true });
-          let assertion;
-          try {
-            assertion = await assertLogin(
-              ch.challenge,
-              ch.credentialId,
-              ch.alg,
-              ch.rpid || window.location.hostname,
-            );
-          } finally {
-            set({ signing: false });
-          }
+          const assertion = await assertLogin(
+            ch.challenge,
+            ch.credentialId,
+            ch.alg,
+            ch.rpid || window.location.hostname,
+          );
           await disablePasskeyFinish(cfg, assertion);
-          set({ passkeyRegistered: false, loading: false });
+          set({ passkeyRegistered: false, loginCeremony: false });
         } catch (err) {
-          set({
-            error: err instanceof Error ? err.message : 'Failed to disable passkey',
-            loading: false,
-            signing: false,
-          });
+          set({ loginCeremony: false });
+          throw err;
         }
       },
 

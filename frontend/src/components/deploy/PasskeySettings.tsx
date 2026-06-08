@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { txt } from '../../i18n';
@@ -9,8 +9,9 @@ import { txt } from '../../i18n';
 // 无账户（后端返回 403），此时 passkeyRegistered 保持 null，UI 提示「请用密码登录」。
 //
 // 注册复用 navigator.credentials.create()（只有公钥离开 authenticator）；移除需要一次新鲜
-// 断言（防被劫持的 session 直接摘掉因子）。两者都会弹出 authenticator——signing/enrolling
-// 标志驱动「触碰你的安全密钥」提示。
+// 断言（防被劫持的 session 直接摘掉因子）。两者都会弹出 authenticator——loginCeremony 标志
+// 驱动「触碰你的安全密钥」提示（与 keystone 的 signing/enrolling 分开，不点亮 DeployBar 部署
+// 横幅）。错误就地展示（store 动作向此处抛出），与 TwoFactorSettings 的本地错误一致。
 export function PasskeySettings() {
   const language = useTopologyStore((s) => s.language);
   const loggedIn = useControllerStore(selectLoggedIn);
@@ -18,8 +19,9 @@ export function PasskeySettings() {
   const loadPasskeyStatus = useControllerStore((s) => s.loadPasskeyStatus);
   const registerPasskey = useControllerStore((s) => s.registerPasskey);
   const disablePasskey = useControllerStore((s) => s.disablePasskey);
-  const enrolling = useControllerStore((s) => s.enrolling);
-  const signing = useControllerStore((s) => s.signing);
+  const loginCeremony = useControllerStore((s) => s.loginCeremony);
+
+  const [localError, setLocalError] = useState<string | null>(null);
 
   // 已登录但状态未知时拉取一次（store 动作，非 setState——与 BootstrapSettings 同型）。
   useEffect(() => {
@@ -28,7 +30,23 @@ export function PasskeySettings() {
     }
   }, [loggedIn, passkeyRegistered, loadPasskeyStatus]);
 
-  const busy = enrolling || signing;
+  const handleRegister = async () => {
+    setLocalError(null);
+    try {
+      await registerPasskey();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Failed to register passkey');
+    }
+  };
+
+  const handleDisable = async () => {
+    setLocalError(null);
+    try {
+      await disablePasskey();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Failed to disable passkey');
+    }
+  };
 
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
@@ -59,11 +77,11 @@ export function PasskeySettings() {
             {txt(language, '✅ 已注册登录 passkey。', '✅ A login passkey is registered.')}
           </p>
           <button
-            onClick={() => void disablePasskey()}
-            disabled={busy}
+            onClick={() => void handleDisable()}
+            disabled={loginCeremony}
             className="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
-            {signing
+            {loginCeremony
               ? txt(language, '请触碰安全密钥...', 'Touch your security key...')
               : txt(language, '移除 passkey', 'Remove passkey')}
           </button>
@@ -77,14 +95,18 @@ export function PasskeySettings() {
         </div>
       ) : (
         <button
-          onClick={() => void registerPasskey()}
-          disabled={busy}
+          onClick={() => void handleRegister()}
+          disabled={loginCeremony}
           className="px-4 py-1.5 text-sm bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
         >
-          {enrolling
+          {loginCeremony
             ? txt(language, '请触碰安全密钥...', 'Touch your security key...')
             : txt(language, '注册登录 passkey', 'Register a login passkey')}
         </button>
+      )}
+
+      {localError && (
+        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {localError}</p>
       )}
     </section>
   );
