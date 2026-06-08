@@ -4,10 +4,10 @@ import { useUiStore, type ThemePref } from '../stores/uiStore';
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
-/** Resolve a preference to a concrete boolean and toggle the `.dark` class. */
+/** Resolve a preference to a concrete boolean and toggle the `.dark` class.
+ *  Client-only (runs from a React effect in this SPA) — no SSR half-guard. */
 function applyTheme(theme: ThemePref) {
-  const prefersDark =
-    typeof window !== 'undefined' && window.matchMedia(DARK_QUERY).matches;
+  const prefersDark = window.matchMedia(DARK_QUERY).matches;
   const dark = theme === 'dark' || (theme === 'system' && prefersDark);
   document.documentElement.classList.toggle('dark', dark);
 }

@@ -1,4 +1,4 @@
-import type { SVGProps } from 'react';
+import type { ReactNode, SVGProps } from 'react';
 
 // Lightweight inline icon set for the app-shell. Stroke-based, currentColor,
 // dependency-free — keeps the bundle lean and matches the minimal aesthetic.
@@ -6,7 +6,7 @@ import type { SVGProps } from 'react';
 
 type IconProps = SVGProps<SVGSVGElement>;
 
-function Base({ children, ...props }: IconProps & { children: React.ReactNode }) {
+function Base({ children, ...props }: IconProps & { children: ReactNode }) {
   return (
     <svg
       width={20}

@@ -2,6 +2,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useUiStore } from '../../stores/uiStore';
 import { txt, STRINGS } from '../../i18n';
 import { MonitorIcon, SunIcon, MoonIcon } from './icons';
+import { FOCUS_RING } from './styles';
 
 // Top-right theme control. Cycles System → Light → Dark and shows the icon for
 // the current preference (standard top-bar placement, not a deep settings panel).
@@ -24,7 +25,7 @@ export function ThemeToggle() {
       onClick={cycleTheme}
       title={`${toggleLabel} · ${current.label}`}
       aria-label={`${toggleLabel}: ${current.label}`}
-      className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--content-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--content)]"
+      className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--content-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--content)] ${FOCUS_RING}`}
     >
       <Icon />
     </button>

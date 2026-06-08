@@ -32,6 +32,14 @@ export const useUiStore = create<UiState>()(
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
     }),
-    { name: 'ui-storage' },
+    {
+      name: 'ui-storage',
+      // Explicit allowlist: only non-secret UI prefs are persisted. Locks the
+      // zero-knowledge custody invariant in for future fields added to this store.
+      partialize: (state) => ({
+        theme: state.theme,
+        sidebarCollapsed: state.sidebarCollapsed,
+      }),
+    },
   ),
 );

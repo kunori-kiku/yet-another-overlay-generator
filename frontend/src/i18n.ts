@@ -60,6 +60,7 @@ export const STRINGS = {
 
   // ── App-shell chrome (sidebar nav, top bar, theme toggle, user menu) ──
   brandName: ['YAOG 控制台', 'YAOG Console'] as const,
+  primaryNavLabel: ['主导航', 'Primary'] as const,
   navOverview: ['总览', 'Overview'] as const,
   navDesign: ['拓扑设计', 'Design'] as const,
   navFleet: ['节点机群', 'Fleet'] as const,

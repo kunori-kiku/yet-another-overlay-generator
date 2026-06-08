@@ -2,12 +2,13 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useUiStore } from '../../stores/uiStore';
 import { txt, STRINGS } from '../../i18n';
 import { ChevronLeftIcon } from './icons';
-import { NAV_ITEMS } from './nav';
+import { NAV_ITEMS, ACTIVE_NAV_KEY } from './nav';
+import { FOCUS_RING } from './styles';
 
 // Collapsible left sidebar. Default expanded; the fold button persists the
 // collapsed state. Nav items are presentational placeholders in P1 — P2 turns
-// them into <NavLink>s once sections become routes. The active item is pinned to
-// "Design" here because the index route renders the topology scene.
+// them into <NavLink>s once sections become routes. The active item comes from
+// ACTIVE_NAV_KEY (single source of truth; route-derived in P2).
 export function Sidebar() {
   const language = useTopologyStore((s) => s.language);
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -31,16 +32,21 @@ export function Sidebar() {
         )}
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto p-2">
+      <nav
+        aria-label={txt(language, ...STRINGS.primaryNavLabel)}
+        className="flex-1 space-y-1 overflow-y-auto p-2"
+      >
         {NAV_ITEMS.map(({ key, label, Icon }) => {
-          const active = key === 'design';
+          const active = key === ACTIVE_NAV_KEY;
+          const itemLabel = txt(language, ...label);
           return (
             <button
               key={key}
               type="button"
               aria-current={active ? 'page' : undefined}
-              title={collapsed ? txt(language, ...label) : undefined}
-              className={`flex h-10 w-full items-center gap-3 rounded-lg text-sm transition-colors ${
+              aria-label={itemLabel}
+              title={collapsed ? itemLabel : undefined}
+              className={`flex h-10 w-full items-center gap-3 rounded-lg text-sm transition-colors ${FOCUS_RING} ${
                 collapsed ? 'justify-center px-0' : 'px-3'
               } ${
                 active
@@ -49,7 +55,7 @@ export function Sidebar() {
               }`}
             >
               <Icon />
-              {!collapsed && <span className="truncate">{txt(language, ...label)}</span>}
+              {!collapsed && <span className="truncate">{itemLabel}</span>}
             </button>
           );
         })}
@@ -61,7 +67,7 @@ export function Sidebar() {
           onClick={toggleSidebar}
           aria-label={foldLabel}
           title={foldLabel}
-          className={`flex h-10 w-full items-center gap-3 rounded-lg text-sm text-[var(--content-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--content)] ${
+          className={`flex h-10 w-full items-center gap-3 rounded-lg text-sm text-[var(--content-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--content)] ${FOCUS_RING} ${
             collapsed ? 'justify-center px-0' : 'px-3'
           }`}
         >
