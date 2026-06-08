@@ -19,6 +19,7 @@ package api
 // operator token for the operator).
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
 // DefaultOperatorName is the operator's identity stamped into the request context
@@ -123,6 +125,11 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"topology", op(h.HandleTopology))
 	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
 	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
+	// Keystone (plan-5.1b): pin the off-host operator credential, fetch the canonical
+	// trust-list bytes to sign, and submit the off-host signature.
+	mux.HandleFunc(base+"operator-credential", op(h.HandleOperatorCredential))
+	mux.HandleFunc(base+"trustlist", op(h.HandleTrustList))
+	mux.HandleFunc(base+"trustlist-signature", op(h.HandleTrustListSignature))
 }
 
 // SetPathPrefix sets the optional secret path prefix the controller routes mount under.
@@ -299,6 +306,34 @@ type rekeyRequestJSON struct {
 // rekeyResponseJSON confirms an agent rekey re-registration.
 type rekeyResponseJSON struct {
 	OK bool `json:"ok"`
+}
+
+// operatorCredentialRequestJSON is the operator's request to pin the off-host signing
+// credential (the keystone trust anchor). public_key_pem is the PKIX ("PUBLIC KEY")
+// PEM; alg selects how it is parsed (ed25519 / webauthn-es256 / webauthn-eddsa);
+// rpid/origin are the WebAuthn relying-party binding values (empty for raw Ed25519).
+type operatorCredentialRequestJSON struct {
+	Alg          string `json:"alg"`
+	CredentialID string `json:"credential_id"`
+	PublicKeyPEM string `json:"public_key_pem"`
+	RPID         string `json:"rpid"`
+	Origin       string `json:"origin"`
+}
+
+// trustListResponseJSON returns the canonical bytes the operator must sign
+// (base64-encoded) plus the membership epoch those bytes carry. The panel signs
+// challenge = SHA256(decoded trustlist_json).
+type trustListResponseJSON struct {
+	TrustListJSON string `json:"trustlist_json"`
+	Epoch         int64  `json:"epoch"`
+}
+
+// trustListSignatureRequestJSON is the operator's submission of a signed trust-list:
+// the base64 of the canonical bytes the operator actually signed (substitution guard)
+// plus the trustlist.SignedTrustList detached-signature artifact.
+type trustListSignatureRequestJSON struct {
+	TrustListJSON string                    `json:"trustlist_json"`
+	Signed        trustlist.SignedTrustList `json:"signed"`
 }
 
 // --- handlers ---
@@ -905,6 +940,291 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})
+}
+
+// --- keystone (off-host membership trust-list) ---
+
+// buildTrustList projects the current approved registry into the user-signable
+// membership trust-list for tenant t. Members are every NodeApproved node with a
+// non-empty WGPublicKey ({NodeID, WGPublicKey}); Tenant is the tenant id;
+// SchemaVersion is 1; CreatedAt is now in RFC3339. The Epoch is monotonic:
+//
+//   - if a StoredTrustList already exists AND its decoded members exactly equal the
+//     current approved members (same node_id -> wg_public_key set), the existing epoch
+//     is REUSED (the membership has not changed, so the signed document is logically
+//     the same and need not bump);
+//   - otherwise the epoch is (current stored epoch + 1), or 0 when no trust-list has
+//     ever been stored.
+//
+// This makes a re-fetch of an unchanged membership stable (same epoch, same canonical
+// bytes), while any membership change advances the epoch so nodes' anti-rollback check
+// (epoch >= last applied) admits the new list and rejects an older one.
+func (h *ControllerHandler) buildTrustList(ctx context.Context, t controller.TenantID) (trustlist.TrustList, error) {
+	nodes, err := h.store.ListNodes(ctx, t)
+	if err != nil {
+		return trustlist.TrustList{}, err
+	}
+	current := make(map[string]string, len(nodes))
+	members := make([]trustlist.Member, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Status == controller.NodeApproved && n.WGPublicKey != "" {
+			current[n.NodeID] = n.WGPublicKey
+			members = append(members, trustlist.Member{NodeID: n.NodeID, WGPublicKey: n.WGPublicKey})
+		}
+	}
+
+	// Epoch rule (monotonic): reuse the stored epoch iff the stored trust-list's members
+	// match the current approved members; else stored-epoch+1 (0 if none stored).
+	var epoch int64 // 0 when no trust-list has ever been stored
+	if stored, err := h.store.GetCurrentSignedTrustList(ctx, t); err == nil {
+		same, serr := storedMembersMatch(stored.TrustListJSON, current)
+		if serr != nil {
+			return trustlist.TrustList{}, serr
+		}
+		if same {
+			epoch = stored.Epoch
+		} else {
+			epoch = stored.Epoch + 1
+		}
+	} else if !errors.Is(err, controller.ErrNotFound) {
+		return trustlist.TrustList{}, err
+	}
+
+	return trustlist.TrustList{
+		SchemaVersion: 1,
+		Tenant:        string(t),
+		Epoch:         epoch,
+		Members:       members,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// storedMembersMatch reports whether the members encoded in a stored trust-list's
+// canonical JSON equal the given current approved-member set (node_id -> wg_public_key).
+func storedMembersMatch(trustListJSON []byte, current map[string]string) (bool, error) {
+	var tl trustlist.TrustList
+	if err := json.Unmarshal(trustListJSON, &tl); err != nil {
+		return false, err
+	}
+	if len(tl.Members) != len(current) {
+		return false, nil
+	}
+	for _, m := range tl.Members {
+		if current[m.NodeID] != m.WGPublicKey {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// pinFromCredential builds the trustlist.PinnedCredential the verifier checks against
+// from a stored OperatorCredential, parsing the PEM by the credential's algorithm and
+// carrying through the WebAuthn RPID/Origin binding values.
+func pinFromCredential(c controller.OperatorCredential) (trustlist.PinnedCredential, error) {
+	pin := trustlist.PinnedCredential{
+		Alg:          trustlist.Alg(c.Alg),
+		CredentialID: c.CredentialID,
+		RPID:         c.RPID,
+		Origin:       c.Origin,
+	}
+	switch trustlist.Alg(c.Alg) {
+	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
+		pub, err := trustlist.ParseEd25519PinPEM([]byte(c.PublicKeyPEM))
+		if err != nil {
+			return trustlist.PinnedCredential{}, err
+		}
+		pin.Ed25519Pub = pub
+	case trustlist.AlgWebAuthnES256:
+		pub, err := trustlist.ParseES256Pin([]byte(c.PublicKeyPEM))
+		if err != nil {
+			return trustlist.PinnedCredential{}, err
+		}
+		pin.ES256Pub = pub
+	default:
+		return trustlist.PinnedCredential{}, errors.New("unsupported operator credential algorithm")
+	}
+	return pin, nil
+}
+
+// HandleOperatorCredential pins the off-host operator signing credential (operator-only),
+// turning KEYSTONE ON for the tenant. The public_key_pem MUST parse for the declared
+// alg (so a malformed pin is rejected here, not at verify time). On success it stores
+// the credential and records a "pin-operator-credential" audit entry.
+func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+	tenant, operator, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	var req operatorCredentialRequestJSON
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Validate the PEM parses for the declared algorithm before pinning it.
+	switch trustlist.Alg(req.Alg) {
+	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
+		if _, err := trustlist.ParseEd25519PinPEM([]byte(req.PublicKeyPEM)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid public_key_pem for alg: "+err.Error())
+			return
+		}
+	case trustlist.AlgWebAuthnES256:
+		if _, err := trustlist.ParseES256Pin([]byte(req.PublicKeyPEM)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid public_key_pem for alg: "+err.Error())
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported alg")
+		return
+	}
+
+	if err := h.store.SetOperatorCredential(r.Context(), tenant, controller.OperatorCredential{
+		Alg:          req.Alg,
+		CredentialID: req.CredentialID,
+		PublicKeyPEM: req.PublicKeyPEM,
+		RPID:         req.RPID,
+		Origin:       req.Origin,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to pin operator credential")
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "pin-operator-credential",
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// HandleTrustList returns the canonical bytes the operator must sign (base64) plus the
+// membership epoch (operator-only). These are EXACTLY the bytes that get signed and
+// verified — the panel signs challenge = SHA256(decoded bytes). A node later verifies
+// the signature over the same canonical bytes against its pinned credential.
+func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	tl, err := h.buildTrustList(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build trust-list")
+		return
+	}
+	canonical, err := trustlist.Canonical(tl)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to canonicalize trust-list: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, trustListResponseJSON{
+		TrustListJSON: base64.StdEncoding.EncodeToString(canonical),
+		Epoch:         tl.Epoch,
+	})
+}
+
+// HandleTrustListSignature accepts the operator's off-host signature over the membership
+// trust-list (operator-only). It (a) re-derives the canonical bytes server-side; (b)
+// rejects a submitted trustlist_json that does not byte-equal them (409 substitution
+// guard — the operator must sign exactly what the controller built); (c) builds the
+// pinned credential from the stored OperatorCredential and verifies the signature with
+// trustlist.Verify (400 on any verification failure); (d) persists the signed trust-list
+// (canonical bytes + json.Marshal(signed) + epoch), records a "sign-trustlist" audit
+// entry, and returns 200. A 412 is returned when no operator credential is pinned.
+func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+	tenant, operator, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	var req trustListSignatureRequestJSON
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// A signature is meaningless without a pinned credential to verify it against.
+	cred, err := h.store.GetOperatorCredential(r.Context(), tenant)
+	if err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			writeError(w, http.StatusPreconditionFailed, "no operator credential is pinned; pin one before signing")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load operator credential")
+		return
+	}
+
+	// (a) Re-derive the canonical bytes the controller would have the operator sign.
+	tl, err := h.buildTrustList(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build trust-list")
+		return
+	}
+	canonical, err := trustlist.Canonical(tl)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to canonicalize trust-list: "+err.Error())
+		return
+	}
+
+	// (b) Substitution guard: the operator must have signed EXACTLY these bytes.
+	submitted, err := base64.StdEncoding.DecodeString(req.TrustListJSON)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "trustlist_json is not valid base64")
+		return
+	}
+	if !bytes.Equal(submitted, canonical) {
+		writeError(w, http.StatusConflict, "submitted trust-list does not match the current canonical trust-list; re-fetch and re-sign")
+		return
+	}
+
+	// (c) Verify the off-host signature against the PINNED credential.
+	pin, err := pinFromCredential(cred)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load pinned credential: "+err.Error())
+		return
+	}
+	if err := trustlist.Verify(tl, req.Signed, pin); err != nil {
+		writeError(w, http.StatusBadRequest, "trust-list signature verification failed: "+err.Error())
+		return
+	}
+
+	// (d) Persist the signed trust-list and audit it.
+	signedJSON, err := json.Marshal(req.Signed)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to marshal signature")
+		return
+	}
+	if err := h.store.PutSignedTrustList(r.Context(), tenant, controller.StoredTrustList{
+		TrustListJSON: canonical,
+		SignatureJSON: signedJSON,
+		Epoch:         tl.Epoch,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store signed trust-list")
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "sign-trustlist",
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "epoch": tl.Epoch})
 }
 
 // --- helpers ---

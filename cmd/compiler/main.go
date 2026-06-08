@@ -82,7 +82,7 @@ func main() {
 	}
 
 	//
-	exportResult, err := artifacts.Export(result, *outputDir)
+	exportResult, err := artifacts.Export(result, *outputDir, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, ": %v\n", err)
 		os.Exit(1)

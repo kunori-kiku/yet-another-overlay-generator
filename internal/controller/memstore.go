@@ -33,6 +33,12 @@ type tenantState struct {
 	apiTokens map[string]string
 	// generation is the tenant's current generation (0 before any promote).
 	generation int64
+	// operatorCred is the tenant's pinned off-host operator signing credential, or nil
+	// when none is pinned (keystone OFF). The keystone trust anchor.
+	operatorCred *OperatorCredential
+	// signedTrustList is the tenant's current operator-signed membership trust-list, or
+	// nil when none has been signed yet.
+	signedTrustList *StoredTrustList
 	// audit is the append-only, hash-chained audit log in Seq order.
 	audit []AuditEntry
 	// lastHash is the Hash of the most recent audit entry ("" if none yet).
@@ -451,6 +457,67 @@ func (s *MemStore) RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID st
 		ts.nodes[nodeID] = n
 	}
 	return nil
+}
+
+// --- Keystone: operator credential + signed trust-list ---
+
+// SetOperatorCredential pins (or replaces) the tenant's off-host operator signing
+// credential. A private copy is stored so a later caller mutation cannot leak in.
+func (s *MemStore) SetOperatorCredential(ctx context.Context, t TenantID, c OperatorCredential) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	cp := c
+	ts.operatorCred = &cp
+	return nil
+}
+
+// GetOperatorCredential returns the tenant's pinned operator credential, or
+// ErrNotFound when none is pinned.
+func (s *MemStore) GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	if ts.operatorCred == nil {
+		return OperatorCredential{}, ErrNotFound
+	}
+	return *ts.operatorCred, nil
+}
+
+// PutSignedTrustList stores (replacing any prior) the operator-signed membership
+// trust-list. The byte slices are deep-copied so the stored record shares no backing
+// arrays with the caller.
+func (s *MemStore) PutSignedTrustList(ctx context.Context, t TenantID, sl StoredTrustList) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	ts.signedTrustList = cloneStoredTrustList(&sl)
+	return nil
+}
+
+// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
+// ErrNotFound when none has been signed yet. A deep copy is returned.
+func (s *MemStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	if ts.signedTrustList == nil {
+		return StoredTrustList{}, ErrNotFound
+	}
+	return *cloneStoredTrustList(ts.signedTrustList), nil
+}
+
+// cloneStoredTrustList returns a deep copy of a StoredTrustList, copying its byte
+// slices so stored/returned records share no backing arrays with the caller.
+func cloneStoredTrustList(in *StoredTrustList) *StoredTrustList {
+	out := StoredTrustList{Epoch: in.Epoch}
+	if in.TrustListJSON != nil {
+		out.TrustListJSON = append([]byte(nil), in.TrustListJSON...)
+	}
+	if in.SignatureJSON != nil {
+		out.SignatureJSON = append([]byte(nil), in.SignatureJSON...)
+	}
+	return &out
 }
 
 // --- Audit (append-only, hash-chained) ---

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
@@ -29,7 +30,14 @@ type ExportResult struct {
 }
 
 // Export 导出所有节点的配置产物
-func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, error) {
+//
+// extraBundleFiles is an optional set of bundle-relative path -> content entries the
+// caller wants added to EVERY node's bundle (the keystone controller passes
+// trustlist.json + trustlist.sig here). Each entry is written into every node dir AND
+// added to that node's checksum/canonical set BEFORE the bundle is signed, so the
+// per-bundle checksums.sha256 and bundle.sig cover them too. Air-gap callers that have
+// no extra files pass nil — in which case the output is byte-for-byte today's.
+func Export(result *compiler.CompileResult, outputDir string, extraBundleFiles map[string]string) (*ExportResult, error) {
 	exportResult := &ExportResult{
 		OutputDir: outputDir,
 	}
@@ -111,6 +119,24 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
+		// Write each caller-supplied extra bundle file (e.g. the keystone
+		// trustlist.json + trustlist.sig) into this node dir. The path is a
+		// bundle-relative slash path; it is validated against traversal and its parent
+		// directory is created. These are written BEFORE the canonical/checksum block
+		// below so the hashes (and the signature over them) cover them too.
+		for rel, content := range extraBundleFiles {
+			dest, err := safeBundlePath(nodeDir, rel)
+			if err != nil {
+				return nil, fmt.Errorf("额外产物路径不安全 %q: %w", rel, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+				return nil, fmt.Errorf("创建额外产物目录失败: %w", err)
+			}
+			if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
+				return nil, fmt.Errorf("写入额外产物 %q 失败: %w", rel, err)
+			}
+		}
+
 		// Build the canonical bundle file set as a path->content map and let
 		// bundlesig.Canonicalize emit the checksums.sha256 content. This replaces
 		// the previous ad-hoc, append-ordered checksum writing: the output is now
@@ -145,6 +171,12 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if script, ok := result.InstallScripts[node.ID]; ok {
 			bundleFiles["install.sh"] = script
 		}
+		// Fold the caller's extra bundle files into the canonical set so
+		// checksums.sha256 (and, when signing is on, bundle.sig) cover them. They were
+		// written to disk above, so the hashes describe the same bytes that landed.
+		for rel, content := range extraBundleFiles {
+			bundleFiles[rel] = content
+		}
 
 		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
@@ -159,6 +191,16 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			allFiles = append(allFiles, "babel/babeld.conf")
 		}
 		allFiles = append(allFiles, "sysctl/99-overlay.conf", "install.sh")
+		// List the extra bundle files in the manifest too, in a deterministic (sorted)
+		// order so the manifest is stable across runs.
+		if len(extraBundleFiles) > 0 {
+			extraNames := make([]string, 0, len(extraBundleFiles))
+			for rel := range extraBundleFiles {
+				extraNames = append(extraNames, rel)
+			}
+			sort.Strings(extraNames)
+			allFiles = append(allFiles, extraNames...)
+		}
 
 		// When signing is enabled, sign the canonical checksums and write the
 		// detached signature (base64) plus the verifying public key (PKIX PEM)
@@ -238,6 +280,31 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	}
 
 	return exportResult, nil
+}
+
+// safeBundlePath resolves a bundle-relative slash path under nodeDir, rejecting any
+// path that would escape nodeDir (path traversal) or use an absolute path. The
+// returned path is the OS-native join of nodeDir and the cleaned relative path.
+func safeBundlePath(nodeDir, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("路径不能为空")
+	}
+	// Normalize to OS separators then clean. A leading "/" or any ".." that escapes
+	// the node dir is rejected below.
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("路径不能为绝对路径: %q", rel)
+	}
+	dest := filepath.Join(nodeDir, clean)
+	// Confirm dest stays within nodeDir (defends against ".." traversal).
+	relCheck, err := filepath.Rel(nodeDir, dest)
+	if err != nil {
+		return "", err
+	}
+	if relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("路径越界: %q", rel)
+	}
+	return dest, nil
 }
 
 // validateSafeName checks that a name is safe to use as a directory or file name

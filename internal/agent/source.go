@@ -27,15 +27,20 @@ import (
 //
 // The list is a superset: babel/, sysctl/, bundle.sig and signing-pubkey.pem are
 // optional (client bundles omit babel; unsigned bundles omit the signature pair),
-// and the wireguard/ confs are per-peer so their exact names are not known ahead
-// of time. Fetch therefore tolerates "not found" for everything EXCEPT the files
-// that checksums.sha256 lists — verify (not Fetch) enforces completeness.
+// trustlist.json/trustlist.sig are present only when the keystone (off-host signed
+// trust-list) is enabled, and the wireguard/ confs are per-peer so their exact names
+// are not known ahead of time. Fetch therefore tolerates "not found" for everything
+// EXCEPT the files that checksums.sha256 lists — verify (not Fetch) enforces
+// completeness. When the keystone is on, the controller lists trustlist.json/.sig in
+// checksums.sha256, so they become mandatory via that path, not via this list.
 var bundleFileNames = []string{
 	"checksums.sha256",
 	"manifest.json",
 	"install.sh",
 	"bundle.sig",
 	"signing-pubkey.pem",
+	"trustlist.json",
+	"trustlist.sig",
 	"sysctl/99-overlay.conf",
 	"babel/babeld.conf",
 	"README.txt",

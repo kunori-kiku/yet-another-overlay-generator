@@ -209,7 +209,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if _, err := artifacts.Export(result, tmpDir); err != nil {
+	if _, err := artifacts.Export(result, tmpDir, nil); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("导出产物失败: %v", err))
 		return
 	}

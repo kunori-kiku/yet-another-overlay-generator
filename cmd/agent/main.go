@@ -170,6 +170,10 @@ func runRun(args []string) int {
 	nodeID := fs.String("node-id", "", "configured node identity (bundle subdir / state key)")
 	sourceSpec := fs.String("source", "", "bundle source: dir:PATH or http(s)://... (configured-source mode)")
 	pubkeyPath := fs.String("pubkey", "", "path to the pinned signing public-key PEM (optional; when set, a signature is required)")
+	operatorCredPath := fs.String("operator-cred", "", "path to the off-host operator credential public-key PEM (optional; when set, the keystone trust-list gate is enforced)")
+	operatorCredAlg := fs.String("operator-cred-alg", "", "operator credential algorithm: ed25519 | webauthn-es256 | webauthn-eddsa (required with --operator-cred)")
+	operatorRPID := fs.String("operator-rpid", "", "operator credential WebAuthn relying-party ID (WebAuthn algs only)")
+	operatorOrigin := fs.String("operator-origin", "", "operator credential WebAuthn origin (WebAuthn algs only; advisory on a node)")
 	stateDir := fs.String("state-dir", agent.DefaultStateDir, "directory for the agent's persisted state")
 	stagingDir := fs.String("staging-dir", "", "directory to materialize the verified bundle (default: a fresh temp dir)")
 	controller := fs.String("controller", "", "controller agent base URL (controller mode): http://host:port")
@@ -186,14 +190,18 @@ func runRun(args []string) int {
 	// Controller mode takes precedence when --controller is set.
 	if *controller != "" {
 		return runControllerMode(controllerModeOpts{
-			nodeID:     *nodeID,
-			baseURL:    *controller,
-			tokenPath:  *tokenPath,
-			pubkeyPath: *pubkeyPath,
-			stateDir:   *stateDir,
-			stagingDir: *stagingDir,
-			after:      *after,
-			daemon:     *daemon,
+			nodeID:           *nodeID,
+			baseURL:          *controller,
+			tokenPath:        *tokenPath,
+			pubkeyPath:       *pubkeyPath,
+			operatorCredPath: *operatorCredPath,
+			operatorCredAlg:  *operatorCredAlg,
+			operatorRPID:     *operatorRPID,
+			operatorOrigin:   *operatorOrigin,
+			stateDir:         *stateDir,
+			stagingDir:       *stagingDir,
+			after:            *after,
+			daemon:           *daemon,
 		})
 	}
 
@@ -214,17 +222,27 @@ func runRun(args []string) int {
 		return 1
 	}
 
+	operatorCred, err := readOperatorCred(*operatorCredPath, *operatorCredAlg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
+		return 1
+	}
+
 	// NOTE: the private-key splice path is fixed at agent.DefaultKeyPath
 	// (/etc/wireguard/agent.key) inside the rendered install.sh, so `run` has no --key
 	// flag; `agent keygen` writes the key there. Config.KeyPath is left empty (unused by Run).
 	cfg := &agent.Config{
-		NodeID:       *nodeID,
-		Source:       src,
-		PinnedPubPEM: pinned,
-		StateDir:     *stateDir,
-		StagingDir:   *stagingDir,
-		Stdout:       os.Stdout,
-		Stderr:       os.Stderr,
+		NodeID:          *nodeID,
+		Source:          src,
+		PinnedPubPEM:    pinned,
+		OperatorCredPEM: operatorCred,
+		OperatorCredAlg: *operatorCredAlg,
+		OperatorRPID:    *operatorRPID,
+		OperatorOrigin:  *operatorOrigin,
+		StateDir:        *stateDir,
+		StagingDir:      *stagingDir,
+		Stdout:          os.Stdout,
+		Stderr:          os.Stderr,
 	}
 
 	res, err := agent.Run(cfg)
@@ -239,12 +257,16 @@ func runRun(args []string) int {
 // controllerModeOpts groups the controller-mode run inputs (kept as a struct so the
 // flag plumbing in runRun stays readable).
 type controllerModeOpts struct {
-	nodeID     string
-	baseURL    string
-	tokenPath  string
-	pubkeyPath string
-	stateDir   string
-	stagingDir string
+	nodeID           string
+	baseURL          string
+	tokenPath        string
+	pubkeyPath       string
+	operatorCredPath string
+	operatorCredAlg  string
+	operatorRPID     string
+	operatorOrigin   string
+	stateDir         string
+	stagingDir       string
 	// after is the resume cursor: poll for a generation strictly greater than this.
 	// A production daemon advances it from each applied generation; the single-shot
 	// CLI takes it as a flag (default 0) since the agent State has no numeric
@@ -289,6 +311,12 @@ func runControllerMode(o controllerModeOpts) int {
 		return 1
 	}
 
+	operatorCred, err := readOperatorCred(o.operatorCredPath, o.operatorCredAlg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
+		return 1
+	}
+
 	// Resume from the supplied cursor so a re-run does not re-fetch an already-applied
 	// generation: long-poll for anything strictly newer than --after. (The agent State
 	// keys anti-rollback on the manifest compiled_at string, not the controller's int64
@@ -305,14 +333,18 @@ func runControllerMode(o controllerModeOpts) int {
 	// past a failed apply).
 	cycle := func() (resumeGen int64, applied bool, err error) {
 		return agent.RunControllerCycle(client, agent.CycleConfig{
-			NodeID:       o.nodeID,
-			After:        lastAppliedGen,
-			PinnedPubPEM: pinned,
-			StateDir:     o.stateDir,
-			StagingDir:   o.stagingDir,
-			KeyPath:      agent.DefaultKeyPath,
-			Stdout:       os.Stdout,
-			Stderr:       os.Stderr,
+			NodeID:          o.nodeID,
+			After:           lastAppliedGen,
+			PinnedPubPEM:    pinned,
+			OperatorCredPEM: operatorCred,
+			OperatorCredAlg: o.operatorCredAlg,
+			OperatorRPID:    o.operatorRPID,
+			OperatorOrigin:  o.operatorOrigin,
+			StateDir:        o.stateDir,
+			StagingDir:      o.stagingDir,
+			KeyPath:         agent.DefaultKeyPath,
+			Stdout:          os.Stdout,
+			Stderr:          os.Stderr,
 		})
 	}
 
@@ -379,6 +411,26 @@ func readPinnedPubkey(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read pinned pubkey %s: %w", path, err)
+	}
+	return data, nil
+}
+
+// readOperatorCred reads the optional off-host operator credential PEM that turns the
+// keystone trust-list gate ON. An empty path means keystone OFF (opt-in: the agent
+// applies exactly as before, no trust-list). A non-empty path REQUIRES a matching
+// --operator-cred-alg, mirroring the readPinnedPubkey discipline; a read error or a
+// missing alg is fatal so a misconfigured agent fails loudly rather than silently
+// skipping the membership check.
+func readOperatorCred(path, alg string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	if alg == "" {
+		return nil, fmt.Errorf("--operator-cred-alg is required when --operator-cred is set")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read operator credential %s: %w", path, err)
 	}
 	return data, nil
 }

@@ -41,7 +41,48 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
+
+// approvedMembers projects the registry down to the keystone membership set: the
+// node_id -> wg_public_key map of every NodeApproved node with a non-empty
+// WGPublicKey. This is the SAME admission test buildTrustList uses, so a trust-list
+// built from this set and the current membership compare apples to apples.
+func approvedMembers(nodes []Node) map[string]string {
+	m := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		if n.Status == NodeApproved && n.WGPublicKey != "" {
+			m[n.NodeID] = n.WGPublicKey
+		}
+	}
+	return m
+}
+
+// signedTrustListMatchesMembership reports whether the members encoded in a stored,
+// signed trust-list (its canonical JSON) exactly equal the current approved
+// membership — same node_id -> wg_public_key set. It is the deploy-time freshness
+// guard: a membership change after the operator signed must force a re-sign before the
+// stale signed bytes can ship to nodes.
+func signedTrustListMatchesMembership(trustListJSON []byte, nodes []Node) (bool, error) {
+	var tl trustlist.TrustList
+	if err := json.Unmarshal(trustListJSON, &tl); err != nil {
+		return false, fmt.Errorf("parsing stored trust-list: %w", err)
+	}
+	signed := make(map[string]string, len(tl.Members))
+	for _, m := range tl.Members {
+		signed[m.NodeID] = m.WGPublicKey
+	}
+	current := approvedMembers(nodes)
+	if len(signed) != len(current) {
+		return false, nil
+	}
+	for id, key := range current {
+		if signed[id] != key {
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 // StageResult reports the outcome of CompileAndStage. Staged and SkippedUnenrolled
 // are NODE IDs (the registry/agent identity), not node names. Generation is the
@@ -104,6 +145,37 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		return StageResult{SkippedUnenrolled: skipped}, nil
 	}
 
+	// (2.5) KEYSTONE gate. If an operator credential is pinned (keystone ON), the
+	// membership embedded in every bundle MUST be the operator's OFF-HOST-signed
+	// trust-list, and that signed trust-list MUST still match the current approved
+	// membership — otherwise a deploy would ship a stale (or absent) membership proof
+	// that nodes would reject offline. When no credential is pinned (keystone OFF), we
+	// embed nothing and behave exactly as before. The gate runs BEFORE the compile work
+	// so a stale membership fails fast (and clearly) rather than after a render.
+	var extra map[string]string
+	if _, err := store.GetOperatorCredential(ctx, t); err == nil {
+		stored, err := store.GetCurrentSignedTrustList(ctx, t)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return StageResult{}, fmt.Errorf("controller: keystone is enabled but no signed trust-list exists; sign the membership trust-list before deploy")
+			}
+			return StageResult{}, fmt.Errorf("controller: loading signed trust-list to stage: %w", err)
+		}
+		ok, err := signedTrustListMatchesMembership(stored.TrustListJSON, nodes)
+		if err != nil {
+			return StageResult{}, fmt.Errorf("controller: validating signed trust-list against membership: %w", err)
+		}
+		if !ok {
+			return StageResult{}, fmt.Errorf("controller: membership changed since the trust-list was signed; re-sign before deploy")
+		}
+		extra = map[string]string{
+			"trustlist.json": string(stored.TrustListJSON),
+			"trustlist.sig":  string(stored.SignatureJSON),
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return StageResult{}, fmt.Errorf("controller: loading operator credential to stage: %w", err)
+	}
+
 	// (3) Drive the frozen pipeline: AgentHeld keys (zero-knowledge), compile, render.
 	keys, err := render.GenerateKeys(&subgraph, render.AgentHeld)
 	if err != nil {
@@ -129,13 +201,15 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 
 	// (4) Export to a temp dir we own and remove on return. Export writes one dir per
 	// node (keyed by node.Name) and, when YAOG_BUNDLE_SIGNING_KEY is set, the
-	// bundle.sig + signing-pubkey.pem inside each.
+	// bundle.sig + signing-pubkey.pem inside each. When keystone is on, extra carries
+	// trustlist.json + trustlist.sig, embedded into every node bundle and covered by
+	// each bundle's checksums + signature.
 	tmp, err := os.MkdirTemp("", "yaog-stage-")
 	if err != nil {
 		return StageResult{}, fmt.Errorf("controller: creating stage temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmp)
-	if _, err := artifacts.Export(result, tmp); err != nil {
+	if _, err := artifacts.Export(result, tmp, extra); err != nil {
 		return StageResult{}, fmt.Errorf("controller: exporting bundles to stage: %w", err)
 	}
 
