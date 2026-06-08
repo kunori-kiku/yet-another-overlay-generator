@@ -373,8 +373,11 @@ func runControllerMode(o controllerModeOpts) int {
 		return 0
 	}
 
-	// A new generation is available: report it on the next auto-Report and apply it.
-	client.SetPendingGeneration(gen)
+	// A new generation is available. Record the prior watermark so a FAILED apply
+	// reports it unchanged (never falsely advancing); a successful apply reports the
+	// generation actually fetched. agent.Run fetches the bundle (setting the fetched
+	// generation) and fires the auto-Report itself, since this client is a Reporter.
+	client.SetPriorGeneration(lastAppliedGen)
 	cfg := &agent.Config{
 		NodeID:       o.nodeID,
 		Source:       client,

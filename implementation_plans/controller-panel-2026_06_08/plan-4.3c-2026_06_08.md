@@ -39,8 +39,10 @@ CA; a mismatch is a hard refusal.
    - `run --controller <url> --controller-ca <pem> [--pubkey <pinned signing pem>]` — the controller
      control loop: load the mTLS cert; `Poll` (long-poll); on a new generation, `Config` → write the
      bundle to a staging dir → reuse `VerifyBundle` (Go-side, fail-closed) → run `install.sh` (verify +
-     splice + apply) → `Report`. Keep-last-good / fail-closed exactly as Plan 1b; anti-rollback uses the
-     bundle generation (now bound in signed content) instead of the unsigned manifest.
+     splice + apply) → `Report`. Keep-last-good / fail-closed exactly as Plan 1b. Anti-rollback REUSES
+     the Plan-1b `compiled_at` decision unchanged; the generation is the poll watermark and the mTLS
+     channel authenticates delivery — a generation/version bound *inside* the signed content is Plan 5
+     (do NOT claim it here).
 3. The agent does NOT splice or render — it reuses Plan 1b's apply path verbatim.
 4. Tests `internal/agent/controller_client_test.go` (in-process, reuse the httptest+TLS+dev-CA harness
    pattern from 4.3b): stand up the real `ControllerHandler` over httptest TLS; the agent `ControllerClient`

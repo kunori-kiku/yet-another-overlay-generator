@@ -347,10 +347,9 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 		t.Fatalf("VerifyBundle: FileCount=0, want > 0")
 	}
 
-	// Report -> the registry reflects the applied generation. Use SetPendingGeneration
-	// + the Reporter shape (the same path agent.Run's auto-report drives), then assert
-	// via the store's GetNode.
-	agentClient.SetPendingGeneration(gen)
+	// Report -> the registry reflects the applied generation. The Fetch above recorded
+	// the bundle's own generation; an "ok" State makes Report send THAT as the applied
+	// generation (the same path agent.Run's auto-report drives). Assert via GetNode.
 	statePayload, err := json.Marshal(agent.State{
 		NodeID:       "node-1",
 		LastChecksum: "deadbeef",

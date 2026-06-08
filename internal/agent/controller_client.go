@@ -113,21 +113,24 @@ type ControllerClient struct {
 	// httpClient is used for non-poll requests; pollClient for the long-poll.
 	httpClient *http.Client
 	pollClient *http.Client
-	// pendingGeneration is the controller generation the loop is about to apply. The
-	// agent State models anti-rollback as a manifest compiled_at STRING and carries no
-	// int64 generation, but the controller's /report wants the numeric generation. The
-	// controller-mode loop calls SetPendingGeneration(gen) right before agent.Run, so
-	// the auto-Report that Run fires (Run reports because this client is a Reporter)
-	// carries the correct applied generation. It defaults to 0 (an honest "unknown
-	// generation" check-in) for any Report not preceded by SetPendingGeneration.
-	pendingGeneration int64
+	// lastFetchedGen is the generation of the bundle returned by the most recent Fetch
+	// (from the /config response envelope). Report sends it as the applied generation
+	// ONLY when the apply succeeded, so a failed apply never claims the new generation.
+	lastFetchedGen int64
+	// priorGen is the last-applied generation watermark for the current cycle (the
+	// loop's --after). On a FAILED apply, Report sends this unchanged instead of the
+	// fetched generation, so the controller registry never shows a generation the node
+	// did not actually apply.
+	priorGen int64
 }
 
 // SetPendingGeneration records the controller generation the loop is about to apply
 // so the next Report (auto-fired by agent.Run) reports that generation. See the
-// pendingGeneration field doc for why the generation cannot be derived from State.
-func (c *ControllerClient) SetPendingGeneration(gen int64) {
-	c.pendingGeneration = gen
+// SetPriorGeneration records the last-applied generation watermark for this cycle (the
+// loop's --after). On a FAILED apply, Report sends this unchanged instead of the fetched
+// generation, so the controller registry never falsely advances on a failed cycle.
+func (c *ControllerClient) SetPriorGeneration(gen int64) {
+	c.priorGen = gen
 }
 
 // NewControllerClient builds a ControllerClient for baseURL, pinning caPEM as the
@@ -240,6 +243,13 @@ func (c *ControllerClient) Fetch(nodeID string) (map[string][]byte, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		// No bundle promoted for this node yet — e.g. the node is enrolled but was not
+		// in the current deploy's enrolled subgraph (render-what's-ready). The run loop
+		// treats this as a transient no-op (keep-last-good) and keeps polling; it is not
+		// a corruption or auth failure.
+		return nil, fmt.Errorf("agent: no bundle promoted for node %q yet", nodeID)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("agent: config for node %q: status %d: %s", nodeID, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -248,6 +258,9 @@ func (c *ControllerClient) Fetch(nodeID string) (map[string][]byte, error) {
 	if err := json.Unmarshal(body, &cr); err != nil {
 		return nil, fmt.Errorf("agent: decode config response: %w", err)
 	}
+	// Record the bundle's own generation so Report (on success) tells the controller the
+	// generation actually applied — not merely the one the loop polled.
+	c.lastFetchedGen = cr.Generation
 	files := make(map[string][]byte, len(cr.Files))
 	for path, b64 := range cr.Files {
 		raw, err := base64.StdEncoding.DecodeString(b64)
@@ -301,16 +314,20 @@ func (c *ControllerClient) Report(nodeID string, payload []byte) error {
 	if c.clientCert == nil {
 		return fmt.Errorf("agent: Report requires an mTLS client cert (enroll first)")
 	}
-	// Translate the agent State JSON into the controller's report shape. A State
-	// without controller-relevant fields (e.g. a fetch failure before a manifest was
-	// read) still reports its health so the controller registry reflects the check-in.
-	// The numeric generation comes from pendingGeneration (set by the loop), not from
-	// State, which has no int64 generation.
+	// Translate the agent State JSON into the controller's report shape. The applied
+	// generation is the bundle actually applied (lastFetchedGen) ONLY when the apply
+	// succeeded; on any non-"ok" result we report the unchanged prior watermark, so a
+	// failed apply never tells the controller the node advanced. The health line always
+	// reflects the real outcome so the registry shows the check-in either way.
 	var st State
 	if err := json.Unmarshal(payload, &st); err != nil {
 		return fmt.Errorf("agent: report: parse state payload: %w", err)
 	}
-	return c.postReport(c.pendingGeneration, st.LastChecksum, st.Health)
+	gen := c.priorGen
+	if st.LastResult == "ok" {
+		gen = c.lastFetchedGen
+	}
+	return c.postReport(gen, st.LastChecksum, st.Health)
 }
 
 // postReport POSTs a reportRequestJSON over mTLS. It is the single report transport

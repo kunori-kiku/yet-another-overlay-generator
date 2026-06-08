@@ -10,7 +10,7 @@ same custody, verify, and apply core:
   below.
 - **Controller mode (Phase 2c-c — plan-4.3c).** The agent **enrolls** with the networked controller
   ([controller-api.md](controller-api.md), [enrollment.md](enrollment.md)) over TLS, then runs a
-  continuous **mTLS** control loop: long-poll for a new generation, fetch the signed bundle over
+  **mTLS** control cycle (one poll→apply→report pass in v1; a daemon repeats it): long-poll for a new generation, fetch the signed bundle over
   `/config`, **reuse the same verify + apply** as Phase 1b, then report what it applied. This closes the
   single-tenant control loop end to end. See [Controller mode (Phase 2c-c)](#controller-mode-phase-2c-c)
   below.
@@ -264,19 +264,23 @@ re-enroll (e.g. after a controller restart) requires a **fresh** token; the agen
 `agent run --controller <url> --controller-ca <pem> [--pubkey <pinned-signing-pem>]` loads the stored
 mTLS client cert + key (and the pinned CA), constructs a `ControllerClient`, and drives the **same**
 `agent.Run` pull→verify→anti-rollback→apply→report core as static-source mode — only the `Source` is
-the `ControllerClient`. The loop:
+the `ControllerClient`. The v1 `run` performs **one** poll→apply→report cycle (a production daemon
+repeats it — the single-shot form keeps v1 simple and trivially testable); the steps:
 
 1. **Poll (long-poll, mTLS).** `ControllerClient.Poll(after)` issues `GET /poll?after=<last-applied
    generation>` over mTLS ([controller-api.md](controller-api.md) §`GET /poll`). The call **blocks**
    until the controller promotes a generation strictly greater than `after`, returning `(gen, changed)`;
-   a **204** (server-side ~55s deadline with no advance) returns `changed = false` and the agent simply
-   re-polls with the same watermark. `after` is the agent's applied-generation high-water mark (`0` on
-   first boot), so a promote that happened between polls is caught immediately.
-2. **Fetch on change (mTLS).** On a new generation, `ControllerClient.Config()` issues `GET /config`
+   a **204** (server-side ~55s deadline with no advance) returns `changed = false` and the v1 single-shot
+   `run` exits 0 with nothing to do (a daemon would re-poll with the same watermark). `after` is the
+   agent's applied-generation high-water mark (`0` on first boot).
+2. **Fetch on change (mTLS).** On a new generation, `ControllerClient.Fetch(nodeID)` issues `GET /config`
    over mTLS and base64-decodes the `{generation, files}` body (`configResponseJSON`) into the
    `map[string][]byte` the verify+stage core expects — exactly the shape `DirSource`/`HTTPSource`
-   return. A **404** ([controller-api.md](controller-api.md) §`GET /config`) means "nothing promoted
-   for this node yet" and is treated as a benign no-op (keep polling), not a failure.
+   return (it also records the bundle's own generation for the report). A **404**
+   ([controller-api.md](controller-api.md) §`GET /config`) means "no bundle promoted for this node yet"
+   — e.g. a node enrolled but not in the current deploy's enrolled subgraph (render-what's-ready).
+   `Fetch` surfaces it as an error, which the cycle treats as **keep-last-good**: the running overlay is
+   untouched and a daemon keeps polling; it is not a corruption or auth failure.
 3. **Verify (fail-closed) — reused verbatim.** The fetched files go through the **same**
    `VerifyBundle(files, pinnedPubPEM)` ([signing.md](signing.md)): the `--pubkey` operator-pinned
    signing key (strongly recommended for any custody fleet) verifies `bundle.sig` over the canonical
@@ -294,27 +298,30 @@ the `ControllerClient`. The loop:
    [controller-api.md](controller-api.md) §`POST /report`), so the controller's registry records the
    node's `AppliedGeneration` / checksum / health and the panel can diff desired-vs-applied. Reporting
    is **best-effort** (the `Reporter` contract): a failed report is logged but never fails an
-   otherwise-successful apply. The agent then advances its local `after` watermark to the applied
-   generation and re-polls.
+   otherwise-successful apply. The applied generation reported is the **bundle's own generation on
+   success**, or the **unchanged prior watermark on a failed apply** — a failure never tells the
+   controller the node advanced. A production daemon then advances its watermark to the applied
+   generation and re-polls; the v1 `run` is single-shot.
 
-### Anti-rollback on the bundle generation
+### Anti-rollback in controller mode (honest)
 
-In controller mode the anti-rollback high-water mark is the **bundle generation** delivered over the
-authenticated mTLS channel (the `generation` in `/poll` and `/config`), **not** the unsigned-manifest
-`compiled_at` stub of Phase 1b. This is the upgrade the static-source `anti-rollback` section flags as a
-later item: the generation is a **monotonic** counter the controller increments only on promote
-([deploy.md](deploy.md) §Generation arithmetic), and it arrives over a **channel the agent
-authenticates** (the controller's server cert chains to the pinned CA, and the agent presents its own
-mTLS cert). The agent applies only a generation **strictly greater** than its last-applied watermark, so
-a replayed older `/config` cannot roll the node back over this channel.
+Controller mode **reuses Phase 1b's anti-rollback decision unchanged**: the `agent.Run` core still
+refuses a bundle whose `manifest.json` `compiled_at` is older than the last applied (the Phase 1b stub).
+The bundle **generation** is NOT (yet) the rollback gate — it operates at two *other* layers:
 
-**Honest scope.** The generation is carried in the mTLS **response envelope**, not bound *inside* the
-signed `checksums.sha256` bytes — so the authenticity guarantee here is **channel-level** (TLS 1.3 +
-mTLS to a CA-pinned controller), which is materially stronger than the Phase 1b unsigned-manifest stub
-(which guarded only an honest source serving a stale file). A generation/version **bound into the signed
-content itself** — so a stale-but-validly-signed bundle cannot be replayed even by an actor on the
-authenticated channel — remains the strongest form and is the Plan 5 direction; controller mode reaches
-the channel-authenticated rung, which is sufficient for the single-tenant v1 trust model.
+- **Poll watermark.** `Poll(after)` uses the generation as a cursor for *which* generation to fetch — a
+  monotonic counter the controller increments only on promote ([deploy.md](deploy.md) §Generation
+  arithmetic). That is which-bundle-to-pull, not the rollback decision.
+- **Channel authentication.** The generation and the bundle arrive over a **channel the agent
+  authenticates** (the controller's server cert chains to the pinned CA; the agent presents its mTLS
+  cert), so an off-path attacker cannot inject a stale `/config`.
+
+**Honest scope.** Controller mode's protection against a stale bundle therefore rests on (a) the Phase
+1b `compiled_at` decision plus (b) the mTLS-authenticated channel — NOT on a generation/version bound
+*inside* the signed `checksums.sha256` bytes. That signed-content binding (so a stale-but-validly-signed
+bundle cannot be replayed even by an actor on the authenticated channel) is the strongest form and is
+the **Plan 5** direction. For the single-tenant v1 trust model — one operator, a CA-pinned controller —
+the compiled_at-plus-mTLS-channel rung is sufficient; this section claims no more.
 
 ## Keep-last-good in controller mode
 
