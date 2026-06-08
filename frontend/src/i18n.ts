@@ -57,4 +57,20 @@ export const STRINGS = {
     '仅影响 transport=tcp（mimic）的链路。部分 VPS 网卡不支持 native XDP，故默认用 skb；确认网卡支持时再选 native。',
     'Affects only transport=tcp (mimic) links. Some VPS NICs do not support native XDP, so skb is the default; choose native only if you know this NIC supports it.',
   ] as const,
+
+  // ── App-shell chrome (sidebar nav, top bar, theme toggle, user menu) ──
+  brandName: ['YAOG 控制台', 'YAOG Console'] as const,
+  navOverview: ['总览', 'Overview'] as const,
+  navDesign: ['拓扑设计', 'Design'] as const,
+  navFleet: ['节点机群', 'Fleet'] as const,
+  navDeploy: ['部署', 'Deploy'] as const,
+  navSecurity: ['安全', 'Security'] as const,
+  navSettings: ['设置', 'Settings'] as const,
+  sidebarCollapse: ['收起侧边栏', 'Collapse sidebar'] as const,
+  sidebarExpand: ['展开侧边栏', 'Expand sidebar'] as const,
+  themeToggleLabel: ['切换主题', 'Toggle theme'] as const,
+  themeSystem: ['跟随系统', 'System'] as const,
+  themeLight: ['浅色', 'Light'] as const,
+  themeDark: ['深色', 'Dark'] as const,
+  userMenuLabel: ['账户', 'Account'] as const,
 } as const;

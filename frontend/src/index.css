@@ -1,1 +1,46 @@
 @import "tailwindcss";
+
+/* Class-based dark mode (Tailwind v4 CSS-first). The `.dark` class is toggled on
+   <html> by ThemeProvider (and pre-paint by the inline script in index.html). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens for the Apple-minimal app-shell. Full polish lands in P6; this
+   establishes the font stack, radii, easing, and the theme-scoped accent so the
+   shell renders coherently in both light and dark from P1 onward. */
+@theme {
+  --font-sans: -apple-system, system-ui, "SF Pro Text", "Inter", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --radius-2xl: 1rem;
+  --ease-quiet: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Light theme (default). Accent = refined teal. */
+:root {
+  --accent: #0d9488;
+  --accent-hover: #0f766e;
+  --accent-fg: #ffffff;
+  --surface: #ffffff;
+  --surface-elevated: #f8fafc;
+  --surface-sunken: #f1f5f9;
+  --content: #1e293b;
+  --content-muted: #64748b;
+  --hairline: #e2e8f0;
+}
+
+/* Dark theme. Accent = graphite (a restrained neutral, macOS "Graphite" feel). */
+:root.dark {
+  --accent: #8b93a1;
+  --accent-hover: #a3acbb;
+  --accent-fg: #0b0f14;
+  --surface: #0b0f14;
+  --surface-elevated: #11161d;
+  --surface-sunken: #080b0f;
+  --content: #e5e7eb;
+  --content-muted: #94a3b8;
+  --hairline: #1f2937;
+}
+
+body {
+  background: var(--surface);
+  color: var(--content);
+}
