@@ -76,6 +76,9 @@ export class WebAuthnError extends Error {
 // "This is an invalid domain." Catch it up front and tell the operator exactly how
 // to fix it — browse to http://localhost:PORT, which resolves to the same loopback
 // container but presents a valid RP ID.
+// `host` is always a window.location.hostname value, which the URL parser has
+// already normalized — IPv4 shorthand (127.1, 2130706433) is expanded to a
+// dotted-quad before it reaches us, so the strict 4-octet regex still catches it.
 function isIpLiteralHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, ''); // strip IPv6 brackets if location kept them
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true; // IPv4 dotted-quad
