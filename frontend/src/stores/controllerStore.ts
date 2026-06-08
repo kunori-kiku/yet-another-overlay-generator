@@ -700,8 +700,14 @@ export const useControllerStore = create<ControllerState>()(
     {
       name: 'controller-storage',
       // 仅持久化连接端点 + 已 pin 的 operator 签名凭据的非密标识（credential_id/alg/rpId/
-      // 公钥 PEM 都不是密钥材料——私钥从不离开 authenticator）。绝不持久化 operatorToken
-      // （密钥不落 localStorage），也不持久化易失的 fleet 视图 / loading / error / signing。
+      // 公钥 PEM 都不是密钥材料——私钥从不离开 authenticator）。绝不持久化 operatorToken /
+      // sessionToken / CSRF（密钥不落 localStorage），也不持久化 loading / error / signing。
+      //
+      // P4 新增的非密缓存（mode / nodes / settings / lastSyncedAt）仅供刷新后「即时上色」。
+      // nodes 只含 nodeId/状态/代号/时间戳等非密字段，不含任何密钥材料。缓存是 advisory：
+      // 唯一一处 nodes 参与门控的地方（selectRekeyingCount → DeployBar 在有节点轮换时禁用
+      // Deploy）是 fail-closed —— 重载后陈旧缓存至多「禁用」Deploy，绝不会「放行」实时状态本应
+      // 拦下的部署；refresh() 拉到实时状态后即收敛。控制器后端在 stage/promote 仍是最终权威。
       partialize: (state) => ({
         baseURL: state.baseURL,
         pathPrefix: state.pathPrefix,
@@ -710,6 +716,10 @@ export const useControllerStore = create<ControllerState>()(
         operatorCredentialAlg: state.operatorCredentialAlg,
         operatorRpId: state.operatorRpId,
         operatorPublicKeyPEM: state.operatorPublicKeyPEM,
+        mode: state.mode,
+        nodes: state.nodes,
+        settings: state.settings,
+        lastSyncedAt: state.lastSyncedAt,
       }),
     }
   )

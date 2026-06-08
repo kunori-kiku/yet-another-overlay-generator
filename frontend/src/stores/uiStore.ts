@@ -16,6 +16,12 @@ interface UiState {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
+  /** Vibrancy/translucency on the shell chrome. Default on; off = solid surfaces
+   *  ("plainer minimalism"). Client fallback here; P5 makes it server-backed in
+   *  controller mode (ControllerSettings.Translucency) with this as the local fallback. */
+  translucency: boolean;
+  setTranslucency: (on: boolean) => void;
+  toggleTranslucency: () => void;
 }
 
 export const useUiStore = create<UiState>()(
@@ -31,6 +37,9 @@ export const useUiStore = create<UiState>()(
       sidebarCollapsed: false,
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      translucency: true,
+      setTranslucency: (translucency) => set({ translucency }),
+      toggleTranslucency: () => set((state) => ({ translucency: !state.translucency })),
     }),
     {
       name: 'ui-storage',
@@ -39,6 +48,7 @@ export const useUiStore = create<UiState>()(
       partialize: (state) => ({
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,
+        translucency: state.translucency,
       }),
     },
   ),

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
-import { txt } from '../../i18n';
+import { txt, STRINGS } from '../../i18n';
 
 // 控制器连接 + 登录设置（从原 DeployPanel 的控制器连接 <section> 原样抽出，作为
 // /settings 路由的 Connection 区块）。token / session / 验证码只在内存中，绝不持久化。
@@ -42,20 +42,9 @@ export function ConnectionSettings() {
 
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-teal-400">
-          {txt(language, '控制器连接', 'Controller Connection')}
-        </h3>
-        <button
-          onClick={() => refresh()}
-          disabled={loading}
-          className="px-3 py-1.5 text-sm bg-teal-700 hover:bg-teal-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
-        >
-          {loading
-            ? txt(language, '同步中...', 'Syncing...')
-            : txt(language, '🔄 刷新', '🔄 Refresh')}
-        </button>
-      </div>
+      <h3 className="text-lg font-semibold text-teal-400">
+        {txt(language, '控制器连接', 'Controller Connection')}
+      </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
           <label className="text-xs text-gray-400">
@@ -250,6 +239,17 @@ export function ConnectionSettings() {
           'Use password sign-in for day-to-day. The operator token is an optional break-glass credential (only when the backend sets YAOG_CONTROLLER_OPERATOR_TOKEN). Both the session and the token are kept in memory only (re-enter after a page refresh); the other endpoints are persisted.',
         )}
       </p>
+      {/* Refresh as a bottom submit-style action — gives the connection form a
+          clear "submit" affordance, connecting/syncing the panel with the backend. */}
+      <button
+        onClick={() => refresh()}
+        disabled={loading}
+        className="w-full py-2 text-sm font-medium bg-teal-700 hover:bg-teal-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
+      >
+        {loading
+          ? txt(language, '同步中...', 'Syncing...')
+          : txt(language, ...STRINGS.connectRefresh)}
+      </button>
       {error && (
         <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {error}</p>
       )}
