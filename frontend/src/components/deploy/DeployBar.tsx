@@ -2,6 +2,7 @@ import {
   useControllerStore,
   selectRekeyingCount,
   selectOperatorEnrolled,
+  selectHasAuth,
 } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
@@ -22,15 +23,15 @@ export function DeployBar() {
   const enrolling = useControllerStore((s) => s.enrolling);
   const error = useControllerStore((s) => s.error);
   const lastDeploy = useControllerStore((s) => s.lastDeploy);
-  const operatorToken = useControllerStore((s) => s.operatorToken);
   // 是否已 pin off-host 签名凭据（决定签名区回显与提示）。
   const operatorEnrolled = useControllerStore(selectOperatorEnrolled);
   const operatorCredentialAlg = useControllerStore((s) => s.operatorCredentialAlg);
   // 仍处于 rekey_requested 的节点数：>0 时禁用 Deploy（见下方说明）。
   const rekeyingCount = useControllerStore(selectRekeyingCount);
 
-  // 未填 operator token 时无法发起 operator 请求，禁用按钮并给出提示。
-  const noToken = operatorToken.trim() === '';
+  // 未登录且未填 break-glass token 时无法发起 operator 请求，禁用按钮并给出提示。
+  // 用 selectHasAuth（session || token），不能只看 operatorToken——否则登录后会被误拦。
+  const noAuth = !useControllerStore(selectHasAuth);
 
   // 轮换收口前（仍有节点 rekey_requested）禁用 Deploy：此时各 agent 尚未全部重生密钥并
   // 重新注册新公钥，若此刻 Deploy 会用「旧+新」混合公钥重编译，导致 fleet 收敛错乱。
@@ -62,14 +63,14 @@ export function DeployBar() {
         <div className="flex items-center gap-2">
           <button
             onClick={onRollKeys}
-            disabled={loading || noToken}
+            disabled={loading || noAuth}
             className="px-4 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {txt(language, '🔑 轮换密钥', '🔑 Roll keys')}
           </button>
           <button
             onClick={() => deploy()}
-            disabled={loading || noToken || anyRekeying}
+            disabled={loading || noAuth || anyRekeying}
             title={
               anyRekeying
                 ? txt(
@@ -131,7 +132,7 @@ export function DeployBar() {
         </p>
         <button
           onClick={() => enrollOperator()}
-          disabled={enrolling || loading || noToken}
+          disabled={enrolling || loading || noAuth}
           className="px-4 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
         >
           {enrolling
@@ -167,12 +168,12 @@ export function DeployBar() {
         </p>
       )}
 
-      {noToken && (
+      {noAuth && (
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
           {txt(
             language,
-            '请先在上方填写 Operator Token。',
-            'Enter the operator token above first.',
+            '请先在上方登录（或填写 break-glass Operator Token）。',
+            'Sign in above first (or enter the break-glass operator token).',
           )}
         </p>
       )}

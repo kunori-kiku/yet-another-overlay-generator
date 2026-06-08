@@ -37,6 +37,7 @@ export function DeployPanel() {
   const logout = useControllerStore((s) => s.logout);
   const loggedIn = useControllerStore(selectLoggedIn);
   const operatorName = useControllerStore((s) => s.operatorName);
+  const sessionExpiresAt = useControllerStore((s) => s.sessionExpiresAt);
 
   const [mode, setMode] = useState<DeployMode>('local');
   // 登录表单的本地输入（密码只在内存里，登录成功后清空）。
@@ -193,7 +194,15 @@ export function DeployPanel() {
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-green-300">
                       {txt(language, '已登录为', 'Signed in as')}{' '}
-                      <span className="font-mono">{operatorName}</span>
+                      <span className="font-mono">{operatorName ?? ''}</span>
+                      {sessionExpiresAt && (
+                        <span className="text-gray-400">
+                          {' '}
+                          {txt(language, '（到期', '(until')}{' '}
+                          {new Date(sessionExpiresAt).toLocaleString()}
+                          {txt(language, '）', ')')}
+                        </span>
+                      )}
                     </span>
                     <button
                       onClick={() => logout()}

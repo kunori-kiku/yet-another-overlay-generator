@@ -100,6 +100,14 @@ export function selectLoggedIn(state: ControllerState): boolean {
   return state.sessionToken !== '';
 }
 
+// 派生选择器：是否持有任一可用的 operator 凭据（登录 session 或 break-glass token）。
+// configOf 的 EFFECTIVE bearer 正是 sessionToken || operatorToken，所以任一非空即可发起
+// operator 请求。DeployBar 用它决定是否禁用 Deploy/Roll-keys（不能再只看 operatorToken，
+// 否则登录后的操作员会被错误地拦住）。
+export function selectHasAuth(state: ControllerState): boolean {
+  return state.sessionToken !== '' || state.operatorToken.trim() !== '';
+}
+
 // 把标准 base64（带 padding，GET /trustlist 的 trustlist_json 编码）解码回原始字节。
 // 这些字节就是 canonical manifest 字节，其 SHA-256 即 WebAuthn challenge。
 //
