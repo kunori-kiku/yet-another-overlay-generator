@@ -93,6 +93,52 @@ func TestRenderBootstrapScript_InjectionSafe(t *testing.T) {
 	}
 }
 
+// TestValidateAbsoluteHTTPURL: accepts http(s) URLs, rejects non-http schemes, missing
+// host, and whitespace (the bootstrap-script word-split vector).
+func TestValidateAbsoluteHTTPURL(t *testing.T) {
+	good := []string{"https://overlay.example.com", "http://10.0.0.1:9090/s3cr3t", "https://gh-proxy.com/"}
+	for _, s := range good {
+		if err := validateAbsoluteHTTPURL(s); err != nil {
+			t.Errorf("validateAbsoluteHTTPURL(%q) = %v, want nil", s, err)
+		}
+	}
+	bad := []string{
+		"not a url",                // whitespace
+		"ftp://x",                  // wrong scheme
+		"javascript:alert(1)",      // wrong scheme
+		"https://",                 // no host
+		"https://ok.example/p ath", // embedded space
+		"https://ok.example/p\tx",  // embedded tab
+		"https://ok.example/p\nx",  // embedded newline
+	}
+	for _, s := range bad {
+		if err := validateAbsoluteHTTPURL(s); err == nil {
+			t.Errorf("validateAbsoluteHTTPURL(%q) = nil, want error", s)
+		}
+	}
+}
+
+// TestRenderBootstrapScript_SafeShellForms: the rendered script uses the set -e-safe
+// flag-shift form and quotes the ExecStart controller/node-id (no silent abort on a
+// trailing flag; no ExecStart word-split).
+func TestRenderBootstrapScript_SafeShellForms(t *testing.T) {
+	s := renderBootstrapScript("https://x", "", "https://r/dl", nil)
+	for _, want := range []string{
+		`shift; [ $# -gt 0 ] && shift ;;`, // safe shift
+		`ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}"`, // quoted
+		`trap 'rm -f "$tmp_bin"' EXIT`,            // temp cleanup
+		`--proto '=https' --proto '=http' "$URL"`, // proto pin (single curl)
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rendered script missing %q", want)
+		}
+	}
+	// The scheme-widening curl fallback must be gone.
+	if strings.Contains(s, `|| curl -fL --retry 3 "$URL"`) {
+		t.Error("script still has the proto-dropping curl fallback")
+	}
+}
+
 // TestBootstrapHTTP: operator GET/POST /settings persists and is reflected by the
 // (unauthenticated) agent GET /bootstrap.
 func TestBootstrapHTTP(t *testing.T) {

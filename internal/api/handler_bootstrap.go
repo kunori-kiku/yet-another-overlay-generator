@@ -125,10 +125,15 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	controllerBase := strings.TrimRight(cs.PublicAgentURL, "/") + h.pathPrefix
 
 	// Keystone: bake the pinned off-host operator credential (public only) so the node
-	// enforces membership. Absent (keystone OFF) -> the script omits --operator-cred.
+	// enforces membership. ONLY a genuine ErrNotFound means keystone OFF; any other
+	// store error must fail loud — silently emitting a keystone-OFF script when the
+	// keystone is actually ON would ship a node that does not verify membership.
 	var cred *controller.OperatorCredential
 	if oc, err := h.store.GetOperatorCredential(r.Context(), h.tenant); err == nil {
 		cred = &oc
+	} else if !errors.Is(err, controller.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "failed to read operator credential")
+		return
 	}
 
 	script := renderBootstrapScript(controllerBase, cs.GithubProxy, cs.AgentReleaseBaseURL, cred)
@@ -141,6 +146,12 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 // misconfigured setting fails at save time (a 400) rather than producing a broken
 // bootstrap script later.
 func validateAbsoluteHTTPURL(s string) error {
+	// Reject whitespace/control characters: these URLs are baked into the bootstrap
+	// bash script, and a space would word-split an (unquoted) systemd ExecStart token
+	// even though the assignment itself is shQuote-safe. A real http(s) URL has none.
+	if strings.ContainsAny(s, " \t\r\n\v\f") {
+		return errors.New("must not contain whitespace")
+	}
 	u, err := url.Parse(s)
 	if err != nil {
 		return errors.New("must be a valid URL")
@@ -209,11 +220,11 @@ USAGE
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --token)        TOKEN="${2:-}"; shift 2 ;;
-    --node-id)      NODE_ID="${2:-}"; shift 2 ;;
-    --controller)   CONTROLLER="${2:-}"; shift 2 ;;
-    --gh-proxy)     GH_PROXY="${2:-}"; shift 2 ;;
-    --release-base) RELEASE_BASE="${2:-}"; shift 2 ;;
+    --token)        TOKEN="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --node-id)      NODE_ID="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --controller)   CONTROLLER="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --gh-proxy)     GH_PROXY="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --release-base) RELEASE_BASE="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
     --once)         DAEMON=0; shift ;;
     -h|--help)      usage; exit 0 ;;
     *) echo "bootstrap: unknown argument: $1" >&2; usage; exit 2 ;;
@@ -242,10 +253,11 @@ URL="${GH_PROXY}${RELEASE_BASE}/${ASSET}"
 echo ">> downloading agent: $URL"
 install -d -m 0755 /usr/local/bin
 tmp_bin="$(mktemp)"
-curl -fL --retry 3 --proto '=https' --proto '=http' "$URL" -o "$tmp_bin" \
-  || curl -fL --retry 3 "$URL" -o "$tmp_bin"
+trap 'rm -f "$tmp_bin"' EXIT
+# Pin the allowed protocols (http/https only) so a redirect cannot pivot to file://,
+# scp://, etc. --proto has been in curl since 7.20; no scheme-widening fallback.
+curl -fL --retry 3 --proto '=https' --proto '=http' "$URL" -o "$tmp_bin"
 install -m 0755 "$tmp_bin" /usr/local/bin/yaog-agent
-rm -f "$tmp_bin"
 
 # Build the keystone (off-host operator credential) flags when the controller baked a
 # credential into this script (keystone ON). The PEM is public; written 0600 anyway.
@@ -272,7 +284,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/yaog-agent run --controller ${CONTROLLER} --node-id ${NODE_ID} --daemon ${OP_FLAGS}
+ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}" --daemon ${OP_FLAGS}
 Restart=always
 RestartSec=5
 
