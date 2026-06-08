@@ -43,23 +43,52 @@ func EnsureKey(keyPath string) (pubKey string, created bool, err error) {
 	}
 
 	// Generate and persist a new key.
+	pub, err := generateAndWriteKey(keyPath)
+	if err != nil {
+		return "", false, err
+	}
+	return pub, true, nil
+}
+
+// RegenerateKey force-rotates the local WireGuard private key: it ALWAYS generates a
+// fresh private key and writes it to keyPath (mode 0600), overwriting any existing key
+// there, and returns the corresponding public key. Unlike EnsureKey (which reuses an
+// existing key so it never rotates identity), RegenerateKey is the explicit rotation
+// path — it is driven by a controller-requested fleet rekey, after which the agent
+// re-registers the NEW public key and awaits the operator's redeploy.
+//
+// As with EnsureKey, the private key is the only secret persisted, written exclusively
+// to keyPath at mode 0600; it is never logged, never returned, and never written
+// anywhere else. The write is atomic (temp file + rename) so a crash mid-rotation
+// cannot leave a truncated key.
+func RegenerateKey(keyPath string) (pubKey string, err error) {
+	if strings.TrimSpace(keyPath) == "" {
+		return "", fmt.Errorf("agent: empty key path")
+	}
+	return generateAndWriteKey(keyPath)
+}
+
+// generateAndWriteKey generates a fresh WireGuard private key and writes it to keyPath
+// (mode 0600, parent dir 0700), atomically via a temp file + rename so a crash mid-write
+// cannot leave a truncated key. It returns the corresponding public key. It is the shared
+// implementation behind EnsureKey's create path and RegenerateKey's unconditional rotate.
+func generateAndWriteKey(keyPath string) (pubKey string, err error) {
 	key, genErr := wgtypes.GeneratePrivateKey()
 	if genErr != nil {
-		return "", false, fmt.Errorf("agent: generate private key: %w", genErr)
+		return "", fmt.Errorf("agent: generate private key: %w", genErr)
 	}
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
-		return "", false, fmt.Errorf("agent: create key dir: %w", err)
+		return "", fmt.Errorf("agent: create key dir: %w", err)
 	}
 	// Write the private key as wgtypes.Key.String() (base64), mode 0600. Write to
 	// a temp file then rename so a crash mid-write cannot leave a truncated key.
 	tmp := keyPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(key.String()+"\n"), 0600); err != nil {
-		return "", false, fmt.Errorf("agent: write key: %w", err)
+		return "", fmt.Errorf("agent: write key: %w", err)
 	}
 	if err := os.Rename(tmp, keyPath); err != nil {
 		_ = os.Remove(tmp)
-		return "", false, fmt.Errorf("agent: install key: %w", err)
+		return "", fmt.Errorf("agent: install key: %w", err)
 	}
-
-	return key.PublicKey().String(), true, nil
+	return key.PublicKey().String(), nil
 }

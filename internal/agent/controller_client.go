@@ -70,6 +70,17 @@ type enrollResponseWire struct {
 type configResponseWire struct {
 	Generation int64             `json:"generation"`
 	Files      map[string]string `json:"files"`
+	// RekeyRequested signals the controller has flagged this node for a WireGuard key
+	// rotation (operator clicked "Roll keys"). When set, the agent regenerates its local
+	// key and re-registers the new public key via /rekey instead of applying this bundle.
+	RekeyRequested bool `json:"rekey_requested"`
+}
+
+// rekeyRequestWire is the body the agent POSTs to /rekey to register its freshly
+// rotated WireGuard PUBLIC key (the controller clears the rekey flag in response). The
+// node identity is the bearer token; only the new public key travels in the body.
+type rekeyRequestWire struct {
+	WGPublicKey string `json:"wg_public_key"`
 }
 
 type pollResponseWire struct {
@@ -109,6 +120,11 @@ type ControllerClient struct {
 	// (from the /config response envelope). Report sends it as the applied generation
 	// ONLY when the apply succeeded, so a failed apply never claims the new generation.
 	lastFetchedGen int64
+	// lastRekeyRequested records the rekey_requested flag from the most recent Fetch's
+	// /config envelope. The daemon loop reads it via LastRekeyRequested() AFTER a Fetch:
+	// when set, the agent rotates its WG key and re-registers (Rekey) instead of applying
+	// the now-stale bundle, then awaits the operator's redeploy.
+	lastRekeyRequested bool
 	// priorGen is the last-applied generation watermark for the current cycle (the
 	// loop's --after). On a FAILED apply, Report sends this unchanged instead of the
 	// fetched generation, so the controller registry never shows a generation the node
@@ -131,6 +147,15 @@ func (c *ControllerClient) SetPriorGeneration(gen int64) {
 // N+1). It is zero before the first Fetch.
 func (c *ControllerClient) LastFetchedGeneration() int64 {
 	return c.lastFetchedGen
+}
+
+// LastRekeyRequested reports whether the most recent Fetch's /config envelope carried
+// rekey_requested=true (the operator flagged this node for a WireGuard key rotation). The
+// daemon loop reads it after a Fetch to decide whether to rotate+re-register the local key
+// (via RegenerateKey + Rekey) instead of applying the now-stale bundle. It is false before
+// the first Fetch and resets to whatever the latest envelope reports.
+func (c *ControllerClient) LastRekeyRequested() bool {
+	return c.lastRekeyRequested
 }
 
 // NewControllerClient builds a ControllerClient for baseURL over plain net/http. The
@@ -208,6 +233,37 @@ func (c *ControllerClient) Enroll(enrollmentToken, nodeID, wgPub string) (*Enrol
 	return &EnrollResult{APIToken: er.ApiToken}, nil
 }
 
+// Rekey registers a freshly rotated WireGuard PUBLIC key with the controller over the
+// bearer-authed POST /rekey. The node identity is the bearer token; only the new public
+// key travels in the body. On 2xx the controller has stored the new public key and
+// cleared this node's rekey flag — the agent then awaits the operator's redeploy so the
+// rest of the fleet learns the new key. It rejects an empty wgPub up front (the server
+// would 400) and surfaces any non-2xx as an error.
+func (c *ControllerClient) Rekey(wgPub string) error {
+	if strings.TrimSpace(wgPub) == "" {
+		return fmt.Errorf("agent: rekey requires a non-empty WG public key")
+	}
+	reqBody, err := json.Marshal(rekeyRequestWire{WGPublicKey: wgPub})
+	if err != nil {
+		return fmt.Errorf("agent: marshal rekey request: %w", err)
+	}
+	req, err := c.authedRequest(http.MethodPost, c.url("rekey"), bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("agent: rekey POST: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("agent: rekey: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 // Fetch implements agent.Source over the controller's GET /config (bearer). The
 // node identity is implied by the bearer token, so the nodeID argument is not sent;
 // it is only used as a diagnostic context here. It decodes configResponseWire and
@@ -241,6 +297,9 @@ func (c *ControllerClient) Fetch(nodeID string) (map[string][]byte, error) {
 	// Record the bundle's own generation so Report (on success) tells the controller the
 	// generation actually applied — not merely the one the loop polled.
 	c.lastFetchedGen = cr.Generation
+	// Record the rekey signal from this envelope so the loop can branch (rotate+register
+	// vs apply) via LastRekeyRequested() after the Fetch returns.
+	c.lastRekeyRequested = cr.RekeyRequested
 	files := make(map[string][]byte, len(cr.Files))
 	for path, b64 := range cr.Files {
 		raw, err := base64.StdEncoding.DecodeString(b64)

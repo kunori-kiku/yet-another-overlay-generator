@@ -14,6 +14,7 @@ import {
   stage,
   promote,
   revoke,
+  rekeyAll,
 } from '../api/controllerClient';
 import { useTopologyStore } from './topologyStore';
 
@@ -45,6 +46,7 @@ interface ControllerState {
   mintToken: (nodeId: string, ttl: number) => Promise<string>;
   deploy: () => Promise<void>;
   revoke: (nodeId: string) => Promise<void>;
+  rollKeys: () => Promise<void>;
 }
 
 // 从连接字段切出 controllerClient 需要的 ControllerConfig（不含 agentBaseURL）。
@@ -149,6 +151,24 @@ export const useControllerStore = create<ControllerState>()(
         } catch (err) {
           set({
             error: err instanceof Error ? err.message : 'Revoke failed',
+            loading: false,
+          });
+        }
+      },
+
+      // 为整个 fleet 请求 WG 密钥轮换（plan-4.6 ROUTINE tier）：把每个已审批节点标记为
+      // rekey_requested，随后刷新视图（注册表里会显示 rekeying 徽标）。这只是 zero-knowledge
+      // 轮换流程的第一步——各 agent 会自行重生密钥并经 /rekey 注册新公钥；待节点重新注册后，
+      // operator 需再 Deploy 一次，新一代配置携带全员新公钥使 fleet 收敛。
+      rollKeys: async () => {
+        set({ loading: true, error: null });
+        try {
+          await rekeyAll(configOf(get()));
+          set({ loading: false });
+          await get().refresh();
+        } catch (err) {
+          set({
+            error: err instanceof Error ? err.message : 'Roll keys failed',
             loading: false,
           });
         }

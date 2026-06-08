@@ -57,6 +57,7 @@ interface NodeJSON {
   last_health: string;
   last_seen: string;
   enrolled_at: string;
+  rekey_requested: boolean;
 }
 
 interface AuditEntryJSON {
@@ -88,6 +89,10 @@ interface EnrollmentTokenResponseJSON {
 interface RevokeResponseJSON {
   node_id: string;
   revoked: boolean;
+}
+
+interface RekeyAllResponseJSON {
+  requested: number;
 }
 
 // --- 共享 request 辅助 ---
@@ -134,6 +139,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     lastHealth: n.last_health,
     lastSeen: n.last_seen,
     enrolledAt: n.enrolled_at,
+    rekeyRequested: n.rekey_requested,
   };
 }
 
@@ -223,4 +229,14 @@ export async function revoke(cfg: ControllerConfig, nodeId: string): Promise<voi
   const res = await postJSON(cfg, 'revoke', JSON.stringify({ node_id: nodeId }));
   // 消费响应体以释放连接；revoked 标志在成功时恒为 true，调用方无需分支。
   await (res.json() as Promise<RevokeResponseJSON>);
+}
+
+// 为整个 fleet 请求一次 WG 密钥轮换（operator-only，plan-4.6 ROUTINE tier）：把每个已审批
+// 节点标记为 RekeyRequested。这是 zero-knowledge 流程的起点——控制器从不接触私钥，各 agent
+// 自行重生本地密钥并经 /rekey 注册新公钥。返回被标记的节点数。注意：标记后还需再 Deploy 一次，
+// 待节点重新注册新公钥，新一代配置才会携带全员新公钥使 fleet 收敛。
+export async function rekeyAll(cfg: ControllerConfig): Promise<{ requested: number }> {
+  const res = await postJSON(cfg, 'rekey-all', '');
+  const data = (await res.json()) as RekeyAllResponseJSON;
+  return { requested: data.requested };
 }

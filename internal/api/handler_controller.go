@@ -11,8 +11,8 @@ package api
 // instead gated by the single-use enrollment token.
 //
 // The routes are split across two muxes (served on two plain-HTTP ports):
-//   - agent routes (/enroll,/config,/poll,/report) → RegisterAgentRoutes.
-//   - operator routes (everything else) → RegisterOperatorRoutes.
+//   - agent routes (/enroll,/config,/poll,/report,/rekey) → RegisterAgentRoutes.
+//   - operator routes (everything else, incl. /rekey-all) → RegisterOperatorRoutes.
 //
 // Transport is plain HTTP; TLS is delegated to a reverse proxy (plan-4.5). Bearer
 // tokens authenticate both kinds of caller (per-node tokens for agents, a single
@@ -93,8 +93,8 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
 // on the agent port), under basePath() (the optional secret prefix + the fixed
 // /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the node
-// has an API token); /config,/poll,/report go through requireNode (per-node bearer
-// token). recoverPanics/cors are NOT applied here — controller requests are
+// has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
+// bearer token). recoverPanics/cors are NOT applied here — controller requests are
 // machine-to-machine JSON, with no browser CORS concern.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	base := h.basePath()
@@ -102,6 +102,7 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
 	mux.HandleFunc(base+"report", h.requireNode(h.HandleReport))
+	mux.HandleFunc(base+"rekey", h.requireNode(h.HandleRekey))
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
@@ -121,6 +122,7 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"audit", op(h.HandleAudit))
 	mux.HandleFunc(base+"topology", op(h.HandleTopology))
 	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
+	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
 }
 
 // SetPathPrefix sets the optional secret path prefix the controller routes mount under.
@@ -181,6 +183,11 @@ type enrollResponseJSON struct {
 type configResponseJSON struct {
 	Generation int64             `json:"generation"`
 	Files      map[string]string `json:"files"`
+	// RekeyRequested signals the agent that the operator has requested a fleet-wide
+	// key rotation: on the next fetch the agent regenerates its WireGuard key,
+	// re-registers the new PUBLIC key via POST /rekey, and waits for the operator's
+	// redeploy rather than applying this (now stale) bundle.
+	RekeyRequested bool `json:"rekey_requested"`
 }
 
 // pollResponseJSON is the wire form of a /poll hit: the generation that is now
@@ -223,6 +230,10 @@ type nodeJSON struct {
 	LastHealth        string    `json:"last_health"`
 	LastSeen          time.Time `json:"last_seen"`
 	EnrolledAt        time.Time `json:"enrolled_at"`
+	// RekeyRequested is true while the node is pending a key rotation (the operator
+	// requested one and the agent has not yet re-registered its new public key). The
+	// panel renders a "rekeying" badge from this flag. No key material is exposed.
+	RekeyRequested bool `json:"rekey_requested"`
 }
 
 // revokeRequestJSON is the operator's request to revoke (evict) a node: the target
@@ -271,6 +282,23 @@ type enrollmentTokenRequestJSON struct {
 // capture the plaintext.
 type enrollmentTokenResponseJSON struct {
 	Token string `json:"token"`
+}
+
+// rekeyAllResponseJSON is the operator-facing result of a fleet-wide key-rotation
+// request: the count of APPROVED nodes flagged for rotation.
+type rekeyAllResponseJSON struct {
+	Requested int `json:"requested"`
+}
+
+// rekeyRequestJSON is the agent's re-registration of its rotated WireGuard PUBLIC
+// key (never a private key). The node is the bearer token's node, never the body.
+type rekeyRequestJSON struct {
+	WGPublicKey string `json:"wg_public_key"`
+}
+
+// rekeyResponseJSON confirms an agent rekey re-registration.
+type rekeyResponseJSON struct {
+	OK bool `json:"ok"`
 }
 
 // --- handlers ---
@@ -350,13 +378,23 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 	// Best-effort check-in stamp; a failed touch must not deny the node its config.
 	_ = h.store.TouchLastSeen(r.Context(), tenant, node, time.Now())
 
+	// Read the caller's registry record so the response can carry its
+	// RekeyRequested flag (the agent reacts to it by regenerating + re-registering
+	// its WireGuard key). A failed read must not deny the node its config — the flag
+	// then defaults to false and the agent re-learns it on a later fetch.
+	rekeyRequested := false
+	if n, err := h.store.GetNode(r.Context(), tenant, node); err == nil {
+		rekeyRequested = n.RekeyRequested
+	}
+
 	files := make(map[string]string, len(bundle.Files))
 	for path, content := range bundle.Files {
 		files[path] = base64.StdEncoding.EncodeToString(content)
 	}
 	writeJSON(w, http.StatusOK, configResponseJSON{
-		Generation: bundle.Generation,
-		Files:      files,
+		Generation:     bundle.Generation,
+		Files:          files,
+		RekeyRequested: rekeyRequested,
 	})
 }
 
@@ -555,6 +593,7 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			LastHealth:        n.LastHealth,
 			LastSeen:          n.LastSeen,
 			EnrolledAt:        n.EnrolledAt,
+			RekeyRequested:    n.RekeyRequested,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -734,6 +773,118 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, http.StatusOK, enrollmentTokenResponseJSON{Token: plaintext})
+}
+
+// HandleRekeyAll requests a fleet-wide WireGuard key rotation (operator-only). It
+// flags every APPROVED node with RekeyRequested=true (read-modify-write via
+// GetNode/UpsertNode so every other field is preserved); pending/revoked nodes are
+// left untouched. Each flagged node's agent learns of the request on its next
+// /config fetch (rekey_requested=true), regenerates its key, and re-registers the
+// new PUBLIC key via /rekey (which clears the flag). This is the ROUTINE security
+// tier: rolling EXISTING members' keys never adds or removes a member, so the
+// operator token authorizes it in v1. Returns {requested:<count>}.
+func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+	tenant, operator, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	nodes, err := h.store.ListNodes(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list nodes")
+		return
+	}
+	requested := 0
+	for _, n := range nodes {
+		if n.Status != controller.NodeApproved {
+			continue
+		}
+		// Re-read under the same shape as /revoke so a concurrent mutation does not
+		// clobber a field; flip the flag while preserving everything else.
+		node, err := h.store.GetNode(r.Context(), tenant, n.NodeID)
+		if err != nil {
+			if errors.Is(err, controller.ErrNotFound) {
+				// The node vanished between the list and the read; skip it.
+				continue
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load node")
+			return
+		}
+		node.RekeyRequested = true
+		if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to flag node for rekey")
+			return
+		}
+		requested++
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "rekey-request",
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, rekeyAllResponseJSON{Requested: requested})
+}
+
+// HandleRekey re-registers the CALLER's rotated WireGuard PUBLIC key (the node from
+// the bearer token, never the request body). It stamps the new public key onto the
+// node record and clears RekeyRequested, all via GetNode/UpsertNode so every other
+// field is preserved. It is the agent's response to a rekey_requested=true /config:
+// the controller never sees a private key (zero-knowledge custody). An empty
+// wg_public_key is a 400. Returns {ok:true}.
+func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+	tenant, node, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	var req rekeyRequestJSON
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.WGPublicKey == "" {
+		writeError(w, http.StatusBadRequest, "wg_public_key is required")
+		return
+	}
+
+	// Load the existing record so we preserve every field while swapping the public
+	// key and clearing the flag. UpsertNode matches by NodeID.
+	rec, err := h.store.GetNode(r.Context(), tenant, node)
+	if err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load node")
+		return
+	}
+	rec.WGPublicKey = req.WGPublicKey
+	rec.RekeyRequested = false
+	if err := h.store.UpsertNode(r.Context(), tenant, rec); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record rekey")
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "agent:" + node,
+		Action:    "rekey",
+		NodeID:    node,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		return
+	}
+	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})
 }
 
 // --- helpers ---

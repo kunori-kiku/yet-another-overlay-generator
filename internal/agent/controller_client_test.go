@@ -151,6 +151,36 @@ func doOperator(t *testing.T, method, url string, body []byte) int {
 	return resp.StatusCode
 }
 
+// doOperatorJSON performs an operator request (bearer = operatorPlaintext) and returns
+// the response body, failing the test on any non-200 status. It is used where the test
+// needs the operator route's response (e.g. /rekey-all's {requested}), unlike doOperator
+// which returns only the status code.
+func (e *ctlEnv) doOperatorJSON(t *testing.T, method, url string, body []byte) []byte {
+	t.Helper()
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
+	if err != nil {
+		t.Fatalf("NewRequest %s %s: %v", method, url, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+operatorPlaintext)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s %s: status %d, want 200: %s", method, url, resp.StatusCode, string(respBody))
+	}
+	return respBody
+}
+
 // stageAndPromote drives the operator side over the operator HTTP routes:
 // update-topology -> stage -> promote, and returns the promoted generation. The agent
 // never performs these; they are how a new configuration becomes available to poll.
@@ -365,6 +395,127 @@ func TestControllerClient_BadOrEmptyToken(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("raw bad-token /config: status %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestControllerClient_RekeyFlow is the agent side of fleet-wide key rotation (plan-4.6):
+// enroll -> (operator stage+promote so /config returns a bundle) -> operator POST
+// /rekey-all flags the node -> the agent's Fetch surfaces rekey_requested via
+// LastRekeyRequested() -> the agent rotates its key and re-registers the NEW public key
+// via Rekey, which clears the flag (asserted via the store). It drives the REAL controller
+// handler, so the agent wire tags (rekey_requested, wg_public_key) are verified end to end.
+func TestControllerClient_RekeyFlow(t *testing.T) {
+	env := newCtlEnv(t)
+
+	// Both nodes enroll (enrolled == NodeApproved, which /rekey-all flags); the whole
+	// graph then compiles on promote.
+	node1Token := env.enrollViaAgent(t, "node-1")
+	_ = env.enrollViaAgent(t, "node-2")
+
+	// A generation must be promoted so /config returns 200 (it 404s before the first
+	// promote) and the agent can read the rekey flag off the envelope.
+	env.stageAndPromote(t)
+
+	agentClient, err := agent.NewControllerClient(env.agentSrv.URL, node1Token)
+	if err != nil {
+		t.Fatalf("NewControllerClient(bearer): %v", err)
+	}
+
+	// Before the operator rolls keys, a Fetch must report rekey NOT requested.
+	if _, err := agentClient.Fetch("node-1"); err != nil {
+		t.Fatalf("pre-rekey Fetch: %v", err)
+	}
+	if agentClient.LastRekeyRequested() {
+		t.Fatalf("LastRekeyRequested before /rekey-all = true, want false")
+	}
+
+	// Operator rolls keys fleet-wide; the response counts the flagged (approved) nodes.
+	body := env.doOperatorJSON(t, http.MethodPost, env.opSrv.URL+"/api/v1/controller/rekey-all", []byte("{}"))
+	var rekeyAll struct {
+		Requested int `json:"requested"`
+	}
+	if err := json.Unmarshal(body, &rekeyAll); err != nil {
+		t.Fatalf("decode rekey-all response: %v", err)
+	}
+	if rekeyAll.Requested < 1 {
+		t.Fatalf("rekey-all requested=%d, want >= 1 (node-1 is approved)", rekeyAll.Requested)
+	}
+
+	// The agent learns of the request on its next Fetch (the /config envelope now carries
+	// rekey_requested=true).
+	if _, err := agentClient.Fetch("node-1"); err != nil {
+		t.Fatalf("post-rekey Fetch: %v", err)
+	}
+	if !agentClient.LastRekeyRequested() {
+		t.Fatalf("LastRekeyRequested after /rekey-all = false, want true")
+	}
+
+	// Capture the node's current public key so we can assert the rotation changed it.
+	before, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1) before rekey: %v", err)
+	}
+
+	// The agent rotates its LOCAL key and registers the NEW public key. We mint a fresh
+	// key here to stand in for RegenerateKey's output (the keygen path is unit-tested
+	// separately; this test exercises the client/server rekey wire).
+	newPriv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("wg GeneratePrivateKey: %v", err)
+	}
+	newPub := newPriv.PublicKey().String()
+	if newPub == before.WGPublicKey {
+		t.Fatalf("test setup: new key equals old key (no rotation to assert)")
+	}
+	if err := agentClient.Rekey(newPub); err != nil {
+		t.Fatalf("Rekey(newPub): %v", err)
+	}
+
+	// The store now holds the NEW public key and the rekey flag is cleared.
+	after, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1) after rekey: %v", err)
+	}
+	if after.WGPublicKey != newPub {
+		t.Fatalf("after rekey: stored pubkey %q, want %q", after.WGPublicKey, newPub)
+	}
+	if after.RekeyRequested {
+		t.Fatalf("after rekey: RekeyRequested still true, want cleared")
+	}
+
+	// A follow-up Fetch confirms the cleared flag is reflected on the wire too.
+	if _, err := agentClient.Fetch("node-1"); err != nil {
+		t.Fatalf("post-clear Fetch: %v", err)
+	}
+	if agentClient.LastRekeyRequested() {
+		t.Fatalf("LastRekeyRequested after rekey cleared = true, want false")
+	}
+}
+
+// TestControllerClient_RekeyRejectsEmptyPubkey confirms the agent's own up-front guard:
+// Rekey with a blank public key fails before any request is issued (the server would
+// otherwise 400). This keeps a misconfigured agent from clobbering its registered key
+// with an empty value.
+func TestControllerClient_RekeyRejectsEmptyPubkey(t *testing.T) {
+	c, err := agent.NewControllerClient("http://example.invalid", "tok")
+	if err != nil {
+		t.Fatalf("NewControllerClient: %v", err)
+	}
+	if err := c.Rekey("   "); err == nil {
+		t.Fatalf("Rekey(empty): got nil error, want failure (no public key)")
+	}
+}
+
+// TestControllerClient_LastRekeyRequestedFalseBeforeFetch confirms the getter the daemon
+// loop branches on is false on a freshly-constructed client (before any Fetch), so the
+// rekey branch never fires off a stale signal.
+func TestControllerClient_LastRekeyRequestedFalseBeforeFetch(t *testing.T) {
+	c, err := agent.NewControllerClient("http://example.invalid", "tok")
+	if err != nil {
+		t.Fatalf("NewControllerClient: %v", err)
+	}
+	if c.LastRekeyRequested() {
+		t.Fatalf("LastRekeyRequested before Fetch = true, want false")
 	}
 }
 

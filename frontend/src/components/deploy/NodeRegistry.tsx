@@ -85,6 +85,12 @@ export function NodeRegistry() {
                       <span className={`px-2 py-0.5 rounded text-xs border ${statusClass(n.status)}`}>
                         {n.status}
                       </span>
+                      {/* plan-4.6：operator 已请求该节点轮换 WG 密钥，等待 agent 重生并注册新公钥。 */}
+                      {n.rekeyRequested && (
+                        <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
+                          {txt(language, '🔑 轮换中', '🔑 rekeying')}
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 pr-3 font-mono">
                       <span className={drift ? 'text-yellow-400' : 'text-gray-300'}>

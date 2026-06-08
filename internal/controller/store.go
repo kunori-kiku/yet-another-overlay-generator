@@ -80,6 +80,12 @@ type Node struct {
 	LastHealth string
 	LastSeen   time.Time
 	EnrolledAt time.Time
+	// RekeyRequested is set by the operator's fleet-wide key-rotation request
+	// (POST /rekey-all) and cleared when the agent re-registers its new WireGuard
+	// PUBLIC key (POST /rekey). It is a flag the agent observes via /config; it
+	// carries no key material. Like every other Node field it is persisted by both
+	// Store impls (it rides along on the whole-Node UpsertNode write).
+	RekeyRequested bool
 }
 
 // TopologyRecord is the operator's stored topology for a tenant. The JSON is

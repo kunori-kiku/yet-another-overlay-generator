@@ -10,6 +10,7 @@ export function DeployBar() {
   const language = useTopologyStore((s) => s.language);
 
   const deploy = useControllerStore((s) => s.deploy);
+  const rollKeys = useControllerStore((s) => s.rollKeys);
   const loading = useControllerStore((s) => s.loading);
   const error = useControllerStore((s) => s.error);
   const lastDeploy = useControllerStore((s) => s.lastDeploy);
@@ -18,21 +19,46 @@ export function DeployBar() {
   // 未填 operator token 时无法发起 operator 请求，禁用按钮并给出提示。
   const noToken = operatorToken.trim() === '';
 
+  // 「Roll keys」是 plan-4.6 ROUTINE tier 的全 fleet 密钥轮换：标记每个已审批节点 rekey，
+  // 各 agent 会自行重生本地 WG 私钥并注册新公钥（控制器从不接触私钥）。操作不可一键完成
+  // ——节点重新注册后还需再 Deploy 一次才会收敛——故先 confirm 再触发。
+  const onRollKeys = () => {
+    const ok = window.confirm(
+      txt(
+        language,
+        '将为整个 fleet 请求 WireGuard 密钥轮换。各节点会重生本地私钥并注册新公钥；随后你需要再「发布」一次以使 fleet 收敛（滚动重部署期间各链路会短暂抖动）。是否继续？',
+        'This requests a WireGuard key rotation across the whole fleet. Each node regenerates its local private key and registers a new public key; you will then need to Deploy once more for the fleet to converge (links flap briefly during the rolling redeploy). Continue?',
+      ),
+    );
+    if (ok) {
+      rollKeys();
+    }
+  };
+
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-teal-400">
           {txt(language, '发布到 Fleet', 'Deploy to Fleet')}
         </h3>
-        <button
-          onClick={() => deploy()}
-          disabled={loading || noToken}
-          className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
-        >
-          {loading
-            ? txt(language, '发布中...', 'Deploying...')
-            : txt(language, '🚀 发布', '🚀 Deploy')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRollKeys}
+            disabled={loading || noToken}
+            className="px-4 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+          >
+            {txt(language, '🔑 轮换密钥', '🔑 Roll keys')}
+          </button>
+          <button
+            onClick={() => deploy()}
+            disabled={loading || noToken}
+            className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+          >
+            {loading
+              ? txt(language, '发布中...', 'Deploying...')
+              : txt(language, '🚀 发布', '🚀 Deploy')}
+          </button>
+        </div>
       </div>
 
       <p className="text-sm text-gray-400">
@@ -40,6 +66,14 @@ export function DeployBar() {
           language,
           '将当前拓扑上传到控制器，编译已注册节点的子图，并提升为新一代配置（已注册节点会自动拉取）。',
           'Upload the current topology, compile the enrolled subgraph, and promote it as a new generation (enrolled nodes pull automatically).',
+        )}
+      </p>
+
+      <p className="text-xs text-purple-300/80">
+        {txt(
+          language,
+          '「轮换密钥」会请求各节点重生 WireGuard 密钥；待节点重新注册新公钥后，再「发布」一次以使 fleet 收敛。',
+          'Roll keys asks each node to regenerate its WireGuard key; once nodes re-register their new public keys, Deploy once more to converge the fleet.',
         )}
       </p>
 

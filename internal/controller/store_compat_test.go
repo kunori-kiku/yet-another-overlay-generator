@@ -131,6 +131,62 @@ func TestStoreNodeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStoreRekeyRequestedRoundTrip pins that the Node.RekeyRequested flag persists
+// across an UpsertNode/GetNode round-trip on both Store impls (the FileStore path is
+// the one that must serialize/deserialize it to disk). It also confirms the flag is
+// independently flippable via a whole-Node upsert (set true, then clear back to
+// false) without disturbing the other fields — the shape the /rekey-all and /rekey
+// handlers rely on.
+func TestStoreRekeyRequestedRoundTrip(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			want := Node{
+				NodeID:      "alpha",
+				WGPublicKey: "pubkey-alpha",
+				Status:      NodeApproved,
+				// RekeyRequested defaults false; flip it on so the round-trip is meaningful.
+				RekeyRequested: true,
+			}
+			if err := s.UpsertNode(ctx, tenant, want); err != nil {
+				t.Fatalf("UpsertNode(rekey true): %v", err)
+			}
+			got, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode(alpha): %v", err)
+			}
+			if !got.RekeyRequested {
+				t.Fatalf("RekeyRequested did not round-trip: got %+v", got)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Node round-trip mismatch:\n got = %+v\nwant = %+v", got, want)
+			}
+
+			// Clearing the flag via a whole-Node upsert (the /rekey shape) preserves the
+			// other fields and drops the flag back to false.
+			cleared := got
+			cleared.RekeyRequested = false
+			cleared.WGPublicKey = "pubkey-alpha-rotated"
+			if err := s.UpsertNode(ctx, tenant, cleared); err != nil {
+				t.Fatalf("UpsertNode(rekey clear): %v", err)
+			}
+			again, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode(alpha) after clear: %v", err)
+			}
+			if again.RekeyRequested {
+				t.Fatalf("RekeyRequested still set after clear: %+v", again)
+			}
+			if again.WGPublicKey != "pubkey-alpha-rotated" {
+				t.Fatalf("WGPublicKey = %q, want pubkey-alpha-rotated", again.WGPublicKey)
+			}
+		})
+	}
+}
+
 // TestStoreTopologyVersioning covers PutTopology version increment and the
 // GetTopology round-trip (including ErrNotFound before any put).
 func TestStoreTopologyVersioning(t *testing.T) {

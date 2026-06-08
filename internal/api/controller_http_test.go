@@ -579,6 +579,127 @@ func TestControllerHTTP_HealthSurfaced(t *testing.T) {
 	}
 }
 
+// TestControllerHTTP_RekeyFlow exercises the fleet-wide key-rotation flow end-to-end
+// over the two muxes: the operator POSTs /rekey-all (flagging every APPROVED node),
+// the operator GET /nodes view and the agent GET /config response both surface
+// rekey_requested=true, the agent POSTs /rekey with its NEW WireGuard public key, and
+// afterward /nodes shows rekey_requested=false while the registry holds the NEW public
+// key (zero-knowledge: only the public key is registered). It also pins the two
+// rejection paths: an empty wg_public_key is a 400, and a node token cannot drive the
+// operator-only /rekey-all (403).
+func TestControllerHTTP_RekeyFlow(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	node2Token := env.enrollNode(t, "node-2")
+	// A current bundle must exist so /config returns 200 (it 404s before any promote);
+	// the rekey_requested flag rides on that 200 response.
+	env.promoteSmallTopo(t)
+
+	// Capture node-1's original public key so we can prove the rekey changed it.
+	origNode, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1) before rekey: %v", err)
+	}
+	origPub := origNode.WGPublicKey
+	if origPub == "" {
+		t.Fatalf("node-1 has no WG public key before rekey")
+	}
+
+	// A node token must NOT drive the operator-only /rekey-all -> 403.
+	if status := doJSON(t, http.MethodPost, env.opURL("rekey-all"), node1Token, struct{}{}, nil); status != http.StatusForbidden {
+		t.Fatalf("rekey-all with node token: status %d, want 403", status)
+	}
+
+	// Operator requests a fleet-wide rekey: both approved nodes are flagged.
+	var rekeyAll rekeyAllResponseJSON
+	if status := doJSON(t, http.MethodPost, env.opURL("rekey-all"), testOperatorToken, struct{}{}, &rekeyAll); status != http.StatusOK {
+		t.Fatalf("rekey-all: status %d, want 200", status)
+	}
+	if rekeyAll.Requested != 2 {
+		t.Fatalf("rekey-all requested = %d, want 2 (both approved nodes)", rekeyAll.Requested)
+	}
+
+	// GET /nodes shows rekey_requested=true for both nodes.
+	var nodes []nodeJSON
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("nodes after rekey-all: status %d, want 200", status)
+	}
+	for _, n := range nodes {
+		if !n.RekeyRequested {
+			t.Fatalf("node %s rekey_requested = false after rekey-all, want true", n.NodeID)
+		}
+	}
+
+	// GET /config (agent) shows rekey_requested=true for the caller node.
+	var cfg configResponseJSON
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, &cfg); status != http.StatusOK {
+		t.Fatalf("config after rekey-all: status %d, want 200", status)
+	}
+	if !cfg.RekeyRequested {
+		t.Fatalf("config rekey_requested = false after rekey-all, want true")
+	}
+
+	// An empty wg_public_key is a 400.
+	if status := doJSON(t, http.MethodPost, env.agentURL("rekey"), node1Token, rekeyRequestJSON{WGPublicKey: ""}, nil); status != http.StatusBadRequest {
+		t.Fatalf("rekey with empty key: status %d, want 400", status)
+	}
+
+	// The agent regenerates its WG key and re-registers the NEW public key.
+	newPriv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("wg GeneratePrivateKey: %v", err)
+	}
+	newPub := newPriv.PublicKey().String()
+	if newPub == origPub {
+		t.Fatalf("generated key equals original; cannot prove rotation")
+	}
+	var rekeyResp rekeyResponseJSON
+	if status := doJSON(t, http.MethodPost, env.agentURL("rekey"), node1Token, rekeyRequestJSON{WGPublicKey: newPub}, &rekeyResp); status != http.StatusOK {
+		t.Fatalf("rekey: status %d, want 200", status)
+	}
+	if !rekeyResp.OK {
+		t.Fatalf("rekey response ok = false, want true")
+	}
+
+	// The registry now holds the NEW public key and the flag is cleared for node-1.
+	after, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1) after rekey: %v", err)
+	}
+	if after.WGPublicKey != newPub {
+		t.Fatalf("node-1 WGPublicKey = %q, want the rotated key %q", after.WGPublicKey, newPub)
+	}
+	if after.RekeyRequested {
+		t.Fatalf("node-1 RekeyRequested still set after /rekey, want cleared")
+	}
+
+	// GET /nodes confirms node-1 cleared its flag (and still reports a key on file),
+	// while node-2 — which never re-registered — is still flagged.
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("nodes after rekey: status %d, want 200", status)
+	}
+	for _, n := range nodes {
+		switch n.NodeID {
+		case "node-1":
+			if n.RekeyRequested {
+				t.Fatalf("node-1 rekey_requested = true after /rekey, want false")
+			}
+			if !n.HasWGPublicKey {
+				t.Fatalf("node-1 reports no WG public key after /rekey")
+			}
+		case "node-2":
+			if !n.RekeyRequested {
+				t.Fatalf("node-2 rekey_requested = false; only node-1 re-registered")
+			}
+		}
+	}
+
+	// node-2's bearer token is unaffected by node-1's rekey; it can still re-register.
+	if status := doJSON(t, http.MethodPost, env.agentURL("rekey"), node2Token, rekeyRequestJSON{WGPublicKey: newPriv.PublicKey().String()}, nil); status != http.StatusOK {
+		t.Fatalf("node-2 rekey: status %d, want 200", status)
+	}
+}
+
 // keysOfMap returns a map's keys for diagnostic messages.
 func keysOfMap(m map[string]string) []string {
 	out := make([]string, 0, len(m))

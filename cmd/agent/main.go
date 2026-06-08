@@ -311,6 +311,32 @@ func runControllerMode(o controllerModeOpts) int {
 		if !changed {
 			return lastAppliedGen, false, nil // long-poll timed out; nothing new
 		}
+		// Fetch the bundle FIRST so we can inspect the controller's rekey signal before
+		// deciding whether to apply. /config is idempotent (it returns the current bundle
+		// + flags for this node), so this pre-fetch is consistent with agent.Run's own
+		// fetch below. We discard the files here; the rekey branch never applies them, and
+		// the apply path re-fetches inside agent.Run.
+		if _, err := client.Fetch(o.nodeID); err != nil {
+			return lastAppliedGen, false, fmt.Errorf("fetch: %w", err) // keep-last-good
+		}
+		// REKEY branch: the operator flagged this node for a WireGuard key rotation
+		// (zero-knowledge — the controller never sees the private key). Regenerate the
+		// LOCAL key, register the NEW public key via /rekey (which clears the flag), and
+		// SKIP applying this (now-stale) bundle. We return the UNCHANGED watermark so a
+		// later real generation (the operator's redeploy carrying everyone's new public
+		// keys) still applies. A brief per-link flap during the rolling redeploy is the
+		// accepted cost; see plan-4.6.
+		if client.LastRekeyRequested() {
+			newPub, err := agent.RegenerateKey(agent.DefaultKeyPath)
+			if err != nil {
+				return lastAppliedGen, false, fmt.Errorf("rekey: regenerate key: %w", err) // keep-last-good
+			}
+			if err := client.Rekey(newPub); err != nil {
+				return lastAppliedGen, false, fmt.Errorf("rekey: register new public key: %w", err) // keep-last-good
+			}
+			fmt.Fprintln(os.Stderr, "agent: rekeyed; awaiting redeploy")
+			return lastAppliedGen, false, nil
+		}
 		// Record the prior watermark so a FAILED apply reports it unchanged (never
 		// falsely advancing); a successful apply reports the generation actually fetched.
 		// agent.Run fetches the bundle (setting the fetched generation) and fires the
