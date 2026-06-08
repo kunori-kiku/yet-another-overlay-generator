@@ -39,6 +39,13 @@ type tenantState struct {
 	// signedTrustList is the tenant's current operator-signed membership trust-list, or
 	// nil when none has been signed yet.
 	signedTrustList *StoredTrustList
+	// operators maps an operator Username -> the Operator account (argon2id PHC hash;
+	// never a plaintext password). Operator login, plan-5.2.
+	operators map[string]Operator
+	// sessions maps a session token's hash -> the Session record. The plaintext token
+	// is never stored; only its hash keys this map (the operator-side analogue of
+	// apiTokens).
+	sessions map[string]Session
 	// audit is the append-only, hash-chained audit log in Seq order.
 	audit []AuditEntry
 	// lastHash is the Hash of the most recent audit entry ("" if none yet).
@@ -54,6 +61,8 @@ func newTenantState() *tenantState {
 		current:   make(map[string]SignedBundle),
 		tokens:    make(map[string]EnrollmentToken),
 		apiTokens: make(map[string]string),
+		operators: make(map[string]Operator),
+		sessions:  make(map[string]Session),
 		nextSeq:   1,
 	}
 }
@@ -518,6 +527,90 @@ func cloneStoredTrustList(in *StoredTrustList) *StoredTrustList {
 		out.SignatureJSON = append([]byte(nil), in.SignatureJSON...)
 	}
 	return &out
+}
+
+// --- Operators + sessions (operator login, plan-5.2) ---
+
+// PutOperator creates or replaces an operator account (matched by Username). Operator
+// is a value type with no reference fields, so the stored copy is independent.
+func (s *MemStore) PutOperator(ctx context.Context, t TenantID, op Operator) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	ts.operators[op.Username] = op
+	return nil
+}
+
+// GetOperator returns the operator account, or ErrNotFound.
+func (s *MemStore) GetOperator(ctx context.Context, t TenantID, username string) (Operator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	op, ok := ts.operators[username]
+	if !ok {
+		return Operator{}, ErrNotFound
+	}
+	return op, nil
+}
+
+// ListOperators returns all operator accounts for the tenant, stably ordered by
+// Username.
+func (s *MemStore) ListOperators(ctx context.Context, t TenantID) ([]Operator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	out := make([]Operator, 0, len(ts.operators))
+	for _, op := range ts.operators {
+		out = append(out, op)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	return out, nil
+}
+
+// DeleteOperator removes an operator account. Idempotent (a missing account is a
+// no-op success). Sessions are not cascaded (they expire on their own TTL).
+func (s *MemStore) DeleteOperator(ctx context.Context, t TenantID, username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	delete(ts.operators, username)
+	return nil
+}
+
+// CreateSession stores a minted operator session, keyed by its TokenHash.
+func (s *MemStore) CreateSession(ctx context.Context, t TenantID, sess Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	ts.sessions[sess.TokenHash] = sess
+	return nil
+}
+
+// LookupSession resolves a session token's hash to its Session, returning
+// ErrTokenInvalid if absent OR expired (now at/after ExpiresAt). An expired session
+// encountered here is lazily deleted so abandoned-but-presented sessions self-clean.
+func (s *MemStore) LookupSession(ctx context.Context, t TenantID, tokenHash string, now time.Time) (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	sess, ok := ts.sessions[tokenHash]
+	if !ok {
+		return Session{}, ErrTokenInvalid
+	}
+	if !now.Before(sess.ExpiresAt) {
+		delete(ts.sessions, tokenHash)
+		return Session{}, ErrTokenInvalid
+	}
+	return sess, nil
+}
+
+// DeleteSession removes a session (logout / revoke). Idempotent.
+func (s *MemStore) DeleteSession(ctx context.Context, t TenantID, tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	delete(ts.sessions, tokenHash)
+	return nil
 }
 
 // --- Audit (append-only, hash-chained) ---

@@ -33,6 +33,8 @@ import (
 //	audit.json                          the full []AuditEntry, in Seq order
 //	operator_credential.json            the pinned off-host operator credential (keystone)
 //	signed_trustlist.json               the operator-signed membership trust-list (keystone)
+//	operators/<username>.json           one operator account (argon2id PHC hash)
+//	sessions/<tokenHash>.json           one operator login session, keyed by token hash
 //
 // Directories are created 0700 and files written 0600. SignedBundle.Files
 // (map[string][]byte) serializes as base64 under encoding/json, which round-trips
@@ -93,7 +95,7 @@ func (fs *FileStore) ensureTenantDir(t TenantID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, sub := range []string{"", "nodes", "bundles", "tokens", "apitokens"} {
+	for _, sub := range []string{"", "nodes", "bundles", "tokens", "apitokens", "operators", "sessions"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return "", fmt.Errorf("controller: create tenant dir: %w", err)
 		}
@@ -139,6 +141,27 @@ func (fs *FileStore) apiTokenPath(dir, tokenHash string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "apitokens", tc+".json"), nil
+}
+
+// operatorPath returns the on-disk path for an operator account after validating the
+// username is a safe single path component.
+func (fs *FileStore) operatorPath(dir, username string) (string, error) {
+	uc, err := sanitizeComponent("operator username", username)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "operators", uc+".json"), nil
+}
+
+// sessionPath returns the on-disk path for an operator session after validating the
+// token hash is a safe single path component (a hex SHA-256 in practice, sanitized
+// like any untrusted key to prevent path traversal).
+func (fs *FileStore) sessionPath(dir, tokenHash string) (string, error) {
+	tc, err := sanitizeComponent("session token hash", tokenHash)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "sessions", tc+".json"), nil
 }
 
 // --- atomic JSON IO ---------------------------------------------------------
@@ -953,6 +976,192 @@ func (fs *FileStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) 
 		return StoredTrustList{}, err
 	}
 	return sl, nil
+}
+
+// ===================== Operators + sessions (login) ========================
+
+// PutOperator creates or replaces an operator account as operators/<username>.json
+// (0700 dir / 0600 file, atomic write). The record carries only the argon2id PHC
+// hash — never a plaintext password.
+func (fs *FileStore) PutOperator(ctx context.Context, t TenantID, op Operator) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.operatorPath(dir, op.Username)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(p, op)
+}
+
+// GetOperator returns the operator account, or ErrNotFound.
+func (fs *FileStore) GetOperator(ctx context.Context, t TenantID, username string) (Operator, error) {
+	if err := ctx.Err(); err != nil {
+		return Operator{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return Operator{}, err
+	}
+	p, err := fs.operatorPath(dir, username)
+	if err != nil {
+		return Operator{}, err
+	}
+	var op Operator
+	if err := readJSON(p, &op); err != nil {
+		if os.IsNotExist(err) {
+			return Operator{}, ErrNotFound
+		}
+		return Operator{}, err
+	}
+	return op, nil
+}
+
+// ListOperators reads every operator record under <dir>/operators, sorted by
+// Username.
+func (fs *FileStore) ListOperators(ctx context.Context, t TenantID) ([]Operator, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return nil, err
+	}
+	opsDir := filepath.Join(dir, "operators")
+	ents, err := os.ReadDir(opsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Operator{}, nil
+		}
+		return nil, fmt.Errorf("controller: list operators: %w", err)
+	}
+	out := make([]Operator, 0, len(ents))
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		var op Operator
+		if err := readJSON(filepath.Join(opsDir, e.Name()), &op); err != nil {
+			return nil, err
+		}
+		out = append(out, op)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	return out, nil
+}
+
+// DeleteOperator removes an operator account. Idempotent: a missing account is a
+// no-op success.
+func (fs *FileStore) DeleteOperator(ctx context.Context, t TenantID, username string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.operatorPath(dir, username)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("controller: delete operator: %w", err)
+	}
+	return nil
+}
+
+// CreateSession stores a minted operator session as sessions/<tokenHash>.json (0700
+// dir / 0600 file, atomic write), keyed by the token's hash.
+func (fs *FileStore) CreateSession(ctx context.Context, t TenantID, sess Session) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.sessionPath(dir, sess.TokenHash)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(p, sess)
+}
+
+// LookupSession resolves a session token's hash to its Session, returning
+// ErrTokenInvalid if the file is absent OR the session has expired (now at/after
+// ExpiresAt). An expired session encountered here is lazily removed so abandoned-
+// but-presented sessions self-clean.
+func (fs *FileStore) LookupSession(ctx context.Context, t TenantID, tokenHash string, now time.Time) (Session, error) {
+	if err := ctx.Err(); err != nil {
+		return Session{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return Session{}, err
+	}
+	p, err := fs.sessionPath(dir, tokenHash)
+	if err != nil {
+		return Session{}, err
+	}
+	var sess Session
+	if err := readJSON(p, &sess); err != nil {
+		if os.IsNotExist(err) {
+			return Session{}, ErrTokenInvalid
+		}
+		return Session{}, err
+	}
+	if !now.Before(sess.ExpiresAt) {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return Session{}, fmt.Errorf("controller: delete expired session: %w", err)
+		}
+		return Session{}, ErrTokenInvalid
+	}
+	return sess, nil
+}
+
+// DeleteSession removes a session (logout / revoke). Idempotent: a missing session
+// is a no-op success.
+func (fs *FileStore) DeleteSession(ctx context.Context, t TenantID, tokenHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.sessionPath(dir, tokenHash)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("controller: delete session: %w", err)
+	}
+	return nil
 }
 
 // ================================ Audit ====================================
