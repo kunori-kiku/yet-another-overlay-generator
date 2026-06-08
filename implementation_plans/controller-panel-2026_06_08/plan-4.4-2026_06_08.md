@@ -1,84 +1,70 @@
-# Plan 4.4 — Phase 2d: operator browser-auth + controller panel (frontend)
+# Plan 4.4 — Phase 2d: controller panel as an entry in the existing app (PR-B)
 
-Parent: [plan-4-2026_06_08.md](plan-4-2026_06_08.md) · Prereq: 4.1/4.2/4.3a/4.3b/4.3c merged (the
-single-tenant controller is complete end-to-end server+agent). Final Phase 2 sub-plan: the operator's
-**browser** surface — the Deploy button + per-node status + enrollment UX from the original vision.
+Parent: [plan-4-2026_06_08.md](plan-4-2026_06_08.md) · Prereq: PR-A ([plan-4.5](plan-4.5-2026_06_08.md),
+token auth + plain HTTP + two ports) merged. The operator's browser surface — integrated **into the
+existing app**, not a separate route. Verifiable locally (`npm run lint && npm run build`; node/npm are
+available).
 
-Split into two stacked PRs (backend before frontend):
+## Adopted shape (owner-directed)
 
-- **4.4a — operator browser-auth + read/token endpoints (backend).** CI-testable (httptest).
-- **4.4b — the controller panel (frontend).** Self-verifiable locally (`npm run lint && npm run build`).
+- **Entry, not a route.** The app is a single page with a Zustand-driven `viewMode` (`topology`|`audit`).
+  Add a third `deploy` view: a **"🚀 Deploy" button in `TopBar`** (after the Audit toggle,
+  `components/layout/TopBar.tsx`) sets `viewMode='deploy'`; `App.tsx` renders `<DeployPanel/>` for that
+  mode (exactly how `<AuditView/>` is rendered for `audit`). The topology designer + `topologyStore` are
+  **untouched** (single source of truth preserved).
+- **Two modes inside the panel:**
+  - **Mode A — Local / manual (works again):** reuse the existing `topologyStore` actions
+    `compile()` / `exportArtifacts()` / `downloadDeployScript('sh'|'ps1')` (today in `RightPanel`) — the
+    "download install bundle / deploy script" path, keys in the browser, no controller. Surface them in
+    the panel so Mode A is first-class.
+  - **Mode B — Controller / managed:** talk to a running controller over **plain HTTP** at a
+    **configurable address (default `http://localhost:8080`, editable in the panel)** + an editable
+    **secret path prefix** + an **operator token** field. Enroll nodes, **Deploy** (stage→promote), show
+    per-node/per-edge readiness + audit.
+- **Editable secret path** (owner): the controller mounts its routes under a runtime-configurable prefix;
+  the panel edits it (and the operator token + base URL) and stores them in session/localStorage. The
+  client sends `<baseURL><prefix>/api/v1/controller/...`. (Backend side of the editable prefix — stored
+  + dispatch middleware + an operator get/set endpoint — is a small PR-A follow-up or lands with this PR;
+  see "Backend deltas" below.)
 
-## Adopted decision — operator browser-auth (resolved 2026-06-08, no user prompt needed)
+## Frontend pieces
 
-The controller's operator routes are mTLS-only (4.3b: operator-cert CN), which a browser cannot cleanly
-present. Browser-friendly operator auth is OIDC, which is Plan 5. For v1 the chosen, non-throwaway
-bridge: an **env-configured operator bearer token** (`YAOG_CONTROLLER_OPERATOR_TOKEN`), accepted on
-operator routes **alongside** the operator mTLS cert, unified at the **one** auth chokepoint
-(`requireOperator`). Properties:
+- `frontend/src/stores/controllerStore.ts` (Zustand, **separate** from topologyStore): `{baseURL,
+  pathPrefix, operatorToken, nodes[], audit, currentTopology, deployState, lastError}` + actions
+  `configure`, `refresh` (GET /nodes,/audit,/topology), `mintEnrollmentToken(nodeID,ttl)`, `deploy`
+  (PUT current design via /update-topology → /stage → /promote), with poll/refresh. Persist
+  baseURL/pathPrefix (NOT the operator token by default — session only) to localStorage.
+- `frontend/src/api/controllerClient.ts`: typed fetch wrappers to `<baseURL><prefix>/api/v1/controller/*`
+  with `Authorization: Bearer <operatorToken>`; central error handling (401/403 → "check token/URL").
+- Components under `frontend/src/components/deploy/`:
+  - `DeployPanel.tsx` — the `deploy` view shell + the A/B mode toggle.
+  - `NodeRegistry.tsx` — per-node rows (enrolled/approved, applied-vs-desired generation drift,
+    last-seen, health) + per-edge ready/pending derived from `/nodes` ∩ the current topology.
+  - `EnrollmentFlow.tsx` — modal: pick node + TTL → mint → show the one-time token + the exact
+    `agent enroll --controller <agent-url> --node-id <id> --token <tok>` command to copy.
+  - `DeployBar.tsx` — the **Deploy** button (stage→promote) + result; a **step-up seam**
+    (`requiresUserKey` no-op stub in v1) wrapping sensitive ops (membership changes), for Plan 5.
+  - `AuditLog.tsx` — the hash-chained entries + a `verified` badge.
+- `frontend/src/types/controller.ts` (mirrors the backend JSON; does NOT touch `types/topology.ts`).
+- i18n EN/ZH in `frontend/src/i18n.ts` (the `txt(lang, zh, en)` pattern).
 
-- One chokepoint, **two principal sources** today (operator mTLS cert OR operator bearer token), a
-  **third** in Plan 5 (OIDC session) — same `tenant`+`node=operator` context downstream. This is an
-  extension of the chokepoint, not a second auth path bolted on elsewhere.
-- Bearer token: optional env (unset ⇒ operator routes stay mTLS-only, the 4.3b behaviour). Compared
-  **constant-time** (`crypto/subtle`). Only meaningful over the existing TLS 1.3 transport.
-- Honest scope: a static shared operator token is a v1 single-operator bridge, NOT multi-operator
-  RBAC / per-operator audit identity — that is OIDC + RBAC (Plan 5). Documented as such; not overclaimed.
+## Backend deltas this PR needs (small)
 
-Dev plumbing: the Vite dev proxy (`:5173` → controller `:8080`) terminates/forwards TLS to the
-controller (configured to trust the dev CA in dev); the browser talks plain HTTP to Vite. The panel
-holds the operator token in session and sends `Authorization: Bearer`.
-
-## 4.4a — backend (operator browser-auth + read/token endpoints)
-
-1. `internal/api/auth_controller.go`: extend `requireOperator` to accept a valid
-   `Authorization: Bearer <YAOG_CONTROLLER_OPERATOR_TOKEN>` (constant-time) as the operator principal,
-   falling back to the existing operator-mTLS-cert path. `ControllerHandler` gains `operatorToken
-   string` (from env; empty ⇒ bearer disabled). Agent routes (`requireNode`) are UNCHANGED (mTLS only).
-2. `internal/api/handler_controller.go`: operator read + token endpoints (all `requireOperator`):
-   - `GET  /api/v1/controller/nodes` → the registry projected for the panel: per node `{node_id,
-     status, has_wg_public_key, mtls_cert_fp, desired_generation, applied_generation, last_checksum,
-     last_seen, enrolled_at}` (never any key material — public-keys-only model holds).
-   - `GET  /api/v1/controller/audit` → the hash-chained audit entries + a `verified` bool
-     (`VerifyAuditChain`).
-   - `GET  /api/v1/controller/topology` → the current stored topology JSON (the panel computes
-     per-edge readiness against `/nodes`).
-   - `POST /api/v1/controller/enrollment-token` `{node_id, ttl_seconds}` → mint a single-use token via
-     `NewEnrollmentToken` + `CreateEnrollmentToken`; return the **plaintext** once (operator hands it
-     to the node out-of-band). This is the missing mint route the panel's enrollment UX needs.
-3. `cmd/server/main.go`: read `YAOG_CONTROLLER_OPERATOR_TOKEN` into the handler.
-4. Tests `internal/api/controller_http_test.go` (extend): bearer-authed operator calls succeed; a wrong
-   /absent bearer on operator routes → 401/403; bearer never grants node routes; `/nodes` reflects an
-   enrolled+reported node; `/enrollment-token` mints a token a node can then enroll with; the mTLS
-   operator path still works (no regression).
-5. Spec `docs/spec/controller/controller-api.md`: the bearer principal source (env, constant-time, v1
-   scope vs OIDC), the read/token routes.
-
-## 4.4b — frontend (controller panel)
-
-- New `/controller` route + `ControllerPanel` view, SEPARATE from the topology designer; the existing
-  designer + `topologyStore` are **untouched** (single-source-of-truth preserved).
-- `frontend/src/stores/controllerStore.ts` (Zustand): operator token, node registry + per-node status,
-  current topology + derived per-edge readiness, audit, deploy state; actions `refresh`, `createToken`,
-  `updateTopology`, `deploy` (= stage → promote), with poll/refresh.
-- `frontend/src/api/controllerClient.ts`: typed calls to `/api/v1/controller/*` with the bearer header.
-- Components: `NodeRegistry` (per-node enrolled/approved, applied-vs-desired generation drift,
-  last-seen; per-edge ready/pending), `EnrollmentFlow` (modal: pick node + TTL → mint → show/copy the
-  one-time token + the agent `enroll` command), `DeployBar` (Deploy button = stage→promote + result),
-  `AuditLog` (chain + verified badge).
-- `frontend/src/types/controller.ts` (mirrors the backend JSON; does NOT pollute `types/topology.ts`).
-- i18n EN/ZH (`frontend/src/i18n.ts`).
-- Verify locally: `npm run lint && npm run build` (tsc) before push.
+- **CORS on the operator port** for the browser panel: the operator routes must answer CORS preflight
+  (`OPTIONS`, no auth) and send `Access-Control-Allow-*` so a cross-origin panel can call them (the
+  air-gap server already has a `cors` middleware to reuse). The agent port needs no CORS.
+- **Runtime-editable secret path** (if not already in PR-A): a stored prefix + a top-level dispatch that
+  strips/validates it before the controller mux, + operator `GET/PUT /controller/config` for the prefix.
+  Changing the prefix rotates the agent URL (document: re-distribute it).
 
 ## Definition of done
 
-- [ ] 4.4a: CI green; operator bearer auth works + never escalates to node routes; read/token endpoints
-      operator-gated; mTLS operator path unregressed; no new go.mod dep.
-- [ ] 4.4b: `npm run lint && npm run build` clean; the panel deploys + shows per-node/per-edge readiness
-      + enrollment flow against a running controller; designer/topologyStore untouched.
+- [ ] `npm run lint && npm run build` clean; the `deploy` view toggles A/B; Mode A downloads bundles/
+      scripts (reusing topologyStore); Mode B configures URL+prefix+token, enrolls (shows token+command),
+      Deploys, and shows per-node/per-edge readiness + audit; designer/topologyStore untouched.
+- [ ] Operator port serves CORS for the panel; secret path editable end-to-end.
 
-## Out of scope (Plan 5)
+## Out of scope (Plan 5 / plan-4.6)
 
-OIDC operator login + RBAC + per-operator audit identity (replaces the v1 bearer token); multi-tenant
-principal-derived tenant; KMS; hardware-signed membership; stage→promote step-up. The real-host
-two-node mTLS smoke remains the owed manual gate.
+OIDC operator login + RBAC (replaces the operator token); the real off-host hardware/Bitwarden step-up
+signing behind the `requiresUserKey` seam; the "Roll keys" button + periodic rotation ([plan-4.6](plan-4.6-2026_06_08.md)).
