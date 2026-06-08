@@ -1,54 +1,37 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { ReactFlowProvider } from '@xyflow/react';
-import { AppLayout } from './components/layout/AppLayout';
-import { TopBar } from './components/layout/TopBar';
-import { LeftPanel } from './components/layout/LeftPanel';
-import { RightPanel } from './components/layout/RightPanel';
-import { BottomBar } from './components/layout/BottomBar';
-import { TopologyCanvas } from './components/canvas/TopologyCanvas';
-import { useTopologyStore } from './stores/topologyStore';
-import { AuditView } from './components/audit/AuditView';
-import { DeployPanel } from './components/deploy/DeployPanel';
 import { Shell } from './components/shell/Shell';
 import { ThemeProvider } from './theme/ThemeProvider';
+import { DesignPage } from './components/pages/DesignPage';
+import { OverviewPage } from './components/pages/OverviewPage';
+import { FleetPage } from './components/pages/FleetPage';
+import { DeployPage } from './components/pages/DeployPage';
+import { SecurityPage } from './components/pages/SecurityPage';
+import { SettingsPage } from './components/pages/SettingsPage';
 
-// viewMode 路由：topology → 编辑画布 + 左右面板；audit → 审计视图；deploy → 部署面板。
-// audit/deploy 都是占满中央画布、隐藏左右/底部面板的全屏视图（与 AuditView 的接线一致）。
-// P1：仍由 viewMode 分发，整体被嵌入新的 Shell 内作为首页路由（P2 拆成真实路由）。
-function mainView(viewMode: ReturnType<typeof useTopologyStore.getState>['viewMode']) {
-  switch (viewMode) {
-    case 'audit':
-      return <AuditView />;
-    case 'deploy':
-      return <DeployPanel />;
-    default:
-      return <TopologyCanvas />;
-  }
-}
-
-// The existing topology/audit/deploy scene, rendered unchanged as the shell's
-// index route. ReactFlowProvider stays scoped to this scene (P2 narrows it to
-// the /design route).
-function DesignScene() {
-  const viewMode = useTopologyStore((s) => s.viewMode);
-
-  return (
-    <ReactFlowProvider>
-      <AppLayout
-        topBar={<TopBar />}
-        leftPanel={viewMode === 'topology' ? <LeftPanel /> : null}
-        canvas={mainView(viewMode)}
-        rightPanel={viewMode === 'topology' ? <RightPanel /> : null}
-        bottomBar={viewMode === 'topology' ? <BottomBar /> : null}
-      />
-    </ReactFlowProvider>
-  );
-}
-
+// Deep-linkable routes under the persistent app-shell. ReactFlowProvider is
+// scoped to /design so the canvas only initializes on that route. The index and
+// unknown paths redirect to /design (mode-aware landing arrives in P4).
 const router = createBrowserRouter([
   {
     element: <Shell />,
-    children: [{ index: true, element: <DesignScene /> }],
+    children: [
+      { index: true, element: <Navigate to="/design" replace /> },
+      {
+        path: 'design',
+        element: (
+          <ReactFlowProvider>
+            <DesignPage />
+          </ReactFlowProvider>
+        ),
+      },
+      { path: 'overview', element: <OverviewPage /> },
+      { path: 'fleet', element: <FleetPage /> },
+      { path: 'deploy', element: <DeployPage /> },
+      { path: 'security', element: <SecurityPage /> },
+      { path: 'settings', element: <SettingsPage /> },
+      { path: '*', element: <Navigate to="/design" replace /> },
+    ],
   },
 ]);
 

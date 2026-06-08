@@ -1,14 +1,14 @@
+import { NavLink } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useUiStore } from '../../stores/uiStore';
 import { txt, STRINGS } from '../../i18n';
 import { ChevronLeftIcon } from './icons';
-import { NAV_ITEMS, ACTIVE_NAV_KEY } from './nav';
+import { NAV_ITEMS } from './nav';
 import { FOCUS_RING } from './styles';
 
 // Collapsible left sidebar. Default expanded; the fold button persists the
-// collapsed state. Nav items are presentational placeholders in P1 — P2 turns
-// them into <NavLink>s once sections become routes. The active item comes from
-// ACTIVE_NAV_KEY (single source of truth; route-derived in P2).
+// collapsed state. Nav items are <NavLink>s — the active section is derived from
+// the current route (NavLink sets aria-current="page" automatically).
 export function Sidebar() {
   const language = useTopologyStore((s) => s.language);
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -36,27 +36,27 @@ export function Sidebar() {
         aria-label={txt(language, ...STRINGS.primaryNavLabel)}
         className="flex-1 space-y-1 overflow-y-auto p-2"
       >
-        {NAV_ITEMS.map(({ key, label, Icon }) => {
-          const active = key === ACTIVE_NAV_KEY;
+        {NAV_ITEMS.map(({ key, path, label, Icon }) => {
           const itemLabel = txt(language, ...label);
           return (
-            <button
+            <NavLink
               key={key}
-              type="button"
-              aria-current={active ? 'page' : undefined}
+              to={path}
               aria-label={itemLabel}
               title={collapsed ? itemLabel : undefined}
-              className={`flex h-10 w-full items-center gap-3 rounded-lg text-sm transition-colors ${FOCUS_RING} ${
-                collapsed ? 'justify-center px-0' : 'px-3'
-              } ${
-                active
-                  ? 'bg-[var(--surface-sunken)] font-medium text-[var(--content)]'
-                  : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)] hover:text-[var(--content)]'
-              }`}
+              className={({ isActive }) =>
+                `flex h-10 w-full items-center gap-3 rounded-lg text-sm transition-colors ${FOCUS_RING} ${
+                  collapsed ? 'justify-center px-0' : 'px-3'
+                } ${
+                  isActive
+                    ? 'bg-[var(--surface-sunken)] font-medium text-[var(--content)]'
+                    : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)] hover:text-[var(--content)]'
+                }`
+              }
             >
               <Icon />
               {!collapsed && <span className="truncate">{itemLabel}</span>}
-            </button>
+            </NavLink>
           );
         })}
       </nav>

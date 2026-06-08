@@ -1,20 +1,18 @@
 import type { ReactNode } from 'react';
 
 interface AppLayoutProps {
-  topBar: ReactNode;
   leftPanel: ReactNode;
   canvas: ReactNode;
   rightPanel: ReactNode;
   bottomBar: ReactNode;
 }
 
-export function AppLayout({ topBar, leftPanel, canvas, rightPanel, bottomBar }: AppLayoutProps) {
+// The Design scene layout: left panel + canvas + right panel + bottom bar. The
+// app-shell (Shell/Topbar) owns the top bar and viewport height, so this fills
+// its routed MAIN region with h-full. (P3 restructures the panels into an aside.)
+export function AppLayout({ leftPanel, canvas, rightPanel, bottomBar }: AppLayoutProps) {
   return (
-    // h-full (not h-screen): this scene now fills the shell's MAIN region rather
-    // than the whole viewport. The shell owns the viewport height.
     <div className="h-full flex flex-col bg-gray-900 text-gray-100">
-      {topBar}
-
       {/* 主内容区 */}
       <div className="flex flex-1 overflow-hidden">
         {/* 左侧面板 */}
