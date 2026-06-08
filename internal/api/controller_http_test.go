@@ -404,3 +404,105 @@ func doRaw(t *testing.T, client *http.Client, method, url string, body []byte) i
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
+
+// TestControllerHTTP_ReservedOperatorName confirms a node can never enroll AS the
+// operator: /enroll rejects NodeID == the operator identity (before any token work),
+// so no node-enrollment path can mint a cert carrying operator privileges.
+func TestControllerHTTP_ReservedOperatorName(t *testing.T) {
+	env := newCtlTestEnv(t)
+	csrDER, _ := genMTLSKeyAndCSR(t, string(testTenant)+":"+DefaultOperatorName)
+	status := doJSON(t, env.certlessClient(), http.MethodPost, env.srv.URL+"/api/v1/controller/enroll", enrollRequestJSON{
+		Token:       "rejected-before-token-use",
+		NodeID:      DefaultOperatorName,
+		CSRDER:      base64.StdEncoding.EncodeToString(csrDER),
+		WGPublicKey: "unused",
+	}, nil)
+	if status != http.StatusForbidden {
+		t.Fatalf("enroll as %q: status %d, want 403 (reserved operator name)", DefaultOperatorName, status)
+	}
+}
+
+// TestControllerHTTP_NodeActsOnlyAsItself confirms /config returns the CALLER's own
+// bundle (derived from the verified cert) and that two different nodes get two
+// different bundles — there is no request field by which node A could obtain node B's
+// config.
+func TestControllerHTTP_NodeActsOnlyAsItself(t *testing.T) {
+	env := newCtlTestEnv(t)
+	base := env.srv.URL + "/api/v1/controller/"
+	node1 := env.mtlsClient(env.enrollNode(t, "node-1"))
+	node2 := env.mtlsClient(env.enrollNode(t, "node-2"))
+
+	op := env.mtlsClient(env.issueOperatorCert(t))
+	topoJSON, err := json.Marshal(smallTopo())
+	if err != nil {
+		t.Fatalf("marshal topology: %v", err)
+	}
+	if status := doRaw(t, op, http.MethodPost, base+"update-topology", topoJSON); status != http.StatusOK {
+		t.Fatalf("update-topology: status %d, want 200", status)
+	}
+	if status := doJSON(t, op, http.MethodPost, base+"stage", struct{}{}, &stageResponseJSON{}); status != http.StatusOK {
+		t.Fatalf("stage: status %d, want 200", status)
+	}
+	if status := doJSON(t, op, http.MethodPost, base+"promote", struct{}{}, &generationResponseJSON{}); status != http.StatusOK {
+		t.Fatalf("promote: status %d, want 200", status)
+	}
+
+	var cfg1, cfg2 configResponseJSON
+	if status := doJSON(t, node1, http.MethodGet, base+"config", nil, &cfg1); status != http.StatusOK {
+		t.Fatalf("node-1 config: status %d, want 200", status)
+	}
+	if status := doJSON(t, node2, http.MethodGet, base+"config", nil, &cfg2); status != http.StatusOK {
+		t.Fatalf("node-2 config: status %d, want 200", status)
+	}
+	// Each node received ITS OWN bundle: the router (node-1) and peer (node-2) install
+	// scripts differ. If /config ignored the cert and served one shared bundle, these
+	// would be identical.
+	if cfg1.Files["install.sh"] == "" || cfg2.Files["install.sh"] == "" {
+		t.Fatalf("a config bundle is missing install.sh (node-1 keys %v, node-2 keys %v)", keysOfMap(cfg1.Files), keysOfMap(cfg2.Files))
+	}
+	if cfg1.Files["install.sh"] == cfg2.Files["install.sh"] {
+		t.Fatalf("node-1 and node-2 received identical install.sh; /config must return the caller's own node bundle")
+	}
+}
+
+// TestControllerHTTP_ForeignClientCertRejected confirms the mTLS layer rejects a client
+// cert that does NOT chain to the controller's dev CA: presenting a cert from a
+// different CA fails the handshake, so authenticate() never even sees it.
+func TestControllerHTTP_ForeignClientCertRejected(t *testing.T) {
+	env := newCtlTestEnv(t)
+	foreignCA, err := controller.NewDevCA(testTenant, time.Now(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatalf("foreign NewDevCA: %v", err)
+	}
+	csrDER, priv := genMTLSKeyAndCSR(t, string(testTenant)+":node-1")
+	certPEM, _, err := foreignCA.IssueClientCert(csrDER, "node-1", time.Now())
+	if err != nil {
+		t.Fatalf("foreign IssueClientCert: %v", err)
+	}
+	foreignCert := clientCertFromPEM(t, certPEM, priv)
+
+	// Trust the REAL server CA (so the server is accepted) but present a FOREIGN client
+	// cert the server's ClientCAs does not include.
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs:      env.ca.CACertPool(),
+		Certificates: []tls.Certificate{foreignCert},
+		MinVersion:   tls.VersionTLS13,
+	}}}
+	req, err := http.NewRequest(http.MethodGet, env.srv.URL+"/api/v1/controller/config", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	if resp, err := client.Do(req); err == nil {
+		resp.Body.Close()
+		t.Fatalf("foreign client cert accepted (status %d); the mTLS handshake must reject it", resp.StatusCode)
+	}
+}
+
+// keysOfMap returns a map's keys for diagnostic messages.
+func keysOfMap(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

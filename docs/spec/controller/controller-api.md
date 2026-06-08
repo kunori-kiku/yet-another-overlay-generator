@@ -37,16 +37,19 @@ and the parent [plan-4-2026_06_08.md](../../../implementation_plans/controller-p
   per-node mTLS** instead of plain HTTP. The air-gap routes remain registered on the **same** mux and
   remain reachable; the controller routes are layered on, not a replacement.
 
-**The gate.** Controller mode is on iff the controller state-dir env is present:
+**The gate.** Controller mode is on iff **both** `YAOG_CONTROLLER_STATE_DIR` **and** `YAOG_TENANT_ID`
+are set (`cmd/server`: `if stateDir == "" || tenant == "" { air-gap }`). If either is unset the server
+is exactly the air-gap server:
 
-| Env var                     | Meaning                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------- |
-| `YAOG_CONTROLLER_STATE_DIR` | Directory for the durable `FileStore` (created `0700`). **Presence = enable.** |
-| `YAOG_TENANT_ID`            | The single-tenant `TenantID` constant pinned for v1 (see below).               |
-| `YAOG_BUNDLE_SIGNING_KEY`   | Optional Phase-0 bundle-signing key, read by `CompileAndStage`'s `Export`.     |
+| Env var                     | Meaning                                                                            |
+| --------------------------- | --------------------------------------------------------------------------------- |
+| `YAOG_CONTROLLER_STATE_DIR` | Directory for the durable `FileStore` (created `0700`). Required to enable.        |
+| `YAOG_TENANT_ID`            | The single-tenant `TenantID` constant pinned for v1. Also required to enable.      |
+| `YAOG_BUNDLE_SIGNING_KEY`   | Optional Phase-0 bundle-signing key, read by `CompileAndStage`'s `Export`.         |
 
-The constant env name is defined once in the server package (e.g. `envControllerStateDir =
-"YAOG_CONTROLLER_STATE_DIR"`). Leaving `YAOG_CONTROLLER_STATE_DIR` unset is the explicit way to keep a
+The constant env names are defined once in the server package (`envControllerStateDir =
+"YAOG_CONTROLLER_STATE_DIR"`, `envTenantID = "YAOG_TENANT_ID"`). Leaving either unset is the explicit
+way to keep a
 deployment air-gap-only — the controller code is compiled in but dormant, so an operator who never
 opts in is never exposed to the networked surface.
 
@@ -123,7 +126,7 @@ unexported helpers `tenantFromCtx(ctx)` and `nodeFromCtx(ctx)`. Downstream handl
    structural guarantee that one compromised node cert cannot read or mutate another node's state.
 5. **Operator gate → 403 for a normal node.** Operator routes (`/update-topology`, `/stage`,
    `/promote`) require a cert whose **node** component equals the configured operator identity
-   `"operator"` (CN `"<tenant>:operator"`). An `isOperator` check on the context node enforces it; a
+   `"operator"` (CN `"<tenant>:operator"`). The `requireOperator` middleware enforces it (the cert's node component must equal the operator identity); a
    **normal node cert on an operator route is rejected 403**. The operator is just another mTLS
    identity issued by the same DevCA (CN `<tenant>:operator`) — there is no password, no session.
    **OIDC operator login + RBAC is Plan 5**; this cert gate is the v1 stand-in.
@@ -211,7 +214,7 @@ The node reports what it actually applied, closing the desired/applied loop the 
   `store.TouchLastSeen(ctx, tenant, callerNode, now)` + an audit append. The node's registry record
   then carries `AppliedGeneration` / `LastChecksum` / `LastSeen`, which the panel diffs against
   `DesiredGeneration` to show convergence.
-- **Response** — `200` (e.g. `{"ok": true}`).
+- **Response** — `200` (`{"status": "ok"}`).
 
 ### `POST /update-topology` — operator stores the topology
 

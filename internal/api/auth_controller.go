@@ -108,6 +108,16 @@ func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc 
 			writeError(w, status, msg)
 			return
 		}
+		// Active-registry gate: a valid cert is necessary but not sufficient. A node
+		// with no active registry record — never enrolled, or flipped to NodeRevoked —
+		// is refused, so revocation takes effect IMMEDIATELY over the network (the dev
+		// CA has no CRL/OCSP). Fleet-wide eviction at stage time remains the primary
+		// revocation mechanism (deploy.md); this closes the residual cert-TTL window.
+		node, err := h.store.GetNode(r.Context(), auth.tenant, auth.node)
+		if err != nil || node.Status == controller.NodeRevoked {
+			writeError(w, http.StatusForbidden, "node is not an active registered node")
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, auth.tenant)
 		ctx = context.WithValue(ctx, ctxKeyNode, auth.node)
 		next(w, r.WithContext(ctx))

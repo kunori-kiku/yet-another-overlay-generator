@@ -17,6 +17,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
@@ -154,6 +155,14 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 	var req enrollRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Reserve the operator identity: a node must never enroll AS the operator. Doing so
+	// would mint a cert with CN "<tenant>:operator" and grant operator privileges
+	// (update-topology/stage/promote). The operator cert is issued out-of-band via
+	// DevCA.IssueClientCert, never through this node-enrollment path.
+	if req.NodeID == h.operatorName {
+		writeError(w, http.StatusForbidden, "node id is reserved")
 		return
 	}
 	csrDER, err := base64.StdEncoding.DecodeString(req.CSRDER)
@@ -450,17 +459,16 @@ func statusForBodyErr(err error) int {
 }
 
 // parseAfter parses the /poll ?after= cursor. An empty value means 0 (poll for any
-// generation). A non-numeric or negative value is a 400.
+// generation). A non-numeric, negative, or out-of-range value is a 400 — strconv
+// rejects overflow, so a huge all-digit value cannot silently wrap to a negative
+// generation (which would make WaitForGeneration return immediately).
 func parseAfter(s string) (int64, error) {
 	if s == "" {
 		return 0, nil
 	}
-	var n int64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("after must be a non-negative integer")
-		}
-		n = n*10 + int64(c-'0')
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0, errors.New("after must be a non-negative integer")
 	}
 	return n, nil
 }
