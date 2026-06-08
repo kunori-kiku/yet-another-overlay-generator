@@ -5,7 +5,12 @@ import type {
   ControllerAuditEntry,
   StageResult,
 } from '../types/controller';
-import type { ControllerConfig, WebAuthnAlg, ControllerSettings } from '../api/controllerClient';
+import type {
+  ControllerConfig,
+  WebAuthnAlg,
+  ControllerSettings,
+  TOTPEnrollment,
+} from '../api/controllerClient';
 import {
   getNodes,
   getAudit,
@@ -22,6 +27,10 @@ import {
   logout as ctlLogout,
   getSettings,
   postSettings,
+  getTOTPStatus,
+  enrollTOTP as ctlEnrollTOTP,
+  confirmTOTP as ctlConfirmTOTP,
+  disableTOTP as ctlDisableTOTP,
 } from '../api/controllerClient';
 import { enrollOperatorCredential, signManifest } from '../lib/webauthn';
 import { useTopologyStore } from './topologyStore';
@@ -45,6 +54,13 @@ interface ControllerState {
   sessionToken: string;
   operatorName: string | null;
   sessionExpiresAt: string | null;
+
+  // TOTP 2FA（plan-5.2）：totpRequired 表示上次登录密码正确但缺/错二次码（后端 401
+  // totp_required），登录表单据此显示验证码输入框。totpEnabled 是当前已登录 operator 账户
+  // 是否启用了 2FA（null=未知/未拉取；break-glass token 无账户 → 状态保持 null）。两者均仅
+  // 内存，绝不持久化。
+  totpRequired: boolean;
+  totpEnabled: boolean | null;
 
   // fleet 视图
   nodes: ControllerNode[];
@@ -82,8 +98,16 @@ interface ControllerState {
   loadSettings: () => Promise<void>;
   saveSettings: (s: ControllerSettings) => Promise<void>;
   refresh: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
+  // 复位待处理的二次验证步骤：当操作员改动了凭据对（或一次硬失败之后），让验证码框只对
+  // 后端实际标记的那一对 username+password 出现，而非粘滞到换了账号/改了密码之后。
+  resetTOTPChallenge: () => void;
+  // TOTP 2FA 自助管理（plan-5.2）：仅对密码 session 有效（break-glass token 无账户）。
+  loadTOTPStatus: () => Promise<void>;
+  enrollTOTP: () => Promise<TOTPEnrollment>;
+  confirmTOTP: (secret: string, code: string) => Promise<void>;
+  disableTOTP: (code: string) => Promise<void>;
   mintToken: (nodeId: string, ttl: number) => Promise<string>;
   enrollOperator: () => Promise<void>;
   deploy: () => Promise<void>;
@@ -168,6 +192,9 @@ export const useControllerStore = create<ControllerState>()(
       operatorName: null,
       sessionExpiresAt: null,
 
+      totpRequired: false,
+      totpEnabled: null,
+
       nodes: [],
       audit: [],
       auditVerified: false,
@@ -238,24 +265,49 @@ export const useControllerStore = create<ControllerState>()(
       // 操作员密码登录（plan-5.2）：POST /login 换取 session token，仅存内存。成功后立即
       // refresh 拉取 fleet 视图。session 优先于 break-glass token（见 configOf）。失败把
       // 控制器原始报错（401 invalid username or password / 429 too many attempts）回显。
-      login: async (username, password) => {
+      login: async (username, password, totp) => {
         set({ loading: true, error: null });
         try {
-          const result = await ctlLogin(configOf(get()), username, password);
+          const outcome = await ctlLogin(configOf(get()), username, password, totp);
+          if (outcome.kind === 'totp_required') {
+            // 密码正确但需要二次码：让登录表单收集 TOTP 码后重试。后端对「缺码」与「码错」
+            // 返回同一个 totp_required（不开 oracle）；但我们本地知道是否带了码——若带了码仍被
+            // 要求，就是码错/过期，给个温和提示（用户已在 2FA 步，不算信息泄露）。首次（未带码）
+            // 不写 error，仅展开验证码框。
+            const submittedCode = !!(totp && totp.trim() !== '');
+            set({
+              totpRequired: true,
+              error: submittedCode
+                ? 'Two-factor code not accepted — check the code and your device clock, then try again.'
+                : null,
+              loading: false,
+            });
+            return;
+          }
           set({
-            sessionToken: result.sessionToken,
-            operatorName: result.operator,
-            sessionExpiresAt: result.expiresAt,
+            sessionToken: outcome.result.sessionToken,
+            operatorName: outcome.result.operator,
+            sessionExpiresAt: outcome.result.expiresAt,
+            totpRequired: false,
             loading: false,
           });
           await get().refresh();
+          // 拉取本账户的 2FA 状态（供「两步验证」区回显启用/未启用）。失败不阻塞登录。
+          await get().loadTOTPStatus();
         } catch (err) {
+          // 硬失败（密码错 / 429 锁定 / 网络 / 500，均在到达「需二次码」之前抛出）：复位
+          // totpRequired，回到纯密码表单——避免「输入用户名或密码错误」却仍显示验证码框的
+          // 错位提示。真正需要二次码的下一次（密码正确）会重新干净地触发 totp_required。
           set({
             error: err instanceof Error ? err.message : 'Login failed',
+            totpRequired: false,
             loading: false,
           });
         }
       },
+
+      // 复位二次验证步骤（见接口注释）：仅清 totpRequired；验证码输入框的本地值由组件清空。
+      resetTOTPChallenge: () => set({ totpRequired: false }),
 
       // 登出：best-effort 调 POST /logout 撤销服务端 session，然后无论成败都清空本地
       // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。
@@ -271,6 +323,10 @@ export const useControllerStore = create<ControllerState>()(
           sessionToken: '',
           operatorName: null,
           sessionExpiresAt: null,
+          // 清掉 2FA 会话态：totpRequired 复位，totpEnabled 回到「未知」，下一位用密码登录的
+          // 操作员会重新拉取自己账户的状态（TwoFactorSettings 的守卫 effect 在 null 时再触发）。
+          totpRequired: false,
+          totpEnabled: null,
           nodes: [],
           audit: [],
           auditVerified: false,
@@ -279,6 +335,35 @@ export const useControllerStore = create<ControllerState>()(
           settings: null,
           error: null,
         });
+      },
+
+      // 拉取本账户的 TOTP 状态。403（break-glass token 无账户）或网络错误时保持 totpEnabled=null
+      // （UI 据此提示「请用密码登录以管理 2FA」），不污染全局 error。
+      loadTOTPStatus: async () => {
+        try {
+          set({ totpEnabled: await getTOTPStatus(configOf(get())) });
+        } catch {
+          set({ totpEnabled: null });
+        }
+      },
+
+      // 开始 enroll：mint 一个尚未激活的 secret + otpauth URI，返回给组件展示（确认前不持久化，
+      // 也不改全局状态）。错误向调用方抛出，由 TwoFactorSettings 就地展示。
+      enrollTOTP: async () => {
+        return ctlEnrollTOTP(configOf(get()));
+      },
+
+      // 确认 enroll：用 enroll 拿到的 secret + 一个当前码激活 2FA。成功后 totpEnabled=true。
+      // 失败（如码错）向调用方抛出，由组件就地展示。
+      confirmTOTP: async (secret, code) => {
+        await ctlConfirmTOTP(configOf(get()), secret, code);
+        set({ totpEnabled: true });
+      },
+
+      // 关闭 2FA：需当前码（防被劫持的 session 直接摘掉二次因子）。成功后 totpEnabled=false。
+      disableTOTP: async (code) => {
+        await ctlDisableTOTP(configOf(get()), code);
+        set({ totpEnabled: false });
       },
 
       // 为某节点铸造一次性 enrollment token，返回明文 token（仅此一次可见）。
