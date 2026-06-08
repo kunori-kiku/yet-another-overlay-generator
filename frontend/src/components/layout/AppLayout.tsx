@@ -10,7 +10,9 @@ interface AppLayoutProps {
 
 export function AppLayout({ topBar, leftPanel, canvas, rightPanel, bottomBar }: AppLayoutProps) {
   return (
-    <div className="h-screen flex flex-col bg-gray-900 text-gray-100">
+    // h-full (not h-screen): this scene now fills the shell's MAIN region rather
+    // than the whole viewport. The shell owns the viewport height.
+    <div className="h-full flex flex-col bg-gray-900 text-gray-100">
       {topBar}
 
       {/* 主内容区 */}

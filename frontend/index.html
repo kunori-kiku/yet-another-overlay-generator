@@ -5,6 +5,27 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>frontend</title>
+    <!-- Anti-FOUC: set the initial theme class before first paint, reading the
+         persisted preference (ui-storage). ThemeProvider reconciles after mount. -->
+    <script>
+      (function () {
+        try {
+          var theme = 'system';
+          var raw = localStorage.getItem('ui-storage');
+          if (raw) {
+            var parsed = JSON.parse(raw);
+            if (parsed && parsed.state && parsed.state.theme) theme = parsed.state.theme;
+          }
+          var dark =
+            theme === 'dark' ||
+            (theme === 'system' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          /* ignore — ThemeProvider applies the class after mount */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
