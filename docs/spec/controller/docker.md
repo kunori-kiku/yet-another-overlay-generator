@@ -67,6 +67,7 @@ missing secret is a clean skip — never a failed build.)
 ## Notes
 
 - Multi-arch: `linux/amd64` + `linux/arm64` (QEMU + Buildx).
-- Runs as a non-root user (uid 65532); `/data` is owned by it so a fresh named volume
-  inherits writable ownership.
+- Runs as a non-root user (uid 65532). The shipped compose uses a **bind mount**, so the
+  host `./data` must be chowned to 65532 (see Deploy). `/data` in the image is owned by
+  65532, so a *named* volume would inherit writable ownership automatically if you revert.
 - Build locally instead of pulling: uncomment `build: .` in `docker-compose.yml`.

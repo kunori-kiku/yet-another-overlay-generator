@@ -37,7 +37,9 @@ COPY --from=frontend --chown=yaog:yaog /app/frontend/dist /app/web
 ENV YAOG_WEB_DIR=/app/web \
     YAOG_CONTROLLER_STATE_DIR=/data
 EXPOSE 8080 9090
-# /data is owned by uid 65532 above, so a fresh named volume inherits that ownership.
+# /data is owned by uid 65532 above. A fresh NAMED volume inherits that ownership; a
+# BIND mount (the shipped docker-compose.yml uses ./data) does NOT — the host dir must
+# be chowned to 65532 (documented in docker-compose.yml / docs/spec/controller/docker.md).
 VOLUME ["/data"]
 USER yaog
 # ENTRYPOINT is the bare binary; CMD holds the serve flags. This way
