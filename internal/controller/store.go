@@ -63,18 +63,23 @@ type Node struct {
 	// WGPublicKey is the node's WireGuard public key (base64), bound at enrollment.
 	// Empty while the node slot is pending. NEVER a private key.
 	WGPublicKey string
-	// MTLSCertFP is the SHA-256 fingerprint of the node's issued mTLS client cert
-	// (set by enrollment in plan-4.2). Empty until enrolled.
-	MTLSCertFP string
-	Status     NodeStatus
+	// APITokenHash is the hex SHA-256 of the node's bearer API token, stamped by
+	// IssueNodeAPIToken at enrollment. Empty while the node is pending and after a
+	// RevokeNodeAPIToken. The plaintext token is NEVER stored — only this hash — so
+	// a store/DB read cannot recover a usable token.
+	APITokenHash string
+	Status       NodeStatus
 	// DesiredGeneration is the latest promoted generation that targets this node.
 	DesiredGeneration int64
 	// AppliedGeneration is the generation the agent last reported applying.
 	AppliedGeneration int64
 	// LastChecksum is the manifest checksum the agent last reported.
 	LastChecksum string
-	LastSeen     time.Time
-	EnrolledAt   time.Time
+	// LastHealth is the free-form health string the agent last reported alongside
+	// its applied generation ("" until the first report carries one).
+	LastHealth string
+	LastSeen   time.Time
+	EnrolledAt time.Time
 }
 
 // TopologyRecord is the operator's stored topology for a tenant. The JSON is
@@ -147,8 +152,9 @@ type Store interface {
 	GetNode(ctx context.Context, t TenantID, nodeID string) (Node, error)
 	// ListNodes returns all nodes for the tenant (stable order by NodeID).
 	ListNodes(ctx context.Context, t TenantID) ([]Node, error)
-	// SetAppliedGeneration records what an agent reported applying.
-	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum string) error
+	// SetAppliedGeneration records what an agent reported applying (the applied
+	// generation, the manifest checksum, and the free-form health string).
+	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 
@@ -192,6 +198,29 @@ type Store interface {
 	// marks the token consumed (ConsumedAt=now) and returns nil. Single-use is
 	// enforced atomically so two concurrent enrollments cannot both succeed.
 	ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error
+
+	// --- Node API tokens (per-node bearer auth) ---
+
+	// IssueNodeAPIToken stamps tokenHash onto the node's APITokenHash AND writes a
+	// reverse index hash->nodeID so a presented token can be resolved in O(1). It
+	// returns ErrNotFound if no node record exists for nodeID. The plaintext token
+	// is never stored — only its hex SHA-256 hash. Rotation is self-cleaning: if the
+	// node already carried a different APITokenHash, the prior reverse-index entry is
+	// deleted before the new one is written so no orphaned (stale) token lingers in
+	// the index.
+	IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error
+	// LookupNodeByAPIToken resolves a presented token's hash to its Node via the
+	// reverse index. The lookup is self-consistent: it returns ErrTokenInvalid unless
+	// the index resolves to a live node whose own APITokenHash still equals tokenHash
+	// AND whose Status is NodeApproved. This rejects an unmapped hash, a stale/orphaned
+	// index entry that no longer matches the node's current token, and any node that
+	// is not approved (pending or revoked) — so a rotated, revoked, or non-approved
+	// token can never authorize.
+	LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error)
+	// RevokeNodeAPIToken clears the node's APITokenHash and deletes the reverse index
+	// entry, immediately invalidating the node's bearer token. It is idempotent: a
+	// node with no issued token (or already revoked) is a no-op success.
+	RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID string) error
 
 	// --- Audit (append-only, hash-chained) ---
 

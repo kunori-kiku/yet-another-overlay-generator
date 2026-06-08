@@ -1,35 +1,40 @@
 package api
 
 // auth_controller.go is the single authentication chokepoint for the networked
-// controller routes (plan-4.3b). Every controller request that is not /enroll
-// passes through this middleware, which derives the calling identity from the
-// VERIFIED mTLS client certificate and rejects anything that does not match the
-// configured tenant / required role.
+// controller routes (plan-4.5). Every controller request that is not /enroll
+// passes through this middleware, which derives the calling identity from a
+// PER-NODE BEARER TOKEN presented in the Authorization header and rejects anything
+// that does not resolve to an active node (agent routes) or the operator token
+// (operator routes).
 //
-// Trust model. The TLS layer (controller.DevCA.ServerTLSConfig) uses
-// ClientAuth=VerifyClientCertIfGiven: a client cert is optional at the handshake
-// (so certless /enroll is reachable) but, if presented, MUST chain to the dev CA.
-// Therefore r.TLS.PeerCertificates is either empty (no cert) or a verified chain.
-// This middleware never re-verifies the chain — it only enforces PRESENCE and the
-// identity parsed from the leaf's Common Name.
+// Trust model. Authentication is a bearer token, NOT mTLS. The transport is plain
+// HTTP; confidentiality (against token replay on the wire) is delegated to a
+// reverse proxy's TLS (nginx/caddy) and is out of this app's scope — bearer tokens
+// are replayable if leaked, so the deployment MUST terminate TLS in front of the
+// controller. This is the conscious v1 model (plan-4.5).
 //
-// Identity. The client-cert CN is "<tenant>:<node>" (IssueClientCert binds it).
-// The middleware splits on the first ':' (strings.Cut), pins the tenant to the
-// configured YAOG_TENANT_ID (single-tenant v1; a cert for another tenant is a 403),
-// and puts tenant+node into the request context. A node acts ONLY as itself: the
-// agent handlers read the node from the context, never from a URL/body field, so a
-// node cannot fetch or report for a different node.
+// Identity. A node presents "Authorization: Bearer <token>". The middleware hashes
+// the presented token (controller.HashToken) and resolves it via
+// Store.LookupNodeByAPIToken to the owning Node — there is no tenant/node field in
+// the URL or body. The tenant is the configured one (single-tenant v1, pinned from
+// YAOG_TENANT_ID). A node acts ONLY as itself: the agent handlers read the node
+// from the request context, never from a URL/body field, so a node cannot fetch or
+// report for a different node.
 //
 // Roles. Two kinds of route:
-//   - agent routes (/config,/poll,/report): any verified node cert is accepted.
-//   - operator routes (/update-topology,/stage,/promote): the cert's node component
-//     MUST equal the configured operator identity ("operator"); a normal node cert
-//     on an operator route is a 403.
+//   - agent routes (/config,/poll,/report): any token that resolves to an active
+//     (non-revoked) node is accepted (requireNode).
+//   - operator routes (/update-topology,/stage,/promote,/nodes,/revoke,/audit,
+//     /topology,/enrollment-token): the presented token's hash MUST equal the configured
+//     operator token hash (constant-time compare); a node token on an operator
+//     route is a 403 (operatorAuth).
 //
-// /enroll is NOT wrapped by this middleware at all (it must be reachable certless).
+// /enroll is NOT wrapped by this middleware at all (it must be reachable before the
+// node has any API token).
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -53,69 +58,77 @@ func tenantFromCtx(ctx context.Context) (controller.TenantID, bool) {
 	return t, ok
 }
 
-// nodeFromCtx returns the node identity (the cert CN's node component) pinned onto
-// the request context by the auth middleware. For agent routes this is the calling
-// node; for operator routes it is the operator identity. The boolean is false if
+// nodeFromCtx returns the node identity pinned onto the request context by the auth
+// middleware. For agent routes this is the calling node (resolved from its API
+// token); for operator routes it is the operator identity. The boolean is false if
 // no node was set.
 func nodeFromCtx(ctx context.Context) (string, bool) {
 	n, ok := ctx.Value(ctxKeyNode).(string)
 	return n, ok
 }
 
-// authResult carries the parsed, verified identity from a client cert.
+// authResult carries the parsed, verified identity from a bearer token.
 type authResult struct {
 	tenant controller.TenantID
 	node   string
 }
 
-// authenticate extracts and validates the caller's identity from the request's
-// verified mTLS client cert. It returns the parsed identity, or an HTTP status +
-// message to reject with. It enforces, in order:
-//
-//	401 — no client cert presented, or the cert has no parseable "<tenant>:<node>" CN.
-//	403 — the cert's tenant != the configured tenant (cross-tenant access).
-//
-// It does NOT enforce the operator-vs-node distinction; that is the caller's
-// responsibility (requireNode vs requireOperator) since it is route-specific.
-func (h *ControllerHandler) authenticate(r *http.Request) (authResult, int, string) {
-	// VerifyClientCertIfGiven means a presented cert is already verified against the
-	// CA; an EMPTY PeerCertificates means no cert was presented at all.
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return authResult{}, http.StatusUnauthorized, "client certificate required"
+// bearerToken extracts the token from an "Authorization: Bearer <token>" header.
+// The boolean is false if the header is absent or not a non-empty Bearer scheme.
+func bearerToken(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return "", false
 	}
-	cn := r.TLS.PeerCertificates[0].Subject.CommonName
-	tenantStr, node, ok := strings.Cut(cn, ":")
-	if !ok || tenantStr == "" || node == "" {
-		return authResult{}, http.StatusUnauthorized, "client certificate has no valid identity"
+	const prefix = "Bearer "
+	// Scheme match is case-insensitive per RFC 7235; the token itself is opaque.
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return "", false
 	}
-	if controller.TenantID(tenantStr) != h.tenant {
-		// A cert minted for a different tenant must never act in this tenant. Under
-		// single-tenant v1 every legitimate cert carries the configured tenant; a
-		// mismatch is an authorization failure, not a malformed request.
-		return authResult{}, http.StatusForbidden, "certificate tenant not authorized"
+	tok := strings.TrimSpace(h[len(prefix):])
+	if tok == "" {
+		return "", false
 	}
-	return authResult{tenant: h.tenant, node: node}, 0, ""
+	return tok, true
 }
 
-// requireNode wraps an agent handler: it authenticates the caller (any verified
-// node cert is accepted) and injects tenant+node into the context. The wrapped
-// handler reads the node from the context — never from the request — so a node can
-// only act as itself.
+// authenticateNode resolves the caller's per-node bearer token to its node
+// identity. It returns the parsed identity, or an HTTP status + message to reject
+// with. It enforces:
+//
+//	401 — no bearer token, or the token does not resolve to an active node.
+//
+// The lookup is hash-keyed: only the hex SHA-256 of the token is ever compared (the
+// Store holds APITokenHash, never plaintext). Per the Store contract,
+// LookupNodeByAPIToken returns ErrTokenInvalid whenever the presented hash does not
+// resolve to an APPROVED node whose own APITokenHash still matches — i.e. an unmapped
+// hash, a stale/rotated hash, or a non-approved (pending/revoked) node all surface as
+// the same opaque 401. There is therefore no separate revoked-node branch here: a
+// revoked node's token is indistinguishable from any other invalid token, which is
+// the desired behaviour (a revoked credential simply stops resolving).
+func (h *ControllerHandler) authenticateNode(r *http.Request) (authResult, int, string) {
+	tok, ok := bearerToken(r)
+	if !ok {
+		return authResult{}, http.StatusUnauthorized, "bearer token required"
+	}
+	node, err := h.store.LookupNodeByAPIToken(r.Context(), h.tenant, controller.HashToken(tok))
+	if err != nil {
+		// ErrTokenInvalid covers an unmapped/stale token AND any non-approved node
+		// (Store contract); either way the caller is not an authenticated active node.
+		return authResult{}, http.StatusUnauthorized, "invalid bearer token"
+	}
+	return authResult{tenant: h.tenant, node: node.NodeID}, 0, ""
+}
+
+// requireNode wraps an agent handler: it authenticates the caller via its per-node
+// bearer token and injects tenant+node into the context. The wrapped handler reads
+// the node from the context — never from the request — so a node can only act as
+// itself.
 func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		auth, status, msg := h.authenticate(r)
+		auth, status, msg := h.authenticateNode(r)
 		if status != 0 {
 			writeError(w, status, msg)
-			return
-		}
-		// Active-registry gate: a valid cert is necessary but not sufficient. A node
-		// with no active registry record — never enrolled, or flipped to NodeRevoked —
-		// is refused, so revocation takes effect IMMEDIATELY over the network (the dev
-		// CA has no CRL/OCSP). Fleet-wide eviction at stage time remains the primary
-		// revocation mechanism (deploy.md); this closes the residual cert-TTL window.
-		node, err := h.store.GetNode(r.Context(), auth.tenant, auth.node)
-		if err != nil || node.Status == controller.NodeRevoked {
-			writeError(w, http.StatusForbidden, "node is not an active registered node")
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, auth.tenant)
@@ -124,23 +137,27 @@ func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-// requireOperator wraps an operator-only handler: it authenticates the caller and
-// additionally requires the cert's node component to equal the configured operator
-// identity. A normal node cert on an operator route is a 403 — a node can never
-// perform an operator action (update-topology/stage/promote).
-func (h *ControllerHandler) requireOperator(next http.HandlerFunc) http.HandlerFunc {
+// operatorAuth wraps an operator-only handler. It requires a bearer token whose
+// hex SHA-256 equals the configured operator token hash, compared in constant time
+// (crypto/subtle) so a timing side-channel cannot leak the secret. A missing token
+// is a 401 ("who are you"); a present-but-wrong token (including a normal node
+// token) is a 403 ("you may not"). It injects the configured tenant and the
+// operator identity into the context so the wrapped handlers read a uniform
+// identity. A node can never perform an operator action.
+func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		auth, status, msg := h.authenticate(r)
-		if status != 0 {
-			writeError(w, status, msg)
+		tok, ok := bearerToken(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "bearer token required")
 			return
 		}
-		if auth.node != h.operatorName {
+		presented := controller.HashToken(tok)
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(h.operatorTokenHash)) != 1 {
 			writeError(w, http.StatusForbidden, "operator privileges required")
 			return
 		}
-		ctx := context.WithValue(r.Context(), ctxKeyTenant, auth.tenant)
-		ctx = context.WithValue(ctx, ctxKeyNode, auth.node)
+		ctx := context.WithValue(r.Context(), ctxKeyTenant, h.tenant)
+		ctx = context.WithValue(ctx, ctxKeyNode, h.operatorName)
 		next(w, r.WithContext(ctx))
 	}
 }

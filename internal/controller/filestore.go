@@ -28,6 +28,7 @@ import (
 //	bundles/<nodeID>.staged.json        the node's staged SignedBundle (if any)
 //	bundles/<nodeID>.current.json       the node's current SignedBundle (if any)
 //	tokens/<tokenHash>.json             one EnrollmentToken record (keyed by hash)
+//	apitokens/<hash>.json               node API token reverse index ({NodeID}), keyed by hash
 //	generation.json                     the tenant's current generation counter
 //	audit.json                          the full []AuditEntry, in Seq order
 //
@@ -90,7 +91,7 @@ func (fs *FileStore) ensureTenantDir(t TenantID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, sub := range []string{"", "nodes", "bundles", "tokens"} {
+	for _, sub := range []string{"", "nodes", "bundles", "tokens", "apitokens"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return "", fmt.Errorf("controller: create tenant dir: %w", err)
 		}
@@ -125,6 +126,17 @@ func (fs *FileStore) tokenPath(dir, tokenHash string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "tokens", tc+".json"), nil
+}
+
+// apiTokenPath returns the on-disk path for a node API token's reverse-index entry
+// after validating the hash is a safe single path component (a hex SHA-256 in
+// practice, sanitized like any untrusted key to prevent path traversal).
+func (fs *FileStore) apiTokenPath(dir, tokenHash string) (string, error) {
+	tc, err := sanitizeComponent("api token hash", tokenHash)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "apitokens", tc+".json"), nil
 }
 
 // --- atomic JSON IO ---------------------------------------------------------
@@ -165,6 +177,12 @@ func readJSON(path string, v any) error {
 // generationFile is the on-disk shape of generation.json.
 type generationFile struct {
 	Generation int64 `json:"generation"`
+}
+
+// apiTokenIndex is the on-disk shape of apitokens/<hash>.json: the reverse index
+// from a node API token's hash to the owning NodeID.
+type apiTokenIndex struct {
+	NodeID string `json:"node_id"`
 }
 
 // readGeneration returns the tenant's current generation, defaulting to 0 when
@@ -285,8 +303,9 @@ func (fs *FileStore) listNodesLocked(dir string) ([]Node, error) {
 	return out, nil
 }
 
-// SetAppliedGeneration records what an agent reported applying.
-func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum string) error {
+// SetAppliedGeneration records what an agent reported applying (generation,
+// checksum, and health).
+func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -310,6 +329,7 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 	}
 	n.AppliedGeneration = gen
 	n.LastChecksum = checksum
+	n.LastHealth = health
 	return writeJSONAtomic(p, n)
 }
 
@@ -677,6 +697,148 @@ func (fs *FileStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tok
 	consumed := now
 	tok.ConsumedAt = &consumed
 	return writeJSONAtomic(p, tok)
+}
+
+// ========================== Node API tokens ================================
+
+// IssueNodeAPIToken stamps tokenHash onto the node record's APITokenHash AND writes
+// the reverse index apitokens/<hash>.json ({node_id}) under the mutex. It returns
+// ErrNotFound if no node record exists for nodeID. Rotation is self-cleaning: if the
+// node already carried a different APITokenHash, that prior apitokens/<oldhash>.json
+// entry is removed before the new one is written (a not-exist removal is tolerated),
+// so a rotated (stale) token leaves no orphan index file. Each write is individually
+// atomic (temp-file + rename); the in-process mutex makes the sequence logically
+// atomic for any other caller of this Store.
+func (fs *FileStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	np, err := fs.nodePath(dir, nodeID)
+	if err != nil {
+		return err
+	}
+	var n Node
+	if err := readJSON(np, &n); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	ip, err := fs.apiTokenPath(dir, tokenHash)
+	if err != nil {
+		return err
+	}
+	// Drop any prior reverse-index file for this node's old token so a rotated
+	// token can never linger and resolve to the node.
+	if n.APITokenHash != "" && n.APITokenHash != tokenHash {
+		oldIP, err := fs.apiTokenPath(dir, n.APITokenHash)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(oldIP); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("controller: delete stale api token index: %w", err)
+		}
+	}
+	n.APITokenHash = tokenHash
+	if err := writeJSONAtomic(np, n); err != nil {
+		return err
+	}
+	return writeJSONAtomic(ip, apiTokenIndex{NodeID: nodeID})
+}
+
+// LookupNodeByAPIToken resolves a presented token's hash to its Node by reading the
+// reverse index apitokens/<hash>.json, then the referenced node record, self-
+// consistently: it returns ErrTokenInvalid unless the index resolves to a live node
+// whose own APITokenHash still equals tokenHash AND whose Status is NodeApproved.
+// This rejects an absent index entry, a missing node record, a stale/orphaned index
+// file that no longer matches the node's current token, and any non-approved
+// (pending or revoked) node.
+func (fs *FileStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error) {
+	if err := ctx.Err(); err != nil {
+		return Node{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return Node{}, err
+	}
+	ip, err := fs.apiTokenPath(dir, tokenHash)
+	if err != nil {
+		return Node{}, err
+	}
+	var idx apiTokenIndex
+	if err := readJSON(ip, &idx); err != nil {
+		if os.IsNotExist(err) {
+			return Node{}, ErrTokenInvalid
+		}
+		return Node{}, err
+	}
+	np, err := fs.nodePath(dir, idx.NodeID)
+	if err != nil {
+		return Node{}, err
+	}
+	var n Node
+	if err := readJSON(np, &n); err != nil {
+		if os.IsNotExist(err) {
+			return Node{}, ErrTokenInvalid
+		}
+		return Node{}, err
+	}
+	if n.APITokenHash != tokenHash || n.Status != NodeApproved {
+		return Node{}, ErrTokenInvalid
+	}
+	return n, nil
+}
+
+// RevokeNodeAPIToken clears the node record's APITokenHash and deletes the reverse
+// index entry, immediately invalidating the bearer token. It is idempotent: a
+// missing node, or a node with no issued token, is a no-op success (no ErrNotFound).
+func (fs *FileStore) RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return err
+	}
+	np, err := fs.nodePath(dir, nodeID)
+	if err != nil {
+		return err
+	}
+	var n Node
+	if err := readJSON(np, &n); err != nil {
+		if os.IsNotExist(err) {
+			return nil // idempotent: no node, nothing to revoke
+		}
+		return err
+	}
+	if n.APITokenHash == "" {
+		return nil // idempotent: no issued token
+	}
+	ip, err := fs.apiTokenPath(dir, n.APITokenHash)
+	if err != nil {
+		return err
+	}
+	n.APITokenHash = ""
+	if err := writeJSONAtomic(np, n); err != nil {
+		return err
+	}
+	if err := os.Remove(ip); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("controller: delete api token index: %w", err)
+	}
+	return nil
 }
 
 // ================================ Audit ====================================

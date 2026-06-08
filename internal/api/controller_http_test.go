@@ -1,36 +1,33 @@
 package api
 
 // controller_http_test.go is the in-process integration test for the networked
-// controller HTTP surface (plan-4.3b). It exercises the real TLS 1.3 + mTLS stack
-// end-to-end with the ephemeral dev CA and a MemStore — no external process, no
-// network beyond loopback — covering:
+// controller HTTP surface (plan-4.5). It exercises the bearer-token + plain-HTTP +
+// two-mux model end-to-end with a MemStore — no external process, no network beyond
+// loopback, no TLS — covering:
 //
-//	(1) ENROLL over a certless client (RootCAs trusts the dev CA, no client cert):
-//	    operator pre-creates a single-use token, the node generates an Ed25519 mTLS
-//	    key + CSR (CN "<tenant>:node-1"), POSTs /enroll, and gets back a client cert.
-//	(2) an mTLS node client built from that issued cert.
+//	(1) ENROLL over the AGENT mux with NO auth: the operator mints a single-use
+//	    enrollment token (via the operator-token /enrollment-token route), the node
+//	    POSTs /enroll with that token + its WG public key, and gets back a per-node
+//	    api_token.
+//	(2) the node uses its api_token as a Bearer credential on the agent routes.
 //	(3) GET /config → 404 before any promote.
-//	(4) an OPERATOR mTLS client (CN "<tenant>:operator", issued via IssueClientCert)
-//	    drives /update-topology → /stage → /promote.
-//	(5) the node client: GET /config → 200 with the bundle; /poll?after=0 → the new
-//	    generation; a /poll already at the current generation (the handler's poll
+//	(4) the OPERATOR (authenticated by the shared operator token) drives
+//	    /update-topology → /stage → /promote on the OPERATOR mux.
+//	(5) the node: GET /config → 200 with the bundle; /poll?after=0 → the new
+//	    generation; /poll already at the current generation (the handler's poll
 //	    deadline is shrunk for the test) and no promote → 204; POST /report → ok, and
 //	    GetNode shows the applied generation.
-//	(6) AUTH: a certless client on /config → 401; the node cert on /stage → 403.
+//	(6) AUTH: an absent/wrong bearer on an agent route → 401/403; a node token on an
+//	    operator route → 403; an absent token on an operator route → 401.
+//	(7) NODE-ACTS-AS-ITSELF: two enrolled nodes get DIFFERENT /config bundles.
 //
-// Real x509/ed25519 throughout; stdlib only.
+// Plain HTTP throughout (httptest.NewServer); stdlib only.
 
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,128 +42,49 @@ import (
 
 const testTenant = controller.TenantID("acme")
 
-// ctlTestEnv bundles the in-process controller server and its dependencies so the
-// individual phases can reach the store and CA directly (e.g. to assert GetNode).
+// testOperatorToken is the plaintext operator bearer token the test handler is built
+// with. The handler stores only its hash; the test presents the plaintext.
+const testOperatorToken = "op-secret-token-for-tests"
+
+// ctlTestEnv bundles the in-process controller servers (two plain-HTTP httptest
+// servers for the two muxes) and the shared store so phases can reach the store
+// directly (e.g. to assert GetNode).
 type ctlTestEnv struct {
-	srv   *httptest.Server
-	store controller.Store
-	ca    *controller.DevCA
+	opSrv    *httptest.Server // operator/panel mux
+	agentSrv *httptest.Server // agent mux
+	store    controller.Store
 }
 
-// newCtlTestEnv stands up the controller over a real TLS 1.3 + mTLS httptest server
-// backed by a MemStore and an ephemeral dev CA. The server's TLS config is the very
-// config the production path builds (DevCA.ServerTLSConfig), so the test exercises
-// VerifyClientCertIfGiven for real.
+// newCtlTestEnv stands up the controller over two plain-HTTP httptest servers (one
+// per mux) backed by a MemStore. The handler is built with the operator token's
+// hash, exactly as the production path does.
 func newCtlTestEnv(t *testing.T) *ctlTestEnv {
 	t.Helper()
-	now := time.Now()
 
 	store := controller.NewMemStore()
-	ca, err := controller.NewDevCA(testTenant, now, 24*time.Hour, 12*time.Hour)
-	if err != nil {
-		t.Fatalf("NewDevCA: %v", err)
-	}
-	serverCert, err := ca.IssueServerCert("127.0.0.1", now)
-	if err != nil {
-		t.Fatalf("IssueServerCert: %v", err)
-	}
-
-	ch := NewControllerHandler(store, ca, testTenant, DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
 	// Shrink the server-side /poll long-poll deadline so the timeout-204 path returns
 	// promptly instead of waiting the production ~55s. The server (not the client) is
-	// what produces the 204, so this is the right knob: a client-side context deadline
-	// would instead surface as a transport error, never a 204 response.
+	// what produces the 204, so this is the right knob.
 	ch.pollDeadline = 250 * time.Millisecond
-	mux := http.NewServeMux()
-	ch.Routes(mux)
 
-	srv := httptest.NewUnstartedServer(mux)
-	srv.TLS = ca.ServerTLSConfig(serverCert)
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
+	opMux := http.NewServeMux()
+	ch.RegisterOperatorRoutes(opMux)
+	agentMux := http.NewServeMux()
+	ch.RegisterAgentRoutes(agentMux)
 
-	return &ctlTestEnv{srv: srv, store: store, ca: ca}
+	opSrv := httptest.NewServer(opMux)
+	agentSrv := httptest.NewServer(agentMux)
+	t.Cleanup(opSrv.Close)
+	t.Cleanup(agentSrv.Close)
+
+	return &ctlTestEnv{opSrv: opSrv, agentSrv: agentSrv, store: store}
 }
 
-// certlessClient returns an HTTPS client that trusts the dev CA but presents NO
-// client cert — the shape /enroll must accept under VerifyClientCertIfGiven.
-func (e *ctlTestEnv) certlessClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    e.ca.CACertPool(),
-				MinVersion: tls.VersionTLS13,
-			},
-		},
-	}
-}
-
-// mtlsClient returns an HTTPS client that trusts the dev CA AND presents the given
-// client cert — the shape every mTLS route requires.
-func (e *ctlTestEnv) mtlsClient(cert tls.Certificate) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:      e.ca.CACertPool(),
-				Certificates: []tls.Certificate{cert},
-				MinVersion:   tls.VersionTLS13,
-			},
-		},
-	}
-}
-
-// genMTLSKeyAndCSR generates a fresh Ed25519 mTLS keypair and a self-signed CSR with
-// CN cn. It returns the CSR DER and the private key (the node keeps the key; only the
-// CSR is sent to the controller — the controller never sees the private key).
-func genMTLSKeyAndCSR(t *testing.T, cn string) ([]byte, ed25519.PrivateKey) {
-	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("ed25519.GenerateKey: %v", err)
-	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: cn},
-	}, priv)
-	if err != nil {
-		t.Fatalf("CreateCertificateRequest(%s): %v", cn, err)
-	}
-	return csrDER, priv
-}
-
-// clientCertFromPEM assembles a tls.Certificate from an issued client-cert PEM and
-// the private key the node generated for the CSR. This is what an enrolled node /
-// the operator presents on subsequent mTLS calls.
-func clientCertFromPEM(t *testing.T, certPEM []byte, priv ed25519.PrivateKey) tls.Certificate {
-	t.Helper()
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatalf("X509KeyPair: %v", err)
-	}
-	return cert
-}
-
-// issueOperatorCert mints an operator client cert (CN "<tenant>:operator") by
-// driving the same CSR → IssueClientCert path a node uses, so the operator identity
-// is a real cert chaining to the dev CA.
-func (e *ctlTestEnv) issueOperatorCert(t *testing.T) tls.Certificate {
-	t.Helper()
-	cn := string(testTenant) + ":" + DefaultOperatorName
-	csrDER, priv := genMTLSKeyAndCSR(t, cn)
-	certPEM, _, err := e.ca.IssueClientCert(csrDER, DefaultOperatorName, time.Now())
-	if err != nil {
-		t.Fatalf("IssueClientCert(operator): %v", err)
-	}
-	return clientCertFromPEM(t, certPEM, priv)
-}
-
-// doJSON performs a request with an optional JSON body and decodes a JSON response
-// into out (when out != nil). It returns the status code.
-func doJSON(t *testing.T, client *http.Client, method, url string, body any, out any) int {
+// doJSON performs a request with an optional Bearer token and optional JSON body,
+// decoding a JSON response into out (when out != nil and status is 200). It returns
+// the status code. token == "" omits the Authorization header.
+func doJSON(t *testing.T, method, url, token string, body any, out any) int {
 	t.Helper()
 	var rdr io.Reader
 	if body != nil {
@@ -183,7 +101,10 @@ func doJSON(t *testing.T, client *http.Client, method, url string, body any, out
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := client.Do(req)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
@@ -195,6 +116,28 @@ func doJSON(t *testing.T, client *http.Client, method, url string, body any, out
 	} else {
 		io.Copy(io.Discard, resp.Body)
 	}
+	return resp.StatusCode
+}
+
+// doRaw performs a request with a raw (non-JSON-marshaled) body and an optional
+// Bearer token, returning the status code. Used for /update-topology, which stores
+// the topology bytes verbatim.
+func doRaw(t *testing.T, method, url, token string, body []byte) int {
+	t.Helper()
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest %s %s: %v", method, url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
 }
 
@@ -225,76 +168,89 @@ func smallTopo() *model.Topology {
 	}
 }
 
-// enrollNode runs the full /enroll ceremony for nodeID over a certless client: the
-// operator mints a token (and persists it), the node generates a key+CSR and a WG
-// public key, POSTs /enroll, and the resulting client cert is assembled. It returns
-// the assembled mTLS client cert.
-func (e *ctlTestEnv) enrollNode(t *testing.T, nodeID string) tls.Certificate {
+// agentURL builds an agent-mux URL for the given controller path suffix.
+func (e *ctlTestEnv) agentURL(suffix string) string {
+	return e.agentSrv.URL + "/api/v1/controller/" + suffix
+}
+
+// opURL builds an operator-mux URL for the given controller path suffix.
+func (e *ctlTestEnv) opURL(suffix string) string {
+	return e.opSrv.URL + "/api/v1/controller/" + suffix
+}
+
+// mintEnrollmentToken drives the operator-token /enrollment-token route to mint a
+// single-use token for nodeID and returns the plaintext.
+func (e *ctlTestEnv) mintEnrollmentToken(t *testing.T, nodeID string) string {
 	t.Helper()
-	ctx := context.Background()
-
-	// Operator side: mint + persist a single-use token scoped to nodeID.
-	plaintext, tok := controller.NewEnrollmentToken(nodeID, time.Hour, time.Now())
-	if err := e.store.CreateEnrollmentToken(ctx, testTenant, tok); err != nil {
-		t.Fatalf("CreateEnrollmentToken(%s): %v", nodeID, err)
+	var resp enrollmentTokenResponseJSON
+	status := doJSON(t, http.MethodPost, e.opURL("enrollment-token"), testOperatorToken, enrollmentTokenRequestJSON{
+		NodeID:     nodeID,
+		TTLSeconds: 3600,
+	}, &resp)
+	if status != http.StatusOK {
+		t.Fatalf("enrollment-token(%s): status %d, want 200", nodeID, status)
 	}
+	if resp.Token == "" {
+		t.Fatalf("enrollment-token(%s): empty token", nodeID)
+	}
+	return resp.Token
+}
 
-	// Node side: generate the mTLS key + CSR (CN "<tenant>:<node>") and a WG pubkey.
-	cn := string(testTenant) + ":" + nodeID
-	csrDER, priv := genMTLSKeyAndCSR(t, cn)
+// enrollNode runs the full /enroll ceremony for nodeID over the agent mux with NO
+// auth: the operator mints a token, the node generates a WG public key, POSTs
+// /enroll, and the per-node api_token is returned. It returns that api_token.
+func (e *ctlTestEnv) enrollNode(t *testing.T, nodeID string) string {
+	t.Helper()
+	enrollTok := e.mintEnrollmentToken(t, nodeID)
+
 	wgPriv, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
 		t.Fatalf("wg GeneratePrivateKey: %v", err)
 	}
 
 	var resp enrollResponseJSON
-	status := doJSON(t, e.certlessClient(), http.MethodPost, e.srv.URL+"/api/v1/controller/enroll", enrollRequestJSON{
-		Token:       plaintext,
+	status := doJSON(t, http.MethodPost, e.agentURL("enroll"), "", enrollRequestJSON{
+		Token:       enrollTok,
 		NodeID:      nodeID,
-		CSRDER:      base64.StdEncoding.EncodeToString(csrDER),
 		WGPublicKey: wgPriv.PublicKey().String(),
 	}, &resp)
 	if status != http.StatusOK {
 		t.Fatalf("enroll %s: status %d, want 200", nodeID, status)
 	}
-	if resp.ClientCertPEM == "" || resp.Fingerprint == "" {
-		t.Fatalf("enroll %s: empty cert/fingerprint in response", nodeID)
+	if resp.ApiToken == "" {
+		t.Fatalf("enroll %s: empty api_token in response", nodeID)
 	}
-
-	return clientCertFromPEM(t, []byte(resp.ClientCertPEM), priv)
+	if resp.NodeID != nodeID {
+		t.Fatalf("enroll %s: response node_id %q, want %q", nodeID, resp.NodeID, nodeID)
+	}
+	return resp.ApiToken
 }
 
-// TestControllerHTTP_EnrollMTLSConfigPollReport is the full happy-path + auth
+// TestControllerHTTP_EnrollConfigPollReport is the full happy-path + auth
 // integration test described in the file header.
-func TestControllerHTTP_EnrollMTLSConfigPollReport(t *testing.T) {
+func TestControllerHTTP_EnrollConfigPollReport(t *testing.T) {
 	env := newCtlTestEnv(t)
-	base := env.srv.URL + "/api/v1/controller/"
 
-	// (1)+(2) Enroll both nodes over certless clients; build their mTLS clients.
-	node1Cert := env.enrollNode(t, "node-1")
-	node2Cert := env.enrollNode(t, "node-2")
-	node1 := env.mtlsClient(node1Cert)
-	node2 := env.mtlsClient(node2Cert)
+	// (1)+(2) Enroll both nodes over the agent mux (no auth); capture their tokens.
+	node1Token := env.enrollNode(t, "node-1")
+	node2Token := env.enrollNode(t, "node-2")
 
 	// (3) GET /config before any promote → 404.
-	if status := doJSON(t, node1, http.MethodGet, base+"config", nil, nil); status != http.StatusNotFound {
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, nil); status != http.StatusNotFound {
 		t.Fatalf("config before promote: status %d, want 404", status)
 	}
 
-	// (4) Operator drives update-topology → stage → promote.
-	op := env.mtlsClient(env.issueOperatorCert(t))
-
+	// (4) Operator (operator token) drives update-topology → stage → promote.
 	topoJSON, err := json.Marshal(smallTopo())
 	if err != nil {
 		t.Fatalf("marshal topology: %v", err)
 	}
-	// update-topology takes the raw topology JSON as the body.
-	if status := doRaw(t, op, http.MethodPost, base+"update-topology", topoJSON); status != http.StatusOK {
+	if status := doRaw(t, http.MethodPost, env.opURL("update-topology"), testOperatorToken, topoJSON); status != http.StatusOK {
 		t.Fatalf("update-topology: status %d, want 200", status)
 	}
 
 	var stage stageResponseJSON
-	if status := doJSON(t, op, http.MethodPost, base+"stage", struct{}{}, &stage); status != http.StatusOK {
+	if status := doJSON(t, http.MethodPost, env.opURL("stage"), testOperatorToken, struct{}{}, &stage); status != http.StatusOK {
 		t.Fatalf("stage: status %d, want 200", status)
 	}
 	if len(stage.Staged) != 2 {
@@ -302,7 +258,7 @@ func TestControllerHTTP_EnrollMTLSConfigPollReport(t *testing.T) {
 	}
 
 	var promote generationResponseJSON
-	if status := doJSON(t, op, http.MethodPost, base+"promote", struct{}{}, &promote); status != http.StatusOK {
+	if status := doJSON(t, http.MethodPost, env.opURL("promote"), testOperatorToken, struct{}{}, &promote); status != http.StatusOK {
 		t.Fatalf("promote: status %d, want 200", status)
 	}
 	if promote.Generation < 1 {
@@ -311,7 +267,7 @@ func TestControllerHTTP_EnrollMTLSConfigPollReport(t *testing.T) {
 
 	// (5) Node fetches its config → 200 with a non-empty bundle.
 	var cfg configResponseJSON
-	if status := doJSON(t, node1, http.MethodGet, base+"config", nil, &cfg); status != http.StatusOK {
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, &cfg); status != http.StatusOK {
 		t.Fatalf("config after promote: status %d, want 200", status)
 	}
 	if cfg.Generation != promote.Generation {
@@ -337,7 +293,7 @@ func TestControllerHTTP_EnrollMTLSConfigPollReport(t *testing.T) {
 
 	// /poll?after=0 → returns the current generation immediately (already promoted).
 	var poll pollResponseJSON
-	if status := doJSON(t, node1, http.MethodGet, base+"poll?after=0", nil, &poll); status != http.StatusOK {
+	if status := doJSON(t, http.MethodGet, env.agentURL("poll?after=0"), node1Token, nil, &poll); status != http.StatusOK {
 		t.Fatalf("poll after=0: status %d, want 200", status)
 	}
 	if poll.Generation != promote.Generation {
@@ -347,12 +303,12 @@ func TestControllerHTTP_EnrollMTLSConfigPollReport(t *testing.T) {
 	// A /poll already AT the current generation with no further promote must time out
 	// on the server's (test-shrunk) deadline → 204. This drives the timeout branch of
 	// WaitForGeneration; the server returns 204 so the agent re-polls.
-	if status := doJSON(t, node1, http.MethodGet, base+"poll?after="+itoa(promote.Generation), nil, nil); status != http.StatusNoContent {
+	if status := doJSON(t, http.MethodGet, env.agentURL("poll?after="+itoa(promote.Generation)), node1Token, nil, nil); status != http.StatusNoContent {
 		t.Fatalf("poll timeout: status %d, want 204", status)
 	}
 
 	// POST /report → ok; GetNode reflects the applied generation.
-	if status := doJSON(t, node1, http.MethodPost, base+"report", reportRequestJSON{
+	if status := doJSON(t, http.MethodPost, env.agentURL("report"), node1Token, reportRequestJSON{
 		AppliedGeneration: promote.Generation,
 		Checksum:          "deadbeef",
 		Health:            "ok",
@@ -371,32 +327,36 @@ func TestControllerHTTP_EnrollMTLSConfigPollReport(t *testing.T) {
 	}
 
 	// (6) AUTH rejections.
-	// A certless client on /config → 401 (no client cert).
-	if status := doJSON(t, env.certlessClient(), http.MethodGet, base+"config", nil, nil); status != http.StatusUnauthorized {
-		t.Fatalf("certless config: status %d, want 401", status)
+	// No bearer on an agent route → 401.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), "", nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("no-token config: status %d, want 401", status)
 	}
-	// A NODE cert on an operator-only route (/stage) → 403.
-	if status := doJSON(t, node2, http.MethodPost, base+"stage", struct{}{}, nil); status != http.StatusForbidden {
-		t.Fatalf("node cert on /stage: status %d, want 403", status)
+	// A garbage bearer on an agent route → 401 (resolves to no node).
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), "not-a-real-token", nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("bad-token config: status %d, want 401", status)
 	}
-}
+	// A NODE token on an operator-only route (/stage) → 403 (wrong, but present).
+	if status := doJSON(t, http.MethodPost, env.opURL("stage"), node2Token, struct{}{}, nil); status != http.StatusForbidden {
+		t.Fatalf("node token on /stage: status %d, want 403", status)
+	}
+	// No token on an operator-only route → 401.
+	if status := doJSON(t, http.MethodPost, env.opURL("stage"), "", struct{}{}, nil); status != http.StatusUnauthorized {
+		t.Fatalf("no token on /stage: status %d, want 401", status)
+	}
 
-// doRaw performs a request with a raw (non-JSON-marshaled) body and returns the
-// status code. Used for /update-topology, which stores the topology bytes verbatim.
-func doRaw(t *testing.T, client *http.Client, method, url string, body []byte) int {
-	t.Helper()
-	req, err := http.NewRequest(method, url, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("NewRequest %s %s: %v", method, url, err)
+	// Operator read routes work with the operator token.
+	var nodes []nodeJSON
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("nodes: status %d, want 200", status)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
+	if len(nodes) != 2 {
+		t.Fatalf("nodes: got %d, want 2", len(nodes))
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode
+	for _, n := range nodes {
+		if !n.HasWGPublicKey {
+			t.Fatalf("nodes: %s reports no WG public key", n.NodeID)
+		}
+	}
 }
 
 // itoa is a tiny int64→string helper for building the poll cursor query without
@@ -407,14 +367,12 @@ func itoa(n int64) string {
 
 // TestControllerHTTP_ReservedOperatorName confirms a node can never enroll AS the
 // operator: /enroll rejects NodeID == the operator identity (before any token work),
-// so no node-enrollment path can mint a cert carrying operator privileges.
+// so no node-enrollment path can mint a node colliding with the operator identity.
 func TestControllerHTTP_ReservedOperatorName(t *testing.T) {
 	env := newCtlTestEnv(t)
-	csrDER, _ := genMTLSKeyAndCSR(t, string(testTenant)+":"+DefaultOperatorName)
-	status := doJSON(t, env.certlessClient(), http.MethodPost, env.srv.URL+"/api/v1/controller/enroll", enrollRequestJSON{
+	status := doJSON(t, http.MethodPost, env.agentURL("enroll"), "", enrollRequestJSON{
 		Token:       "rejected-before-token-use",
 		NodeID:      DefaultOperatorName,
-		CSRDER:      base64.StdEncoding.EncodeToString(csrDER),
 		WGPublicKey: "unused",
 	}, nil)
 	if status != http.StatusForbidden {
@@ -423,39 +381,37 @@ func TestControllerHTTP_ReservedOperatorName(t *testing.T) {
 }
 
 // TestControllerHTTP_NodeActsOnlyAsItself confirms /config returns the CALLER's own
-// bundle (derived from the verified cert) and that two different nodes get two
+// bundle (derived from its bearer token) and that two different nodes get two
 // different bundles — there is no request field by which node A could obtain node B's
 // config.
 func TestControllerHTTP_NodeActsOnlyAsItself(t *testing.T) {
 	env := newCtlTestEnv(t)
-	base := env.srv.URL + "/api/v1/controller/"
-	node1 := env.mtlsClient(env.enrollNode(t, "node-1"))
-	node2 := env.mtlsClient(env.enrollNode(t, "node-2"))
+	node1Token := env.enrollNode(t, "node-1")
+	node2Token := env.enrollNode(t, "node-2")
 
-	op := env.mtlsClient(env.issueOperatorCert(t))
 	topoJSON, err := json.Marshal(smallTopo())
 	if err != nil {
 		t.Fatalf("marshal topology: %v", err)
 	}
-	if status := doRaw(t, op, http.MethodPost, base+"update-topology", topoJSON); status != http.StatusOK {
+	if status := doRaw(t, http.MethodPost, env.opURL("update-topology"), testOperatorToken, topoJSON); status != http.StatusOK {
 		t.Fatalf("update-topology: status %d, want 200", status)
 	}
-	if status := doJSON(t, op, http.MethodPost, base+"stage", struct{}{}, &stageResponseJSON{}); status != http.StatusOK {
+	if status := doJSON(t, http.MethodPost, env.opURL("stage"), testOperatorToken, struct{}{}, &stageResponseJSON{}); status != http.StatusOK {
 		t.Fatalf("stage: status %d, want 200", status)
 	}
-	if status := doJSON(t, op, http.MethodPost, base+"promote", struct{}{}, &generationResponseJSON{}); status != http.StatusOK {
+	if status := doJSON(t, http.MethodPost, env.opURL("promote"), testOperatorToken, struct{}{}, &generationResponseJSON{}); status != http.StatusOK {
 		t.Fatalf("promote: status %d, want 200", status)
 	}
 
 	var cfg1, cfg2 configResponseJSON
-	if status := doJSON(t, node1, http.MethodGet, base+"config", nil, &cfg1); status != http.StatusOK {
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, &cfg1); status != http.StatusOK {
 		t.Fatalf("node-1 config: status %d, want 200", status)
 	}
-	if status := doJSON(t, node2, http.MethodGet, base+"config", nil, &cfg2); status != http.StatusOK {
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node2Token, nil, &cfg2); status != http.StatusOK {
 		t.Fatalf("node-2 config: status %d, want 200", status)
 	}
 	// Each node received ITS OWN bundle: the router (node-1) and peer (node-2) install
-	// scripts differ. If /config ignored the cert and served one shared bundle, these
+	// scripts differ. If /config ignored the token and served one shared bundle, these
 	// would be identical.
 	if cfg1.Files["install.sh"] == "" || cfg2.Files["install.sh"] == "" {
 		t.Fatalf("a config bundle is missing install.sh (node-1 keys %v, node-2 keys %v)", keysOfMap(cfg1.Files), keysOfMap(cfg2.Files))
@@ -465,36 +421,160 @@ func TestControllerHTTP_NodeActsOnlyAsItself(t *testing.T) {
 	}
 }
 
-// TestControllerHTTP_ForeignClientCertRejected confirms the mTLS layer rejects a client
-// cert that does NOT chain to the controller's dev CA: presenting a cert from a
-// different CA fails the handshake, so authenticate() never even sees it.
-func TestControllerHTTP_ForeignClientCertRejected(t *testing.T) {
-	env := newCtlTestEnv(t)
-	foreignCA, err := controller.NewDevCA(testTenant, time.Now(), time.Hour, time.Hour)
-	if err != nil {
-		t.Fatalf("foreign NewDevCA: %v", err)
-	}
-	csrDER, priv := genMTLSKeyAndCSR(t, string(testTenant)+":node-1")
-	certPEM, _, err := foreignCA.IssueClientCert(csrDER, "node-1", time.Now())
-	if err != nil {
-		t.Fatalf("foreign IssueClientCert: %v", err)
-	}
-	foreignCert := clientCertFromPEM(t, certPEM, priv)
+// TestControllerHTTP_AirGapOpen confirms the air-gap routes stay OPEN and
+// UNAUTHENTICATED even when controller mode is enabled: they live on the operator
+// mux (s.mux) and are never gated by the operator token. Here we drive the full
+// Server (not a bare mux) so the air-gap routes are registered, enable the
+// controller, and confirm /api/health responds with no Authorization header.
+func TestControllerHTTP_AirGapOpen(t *testing.T) {
+	srv := NewServer()
+	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	srv.EnableController(ch)
 
-	// Trust the REAL server CA (so the server is accepted) but present a FOREIGN client
-	// cert the server's ClientCAs does not include.
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
-		RootCAs:      env.ca.CACertPool(),
-		Certificates: []tls.Certificate{foreignCert},
-		MinVersion:   tls.VersionTLS13,
-	}}}
-	req, err := http.NewRequest(http.MethodGet, env.srv.URL+"/api/v1/controller/config", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// Air-gap health: no token, must be 200.
+	if status := doJSON(t, http.MethodGet, ts.URL+"/api/health", "", nil, nil); status != http.StatusOK {
+		t.Fatalf("air-gap /api/health: status %d, want 200 (must stay open)", status)
 	}
-	if resp, err := client.Do(req); err == nil {
-		resp.Body.Close()
-		t.Fatalf("foreign client cert accepted (status %d); the mTLS handshake must reject it", resp.StatusCode)
+	// The operator route on the SAME mux still requires the operator token (401 absent).
+	if status := doJSON(t, http.MethodGet, ts.URL+"/api/v1/controller/nodes", "", nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("operator /nodes without token: status %d, want 401", status)
+	}
+}
+
+// promoteSmallTopo drives the operator update-topology → stage → promote sequence
+// for smallTopo over the operator mux, so the enrolled nodes have a current bundle
+// to fetch on /config. It fails the test on any non-200 step.
+func (e *ctlTestEnv) promoteSmallTopo(t *testing.T) {
+	t.Helper()
+	topoJSON, err := json.Marshal(smallTopo())
+	if err != nil {
+		t.Fatalf("marshal topology: %v", err)
+	}
+	if status := doRaw(t, http.MethodPost, e.opURL("update-topology"), testOperatorToken, topoJSON); status != http.StatusOK {
+		t.Fatalf("update-topology: status %d, want 200", status)
+	}
+	if status := doJSON(t, http.MethodPost, e.opURL("stage"), testOperatorToken, struct{}{}, &stageResponseJSON{}); status != http.StatusOK {
+		t.Fatalf("stage: status %d, want 200", status)
+	}
+	if status := doJSON(t, http.MethodPost, e.opURL("promote"), testOperatorToken, struct{}{}, &generationResponseJSON{}); status != http.StatusOK {
+		t.Fatalf("promote: status %d, want 200", status)
+	}
+}
+
+// TestControllerHTTP_Revoke confirms the operator /revoke route immediately voids a
+// node's bearer credential: the node enrolls and its token works on /config, the
+// operator POSTs /revoke {node_id}, and the SAME token now 401s on /config (the
+// revoke flipped Status to NodeRevoked AND cleared the API token, so the bearer no
+// longer resolves to an approved node). Revoking an unknown node is a 404.
+func TestControllerHTTP_Revoke(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// The freshly enrolled, approved node's token works on /config.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, nil); status != http.StatusOK {
+		t.Fatalf("config before revoke: status %d, want 200", status)
+	}
+
+	// Revoking an unknown node → 404 (nothing to revoke).
+	if status := doJSON(t, http.MethodPost, env.opURL("revoke"), testOperatorToken, revokeRequestJSON{NodeID: "ghost"}, nil); status != http.StatusNotFound {
+		t.Fatalf("revoke unknown node: status %d, want 404", status)
+	}
+
+	// Operator revokes node-1.
+	var rev revokeResponseJSON
+	if status := doJSON(t, http.MethodPost, env.opURL("revoke"), testOperatorToken, revokeRequestJSON{NodeID: "node-1"}, &rev); status != http.StatusOK {
+		t.Fatalf("revoke node-1: status %d, want 200", status)
+	}
+	if rev.NodeID != "node-1" || !rev.Revoked {
+		t.Fatalf("revoke node-1: response %+v, want {node_id:node-1 revoked:true}", rev)
+	}
+
+	// The SAME token now 401s on /config: the bearer credential stops resolving.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("config after revoke: status %d, want 401 (revoked token must stop resolving)", status)
+	}
+
+	// The registry reflects the revoked status and the cleared token hash.
+	node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode(node-1): %v", err)
+	}
+	if node.Status != controller.NodeRevoked {
+		t.Fatalf("GetNode status %q, want %q", node.Status, controller.NodeRevoked)
+	}
+	if node.APITokenHash != "" {
+		t.Fatalf("GetNode APITokenHash %q, want empty after revoke", node.APITokenHash)
+	}
+}
+
+// TestControllerHTTP_ReEnrollRotation confirms re-enrolling a node rotates its bearer
+// token AND invalidates the old one at the lookup chokepoint: node-1 enrolls (token1
+// works), the operator mints a fresh enrollment token and node-1 enrolls again
+// (token2), after which token1 401s and token2 works on /config. This is the
+// re-enroll-leaves-old-token bug: a stale token must never authorize.
+func TestControllerHTTP_ReEnrollRotation(t *testing.T) {
+	env := newCtlTestEnv(t)
+	token1 := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// token1 works on /config.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), token1, nil, nil); status != http.StatusOK {
+		t.Fatalf("config with token1: status %d, want 200", status)
+	}
+
+	// Operator mints a fresh enrollment token; node-1 re-enrolls and gets token2.
+	token2 := env.enrollNode(t, "node-1")
+	if token2 == token1 {
+		t.Fatalf("re-enroll returned the same api_token; expected a rotated token")
+	}
+
+	// token1 (the OLD token) now 401s — rotation invalidated it.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), token1, nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("config with old token1 after re-enroll: status %d, want 401 (stale token must not authorize)", status)
+	}
+
+	// token2 (the NEW token) works.
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), token2, nil, nil); status != http.StatusOK {
+		t.Fatalf("config with new token2: status %d, want 200", status)
+	}
+}
+
+// TestControllerHTTP_HealthSurfaced confirms a node's reported health is persisted and
+// surfaced to the operator: the node POSTs /report with a health string, and the
+// operator GET /nodes view shows it in last_health.
+func TestControllerHTTP_HealthSurfaced(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	const wantHealth = "degraded: babel reconverging"
+	if status := doJSON(t, http.MethodPost, env.agentURL("report"), node1Token, reportRequestJSON{
+		AppliedGeneration: 1,
+		Checksum:          "cafebabe",
+		Health:            wantHealth,
+	}, nil); status != http.StatusOK {
+		t.Fatalf("report: status %d, want 200", status)
+	}
+
+	var nodes []nodeJSON
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("nodes: status %d, want 200", status)
+	}
+	var found bool
+	for _, n := range nodes {
+		if n.NodeID == "node-1" {
+			found = true
+			if n.LastHealth != wantHealth {
+				t.Fatalf("node-1 last_health %q, want %q", n.LastHealth, wantHealth)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("nodes view did not include node-1")
 	}
 }
 

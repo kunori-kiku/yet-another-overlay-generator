@@ -4,16 +4,21 @@ import (
 	"flag"
 	"log"
 	"os"
-	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/api"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
-// Controller-mode environment gates. When BOTH are set, cmd/server builds the
-// controller dependencies (FileStore + ephemeral DevCA) and serves the controller
-// over TLS 1.3 + mTLS. When either is unset, the server is EXACTLY as before:
-// air-gap HTTP only, no controller routes, no TLS.
+// Controller-mode environment gates. When BOTH the state dir and the tenant id are
+// set, cmd/server builds the controller dependencies (FileStore) and serves the
+// controller on two PLAIN-HTTP ports (operator/panel + agent). When either is unset,
+// the server is EXACTLY as before: air-gap HTTP only, no controller routes.
+//
+// In controller mode the operator token is ALSO required: it authenticates every
+// operator route. The server refuses to start in controller mode without it.
+//
+// Transport is plain HTTP on both ports (plan-4.5); TLS is delegated to a reverse
+// proxy (nginx/caddy) and is never forced in-app.
 const (
 	// envControllerStateDir is the FileStore root for controller state. Its presence
 	// (together with the tenant id) turns on controller mode.
@@ -21,21 +26,17 @@ const (
 	// envTenantID is the single-tenant id (single-tenant v1). Pinned into the auth
 	// chokepoint and used to scope every Store operation.
 	envTenantID = "YAOG_TENANT_ID"
-	// envControllerHost names the controller for its TLS server cert SANs. Optional;
-	// "localhost" + 127.0.0.1 are always included regardless.
-	envControllerHost = "YAOG_CONTROLLER_HOST"
-)
-
-// Ephemeral DevCA lifetimes (controller mode). The CA private key is in-memory only
-// and discarded on restart (see enrollment.go), so a restart forces re-enrollment;
-// the TTLs are long enough that a single run never expires mid-operation.
-const (
-	caTTL         = 365 * 24 * time.Hour
-	clientCertTTL = 90 * 24 * time.Hour
+	// envOperatorToken is the operator's bearer token (plaintext). It is hashed
+	// (controller.HashToken) before it reaches the handler; the plaintext is never
+	// stored. REQUIRED in controller mode.
+	envOperatorToken = "YAOG_CONTROLLER_OPERATOR_TOKEN"
+	// envAgentAddr overrides the default agent-port listen address.
+	envAgentAddr = "YAOG_CONTROLLER_AGENT_ADDR"
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "")
+	addr := flag.String("addr", ":8080", "operator/panel + air-gap listen address (plain HTTP)")
+	agentAddr := flag.String("agent-addr", "", "controller agent listen address (plain HTTP); default :9090 or YAOG_CONTROLLER_AGENT_ADDR")
 	flag.Parse()
 
 	stateDir := os.Getenv(envControllerStateDir)
@@ -47,41 +48,49 @@ func main() {
 	// before. The mux and the HTTP serve path are untouched.
 	if stateDir == "" || tenant == "" {
 		if err := server.ListenAndServe(*addr); err != nil {
-			log.Fatalf(": %v", err)
+			log.Fatalf("server: %v", err)
 		}
 		return
 	}
 
-	// Controller mode: build the dependencies and serve over TLS + mTLS.
-	if err := serveController(server, *addr, stateDir, tenant); err != nil {
+	// Controller mode: resolve the agent address (flag > env > default).
+	resolvedAgentAddr := *agentAddr
+	if resolvedAgentAddr == "" {
+		resolvedAgentAddr = os.Getenv(envAgentAddr)
+	}
+	if resolvedAgentAddr == "" {
+		resolvedAgentAddr = ":9090"
+	}
+
+	if err := serveController(server, *addr, resolvedAgentAddr, stateDir, tenant); err != nil {
 		log.Fatalf("controller: %v", err)
 	}
 }
 
-// serveController builds the controller dependencies (FileStore, ephemeral DevCA,
-// server cert + mTLS config), arms the controller routes on the server, and serves
-// over TLS. It is only reached under the controller env gate.
-func serveController(server *api.Server, addr, stateDir, tenant string) error {
-	now := time.Now()
+// serveController builds the controller dependencies (FileStore), arms the
+// controller routes across the server's two muxes, and serves the operator/panel
+// port and the agent port concurrently as plain HTTP. It is only reached under the
+// controller env gate. It returns the first serve error from either port.
+func serveController(server *api.Server, addr, agentAddr, stateDir, tenant string) error {
+	opToken := os.Getenv(envOperatorToken)
+	if opToken == "" {
+		// The operator token gates every operator route; starting without it would
+		// either lock the operator out or (worse) leave the routes unguarded. Fail loud.
+		log.Fatalf("controller: %s is required in controller mode", envOperatorToken)
+	}
 
 	store, err := controller.NewFileStore(stateDir)
 	if err != nil {
 		return err
 	}
 
-	ca, err := controller.NewDevCA(controller.TenantID(tenant), now, caTTL, clientCertTTL)
-	if err != nil {
-		return err
-	}
+	ch := api.NewControllerHandler(store, controller.TenantID(tenant), controller.HashToken(opToken), api.DefaultOperatorName)
+	server.EnableController(ch)
 
-	serverCert, err := ca.IssueServerCert(os.Getenv(envControllerHost), now)
-	if err != nil {
-		return err
-	}
-	tlsConfig := ca.ServerTLSConfig(serverCert)
-
-	ch := api.NewControllerHandler(store, ca, controller.TenantID(tenant), api.DefaultOperatorName)
-	server.EnableController(ch, tlsConfig)
-
-	return server.ListenAndServeTLS(addr)
+	// Serve both ports concurrently; the first error from either wins. A buffered
+	// channel of size 2 ensures the second goroutine's send never blocks on exit.
+	errc := make(chan error, 2)
+	go func() { errc <- server.ListenAndServe(addr) }()
+	go func() { errc <- server.ListenAndServeAgent(agentAddr) }()
+	return <-errc
 }

@@ -1,32 +1,33 @@
 package agent
 
 // controller_client.go is the agent's client for the NETWORKED controller
-// (plan-4.3b), closing the single-tenant loop opened by the configured-source
-// agent (plan-1b). Where DirSource/HTTPSource pull a plain bundle tree, this
-// client speaks the controller's mTLS JSON protocol under /api/v1/controller/:
+// (plan-4.5). The mTLS model (plan-4.3b) was withdrawn: the controller is now
+// served over PLAIN HTTP and authenticated with a PER-NODE BEARER TOKEN, with
+// transport confidentiality delegated to a reverse proxy (nginx/caddy), never
+// forced in-app. This client speaks the controller's JSON protocol under
+// /api/v1/controller/:
 //
-//   - Enroll  (POST /enroll, certless TLS) turns a single-use token + CSR into an
-//     issued mTLS client cert. The agent is configured OUT-OF-BAND with the
-//     controller's CA cert PEM (--controller-ca) and pins it: the Enroll TLS trusts
-//     only that CA, and the response's ca_cert_pem MUST byte-equal the pinned CA or
-//     enrollment is refused. This is the bootstrap-trust anchor for every later call.
-//   - Fetch   (GET /config, mTLS) implements agent.Source: it returns the bundle
-//     files for the caller's node (identity is the cert, not the request).
-//   - Poll    (GET /poll?after=N, mTLS) long-polls for a newer generation.
-//   - Report  (POST /report, mTLS) implements agent.Reporter (best-effort).
+//   - Enroll  (POST /enroll, NO auth) turns a single-use enrollment token + the
+//     node's WireGuard PUBLIC key into a per-node bearer API token. /enroll is the
+//     one route reachable before the node holds a token; the single-use token is the
+//     authentication. The returned api_token is the node's credential for every
+//     later call.
+//   - Fetch   (GET /config, bearer) implements agent.Source: it returns the bundle
+//     files for the caller's node (identity is the token, not the request).
+//   - Poll    (GET /poll?after=N, bearer) long-polls for a newer generation.
+//   - Report  (POST /report, bearer) implements agent.Reporter (best-effort).
 //
-// The production file imports ONLY net/http + crypto/tls + the agent's own types —
-// never internal/api or internal/controller. The wire JSON shapes are mirrored here
-// as small private structs so the agent stays decoupled from the server packages
-// (the test may import them to drive the server, but the client does not).
+// The production file imports ONLY net/http + the agent's own types — never
+// crypto/tls, crypto/x509, internal/api, or internal/controller. The wire JSON
+// shapes are mirrored here as small private structs so the agent stays decoupled
+// from the server packages (the test may import them to drive the server, but the
+// client does not). Only the field tags are load-bearing: they MUST match the
+// server's JSON exactly.
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,7 +43,7 @@ const controllerHTTPTimeout = 30 * time.Second
 // pollHTTPTimeout bounds a single /poll long-poll on the CLIENT side. It must exceed
 // the server's poll deadline (defaultPollDeadline ~55s) so the server's 204 timeout
 // is observed as a response rather than aborted as a client transport error; the
-// margin absorbs handshake + scheduling latency.
+// margin absorbs scheduling latency.
 const pollHTTPTimeout = 90 * time.Second
 
 // controllerBasePath is the URL prefix every controller route lives under. It is
@@ -56,16 +57,14 @@ const controllerBasePath = "/api/v1/controller/"
 // load-bearing (they must match the server's JSON exactly).
 
 type enrollRequestWire struct {
-	Token       string `json:"token"`
-	NodeID      string `json:"node_id"`
-	CSRDER      string `json:"csr_der"` // base64(DER) of the node's mTLS CSR
-	WGPublicKey string `json:"wg_public_key"`
+	EnrollmentToken string `json:"enrollment_token"`
+	NodeID          string `json:"node_id"`
+	WGPublicKey     string `json:"wg_public_key"`
 }
 
 type enrollResponseWire struct {
-	ClientCertPEM string `json:"client_cert_pem"`
-	CACertPEM     string `json:"ca_cert_pem"`
-	Fingerprint   string `json:"fingerprint"`
+	ApiToken string `json:"api_token"`
+	NodeID   string `json:"node_id"`
 }
 
 type configResponseWire struct {
@@ -84,32 +83,25 @@ type reportRequestWire struct {
 }
 
 // EnrollResult is what a successful Enroll hands back to the caller (cmd/agent):
-// the issued client-cert PEM, the CA PEM (already verified to equal the pinned CA),
-// and the issued cert's fingerprint. The caller writes the cert + its mTLS private
-// key to disk and uses them to build the mTLS ControllerClient for `run`.
+// the per-node bearer API token the controller minted. The caller writes the token
+// to disk (0600) and uses it to build the bearer ControllerClient for `run`.
 type EnrollResult struct {
-	// ClientCertPEM is the issued mTLS client certificate, PEM-encoded.
-	ClientCertPEM []byte
-	// CACertPEM is the controller CA, PEM-encoded. It is guaranteed to byte-equal
-	// the pinned CA (Enroll refuses otherwise), so it is safe to persist as-is.
-	CACertPEM []byte
-	// Fingerprint is hex(SHA-256(certDER)) of the issued client cert.
-	Fingerprint string
+	// APIToken is the plaintext per-node bearer token. The controller stores only
+	// its SHA-256 hash; this plaintext is returned exactly once, at enrollment.
+	APIToken string
 }
 
-// ControllerClient speaks the controller's mTLS JSON protocol for one node. It is
-// constructed with the pinned CA PEM (the bootstrap trust anchor) and, after
-// enrollment, the issued client cert. It implements agent.Source (Fetch) and
-// agent.Reporter (Report) so it can drop straight into agent.Run.
+// ControllerClient speaks the controller's plain-HTTP bearer protocol for one node.
+// It is constructed with the node's bearer token (empty before enrollment, for the
+// /enroll call) and presents it on every authed request. It implements agent.Source
+// (Fetch) and agent.Reporter (Report) so it can drop straight into agent.Run.
 type ControllerClient struct {
 	// baseURL is the controller's scheme://host[:port], trailing slash trimmed.
 	baseURL string
-	// caPEM is the pinned controller CA, configured out-of-band. RootCAs trusts only
-	// this; Enroll additionally requires the response CA to byte-equal it.
-	caPEM []byte
-	// clientCert is the issued mTLS client cert, or nil before enrollment (Enroll
-	// runs certless). When set, every request presents it for mTLS.
-	clientCert *tls.Certificate
+	// nodeToken is the per-node bearer token presented on authed calls (config/poll/
+	// report). It is empty on the certless-equivalent client used only for Enroll;
+	// authed calls guard against an empty token rather than sending a blank header.
+	nodeToken string
 	// httpClient is used for non-poll requests; pollClient for the long-poll.
 	httpClient *http.Client
 	pollClient *http.Client
@@ -124,8 +116,6 @@ type ControllerClient struct {
 	priorGen int64
 }
 
-// SetPendingGeneration records the controller generation the loop is about to apply
-// so the next Report (auto-fired by agent.Run) reports that generation. See the
 // SetPriorGeneration records the last-applied generation watermark for this cycle (the
 // loop's --after). On a FAILED apply, Report sends this unchanged instead of the fetched
 // generation, so the controller registry never falsely advances on a failed cycle.
@@ -133,35 +123,28 @@ func (c *ControllerClient) SetPriorGeneration(gen int64) {
 	c.priorGen = gen
 }
 
-// NewControllerClient builds a ControllerClient for baseURL, pinning caPEM as the
-// sole TLS root. When clientCert is non-nil the client presents it (mTLS, for
-// config/poll/report); when nil the client is certless (for Enroll). It returns an
-// error if caPEM does not parse into at least one certificate, so a misconfigured
-// --controller-ca fails loudly at construction rather than as an opaque handshake
-// error later.
-func NewControllerClient(baseURL string, caPEM []byte, clientCert *tls.Certificate) (*ControllerClient, error) {
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("agent: controller CA PEM contains no usable certificate")
-	}
-	tlsCfg := &tls.Config{
-		RootCAs:    pool,
-		MinVersion: tls.VersionTLS13,
-	}
-	if clientCert != nil {
-		tlsCfg.Certificates = []tls.Certificate{*clientCert}
-	}
-	// Each client gets its own Transport with a clone of the TLS config so the two
-	// timeouts do not share mutable state.
-	newTransport := func() *http.Transport {
-		return &http.Transport{TLSClientConfig: tlsCfg.Clone()}
-	}
+// LastFetchedGeneration returns the generation of the bundle returned by the most recent
+// successful Fetch (the /config envelope's generation). The daemon loop reads it AFTER a
+// successful apply to advance its resume cursor to the generation actually fetched and
+// applied — not the one the poll merely observed — so the watermark cannot lag under a
+// poll->fetch race (a promote landing between Poll returning gen N and Fetch returning gen
+// N+1). It is zero before the first Fetch.
+func (c *ControllerClient) LastFetchedGeneration() int64 {
+	return c.lastFetchedGen
+}
+
+// NewControllerClient builds a ControllerClient for baseURL over plain net/http. The
+// nodeToken is the per-node bearer credential presented on config/poll/report; pass
+// "" to build the pre-enrollment client used only for Enroll (which is unauthenticated
+// by design). There is no TLS/CA/cert material: transport confidentiality is the
+// reverse proxy's responsibility (plan-4.5). It returns an error only to keep the
+// two-value constructor contract stable across the mTLS->bearer migration.
+func NewControllerClient(baseURL, nodeToken string) (*ControllerClient, error) {
 	return &ControllerClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
-		caPEM:      caPEM,
-		clientCert: clientCert,
-		httpClient: &http.Client{Timeout: controllerHTTPTimeout, Transport: newTransport()},
-		pollClient: &http.Client{Timeout: pollHTTPTimeout, Transport: newTransport()},
+		nodeToken:  nodeToken,
+		httpClient: &http.Client{Timeout: controllerHTTPTimeout},
+		pollClient: &http.Client{Timeout: pollHTTPTimeout},
 	}, nil
 }
 
@@ -172,25 +155,33 @@ func (c *ControllerClient) url(route string) string {
 	return c.baseURL + controllerBasePath + route
 }
 
-// Enroll runs the certless enrollment ceremony: it POSTs the token + CSR (+ WG
-// public key) to /enroll and, on 200, decodes the issued cert.
-//
-// Bootstrap trust is enforced HERE: the response's ca_cert_pem MUST byte-equal the
-// caPEM the agent was configured with out-of-band. A controller that returns a
-// DIFFERENT CA — even a validly-served one — is refused ("controller CA mismatch"),
-// because the agent's whole trust chain for every later mTLS call rests on the
-// pinned CA. (The handshake already trusts only the pinned CA, so a TLS-level
-// substitution cannot occur; this check additionally rejects a controller that
-// hands back an inconsistent CA in the body.)
-//
-// Enroll must be called on a certless client (NewControllerClient with nil
-// clientCert): /enroll is the one route reachable before the node holds a cert.
-func (c *ControllerClient) Enroll(token, nodeID string, csrDER []byte, wgPub string) (*EnrollResult, error) {
+// authedRequest builds an *http.Request for an authed controller call, attaching the
+// node bearer token. It refuses up front when the client holds no token, so a
+// misconfigured (token-less) client fails loudly instead of issuing an unauthenticated
+// request that the server would reject with an opaque 401.
+func (c *ControllerClient) authedRequest(method, url string, body io.Reader) (*http.Request, error) {
+	if c.nodeToken == "" {
+		return nil, fmt.Errorf("agent: controller call requires a node API token (enroll first)")
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.nodeToken)
+	return req, nil
+}
+
+// Enroll runs the unauthenticated enrollment ceremony: it POSTs the single-use
+// enrollment token + node id + WG public key to /enroll and, on 200, returns the
+// minted per-node bearer API token. Enroll must be called on a token-less client
+// (NewControllerClient with nodeToken ""): /enroll is the one route reachable before
+// the node holds a token, and it is gated by the single-use enrollment token itself,
+// not by a bearer credential.
+func (c *ControllerClient) Enroll(enrollmentToken, nodeID, wgPub string) (*EnrollResult, error) {
 	reqBody, err := json.Marshal(enrollRequestWire{
-		Token:       token,
-		NodeID:      nodeID,
-		CSRDER:      base64.StdEncoding.EncodeToString(csrDER),
-		WGPublicKey: wgPub,
+		EnrollmentToken: enrollmentToken,
+		NodeID:          nodeID,
+		WGPublicKey:     wgPub,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent: marshal enroll request: %w", err)
@@ -210,34 +201,23 @@ func (c *ControllerClient) Enroll(token, nodeID string, csrDER []byte, wgPub str
 	if err := json.Unmarshal(body, &er); err != nil {
 		return nil, fmt.Errorf("agent: decode enroll response: %w", err)
 	}
-	if strings.TrimSpace(er.ClientCertPEM) == "" {
-		return nil, fmt.Errorf("agent: enroll response has empty client cert")
+	if strings.TrimSpace(er.ApiToken) == "" {
+		return nil, fmt.Errorf("agent: enroll response has empty api token")
 	}
 
-	// Bootstrap-trust gate: the returned CA must be the pinned CA, byte for byte.
-	// Compare the DECODED certificate bytes, not the raw PEM strings, so cosmetic PEM
-	// differences (line wrapping, trailing newline) do not cause a spurious mismatch
-	// while still rejecting a genuinely different CA.
-	if !sameCertPEM(c.caPEM, []byte(er.CACertPEM)) {
-		return nil, fmt.Errorf("agent: controller CA mismatch: enroll response CA does not equal the pinned --controller-ca")
-	}
-
-	return &EnrollResult{
-		ClientCertPEM: []byte(er.ClientCertPEM),
-		CACertPEM:     []byte(er.CACertPEM),
-		Fingerprint:   er.Fingerprint,
-	}, nil
+	return &EnrollResult{APIToken: er.ApiToken}, nil
 }
 
-// Fetch implements agent.Source over the controller's GET /config (mTLS). The
-// node identity is implied by the client cert, so the nodeID argument is not sent;
-// it is only used as a diagnostic context here. It decodes configResponseJSON and
+// Fetch implements agent.Source over the controller's GET /config (bearer). The
+// node identity is implied by the bearer token, so the nodeID argument is not sent;
+// it is only used as a diagnostic context here. It decodes configResponseWire and
 // base64-decodes each file into the path->content map agent.Run expects.
 func (c *ControllerClient) Fetch(nodeID string) (map[string][]byte, error) {
-	if c.clientCert == nil {
-		return nil, fmt.Errorf("agent: Fetch requires an mTLS client cert (enroll first)")
+	req, err := c.authedRequest(http.MethodGet, c.url("config"), nil)
+	if err != nil {
+		return nil, err
 	}
-	resp, err := c.httpClient.Get(c.url("config"))
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("agent: config GET: %w", err)
 	}
@@ -278,11 +258,12 @@ func (c *ControllerClient) Fetch(nodeID string) (map[string][]byte, error) {
 // caller re-polls. Any other status or transport failure is an error. It uses the
 // long-poll-aware client so a single call may block up to pollHTTPTimeout.
 func (c *ControllerClient) Poll(after int64) (gen int64, changed bool, err error) {
-	if c.clientCert == nil {
-		return after, false, fmt.Errorf("agent: Poll requires an mTLS client cert (enroll first)")
-	}
 	reqURL := fmt.Sprintf("%s?after=%d", c.url("poll"), after)
-	resp, err := c.pollClient.Get(reqURL)
+	req, err := c.authedRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return after, false, err
+	}
+	resp, err := c.pollClient.Do(req)
 	if err != nil {
 		return after, false, fmt.Errorf("agent: poll GET: %w", err)
 	}
@@ -305,15 +286,12 @@ func (c *ControllerClient) Poll(after int64) (gen int64, changed bool, err error
 	}
 }
 
-// Report implements agent.Reporter over the controller's POST /report (mTLS). The
+// Report implements agent.Reporter over the controller's POST /report (bearer). The
 // payload is the agent's persisted State JSON (the same bytes the DirSource/HTTP
-// path reports); this maps it onto the controller's reportRequestJSON shape. Like
+// path reports); this maps it onto the controller's reportRequestWire shape. Like
 // the existing HTTPSource.Report it is best-effort: a transport or non-2xx failure
 // is returned to the caller, which logs it but does NOT fail an applied bundle.
 func (c *ControllerClient) Report(nodeID string, payload []byte) error {
-	if c.clientCert == nil {
-		return fmt.Errorf("agent: Report requires an mTLS client cert (enroll first)")
-	}
 	// Translate the agent State JSON into the controller's report shape. The applied
 	// generation is the bundle actually applied (lastFetchedGen) ONLY when the apply
 	// succeeded; on any non-"ok" result we report the unchanged prior watermark, so a
@@ -330,10 +308,10 @@ func (c *ControllerClient) Report(nodeID string, payload []byte) error {
 	return c.postReport(gen, st.LastChecksum, st.Health)
 }
 
-// postReport POSTs a reportRequestJSON over mTLS. It is the single report transport
-// shared by the Reporter interface (Report) and any explicit caller. It is
-// best-effort: a transport or non-2xx error is returned to the caller (which logs
-// it) but must not fail an otherwise-applied bundle.
+// postReport POSTs a reportRequestWire over the bearer-authed client. It is the
+// single report transport shared by the Reporter interface (Report) and any explicit
+// caller. It is best-effort: a transport or non-2xx error is returned to the caller
+// (which logs it) but must not fail an otherwise-applied bundle.
 func (c *ControllerClient) postReport(gen int64, checksum, health string) error {
 	reqBody, err := json.Marshal(reportRequestWire{
 		AppliedGeneration: gen,
@@ -343,7 +321,12 @@ func (c *ControllerClient) postReport(gen int64, checksum, health string) error 
 	if err != nil {
 		return fmt.Errorf("agent: marshal report request: %w", err)
 	}
-	resp, err := c.httpClient.Post(c.url("report"), "application/json", bytes.NewReader(reqBody))
+	req, err := c.authedRequest(http.MethodPost, c.url("report"), bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("agent: report POST: %w", err)
 	}
@@ -353,40 +336,4 @@ func (c *ControllerClient) postReport(gen int64, checksum, health string) error 
 		return fmt.Errorf("agent: report: status %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// sameCertPEM reports whether two CA PEM blobs encode the same certificate. It
-// compares the parsed certificate DER (via the first cert in each pool) rather than
-// the raw PEM text so harmless encoding differences do not read as a CA mismatch,
-// while a genuinely different certificate is still rejected. A blob that fails to
-// parse is treated as not-equal (fail closed).
-func sameCertPEM(a, b []byte) bool {
-	ca, errA := firstCertDER(a)
-	cb, errB := firstCertDER(b)
-	if errA != nil || errB != nil {
-		return false
-	}
-	return bytes.Equal(ca, cb)
-}
-
-// firstCertDER decodes the first CERTIFICATE block from a PEM blob and returns its
-// DER bytes. It validates the bytes parse as an x509 certificate so a malformed
-// block cannot masquerade as a match.
-func firstCertDER(pemBytes []byte) ([]byte, error) {
-	rest := pemBytes
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			return nil, fmt.Errorf("agent: no CERTIFICATE block in CA PEM")
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("agent: parse CA certificate: %w", err)
-		}
-		return cert.Raw, nil
-	}
 }

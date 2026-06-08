@@ -73,7 +73,7 @@ func TestStoreNodeRoundTrip(t *testing.T) {
 			want := Node{
 				NodeID:            "alpha",
 				WGPublicKey:       "pubkey-alpha",
-				MTLSCertFP:        "fp-alpha",
+				APITokenHash:      tokenHash("api-alpha"),
 				Status:            NodeApproved,
 				DesiredGeneration: 3,
 				AppliedGeneration: 2,
@@ -374,7 +374,7 @@ func TestStoreAgentReports(t *testing.T) {
 				t.Fatalf("UpsertNode: %v", err)
 			}
 
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7"); err != nil {
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy"); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 			seen := time.Date(2026, 6, 8, 15, 30, 0, 0, time.UTC)
@@ -391,6 +391,9 @@ func TestStoreAgentReports(t *testing.T) {
 			}
 			if got.LastChecksum != "checksum-7" {
 				t.Fatalf("LastChecksum = %q, want %q", got.LastChecksum, "checksum-7")
+			}
+			if got.LastHealth != "healthy" {
+				t.Fatalf("LastHealth = %q, want %q", got.LastHealth, "healthy")
 			}
 			if !got.LastSeen.Equal(seen) {
 				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, seen)
@@ -595,6 +598,147 @@ func TestStoreEnrollmentTokens(t *testing.T) {
 			}
 			if err := s.ConsumeEnrollmentToken(ctx, tenant, expTok.TokenHash, "gamma", expires.Add(time.Hour)); !errors.Is(err, ErrTokenInvalid) {
 				t.Fatalf("Consume(after ExpiresAt): err = %v, want ErrTokenInvalid", err)
+			}
+		})
+	}
+}
+
+// TestStoreAPITokens covers the per-node bearer-token contract across both Store
+// impls: issuing stamps APITokenHash and makes the token resolvable; lookup of an
+// unknown hash is ErrTokenInvalid; issuing for an absent node is ErrNotFound; a
+// revoked node's token never authorizes (ErrTokenInvalid) even before the index is
+// cleared; RevokeNodeAPIToken clears the hash + index and is idempotent.
+func TestStoreAPITokens(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			hash := tokenHash("plaintext-api-alpha")
+
+			// Issuing a token for an absent node -> ErrNotFound (the node must be
+			// registered at enrollment before its token is stamped).
+			if err := s.IssueNodeAPIToken(ctx, tenant, "alpha", hash); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("IssueNodeAPIToken(absent node): err = %v, want ErrNotFound", err)
+			}
+
+			// Looking up an unmapped hash -> ErrTokenInvalid.
+			if _, err := s.LookupNodeByAPIToken(ctx, tenant, hash); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupNodeByAPIToken(unknown): err = %v, want ErrTokenInvalid", err)
+			}
+
+			// Register the node, then issue: APITokenHash is stamped and the token
+			// resolves back to the node.
+			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", WGPublicKey: "pub-alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode: %v", err)
+			}
+			if err := s.IssueNodeAPIToken(ctx, tenant, "alpha", hash); err != nil {
+				t.Fatalf("IssueNodeAPIToken: %v", err)
+			}
+			node, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode after issue: %v", err)
+			}
+			if node.APITokenHash != hash {
+				t.Fatalf("APITokenHash = %q, want %q", node.APITokenHash, hash)
+			}
+			got, err := s.LookupNodeByAPIToken(ctx, tenant, hash)
+			if err != nil {
+				t.Fatalf("LookupNodeByAPIToken(issued): %v", err)
+			}
+			if got.NodeID != "alpha" || got.WGPublicKey != "pub-alpha" {
+				t.Fatalf("LookupNodeByAPIToken = %+v, want alpha/pub-alpha", got)
+			}
+
+			// A revoked node's token never authorizes, even though the index still
+			// maps the hash: lookup -> ErrTokenInvalid.
+			revoked := node
+			revoked.Status = NodeRevoked
+			if err := s.UpsertNode(ctx, tenant, revoked); err != nil {
+				t.Fatalf("UpsertNode(revoked): %v", err)
+			}
+			if _, err := s.LookupNodeByAPIToken(ctx, tenant, hash); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupNodeByAPIToken(revoked node): err = %v, want ErrTokenInvalid", err)
+			}
+
+			// RevokeNodeAPIToken clears the hash and deletes the index entry.
+			if err := s.RevokeNodeAPIToken(ctx, tenant, "alpha"); err != nil {
+				t.Fatalf("RevokeNodeAPIToken: %v", err)
+			}
+			cleared, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode after revoke: %v", err)
+			}
+			if cleared.APITokenHash != "" {
+				t.Fatalf("APITokenHash after revoke = %q, want empty", cleared.APITokenHash)
+			}
+			if _, err := s.LookupNodeByAPIToken(ctx, tenant, hash); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupNodeByAPIToken after revoke: err = %v, want ErrTokenInvalid", err)
+			}
+
+			// Revoke is idempotent: a second revoke (no issued token) is a no-op
+			// success, and so is revoking a node that was never issued a token / an
+			// absent node.
+			if err := s.RevokeNodeAPIToken(ctx, tenant, "alpha"); err != nil {
+				t.Fatalf("RevokeNodeAPIToken(idempotent): %v", err)
+			}
+			if err := s.RevokeNodeAPIToken(ctx, tenant, "never-issued"); err != nil {
+				t.Fatalf("RevokeNodeAPIToken(absent node): %v", err)
+			}
+		})
+	}
+}
+
+// TestStoreAPITokenRotation pins the rotation invariant across both Store impls:
+// issuing a fresh token for a node that already has one must invalidate the OLD
+// token at the lookup chokepoint. This is the re-enroll-leaves-old-token bug: a
+// second IssueNodeAPIToken (e.g. a re-enrollment) used to leave the prior
+// reverse-index entry in place, so the stale token kept resolving. IssueNodeAPIToken
+// now drops the old index entry on rotation, and LookupNodeByAPIToken additionally
+// requires the resolved node's APITokenHash to still equal the presented hash, so a
+// stale token can never authorize.
+func TestStoreAPITokenRotation(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			hashA := tokenHash("plaintext-api-A")
+			hashB := tokenHash("plaintext-api-B")
+
+			// Register the node (approved) then issue token A.
+			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", WGPublicKey: "pub-alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode: %v", err)
+			}
+			if err := s.IssueNodeAPIToken(ctx, tenant, "alpha", hashA); err != nil {
+				t.Fatalf("IssueNodeAPIToken(A): %v", err)
+			}
+			gotA, err := s.LookupNodeByAPIToken(ctx, tenant, hashA)
+			if err != nil {
+				t.Fatalf("LookupNodeByAPIToken(A) before rotation: %v", err)
+			}
+			if gotA.NodeID != "alpha" {
+				t.Fatalf("LookupNodeByAPIToken(A) = %+v, want alpha", gotA)
+			}
+
+			// Rotate: issue token B for the same node. This must invalidate A.
+			if err := s.IssueNodeAPIToken(ctx, tenant, "alpha", hashB); err != nil {
+				t.Fatalf("IssueNodeAPIToken(B): %v", err)
+			}
+
+			// The OLD token A no longer authorizes (rotation invalidated it).
+			if _, err := s.LookupNodeByAPIToken(ctx, tenant, hashA); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupNodeByAPIToken(A) after rotation: err = %v, want ErrTokenInvalid", err)
+			}
+			// The NEW token B resolves to the node.
+			gotB, err := s.LookupNodeByAPIToken(ctx, tenant, hashB)
+			if err != nil {
+				t.Fatalf("LookupNodeByAPIToken(B) after rotation: %v", err)
+			}
+			if gotB.NodeID != "alpha" || gotB.APITokenHash != hashB {
+				t.Fatalf("LookupNodeByAPIToken(B) = %+v, want alpha with APITokenHash=B", gotB)
 			}
 		})
 	}
