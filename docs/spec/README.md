@@ -58,8 +58,10 @@ docs/spec/
 │   ├── agent.md                   # Node agent (keygen→pull→verify→apply via install.sh splice)
 │   ├── persistence.md             # Controller Store interface, MemStore/FileStore, tenant
 │   │                              #   chokepoint, generation/stage-promote, audit hash chain
-│   └── enrollment.md              # Enrollment ceremony: single-use token, mTLS CSR PoP,
-│                                  #   ephemeral dev controller-CA, per-node cert issuance
+│   ├── enrollment.md              # Enrollment ceremony: single-use token, mTLS CSR PoP,
+│   │                              #   ephemeral dev controller-CA, per-node cert issuance
+│   └── deploy.md                  # Compile/stage/promote model, render-what's-ready
+│                                  #   subgraph filter, frozen-pipeline reuse via temp-dir
 └── glossary.md                    # Terminology
 ```
 
