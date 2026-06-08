@@ -177,6 +177,8 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/.tmp/bin"
           go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
           go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
+          # yaog-agent is the node-side binary the one-shot bootstrap downloads (plan-5.2).
+          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" ./cmd/agent
 
       - name: Assemble Bundle Directory
         run: |
@@ -199,15 +201,28 @@ jobs:
           path: yaog-bundle-${{ matrix.target.id }}.${{ matrix.target.archive }}
           if-no-files-found: error
 
+      # Publish the agent as a STANDALONE per-arch binary too, so the one-shot
+      # bootstrap (plan-5.2) can download just the node binary (curl + chmod +x)
+      # rather than the whole bundle.
+      - name: Stage Standalone Agent Binary
+        run: cp ".tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" "yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}"
+
+      - name: Upload Standalone Agent Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaog-agent-${{ matrix.target.id }}
+          path: yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
     needs: build-bundles
     runs-on: ubuntu-latest
     steps:
-      - name: Download All Bundle Artifacts
+      - name: Download All Release Artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: yaog-bundle-*
+          pattern: yaog-*
           merge-multiple: true
 
       - name: Create Release
@@ -216,5 +231,7 @@ jobs:
           files: |
             yaog-bundle-*.tar.gz
             yaog-bundle-*.zip
+            yaog-agent-linux-*
+            yaog-agent-windows-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

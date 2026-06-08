@@ -35,6 +35,7 @@ import (
 //	signed_trustlist.json               the operator-signed membership trust-list (keystone)
 //	operators/<username>.json           one operator account (argon2id PHC hash)
 //	sessions/<tokenHash>.json           one operator login session, keyed by token hash
+//	settings.json                       operator-editable controller settings (bootstrap)
 //
 // Directories are created 0700 and files written 0600. SignedBundle.Files
 // (map[string][]byte) serializes as base64 under encoding/json, which round-trips
@@ -1162,6 +1163,47 @@ func (fs *FileStore) DeleteSession(ctx context.Context, t TenantID, tokenHash st
 		return fmt.Errorf("controller: delete session: %w", err)
 	}
 	return nil
+}
+
+// ===================== Controller settings (bootstrap) =====================
+
+// GetSettings returns the tenant's saved settings, or ErrNotFound when settings.json
+// is absent.
+func (fs *FileStore) GetSettings(ctx context.Context, t TenantID) (ControllerSettings, error) {
+	if err := ctx.Err(); err != nil {
+		return ControllerSettings{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return ControllerSettings{}, err
+	}
+	var cs ControllerSettings
+	if err := readJSON(filepath.Join(dir, "settings.json"), &cs); err != nil {
+		if os.IsNotExist(err) {
+			return ControllerSettings{}, ErrNotFound
+		}
+		return ControllerSettings{}, err
+	}
+	return cs, nil
+}
+
+// PutSettings stores (replacing) the tenant's settings as settings.json (0700 dir /
+// 0600 file, atomic write).
+func (fs *FileStore) PutSettings(ctx context.Context, t TenantID, cs ControllerSettings) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(filepath.Join(dir, "settings.json"), cs)
 }
 
 // ================================ Audit ====================================

@@ -46,6 +46,9 @@ type tenantState struct {
 	// is never stored; only its hash keys this map (the operator-side analogue of
 	// apiTokens).
 	sessions map[string]Session
+	// settings is the tenant's saved controller settings (bootstrap), or nil when none
+	// has been saved (the caller applies DefaultSettings).
+	settings *ControllerSettings
 	// audit is the append-only, hash-chained audit log in Seq order.
 	audit []AuditEntry
 	// lastHash is the Hash of the most recent audit entry ("" if none yet).
@@ -610,6 +613,30 @@ func (s *MemStore) DeleteSession(ctx context.Context, t TenantID, tokenHash stri
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
 	delete(ts.sessions, tokenHash)
+	return nil
+}
+
+// --- Controller settings (bootstrap, plan-5.2) ---
+
+// GetSettings returns the tenant's saved settings, or ErrNotFound when none saved.
+func (s *MemStore) GetSettings(ctx context.Context, t TenantID) (ControllerSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	if ts.settings == nil {
+		return ControllerSettings{}, ErrNotFound
+	}
+	return *ts.settings, nil
+}
+
+// PutSettings stores (replacing) the tenant's settings. ControllerSettings is a value
+// type with no reference fields, so the stored copy is independent.
+func (s *MemStore) PutSettings(ctx context.Context, t TenantID, cs ControllerSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	cp := cs
+	ts.settings = &cp
 	return nil
 }
 

@@ -115,6 +115,9 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
 	mux.HandleFunc(base+"report", h.requireNode(h.HandleReport))
 	mux.HandleFunc(base+"rekey", h.requireNode(h.HandleRekey))
+	// Bootstrap (plan-5.2): the one-shot install script, served WITHOUT auth (it is
+	// generic; the single-use enrollment token is a flag the operator supplies).
+	mux.HandleFunc(base+"bootstrap", h.HandleBootstrap)
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
@@ -141,6 +144,8 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"topology", op(h.HandleTopology))
 	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
 	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
+	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL.
+	mux.HandleFunc(base+"settings", op(h.HandleSettings))
 	// Keystone (plan-5.1b): pin the off-host operator credential, fetch the canonical
 	// trust-list bytes to sign, and submit the off-host signature.
 	mux.HandleFunc(base+"operator-credential", op(h.HandleOperatorCredential))
