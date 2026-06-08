@@ -32,6 +32,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -585,4 +586,85 @@ func keysOfMap(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestControllerHTTP_CORS confirms operator routes answer a browser CORS preflight
+// (OPTIONS, which carries no Authorization) with 204 + the headers the panel needs,
+// and stamp Allow-Origin onto real responses, so a cross-origin panel can call them.
+func TestControllerHTTP_CORS(t *testing.T) {
+	env := newCtlTestEnv(t)
+
+	// Preflight: OPTIONS must be answered before operatorAuth (it has no bearer token).
+	req, err := http.NewRequest(http.MethodOptions, env.opURL("nodes"), nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Origin", "http://panel.example")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS /nodes: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight status %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("preflight Allow-Origin = %q, want *", got)
+	}
+	if ah := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(ah, "Authorization") {
+		t.Errorf("preflight Allow-Headers = %q, want to include Authorization", ah)
+	}
+
+	// A real authenticated GET also carries the CORS origin header.
+	req2, _ := http.NewRequest(http.MethodGet, env.opURL("nodes"), nil)
+	req2.Header.Set("Authorization", "Bearer "+testOperatorToken)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("GET /nodes: %v", err)
+	}
+	io.Copy(io.Discard, resp2.Body)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("GET /nodes status %d, want 200", resp2.StatusCode)
+	}
+	if got := resp2.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("GET Allow-Origin = %q, want *", got)
+	}
+}
+
+// TestControllerHTTP_PathPrefix confirms the secret path prefix mounts the controller
+// routes under /<prefix>/api/v1/controller/... and that the bare path is NOT served.
+func TestControllerHTTP_PathPrefix(t *testing.T) {
+	store := controller.NewMemStore()
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch.SetPathPrefix("/s3cr3t/") // normalizes to "/s3cr3t"
+	mux := http.NewServeMux()
+	ch.RegisterOperatorRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// The prefixed path is served (operator GET /nodes -> 200).
+	if st := doJSON(t, http.MethodGet, srv.URL+"/s3cr3t/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
+		t.Errorf("prefixed /nodes status %d, want 200", st)
+	}
+	// The bare (unprefixed) path is NOT mounted -> 404.
+	if st := doJSON(t, http.MethodGet, srv.URL+"/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
+		t.Errorf("bare /nodes status %d, want 404 (only the prefixed path is mounted)", st)
+	}
+
+	// The AGENT routes are prefixed too (both ports share basePath()): an agent route
+	// is reachable only under the prefix. /config with no token -> 401 (mounted), while
+	// the bare path -> 404 (not mounted).
+	agentMux := http.NewServeMux()
+	ch.RegisterAgentRoutes(agentMux)
+	asrv := httptest.NewServer(agentMux)
+	t.Cleanup(asrv.Close)
+	if st := doJSON(t, http.MethodGet, asrv.URL+"/s3cr3t/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
+		t.Errorf("prefixed agent /config status %d, want 401 (mounted, needs a token)", st)
+	}
+	if st := doJSON(t, http.MethodGet, asrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+		t.Errorf("bare agent /config status %d, want 404 (only the prefixed path is mounted)", st)
+	}
 }
