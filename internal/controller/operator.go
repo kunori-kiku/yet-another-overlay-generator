@@ -30,6 +30,11 @@ const maxOperatorUsernameLen = 64
 // (operators/<username>.json), so it is restricted to a conservative charset
 // (letters, digits, '.', '_', '-') and the path-traversal sentinels "." / ".." are
 // rejected outright.
+//
+// Usernames are CASE-SENSITIVE (a map key in MemStore, a filename in FileStore). The
+// controller targets Linux, where the FileStore lives on a case-sensitive filesystem;
+// on a case-folding filesystem (macOS/Windows) "Admin" and "admin" would collide on
+// disk. That is out of the supported deployment surface — see operator-auth.md.
 func ValidateOperatorUsername(username string) error {
 	if username == "" {
 		return errors.New("controller: operator username must not be empty")

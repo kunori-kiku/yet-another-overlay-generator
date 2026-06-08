@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -67,15 +68,38 @@ func VerifyPassword(phc, password string) (bool, error) {
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
-// dummySalt is a fixed, non-secret salt used only by DummyVerifyPassword to burn an
-// equivalent amount of argon2 work for an unknown user, so a login endpoint does not
-// become a username oracle via timing. It protects nothing — it only equalizes time.
-var dummySalt = []byte("yaog.dummy.salt!")
+// dummyPHC holds a reference argon2id hash built (once) with the CURRENT default
+// parameters, used by DummyVerifyPassword. dummySalt is a fixed non-secret salt for
+// the fallback derivation path only.
+var (
+	dummyOnce sync.Once
+	dummyPHC  string
+	dummySalt = make([]byte, argon2SaltLen)
+)
 
-// DummyVerifyPassword performs the same argon2id derivation a real verify would, then
-// discards the result. Callers run it on the unknown-user branch of a login so the
-// response time does not reveal whether the username exists.
+// DummyVerifyPassword performs the same parse-and-derive work a real VerifyPassword
+// does, then discards the result. Callers run it on the unknown-user branch of a login
+// so the response time matches the wrong-password branch (no username oracle via
+// timing).
+//
+// It verifies against a reference PHC string built with the current default parameters
+// and routed through VerifyPassword, so it exercises the SAME parse+derive code path as
+// a real verify. (A real verify reads its parameters FROM the stored hash; deriving the
+// dummy from a current-params reference — rather than hard-coding a separate
+// derivation — keeps it in step with newly created hashes if the defaults are ever
+// raised.) The reference is computed once; the first call pays a single hash.
 func DummyVerifyPassword(password string) {
+	dummyOnce.Do(func() {
+		if h, err := HashPassword("yaog-dummy-reference"); err == nil {
+			dummyPHC = h
+		}
+	})
+	if dummyPHC != "" {
+		_, _ = VerifyPassword(dummyPHC, password)
+		return
+	}
+	// Fallback (only if the one-time reference hash failed): still burn equivalent
+	// argon2 work so the timing-parity property holds.
 	_ = argon2.IDKey([]byte(password), dummySalt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 }
 

@@ -57,9 +57,13 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 	userKey := "user:" + req.Username
 	ipKey := "ip:" + clientIP(r)
 
-	// Rate-limit gate: if either the username or the source IP is locked out, reject
-	// before doing any (expensive) password work.
-	if locked, retry := h.loginLimiter.blocked(now, userKey, ipKey); locked {
+	// Atomic rate-limit gate (check-and-reserve), BEFORE any (expensive) password
+	// work: if the username or source IP is locked out, reject; otherwise this attempt
+	// is counted now, so concurrent requests cannot overshoot the cap between the gate
+	// and the recorder. justLocked marks the lockout transition — audited once, and
+	// only on a failed attempt (a correct password refunds via succeed()).
+	allowed, justLocked, retry := h.loginLimiter.registerAttempt(now, userKey, ipKey)
+	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
 		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
 		return
@@ -70,14 +74,14 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		// Unknown user: run a dummy argon2 verify so the response time matches the
 		// wrong-password branch (no username oracle), then fail uniformly.
 		controller.DummyVerifyPassword(req.Password)
-		h.failLogin(r.Context(), now, req.Username, userKey, ipKey)
+		h.auditLockout(r.Context(), now, req.Username, justLocked)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 
 	ok, err := controller.VerifyPassword(op.PasswordHash, req.Password)
 	if err != nil || !ok {
-		h.failLogin(r.Context(), now, req.Username, userKey, ipKey)
+		h.auditLockout(r.Context(), now, req.Username, justLocked)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -104,19 +108,20 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// failLogin records a failed login against the limiter and, if this failure triggered
-// a lockout, appends a single login-lockout audit entry. Individual non-lockout
-// failures are intentionally NOT audited: they are bounded only by the limiter, so
-// auditing each one would let an attacker grow the audit log; the lockout transition
-// is the signal worth recording. The audit write is best-effort.
-func (h *ControllerHandler) failLogin(ctx context.Context, now time.Time, username, userKey, ipKey string) {
-	if locked := h.loginLimiter.fail(now, userKey, ipKey); locked {
-		_, _ = h.store.AppendAudit(ctx, h.tenant, controller.AuditEntry{
-			Timestamp: now,
-			Actor:     "operator:" + username,
-			Action:    "login-lockout",
-		})
+// auditLockout appends a single login-lockout audit entry when this failed attempt
+// tipped a key to the lockout threshold (justLocked, computed atomically by the gate).
+// Individual non-lockout failures are intentionally NOT audited: they are bounded by
+// the limiter, so auditing each one would let an attacker grow the audit log; the
+// lockout transition is the signal worth recording. The audit write is best-effort.
+func (h *ControllerHandler) auditLockout(ctx context.Context, now time.Time, username string, justLocked bool) {
+	if !justLocked {
+		return
 	}
+	_, _ = h.store.AppendAudit(ctx, h.tenant, controller.AuditEntry{
+		Timestamp: now,
+		Actor:     "operator:" + username,
+		Action:    "login-lockout",
+	})
 }
 
 // HandleLogout revokes the presented session. It is authenticated (operatorAuth) and

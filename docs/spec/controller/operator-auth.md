@@ -87,5 +87,9 @@ one, or leave it unset and rely on `create-operator` on the host for recovery.
   `create-operator --force` on the host. (A panel-driven account UI is a later slice.)
 - **No password-complexity rules** beyond an 8-character floor — length/passphrases are
   encouraged; argon2id makes each guess expensive.
+- **Usernames are case-sensitive**, and the FileStore assumes a case-sensitive
+  filesystem (Linux — the controller's only supported host). On a case-folding
+  filesystem (macOS/Windows) `Admin` and `admin` would map to the same file; that is not
+  a supported deployment.
 - **2FA (TOTP / passkey-login) is a follow-up slice.** A passkey login factor will be its
   own random-challenge WebAuthn assertion — NOT the content-bound keystone verifier.

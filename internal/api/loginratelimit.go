@@ -58,14 +58,27 @@ func newLoginLimiter() *loginLimiter {
 	}
 }
 
-// blocked reports whether ANY of keys is currently locked out, and the longest
-// remaining lockout among them (for a Retry-After hint). A record whose window has
-// elapsed is treated as not-blocked (and is not counted).
-func (l *loginLimiter) blocked(now time.Time, keys ...string) (bool, time.Duration) {
+// registerAttempt is the single atomic check-and-reserve gate for one login attempt.
+// Under one lock acquisition it (a) reports whether any key is already locked out
+// and, if so, rejects WITHOUT counting (allowed=false + the longest remaining lockout
+// for Retry-After); otherwise (b) reserves a slot by incrementing each key's count and
+// returns allowed=true, with justLocked=true when this attempt tipped a key to exactly
+// the threshold (the transition the caller audits once).
+//
+// Counting at the GATE — not after the (slow, unlocked) argon2 verify — closes the
+// check-then-record TOCTOU: N concurrent requests serialize through this lock, so at
+// most maxLoginFailures of them are ever admitted before the rest are rejected. A
+// SUCCESSFUL login refunds its reservation via succeed(), so the steady-state count
+// tracks failures; a key whose window has elapsed restarts at 1.
+func (l *loginLimiter) registerAttempt(now time.Time, keys ...string) (allowed, justLocked bool, retryAfter time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var worst time.Duration
-	isBlocked := false
+	if len(l.attempts) > loginLimiterSweepAt {
+		l.pruneLocked(now)
+	}
+
+	// Pass 1: is any key already locked out within its live window?
+	var blocked bool
 	for _, k := range keys {
 		rec := l.attempts[k]
 		if rec == nil {
@@ -73,28 +86,20 @@ func (l *loginLimiter) blocked(now time.Time, keys ...string) (bool, time.Durati
 		}
 		elapsed := now.Sub(rec.windowStart)
 		if elapsed >= l.window {
-			// Window passed: stale record, no longer blocking.
-			continue
+			continue // stale; reset on increment below
 		}
 		if rec.count >= l.max {
-			isBlocked = true
-			if remain := l.window - elapsed; remain > worst {
-				worst = remain
+			blocked = true
+			if remain := l.window - elapsed; remain > retryAfter {
+				retryAfter = remain
 			}
 		}
 	}
-	return isBlocked, worst
-}
-
-// fail records one failed attempt against each key and returns true if this failure
-// pushed any key to exactly the lockout threshold (the transition into locked) — the
-// caller audits that as a lockout event. A key whose window has elapsed restarts at 1.
-func (l *loginLimiter) fail(now time.Time, keys ...string) (lockedOut bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.attempts) > loginLimiterSweepAt {
-		l.pruneLocked(now)
+	if blocked {
+		return false, false, retryAfter
 	}
+
+	// Pass 2: reserve a slot on each key (resetting a stale window to a fresh count).
 	for _, k := range keys {
 		rec := l.attempts[k]
 		if rec == nil || now.Sub(rec.windowStart) >= l.window {
@@ -104,13 +109,14 @@ func (l *loginLimiter) fail(now time.Time, keys ...string) (lockedOut bool) {
 			rec.count++
 		}
 		if rec.count == l.max {
-			lockedOut = true
+			justLocked = true
 		}
 	}
-	return lockedOut
+	return true, justLocked, 0
 }
 
-// succeed clears the failure records for keys (a successful login resets the count).
+// succeed clears the failure records for keys (a successful login refunds its
+// reserved slot and resets the count).
 func (l *loginLimiter) succeed(keys ...string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
