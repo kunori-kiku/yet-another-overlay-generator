@@ -422,10 +422,32 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 		rekeyRequested = n.RekeyRequested
 	}
 
-	files := make(map[string]string, len(bundle.Files))
+	files := make(map[string]string, len(bundle.Files)+2)
 	for path, content := range bundle.Files {
 		files[path] = base64.StdEncoding.EncodeToString(content)
 	}
+
+	// KEYSTONE: when an operator credential is pinned, APPEND the off-host-signed
+	// membership manifest (trustlist.json) and its detached signature (trustlist.sig)
+	// to the SERVED file map — NOT to the bundle's checksums.sha256. The manifest binds
+	// each node's checksums.sha256 digest, so it cannot live inside that very checksum
+	// set; the agent verifies it against its pinned credential and asserts this node's
+	// member.BundleSHA256 matches hex(sha256(checksums.sha256)). A promote cannot occur
+	// without a valid signed manifest (PromoteStaged gate), so a promoted bundle always
+	// has one to serve; we still fail closed if it is somehow absent.
+	if _, err := h.store.GetOperatorCredential(r.Context(), tenant); err == nil {
+		stored, err := h.store.GetCurrentSignedTrustList(r.Context(), tenant)
+		if err != nil || len(stored.SignatureJSON) == 0 {
+			writeError(w, http.StatusInternalServerError, "keystone is enabled but no signed membership manifest is available to serve")
+			return
+		}
+		files["trustlist.json"] = base64.StdEncoding.EncodeToString(stored.TrustListJSON)
+		files["trustlist.sig"] = base64.StdEncoding.EncodeToString(stored.SignatureJSON)
+	} else if !errors.Is(err, controller.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "failed to load operator credential")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, configResponseJSON{
 		Generation:     bundle.Generation,
 		Files:          files,
@@ -577,6 +599,12 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 
 // HandlePromote flips the staged bundles to current and bumps the generation
 // (operator-only), waking any /poll waiters. Returns the new generation.
+//
+// It drives controller.PromoteStaged, which enforces the KEYSTONE gate: when an
+// operator credential is pinned (keystone ON), the promote is refused unless a valid
+// off-host signature exists over the staged membership manifest. A missing/unsigned/
+// invalid manifest is a 422 (the deploy cannot go live without the off-host proof); an
+// empty staged set is a 409.
 func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
@@ -587,13 +615,15 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
 	}
-	gen, err := h.store.PromoteStaged(r.Context(), tenant)
+	gen, err := controller.PromoteStaged(r.Context(), h.store, tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNoStagedBundle) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "promote failed")
+		// The keystone gate (missing/unsigned/invalid manifest) is an operator-actionable
+		// precondition failure, not an internal error: surface its message at 422.
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, generationResponseJSON{Generation: gen})
@@ -942,79 +972,21 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})
 }
 
-// --- keystone (off-host membership trust-list) ---
+// --- keystone (off-host membership manifest) ---
 
-// buildTrustList projects the current approved registry into the user-signable
-// membership trust-list for tenant t. Members are every NodeApproved node with a
-// non-empty WGPublicKey ({NodeID, WGPublicKey}); Tenant is the tenant id;
-// SchemaVersion is 1; CreatedAt is now in RFC3339. The Epoch is monotonic:
-//
-//   - if a StoredTrustList already exists AND its decoded members exactly equal the
-//     current approved members (same node_id -> wg_public_key set), the existing epoch
-//     is REUSED (the membership has not changed, so the signed document is logically
-//     the same and need not bump);
-//   - otherwise the epoch is (current stored epoch + 1), or 0 when no trust-list has
-//     ever been stored.
-//
-// This makes a re-fetch of an unchanged membership stable (same epoch, same canonical
-// bytes), while any membership change advances the epoch so nodes' anti-rollback check
-// (epoch >= last applied) admits the new list and rejects an older one.
-func (h *ControllerHandler) buildTrustList(ctx context.Context, t controller.TenantID) (trustlist.TrustList, error) {
-	nodes, err := h.store.ListNodes(ctx, t)
+// stagedManifest returns the tenant's STAGED membership manifest (the to-be-signed
+// canonical bytes CompileAndStage stored) and its epoch. The manifest binds, per member,
+// the node's bundle digest (BundleSHA256 = hex(sha256(checksums.sha256))), so the
+// off-host signature covers what RUNS — install.sh + every config — not merely the
+// member list. The manifest is built at STAGE time (not projected from the live
+// registry), so GET /trustlist and POST /trustlist-signature both operate over the exact
+// bytes a node will be served. ErrNotFound surfaces when nothing has been staged yet.
+func (h *ControllerHandler) stagedManifest(ctx context.Context, t controller.TenantID) (canonical []byte, epoch int64, err error) {
+	stored, err := h.store.GetCurrentSignedTrustList(ctx, t)
 	if err != nil {
-		return trustlist.TrustList{}, err
+		return nil, 0, err
 	}
-	current := make(map[string]string, len(nodes))
-	members := make([]trustlist.Member, 0, len(nodes))
-	for _, n := range nodes {
-		if n.Status == controller.NodeApproved && n.WGPublicKey != "" {
-			current[n.NodeID] = n.WGPublicKey
-			members = append(members, trustlist.Member{NodeID: n.NodeID, WGPublicKey: n.WGPublicKey})
-		}
-	}
-
-	// Epoch rule (monotonic): reuse the stored epoch iff the stored trust-list's members
-	// match the current approved members; else stored-epoch+1 (0 if none stored).
-	var epoch int64 // 0 when no trust-list has ever been stored
-	if stored, err := h.store.GetCurrentSignedTrustList(ctx, t); err == nil {
-		same, serr := storedMembersMatch(stored.TrustListJSON, current)
-		if serr != nil {
-			return trustlist.TrustList{}, serr
-		}
-		if same {
-			epoch = stored.Epoch
-		} else {
-			epoch = stored.Epoch + 1
-		}
-	} else if !errors.Is(err, controller.ErrNotFound) {
-		return trustlist.TrustList{}, err
-	}
-
-	return trustlist.TrustList{
-		SchemaVersion: 1,
-		Tenant:        string(t),
-		Epoch:         epoch,
-		Members:       members,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	}, nil
-}
-
-// storedMembersMatch reports whether the members encoded in a stored trust-list's
-// canonical JSON equal the given current approved-member set (node_id -> wg_public_key).
-func storedMembersMatch(trustListJSON []byte, current map[string]string) (bool, error) {
-	var tl trustlist.TrustList
-	if err := json.Unmarshal(trustListJSON, &tl); err != nil {
-		return false, err
-	}
-	if len(tl.Members) != len(current) {
-		return false, nil
-	}
-	for _, m := range tl.Members {
-		if current[m.NodeID] != m.WGPublicKey {
-			return false, nil
-		}
-	}
-	return true, nil
+	return stored.TrustListJSON, stored.Epoch, nil
 }
 
 // pinFromCredential builds the trustlist.PinnedCredential the verifier checks against
@@ -1103,10 +1075,11 @@ func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// HandleTrustList returns the canonical bytes the operator must sign (base64) plus the
-// membership epoch (operator-only). These are EXACTLY the bytes that get signed and
-// verified — the panel signs challenge = SHA256(decoded bytes). A node later verifies
-// the signature over the same canonical bytes against its pinned credential.
+// HandleTrustList returns the STAGED membership manifest's canonical bytes (base64) plus
+// its epoch (operator-only). These are EXACTLY the bytes that get signed and verified —
+// the panel signs challenge = SHA256(decoded bytes). Each member carries its bundle
+// digest, so the off-host signature covers what RUNS (install.sh + every config), not
+// only the member list. 404 when nothing has been staged yet (stage a deploy first).
 func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
@@ -1117,30 +1090,30 @@ func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
 	}
-	tl, err := h.buildTrustList(r.Context(), tenant)
+	canonical, epoch, err := h.stagedManifest(r.Context(), tenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to build trust-list")
-		return
-	}
-	canonical, err := trustlist.Canonical(tl)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to canonicalize trust-list: "+err.Error())
+		if errors.Is(err, controller.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no staged membership manifest; stage a deploy before signing")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load staged manifest")
 		return
 	}
 	writeJSON(w, http.StatusOK, trustListResponseJSON{
 		TrustListJSON: base64.StdEncoding.EncodeToString(canonical),
-		Epoch:         tl.Epoch,
+		Epoch:         epoch,
 	})
 }
 
-// HandleTrustListSignature accepts the operator's off-host signature over the membership
-// trust-list (operator-only). It (a) re-derives the canonical bytes server-side; (b)
-// rejects a submitted trustlist_json that does not byte-equal them (409 substitution
-// guard — the operator must sign exactly what the controller built); (c) builds the
-// pinned credential from the stored OperatorCredential and verifies the signature with
-// trustlist.Verify (400 on any verification failure); (d) persists the signed trust-list
-// (canonical bytes + json.Marshal(signed) + epoch), records a "sign-trustlist" audit
-// entry, and returns 200. A 412 is returned when no operator credential is pinned.
+// HandleTrustListSignature accepts the operator's off-host signature over the staged
+// membership manifest (operator-only). It (a) re-derives the staged manifest canonical
+// bytes server-side from the store; (b) rejects a submitted trustlist_json that does not
+// byte-equal them (409 substitution guard — the operator must sign exactly what was
+// staged); (c) builds the pinned credential from the stored OperatorCredential and
+// verifies the signature with trustlist.Verify (400 on any verification failure); (d)
+// stores the signature onto the staged manifest record (keeping its canonical bytes +
+// epoch), records a "sign-trustlist" audit entry, and returns 200. A 412 is returned
+// when no operator credential is pinned; a 404 when nothing has been staged.
 func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
@@ -1168,15 +1141,14 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 		return
 	}
 
-	// (a) Re-derive the canonical bytes the controller would have the operator sign.
-	tl, err := h.buildTrustList(r.Context(), tenant)
+	// (a) Re-derive the staged manifest canonical bytes from the store.
+	canonical, epoch, err := h.stagedManifest(r.Context(), tenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to build trust-list")
-		return
-	}
-	canonical, err := trustlist.Canonical(tl)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to canonicalize trust-list: "+err.Error())
+		if errors.Is(err, controller.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "no staged membership manifest; stage a deploy before signing")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load staged manifest")
 		return
 	}
 
@@ -1187,7 +1159,15 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 		return
 	}
 	if !bytes.Equal(submitted, canonical) {
-		writeError(w, http.StatusConflict, "submitted trust-list does not match the current canonical trust-list; re-fetch and re-sign")
+		writeError(w, http.StatusConflict, "submitted manifest does not match the current staged manifest; re-fetch and re-sign")
+		return
+	}
+
+	// Parse the staged manifest so trustlist.Verify checks the signature over its exact
+	// canonical bytes (Verify re-canonicalizes the parsed value internally).
+	var manifest trustlist.TrustList
+	if err := json.Unmarshal(canonical, &manifest); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to parse staged manifest: "+err.Error())
 		return
 	}
 
@@ -1197,12 +1177,13 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 		writeError(w, http.StatusInternalServerError, "failed to load pinned credential: "+err.Error())
 		return
 	}
-	if err := trustlist.Verify(tl, req.Signed, pin); err != nil {
-		writeError(w, http.StatusBadRequest, "trust-list signature verification failed: "+err.Error())
+	if err := trustlist.Verify(manifest, req.Signed, pin); err != nil {
+		writeError(w, http.StatusBadRequest, "manifest signature verification failed: "+err.Error())
 		return
 	}
 
-	// (d) Persist the signed trust-list and audit it.
+	// (d) Store the signature onto the staged manifest record (canonical bytes + epoch
+	// unchanged) and audit it.
 	signedJSON, err := json.Marshal(req.Signed)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to marshal signature")
@@ -1211,9 +1192,9 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 	if err := h.store.PutSignedTrustList(r.Context(), tenant, controller.StoredTrustList{
 		TrustListJSON: canonical,
 		SignatureJSON: signedJSON,
-		Epoch:         tl.Epoch,
+		Epoch:         epoch,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store signed trust-list")
+		writeError(w, http.StatusInternalServerError, "failed to store signed manifest")
 		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -1224,7 +1205,7 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "epoch": tl.Epoch})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "epoch": epoch})
 }
 
 // --- helpers ---

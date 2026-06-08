@@ -107,7 +107,7 @@ func TestExportSigned(t *testing.T) {
 	t.Setenv(bundlesig.EnvSigningKey, keyPath)
 
 	outDir := t.TempDir()
-	if _, err := Export(newTestResult(), outDir, nil); err != nil {
+	if _, err := Export(newTestResult(), outDir); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
 
@@ -158,10 +158,10 @@ func TestExportSignedDeterministic(t *testing.T) {
 
 	out1 := t.TempDir()
 	out2 := t.TempDir()
-	if _, err := Export(newTestResult(), out1, nil); err != nil {
+	if _, err := Export(newTestResult(), out1); err != nil {
 		t.Fatalf("Export run 1: %v", err)
 	}
-	if _, err := Export(newTestResult(), out2, nil); err != nil {
+	if _, err := Export(newTestResult(), out2); err != nil {
 		t.Fatalf("Export run 2: %v", err)
 	}
 
@@ -204,10 +204,10 @@ func TestExportUnsigned(t *testing.T) {
 
 	out1 := t.TempDir()
 	out2 := t.TempDir()
-	if _, err := Export(newTestResult(), out1, nil); err != nil {
+	if _, err := Export(newTestResult(), out1); err != nil {
 		t.Fatalf("Export run 1: %v", err)
 	}
-	if _, err := Export(newTestResult(), out2, nil); err != nil {
+	if _, err := Export(newTestResult(), out2); err != nil {
 		t.Fatalf("Export run 2: %v", err)
 	}
 

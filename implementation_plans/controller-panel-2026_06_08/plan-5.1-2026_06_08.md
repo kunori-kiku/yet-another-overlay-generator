@@ -68,6 +68,38 @@ membership or add a rogue peer. Two-tier over Phase-0: tier-1 = automated host-h
   (`navigator.credentials.get`) replacing `controllerStore.requireUserKey()`; step-up on membership-
   changing Deploy/rekey/revoke.
 
+## CORRECTION (2026-06-08, adversarial review of PR #36 — BLOCKER fix)
+
+The membership-only signing of the first 5.1b/c cut was **bypassable**: the off-host signature
+covered `trustlist.json` (the member list) but NOT `install.sh` — a controller-controlled byte that
+runs as **root** and configures WireGuard. A breached controller (holding the operator token + the
+host-held `bundle.sig` key) could append `wg set <iface> peer <rogue>` to `install.sh` and add a peer
+absent from the signed members; both `VerifyBundle` and `VerifyMembership` passed. **The off-host
+signature must cover what RUNS, not just the membership list.** Owner decision: **sign the bundle per
+Deploy.**
+
+Corrected design:
+- The signed artifact binds, per member, the node's **bundle digest**: `trustlist.Member` gains
+  `BundleSHA256` = `hex(sha256(checksums.sha256))` (checksums.sha256 covers install.sh + every config).
+  Drop `CreatedAt` from the canonical bytes (it was a `time.Now()` non-determinism that broke the
+  GET→sign→POST round-trip; epoch + bundle digests provide freshness/identity).
+- Flow (one off-host tap per Deploy; deploys are operator-initiated clicks, so this is natural and
+  strictly more secure): **stage** (render all node bundles + checksums + tier-1 bundle.sig; compute the
+  to-be-signed manifest = {epoch, tenant, members[{node_id, wg_public_key, bundle_sha256}]}; store it
+  staged) → **GET /trustlist** (the staged manifest canonical) → operator signs off-host → **POST
+  /trustlist-signature** (re-derive + byte-match + trustlist.Verify vs the pinned cred; store the sig)
+  → **promote** (refuses, keystone-ON, unless a valid off-host sig over the current staged manifest
+  exists). `/config` serves `trustlist.json` (manifest) + `trustlist.sig` (off-host) alongside the
+  bundle — these live OUTSIDE `checksums.sha256` (they bind the checksums digest, so they cannot be
+  inside it).
+- Agent: tier-1 `VerifyBundle` (bundle.sig over checksums = file integrity) → tier-2 `trustlist.Verify`
+  the manifest vs the **node-pinned** credential → assert `hex(sha256(this bundle's checksums.sha256))
+  == this node's member.BundleSHA256` (binds install.sh + all configs to the off-host key) → node ∈
+  members → epoch ≥ last-applied. Fail-closed. (This also covers AllowedIPs/endpoints — they are in the
+  signed configs.)
+- Tradeoff (conscious): a user-key tap at EVERY Deploy, not only membership changes — the spike's
+  "routine config = automated" does not apply when deploys are manual operator actions. Documented.
+
 ## Honest limits (state in specs)
 
 Operator-credential **pinning bootstrap** is trust-on-pin at install (a compromised install-time pin

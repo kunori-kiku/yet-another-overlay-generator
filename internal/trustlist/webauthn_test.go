@@ -400,8 +400,7 @@ func TestWebAuthnBadClientDataJSON(t *testing.T) {
 func TestVerifyFailsClosedOnMalformedPin(t *testing.T) {
 	tl := TrustList{
 		SchemaVersion: 1, Tenant: "acme", Epoch: 1,
-		Members:   []Member{{NodeID: "n1", WGPublicKey: "k1"}},
-		CreatedAt: "2026-06-08T00:00:00Z",
+		Members: []Member{{NodeID: "n1", WGPublicKey: "k1", BundleSHA256: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}},
 	}
 	check := func(name string, pin PinnedCredential, art SignedTrustList) {
 		defer func() {

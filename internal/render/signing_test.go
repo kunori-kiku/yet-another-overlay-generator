@@ -214,7 +214,7 @@ func TestSignedExport_EmbeddedPubkeyMatchesShippedAndVerifies(t *testing.T) {
 
 	result := renderAll(t, signingTestTopology(t))
 	outDir := t.TempDir()
-	if _, err := artifacts.Export(result, outDir, nil); err != nil {
+	if _, err := artifacts.Export(result, outDir); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
 

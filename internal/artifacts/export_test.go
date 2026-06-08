@@ -54,7 +54,7 @@ func TestExport_BasicStructure(t *testing.T) {
 
 	// 
 	outputDir := t.TempDir()
-	exportResult, err := Export(result, outputDir, nil)
+	exportResult, err := Export(result, outputDir)
 	if err != nil {
 		t.Fatalf(": %v", err)
 	}
@@ -103,7 +103,7 @@ func TestExport_WireGuardPermissions(t *testing.T) {
 	result := minimalCompileResult()
 	outputDir := t.TempDir()
 
-	_, err := Export(result, outputDir, nil)
+	_, err := Export(result, outputDir)
 	if err != nil {
 		t.Fatalf(": %v", err)
 	}
@@ -125,7 +125,7 @@ func TestExport_InstallScriptExecutable(t *testing.T) {
 	result := minimalCompileResult()
 	outputDir := t.TempDir()
 
-	_, err := Export(result, outputDir, nil)
+	_, err := Export(result, outputDir)
 	if err != nil {
 		t.Fatalf(": %v", err)
 	}
@@ -147,7 +147,7 @@ func TestExport_ManifestContent(t *testing.T) {
 	result := minimalCompileResult()
 	outputDir := t.TempDir()
 
-	_, err := Export(result, outputDir, nil)
+	_, err := Export(result, outputDir)
 	if err != nil {
 		t.Fatalf(": %v", err)
 	}

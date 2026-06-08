@@ -16,7 +16,7 @@ func TestExport_ChecksumsCoversInstallScript(t *testing.T) {
 	result := minimalCompileResult()
 	outputDir := t.TempDir()
 
-	if _, err := Export(result, outputDir, nil); err != nil {
+	if _, err := Export(result, outputDir); err != nil {
 		t.Fatalf("Export 失败: %v", err)
 	}
 

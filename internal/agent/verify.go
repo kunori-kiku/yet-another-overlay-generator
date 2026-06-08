@@ -207,30 +207,40 @@ type MembershipConfig struct {
 	OperatorOrigin string
 }
 
-// VerifyMembership is the keystone gate (plan-5.1c): it proves the bundle's
-// membership was authorized by the OFF-HOST operator credential, so a breached
-// controller cannot forge membership. It runs AFTER VerifyBundle (tier-1 integrity)
-// and BEFORE apply. It is fail-closed: any missing field, parse error, signature
-// failure, non-member node, unsigned peer key, or epoch rollback returns an error
-// and the caller must refuse to apply (keep-last-good).
+// VerifyMembership is the keystone gate (plan-5.1c, install.sh-coverage CORRECTION
+// 2026-06-08): it proves the bundle's membership AND the bundle's exact contents were
+// authorized by the OFF-HOST operator credential, so a breached controller can forge
+// neither membership nor what RUNS on the node. It runs AFTER VerifyBundle (tier-1
+// integrity) and BEFORE apply. It is fail-closed: any missing field, parse error,
+// signature failure, bundle-digest mismatch, non-member node, or epoch rollback returns
+// an error and the caller must refuse to apply (keep-last-good).
 //
 // When cfg.OperatorCredPEM is empty, keystone is OFF and this is a no-op (opt-in):
 // the agent applies exactly as it did before the trust-list existed.
 //
 // When keystone is ON it enforces, in order:
 //
-//   - REQUIRE files["trustlist.json"] and files["trustlist.sig"] (fail-closed if
-//     either is absent — a pinned operator demands a signed membership).
+//   - REQUIRE files["trustlist.json"], files["trustlist.sig"], and
+//     files["checksums.sha256"] (fail-closed if any is absent — a pinned operator
+//     demands a signed membership AND the bundle's integrity manifest to bind it to).
 //   - Parse the TrustList (from trustlist.json) and the SignedTrustList (from
 //     trustlist.sig).
-//   - Assert trustlist.Canonical(parsedTL) byte-equals files["trustlist.json"] (the
+//   - Assert trustlist.Canonical(manifest) byte-equals files["trustlist.json"] (the
 //     Verify CALLER CONTRACT): the agent acts on EXACTLY the bytes the operator
 //     signed, never an attacker's re-encoding carrying extra/duplicate fields.
-//   - trustlist.Verify(parsedTL, signed, pin) against the PINNED credential.
+//   - trustlist.Verify(manifest, signed, pin) against the PINNED credential.
+//   - BUNDLE-DIGEST BINDING (the install.sh-coverage fix): compute
+//     gotDigest = hex(sha256(files["checksums.sha256"])) and assert it equals THIS
+//     node's (cfg.NodeID) member.BundleSHA256 in the signed manifest. checksums.sha256
+//     covers install.sh + every config, so a controller that tampers with install.sh
+//     changes this digest — which it cannot re-sign without the off-host key — and the
+//     node rejects the bundle. This is what binds the OFF-HOST signature to what RUNS,
+//     closing the prior bypass where install.sh was controller-controlled and unsigned.
 //   - Assert cfg.NodeID is a member (this node is in the signed fleet).
 //   - Assert every WG public key in the bundle's wireguard/*.conf [Peer] blocks is
-//     some signed member's WGPublicKey (peers must be signed members).
-//   - Assert parsedTL.Epoch >= prevEpoch (anti-rollback against State.MembershipEpoch).
+//     some signed member's WGPublicKey (cheap defense in depth — the bundle-digest
+//     binding above already covers the configs, but this keeps a clear, early signal).
+//   - Assert manifest.Epoch >= prevEpoch (anti-rollback against State.MembershipEpoch).
 //
 // On success it returns the verified trust-list's Epoch so the caller can persist it
 // (advancing the anti-rollback floor) after a successful apply.
@@ -240,8 +250,9 @@ func VerifyMembership(files map[string][]byte, cfg MembershipConfig, prevEpoch i
 		return 0, nil
 	}
 
-	// Fail closed when a pinned operator's bundle lacks the signed membership: the
-	// keystone is mandatory once an operator credential is configured.
+	// Fail closed when a pinned operator's bundle lacks the signed membership or the
+	// integrity manifest the off-host signature binds to: the keystone is mandatory
+	// once an operator credential is configured.
 	tlJSON, ok := files["trustlist.json"]
 	if !ok {
 		return 0, fmt.Errorf("agent: operator credential pinned but bundle has no trustlist.json; refusing")
@@ -250,8 +261,15 @@ func VerifyMembership(files map[string][]byte, cfg MembershipConfig, prevEpoch i
 	if !ok {
 		return 0, fmt.Errorf("agent: operator credential pinned but bundle has no trustlist.sig; refusing")
 	}
+	// checksums.sha256 is the bundle's integrity manifest (it covers install.sh + every
+	// config). Its digest is what the off-host manifest binds per member, so it MUST be
+	// present — an absent one would otherwise let the bundle-digest check be skipped.
+	checksums, ok := files["checksums.sha256"]
+	if !ok {
+		return 0, fmt.Errorf("agent: operator credential pinned but bundle has no checksums.sha256; refusing")
+	}
 
-	// Parse the distributed trust-list and its detached signature artifact.
+	// Parse the distributed trust-list manifest and its detached signature artifact.
 	var tl trustlist.TrustList
 	if err := json.Unmarshal(tlJSON, &tl); err != nil {
 		return 0, fmt.Errorf("agent: parse trustlist.json: %w", err)
@@ -285,24 +303,44 @@ func VerifyMembership(files map[string][]byte, cfg MembershipConfig, prevEpoch i
 		return 0, fmt.Errorf("agent: trust-list signature verification failed: %w", err)
 	}
 
-	// This node must itself be a signed member: a valid trust-list for a fleet this
-	// node was removed from must not authorize applying that fleet's config here.
+	// This node must itself be a signed member, AND its signed member entry carries the
+	// digest that binds THIS bundle. Index by node id so we can read this node's
+	// BundleSHA256; index pubkeys for the cheap peer defense below.
 	members := make(map[string]string, len(tl.Members)) // wg pubkey -> node id (for diagnostics)
-	selfMember := false
-	for _, m := range tl.Members {
+	var self *trustlist.Member
+	for i := range tl.Members {
+		m := &tl.Members[i]
 		if m.NodeID == cfg.NodeID {
-			selfMember = true
+			self = m
 		}
 		if m.WGPublicKey != "" {
 			members[m.WGPublicKey] = m.NodeID
 		}
 	}
-	if !selfMember {
+	if self == nil {
 		return 0, fmt.Errorf("agent: node %q is not a member of the signed trust-list; refusing", cfg.NodeID)
 	}
 
-	// Every WireGuard peer the bundle would configure must be a signed member: a
-	// breached controller cannot splice an unsigned peer into a node's config.
+	// BUNDLE-DIGEST BINDING (install.sh-coverage, plan-5.1 CORRECTION): the off-host
+	// signature binds this node's bundle digest = hex(sha256(checksums.sha256)), and
+	// checksums.sha256 covers install.sh + every config. So a breached controller that
+	// rewrites install.sh (e.g. to splice a rogue `wg set ... peer ...`) must rebuild
+	// checksums.sha256 to keep tier-1 VerifyBundle passing — which changes this digest,
+	// which it cannot re-sign without the off-host key. The signed member's digest then
+	// no longer matches and we refuse. This is THE check that makes the off-host
+	// signature cover what RUNS, not merely the membership list.
+	sum := sha256.Sum256(checksums)
+	gotDigest := hex.EncodeToString(sum[:])
+	if self.BundleSHA256 == "" {
+		return 0, fmt.Errorf("agent: signed trust-list member %q carries no bundle_sha256; refusing (the off-host signature must bind the bundle)", cfg.NodeID)
+	}
+	if !strings.EqualFold(gotDigest, self.BundleSHA256) {
+		return 0, fmt.Errorf("agent: bundle digest %s does not match the off-host-signed digest %s for node %q; refusing (install.sh or a config was tampered)", gotDigest, strings.ToLower(self.BundleSHA256), cfg.NodeID)
+	}
+
+	// Every WireGuard peer the bundle would configure should be a signed member. The
+	// bundle-digest binding above already covers the conf bytes cryptographically; this
+	// is a cheap, early, human-legible signal kept as defense in depth.
 	peerKeys, err := collectBundlePeerKeys(files)
 	if err != nil {
 		return 0, err

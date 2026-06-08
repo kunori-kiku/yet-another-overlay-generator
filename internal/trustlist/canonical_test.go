@@ -14,11 +14,10 @@ func sampleTL() TrustList {
 		Tenant:        "acme",
 		Epoch:         7,
 		Members: []Member{
-			{NodeID: "gamma", WGPublicKey: "GGG="},
-			{NodeID: "alpha", WGPublicKey: "AAA="},
-			{NodeID: "beta", WGPublicKey: "BBB="},
+			{NodeID: "gamma", WGPublicKey: "GGG=", BundleSHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+			{NodeID: "alpha", WGPublicKey: "AAA=", BundleSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			{NodeID: "beta", WGPublicKey: "BBB=", BundleSHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		},
-		CreatedAt: "2026-06-08T00:00:00Z",
 	}
 }
 
@@ -126,11 +125,15 @@ func TestCanonicalFieldChangesDiffer(t *testing.T) {
 	cases := map[string]func(tl *TrustList){
 		"member wg key":  func(tl *TrustList) { tl.Members[0].WGPublicKey = "CHANGED=" },
 		"member node id": func(tl *TrustList) { tl.Members[0].NodeID = "alpha2" },
-		"add member":     func(tl *TrustList) { tl.Members = append(tl.Members, Member{NodeID: "delta", WGPublicKey: "DDD="}) },
+		"member bundle digest": func(tl *TrustList) {
+			tl.Members[0].BundleSHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		},
+		"add member": func(tl *TrustList) {
+			tl.Members = append(tl.Members, Member{NodeID: "delta", WGPublicKey: "DDD=", BundleSHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"})
+		},
 		"epoch":          func(tl *TrustList) { tl.Epoch = 8 },
 		"tenant":         func(tl *TrustList) { tl.Tenant = "other" },
 		"schema version": func(tl *TrustList) { tl.SchemaVersion = 2 },
-		"created at":     func(tl *TrustList) { tl.CreatedAt = "2099-01-01T00:00:00Z" },
 	}
 	for name, mut := range cases {
 		tl := sampleTL()
