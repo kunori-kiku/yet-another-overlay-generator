@@ -115,7 +115,7 @@ By default both ports bind to **loopback only** (`127.0.0.1`) — the login form
 
 To let a remote node pull its config, first expose the agent port — for a lab, `YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`; for production, the TLS proxy above. Then, in the panel:
 
-1. **Settings** → set the **public agent URL** to where nodes reach the controller (e.g. `https://overlay.example.com` or `http://<host>:9090`).
+1. In the **Bootstrap Settings** section, set the **Public Agent URL** to where nodes reach the controller (e.g. `https://overlay.example.com` or `http://<host>:9090`).
 2. Add a node and generate a single-use **enrollment token**.
 3. On the target host (Linux + systemd), as root:
 
