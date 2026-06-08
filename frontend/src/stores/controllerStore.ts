@@ -81,6 +81,13 @@ function configOf(state: ControllerState): ControllerConfig {
 
 // 把标准 base64（带 padding，GET /trustlist 的 trustlist_json 编码）解码回原始字节。
 // 这些字节就是 canonical manifest 字节，其 SHA-256 即 WebAuthn challenge。
+//
+// FOOTGUN: the input MUST be STANDARD (padded) base64 because it pairs with Go's
+// base64.StdEncoding on trustlist_json (handler_controller.go ~:1103) — this is a
+// DIFFERENT dialect from the base64url (no-pad) used for every SignedTrustList
+// field. atob() here requires the std alphabet + padding; if the Go side ever
+// switches trustlist_json to base64url, this mis-decodes and the node rejects
+// with ErrChallengeMismatch. Keep both sides on std base64 in lockstep.
 function base64StdToBytes(s: string): Uint8Array {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -101,8 +108,14 @@ export function selectRekeyingCount(state: ControllerState): number {
 
 // 派生选择器：是否已 pin off-host operator 签名凭据。DeployPanel 用它在签名区回显
 // 「已注册 / 未注册签名密钥」，并在 keystone 开启而无凭据时给出可执行的报错。
+// 要求三者齐备（credential_id + alg + PEM）：deploy() 的签名守卫用同一组字段，从而
+// UI 与 deploy 对「已注册」的判定一致，且签名时绝不会发出空的 audit-only public_key。
 export function selectOperatorEnrolled(state: ControllerState): boolean {
-  return state.operatorCredentialId !== null && state.operatorCredentialAlg !== null;
+  return (
+    state.operatorCredentialId !== null &&
+    state.operatorCredentialAlg !== null &&
+    !!state.operatorPublicKeyPEM
+  );
 }
 
 export const useControllerStore = create<ControllerState>()(
@@ -222,21 +235,24 @@ export const useControllerStore = create<ControllerState>()(
             if (toSign !== null) {
               const credentialId = get().operatorCredentialId;
               const alg = get().operatorCredentialAlg;
-              if (credentialId === null || alg === null) {
-                // keystone 已开启（节点需要签名）但本地没有 pin 的签名凭据：
-                // 这是可执行的前置条件失败，而非内部错误。
+              const pem = get().operatorPublicKeyPEM;
+              if (credentialId === null || alg === null || !pem) {
+                // keystone 已开启（节点需要签名）但本地没有 pin 的完整签名凭据
+                // （credential_id + alg + PEM）：这是可执行的前置条件失败，而非内部错误。
                 throw new Error(
                   'This deploy requires an off-host signature, but no operator signing key is enrolled — enroll your signing key first.',
                 );
               }
+              // rpId 必须等于 enroll 时 pin 的值（节点校验 SHA256(rpid)==assertion 的
+              // rpIdHash）；老记录可能缺 rpId，回退到当前 hostname（enroll 时即用它）。
+              const rpId = get().operatorRpId ?? window.location.hostname;
               // 把标准 base64 的 canonical bytes 解码回原始字节：它们的 SHA-256 就是
               // WebAuthn challenge（节点比对 base64url(SHA256(Canonical(manifest)))）。
               const manifestBytes = base64StdToBytes(toSign.trustlistJson);
-              const pem = get().operatorPublicKeyPEM ?? '';
               set({ signing: true });
               let signed;
               try {
-                signed = await signManifest(manifestBytes, credentialId, alg, pem);
+                signed = await signManifest(manifestBytes, credentialId, alg, rpId, pem);
               } finally {
                 set({ signing: false });
               }

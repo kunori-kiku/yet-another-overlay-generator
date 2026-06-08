@@ -40,6 +40,12 @@ import type { WebAuthnAlg, SignedTrustList } from '../api/controllerClient';
 // ES256 (-7) and EdDSA (-8); anything else (notably RS256 = -257) is rejected so
 // the pinned credential always matches one of the two algorithms the node
 // verifier dispatches on.
+//
+// ES256 is the PRIMARY, production path: it is universally supported by passkeys
+// and YubiKeys, and is the one to trust. EdDSA is best-effort — OKP/Ed25519
+// getPublicKey() support varies by platform/browser, and the live ceremony
+// cannot be exercised in CI (no authenticator) — but both verify against the
+// node when present, and the authenticator picks the first it supports.
 const COSE_ES256 = -7;
 const COSE_EDDSA = -8;
 
@@ -264,12 +270,20 @@ export async function enrollOperatorCredential(
 // compares against base64url(SHA256(Canonical(manifest))) — so this is the
 // proof the operator authorized THESE exact bytes.
 //
+// rpId MUST equal the rpid that was pinned at enrollment (the node checks
+// SHA256(rpid)==authData rpIdHash). We pass it EXPLICITLY rather than letting the
+// browser default rpId to the caller's effective domain: the implicit default
+// only happens to match when enroll and sign run from the same hostname, and a
+// mismatch would surface as an opaque node-side rpIdHash failure (a deploy-time
+// 400) instead of a clear browser error. Pinning it makes the binding explicit.
+//
 // publicKeyPEM is the pinned PEM (audit-only field on the wire); pass the value
 // stored at enrollment.
 export async function signManifest(
   manifestBytes: Uint8Array,
   credentialId: string,
   alg: WebAuthnAlg,
+  rpId: string,
   publicKeyPEM: string,
 ): Promise<SignedTrustList> {
   assertWebAuthnAvailable();
@@ -286,6 +300,9 @@ export async function signManifest(
 
   const options: PublicKeyCredentialRequestOptions = {
     challenge,
+    // Pin rpId to the enrolled value; do NOT rely on the implicit
+    // effective-domain default (see the function doc above).
+    rpId,
     allowCredentials: [
       {
         type: 'public-key',

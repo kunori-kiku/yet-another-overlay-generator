@@ -149,14 +149,21 @@ export function DeployBar() {
         </p>
       </div>
 
-      {/* WebAuthn 提示弹出、等待用户触碰安全密钥时的醒目提示（enroll 或 deploy 签名期间）。 */}
+      {/* WebAuthn 提示弹出、等待用户触碰安全密钥时的醒目提示。文案区分 enroll（注册签名
+          密钥，此时并无部署在进行）与 deploy 签名（授权本次部署）两种 ceremony。 */}
       {(signing || enrolling) && (
         <p className="text-sm text-amber-200 bg-amber-900/30 border border-amber-700/50 px-3 py-2 rounded animate-pulse">
-          {txt(
-            language,
-            '👆 请触碰你的安全密钥以授权本次部署...',
-            '👆 Touch your security key to authorize this deploy...',
-          )}
+          {enrolling
+            ? txt(
+                language,
+                '👆 请触碰你的安全密钥以注册签名密钥...',
+                '👆 Touch your security key to enroll your signing key...',
+              )
+            : txt(
+                language,
+                '👆 请触碰你的安全密钥以授权本次部署...',
+                '👆 Touch your security key to authorize this deploy...',
+              )}
         </p>
       )}
 
