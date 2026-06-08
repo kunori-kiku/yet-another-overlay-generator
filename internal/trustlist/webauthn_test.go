@@ -393,3 +393,44 @@ func TestWebAuthnBadClientDataJSON(t *testing.T) {
 		t.Fatalf("Verify accepted invalid clientDataJSON")
 	}
 }
+
+// TestVerifyFailsClosedOnMalformedPin confirms the verifier returns an error (never
+// PANICS) on a malformed pinned credential. A keystone verifier must fail closed even
+// if a future caller builds a PinnedCredential by means other than the PEM parsers.
+func TestVerifyFailsClosedOnMalformedPin(t *testing.T) {
+	tl := TrustList{
+		SchemaVersion: 1, Tenant: "acme", Epoch: 1,
+		Members:   []Member{{NodeID: "n1", WGPublicKey: "k1"}},
+		CreatedAt: "2026-06-08T00:00:00Z",
+	}
+	check := func(name string, pin PinnedCredential, art SignedTrustList) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("%s: Verify PANICKED (%v); a keystone verifier must fail closed, not crash", name, r)
+			}
+		}()
+		if err := Verify(tl, art, pin); err == nil {
+			t.Errorf("%s: Verify returned nil for a malformed pin; want an error", name)
+		}
+	}
+
+	esArt, esPin := buildES256Assertion(t, tl)
+	edArt, edPin := buildEdDSAAssertion(t, tl)
+
+	// ES256: nil pubkey, and a non-P-256 curve (would panic in ecdsa.VerifyASN1).
+	check("es256 nil pub", PinnedCredential{Alg: AlgWebAuthnES256, RPID: testRPID, ES256Pub: nil}, esArt)
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen p384: %v", err)
+	}
+	check("es256 non-P256 curve", PinnedCredential{Alg: AlgWebAuthnES256, RPID: testRPID, ES256Pub: &p384.PublicKey}, esArt)
+
+	// EdDSA: a wrong-length public key would PANIC in ed25519.Verify without the guard.
+	check("eddsa short pub", PinnedCredential{Alg: AlgWebAuthnEdDSA, RPID: testRPID, Ed25519Pub: make([]byte, 31)}, edArt)
+
+	// Empty RPID silently disables relying-party binding -> must be rejected.
+	emptyRPID := esPin
+	emptyRPID.RPID = ""
+	check("empty rpid", emptyRPID, esArt)
+	_ = edPin
+}

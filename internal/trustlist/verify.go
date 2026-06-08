@@ -40,6 +40,14 @@ var (
 // algorithm), NOT art.Alg (attacker-influenced). If art.Alg != pin.Alg we reject
 // outright (ErrAlgMismatch) before any cryptographic work, closing the
 // algorithm-confusion door.
+//
+// CALLER CONTRACT (load-bearing for the node consumer, plan-5.1c): the signed
+// payload is Canonical(tl), NOT the raw distributed trustlist.json bytes. Verify
+// re-canonicalizes tl, so it tolerates a distributed file that carries unknown
+// fields, duplicate keys, or different whitespace — those are simply dropped from
+// the canonical projection. A node that ACTS on the membership MUST act on
+// Canonical(tl) (or assert Canonical(parsed) byte-equals the received file and use a
+// strict decoder), so it never trusts bytes the user did not actually sign.
 func Verify(tl TrustList, art SignedTrustList, pin PinnedCredential) error {
 	// Algorithm-confusion guard: the artifact must declare the same algorithm
 	// the verifier was pinned to. We still dispatch on pin.Alg below regardless.

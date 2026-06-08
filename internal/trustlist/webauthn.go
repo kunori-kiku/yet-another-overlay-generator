@@ -3,6 +3,7 @@ package trustlist
 import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -46,6 +47,13 @@ const flagUserPresent = 0x01
 // origin check is documented as advisory; the content binding (step 5) is the
 // real authority.
 func verifyWebAuthn(tl TrustList, art SignedTrustList, pin PinnedCredential) error {
+	// 0. Pin config precondition: an empty RPID makes the rpIdHash check meaningless
+	//    (sha256("") is a known constant), silently disabling relying-party binding.
+	//    A keystone anchor must have a real RPID — reject fail-closed.
+	if pin.RPID == "" {
+		return fmt.Errorf("trustlist: webauthn pin has empty RPID (relying-party binding disabled)")
+	}
+
 	// 1. Decode the assertion components.
 	authData, err := base64.RawURLEncoding.DecodeString(art.AuthenticatorData)
 	if err != nil {
@@ -121,7 +129,10 @@ func verifyWebAuthn(tl TrustList, art SignedTrustList, pin PinnedCredential) err
 	// 10. Verify per the PINNED algorithm.
 	switch pin.Alg {
 	case AlgWebAuthnES256:
-		if pin.ES256Pub == nil {
+		// Re-assert the pin shape at the verify site (defense in depth): a nil key or
+		// nil/non-P-256 curve would panic inside ecdsa.VerifyASN1. ParseES256Pin already
+		// enforces P-256, but a pin constructed by other means must still fail closed.
+		if pin.ES256Pub == nil || pin.ES256Pub.Curve != elliptic.P256() {
 			return ErrMissingPin
 		}
 		// ES256 = ECDSA P-256 with SHA-256; the signature is DER (ASN.1) over
@@ -132,7 +143,9 @@ func verifyWebAuthn(tl TrustList, art SignedTrustList, pin PinnedCredential) err
 		}
 		return nil
 	case AlgWebAuthnEdDSA:
-		if len(pin.Ed25519Pub) == 0 {
+		// Require the exact key size: ed25519.Verify PANICS on a wrong-length public
+		// key (vs returning false), so a malformed pin must fail closed here, not crash.
+		if len(pin.Ed25519Pub) != ed25519.PublicKeySize {
 			return ErrMissingPin
 		}
 		// Ed25519 signs the message directly (it hashes internally); do NOT
