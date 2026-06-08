@@ -59,6 +59,19 @@ func TestTenantIsolation(t *testing.T) {
 			if err := s.IssueNodeAPIToken(ctx, tenantA, "alpha", tokenHash("a-api-secret")); err != nil {
 				t.Fatalf("IssueNodeAPIToken(A): %v", err)
 			}
+			if err := s.PutOperator(ctx, tenantA, Operator{
+				Username:     "admin",
+				PasswordHash: "$argon2id$v=19$m=65536,t=3,p=1$c2FsdHNhbHQ$aGFzaGhhc2g",
+			}); err != nil {
+				t.Fatalf("PutOperator(A): %v", err)
+			}
+			if err := s.CreateSession(ctx, tenantA, Session{
+				TokenHash: tokenHash("a-session"),
+				Operator:  "admin",
+				ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+			}); err != nil {
+				t.Fatalf("CreateSession(A): %v", err)
+			}
 
 			// Tenant B must see nothing: point reads -> ErrNotFound.
 			if _, err := s.GetNode(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
@@ -105,6 +118,22 @@ func TestTenantIsolation(t *testing.T) {
 				t.Fatalf("LookupNodeByAPIToken(B, A's api token): err = %v, want ErrTokenInvalid", err)
 			}
 
+			// Tenant B must not see tenant A's operator account or login session.
+			if _, err := s.GetOperator(ctx, tenantB, "admin"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetOperator(B, admin): err = %v, want ErrNotFound", err)
+			}
+			ops, err := s.ListOperators(ctx, tenantB)
+			if err != nil {
+				t.Fatalf("ListOperators(B): %v", err)
+			}
+			if len(ops) != 0 {
+				t.Fatalf("ListOperators(B) = %v, want empty", ops)
+			}
+			sessNow := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+			if _, err := s.LookupSession(ctx, tenantB, tokenHash("a-session"), sessNow); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("LookupSession(B, A's session): err = %v, want ErrTokenInvalid", err)
+			}
+
 			// Sanity: tenant A still sees its own data (isolation is symmetric, not
 			// a blanket wipe).
 			if _, err := s.GetNode(ctx, tenantA, "alpha"); err != nil {
@@ -123,6 +152,15 @@ func TestTenantIsolation(t *testing.T) {
 			// not break the owning tenant).
 			if err := s.ConsumeEnrollmentToken(ctx, tenantA, tokenHash("a-secret"), "alpha", at); err != nil {
 				t.Fatalf("ConsumeEnrollmentToken(A, A's token): %v", err)
+			}
+			// ...and tenant A still sees its own operator account + session.
+			if _, err := s.GetOperator(ctx, tenantA, "admin"); err != nil {
+				t.Fatalf("GetOperator(A, admin): %v", err)
+			}
+			if sess, err := s.LookupSession(ctx, tenantA, tokenHash("a-session"), at); err != nil {
+				t.Fatalf("LookupSession(A, A's session): %v", err)
+			} else if sess.Operator != "admin" {
+				t.Fatalf("LookupSession(A) Operator = %q, want admin", sess.Operator)
 			}
 		})
 	}

@@ -59,10 +59,18 @@ const controllerMaxBodyBytes = maxRequestBodyBytes
 // YAOG_TENANT_ID), the hex SHA-256 of the operator's bearer token (never the
 // plaintext), and the operator identity stamped onto operator-route requests.
 type ControllerHandler struct {
-	store             controller.Store
-	tenant            controller.TenantID
+	store  controller.Store
+	tenant controller.TenantID
+	// operatorTokenHash is the hex SHA-256 of the optional BREAK-GLASS operator token
+	// (YAOG_CONTROLLER_OPERATOR_TOKEN). Empty disables it: with no break-glass token,
+	// only password-login sessions authenticate operator routes. When set it is a
+	// standing admin credential, accepted alongside sessions (a recovery path).
 	operatorTokenHash string
 	operatorName      string
+	// loginLimiter throttles failed POST /login attempts (per username + source IP).
+	loginLimiter *loginLimiter
+	// sessionTTL is the lifetime of a session minted at /login.
+	sessionTTL time.Duration
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
 	pollDeadline time.Duration
 	// pathPrefix is an optional secret path segment the controller routes mount under
@@ -88,6 +96,8 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		tenant:            tenant,
 		operatorTokenHash: operatorTokenHash,
 		operatorName:      operatorName,
+		loginLimiter:      newLoginLimiter(),
+		sessionTTL:        controller.DefaultSessionTTL,
 		pollDeadline:      defaultPollDeadline,
 	}
 }
@@ -116,6 +126,12 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	base := h.basePath()
 	op := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
+	// Operator login (plan-5.2): /login is UNAUTHENTICATED (reachable before the
+	// operator has a session) — cors-wrapped but NOT operatorAuth; it verifies a
+	// password and mints a session. /logout is authenticated and revokes the
+	// presented session.
+	mux.HandleFunc(base+"login", h.cors(h.HandleLogin))
+	mux.HandleFunc(base+"logout", op(h.HandleLogout))
 	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
 	mux.HandleFunc(base+"stage", op(h.HandleStage))
 	mux.HandleFunc(base+"promote", op(h.HandlePromote))

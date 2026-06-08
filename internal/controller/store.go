@@ -163,6 +163,31 @@ type EnrollmentToken struct {
 	ConsumedAt *time.Time
 }
 
+// Operator is a controller operator account (operator login, plan-5.2). It is
+// created out-of-band by the `yaog-server create-operator` CLI and authenticates the
+// operator at POST /login. The plaintext password is NEVER stored — only
+// PasswordHash, a self-describing argon2id PHC string (see password.go) — so a
+// store/DB read cannot recover a usable password.
+type Operator struct {
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"password_hash"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Session is a server-side operator session minted at a successful /login. The
+// controller stores only TokenHash (hex SHA-256 of the bearer session token); the
+// plaintext is returned to the browser exactly once and held in memory there. A
+// presented session bearer resolves to its Operator while now < ExpiresAt; an
+// expired session is treated as invalid (and may be lazily deleted). Logout deletes
+// the session. Sessions are the operator-side analogue of per-node API tokens.
+type Session struct {
+	TokenHash string    `json:"token_hash"`
+	Operator  string    `json:"operator"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // Store is the single tenant-scoped data-access chokepoint for the controller.
 //
 // Contract for every implementation:
@@ -288,4 +313,33 @@ type Store interface {
 	// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
 	// ErrNotFound when none has been signed yet.
 	GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error)
+
+	// --- Operators + sessions (operator login, plan-5.2) ---
+
+	// PutOperator creates or replaces an operator account (matched by Username). It is
+	// the persistence step behind `yaog-server create-operator`. The plaintext password
+	// is never passed here — Operator carries only the argon2id PHC hash.
+	PutOperator(ctx context.Context, t TenantID, op Operator) error
+	// GetOperator returns the operator account, or ErrNotFound.
+	GetOperator(ctx context.Context, t TenantID, username string) (Operator, error)
+	// ListOperators returns all operator accounts for the tenant (stable order by
+	// Username). Used to detect a duplicate at create time and to list accounts.
+	ListOperators(ctx context.Context, t TenantID) ([]Operator, error)
+	// DeleteOperator removes an operator account. It is idempotent: a missing account
+	// is a no-op success. Existing sessions are NOT cascaded here (a session expires on
+	// its own TTL); a caller wanting immediate lockout deletes the sessions too.
+	DeleteOperator(ctx context.Context, t TenantID, username string) error
+
+	// CreateSession stores a minted operator session, keyed by its TokenHash (hex
+	// SHA-256 of the session bearer token; the plaintext is never stored).
+	CreateSession(ctx context.Context, t TenantID, s Session) error
+	// LookupSession resolves a presented session token's hash to its Session. It
+	// returns ErrTokenInvalid when no session matches tokenHash OR the session has
+	// expired (now is at/after ExpiresAt); an implementation MAY lazily delete an
+	// expired session it encounters. This is the operator-side analogue of
+	// LookupNodeByAPIToken.
+	LookupSession(ctx context.Context, t TenantID, tokenHash string, now time.Time) (Session, error)
+	// DeleteSession removes a session (logout / revoke). It is idempotent: a missing
+	// session is a no-op success.
+	DeleteSession(ctx context.Context, t TenantID, tokenHash string) error
 }

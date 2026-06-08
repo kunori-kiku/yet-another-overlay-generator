@@ -37,6 +37,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
@@ -137,13 +138,14 @@ func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-// operatorAuth wraps an operator-only handler. It requires a bearer token whose
-// hex SHA-256 equals the configured operator token hash, compared in constant time
-// (crypto/subtle) so a timing side-channel cannot leak the secret. A missing token
-// is a 401 ("who are you"); a present-but-wrong token (including a normal node
-// token) is a 403 ("you may not"). It injects the configured tenant and the
-// operator identity into the context so the wrapped handlers read a uniform
-// identity. A node can never perform an operator action.
+// operatorAuth wraps an operator-only handler. It authenticates the bearer token
+// as EITHER a valid login session (the primary path, plan-5.2) OR — when configured —
+// the break-glass operator token (constant-time compared). A missing token is a 401
+// ("who are you"); a present-but-unrecognized token (including a normal node token,
+// an expired session, or — when no break-glass token is set — any non-session token)
+// is a 403 ("you may not"). It injects the configured tenant and the resolved
+// operator identity into the context so the wrapped handlers read a uniform identity.
+// A node can never perform an operator action.
 func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
@@ -151,13 +153,35 @@ func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc
 			writeError(w, http.StatusUnauthorized, "bearer token required")
 			return
 		}
-		presented := controller.HashToken(tok)
-		if subtle.ConstantTimeCompare([]byte(presented), []byte(h.operatorTokenHash)) != 1 {
+		operator, ok := h.resolveOperator(r.Context(), tok)
+		if !ok {
 			writeError(w, http.StatusForbidden, "operator privileges required")
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, h.tenant)
-		ctx = context.WithValue(ctx, ctxKeyNode, h.operatorName)
+		ctx = context.WithValue(ctx, ctxKeyNode, operator)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// resolveOperator authenticates an operator bearer token, returning the operator
+// identity. It accepts EITHER a valid (unexpired) login session OR — when a
+// break-glass operator token is configured — that token (constant-time compared so a
+// timing side channel cannot leak it). It returns ("", false) when neither matches.
+//
+// Both credentials are 256-bit unguessable secrets resolved by their hash, so the
+// session lookup needs no constant-time compare (a Go map/file lookup by a hashed key
+// does not leak the stored keys); only the break-glass compare against the pinned
+// secret is constant-time. On any store error the session is simply not accepted
+// (fail-closed) and the break-glass path is tried.
+func (h *ControllerHandler) resolveOperator(ctx context.Context, tok string) (string, bool) {
+	hash := controller.HashToken(tok)
+	if sess, err := h.store.LookupSession(ctx, h.tenant, hash, time.Now().UTC()); err == nil {
+		return sess.Operator, true
+	}
+	if h.operatorTokenHash != "" &&
+		subtle.ConstantTimeCompare([]byte(hash), []byte(h.operatorTokenHash)) == 1 {
+		return h.operatorName, true
+	}
+	return "", false
 }
