@@ -268,6 +268,10 @@ type ControllerSettings struct {
 	// the bootstrap fetches "<AgentReleaseBaseURL>/yaog-agent-linux-<arch>". Defaults to
 	// the project's "releases/latest/download".
 	AgentReleaseBaseURL string `json:"agent_release_base_url"`
+	// Translucency is the operator panel's vibrancy preference (panel-appshell P5). It is
+	// a PANEL APPEARANCE setting served via GET/POST /settings; it is deliberately NOT
+	// baked into the agent bootstrap script (it has no bearing on a node). Default true.
+	Translucency bool `json:"translucency"`
 }
 
 // Store is the single tenant-scoped data-access chokepoint for the controller.

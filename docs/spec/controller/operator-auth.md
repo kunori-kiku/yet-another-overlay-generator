@@ -149,6 +149,31 @@ sessions authenticate; the server logs a startup warning if neither a break-glas
 nor any operator account exists. If set, it is a standing admin secret — store it like
 one, or leave it unset and rely on `create-operator` on the host for recovery.
 
+## Session cookies & cross-origin (`YAOG_PANEL_ORIGIN`, `YAOG_SECURE_COOKIE`)
+
+A successful login also sets an **httpOnly `yaog_session` cookie** (alongside the JSON
+`session_token`, kept for the Bearer fallback) so an operator stays logged in across a
+page refresh **without the panel persisting any token in web storage**. The panel
+re-derives login state from `GET …/session` (the cookie travels automatically). JS never
+reads the session — it lives in an httpOnly cookie.
+
+- **CSRF (double-submit).** Login also sets a readable `yaog_csrf` cookie and returns
+  `csrf_token`. On the cookie path, every **state-changing** request must echo that token
+  in the `X-CSRF-Token` header; the server constant-time compares it to the cookie. The
+  **Bearer** path is exempt (it is not CSRF-vulnerable). Safe methods (GET) are exempt.
+- **`YAOG_PANEL_ORIGIN`** — comma-separated allowlist of browser origins permitted to make
+  **credentialed** (cookie) cross-origin requests. For a matching `Origin`, CORS reflects
+  that exact origin + `Access-Control-Allow-Credentials: true` + `Vary: Origin` (a wildcard
+  `*` is **never** sent with credentials). Empty (default) ⇒ **same-origin only** for the
+  cookie path; the Bearer path still works via the permissive non-credentialed `*`. A
+  same-origin Docker deployment (panel + API on one origin) needs **no** allowlist. A
+  cross-origin panel **must** set this and be served over **HTTPS** (`SameSite=None`
+  requires `Secure`).
+- **`YAOG_SECURE_COOKIE`** — `Secure` attribute on the cookies. Default **true**; set
+  `false`/`0`/`no` ONLY for local non-TLS development.
+- **Agent routes are untouched** — machine-to-machine routes stay Bearer-only with no
+  cookies, no CSRF, and no credentialed CORS.
+
 ## Honest limits
 
 - **Rate-limit state is in-process** and resets on restart (ephemeral by design); a

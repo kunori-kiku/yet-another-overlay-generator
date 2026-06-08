@@ -229,3 +229,75 @@ func TestBootstrapHTTP(t *testing.T) {
 	// The bootstrap route must NOT require auth (it is served on the agent port like
 	// /enroll): a bare GET with no bearer already succeeded above, confirming that.
 }
+
+// TestSettingsTranslucencyRoundTrip: the panel Translucency setting (P5) defaults to
+// true, round-trips through GET/POST /settings, and is NEVER injected into the agent
+// bootstrap script (it is a panel-appearance setting with no bearing on a node).
+func TestSettingsTranslucencyRoundTrip(t *testing.T) {
+	store := controller.NewMemStore()
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	opMux := http.NewServeMux()
+	ch.RegisterOperatorRoutes(opMux)
+	agentMux := http.NewServeMux()
+	ch.RegisterAgentRoutes(agentMux)
+	opSrv := httptest.NewServer(opMux)
+	defer opSrv.Close()
+	agentSrv := httptest.NewServer(agentMux)
+	defer agentSrv.Close()
+
+	const base = "/api/v1/controller/"
+	opReq := func(method, route, body string) *http.Response {
+		t.Helper()
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+		req, _ := http.NewRequest(method, opSrv.URL+base+route, r)
+		req.Header.Set("Authorization", "Bearer "+testOperatorToken)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := opSrv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, route, err)
+		}
+		return resp
+	}
+
+	// GET defaults: translucency ON.
+	resp := opReq(http.MethodGet, "settings", "")
+	var got settingsJSON
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if !got.Translucency {
+		t.Fatalf("default translucency = false, want true")
+	}
+
+	// POST translucency:false round-trips and persists.
+	body, _ := json.Marshal(settingsJSON{PublicAgentURL: "https://x.example.com", Translucency: false})
+	resp = opReq(http.MethodPost, "settings", string(body))
+	var saved settingsJSON
+	_ = json.NewDecoder(resp.Body).Decode(&saved)
+	resp.Body.Close()
+	if saved.Translucency {
+		t.Fatalf("POST translucency=false returned true")
+	}
+	resp = opReq(http.MethodGet, "settings", "")
+	var reread settingsJSON
+	_ = json.NewDecoder(resp.Body).Decode(&reread)
+	resp.Body.Close()
+	if reread.Translucency {
+		t.Fatalf("translucency=false not persisted")
+	}
+
+	// The bootstrap script must NOT mention translucency.
+	bresp, err := agentSrv.Client().Get(agentSrv.URL + base + "bootstrap")
+	if err != nil {
+		t.Fatalf("GET bootstrap: %v", err)
+	}
+	script, _ := io.ReadAll(bresp.Body)
+	bresp.Body.Close()
+	if bytes.Contains(bytes.ToLower(script), []byte("translucen")) {
+		t.Errorf("bootstrap script must not contain translucency")
+	}
+}

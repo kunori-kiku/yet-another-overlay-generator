@@ -15,6 +15,18 @@ export function SettingsPage() {
   const setTheme = useUiStore((s) => s.setTheme);
   const translucency = useUiStore((s) => s.translucency);
   const setTranslucency = useUiStore((s) => s.setTranslucency);
+  const settings = useControllerStore((s) => s.settings);
+  const saveSettings = useControllerStore((s) => s.saveSettings);
+
+  // Translucency is applied via uiStore (the appearance source ThemeProvider reads). In
+  // controller mode the server is the source of truth, so also persist it there
+  // (merging the current bootstrap settings); local mode persists client-side only.
+  const onTranslucencyChange = (on: boolean) => {
+    setTranslucency(on);
+    if (mode === 'controller' && settings) {
+      void saveSettings({ ...settings, translucency: on });
+    }
+  };
 
   const seg = (selected: boolean) =>
     `px-3 py-1.5 text-sm ${
@@ -82,7 +94,7 @@ export function SettingsPage() {
             <input
               type="checkbox"
               checked={translucency}
-              onChange={(e) => setTranslucency(e.target.checked)}
+              onChange={(e) => onTranslucencyChange(e.target.checked)}
             />
             {txt(language, ...STRINGS.appearanceTranslucency)}
           </label>

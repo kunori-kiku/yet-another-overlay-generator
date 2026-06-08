@@ -11,13 +11,15 @@ package controller
 const DefaultAgentReleaseBaseURL = "https://github.com/kunori-kiku/yet-another-overlay-generator/releases/latest/download"
 
 // DefaultSettings returns the controller settings applied when none have been saved:
-// no public agent URL yet (the operator must set it), GitHub proxy OFF, and the
-// project's latest-release asset URL as the agent binary source.
+// no public agent URL yet (the operator must set it), GitHub proxy OFF, the project's
+// latest-release asset URL as the agent binary source, and translucency ON (matching
+// the panel's default appearance).
 func DefaultSettings() ControllerSettings {
 	return ControllerSettings{
 		PublicAgentURL:      "",
 		GithubProxy:         "",
 		AgentReleaseBaseURL: DefaultAgentReleaseBaseURL,
+		Translucency:        true,
 	}
 }
 

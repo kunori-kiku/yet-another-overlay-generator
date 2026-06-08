@@ -37,9 +37,11 @@ import {
   disablePasskeyFinish,
   passkeyLoginBegin,
   passkeyLoginFinish,
+  getSession,
 } from '../api/controllerClient';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { useTopologyStore } from './topologyStore';
+import { useUiStore } from './uiStore';
 
 // 控制器面板（Mode B）状态。它是 controller 连接 + fleet 视图的单一来源，独立于
 // topologyStore（后者仍是拓扑数据的唯一来源）。deploy() 时从 topologyStore 读取当前
@@ -60,12 +62,19 @@ interface ControllerState {
   mode: 'local' | 'controller';
   setMode: (mode: 'local' | 'controller') => void;
 
-  // 登录会话（plan-5.2）：密码登录后服务端签发的 bearer session token，仅在内存中保存
-  // （刷新页面后需重新登录），绝不落 localStorage。operatorName/sessionExpiresAt 仅用于
-  // 回显「已登录为 X，到期时间」。
+  // 登录会话（plan-5.2 + appshell-P5）：密码登录后服务端签发的 bearer session token，仅在
+  // 内存中保存，绝不落 localStorage。P5 起 session 同时写入 httpOnly cookie，刷新后由
+  // checkSession() 经 GET /session 探测恢复登录态（loggedIn），无需在 JS 里读 token。
+  // operatorName/sessionExpiresAt 仅用于回显「已登录为 X，到期时间」。
   sessionToken: string;
   operatorName: string | null;
   sessionExpiresAt: string | null;
+  // csrfToken 是双提交 CSRF 令牌（来自 login / GET /session 响应），仅内存，绝不持久化。
+  // 在 cookie 鉴权的状态改写请求上作为 X-CSRF-Token 头回显（见 configOf）。
+  csrfToken: string;
+  // loggedIn 由 GET /session 探测派生：cookie 会话在刷新后仍有效时为真（此时 sessionToken
+  // 已随内存丢失）。selectLoggedIn = sessionToken !== '' || loggedIn。
+  loggedIn: boolean;
 
   // TOTP 2FA（plan-5.2）：totpRequired 表示上次登录密码正确但缺/错二次码（后端 401
   // totp_required），登录表单据此显示验证码输入框。totpEnabled 是当前已登录 operator 账户
@@ -124,6 +133,9 @@ interface ControllerState {
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
+  // checkSession probes GET /session to restore login state from the httpOnly cookie
+  // after a refresh (P5). Sets loggedIn + operator + expiry + csrfToken, or clears them.
+  checkSession: () => Promise<void>;
   // 无密码 passkey 登录（plan-5.2）：begin → assertLogin → finish。
   loginWithPasskey: (username: string) => Promise<void>;
   // 登录 passkey 自助管理（仅密码 session 有效）。
@@ -153,13 +165,16 @@ function configOf(state: ControllerState): ControllerConfig {
     baseURL: state.baseURL,
     pathPrefix: state.pathPrefix,
     operatorToken: state.sessionToken || state.operatorToken,
+    csrfToken: state.csrfToken,
   };
 }
 
 // 派生选择器：是否已通过密码登录（持有有效 session）。DeployPanel 用它在登录区切换
 // 「登录表单 / 已登录为 X」。break-glass operatorToken 不算「已登录」（它是恢复路径）。
 export function selectLoggedIn(state: ControllerState): boolean {
-  return state.sessionToken !== '';
+  // sessionToken is the in-memory bearer (this tab's login); loggedIn is derived from the
+  // GET /session cookie probe (survives a refresh that drops the in-memory token).
+  return state.sessionToken !== '' || state.loggedIn;
 }
 
 // 派生选择器：是否持有任一可用的 operator 凭据（登录 session 或 break-glass token）。
@@ -167,7 +182,9 @@ export function selectLoggedIn(state: ControllerState): boolean {
 // operator 请求。DeployBar 用它决定是否禁用 Deploy/Roll-keys（不能再只看 operatorToken，
 // 否则登录后的操作员会被错误地拦住）。
 export function selectHasAuth(state: ControllerState): boolean {
-  return state.sessionToken !== '' || state.operatorToken.trim() !== '';
+  // A cookie-restored session (loggedIn) can make operator requests too — the cookie is
+  // attached automatically — so it counts as auth even when the in-memory token is empty.
+  return state.sessionToken !== '' || state.loggedIn || state.operatorToken.trim() !== '';
 }
 
 // 把标准 base64（带 padding，GET /trustlist 的 trustlist_json 编码）解码回原始字节。
@@ -223,6 +240,8 @@ export const useControllerStore = create<ControllerState>()(
       sessionToken: '',
       operatorName: null,
       sessionExpiresAt: null,
+      csrfToken: '',
+      loggedIn: false,
 
       totpRequired: false,
       totpEnabled: null,
@@ -281,7 +300,13 @@ export const useControllerStore = create<ControllerState>()(
       // 加载 bootstrap 设置（独立入口，供设置区首次渲染时用）。
       loadSettings: async () => {
         try {
-          set({ settings: await getSettings(configOf(get())) });
+          const settings = await getSettings(configOf(get()));
+          set({ settings });
+          // In controller mode the server is the source of truth for translucency; apply
+          // it to the appearance store. In local mode the client uiStore value stands.
+          if (get().mode === 'controller') {
+            useUiStore.getState().setTranslucency(settings.translucency);
+          }
         } catch (err) {
           set({ error: err instanceof Error ? err.message : 'Failed to load settings' });
         }
@@ -326,6 +351,8 @@ export const useControllerStore = create<ControllerState>()(
               if (after.kind === 'success') {
                 set({
                   sessionToken: after.result.sessionToken,
+                  csrfToken: after.result.csrfToken,
+                  loggedIn: true,
                   operatorName: after.result.operator,
                   sessionExpiresAt: after.result.expiresAt,
                   totpRequired: false,
@@ -365,6 +392,8 @@ export const useControllerStore = create<ControllerState>()(
           }
           set({
             sessionToken: outcome.result.sessionToken,
+            csrfToken: outcome.result.csrfToken,
+            loggedIn: true,
             operatorName: outcome.result.operator,
             sessionExpiresAt: outcome.result.expiresAt,
             totpRequired: false,
@@ -393,7 +422,8 @@ export const useControllerStore = create<ControllerState>()(
       // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。
       logout: async () => {
         try {
-          if (get().sessionToken) {
+          // 有内存 session 或 cookie 会话（loggedIn）时都要调服务端撤销 + 清 cookie。
+          if (get().sessionToken || get().loggedIn) {
             await ctlLogout(configOf(get()));
           }
         } catch {
@@ -401,6 +431,8 @@ export const useControllerStore = create<ControllerState>()(
         }
         set({
           sessionToken: '',
+          csrfToken: '',
+          loggedIn: false,
           operatorName: null,
           sessionExpiresAt: null,
           // 清掉 2FA 会话态：totpRequired 复位，totpEnabled 回到「未知」，下一位用密码登录的
@@ -416,6 +448,28 @@ export const useControllerStore = create<ControllerState>()(
           settings: null,
           error: null,
         });
+      },
+
+      // 刷新后恢复登录态（P5）：GET /session 用 httpOnly cookie 探测当前会话。命中则置
+      // loggedIn + 身份 + 到期 + csrfToken（后续状态改写请求据此带 X-CSRF-Token）；未命中
+      // （401/403）则清空登录态。探测失败（网络/未配置）也清 loggedIn。仅恢复登录态——不主动
+      // 拉 fleet（由持久化缓存即时上色，用户按「连接 / 刷新」取实时态）。
+      checkSession: async () => {
+        try {
+          const info = await getSession(configOf(get()));
+          if (info) {
+            set({
+              loggedIn: true,
+              operatorName: info.operator,
+              sessionExpiresAt: info.expiresAt || null,
+              csrfToken: info.csrfToken,
+            });
+          } else {
+            set({ loggedIn: false, csrfToken: '' });
+          }
+        } catch {
+          set({ loggedIn: false });
+        }
       },
 
       // 拉取本账户的 TOTP 状态。403（break-glass token 无账户）或网络错误时保持 totpEnabled=null
@@ -474,6 +528,8 @@ export const useControllerStore = create<ControllerState>()(
           const result = await passkeyLoginFinish(cfg, username, assertion);
           set({
             sessionToken: result.sessionToken,
+            csrfToken: result.csrfToken,
+            loggedIn: true,
             operatorName: result.operator,
             sessionExpiresAt: result.expiresAt,
             loading: false,

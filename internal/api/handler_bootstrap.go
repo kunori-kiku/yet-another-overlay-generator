@@ -28,6 +28,9 @@ type settingsJSON struct {
 	PublicAgentURL      string `json:"public_agent_url"`
 	GithubProxy         string `json:"github_proxy"`
 	AgentReleaseBaseURL string `json:"agent_release_base_url"`
+	// Translucency is the panel's appearance preference (P5). It round-trips through
+	// GET/POST /settings but is NOT injected into the bootstrap script.
+	Translucency bool `json:"translucency"`
 }
 
 // loadSettings returns the tenant's settings with defaults applied (so an absent or
@@ -54,7 +57,12 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to read settings")
 			return
 		}
-		writeJSON(w, http.StatusOK, settingsJSON{cs.PublicAgentURL, cs.GithubProxy, cs.AgentReleaseBaseURL})
+		writeJSON(w, http.StatusOK, settingsJSON{
+			PublicAgentURL:      cs.PublicAgentURL,
+			GithubProxy:         cs.GithubProxy,
+			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
+			Translucency:        cs.Translucency,
+		})
 
 	case http.MethodPost:
 		tenant, actor, ok := identity(r.Context())
@@ -71,6 +79,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			PublicAgentURL:      strings.TrimSpace(req.PublicAgentURL),
 			GithubProxy:         strings.TrimSpace(req.GithubProxy),
 			AgentReleaseBaseURL: strings.TrimSpace(req.AgentReleaseBaseURL),
+			Translucency:        req.Translucency,
 		}.WithDefaults()
 		if cs.PublicAgentURL != "" {
 			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
@@ -97,7 +106,12 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			Actor:     "operator:" + actor,
 			Action:    "settings-update",
 		})
-		writeJSON(w, http.StatusOK, settingsJSON{cs.PublicAgentURL, cs.GithubProxy, cs.AgentReleaseBaseURL})
+		writeJSON(w, http.StatusOK, settingsJSON{
+			PublicAgentURL:      cs.PublicAgentURL,
+			GithubProxy:         cs.GithubProxy,
+			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
+			Translucency:        cs.Translucency,
+		})
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "only GET and POST are supported")

@@ -148,7 +148,21 @@ func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc 
 // A node can never perform an operator action.
 func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Primary: the Authorization Bearer header (session token or break-glass token).
+		// Bearer auth is not CSRF-vulnerable (a cross-site form cannot set it), so it is
+		// exempt from the CSRF check.
 		tok, ok := bearerToken(r)
+		if !ok {
+			// Fallback: the httpOnly session cookie. Because the browser attaches it
+			// AMBIENTLY, a state-changing request on the cookie path must carry a valid
+			// double-submit CSRF token (X-CSRF-Token == yaog_csrf cookie). Safe methods
+			// (GET/HEAD/OPTIONS) are exempt.
+			tok, ok = sessionCookieToken(r)
+			if ok && isStateChanging(r.Method) && !csrfValid(r) {
+				writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+				return
+			}
+		}
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "bearer token required")
 			return
