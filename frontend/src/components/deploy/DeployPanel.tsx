@@ -191,6 +191,13 @@ export function DeployPanel() {
                   placeholder="/s3cr3t"
                   className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                 />
+                <p className="text-[10px] text-gray-500 mt-0.5">
+                  {txt(
+                    language,
+                    '需与服务端部署变量 YAOG_CONTROLLER_PATH_PREFIX 一致：此处不设置任何东西，只告诉面板 API 的位置。服务端未设置则留空。',
+                    "Must match the server's YAOG_CONTROLLER_PATH_PREFIX (set at deploy time). This sets nothing — it only tells the panel where the API is. Leave blank if the server has none.",
+                  )}
+                </p>
               </div>
               <div>
                 <label className="text-xs text-gray-400">
