@@ -42,6 +42,10 @@ const (
 	// under (both ports), e.g. "s3cr3t" -> "/s3cr3t/api/v1/controller/...". Empty =
 	// the bare paths. Defense-in-depth obscurity, not a security boundary.
 	envPathPrefix = "YAOG_CONTROLLER_PATH_PREFIX"
+	// envWebDir, when set, is the directory of the built frontend (the panel SPA) to
+	// serve on the operator/panel port alongside the API. The Docker image sets it to
+	// the embedded dist; unset = API only (Vite/dev or a reverse proxy serves the panel).
+	envWebDir = "YAOG_WEB_DIR"
 )
 
 func main() {
@@ -63,6 +67,13 @@ func main() {
 	tenant := os.Getenv(envTenantID)
 
 	server := api.NewServer()
+
+	// Optionally serve the built panel SPA from YAOG_WEB_DIR on the operator/panel port
+	// (the Docker image sets this so one container serves panel + API). Applies in both
+	// air-gap and controller mode; the /api/* routes take precedence over the SPA "/".
+	if webDir := os.Getenv(envWebDir); webDir != "" {
+		server.EnableStatic(webDir)
+	}
 
 	// Air-gap mode (the default): controller env not configured → serve exactly as
 	// before. The mux and the HTTP serve path are untouched.

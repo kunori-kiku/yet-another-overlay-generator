@@ -1,0 +1,14 @@
+# Keep the build context small and never ship local state/secrets into the image.
+.git
+.github
+**/node_modules
+frontend/dist
+output
+*.log
+.env
+*.pem
+*.key
+implementation_plans
+docs
+dev.sh
+**/*_test.go
