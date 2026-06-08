@@ -239,11 +239,24 @@ type revokeResponseJSON struct {
 	Revoked bool   `json:"revoked"`
 }
 
+// auditEntryJSON is the operator-facing wire form of one audit entry. It is an
+// explicit snake_case DTO (controller.AuditEntry has no json tags, so it would
+// otherwise serialize as PascalCase) that exposes only the operator-relevant fields —
+// the chain internals (PrevHash/Hash) are NOT leaked; their integrity is conveyed by
+// auditResponseJSON.Verified.
+type auditEntryJSON struct {
+	Seq       int64     `json:"seq"`
+	Timestamp time.Time `json:"timestamp"`
+	Actor     string    `json:"actor"`
+	Action    string    `json:"action"`
+	NodeID    string    `json:"node_id"`
+}
+
 // auditResponseJSON is the operator-facing view of the audit chain: the entries in
 // Seq order plus whether the hash chain verifies intact.
 type auditResponseJSON struct {
-	Entries  []controller.AuditEntry `json:"entries"`
-	Verified bool                    `json:"verified"`
+	Entries  []auditEntryJSON `json:"entries"`
+	Verified bool             `json:"verified"`
 }
 
 // enrollmentTokenRequestJSON is the operator's request to mint a single-use
@@ -626,8 +639,18 @@ func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to list audit")
 		return
 	}
+	out := make([]auditEntryJSON, len(entries))
+	for i, e := range entries {
+		out[i] = auditEntryJSON{
+			Seq:       e.Seq,
+			Timestamp: e.Timestamp,
+			Actor:     e.Actor,
+			Action:    e.Action,
+			NodeID:    e.NodeID,
+		}
+	}
 	writeJSON(w, http.StatusOK, auditResponseJSON{
-		Entries:  entries,
+		Entries:  out,
 		Verified: controller.VerifyAuditChain(entries) == -1,
 	})
 }

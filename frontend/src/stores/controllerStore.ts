@@ -123,7 +123,12 @@ export const useControllerStore = create<ControllerState>()(
           // step-up：把任何用户密钥确认放在改动 fleet 状态（stage/promote）之前。
           await requireUserKey();
           const result = await stage(cfg);
-          await promote(cfg);
+          // 当没有已注册节点时 stage 不产生任何 bundle（staged 为空），此时 promote 会
+          // 返回 409 ErrNoStagedBundle —— 那不是错误，而是「还没有节点入网」。直接展示
+          // skippedUnenrolled，跳过 promote，避免把正常情况渲染成报错。
+          if (result.staged.length > 0) {
+            await promote(cfg);
+          }
           set({ lastDeploy: result, loading: false });
           await get().refresh();
         } catch (err) {

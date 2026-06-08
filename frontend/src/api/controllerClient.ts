@@ -29,8 +29,19 @@ function normalizePrefix(prefix: string): string {
 }
 
 // 构造一条控制器路由的完整 URL。baseURL 去掉尾随斜杠，避免与 path 前缀拼出双斜杠。
+// baseURL 必须是绝对 http(s) URL：否则 fetch 会相对于面板自身的 origin 解析，把 operator
+// bearer token 发到错误的源（凭据泄露）。非法时直接抛错，由调用方写入 store.error。
 export function ctlURL(cfg: ControllerConfig, route: string): string {
-  const base = cfg.baseURL.replace(/\/+$/, '');
+  const base = cfg.baseURL.trim().replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    throw new Error('controller URL must be an absolute http(s) URL, e.g. http://localhost:8080');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('controller URL must use http or https');
+  }
   return `${base}${normalizePrefix(cfg.pathPrefix)}/api/v1/controller/${route}`;
 }
 
