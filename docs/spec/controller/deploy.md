@@ -75,11 +75,23 @@ in on later deploys as more nodes enroll.
   stage yet). Zero enrolled nodes → an empty `StageResult` (with `SkippedUnenrolled` populated) and no
   error — staging nothing is a benign no-op, not a failure.
 
-**Idempotent fill-in.** Because the allocation pins persist in the stored topology (compiler invariant
-I10, see [../compiler/allocation-stability.md](../compiler/allocation-stability.md)), re-deploying after
-a new enrollment reproduces byte-identical configs for the already-rendered nodes and edges, and only
-**adds** the newly-ready peer interfaces. Incremental enrollment does not perturb the nodes that were
-already live.
+**Idempotent fill-in — via allocation write-back.** Allocation stability (invariant I10, see
+[../compiler/allocation-stability.md](../compiler/allocation-stability.md)) does **not** come for free
+here: the IP/transit/port allocators are sequential, so compiling a *growing* subgraph would renumber
+existing nodes unless their allocations are pinned. `CompileAndStage` therefore **persists the compiled
+pins back into the stored topology** after each run — per-node `overlay_ip` and the per-edge transit
+IPs, link-locals, and ports (never any key material; the stored topology stays public-keys-only). The
+**next** `CompileAndStage` finds those pins in the stored topology and the compiler **sticky-pins**
+them (reusing existing values, allocating only genuinely new entities). The result: re-deploying after
+a new enrollment reproduces the **same** allocations for the already-staged nodes/edges and only
+**adds** the newly-ready ones — incremental enrollment never perturbs a node that was already live.
+
+**Client readiness.** A `client` role requires exactly one enabled outbound edge (the compiler treats
+a clientless-edge as a hard error). So an enrolled client whose dial target (its router/relay/gateway)
+is **not yet enrolled** is itself treated as **not ready**: it is reported in `SkippedUnenrolled` and
+not staged, exactly like an unenrolled node, and activates on a later deploy once its target enrolls.
+This keeps render-what's-ready honest for clients — a client enrolling before its router never fails
+the whole stage.
 
 ## Reusing the frozen pipeline
 
@@ -140,10 +152,12 @@ ID. The bridge lives only in the controller; the frozen exporter is not changed 
 
 ## Audit
 
-`CompileAndStage` appends **one** audit entry per invocation: `{Actor: "operator", Action: "stage",
-NodeID: ""}` — fleet-wide (empty `NodeID`) because a stage covers the whole enrolled subgraph, not a
-single node. The entry is hash-chained like every other (`AppendAudit`, [persistence.md](persistence.md)
-§audit hash chain). Promote appends its own entry separately.
+`CompileAndStage` appends **one** audit entry per invocation **that actually stages something**:
+`{Actor: "operator", Action: "stage", NodeID: ""}` — fleet-wide (empty `NodeID`) because a stage covers
+the whole enrolled subgraph, not a single node. The two benign no-op early returns — **no stored
+topology** and **no enrolled node** — return before the audit append (they staged nothing, so there is
+nothing to record). The entry is hash-chained like every other (`AppendAudit`,
+[persistence.md](persistence.md) §audit hash chain). Promote appends its own entry separately.
 
 ## Summary
 

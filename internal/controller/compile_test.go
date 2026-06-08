@@ -214,6 +214,26 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 		if !strings.Contains(wg, peerPub) {
 			t.Errorf("router WG config missing enrolled peer's public key %q\n%s", peerPub, wg)
 		}
+		// The unenrolled client must NOT appear as a peer: with the per-peer interface
+		// model the router has exactly one [Peer] (the enrolled peer), proving its
+		// dropped edge to the unenrolled client did not render.
+		if n := strings.Count(wg, "[Peer]"); n != 1 {
+			t.Errorf("router WG config has %d [Peer] blocks, want 1 (unenrolled client must be absent)\n%s", n, wg)
+		}
+
+		// Comprehensive zero-knowledge check: NO staged bundle (router OR peer) carries
+		// a real WireGuard private key on any of its wireguard/*.conf files.
+		for _, id := range []string{"node-router", "node-peer"} {
+			b, err := store.GetCurrentBundle(ctx, tnt, id)
+			if err != nil {
+				t.Fatalf("GetCurrentBundle(%s): %v", id, err)
+			}
+			for path, content := range b.Files {
+				if strings.HasPrefix(path, "wireguard/") && wgPrivKeyLineRE.Match(content) {
+					t.Errorf("bundle %s/%s leaked a real WireGuard private key", id, path)
+				}
+			}
+		}
 	})
 
 	// (c) Enroll the client too and re-run: the client is now staged and the
@@ -275,4 +295,85 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 			t.Errorf("GetCurrentBundle(node-client): %v", err)
 		}
 	})
+}
+
+// nodeOverlayIP reads a node's allocated overlay IP from the stored topology (it is
+// written there by CompileAndStage's allocation persistence).
+func nodeOverlayIP(t *testing.T, ctx context.Context, store Store, tnt TenantID, nodeID string) string {
+	t.Helper()
+	rec, err := store.GetTopology(ctx, tnt)
+	if err != nil {
+		t.Fatalf("GetTopology: %v", err)
+	}
+	var topo model.Topology
+	if err := json.Unmarshal(rec.JSON, &topo); err != nil {
+		t.Fatalf("unmarshal stored topology: %v", err)
+	}
+	for _, n := range topo.Nodes {
+		if n.ID == nodeID {
+			return n.OverlayIP
+		}
+	}
+	t.Fatalf("node %s not in stored topology", nodeID)
+	return ""
+}
+
+// TestCompileAndStage_ClientNotReady covers the render-what's-ready fix for the client
+// role: an enrolled client whose dial target (router) is NOT yet enrolled must be
+// treated as not-ready and skipped — NOT fed edgeless to the compiler (which would
+// hard-fail the whole stage on the client-edge rule). It activates on a later deploy.
+func TestCompileAndStage_ClientNotReady(t *testing.T) {
+	store := NewMemStore()
+	tnt := TenantID("stage-client-first")
+	ctx := putStageTopo(t, store, tnt)
+
+	// Enroll ONLY the client; its dial target node-router is left unenrolled.
+	approveNode(t, ctx, store, tnt, "node-client", genWGPubKey(t))
+
+	res, err := CompileAndStage(ctx, store, tnt, time.Now())
+	if err != nil {
+		t.Fatalf("CompileAndStage must not error when only an unready client is enrolled: %v", err)
+	}
+	if len(res.Staged) != 0 {
+		t.Errorf("Staged = %v, want empty (client not ready: its router is unenrolled)", res.Staged)
+	}
+	if !containsStr(res.SkippedUnenrolled, "node-client") {
+		t.Errorf("SkippedUnenrolled = %v, want to include node-client (not ready)", res.SkippedUnenrolled)
+	}
+	if _, err := store.PromoteStaged(ctx, tnt); err != ErrNoStagedBundle {
+		t.Errorf("PromoteStaged: err = %v, want ErrNoStagedBundle (nothing staged)", err)
+	}
+}
+
+// TestCompileAndStage_AllocationStability pins invariant I10 for the render-what's-ready
+// model: enrolling a new node and re-compiling must NOT renumber an already-staged
+// node's overlay IP. This works because CompileAndStage persists the compiled
+// allocation pins back into the stored topology, which the next compile sticky-pins.
+func TestCompileAndStage_AllocationStability(t *testing.T) {
+	store := NewMemStore()
+	tnt := TenantID("stage-stability")
+	ctx := putStageTopo(t, store, tnt)
+
+	approveNode(t, ctx, store, tnt, "node-router", genWGPubKey(t))
+	approveNode(t, ctx, store, tnt, "node-peer", genWGPubKey(t))
+	if _, err := CompileAndStage(ctx, store, tnt, time.Now()); err != nil {
+		t.Fatalf("CompileAndStage(first): %v", err)
+	}
+	routerIP := nodeOverlayIP(t, ctx, store, tnt, "node-router")
+	peerIP := nodeOverlayIP(t, ctx, store, tnt, "node-peer")
+	if routerIP == "" || peerIP == "" {
+		t.Fatalf("allocations not persisted to the stored topology: router=%q peer=%q", routerIP, peerIP)
+	}
+
+	// Enroll a third node and re-compile: existing nodes must keep their overlay IPs.
+	approveNode(t, ctx, store, tnt, "node-client", genWGPubKey(t))
+	if _, err := CompileAndStage(ctx, store, tnt, time.Now()); err != nil {
+		t.Fatalf("CompileAndStage(second): %v", err)
+	}
+	if got := nodeOverlayIP(t, ctx, store, tnt, "node-router"); got != routerIP {
+		t.Errorf("router overlay IP shifted %q -> %q after another node enrolled (I10 violated)", routerIP, got)
+	}
+	if got := nodeOverlayIP(t, ctx, store, tnt, "node-peer"); got != peerIP {
+		t.Errorf("peer overlay IP shifted %q -> %q after another node enrolled (I10 violated)", peerIP, got)
+	}
 }

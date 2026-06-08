@@ -117,6 +117,16 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		return StageResult{}, fmt.Errorf("controller: rendering enrolled subgraph: %w", err)
 	}
 
+	// Persist the compiled allocation pins (overlay IPs, transit pairs, link-locals,
+	// ports) back into the FULL stored topology, so a later re-compile sticky-pins them.
+	// This is what makes the render-what's-ready model satisfy invariant I10: once a
+	// node/edge has been staged at an allocation, enrolling another node never renumbers
+	// it (the compiler reuses the pins it finds in the stored topology and only allocates
+	// genuinely new entities).
+	if err := persistAllocations(ctx, store, t, &topo, result.Topology); err != nil {
+		return StageResult{}, err
+	}
+
 	// (4) Export to a temp dir we own and remove on return. Export writes one dir per
 	// node (keyed by node.Name) and, when YAOG_BUNDLE_SIGNING_KEY is set, the
 	// bundle.sig + signing-pubkey.pem inside each.
@@ -206,18 +216,35 @@ func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []str
 		AllocSchemaVersion: topo.AllocSchemaVersion,
 	}
 
+	// First pass: the set of nodes whose key material is enrolled.
 	enrolled := make(map[string]bool, len(topo.Nodes))
+	for _, node := range topo.Nodes {
+		if _, ok := registry[node.ID]; ok {
+			enrolled[node.ID] = true
+		}
+	}
+
+	// Render-what's-ready for the client role. A client requires EXACTLY ONE enabled
+	// outbound edge (compiler validateClientEdges is a HARD error otherwise), so an
+	// enrolled client whose dial target is not yet enrolled would be left edgeless and
+	// fail the whole stage. Treat such a client as itself not-ready: exclude it now and
+	// let it activate on a later deploy once its router/relay/gateway enrolls. (Clients
+	// are leaves — excluding one cannot strand another — so a single pass suffices.)
+	for _, node := range topo.Nodes {
+		if enrolled[node.ID] && node.Role == "client" && !clientTargetEnrolled(topo, node.ID, enrolled) {
+			delete(enrolled, node.ID)
+		}
+	}
+
 	var skipped []string
 	for _, node := range topo.Nodes { // value copy: never mutate the caller's slice
-		pub, ok := registry[node.ID]
-		if !ok {
+		if !enrolled[node.ID] {
 			skipped = append(skipped, node.ID)
 			continue
 		}
-		node.WireGuardPublicKey = pub
+		node.WireGuardPublicKey = registry[node.ID]
 		node.WireGuardPrivateKey = ""
 		sub.Nodes = append(sub.Nodes, node)
-		enrolled[node.ID] = true
 	}
 
 	// Drop any edge whose far end is not enrolled: it activates on a later deploy.
@@ -228,6 +255,65 @@ func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []str
 	}
 
 	return sub, skipped
+}
+
+// clientTargetEnrolled reports whether a client node has an enabled outbound edge
+// whose dial target is enrolled — the readiness condition for compiling the client
+// (a client must have exactly one enabled outbound edge).
+func clientTargetEnrolled(topo *model.Topology, clientID string, enrolled map[string]bool) bool {
+	for _, e := range topo.Edges {
+		if e.FromNodeID == clientID && e.IsEnabled && enrolled[e.ToNodeID] {
+			return true
+		}
+	}
+	return false
+}
+
+// persistAllocations merges the allocation pins the compiler stamped onto the
+// compiled subgraph back into the FULL stored topology, then re-stores it. It copies
+// per-node OverlayIP and the per-edge pin set (transit IPs, link-locals, ports,
+// CompiledPort) by ID — never any key material, so the stored topology stays
+// public-keys-only — and stamps AllocSchemaVersion. The next CompileAndStage then
+// finds these pins in the stored topology and the compiler reuses them (sticky-pin),
+// which is what keeps allocations stable across incremental enrollment (I10).
+func persistAllocations(ctx context.Context, store Store, t TenantID, full, compiled *model.Topology) error {
+	ipByID := make(map[string]string, len(compiled.Nodes))
+	for _, n := range compiled.Nodes {
+		ipByID[n.ID] = n.OverlayIP
+	}
+	edgeByID := make(map[string]model.Edge, len(compiled.Edges))
+	for _, e := range compiled.Edges {
+		edgeByID[e.ID] = e
+	}
+
+	for i := range full.Nodes {
+		if ip, ok := ipByID[full.Nodes[i].ID]; ok && ip != "" {
+			full.Nodes[i].OverlayIP = ip
+		}
+	}
+	for i := range full.Edges {
+		c, ok := edgeByID[full.Edges[i].ID]
+		if !ok {
+			continue // edge not in the compiled subgraph (far end unenrolled) — leave unpinned
+		}
+		full.Edges[i].CompiledPort = c.CompiledPort
+		full.Edges[i].PinnedFromPort = c.PinnedFromPort
+		full.Edges[i].PinnedToPort = c.PinnedToPort
+		full.Edges[i].PinnedFromTransitIP = c.PinnedFromTransitIP
+		full.Edges[i].PinnedToTransitIP = c.PinnedToTransitIP
+		full.Edges[i].PinnedFromLinkLocal = c.PinnedFromLinkLocal
+		full.Edges[i].PinnedToLinkLocal = c.PinnedToLinkLocal
+	}
+	full.AllocSchemaVersion = compiled.AllocSchemaVersion
+
+	raw, err := json.Marshal(full)
+	if err != nil {
+		return fmt.Errorf("controller: marshaling topology with persisted allocations: %w", err)
+	}
+	if _, err := store.PutTopology(ctx, t, raw); err != nil {
+		return fmt.Errorf("controller: persisting allocations: %w", err)
+	}
+	return nil
 }
 
 // readBundleDir walks an exported node directory and returns its files keyed by
