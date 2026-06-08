@@ -31,8 +31,14 @@ import {
   enrollTOTP as ctlEnrollTOTP,
   confirmTOTP as ctlConfirmTOTP,
   disableTOTP as ctlDisableTOTP,
+  getPasskeyStatus,
+  registerPasskey as ctlRegisterPasskey,
+  disablePasskeyBegin,
+  disablePasskeyFinish,
+  passkeyLoginBegin,
+  passkeyLoginFinish,
 } from '../api/controllerClient';
-import { enrollOperatorCredential, signManifest } from '../lib/webauthn';
+import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { useTopologyStore } from './topologyStore';
 
 // 控制器面板（Mode B）状态。它是 controller 连接 + fleet 视图的单一来源，独立于
@@ -61,6 +67,11 @@ interface ControllerState {
   // 内存，绝不持久化。
   totpRequired: boolean;
   totpEnabled: boolean | null;
+
+  // 登录 passkey（plan-5.2）：当前已登录 operator 是否注册了登录 passkey（null=未知/未拉取；
+  // break-glass token 无账户 → 保持 null）。passkey 2FA 步骤不需要单独的 *Required 标志：
+  // login() 收到 passkey_required 后会就地弹出 authenticator 并重提交（signing 标志驱动 UI）。
+  passkeyRegistered: boolean | null;
 
   // fleet 视图
   nodes: ControllerNode[];
@@ -100,6 +111,12 @@ interface ControllerState {
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
+  // 无密码 passkey 登录（plan-5.2）：begin → assertLogin → finish。
+  loginWithPasskey: (username: string) => Promise<void>;
+  // 登录 passkey 自助管理（仅密码 session 有效）。
+  loadPasskeyStatus: () => Promise<void>;
+  registerPasskey: () => Promise<void>;
+  disablePasskey: () => Promise<void>;
   // 复位待处理的二次验证步骤：当操作员改动了凭据对（或一次硬失败之后），让验证码框只对
   // 后端实际标记的那一对 username+password 出现，而非粘滞到换了账号/改了密码之后。
   resetTOTPChallenge: () => void;
@@ -194,6 +211,7 @@ export const useControllerStore = create<ControllerState>()(
 
       totpRequired: false,
       totpEnabled: null,
+      passkeyRegistered: null,
 
       nodes: [],
       audit: [],
@@ -269,6 +287,49 @@ export const useControllerStore = create<ControllerState>()(
         set({ loading: true, error: null });
         try {
           const outcome = await ctlLogin(configOf(get()), username, password, totp);
+          if (outcome.kind === 'passkey_required') {
+            // 密码正确但需要 passkey：就地弹出 authenticator 并用断言重提交（password 仍在闭包
+            // 里）。signing 标志驱动「触碰你的安全密钥」提示。整个 2FA passkey 步骤对 UI 透明
+            // ——登录表单无需 passkey 输入框，store 自动完成 ceremony。
+            const ch = outcome.challenge;
+            if (!ch.credentialId || !ch.alg) {
+              set({ error: 'This account requires a passkey, but none is registered.', loading: false });
+              return;
+            }
+            set({ signing: true });
+            try {
+              const assertion = await assertLogin(
+                ch.challenge,
+                ch.credentialId,
+                ch.alg,
+                ch.rpid || window.location.hostname,
+              );
+              const after = await ctlLogin(configOf(get()), username, password, undefined, assertion);
+              if (after.kind === 'success') {
+                set({
+                  sessionToken: after.result.sessionToken,
+                  operatorName: after.result.operator,
+                  sessionExpiresAt: after.result.expiresAt,
+                  totpRequired: false,
+                  signing: false,
+                  loading: false,
+                });
+                await get().refresh();
+                await get().loadTOTPStatus();
+                await get().loadPasskeyStatus();
+                return;
+              }
+              // A passkey resubmit should either succeed or throw; anything else is unexpected.
+              set({ error: 'Passkey login did not complete — please try again.', signing: false, loading: false });
+            } catch (err) {
+              set({
+                error: err instanceof Error ? err.message : 'Passkey login failed',
+                signing: false,
+                loading: false,
+              });
+            }
+            return;
+          }
           if (outcome.kind === 'totp_required') {
             // 密码正确但需要二次码：让登录表单收集 TOTP 码后重试。后端对「缺码」与「码错」
             // 返回同一个 totp_required（不开 oracle）；但我们本地知道是否带了码——若带了码仍被
@@ -292,8 +353,9 @@ export const useControllerStore = create<ControllerState>()(
             loading: false,
           });
           await get().refresh();
-          // 拉取本账户的 2FA 状态（供「两步验证」区回显启用/未启用）。失败不阻塞登录。
+          // 拉取本账户的 2FA / passkey 状态（供「账户安全」区回显）。失败不阻塞登录。
           await get().loadTOTPStatus();
+          await get().loadPasskeyStatus();
         } catch (err) {
           // 硬失败（密码错 / 429 锁定 / 网络 / 500，均在到达「需二次码」之前抛出）：复位
           // totpRequired，回到纯密码表单——避免「输入用户名或密码错误」却仍显示验证码框的
@@ -327,6 +389,7 @@ export const useControllerStore = create<ControllerState>()(
           // 操作员会重新拉取自己账户的状态（TwoFactorSettings 的守卫 effect 在 null 时再触发）。
           totpRequired: false,
           totpEnabled: null,
+          passkeyRegistered: null,
           nodes: [],
           audit: [],
           auditVerified: false,
@@ -364,6 +427,122 @@ export const useControllerStore = create<ControllerState>()(
       disableTOTP: async (code) => {
         await ctlDisableTOTP(configOf(get()), code);
         set({ totpEnabled: false });
+      },
+
+      // 无密码 passkey 登录：begin 取挑战 → assertLogin 弹 authenticator → finish 换 session。
+      // 失败（无 passkey / 断言失败 / 取消）就地展示。成功后刷新视图 + 拉取账户安全状态。
+      loginWithPasskey: async (username) => {
+        set({ loading: true, error: null });
+        try {
+          const cfg = configOf(get());
+          const ch = await passkeyLoginBegin(cfg, username);
+          if (!ch.credentialId || !ch.alg) {
+            // 空 allow_credentials = 该用户名没有注册 passkey（后端返回 decoy）。
+            set({ error: 'No passkey is registered for this account.', loading: false });
+            return;
+          }
+          set({ signing: true });
+          let assertion;
+          try {
+            assertion = await assertLogin(
+              ch.challenge,
+              ch.credentialId,
+              ch.alg,
+              ch.rpid || window.location.hostname,
+            );
+          } finally {
+            set({ signing: false });
+          }
+          const result = await passkeyLoginFinish(cfg, username, assertion);
+          set({
+            sessionToken: result.sessionToken,
+            operatorName: result.operator,
+            sessionExpiresAt: result.expiresAt,
+            loading: false,
+          });
+          await get().refresh();
+          await get().loadTOTPStatus();
+          await get().loadPasskeyStatus();
+        } catch (err) {
+          set({
+            error: err instanceof Error ? err.message : 'Passkey login failed',
+            loading: false,
+            signing: false,
+          });
+        }
+      },
+
+      // 拉取本账户的登录 passkey 状态。403（break-glass token 无账户）或错误时保持 null。
+      loadPasskeyStatus: async () => {
+        try {
+          set({ passkeyRegistered: await getPasskeyStatus(configOf(get())) });
+        } catch {
+          set({ passkeyRegistered: null });
+        }
+      },
+
+      // 注册登录 passkey：复用 keystone 的 create() ceremony（enrollOperatorCredential 取
+      // SPKI + alg），POST /passkey/register 存公钥。仅公钥离开 authenticator。enrolling 标志
+      // 复用以驱动「触碰你的安全密钥」提示。
+      registerPasskey: async () => {
+        const rpId = window.location.hostname;
+        const origin = window.location.origin;
+        set({ enrolling: true, error: null });
+        try {
+          const cred = await enrollOperatorCredential(rpId, origin);
+          await ctlRegisterPasskey(configOf(get()), {
+            alg: cred.alg,
+            credentialId: cred.credentialId,
+            publicKeyPEM: cred.publicKeyPEM,
+            rpId,
+            origin,
+          });
+          set({ passkeyRegistered: true, enrolling: false });
+        } catch (err) {
+          set({
+            error: err instanceof Error ? err.message : 'Failed to register passkey',
+            enrolling: false,
+          });
+        }
+      },
+
+      // 关闭登录 passkey（两段式）：begin 取再认证挑战 → assertLogin → finish 删除凭据。需新鲜
+      // 断言，防被劫持的 session 直接摘掉因子。begin 返回 done 表示本就没有 passkey（幂等）。
+      disablePasskey: async () => {
+        set({ loading: true, error: null });
+        try {
+          const cfg = configOf(get());
+          const begin = await disablePasskeyBegin(cfg);
+          if (begin.kind === 'done') {
+            set({ passkeyRegistered: false, loading: false });
+            return;
+          }
+          const ch = begin.challenge;
+          if (!ch.credentialId || !ch.alg) {
+            set({ error: 'Cannot disable: no credential to re-authenticate with.', loading: false });
+            return;
+          }
+          set({ signing: true });
+          let assertion;
+          try {
+            assertion = await assertLogin(
+              ch.challenge,
+              ch.credentialId,
+              ch.alg,
+              ch.rpid || window.location.hostname,
+            );
+          } finally {
+            set({ signing: false });
+          }
+          await disablePasskeyFinish(cfg, assertion);
+          set({ passkeyRegistered: false, loading: false });
+        } catch (err) {
+          set({
+            error: err instanceof Error ? err.message : 'Failed to disable passkey',
+            loading: false,
+            signing: false,
+          });
+        }
       },
 
       // 为某节点铸造一次性 enrollment token，返回明文 token（仅此一次可见）。

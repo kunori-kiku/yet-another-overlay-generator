@@ -157,6 +157,9 @@ func TestPasskey2FALoginReplayAndPasswordless(t *testing.T) {
 	if pr.RPID != testRPID {
 		t.Fatalf("rpid = %q, want %q", pr.RPID, testRPID)
 	}
+	if pr.Alg != string(trustlist.AlgWebAuthnEdDSA) {
+		t.Fatalf("passkey_required alg = %q, want %q", pr.Alg, trustlist.AlgWebAuthnEdDSA)
+	}
 
 	// 2FA leg 2: sign the challenge -> 200 + session.
 	chal, _ := base64.RawURLEncoding.DecodeString(pr.Challenge)
