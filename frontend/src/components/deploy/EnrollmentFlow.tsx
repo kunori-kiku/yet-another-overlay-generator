@@ -11,6 +11,8 @@ export function EnrollmentFlow() {
   const topoNodes = useTopologyStore((s) => s.nodes);
 
   const agentBaseURL = useControllerStore((s) => s.agentBaseURL);
+  const pathPrefix = useControllerStore((s) => s.pathPrefix);
+  const settings = useControllerStore((s) => s.settings);
   const mintToken = useControllerStore((s) => s.mintToken);
 
   const [nodeId, setNodeId] = useState<string>('');
@@ -18,12 +20,23 @@ export function EnrollmentFlow() {
   const [token, setToken] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
   const [mintError, setMintError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'' | 'enroll' | 'bootstrap'>('');
 
-  // enroll 命令文案：节点持有者在目标机上执行它来加入控制器。
+  // enroll 命令文案：节点持有者在目标机上手动执行它来加入控制器（需先装好 agent 二进制）。
   const enrollCommand =
     token && nodeId
       ? `agent enroll --controller ${agentBaseURL} --node-id ${nodeId} --token ${token}`
+      : '';
+
+  // 一键 bootstrap 命令（plan-5.2）：节点持有者以 root 跑一次，自动下载 agent、入网、应用、
+  // 并装上 systemd 守护进程。curl 目标是服务端配置的 public agent URL（未配置则回退到
+  // agentBaseURL）+ 可选 secret 前缀 + /api/v1/controller/bootstrap。
+  const bootstrapBase = (settings?.publicAgentURL || agentBaseURL).replace(/\/+$/, '');
+  const normPrefix = pathPrefix.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  const bootstrapURL = `${bootstrapBase}${normPrefix ? '/' + normPrefix : ''}/api/v1/controller/bootstrap`;
+  const bootstrapCommand =
+    token && nodeId
+      ? `bash <(curl -fsSL ${bootstrapURL}) --token ${token} --node-id ${nodeId}`
       : '';
 
   const handleMint = async () => {
@@ -31,7 +44,7 @@ export function EnrollmentFlow() {
     setMinting(true);
     setMintError(null);
     setToken(null);
-    setCopied(false);
+    setCopied('');
     try {
       const tok = await mintToken(nodeId, ttlSeconds);
       setToken(tok);
@@ -42,14 +55,14 @@ export function EnrollmentFlow() {
     }
   };
 
-  const handleCopy = async () => {
-    if (!enrollCommand) return;
+  const copyText = async (text: string, which: 'enroll' | 'bootstrap') => {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(enrollCommand);
-      setCopied(true);
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
     } catch {
       // 剪贴板不可用（非安全上下文等）：保持命令可手动选中复制，不报错。
-      setCopied(false);
+      setCopied('');
     }
   };
 
@@ -138,16 +151,43 @@ export function EnrollmentFlow() {
               {token}
             </pre>
           </div>
+          {/* 推荐：一键 bootstrap（自动装 agent + 入网 + 应用 + systemd 守护）。 */}
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">
+                {txt(language, '一键安装（推荐，以 root 运行）', 'One-shot install (recommended, run as root)')}
+              </label>
+              <button
+                onClick={() => copyText(bootstrapCommand, 'bootstrap')}
+                className="px-2 py-0.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded text-gray-100"
+              >
+                {copied === 'bootstrap' ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
+              </button>
+            </div>
+            <pre className="text-xs text-emerald-200 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
+              {bootstrapCommand}
+            </pre>
+            {!settings?.publicAgentURL && (
+              <p className="text-[10px] text-yellow-400 mt-1">
+                {txt(
+                  language,
+                  '提示：未配置「公开 Agent 地址」，已回退到上方 Agent 基础地址。请在「Bootstrap 设置」里设置节点可达的公开地址。',
+                  'Tip: no public agent URL configured — falling back to the Agent Base URL above. Set a node-reachable public URL in Bootstrap Settings.',
+                )}
+              </p>
+            )}
+          </div>
+          {/* 备选：手动 enroll（节点已自带 agent 二进制时）。 */}
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-gray-500 uppercase tracking-wider">
-                {txt(language, '注册命令', 'Enroll command')}
+                {txt(language, '或：手动 enroll 命令', 'Or: manual enroll command')}
               </label>
               <button
-                onClick={handleCopy}
+                onClick={() => copyText(enrollCommand, 'enroll')}
                 className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
               >
-                {copied ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
+                {copied === 'enroll' ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
               </button>
             </div>
             <pre className="text-xs text-gray-300 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">

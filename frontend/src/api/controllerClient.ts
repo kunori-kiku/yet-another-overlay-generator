@@ -265,6 +265,49 @@ function mapAuditEntry(e: AuditEntryJSON): ControllerAuditEntry {
   };
 }
 
+// --- bootstrap settings (plan-5.2) ---
+
+// ControllerSettings is the operator-editable, server-persisted bootstrap config:
+// the public agent URL (where nodes curl the bootstrap / enroll), an optional GitHub
+// proxy prefix (default off), and the agent-binary release base URL.
+export interface ControllerSettings {
+  publicAgentURL: string;
+  githubProxy: string;
+  agentReleaseBaseURL: string;
+}
+
+// SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go.
+interface SettingsJSON {
+  public_agent_url: string;
+  github_proxy: string;
+  agent_release_base_url: string;
+}
+
+function mapSettings(d: SettingsJSON): ControllerSettings {
+  return {
+    publicAgentURL: d.public_agent_url,
+    githubProxy: d.github_proxy,
+    agentReleaseBaseURL: d.agent_release_base_url,
+  };
+}
+
+// getSettings reads the current bootstrap settings (defaults applied server-side).
+export async function getSettings(cfg: ControllerConfig): Promise<ControllerSettings> {
+  const res = await request(cfg, 'settings', { method: 'GET' });
+  return mapSettings((await res.json()) as SettingsJSON);
+}
+
+// postSettings saves the bootstrap settings and returns the stored values.
+export async function postSettings(cfg: ControllerConfig, s: ControllerSettings): Promise<ControllerSettings> {
+  const body = JSON.stringify({
+    public_agent_url: s.publicAgentURL,
+    github_proxy: s.githubProxy,
+    agent_release_base_url: s.agentReleaseBaseURL,
+  });
+  const res = await postJSON(cfg, 'settings', body);
+  return mapSettings((await res.json()) as SettingsJSON);
+}
+
 // --- 公开 API（每个都接收 (cfg, ...)）---
 
 // 列出整个 fleet 注册表（operator-only）。

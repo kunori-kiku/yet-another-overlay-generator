@@ -5,7 +5,7 @@ import type {
   ControllerAuditEntry,
   StageResult,
 } from '../types/controller';
-import type { ControllerConfig, WebAuthnAlg } from '../api/controllerClient';
+import type { ControllerConfig, WebAuthnAlg, ControllerSettings } from '../api/controllerClient';
 import {
   getNodes,
   getAudit,
@@ -20,6 +20,8 @@ import {
   postOperatorCredential,
   login as ctlLogin,
   logout as ctlLogout,
+  getSettings,
+  postSettings,
 } from '../api/controllerClient';
 import { enrollOperatorCredential, signManifest } from '../lib/webauthn';
 import { useTopologyStore } from './topologyStore';
@@ -50,6 +52,10 @@ interface ControllerState {
   auditVerified: boolean;
   lastDeploy: StageResult | null;
 
+  // bootstrap 设置（plan-5.2，服务端持久化）：public agent URL / GitHub 代理 / agent 发布
+  // 基址。null 表示尚未从服务端加载（refresh 时拉取）。
+  settings: ControllerSettings | null;
+
   // KEYSTONE（plan-5.1d）：已 pin 的 off-host operator 签名凭据（passkey / YubiKey）。
   // 仅持久化非密信息——credential_id（base64url(rawId)）、alg、rpId——它们不是密钥材料
   // （私钥从不离开 authenticator），但记住它们让面板能跨刷新驱动后续签名（allowCredentials）
@@ -73,6 +79,8 @@ interface ControllerState {
 
   // actions
   setConfig: (partial: Partial<ControllerConfig & { agentBaseURL: string }>) => void;
+  loadSettings: () => Promise<void>;
+  saveSettings: (s: ControllerSettings) => Promise<void>;
   refresh: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -164,6 +172,7 @@ export const useControllerStore = create<ControllerState>()(
       audit: [],
       auditVerified: false,
       lastDeploy: null,
+      settings: null,
 
       operatorCredentialId: null,
       operatorCredentialAlg: null,
@@ -178,7 +187,8 @@ export const useControllerStore = create<ControllerState>()(
 
       setConfig: (partial) => set(partial),
 
-      // 刷新 fleet 视图：并行拉取 nodes + audit。任一失败则记录 error，并保持已有视图不变。
+      // 刷新 fleet 视图：并行拉取 nodes + audit + bootstrap 设置。任一失败则记录 error，
+      // 并保持已有视图不变。settings 拉取失败不影响 nodes/audit（best-effort，单独 catch）。
       refresh: async () => {
         set({ loading: true, error: null });
         try {
@@ -191,11 +201,37 @@ export const useControllerStore = create<ControllerState>()(
             loading: false,
             lastSyncedAt: Date.now(),
           });
+          // 顺带刷新 bootstrap 设置（不阻塞 fleet 视图；失败保留旧值）。
+          try {
+            set({ settings: await getSettings(cfg) });
+          } catch {
+            /* 设置拉取失败：保留已有 settings，不覆盖 fleet 视图的成功状态。 */
+          }
         } catch (err) {
           set({
             error: err instanceof Error ? err.message : 'Failed to refresh controller state',
             loading: false,
           });
+        }
+      },
+
+      // 加载 bootstrap 设置（独立入口，供设置区首次渲染时用）。
+      loadSettings: async () => {
+        try {
+          set({ settings: await getSettings(configOf(get())) });
+        } catch (err) {
+          set({ error: err instanceof Error ? err.message : 'Failed to load settings' });
+        }
+      },
+
+      // 保存 bootstrap 设置：POST /settings，回写服务端归一化后的值。
+      saveSettings: async (s) => {
+        set({ loading: true, error: null });
+        try {
+          const saved = await postSettings(configOf(get()), s);
+          set({ settings: saved, loading: false });
+        } catch (err) {
+          set({ error: err instanceof Error ? err.message : 'Failed to save settings', loading: false });
         }
       },
 
@@ -238,6 +274,9 @@ export const useControllerStore = create<ControllerState>()(
           nodes: [],
           audit: [],
           auditVerified: false,
+          // Clear settings too, so a different operator signing in re-fetches them
+          // (the guarded loadSettings effect re-fires on settings===null).
+          settings: null,
           error: null,
         });
       },
