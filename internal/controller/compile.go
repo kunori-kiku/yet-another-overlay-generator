@@ -354,6 +354,13 @@ func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKey
 //
 // It returns the new generation, ErrNoStagedBundle when nothing is staged, or a
 // descriptive error when the keystone gate refuses.
+//
+// NOTE: with the keystone on this verifies the off-host SIGNATURE over the stored staged
+// manifest as an early, operator-visible defense-in-depth check — it does NOT re-derive
+// the staged bundles' checksums digests and compare them to the manifest's BundleSHA256
+// values. The authoritative chokepoint is the AGENT, which re-derives
+// hex(sha256(checksums.sha256)) offline and binds it to its signed member entry before
+// applying. Do not mistake this controller gate for the trust root.
 func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) {
 	cred, err := store.GetOperatorCredential(ctx, t)
 	if err != nil {

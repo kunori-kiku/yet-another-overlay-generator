@@ -915,7 +915,7 @@ func TestStoreSignedTrustList(t *testing.T) {
 			}
 
 			want := StoredTrustList{
-				TrustListJSON: []byte(`{"schema_version":1,"tenant":"compat-tenant","epoch":0,"members":[],"created_at":"2026-06-08T00:00:00Z"}` + "\n"),
+				TrustListJSON: []byte(`{"schema_version":1,"tenant":"compat-tenant","epoch":0,"members":[]}` + "\n"),
 				SignatureJSON: []byte(`{"alg":"ed25519","credential_id":"k","public_key":"p","signature":"s"}`),
 				Epoch:         0,
 			}

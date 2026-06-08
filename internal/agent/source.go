@@ -31,8 +31,9 @@ import (
 // trust-list) is enabled, and the wireguard/ confs are per-peer so their exact names
 // are not known ahead of time. Fetch therefore tolerates "not found" for everything
 // EXCEPT the files that checksums.sha256 lists — verify (not Fetch) enforces
-// completeness. When the keystone is on, the controller lists trustlist.json/.sig in
-// checksums.sha256, so they become mandatory via that path, not via this list.
+// completeness. trustlist.json/.sig are NOT listed in checksums.sha256 (they bind its
+// digest, so they live OUTSIDE it); when the keystone is on, VerifyMembership requires
+// them explicitly (and the off-host signature + digest binding enforce them).
 var bundleFileNames = []string{
 	"checksums.sha256",
 	"manifest.json",
