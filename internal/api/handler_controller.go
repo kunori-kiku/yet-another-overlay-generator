@@ -80,6 +80,17 @@ type ControllerHandler struct {
 	// the boundary is the bearer tokens + the off-host signed trust-list. Normalized by
 	// SetPathPrefix to "" or "/<seg>" (single leading slash, no trailing slash).
 	pathPrefix string
+	// panelOriginAllowlist is the set of exact browser origins (scheme://host[:port])
+	// permitted to make CREDENTIALED (cookie-bearing) cross-origin requests to the
+	// operator routes (YAOG_PANEL_ORIGIN). For a matching Origin, cors() reflects it +
+	// Access-Control-Allow-Credentials: true (never "*" with credentials). Empty =
+	// same-origin only for the cookie path (the Bearer path still works via the "*"
+	// non-credentialed fallback). Set via SetPanelOrigins.
+	panelOriginAllowlist []string
+	// secureCookie controls the Secure attribute on the session/CSRF cookies
+	// (YAOG_SECURE_COOKIE, default true). Set false ONLY for local non-TLS development;
+	// production MUST keep it true (the deployment fronts the controller with TLS).
+	secureCookie bool
 }
 
 // NewControllerHandler builds a ControllerHandler. operatorTokenHash is the hex
@@ -99,7 +110,42 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		loginLimiter:      newLoginLimiter(),
 		sessionTTL:        controller.DefaultSessionTTL,
 		pollDeadline:      defaultPollDeadline,
+		// Secure cookies by default: a non-TLS deployment must opt out explicitly
+		// (YAOG_SECURE_COOKIE=false) for local development.
+		secureCookie: true,
 	}
+}
+
+// SetPanelOrigins sets the credentialed-CORS allowlist of browser origins permitted to
+// make cookie-bearing cross-origin requests to the operator routes. Each entry is an
+// exact origin (scheme://host[:port]); empty/blank entries are dropped. Call before
+// RegisterOperatorRoutes.
+func (h *ControllerHandler) SetPanelOrigins(origins []string) {
+	out := make([]string, 0, len(origins))
+	for _, o := range origins {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, strings.TrimRight(o, "/"))
+		}
+	}
+	h.panelOriginAllowlist = out
+}
+
+// SetSecureCookie sets the Secure attribute on the session/CSRF cookies. Production
+// keeps it true; set false only for local non-TLS development.
+func (h *ControllerHandler) SetSecureCookie(secure bool) {
+	h.secureCookie = secure
+}
+
+// originAllowed reports whether origin is in the credentialed-CORS allowlist (exact
+// match, trailing slash ignored).
+func (h *ControllerHandler) originAllowed(origin string) bool {
+	origin = strings.TrimRight(origin, "/")
+	for _, o := range h.panelOriginAllowlist {
+		if o == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
@@ -135,6 +181,9 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// presented session.
 	mux.HandleFunc(base+"login", h.cors(h.HandleLogin))
 	mux.HandleFunc(base+"logout", op(h.HandleLogout))
+	// Session probe (panel-appshell P5): the panel calls GET /session on mount to derive
+	// login state from the httpOnly cookie after a refresh (no token read in JS).
+	mux.HandleFunc(base+"session", op(h.HandleSession))
 	// Passwordless passkey login (plan-5.2): UNAUTHENTICATED (reachable before a session),
 	// cors-wrapped but NOT operatorAuth. begin issues a single-use random challenge for a
 	// username; finish verifies the WebAuthn assertion and mints a session (no password).
@@ -186,15 +235,30 @@ func (h *ControllerHandler) basePath() string {
 }
 
 // cors answers a browser CORS preflight (OPTIONS, which carries no auth) and stamps the
-// headers the operator panel needs onto every response. Allow-Origin is "*" because the
-// panel authenticates with a Bearer token (not cookies), so no credentialed-origin
-// pinning is required; a deployment fronting the controller with a proxy may tighten it.
+// headers the operator panel needs onto every response.
+//
+// Two modes. (1) When the request Origin is in the credentialed allowlist
+// (YAOG_PANEL_ORIGIN), reflect that EXACT origin + Access-Control-Allow-Credentials:
+// true + Vary: Origin, so the browser sends/stores the session cookie cross-origin. A
+// wildcard "*" is NEVER emitted together with credentials (the browser would reject it,
+// and it would be unsafe). (2) Otherwise fall back to the historical permissive
+// non-credentialed "*" for the Bearer-token path (no cookies attached). Same-origin
+// panels (the Docker default) need no allowlist — the browser applies no CORS and the
+// cookie flows normally.
 func (h *ControllerHandler) cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+csrfHeaderName)
 		w.Header().Set("Access-Control-Max-Age", "600") // cache the preflight; the panel re-polls often
+		// The Allow-Origin value depends on the request Origin in BOTH branches, so advertise
+		// Vary: Origin unconditionally to keep a shared cache from cross-serving origins.
+		w.Header().Add("Vary", "Origin")
+		if origin := r.Header.Get("Origin"); origin != "" && h.originAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

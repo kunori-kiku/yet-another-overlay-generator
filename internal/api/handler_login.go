@@ -39,11 +39,15 @@ type totpRequiredJSON struct {
 
 // loginResponseJSON is returned on a successful login: the plaintext session bearer
 // token (returned ONCE; the controller stores only its hash), the operator identity,
-// and the session expiry (RFC3339).
+// the session expiry (RFC3339), and the double-submit CSRF token (also set as the
+// readable yaog_csrf cookie). The session is ALSO set as an httpOnly cookie so a
+// refresh stays logged in without the panel persisting the token; session_token is
+// kept for the Bearer fallback.
 type loginResponseJSON struct {
 	SessionToken string `json:"session_token"`
 	Operator     string `json:"operator"`
 	ExpiresAt    string `json:"expires_at"`
+	CSRFToken    string `json:"csrf_token"`
 }
 
 // HandleLogin authenticates an operator by username + password and mints a session.
@@ -165,12 +169,23 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 // The audit write is best-effort: login availability must not depend on the audit log
 // (operational visibility only, not a security boundary — see audit.go).
 func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx context.Context, op controller.Operator, now time.Time, userKey, ipKey string) {
+	// Generate the CSRF token BEFORE persisting the session, so a (vanishingly rare)
+	// CSPRNG failure aborts without leaving an orphaned session in the store.
+	csrf, err := newCSRFToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
 	plaintext, sess := controller.NewSession(op.Username, h.sessionTTL, now)
 	if err := h.store.CreateSession(ctx, h.tenant, sess); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
 	h.loginLimiter.succeed(userKey, ipKey)
+	// Set the httpOnly session cookie + the readable CSRF cookie BEFORE writing the body
+	// (Set-Cookie is a header). This is the single tail of every login path (password,
+	// TOTP, passkey 2FA, passwordless passkey finish), so all of them survive a refresh.
+	h.setSessionCookies(w, plaintext, csrf)
 	_, _ = h.store.AppendAudit(ctx, h.tenant, controller.AuditEntry{
 		Timestamp: now,
 		Actor:     "operator:" + op.Username,
@@ -180,6 +195,7 @@ func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx conte
 		SessionToken: plaintext,
 		Operator:     op.Username,
 		ExpiresAt:    sess.ExpiresAt.Format(time.RFC3339),
+		CSRFToken:    csrf,
 	})
 }
 
@@ -208,9 +224,13 @@ func (h *ControllerHandler) HandleLogout(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
 		return
 	}
-	tok, ok := bearerToken(r)
+	// The session may have authenticated via the Bearer header OR the httpOnly cookie;
+	// delete whichever was presented. Clear both cookies regardless (so the browser drops
+	// them even on a break-glass or already-stale logout).
+	tok, ok := bearerOrCookieToken(r)
+	h.clearSessionCookies(w)
 	if !ok {
-		// operatorAuth already required a token to reach here; defensive no-op.
+		// operatorAuth already required a credential to reach here; defensive no-op.
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

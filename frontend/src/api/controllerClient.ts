@@ -20,8 +20,13 @@ export interface ControllerConfig {
   pathPrefix: string;
   // operatorToken is the EFFECTIVE operator bearer: a login session token when logged
   // in, else the optional break-glass operator token. The store's configOf() picks it
-  // (session preferred); this layer just attaches `Authorization: Bearer <it>`.
+  // (session preferred); this layer attaches `Authorization: Bearer <it>` when non-empty.
+  // After a refresh it is empty and the httpOnly session cookie authenticates instead.
   operatorToken: string;
+  // csrfToken is the in-memory double-submit CSRF token (from the login or /session
+  // response). It is echoed as X-CSRF-Token on cookie-authed state-changing requests.
+  // Never persisted (memory only); empty for the Bearer/break-glass path.
+  csrfToken: string;
 }
 
 // LoginResult is the result of a successful POST /login: the session bearer token
@@ -31,6 +36,9 @@ export interface LoginResult {
   sessionToken: string;
   operator: string;
   expiresAt: string;
+  // csrfToken is the double-submit token (also set as the readable yaog_csrf cookie). Held
+  // in memory and echoed as X-CSRF-Token on state-changing cookie-authed requests.
+  csrfToken: string;
 }
 
 // LoginOutcome is what login() returns. Either the password (and any required second
@@ -82,6 +90,7 @@ interface LoginResponseJSON {
   session_token: string;
   operator: string;
   expires_at: string;
+  csrf_token: string;
 }
 
 // --- keystone (off-host operator signing) wire types ---
@@ -219,15 +228,29 @@ interface RekeyAllResponseJSON {
 
 // --- 共享 request 辅助 ---
 
-// 发起一个带 Bearer 鉴权的请求；非 2xx 抛 Error(`${status} ${body}`)。
+// 判断 HTTP 方法是否会改写状态（用于决定 cookie 路径是否要带 CSRF 头）。
+function isStateChanging(method: string): boolean {
+  const m = method.toUpperCase();
+  return m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS';
+}
+
+// 发起一个请求：携带凭据（credentials:'include' 让 httpOnly session cookie 随行，刷新后
+// 仍登录）；持有 operatorToken（session/break-glass）时附 Bearer，否则仅靠 cookie；状态改写
+// 类请求在 cookie 路径上附带 X-CSRF-Token 双提交令牌。非 2xx 抛 Error(`${status} ${body}`)。
 async function request(
   cfg: ControllerConfig,
   route: string,
   init?: RequestInit
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
-  headers.set('Authorization', `Bearer ${cfg.operatorToken}`);
-  const res = await fetch(ctlURL(cfg, route), { ...init, headers });
+  if (cfg.operatorToken) {
+    headers.set('Authorization', `Bearer ${cfg.operatorToken}`);
+  }
+  const method = init?.method ?? 'GET';
+  if (cfg.csrfToken && isStateChanging(method)) {
+    headers.set('X-CSRF-Token', cfg.csrfToken);
+  }
+  const res = await fetch(ctlURL(cfg, route), { ...init, headers, credentials: 'include' });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${body}`);
@@ -272,6 +295,8 @@ export async function login(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    // credentials:'include' so the browser stores the httpOnly session + CSRF cookies.
+    credentials: 'include',
   });
   if (!res.ok) {
     const text = await res.text();
@@ -304,6 +329,7 @@ export async function login(
       sessionToken: data.session_token,
       operator: data.operator,
       expiresAt: data.expires_at,
+      csrfToken: data.csrf_token,
     },
   };
 }
@@ -435,6 +461,7 @@ export async function passkeyLoginBegin(cfg: ControllerConfig, username: string)
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username }),
+    credentials: 'include',
   });
   if (!res.ok) {
     const b = await res.text();
@@ -454,13 +481,55 @@ export async function passkeyLoginFinish(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, passkey: assertion }),
+    credentials: 'include',
   });
   if (!res.ok) {
     const b = await res.text();
     throw new Error(`${res.status} ${b}`);
   }
   const d = (await res.json()) as LoginResponseJSON;
-  return { sessionToken: d.session_token, operator: d.operator, expiresAt: d.expires_at };
+  return {
+    sessionToken: d.session_token,
+    operator: d.operator,
+    expiresAt: d.expires_at,
+    csrfToken: d.csrf_token,
+  };
+}
+
+// SessionInfo is the GET /session probe result: the operator identity, the session
+// expiry (RFC3339), and the in-memory CSRF token recovered from the cookie. Used by the
+// panel on mount to re-derive login state after a refresh without reading a token in JS.
+export interface SessionInfo {
+  operator: string;
+  expiresAt: string;
+  csrfToken: string;
+}
+
+interface SessionResponseJSON {
+  operator: string;
+  expires_at: string;
+  csrf_token: string;
+}
+
+// getSession probes the current operator session via the httpOnly cookie (or Bearer).
+// Returns null when not logged in (401/403); any other non-2xx throws. credentials:
+// 'include' so the session cookie travels.
+export async function getSession(cfg: ControllerConfig): Promise<SessionInfo | null> {
+  const headers = new Headers();
+  if (cfg.operatorToken) {
+    headers.set('Authorization', `Bearer ${cfg.operatorToken}`);
+  }
+  const res = await fetch(ctlURL(cfg, 'session'), { method: 'GET', headers, credentials: 'include' });
+  if (res.status === 401 || res.status === 403) {
+    await res.text();
+    return null;
+  }
+  if (!res.ok) {
+    const b = await res.text();
+    throw new Error(`${res.status} ${b}`);
+  }
+  const d = (await res.json()) as SessionResponseJSON;
+  return { operator: d.operator, expiresAt: d.expires_at, csrfToken: d.csrf_token };
 }
 
 // logout revokes the current session (POST /logout, authed by the session bearer in
@@ -505,6 +574,9 @@ export interface ControllerSettings {
   publicAgentURL: string;
   githubProxy: string;
   agentReleaseBaseURL: string;
+  // translucency is the panel appearance preference (P5), served server-side via
+  // GET/POST /settings. It is NOT part of the agent bootstrap script.
+  translucency: boolean;
 }
 
 // SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go.
@@ -512,6 +584,7 @@ interface SettingsJSON {
   public_agent_url: string;
   github_proxy: string;
   agent_release_base_url: string;
+  translucency: boolean;
 }
 
 function mapSettings(d: SettingsJSON): ControllerSettings {
@@ -519,6 +592,7 @@ function mapSettings(d: SettingsJSON): ControllerSettings {
     publicAgentURL: d.public_agent_url,
     githubProxy: d.github_proxy,
     agentReleaseBaseURL: d.agent_release_base_url,
+    translucency: d.translucency,
   };
 }
 
@@ -534,6 +608,7 @@ export async function postSettings(cfg: ControllerConfig, s: ControllerSettings)
     public_agent_url: s.publicAgentURL,
     github_proxy: s.githubProxy,
     agent_release_base_url: s.agentReleaseBaseURL,
+    translucency: s.translucency,
   });
   const res = await postJSON(cfg, 'settings', body);
   return mapSettings((await res.json()) as SettingsJSON);

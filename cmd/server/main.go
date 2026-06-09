@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/api"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
@@ -46,6 +47,14 @@ const (
 	// serve on the operator/panel port alongside the API. The Docker image sets it to
 	// the embedded dist; unset = API only (Vite/dev or a reverse proxy serves the panel).
 	envWebDir = "YAOG_WEB_DIR"
+	// envPanelOrigin is a comma-separated allowlist of browser origins permitted to make
+	// CREDENTIALED (session-cookie) cross-origin requests to the operator routes
+	// (panel-appshell P5). Empty = same-origin only for the cookie path; the Bearer path
+	// still works. e.g. "https://panel.example.com,https://ops.example.com".
+	envPanelOrigin = "YAOG_PANEL_ORIGIN"
+	// envSecureCookie toggles the Secure attribute on the session/CSRF cookies. Default
+	// true; set "false"/"0"/"no" ONLY for local non-TLS development.
+	envSecureCookie = "YAOG_SECURE_COOKIE"
 )
 
 func main() {
@@ -130,6 +139,15 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 
 	ch := api.NewControllerHandler(store, controller.TenantID(tenant), opTokenHash, api.DefaultOperatorName)
 	ch.SetPathPrefix(os.Getenv(envPathPrefix))
+	// Credentialed-CORS allowlist for cross-origin panel hosting (cookie auth). Empty =
+	// same-origin only for the cookie path (the Bearer path still works).
+	if origins := os.Getenv(envPanelOrigin); strings.TrimSpace(origins) != "" {
+		ch.SetPanelOrigins(strings.Split(origins, ","))
+	}
+	// Secure cookies default ON; an explicit false/0/no opts out for non-TLS dev.
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv(envSecureCookie))); v != "" {
+		ch.SetSecureCookie(!(v == "false" || v == "0" || v == "no"))
+	}
 	server.EnableController(ch)
 
 	// Serve both ports concurrently; the first error from either wins. A buffered
