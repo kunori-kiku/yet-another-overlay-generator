@@ -45,7 +45,7 @@ export function Topbar() {
     FOCUS_RING;
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--hairline)] bg-[var(--surface-elevated)] px-4">
+    <header className="app-chrome flex h-14 shrink-0 items-center gap-3 border-b border-[var(--hairline)] px-4">
       <span className="text-sm font-medium text-[var(--content)]">
         {active ? txt(language, ...active.label) : ''}
       </span>

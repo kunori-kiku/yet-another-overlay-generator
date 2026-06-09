@@ -44,3 +44,45 @@ body {
   background: var(--surface);
   color: var(--content);
 }
+
+/* ── App-shell vibrancy (P6) ──
+   `.app-chrome` is the translucent sidebar/topbar treatment: a frosted, saturated
+   blur over the page. It turns SOLID when the operator disables translucency
+   (`.no-translucency` html class, persisted in P4/P5) or when the OS asks to reduce
+   transparency — "simple minimalism" without the blur. */
+.app-chrome {
+  background-color: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+.no-translucency .app-chrome {
+  background-color: var(--surface-elevated);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .app-chrome {
+    background-color: var(--surface-elevated);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Quiet motion, but honor the OS reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Theme-accent keyboard focus baseline for any native control (the shell controls
+   add their own ring via FOCUS_RING; this catches the rest). :focus-visible only
+   fires for keyboard/AT focus, so it never disturbs mouse interactions. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
