@@ -61,7 +61,8 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			PublicAgentURL:      cs.PublicAgentURL,
 			GithubProxy:         cs.GithubProxy,
 			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
-			Translucency:        cs.Translucency,
+			// loadSettings applied WithDefaults, so Translucency is non-nil; guard anyway.
+			Translucency: cs.Translucency != nil && *cs.Translucency,
 		})
 
 	case http.MethodPost:
@@ -75,11 +76,14 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// A POST always carries an explicit translucency bool (the panel sends it), so pin
+		// it as a non-nil pointer; WithDefaults only fills a nil (legacy-load) value.
+		translucency := req.Translucency
 		cs := controller.ControllerSettings{
 			PublicAgentURL:      strings.TrimSpace(req.PublicAgentURL),
 			GithubProxy:         strings.TrimSpace(req.GithubProxy),
 			AgentReleaseBaseURL: strings.TrimSpace(req.AgentReleaseBaseURL),
-			Translucency:        req.Translucency,
+			Translucency:        &translucency,
 		}.WithDefaults()
 		if cs.PublicAgentURL != "" {
 			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
@@ -110,7 +114,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			PublicAgentURL:      cs.PublicAgentURL,
 			GithubProxy:         cs.GithubProxy,
 			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
-			Translucency:        cs.Translucency,
+			Translucency:        cs.Translucency != nil && *cs.Translucency,
 		})
 
 	default:

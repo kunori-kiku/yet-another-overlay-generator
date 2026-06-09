@@ -250,10 +250,12 @@ func (h *ControllerHandler) cors(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, "+csrfHeaderName)
 		w.Header().Set("Access-Control-Max-Age", "600") // cache the preflight; the panel re-polls often
+		// The Allow-Origin value depends on the request Origin in BOTH branches, so advertise
+		// Vary: Origin unconditionally to keep a shared cache from cross-serving origins.
+		w.Header().Add("Vary", "Origin")
 		if origin := r.Header.Get("Origin"); origin != "" && h.originAllowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Add("Vary", "Origin")
 		} else {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}

@@ -270,8 +270,11 @@ type ControllerSettings struct {
 	AgentReleaseBaseURL string `json:"agent_release_base_url"`
 	// Translucency is the operator panel's vibrancy preference (panel-appshell P5). It is
 	// a PANEL APPEARANCE setting served via GET/POST /settings; it is deliberately NOT
-	// baked into the agent bootstrap script (it has no bearing on a node). Default true.
-	Translucency bool `json:"translucency"`
+	// baked into the agent bootstrap script (it has no bearing on a node). A POINTER so a
+	// legacy settings.json written before this field existed (nil) is distinguishable from
+	// an explicit false: WithDefaults() fills nil with true, preserving the default-on
+	// appearance after an upgrade instead of silently reading false.
+	Translucency *bool `json:"translucency,omitempty"`
 }
 
 // Store is the single tenant-scoped data-access chokepoint for the controller.

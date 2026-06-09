@@ -283,9 +283,15 @@ export const useControllerStore = create<ControllerState>()(
             loading: false,
             lastSyncedAt: Date.now(),
           });
-          // 顺带刷新 bootstrap 设置（不阻塞 fleet 视图；失败保留旧值）。
+          // 顺带刷新 bootstrap 设置（不阻塞 fleet 视图；失败保留旧值）。controller 模式下
+          // 服务端是 translucency 的权威，拉到后同步到外观 store（与 loadSettings 一致），
+          // 避免设置页复选框与服务端值发散。
           try {
-            set({ settings: await getSettings(cfg) });
+            const settings = await getSettings(cfg);
+            set({ settings });
+            if (get().mode === 'controller') {
+              useUiStore.getState().setTranslucency(settings.translucency);
+            }
           } catch {
             /* 设置拉取失败：保留已有 settings，不覆盖 fleet 视图的成功状态。 */
           }
@@ -457,7 +463,13 @@ export const useControllerStore = create<ControllerState>()(
       checkSession: async () => {
         try {
           const info = await getSession(configOf(get()));
-          if (info) {
+          // Only a GENUINE cookie session counts as "logged in". GET /session also answers
+          // 200 for a break-glass Bearer token (it authenticates operator routes), but
+          // break-glass mints no session/CSRF cookie, so its probe returns an EMPTY
+          // csrf_token. Gate on a non-empty csrf_token to keep break-glass a recovery path
+          // (selectHasAuth still enables Deploy via operatorToken), preserving the
+          // "break-glass is not a login" invariant.
+          if (info && info.csrfToken !== '') {
             set({
               loggedIn: true,
               operatorName: info.operator,

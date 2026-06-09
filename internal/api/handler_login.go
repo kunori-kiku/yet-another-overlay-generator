@@ -169,13 +169,15 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 // The audit write is best-effort: login availability must not depend on the audit log
 // (operational visibility only, not a security boundary — see audit.go).
 func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx context.Context, op controller.Operator, now time.Time, userKey, ipKey string) {
-	plaintext, sess := controller.NewSession(op.Username, h.sessionTTL, now)
-	if err := h.store.CreateSession(ctx, h.tenant, sess); err != nil {
+	// Generate the CSRF token BEFORE persisting the session, so a (vanishingly rare)
+	// CSPRNG failure aborts without leaving an orphaned session in the store.
+	csrf, err := newCSRFToken()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
-	csrf, err := newCSRFToken()
-	if err != nil {
+	plaintext, sess := controller.NewSession(op.Username, h.sessionTTL, now)
+	if err := h.store.CreateSession(ctx, h.tenant, sess); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}

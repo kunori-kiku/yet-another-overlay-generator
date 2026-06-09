@@ -95,6 +95,10 @@ export function SettingsPage() {
               type="checkbox"
               checked={translucency}
               onChange={(e) => onTranslucencyChange(e.target.checked)}
+              // In controller mode the server is the source of truth; until settings load
+              // a toggle could not be persisted (and would be clobbered by the server
+              // value), so gate on settings being present.
+              disabled={mode === 'controller' && !settings}
             />
             {txt(language, ...STRINGS.appearanceTranslucency)}
           </label>

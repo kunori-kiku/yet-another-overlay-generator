@@ -29,6 +29,21 @@ func TestDefaultSettingsAndWithDefaults(t *testing.T) {
 	if got.AgentReleaseBaseURL != "https://mirror/dl" {
 		t.Errorf("WithDefaults overrode a set release URL: %q", got.AgentReleaseBaseURL)
 	}
+
+	// Translucency: default ON; WithDefaults fills a nil (legacy-load) value with true but
+	// preserves an explicit false (the absent-vs-false migration).
+	if d.Translucency == nil || !*d.Translucency {
+		t.Errorf("DefaultSettings translucency should be true, got %v", d.Translucency)
+	}
+	legacy := ControllerSettings{}.WithDefaults()
+	if legacy.Translucency == nil || !*legacy.Translucency {
+		t.Errorf("WithDefaults(nil translucency) should default to true, got %v", legacy.Translucency)
+	}
+	off := false
+	explicit := ControllerSettings{Translucency: &off}.WithDefaults()
+	if explicit.Translucency == nil || *explicit.Translucency {
+		t.Errorf("WithDefaults must keep an explicit false, got %v", explicit.Translucency)
+	}
 }
 
 // TestStoreSettingsRoundTrip: Get(absent)->ErrNotFound, Put then Get round-trips, on
