@@ -81,8 +81,13 @@ body {
 
 /* Theme-accent keyboard focus baseline for any native control (the shell controls
    add their own ring via FOCUS_RING; this catches the rest). :focus-visible only
-   fires for keyboard/AT focus, so it never disturbs mouse interactions. */
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+   fires for keyboard/AT focus, so it never disturbs mouse interactions.
+   In @layer base so Tailwind's `focus-visible:outline-none` (in the higher
+   @layer utilities) wins on shell controls — no double outline + ring there —
+   while this baseline still covers controls that don't opt out. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 }

@@ -33,7 +33,7 @@ export function Shell() {
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar />
-        <main id="main-content" className="flex-1 overflow-hidden">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-hidden outline-none">
           <Outlet />
         </main>
       </div>
