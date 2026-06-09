@@ -105,11 +105,24 @@ Each links its plan file. Goal / Proposed solution / Hazards / Verification / St
 
 ## 9. Closure criteria
 
-- [ ] M1–M6 merged to main, each independently reviewed.
-- [ ] No existing feature lost; EN/ZH parity; compiler/renderer/air-gap untouched.
-- [ ] No token in web storage (DevTools verified).
-- [ ] Login survives refresh; dark/light/system + translucency work.
-- [ ] STATUS.md updated; subject `git mv` to `_completed/` at closure.
+- [x] M1–M6 merged to main, each independently reviewed (PRs #53–#58; each got a 4–5
+  dimension adversarial review workflow with skeptic re-verification; all merged with 0
+  confirmed blockers/majors after fix-ups).
+- [x] No existing feature lost (P2/P3 decomposed DeployPanel + RightPanel verbatim, parity
+  reviewed); EN/ZH parity (incl. the AuditView sweep); compiler/renderer/air-gap untouched.
+- [x] No token in web storage (sessionToken/operatorToken/csrfToken memory-only; explicit
+  partialize allowlists).
+- [x] Login survives refresh (httpOnly cookie + GET /session probe); dark/light/system +
+  translucency work (translucency server-backed in controller mode, client fallback local).
+- [x] STATUS.md updated; subject `git mv` to `_completed/` at closure (this commit).
+
+### Deliberate scope notes (carried forward, NOT defects)
+- **Dark workspace:** the nav chrome follows auto dark/light; the topology/deploy WORKSPACE
+  stays a dark canvas (pro-tool aesthetic). Full light theming of the legacy topology/deploy
+  forms is a deferred mechanical recolor (candidate follow-up subject).
+- **Cross-origin panel** requires `YAOG_PANEL_ORIGIN` (+ HTTPS); same-origin Docker (primary
+  deployment) needs no config. `plan-3.5`/`plan-5.5` insertion points were not needed.
+- **No release tag cut** — outward-facing; left to the user. The redesign is on `main` only.
 
 ## 10. Plan status
 
@@ -120,4 +133,6 @@ Each links its plan file. Goal / Proposed solution / Hazards / Verification / St
 | plan-3 | Right aside + toolbar | done — 286a3fb (PR #55); RightPanel/LeftPanel decomposed verbatim, no feature lost, /fleet/nodes/:id added; review 0 confirmed blocker/major; plan-3.5 not needed |
 | plan-4 | Persisted mode + caches + appearance | done — ca2f3da (PR #56); mode+caches persisted (non-secret), appearance (theme+translucency client), mode-aware nav/landing, Refresh→submit; review 0 confirmed blocker/major |
 | plan-5 | Cookie auth + CSRF + CORS | done — ee2b353 (PR #57); httpOnly cookie + double-submit CSRF + credentialed CORS + /session probe + server Translucency; security review 0 blocker, 1 confirmed major fixed (break-glass login-state); plan-5.5 not needed |
-| plan-6 | Polish + i18n + a11y | pending |
+| plan-6 | Polish + i18n + a11y | done — a63c177 (PR #58); vibrancy + reduced-motion/transparency + focus baseline (@layer base) + skip-link + AuditView i18n sweep; review 0 confirmed blocker/major |
+
+**SUBJECT COMPLETE 2026-06-09** — all six phases merged to main (PRs #53–#58). Closure README below.

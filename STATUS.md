@@ -1,60 +1,48 @@
 # STATUS
-<!-- regenerated: 2026-06-09 (panel-appshell-redesign drafted, awaiting approval) -->
-<!-- by: draft-implementation-plan -->
+<!-- regenerated: 2026-06-09 (panel-appshell-redesign closed) -->
+<!-- by: execute-implementation-plan / close-phase -->
 
 ## Active work
 
-- **Subject:** panel-appshell-redesign-2026_06_09 — **DRAFTED, awaiting user approval to build.**
-  Restructure the operator panel (a PoC) into a dashboard app-shell (collapsible sidebar + top app
-  bar + top-right user/theme menu + selection-driven right aside), Apple-minimal styling (auto
-  dark/light, theme-scoped accent, optional translucency), persisted mode + non-secret caches, and
-  refresh-surviving httpOnly-cookie login (cross-origin-capable). 6 phases (P1 shell+theme → P6
-  polish). Plans: `implementation_plans/panel-appshell-redesign-2026_06_09/`. Approved mirror:
-  `.claude/plans/valiant-wondering-crab.md`. Frozen: compiler/renderer/air-gap.
-- **Prior subject:** controller-panel-2026_06_08 (2.0 program) — CHECKPOINTED, all merged to main;
-  design `docs/design/controller-panel-design-spike-2026_06_07.md`.
-- **Branch:** main (no active feature branch until P1 is approved).
-- **Last shipped:** **v2.0.0-preview.3** (2026-06-09) — controller-panel operator auth stack
-  (#38–#48: ConfigSigner, password login, one-shot bootstrap, Docker, TOTP, passkey, signing
-  at-rest) + #49 loopback bind + #50 docker README + #51 webauthn IP-RP-ID guard + #52 path-prefix
-  hint. Prior: v2.0.0-preview.2 (off-host signing keystone, #35/#36/#37); v1.4.0 (signed bundles
-  + custody + agent).
+- **None active.** The `panel-appshell-redesign-2026_06_09` subject is **COMPLETE** —
+  all six phases merged to `main` (PRs #53–#58), each independently reviewed. Archived to
+  `implementation_plans/_completed/panel-appshell-redesign-2026_06_09/` (see `CLOSURE.md`).
+- **Branch:** main (no active feature branch).
+- **Last shipped (on main, untagged):** the operator-panel app-shell redesign —
+  - P1 #53 `d1dadd6` shell scaffold + theme · P2 #54 `86ec31e` sections→routes ·
+    P3 #55 `286a3fb` right aside + toolbar · P4 #56 `ca2f3da` persisted mode + caches +
+    appearance · P5 #57 `ee2b353` httpOnly-cookie auth + CSRF + CORS · P6 #58 `a63c177`
+    polish + i18n + a11y.
+- **Last release tag:** v2.0.0-preview.3 (2026-06-09, pre-redesign). The redesign is on
+  `main` only — no tag cut (outward-facing; left to the user).
 
 ## Open questions / blockers
 
-- **Remaining Plan 5 (task #20) is GATED on user forks** — the SaaS-hardening phase (multi-tenant
-  isolation, per-tenant **KMS** config-signing, **OIDC** operator login + RBAC, supply-chain
-  hardening) needs the user to choose a KMS provider and an OIDC provider before building. User
-  asked to checkpoint here rather than start it. See [[security-model-keystone]].
-- Remote ultraplan cloud session never landed its PR. If it ever appears: reconcile via a
-  plan-N.5-style insertion; the frozen `docs/spec/` contracts win conflicts.
+- **Release of the redesign is user-gated.** `main` is ahead of v2.0.0-preview.3 by the six
+  app-shell PRs; cutting a `v*` tag (→ Release + Docker workflows) is an outward-facing call
+  for the user.
+- **Remaining Plan 5 (task #20)** stays GATED on user provider forks (multi-tenant / KMS /
+  OIDC). See [[security-model-keystone]].
 
 ## Next actions
 
-- **panel-appshell-redesign — awaiting approval:** once approved, execute `plan-1` (app-shell
-  scaffold + theme foundation) as the first reviewed PR, then P2–P6. See the subject folder +
-  `.claude/plans/valiant-wondering-crab.md`. **Do not build until the user approves.**
-- **Owed manual gate (keystone) — needs user hardware (no authenticator in CI):** a browser smoke —
-  enroll a passkey/YubiKey and run a keystone-ON deploy that taps the key and promotes.
-- **Owed:** real-host two-node agent smoke (enroll → pull → verify → apply → report) and real-host
-  mimic failover smoke (`docs/spec/artifacts/mimic.md` §Verification) before production reliance.
-- **When the user resumes the program:** detail the rest of Plan 5 into numbered sub-plans once the
-  KMS + OIDC provider forks are decided (plan-5.2+). Multi-tenant structural isolation (tenant_id
-  from authenticated principal + cross-tenant CI gate) is the provider-agnostic slice that can start
-  without those forks.
-- **plan-6.5 (open design marker, audit subject):** domain-CIDR aggregate announcement design.
-- Future-subject candidates: ECMP/load-balancing across parallel links; per-edge WG keypairs
-  (escape hatch documented in security.md); bundled/hybrid canvas rendering for N>3 fans;
-  route_policies implementation; static-route renderer; additive-apply installer; IPv6 overlay.
-- Carried-forward polish (non-blocking reviewer notes, see both archived outlines §9):
-  sole-backup-pair compile test; node-ID charset hardening vs reserved separators;
-  deploy.go fallback-branch test (audit subject).
+- **Owed manual smoke (carried):** browser + authenticator + two-node controller deploy
+  (use `http://localhost`, not `127.0.0.1`, for WebAuthn). Verify the redesign end-to-end:
+  login survives refresh (cookie), CSRF, dark/light/system + translucency, no token in
+  `localStorage`; and the keystone passkey deploy.
+- **Optional (user-gated):** cut a release tag for the redesign once the smoke passes.
+- **Candidate follow-up subject:** full light-mode theming of the legacy topology/deploy
+  forms (the editing canvas is intentionally dark today — a mechanical recolor across the
+  deploy/* + aside/* components).
+- **Cross-origin panel deployments** must set `YAOG_PANEL_ORIGIN` (+ HTTPS); same-origin
+  Docker needs no config (`docs/spec/controller/operator-auth.md`).
 
 ## Recently closed subjects (last 3)
 
+- [panel-appshell-redesign-2026_06_09](implementation_plans/_completed/panel-appshell-redesign-2026_06_09/CLOSURE.md)
+  — 6 PRs: operator panel → dashboard app-shell (routes, selection aside, Apple-minimal
+  auto dark/light + vibrancy, persisted mode/caches, httpOnly-cookie refresh-surviving login).
 - [mimic-tcp-transport-2026_06_07](implementation_plans/_completed/mimic-tcp-transport-2026_06_07/outline.md)
   — 3 stacked PRs: transport:"tcp" wraps links with mimic (eBPF UDP→fake-TCP) for UDP-hostile networks.
 - [parallel-links-and-babel-failover-2026_06_07](implementation_plans/_completed/parallel-links-and-babel-failover-2026_06_07/outline.md)
   — 3 stacked PRs: per-edge link identity, babel cost failover, focus-transparency UX.
-- [audit-remediation-and-allocation-stability-2026_06_07](implementation_plans/_completed/audit-remediation-and-allocation-stability-2026_06_07/outline.md)
-  — 10 stacked PRs, 84 findings closed/deferred/refuted, sticky-pin allocation, contract freeze.
