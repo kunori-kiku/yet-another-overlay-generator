@@ -24,7 +24,7 @@ export function Sidebar() {
     <aside
       className={`${
         collapsed ? 'w-16' : 'w-60'
-      } flex shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-elevated)] transition-[width] duration-200 ease-[var(--ease-quiet)]`}
+      } app-chrome flex shrink-0 flex-col border-r border-[var(--hairline)] transition-[width] duration-200 ease-[var(--ease-quiet)]`}
     >
       <div className="flex h-14 items-center gap-2 border-b border-[var(--hairline)] px-3">
         <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--accent)] font-semibold text-[var(--accent-fg)]">

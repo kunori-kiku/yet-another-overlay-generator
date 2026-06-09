@@ -131,15 +131,15 @@ export function AuditView() {
     <div className="flex flex-col p-6 space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-white">{txt(language, ...STRINGS.compileHistoryTitle)}</h2>
-        <button onClick={clearHistory} className="px-3 py-1.5 bg-red-800 hover:bg-red-700 text-sm rounded">Clear History</button>
+        <button onClick={clearHistory} className="px-3 py-1.5 bg-red-800 hover:bg-red-700 text-sm rounded">{txt(language, ...STRINGS.chClearHistory)}</button>
       </div>
 
       {/* Global Audit Summary */}
       <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg">
-        <h3 className="text-lg font-semibold mb-3 text-orange-400">🛡️ Global Exopsure Audit</h3>
+        <h3 className="text-lg font-semibold mb-3 text-orange-400">🛡️ {txt(language, ...STRINGS.chExposureAudit)}</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <h4 className="text-sm text-gray-400 mb-2">Exposed Nodes (Public / Relays)</h4>
+            <h4 className="text-sm text-gray-400 mb-2">{txt(language, ...STRINGS.chExposedNodes)}</h4>
             <p className="text-xs text-gray-500 mb-2 italic">
               {auditNodesAreBackendInferred
                 ? txt(
@@ -153,14 +153,14 @@ export function AuditView() {
                     'Pre-compile estimate (from local role inference); will be authoritative after a compile.'
                   )}
             </p>
-            {exposedNodes.length === 0 ? <span className="text-xs text-gray-500">No exposed nodes</span> : (
+            {exposedNodes.length === 0 ? <span className="text-xs text-gray-500">{txt(language, ...STRINGS.chNoExposedNodes)}</span> : (
               <ul className="text-sm space-y-1">
                 {exposedNodes.map(n => {
                   const inboundEdges = edges.filter(e => e.to_node_id === n.id);
                   return (
                     <li key={n.id} className="text-gray-300">
                       <strong>{n.name}</strong> ({n.role}) - {n.overlay_ip}<br />
-                      <span className="text-gray-500 text-xs pl-2">Listens on port: {n.listen_port || 'Auto'} | Inbound allowed paths: {inboundEdges.length}</span>
+                      <span className="text-gray-500 text-xs pl-2">{txt(language, ...STRINGS.chListensOnPort)}: {n.listen_port || 'Auto'} | {txt(language, ...STRINGS.chInboundPaths)}: {inboundEdges.length}</span>
                     </li>
                   )
                 })}
@@ -168,11 +168,11 @@ export function AuditView() {
             )}
           </div>
           <div>
-            <h4 className="text-sm text-gray-400 mb-2">Network Statistics</h4>
+            <h4 className="text-sm text-gray-400 mb-2">{txt(language, ...STRINGS.chNetworkStats)}</h4>
             <ul className="text-sm text-gray-300 space-y-1">
-              <li>Total Nodes: {nodes.length}</li>
-              <li>Encrypted Edges: {edges.length}</li>
-              <li>Current Checksum:{currentResult ? <span className="font-mono text-xs ml-2 bg-gray-900 p-1 rounded break-all">{currentResult.manifest.checksum}</span> : ' N/A'}</li>
+              <li>{txt(language, ...STRINGS.chTotalNodes)}: {nodes.length}</li>
+              <li>{txt(language, ...STRINGS.chEncryptedEdges)}: {edges.length}</li>
+              <li>{txt(language, ...STRINGS.chCurrentChecksum)}:{currentResult ? <span className="font-mono text-xs ml-2 bg-gray-900 p-1 rounded break-all">{currentResult.manifest.checksum}</span> : ' N/A'}</li>
             </ul>
           </div>
         </div>
@@ -183,15 +183,15 @@ export function AuditView() {
       <section className="flex flex-1 gap-6 min-h-[400px]">
         {/* History List */}
         <div className="w-1/3 flex flex-col bg-gray-800 border border-gray-700 p-4 rounded-lg">
-          <h3 className="text-lg font-semibold mb-3 text-blue-400">📜 Compilation History</h3>
+          <h3 className="text-lg font-semibold mb-3 text-blue-400">📜 {txt(language, ...STRINGS.chCompilationHistory)}</h3>
           <div className="flex-1 overflow-y-auto space-y-2">
             {currentResult && (
               <div
                 className={`p-3 rounded cursor-pointer border ${selectedHistoryId === null ? 'border-blue-500 bg-blue-900/30' : 'border-gray-600 bg-gray-700 hover:bg-gray-600'}`}
                 onClick={() => setSelectedHistoryId(null)}
               >
-                <div className="font-semibold text-sm">Current Working State</div>
-                <div className="text-xs text-gray-400">Ready to export</div>
+                <div className="font-semibold text-sm">{txt(language, ...STRINGS.chCurrentWorkingState)}</div>
+                <div className="text-xs text-gray-400">{txt(language, ...STRINGS.chReadyToExport)}</div>
               </div>
             )}
             
@@ -201,25 +201,25 @@ export function AuditView() {
                 className={`p-3 rounded cursor-pointer border ${selectedHistoryId === h.id ? 'border-blue-500 bg-blue-900/30' : 'border-gray-600 bg-gray-700 hover:bg-gray-600'}`}
                 onClick={() => setSelectedHistoryId(h.id)}
               >
-                <div className="font-semibold text-sm">Snapshot {history.length - i}</div>
+                <div className="font-semibold text-sm">{txt(language, ...STRINGS.chSnapshot)} {history.length - i}</div>
                 <div className="text-xs text-gray-400">{new Date(h.timestamp).toLocaleString()}</div>
                 <div className="text-xs text-gray-500 font-mono mt-1 w-24 truncate">{h.compileResult.manifest.checksum}</div>
               </div>
             ))}
-            {history.length === 0 && !currentResult && <div className="text-sm text-gray-500 italic">No history available. Compile the project first.</div>}
+            {history.length === 0 && !currentResult && <div className="text-sm text-gray-500 italic">{txt(language, ...STRINGS.chNoHistory)}</div>}
           </div>
         </div>
 
         {/* Diff View */}
         <div className="w-2/3 flex flex-col bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
           <div className="p-3 border-b border-gray-700 bg-gray-800 flex justify-between items-center shrink-0">
-            <h3 className="text-lg font-semibold text-gray-200">🔍 Configuration Diff {selectedHistoryId && '(Current vs Snapshot)'}</h3>
+            <h3 className="text-lg font-semibold text-gray-200">🔍 {txt(language, ...STRINGS.chConfigDiff)} {selectedHistoryId && txt(language, ...STRINGS.chCurrentVsSnapshot)}</h3>
             <select
               className="bg-gray-900 border border-gray-600 text-sm rounded px-2 py-1"
               value={selectedNodeFileId}
               onChange={(e) => setSelectedNodeFileId(e.target.value)}
             >
-              <option value="">Select a file to diff...</option>
+              <option value="">{txt(language, ...STRINGS.chSelectFileToDiff)}</option>
               {nodes.map(n => {
                 // \u4ECE\u7F16\u8BD1\u7ED3\u679C\u6536\u96C6\u6BCF\u4E2A peer \u7684 WireGuard \u63A5\u53E3\u540D\u3002wireguard_configs \u7684 key \u662F
                 // \u540E\u7AEF\u7EA6\u5B9A\u7684 "nodeId:interfaceName"\uFF0C\u8FD9\u91CC\u4EE5 nodeId \u524D\u7F00\u5207\u51FA\u63A5\u53E3\u540D\u90E8\u5206\u3002
@@ -236,7 +236,7 @@ export function AuditView() {
                             {ifName}.conf
                           </option>
                         ))
-                      : <option value={encodeFileSelector(n.id, 'wg', '')} disabled>({'\u00A0'}no wg configs{'\u00A0'})</option>
+                      : <option value={encodeFileSelector(n.id, 'wg', '')} disabled>({'\u00A0'}{txt(language, ...STRINGS.chNoWgConfigs)}{'\u00A0'})</option>
                     }
                     <option value={encodeFileSelector(n.id, 'babel')}>babeld.conf</option>
                     <option value={encodeFileSelector(n.id, 'sysctl')}>sysctl.conf</option>
@@ -248,13 +248,13 @@ export function AuditView() {
           </div>
           <div className="flex-1 p-4 overflow-y-auto bg-gray-950">
             {!selectedNodeFileId ? (
-              <div className="text-center text-gray-500 mt-20">Select a file from the dropdown to view differences.</div>
+              <div className="text-center text-gray-500 mt-20">{txt(language, ...STRINGS.chSelectFromDropdown)}</div>
             ) : selectedHistoryId === null ? (
-              <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{currentText || 'File not found in current compilation.'}</pre>
+              <pre className="font-mono text-xs text-gray-300 whitespace-pre-wrap">{currentText || txt(language, ...STRINGS.chFileNotInCurrent)}</pre>
             ) : (
               <div>
                 {!oldText && !currentText ? (
-                  <div className="text-gray-500 italic">File does not exist in both states.</div>
+                  <div className="text-gray-500 italic">{txt(language, ...STRINGS.chFileNotInBoth)}</div>
                 ) : (
                   renderDiff(oldText, currentText)
                 )}
