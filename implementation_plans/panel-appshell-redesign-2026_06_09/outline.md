@@ -119,5 +119,5 @@ Each links its plan file. Goal / Proposed solution / Hazards / Verification / St
 | plan-2 | Sections → routes | done — 86ec31e (PR #54); viewMode retired, DeployPanel decomposed losslessly, review 0 confirmed blocker/major |
 | plan-3 | Right aside + toolbar | done — 286a3fb (PR #55); RightPanel/LeftPanel decomposed verbatim, no feature lost, /fleet/nodes/:id added; review 0 confirmed blocker/major; plan-3.5 not needed |
 | plan-4 | Persisted mode + caches + appearance | done — ca2f3da (PR #56); mode+caches persisted (non-secret), appearance (theme+translucency client), mode-aware nav/landing, Refresh→submit; review 0 confirmed blocker/major |
-| plan-5 | Cookie auth + CSRF + CORS | pending |
+| plan-5 | Cookie auth + CSRF + CORS | done — ee2b353 (PR #57); httpOnly cookie + double-submit CSRF + credentialed CORS + /session probe + server Translucency; security review 0 blocker, 1 confirmed major fixed (break-glass login-state); plan-5.5 not needed |
 | plan-6 | Polish + i18n + a11y | pending |
