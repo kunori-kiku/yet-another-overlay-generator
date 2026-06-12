@@ -24,21 +24,29 @@ export function EnrollmentFlow() {
   // Agent 前缀是服务端在 GET /settings 里只读上报的（YAOG_AGENT_PATH_PREFIX，已归一化为
   // '' 或 '/<seg>'）：面板不再让操作员手工镜像第二个环境变量（plan-1.5，server-authoritative）。
   // 注意绝不能用操作员前缀（pathPrefix mirror）——那属于面板自己的 API base，两者拆分后不同。
+  // settings 为 null（未加载/拉取失败）时前缀未知——此时给出显式警告而非静默生成可能 404 的命令。
+  const agentPrefixKnown = settings !== null;
   const agentPrefix = settings?.agentPathPrefix ?? '';
+
+  // 组合 agent 基址 + 前缀：若操作员历史上已把前缀手工写进了基址（旧版命令不补前缀，
+  // 这曾是唯一能用的写法），不再二次追加，避免升级后出现 /s3cr3t/s3cr3t 双前缀 404。
+  const withAgentPrefix = (base: string) => {
+    const trimmed = base.replace(/\/+$/, '');
+    if (!agentPrefix || trimmed.endsWith(agentPrefix)) return trimmed;
+    return `${trimmed}${agentPrefix}`;
+  };
 
   // enroll 命令文案：节点持有者在目标机上手动执行它来加入控制器（需先装好 agent 二进制）。
   // --controller 是 scheme://host[:port] + agent 前缀（agent 自己补 /api/v1/controller/）。
-  const enrollBase = agentBaseURL.replace(/\/+$/, '');
   const enrollCommand =
     token && nodeId
-      ? `agent enroll --controller ${enrollBase}${agentPrefix} --node-id ${nodeId} --token ${token}`
+      ? `agent enroll --controller ${withAgentPrefix(agentBaseURL)} --node-id ${nodeId} --token ${token}`
       : '';
 
   // 一键 bootstrap 命令（plan-5.2）：节点持有者以 root 跑一次，自动下载 agent、入网、应用、
   // 并装上 systemd 守护进程。curl 目标是服务端配置的 public agent URL（未配置则回退到
   // agentBaseURL）+ 服务端上报的 agent secret 前缀 + /api/v1/controller/bootstrap。
-  const bootstrapBase = (settings?.publicAgentURL || agentBaseURL).replace(/\/+$/, '');
-  const bootstrapURL = `${bootstrapBase}${agentPrefix}/api/v1/controller/bootstrap`;
+  const bootstrapURL = `${withAgentPrefix(settings?.publicAgentURL || agentBaseURL)}/api/v1/controller/bootstrap`;
   const bootstrapCommand =
     token && nodeId
       ? `bash <(curl -fsSL ${bootstrapURL}) --token ${token} --node-id ${nodeId}`
@@ -148,6 +156,15 @@ export function EnrollmentFlow() {
               '⚠️ This token is shown only once — copy it now.',
             )}
           </p>
+          {!agentPrefixKnown && (
+            <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+              {txt(
+                language,
+                '⚠️ 服务端设置尚未加载：以下命令可能缺少 agent 路径前缀。请等待设置加载或刷新后再复制。',
+                '⚠️ Server settings not loaded yet: the commands below may be missing the agent path prefix. Wait for settings to load (or refresh) before copying.',
+              )}
+            </p>
+          )}
           <div>
             <label className="text-[10px] text-gray-500 uppercase tracking-wider">
               {txt(language, '注册令牌', 'Enrollment token')}

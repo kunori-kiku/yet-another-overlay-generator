@@ -39,6 +39,20 @@ type settingsJSON struct {
 	AgentPathPrefix string `json:"agent_path_prefix"`
 }
 
+// settingsResponse builds the wire view of cs: the stored settings plus the
+// server-derived read-only fields (agent path prefix). Both HandleSettings branches
+// MUST respond through this single constructor so a field added for GET cannot be
+// forgotten for POST (which would make it flicker empty right after every save).
+func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) settingsJSON {
+	return settingsJSON{
+		PublicAgentURL:      cs.PublicAgentURL,
+		GithubProxy:         cs.GithubProxy,
+		AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
+		Translucency:        cs.Translucency != nil && *cs.Translucency,
+		AgentPathPrefix:     h.agentPrefix,
+	}
+}
+
 // loadSettings returns the tenant's settings with defaults applied (so an absent or
 // partially-saved record still yields a usable agent release URL).
 func (h *ControllerHandler) loadSettings(r *http.Request) (controller.ControllerSettings, error) {
@@ -63,14 +77,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to read settings")
 			return
 		}
-		writeJSON(w, http.StatusOK, settingsJSON{
-			PublicAgentURL:      cs.PublicAgentURL,
-			GithubProxy:         cs.GithubProxy,
-			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
-			// loadSettings applied WithDefaults, so Translucency is non-nil; guard anyway.
-			Translucency:    cs.Translucency != nil && *cs.Translucency,
-			AgentPathPrefix: h.agentPrefix,
-		})
+		writeJSON(w, http.StatusOK, h.settingsResponse(cs))
 
 	case http.MethodPost:
 		tenant, actor, ok := identity(r.Context())
@@ -117,13 +124,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			Actor:     "operator:" + actor,
 			Action:    "settings-update",
 		})
-		writeJSON(w, http.StatusOK, settingsJSON{
-			PublicAgentURL:      cs.PublicAgentURL,
-			GithubProxy:         cs.GithubProxy,
-			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
-			Translucency:        cs.Translucency != nil && *cs.Translucency,
-			AgentPathPrefix:     h.agentPrefix,
-		})
+		writeJSON(w, http.StatusOK, h.settingsResponse(cs))
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "only GET and POST are supported")
@@ -149,7 +150,13 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	// (YAOG_AGENT_PATH_PREFIX; the agent appends /api/v1/controller/ itself). The
 	// server knows its own prefix, so it composes the full base here. The operator
 	// prefix is deliberately NOT used: agents only ever talk to the agent port.
-	controllerBase := strings.TrimRight(cs.PublicAgentURL, "/") + h.agentPrefix
+	// With no PublicAgentURL configured the base stays "" — appending the prefix to an
+	// empty base would yield a schemeless "/<seg>" that defeats the script's
+	// "--controller is required" guard and fails with a confusing connection error.
+	controllerBase := ""
+	if cs.PublicAgentURL != "" {
+		controllerBase = strings.TrimRight(cs.PublicAgentURL, "/") + h.agentPrefix
+	}
 
 	// Keystone: bake the pinned off-host operator credential (public only) so the node
 	// enforces membership. ONLY a genuine ErrNotFound means keystone OFF; any other

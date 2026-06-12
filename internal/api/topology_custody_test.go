@@ -24,30 +24,19 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// newCustodyEnv stands up the operator mux (bare prefixes — custody is orthogonal to
-// the path prefix) over a MemStore.
+// newCustodyEnv rides the package's single controller test-env constructor (bare
+// prefixes — custody is orthogonal to the path prefix).
 func newCustodyEnv(t *testing.T) (*httptest.Server, controller.Store) {
 	t.Helper()
-	store := controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
-	mux := http.NewServeMux()
-	ch.RegisterOperatorRoutes(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv, store
+	env := newCtlTestEnv(t)
+	return env.opSrv, env.store
 }
 
-// custodyTopology builds a minimal schema-valid topology; withKey plants a private
-// key on the second node (not the first — the gate must scan EVERY node).
+// custodyTopology derives from the package's canonical minimal fixture (smallTopo —
+// one source of "schema-valid topology" truth); withKey plants a private key on the
+// SECOND node, not the first, so the gate is proven to scan every node.
 func custodyTopology(withKey bool) model.Topology {
-	topo := model.Topology{
-		Project: model.Project{ID: "p1", Name: "custody"},
-		Domains: []model.Domain{{ID: "d1", Name: "main", CIDR: "10.0.0.0/24", AllocationMode: "auto", RoutingMode: "babel"}},
-		Nodes: []model.Node{
-			{ID: "n1", Name: "alpha", Role: "peer", DomainID: "d1"},
-			{ID: "n2", Name: "bravo", Role: "peer", DomainID: "d1"},
-		},
-	}
+	topo := *smallTopo()
 	if withKey {
 		topo.Nodes[1].FixedPrivateKey = true
 		topo.Nodes[1].WireGuardPrivateKey = "SGVsbG8tLW5vdC1hLXJlYWwta2V5LWJ1dC1zZWNyZXQ="
@@ -105,7 +94,7 @@ func TestTopologyCustody_RejectionMessageNamesCustody(t *testing.T) {
 }
 
 // TestTopologyCustody_CleanTopologyStored: a clean (public-only) topology is accepted,
-// stored verbatim, audited, and the stored bytes carry no private key material.
+// stored in canonical form, audited, and the stored bytes carry no private key material.
 func TestTopologyCustody_CleanTopologyStored(t *testing.T) {
 	srv, store := newCustodyEnv(t)
 
@@ -156,5 +145,61 @@ func TestTopologyCustody_NonSchemaJSONRejected(t *testing.T) {
 	}
 	if _, err := store.GetTopology(context.Background(), testTenant); !errors.Is(err, controller.ErrNotFound) {
 		t.Fatalf("store has a topology after a refused non-schema upload (err=%v)", err)
+	}
+}
+
+// TestTopologyCustody_CanonicalStorageDefeatsSmuggling: the gate checks the PARSED
+// view, so the store must persist the canonical re-marshaled form — raw bytes could
+// smuggle key material past the gate via duplicate JSON keys (last-key-wins parsing
+// leaves the parsed field empty while the raw bytes keep the key) or via fields
+// outside the model (silently dropped by Unmarshal, preserved verbatim). Stored
+// bytes must equal the checked view by construction.
+func TestTopologyCustody_CanonicalStorageDefeatsSmuggling(t *testing.T) {
+	srv, store := newCustodyEnv(t)
+
+	const smuggled = "U01VR0dMRUQtUFJJVkFURS1LRVktQllURVM="
+	clean, err := json.Marshal(custodyTopology(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Plant (1) a duplicate-key pair on the first node object — the KEYED copy first,
+	// an empty copy second, so the parsed (last-wins) view passes the gate — and
+	// (2) an unknown top-level field stashing the same secret.
+	dupKey := bytes.Replace(clean,
+		[]byte(`"nodes":[{`),
+		[]byte(`"nodes":[{"wireguard_private_key":"`+smuggled+`","wireguard_private_key":"",`), 1)
+	payload := bytes.Replace(dupKey,
+		[]byte(`{"project":`),
+		[]byte(`{"smuggled_field":"`+smuggled+`","project":`), 1)
+	if !json.Valid(payload) {
+		t.Fatalf("test bug: crafted payload is not valid JSON:\n%s", payload)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/controller/update-topology", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testOperatorToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// The parsed view is clean, so the upload is accepted — the guarantee under test
+	// is that what gets STORED is the parsed view, not the smuggling bytes.
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("smuggle-shaped upload = %d, want 200 (parsed view is clean)", resp.StatusCode)
+	}
+
+	rec, err := store.GetTopology(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("GetTopology: %v", err)
+	}
+	if bytes.Contains(rec.JSON, []byte(smuggled)) {
+		t.Fatalf("stored topology bytes carry smuggled key material (canonicalization failed):\n%s", rec.JSON)
+	}
+	if bytes.Contains(rec.JSON, []byte("smuggled_field")) {
+		t.Fatalf("stored topology bytes carry the unknown stash field:\n%s", rec.JSON)
 	}
 }

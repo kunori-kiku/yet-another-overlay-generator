@@ -666,7 +666,7 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 
 // HandleUpdateTopology stores a new topology version (operator-only). The body is
 // the public-keys-only topology JSON (the stage step compiles/validates it). The
-// key-custody principle is ENFORCED here at the store boundary, not just asserted:
+// key-custody principle is ENFORCED at this API write boundary, not just asserted:
 // a payload carrying any non-empty wireguard_private_key is refused with 400 (D4,
 // fail-closed — the panel strips client-side; a key reaching this handler means a
 // custody bug upstream and must blow up loudly, never be stored). The tenant is the
@@ -686,18 +686,19 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 		writeError(w, statusForBodyErr(err), err.Error())
 		return
 	}
-	// Reject a non-JSON body up front so a malformed topology fails here rather than
-	// surfacing as a confusing compile error at /stage.
-	if !json.Valid(body) {
-		writeError(w, http.StatusBadRequest, "topology body is not valid JSON")
-		return
-	}
 	// Custody gate: unmarshal into the model (not a substring match, which would
 	// false-positive on names/notes) and refuse any private key material. Bodies are
 	// always panel-produced model.Topology, so an unmarshal failure is equally a 400 —
 	// storing bytes we cannot custody-check would reopen the hole this gate closes.
+	// A *json.SyntaxError keeps the plain "not valid JSON" message (the old json.Valid
+	// pre-check, now folded into this single parse).
 	var topo model.Topology
 	if err := json.Unmarshal(body, &topo); err != nil {
+		var syn *json.SyntaxError
+		if errors.As(err, &syn) {
+			writeError(w, http.StatusBadRequest, "topology body is not valid JSON")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "topology body does not match the topology schema: "+err.Error())
 		return
 	}
@@ -708,20 +709,32 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 			return
 		}
 	}
+	// Store the CANONICAL re-marshaled form, not the raw bytes: the gate above checks
+	// the parsed view, and raw bytes could smuggle key material past it via duplicate
+	// JSON keys (last-key-wins parsing) or fields outside the model. Canonicalizing
+	// makes stored-bytes == checked-view by construction. The wire contract for this
+	// endpoint is exactly model.Topology, so unknown fields are not data, they are a
+	// bug — and they are dropped here rather than persisted unchecked.
+	canonical, err := json.Marshal(topo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to canonicalize topology")
+		return
+	}
 
-	rec, err := h.store.PutTopology(r.Context(), tenant, body)
+	rec, err := h.store.PutTopology(r.Context(), tenant, canonical)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store topology")
 		return
 	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	// Post-commit audit is best-effort: the version is already stored, and converting
+	// an audit-write hiccup into a 500 would tell the operator the action failed when
+	// it committed (the retry would mint a duplicate version). Same convention as the
+	// settings/login audits.
+	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
 		Actor:     "operator:" + operator,
 		Action:    "update-topology",
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
-		return
-	}
+	})
 	writeJSON(w, http.StatusOK, map[string]int64{"version": rec.Version})
 }
 
@@ -779,15 +792,14 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// Audit the flip: promote is the action that changes what the fleet RUNS, so its
-	// absence from the audit log was a real observability gap (plan-1).
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	// absence from the audit log was a real observability gap (plan-1). Best-effort:
+	// the generation has ALREADY flipped fleet-wide — a 500 here would report a live
+	// deploy as failed, and the operator's retry would 409 on the consumed stage.
+	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
 		Actor:     "operator:" + operator,
 		Action:    "promote",
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
-		return
-	}
+	})
 	writeJSON(w, http.StatusOK, generationResponseJSON{Generation: gen})
 }
 

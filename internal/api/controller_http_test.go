@@ -60,6 +60,15 @@ type ctlTestEnv struct {
 // per mux) backed by a MemStore. The handler is built with the operator token's
 // hash, exactly as the production path does.
 func newCtlTestEnv(t *testing.T) *ctlTestEnv {
+	return newCtlTestEnvWith(t, nil)
+}
+
+// newCtlTestEnvWith is newCtlTestEnv with a configuration hook applied to the handler
+// BEFORE route registration (e.g. the prefix setters). It is the SINGLE controller
+// test-env constructor in this package — sibling test files must extend it via the
+// hook rather than re-implementing the scaffold, so a change to handler construction
+// is made exactly once.
+func newCtlTestEnvWith(t *testing.T, configure func(*ControllerHandler)) *ctlTestEnv {
 	t.Helper()
 
 	store := controller.NewMemStore()
@@ -68,6 +77,9 @@ func newCtlTestEnv(t *testing.T) *ctlTestEnv {
 	// promptly instead of waiting the production ~55s. The server (not the client) is
 	// what produces the 204, so this is the right knob.
 	ch.pollDeadline = 250 * time.Millisecond
+	if configure != nil {
+		configure(ch)
+	}
 
 	opMux := http.NewServeMux()
 	ch.RegisterOperatorRoutes(opMux)
@@ -122,7 +134,7 @@ func doJSON(t *testing.T, method, url, token string, body any, out any) int {
 
 // doRaw performs a request with a raw (non-JSON-marshaled) body and an optional
 // Bearer token, returning the status code. Used for /update-topology, which stores
-// the topology bytes verbatim.
+// the canonical re-marshaled form of the posted topology.
 func doRaw(t *testing.T, method, url, token string, body []byte) int {
 	t.Helper()
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))

@@ -20,24 +20,15 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
-// newPrefixEnv stands up the two muxes with independent prefixes applied.
+// newPrefixEnv stands up the shared controller test env with independent prefixes
+// applied (the scaffold itself lives in newCtlTestEnvWith — single constructor).
 func newPrefixEnv(t *testing.T, operatorPrefix, agentPrefix string) (opSrv, agentSrv *httptest.Server, store controller.Store) {
 	t.Helper()
-	store = controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
-	ch.SetOperatorPathPrefix(operatorPrefix)
-	ch.SetAgentPathPrefix(agentPrefix)
-
-	opMux := http.NewServeMux()
-	ch.RegisterOperatorRoutes(opMux)
-	agentMux := http.NewServeMux()
-	ch.RegisterAgentRoutes(agentMux)
-
-	opSrv = httptest.NewServer(opMux)
-	agentSrv = httptest.NewServer(agentMux)
-	t.Cleanup(opSrv.Close)
-	t.Cleanup(agentSrv.Close)
-	return opSrv, agentSrv, store
+	env := newCtlTestEnvWith(t, func(ch *ControllerHandler) {
+		ch.SetOperatorPathPrefix(operatorPrefix)
+		ch.SetAgentPathPrefix(agentPrefix)
+	})
+	return env.opSrv, env.agentSrv, env.store
 }
 
 // TestPrefixSplit_IndependentMounts: with two different prefixes configured, each mux

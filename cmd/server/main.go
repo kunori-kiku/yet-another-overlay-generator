@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -117,6 +118,14 @@ func main() {
 // port and the agent port concurrently as plain HTTP. It is only reached under the
 // controller env gate. It returns the first serve error from either port.
 func serveController(server *api.Server, addr, agentAddr, stateDir, tenant string) error {
+	// Fail LOUD on the removed env (D3 clean break): silently ignoring a stale
+	// YAOG_CONTROLLER_PATH_PREFIX would mount everything at the bare paths while the
+	// whole enrolled fleet keeps polling the old prefixed URLs — a fleet-wide 404 with
+	// nothing in the log naming the cause. Refusing to start names the fix instead.
+	if os.Getenv("YAOG_CONTROLLER_PATH_PREFIX") != "" {
+		return errors.New("YAOG_CONTROLLER_PATH_PREFIX was removed: set YAOG_OPERATOR_PATH_PREFIX (operator/panel API, :8080) and YAOG_AGENT_PATH_PREFIX (agent API, :9090) instead, then update your proxy rules per audience")
+	}
+
 	// The operator token is now OPTIONAL: it is the BREAK-GLASS credential, accepted
 	// alongside password-login sessions (plan-5.2). When unset, only operator accounts
 	// (created via `yaog-server create-operator`) can authenticate operator routes.
