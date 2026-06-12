@@ -62,27 +62,15 @@ func TestTopologyVersionsHTTP(t *testing.T) {
 		t.Fatalf("versions = %+v, want [3 2 1]", list.Versions)
 	}
 
-	// A retained payload round-trips: ?version=1 returns the FIRST upload.
-	resp, err := http.NewRequest(http.MethodGet, env.opURL("topology?version=1"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Header.Set("Authorization", "Bearer "+testOperatorToken)
-	r, err := http.DefaultClient.Do(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Body.Close()
-	if r.StatusCode != http.StatusOK {
-		t.Fatalf("GET topology?version=1 = %d, want 200", r.StatusCode)
-	}
+	// A retained payload round-trips: ?version=1 returns the FIRST upload (doJSON
+	// decodes the 200 body — no hand-rolled request block).
 	var got struct {
 		Project struct {
 			Description string `json:"description"`
 		} `json:"project"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-		t.Fatalf("decode version payload: %v", err)
+	if st := doJSON(t, http.MethodGet, env.opURL("topology?version=1"), testOperatorToken, nil, &got); st != http.StatusOK {
+		t.Fatalf("GET topology?version=1 = %d, want 200", st)
 	}
 	if got.Project.Description != "rev-1" {
 		t.Fatalf("version 1 description = %q, want rev-1", got.Project.Description)

@@ -331,9 +331,14 @@ type Store interface {
 	GetTopology(ctx context.Context, t TenantID) (TopologyRecord, error)
 	// ListTopologyVersions returns the retained versions, newest first
 	// (≤ TopologyHistoryLimit entries; empty slice before the first PutTopology).
+	// Only COMMITTED versions appear: a crash orphan (retained ahead of the
+	// current record) is invisible, the current record is always present, and a
+	// corrupt retained entry is skipped rather than failing the list — this is
+	// the operator's recovery surface and must stay serviceable.
 	ListTopologyVersions(ctx context.Context, t TenantID) ([]TopologyVersionInfo, error)
-	// GetTopologyVersion returns one retained version, or ErrNotFound (unknown or
-	// already pruned).
+	// GetTopologyVersion returns one retained version, or ErrNotFound (unknown,
+	// already pruned, or never committed). The current record's version is always
+	// servable.
 	GetTopologyVersion(ctx context.Context, t TenantID, version int64) (TopologyRecord, error)
 
 	// --- Bundles + generation ---

@@ -438,7 +438,17 @@ func (fs *FileStore) PutTopology(ctx context.Context, t TenantID, jsonBytes []by
 		UpdatedAt: time.Now().UTC(),
 	}
 	histDir := filepath.Join(dir, "topology-history")
-	if err := writeJSONAtomic(filepath.Join(histDir, fmt.Sprintf("%d.json", rec.Version)), rec); err != nil {
+	// Upgrade backfill: a deployment that stored its current topology BEFORE the
+	// history feature existed has no history file for it; write it lazily now so
+	// the previous version remains recoverable after this put displaces it.
+	if prevVersion > 0 {
+		if prevHist := filepath.Join(histDir, historyFileName(prevVersion)); !fileExists(prevHist) {
+			if err := writeJSONAtomic(prevHist, prev); err != nil {
+				return TopologyRecord{}, err
+			}
+		}
+	}
+	if err := writeJSONAtomic(filepath.Join(histDir, historyFileName(rec.Version)), rec); err != nil {
 		return TopologyRecord{}, err
 	}
 	if err := writeJSONAtomic(p, rec); err != nil {
@@ -460,6 +470,19 @@ func (fs *FileStore) PutTopology(ctx context.Context, t TenantID, jsonBytes []by
 	return rec, nil
 }
 
+// historyFileName is the single format-direction counterpart of
+// historyVersionFromName: the on-disk file name for a retained version.
+func historyFileName(version int64) string {
+	return fmt.Sprintf("%d.json", version)
+}
+
+// fileExists reports whether path exists (any stat error other than not-exist is
+// treated as existing, so a permission oddity never triggers an overwrite).
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
+}
+
 // historyVersionFromName parses a topology-history file name ("<version>.json")
 // into its version, reporting ok=false for anything else (temp files, foreign
 // names) so directory scans skip them instead of failing.
@@ -476,7 +499,20 @@ func historyVersionFromName(name string) (int64, bool) {
 }
 
 // ListTopologyVersions returns the retained versions, newest first. An absent
-// history directory (tenant never stored a topology) is an empty list.
+// current topology (tenant never stored one) is an empty list.
+//
+// Robustness contract for the RECOVERY surface (review-hardened):
+//   - A crash orphan (history file with version > the committed current record,
+//     left by a crash between the history write and the topology.json flip) is
+//     INVISIBLE — it was never the current topology, so listing or serving it
+//     would offer to "recover" a write that never committed. The next put
+//     overwrites it (self-heal).
+//   - A corrupt history file is SKIPPED, never allowed to brick the whole list
+//     (one bit-rotted entry must not 500 the endpoint an operator is using to
+//     recover from a bad overwrite). The filename is the lookup key (the same
+//     key GetTopologyVersion uses); a body whose Version disagrees is corrupt.
+//   - The CURRENT record always appears, even when its history file is missing
+//     (a deployment whose topology predates the history feature).
 func (fs *FileStore) ListTopologyVersions(ctx context.Context, t TenantID) ([]TopologyVersionInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -488,27 +524,32 @@ func (fs *FileStore) ListTopologyVersions(ctx context.Context, t TenantID) ([]To
 	if err != nil {
 		return nil, err
 	}
-	histDir := filepath.Join(dir, "topology-history")
-	entries, err := os.ReadDir(histDir)
-	if err != nil {
+	var cur TopologyRecord
+	if err := readJSON(filepath.Join(dir, "topology.json"), &cur); err != nil {
 		if os.IsNotExist(err) {
 			return []TopologyVersionInfo{}, nil
 		}
 		return nil, err
 	}
-	out := make([]TopologyVersionInfo, 0, len(entries))
+
+	histDir := filepath.Join(dir, "topology-history")
+	entries, err := os.ReadDir(histDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	out := make([]TopologyVersionInfo, 0, len(entries)+1)
+	sawCurrent := false
 	for _, e := range entries {
-		if _, ok := historyVersionFromName(e.Name()); !ok {
-			continue
+		v, ok := historyVersionFromName(e.Name())
+		if !ok || v > cur.Version {
+			continue // foreign file, or a crash orphan newer than the committed record
 		}
 		var rec TopologyRecord
-		if err := readJSON(filepath.Join(histDir, e.Name()), &rec); err != nil {
-			// A file deleted between ReadDir and read (concurrent prune in another
-			// process is out of contract, but be tolerant); anything else is real.
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, err
+		if err := readJSON(filepath.Join(histDir, e.Name()), &rec); err != nil || rec.Version != v {
+			continue // unreadable/corrupt entry: skip, never brick the recovery list
+		}
+		if v == cur.Version {
+			sawCurrent = true
 		}
 		out = append(out, TopologyVersionInfo{
 			Version:   rec.Version,
@@ -516,12 +557,20 @@ func (fs *FileStore) ListTopologyVersions(ctx context.Context, t TenantID) ([]To
 			Bytes:     len(rec.JSON),
 		})
 	}
+	if !sawCurrent {
+		out = append(out, TopologyVersionInfo{
+			Version:   cur.Version,
+			UpdatedAt: cur.UpdatedAt,
+			Bytes:     len(cur.JSON),
+		})
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Version > out[j].Version })
 	return out, nil
 }
 
-// GetTopologyVersion returns one retained version, or ErrNotFound (unknown or
-// already pruned).
+// GetTopologyVersion returns one retained version, or ErrNotFound (unknown,
+// pruned, or a crash orphan that never committed). The current record's version
+// is always servable, even when its history file is missing (upgrade shape).
 func (fs *FileStore) GetTopologyVersion(ctx context.Context, t TenantID, version int64) (TopologyRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return TopologyRecord{}, err
@@ -536,8 +585,21 @@ func (fs *FileStore) GetTopologyVersion(ctx context.Context, t TenantID, version
 	if version <= 0 {
 		return TopologyRecord{}, ErrNotFound
 	}
+	var cur TopologyRecord
+	if err := readJSON(filepath.Join(dir, "topology.json"), &cur); err != nil {
+		if os.IsNotExist(err) {
+			return TopologyRecord{}, ErrNotFound // nothing ever committed
+		}
+		return TopologyRecord{}, err
+	}
+	if version > cur.Version {
+		return TopologyRecord{}, ErrNotFound // crash orphan / never existed
+	}
+	if version == cur.Version {
+		return cur, nil // the committed current record is authoritative for its version
+	}
 	var rec TopologyRecord
-	if err := readJSON(filepath.Join(dir, "topology-history", fmt.Sprintf("%d.json", version)), &rec); err != nil {
+	if err := readJSON(filepath.Join(dir, "topology-history", historyFileName(version)), &rec); err != nil {
 		if os.IsNotExist(err) {
 			return TopologyRecord{}, ErrNotFound
 		}
