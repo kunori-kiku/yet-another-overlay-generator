@@ -101,6 +101,21 @@ type TopologyRecord struct {
 	UpdatedAt time.Time
 }
 
+// TopologyHistoryLimit is the number of topology versions every Store retains
+// (D7): each PutTopology appends a version and prunes the oldest beyond this
+// bound, so a bad overwrite (empty-canvas deploy, botched import) is recoverable
+// from the API without filesystem backups. Stage write-backs (persistAllocations)
+// also count as versions.
+const TopologyHistoryLimit = 10
+
+// TopologyVersionInfo is the cheap list view of one retained topology version —
+// metadata only, no JSON payload (fetch a payload via GetTopologyVersion).
+type TopologyVersionInfo struct {
+	Version   int64
+	UpdatedAt time.Time
+	Bytes     int
+}
+
 // SignedBundle is one node's rendered, Phase-0-signed bundle at a generation.
 // Files maps bundle-relative paths (install.sh, wireguard/<iface>.conf,
 // checksums.sha256, bundle.sig, signing-pubkey.pem, manifest.json, …) to content.
@@ -309,10 +324,17 @@ type Store interface {
 	// --- Topology (public-keys-only) ---
 
 	// PutTopology stores a new topology version (public-keys-only JSON) and returns
-	// the stored record with its assigned Version.
+	// the stored record with its assigned Version. The version is also retained in
+	// the bounded history (TopologyHistoryLimit; oldest pruned).
 	PutTopology(ctx context.Context, t TenantID, json []byte) (TopologyRecord, error)
 	// GetTopology returns the current topology, or ErrNotFound.
 	GetTopology(ctx context.Context, t TenantID) (TopologyRecord, error)
+	// ListTopologyVersions returns the retained versions, newest first
+	// (≤ TopologyHistoryLimit entries; empty slice before the first PutTopology).
+	ListTopologyVersions(ctx context.Context, t TenantID) ([]TopologyVersionInfo, error)
+	// GetTopologyVersion returns one retained version, or ErrNotFound (unknown or
+	// already pruned).
+	GetTopologyVersion(ctx context.Context, t TenantID, version int64) (TopologyRecord, error)
 
 	// --- Bundles + generation ---
 

@@ -525,6 +525,11 @@ func clientTargetEnrolled(topo *model.Topology, clientID string, enrolled map[st
 // public-keys-only — and stamps AllocSchemaVersion. The next CompileAndStage then
 // finds these pins in the stored topology and the compiler reuses them (sticky-pin),
 // which is what keeps allocations stable across incremental enrollment (I10).
+//
+// Note (plan-2): this PutTopology write-back COUNTS as a retained topology version
+// like any other — each stage burns one slot of the bounded history
+// (TopologyHistoryLimit). That is deliberate: the pinned post-stage shape is itself
+// a state an operator may want to recover.
 func persistAllocations(ctx context.Context, store Store, t TenantID, full, compiled *model.Topology) error {
 	ipByID := make(map[string]string, len(compiled.Nodes))
 	for _, n := range compiled.Nodes {
