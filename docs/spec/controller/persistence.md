@@ -68,7 +68,13 @@ The Store holds the records defined alongside the interface:
   `ErrNotFound` when absent; `ListNodes` returns a stable order by `NodeID`.
 - **`TopologyRecord`** — the operator's stored topology JSON for the tenant, **public-keys-only** (it
   must not carry WireGuard private keys). `PutTopology` assigns an incrementing `Version` (1, 2, 3, …)
-  on each call; `GetTopology` returns the current record or `ErrNotFound`.
+  on each call; `GetTopology` returns the current record or `ErrNotFound`. Every put is also retained
+  in a **bounded version history** (`TopologyHistoryLimit` = 10, oldest pruned): `ListTopologyVersions`
+  lists retained metadata newest-first and `GetTopologyVersion` returns one retained record — the
+  recovery substrate for a bad overwrite. On disk (FileStore) the history lives at
+  `topology-history/<version>.json`, written **before** `topology.json` flips so a crash between the
+  two leaves only a harmless orphan entry that the next put overwrites. Stage write-backs
+  (`persistAllocations`) count as versions like any other put.
 - **`SignedBundle`** — one node's rendered, Phase-0-signed bundle at a generation: `NodeID`,
   `Generation`, `Files` (bundle-relative path → content: `install.sh`, `wireguard/<iface>.conf`,
   `checksums.sha256`, `bundle.sig`, `signing-pubkey.pem`, `manifest.json`, …), and the `IsStaged` /
