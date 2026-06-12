@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -664,14 +665,18 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleUpdateTopology stores a new topology version (operator-only). The body is
-// the public-keys-only topology JSON; it is stored verbatim via PutTopology (the
-// stage step compiles/validates it). The tenant is the configured one.
+// the public-keys-only topology JSON (the stage step compiles/validates it). The
+// key-custody principle is ENFORCED here at the store boundary, not just asserted:
+// a payload carrying any non-empty wireguard_private_key is refused with 400 (D4,
+// fail-closed — the panel strips client-side; a key reaching this handler means a
+// custody bug upstream and must blow up loudly, never be stored). The tenant is the
+// configured one.
 func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
 		return
 	}
-	tenant, _, ok := identity(r.Context())
+	tenant, operator, ok := identity(r.Context())
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
@@ -687,10 +692,34 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "topology body is not valid JSON")
 		return
 	}
+	// Custody gate: unmarshal into the model (not a substring match, which would
+	// false-positive on names/notes) and refuse any private key material. Bodies are
+	// always panel-produced model.Topology, so an unmarshal failure is equally a 400 —
+	// storing bytes we cannot custody-check would reopen the hole this gate closes.
+	var topo model.Topology
+	if err := json.Unmarshal(body, &topo); err != nil {
+		writeError(w, http.StatusBadRequest, "topology body does not match the topology schema: "+err.Error())
+		return
+	}
+	for _, n := range topo.Nodes {
+		if n.WireGuardPrivateKey != "" {
+			writeError(w, http.StatusBadRequest,
+				"topology carries WireGuard private keys; controller mode is zero-knowledge — strip them client-side (key custody)")
+			return
+		}
+	}
 
 	rec, err := h.store.PutTopology(r.Context(), tenant, body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store topology")
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "update-topology",
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"version": rec.Version})
@@ -733,7 +762,7 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
 		return
 	}
-	tenant, _, ok := identity(r.Context())
+	tenant, operator, ok := identity(r.Context())
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
@@ -747,6 +776,16 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		// The keystone gate (missing/unsigned/invalid manifest) is an operator-actionable
 		// precondition failure, not an internal error: surface its message at 422.
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// Audit the flip: promote is the action that changes what the fleet RUNS, so its
+	// absence from the audit log was a real observability gap (plan-1).
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "promote",
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
 	writeJSON(w, http.StatusOK, generationResponseJSON{Generation: gen})
