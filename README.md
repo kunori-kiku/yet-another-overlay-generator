@@ -16,6 +16,11 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Offline Configuration Bundles:** One-click deployment bundle generation — download portable `.zip` archives containing safe Bash installation scripts, sysctl modifications, Babel daemons, and WireGuard interfaces.
 - **Immutable Artifacts:** Generated scripts hash and verify checksums (`sha256`) explicitly mitigating tamper attacks.
 - **Controller Mode (Agent-Pull Deploy):** Optionally run YAOG as a long-lived **controller** — a single Docker image (panel + API) where each node **pulls** its own keystone-signed config instead of you exporting a bundle. Operator login (password + optional TOTP / passkey 2FA), one-line node enrollment, and one-click Deploy. See [Controller Mode (Docker)](#controller-mode-docker).
+- **Dashboard App Shell (2.0):** The operator panel is a deep-linkable dashboard — **Overview, Design, Fleet, Deploy, Security, Settings** sections behind a collapsible sidebar. The Design page pairs the canvas with a creation toolbar and a selection-driven properties aside; navigation and the landing page adapt to the mode (controller → Overview, local generator → Design).
+- **Off-Host Signing Keystone (2.0):** Each controller Deploy is signed by the operator's hardware-backed passkey in a WebAuthn ceremony over the exact trust-list bytes, and nodes verify the signature before applying — a compromised controller alone cannot push configs to your fleet.
+- **Hardened Operator Auth (2.0):** Sessions live in an httpOnly cookie (login survives page refresh; no token in `localStorage`) with double-submit CSRF protection and credentialed CORS (`YAOG_PANEL_ORIGIN`). Second factors are TOTP (RFC 6238) and/or passkeys; passkeys also enable passwordless login.
+- **Fleet Management (2.0):** Per-node fleet pages with status detail, single-use enrollment tokens minted from the panel, a compile-history/audit view, and manual fleet-wide WireGuard key rotation (Roll keys).
+- **Theming, i18n & Accessibility (2.0):** System-following dark/light themes with manual override and optional translucency/vibrancy, reduced-motion support, keyboard/skip-link accessibility, and a fully bilingual English/中文 UI.
 
 ## Getting Started
 
@@ -64,12 +69,14 @@ Visit `http://localhost:5173` in your browser.
 
 ## Basic Usage Guide
 
-1. **Add Domains:** Open the left panel and add a logical IP Domain (e.g., `10.10.0.0/24`). Set allocation mode to Automatic.
-2. **Add Nodes:** Create nodes via the left panel. Define their Roles (Peer, Router, Relay, Gateway, Client) and capabilities (e.g., `Publicly Reachable` / `Can Forward`).
-3. **Configure SSH (optional):** Expand the SSH Connection section in node properties to set SSH alias or host/port/user/key for auto-deploy.
+All topology editing happens on the **Design** page (the default landing in local mode):
+
+1. **Add Domains:** Use the domain form in the canvas toolbar to add a logical IP Domain (e.g., `10.10.0.0/24`). Set allocation mode to Automatic.
+2. **Add Nodes:** Use the node form in the canvas toolbar. Define their Roles (Peer, Router, Relay, Gateway, Client) and capabilities (e.g., a public address / `Can Forward`).
+3. **Edit Properties:** Select any domain, node, or edge on the canvas (or via the toolbar's list drawer) to edit it in the right-hand aside — including the optional SSH Connection section (alias or host/port/user/key) used by auto-deploy.
 4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown). Leave the port at `0` so the compiler allocates it; only set `endpoint_port` when you need an explicit NAT/port-forward override.
-5. **Compile:** Hit `Compile` to allocate IPs and ports, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
-6. **Export & Deploy:** Hit `Export` to download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
+5. **Compile:** Hit `Compile` in the canvas toolbar to allocate IPs and ports, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
+6. **Export & Deploy:** Switch to the **Deploy** page to review the compiled artifacts and download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
 
 ## Controller Mode (Docker)
 
@@ -105,18 +112,20 @@ You'll be prompted for a password (entered without echo). This is the account yo
 
 ### 3. Open the panel
 
-The panel + operator API is at **`http://localhost:8080`** (the node-facing agent API is on `:9090`). Log in as `admin`.
+The panel + operator API is at **`http://localhost:8080`** (the node-facing agent API is on `:9090`). Log in as `admin` — the session is an httpOnly cookie, so it survives page refreshes.
+
+In controller mode you land on **Overview** (topology + fleet at a glance). The other sections: **Design** (the topology canvas), **Fleet** (node enrollment + per-node detail), **Deploy** (compile preview + one-click Deploy), **Security** (TOTP and passkey enrollment, audit log, compile history), and **Settings** (mode, connection, bootstrap, appearance). The EN/中文 language toggle sits in the top bar.
 
 By default both ports bind to **loopback only** (`127.0.0.1`) — the login form carries a plaintext password, so nothing is exposed on other interfaces out of the box. Reach the panel from the same host, or tunnel it: `ssh -L 8080:127.0.0.1:8080 <host>`.
 
-> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. ⚠️ Use the hostname **`localhost`**, not the IP `http://127.0.0.1` — WebAuthn forbids IP-address domains, so passkey enrollment at `127.0.0.1` fails with *"invalid domain."* For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony.
+> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. ⚠️ Use the hostname **`localhost`**, not the IP `http://127.0.0.1` — WebAuthn forbids IP-address domains, so passkey enrollment at `127.0.0.1` fails with *"invalid domain."* For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony. (As of `v2.0.0-preview.5` the rest of the panel — including Compile — degrades gracefully over plain HTTP on a LAN address; only the passkey/WebAuthn ceremonies hard-require a secure context.)
 
 ### 4. Deploy to a node (agent pull)
 
 To let a remote node pull its config, first expose the agent port — for a lab, `YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`; for production, the TLS proxy above. Then, in the panel:
 
-1. In the **Bootstrap Settings** section, set the **Public Agent URL** to where nodes reach the controller (e.g. `https://overlay.example.com` or `http://<host>:9090`).
-2. Add a node and generate a single-use **enrollment token**.
+1. On the **Settings** page, under **Bootstrap Settings**, set the **Public Agent URL** to where nodes reach the controller (e.g. `https://overlay.example.com` or `http://<host>:9090`).
+2. Add the node to your topology (Design page), then on the **Fleet** page mint a single-use **enrollment token** for it.
 3. On the target host (Linux + systemd), as root:
 
 ```bash
