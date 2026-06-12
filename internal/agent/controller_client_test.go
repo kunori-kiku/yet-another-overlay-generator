@@ -182,14 +182,15 @@ func (e *ctlEnv) doOperatorJSON(t *testing.T, method, url string, body []byte) [
 	return respBody
 }
 
-// stageAndPromote drives the operator side over the operator HTTP routes:
-// update-topology -> stage -> promote, and returns the promoted generation. The agent
-// never performs these; they are how a new configuration becomes available to poll.
-func (e *ctlEnv) stageAndPromote(t *testing.T) int64 {
+// deployTopo drives the operator side over the operator HTTP routes for an
+// arbitrary topology: update-topology -> stage -> promote, returning the promoted
+// generation. The single deploy helper for this package's tests — do not re-inline
+// the sequence.
+func (e *ctlEnv) deployTopo(t *testing.T, topo *model.Topology) int64 {
 	t.Helper()
 	base := e.opSrv.URL + "/api/v1/controller/"
 
-	topoJSON, err := json.Marshal(smallTopo())
+	topoJSON, err := json.Marshal(topo)
 	if err != nil {
 		t.Fatalf("marshal topology: %v", err)
 	}
@@ -199,31 +200,22 @@ func (e *ctlEnv) stageAndPromote(t *testing.T) int64 {
 	if status := doOperator(t, http.MethodPost, base+"stage", []byte("{}")); status != http.StatusOK {
 		t.Fatalf("stage: status %d, want 200", status)
 	}
-
-	req, err := http.NewRequest(http.MethodPost, base+"promote", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		t.Fatalf("promote NewRequest: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+operatorPlaintext)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("promote: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("promote: status %d, want 200", resp.StatusCode)
-	}
 	var promote struct {
 		Generation int64 `json:"generation"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&promote); err != nil {
+	if err := json.Unmarshal(e.doOperatorJSON(t, http.MethodPost, base+"promote", []byte("{}")), &promote); err != nil {
 		t.Fatalf("decode promote response: %v", err)
 	}
 	if promote.Generation < 1 {
 		t.Fatalf("promote generation %d, want >= 1", promote.Generation)
 	}
 	return promote.Generation
+}
+
+// stageAndPromote deploys the package's standard smallTopo fixture.
+func (e *ctlEnv) stageAndPromote(t *testing.T) int64 {
+	t.Helper()
+	return e.deployTopo(t, smallTopo())
 }
 
 // enrollViaAgent runs the agent's OWN Enroll against the live controller over a

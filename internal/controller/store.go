@@ -34,8 +34,12 @@ type TenantID string
 var (
 	// ErrNotFound is returned when a requested record does not exist for the tenant.
 	ErrNotFound = errors.New("controller: not found")
-	// ErrNoStagedBundle is returned by PromoteStaged when nothing is staged.
-	ErrNoStagedBundle = errors.New("controller: no staged bundle to promote")
+	// ErrNoStagedBundle is returned by PromoteStaged when nothing is staged FOR
+	// THE GENERATION BEING PROMOTED — either nothing is staged at all, or the
+	// staged set's provisional generation was invalidated by an interleaved
+	// BumpGeneration/promote (plan-3 scoping). The remedy is identical either
+	// way: stage (again), then promote.
+	ErrNoStagedBundle = errors.New("controller: nothing staged for the next generation; stage (again) before promoting")
 	// ErrTokenInvalid is returned by ConsumeEnrollmentToken when the token is
 	// unknown, scoped to a different node, or expired.
 	ErrTokenInvalid = errors.New("controller: enrollment token invalid or expired")

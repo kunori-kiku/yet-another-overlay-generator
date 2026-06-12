@@ -75,12 +75,10 @@ func simulateApplied(t *testing.T, stateDir, checksum, compiledAt, result string
 // with it), then stages+promotes so the tenant generation advances for node-2 only.
 func removeNode1AndRedeploy(t *testing.T, env *ctlEnv) int64 {
 	t.Helper()
-	base := env.opSrv.URL + "/api/v1/controller/"
-
+	// Orphan NODE-1: remove it and the peer's edge to it; node-2 (a peer) cannot
+	// compile alone with no edge, so it becomes an inbound-capable router in the
+	// reduced design. The deploy itself rides the shared harness helper.
 	topo := smallTopo()
-	// Drop node-2... careful: node-1 is "router", node-2 is "peer" in smallTopo.
-	// We orphan NODE-1: remove it and the peer's edge to it; node-2 alone cannot
-	// compile (a peer with no edge), so flip node-2 into an inbound-capable router.
 	topo.Nodes = topo.Nodes[1:]
 	topo.Nodes[0].Role = "router"
 	topo.Nodes[0].Hostname = "peer.example.com"
@@ -88,25 +86,7 @@ func removeNode1AndRedeploy(t *testing.T, env *ctlEnv) int64 {
 	topo.Nodes[0].Capabilities.CanForward = true
 	topo.Nodes[0].Capabilities.HasPublicIP = true
 	topo.Edges = nil
-
-	raw, err := json.Marshal(topo)
-	if err != nil {
-		t.Fatalf("marshal reduced topology: %v", err)
-	}
-	if status := doOperator(t, "POST", base+"update-topology", raw); status != 200 {
-		t.Fatalf("update-topology(reduced): status %d, want 200", status)
-	}
-	if status := doOperator(t, "POST", base+"stage", []byte("{}")); status != 200 {
-		t.Fatalf("stage(reduced): status %d, want 200", status)
-	}
-	respBody := env.doOperatorJSON(t, "POST", base+"promote", []byte("{}"))
-	var promote struct {
-		Generation int64 `json:"generation"`
-	}
-	if err := json.Unmarshal(respBody, &promote); err != nil {
-		t.Fatalf("decode promote: %v", err)
-	}
-	return promote.Generation
+	return env.deployTopo(t, topo)
 }
 
 // TestCycleIdle_OrphanSkipsApplyAndAdvances: the heart of the guard. An orphaned

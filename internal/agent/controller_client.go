@@ -361,7 +361,7 @@ func (c *ControllerClient) Report(nodeID string, payload []byte) error {
 		return fmt.Errorf("agent: report: parse state payload: %w", err)
 	}
 	gen := c.priorGen
-	if st.LastResult == "ok" {
+	if st.LastResult == LastResultOK {
 		gen = c.lastFetchedGen
 	}
 	return c.postReport(gen, st.LastChecksum, st.Health)

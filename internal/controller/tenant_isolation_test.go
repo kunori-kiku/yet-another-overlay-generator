@@ -168,6 +168,23 @@ func TestTenantIsolation(t *testing.T) {
 			} else if sess.Operator != "admin" {
 				t.Fatalf("LookupSession(A) Operator = %q, want admin", sess.Operator)
 			}
+
+			// Tenant B's prune (keep=nothing) must not touch tenant A's staged
+			// bundles (plan-3's PruneStagedBundles is tenant-scoped like the rest).
+			if err := s.StageBundle(ctx, tenantA, SignedBundle{
+				NodeID:     "alpha",
+				Generation: 2,
+				Files:      map[string][]byte{"install.sh": []byte("a2")},
+				IsStaged:   true,
+			}); err != nil {
+				t.Fatalf("StageBundle(A, second): %v", err)
+			}
+			if purged, err := s.PruneStagedBundles(ctx, tenantB, nil); err != nil || len(purged) != 0 {
+				t.Fatalf("PruneStagedBundles(B) = %v, %v; want none, nil", purged, err)
+			}
+			if gen, err := s.PromoteStaged(ctx, tenantA); err != nil || gen != 2 {
+				t.Fatalf("PromoteStaged(A) after B's prune = (%d, %v), want (2, nil) — B's prune must not eat A's staged bundle", gen, err)
+			}
 		})
 	}
 }

@@ -508,6 +508,7 @@ func (fs *FileStore) PruneStagedBundles(ctx context.Context, t TenantID, keep []
 		keepSet[id] = true
 	}
 	var purged []string
+	var firstErr error
 	for _, e := range ents {
 		nodeID, found := strings.CutSuffix(e.Name(), ".staged.json")
 		if e.IsDir() || !found {
@@ -517,12 +518,18 @@ func (fs *FileStore) PruneStagedBundles(ctx context.Context, t TenantID, keep []
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, "bundles", e.Name())); err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("controller: prune staged bundle %s: %w", nodeID, err)
+			// Keep going: aborting mid-loop would discard the IDs already removed,
+			// and the caller audits the purged list — every actual removal must be
+			// reported even when a later one fails (review finding).
+			if firstErr == nil {
+				firstErr = fmt.Errorf("controller: prune staged bundle %s: %w", nodeID, err)
+			}
+			continue
 		}
 		purged = append(purged, nodeID)
 	}
 	sort.Strings(purged)
-	return purged, nil
+	return purged, firstErr
 }
 
 // PromoteStaged atomically flips the currently staged bundles to current, clears

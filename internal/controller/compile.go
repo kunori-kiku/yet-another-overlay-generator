@@ -138,8 +138,17 @@ type StageResult struct {
 // Bundles are signed iff YAOG_BUNDLE_SIGNING_KEY is set — that tier-1 signing happens
 // inside artifacts.Export (the Phase-0 env path), not here.
 func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time) (StageResult, error) {
+	// Serialize the whole stage against any concurrent stage/promote for this
+	// tenant (review finding): the sequence below is many individual Store calls,
+	// and a promote landing mid-loop would flip a PARTIAL fresh stage set and
+	// permanently strand the remainder (their provisional generation would equal
+	// the now-current one, so the scoped promote filter excludes them forever);
+	// two interleaved stages would purge each other's freshly staged bundles.
+	defer lockTenantOps(t)()
+
 	// (1) Load the stored, public-keys-only topology. No stored topology is a
-	// benign no-op: there is nothing to stage yet.
+	// benign no-op: there is nothing to stage yet (and nothing can be staged —
+	// staging requires a stored topology — so there is nothing to purge either).
 	rec, err := store.GetTopology(ctx, t)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -165,12 +174,21 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// deploy (every node silently skipped), so its occurrence must be visible in
 	// the audit log, not just in a transient HTTP response. Best-effort: the audit
 	// must not turn the benign no-op into an error.
+	//
+	// The purge MUST still run on this path (review finding): an empty stage is a
+	// stage — the previous stage's bundles keep their promotable provisional
+	// generation, so without the purge an operator who retracted the whole design
+	// and "cleared" it with an empty stage would have the retracted bundles flip
+	// LIVE on the next promote (running install.sh as root with a dead design).
 	if len(subgraph.Nodes) == 0 {
-		_, _ = store.AppendAudit(ctx, t, AuditEntry{
-			Timestamp: now,
-			Actor:     "operator",
-			Action:    "stage-empty",
-		})
+		purged, err := store.PruneStagedBundles(ctx, t, nil)
+		if err != nil {
+			return StageResult{}, fmt.Errorf("controller: purging staged bundles on empty stage: %w", err)
+		}
+		for _, nodeID := range purged {
+			appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
+		}
+		appendStageAudit(ctx, store, t, now, "stage-empty", "")
 		return StageResult{SkippedUnenrolled: skipped}, nil
 	}
 
@@ -257,18 +275,15 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// (5b) Purge staged bundles that are NOT part of this stage set (plan-3): a
 	// node removed from the design since the previous stage would otherwise leave
 	// its stale staged bundle behind, and the next promote would flip it live.
-	// One audit entry per purged node keeps the disappearance attributable.
-	purged, err := store.PruneStagedBundles(ctx, t, staged)
-	if err != nil {
-		return StageResult{}, fmt.Errorf("controller: purging stale staged bundles: %w", err)
-	}
+	// One audit entry per purged node keeps the disappearance attributable —
+	// written BEFORE the error check, so a prune that failed partway still leaves
+	// an audit trace for everything it actually removed (review finding).
+	purged, pruneErr := store.PruneStagedBundles(ctx, t, staged)
 	for _, nodeID := range purged {
-		_, _ = store.AppendAudit(ctx, t, AuditEntry{
-			Timestamp: now,
-			Actor:     "operator",
-			Action:    "purge-staged",
-			NodeID:    nodeID,
-		})
+		appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
+	}
+	if pruneErr != nil {
+		return StageResult{}, fmt.Errorf("controller: purging stale staged bundles: %w", pruneErr)
 	}
 
 	// (6) KEYSTONE ON: build the off-host-signable manifest binding each staged node's
@@ -281,21 +296,29 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		}
 	}
 
-	// (7) One audit entry for the whole stage operation.
-	if _, err := store.AppendAudit(ctx, t, AuditEntry{
-		Timestamp: now,
-		Actor:     "operator",
-		Action:    "stage",
-		NodeID:    "",
-	}); err != nil {
-		return StageResult{}, fmt.Errorf("controller: appending stage audit: %w", err)
-	}
+	// (7) One audit entry for the whole stage operation. Post-commit (the bundles
+	// are staged), so best-effort like the other stage-path audits.
+	appendStageAudit(ctx, store, t, now, "stage", "")
 
 	return StageResult{
 		Staged:            staged,
 		SkippedUnenrolled: skipped,
 		Generation:        nextGen,
 	}, nil
+}
+
+// appendStageAudit appends one best-effort audit entry for a stage-path action
+// (stage / stage-empty / purge-staged). Best-effort by design: these audits record
+// state changes that have ALREADY committed, and converting an audit-write hiccup
+// into a failed stage would tell the operator the action failed when it happened
+// (the same post-commit convention as the update-topology/promote audits).
+func appendStageAudit(ctx context.Context, store Store, t TenantID, now time.Time, action, nodeID string) {
+	_, _ = store.AppendAudit(ctx, t, AuditEntry{
+		Timestamp: now,
+		Actor:     "operator",
+		Action:    action,
+		NodeID:    nodeID,
+	})
 }
 
 // stageManifest assembles the off-host-signable membership manifest from the staged
@@ -388,6 +411,10 @@ func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKey
 // hex(sha256(checksums.sha256)) offline and binds it to its signed member entry before
 // applying. Do not mistake this controller gate for the trust root.
 func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) {
+	// Serialized against any concurrent stage/promote for this tenant — a promote
+	// landing mid-stage would flip a partial stage set (see lockTenantOps).
+	defer lockTenantOps(t)()
+
 	cred, err := store.GetOperatorCredential(ctx, t)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {

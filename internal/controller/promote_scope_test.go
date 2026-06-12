@@ -145,6 +145,76 @@ func TestPruneStagedBundles(t *testing.T) {
 	}
 }
 
+// TestCompileAndStage_EmptyStagePurges: the review-confirmed kill shot — the
+// operator stages a fleet, then retracts the design (no enrolled node remains)
+// and re-stages to "clear" it. The empty stage MUST purge the previous stage's
+// bundles; without the purge they keep their promotable provisional generation
+// and the next promote would run install.sh as root fleet-wide with the
+// retracted design.
+func TestCompileAndStage_EmptyStagePurges(t *testing.T) {
+	store := NewMemStore()
+	tnt := TenantID("empty-stage-purge")
+	ctx := putStageTopo(t, store, tnt)
+
+	approveNode(t, ctx, store, tnt, "node-router", genWGPubKey(t))
+	approveNode(t, ctx, store, tnt, "node-peer", genWGPubKey(t))
+
+	res1, err := CompileAndStage(ctx, store, tnt, time.Now())
+	if err != nil || len(res1.Staged) != 2 {
+		t.Fatalf("first stage = %+v, %v; want 2 staged", res1, err)
+	}
+
+	// Retract the design: replace the topology with only the never-enrolled
+	// client, so the enrolled subgraph is empty.
+	retracted := stageTestTopo()
+	retracted.Nodes = retracted.Nodes[2:3] // node-client only
+	retracted.Edges = nil
+	raw, err := json.Marshal(retracted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutTopology(ctx, tnt, raw); err != nil {
+		t.Fatalf("PutTopology(retracted): %v", err)
+	}
+
+	res2, err := CompileAndStage(ctx, store, tnt, time.Now())
+	if err != nil {
+		t.Fatalf("empty stage: %v", err)
+	}
+	if len(res2.Staged) != 0 {
+		t.Fatalf("empty stage Staged = %v, want none", res2.Staged)
+	}
+
+	// The previous stage's bundles are gone: promote must refuse, and neither
+	// node may go live.
+	if _, err := store.PromoteStaged(ctx, tnt); !errors.Is(err, ErrNoStagedBundle) {
+		t.Fatalf("PromoteStaged after empty stage: err = %v, want ErrNoStagedBundle (retracted bundles must not flip live)", err)
+	}
+	for _, id := range []string{"node-router", "node-peer"} {
+		if _, err := store.GetCurrentBundle(ctx, tnt, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s went live after a retract + empty stage (err=%v)", id, err)
+		}
+	}
+
+	// The purge and the empty stage are both audited.
+	entries, err := store.ListAudit(ctx, tnt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	purgeCount, emptyCount := 0, 0
+	for _, e := range entries {
+		switch e.Action {
+		case "purge-staged":
+			purgeCount++
+		case "stage-empty":
+			emptyCount++
+		}
+	}
+	if purgeCount != 2 || emptyCount != 1 {
+		t.Errorf("audit: purge-staged=%d (want 2), stage-empty=%d (want 1)", purgeCount, emptyCount)
+	}
+}
+
 // TestCompileAndStage_PurgesRemovedNode: the end-to-end audit scenario — a node is
 // staged, then removed from the design; the NEXT stage purges its stale staged
 // bundle (with an attributable audit entry) so the following promote cannot ship it.

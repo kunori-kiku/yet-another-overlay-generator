@@ -258,7 +258,7 @@ func recordSuccess(cfg *Config, man *manifestInfo, vr *VerifyResult, membershipE
 		NodeID:          cfg.NodeID,
 		LastCompiledAt:  man.CompiledAt,
 		LastChecksum:    man.Checksum,
-		LastResult:      "ok",
+		LastResult:      LastResultOK,
 		LastSigned:      vr != nil && vr.Signed,
 		MembershipEpoch: membershipEpoch,
 		AppliedAt:       time.Now().UTC().Format(compiledAtLayout),

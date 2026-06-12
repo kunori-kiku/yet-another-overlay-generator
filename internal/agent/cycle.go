@@ -168,15 +168,14 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 	if fetchedGen := client.LastFetchedGeneration(); fetchedGen <= after {
 		if man, perr := parseManifest(files["manifest.json"]); perr == nil && man.Checksum != "" {
 			if prev, serr := LoadState(cfg.StateDir); serr == nil && prev != nil &&
-				prev.LastResult == "ok" && prev.LastChecksum == man.Checksum {
+				prev.LastResult == LastResultOK && prev.LastChecksum == man.Checksum {
 				fmt.Fprintf(stderr,
 					"agent: woke at generation %d but the served bundle (gen %d) is already applied (checksum %s); idling\n",
 					polledGen, fetchedGen, man.Checksum)
-				resume := polledGen
-				if fetchedGen > resume {
-					resume = fetchedGen
-				}
-				return resume, false, nil
+				// Resume from the WAKE generation. (polledGen > after ≥ fetchedGen
+				// here: Poll only reports change for a strictly greater generation,
+				// and this branch requires fetchedGen ≤ after — no max() needed.)
+				return polledGen, false, nil
 			}
 		}
 	}
