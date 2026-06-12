@@ -142,6 +142,16 @@ key rejection; missing audit entries; startup observability.
 **Verification gate:** CI green; curl matrix (per-port prefix mounting, 400 on keyed payload).
 **Stop-loss:** tag before merge; revert the PR; live deployment keeps old image until rollout step.
 
+**Insertion point fired (2026-06-13):** the M1 sweep found the pre-declared hidden consumer —
+`frontend/src/components/deploy/EnrollmentFlow.tsx:28,34-36` composes the bootstrap one-liner
+and the manual enroll command from the panel's `pathPrefix` mirror, which post-split mirrors
+the OPERATOR prefix; with distinct prefixes both displayed commands would 404 against the
+agent port (the enroll command omitted the prefix entirely even pre-split). Remediation does
+NOT add a second user-typed mirror field: the server exposes its agent prefix read-only in
+`GET /settings` (`agent_path_prefix`) and the panel composes from that — server-authoritative,
+matching the subject's core principle. → `plan-1.5-2026_06_13.md` (executed in the plan-1 PR
+branch; authorized by the user's standing execute-until-closed directive).
+
 ### M2 — Backend: topology version history → `plan-2-2026_06_12.md`
 **Goal:** keep last 10 TopologyRecords; list/get-version API; deploy-overwrite becomes recoverable.
 **Hazards:** FileStore atomicity across multiple files; stage write-backs (persistAllocations)

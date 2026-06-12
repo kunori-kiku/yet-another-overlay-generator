@@ -31,6 +31,12 @@ type settingsJSON struct {
 	// Translucency is the panel's appearance preference (P5). It round-trips through
 	// GET/POST /settings but is NOT injected into the bootstrap script.
 	Translucency bool `json:"translucency"`
+	// AgentPathPrefix is READ-ONLY: the server's normalized agent secret path prefix
+	// (YAOG_AGENT_PATH_PREFIX, "" or "/<seg>"), reported so the panel composes
+	// agent-facing URLs (the bootstrap one-liner, the manual enroll command)
+	// server-authoritatively instead of mirroring a second env by hand. It is
+	// env-derived, not a stored setting — POST ignores any submitted value.
+	AgentPathPrefix string `json:"agent_path_prefix"`
 }
 
 // loadSettings returns the tenant's settings with defaults applied (so an absent or
@@ -62,7 +68,8 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			GithubProxy:         cs.GithubProxy,
 			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
 			// loadSettings applied WithDefaults, so Translucency is non-nil; guard anyway.
-			Translucency: cs.Translucency != nil && *cs.Translucency,
+			Translucency:    cs.Translucency != nil && *cs.Translucency,
+			AgentPathPrefix: h.agentPrefix,
 		})
 
 	case http.MethodPost:
@@ -115,6 +122,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			GithubProxy:         cs.GithubProxy,
 			AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
 			Translucency:        cs.Translucency != nil && *cs.Translucency,
+			AgentPathPrefix:     h.agentPrefix,
 		})
 
 	default:

@@ -11,7 +11,6 @@ export function EnrollmentFlow() {
   const topoNodes = useTopologyStore((s) => s.nodes);
 
   const agentBaseURL = useControllerStore((s) => s.agentBaseURL);
-  const pathPrefix = useControllerStore((s) => s.pathPrefix);
   const settings = useControllerStore((s) => s.settings);
   const mintToken = useControllerStore((s) => s.mintToken);
 
@@ -22,18 +21,24 @@ export function EnrollmentFlow() {
   const [mintError, setMintError] = useState<string | null>(null);
   const [copied, setCopied] = useState<'' | 'enroll' | 'bootstrap'>('');
 
+  // Agent 前缀是服务端在 GET /settings 里只读上报的（YAOG_AGENT_PATH_PREFIX，已归一化为
+  // '' 或 '/<seg>'）：面板不再让操作员手工镜像第二个环境变量（plan-1.5，server-authoritative）。
+  // 注意绝不能用操作员前缀（pathPrefix mirror）——那属于面板自己的 API base，两者拆分后不同。
+  const agentPrefix = settings?.agentPathPrefix ?? '';
+
   // enroll 命令文案：节点持有者在目标机上手动执行它来加入控制器（需先装好 agent 二进制）。
+  // --controller 是 scheme://host[:port] + agent 前缀（agent 自己补 /api/v1/controller/）。
+  const enrollBase = agentBaseURL.replace(/\/+$/, '');
   const enrollCommand =
     token && nodeId
-      ? `agent enroll --controller ${agentBaseURL} --node-id ${nodeId} --token ${token}`
+      ? `agent enroll --controller ${enrollBase}${agentPrefix} --node-id ${nodeId} --token ${token}`
       : '';
 
   // 一键 bootstrap 命令（plan-5.2）：节点持有者以 root 跑一次，自动下载 agent、入网、应用、
   // 并装上 systemd 守护进程。curl 目标是服务端配置的 public agent URL（未配置则回退到
-  // agentBaseURL）+ 可选 secret 前缀 + /api/v1/controller/bootstrap。
+  // agentBaseURL）+ 服务端上报的 agent secret 前缀 + /api/v1/controller/bootstrap。
   const bootstrapBase = (settings?.publicAgentURL || agentBaseURL).replace(/\/+$/, '');
-  const normPrefix = pathPrefix.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-  const bootstrapURL = `${bootstrapBase}${normPrefix ? '/' + normPrefix : ''}/api/v1/controller/bootstrap`;
+  const bootstrapURL = `${bootstrapBase}${agentPrefix}/api/v1/controller/bootstrap`;
   const bootstrapCommand =
     token && nodeId
       ? `bash <(curl -fsSL ${bootstrapURL}) --token ${token} --node-id ${nodeId}`

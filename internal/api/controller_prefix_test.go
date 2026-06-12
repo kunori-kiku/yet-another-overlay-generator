@@ -145,6 +145,35 @@ func TestPrefixSplit_Normalization(t *testing.T) {
 	}
 }
 
+// TestPrefixSplit_SettingsReportAgentPrefix (plan-1.5): GET /settings reports the
+// server's normalized agent prefix READ-ONLY, so the panel composes agent-facing
+// URLs (bootstrap one-liner, enroll command) server-authoritatively instead of
+// asking the operator to mirror a second env var. POST ignores a submitted value.
+func TestPrefixSplit_SettingsReportAgentPrefix(t *testing.T) {
+	opSrv, _, _ := newPrefixEnv(t, "op-secret", "agent-secret/")
+
+	var got struct {
+		AgentPathPrefix string `json:"agent_path_prefix"`
+	}
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/op-secret/api/v1/controller/settings", testOperatorToken, nil, &got); st != http.StatusOK {
+		t.Fatalf("GET settings = %d, want 200", st)
+	}
+	if got.AgentPathPrefix != "/agent-secret" {
+		t.Errorf("agent_path_prefix = %q, want %q (normalized)", got.AgentPathPrefix, "/agent-secret")
+	}
+
+	// POST with a forged agent_path_prefix: accepted (the field is in the wire struct)
+	// but IGNORED — the next GET still reports the env-derived value.
+	st := doJSON(t, http.MethodPost, opSrv.URL+"/op-secret/api/v1/controller/settings", testOperatorToken,
+		map[string]any{"public_agent_url": "https://overlay.example.com", "agent_path_prefix": "/forged"}, &got)
+	if st != http.StatusOK {
+		t.Fatalf("POST settings = %d, want 200", st)
+	}
+	if got.AgentPathPrefix != "/agent-secret" {
+		t.Errorf("POST response agent_path_prefix = %q, want %q (read-only)", got.AgentPathPrefix, "/agent-secret")
+	}
+}
+
 // firstLines returns up to n leading lines of s (test-failure readability helper).
 func firstLines(s string, n int) string {
 	lines := strings.SplitN(s, "\n", n+1)
