@@ -223,7 +223,8 @@ migration note, the long-owed two-node manual smoke, then `/close-phase`.
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-1 | pending | — | backend prefix split + custody enforcement |
+| plan-1 | done (2778754) | [#59](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/59) | prefix split + custody gate (canonical storage) + audits + fail-loud stale env; 7-angle review hardening |
+| plan-1.5 | done (2778754) | [#59](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/59) | server-reported agent_path_prefix in GET /settings; EnrollmentFlow composes from it |
 | plan-2 | pending | — | topology version history |
 | plan-3 | pending | — | agent backoff + staged-bundle purge |
 | plan-4 | pending | — | login gate + hydration |
