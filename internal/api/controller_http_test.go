@@ -266,6 +266,24 @@ func TestControllerHTTP_EnrollConfigPollReport(t *testing.T) {
 		t.Fatalf("promote: generation %d, want >= 1", promote.Generation)
 	}
 
+	// A full deploy leaves a complete audit trail: update-topology, stage, and promote
+	// must each have appended an entry (plan-1 closed the update-topology/promote gaps).
+	auditEntries, err := env.store.ListAudit(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	wantActions := map[string]bool{"update-topology": false, "stage": false, "promote": false}
+	for _, e := range auditEntries {
+		if _, ok := wantActions[e.Action]; ok {
+			wantActions[e.Action] = true
+		}
+	}
+	for action, seen := range wantActions {
+		if !seen {
+			t.Errorf("full deploy left no %q audit entry (entries: %d)", action, len(auditEntries))
+		}
+	}
+
 	// (5) Node fetches its config → 200 with a non-empty bundle.
 	var cfg configResponseJSON
 	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, &cfg); status != http.StatusOK {
