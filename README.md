@@ -135,6 +135,29 @@ bash <(curl -fsSL https://<public-agent-url>/api/v1/controller/bootstrap) \
 
 This downloads the `yaog-agent` binary, enrolls the node, applies the current generation, and installs a systemd daemon so future **Deploy**s auto-apply. Add `--once` to apply a single generation without the daemon. With the keystone enabled, each Deploy is signed by your off-host hardware key and the node verifies the signature before applying.
 
+Besides `--token` and `--node-id` (required), the one-liner accepts `--controller`, `--gh-proxy`, and `--release-base` to override the server-configured defaults. It installs the agent at `/usr/local/bin/yaog-agent` with a `yaog-agent.service` systemd unit; the per-node bearer token lands at `/etc/wireguard/agent-controller.token` (mode 0600), and with the keystone on, the operator's verification credential at `/etc/wireguard/operator-cred.pem`. The agent binary itself has `keygen` / `enroll` / `run` subcommands for manual or non-systemd setups — see [`docs/spec/controller/agent.md`](docs/spec/controller/agent.md).
+
+### 5. Configuration reference
+
+Controller behavior is configured through environment variables on the container (set them in `docker-compose.yml`), plus a few server-stored settings edited in the panel.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `YAOG_BIND_ADDR` | `127.0.0.1` | Compose-only: the host interface both published ports bind to. Set `0.0.0.0` to expose them beyond loopback. |
+| `YAOG_CONTROLLER_STATE_DIR` | unset | Controller state directory. Together with `YAOG_TENANT_ID`, this is what switches controller mode on (the image sets `/data`). |
+| `YAOG_TENANT_ID` | unset | Tenant identifier scoping all controller state (single-tenant for now; the compose defaults it to `default`). |
+| `YAOG_CONTROLLER_AGENT_ADDR` | `:9090` | Listen address of the node-facing agent API. |
+| `YAOG_CONTROLLER_PATH_PREFIX` | empty | Optional **secret path prefix** — mounts every controller route (both ports) under `/<prefix>/api/v1/controller/...`. See below. |
+| `YAOG_PANEL_ORIGIN` | empty | Comma-separated allowlist of origins permitted credentialed (cookie) cross-origin panel access; needed only when the panel is served from a different origin (requires HTTPS). Same-origin Docker needs none. |
+| `YAOG_SECURE_COOKIE` | `true` | `Secure` attribute on the session/CSRF cookies. Set `false` only for local non-TLS development. |
+| `YAOG_CONTROLLER_OPERATOR_TOKEN` | unset | Optional break-glass bearer token for operator routes — a recovery path if the operator login is lost. Only its SHA-256 is kept in memory. |
+| `YAOG_BUNDLE_SIGNING_KEY` | unset | Path to an Ed25519 private key (PKCS#8 PEM). When set, every exported bundle carries a detached signature and `install.sh` pins the public key; loading is fail-closed. |
+| `YAOG_WEB_DIR` | unset | Directory the server serves the panel SPA from (the image sets `/app/web`). |
+
+**Secret path prefix.** Setting `YAOG_CONTROLLER_PATH_PREFIX=s3cr3t` moves the entire API to `/s3cr3t/api/v1/controller/...`, keeping it off well-known paths. This is defense-in-depth obscurity, **not** a security boundary — bearer tokens and the keystone signature remain the real ones. The panel's **Secret Path Prefix** field is a *mirror*, not a setting: it tells the panel where the API lives and must match the server's deploy-time value. Nodes never type it — the bootstrap one-liner bakes the prefixed URL into the installed agent.
+
+**Server-stored bootstrap settings** (edited on the panel's **Settings** page, persisted controller-side): the **Public Agent URL** nodes use to reach the controller, an optional **GitHub proxy** prefix for agent-binary downloads (useful behind restrictive egress), and an optional **agent release base URL** override.
+
 Full reference: [`docs/spec/controller/docker.md`](docs/spec/controller/docker.md) and [`docs/spec/controller/bootstrap.md`](docs/spec/controller/bootstrap.md).
 
 ## Documentation
