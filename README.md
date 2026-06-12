@@ -162,6 +162,7 @@ Full reference: [`docs/spec/controller/docker.md`](docs/spec/controller/docker.m
 
 ## Documentation
 
+- Architectural ground truth: [`specs/`](specs/) — start with [`specs/README.md`](specs/README.md).
 - [Wiki (English)](docs/wiki.md) — Full documentation including architecture, parameters, and troubleshooting
 - [Wiki (中文)](docs/wiki-zh.md) — 完整中文文档
 
