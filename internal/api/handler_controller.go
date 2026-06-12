@@ -73,13 +73,18 @@ type ControllerHandler struct {
 	sessionTTL time.Duration
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
 	pollDeadline time.Duration
-	// pathPrefix is an optional secret path segment the controller routes mount under
+	// operatorPrefix and agentPrefix are optional secret path segments the OPERATOR
+	// routes (panel port) and AGENT routes (agent port) mount under, independently
 	// (e.g. "/s3cr3t" -> "/s3cr3t/api/v1/controller/..."). Empty = the bare
-	// "/api/v1/controller/..." paths. This is defense-in-depth obscurity (it hides the
-	// surface from drive-by scanners and is CDN-friendly), NOT a security boundary —
-	// the boundary is the bearer tokens + the off-host signed trust-list. Normalized by
-	// SetPathPrefix to "" or "/<seg>" (single leading slash, no trailing slash).
-	pathPrefix string
+	// "/api/v1/controller/..." paths. They are defense-in-depth obscurity (hiding the
+	// surface from drive-by scanners, CDN-friendly), NOT a security boundary — the
+	// boundary is the bearer tokens + the off-host signed trust-list. Two independent
+	// prefixes (YAOG_OPERATOR_PATH_PREFIX / YAOG_AGENT_PATH_PREFIX) let a path-based
+	// proxy on one hostname route each audience to its own port without the
+	// shared-prefix ambiguity that misrouted operator logins to the agent port.
+	// Normalized by the setters to "" or "/<seg>" (single leading slash, no trailing).
+	operatorPrefix string
+	agentPrefix    string
 	// panelOriginAllowlist is the set of exact browser origins (scheme://host[:port])
 	// permitted to make CREDENTIALED (cookie-bearing) cross-origin requests to the
 	// operator routes (YAOG_PANEL_ORIGIN). For a matching Origin, cors() reflects it +
@@ -149,13 +154,13 @@ func (h *ControllerHandler) originAllowed(origin string) bool {
 }
 
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
-// on the agent port), under basePath() (the optional secret prefix + the fixed
-// /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the node
-// has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
+// on the agent port), under AgentBasePath() (the optional agent secret prefix + the
+// fixed /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the
+// node has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
 // bearer token). recoverPanics/cors are NOT applied here — controller requests are
 // machine-to-machine JSON, with no browser CORS concern.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
-	base := h.basePath()
+	base := h.AgentBasePath()
 	mux.HandleFunc(base+"enroll", h.HandleEnroll)
 	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
@@ -167,13 +172,13 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
-// (served on the operator/panel port), under basePath(). Each is wrapped with cors()
-// so the browser panel — served from a possibly different origin and pointed at a
-// configurable controller URL — can call it, and its CORS preflight (which carries no
+// (served on the operator/panel port), under OperatorBasePath(). Each is wrapped with
+// cors() so the browser panel — served from a possibly different origin and pointed at
+// a configurable controller URL — can call it, and its CORS preflight (which carries no
 // Authorization header) is answered before operatorAuth. All routes go through
 // operatorAuth (the shared operator bearer token).
 func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
-	base := h.basePath()
+	base := h.OperatorBasePath()
 	op := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
 	// Operator login (plan-5.2): /login is UNAUTHENTICATED (reachable before the
 	// operator has a session) — cors-wrapped but NOT operatorAuth; it verifies a
@@ -217,21 +222,39 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"trustlist-signature", op(h.HandleTrustListSignature))
 }
 
-// SetPathPrefix sets the optional secret path prefix the controller routes mount under.
-// It normalizes to "" (no prefix) or "/<trimmed>" (single leading slash, no trailing
-// slash). Call it before RegisterAgentRoutes/RegisterOperatorRoutes.
-func (h *ControllerHandler) SetPathPrefix(prefix string) {
+// normalizePathPrefix normalizes a configured secret path prefix to "" (no prefix)
+// or "/<trimmed>" (single leading slash, no trailing slash).
+func normalizePathPrefix(prefix string) string {
 	if p := strings.Trim(strings.TrimSpace(prefix), "/"); p != "" {
-		h.pathPrefix = "/" + p
-	} else {
-		h.pathPrefix = ""
+		return "/" + p
 	}
+	return ""
 }
 
-// basePath is the route prefix for all controller endpoints: the optional secret path
-// prefix followed by the fixed "/api/v1/controller/".
-func (h *ControllerHandler) basePath() string {
-	return h.pathPrefix + "/api/v1/controller/"
+// SetOperatorPathPrefix sets the optional secret path prefix the OPERATOR routes
+// mount under (YAOG_OPERATOR_PATH_PREFIX). Call it before RegisterOperatorRoutes.
+func (h *ControllerHandler) SetOperatorPathPrefix(prefix string) {
+	h.operatorPrefix = normalizePathPrefix(prefix)
+}
+
+// SetAgentPathPrefix sets the optional secret path prefix the AGENT routes mount
+// under (YAOG_AGENT_PATH_PREFIX). Call it before RegisterAgentRoutes.
+func (h *ControllerHandler) SetAgentPathPrefix(prefix string) {
+	h.agentPrefix = normalizePathPrefix(prefix)
+}
+
+// OperatorBasePath is the route prefix for the operator endpoints: the optional
+// operator secret prefix followed by the fixed "/api/v1/controller/". Exported so
+// cmd/server can name the mounted base path in its startup log.
+func (h *ControllerHandler) OperatorBasePath() string {
+	return h.operatorPrefix + "/api/v1/controller/"
+}
+
+// AgentBasePath is the route prefix for the agent endpoints: the optional agent
+// secret prefix followed by the fixed "/api/v1/controller/". Exported so cmd/server
+// can name the mounted base path in its startup log.
+func (h *ControllerHandler) AgentBasePath() string {
+	return h.agentPrefix + "/api/v1/controller/"
 }
 
 // cors answers a browser CORS preflight (OPTIONS, which carries no auth) and stamps the

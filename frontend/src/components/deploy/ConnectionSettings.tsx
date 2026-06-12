@@ -72,8 +72,8 @@ export function ConnectionSettings() {
           <p className="text-[10px] text-gray-500 mt-0.5">
             {txt(
               language,
-              '需与服务端部署变量 YAOG_CONTROLLER_PATH_PREFIX 一致：此处不设置任何东西，只告诉面板 API 的位置。服务端未设置则留空。',
-              "Must match the server's YAOG_CONTROLLER_PATH_PREFIX (set at deploy time). This sets nothing — it only tells the panel where the API is. Leave blank if the server has none.",
+              '需与服务端部署变量 YAOG_OPERATOR_PATH_PREFIX 一致：此处不设置任何东西，只告诉面板操作员 API 的位置。服务端未设置则留空。',
+              "Must match the server's YAOG_OPERATOR_PATH_PREFIX (set at deploy time). This sets nothing — it only tells the panel where the operator API is. Leave blank if the server has none.",
             )}
           </p>
         </div>

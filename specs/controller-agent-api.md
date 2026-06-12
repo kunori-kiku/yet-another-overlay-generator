@@ -31,7 +31,7 @@ Serve the agent-facing HTTP surface of the networked controller — enroll, conf
 - **Poll** (573-599): malformed/negative/overflowing `?after=` → 400 (`parseAfter`, 1383-1392); generation advance → 200; deadline/cancel → 204 so the agent re-polls on a fresh connection.
 - **Rekey** (1041-1044): empty `wg_public_key` → 400; the target node is always the bearer token's node, never a body field.
 - **Bootstrap keystone bake** (handler_bootstrap.go:149-155): only a genuine `ErrNotFound` emits a keystone-OFF script; any other store error is a loud 500 (a silently keystone-OFF script would ship a non-verifying node).
-- **Controller base composition** (handler_bootstrap.go:140-143): `controllerBase = TrimRight(PublicAgentURL,"/") + pathPrefix`; the agent appends `/api/v1/controller/` itself. The prefix is normalized by `SetPathPrefix` (handler_controller.go:223-229).
+- **Controller base composition** (handler_bootstrap.go:140-144): `controllerBase = TrimRight(PublicAgentURL,"/") + agentPrefix` — the AGENT prefix (`YAOG_AGENT_PATH_PREFIX`), never the operator one; the agent appends `/api/v1/controller/` itself. The prefix is normalized by `SetAgentPathPrefix` (handler_controller.go).
 
 ## Invariants
 - **Burn-before-mint, never un-burned**: `Enroll` atomically consumes the enrollment token as step 1; a failure in any later step does NOT restore it — the operator mints a fresh token to retry (enrollment.go:137-148). Single-use is the protected property.

@@ -39,10 +39,15 @@ const (
 	envOperatorToken = "YAOG_CONTROLLER_OPERATOR_TOKEN"
 	// envAgentAddr overrides the default agent-port listen address.
 	envAgentAddr = "YAOG_CONTROLLER_AGENT_ADDR"
-	// envPathPrefix is an optional secret path segment the controller routes mount
-	// under (both ports), e.g. "s3cr3t" -> "/s3cr3t/api/v1/controller/...". Empty =
-	// the bare paths. Defense-in-depth obscurity, not a security boundary.
-	envPathPrefix = "YAOG_CONTROLLER_PATH_PREFIX"
+	// envOperatorPathPrefix is an optional secret path segment the OPERATOR/panel
+	// routes (the :8080 mux) mount under, e.g. "s3cr3t" ->
+	// "/s3cr3t/api/v1/controller/...". Empty = the bare paths. Defense-in-depth
+	// obscurity, not a security boundary. Independent from the agent prefix so a
+	// path-based proxy can route each audience to its own port on one hostname.
+	envOperatorPathPrefix = "YAOG_OPERATOR_PATH_PREFIX"
+	// envAgentPathPrefix is the same for the AGENT routes (the :9090 mux). The
+	// bootstrap installer bakes this prefix into the agent's controller base URL.
+	envAgentPathPrefix = "YAOG_AGENT_PATH_PREFIX"
 	// envWebDir, when set, is the directory of the built frontend (the panel SPA) to
 	// serve on the operator/panel port alongside the API. The Docker image sets it to
 	// the embedded dist; unset = API only (Vite/dev or a reverse proxy serves the panel).
@@ -138,7 +143,8 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	}
 
 	ch := api.NewControllerHandler(store, controller.TenantID(tenant), opTokenHash, api.DefaultOperatorName)
-	ch.SetPathPrefix(os.Getenv(envPathPrefix))
+	ch.SetOperatorPathPrefix(os.Getenv(envOperatorPathPrefix))
+	ch.SetAgentPathPrefix(os.Getenv(envAgentPathPrefix))
 	// Credentialed-CORS allowlist for cross-origin panel hosting (cookie auth). Empty =
 	// same-origin only for the cookie path (the Bearer path still works).
 	if origins := os.Getenv(envPanelOrigin); strings.TrimSpace(origins) != "" {
@@ -149,6 +155,13 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 		ch.SetSecureCookie(!(v == "false" || v == "0" || v == "no"))
 	}
 	server.EnableController(ch)
+
+	// Name both mounted base paths at startup so a proxy/tunnel misroute (operator
+	// traffic at the agent port or a prefix mismatch) is diagnosable from the container
+	// log in seconds. The prefixes are secrets-by-obscurity only — this log stays inside
+	// the operator's own container, so naming them here is acceptable and deliberate.
+	log.Printf("controller: operator routes at %s (addr %s); agent routes at %s (addr %s)",
+		ch.OperatorBasePath(), addr, ch.AgentBasePath(), agentAddr)
 
 	// Serve both ports concurrently; the first error from either wins. A buffered
 	// channel of size 2 ensures the second goroutine's send never blocks on exit.

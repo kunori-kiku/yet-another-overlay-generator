@@ -137,10 +137,11 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to read settings")
 		return
 	}
-	// The agent's --controller is scheme://host[:port] + the controller's secret path
-	// prefix (the agent appends /api/v1/controller/ itself). The server knows its own
-	// prefix, so it composes the full base here.
-	controllerBase := strings.TrimRight(cs.PublicAgentURL, "/") + h.pathPrefix
+	// The agent's --controller is scheme://host[:port] + the AGENT secret path prefix
+	// (YAOG_AGENT_PATH_PREFIX; the agent appends /api/v1/controller/ itself). The
+	// server knows its own prefix, so it composes the full base here. The operator
+	// prefix is deliberately NOT used: agents only ever talk to the agent port.
+	controllerBase := strings.TrimRight(cs.PublicAgentURL, "/") + h.agentPrefix
 
 	// Keystone: bake the pinned off-host operator credential (public only) so the node
 	// enforces membership. ONLY a genuine ErrNotFound means keystone OFF; any other

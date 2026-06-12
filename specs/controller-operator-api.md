@@ -17,7 +17,7 @@ Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, p
 - `internal/api/loginratelimit.go:1-145` — per-username + per-IP failed-login limiter with atomic check-and-reserve gate (73-116)
 - `internal/api/handler_bootstrap.go:49-123` — GET/POST /settings (operator half; GET /bootstrap is agent-port, see specs/controller-agent-api.md)
 - `internal/api/server.go:48-51` — `EnableController` mounts operator routes on the operator/panel mux (shared with the air-gap API)
-- `cmd/server/main.go:29-58,114-159` — env wiring: `YAOG_CONTROLLER_PATH_PREFIX`, `YAOG_PANEL_ORIGIN`, `YAOG_SECURE_COOKIE`, break-glass token hashed before handler construction (118-122)
+- `cmd/server/main.go:29-63,119-175` — env wiring: `YAOG_OPERATOR_PATH_PREFIX` / `YAOG_AGENT_PATH_PREFIX` (split per audience), `YAOG_PANEL_ORIGIN`, `YAOG_SECURE_COOKIE`, break-glass token hashed before handler construction; startup log names both mounted base paths
 
 ## Inputs
 - Browser panel requests (see specs/panel-auth.md for the login UX, specs/panel-deploy-fleet.md for the deploy/fleet consumers): JSON bodies (size-capped, unknown-field-rejecting `decodeJSON`, `internal/api/handler_controller.go:1336-1345`), credential via `Authorization: Bearer` header or the `yaog_session` cookie + `X-CSRF-Token` header.
@@ -46,7 +46,7 @@ Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, p
 - `Access-Control-Allow-Origin: *` is never emitted together with `Allow-Credentials` (`internal/api/handler_controller.go:256-261`), and cookies/CSRF/credentialed CORS apply to operator routes only — agent routes stay Bearer-only (`internal/api/cookie_session.go:10-13`).
 
 ## Gotchas
-- `pathPrefix` (`YAOG_CONTROLLER_PATH_PREFIX`) is drive-by-scanner obscurity, NOT a security boundary (`internal/api/handler_controller.go:78-82`); operator routes share the panel port's mux with the air-gap API and optional SPA (`internal/api/server.go:48-51`), while agent routes live on a separate port.
+- `operatorPrefix` (`YAOG_OPERATOR_PATH_PREFIX`) is drive-by-scanner obscurity, NOT a security boundary (`internal/api/handler_controller.go:76-87`); operator routes share the panel port's mux with the air-gap API and optional SPA (`internal/api/server.go:48-51`), while agent routes live on a separate port under their own independent `YAOG_AGENT_PATH_PREFIX`.
 - The limiter's per-IP key is `r.RemoteAddr`, which collapses to one bucket behind a reverse proxy (`internal/api/loginratelimit.go:14-17,139-145`); a failed second-factor leg keeps the reserved slot counted — only a fully successful login refunds it (`internal/api/handler_login.go:110-115`).
 - Logout with the break-glass token deletes no session yet still returns 204 and clears both cookies (`internal/api/handler_login.go:222-242`); TOTP/passkey management 403s under break-glass because that identity has no operator account (`internal/api/handler_totp.go:41-53`).
 

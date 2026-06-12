@@ -836,41 +836,6 @@ func TestControllerHTTP_CORS(t *testing.T) {
 	}
 }
 
-// TestControllerHTTP_PathPrefix confirms the secret path prefix mounts the controller
-// routes under /<prefix>/api/v1/controller/... and that the bare path is NOT served.
-func TestControllerHTTP_PathPrefix(t *testing.T) {
-	store := controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
-	ch.SetPathPrefix("/s3cr3t/") // normalizes to "/s3cr3t"
-	mux := http.NewServeMux()
-	ch.RegisterOperatorRoutes(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	// The prefixed path is served (operator GET /nodes -> 200).
-	if st := doJSON(t, http.MethodGet, srv.URL+"/s3cr3t/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
-		t.Errorf("prefixed /nodes status %d, want 200", st)
-	}
-	// The bare (unprefixed) path is NOT mounted -> 404.
-	if st := doJSON(t, http.MethodGet, srv.URL+"/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
-		t.Errorf("bare /nodes status %d, want 404 (only the prefixed path is mounted)", st)
-	}
-
-	// The AGENT routes are prefixed too (both ports share basePath()): an agent route
-	// is reachable only under the prefix. /config with no token -> 401 (mounted), while
-	// the bare path -> 404 (not mounted).
-	agentMux := http.NewServeMux()
-	ch.RegisterAgentRoutes(agentMux)
-	asrv := httptest.NewServer(agentMux)
-	t.Cleanup(asrv.Close)
-	if st := doJSON(t, http.MethodGet, asrv.URL+"/s3cr3t/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
-		t.Errorf("prefixed agent /config status %d, want 401 (mounted, needs a token)", st)
-	}
-	if st := doJSON(t, http.MethodGet, asrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
-		t.Errorf("bare agent /config status %d, want 404 (only the prefixed path is mounted)", st)
-	}
-}
-
 // TestControllerHTTP_AuditWireShape locks the /audit JSON contract: entries must
 // serialize in snake_case (the operator DTO) so the browser panel can read them. An
 // enroll appends an "enroll" entry; GET /audit must return it with snake_case keys and

@@ -1,0 +1,155 @@
+package api
+
+// controller_prefix_test.go — subject-scoped tests for the operator/agent path-prefix
+// split (controller-server-authority-redesign plan-1, D3). Guards: each mux mounts its
+// routes under ITS OWN prefix only; the other audience's prefix and the bare path 404;
+// the bootstrap script bakes the AGENT prefix (never the operator prefix) into the
+// agent's controller base URL.
+//
+// Lifecycle: subject-scoped — retire at subject close (the perpetual custody guard is
+// topology_custody_test.go).
+
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+)
+
+// newPrefixEnv stands up the two muxes with independent prefixes applied.
+func newPrefixEnv(t *testing.T, operatorPrefix, agentPrefix string) (opSrv, agentSrv *httptest.Server, store controller.Store) {
+	t.Helper()
+	store = controller.NewMemStore()
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch.SetOperatorPathPrefix(operatorPrefix)
+	ch.SetAgentPathPrefix(agentPrefix)
+
+	opMux := http.NewServeMux()
+	ch.RegisterOperatorRoutes(opMux)
+	agentMux := http.NewServeMux()
+	ch.RegisterAgentRoutes(agentMux)
+
+	opSrv = httptest.NewServer(opMux)
+	agentSrv = httptest.NewServer(agentMux)
+	t.Cleanup(opSrv.Close)
+	t.Cleanup(agentSrv.Close)
+	return opSrv, agentSrv, store
+}
+
+// TestPrefixSplit_IndependentMounts: with two different prefixes configured, each mux
+// serves ONLY under its own prefix — the other audience's prefix and the bare path 404
+// on both muxes. This is the routing contract that makes a per-audience path rule
+// expressible on one hostname (the misroute that 404'd operator logins routed to the
+// agent port is now structurally diagnosable).
+func TestPrefixSplit_IndependentMounts(t *testing.T) {
+	opSrv, agentSrv, _ := newPrefixEnv(t, "/op-secret/", "agent-secret") // both normalize
+
+	// Operator mux: own prefix → mounted (200); agent prefix and bare path → 404.
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/op-secret/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
+		t.Errorf("operator-prefixed /nodes = %d, want 200", st)
+	}
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/agent-secret/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
+		t.Errorf("agent-prefixed /nodes on operator mux = %d, want 404", st)
+	}
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
+		t.Errorf("bare /nodes on operator mux = %d, want 404", st)
+	}
+
+	// Agent mux: own prefix → mounted (401 without a token proves the route exists);
+	// operator prefix and bare path → 404.
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/agent-secret/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
+		t.Errorf("agent-prefixed /config = %d, want 401 (mounted, needs a token)", st)
+	}
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/op-secret/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+		t.Errorf("operator-prefixed /config on agent mux = %d, want 404", st)
+	}
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+		t.Errorf("bare /config on agent mux = %d, want 404", st)
+	}
+}
+
+// TestPrefixSplit_OneSidedPrefix: setting ONLY the operator prefix leaves the agent
+// routes at the bare path (and vice versa) — the two prefixes are fully independent.
+func TestPrefixSplit_OneSidedPrefix(t *testing.T) {
+	opSrv, agentSrv, _ := newPrefixEnv(t, "panel-only", "")
+
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/panel-only/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
+		t.Errorf("operator-prefixed /nodes = %d, want 200", st)
+	}
+	// The agent mux serves at the BARE path: its prefix was not set.
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
+		t.Errorf("bare agent /config = %d, want 401 (mounted at bare path)", st)
+	}
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/panel-only/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+		t.Errorf("operator-prefixed agent /config = %d, want 404", st)
+	}
+}
+
+// TestPrefixSplit_BootstrapBakesAgentPrefix: the bootstrap script's CONTROLLER base
+// must carry the AGENT prefix — the installed agent only ever talks to the agent
+// port. Baking the operator prefix instead would point every fleet node at a path
+// that 404s (the exact failure mode of the shared-prefix design).
+func TestPrefixSplit_BootstrapBakesAgentPrefix(t *testing.T) {
+	opSrv, agentSrv, _ := newPrefixEnv(t, "op-secret", "agent-secret")
+
+	// Save a public agent URL so the script has a base to compose with.
+	st := doJSON(t, http.MethodPost, opSrv.URL+"/op-secret/api/v1/controller/settings", testOperatorToken,
+		map[string]any{"public_agent_url": "https://overlay.example.com"}, nil)
+	if st != http.StatusOK {
+		t.Fatalf("POST settings = %d, want 200", st)
+	}
+
+	resp, err := agentSrv.Client().Get(agentSrv.URL + "/agent-secret/api/v1/controller/bootstrap")
+	if err != nil {
+		t.Fatalf("GET bootstrap: %v", err)
+	}
+	script, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET bootstrap = %d, want 200", resp.StatusCode)
+	}
+	if want := []byte("CONTROLLER='https://overlay.example.com/agent-secret'"); !bytes.Contains(script, want) {
+		t.Errorf("bootstrap script must bake the AGENT prefix into CONTROLLER; got:\n%s",
+			firstLines(string(script), 12))
+	}
+	if bytes.Contains(script, []byte("op-secret")) {
+		t.Errorf("bootstrap script leaked the OPERATOR prefix (agents must never see it)")
+	}
+}
+
+// TestPrefixSplit_Normalization: the setters normalize whitespace and slashes the same
+// way the old shared setter did ("" or "/<seg>").
+func TestPrefixSplit_Normalization(t *testing.T) {
+	for in, want := range map[string]string{
+		"":           "/api/v1/controller/",
+		"  ":         "/api/v1/controller/",
+		"/s3cr3t/":   "/s3cr3t/api/v1/controller/",
+		"s3cr3t":     "/s3cr3t/api/v1/controller/",
+		" /s3cr3t ":  "/s3cr3t/api/v1/controller/",
+		"a/b":        "/a/b/api/v1/controller/",
+		"//s3cr3t//": "/s3cr3t/api/v1/controller/",
+	} {
+		ch := NewControllerHandler(controller.NewMemStore(), testTenant, "", DefaultOperatorName)
+		ch.SetOperatorPathPrefix(in)
+		ch.SetAgentPathPrefix(in)
+		if got := ch.OperatorBasePath(); got != want {
+			t.Errorf("OperatorBasePath(%q) = %q, want %q", in, got, want)
+		}
+		if got := ch.AgentBasePath(); got != want {
+			t.Errorf("AgentBasePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// firstLines returns up to n leading lines of s (test-failure readability helper).
+func firstLines(s string, n int) string {
+	lines := strings.SplitN(s, "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
