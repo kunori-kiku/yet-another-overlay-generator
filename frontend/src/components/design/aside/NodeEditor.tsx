@@ -1,6 +1,7 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
 import { txt, STRINGS } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
+import { uuid } from '../../../lib/uuid';
 
 // 节点属性编辑器（从 RightPanel 的选中节点区块原样抽出，含公网地址 / 通告网段 / SSH 配置，
 // 以及对 reconcileEdgeEndpoints 的耦合）。供选择驱动的 Design 右侧 aside 使用。
@@ -38,7 +39,7 @@ export function NodeEditor() {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const newEndpoint = {
-      id: `${nodeId}-ep-${crypto.randomUUID()}`,
+      id: `${nodeId}-ep-${uuid()}`,
       host: '',
       port: node.listen_port || 51820,
       note: '',

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
+import { uuid } from '../../lib/uuid';
 
 export function DomainForm() {
   const { addDomain, language } = useTopologyStore();
@@ -34,7 +35,7 @@ export function DomainForm() {
       return;
     }
 
-    const id = `domain-${crypto.randomUUID()}`;
+    const id = `domain-${uuid()}`;
     addDomain({
       id,
       name: name.trim(),

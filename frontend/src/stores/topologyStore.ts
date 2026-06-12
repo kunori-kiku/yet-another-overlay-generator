@@ -11,6 +11,7 @@ import type {
   CompileHistoryEntry,
 } from '../types/topology';
 import { detectSystemLanguage, txt, type UILanguage } from '../i18n';
+import { uuid } from '../lib/uuid';
 
 interface TopologyState {
   // 数据
@@ -249,7 +250,7 @@ export const useTopologyStore = create<TopologyState>()(
   addBackupEdge: (primaryEdgeId) => {
     const primary = get().edges.find((e) => e.id === primaryEdgeId);
     if (!primary) return null;
-    const newId = `edge-${crypto.randomUUID()}`;
+    const newId = `edge-${uuid()}`;
     const backup: Edge = {
       id: newId,
       from_node_id: primary.from_node_id,
@@ -468,7 +469,7 @@ export const useTopologyStore = create<TopologyState>()(
       const data: CompileResponse = await res.json();
       
       const newHistoryEntry: CompileHistoryEntry = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         timestamp: new Date().toISOString(),
         topology: topo,
         compileResult: data,

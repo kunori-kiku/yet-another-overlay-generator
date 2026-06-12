@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt, STRINGS } from '../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
+import { uuid } from '../../lib/uuid';
 import type { Node } from '../../types/topology';
 
 const DEFAULT_LISTEN_PORT = 51820;
@@ -61,7 +62,7 @@ export function NodeForm() {
       return;
     }
 
-    const id = `node-${crypto.randomUUID()}`;
+    const id = `node-${uuid()}`;
 
     // UX-5：顶层“公网地址”是公网可达的主入口。client 角色永不可达；其余角色只要
     // 顶层地址非空或勾选了高级复选框，即视为有公网 IP。
@@ -80,7 +81,7 @@ export function NodeForm() {
     const publicEndpoints: NonNullable<Node['public_endpoints']> = [];
     if (parsedPublic) {
       publicEndpoints.push({
-        id: `${id}-ep-${crypto.randomUUID()}`,
+        id: `${id}-ep-${uuid()}`,
         host: parsedPublic.host,
         port: parsedPublic.port,
       });
@@ -93,7 +94,7 @@ export function NodeForm() {
       );
       if (!duplicate) {
         publicEndpoints.push({
-          id: `${id}-ep-${crypto.randomUUID()}`,
+          id: `${id}-ep-${uuid()}`,
           host: advHost,
           port: advPort,
         });

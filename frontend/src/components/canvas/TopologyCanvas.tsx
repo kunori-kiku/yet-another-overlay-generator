@@ -23,6 +23,7 @@ import { CustomEdge } from './CustomEdge';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt, STRINGS } from '../../i18n';
 import { resolveNodeInterfaces } from '../../lib/compiledInterfaces';
+import { uuid } from '../../lib/uuid';
 
 const nodeTypes = { custom: CustomNode };
 const edgeTypes = { custom: CustomEdge };
@@ -486,9 +487,9 @@ export function TopologyCanvas() {
       setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', pending: true, parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
 
       if (params.source && params.target) {
-        // 用 crypto.randomUUID() 而非毫秒时间戳生成边 ID：两次快速连线会落在同一毫秒，
+        // 用 uuid() 而非毫秒时间戳生成边 ID：两次快速连线会落在同一毫秒，
         // 导致 ID 冲突，之后任何按 ID 进行的编辑/删除都会同时命中两条边（修复 D17）。
-        const id = `edge-${crypto.randomUUID()}`;
+        const id = `edge-${uuid()}`;
         const targetNode = topoNodes.find((n) => n.id === params.target);
         const preferredEndpoint = targetNode?.public_endpoints?.[0];
 
