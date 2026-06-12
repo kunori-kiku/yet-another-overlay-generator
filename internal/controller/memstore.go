@@ -19,6 +19,9 @@ type tenantState struct {
 	topology *TopologyRecord
 	// topoVersion is the last assigned topology Version; PutTopology pre-increments it.
 	topoVersion int64
+	// topoHistory retains the last TopologyHistoryLimit stored records, oldest
+	// first (the FileStore analogue is topology-history/<version>.json).
+	topoHistory []TopologyRecord
 	// staged maps NodeID -> the node's staged (not-yet-current) bundle.
 	staged map[string]SignedBundle
 	// current maps NodeID -> the node's current (promoted) bundle.
@@ -212,7 +215,8 @@ func (s *MemStore) TouchLastSeen(ctx context.Context, t TenantID, nodeID string,
 // --- Topology (public-keys-only) ---
 
 // PutTopology stores a new topology version and returns the stored record with its
-// assigned (incrementing) Version.
+// assigned (incrementing) Version. The version is also retained in the bounded
+// history (TopologyHistoryLimit, oldest pruned).
 func (s *MemStore) PutTopology(ctx context.Context, t TenantID, json []byte) (TopologyRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -227,6 +231,10 @@ func (s *MemStore) PutTopology(ctx context.Context, t TenantID, json []byte) (To
 		UpdatedAt: time.Now().UTC(),
 	}
 	ts.topology = &rec
+	ts.topoHistory = append(ts.topoHistory, cloneTopology(rec))
+	if over := len(ts.topoHistory) - TopologyHistoryLimit; over > 0 {
+		ts.topoHistory = append([]TopologyRecord(nil), ts.topoHistory[over:]...)
+	}
 	return cloneTopology(rec), nil
 }
 
@@ -239,6 +247,37 @@ func (s *MemStore) GetTopology(ctx context.Context, t TenantID) (TopologyRecord,
 		return TopologyRecord{}, ErrNotFound
 	}
 	return cloneTopology(*ts.topology), nil
+}
+
+// ListTopologyVersions returns the retained versions, newest first.
+func (s *MemStore) ListTopologyVersions(ctx context.Context, t TenantID) ([]TopologyVersionInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	out := make([]TopologyVersionInfo, 0, len(ts.topoHistory))
+	for i := len(ts.topoHistory) - 1; i >= 0; i-- {
+		rec := ts.topoHistory[i]
+		out = append(out, TopologyVersionInfo{
+			Version:   rec.Version,
+			UpdatedAt: rec.UpdatedAt,
+			Bytes:     len(rec.JSON),
+		})
+	}
+	return out, nil
+}
+
+// GetTopologyVersion returns one retained version, or ErrNotFound (unknown or
+// already pruned).
+func (s *MemStore) GetTopologyVersion(ctx context.Context, t TenantID, version int64) (TopologyRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	for _, rec := range ts.topoHistory {
+		if rec.Version == version {
+			return cloneTopology(rec), nil
+		}
+	}
+	return TopologyRecord{}, ErrNotFound
 }
 
 // --- Bundles + generation ---

@@ -212,6 +212,9 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"revoke", op(h.HandleRevoke))
 	mux.HandleFunc(base+"audit", op(h.HandleAudit))
 	mux.HandleFunc(base+"topology", op(h.HandleTopology))
+	// Topology version history (plan-2, D7): list retained versions; a specific
+	// version's payload is served by GET /topology?version=N above.
+	mux.HandleFunc(base+"topology/versions", op(h.HandleTopologyVersions))
 	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
 	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
 	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL.
@@ -345,6 +348,21 @@ type stageResponseJSON struct {
 // generationResponseJSON is the wire form of a promote result.
 type generationResponseJSON struct {
 	Generation int64 `json:"generation"`
+}
+
+// topologyVersionJSON is the wire form of one retained topology version's
+// metadata (no payload — GET /topology?version=N serves the bytes).
+type topologyVersionJSON struct {
+	Version   int64     `json:"version"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Bytes     int       `json:"bytes"`
+}
+
+// topologyVersionsResponseJSON is the wire form of the version list, newest
+// first, plus the server's retention bound (so the panel can label the list).
+type topologyVersionsResponseJSON struct {
+	Versions []topologyVersionJSON `json:"versions"`
+	Limit    int                   `json:"limit"`
 }
 
 // nodeJSON is the operator-facing view of one registry node. It deliberately
@@ -937,9 +955,11 @@ func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// HandleTopology returns the currently stored topology JSON (operator-only). The
-// stored bytes are public-keys-only and are returned verbatim. 404 before the first
-// update-topology.
+// HandleTopology returns stored topology JSON (operator-only). With no query it
+// returns the CURRENT record; `?version=N` returns one retained history version
+// (plan-2, D7 — the recovery substrate for a bad overwrite). The stored bytes are
+// public-keys-only and returned verbatim. 404 before the first update-topology, or
+// for an unknown/pruned version.
 func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
@@ -950,20 +970,64 @@ func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
 	}
-	rec, err := h.store.GetTopology(r.Context(), tenant)
-	if err != nil {
-		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "no topology stored yet")
+
+	var rec controller.TopologyRecord
+	var err error
+	if vq := r.URL.Query().Get("version"); vq != "" {
+		version, perr := strconv.ParseInt(vq, 10, 64)
+		if perr != nil || version <= 0 {
+			writeError(w, http.StatusBadRequest, "version must be a positive integer")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load topology")
-		return
+		rec, err = h.store.GetTopologyVersion(r.Context(), tenant, version)
+		if err != nil {
+			if errors.Is(err, controller.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "no such retained topology version (it may have been pruned)")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load topology version")
+			return
+		}
+	} else {
+		rec, err = h.store.GetTopology(r.Context(), tenant)
+		if err != nil {
+			if errors.Is(err, controller.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "no topology stored yet")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load topology")
+			return
+		}
 	}
 	// The stored JSON is returned verbatim (it is already valid JSON, validated at
 	// update-topology time).
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rec.JSON)
+}
+
+// HandleTopologyVersions lists the retained topology versions, newest first
+// (operator-only; metadata only — fetch a payload via GET /topology?version=N).
+func (h *ControllerHandler) HandleTopologyVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		return
+	}
+	infos, err := h.store.ListTopologyVersions(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list topology versions")
+		return
+	}
+	out := make([]topologyVersionJSON, len(infos))
+	for i, v := range infos {
+		out[i] = topologyVersionJSON{Version: v.Version, UpdatedAt: v.UpdatedAt, Bytes: v.Bytes}
+	}
+	writeJSON(w, http.StatusOK, topologyVersionsResponseJSON{Versions: out, Limit: controller.TopologyHistoryLimit})
 }
 
 // HandleEnrollmentToken mints a single-use, node-scoped enrollment token

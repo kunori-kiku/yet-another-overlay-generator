@@ -5,7 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -228,6 +232,218 @@ func TestStoreTopologyVersioning(t *testing.T) {
 				t.Fatalf("GetTopology JSON = %q, want %q", cur.JSON, `{"v":2}`)
 			}
 		})
+	}
+}
+
+// TestStoreTopologyHistory covers the bounded version history (plan-2, D7):
+// every PutTopology is retained, the list is newest-first and pruned to
+// TopologyHistoryLimit, retained versions round-trip byte-exact, and pruned or
+// unknown versions are ErrNotFound. Perpetual: the history contract is a durable
+// Store invariant (the recovery substrate for a bad overwrite).
+func TestStoreTopologyHistory(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			// Empty tenant: empty list (not an error), unknown version ErrNotFound.
+			if infos, err := s.ListTopologyVersions(ctx, tenant); err != nil || len(infos) != 0 {
+				t.Fatalf("ListTopologyVersions(empty) = %v, %v; want empty, nil", infos, err)
+			}
+			if _, err := s.GetTopologyVersion(ctx, tenant, 1); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetTopologyVersion(empty, 1): err = %v, want ErrNotFound", err)
+			}
+
+			// TopologyHistoryLimit+2 successive puts: versions 1..limit+2.
+			total := TopologyHistoryLimit + 2
+			for i := 1; i <= total; i++ {
+				if _, err := s.PutTopology(ctx, tenant, []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
+					t.Fatalf("PutTopology v%d: %v", i, err)
+				}
+			}
+
+			// The list holds exactly the limit, newest first.
+			infos, err := s.ListTopologyVersions(ctx, tenant)
+			if err != nil {
+				t.Fatalf("ListTopologyVersions: %v", err)
+			}
+			if len(infos) != TopologyHistoryLimit {
+				t.Fatalf("retained %d versions, want %d", len(infos), TopologyHistoryLimit)
+			}
+			for i, info := range infos {
+				wantVersion := int64(total - i)
+				if info.Version != wantVersion {
+					t.Fatalf("infos[%d].Version = %d, want %d (newest first)", i, info.Version, wantVersion)
+				}
+				if info.UpdatedAt.IsZero() {
+					t.Errorf("infos[%d].UpdatedAt is zero", i)
+				}
+				if info.Bytes <= 0 {
+					t.Errorf("infos[%d].Bytes = %d, want > 0", i, info.Bytes)
+				}
+			}
+
+			// A retained version round-trips byte-exact; the oldest retained one too.
+			oldest := int64(total - TopologyHistoryLimit + 1)
+			rec, err := s.GetTopologyVersion(ctx, tenant, oldest)
+			if err != nil {
+				t.Fatalf("GetTopologyVersion(%d): %v", oldest, err)
+			}
+			if want := fmt.Sprintf(`{"v":%d}`, oldest); string(rec.JSON) != want {
+				t.Fatalf("GetTopologyVersion(%d).JSON = %q, want %q", oldest, rec.JSON, want)
+			}
+
+			// Pruned and never-existed versions are ErrNotFound.
+			if _, err := s.GetTopologyVersion(ctx, tenant, oldest-1); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetTopologyVersion(pruned %d): err = %v, want ErrNotFound", oldest-1, err)
+			}
+			if _, err := s.GetTopologyVersion(ctx, tenant, int64(total+50)); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetTopologyVersion(unknown): err = %v, want ErrNotFound", err)
+			}
+
+			// The CURRENT record is unaffected by history mechanics.
+			cur, err := s.GetTopology(ctx, tenant)
+			if err != nil || cur.Version != int64(total) {
+				t.Fatalf("GetTopology after history churn = v%d, %v; want v%d, nil", cur.Version, err, total)
+			}
+		})
+	}
+}
+
+// TestFileStoreTopologyHistoryCrashShape: a crash between the history write and
+// the topology.json flip leaves an orphan history file one version ahead of the
+// current record. The orphan was NEVER the committed topology, so it must be
+// INVISIBLE — not listed, not servable (an operator must not be offered to
+// "recover" a write that never committed) — and the next PutTopology reassigns
+// that version number and overwrites it (self-heal). FileStore-specific by nature
+// (MemStore cannot crash mid-put).
+func TestFileStoreTopologyHistoryCrashShape(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	if _, err := s.PutTopology(ctx, tenant, []byte(`{"v":1}`)); err != nil {
+		t.Fatalf("PutTopology v1: %v", err)
+	}
+
+	// Simulate the crash shape: history file for v2 exists, topology.json still v1.
+	orphan := TopologyRecord{Version: 2, JSON: []byte(`{"v":"orphan"}`), UpdatedAt: time.Now().UTC()}
+	orphanJSON, _ := json.Marshal(orphan)
+	orphanPath := filepath.Join(dir, string(tenant), "topology-history", "2.json")
+	if err := os.WriteFile(orphanPath, orphanJSON, 0600); err != nil {
+		t.Fatalf("plant orphan: %v", err)
+	}
+
+	// The orphan is invisible: the list shows only the committed v1, and the
+	// orphan's version is not servable.
+	infos, err := s.ListTopologyVersions(ctx, tenant)
+	if err != nil {
+		t.Fatalf("ListTopologyVersions with orphan: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Version != 1 {
+		t.Fatalf("list with orphan = %+v, want only the committed [v1]", infos)
+	}
+	if _, err := s.GetTopologyVersion(ctx, tenant, 2); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetTopologyVersion(orphan 2): err = %v, want ErrNotFound (never committed)", err)
+	}
+
+	// The next put self-heals: it assigns version 2 (current was 1) and overwrites.
+	rec, err := s.PutTopology(ctx, tenant, []byte(`{"v":"healed"}`))
+	if err != nil {
+		t.Fatalf("PutTopology after orphan: %v", err)
+	}
+	if rec.Version != 2 {
+		t.Fatalf("post-orphan PutTopology Version = %d, want 2", rec.Version)
+	}
+	got, err := s.GetTopologyVersion(ctx, tenant, 2)
+	if err != nil || string(got.JSON) != `{"v":"healed"}` {
+		t.Fatalf("history v2 after self-heal = %q, %v; want healed bytes", got.JSON, err)
+	}
+}
+
+// TestFileStoreTopologyHistoryUpgradeShape: a deployment whose current topology
+// predates the history feature has topology.json but NO history files. The
+// recovery surface must still work: the current record lists and serves, and the
+// next put lazily backfills the displaced version so it stays recoverable.
+func TestFileStoreTopologyHistoryUpgradeShape(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	// Hand-place a pre-history deployment shape: topology.json at v37, no history dir.
+	tdir := filepath.Join(dir, string(tenant))
+	if err := os.MkdirAll(tdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pre := TopologyRecord{Version: 37, JSON: []byte(`{"v":37}`), UpdatedAt: time.Now().UTC()}
+	preJSON, _ := json.Marshal(pre)
+	if err := os.WriteFile(filepath.Join(tdir, "topology.json"), preJSON, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The current record lists and serves despite having no history file.
+	infos, err := s.ListTopologyVersions(ctx, tenant)
+	if err != nil || len(infos) != 1 || infos[0].Version != 37 {
+		t.Fatalf("upgrade-shape list = %+v, %v; want [v37]", infos, err)
+	}
+	got, err := s.GetTopologyVersion(ctx, tenant, 37)
+	if err != nil || string(got.JSON) != `{"v":37}` {
+		t.Fatalf("upgrade-shape GetTopologyVersion(37) = %q, %v; want stored bytes", got.JSON, err)
+	}
+
+	// The next put backfills v37 into history before storing v38 — the displaced
+	// pre-upgrade version stays recoverable.
+	if _, err := s.PutTopology(ctx, tenant, []byte(`{"v":38}`)); err != nil {
+		t.Fatalf("PutTopology v38: %v", err)
+	}
+	got, err = s.GetTopologyVersion(ctx, tenant, 37)
+	if err != nil || string(got.JSON) != `{"v":37}` {
+		t.Fatalf("backfilled v37 = %q, %v; want pre-upgrade bytes", got.JSON, err)
+	}
+	infos, err = s.ListTopologyVersions(ctx, tenant)
+	if err != nil || len(infos) != 2 || infos[0].Version != 38 || infos[1].Version != 37 {
+		t.Fatalf("post-backfill list = %+v, %v; want [v38 v37]", infos, err)
+	}
+}
+
+// TestFileStoreTopologyHistoryCorruptEntrySkipped: one bit-rotted/corrupt history
+// file must not brick the whole recovery list — it is skipped; intact versions
+// keep listing and serving.
+func TestFileStoreTopologyHistoryCorruptEntrySkipped(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	for i := 1; i <= 3; i++ {
+		if _, err := s.PutTopology(ctx, tenant, []byte(fmt.Sprintf(`{"v":%d}`, i))); err != nil {
+			t.Fatalf("PutTopology v%d: %v", i, err)
+		}
+	}
+	// Corrupt v2's retained file (truncated JSON).
+	corrupt := filepath.Join(dir, string(tenant), "topology-history", "2.json")
+	if err := os.WriteFile(corrupt, []byte(`{"Version": 2, "JSO`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := s.ListTopologyVersions(ctx, tenant)
+	if err != nil {
+		t.Fatalf("ListTopologyVersions with corrupt entry: %v (the recovery list must not brick)", err)
+	}
+	if len(infos) != 2 || infos[0].Version != 3 || infos[1].Version != 1 {
+		t.Fatalf("list with corrupt v2 = %+v, want [v3 v1] (corrupt entry skipped)", infos)
+	}
+	// Intact versions still serve.
+	if _, err := s.GetTopologyVersion(ctx, tenant, 1); err != nil {
+		t.Errorf("GetTopologyVersion(1) after corruption elsewhere: %v", err)
 	}
 }
 

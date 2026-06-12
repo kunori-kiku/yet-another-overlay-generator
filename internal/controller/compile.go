@@ -36,6 +36,7 @@ package controller
 // topology node is cleared before rendering.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -190,8 +191,10 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	}
 
 	// Persist the compiled allocation pins back into the FULL stored topology so a later
-	// re-compile sticky-pins them (invariant I10).
-	if err := persistAllocations(ctx, store, t, &topo, result.Topology); err != nil {
+	// re-compile sticky-pins them (invariant I10). rec.JSON is passed so a write-back
+	// that changes NOTHING (sticky pins re-derived byte-identically) is skipped instead
+	// of burning one of the bounded history slots.
+	if err := persistAllocations(ctx, store, t, &topo, result.Topology, rec.JSON); err != nil {
 		return StageResult{}, err
 	}
 
@@ -525,7 +528,15 @@ func clientTargetEnrolled(topo *model.Topology, clientID string, enrolled map[st
 // public-keys-only — and stamps AllocSchemaVersion. The next CompileAndStage then
 // finds these pins in the stored topology and the compiler reuses them (sticky-pin),
 // which is what keeps allocations stable across incremental enrollment (I10).
-func persistAllocations(ctx context.Context, store Store, t TenantID, full, compiled *model.Topology) error {
+//
+// Note (plan-2): a PutTopology write-back that CHANGES the stored topology counts
+// as a retained version like any other — the pinned post-stage shape is itself a
+// state an operator may want to recover. A write-back whose bytes equal the stored
+// record (sticky pins re-derived identically, the common re-stage case) is SKIPPED:
+// burning one of the bounded history slots per no-op stage would let routine
+// incremental-enrollment staging flush every operator-authored version out of the
+// recovery window (review finding, D7).
+func persistAllocations(ctx context.Context, store Store, t TenantID, full, compiled *model.Topology, originalJSON []byte) error {
 	ipByID := make(map[string]string, len(compiled.Nodes))
 	for _, n := range compiled.Nodes {
 		ipByID[n.ID] = n.OverlayIP
@@ -558,6 +569,12 @@ func persistAllocations(ctx context.Context, store Store, t TenantID, full, comp
 	raw, err := json.Marshal(full)
 	if err != nil {
 		return fmt.Errorf("controller: marshaling topology with persisted allocations: %w", err)
+	}
+	// No-op write-back: the stored record is canonical json.Marshal output (the
+	// update-topology custody gate canonicalizes), so byte equality here means the
+	// pins changed nothing. Skip the put — do not burn a history slot.
+	if bytes.Equal(raw, originalJSON) {
+		return nil
 	}
 	if _, err := store.PutTopology(ctx, t, raw); err != nil {
 		return fmt.Errorf("controller: persisting allocations: %w", err)

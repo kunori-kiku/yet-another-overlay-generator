@@ -83,6 +83,13 @@ func TestTenantIsolation(t *testing.T) {
 			if _, err := s.GetTopology(ctx, tenantB); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetTopology(B): err = %v, want ErrNotFound", err)
 			}
+			// Topology version history (plan-2) is tenant-scoped like everything else.
+			if _, err := s.GetTopologyVersion(ctx, tenantB, 1); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetTopologyVersion(B, 1): err = %v, want ErrNotFound", err)
+			}
+			if versions, err := s.ListTopologyVersions(ctx, tenantB); err != nil || len(versions) != 0 {
+				t.Fatalf("ListTopologyVersions(B) = %v, %v; want empty, nil", versions, err)
+			}
 			if _, err := s.GetCurrentBundle(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetCurrentBundle(B, alpha): err = %v, want ErrNotFound", err)
 			}
