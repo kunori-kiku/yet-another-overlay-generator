@@ -370,16 +370,25 @@ func runControllerMode(o controllerModeOpts) int {
 	// the running overlay. On a rekey wake the watermark advances to the polled wake
 	// generation (so the stale pre-rekey bundle is never re-applied); the next applied
 	// generation is the operator's post-rekey Deploy.
+	//
+	// A cycle that advanced the watermark WITHOUT applying (a rekey wake, or the
+	// plan-3 idle skip when the served bundle is already applied — the orphaned-node
+	// shape) also sleeps the backoff: both await an operator action, and the pause
+	// bounds the wake-fetch rate even if the tenant generation is advancing rapidly
+	// for OTHER nodes. install.sh never runs in those cycles.
 	const errBackoff = 5 * time.Second
 	fmt.Fprintf(os.Stderr, "agent: controller daemon started (node %s, resume @%d)\n", o.nodeID, lastAppliedGen)
 	for {
-		resumeGen, _, err := cycle()
+		resumeGen, applied, err := cycle()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent: %v (keeping last-good; retrying in %s)\n", err, errBackoff)
 			time.Sleep(errBackoff)
 			continue
 		}
-		lastAppliedGen = resumeGen // advance on success or rekey wake; unchanged on a timed-out poll
+		if !applied && resumeGen > lastAppliedGen {
+			time.Sleep(errBackoff) // idle/rekey wake: pace before re-polling
+		}
+		lastAppliedGen = resumeGen // advance on success, idle skip, or rekey wake; unchanged on a timed-out poll
 	}
 }
 

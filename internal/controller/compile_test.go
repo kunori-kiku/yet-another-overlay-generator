@@ -153,6 +153,21 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 		if _, err := store.PromoteStaged(ctx, tnt); err != ErrNoStagedBundle {
 			t.Errorf("PromoteStaged after empty stage: err = %v, want ErrNoStagedBundle", err)
 		}
+		// plan-3: a zero-node stage is the design-destroying-deploy shape and must
+		// leave an audit trace, not just a transient HTTP response.
+		entries, err := store.ListAudit(ctx, tnt)
+		if err != nil {
+			t.Fatalf("ListAudit: %v", err)
+		}
+		foundEmpty := false
+		for _, e := range entries {
+			if e.Action == "stage-empty" {
+				foundEmpty = true
+			}
+		}
+		if !foundEmpty {
+			t.Errorf("no stage-empty audit entry after a zero-node stage (entries: %+v)", entries)
+		}
 	})
 
 	// (a) Only router+peer enrolled; client NOT enrolled.

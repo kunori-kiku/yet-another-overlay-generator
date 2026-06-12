@@ -654,11 +654,65 @@ func (fs *FileStore) StageBundle(ctx context.Context, t TenantID, b SignedBundle
 	return writeJSONAtomic(p, b)
 }
 
-// PromoteStaged atomically flips all staged bundles to current, clears each
-// promoted node's prior current bundle, increments the tenant generation by one,
-// sets each promoted node's DesiredGeneration to the new generation, wakes
-// WaitForGeneration waiters, and returns the new generation. With nothing staged
-// it returns ErrNoStagedBundle and changes nothing.
+// PruneStagedBundles deletes staged bundles whose NodeID is not in keep and
+// returns the purged node IDs in stable order. Current bundles are never touched.
+func (fs *FileStore) PruneStagedBundles(ctx context.Context, t TenantID, keep []string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return nil, err
+	}
+	ents, err := os.ReadDir(filepath.Join(dir, "bundles"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // nothing staged at all
+		}
+		return nil, fmt.Errorf("controller: list bundles to prune: %w", err)
+	}
+	keepSet := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		keepSet[id] = true
+	}
+	var purged []string
+	var firstErr error
+	for _, e := range ents {
+		nodeID, found := strings.CutSuffix(e.Name(), ".staged.json")
+		if e.IsDir() || !found {
+			continue
+		}
+		if keepSet[nodeID] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, "bundles", e.Name())); err != nil && !os.IsNotExist(err) {
+			// Keep going: aborting mid-loop would discard the IDs already removed,
+			// and the caller audits the purged list — every actual removal must be
+			// reported even when a later one fails (review finding).
+			if firstErr == nil {
+				firstErr = fmt.Errorf("controller: prune staged bundle %s: %w", nodeID, err)
+			}
+			continue
+		}
+		purged = append(purged, nodeID)
+	}
+	sort.Strings(purged)
+	return purged, firstErr
+}
+
+// PromoteStaged atomically flips the currently staged bundles to current, clears
+// each promoted node's prior current bundle, increments the tenant generation by
+// one, sets each promoted node's DesiredGeneration to the new generation, wakes
+// WaitForGeneration waiters, and returns the new generation. With nothing
+// (currently) staged it returns ErrNoStagedBundle and changes nothing.
+//
+// Scoping (plan-3): only bundles staged at the generation being promoted
+// (current+1) flip; a bundle whose provisional generation was invalidated by an
+// interleaved BumpGeneration/promote is stale and stays staged until a re-stage
+// refreshes it (or purge-on-stage removes it).
 func (fs *FileStore) PromoteStaged(ctx context.Context, t TenantID) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -680,7 +734,14 @@ func (fs *FileStore) PromoteStaged(ctx context.Context, t TenantID) (int64, erro
 		return 0, fmt.Errorf("controller: list bundles: %w", err)
 	}
 
-	// Collect staged bundles in stable NodeID order for deterministic behavior.
+	cur, err := fs.readGeneration(dir)
+	if err != nil {
+		return 0, err
+	}
+	newGen := cur + 1
+
+	// Collect the staged bundles that belong to THIS promote (provisional
+	// generation == newGen), in stable NodeID order for deterministic behavior.
 	var staged []SignedBundle
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".staged.json") {
@@ -690,18 +751,15 @@ func (fs *FileStore) PromoteStaged(ctx context.Context, t TenantID) (int64, erro
 		if err := readJSON(filepath.Join(bundlesDir, e.Name()), &b); err != nil {
 			return 0, err
 		}
+		if b.Generation != newGen {
+			continue // stale provisional generation — not part of the stage being promoted
+		}
 		staged = append(staged, b)
 	}
 	if len(staged) == 0 {
 		return 0, ErrNoStagedBundle
 	}
 	sort.Slice(staged, func(i, j int) bool { return staged[i].NodeID < staged[j].NodeID })
-
-	cur, err := fs.readGeneration(dir)
-	if err != nil {
-		return 0, err
-	}
-	newGen := cur + 1
 
 	// Flip each staged bundle to current: write the new current, remove the
 	// staged marker, and bump the node's DesiredGeneration. Each per-file write

@@ -294,22 +294,48 @@ func (s *MemStore) StageBundle(ctx context.Context, t TenantID, b SignedBundle) 
 	return nil
 }
 
-// PromoteStaged atomically flips all staged bundles to current, increments the
-// tenant's generation, sets each promoted node's DesiredGeneration to the new
-// generation, wakes WaitForGeneration waiters, and returns the new generation.
-// Returns ErrNoStagedBundle when nothing is staged.
+// PruneStagedBundles deletes staged bundles whose NodeID is not in keep and
+// returns the purged node IDs in stable order. Current bundles are never touched.
+func (s *MemStore) PruneStagedBundles(ctx context.Context, t TenantID, keep []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	keepSet := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		keepSet[id] = true
+	}
+	var purged []string
+	for nodeID := range ts.staged {
+		if !keepSet[nodeID] {
+			delete(ts.staged, nodeID)
+			purged = append(purged, nodeID)
+		}
+	}
+	sort.Strings(purged)
+	return purged, nil
+}
+
+// PromoteStaged atomically flips the currently staged bundles to current,
+// increments the tenant's generation, sets each promoted node's DesiredGeneration
+// to the new generation, wakes WaitForGeneration waiters, and returns the new
+// generation. Returns ErrNoStagedBundle when nothing (current) is staged.
+//
+// Scoping (plan-3): only bundles staged at the generation being promoted
+// (generation+1) flip; a bundle whose provisional generation was invalidated by an
+// interleaved BumpGeneration/promote is stale and stays staged until a re-stage
+// refreshes it (or purge-on-stage removes it).
 func (s *MemStore) PromoteStaged(ctx context.Context, t TenantID) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
-	if len(ts.staged) == 0 {
-		return 0, ErrNoStagedBundle
-	}
 	newGen := ts.generation + 1
+	flipped := 0
 	for nodeID, b := range ts.staged {
+		if b.Generation != newGen {
+			continue // stale provisional generation — not part of the stage being promoted
+		}
 		b.IsStaged = false
 		b.IsCurrent = true
-		b.Generation = newGen
 		// Replacing ts.current[nodeID] clears the prior current for that node.
 		ts.current[nodeID] = b
 		delete(ts.staged, nodeID)
@@ -318,6 +344,10 @@ func (s *MemStore) PromoteStaged(ctx context.Context, t TenantID) (int64, error)
 			n.DesiredGeneration = newGen
 			ts.nodes[nodeID] = n
 		}
+		flipped++
+	}
+	if flipped == 0 {
+		return 0, ErrNoStagedBundle
 	}
 	ts.generation = newGen
 	// Wake all WaitForGeneration waiters across tenants; each rechecks its predicate.

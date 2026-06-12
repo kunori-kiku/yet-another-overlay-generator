@@ -26,6 +26,11 @@ const stateFileName = "state.json"
 
 // State is the agent's persisted bookkeeping: what it last applied and the
 // outcome. It backs both anti-rollback (LastCompiledAt) and reporting.
+// LastResultOK is the State.LastResult value of a successful apply. The literal
+// is load-bearing in three places (recordSuccess writes it, Report and the idle
+// skip compare it), so it lives here once rather than as a scattered magic string.
+const LastResultOK = "ok"
+
 type State struct {
 	// NodeID is the identity this state belongs to (sanity check on reuse).
 	NodeID string `json:"node_id"`

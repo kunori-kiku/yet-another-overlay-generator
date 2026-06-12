@@ -34,8 +34,12 @@ type TenantID string
 var (
 	// ErrNotFound is returned when a requested record does not exist for the tenant.
 	ErrNotFound = errors.New("controller: not found")
-	// ErrNoStagedBundle is returned by PromoteStaged when nothing is staged.
-	ErrNoStagedBundle = errors.New("controller: no staged bundle to promote")
+	// ErrNoStagedBundle is returned by PromoteStaged when nothing is staged FOR
+	// THE GENERATION BEING PROMOTED — either nothing is staged at all, or the
+	// staged set's provisional generation was invalidated by an interleaved
+	// BumpGeneration/promote (plan-3 scoping). The remedy is identical either
+	// way: stage (again), then promote.
+	ErrNoStagedBundle = errors.New("controller: nothing staged for the next generation; stage (again) before promoting")
 	// ErrTokenInvalid is returned by ConsumeEnrollmentToken when the token is
 	// unknown, scoped to a different node, or expired.
 	ErrTokenInvalid = errors.New("controller: enrollment token invalid or expired")
@@ -346,12 +350,25 @@ type Store interface {
 	// StageBundle stores a node's bundle as the staged (not-yet-current) version.
 	// Staging replaces any prior staged bundle for that node.
 	StageBundle(ctx context.Context, t TenantID, b SignedBundle) error
-	// PromoteStaged atomically flips all staged bundles to current, increments the
-	// tenant's generation, sets DesiredGeneration on each promoted node that has a
-	// registry record (a node is registered at enrollment before any bundle is
-	// staged for it; promote updates existing records, it does not create them), and
-	// wakes any WaitForGeneration waiters. Returns the new generation, or
-	// ErrNoStagedBundle when nothing is staged.
+	// PruneStagedBundles deletes staged bundles whose NodeID is NOT in keep and
+	// returns the purged node IDs (stable order). It is the stage-side half of
+	// promote scoping (plan-3): CompileAndStage calls it with the freshly staged
+	// set so a stale staged bundle for a since-removed node cannot linger into a
+	// later promote. Current (promoted) bundles are never touched.
+	PruneStagedBundles(ctx context.Context, t TenantID, keep []string) (purged []string, err error)
+	// PromoteStaged atomically flips the CURRENTLY staged bundles to current,
+	// increments the tenant's generation, sets DesiredGeneration on each promoted
+	// node that has a registry record (a node is registered at enrollment before
+	// any bundle is staged for it; promote updates existing records, it does not
+	// create them), and wakes any WaitForGeneration waiters. Returns the new
+	// generation, or ErrNoStagedBundle when nothing is staged.
+	//
+	// Scoping (plan-3): only bundles whose staged (provisional) Generation equals
+	// the generation being promoted (current+1) flip. A staged bundle whose
+	// provisional generation was invalidated — e.g. a BumpGeneration (rekey-all)
+	// or another promote landed after it was staged — is stale by construction
+	// (compiled against pre-bump state) and is NOT flipped; re-stage to refresh
+	// it. If nothing matches, ErrNoStagedBundle.
 	PromoteStaged(ctx context.Context, t TenantID) (generation int64, err error)
 	// GetCurrentBundle returns the node's current (promoted) bundle, or ErrNotFound.
 	GetCurrentBundle(ctx context.Context, t TenantID, nodeID string) (SignedBundle, error)
