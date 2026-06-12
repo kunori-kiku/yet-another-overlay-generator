@@ -1,20 +1,20 @@
 # STATUS
-<!-- regenerated: 2026-06-09 (panel-appshell-redesign closed) -->
-<!-- by: execute-implementation-plan / close-phase -->
+<!-- regenerated: 2026-06-12 (controller-server-authority-redesign drafted) -->
+<!-- by: draft-implementation-plan -->
 
 ## Active work
 
-- **None active.** The `panel-appshell-redesign-2026_06_09` subject is **COMPLETE** —
-  all six phases merged to `main` (PRs #53–#58), each independently reviewed. Archived to
-  `implementation_plans/_completed/panel-appshell-redesign-2026_06_09/` (see `CLOSURE.md`).
-- **Branch:** main (no active feature branch).
-- **Last shipped (on main, untagged):** the operator-panel app-shell redesign —
-  - P1 #53 `d1dadd6` shell scaffold + theme · P2 #54 `86ec31e` sections→routes ·
-    P3 #55 `286a3fb` right aside + toolbar · P4 #56 `ca2f3da` persisted mode + caches +
-    appearance · P5 #57 `ee2b353` httpOnly-cookie auth + CSRF + CORS · P6 #58 `a63c177`
-    polish + i18n + a11y.
-- **Last release tag:** v2.0.0-preview.3 (2026-06-09, pre-redesign). The redesign is on
-  `main` only — no tag cut (outward-facing; left to the user).
+- **Subject:** `controller-server-authority-redesign-2026_06_12` — drafted, awaiting execution.
+  Seven plans: backend prefix split + custody enforcement → topology version history → safety
+  bugs (agent busy-loop, staged-bundle purge) → panel login gate + hydrate-on-login →
+  mode-boundary custody → identity reconciliation → docs/migration/closure smoke. All ten
+  user decisions locked in the outline's Decisions log; audit findings + fresh `specs/`
+  (bootstrapped `1abd662`) are the ground truth.
+- **Branch:** main (no active feature branch yet; plan-1 will branch).
+- **Current plan:** `plan-1-2026_06_12.md` (pending).
+- **Last shipped:** v2.0.0-preview.5 (UUID insecure-context fix `97f504a`), README config
+  reference (`ab88799`), specs/ bootstrap (`1abd662`). The appshell redesign closed 2026-06-09
+  (PRs #53–#58, see `_completed/panel-appshell-redesign-2026_06_09/CLOSURE.md`).
 
 ## Open questions / blockers
 
@@ -26,14 +26,15 @@
 
 ## Next actions
 
-- **Owed manual smoke (carried):** browser + authenticator + two-node controller deploy
-  (use `http://localhost`, not `127.0.0.1`, for WebAuthn). Verify the redesign end-to-end:
-  login survives refresh (cookie), CSRF, dark/light/system + translucency, no token in
-  `localStorage`; and the keystone passkey deploy.
-- **Optional (user-gated):** cut a release tag for the redesign once the smoke passes.
-- **Candidate follow-up subject:** full light-mode theming of the legacy topology/deploy
-  forms (the editing canvas is intentionally dark today — a mechanical recolor across the
-  deploy/* + aside/* components).
+- **Execute plan-1:** backend prefix split (`YAOG_OPERATOR_PATH_PREFIX` /
+  `YAOG_AGENT_PATH_PREFIX`, clean break) + 400-reject private-key-bearing topologies +
+  missing audit entries + startup base-path log. Breaking for the live deployment — the plan
+  carries the migration snippet.
+- **Owed manual smoke (carried, now scheduled):** folded into plan-7's closure smoke —
+  browser + authenticator + two-node controller deploy (use `http://localhost`, not
+  `127.0.0.1`, for WebAuthn), extended with this subject's success criteria.
+- **Candidate follow-up subject (carried):** full light-mode theming of the legacy
+  topology/deploy forms.
 - **Cross-origin panel deployments** must set `YAOG_PANEL_ORIGIN` (+ HTTPS); same-origin
   Docker needs no config (`docs/spec/controller/operator-auth.md`).
 
