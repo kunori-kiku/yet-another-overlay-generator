@@ -319,12 +319,25 @@ type Store interface {
 	// StageBundle stores a node's bundle as the staged (not-yet-current) version.
 	// Staging replaces any prior staged bundle for that node.
 	StageBundle(ctx context.Context, t TenantID, b SignedBundle) error
-	// PromoteStaged atomically flips all staged bundles to current, increments the
-	// tenant's generation, sets DesiredGeneration on each promoted node that has a
-	// registry record (a node is registered at enrollment before any bundle is
-	// staged for it; promote updates existing records, it does not create them), and
-	// wakes any WaitForGeneration waiters. Returns the new generation, or
-	// ErrNoStagedBundle when nothing is staged.
+	// PruneStagedBundles deletes staged bundles whose NodeID is NOT in keep and
+	// returns the purged node IDs (stable order). It is the stage-side half of
+	// promote scoping (plan-3): CompileAndStage calls it with the freshly staged
+	// set so a stale staged bundle for a since-removed node cannot linger into a
+	// later promote. Current (promoted) bundles are never touched.
+	PruneStagedBundles(ctx context.Context, t TenantID, keep []string) (purged []string, err error)
+	// PromoteStaged atomically flips the CURRENTLY staged bundles to current,
+	// increments the tenant's generation, sets DesiredGeneration on each promoted
+	// node that has a registry record (a node is registered at enrollment before
+	// any bundle is staged for it; promote updates existing records, it does not
+	// create them), and wakes any WaitForGeneration waiters. Returns the new
+	// generation, or ErrNoStagedBundle when nothing is staged.
+	//
+	// Scoping (plan-3): only bundles whose staged (provisional) Generation equals
+	// the generation being promoted (current+1) flip. A staged bundle whose
+	// provisional generation was invalidated — e.g. a BumpGeneration (rekey-all)
+	// or another promote landed after it was staged — is stale by construction
+	// (compiled against pre-bump state) and is NOT flipped; re-stage to refresh
+	// it. If nothing matches, ErrNoStagedBundle.
 	PromoteStaged(ctx context.Context, t TenantID) (generation int64, err error)
 	// GetCurrentBundle returns the node's current (promoted) bundle, or ErrNotFound.
 	GetCurrentBundle(ctx context.Context, t TenantID, nodeID string) (SignedBundle, error)

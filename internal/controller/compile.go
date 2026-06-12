@@ -160,8 +160,17 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	subgraph, skipped := enrolledSubgraph(&topo, nodes)
 
 	// Nothing enrolled → nothing to render or stage. Report the skips so the caller
-	// can surface "no node has enrolled yet".
+	// can surface "no node has enrolled yet" — and leave an audit trace (plan-3):
+	// a stage that staged ZERO nodes is exactly the shape of a design-destroying
+	// deploy (every node silently skipped), so its occurrence must be visible in
+	// the audit log, not just in a transient HTTP response. Best-effort: the audit
+	// must not turn the benign no-op into an error.
 	if len(subgraph.Nodes) == 0 {
+		_, _ = store.AppendAudit(ctx, t, AuditEntry{
+			Timestamp: now,
+			Actor:     "operator",
+			Action:    "stage-empty",
+		})
 		return StageResult{SkippedUnenrolled: skipped}, nil
 	}
 
@@ -243,6 +252,23 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 			return StageResult{}, fmt.Errorf("controller: staging bundle for node %s: %w", node.ID, err)
 		}
 		staged = append(staged, node.ID)
+	}
+
+	// (5b) Purge staged bundles that are NOT part of this stage set (plan-3): a
+	// node removed from the design since the previous stage would otherwise leave
+	// its stale staged bundle behind, and the next promote would flip it live.
+	// One audit entry per purged node keeps the disappearance attributable.
+	purged, err := store.PruneStagedBundles(ctx, t, staged)
+	if err != nil {
+		return StageResult{}, fmt.Errorf("controller: purging stale staged bundles: %w", err)
+	}
+	for _, nodeID := range purged {
+		_, _ = store.AppendAudit(ctx, t, AuditEntry{
+			Timestamp: now,
+			Actor:     "operator",
+			Action:    "purge-staged",
+			NodeID:    nodeID,
+		})
 	}
 
 	// (6) KEYSTONE ON: build the off-host-signable manifest binding each staged node's
