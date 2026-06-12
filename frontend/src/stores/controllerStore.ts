@@ -38,7 +38,9 @@ import {
   passkeyLoginBegin,
   passkeyLoginFinish,
   getSession,
+  getTopology as ctlGetTopology,
 } from '../api/controllerClient';
+import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { useTopologyStore } from './topologyStore';
 import { useUiStore } from './uiStore';
@@ -98,6 +100,13 @@ interface ControllerState {
   // 基址。null 表示尚未从服务端加载（refresh 时拉取）。
   settings: ControllerSettings | null;
 
+  // 服务端权威 hydration（plan-4，D1）：每次登录/会话恢复后用 GET /topology 覆盖本地画布。
+  // hydrationStashDone（持久化）记录「一次性导出备份」（D9）是否已经发生——首次覆盖且本地
+  // 设计非空且与服务端不同的那一次，会先下载 pre-hydration-backup-<date>.json 再覆盖；
+  // 此后不再备份（服务端是唯一权威，本地缓存只是镜像）。hydrationNotice 是可关闭的提示。
+  hydrationStashDone: boolean;
+  hydrationNotice: string | null;
+
   // KEYSTONE（plan-5.1d）：已 pin 的 off-host operator 签名凭据（passkey / YubiKey）。
   // 仅持久化非密信息——credential_id（base64url(rawId)）、alg、rpId——它们不是密钥材料
   // （私钥从不离开 authenticator），但记住它们让面板能跨刷新驱动后续签名（allowCredentials）
@@ -136,6 +145,11 @@ interface ControllerState {
   // checkSession probes GET /session to restore login state from the httpOnly cookie
   // after a refresh (P5). Sets loggedIn + operator + expiry + csrfToken, or clears them.
   checkSession: () => Promise<void>;
+  // 服务端权威 hydration（plan-4，D1）：GET /topology → loadTopology 覆盖本地画布。404
+  //（尚无服务端拓扑——首次部署前）保留本地画布。login/loginWithPasskey/checkSession 的
+  // 成功路径都会调用它。首次覆盖前按 D9 做一次性导出备份（见 hydrationStashDone）。
+  hydrateFromServer: () => Promise<void>;
+  dismissHydrationNotice: () => void;
   // 无密码 passkey 登录（plan-5.2）：begin → assertLogin → finish。
   loginWithPasskey: (username: string) => Promise<void>;
   // 登录 passkey 自助管理（仅密码 session 有效）。
@@ -253,6 +267,9 @@ export const useControllerStore = create<ControllerState>()(
       lastDeploy: null,
       settings: null,
 
+      hydrationStashDone: false,
+      hydrationNotice: null,
+
       operatorCredentialId: null,
       operatorCredentialAlg: null,
       operatorRpId: null,
@@ -365,6 +382,7 @@ export const useControllerStore = create<ControllerState>()(
                   loginCeremony: false,
                   loading: false,
                 });
+                await get().hydrateFromServer();
                 await get().refresh();
                 await get().loadTOTPStatus();
                 await get().loadPasskeyStatus();
@@ -405,6 +423,7 @@ export const useControllerStore = create<ControllerState>()(
             totpRequired: false,
             loading: false,
           });
+          await get().hydrateFromServer();
           await get().refresh();
           // 拉取本账户的 2FA / passkey 状态（供「账户安全」区回显）。失败不阻塞登录。
           await get().loadTOTPStatus();
@@ -423,6 +442,47 @@ export const useControllerStore = create<ControllerState>()(
 
       // 复位二次验证步骤（见接口注释）：仅清 totpRequired；验证码输入框的本地值由组件清空。
       resetTOTPChallenge: () => set({ totpRequired: false }),
+
+      // 服务端权威 hydration（plan-4，D1）：服务端的拓扑是唯一权威，本地缓存只是可弃置的
+      // 镜像——每次登录/会话恢复后覆盖。失败（网络/解析）保留本地画布并安静返回：hydration
+      // 是登录的附属动作，不能让一次拉取失败挡住登录本身；下次登录/刷新会再试。
+      hydrateFromServer: async () => {
+        try {
+          const raw = await ctlGetTopology(configOf(get()));
+          if (raw === null) {
+            return; // 服务端尚无拓扑（首次部署前）：保留本地画布。
+          }
+          const topo = raw as Topology;
+          if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
+            return; // 形状不符：不覆盖（服务端字节由 update-topology 的 custody 门保证，这只是防御）。
+          }
+          const topoStore = useTopologyStore.getState();
+          // D9：首次覆盖且本地非空且与服务端不同 → 先导出一次性备份再覆盖。仅一次/浏览器。
+          if (!get().hydrationStashDone) {
+            const local = topoStore.getTopology();
+            const localEmpty =
+              local.nodes.length === 0 && local.edges.length === 0 && local.domains.length === 0;
+            const differs = JSON.stringify(local) !== JSON.stringify(topo);
+            if (!localEmpty && differs) {
+              const stamp = new Date().toISOString().slice(0, 10);
+              topoStore.exportProject(`pre-hydration-backup-${stamp}.json`);
+              const language = topoStore.language;
+              set({
+                hydrationNotice:
+                  language === 'zh'
+                    ? '本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。'
+                    : 'Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.',
+              });
+            }
+            set({ hydrationStashDone: true });
+          }
+          topoStore.loadTopology(topo);
+        } catch {
+          // 拉取失败：保留本地画布，不阻塞登录（见函数注释）。
+        }
+      },
+
+      dismissHydrationNotice: () => set({ hydrationNotice: null }),
 
       // 登出：best-effort 调 POST /logout 撤销服务端 session，然后无论成败都清空本地
       // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。
@@ -470,12 +530,18 @@ export const useControllerStore = create<ControllerState>()(
           // (selectHasAuth still enables Deploy via operatorToken), preserving the
           // "break-glass is not a login" invariant.
           if (info && info.csrfToken !== '') {
+            const wasLoggedIn = get().loggedIn;
             set({
               loggedIn: true,
               operatorName: info.operator,
               sessionExpiresAt: info.expiresAt || null,
               csrfToken: info.csrfToken,
             });
+            // 服务端权威 hydration（D1）：会话恢复也覆盖本地画布——但仅在登录态由假变真的
+            // 那次（mount/刷新恢复），避免 Shell 的 mode 翻转 effect 重复触发重复覆盖。
+            if (!wasLoggedIn) {
+              await get().hydrateFromServer();
+            }
           } else {
             set({ loggedIn: false, csrfToken: '' });
           }
@@ -546,6 +612,7 @@ export const useControllerStore = create<ControllerState>()(
             sessionExpiresAt: result.expiresAt,
             loading: false,
           });
+          await get().hydrateFromServer();
           await get().refresh();
           await get().loadTOTPStatus();
           await get().loadPasskeyStatus();
@@ -788,6 +855,8 @@ export const useControllerStore = create<ControllerState>()(
         nodes: state.nodes,
         settings: state.settings,
         lastSyncedAt: state.lastSyncedAt,
+        // plan-4 (D9): the one-time pre-hydration export stash fires once per browser.
+        hydrationStashDone: state.hydrationStashDone,
       }),
     }
   )

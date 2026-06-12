@@ -63,7 +63,7 @@ export function Topbar() {
           <button type="button" onClick={handleImportClick} className={ioBtn}>
             {txt(language, '导入项目', 'Import')}
           </button>
-          <button type="button" onClick={exportProject} className={ioBtn}>
+          <button type="button" onClick={() => exportProject()} className={ioBtn}>
             {txt(language, '导出项目', 'Export')}
           </button>
           <button

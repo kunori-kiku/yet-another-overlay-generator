@@ -643,10 +643,19 @@ export async function getAudit(
 }
 
 // 取回当前存储的拓扑 JSON（operator-only）。返回 unknown：存储的字节是 public-keys-only
-// 的拓扑，本层不强加结构（由调用方按需解释）。
-export async function getTopology(cfg: ControllerConfig): Promise<unknown> {
-  const res = await request(cfg, 'topology', { method: 'GET' });
-  return (await res.json()) as unknown;
+// 的拓扑，本层不强加结构（由调用方按需解释）。404（服务端尚无拓扑——首次部署前）返回
+// null，调用方据此保留本地画布；其余错误照常抛出。
+export async function getTopology(cfg: ControllerConfig): Promise<unknown | null> {
+  try {
+    const res = await request(cfg, 'topology', { method: 'GET' });
+    return (await res.json()) as unknown;
+  } catch (err) {
+    // request() 抛 Error(`${status} ${body}`)；404 是「尚无拓扑」的正常形状。
+    if (err instanceof Error && err.message.startsWith('404')) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 // 为某节点铸造一次性 enrollment token，返回明文 token（仅此一次可见）。

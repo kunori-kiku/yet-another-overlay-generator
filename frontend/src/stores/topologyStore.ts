@@ -92,7 +92,7 @@ interface TopologyState {
   getTopology: () => Topology;
   loadTopology: (topo: Topology) => void;
   reset: () => void;
-  exportProject: () => void;
+  exportProject: (filename?: string) => void;
   importProject: (file: File) => Promise<void>;
   clearHistory: () => void;
   flushWorkspace: () => void;
@@ -325,12 +325,14 @@ export const useTopologyStore = create<TopologyState>()(
     return topo;
   },
 
-  exportProject: () => {
+  // 导出当前设计为 JSON 下载。filename 可选（默认 <project.id>.json）——hydration 的
+  // 一次性备份（plan-4，D9）用它命名 pre-hydration-backup-<date>.json。
+  exportProject: (filename?: string) => {
     const topo = get().getTopology();
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(topo, null, 2));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href",     dataStr);
-    downloadAnchorNode.setAttribute("download", `${topo.project.id || 'project'}.json`);
+    downloadAnchorNode.setAttribute("download", filename ?? `${topo.project.id || 'project'}.json`);
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
