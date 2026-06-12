@@ -94,6 +94,12 @@ a real key. The controller wiring that stages bundles (plan-4.3) is responsible 
 renderer-produced, custody-clean bundles; the Store does not re-scan bundle bytes, so that pre-stage
 discipline is the caller's contract, not a guarantee the Store enforces at write time.
 
+At the **topology** level the contract IS now enforced at the API boundary
+(controller-server-authority-redesign plan-1): `POST /update-topology` unmarshals the payload and
+refuses any topology carrying a non-empty `wireguard_private_key` with a 400 before `PutTopology`
+runs, pinned by the perpetual guard `internal/api/topology_custody_test.go`. A stored
+`TopologyRecord` therefore cannot carry a private key via the operator API path.
+
 ## The per-node API-token index
 
 Authenticating an agent request means resolving a presented bearer token back to its `Node`

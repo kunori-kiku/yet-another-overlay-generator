@@ -60,6 +60,15 @@ type ctlTestEnv struct {
 // per mux) backed by a MemStore. The handler is built with the operator token's
 // hash, exactly as the production path does.
 func newCtlTestEnv(t *testing.T) *ctlTestEnv {
+	return newCtlTestEnvWith(t, nil)
+}
+
+// newCtlTestEnvWith is newCtlTestEnv with a configuration hook applied to the handler
+// BEFORE route registration (e.g. the prefix setters). It is the SINGLE controller
+// test-env constructor in this package — sibling test files must extend it via the
+// hook rather than re-implementing the scaffold, so a change to handler construction
+// is made exactly once.
+func newCtlTestEnvWith(t *testing.T, configure func(*ControllerHandler)) *ctlTestEnv {
 	t.Helper()
 
 	store := controller.NewMemStore()
@@ -68,6 +77,9 @@ func newCtlTestEnv(t *testing.T) *ctlTestEnv {
 	// promptly instead of waiting the production ~55s. The server (not the client) is
 	// what produces the 204, so this is the right knob.
 	ch.pollDeadline = 250 * time.Millisecond
+	if configure != nil {
+		configure(ch)
+	}
 
 	opMux := http.NewServeMux()
 	ch.RegisterOperatorRoutes(opMux)
@@ -122,7 +134,7 @@ func doJSON(t *testing.T, method, url, token string, body any, out any) int {
 
 // doRaw performs a request with a raw (non-JSON-marshaled) body and an optional
 // Bearer token, returning the status code. Used for /update-topology, which stores
-// the topology bytes verbatim.
+// the canonical re-marshaled form of the posted topology.
 func doRaw(t *testing.T, method, url, token string, body []byte) int {
 	t.Helper()
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
@@ -264,6 +276,24 @@ func TestControllerHTTP_EnrollConfigPollReport(t *testing.T) {
 	}
 	if promote.Generation < 1 {
 		t.Fatalf("promote: generation %d, want >= 1", promote.Generation)
+	}
+
+	// A full deploy leaves a complete audit trail: update-topology, stage, and promote
+	// must each have appended an entry (plan-1 closed the update-topology/promote gaps).
+	auditEntries, err := env.store.ListAudit(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	wantActions := map[string]bool{"update-topology": false, "stage": false, "promote": false}
+	for _, e := range auditEntries {
+		if _, ok := wantActions[e.Action]; ok {
+			wantActions[e.Action] = true
+		}
+	}
+	for action, seen := range wantActions {
+		if !seen {
+			t.Errorf("full deploy left no %q audit entry (entries: %d)", action, len(auditEntries))
+		}
 	}
 
 	// (5) Node fetches its config → 200 with a non-empty bundle.
@@ -833,41 +863,6 @@ func TestControllerHTTP_CORS(t *testing.T) {
 	}
 	if got := resp2.Header.Get("Access-Control-Allow-Origin"); got != "*" {
 		t.Errorf("GET Allow-Origin = %q, want *", got)
-	}
-}
-
-// TestControllerHTTP_PathPrefix confirms the secret path prefix mounts the controller
-// routes under /<prefix>/api/v1/controller/... and that the bare path is NOT served.
-func TestControllerHTTP_PathPrefix(t *testing.T) {
-	store := controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
-	ch.SetPathPrefix("/s3cr3t/") // normalizes to "/s3cr3t"
-	mux := http.NewServeMux()
-	ch.RegisterOperatorRoutes(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	// The prefixed path is served (operator GET /nodes -> 200).
-	if st := doJSON(t, http.MethodGet, srv.URL+"/s3cr3t/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
-		t.Errorf("prefixed /nodes status %d, want 200", st)
-	}
-	// The bare (unprefixed) path is NOT mounted -> 404.
-	if st := doJSON(t, http.MethodGet, srv.URL+"/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
-		t.Errorf("bare /nodes status %d, want 404 (only the prefixed path is mounted)", st)
-	}
-
-	// The AGENT routes are prefixed too (both ports share basePath()): an agent route
-	// is reachable only under the prefix. /config with no token -> 401 (mounted), while
-	// the bare path -> 404 (not mounted).
-	agentMux := http.NewServeMux()
-	ch.RegisterAgentRoutes(agentMux)
-	asrv := httptest.NewServer(agentMux)
-	t.Cleanup(asrv.Close)
-	if st := doJSON(t, http.MethodGet, asrv.URL+"/s3cr3t/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
-		t.Errorf("prefixed agent /config status %d, want 401 (mounted, needs a token)", st)
-	}
-	if st := doJSON(t, http.MethodGet, asrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
-		t.Errorf("bare agent /config status %d, want 404 (only the prefixed path is mounted)", st)
 	}
 }
 

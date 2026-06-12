@@ -100,7 +100,7 @@ zero-knowledge placeholder spliced with the node's locally-held key).
 | Trust-list | Canonical signed manifest of approved members (node ID + WG pubkey + bundle checksum), verified by agents before apply |
 | Operator | The human controlling the panel (password/TOTP/passkey login) |
 | Tenant | The single state scope a controller serves (`YAOG_TENANT_ID`) |
-| Secret path prefix | Optional path segment (`YAOG_CONTROLLER_PATH_PREFIX`) all controller routes mount under, on both ports |
+| Secret path prefix | Optional per-audience path segment the controller routes mount under: `YAOG_OPERATOR_PATH_PREFIX` (operator/panel port) and `YAOG_AGENT_PATH_PREFIX` (agent port), independently |
 
 ## Cross-doc map
 

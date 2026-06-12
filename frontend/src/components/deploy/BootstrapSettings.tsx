@@ -45,7 +45,13 @@ export function BootstrapSettings() {
         <SettingsForm
           key={settings ? JSON.stringify(settings) : 'empty'}
           initial={
-            settings ?? { publicAgentURL: '', githubProxy: '', agentReleaseBaseURL: '', translucency: true }
+            settings ?? {
+              publicAgentURL: '',
+              githubProxy: '',
+              agentReleaseBaseURL: '',
+              translucency: true,
+              agentPathPrefix: '',
+            }
           }
           loading={loading}
           language={language}
@@ -138,6 +144,8 @@ function SettingsForm({
             agentReleaseBaseURL: agentReleaseBaseURL.trim(),
             // Preserve the appearance setting — this form edits only the bootstrap fields.
             translucency: initial.translucency,
+            // Read-only, server-reported; carried for type completeness, never posted.
+            agentPathPrefix: initial.agentPathPrefix,
           })
         }
         disabled={loading}

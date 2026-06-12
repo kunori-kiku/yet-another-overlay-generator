@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -73,13 +74,18 @@ type ControllerHandler struct {
 	sessionTTL time.Duration
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
 	pollDeadline time.Duration
-	// pathPrefix is an optional secret path segment the controller routes mount under
+	// operatorPrefix and agentPrefix are optional secret path segments the OPERATOR
+	// routes (panel port) and AGENT routes (agent port) mount under, independently
 	// (e.g. "/s3cr3t" -> "/s3cr3t/api/v1/controller/..."). Empty = the bare
-	// "/api/v1/controller/..." paths. This is defense-in-depth obscurity (it hides the
-	// surface from drive-by scanners and is CDN-friendly), NOT a security boundary —
-	// the boundary is the bearer tokens + the off-host signed trust-list. Normalized by
-	// SetPathPrefix to "" or "/<seg>" (single leading slash, no trailing slash).
-	pathPrefix string
+	// "/api/v1/controller/..." paths. They are defense-in-depth obscurity (hiding the
+	// surface from drive-by scanners, CDN-friendly), NOT a security boundary — the
+	// boundary is the bearer tokens + the off-host signed trust-list. Two independent
+	// prefixes (YAOG_OPERATOR_PATH_PREFIX / YAOG_AGENT_PATH_PREFIX) let a path-based
+	// proxy on one hostname route each audience to its own port without the
+	// shared-prefix ambiguity that misrouted operator logins to the agent port.
+	// Normalized by the setters to "" or "/<seg>" (single leading slash, no trailing).
+	operatorPrefix string
+	agentPrefix    string
 	// panelOriginAllowlist is the set of exact browser origins (scheme://host[:port])
 	// permitted to make CREDENTIALED (cookie-bearing) cross-origin requests to the
 	// operator routes (YAOG_PANEL_ORIGIN). For a matching Origin, cors() reflects it +
@@ -149,13 +155,13 @@ func (h *ControllerHandler) originAllowed(origin string) bool {
 }
 
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
-// on the agent port), under basePath() (the optional secret prefix + the fixed
-// /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the node
-// has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
+// on the agent port), under AgentBasePath() (the optional agent secret prefix + the
+// fixed /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the
+// node has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
 // bearer token). recoverPanics/cors are NOT applied here — controller requests are
 // machine-to-machine JSON, with no browser CORS concern.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
-	base := h.basePath()
+	base := h.AgentBasePath()
 	mux.HandleFunc(base+"enroll", h.HandleEnroll)
 	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
@@ -167,13 +173,13 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
-// (served on the operator/panel port), under basePath(). Each is wrapped with cors()
-// so the browser panel — served from a possibly different origin and pointed at a
-// configurable controller URL — can call it, and its CORS preflight (which carries no
+// (served on the operator/panel port), under OperatorBasePath(). Each is wrapped with
+// cors() so the browser panel — served from a possibly different origin and pointed at
+// a configurable controller URL — can call it, and its CORS preflight (which carries no
 // Authorization header) is answered before operatorAuth. All routes go through
 // operatorAuth (the shared operator bearer token).
 func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
-	base := h.basePath()
+	base := h.OperatorBasePath()
 	op := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
 	// Operator login (plan-5.2): /login is UNAUTHENTICATED (reachable before the
 	// operator has a session) — cors-wrapped but NOT operatorAuth; it verifies a
@@ -217,21 +223,39 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"trustlist-signature", op(h.HandleTrustListSignature))
 }
 
-// SetPathPrefix sets the optional secret path prefix the controller routes mount under.
-// It normalizes to "" (no prefix) or "/<trimmed>" (single leading slash, no trailing
-// slash). Call it before RegisterAgentRoutes/RegisterOperatorRoutes.
-func (h *ControllerHandler) SetPathPrefix(prefix string) {
+// normalizePathPrefix normalizes a configured secret path prefix to "" (no prefix)
+// or "/<trimmed>" (single leading slash, no trailing slash).
+func normalizePathPrefix(prefix string) string {
 	if p := strings.Trim(strings.TrimSpace(prefix), "/"); p != "" {
-		h.pathPrefix = "/" + p
-	} else {
-		h.pathPrefix = ""
+		return "/" + p
 	}
+	return ""
 }
 
-// basePath is the route prefix for all controller endpoints: the optional secret path
-// prefix followed by the fixed "/api/v1/controller/".
-func (h *ControllerHandler) basePath() string {
-	return h.pathPrefix + "/api/v1/controller/"
+// SetOperatorPathPrefix sets the optional secret path prefix the OPERATOR routes
+// mount under (YAOG_OPERATOR_PATH_PREFIX). Call it before RegisterOperatorRoutes.
+func (h *ControllerHandler) SetOperatorPathPrefix(prefix string) {
+	h.operatorPrefix = normalizePathPrefix(prefix)
+}
+
+// SetAgentPathPrefix sets the optional secret path prefix the AGENT routes mount
+// under (YAOG_AGENT_PATH_PREFIX). Call it before RegisterAgentRoutes.
+func (h *ControllerHandler) SetAgentPathPrefix(prefix string) {
+	h.agentPrefix = normalizePathPrefix(prefix)
+}
+
+// OperatorBasePath is the route prefix for the operator endpoints: the optional
+// operator secret prefix followed by the fixed "/api/v1/controller/". Exported so
+// cmd/server can name the mounted base path in its startup log.
+func (h *ControllerHandler) OperatorBasePath() string {
+	return h.operatorPrefix + "/api/v1/controller/"
+}
+
+// AgentBasePath is the route prefix for the agent endpoints: the optional agent
+// secret prefix followed by the fixed "/api/v1/controller/". Exported so cmd/server
+// can name the mounted base path in its startup log.
+func (h *ControllerHandler) AgentBasePath() string {
+	return h.agentPrefix + "/api/v1/controller/"
 }
 
 // cors answers a browser CORS preflight (OPTIONS, which carries no auth) and stamps the
@@ -641,14 +665,18 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleUpdateTopology stores a new topology version (operator-only). The body is
-// the public-keys-only topology JSON; it is stored verbatim via PutTopology (the
-// stage step compiles/validates it). The tenant is the configured one.
+// the public-keys-only topology JSON (the stage step compiles/validates it). The
+// key-custody principle is ENFORCED at this API write boundary, not just asserted:
+// a payload carrying any non-empty wireguard_private_key is refused with 400 (D4,
+// fail-closed — the panel strips client-side; a key reaching this handler means a
+// custody bug upstream and must blow up loudly, never be stored). The tenant is the
+// configured one.
 func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
 		return
 	}
-	tenant, _, ok := identity(r.Context())
+	tenant, operator, ok := identity(r.Context())
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
@@ -658,18 +686,55 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 		writeError(w, statusForBodyErr(err), err.Error())
 		return
 	}
-	// Reject a non-JSON body up front so a malformed topology fails here rather than
-	// surfacing as a confusing compile error at /stage.
-	if !json.Valid(body) {
-		writeError(w, http.StatusBadRequest, "topology body is not valid JSON")
+	// Custody gate: unmarshal into the model (not a substring match, which would
+	// false-positive on names/notes) and refuse any private key material. Bodies are
+	// always panel-produced model.Topology, so an unmarshal failure is equally a 400 —
+	// storing bytes we cannot custody-check would reopen the hole this gate closes.
+	// A *json.SyntaxError keeps the plain "not valid JSON" message (the old json.Valid
+	// pre-check, now folded into this single parse).
+	var topo model.Topology
+	if err := json.Unmarshal(body, &topo); err != nil {
+		var syn *json.SyntaxError
+		if errors.As(err, &syn) {
+			writeError(w, http.StatusBadRequest, "topology body is not valid JSON")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "topology body does not match the topology schema: "+err.Error())
+		return
+	}
+	for _, n := range topo.Nodes {
+		if n.WireGuardPrivateKey != "" {
+			writeError(w, http.StatusBadRequest,
+				"topology carries WireGuard private keys; controller mode is zero-knowledge — strip them client-side (key custody)")
+			return
+		}
+	}
+	// Store the CANONICAL re-marshaled form, not the raw bytes: the gate above checks
+	// the parsed view, and raw bytes could smuggle key material past it via duplicate
+	// JSON keys (last-key-wins parsing) or fields outside the model. Canonicalizing
+	// makes stored-bytes == checked-view by construction. The wire contract for this
+	// endpoint is exactly model.Topology, so unknown fields are not data, they are a
+	// bug — and they are dropped here rather than persisted unchecked.
+	canonical, err := json.Marshal(topo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to canonicalize topology")
 		return
 	}
 
-	rec, err := h.store.PutTopology(r.Context(), tenant, body)
+	rec, err := h.store.PutTopology(r.Context(), tenant, canonical)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store topology")
 		return
 	}
+	// Post-commit audit is best-effort: the version is already stored, and converting
+	// an audit-write hiccup into a 500 would tell the operator the action failed when
+	// it committed (the retry would mint a duplicate version). Same convention as the
+	// settings/login audits.
+	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "update-topology",
+	})
 	writeJSON(w, http.StatusOK, map[string]int64{"version": rec.Version})
 }
 
@@ -710,7 +775,7 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
 		return
 	}
-	tenant, _, ok := identity(r.Context())
+	tenant, operator, ok := identity(r.Context())
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
 		return
@@ -726,6 +791,15 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// Audit the flip: promote is the action that changes what the fleet RUNS, so its
+	// absence from the audit log was a real observability gap (plan-1). Best-effort:
+	// the generation has ALREADY flipped fleet-wide — a 500 here would report a live
+	// deploy as failed, and the operator's retry would 409 on the consumed stage.
+	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "promote",
+	})
 	writeJSON(w, http.StatusOK, generationResponseJSON{Generation: gen})
 }
 

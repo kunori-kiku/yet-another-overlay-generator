@@ -577,6 +577,11 @@ export interface ControllerSettings {
   // translucency is the panel appearance preference (P5), served server-side via
   // GET/POST /settings. It is NOT part of the agent bootstrap script.
   translucency: boolean;
+  // agentPathPrefix is READ-ONLY, server-reported (YAOG_AGENT_PATH_PREFIX,
+  // normalized '' or '/<seg>'): the prefix agent-facing URLs mount under. The panel
+  // composes the bootstrap one-liner / enroll command from it — never from the
+  // operator-prefix mirror, which belongs to the panel's own API base.
+  agentPathPrefix: string;
 }
 
 // SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go.
@@ -585,6 +590,7 @@ interface SettingsJSON {
   github_proxy: string;
   agent_release_base_url: string;
   translucency: boolean;
+  agent_path_prefix?: string;
 }
 
 function mapSettings(d: SettingsJSON): ControllerSettings {
@@ -593,6 +599,7 @@ function mapSettings(d: SettingsJSON): ControllerSettings {
     githubProxy: d.github_proxy,
     agentReleaseBaseURL: d.agent_release_base_url,
     translucency: d.translucency,
+    agentPathPrefix: d.agent_path_prefix ?? '',
   };
 }
 
