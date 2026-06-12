@@ -108,9 +108,11 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 
 	// Fetch the bundle FIRST so we can inspect the controller's rekey signal before
 	// deciding whether to apply. /config is idempotent (it returns the current bundle +
-	// flags for this node). We discard the files here; the rekey branch never applies
-	// them, and the apply path re-fetches inside agent.Run.
-	if _, err := client.Fetch(cfg.NodeID); err != nil {
+	// flags for this node). The rekey branch never applies these files, and the apply
+	// path re-fetches inside agent.Run; the idle check below reads manifest.json from
+	// this fetch to decide whether there is anything new to apply at all.
+	files, err := client.Fetch(cfg.NodeID)
+	if err != nil {
 		return after, false, fmt.Errorf("fetch: %w", err) // keep-last-good
 	}
 
@@ -145,6 +147,38 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 			resume = fetched
 		}
 		return resume, false, nil
+	}
+
+	// IDLE branch (plan-3, "root install.sh never re-runs without a new bundle"): the
+	// poll woke us, but the bundle the controller serves is one this node ALREADY
+	// applied successfully — its generation is not past our cursor AND its manifest
+	// checksum equals the persisted last-applied checksum. This is the orphaned-node
+	// shape: the node left the design, its current bundle is frozen, and every promote
+	// for OTHER nodes bumps the tenant generation and wakes us. Without this branch the
+	// cycle re-runs install.sh as root on every wake and — because the frozen bundle's
+	// generation lags the tenant's — resumes from a stale cursor, so the next poll
+	// returns instantly: a root-executing busy loop. Skip the apply and resume from the
+	// WAKE generation (same rationale as the rekey branch), restoring long-poll pacing.
+	//
+	// Both clauses matter. Checksum equality alone would also skip a single-shot rerun
+	// from a cold cursor (--after 0), killing the operator's force-reapply workflow;
+	// requiring the fetched generation to be ≤ the live cursor confines the skip to a
+	// daemon that has already applied this exact content this run. A failed last apply
+	// (LastResult != "ok") never skips — the retry is wanted.
+	if fetchedGen := client.LastFetchedGeneration(); fetchedGen <= after {
+		if man, perr := parseManifest(files["manifest.json"]); perr == nil && man.Checksum != "" {
+			if prev, serr := LoadState(cfg.StateDir); serr == nil && prev != nil &&
+				prev.LastResult == "ok" && prev.LastChecksum == man.Checksum {
+				fmt.Fprintf(stderr,
+					"agent: woke at generation %d but the served bundle (gen %d) is already applied (checksum %s); idling\n",
+					polledGen, fetchedGen, man.Checksum)
+				resume := polledGen
+				if fetchedGen > resume {
+					resume = fetchedGen
+				}
+				return resume, false, nil
+			}
+		}
 	}
 
 	// APPLY branch. Record the prior watermark so a FAILED apply reports it unchanged
