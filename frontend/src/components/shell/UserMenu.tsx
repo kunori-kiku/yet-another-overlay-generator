@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { txt, STRINGS } from '../../i18n';
 import { UserIcon } from './icons';
 import { FOCUS_RING } from './styles';
 
-// Top-right account menu. A real click-outside popover primitive; its contents
-// (login state, sign-in/out, language) are filled by later phases (P3/P5). For
-// now it anchors the account affordance in the standard top-right position.
+// Top-right account menu (plan-4 fills the P1 placeholder): shows the signed-in
+// operator identity + session expiry and hosts sign-out (moved here from the old
+// ConnectionSettings login block). In local mode — or under break-glass, which is
+// not a login — it states the mode instead.
 export function UserMenu() {
   const language = useTopologyStore((s) => s.language);
+  const mode = useControllerStore((s) => s.mode);
+  const loggedIn = useControllerStore(selectLoggedIn);
+  const operatorName = useControllerStore((s) => s.operatorName);
+  const sessionExpiresAt = useControllerStore((s) => s.sessionExpiresAt);
+  const operatorToken = useControllerStore((s) => s.operatorToken);
+  const logout = useControllerStore((s) => s.logout);
+  const loading = useControllerStore((s) => s.loading);
+
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const label = txt(language, ...STRINGS.userMenuLabel);
@@ -43,14 +53,53 @@ export function UserMenu() {
         <UserIcon />
       </button>
       {open && (
-        // Plain labelled popover for the P1 placeholder. P3 fills it with real
-        // menu items and adds menu keyboard semantics (role="menu" + menuitems +
-        // arrow-key navigation + focus management).
         <div
           aria-label={label}
-          className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-[var(--hairline)] bg-[var(--surface-elevated)] p-2 shadow-lg"
+          className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-[var(--hairline)] bg-[var(--surface-elevated)] p-2 shadow-lg"
         >
-          <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">{label}</p>
+          {mode !== 'controller' ? (
+            <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
+              {txt(language, '本地模式（无需登录）', 'Local mode (no sign-in)')}
+            </p>
+          ) : loggedIn ? (
+            <div className="space-y-2 px-2 py-1.5">
+              <div>
+                <p className="text-sm font-medium text-[var(--content)]">
+                  {txt(language, '已登录为', 'Signed in as')}{' '}
+                  <span className="font-mono">{operatorName ?? ''}</span>
+                </p>
+                {sessionExpiresAt && (
+                  <p className="text-xs text-[var(--content-muted)]">
+                    {txt(language, '会话到期：', 'Session until: ')}
+                    {new Date(sessionExpiresAt).toLocaleString()}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  void logout();
+                }}
+                disabled={loading}
+                className={`w-full rounded-lg border border-[var(--hairline)] py-1.5 text-sm text-[var(--content)] transition-colors hover:bg-[var(--surface-sunken)] disabled:opacity-40 ${FOCUS_RING}`}
+              >
+                {txt(language, '登出', 'Sign out')}
+              </button>
+            </div>
+          ) : operatorToken !== '' ? (
+            <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
+              {txt(
+                language,
+                '以 break-glass 令牌访问（非登录会话）',
+                'Using a break-glass token (not a login session)',
+              )}
+            </p>
+          ) : (
+            <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
+              {txt(language, '未登录', 'Not signed in')}
+            </p>
+          )}
         </div>
       )}
     </div>
