@@ -121,6 +121,52 @@ func TestValidateSchema_SSHFieldCharset(t *testing.T) {
 	}
 }
 
+// TestValidateSchema_SSHKeyPathCharset pins the ssh_key_path validation half of
+// the deploy-script command-injection fix. ssh_key_path is spliced into the
+// operator's bash + PowerShell deploy commands (ssh/scp -i <path>); unlike the
+// connection fields it permits real path characters (/ \ ~ : space) but must
+// still reject every shell metacharacter. A regression here reopens the
+// injection path the renderer escaping also guards.
+func TestValidateSchema_SSHKeyPathCharset(t *testing.T) {
+	cases := []struct {
+		name        string
+		keyPath     string
+		expectError bool
+	}{
+		// Hostile: shell metacharacters that enable injection.
+		{"command substitution", `/keys/x$(reboot).pem`, true},
+		{"powershell quote break", `/keys/k".pem`, true},
+		{"backtick", "/keys/k`id`.pem", true},
+		{"statement separator", `/keys/k.pem;reboot`, true},
+		{"pipe", `/keys/k.pem|cat`, true},
+		{"single quote", `/keys/k'.pem`, true},
+		// Clean: realistic key paths on Linux and Windows.
+		{"linux absolute path", `/home/user/.ssh/id_ed25519`, false},
+		{"tilde home path", `~/.ssh/id_rsa`, false},
+		{"relative path", `./keys/deploy.pem`, false},
+		{"windows backslash path", `C:\Users\me\.ssh\id_rsa`, false},
+		{"windows path with space", `C:/Users/John Doe/key.pem`, false},
+		{"empty is allowed", ``, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			topo := validTopology()
+			topo.Nodes[0].SSHKeyPath = tc.keyPath
+			result := ValidateSchema(topo)
+			if tc.expectError {
+				assertHasError(t, result, "nodes[0].ssh_key_path")
+			} else {
+				for _, e := range result.Errors {
+					if contains(e.Field, "nodes[0].ssh_key_path") {
+						t.Errorf("ssh_key_path %q should be accepted, got: %s", tc.keyPath, e.Error())
+					}
+				}
+			}
+		})
+	}
+}
+
 // portRangeTopology 构造一个最小拓扑：单个 router 节点，给定基准端口、hostname，
 // 以及连向 peerCount 个对端 peer 的启用边。每条边都是一个去重节点对，
 // 因此该 router 会获得 peerCount 个 per-peer 接口，生效监听端口范围为

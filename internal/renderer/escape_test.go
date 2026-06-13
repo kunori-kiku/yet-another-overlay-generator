@@ -29,6 +29,14 @@ const nodeNamePayload = `x$(touch /tmp/pwned)`
 // trailing comment to swallow the rest of the line).
 const sshHostPayload = `x; rm -rf $HOME #`
 
+// sshKeyPathPayload is an ssh_key_path that carries BOTH a bash command
+// substitution (`$(touch /tmp/keypwn)`, fires inside a bash double-quoted or
+// unquoted context) AND a PowerShell quote-break (`"`), so the same fixture
+// exercises the injection path in both deploy variants. Its inner marker
+// (/tmp/keypwn) is deliberately distinct from nodeNamePayload's (/tmp/pwned) so
+// the per-token residue checks don't cross-contaminate.
+const sshKeyPathPayload = `/keys/y$(touch /tmp/keypwn)".pem`
+
 // ----------------------------------------------------------------------------
 // Unit tests for the two escaping helpers.
 // ----------------------------------------------------------------------------
@@ -132,13 +140,14 @@ func hostileDeployTopology() *model.Topology {
 		},
 		Nodes: []model.Node{
 			{
-				ID:        "node-1",
-				Name:      nodeNamePayload,
-				Role:      "router",
-				DomainID:  "d1",
-				OverlayIP: "10.20.0.1",
-				SSHHost:   sshHostPayload, // user@host where host carries the payload
-				SSHUser:   "root",
+				ID:         "node-1",
+				Name:       nodeNamePayload,
+				Role:       "router",
+				DomainID:   "d1",
+				OverlayIP:  "10.20.0.1",
+				SSHHost:    sshHostPayload, // user@host where host carries the payload
+				SSHUser:    "root",
+				SSHKeyPath: sshKeyPathPayload, // spliced into ssh/scp -i <path>
 				Capabilities: model.NodeCapabilities{
 					CanForward: true,
 				},
@@ -178,6 +187,12 @@ func TestRenderDeployScripts_BashRendersPayloadInert(t *testing.T) {
 	// self-contradictory: the correctly quoted token necessarily contains
 	// this substring between its quotes.)
 	assertMarkerOnlyInToken(t, "bash deploy / ssh target (full sequence)", bash, "root@x; rm -rf", targetToken)
+
+	// The ssh_key_path reaches `ssh -i <path>` / `scp -i <path>`; its command
+	// substitution marker must live only inside the single-quoted key token. Go's
+	// %q would have left it live inside double quotes — this asserts the fix.
+	keyToken := bashSingleQuote(sshKeyPathPayload) // '/keys/y$(touch /tmp/keypwn)".pem'
+	assertMarkerOnlyInToken(t, "bash deploy / ssh_key_path", bash, "$(touch /tmp/keypwn)", keyToken)
 }
 
 func TestRenderDeployScripts_PowerShellRendersPayloadInert(t *testing.T) {
@@ -232,6 +247,19 @@ func TestRenderDeployScripts_PowerShellRendersPayloadInert(t *testing.T) {
 	}
 	if !strings.Contains(ps1, psTargetToken) {
 		t.Errorf("ps1 deploy: PowerShell-escaped ssh target token %q missing", psTargetToken)
+	}
+
+	// The ssh_key_path reaches `& ssh -i <path>` / `& scp -i <path>` via
+	// powerShellArgQuote, which backtick-escapes its `$` and `"`. The raw
+	// command-substitution form must not survive outside the escaped key token,
+	// and the escaped token must be present (path preserved, not dropped).
+	psKeyToken := powerShellArgQuote(sshKeyPathPayload)
+	residue = strings.ReplaceAll(ps1, psKeyToken, "")
+	if strings.Contains(residue, "$(touch /tmp/keypwn)") {
+		t.Errorf("ps1 deploy: raw command substitution from ssh_key_path survives outside an escaped token — injection path open")
+	}
+	if !strings.Contains(ps1, psKeyToken) {
+		t.Errorf("ps1 deploy: PowerShell-escaped ssh_key_path token %q missing", psKeyToken)
 	}
 }
 

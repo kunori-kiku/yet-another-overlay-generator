@@ -20,6 +20,18 @@ var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
 // 因此必须排除空白字符与一切 shell 元字符。仅允许：字母、数字、点、下划线、冒号、@、连字符。
 var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 
+// sshKeyPathCharset constrains ssh_key_path. Like ssh_host/alias/user it is
+// spliced into the operator's bash + PowerShell deploy scripts (ssh/scp -i
+// <path>), so it must exclude every shell metacharacter that could break out of
+// quoting. But unlike those connection fields it is a filesystem PATH, so it
+// additionally permits the path characters a real key path needs: forward and
+// back slashes, a leading ~, a Windows drive colon, and spaces (e.g.
+// `C:\Users\John Doe\.ssh\id_ed25519`). Everything dangerous — $ ` " ' ; | & <
+// > ( ) etc. — is excluded. This is the validation half of the ssh_key_path
+// injection fix; the renderer's bashSingleQuote/powerShellArgQuote escaping is
+// the defence-in-depth runtime half.
+var sshKeyPathCharset = regexp.MustCompile(`^[A-Za-z0-9._:@/\\~ -]+$`)
+
 // routerIDMAC48 约束 Babel router-id 的 MAC-48 形式（D66）：六组以冒号分隔的十六进制对，
 // 如 02:11:22:33:44:55。babeld 也接受 IPv4 形式的 router-id，因此 IPv4 形式由 net.ParseIP
 // 单独判定（见 validateNodesSchema），二者满足其一即合法。
@@ -33,7 +45,7 @@ const (
 	mtuMaximum = 65535
 )
 
-// ValidationError 
+// ValidationError
 type ValidationError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -44,7 +56,7 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("[%s] %s: %s", e.Level, e.Field, e.Message)
 }
 
-// ValidationResult 
+// ValidationResult
 type ValidationResult struct {
 	Errors   []ValidationError `json:"errors"`
 	Warnings []ValidationError `json:"warnings"`
@@ -63,7 +75,7 @@ func (r *ValidationResult) IsValid() bool {
 }
 
 // ValidateSchema  Schema （ Pass 1）
-// 、、CIDR 
+// 、、CIDR
 func ValidateSchema(topo *model.Topology) *ValidationResult {
 	result := &ValidationResult{}
 
@@ -131,7 +143,7 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// AllocationMode 
+		// AllocationMode
 		validAllocModes := map[string]bool{"auto": true, "manual": true}
 		if domain.AllocationMode != "" && !validAllocModes[domain.AllocationMode] {
 			result.AddError(prefix+".allocation_mode",
@@ -202,7 +214,7 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".domain_id", " Domain")
 		}
 
-		// Role 
+		// Role
 		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true, "client": true}
 		if node.Role == "" {
 			result.AddError(prefix+".role", "角色不能为空")
@@ -299,6 +311,15 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".ssh_user",
 				fmt.Sprintf("ssh_user %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHUser))
 		}
+		// ssh_key_path is also spliced into the operator's deploy shell command
+		// (ssh/scp -i <path>); it permits path characters (/ \ ~ : space) the
+		// connection fields don't, but still forbids every shell metacharacter so a
+		// hostile path like `/k$(reboot).pem` or `k".pem` cannot inject. See
+		// sshKeyPathCharset.
+		if node.SSHKeyPath != "" && !sshKeyPathCharset.MatchString(node.SSHKeyPath) {
+			result.AddError(prefix+".ssh_key_path",
+				fmt.Sprintf("ssh_key_path %q contains illegal characters: only letters, digits, and path characters (. _ : @ / \\ ~ space and -) are allowed; shell metacharacters ($ ` \" ' ; | & < > ( ) etc.) are forbidden because the path is spliced into the operator's deploy shell command", node.SSHKeyPath))
+		}
 	}
 }
 
@@ -318,7 +339,7 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".to_node_id", " ID ")
 		}
 
-		// Type 
+		// Type
 		validTypes := map[string]bool{"direct": true, "public-endpoint": true, "relay-path": true, "candidate": true}
 		if edge.Type == "" {
 			result.AddError(prefix+".type", "")
@@ -356,7 +377,7 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 				fmt.Sprintf("链路角色无效: %s，可选值: primary, backup（留空等价于 primary）", edge.Role))
 		}
 
-		// 
+		//
 		if edge.FromNodeID != "" && edge.FromNodeID == edge.ToNodeID {
 			result.AddError(prefix, "（）")
 		}

@@ -126,13 +126,23 @@ func buildSSHOpts(node DeployNodeInfo, quoteStyle string) (string, string) {
 		scpParts = append(scpParts, fmt.Sprintf("-P %d", node.SSHPort))
 	}
 	if node.SSHKeyPath != "" {
+		// SSHKeyPath is operator-supplied free text spliced into a root/operator
+		// shell command (`ssh -i <path>` / `scp -i <path>`), so it MUST go through
+		// the same escaping idiom as SSHTarget / NodeName — otherwise a path like
+		// `/k$(touch x).pem` (bash) or `k".pem` (PowerShell) is a command-injection
+		// path. Go's %q is NOT bash-safe: it emits a double-quoted token, and bash
+		// still expands `$`/`$(...)`/backticks inside double quotes — so bash uses
+		// bashSingleQuote (single quotes are fully inert), and PowerShell uses
+		// powerShellArgQuote, exactly as the target/name interpolations do.
 		switch quoteStyle {
-		case "go": // Go %q quoting for bash
-			sshParts = append(sshParts, fmt.Sprintf("-i %q", node.SSHKeyPath))
-			scpParts = append(scpParts, fmt.Sprintf("-i %q", node.SSHKeyPath))
-		case "dquote": // double-quote for PowerShell
-			sshParts = append(sshParts, fmt.Sprintf(`-i "%s"`, node.SSHKeyPath))
-			scpParts = append(scpParts, fmt.Sprintf(`-i "%s"`, node.SSHKeyPath))
+		case "bash":
+			keyArg := "-i " + bashSingleQuote(node.SSHKeyPath)
+			sshParts = append(sshParts, keyArg)
+			scpParts = append(scpParts, keyArg)
+		case "powershell":
+			keyArg := "-i " + powerShellArgQuote(node.SSHKeyPath)
+			sshParts = append(sshParts, keyArg)
+			scpParts = append(scpParts, keyArg)
 		}
 	}
 
@@ -252,7 +262,7 @@ SKIPPED=$((SKIPPED + 1))
 			continue
 		}
 
-		sshOpts, scpOpts := buildSSHOpts(node, "go")
+		sshOpts, scpOpts := buildSSHOpts(node, "bash")
 
 		// scpCmd: "scp -P 22 -i key" or just "scp" when no opts
 		scpCmd := "scp"
@@ -520,7 +530,7 @@ try {
 			continue
 		}
 
-		sshOpts, scpOpts := buildSSHOpts(node, "dquote")
+		sshOpts, scpOpts := buildSSHOpts(node, "powershell")
 
 		scpCmd := "scp"
 		if scpOpts != "" {
