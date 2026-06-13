@@ -942,10 +942,19 @@ export const useControllerStore = create<ControllerState>()(
           set({ lastDeploy: result, loading: false, pendingShrink: null, lastStrippedKeys: stripped });
           await get().refresh();
         } catch (err) {
+          // Clear pendingShrink on failure too: a CONFIRMED-shrink deploy
+          // (deploy({confirmedShrink:true})) that throws during update/stage/
+          // promote/signature still has pendingShrink set (it is consumed only on
+          // the SUCCESS path at the end of try). Leaving it set keeps the
+          // full-screen shrink-confirm modal (DeployBar renders solely on
+          // pendingShrink) stuck open over the error. Clearing it surfaces the
+          // error in the deploy bar and lets the operator retry Deploy, which
+          // re-evaluates the shrink guard against the current server state.
           set({
             error: err instanceof Error ? err.message : 'Deploy failed',
             loading: false,
             signing: false,
+            pendingShrink: null,
           });
         }
       },
