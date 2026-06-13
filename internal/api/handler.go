@@ -137,7 +137,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to generate WireGuard keys: %v", err))
 		return
 	}
 
@@ -185,7 +185,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to generate WireGuard keys: %v", err))
 		return
 	}
 
@@ -250,7 +250,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	// 拆除步骤（审计阻断项 D36）。
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("生成 WireGuard 密钥失败: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to generate WireGuard keys: %v", err))
 		return
 	}
 

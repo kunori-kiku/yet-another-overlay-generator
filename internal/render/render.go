@@ -107,16 +107,17 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 			// 借此修复节点上缺失或与私钥不一致（陈旧）的公钥。
 			privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
 			if err != nil {
-				return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
+				return nil, fmt.Errorf("node %s: failed to parse WireGuard private key: %w", node.ID, err)
 			}
 
 			node.WireGuardPrivateKey = privateKey.String()
 			node.WireGuardPublicKey = privateKey.PublicKey().String()
 
 		case node.WireGuardPublicKey != "":
-			// 情形 (b)：公钥在场但私钥缺失。无状态编译器无法重建私钥，无法渲染该节点自身的
-			// Interface PrivateKey，因此必须硬错误而非静默轮换或留空。
-			return nil, fmt.Errorf("节点 %s 已固定 WireGuard 公钥，但缺少对应私钥：无状态编译器无法重建私钥。请从该主机的 /etc/wireguard/<接口>.conf 粘贴在用私钥到 wireguard_private_key，或同时清空 wireguard_private_key 与 wireguard_public_key 两个字段以显式轮换密钥", node.ID)
+			// Case (b): the public key is present but the private key is missing. The stateless
+			// compiler cannot reconstruct the private key, so it cannot render this node's own
+			// Interface PrivateKey — a hard error, not a silent rotate-or-blank.
+			return nil, fmt.Errorf("node %s has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf into wireguard_private_key, or clear BOTH wireguard_private_key and wireguard_public_key to explicitly rotate the key", node.ID)
 
 		default:
 			// 情形 (c)：两枚密钥字段皆空，是全新节点。生成新密钥对，并把私钥与公钥都写回

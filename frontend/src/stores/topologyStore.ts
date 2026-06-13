@@ -549,6 +549,20 @@ export const useTopologyStore = create<TopologyState>()(
 
   // API: 编译
   compile: async () => {
+    // Defense-in-depth: /api/compile is the air-gap path — it generates/reconstructs WireGuard
+    // keys client-side and needs private keys in the design. Controller mode is zero-knowledge
+    // (public-keys-only; the controller compiles server-side during Deploy), so a local compile
+    // there fails on every node. The Compile button is already hidden in controller mode
+    // (CanvasToolbar); this guard makes the store action itself refuse rather than emit a
+    // confusing key-generation error if ever invoked.
+    if (useControllerStore.getState().mode === 'controller') {
+      set({
+        error:
+          'Local compile is unavailable in controller mode (the design is public-keys-only). Use Deploy — the controller compiles server-side.',
+        isCompiling: false,
+      });
+      return;
+    }
     set({ isCompiling: true, error: null });
     try {
       const topo = get().getTopology();
@@ -559,7 +573,7 @@ export const useTopologyStore = create<TopologyState>()(
       });
       if (!res.ok) {
         const errData = await res.json();
-        throw new Error(errData.error || '编译失败');
+        throw new Error(errData.error || 'Compile failed');
       }
       const data: CompileResponse = await res.json();
       
@@ -583,7 +597,7 @@ export const useTopologyStore = create<TopologyState>()(
       }));
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : '编译请求失败',
+        error: err instanceof Error ? err.message : 'Compile request failed',
         isCompiling: false,
       });
     }
