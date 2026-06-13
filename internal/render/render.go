@@ -14,6 +14,7 @@ package render
 import (
 	"fmt"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -83,11 +84,11 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 				// imported into the controller. Derive the public half and DISCARD
 				// the private one — it must never reach a controller-rendered bundle.
 				if node.WireGuardPrivateKey == "" {
-					return nil, fmt.Errorf("节点 %s 在 AgentHeld 托管模式下缺少 WireGuard 公钥：代理需先注册公钥，控制器才能渲染该节点", node.ID)
+					return nil, apierr.New(apierr.CodeKeygenMissingPubkey).With("node", node.ID)
 				}
 				privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
 				if err != nil {
-					return nil, fmt.Errorf("节点 %s 的 WireGuard 私钥解析失败: %w", node.ID, err)
+					return nil, apierr.New(apierr.CodeKeygenPrivkeyParse).With("node", node.ID).With("detail", err.Error()).Wrap(err)
 				}
 				pub = privateKey.PublicKey().String()
 			}
@@ -107,7 +108,7 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 			// 借此修复节点上缺失或与私钥不一致（陈旧）的公钥。
 			privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
 			if err != nil {
-				return nil, fmt.Errorf("node %s: failed to parse WireGuard private key: %w", node.ID, err)
+				return nil, apierr.New(apierr.CodeKeygenPrivkeyParse).With("node", node.ID).With("detail", err.Error()).Wrap(err)
 			}
 
 			node.WireGuardPrivateKey = privateKey.String()
@@ -117,14 +118,14 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 			// Case (b): the public key is present but the private key is missing. The stateless
 			// compiler cannot reconstruct the private key, so it cannot render this node's own
 			// Interface PrivateKey — a hard error, not a silent rotate-or-blank.
-			return nil, fmt.Errorf("node %s has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf into wireguard_private_key, or clear BOTH wireguard_private_key and wireguard_public_key to explicitly rotate the key", node.ID)
+			return nil, apierr.New(apierr.CodeKeygenPinnedNoPrivkey).With("node", node.ID)
 
 		default:
 			// 情形 (c)：两枚密钥字段皆空，是全新节点。生成新密钥对，并把私钥与公钥都写回
 			// 节点，使其随拓扑持久化、可往返，下次编译复用同一对密钥。
 			privateKey, err := wgtypes.GeneratePrivateKey()
 			if err != nil {
-				return nil, fmt.Errorf("为节点 %s 生成 WireGuard 私钥失败: %w", node.ID, err)
+				return nil, apierr.New(apierr.CodeKeygenGenerateFailed).With("node", node.ID).With("detail", err.Error()).Wrap(err)
 			}
 
 			node.WireGuardPrivateKey = privateKey.String()

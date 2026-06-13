@@ -65,13 +65,13 @@ func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
 
 		domain, ok := domainMap[result[i].DomainID]
 		if !ok {
-			return nil, fmt.Errorf(" %s  Domain %s ",
+			return nil, fmt.Errorf("node %s references unknown domain %s",
 				result[i].Name, result[i].DomainID)
 		}
 
 		ip, err := a.allocateFromCIDR(domain.CIDR, domain.ReservedRanges, usedIPs)
 		if err != nil {
-			return nil, fmt.Errorf(" %s  IP : %w", result[i].Name, err)
+			return nil, fmt.Errorf("failed to allocate an IP for node %s: %w", result[i].Name, err)
 		}
 
 		result[i].OverlayIP = ip
@@ -110,13 +110,13 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 
 	//  /32  /128，无可分配主机位
 	if hostBits == 0 {
-		return "", fmt.Errorf("CIDR %s 没有可分配的主机地址（前缀过长）", cidr)
+		return "", fmt.Errorf("CIDR %s has no assignable host addresses (prefix too long)", cidr)
 	}
 
 	// 主机位溢出防御：uint32(1) << 32 会溢出，导致退化的循环边界。
 	// 在 schema 校验加入 CIDR 大小下限后此分支不可达，保留为安全网。
 	if hostBits >= 32 {
-		return "", fmt.Errorf("CIDR %s 主机位过多，无法枚举（需为 IPv4 且前缀不小于 /8）", cidr)
+		return "", fmt.Errorf("CIDR %s has too many host bits to enumerate (must be IPv4 with prefix >= /8)", cidr)
 	}
 
 	totalHosts := uint32(1) << uint(hostBits)
@@ -134,7 +134,7 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 
 	networkIP, err := ipToUint32(ipNet.IP)
 	if err != nil {
-		return "", fmt.Errorf("CIDR %s 不是有效的 IPv4 网络地址: %w", cidr, err)
+		return "", fmt.Errorf("CIDR %s is not a valid IPv4 network address: %w", cidr, err)
 	}
 
 	for h := startHost; h < endHost; h++ {
@@ -176,7 +176,7 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 func ipToUint32(ip net.IP) (uint32, error) {
 	v4 := ip.To4()
 	if v4 == nil || len(v4) != 4 {
-		return 0, fmt.Errorf("地址 %q 不是有效的 IPv4 地址", ip.String())
+		return 0, fmt.Errorf("address %q is not a valid IPv4 address", ip.String())
 	}
 	return binary.BigEndian.Uint32(v4), nil
 }

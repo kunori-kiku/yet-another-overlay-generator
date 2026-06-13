@@ -147,7 +147,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to generate WireGuard keys: %v", err))
+		writeCodedOr(w, "failed to generate WireGuard keys", err)
 		return
 	}
 
@@ -195,7 +195,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to generate WireGuard keys: %v", err))
+		writeCodedOr(w, "failed to generate WireGuard keys", err)
 		return
 	}
 
@@ -260,7 +260,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	// 拆除步骤（审计阻断项 D36）。
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to generate WireGuard keys: %v", err))
+		writeCodedOr(w, "failed to generate WireGuard keys", err)
 		return
 	}
 
@@ -604,4 +604,18 @@ func writeAPIError(w http.ResponseWriter, e *apierr.Error) {
 // Deprecated: use writeAPIError with an apierr.Code.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeAPIError(w, apierr.New(apierr.CodeLegacyUncoded).WithStatus(status).WithMessage(message))
+}
+
+// writeCodedOr surfaces err as its coded envelope (with the error's own status) when err
+// is, or wraps, an *apierr.Error; otherwise it falls back to a legacy 500 with the given
+// context message. Used where a handler relays a deep error (e.g. render.GenerateKeys)
+// that is coded at the source — the code + status flow through to the panel instead of
+// being flattened to a generic 500.
+func writeCodedOr(w http.ResponseWriter, fallbackMsg string, err error) {
+	var ae *apierr.Error
+	if errors.As(err, &ae) {
+		writeAPIError(w, ae)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, fmt.Sprintf("%s: %v", fallbackMsg, err))
 }

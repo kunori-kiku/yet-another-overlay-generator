@@ -433,4 +433,8 @@ export const zh: Record<keyof typeof en, string> = {
   'error.compileFailed': '编译失败',
   'error.exportFailed': '导出失败',
   'error.deployScriptFailed': '生成部署脚本失败',
+  'error.keygen_missing_pubkey': "节点 {node} 处于 agent 自持托管模式，但尚未注册 WireGuard 公钥——代理需先注册公钥，控制器才能渲染该节点。",
+  'error.keygen_privkey_parse_failed': "节点 {node} 的 WireGuard 私钥解析失败：{detail}",
+  'error.keygen_pinned_pubkey_no_privkey': "节点 {node} 已固定 WireGuard 公钥，但缺少对应私钥：无状态编译器无法重建它。请从该主机的 /etc/wireguard/<接口>.conf 粘贴在用私钥，或清空两个密钥字段以显式轮换。",
+  'error.keygen_generate_failed': "为节点 {node} 生成 WireGuard 密钥失败：{detail}",
 };

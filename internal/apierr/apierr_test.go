@@ -14,6 +14,10 @@ var allCodes = []Code{
 	CodeLegacyUncoded,
 	CodeInternalPanic,
 	CodeCustodyPrivateKey,
+	CodeKeygenMissingPubkey,
+	CodeKeygenPrivkeyParse,
+	CodeKeygenPinnedNoPrivkey,
+	CodeKeygenGenerateFailed,
 }
 
 func TestRegistryBijection(t *testing.T) {
