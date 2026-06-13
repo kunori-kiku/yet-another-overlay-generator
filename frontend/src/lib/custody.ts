@@ -17,6 +17,15 @@ export interface StripResult {
 // model note) and wireguard_public_key (the agent's registered public half) are left
 // as-is. Unmodified nodes are shared by reference; modified nodes are fresh objects,
 // and the nodes array is new, so the input is never mutated.
+//
+// Scope note (plan-5 review): the SSH auto-deploy fields (ssh_alias/ssh_host/ssh_user/
+// ssh_port/ssh_key_path) are DELIBERATELY not stripped. They are local/air-gap
+// deploy-script metadata — never WireGuard key material, never used by the
+// controller's agent-pull model — and ssh_key_path is a path on the OPERATOR's own
+// machine, not a fleet-node secret. The zero-knowledge custody principle is about
+// fleet-node WireGuard private keys (a controller breach must not expose the mesh);
+// the controller is already trusted with the operator's design. Stripping these would
+// also destroy the SSH config that LOCAL mode needs on a controller→local switch.
 export function stripPrivateKeys(topo: Topology): StripResult {
   let stripped = 0;
   const nodes = topo.nodes.map((n) => {

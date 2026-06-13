@@ -29,6 +29,7 @@ export function LoginPage() {
   const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
   const setMode = useControllerStore((s) => s.setMode);
   const purgeModeBoundaryState = useTopologyStore((s) => s.purgeModeBoundaryState);
+  const clearModeNotices = useControllerStore((s) => s.clearModeNotices);
 
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -307,6 +308,7 @@ export function LoginPage() {
                 );
                 if (ok) {
                   purgeModeBoundaryState();
+                  clearModeNotices();
                   setMode('local');
                   navigate(landingPathForMode('local'));
                 }

@@ -380,9 +380,9 @@ export const useTopologyStore = create<TopologyState>()(
         // loadTopology 只接收四个切片 + 版本号，这里先加载再补提示，
         // 因为 loadTopology 会清空 error。
         get().loadTopology(topo);
-        if (placeholdered > 0) {
-          set({ importPlaceholdered: placeholdered });
-        }
+        // 总是写入（含 0）：一次干净导入（0 个被占位）必须清掉上一次导入残留的「N 个被
+        // 占位」横幅，否则提示会粘滞（plan-5 review）。
+        set({ importPlaceholdered: placeholdered });
         if (hasReservedRoutePolicies) {
           const { language } = get();
           set({
@@ -449,6 +449,8 @@ export const useTopologyStore = create<TopologyState>()(
       history: [],
       validateResult: null,
       compileResult: null,
+      // 切到本地模式后，控制器模式导入残留的「已占位」横幅也一并清掉（plan-5 review）。
+      importPlaceholdered: 0,
       error: null,
       selectedNodeId: null,
       selectedEdgeId: null,

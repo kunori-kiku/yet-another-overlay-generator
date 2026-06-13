@@ -275,15 +275,15 @@ export function DeployBar() {
             <p className="text-xs text-gray-400">
               {txt(
                 language,
-                `如果这是有意的，请键入项目名 “${pendingShrink.projectName}” 以确认。`,
-                `If this is intentional, type the project name “${pendingShrink.projectName}” to confirm.`,
+                `如果这是有意的，请键入 “${pendingShrink.confirmPhrase}” 以确认。`,
+                `If this is intentional, type “${pendingShrink.confirmPhrase}” to confirm.`,
               )}
             </p>
             <input
               type="text"
               value={shrinkTyped}
               onChange={(e) => setShrinkTyped(e.target.value)}
-              placeholder={pendingShrink.projectName}
+              placeholder={pendingShrink.confirmPhrase}
               autoFocus
               className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-red-400 outline-none"
             />
@@ -300,7 +300,7 @@ export function DeployBar() {
               </button>
               <button
                 type="button"
-                disabled={shrinkTyped !== pendingShrink.projectName || loading}
+                disabled={shrinkTyped !== pendingShrink.confirmPhrase || loading}
                 onClick={() => {
                   setShrinkTyped('');
                   void deploy({ confirmedShrink: true });

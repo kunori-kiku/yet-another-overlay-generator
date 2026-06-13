@@ -147,7 +147,19 @@ interface ControllerState {
   //   先把待确认信息存这里、暂不部署；DeployBar 弹出「键入项目名确认」对话框，确认后以
   //   confirmedShrink 重新调用 deploy。版本历史（plan-2）是事后兜底，本守卫是事前预防。
   lastStrippedKeys: number;
-  pendingShrink: { serverNodeCount: number; canvasNodeCount: number; projectName: string } | null;
+  // pendingShrink carries the typed-confirm phrase (project name, or a non-empty
+  // sentinel when the project is unnamed — an empty phrase would let an empty input
+  // match and bypass the gate), the node-count delta for the dialog copy, and a
+  // SNAPSHOT of the exact stripped design the warning was computed from (so the
+  // confirmed deploy binds to what the operator was warned about, not a since-changed
+  // canvas) plus its stripped-key count.
+  pendingShrink: {
+    serverNodeCount: number;
+    canvasNodeCount: number;
+    confirmPhrase: string;
+    snapshot: Topology;
+    stripped: number;
+  } | null;
 
   // KEYSTONE（plan-5.1d）：已 pin 的 off-host operator 签名凭据（passkey / YubiKey）。
   // 仅持久化非密信息——credential_id（base64url(rawId)）、alg、rpId——它们不是密钥材料
@@ -216,6 +228,9 @@ interface ControllerState {
   cancelShrinkConfirm: () => void;
   // 关闭「已剥离 N 个私钥」提示。
   dismissStripNotice: () => void;
+  // 清掉 controller 模式相关的临时提示（hydration / 剥离 / 待确认缩水）。controller→local
+  // 切换时调用，避免本地模式下还残留控制器模式的横幅（plan-5 review）。
+  clearModeNotices: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
 }
@@ -794,31 +809,58 @@ export const useControllerStore = create<ControllerState>()(
         set({ loading: true, error: null });
         try {
           const cfg = configOf(get());
-          // Custody strip (plan-5, D4): never send a private key to the server (the
-          // client mirror of the server's update-topology 400). In controller mode the
-          // hydrated design is already key-free, but a locally-compiled/imported design
-          // could carry keys — this is the fail-safe.
-          const local = useTopologyStore.getState().getTopology();
-          const { topo: cleanTopo, stripped } = stripPrivateKeys(local);
 
-          // Shrink/empty guard (plan-5): before mutating the server design, compare the
-          // canvas against the server copy. Emptying it, or dropping >50% of the server's
-          // node-IDs, requires a typed confirmation (the audit's one-click-destruction
-          // scenario). Version history (plan-2) is the recovery backstop; this is the
-          // prevention layer. 404 (no server topology yet) ⇒ nothing to shrink ⇒ no guard.
-          if (!opts?.confirmedShrink) {
-            const server = (await ctlGetTopology(cfg)) as Topology | null;
+          // Resolve the design to upload + its stripped-key count. On a confirmed
+          // shrink we deploy the SNAPSHOT the warning was computed from (binds the
+          // confirmation to what the operator actually saw, not a since-changed
+          // canvas); otherwise we strip the live canvas now.
+          let cleanTopo: Topology;
+          let stripped: number;
+          const confirming = opts?.confirmedShrink ? get().pendingShrink : null;
+          if (confirming) {
+            cleanTopo = confirming.snapshot;
+            stripped = confirming.stripped;
+          } else {
+            // Custody strip (plan-5, D4): never send a private key to the server (the
+            // client mirror of the server's update-topology 400). In controller mode
+            // the hydrated design is already key-free, but a locally-compiled/imported
+            // design could carry keys — this is the fail-safe.
+            const local = useTopologyStore.getState().getTopology();
+            const r = stripPrivateKeys(local);
+            cleanTopo = r.topo;
+            stripped = r.stripped;
+
+            // Shrink/empty guard (plan-5): before mutating the server design, compare
+            // the canvas against the server copy. Emptying it, or dropping ≥50% of the
+            // server's node-IDs, requires a typed confirmation (the audit's
+            // one-click-destruction scenario). Version history (plan-2) is the recovery
+            // backstop; this is the prevention layer.
+            //
+            // The server read is best-effort: a 404 means no server topology yet (no
+            // shrink possible), and ANY other read failure (5xx/timeout/CSRF) must NOT
+            // abort an otherwise-valid deploy — we proceed and rely on version history,
+            // rather than blocking a legitimate upload on a transient guard-read error.
+            let server: Topology | null = null;
+            try {
+              server = (await ctlGetTopology(cfg)) as Topology | null;
+            } catch {
+              server = null; // guard read failed → skip the guard (history is the backstop)
+            }
             if (server && Array.isArray(server.nodes) && server.nodes.length > 0) {
               const canvasIds = new Set(cleanTopo.nodes.map((n) => n.id));
               const dropped = server.nodes.filter((n) => !canvasIds.has(n.id)).length;
               const emptied = cleanTopo.nodes.length === 0;
-              const majorityDropped = dropped / server.nodes.length > 0.5;
+              const majorityDropped = dropped / server.nodes.length >= 0.5;
               if (emptied || majorityDropped) {
                 set({
                   pendingShrink: {
                     serverNodeCount: server.nodes.length,
                     canvasNodeCount: cleanTopo.nodes.length,
-                    projectName: cleanTopo.project.name || cleanTopo.project.id || '',
+                    // Never empty: an empty phrase would let an empty input match and
+                    // one-click past the gate. Fall back to a typed sentinel.
+                    confirmPhrase: cleanTopo.project.name || cleanTopo.project.id || 'DELETE',
+                    snapshot: cleanTopo,
+                    stripped,
                   },
                   loading: false,
                 });
@@ -884,6 +926,7 @@ export const useControllerStore = create<ControllerState>()(
 
       cancelShrinkConfirm: () => set({ pendingShrink: null }),
       dismissStripNotice: () => set({ lastStrippedKeys: 0 }),
+      clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null }),
 
       // 驱逐一个节点后刷新视图。
       revoke: async (nodeId) => {

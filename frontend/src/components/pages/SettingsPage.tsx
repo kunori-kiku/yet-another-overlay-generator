@@ -13,6 +13,7 @@ export function SettingsPage() {
   const mode = useControllerStore((s) => s.mode);
   const setMode = useControllerStore((s) => s.setMode);
   const purgeModeBoundaryState = useTopologyStore((s) => s.purgeModeBoundaryState);
+  const clearModeNotices = useControllerStore((s) => s.clearModeNotices);
   // controller→local is a LOSSY switch (plan-5, D6): confirm before purging.
   const [showSwitchToLocal, setShowSwitchToLocal] = useState(false);
   const theme = useUiStore((s) => s.theme);
@@ -49,6 +50,7 @@ export function SettingsPage() {
   };
   const confirmSwitchToLocal = () => {
     purgeModeBoundaryState(); // graph survives; keys/pins/compile-history purged
+    clearModeNotices(); // drop any controller-mode banners (hydration/strip/shrink)
     setMode('local');
     setShowSwitchToLocal(false);
   };

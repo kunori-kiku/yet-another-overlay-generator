@@ -5,6 +5,7 @@ import { Topbar } from './Topbar';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { LoginPage } from '../auth/LoginPage';
+import { NoticeBanner } from './NoticeBanner';
 import { txt, STRINGS } from '../../i18n';
 import { FOCUS_RING } from './styles';
 
@@ -87,54 +88,30 @@ export function Shell() {
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar />
-        {/* plan-4 (D9): notice that the local design was replaced by the server copy
-            and a backup file was downloaded. Rendered live via txt() (not a frozen
-            pre-localized string) and dismissible. */}
+        {/* plan-4 (D9): the local design was replaced by the server copy + a backup
+            downloaded. plan-5 (D5): a controller-mode import placeholdered private
+            keys. Both render live via txt() through the shared NoticeBanner. */}
         {hydrationNotice && (
-          <div
-            className="flex items-start justify-between gap-3 border-b border-[var(--hairline)] bg-[var(--surface-sunken)] px-4 py-2 text-sm text-[var(--content)]"
-            role="status"
-          >
-            <span>
-              {txt(
-                language,
-                '本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。',
-                'Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.',
-              )}
-            </span>
-            <button
-              type="button"
-              onClick={dismissHydrationNotice}
-              aria-label={txt(language, '关闭提示', 'Dismiss notice')}
-              className={`shrink-0 rounded px-2 text-[var(--content-muted)] hover:text-[var(--content)] ${FOCUS_RING}`}
-            >
-              ✕
-            </button>
-          </div>
+          <NoticeBanner
+            message={txt(
+              language,
+              '本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。',
+              'Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.',
+            )}
+            onDismiss={dismissHydrationNotice}
+            dismissLabel={txt(language, '关闭提示', 'Dismiss notice')}
+          />
         )}
-        {/* plan-5 (D5): notice that a controller-mode import placeholdered private
-            keys. Rendered live via txt() and dismissible. */}
         {importPlaceholdered > 0 && (
-          <div
-            className="flex items-start justify-between gap-3 border-b border-[var(--hairline)] bg-[var(--surface-sunken)] px-4 py-2 text-sm text-[var(--content)]"
-            role="status"
-          >
-            <span>
-              {txt(
-                language,
-                `控制器模式导入：已将 ${importPlaceholdered} 个私钥替换为占位（节点将使用自持的 agent 密钥）。`,
-                `Imported under controller mode: ${importPlaceholdered} private key(s) replaced by placeholders — nodes will use their agent-held keys.`,
-              )}
-            </span>
-            <button
-              type="button"
-              onClick={dismissImportNotice}
-              aria-label={txt(language, '关闭提示', 'Dismiss notice')}
-              className={`shrink-0 rounded px-2 text-[var(--content-muted)] hover:text-[var(--content)] ${FOCUS_RING}`}
-            >
-              ✕
-            </button>
-          </div>
+          <NoticeBanner
+            message={txt(
+              language,
+              `控制器模式导入：已将 ${importPlaceholdered} 个私钥替换为占位（节点将使用自持的 agent 密钥）。`,
+              `Imported under controller mode: ${importPlaceholdered} private key(s) replaced by placeholders — nodes will use their agent-held keys.`,
+            )}
+            onDismiss={dismissImportNotice}
+            dismissLabel={txt(language, '关闭提示', 'Dismiss notice')}
+          />
         )}
         <main id="main-content" tabIndex={-1} className="flex-1 overflow-hidden outline-none">
           <Outlet />
