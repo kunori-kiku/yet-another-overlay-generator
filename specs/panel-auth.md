@@ -1,6 +1,19 @@
 # Panel Auth — Operator Login UI + Client Auth State
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-13 -->
+
+> **controller-server-authority-redesign (plans 4–6):** the login form is now a
+> **full-page gate** in `components/auth/LoginPage.tsx` (brand, password+TOTP,
+> passwordless passkey, break-glass Recovery disclosure, connection settings, language
+> toggle, "switch to local mode" escape) — NOT a section inside ConnectionSettings.
+> `Shell` renders it (after a session-probe splash) whenever
+> `mode==='controller' && !loggedIn && operatorToken===''`; see specs/panel-shell.md.
+> On a successful login or cookie-restore the store calls `hydrateFromServer()`
+> (`GET /topology`→`loadTopology`, overwriting the local canvas; controller mode is
+> server-authoritative) with a one-time pre-hydration export stash of a differing
+> non-empty local design. ConnectionSettings now holds only the connection endpoints +
+> refresh; UserMenu hosts the signed-in identity + sign-out. The line citations below
+> predate the move and are approximate.
 
 ## Responsibility
 Authenticate the panel operator against the controller (password + optional TOTP / login-passkey second factor, passwordless passkey, break-glass token) and hold the resulting session/CSRF state in memory so every operator API call carries the right credentials.

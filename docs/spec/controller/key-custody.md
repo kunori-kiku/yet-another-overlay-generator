@@ -75,6 +75,16 @@ renders a public-only fleet in `AgentHeld` mode and asserts every emitted `Priva
 only the placeholder. This gate never retires; it is the standing guard against a split-render
 regression reintroducing a key vault.
 
+**Custody is now also enforced at the topology STORE boundary** (controller-server-authority-redesign):
+`POST /update-topology` unmarshals the payload and **rejects (400)** any topology carrying a non-empty
+`wireguard_private_key`, then stores the canonical re-marshaled bytes — so the stored `TopologyRecord`
+cannot carry a private key via the operator API (perpetual gate
+`internal/api/topology_custody_test.go`). The panel mirrors this client-side: it strips private keys
+before every upload (the 400 is unreachable from the panel), placeholders them on a controller-mode
+import, and purges them when switching controller→local. Previously this was a caller contract only;
+it is now belt-and-braces (client strip + server reject), closing the doc-drift noted in
+specs/controller-store.md.
+
 See also [../security/security.md](../security/security.md) (custody in the threat model) and
 [signing.md](signing.md) (each rendered bundle — including a placeholder-bearing AgentHeld bundle — is
 signed over its own `checksums.sha256`).
