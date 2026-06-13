@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
 import { txt, STRINGS } from '../../i18n';
 import { ThemeToggle } from '../shell/ThemeToggle';
+import { LanguageToggle } from '../shell/LanguageToggle';
+import { landingPathForMode } from '../shell/nav';
 import { FOCUS_RING } from '../shell/styles';
 
 // plan-4（D2）：持久化的 controller 模式下，进入面板首先落在这个全屏登录页——任何 shell
@@ -12,11 +15,10 @@ import { FOCUS_RING } from '../shell/styles';
 // 登录页就会被锁死（API 地址只能在登录后的设置页改，而设置页在门后）。
 export function LoginPage() {
   const language = useTopologyStore((s) => s.language);
-  const setLanguage = useTopologyStore((s) => s.setLanguage);
+  const navigate = useNavigate();
 
   const baseURL = useControllerStore((s) => s.baseURL);
   const pathPrefix = useControllerStore((s) => s.pathPrefix);
-  const operatorToken = useControllerStore((s) => s.operatorToken);
   const setConfig = useControllerStore((s) => s.setConfig);
   const loading = useControllerStore((s) => s.loading);
   const error = useControllerStore((s) => s.error);
@@ -32,6 +34,11 @@ export function LoginPage() {
   const [loginTotp, setLoginTotp] = useState('');
   const [showConnection, setShowConnection] = useState(false);
   const [showBreakGlass, setShowBreakGlass] = useState(false);
+  // The break-glass token uses a LOCAL buffer, committed to the store only on an
+  // explicit button click — NOT bound directly. The Shell gate opens the instant
+  // operatorToken becomes non-empty, so a directly-bound field would unmount this
+  // page after the first keystroke, making the token impossible to type (review).
+  const [breakGlassInput, setBreakGlassInput] = useState('');
 
   // 改动凭据对即丢弃任何待处理的二次验证步骤（迁自 ConnectionSettings）。
   const onCredentialEdit = () => {
@@ -48,30 +55,7 @@ export function LoginPage() {
     <div className="flex min-h-screen flex-col bg-[var(--surface)] text-[var(--content)]">
       {/* 顶部右侧：登录前也可切换语言与主题（a11y / 多语操作员）。 */}
       <header className="flex items-center justify-end gap-2 p-3">
-        <div className="flex items-center overflow-hidden rounded-lg border border-[var(--hairline)]">
-          <button
-            type="button"
-            onClick={() => setLanguage('zh')}
-            className={`px-2 py-1 text-xs transition-colors ${FOCUS_RING} ${
-              language === 'zh'
-                ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
-                : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)]'
-            }`}
-          >
-            中文
-          </button>
-          <button
-            type="button"
-            onClick={() => setLanguage('en')}
-            className={`px-2 py-1 text-xs transition-colors ${FOCUS_RING} ${
-              language === 'en'
-                ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
-                : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)]'
-            }`}
-          >
-            EN
-          </button>
-        </div>
+        <LanguageToggle />
         <ThemeToggle />
       </header>
 
@@ -266,33 +250,55 @@ export function LoginPage() {
               {showBreakGlass ? '▾' : '▸'} {txt(language, '恢复（break-glass）', 'Recovery (break-glass)')}
             </button>
             {showBreakGlass && (
-              <div className="space-y-1 rounded-lg border border-[var(--hairline)] p-3">
-                <label htmlFor="login-breakglass" className="mb-1 block text-xs text-[var(--content-muted)]">
+              <form
+                className="space-y-2 rounded-lg border border-[var(--hairline)] p-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  // Commit the buffered token to the store in one shot — this is what
+                  // opens the gate, AFTER the full token is entered.
+                  if (breakGlassInput.trim() !== '') {
+                    setConfig({ operatorToken: breakGlassInput });
+                  }
+                }}
+              >
+                <label htmlFor="login-breakglass" className="block text-xs text-[var(--content-muted)]">
                   {txt(language, 'Operator Token（恢复用）', 'Operator token (break-glass)')}
                 </label>
                 <input
                   id="login-breakglass"
                   type="password"
-                  value={operatorToken}
-                  onChange={(e) => setConfig({ operatorToken: e.target.value })}
+                  value={breakGlassInput}
+                  onChange={(e) => setBreakGlassInput(e.target.value)}
                   placeholder={txt(language, '可选；不会被持久化', 'Optional; never persisted')}
                   autoComplete="off"
                   className={inputClass}
                 />
+                <button
+                  type="submit"
+                  disabled={breakGlassInput.trim() === ''}
+                  className={`w-full rounded-lg border border-[var(--hairline)] py-1.5 text-sm text-[var(--content)] transition-colors hover:bg-[var(--surface-sunken)] disabled:opacity-40 ${FOCUS_RING}`}
+                >
+                  {txt(language, '用恢复令牌进入', 'Enter with recovery token')}
+                </button>
                 <p className="text-xs text-[var(--content-muted)]">
                   {txt(
                     language,
-                    '输入后即可进入面板（不创建会话；仅当后端设置了 YAOG_CONTROLLER_OPERATOR_TOKEN 时有效）。',
-                    'Entering a token opens the panel (no session is created; only works when the backend sets YAOG_CONTROLLER_OPERATOR_TOKEN).',
+                    '提交后即可进入面板（不创建会话；仅当后端设置了 YAOG_CONTROLLER_OPERATOR_TOKEN 时有效）。',
+                    'Submitting opens the panel (no session is created; only works when the backend sets YAOG_CONTROLLER_OPERATOR_TOKEN).',
                   )}
                 </p>
-              </div>
+              </form>
             )}
 
-            {/* 回到本地模式：登录门不该把只想用本地设计器的用户锁在外面。 */}
+            {/* 回到本地模式：登录门不该把只想用本地设计器的用户锁在外面。切到本地模式后
+                直接导航到本地落地页，避免停留在 controller-only 的深链路由（如 /fleet）上
+                渲染空白（review）。 */}
             <button
               type="button"
-              onClick={() => setMode('local')}
+              onClick={() => {
+                setMode('local');
+                navigate(landingPathForMode('local'));
+              }}
               className={`block text-xs text-[var(--content-muted)] underline-offset-2 hover:underline ${FOCUS_RING}`}
             >
               {txt(language, '← 切换到本地模式（无需登录）', '← Switch to local mode (no sign-in needed)')}

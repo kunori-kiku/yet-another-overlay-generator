@@ -28,11 +28,18 @@ export function Shell() {
   const dismissHydrationNotice = useControllerStore((s) => s.dismissHydrationNotice);
   const language = useTopologyStore((s) => s.language);
 
-  // sessionChecked guards the gate against a flash: neither the canvas (cookie may
-  // be valid) nor the login page (it may not) is shown until the FIRST probe in
-  // controller mode resolves. Subsequent mode flips re-probe asynchronously without
-  // re-raising the splash (same-session login state is already known).
-  const [sessionChecked, setSessionChecked] = useState(false);
+  // The gate must not flash: until the session probe for the CURRENT controller-mode
+  // entry resolves, show neither the canvas (cookie may be valid) nor the login page
+  // (it may not). probedMode records which mode the last resolved probe was for; it
+  // is RESET on leaving controller mode (during render — the React-sanctioned
+  // "adjust state when a prop changes" pattern) so a controller→local→controller
+  // round-trip re-raises the splash and re-probes instead of trusting a stale
+  // loggedIn (review: an expired session would otherwise flash the canvas).
+  const [probedMode, setProbedMode] = useState<'local' | 'controller' | null>(null);
+  if (mode !== 'controller' && probedMode !== null) {
+    setProbedMode(null);
+  }
+  const sessionChecked = probedMode === 'controller';
 
   // P5: restore login state from the httpOnly session cookie after a page refresh.
   // Runs once on mount and whenever the workflow switches into controller mode.
@@ -42,7 +49,7 @@ export function Shell() {
     }
     let cancelled = false;
     void checkSession().finally(() => {
-      if (!cancelled) setSessionChecked(true);
+      if (!cancelled) setProbedMode('controller');
     });
     return () => {
       cancelled = true;
@@ -78,14 +85,21 @@ export function Shell() {
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar />
-        {/* plan-4 (D9): one-time notice that the local design was replaced by the
-            server copy and a backup file was downloaded. Dismissible. */}
+        {/* plan-4 (D9): notice that the local design was replaced by the server copy
+            and a backup file was downloaded. Rendered live via txt() (not a frozen
+            pre-localized string) and dismissible. */}
         {hydrationNotice && (
           <div
             className="flex items-start justify-between gap-3 border-b border-[var(--hairline)] bg-[var(--surface-sunken)] px-4 py-2 text-sm text-[var(--content)]"
             role="status"
           >
-            <span>{hydrationNotice}</span>
+            <span>
+              {txt(
+                language,
+                '本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。',
+                'Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.',
+              )}
+            </span>
             <button
               type="button"
               onClick={dismissHydrationNotice}

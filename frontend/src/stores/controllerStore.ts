@@ -45,6 +45,38 @@ import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/weba
 import { useTopologyStore } from './topologyStore';
 import { useUiStore } from './uiStore';
 
+// loadSlices projects a Topology down to exactly the fields loadTopology consumes
+// (project/domains/nodes/edges + the schema version), so the hydration diff compares
+// what an overwrite would actually change — nothing else.
+function loadSlices(t: Topology): Record<string, unknown> {
+  return {
+    project: t.project,
+    domains: t.domains,
+    nodes: t.nodes,
+    edges: t.edges,
+    alloc_schema_version: t.alloc_schema_version ?? 0,
+  };
+}
+
+// stableStringify serializes with recursively-sorted object keys so two structurally
+// equal designs compare equal regardless of key order (the server's canonical JSON vs
+// the panel's getTopology() key order). Array order is preserved (significant). Used
+// only for the hydration diff; being conservative (a reorder reads as "differs") is
+// safe — it backs up + reloads, never loses data.
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const obj = value as Record<string, unknown>;
+  return (
+    '{' +
+    Object.keys(obj)
+      .sort()
+      .map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k]))
+      .join(',') +
+    '}'
+  );
+}
+
 // 控制器面板（Mode B）状态。它是 controller 连接 + fleet 视图的单一来源，独立于
 // topologyStore（后者仍是拓扑数据的唯一来源）。deploy() 时从 topologyStore 读取当前
 // 拓扑并复用 compile() 发送的同一 model.Topology JSON 形状。
@@ -101,11 +133,11 @@ interface ControllerState {
   settings: ControllerSettings | null;
 
   // 服务端权威 hydration（plan-4，D1）：每次登录/会话恢复后用 GET /topology 覆盖本地画布。
-  // hydrationStashDone（持久化）记录「一次性导出备份」（D9）是否已经发生——首次覆盖且本地
-  // 设计非空且与服务端不同的那一次，会先下载 pre-hydration-backup-<date>.json 再覆盖；
-  // 此后不再备份（服务端是唯一权威，本地缓存只是镜像）。hydrationNotice 是可关闭的提示。
-  hydrationStashDone: boolean;
-  hydrationNotice: string | null;
+  // 当一次覆盖会丢弃「非空且与服务端不同」的本地设计时，先下载 pre-hydration-backup-<date>
+  // .json 作为保险（D9，review 修正：每次分歧覆盖都备份，而非每浏览器一次——后者会静默丢弃
+  // 未部署的本地编辑）。hydrationNotice 为真时 Shell 显示一条可关闭提示（用 txt() 实时本地化，
+  // 不冻结语言）。
+  hydrationNotice: boolean;
 
   // KEYSTONE（plan-5.1d）：已 pin 的 off-host operator 签名凭据（passkey / YubiKey）。
   // 仅持久化非密信息——credential_id（base64url(rawId)）、alg、rpId——它们不是密钥材料
@@ -147,7 +179,7 @@ interface ControllerState {
   checkSession: () => Promise<void>;
   // 服务端权威 hydration（plan-4，D1）：GET /topology → loadTopology 覆盖本地画布。404
   //（尚无服务端拓扑——首次部署前）保留本地画布。login/loginWithPasskey/checkSession 的
-  // 成功路径都会调用它。首次覆盖前按 D9 做一次性导出备份（见 hydrationStashDone）。
+  // 成功路径都会调用它。覆盖前若本地有「非空且与服务端不同」的设计，先导出一次备份（D9）。
   hydrateFromServer: () => Promise<void>;
   dismissHydrationNotice: () => void;
   // 无密码 passkey 登录（plan-5.2）：begin → assertLogin → finish。
@@ -267,8 +299,7 @@ export const useControllerStore = create<ControllerState>()(
       lastDeploy: null,
       settings: null,
 
-      hydrationStashDone: false,
-      hydrationNotice: null,
+      hydrationNotice: false,
 
       operatorCredentialId: null,
       operatorCredentialAlg: null,
@@ -457,24 +488,23 @@ export const useControllerStore = create<ControllerState>()(
             return; // 形状不符：不覆盖（服务端字节由 update-topology 的 custody 门保证，这只是防御）。
           }
           const topoStore = useTopologyStore.getState();
-          // D9：首次覆盖且本地非空且与服务端不同 → 先导出一次性备份再覆盖。仅一次/浏览器。
-          if (!get().hydrationStashDone) {
-            const local = topoStore.getTopology();
-            const localEmpty =
-              local.nodes.length === 0 && local.edges.length === 0 && local.domains.length === 0;
-            const differs = JSON.stringify(local) !== JSON.stringify(topo);
-            if (!localEmpty && differs) {
-              const stamp = new Date().toISOString().slice(0, 10);
-              topoStore.exportProject(`pre-hydration-backup-${stamp}.json`);
-              const language = topoStore.language;
-              set({
-                hydrationNotice:
-                  language === 'zh'
-                    ? '本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。'
-                    : 'Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.',
-              });
-            }
-            set({ hydrationStashDone: true });
+          const local = topoStore.getTopology();
+          // 语义比较（plan-4 review）：只比 loadTopology 实际消费的四个切片 + 版本号，且对
+          // 对象键排序后再比，避免「服务端 canonical 键序」与「前端 getTopology 键序」不同
+          // 造成的假性差异（数组顺序保留=保守，宁可多备份也不漏）。
+          const differs = stableStringify(loadSlices(local)) !== stableStringify(loadSlices(topo));
+          if (!differs) {
+            return; // 与本地完全一致：跳过覆盖（不无谓清空历史/选中）。
+          }
+          // 备份保险（D9，review 修正）：每当一次覆盖会丢弃「非空且与服务端不同」的本地设计
+          // 时都先导出备份——不再是「每浏览器一次」（那会在第二次起静默丢弃未部署的本地编辑）。
+          // 稳态下 differs=false，本分支根本不触发，故不会刷屏下载；只有真有分歧的未部署改动
+          // 才会备份，正是该保护的场景。控制器模式下「持久化=部署」，未部署的本地改动是易失的。
+          const localHasWork = local.nodes.length > 0 || local.edges.length > 0;
+          if (localHasWork) {
+            const stamp = new Date().toISOString().slice(0, 10);
+            topoStore.exportProject(`pre-hydration-backup-${stamp}.json`);
+            set({ hydrationNotice: true });
           }
           topoStore.loadTopology(topo);
         } catch {
@@ -482,7 +512,7 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      dismissHydrationNotice: () => set({ hydrationNotice: null }),
+      dismissHydrationNotice: () => set({ hydrationNotice: false }),
 
       // 登出：best-effort 调 POST /logout 撤销服务端 session，然后无论成败都清空本地
       // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。
@@ -855,8 +885,6 @@ export const useControllerStore = create<ControllerState>()(
         nodes: state.nodes,
         settings: state.settings,
         lastSyncedAt: state.lastSyncedAt,
-        // plan-4 (D9): the one-time pre-hydration export stash fires once per browser.
-        hydrationStashDone: state.hydrationStashDone,
       }),
     }
   )
