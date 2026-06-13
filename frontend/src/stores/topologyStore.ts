@@ -96,7 +96,22 @@ interface TopologyState {
 
   // 工具
   getTopology: () => Topology;
-  loadTopology: (topo: Topology) => void;
+  // fromServer 标记本次加载是否来自控制器服务端 hydration（区别于本地导入/快照）：服务端
+  // 拉来的设计含机密 fleet 数据（公网 IP/SSH 目标），controller 模式下绝不能落盘或在登出后
+  // 残留。见 canvasFromServer 的安全不变量。
+  loadTopology: (topo: Topology, fromServer?: boolean) => void;
+  // 画布来源（安全不变量）：true 表示当前画布内容是「服务端权威的机密数据」——它由一次服务端
+  // hydration 写入（loadTopology(topo,true)），或由一次 deploy() 写到服务端后标记（部署后本地画布
+  // 即等同服务端权威副本）；其后的本地编辑仍视为派生机密数据。controller 模式下为 true 时：
+  // ①不持久化到 localStorage（partialize 置空），②登出/会话失效时清空（controllerStore），
+  // ③未登录时从登录门「切回本地」是整画布重置而非保图。本地原创工作（导入/新建/reset）置 false，
+  // 正常持久化——那是用户自有数据。
+  // 已知边界（均为 minor，刻意取舍）：(a) 与服务端字节完全相同的「空对空」no-op hydration 提前
+  // 返回，不改来源标记——但此时本地与服务端无差异，无机密可泄漏；(b) 尚未部署、也非服务端来的
+  // 「controller 模式草稿」标记为 false 以便登出后保留未保存草稿（代价：本机登出态可见，敏感度低于
+  // 已部署的 fleet 数据）；一旦部署即转为 true 受保护。
+  canvasFromServer: boolean;
+  setCanvasFromServer: (v: boolean) => void;
   reset: () => void;
   // 模式边界清洗（plan-5，D6）：controller→local 切换时调用。图（project/domains/节点身份/
   // edges）保留，但清空一切密钥材料与编译产物——私钥/公钥、overlay_ip、edge 的 compiled_port
@@ -164,6 +179,10 @@ export const useTopologyStore = create<TopologyState>()(
       selectedDomainId: null,
         language: defaultLanguage,
       importPlaceholdered: 0,
+      // 默认 false：全新/本地工作区不是服务端机密数据。仅 hydrateFromServer 会置 true。
+      canvasFromServer: false,
+
+      setCanvasFromServer: (v) => set({ canvasFromServer: v }),
 
       setLanguage: (lang) => set({ language: lang }),
 
@@ -404,7 +423,7 @@ export const useTopologyStore = create<TopologyState>()(
   // 加载拓扑（导入项目 / 恢复快照）。保持四切片语义：只接收 project/domains/nodes/edges，
   // 外加 Spec E 规则 R0 的 alloc_schema_version（文件中存在时读取，否则归零）。
   // D75：清空历史与选中状态，避免导入的新项目与上一份项目的快照做无意义的 diff。
-  loadTopology: (topo) =>
+  loadTopology: (topo, fromServer = false) =>
     set({
       project: topo.project,
       domains: topo.domains,
@@ -418,6 +437,9 @@ export const useTopologyStore = create<TopologyState>()(
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,
+      // 本地导入/快照恢复默认 false；只有服务端 hydration 传 true。原子设置（与切片同一次 set），
+      // 避免「先 false 落盘服务端数据、再翻 true」的瞬态持久化窗口。
+      canvasFromServer: fromServer,
     }),
 
   // 模式边界清洗（plan-5，D6）：controller→local 切换的有损动作。图保留（project/domains/
@@ -455,6 +477,8 @@ export const useTopologyStore = create<TopologyState>()(
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,
+      // 切回本地后图归操作员本地所有，不再是服务端机密镜像：清除来源标记，恢复正常持久化。
+      canvasFromServer: false,
     })),
 
   // 重置
@@ -475,6 +499,7 @@ export const useTopologyStore = create<TopologyState>()(
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,
+      canvasFromServer: false,
     }),
 
   flushWorkspace: () =>
@@ -495,6 +520,7 @@ export const useTopologyStore = create<TopologyState>()(
       selectedEdgeId: null,
       selectedDomainId: null,
       language: state.language,
+      canvasFromServer: false,
     })),
 
   // API: 校验
@@ -633,17 +659,31 @@ export const useTopologyStore = create<TopologyState>()(
     {
       name: 'topology-storage',
       // We only persist these properties to avoid saving volatile UI state like isCompiling or errors
-      partialize: (state) => ({
-        project: state.project,
-        domains: state.domains,
-        nodes: state.nodes,
-        edges: state.edges,
-        // Spec E 规则 R0：版本号也要持久化，刷新页面后仍能往返编译器写入的分配方案。
-        allocSchemaVersion: state.allocSchemaVersion,
-        language: state.language,
-        // 画布偏好与语言同级持久化：刷新后保持用户选择的接口详情展开状态。
-        showInterfaces: state.showInterfaces,
-      }),
+      partialize: (state) => {
+        // 安全不变量（controller server-authoritative）：服务端 hydrate 来的设计含机密 fleet
+        // 数据（公网 IP/SSH 目标）。controller 模式下绝不把它落盘——否则登出后任何拿到浏览器的
+        // 人都能从 localStorage 读出（或一键「切回本地」渲染出来）。D1 说画布是「可丢弃的镜像」：
+        // 登录会从服务端重新 hydrate，故无需持久化。本地模式、或本地原创工作（canvasFromServer
+        // =false）照常持久化——那是用户自己机器上的自有数据，不是机密镜像。mode 跨 store 惰性读取
+        // （与 importProject 同一手法，运行时取值规避模块级循环依赖）。init-safety：本 store 未配置
+        // persist version/migrate，故 partialize 不会在模块初始化期（hydrate 阶段）被调用——首次调用
+        // 发生在两个 store 都已就绪后的用户态 set()，此时 useControllerStore.getState() 必定可用。
+        const serverHeld =
+          state.canvasFromServer && useControllerStore.getState().mode === 'controller';
+        return {
+          project: serverHeld ? { ...defaultProject } : state.project,
+          domains: serverHeld ? makeDefaultDomains() : state.domains,
+          nodes: serverHeld ? [] : state.nodes,
+          edges: serverHeld ? [] : state.edges,
+          // Spec E 规则 R0：版本号也要持久化，刷新页面后仍能往返编译器写入的分配方案。
+          allocSchemaVersion: serverHeld ? 0 : state.allocSchemaVersion,
+          // 来源标记本身要持久化：刷新后若仍未登录，登录门据此知道画布是机密镜像而整体重置。
+          canvasFromServer: state.canvasFromServer,
+          language: state.language,
+          // 画布偏好与语言同级持久化：刷新后保持用户选择的接口详情展开状态。
+          showInterfaces: state.showInterfaces,
+        };
+      },
     }
   )
 );
