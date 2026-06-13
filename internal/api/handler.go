@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
@@ -38,10 +39,19 @@ func NewHandler() *Handler {
 	}
 }
 
-// apiError
+// apiError is the wire envelope for every error response: a single nested object
+// carrying a stable machine code, the server-rendered English message (for CLI/curl
+// and as the i18n English fallback), and string params the panel interpolates into the
+// localized template. See internal/apierr.
 type apiError struct {
-	Error   string `json:"error"`
-	Details any    `json:"details,omitempty"`
+	Error errorBody `json:"error"`
+}
+
+// errorBody is the nested error payload.
+type errorBody struct {
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Params  map[string]string `json:"params,omitempty"`
 }
 
 // HealthResponse
@@ -575,6 +585,23 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// writeAPIError serializes a coded error as the nested envelope, using the error's own
+// HTTP status. This is the single error-response path; new code calls it with a real
+// apierr code.
+func writeAPIError(w http.ResponseWriter, e *apierr.Error) {
+	writeJSON(w, e.Status(), apiError{Error: errorBody{
+		Code:    string(e.Code()),
+		Message: e.Message(),
+		Params:  e.Params(),
+	}})
+}
+
+// writeError is the TRANSITIONAL bridge: it wraps a bare, not-yet-coded message under
+// CodeLegacyUncoded so the ~200 existing call sites emit the nested envelope unchanged.
+// It is removed in the final plan-3 commit, once every site calls writeAPIError with a
+// real code (grep-gated). Do not use it in new code.
+//
+// Deprecated: use writeAPIError with an apierr.Code.
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, apiError{Error: message})
+	writeAPIError(w, apierr.New(apierr.CodeLegacyUncoded).WithStatus(status).WithMessage(message))
 }

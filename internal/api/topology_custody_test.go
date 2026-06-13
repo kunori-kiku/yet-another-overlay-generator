@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
@@ -83,13 +84,18 @@ func TestTopologyCustody_RejectionMessageNamesCustody(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
-	var raw map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	var body apiError
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode 400 body: %v", err)
 	}
-	msg := strings.ToLower(raw["error"])
+	// The rejection is coded; both the code and the rendered message must convey the WHY
+	// (private keys + custody) so the operator and the panel localization both have it.
+	if body.Error.Code != string(apierr.CodeCustodyPrivateKey) {
+		t.Errorf("rejection code = %q, want %q", body.Error.Code, apierr.CodeCustodyPrivateKey)
+	}
+	msg := strings.ToLower(body.Error.Message)
 	if !strings.Contains(msg, "private key") || !strings.Contains(msg, "custody") {
-		t.Errorf("rejection message must name private keys + custody; got %q", raw["error"])
+		t.Errorf("rejection message must name private keys + custody; got %q", body.Error.Message)
 	}
 }
 

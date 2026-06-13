@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
@@ -739,8 +740,7 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 	}
 	for _, n := range topo.Nodes {
 		if n.WireGuardPrivateKey != "" {
-			writeError(w, http.StatusBadRequest,
-				"topology carries WireGuard private keys; controller mode is zero-knowledge — strip them client-side (key custody)")
+			writeAPIError(w, apierr.New(apierr.CodeCustodyPrivateKey))
 			return
 		}
 	}

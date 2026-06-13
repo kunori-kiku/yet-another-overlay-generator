@@ -74,8 +74,8 @@ func TestHandleDeployScript_InvalidTopologyReturns422(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("解析错误响应失败: %v", err)
 	}
-	if resp.Error == "" {
-		t.Errorf("期望 422 响应体含非空 error 字段")
+	if resp.Error.Message == "" {
+		t.Errorf("期望 422 响应体含非空 error.message 字段")
 	}
 }
 

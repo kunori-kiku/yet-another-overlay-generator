@@ -28,13 +28,13 @@ func TestRequestBodySizeCap_Returns413(t *testing.T) {
 		t.Fatalf("期望 413，实际 %d，body: %s", rec.Code, rec.Body.String())
 	}
 
-	// 错误响应必须是 {"error": ...} 形式，供前端展示。
+	// 错误响应必须是 {"error":{code,message,params}} 形式，供前端展示/本地化。
 	var resp apiError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("解码错误响应失败: %v", err)
 	}
-	if resp.Error == "" {
-		t.Errorf("413 响应应包含非空的 error 字段")
+	if resp.Error.Message == "" {
+		t.Errorf("413 响应应包含非空的 error.message 字段")
 	}
 }
 
@@ -69,8 +69,8 @@ func TestRecoverPanics_Returns500JSON(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("解码错误响应失败: %v", err)
 	}
-	if resp.Error == "" {
-		t.Errorf("500 响应应包含非空的 error 字段")
+	if resp.Error.Message == "" {
+		t.Errorf("500 响应应包含非空的 error.message 字段")
 	}
 }
 
