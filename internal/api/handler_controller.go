@@ -431,6 +431,11 @@ type enrollmentTokenRequestJSON struct {
 // capture the plaintext.
 type enrollmentTokenResponseJSON struct {
 	Token string `json:"token"`
+	// Warning is a non-blocking advisory (plan-6): set when the node-id has no
+	// matching node in the stored design, so the operator learns the token will mint
+	// fine but the node will be SKIPPED at stage until it is added to the design.
+	// Empty when the node-id is present (or no design is stored yet).
+	Warning string `json:"warning,omitempty"`
 }
 
 // rekeyAllResponseJSON is the operator-facing result of a fleet-wide key-rotation
@@ -516,6 +521,12 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		// malformed request.
 		if errors.Is(err, controller.ErrTokenInvalid) || errors.Is(err, controller.ErrTokenConsumed) {
 			writeError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
+		// must resolve (revoke the other node or reuse its id), not a malformed request.
+		if errors.Is(err, controller.ErrDuplicateWGKey) {
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1079,7 +1090,34 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
-	writeJSON(w, http.StatusOK, enrollmentTokenResponseJSON{Token: plaintext})
+	// Design-membership advisory (plan-6, warn-not-block): if the stored design has
+	// no node with this id, the token mints fine but the node will be skipped at
+	// stage until it is added — surface that so an operator who pre-mints (token
+	// before design) or fat-fingers an id learns about it now. A missing stored
+	// design (404) is not a warning: pre-minting before any design exists is normal.
+	resp := enrollmentTokenResponseJSON{Token: plaintext}
+	if rec, err := h.store.GetTopology(r.Context(), tenant); err == nil {
+		if !topologyHasNode(rec.JSON, req.NodeID) {
+			resp.Warning = "node-id not present in the stored design; it will be skipped at stage until added"
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// topologyHasNode reports whether the stored topology JSON contains a node with the
+// given id. A parse failure is treated as "present" (no false alarm on a topology we
+// cannot read — the membership check is an advisory, not a gate).
+func topologyHasNode(topoJSON []byte, nodeID string) bool {
+	var topo model.Topology
+	if err := json.Unmarshal(topoJSON, &topo); err != nil {
+		return true
+	}
+	for _, n := range topo.Nodes {
+		if n.ID == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleRekeyAll requests a fleet-wide WireGuard key rotation (operator-only). It

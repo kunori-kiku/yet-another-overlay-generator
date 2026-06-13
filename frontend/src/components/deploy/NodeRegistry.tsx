@@ -44,6 +44,11 @@ export function NodeRegistry() {
   );
   // 拓扑节点名查找（边的就绪状态用名字展示，便于操作员对应）。
   const nameByNodeId = new Map<string, string>(topoNodes.map((n) => [n.id, n.name]));
+  // 当前设计里的节点 id 集合：注册表里出现、但设计里没有的 node-id 是「孤儿」——它仍在
+  // fleet 里（持有有效令牌、会拉取配置），但已不属于当前设计（plan-6，身份对账）。hydration
+  // 后 topoNodes 即服务端设计，故此判断在登录后可信。
+  const designNodeIds = new Set<string>(topoNodes.map((n) => n.id));
+  const isOrphan = (nodeId: string): boolean => !designNodeIds.has(nodeId);
 
   // 边就绪：当且仅当两个端点节点在控制器注册表中都是 approved。
   const edgeReady = (fromId: string, toId: string): boolean =>
@@ -97,6 +102,13 @@ export function NodeRegistry() {
                       {n.rekeyRequested && (
                         <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
                           {txt(language, '🔑 轮换中', '🔑 rekeying')}
+                        </span>
+                      )}
+                      {/* plan-6：该节点在 fleet 注册表里，但不在当前设计中——身份对账标记，
+                          提示操作员它已脱离设计（可在右侧「驱逐」以从 fleet 移除）。 */}
+                      {isOrphan(n.nodeId) && n.status !== 'revoked' && (
+                        <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-900/40 text-orange-300 border-orange-700">
+                          {txt(language, '⚠ 不在设计中', '⚠ not in design')}
                         </span>
                       )}
                     </td>

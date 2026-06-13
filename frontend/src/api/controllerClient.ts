@@ -215,6 +215,15 @@ interface GenerationResponseJSON {
 
 interface EnrollmentTokenResponseJSON {
   token: string;
+  warning?: string;
+}
+
+// MintTokenResult is the operator-facing result of minting an enrollment token: the
+// plaintext token (shown once) plus an optional non-blocking design-membership
+// warning (plan-6: set when the node-id is absent from the stored design).
+export interface MintTokenResult {
+  token: string;
+  warning: string;
 }
 
 interface RevokeResponseJSON {
@@ -663,14 +672,14 @@ export async function mintEnrollmentToken(
   cfg: ControllerConfig,
   nodeId: string,
   ttlSeconds: number
-): Promise<string> {
+): Promise<MintTokenResult> {
   const res = await postJSON(
     cfg,
     'enrollment-token',
     JSON.stringify({ node_id: nodeId, ttl_seconds: ttlSeconds })
   );
   const data = (await res.json()) as EnrollmentTokenResponseJSON;
-  return data.token;
+  return { token: data.token, warning: data.warning ?? '' };
 }
 
 // 上传一份新拓扑版本（operator-only）。topoJSON 是已序列化的 model.Topology JSON

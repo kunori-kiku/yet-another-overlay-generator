@@ -19,6 +19,8 @@ export function EnrollmentFlow() {
   const [token, setToken] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
   const [mintError, setMintError] = useState<string | null>(null);
+  // 服务端对「为不在设计里的 node-id 铸造令牌」给出的非阻塞警告（plan-6）。
+  const [mintWarning, setMintWarning] = useState<string>('');
   const [copied, setCopied] = useState<'' | 'enroll' | 'bootstrap'>('');
 
   // Agent 前缀是服务端在 GET /settings 里只读上报的（YAOG_AGENT_PATH_PREFIX，已归一化为
@@ -56,11 +58,13 @@ export function EnrollmentFlow() {
     if (!nodeId || ttlSeconds <= 0) return;
     setMinting(true);
     setMintError(null);
+    setMintWarning('');
     setToken(null);
     setCopied('');
     try {
-      const tok = await mintToken(nodeId, ttlSeconds);
-      setToken(tok);
+      const result = await mintToken(nodeId, ttlSeconds);
+      setToken(result.token);
+      setMintWarning(result.warning);
     } catch (err) {
       setMintError(err instanceof Error ? err.message : 'Failed to mint enrollment token');
     } finally {
@@ -144,6 +148,19 @@ export function EnrollmentFlow() {
       {mintError && (
         <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">
           ⚠️ {mintError}
+        </p>
+      )}
+
+      {/* 设计成员告警（plan-6，warn-not-block）：令牌已铸造可用，但该 node-id 不在当前设计里，
+          stage 时会被跳过——提示操作员把它加进设计（或确认是预先铸造）。 */}
+      {mintWarning && (
+        <p className="text-xs text-amber-300 bg-amber-900/20 px-2 py-1 rounded break-all">
+          ⚠️{' '}
+          {txt(
+            language,
+            `该节点 ID 不在当前设计中——令牌可用，但在把它加入设计之前，stage 会跳过该节点。（${mintWarning}）`,
+            `This node id is not in the current design — the token works, but stage will skip the node until you add it to the design. (${mintWarning})`,
+          )}
         </p>
       )}
 

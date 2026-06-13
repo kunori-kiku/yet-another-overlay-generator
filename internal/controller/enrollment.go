@@ -149,6 +149,35 @@ func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now
 		return EnrollResult{}, err
 	}
 
+	// (a2) Dedupe (plan-6): one approved WG public key ↔ one node-id. Refuse if the
+	// presented pubkey is already approved under a DIFFERENT node-id — the
+	// duplicate-fleet-rows vector (re-enrolling one machine's key under a second id
+	// would leave two registry rows the operator must reconcile). Same-id re-enroll
+	// (a reinstalled host with a fresh token, same or new key) is unaffected: the
+	// match is pubkey-equal AND id-different. Checked AFTER the burn so only an
+	// authorized caller (valid single-use token) reaches it — auditing here cannot be
+	// spammed by an unauthenticated probe. An empty pubkey (registered as-is, see the
+	// file header) is never deduped. The refusal is audited.
+	if req.WGPublicKey != "" {
+		nodes, err := store.ListNodes(ctx, t)
+		if err != nil {
+			return EnrollResult{}, fmt.Errorf("controller: checking for duplicate WG key: %w", err)
+		}
+		for _, n := range nodes {
+			if n.Status == NodeApproved && n.WGPublicKey == req.WGPublicKey && n.NodeID != req.NodeID {
+				if _, auditErr := store.AppendAudit(ctx, t, AuditEntry{
+					Timestamp: now,
+					Actor:     "agent:" + req.NodeID,
+					Action:    "enroll-rejected-duplicate-key",
+					NodeID:    req.NodeID,
+				}); auditErr != nil {
+					return EnrollResult{}, fmt.Errorf("controller: appending duplicate-key audit: %w", auditErr)
+				}
+				return EnrollResult{}, fmt.Errorf("%w: this WireGuard public key is already enrolled as node %q; revoke it first or reuse that node id", ErrDuplicateWGKey, n.NodeID)
+			}
+		}
+	}
+
 	// (b) Mint the per-node bearer token. Plaintext is returned to the node once;
 	// only the hash is stored.
 	plaintext, hash := NewNodeAPIToken(now)
