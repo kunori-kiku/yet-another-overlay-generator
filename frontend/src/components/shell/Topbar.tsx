@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { txt } from '../../i18n';
 import { ThemeToggle } from './ThemeToggle';
+import { LanguageToggle } from './LanguageToggle';
 import { UserMenu } from './UserMenu';
 import { activeNavItem } from './nav';
 import { FOCUS_RING } from './styles';
@@ -14,7 +15,6 @@ import { FOCUS_RING } from './styles';
 export function Topbar() {
   const location = useLocation();
   const language = useTopologyStore((s) => s.language);
-  const setLanguage = useTopologyStore((s) => s.setLanguage);
   const exportProject = useTopologyStore((s) => s.exportProject);
   const importProject = useTopologyStore((s) => s.importProject);
   const flushWorkspace = useTopologyStore((s) => s.flushWorkspace);
@@ -63,7 +63,7 @@ export function Topbar() {
           <button type="button" onClick={handleImportClick} className={ioBtn}>
             {txt(language, '导入项目', 'Import')}
           </button>
-          <button type="button" onClick={exportProject} className={ioBtn}>
+          <button type="button" onClick={() => exportProject()} className={ioBtn}>
             {txt(language, '导出项目', 'Export')}
           </button>
           <button
@@ -77,30 +77,7 @@ export function Topbar() {
         </div>
       )}
 
-      <div className="flex items-center overflow-hidden rounded-lg border border-[var(--hairline)]">
-        <button
-          type="button"
-          onClick={() => setLanguage('zh')}
-          className={`px-2 py-1 text-xs transition-colors ${FOCUS_RING} ${
-            language === 'zh'
-              ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
-              : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)]'
-          }`}
-        >
-          中文
-        </button>
-        <button
-          type="button"
-          onClick={() => setLanguage('en')}
-          className={`px-2 py-1 text-xs transition-colors ${FOCUS_RING} ${
-            language === 'en'
-              ? 'bg-[var(--accent)] text-[var(--accent-fg)]'
-              : 'text-[var(--content-muted)] hover:bg-[var(--surface-sunken)]'
-          }`}
-        >
-          EN
-        </button>
-      </div>
+      <LanguageToggle />
 
       <ThemeToggle />
       <UserMenu />
