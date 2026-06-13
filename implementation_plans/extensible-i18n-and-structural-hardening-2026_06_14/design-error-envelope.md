@@ -4,6 +4,33 @@
 The decision that frees the panel to localize backend errors (the bug the owner hit: an
 English-locale operator sees Chinese). Implement plan-2 and plan-3 to this spec verbatim.
 
+## plan-3.5 scoping note (added 2026-06-14 after plan-3 shipped)
+
+plan-2 (apierr + envelope) and plan-3 (render key-gen codes + corrupted-allocator fix) shipped.
+The remaining backend user-facing strings split into TWO channels — handle them differently:
+
+1. **HTTP error responses → the apierr envelope** (the `{error:{code,message,params}}` path). Remaining
+   here: `internal/compiler` (~11, incl. `peers.go` 10 — surface via `HandleCompile`'s 422),
+   `auth_controller.go`, `handler_login/passkey/totp/bootstrap.go`, `cmd/compiler`, `cmd/server`,
+   plus render.All's other Chinese (`render.go` 152–217). Treat exactly like plan-3: code at the
+   source (or map a sentinel at the handler), add `error.<code>` frontend keys, then DELETE the
+   `writeError` legacy delegate + `CodeLegacyUncoded` (grep-gated) as the FINAL step.
+
+2. **Validation results → NOT the envelope.** `validator` messages (schema ~24, semantic ~26, nat ~4
+   = ~54) reach the panel via `ValidateResponse{ errors: []ValidationError{Field,Message,Level} }` on
+   a **200** response (see `HandleValidate`/`HandleCompile`), displayed directly by the frontend — they
+   never pass through `writeError`/apierr. To localize them, add `Code Code` + `Params map[string]string`
+   to `validator.ValidationError` (Message stays as the English default), have each `AddError/AddWarning`
+   site pass a code+params, and add a frontend localizer for validation errors (mirror `tError`, keyed
+   by `error.<code>`). This is the LARGER half of plan-3.5 and a distinct refactor from the envelope
+   work — scope it as its own focused session. `validator` may import `internal/apierr` (the stdlib-only
+   leaf) to reuse the `Code` type, OR define validation codes locally; reusing `apierr.Code` keeps one
+   code namespace.
+
+Both halves are mechanical follow-through of the established pattern; the build (the frontend
+`MessageKey` union + Go `go test`) keeps proving completeness. Until then, an English-locale operator
+still sees Chinese on a **validation failure** — that is the single biggest remaining user-visible gap.
+
 ## Wire envelope — NESTED
 
 ```json
