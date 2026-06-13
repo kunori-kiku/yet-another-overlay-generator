@@ -431,6 +431,11 @@ type enrollmentTokenRequestJSON struct {
 // capture the plaintext.
 type enrollmentTokenResponseJSON struct {
 	Token string `json:"token"`
+	// Warning is a non-blocking advisory (plan-6): set when the node-id has no
+	// matching node in the stored design, so the operator learns the token will mint
+	// fine but the node will be SKIPPED at stage until it is added to the design.
+	// Empty when the node-id is present (or no design is stored yet).
+	Warning string `json:"warning,omitempty"`
 }
 
 // rekeyAllResponseJSON is the operator-facing result of a fleet-wide key-rotation
@@ -516,6 +521,12 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		// malformed request.
 		if errors.Is(err, controller.ErrTokenInvalid) || errors.Is(err, controller.ErrTokenConsumed) {
 			writeError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
+		// must resolve (revoke the other node or reuse its id), not a malformed request.
+		if errors.Is(err, controller.ErrDuplicateWGKey) {
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1079,7 +1090,35 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
-	writeJSON(w, http.StatusOK, enrollmentTokenResponseJSON{Token: plaintext})
+	// Design-membership advisory (plan-6, warn-not-block): if the stored design has
+	// no node with this id, the token mints fine but the node will be skipped at
+	// stage until it is added — surface that so an operator who fat-fingers an id
+	// learns about it now. The warning is set ONLY when GetTopology succeeds AND the
+	// id is absent. Any read failure yields NO warning by design: ErrNotFound means
+	// no design is stored yet (pre-minting before designing is normal), and a
+	// transient store error must not produce a false alarm — the advisory fails safe
+	// to silent, never blocks the mint.
+	resp := enrollmentTokenResponseJSON{Token: plaintext}
+	if rec, err := h.store.GetTopology(r.Context(), tenant); err == nil && !topologyHasNode(rec.JSON, req.NodeID) {
+		resp.Warning = "node-id not present in the stored design; it will be skipped at stage until added"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// topologyHasNode reports whether the stored topology JSON contains a node with the
+// given id. A parse failure is treated as "present" (no false alarm on a topology we
+// cannot read — the membership check is an advisory, not a gate).
+func topologyHasNode(topoJSON []byte, nodeID string) bool {
+	var topo model.Topology
+	if err := json.Unmarshal(topoJSON, &topo); err != nil {
+		return true
+	}
+	for _, n := range topo.Nodes {
+		if n.ID == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleRekeyAll requests a fleet-wide WireGuard key rotation (operator-only). It
@@ -1181,30 +1220,19 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Load the existing record so we preserve every field while swapping the public
-	// key and clearing the flag. UpsertNode matches by NodeID.
-	rec, err := h.store.GetNode(r.Context(), tenant, node)
-	if err != nil {
+	// controller.Rekey swaps the key + clears the flag under the per-tenant op lock
+	// and enforces the SAME identity invariant as enroll (plan-6 review: the rekey
+	// write path must not be able to create a duplicate the enroll dedupe forbids).
+	if err := controller.Rekey(r.Context(), h.store, tenant, node, req.WGPublicKey, time.Now()); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "node not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load node")
-		return
-	}
-	rec.WGPublicKey = req.WGPublicKey
-	rec.RekeyRequested = false
-	if err := h.store.UpsertNode(r.Context(), tenant, rec); err != nil {
+		if errors.Is(err, controller.ErrDuplicateWGKey) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to record rekey")
-		return
-	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
-		Timestamp: time.Now(),
-		Actor:     "agent:" + node,
-		Action:    "rekey",
-		NodeID:    node,
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
 	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})

@@ -50,6 +50,11 @@ var (
 	// matches the hash for the operator, it is expired, or it was already consumed
 	// (a consumed challenge is DELETED, so a replay simply finds nothing).
 	ErrChallengeInvalid = errors.New("controller: login challenge invalid or expired")
+	// ErrDuplicateWGKey is returned by Enroll when the presented WireGuard public
+	// key is already approved under a DIFFERENT node-id (plan-6: one approved WG
+	// pubkey ↔ one node-id — the duplicate-fleet-rows vector). Same-id re-enroll
+	// (reinstalled host, fresh token) is unaffected.
+	ErrDuplicateWGKey = errors.New("controller: WireGuard public key already enrolled under a different node id")
 )
 
 // NodeStatus is the lifecycle state of a registry node.

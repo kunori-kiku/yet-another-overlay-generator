@@ -10,6 +10,7 @@ import type {
   WebAuthnAlg,
   ControllerSettings,
   TOTPEnrollment,
+  MintTokenResult,
 } from '../api/controllerClient';
 import {
   getNodes,
@@ -218,7 +219,7 @@ interface ControllerState {
   enrollTOTP: () => Promise<TOTPEnrollment>;
   confirmTOTP: (secret: string, code: string) => Promise<void>;
   disableTOTP: (code: string) => Promise<void>;
-  mintToken: (nodeId: string, ttl: number) => Promise<string>;
+  mintToken: (nodeId: string, ttl: number) => Promise<MintTokenResult>;
   enrollOperator: () => Promise<void>;
   // deploy 上传当前画布（先剥离私钥）→ stage → (keystone 签名) → promote。当一次部署会让
   // 服务端设计大幅缩水时，除非 confirmedShrink，否则设置 pendingShrink 并暂不部署（等键入

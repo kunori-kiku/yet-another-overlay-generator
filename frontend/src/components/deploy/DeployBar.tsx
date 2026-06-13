@@ -27,6 +27,9 @@ export function DeployBar() {
   // 是否已 pin off-host 签名凭据（决定签名区回显与提示）。
   const operatorEnrolled = useControllerStore(selectOperatorEnrolled);
   const operatorCredentialAlg = useControllerStore((s) => s.operatorCredentialAlg);
+  // 部署后孤儿清单（plan-6）：仍在 fleet 注册表、但不在「刚刚发布的那一代」里的已审批节点。
+  const ctlNodes = useControllerStore((s) => s.nodes);
+  const revoke = useControllerStore((s) => s.revoke);
   // 缩水部署确认（plan-5）与「已剥离 N 个私钥」提示。
   const pendingShrink = useControllerStore((s) => s.pendingShrink);
   const cancelShrinkConfirm = useControllerStore((s) => s.cancelShrinkConfirm);
@@ -60,6 +63,17 @@ export function DeployBar() {
       rollKeys();
     }
   };
+
+  // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
+  // generation. Computed against lastDeploy.staged — the node-ids actually deployed —
+  // NOT the live canvas (which can drift from what was promoted after a local edit;
+  // plan-6 review). They still hold a valid token and poll, but this deploy didn't
+  // include them. One-click manual revoke (never automatic — D10). Only meaningful
+  // alongside lastDeploy, so the list renders inside that block.
+  const deployedIds = new Set(lastDeploy?.staged ?? []);
+  const orphans = lastDeploy
+    ? ctlNodes.filter((n) => n.status === 'approved' && !deployedIds.has(n.nodeId))
+    : [];
 
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
@@ -251,6 +265,30 @@ export function DeployBar() {
               <p className="text-xs text-yellow-300 font-mono break-all">
                 {lastDeploy.skippedUnenrolled.join(', ')}
               </p>
+            </div>
+          )}
+          {/* plan-6 身份对账：已入网但不在本次设计里的节点。它们没有被部署到，却仍持有令牌
+              并在轮询——逐行提供一键「驱逐」（仅手动，绝不自动，D10）。 */}
+          {orphans.length > 0 && (
+            <div>
+              <p className="text-xs text-orange-300">
+                {txt(language, '已入网但不在本设计中（未部署到）', 'Enrolled but not in this design (not deployed to)')} (
+                {orphans.length})
+              </p>
+              <ul className="mt-1 space-y-1">
+                {orphans.map((o) => (
+                  <li key={o.nodeId} className="flex items-center justify-between gap-2 bg-orange-900/10 px-2 py-1 rounded">
+                    <span className="text-xs text-orange-200 font-mono break-all">{o.nodeId}</span>
+                    <button
+                      onClick={() => revoke(o.nodeId)}
+                      disabled={loading}
+                      className="shrink-0 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
+                    >
+                      {txt(language, '驱逐', 'Revoke')}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
