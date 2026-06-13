@@ -1,6 +1,6 @@
 # Controller agent API
 
-<!-- last-verified: 2026-06-13 -->
+<!-- last-verified: 2026-06-14 -->
 
 > **controller-server-authority-redesign (plan-6):** enrollment and rekey now enforce
 > the identity invariant — one APPROVED WireGuard public key binds to one node-id.
@@ -8,7 +8,8 @@
 > per-tenant op lock (`tenantlock.go`, also taken by stage/promote), so a pubkey already
 > approved under a DIFFERENT node-id is refused: `ErrDuplicateWGKey` → 409 at `/enroll`
 > and `/rekey`. Same-id re-enroll (reinstalled host, fresh token) is allowed; a revoked
-> node frees its key. The refusal is audited (`enroll-rejected-duplicate-key`).
+> node frees its key. Each refusal is audited under its own action — the enroll path
+> emits `enroll-rejected-duplicate-key`, the rekey path `rekey-rejected-duplicate-key`.
 
 ## Responsibility
 Serve the agent-facing HTTP surface of the networked controller — enroll, config fetch, generation long-poll, apply report, rekey re-registration, and the unauthenticated one-line bootstrap installer — on a dedicated agent mux/port.

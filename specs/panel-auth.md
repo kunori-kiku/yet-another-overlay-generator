@@ -1,6 +1,6 @@
 # Panel Auth — Operator Login UI + Client Auth State
 
-<!-- last-verified: 2026-06-13 -->
+<!-- last-verified: 2026-06-14 -->
 
 > **controller-server-authority-redesign (plans 4–6):** the login form is now a
 > **full-page gate** in `components/auth/LoginPage.tsx` (brand, password+TOTP,
@@ -10,8 +10,10 @@
 > `mode==='controller' && !loggedIn && operatorToken===''`; see specs/panel-shell.md.
 > On a successful login or cookie-restore the store calls `hydrateFromServer()`
 > (`GET /topology`→`loadTopology`, overwriting the local canvas; controller mode is
-> server-authoritative) with a one-time pre-hydration export stash of a differing
-> non-empty local design. ConnectionSettings now holds only the connection endpoints +
+> server-authoritative) with a pre-hydration export stash of a differing non-empty local
+> design — fired on EVERY divergent overwrite, not once per browser (the once-per-browser
+> design was rejected in review because it silently discards undeployed edits from the
+> second login on). ConnectionSettings now holds only the connection endpoints +
 > refresh; UserMenu hosts the signed-in identity + sign-out. The line citations below
 > predate the move and are approximate.
 

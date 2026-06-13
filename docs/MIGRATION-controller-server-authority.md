@@ -34,8 +34,7 @@ Then `docker compose up -d` and confirm the mounted base paths from the log:
 
 ```bash
 docker compose logs controller | grep "controller: operator routes"
-# controller: operator routes at /s3cr3t/api/v1/controller/ (addr :8080);
-#             agent routes at /s3cr3t-agent/api/v1/controller/ (addr :9090)
+# one line: controller: operator routes at /s3cr3t/api/v1/controller/ (addr :8080); agent routes at /s3cr3t-agent/api/v1/controller/ (addr :9090)
 ```
 
 **Proxy/tunnel rules** (one hostname): route `/<operator-prefix>/*` → `:8080` and
@@ -88,7 +87,7 @@ backup is downloaded.
   (`GET /topology?version=N`, `GET /topology/versions`) — a bad overwrite is recoverable
   without filesystem backups.
 - **Shrink/empty deploy guard:** a deploy that would empty the server design or drop
-  >50% of its nodes now requires typing the project name to confirm.
+  half or more (≥50%) of its nodes now requires typing the project name to confirm.
 - **Promote scoping:** a promote flips only the bundles staged for that generation; a
   `BumpGeneration` (rekey-all) between stage and promote invalidates the stage — re-stage,
   then promote (you'll get a 409 "nothing staged for the next generation" otherwise).
@@ -97,8 +96,9 @@ backup is downloaded.
   are marked "not in design" and listed for one-click (manual) revoke after a deploy.
 - **Enrollment dedupe:** one approved WireGuard public key binds to one node-id. Enrolling
   (or rekeying to) a key already approved under a different node-id is refused (409).
-- **Audit completeness:** `update-topology`, `promote`, `stage-empty`, `purge-staged`, and
-  `enroll-rejected-duplicate-key` now appear in the audit log.
+- **Audit completeness:** `update-topology`, `promote`, `stage-empty`, `purge-staged`,
+  `enroll-rejected-duplicate-key`, and `rekey-rejected-duplicate-key` now appear in the
+  audit log.
 
 ## Rollback
 

@@ -165,8 +165,9 @@ A full deploy leaves a complete, hash-chained audit trail (`AppendAudit`,
   was staged before but is no longer in the stage set, its stale staged bundle is purged so it cannot
   go live on a later promote, and each purge is attributable.
 
-`update-topology` and `promote` append their own entries (plan-1 closed those gaps), and an enrollment
-refused for a duplicate WG pubkey appends `enroll-rejected-duplicate-key` (plan-6). The stage-path
+`update-topology` and `promote` append their own entries (plan-1 closed those gaps), and a duplicate-WG-pubkey
+refusal is audited on both write paths (plan-6): the enroll path appends `enroll-rejected-duplicate-key`,
+the rekey path `rekey-rejected-duplicate-key`. The stage-path
 audits are best-effort (post-commit): a failed audit append does not fail an already-committed stage.
 
 ## Revocation — clear the token + evict from the subgraph
