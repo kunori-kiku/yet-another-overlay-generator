@@ -95,4 +95,11 @@ export const en = {
   // Backend error-code localization (see tError). The per-code keys ('error.<code>')
   // are added as backend codes land; 'error.generic' is the shape-agnostic fallback.
   'error.generic': 'Something went wrong. Please try again.',
+  // Per-action fallbacks for readApiErrorMessage when the response body is NOT JSON
+  // (proxy HTML 502/504, auth redirect, empty body) — keyed so they respect the UI
+  // language instead of the former mixed zh/en literals.
+  'error.validateFailed': 'Validation failed',
+  'error.compileFailed': 'Compile failed',
+  'error.exportFailed': 'Export failed',
+  'error.deployScriptFailed': 'Failed to generate deploy script',
 } as const;

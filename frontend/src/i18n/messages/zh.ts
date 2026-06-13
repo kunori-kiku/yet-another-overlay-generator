@@ -84,4 +84,8 @@ export const zh: Record<keyof typeof en, string> = {
   connectRefresh: "连接 / 刷新",
 
   'error.generic': '出错了，请重试。',
+  'error.validateFailed': '校验失败',
+  'error.compileFailed': '编译失败',
+  'error.exportFailed': '导出失败',
+  'error.deployScriptFailed': '生成部署脚本失败',
 };
