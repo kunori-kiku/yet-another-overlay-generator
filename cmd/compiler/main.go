@@ -46,7 +46,7 @@ func main() {
 	// 产物无法被 wg-quick 接受、不可部署（审计阻断项 D6）。
 	keys, err := render.GenerateKeys(&topo, render.AirGap)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "生成 WireGuard 密钥失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to generate WireGuard keys: %v\n", err)
 		os.Exit(1)
 	}
 
