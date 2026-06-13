@@ -84,6 +84,15 @@ func TestWithMessageOverridesTemplate(t *testing.T) {
 	if len(e.Params()) != 0 {
 		t.Errorf("WithMessage must not populate params; got %v", e.Params())
 	}
+	// Enforced contract: WithMessage clears params set earlier, so "no params on the
+	// wire" holds even under With()-then-WithMessage() misuse.
+	cleared := New(CodeLegacyUncoded).With("k", "v").WithMessage("m")
+	if len(cleared.Params()) != 0 {
+		t.Errorf("WithMessage must clear params set via With(); got %v", cleared.Params())
+	}
+	if cleared.Message() != "m" {
+		t.Errorf("message after With+WithMessage = %q, want %q", cleared.Message(), "m")
+	}
 	// Without WithMessage, CodeLegacyUncoded falls back to its template.
 	if got := New(CodeLegacyUncoded).Message(); got != registry[CodeLegacyUncoded].tmpl {
 		t.Errorf("fallback template = %q, want %q", got, registry[CodeLegacyUncoded].tmpl)

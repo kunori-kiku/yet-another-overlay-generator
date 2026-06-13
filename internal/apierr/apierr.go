@@ -92,11 +92,16 @@ func (e *Error) Wrap(cause error) *Error { e.cause = cause; return e }
 func (e *Error) WithStatus(s int) *Error { e.status = s; return e }
 
 // WithMessage sets a VERBATIM message that overrides the registry template (no
-// interpolation, no params on the wire). It exists ONLY for the transitional
-// writeError->CodeLegacyUncoded bridge so a bare, not-yet-coded string can ride the
-// nested envelope; coded errors render from their template and must not use it. Removed
-// with CodeLegacyUncoded in the final plan-3 commit.
-func (e *Error) WithMessage(m string) *Error { e.literal = m; return e }
+// interpolation). It ENFORCES "no params on the wire" by clearing params, so the
+// documented contract holds even if a caller did With() first. It exists ONLY for the
+// transitional writeError->CodeLegacyUncoded bridge so a bare, not-yet-coded string can
+// ride the nested envelope; coded errors render from their template and must not use it.
+// Removed with CodeLegacyUncoded in the final plan-3 commit.
+func (e *Error) WithMessage(m string) *Error {
+	e.literal = m
+	e.params = nil
+	return e
+}
 
 func (e *Error) Error() string { return e.Message() }
 func (e *Error) Unwrap() error { return e.cause }
