@@ -152,14 +152,15 @@ export function EnrollmentFlow() {
       )}
 
       {/* 设计成员告警（plan-6，warn-not-block）：令牌已铸造可用，但该 node-id 不在当前设计里，
-          stage 时会被跳过——提示操作员把它加进设计（或确认是预先铸造）。 */}
+          stage 时会被跳过——提示操作员把它加进设计（或确认是预先铸造）。mintWarning 只作为「是否
+          告警」的开关；文案在前端按语言渲染（服务端串是英文，不再原样拼接）。 */}
       {mintWarning && (
         <p className="text-xs text-amber-300 bg-amber-900/20 px-2 py-1 rounded break-all">
           ⚠️{' '}
           {txt(
             language,
-            `该节点 ID 不在当前设计中——令牌可用，但在把它加入设计之前，stage 会跳过该节点。（${mintWarning}）`,
-            `This node id is not in the current design — the token works, but stage will skip the node until you add it to the design. (${mintWarning})`,
+            '该节点 ID 不在当前设计中——令牌可用，但在把它加入设计之前，stage 会跳过该节点。',
+            'This node id is not in the current design — the token works, but stage will skip the node until you add it to the design.',
           )}
         </p>
       )}

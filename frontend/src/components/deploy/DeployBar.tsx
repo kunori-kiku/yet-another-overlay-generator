@@ -27,10 +27,9 @@ export function DeployBar() {
   // 是否已 pin off-host 签名凭据（决定签名区回显与提示）。
   const operatorEnrolled = useControllerStore(selectOperatorEnrolled);
   const operatorCredentialAlg = useControllerStore((s) => s.operatorCredentialAlg);
-  // 部署后孤儿清单（plan-6）：仍在 fleet 注册表、但不在刚部署的设计里的已审批节点。
+  // 部署后孤儿清单（plan-6）：仍在 fleet 注册表、但不在「刚刚发布的那一代」里的已审批节点。
   const ctlNodes = useControllerStore((s) => s.nodes);
   const revoke = useControllerStore((s) => s.revoke);
-  const topoNodes = useTopologyStore((s) => s.nodes);
   // 缩水部署确认（plan-5）与「已剥离 N 个私钥」提示。
   const pendingShrink = useControllerStore((s) => s.pendingShrink);
   const cancelShrinkConfirm = useControllerStore((s) => s.cancelShrinkConfirm);
@@ -65,12 +64,16 @@ export function DeployBar() {
     }
   };
 
-  // Orphans (plan-6): approved fleet nodes whose id is absent from the current design.
-  // After a deploy, these were NOT in the just-promoted generation — they still hold a
-  // valid token and poll, but the design no longer includes them. Surface them with a
-  // one-click manual revoke (never automatic — D10). Computed only for display.
-  const designNodeIds = new Set(topoNodes.map((n) => n.id));
-  const orphans = ctlNodes.filter((n) => n.status === 'approved' && !designNodeIds.has(n.nodeId));
+  // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
+  // generation. Computed against lastDeploy.staged — the node-ids actually deployed —
+  // NOT the live canvas (which can drift from what was promoted after a local edit;
+  // plan-6 review). They still hold a valid token and poll, but this deploy didn't
+  // include them. One-click manual revoke (never automatic — D10). Only meaningful
+  // alongside lastDeploy, so the list renders inside that block.
+  const deployedIds = new Set(lastDeploy?.staged ?? []);
+  const orphans = lastDeploy
+    ? ctlNodes.filter((n) => n.status === 'approved' && !deployedIds.has(n.nodeId))
+    : [];
 
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">

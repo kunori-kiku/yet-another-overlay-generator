@@ -103,6 +103,69 @@ func TestEnrollDedupe_SameNodeReenrollAllowed(t *testing.T) {
 	}
 }
 
+// TestEnrollDedupe_WhitespaceCannotEvade: a pubkey padded with surrounding
+// whitespace must not slip past the dedupe (the compare is whitespace-insensitive).
+func TestEnrollDedupe_WhitespaceCannotEvade(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+			pub := freshPub(t)
+
+			if err := mintAndEnroll(t, ctx, s, tenant, "node-a", pub); err != nil {
+				t.Fatalf("first enroll: %v", err)
+			}
+			// Same key, padded — must still be rejected under a different id.
+			if err := mintAndEnroll(t, ctx, s, tenant, "node-b", "  "+pub+"\n"); !errors.Is(err, ErrDuplicateWGKey) {
+				t.Fatalf("padded duplicate enroll: err = %v, want ErrDuplicateWGKey", err)
+			}
+		})
+	}
+}
+
+// TestRekeyDedupe: Rekey enforces the same identity invariant as Enroll — rotating a
+// node's key TO another approved node's key is refused; a fresh key (or the node's own
+// key) is allowed. Also covers ErrNotFound for an unknown node.
+func TestRekeyDedupe(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+			ka, kb := freshPub(t), freshPub(t)
+
+			if err := mintAndEnroll(t, ctx, s, tenant, "node-a", ka); err != nil {
+				t.Fatalf("enroll node-a: %v", err)
+			}
+			if err := mintAndEnroll(t, ctx, s, tenant, "node-b", kb); err != nil {
+				t.Fatalf("enroll node-b: %v", err)
+			}
+
+			// Rekey node-b TO node-a's key → refused.
+			if err := Rekey(ctx, s, tenant, "node-b", ka, time.Now()); !errors.Is(err, ErrDuplicateWGKey) {
+				t.Fatalf("rekey node-b to node-a's key: err = %v, want ErrDuplicateWGKey", err)
+			}
+			// node-b's stored key is unchanged (the refusal did not write).
+			if n, err := s.GetNode(ctx, tenant, "node-b"); err != nil || n.WGPublicKey != kb {
+				t.Fatalf("node-b key after refused rekey = %q (err %v), want unchanged %q", n.WGPublicKey, err, kb)
+			}
+			// Rekey node-b to a FRESH key → allowed, clears RekeyRequested.
+			kbNew := freshPub(t)
+			if err := Rekey(ctx, s, tenant, "node-b", kbNew, time.Now()); err != nil {
+				t.Fatalf("rekey node-b to a fresh key: %v", err)
+			}
+			if n, err := s.GetNode(ctx, tenant, "node-b"); err != nil || n.WGPublicKey != kbNew {
+				t.Fatalf("node-b key after rekey = %q (err %v), want %q", n.WGPublicKey, err, kbNew)
+			}
+			// Rekey an unknown node → ErrNotFound.
+			if err := Rekey(ctx, s, tenant, "ghost", freshPub(t), time.Now()); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("rekey unknown node: err = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
 // TestEnrollDedupe_RevokedKeyFreesTheBinding: a revoked node's key no longer blocks
 // re-use under a new id — dedupe checks only APPROVED nodes (revoke is the operator's
 // way to free a key for re-binding, D10's manual path).

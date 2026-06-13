@@ -28,6 +28,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -142,6 +143,14 @@ type EnrollResult struct {
 // The burn-first ordering trades a small operator inconvenience for a hard
 // single-use guarantee.
 func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now time.Time) (EnrollResult, error) {
+	// Serialize the whole ceremony per tenant (plan-6 review): the dedupe check
+	// (ListNodes) and the registration (UpsertNode) are separate Store-lock
+	// acquisitions, so without an enclosing lock two concurrent enrolls with the
+	// same pubkey under different ids could both pass the check before either writes —
+	// the exact duplicate-fleet-rows the dedupe forbids. The lock also serializes
+	// enroll against stage/promote (which read the registry). Enroll is infrequent.
+	defer lockTenantOps(t)()
+
 	// (a) Atomically validate-and-burn the token. On any token error (invalid,
 	// expired, or already consumed) we return immediately without touching the
 	// registry — an unauthorized caller learns nothing and changes nothing.
@@ -151,31 +160,22 @@ func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now
 
 	// (a2) Dedupe (plan-6): one approved WG public key ↔ one node-id. Refuse if the
 	// presented pubkey is already approved under a DIFFERENT node-id — the
-	// duplicate-fleet-rows vector (re-enrolling one machine's key under a second id
-	// would leave two registry rows the operator must reconcile). Same-id re-enroll
-	// (a reinstalled host with a fresh token, same or new key) is unaffected: the
-	// match is pubkey-equal AND id-different. Checked AFTER the burn so only an
-	// authorized caller (valid single-use token) reaches it — auditing here cannot be
-	// spammed by an unauthenticated probe. An empty pubkey (registered as-is, see the
-	// file header) is never deduped. The refusal is audited.
-	if req.WGPublicKey != "" {
-		nodes, err := store.ListNodes(ctx, t)
-		if err != nil {
-			return EnrollResult{}, fmt.Errorf("controller: checking for duplicate WG key: %w", err)
+	// duplicate-fleet-rows vector. Same-id re-enroll (a reinstalled host with a fresh
+	// token) is unaffected. Checked AFTER the burn so only an authorized caller
+	// reaches it (auditing here cannot be spammed by an unauthenticated probe); the
+	// trade-off is that a duplicate burns the token (consistent with the burn-first
+	// principle — the operator mints a fresh one after revoking the conflict). Under
+	// the tenant lock the check-then-register is now atomic. The refusal is audited.
+	if conflict, err := CheckWGKeyUnique(ctx, store, t, req.WGPublicKey, req.NodeID); err != nil {
+		if _, auditErr := store.AppendAudit(ctx, t, AuditEntry{
+			Timestamp: now,
+			Actor:     "agent:" + req.NodeID,
+			Action:    "enroll-rejected-duplicate-key",
+			NodeID:    req.NodeID,
+		}); auditErr != nil {
+			return EnrollResult{}, fmt.Errorf("controller: appending duplicate-key audit: %w", auditErr)
 		}
-		for _, n := range nodes {
-			if n.Status == NodeApproved && n.WGPublicKey == req.WGPublicKey && n.NodeID != req.NodeID {
-				if _, auditErr := store.AppendAudit(ctx, t, AuditEntry{
-					Timestamp: now,
-					Actor:     "agent:" + req.NodeID,
-					Action:    "enroll-rejected-duplicate-key",
-					NodeID:    req.NodeID,
-				}); auditErr != nil {
-					return EnrollResult{}, fmt.Errorf("controller: appending duplicate-key audit: %w", auditErr)
-				}
-				return EnrollResult{}, fmt.Errorf("%w: this WireGuard public key is already enrolled as node %q; revoke it first or reuse that node id", ErrDuplicateWGKey, n.NodeID)
-			}
-		}
+		return EnrollResult{}, fmt.Errorf("%w: this WireGuard public key is already enrolled as node %q; revoke it first or reuse that node id", err, conflict)
 	}
 
 	// (b) Mint the per-node bearer token. Plaintext is returned to the node once;
@@ -218,4 +218,64 @@ func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now
 		NodeID:   req.NodeID,
 		APIToken: plaintext,
 	}, nil
+}
+
+// CheckWGKeyUnique reports a conflict when an APPROVED node OTHER than selfNodeID
+// already holds wgPubKey. It returns the conflicting node-id and ErrDuplicateWGKey,
+// or ("", nil) when the key is free (or empty — an empty key is never deduped). The
+// comparison is whitespace-insensitive so a padded key cannot evade the gate (a
+// padded key would also break the rendered WG config, so this is belt-and-braces).
+//
+// This is the single definition of the identity invariant — one approved WG pubkey ↔
+// one node-id — shared by BOTH write paths (Enroll and Rekey). Callers MUST hold the
+// per-tenant op lock across this check AND the subsequent write; the check-then-act is
+// only atomic under that lock (Enroll and Rekey both take lockTenantOps).
+func CheckWGKeyUnique(ctx context.Context, store Store, t TenantID, wgPubKey, selfNodeID string) (string, error) {
+	key := strings.TrimSpace(wgPubKey)
+	if key == "" {
+		return "", nil
+	}
+	nodes, err := store.ListNodes(ctx, t)
+	if err != nil {
+		return "", fmt.Errorf("controller: checking for duplicate WG key: %w", err)
+	}
+	for _, n := range nodes {
+		if n.Status == NodeApproved && n.NodeID != selfNodeID && strings.TrimSpace(n.WGPublicKey) == key {
+			return n.NodeID, ErrDuplicateWGKey
+		}
+	}
+	return "", nil
+}
+
+// Rekey re-registers a node's rotated WireGuard PUBLIC key (the zero-knowledge
+// rekey response), swapping WGPublicKey and clearing RekeyRequested while preserving
+// every other field. It enforces the SAME identity invariant as Enroll
+// (CheckWGKeyUnique) — the parallel write path must not be able to create the
+// duplicate the enroll dedupe forbids — and holds the per-tenant op lock so the
+// check-then-write is atomic. Returns ErrNotFound (unknown node), ErrDuplicateWGKey
+// (the new key already belongs to another approved node), or a wrapped store error.
+func Rekey(ctx context.Context, store Store, t TenantID, nodeID, newPubKey string, now time.Time) error {
+	defer lockTenantOps(t)()
+
+	rec, err := store.GetNode(ctx, t, nodeID)
+	if err != nil {
+		return err // ErrNotFound mapped by the caller
+	}
+	if conflict, err := CheckWGKeyUnique(ctx, store, t, newPubKey, nodeID); err != nil {
+		return fmt.Errorf("%w: this WireGuard public key is already enrolled as node %q", err, conflict)
+	}
+	rec.WGPublicKey = newPubKey
+	rec.RekeyRequested = false
+	if err := store.UpsertNode(ctx, t, rec); err != nil {
+		return fmt.Errorf("controller: recording rekey: %w", err)
+	}
+	if _, err := store.AppendAudit(ctx, t, AuditEntry{
+		Timestamp: now,
+		Actor:     "agent:" + nodeID,
+		Action:    "rekey",
+		NodeID:    nodeID,
+	}); err != nil {
+		return fmt.Errorf("controller: appending rekey audit: %w", err)
+	}
+	return nil
 }

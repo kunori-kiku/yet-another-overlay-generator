@@ -768,7 +768,13 @@ func TestControllerHTTP_RekeyFlow(t *testing.T) {
 	}
 
 	// node-2's bearer token is unaffected by node-1's rekey; it can still re-register.
-	if status := doJSON(t, http.MethodPost, env.agentURL("rekey"), node2Token, rekeyRequestJSON{WGPublicKey: newPriv.PublicKey().String()}, nil); status != http.StatusOK {
+	// node-2 rotates to its OWN fresh key — reusing node-1's just-registered key would
+	// (correctly) be refused by the WG-pubkey dedupe (plan-6: one approved key ↔ one id).
+	node2Priv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("generate node-2 rekey key: %v", err)
+	}
+	if status := doJSON(t, http.MethodPost, env.agentURL("rekey"), node2Token, rekeyRequestJSON{WGPublicKey: node2Priv.PublicKey().String()}, nil); status != http.StatusOK {
 		t.Fatalf("node-2 rekey: status %d, want 200", status)
 	}
 

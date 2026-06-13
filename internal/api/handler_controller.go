@@ -1092,14 +1092,15 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 	}
 	// Design-membership advisory (plan-6, warn-not-block): if the stored design has
 	// no node with this id, the token mints fine but the node will be skipped at
-	// stage until it is added — surface that so an operator who pre-mints (token
-	// before design) or fat-fingers an id learns about it now. A missing stored
-	// design (404) is not a warning: pre-minting before any design exists is normal.
+	// stage until it is added — surface that so an operator who fat-fingers an id
+	// learns about it now. The warning is set ONLY when GetTopology succeeds AND the
+	// id is absent. Any read failure yields NO warning by design: ErrNotFound means
+	// no design is stored yet (pre-minting before designing is normal), and a
+	// transient store error must not produce a false alarm — the advisory fails safe
+	// to silent, never blocks the mint.
 	resp := enrollmentTokenResponseJSON{Token: plaintext}
-	if rec, err := h.store.GetTopology(r.Context(), tenant); err == nil {
-		if !topologyHasNode(rec.JSON, req.NodeID) {
-			resp.Warning = "node-id not present in the stored design; it will be skipped at stage until added"
-		}
+	if rec, err := h.store.GetTopology(r.Context(), tenant); err == nil && !topologyHasNode(rec.JSON, req.NodeID) {
+		resp.Warning = "node-id not present in the stored design; it will be skipped at stage until added"
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1219,30 +1220,19 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Load the existing record so we preserve every field while swapping the public
-	// key and clearing the flag. UpsertNode matches by NodeID.
-	rec, err := h.store.GetNode(r.Context(), tenant, node)
-	if err != nil {
+	// controller.Rekey swaps the key + clears the flag under the per-tenant op lock
+	// and enforces the SAME identity invariant as enroll (plan-6 review: the rekey
+	// write path must not be able to create a duplicate the enroll dedupe forbids).
+	if err := controller.Rekey(r.Context(), h.store, tenant, node, req.WGPublicKey, time.Now()); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "node not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load node")
-		return
-	}
-	rec.WGPublicKey = req.WGPublicKey
-	rec.RekeyRequested = false
-	if err := h.store.UpsertNode(r.Context(), tenant, rec); err != nil {
+		if errors.Is(err, controller.ErrDuplicateWGKey) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to record rekey")
-		return
-	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
-		Timestamp: time.Now(),
-		Actor:     "agent:" + node,
-		Action:    "rekey",
-		NodeID:    node,
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
 		return
 	}
 	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})
