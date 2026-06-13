@@ -131,6 +131,7 @@ Decisions log says so (env rename, login-gate behavior); everything else stays c
 | 2026-06-14 | plan-7 closed as **completed** (PR #65, merge `24f044e`) | Docs/migration/closure shipped; doc-accuracy review caught + fixed a real gap (rekey duplicate-key refusal now audited) — fixed in code, not papered over |
 | 2026-06-14 | subject closed as **delivered** (close-phase) | All 7 plans (+1.5) merged #59–#65, each independently reviewed; code-side closure criteria met. Owed: live-deploy env migration + manual browser two-node smoke (user-run, not code blockers) |
 | 2026-06-14 | memory [[controller-mode-redesign-decisions]] updated to mark the redesign shipped | Per close-phase Step 3.5; one canonical entry kept rather than a new file |
+| 2026-06-14 | close-phase 4.6: specs/ left as-is (no further edit) | Component specs were plan-7's deliverable, accuracy-reviewed this session with confirmed findings fixed; panel-auth.md + controller-agent-api.md re-stamped today — no architectural drift to refresh |
 
 ## Milestones
 
