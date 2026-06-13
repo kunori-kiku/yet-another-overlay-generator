@@ -306,13 +306,38 @@ the new i18n + error envelope, a migration note, and `/close-phase`. **Finalized
 
 | Plan | Status | PR | Notes |
 |---|---|---|---|
-| plan-0 (security) | pending | — | finalized from findings.md (only if CONFIRMED security) |
-| plan-1 (i18n core + error seam) | in PR | — | core module + tError seam; txt/STRINGS retained transitionally (D1) |
-| plan-1.5 (full call-site migration) | pending | — | 406 txt + 81 STRINGS → t across 38 files; delete txt/STRINGS (migration Workflow) |
-| plan-2 (error envelope) | pending | — | design-locked (D2) |
-| plan-3 (backend string migration) | pending | — | design-locked (D3); may add plan-3.5 |
-| plan-4 (mode-boundary parity) | pending | — | design-locked (D4) |
-| plan-6 (robustness) | pending | — | finalized from findings.md |
-| plan-7 (struct-backend) | pending | — | finalized from findings.md |
-| plan-8 (struct-frontend) | pending | — | finalized from findings.md |
-| plan-9 (cross-cutting + docs + closure) | pending | — | finalized from findings.md |
+| plan-0 (security) | **done** (9f1e7bb) | [#70](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/70) | ssh_key_path PowerShell command-injection: escape (bash/PS helpers) + validate (sshKeyPathCharset); perpetual injection-gate test; review 0-confirmed |
+| plan-4 (mode-boundary parity) | **done** (22b0936) | [#71](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/71) | export/deploy-script controller-mode guards + in-flight compile mode-flip guard; review 0-confirmed |
+| plan-6 (robustness) | **done** (660f92c) | [#72](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/72) | clear pendingShrink on deploy error + tolerant readApiErrorMessage; review 0-confirmed |
+| plan-1 (i18n core + error seam) | **done** (75076e3) | [#73](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/73) | keyed catalog + t(lang,key,params)/tError + fallback + N-language; tError wired into error seam. Review caught an untracked-files blocker + mixed-language fallback (both fixed) |
+| plan-2 (error envelope) | **done** (86c4014) | [#74](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/74) | internal/apierr leaf (Code+registry+Error) + nested {error:{code,message,params}} flip via writeError delegate; panic+custody coded. Review fixed WithMessage contract |
+| plan-1.5 (full call-site migration) | **done** (d1f0cc6) | [#75](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/75) | 410 txt sites → t via TS-AST codemod (7 parameterized, 3 tuple→key); txt/STRINGS deleted; build proves completeness; review 0-confirmed |
+| plan-3 (backend errors, bounded) | **done** (9a2fecd) | [#76](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/76) | render.GenerateKeys → 4 keygen codes (incl. owner's reported pinned-pubkey error, now 400+localized) + handler writeCodedOr relay + frontend error.keygen_* + fixed corrupted allocator/ip.go strings; review 0-confirmed |
+| plan-3.5 (remaining backend strings) | **pending** | — | code validator/compiler/auth/login/passkey/totp/bootstrap/cmd user-facing strings (validator set surfaces on validate/compile) + remove the writeError shim. Follow the apierr pattern (task #27) |
+| plan-7 (struct-backend) | **pending** | — | triage struct-backend PLAUSIBLE (P7 reserved-id helper easy; P3/P5/P6 — verifiers rated several overstated) |
+| plan-8 (struct-frontend) | **pending** | — | triage struct-frontend PLAUSIBLE (god-store, coupling — verifiers rated quantitative claims wrong / core REFUTED) |
+| plan-9 (cross-cutting + docs + closure) | **pending** | — | test-coverage gaps, doc/spec for new i18n+envelope, migration note, subject close |
+
+### Status as of 2026-06-14 (checkpoint)
+
+**Delivered (7 PRs merged, each independently reviewed → 0 confirmed after fixes):** all of the
+owner's explicit asks — extensible keyed i18n (params/fallback/N-language), backend errors made
+localizable (coded envelope), and the specific Chinese key-gen error fixed — plus every CONFIRMED
+audit security finding (ssh_key_path injection) and robustness finding, the mode-boundary hardening,
+and the two **highest-leverage structural fixes** the audit named (the i18n architecture redesign and
+the error-code envelope, which together dissolve the bulk of the structural debt: sentinel-codes,
+compile-error context, the {error:string} contract, the un-extendable i18n module).
+
+**Remaining (well-scoped, lower-leverage):**
+- **plan-3.5** — code the rest of the backend user-facing strings (validator is the largest set,
+  surfaces on validate/compile; plus compiler/auth/login/passkey/totp/bootstrap/cmd), then delete the
+  transitional `writeError` shim. The full pattern is established + demonstrated in plan-3; this is
+  mechanical follow-through. **For an English-locale operator the remaining visible gap is the
+  validator's Chinese messages on a validation failure.**
+- **plan-7/8/9** — structural triage. The audit's struct PLAUSIBLE items were largely rated
+  "real-but-minor / overstated / core-refuted" by the adversarial verifiers; the genuine high-leverage
+  structural debt was already cleared by plan-1+plan-2. P7 (reserved-id helper, a 2-site dedup) is the
+  clearest easy win. Plus docs/spec refresh for the new i18n + envelope, and the subject-close ritual.
+
+**Owed (user-gated):** a release tag covering #70–#76 (outward-facing — the owner's call), and the
+docs/spec refresh for the new i18n module + error envelope.
