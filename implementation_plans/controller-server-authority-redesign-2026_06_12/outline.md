@@ -229,5 +229,5 @@ migration note, the long-owed two-node manual smoke, then `/close-phase`.
 | plan-3 | done (3c37048) | [#61](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/61) | agent idle skip (perpetual guard) + promote scoping + purge-on-stage (incl. empty stage) + per-tenant stage/promote lock + stage audits |
 | plan-4 | done (18d267e) | [#62](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/62) | full-page login gate + hydrate-on-login + divergence-backup stash; review-hardened (break-glass usable, no silent data loss, semantic diff) |
 | plan-5 | done (0833b60) | [#63](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/63) | strip-on-deploy + import placeholdering + controller→local purge dialog + shrink/empty typed-confirm; review-hardened (sentinel phrase, best-effort guard, snapshot binding) |
-| plan-6 | pending | — | identity reconciliation |
+| plan-6 | done (2992abe) | [#64](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/64) | enrollment WG-pubkey dedupe (both write paths, lock-atomic) + token-mint design warning + fleet "not in design" markers + deploy orphan list; review-hardened |
 | plan-7 | pending | — | docs + migration + closure |
