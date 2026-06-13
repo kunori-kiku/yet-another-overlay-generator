@@ -128,6 +128,9 @@ Decisions log says so (env rename, login-gate behavior); everything else stays c
 | 2026-06-12 | D9: One-time export stash before the first overwriting hydration | Migration insurance; reuses exportProject |
 | 2026-06-12 | D10: Out of scope: multi-tenant/OIDC/KMS, legacy-form light theming, rollback UI, auto-revocation | Keeps the subject shippable; each has a parking spot |
 | 2026-06-12 | specs/ bootstrapped before drafting (refresh-specs, commit `1abd662`) | Plans cite specs/ components per convention |
+| 2026-06-14 | plan-7 closed as **completed** (PR #65, merge `24f044e`) | Docs/migration/closure shipped; doc-accuracy review caught + fixed a real gap (rekey duplicate-key refusal now audited) — fixed in code, not papered over |
+| 2026-06-14 | subject closed as **delivered** (close-phase) | All 7 plans (+1.5) merged #59–#65, each independently reviewed; code-side closure criteria met. Owed: live-deploy env migration + manual browser two-node smoke (user-run, not code blockers) |
+| 2026-06-14 | memory [[controller-mode-redesign-decisions]] updated to mark the redesign shipped | Per close-phase Step 3.5; one canonical entry kept rather than a new file |
 
 ## Milestones
 
@@ -213,8 +216,10 @@ migration note, the long-owed two-node manual smoke, then `/close-phase`.
 
 ## Closure criteria
 
-- [x] All seven plans merged via reviewed PRs; CI green on each (plans 1–6 merged; plan-7 is this PR).
-      Every plan got an independent 7-angle review workflow (find → adversarial verify) with fixes.
+- [x] All seven plans merged via reviewed PRs; CI green on each (plans 1–7 merged, #59–#65).
+      Every plan got an independent review workflow (find → adversarial verify) with fixes; plan-7's
+      doc-accuracy review surfaced a real auditability gap (rekey duplicate-key refusal left no audit
+      trail) which was fixed in code, not just papered over in docs.
 - [x] Success criteria in Mission demonstrably true — see the closure-smoke transcript below.
 - [ ] Live deployment migrated (new envs set, operators re-logged-in) — **owed to the user** (their
       overlay.kunorikiku.com deploy; the migration note is published for it).
@@ -256,4 +261,4 @@ the end-to-end browser pass remains the user's to run on `http://localhost` (Web
 | plan-4 | done (18d267e) | [#62](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/62) | full-page login gate + hydrate-on-login + divergence-backup stash; review-hardened (break-glass usable, no silent data loss, semantic diff) |
 | plan-5 | done (0833b60) | [#63](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/63) | strip-on-deploy + import placeholdering + controller→local purge dialog + shrink/empty typed-confirm; review-hardened (sentinel phrase, best-effort guard, snapshot binding) |
 | plan-6 | done (2992abe) | [#64](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/64) | enrollment WG-pubkey dedupe (both write paths, lock-atomic) + token-mint design warning + fleet "not in design" markers + deploy orphan list; review-hardened |
-| plan-7 | in review | [#65] | docs accuracy pass + migration note + closure smoke; close-phase to archive |
+| plan-7 | done (24f044e) | [#65](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/65) | docs accuracy pass + migration note + closure smoke; review-hardened (rekey duplicate-key refusal now audited as `rekey-rejected-duplicate-key`; shrink-guard "≥50%", per-overwrite backup, version-history-is-server-side wording corrected) |
