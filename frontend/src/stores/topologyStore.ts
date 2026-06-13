@@ -576,7 +576,18 @@ export const useTopologyStore = create<TopologyState>()(
         throw new Error(errData.error || 'Compile failed');
       }
       const data: CompileResponse = await res.json();
-      
+
+      // In-flight mode-flip guard: the front-door check above only rejects FRESH
+      // invocations. If the operator switched to controller mode while this air-gap
+      // compile was in flight, the response carries reconstructed private keys
+      // (data.topology.nodes). Persisting them now would write fleet private keys into
+      // the controller-mode store and its localStorage mirror — exactly the boundary
+      // the zero-knowledge custody model forbids. Drop the result instead.
+      if (useControllerStore.getState().mode === 'controller') {
+        set({ isCompiling: false });
+        return;
+      }
+
       const newHistoryEntry: CompileHistoryEntry = {
         id: uuid(),
         timestamp: new Date().toISOString(),
@@ -605,6 +616,19 @@ export const useTopologyStore = create<TopologyState>()(
 
   // API: 导出
   exportArtifacts: async () => {
+    // Defense-in-depth, parity with compile(): /api/export is an air-gap path that
+    // generates WireGuard keys server-side from the design and bundles them into the
+    // downloaded ZIP. Controller mode is zero-knowledge (public-keys-only), so an
+    // export there fails on every node — and shipping keys for a controller design is
+    // a category error. The button is local-mode-only in the UI; this guard makes the
+    // action refuse rather than emit a confusing key-generation error if ever invoked.
+    if (useControllerStore.getState().mode === 'controller') {
+      set({
+        error:
+          'Artifact export is unavailable in controller mode (the design is public-keys-only). The controller compiles and distributes per-node bundles server-side on Deploy.',
+      });
+      return;
+    }
     try {
       const topo = get().getTopology();
       const res = await fetch('/api/export', {
@@ -641,6 +665,17 @@ export const useTopologyStore = create<TopologyState>()(
 
   // API: 下载部署脚本
   downloadDeployScript: async (format: 'sh' | 'ps1') => {
+    // Defense-in-depth, parity with compile()/exportArtifacts(): /api/deploy-script is
+    // an air-gap path that compiles the design (key generation included) server-side.
+    // Controller mode is public-keys-only, so it fails there; deployment in controller
+    // mode goes through the server (stage/promote), not a downloaded script.
+    if (useControllerStore.getState().mode === 'controller') {
+      set({
+        error:
+          'Deploy-script download is unavailable in controller mode (the design is public-keys-only). Use Deploy — the controller stages and promotes per-node bundles server-side.',
+      });
+      return;
+    }
     try {
       const topo = get().getTopology();
       const res = await fetch(`/api/deploy-script?format=${format}`, {
