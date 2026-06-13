@@ -4,8 +4,8 @@ package agent
 // (plan-4.5). The mTLS model (plan-4.3b) was withdrawn: the controller is now
 // served over PLAIN HTTP and authenticated with a PER-NODE BEARER TOKEN, with
 // transport confidentiality delegated to a reverse proxy (nginx/caddy), never
-// forced in-app. This client speaks the controller's JSON protocol under
-// /api/v1/controller/:
+// forced in-app. This client speaks the controller's JSON protocol under the
+// agent namespace /api/v1/agent/:
 //
 //   - Enroll  (POST /enroll, NO auth) turns a single-use enrollment token + the
 //     node's WireGuard PUBLIC key into a per-node bearer API token. /enroll is the
@@ -46,9 +46,10 @@ const controllerHTTPTimeout = 30 * time.Second
 // margin absorbs scheduling latency.
 const pollHTTPTimeout = 90 * time.Second
 
-// controllerBasePath is the URL prefix every controller route lives under. It is
-// joined to the configured BaseURL (which is the controller's scheme://host[:port]).
-const controllerBasePath = "/api/v1/controller/"
+// controllerBasePath is the URL prefix every agent route lives under. It is joined
+// to the configured BaseURL (the controller's scheme://host[:port] + agent secret
+// prefix). The agent only ever speaks the AGENT namespace, never the operator one.
+const controllerBasePath = "/api/v1/agent/"
 
 // --- wire JSON shapes (mirrors of internal/api/handler_controller.go) ---
 //

@@ -188,7 +188,7 @@ func (e *ctlEnv) doOperatorJSON(t *testing.T, method, url string, body []byte) [
 // the sequence.
 func (e *ctlEnv) deployTopo(t *testing.T, topo *model.Topology) int64 {
 	t.Helper()
-	base := e.opSrv.URL + "/api/v1/controller/"
+	base := e.opSrv.URL + "/api/v1/operator/"
 
 	topoJSON, err := json.Marshal(topo)
 	if err != nil {
@@ -375,7 +375,7 @@ func TestControllerClient_BadOrEmptyToken(t *testing.T) {
 	// Server side: a raw plain-HTTP GET with a bogus bearer on /config -> 401. This
 	// confirms the rejection is enforced by the auth chokepoint, not only by the agent's
 	// own guard.
-	req, err := http.NewRequest(http.MethodGet, env.agentSrv.URL+"/api/v1/controller/config", nil)
+	req, err := http.NewRequest(http.MethodGet, env.agentSrv.URL+"/api/v1/agent/config", nil)
 	if err != nil {
 		t.Fatalf("NewRequest /config: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestControllerClient_RekeyFlow(t *testing.T) {
 	}
 
 	// Operator rolls keys fleet-wide; the response counts the flagged (approved) nodes.
-	body := env.doOperatorJSON(t, http.MethodPost, env.opSrv.URL+"/api/v1/controller/rekey-all", []byte("{}"))
+	body := env.doOperatorJSON(t, http.MethodPost, env.opSrv.URL+"/api/v1/operator/rekey-all", []byte("{}"))
 	var rekeyAll struct {
 		Requested int `json:"requested"`
 	}
@@ -560,7 +560,7 @@ func TestControllerCycle_RekeyWakeSkipsApply(t *testing.T) {
 	}
 
 	// Operator rolls keys fleet-wide: flags node-1 AND bumps the generation (the WAKE).
-	env.doOperatorJSON(t, http.MethodPost, env.opSrv.URL+"/api/v1/controller/rekey-all", []byte("{}"))
+	env.doOperatorJSON(t, http.MethodPost, env.opSrv.URL+"/api/v1/operator/rekey-all", []byte("{}"))
 
 	// The wake bumped the generation past the promoted one.
 	wakeGen, err := env.store.CurrentGeneration(context.Background(), testTenant)

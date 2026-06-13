@@ -85,7 +85,7 @@ func (e *ctlEnv) pinOperatorCredential(t *testing.T, pinPEM []byte) {
 	if err != nil {
 		t.Fatalf("marshal operator-credential: %v", err)
 	}
-	if status := doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/controller/operator-credential", body); status != http.StatusOK {
+	if status := doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/operator/operator-credential", body); status != http.StatusOK {
 		t.Fatalf("operator-credential: status %d, want 200", status)
 	}
 }
@@ -94,7 +94,7 @@ func (e *ctlEnv) pinOperatorCredential(t *testing.T, pinPEM []byte) {
 // the operator step that makes a topology available for a later stage.
 func (e *ctlEnv) updateTopology(t *testing.T, topoJSON []byte) {
 	t.Helper()
-	if status := doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/controller/update-topology", topoJSON); status != http.StatusOK {
+	if status := doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/operator/update-topology", topoJSON); status != http.StatusOK {
 		t.Fatalf("update-topology: status %d, want 200", status)
 	}
 }
@@ -109,7 +109,7 @@ func (e *ctlEnv) stageSmallTopo(t *testing.T) {
 		t.Fatalf("marshal topology: %v", err)
 	}
 	e.updateTopology(t, topoJSON)
-	if status := doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/controller/stage", []byte("{}")); status != http.StatusOK {
+	if status := doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/operator/stage", []byte("{}")); status != http.StatusOK {
 		t.Fatalf("stage: status %d, want 200", status)
 	}
 }
@@ -119,7 +119,7 @@ func (e *ctlEnv) stageSmallTopo(t *testing.T) {
 // exists, so the caller asserts the status it expects.
 func (e *ctlEnv) promote(t *testing.T) (gen int64, status int) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, e.opSrv.URL+"/api/v1/controller/promote", bytes.NewReader([]byte("{}")))
+	req, err := http.NewRequest(http.MethodPost, e.opSrv.URL+"/api/v1/operator/promote", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		t.Fatalf("promote NewRequest: %v", err)
 	}
@@ -147,7 +147,7 @@ func (e *ctlEnv) promote(t *testing.T) (gen int64, status int) {
 // exactly these bytes.
 func (e *ctlEnv) fetchTrustListCanonical(t *testing.T) (canonical []byte, epoch int64) {
 	t.Helper()
-	body := e.doOperatorJSON(t, http.MethodGet, e.opSrv.URL+"/api/v1/controller/trustlist", nil)
+	body := e.doOperatorJSON(t, http.MethodGet, e.opSrv.URL+"/api/v1/operator/trustlist", nil)
 	var resp struct {
 		TrustListJSON string `json:"trustlist_json"`
 		Epoch         int64  `json:"epoch"`
@@ -190,7 +190,7 @@ func (e *ctlEnv) postTrustListSignature(t *testing.T, canonicalB64 string, signe
 	if err != nil {
 		t.Fatalf("marshal trustlist-signature: %v", err)
 	}
-	return doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/controller/trustlist-signature", body)
+	return doOperator(t, http.MethodPost, e.opSrv.URL+"/api/v1/operator/trustlist-signature", body)
 }
 
 // signStaged is the happy-path glue: GET the staged manifest, sign it, POST the valid

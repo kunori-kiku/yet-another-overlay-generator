@@ -1,6 +1,6 @@
 # Agent (node-side pull/verify/apply daemon)
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-14 -->
 
 ## Responsibility
 Pull a per-node install bundle from a configured source or the networked controller, verify it fail-closed (signature, per-file SHA-256, keystone trust-list, anti-rollback), then execute the bundle's own `install.sh` as root — never tearing down the running overlay on failure.
@@ -9,7 +9,7 @@ Pull a per-node install bundle from a configured source or the networked control
 - `cmd/agent/main.go:1-455` — CLI: `keygen`/`enroll`/`run` dispatch (main.go:46-60), flag parsing, controller-mode single-shot and `--daemon` loops.
 - `internal/agent/agent.go:1-321` — `Run(cfg *Config) (*RunResult, error)` (agent.go:67-169): pull → verify → membership → anti-rollback → stage → apply → report.
 - `internal/agent/cycle.go:1-197` — `RunControllerCycle(client, CycleConfig) (resumeGen int64, applied bool, err error)` (cycle.go:84-182): one poll → fetch → (rekey | apply) cycle, the testable unit the daemon loops.
-- `internal/agent/controller_client.go:1-399` — bearer-token HTTP client for `/api/v1/controller/{enroll,config,poll,report,rekey}` (controller_client.go:51); implements `Source` (Fetch, :271-312) and `Reporter` (Report, :353-368).
+- `internal/agent/controller_client.go:1-399` — bearer-token HTTP client for `/api/v1/agent/{enroll,config,poll,report,rekey}` (controller_client.go:51); implements `Source` (Fetch, :271-312) and `Reporter` (Report, :353-368).
 - `internal/agent/keygen.go:1-95` — `EnsureKey(keyPath) (pubKey string, created bool, err error)` (keygen.go:27-51, idempotent) and `RegenerateKey` (keygen.go:64-69, forced rotation); atomic 0600 writes (keygen.go:75-94).
 - `internal/agent/verify.go:1-447` — `VerifyBundle(files, pinnedPubPEM)` tier-1 integrity (verify.go:112-184) and `VerifyMembership(files, MembershipConfig, prevEpoch)` keystone gate (verify.go:247-361).
 - `internal/agent/state.go:1-148` — persisted `State` (state.go:29-53), `LoadState`/`SaveState` (state.go:62-98), `CheckRollback` on manifest `compiled_at` (state.go:129-147).

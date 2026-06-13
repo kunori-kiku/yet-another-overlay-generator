@@ -126,7 +126,7 @@ func TestRenderBootstrapScript_SafeShellForms(t *testing.T) {
 	for _, want := range []string{
 		`shift; [ $# -gt 0 ] && shift ;;`, // safe shift
 		`ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}"`, // quoted
-		`trap 'rm -f "$tmp_bin"' EXIT`,            // temp cleanup
+		`trap 'rm -f "$tmp_bin"' EXIT`, // temp cleanup
 		`--proto '=https,http' "$URL"`, // proto pin (single comma list — both schemes)
 	} {
 		if !strings.Contains(s, want) {
@@ -153,7 +153,8 @@ func TestBootstrapHTTP(t *testing.T) {
 	agentSrv := httptest.NewServer(agentMux)
 	defer agentSrv.Close()
 
-	const base = "/api/v1/controller/"
+	const opBase = "/api/v1/operator/" // operator routes (settings)
+	const agentBase = "/api/v1/agent/" // agent routes (bootstrap)
 
 	opReq := func(method, route, body string) *http.Response {
 		t.Helper()
@@ -161,7 +162,7 @@ func TestBootstrapHTTP(t *testing.T) {
 		if body != "" {
 			r = strings.NewReader(body)
 		}
-		req, _ := http.NewRequest(method, opSrv.URL+base+route, r)
+		req, _ := http.NewRequest(method, opSrv.URL+opBase+route, r)
 		req.Header.Set("Authorization", "Bearer "+testOperatorToken)
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
@@ -205,7 +206,7 @@ func TestBootstrapHTTP(t *testing.T) {
 	resp.Body.Close()
 
 	// GET /bootstrap (agent mux, NO auth) reflects the saved settings.
-	bresp, err := agentSrv.Client().Get(agentSrv.URL + base + "bootstrap")
+	bresp, err := agentSrv.Client().Get(agentSrv.URL + agentBase + "bootstrap")
 	if err != nil {
 		t.Fatalf("GET bootstrap: %v", err)
 	}
@@ -245,14 +246,15 @@ func TestSettingsTranslucencyRoundTrip(t *testing.T) {
 	agentSrv := httptest.NewServer(agentMux)
 	defer agentSrv.Close()
 
-	const base = "/api/v1/controller/"
+	const opBase = "/api/v1/operator/" // operator routes (settings)
+	const agentBase = "/api/v1/agent/" // agent routes (bootstrap)
 	opReq := func(method, route, body string) *http.Response {
 		t.Helper()
 		var r io.Reader
 		if body != "" {
 			r = strings.NewReader(body)
 		}
-		req, _ := http.NewRequest(method, opSrv.URL+base+route, r)
+		req, _ := http.NewRequest(method, opSrv.URL+opBase+route, r)
 		req.Header.Set("Authorization", "Bearer "+testOperatorToken)
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
@@ -291,7 +293,7 @@ func TestSettingsTranslucencyRoundTrip(t *testing.T) {
 	}
 
 	// The bootstrap script must NOT mention translucency.
-	bresp, err := agentSrv.Client().Get(agentSrv.URL + base + "bootstrap")
+	bresp, err := agentSrv.Client().Get(agentSrv.URL + agentBase + "bootstrap")
 	if err != nil {
 		t.Fatalf("GET bootstrap: %v", err)
 	}

@@ -34,7 +34,7 @@ Then `docker compose up -d` and confirm the mounted base paths from the log:
 
 ```bash
 docker compose logs controller | grep "controller: operator routes"
-# one line: controller: operator routes at /s3cr3t/api/v1/controller/ (addr :8080); agent routes at /s3cr3t-agent/api/v1/controller/ (addr :9090)
+# one line: controller: operator routes at /s3cr3t/api/v1/operator/ (addr :8080); agent routes at /s3cr3t-agent/api/v1/agent/ (addr :9090)
 ```
 
 **Proxy/tunnel rules** (one hostname): route `/<operator-prefix>/*` → `:8080` and
@@ -49,6 +49,26 @@ from the server-reported agent prefix — you no longer mirror it by hand). Keep
 agent prefix equal to the old value avoids re-bootstrapping the fleet.
 
 The panel's **Secret Path Prefix** field mirrors the **operator** prefix only.
+
+### 1b. API namespace split — `/api/v1/controller/` → `/api/v1/operator/` + `/api/v1/agent/` (breaking)
+
+The single shared `/api/v1/controller/` namespace (used by BOTH audiences, distinguished
+only by port + secret prefix) is **gone**. Routes now live under audience-named namespaces:
+
+| Audience | Old | New | Port |
+|---|---|---|---|
+| operator/panel | `…/api/v1/controller/<route>` | `…/api/v1/operator/<route>` | `:8080` |
+| agent/node | `…/api/v1/controller/<route>` | `…/api/v1/agent/<route>` | `:9090` |
+
+This makes the two surfaces splittable by **path** (not just port), so a path-routing
+proxy can expose only `/…/api/v1/agent/*` publicly while keeping the operator panel behind
+a VPN. The startup log (above) prints the new base paths.
+
+**Already-enrolled agents re-bootstrap.** An agent baked the old `…/api/v1/controller/`
+base into its installed config, so it must be re-bootstrapped to learn `…/api/v1/agent/`
+(the panel's Enrollment flow emits the new one-liner). Clean break — no dual-serve of the
+old namespace. Reverse-proxy/tunnel path rules that hard-coded `/api/v1/controller/` must
+be updated to the two new namespaces.
 
 ## 2. Login is now a full-page gate (operator-visible)
 

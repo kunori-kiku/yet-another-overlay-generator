@@ -39,7 +39,7 @@ export function EnrollmentFlow() {
   };
 
   // enroll 命令文案：节点持有者在目标机上手动执行它来加入控制器（需先装好 agent 二进制）。
-  // --controller 是 scheme://host[:port] + agent 前缀（agent 自己补 /api/v1/controller/）。
+  // --controller 是 scheme://host[:port] + agent 前缀（agent 自己补 /api/v1/agent/）。
   const enrollCommand =
     token && nodeId
       ? `agent enroll --controller ${withAgentPrefix(agentBaseURL)} --node-id ${nodeId} --token ${token}`
@@ -47,8 +47,8 @@ export function EnrollmentFlow() {
 
   // 一键 bootstrap 命令（plan-5.2）：节点持有者以 root 跑一次，自动下载 agent、入网、应用、
   // 并装上 systemd 守护进程。curl 目标是服务端配置的 public agent URL（未配置则回退到
-  // agentBaseURL）+ 服务端上报的 agent secret 前缀 + /api/v1/controller/bootstrap。
-  const bootstrapURL = `${withAgentPrefix(settings?.publicAgentURL || agentBaseURL)}/api/v1/controller/bootstrap`;
+  // agentBaseURL）+ 服务端上报的 agent secret 前缀 + /api/v1/agent/bootstrap。
+  const bootstrapURL = `${withAgentPrefix(settings?.publicAgentURL || agentBaseURL)}/api/v1/agent/bootstrap`;
   const bootstrapCommand =
     token && nodeId
       ? `bash <(curl -fsSL ${bootstrapURL}) --token ${token} --node-id ${nodeId}`

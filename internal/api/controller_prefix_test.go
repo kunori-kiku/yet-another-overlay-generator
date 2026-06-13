@@ -40,25 +40,25 @@ func TestPrefixSplit_IndependentMounts(t *testing.T) {
 	opSrv, agentSrv, _ := newPrefixEnv(t, "/op-secret/", "agent-secret") // both normalize
 
 	// Operator mux: own prefix → mounted (200); agent prefix and bare path → 404.
-	if st := doJSON(t, http.MethodGet, opSrv.URL+"/op-secret/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/op-secret/api/v1/operator/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
 		t.Errorf("operator-prefixed /nodes = %d, want 200", st)
 	}
-	if st := doJSON(t, http.MethodGet, opSrv.URL+"/agent-secret/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/agent-secret/api/v1/operator/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
 		t.Errorf("agent-prefixed /nodes on operator mux = %d, want 404", st)
 	}
-	if st := doJSON(t, http.MethodGet, opSrv.URL+"/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/api/v1/operator/nodes", testOperatorToken, nil, nil); st != http.StatusNotFound {
 		t.Errorf("bare /nodes on operator mux = %d, want 404", st)
 	}
 
 	// Agent mux: own prefix → mounted (401 without a token proves the route exists);
 	// operator prefix and bare path → 404.
-	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/agent-secret/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/agent-secret/api/v1/agent/config", "", nil, nil); st != http.StatusUnauthorized {
 		t.Errorf("agent-prefixed /config = %d, want 401 (mounted, needs a token)", st)
 	}
-	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/op-secret/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/op-secret/api/v1/agent/config", "", nil, nil); st != http.StatusNotFound {
 		t.Errorf("operator-prefixed /config on agent mux = %d, want 404", st)
 	}
-	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/api/v1/agent/config", "", nil, nil); st != http.StatusNotFound {
 		t.Errorf("bare /config on agent mux = %d, want 404", st)
 	}
 }
@@ -68,14 +68,14 @@ func TestPrefixSplit_IndependentMounts(t *testing.T) {
 func TestPrefixSplit_OneSidedPrefix(t *testing.T) {
 	opSrv, agentSrv, _ := newPrefixEnv(t, "panel-only", "")
 
-	if st := doJSON(t, http.MethodGet, opSrv.URL+"/panel-only/api/v1/controller/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/panel-only/api/v1/operator/nodes", testOperatorToken, nil, nil); st != http.StatusOK {
 		t.Errorf("operator-prefixed /nodes = %d, want 200", st)
 	}
 	// The agent mux serves at the BARE path: its prefix was not set.
-	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/api/v1/controller/config", "", nil, nil); st != http.StatusUnauthorized {
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/api/v1/agent/config", "", nil, nil); st != http.StatusUnauthorized {
 		t.Errorf("bare agent /config = %d, want 401 (mounted at bare path)", st)
 	}
-	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/panel-only/api/v1/controller/config", "", nil, nil); st != http.StatusNotFound {
+	if st := doJSON(t, http.MethodGet, agentSrv.URL+"/panel-only/api/v1/agent/config", "", nil, nil); st != http.StatusNotFound {
 		t.Errorf("operator-prefixed agent /config = %d, want 404", st)
 	}
 }
@@ -88,13 +88,13 @@ func TestPrefixSplit_BootstrapBakesAgentPrefix(t *testing.T) {
 	opSrv, agentSrv, _ := newPrefixEnv(t, "op-secret", "agent-secret")
 
 	// Save a public agent URL so the script has a base to compose with.
-	st := doJSON(t, http.MethodPost, opSrv.URL+"/op-secret/api/v1/controller/settings", testOperatorToken,
+	st := doJSON(t, http.MethodPost, opSrv.URL+"/op-secret/api/v1/operator/settings", testOperatorToken,
 		map[string]any{"public_agent_url": "https://overlay.example.com"}, nil)
 	if st != http.StatusOK {
 		t.Fatalf("POST settings = %d, want 200", st)
 	}
 
-	resp, err := agentSrv.Client().Get(agentSrv.URL + "/agent-secret/api/v1/controller/bootstrap")
+	resp, err := agentSrv.Client().Get(agentSrv.URL + "/agent-secret/api/v1/agent/bootstrap")
 	if err != nil {
 		t.Fatalf("GET bootstrap: %v", err)
 	}
@@ -112,25 +112,28 @@ func TestPrefixSplit_BootstrapBakesAgentPrefix(t *testing.T) {
 	}
 }
 
-// TestPrefixSplit_Normalization: the setters normalize whitespace and slashes the same
-// way the old shared setter did ("" or "/<seg>").
+// TestPrefixSplit_Normalization: the setters normalize whitespace and slashes ("" or
+// "/<seg>"); the two audiences then mount under DISTINCT fixed namespaces
+// (/api/v1/operator/ vs /api/v1/agent/) so the surfaces never collide by path.
 func TestPrefixSplit_Normalization(t *testing.T) {
-	for in, want := range map[string]string{
-		"":           "/api/v1/controller/",
-		"  ":         "/api/v1/controller/",
-		"/s3cr3t/":   "/s3cr3t/api/v1/controller/",
-		"s3cr3t":     "/s3cr3t/api/v1/controller/",
-		" /s3cr3t ":  "/s3cr3t/api/v1/controller/",
-		"a/b":        "/a/b/api/v1/controller/",
-		"//s3cr3t//": "/s3cr3t/api/v1/controller/",
+	// in → the normalized prefix SEGMENT (empty or "/<seg>"); the fixed namespace
+	// suffix is appended per audience below.
+	for in, seg := range map[string]string{
+		"":           "",
+		"  ":         "",
+		"/s3cr3t/":   "/s3cr3t",
+		"s3cr3t":     "/s3cr3t",
+		" /s3cr3t ":  "/s3cr3t",
+		"a/b":        "/a/b",
+		"//s3cr3t//": "/s3cr3t",
 	} {
 		ch := NewControllerHandler(controller.NewMemStore(), testTenant, "", DefaultOperatorName)
 		ch.SetOperatorPathPrefix(in)
 		ch.SetAgentPathPrefix(in)
-		if got := ch.OperatorBasePath(); got != want {
+		if got, want := ch.OperatorBasePath(), seg+"/api/v1/operator/"; got != want {
 			t.Errorf("OperatorBasePath(%q) = %q, want %q", in, got, want)
 		}
-		if got := ch.AgentBasePath(); got != want {
+		if got, want := ch.AgentBasePath(), seg+"/api/v1/agent/"; got != want {
 			t.Errorf("AgentBasePath(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -146,7 +149,7 @@ func TestPrefixSplit_SettingsReportAgentPrefix(t *testing.T) {
 	var got struct {
 		AgentPathPrefix string `json:"agent_path_prefix"`
 	}
-	if st := doJSON(t, http.MethodGet, opSrv.URL+"/op-secret/api/v1/controller/settings", testOperatorToken, nil, &got); st != http.StatusOK {
+	if st := doJSON(t, http.MethodGet, opSrv.URL+"/op-secret/api/v1/operator/settings", testOperatorToken, nil, &got); st != http.StatusOK {
 		t.Fatalf("GET settings = %d, want 200", st)
 	}
 	if got.AgentPathPrefix != "/agent-secret" {
@@ -155,7 +158,7 @@ func TestPrefixSplit_SettingsReportAgentPrefix(t *testing.T) {
 
 	// POST with a forged agent_path_prefix: accepted (the field is in the wire struct)
 	// but IGNORED — the next GET still reports the env-derived value.
-	st := doJSON(t, http.MethodPost, opSrv.URL+"/op-secret/api/v1/controller/settings", testOperatorToken,
+	st := doJSON(t, http.MethodPost, opSrv.URL+"/op-secret/api/v1/operator/settings", testOperatorToken,
 		map[string]any{"public_agent_url": "https://overlay.example.com", "agent_path_prefix": "/forged"}, &got)
 	if st != http.StatusOK {
 		t.Fatalf("POST settings = %d, want 200", st)

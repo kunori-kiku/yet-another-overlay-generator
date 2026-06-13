@@ -18,7 +18,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
-const ctlBase = "/api/v1/controller/"
+const ctlBase = "/api/v1/operator/"
 
 // newLoginEnv stands up the operator mux with a MemStore that already holds operator
 // "admin" / "correct-password". breakGlassHash is the optional break-glass token hash
