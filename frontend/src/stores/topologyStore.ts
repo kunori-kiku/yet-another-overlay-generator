@@ -100,10 +100,16 @@ interface TopologyState {
   // 拉来的设计含机密 fleet 数据（公网 IP/SSH 目标），controller 模式下绝不能落盘或在登出后
   // 残留。见 canvasFromServer 的安全不变量。
   loadTopology: (topo: Topology, fromServer?: boolean) => void;
-  // 画布来源（安全不变量）：true 当且仅当当前画布内容来自一次服务端 hydration（含其后的本地
-  // 编辑——派生物仍是服务端机密数据）。controller 模式下 canvasFromServer 为 true 时：①不持久化
-  // 到 localStorage（partialize 置空），②登出/会话失效时清空（controllerStore），③未登录时
-  // 从登录门「切回本地」是整画布重置而非保图。本地原创工作（导入/新建/reset）置 false，正常持久化。
+  // 画布来源（安全不变量）：true 表示当前画布内容是「服务端权威的机密数据」——它由一次服务端
+  // hydration 写入（loadTopology(topo,true)），或由一次 deploy() 写到服务端后标记（部署后本地画布
+  // 即等同服务端权威副本）；其后的本地编辑仍视为派生机密数据。controller 模式下为 true 时：
+  // ①不持久化到 localStorage（partialize 置空），②登出/会话失效时清空（controllerStore），
+  // ③未登录时从登录门「切回本地」是整画布重置而非保图。本地原创工作（导入/新建/reset）置 false，
+  // 正常持久化——那是用户自有数据。
+  // 已知边界（均为 minor，刻意取舍）：(a) 与服务端字节完全相同的「空对空」no-op hydration 提前
+  // 返回，不改来源标记——但此时本地与服务端无差异，无机密可泄漏；(b) 尚未部署、也非服务端来的
+  // 「controller 模式草稿」标记为 false 以便登出后保留未保存草稿（代价：本机登出态可见，敏感度低于
+  // 已部署的 fleet 数据）；一旦部署即转为 true 受保护。
   canvasFromServer: boolean;
   setCanvasFromServer: (v: boolean) => void;
   reset: () => void;
@@ -659,7 +665,9 @@ export const useTopologyStore = create<TopologyState>()(
         // 人都能从 localStorage 读出（或一键「切回本地」渲染出来）。D1 说画布是「可丢弃的镜像」：
         // 登录会从服务端重新 hydrate，故无需持久化。本地模式、或本地原创工作（canvasFromServer
         // =false）照常持久化——那是用户自己机器上的自有数据，不是机密镜像。mode 跨 store 惰性读取
-        // （与 importProject 同一手法，运行时取值规避模块级循环依赖）。
+        // （与 importProject 同一手法，运行时取值规避模块级循环依赖）。init-safety：本 store 未配置
+        // persist version/migrate，故 partialize 不会在模块初始化期（hydrate 阶段）被调用——首次调用
+        // 发生在两个 store 都已就绪后的用户态 set()，此时 useControllerStore.getState() 必定可用。
         const serverHeld =
           state.canvasFromServer && useControllerStore.getState().mode === 'controller';
         return {

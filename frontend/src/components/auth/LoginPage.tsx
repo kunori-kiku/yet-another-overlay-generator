@@ -198,7 +198,7 @@ export function LoginPage() {
               {txt(language, '🔑 用 passkey 登录', '🔑 Sign in with passkey')}
             </button>
             {passkeyHint && loginUser.trim() === '' && (
-              <p className="text-center text-xs text-[var(--content-muted)]">
+              <p className="text-center text-xs text-[var(--content-muted)]" role="status">
                 {txt(
                   language,
                   '先填写上方的用户名，再用 passkey 登录。',
