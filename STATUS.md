@@ -1,43 +1,48 @@
 # STATUS
-<!-- regenerated: 2026-06-14 (controller-server-authority-redesign closed) -->
-<!-- by: close-phase -->
+<!-- regenerated: 2026-06-14 (login-gate + namespace-split hardening merged) -->
+<!-- by: follow-up hardening (post controller-server-authority-redesign) -->
 
 ## Active work
 
-- **Subject:** none. `controller-server-authority-redesign-2026_06_12` closed
-  **delivered** on 2026-06-14 and was archived to `implementation_plans/_completed/`.
-  No subject is in flight — the next session should draft a new subject (or the user
-  may pick up one of the carried follow-ups below).
-- **Branch:** `main` (no active feature branch; all plan branches merged + deleted).
-- **Current plan:** all done — the closed subject's seven plans (+1.5) shipped as PRs
-  #59–#65.
-- **Last shipped:** controller server-authority redesign — controller mode is now
-  server-authoritative end-to-end (server-authoritative cache + hydrate-on-login,
-  operator/agent prefix split, enforced zero-knowledge key custody at the API boundary,
-  bounded topology version history, orphan-agent idle + promote scoping, identity
-  reconciliation). Final PR #65 (merge `24f044e`, 2026-06-14): docs accuracy + breaking
-  migration note + a real rekey-refusal audit gap fixed.
+- **Subject:** none. `controller-server-authority-redesign-2026_06_12` closed **delivered**
+  (archived to `implementation_plans/_completed/`). Since then, four owner-raised concerns
+  were fixed as standalone, independently-reviewed PRs (no new subject folder):
+  - **#66** (merge `768211d`) — login-gate hardening: the controller login gate was only a
+    client-side render check, not a data boundary (server-hydrated design persisted at rest +
+    survived logout, readable via "switch to local" or devtools); now a provenance flag
+    (`canvasFromServer`) keeps server-held design out of localStorage and flushes it on
+    logout/gate, while preserving the operator's own local work. Plus: passkey button no longer
+    dead-disabled before username entry; browser tab title fixed.
+  - **#67** (merge `5025de3`) — **BREAKING** API namespace split: `/api/v1/controller/` →
+    `/api/v1/operator/` (panel, :8080) + `/api/v1/agent/` (nodes, :9090), so the two surfaces
+    split by path (expose only the agent endpoint publicly, keep the panel behind a VPN).
+- **Branch:** `main` (no active feature branch; all merged + deleted).
+- **Last shipped (to `main`):** PR #67 namespace split (`5025de3`, 2026-06-14). NOT yet released
+  (the last tag, `v2.0.0-preview.6`, predates #66 and #67).
 
 ## Open questions / blockers
 
-- **Live deployment migration is user-owed.** `overlay.kunorikiku.com` still runs the old
-  single `YAOG_CONTROLLER_PATH_PREFIX`; it must be renamed to the operator/agent pair and
-  operators re-logged-in. The server now **refuses to start** if the old env is still set.
-  Migration steps: `docs/MIGRATION-controller-server-authority.md`.
-- **Release of the redesign is user-gated.** `main` is well ahead of the last `v*` tag;
-  cutting a tag (→ Release + Docker workflows) is an outward-facing call for the user.
+- **Release pending (user-gated).** `main` is ahead of `v2.0.0-preview.6` by #66 + #67, and #67
+  is a **breaking** path change (enrolled agents must re-bootstrap). Cutting a `v*` tag triggers
+  the Release + Docker workflows — an outward-facing call for the user. A `preview.7` would carry
+  the login-gate hardening + the namespace split.
+- **Live deployment migration is user-owed.** `overlay.kunorikiku.com` needs: the env rename
+  (`YAOG_CONTROLLER_PATH_PREFIX` → operator/agent pair; server fails loud on the old one) AND,
+  after #67, re-bootstrapping nodes onto the new `/api/v1/agent/` path. Steps:
+  `docs/MIGRATION-controller-server-authority.md` (§1 env, §1b namespace).
 
 ## Next actions
 
-- **Migrate the live controller (owed):** apply the env rename + `docker compose up -d`,
-  confirm the startup log names both base paths, re-login, and update proxy/tunnel rules to
-  route the operator prefix → :8080 and the agent prefix → :9090.
-- **Manual browser two-node smoke (owed, carried since the keystone program):** browser +
-  authenticator + two real nodes on `http://localhost` (not `127.0.0.1` — WebAuthn). Verify
-  SC1 (cache-clear → login → hydrated canvas), SC5 (persisted controller mode → full-page
-  login), SC6 (controller→local warns + preserves graph + purges secrets), SC8 (fleet
-  "not in design" markers + one-click revoke), login-survives-refresh, dark/light, no token
-  in localStorage.
+- **Cut `v2.0.0-preview.7`?** (user decision) — bundles #66 (login-gate hardening) + #67
+  (breaking namespace split); release notes must point at the migration guide.
+- **Migrate the live controller (owed):** env rename + re-bootstrap nodes onto `/api/v1/agent/`;
+  confirm the startup log names both base paths; re-login; update proxy/tunnel path rules to the
+  two new namespaces (`/<op-prefix>/api/v1/operator/*` → :8080, `/<agent-prefix>/api/v1/agent/*` → :9090).
+- **Manual browser two-node smoke (owed, carried):** browser + authenticator + two real nodes on
+  `http://localhost` (not `127.0.0.1` — WebAuthn). Verify SC1 (cache-clear → login → hydrated
+  canvas), SC5 (persisted controller mode → full-page login), SC6 (controller→local warns +
+  preserves graph + purges secrets), SC8 (fleet "not in design" markers + one-click revoke),
+  login-survives-refresh, dark/light, no token in localStorage.
 - **Candidate follow-up subject (carried):** full light-mode theming of the legacy
   topology/deploy editing forms (mechanical recolor).
 
@@ -45,10 +50,9 @@
 
 - [controller-server-authority-redesign-2026_06_12](implementation_plans/_completed/controller-server-authority-redesign-2026_06_12/CLOSURE.md)
   — 7 plans (+1.5), PRs #59–#65 (delivered): controller mode made server-authoritative —
-  server-authoritative cache + login gate + hydrate, operator/agent prefix split (clean
-  break), enforced key custody (400 + canonical storage), version history (N=10), safety
-  bugs (orphan-agent idle, promote scoping), identity reconciliation. Each PR independently
-  reviewed (find → adversarial verify → fix).
+  server-authoritative cache + login gate + hydrate, operator/agent prefix split, enforced key
+  custody (400 + canonical storage), version history (N=10), safety bugs (orphan-agent idle,
+  promote scoping), identity reconciliation. Followed by hardening PRs #66/#67 (above).
 - [panel-appshell-redesign-2026_06_09](implementation_plans/_completed/panel-appshell-redesign-2026_06_09/CLOSURE.md)
   — 6 PRs: operator panel → dashboard app-shell (routes, selection aside, Apple-minimal
   auto dark/light + vibrancy, persisted mode/caches, httpOnly-cookie refresh-surviving login).
