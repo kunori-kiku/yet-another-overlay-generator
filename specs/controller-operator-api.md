@@ -1,9 +1,19 @@
 # Controller operator API
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-13 -->
 
 ## Responsibility
 Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, plus an optional break-glass bearer token) and serves the operator-port HTTP routes that drive the fleet lifecycle: topology, stage/promote, nodes, revoke, audit, settings, enrollment tokens, rekey-all, and keystone signing.
+
+> **controller-server-authority-redesign (plans 1/2/6):** `POST /update-topology`
+> enforces key custody — it rejects (400) any payload carrying a non-empty
+> `wireguard_private_key` and stores the canonical re-marshaled bytes — and appends an
+> `update-topology` audit entry; `promote` appends a `promote` entry (both gaps closed).
+> Topology is retained as bounded history (`GET /topology?version=N`,
+> `GET /topology/versions`, last 10). `POST /enrollment-token` returns a non-blocking
+> `warning` when the node-id is absent from the stored design (warn-not-block). The
+> operator/agent secret path prefixes are split (`YAOG_OPERATOR_PATH_PREFIX` /
+> `YAOG_AGENT_PATH_PREFIX`).
 
 ## Files
 - `internal/api/handler_controller.go:37-268` — `ControllerHandler` config (path prefix, panel-origin allowlist, secure cookie), `RegisterOperatorRoutes` route table (175-218), `SetPathPrefix`/`basePath` (223-235), `cors()` middleware (248-268)

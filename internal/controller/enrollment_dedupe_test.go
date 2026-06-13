@@ -150,6 +150,21 @@ func TestRekeyDedupe(t *testing.T) {
 			if n, err := s.GetNode(ctx, tenant, "node-b"); err != nil || n.WGPublicKey != kb {
 				t.Fatalf("node-b key after refused rekey = %q (err %v), want unchanged %q", n.WGPublicKey, err, kb)
 			}
+			// The rekey refusal is audited (parallel to the enroll path), so a
+			// duplicate-key binding attempt via rekey is as visible as one via enroll.
+			entries, err := s.ListAudit(ctx, tenant)
+			if err != nil {
+				t.Fatalf("ListAudit: %v", err)
+			}
+			found := false
+			for _, e := range entries {
+				if e.Action == "rekey-rejected-duplicate-key" && e.NodeID == "node-b" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no rekey-rejected-duplicate-key audit entry for node-b")
+			}
 			// Rekey node-b to a FRESH key → allowed, clears RekeyRequested.
 			kbNew := freshPub(t)
 			if err := Rekey(ctx, s, tenant, "node-b", kbNew, time.Now()); err != nil {

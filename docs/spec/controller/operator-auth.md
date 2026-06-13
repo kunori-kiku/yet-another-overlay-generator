@@ -45,6 +45,18 @@ reads it on the next login).
    when configured, the break-glass token (constant-time compared).
 4. `POST /api/v1/controller/logout` (authenticated) deletes the presented session.
 
+**Panel UX (controller-server-authority-redesign):** the login form is a **full-page
+gate** (`components/auth/LoginPage.tsx`), not a section inside Settings — entering the
+panel with controller mode persisted shows it before any chrome (the shell renders a
+brief "checking session…" splash until the mount session-probe resolves, then either the
+gate or the canvas — no flash). A valid break-glass token entered from the gate's
+Recovery disclosure opens the panel without minting a session (it is not a login). On a
+successful login or cookie-session restore the panel hydrates its canvas from the server
+(`GET /topology` → load), overwriting the local cache — controller mode is
+server-authoritative; the browser cache is a disposable mirror, with a one-time export
+stash before the first overwriting hydration of a differing non-empty local design. See
+specs/panel-auth.md and specs/panel-shell.md.
+
 ## Defenses
 
 - **Password storage:** argon2id, `m=64 MiB, t=3, p=1`, 16-byte random salt, stored as a

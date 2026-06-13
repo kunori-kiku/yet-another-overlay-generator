@@ -213,11 +213,37 @@ migration note, the long-owed two-node manual smoke, then `/close-phase`.
 
 ## Closure criteria
 
-- [ ] All seven plans merged via reviewed PRs; CI green on each.
-- [ ] Success criteria in Mission all demonstrably true (manual smoke transcript in closure notes).
-- [ ] Live deployment migrated (new envs set, operators re-logged-in) and verified.
-- [ ] docs/spec/controller/persistence.md claim is accurate; specs/ component files touched up.
-- [ ] Memory updated; STATUS.md regenerated via close-phase; subject archived to `_completed/`.
+- [x] All seven plans merged via reviewed PRs; CI green on each (plans 1–6 merged; plan-7 is this PR).
+      Every plan got an independent 7-angle review workflow (find → adversarial verify) with fixes.
+- [x] Success criteria in Mission demonstrably true — see the closure-smoke transcript below.
+- [ ] Live deployment migrated (new envs set, operators re-logged-in) — **owed to the user** (their
+      overlay.kunorikiku.com deploy; the migration note is published for it).
+- [x] docs/spec/controller/persistence.md claim accurate; specs/ component files touched up (plan-7).
+- [ ] Memory updated; STATUS.md regenerated via close-phase; subject archived to `_completed/` — done by
+      `/close-phase` at the end of plan-7.
+
+### Closure-smoke transcript (2026-06-14)
+
+**Automated (CI on every PR + `go test ./...` / `npm run lint && build` green on merged main):**
+- SC2 custody — `internal/api/topology_custody_test.go` (perpetual): keyed payload 400, stored bytes
+  key-free, non-schema 400, canonical-storage anti-smuggle.
+- SC4 history — `store_compat_test.go` (both impls): retention bound, newest-first, byte-exact
+  round-trip, crash-orphan invisibility, upgrade backfill, corrupt-entry skip.
+- SC7 agent idle + promote scoping — `cycle_idle_test.go` (perpetual), `promote_scope_test.go`.
+- Identity — `enrollment_dedupe_test.go` (perpetual): one approved pubkey ↔ one id, rekey path,
+  whitespace evasion, revoked-frees-binding.
+
+**Live HTTP smoke (dev controller, `OP`/`AG` prefixes, 12/12 PASS):** startup log names both base paths;
+operator login 401 under `/OP` on :8080 and 404 on :9090; bootstrap 200 under `/AG` on :9090 and 404 on
+:8080; bare paths 404 (SC3). Keyed update-topology → 400, clean → 200 (SC2). 12 puts retain exactly 10
+versions (newest=12, limit=10); `?version=3` 200, pruned `?version=1` 404, malformed 400 (SC4).
+
+**Owed manual browser smoke (carried since the keystone program; requires a browser + authenticator +
+two real nodes — cannot be run headless):** SC1 (cache-clear → login → hydrated canvas round-trip), SC5
+(persisted controller mode → full-page login before chrome), SC6 (controller→local warns + preserves
+graph + purges secrets), SC8 (fleet "not in design" markers + one-click revoke), plus
+login-survives-refresh, dark/light, no token in localStorage. The code paths are unit-/build-verified;
+the end-to-end browser pass remains the user's to run on `http://localhost` (WebAuthn caveat).
 
 ## Plan status table
 
@@ -230,4 +256,4 @@ migration note, the long-owed two-node manual smoke, then `/close-phase`.
 | plan-4 | done (18d267e) | [#62](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/62) | full-page login gate + hydrate-on-login + divergence-backup stash; review-hardened (break-glass usable, no silent data loss, semantic diff) |
 | plan-5 | done (0833b60) | [#63](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/63) | strip-on-deploy + import placeholdering + controller→local purge dialog + shrink/empty typed-confirm; review-hardened (sentinel phrase, best-effort guard, snapshot binding) |
 | plan-6 | done (2992abe) | [#64](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/64) | enrollment WG-pubkey dedupe (both write paths, lock-atomic) + token-mint design warning + fleet "not in design" markers + deploy orphan list; review-hardened |
-| plan-7 | pending | — | docs + migration + closure |
+| plan-7 | in review | [#65] | docs accuracy pass + migration note + closure smoke; close-phase to archive |

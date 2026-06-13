@@ -123,6 +123,15 @@ handler's long write timeout is confined to the agent listener. `EnableControlle
 concurrently — two goroutines feeding one error channel; the first listener error brings the process
 down.
 
+**Two independent secret path prefixes** (controller-server-authority-redesign): each port's routes
+mount under their own optional prefix — `YAOG_OPERATOR_PATH_PREFIX` for the operator mux and
+`YAOG_AGENT_PATH_PREFIX` for the agent mux (the old single `YAOG_CONTROLLER_PATH_PREFIX` is removed;
+the server refuses to start if it is still set). So a path-based proxy on one hostname can route
+`/<operator-prefix>/*` → `:8080` and `/<agent-prefix>/*` → `:9090` unambiguously. The prefixes are
+drive-by-scanner obscurity, NOT a security boundary. The server logs both mounted base paths at
+startup (`OperatorBasePath()` / `AgentBasePath()`), so a proxy misroute is diagnosable from the
+container log; the bootstrap installer bakes the **agent** prefix into the node's controller URL.
+
 ## The single auth chokepoint
 
 All authentication and authorization for the controller routes funnels through **one** file,

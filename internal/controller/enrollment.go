@@ -262,6 +262,19 @@ func Rekey(ctx context.Context, store Store, t TenantID, nodeID, newPubKey strin
 		return err // ErrNotFound mapped by the caller
 	}
 	if conflict, err := CheckWGKeyUnique(ctx, store, t, newPubKey, nodeID); err != nil {
+		// Audit the refusal so a duplicate-key binding ATTEMPT via the rekey path is
+		// as visible in the trail as one via enroll (the Enroll path emits
+		// "enroll-rejected-duplicate-key"); without this, a /rekey collision would be
+		// refused but leave no trace. The bearer already proved itself, so this cannot
+		// be spammed by an unauthenticated probe.
+		if _, auditErr := store.AppendAudit(ctx, t, AuditEntry{
+			Timestamp: now,
+			Actor:     "agent:" + nodeID,
+			Action:    "rekey-rejected-duplicate-key",
+			NodeID:    nodeID,
+		}); auditErr != nil {
+			return fmt.Errorf("controller: appending duplicate-key audit: %w", auditErr)
+		}
 		return fmt.Errorf("%w: this WireGuard public key is already enrolled as node %q", err, conflict)
 	}
 	rec.WGPublicKey = newPubKey

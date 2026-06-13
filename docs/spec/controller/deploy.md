@@ -153,12 +153,22 @@ ID. The bridge lives only in the controller; the frozen exporter is not changed 
 
 ## Audit
 
-`CompileAndStage` appends **one** audit entry per invocation **that actually stages something**:
-`{Actor: "operator", Action: "stage", NodeID: ""}` — fleet-wide (empty `NodeID`) because a stage covers
-the whole enrolled subgraph, not a single node. The two benign no-op early returns — **no stored
-topology** and **no enrolled node** — return before the audit append (they staged nothing, so there is
-nothing to record). The entry is hash-chained like every other (`AppendAudit`,
-[persistence.md](persistence.md) §audit hash chain). Promote appends its own entry separately.
+A full deploy leaves a complete, hash-chained audit trail (`AppendAudit`,
+[persistence.md](persistence.md) §audit hash chain). The stage-path entries, all `Actor:"operator"`:
+
+- **`stage`** — one per invocation that actually staged ≥1 node (fleet-wide, empty `NodeID`).
+- **`stage-empty`** — a zero-enrolled stage (controller-server-authority-redesign plan-3). This is the
+  design-destroying-deploy shape (every node skipped), so it is now recorded rather than silent. The
+  **no stored topology** path (`GetTopology` → `ErrNotFound`) still returns before any audit (nothing
+  was ever there to stage); the **zero-enrolled** path audits.
+- **`purge-staged`** (one per node) — when a re-stage (including a zero-node stage) drops a node that
+  was staged before but is no longer in the stage set, its stale staged bundle is purged so it cannot
+  go live on a later promote, and each purge is attributable.
+
+`update-topology` and `promote` append their own entries (plan-1 closed those gaps), and a duplicate-WG-pubkey
+refusal is audited on both write paths (plan-6): the enroll path appends `enroll-rejected-duplicate-key`,
+the rekey path `rekey-rejected-duplicate-key`. The stage-path
+audits are best-effort (post-commit): a failed audit append does not fail an already-committed stage.
 
 ## Revocation — clear the token + evict from the subgraph
 

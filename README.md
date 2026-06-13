@@ -112,9 +112,13 @@ You'll be prompted for a password (entered without echo). This is the account yo
 
 ### 3. Open the panel
 
-The panel + operator API is at **`http://localhost:8080`** (the node-facing agent API is on `:9090`). Log in as `admin` — the session is an httpOnly cookie, so it survives page refreshes.
+The panel + operator API is at **`http://localhost:8080`** (the node-facing agent API is on `:9090`). In controller mode you land on a **full-page login screen** before any of the panel chrome — log in as `admin`. The session is an httpOnly cookie, so it survives page refreshes; sign-out is in the top-right account menu, and the optional break-glass operator token is entered from the login page's **Recovery** disclosure.
 
-In controller mode you land on **Overview** (topology + fleet at a glance). The other sections: **Design** (the topology canvas), **Fleet** (node enrollment + per-node detail), **Deploy** (compile preview + one-click Deploy), **Security** (TOTP and passkey enrollment, audit log, compile history), and **Settings** (mode, connection, bootstrap, appearance). The EN/中文 language toggle sits in the top bar.
+**The server is authoritative.** On every login the panel pulls the controller's stored design and overwrites its local canvas — the browser cache is a disposable mirror. If your browser is holding a local design that differs from the server copy, the panel downloads a fresh `pre-hydration-backup-<date>.json` and shows a notice before overwriting — this happens on *every* such overwrite, not just the first, so undeployed local work is never silently lost.
+
+After login you land on **Overview** (topology + fleet at a glance). The other sections: **Design** (the topology canvas), **Fleet** (node enrollment + per-node detail, with "not in design" markers for orphaned fleet rows), **Deploy** (compile preview + one-click Deploy, with a shrink-guard confirmation; the server keeps the last 10 topology versions for recovery via its API), **Security** (TOTP and passkey enrollment, audit log, compile history), and **Settings** (mode, connection, bootstrap, appearance — switching back to local mode is a confirmed, lossy action that regenerates keys). The EN/中文 language toggle sits in the top bar (and on the login screen).
+
+> **Upgrading an existing controller?** This release renames the secret path prefix env and changes the login/hydration flow — see [`docs/MIGRATION-controller-server-authority.md`](docs/MIGRATION-controller-server-authority.md) before deploying.
 
 By default both ports bind to **loopback only** (`127.0.0.1`) — the login form carries a plaintext password, so nothing is exposed on other interfaces out of the box. Reach the panel from the same host, or tunnel it: `ssh -L 8080:127.0.0.1:8080 <host>`.
 

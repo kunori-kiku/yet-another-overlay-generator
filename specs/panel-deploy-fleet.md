@@ -1,9 +1,22 @@
 # Panel Deploy & Fleet
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-13 -->
 
 ## Responsibility
 Drives the controller deploy pipeline (update-topology → stage → keystone sign → promote → refresh) and the fleet UI (registry, enrollment, node detail, fleet-wide key rotation), plus the air-gap local-deploy downloads.
+
+> **controller-server-authority-redesign (plans 5–6):** `deploy()` strips private keys
+> (`lib/custody.ts` `stripPrivateKeys`) before `update-topology` — the client mirror of
+> the server's 400 — and guards a shrink/empty deploy (canvas empties the server design
+> or drops ≥50% of its node-ids) behind a typed project-name confirmation, computed
+> against the server copy fetched best-effort. Controller-mode import placeholders private
+> keys; switching controller→local purges keys/pins/compile-history behind a confirm
+> (`topologyStore.purgeModeBoundaryState`). Fleet UI: NodeRegistry marks registry rows
+> absent from the loaded design "not in design"; after a deploy, DeployBar lists approved
+> fleet nodes absent from `lastDeploy.staged` ("enrolled but not in this design") with a
+> one-click manual revoke (never automatic, D10). EnrollmentFlow composes its commands
+> from the server-reported agent prefix and surfaces the token-mint design-membership
+> warning. These UIs render in controller mode only (mode-gated routes).
 
 ## Files
 - `frontend/src/stores/controllerStore.ts:626-766` — deploy-side store actions: `mintToken` (626-628), `enrollOperator` (636-664), `deploy` (677-733), `revoke` (736-748), `rollKeys` (754-766); fleet view state (`nodes`/`audit`/`lastDeploy`, 91-95) and `refresh` (274-304)
