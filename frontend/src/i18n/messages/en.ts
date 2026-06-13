@@ -449,4 +449,8 @@ export const en = {
   'error.compileFailed': 'Compile failed',
   'error.exportFailed': 'Export failed',
   'error.deployScriptFailed': 'Failed to generate deploy script',
+  'error.keygen_missing_pubkey': "Node {node} is in agent-held custody but has not registered a WireGuard public key yet — the agent must register one before the controller can render it.",
+  'error.keygen_privkey_parse_failed': "Node {node}'s WireGuard private key could not be parsed: {detail}",
+  'error.keygen_pinned_pubkey_no_privkey': "Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.",
+  'error.keygen_generate_failed': "Failed to generate a WireGuard key for node {node}: {detail}",
 } as const;

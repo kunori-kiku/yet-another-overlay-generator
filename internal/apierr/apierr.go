@@ -40,6 +40,14 @@ const (
 	// private key — a key-custody violation. The message names "private key" + "custody"
 	// so both the operator and the perpetual custody test see the WHY.
 	CodeCustodyPrivateKey Code = "custody_private_key"
+
+	// WireGuard key preparation (render.GenerateKeys) — surfaced to the operator on the
+	// air-gap compile/export path and the controller deploy path. params: {node} and,
+	// where a parse/generate failed, {detail}.
+	CodeKeygenMissingPubkey   Code = "keygen_missing_pubkey"
+	CodeKeygenPrivkeyParse    Code = "keygen_privkey_parse_failed"
+	CodeKeygenPinnedNoPrivkey Code = "keygen_pinned_pubkey_no_privkey"
+	CodeKeygenGenerateFailed  Code = "keygen_generate_failed"
 )
 
 // def is the immutable per-code metadata: the default English message TEMPLATE (with
@@ -59,6 +67,11 @@ var registry = map[Code]def{
 	CodeLegacyUncoded:     {"An unexpected error occurred.", http.StatusInternalServerError},
 	CodeInternalPanic:     {"An unexpected server error occurred.", http.StatusInternalServerError},
 	CodeCustodyPrivateKey: {"Topology payload carried a WireGuard private key; this is a key-custody violation — the panel must strip private keys client-side before upload.", http.StatusBadRequest},
+
+	CodeKeygenMissingPubkey:   {"Node {node} is in agent-held custody but has not registered a WireGuard public key yet — the agent must register one before the controller can render it.", http.StatusBadRequest},
+	CodeKeygenPrivkeyParse:    {"Node {node}'s WireGuard private key could not be parsed: {detail}", http.StatusBadRequest},
+	CodeKeygenPinnedNoPrivkey: {"Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.", http.StatusBadRequest},
+	CodeKeygenGenerateFailed:  {"Failed to generate a WireGuard key for node {node}: {detail}", http.StatusInternalServerError},
 }
 
 // Error is a coded API error. It implements error and supports errors.Is/As via Unwrap,
