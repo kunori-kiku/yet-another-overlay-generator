@@ -10,7 +10,7 @@ import type {
   CompileResponse,
   CompileHistoryEntry,
 } from '../types/topology';
-import { detectSystemLanguage, txt, type UILanguage } from '../i18n';
+import { detectSystemLanguage, t, tError, txt, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
 import { stripPrivateKeys } from '../lib/custody';
 // useControllerStore is read LAZILY (getState() inside actions, never at module
@@ -155,27 +155,31 @@ function makeDefaultDomains(): Domain[] {
 
 const defaultLanguage: UILanguage = detectSystemLanguage();
 
-// readApiErrorMessage extracts a human message from a non-OK API response while
-// tolerating a body that is NOT the JSON error envelope — e.g. an HTML 502/504
-// from a reverse proxy, a CSRF/auth redirect, or an empty body. The previous
-// `await res.json()` threw a SyntaxError on such bodies, which the outer catch
-// then masked behind a generic fallback ("compile request failed"), hiding the
-// real HTTP status from the operator. Read the body once as text, parse it as
-// JSON only if it is JSON, and otherwise fall back to a status-qualified message.
-async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
+// readApiErrorMessage extracts a LOCALIZED human message from a non-OK API response,
+// tolerating a body that is NOT the JSON error envelope — e.g. an HTML 502/504 from a
+// reverse proxy, a CSRF/auth redirect, or an empty body. A raw `await res.json()` threw
+// a SyntaxError on such bodies, which the outer catch then masked behind a generic
+// fallback, hiding the real HTTP status. Read the body once as text; if it is JSON with
+// an `error` field, localize it through tError (shape-tolerant: today's {error:string}
+// AND the coded {error:{code,message,params}} envelope plan-2 introduces); otherwise
+// fall back to a status-qualified message.
+async function readApiErrorMessage(res: Response, fallbackKey: MessageKey, lang: UILanguage): Promise<string> {
   const text = await res.text().catch(() => '');
   if (text) {
     try {
       const data = JSON.parse(text);
-      if (data && typeof data.error === 'string' && data.error.trim()) {
-        return data.error;
+      if (data && (data as { error?: unknown }).error !== undefined) {
+        return tError(data, lang);
       }
     } catch {
       // Body is not JSON (proxy HTML, plain text, truncated) — fall through.
     }
   }
+  // Non-JSON body: a localized per-action fallback (keyed, so it respects the UI
+  // language) qualified by the HTTP status.
   const status = res.status ? `${res.status}${res.statusText ? ' ' + res.statusText : ''}` : '';
-  return status ? `${fallback} (${status})` : fallback;
+  const base = t(lang, fallbackKey);
+  return status ? `${base} (${status})` : base;
 }
 
 export const useTopologyStore = create<TopologyState>()(
@@ -557,7 +561,7 @@ export const useTopologyStore = create<TopologyState>()(
         body: JSON.stringify(topo),
       });
       if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, '校验失败'));
+        throw new Error(await readApiErrorMessage(res, 'error.validateFailed', get().language));
       }
       const data: ValidateResponse = await res.json();
       set({ validateResult: data, isValidating: false });
@@ -594,7 +598,7 @@ export const useTopologyStore = create<TopologyState>()(
         body: JSON.stringify(topo),
       });
       if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, 'Compile failed'));
+        throw new Error(await readApiErrorMessage(res, 'error.compileFailed', get().language));
       }
       const data: CompileResponse = await res.json();
 
@@ -658,7 +662,7 @@ export const useTopologyStore = create<TopologyState>()(
         body: JSON.stringify(topo),
       });
       if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, '导出失败'));
+        throw new Error(await readApiErrorMessage(res, 'error.exportFailed', get().language));
       }
 
       const blob = await res.blob();
@@ -704,7 +708,7 @@ export const useTopologyStore = create<TopologyState>()(
         body: JSON.stringify(topo),
       });
       if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, 'Failed to generate deploy script'));
+        throw new Error(await readApiErrorMessage(res, 'error.deployScriptFailed', get().language));
       }
 
       const blob = await res.blob();
