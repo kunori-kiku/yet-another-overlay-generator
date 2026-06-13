@@ -21,7 +21,7 @@ import dagre from '@dagrejs/dagre';
 import { CustomNode } from './CustomNode';
 import { CustomEdge } from './CustomEdge';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { resolveNodeInterfaces } from '../../lib/compiledInterfaces';
 import { uuid } from '../../lib/uuid';
 
@@ -591,7 +591,7 @@ export function TopologyCanvas() {
           onClick={runAutoLayout}
           className="px-2.5 py-1 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-xs text-gray-200 transition-colors duration-150"
         >
-          ✨ {txt(language, ...STRINGS.autoLayoutLabel)}
+          ✨ {t(language, 'autoLayoutLabel')}
         </button>
         <label className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 border border-gray-600 rounded text-xs text-gray-200 cursor-pointer transition-colors duration-150 hover:bg-gray-600">
           <input
@@ -600,7 +600,7 @@ export function TopologyCanvas() {
             onChange={(e) => setShowInterfaces(e.target.checked)}
             className="rounded"
           />
-          {txt(language, ...STRINGS.showInterfacesLabel)}
+          {t(language, 'showInterfacesLabel')}
         </label>
       </Panel>
       <MiniMap

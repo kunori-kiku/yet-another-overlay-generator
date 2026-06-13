@@ -5,7 +5,7 @@ import {
   type EdgeProps,
 } from '@xyflow/react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 
 // 每种 edge type 的颜色方案
 const edgeColors: Record<string, { stroke: string; label: string; bg: string }> = {
@@ -173,7 +173,7 @@ export function CustomEdge({
                   fontWeight: 700,
                 }}
               >
-                ⚠ {txt(language, ...STRINGS.duplicateChip)}
+                ⚠ {t(language, 'duplicateChip')}
               </span>
             )}
             {roleChip !== undefined &&
@@ -209,7 +209,7 @@ export function CustomEdge({
                   opacity: pending ? 0.8 : 1,
                 }}
               >
-                {port !== undefined ? `:${port}` : txt(language, ...STRINGS.portPendingLabel)}
+                {port !== undefined ? `:${port}` : t(language, 'portPendingLabel')}
               </span>
             )}
           </div>

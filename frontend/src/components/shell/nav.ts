@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from 'react';
-import { STRINGS } from '../../i18n';
+import type { MessageKey } from '../../i18n';
 import {
   OverviewIcon,
   DesignIcon,
@@ -20,7 +20,8 @@ export interface NavItem {
   key: NavKey;
   /** Route path this item links to (P2). */
   path: string;
-  label: readonly [string, string];
+  /** i18n catalog key for the item's label, resolved via t(lang, labelKey). */
+  labelKey: MessageKey;
   Icon: ComponentType<SVGProps<SVGSVGElement>>;
   /** Whether this section appears in the sidebar in Local mode (P4). Overview and
    *  Fleet are controller-only; Security stays visible because it also hosts the
@@ -30,12 +31,12 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { key: 'overview', path: '/overview', label: STRINGS.navOverview, Icon: OverviewIcon, localVisible: false },
-  { key: 'design', path: '/design', label: STRINGS.navDesign, Icon: DesignIcon, localVisible: true },
-  { key: 'fleet', path: '/fleet', label: STRINGS.navFleet, Icon: FleetIcon, localVisible: false },
-  { key: 'deploy', path: '/deploy', label: STRINGS.navDeploy, Icon: DeployIcon, localVisible: true },
-  { key: 'security', path: '/security', label: STRINGS.navSecurity, Icon: SecurityIcon, localVisible: true },
-  { key: 'settings', path: '/settings', label: STRINGS.navSettings, Icon: SettingsIcon, localVisible: true },
+  { key: 'overview', path: '/overview', labelKey: 'navOverview', Icon: OverviewIcon, localVisible: false },
+  { key: 'design', path: '/design', labelKey: 'navDesign', Icon: DesignIcon, localVisible: true },
+  { key: 'fleet', path: '/fleet', labelKey: 'navFleet', Icon: FleetIcon, localVisible: false },
+  { key: 'deploy', path: '/deploy', labelKey: 'navDeploy', Icon: DeployIcon, localVisible: true },
+  { key: 'security', path: '/security', labelKey: 'navSecurity', Icon: SecurityIcon, localVisible: true },
+  { key: 'settings', path: '/settings', labelKey: 'navSettings', Icon: SettingsIcon, localVisible: true },
 ];
 
 /** Sidebar items visible for the current mode (controller shows all). */

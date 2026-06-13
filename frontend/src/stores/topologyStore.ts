@@ -10,7 +10,7 @@ import type {
   CompileResponse,
   CompileHistoryEntry,
 } from '../types/topology';
-import { detectSystemLanguage, t, tError, txt, type MessageKey, type UILanguage } from '../i18n';
+import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
 import { stripPrivateKeys } from '../lib/custody';
 // useControllerStore is read LAZILY (getState() inside actions, never at module
@@ -432,11 +432,7 @@ export const useTopologyStore = create<TopologyState>()(
         if (hasReservedRoutePolicies) {
           const { language } = get();
           set({
-            error: txt(
-              language,
-              'route_policies 为保留特性（尚未实现），已从导入的项目中移除。',
-              'route_policies is a reserved feature (not yet implemented) and was removed from the imported project.'
-            ),
+            error: t(language, 'topologyStore.routePoliciesIsA'),
           });
         }
       } else {

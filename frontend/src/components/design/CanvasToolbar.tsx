@@ -1,6 +1,6 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { DomainForm } from '../domains/DomainForm';
 import { NodeForm } from '../nodes/NodeForm';
 
@@ -44,7 +44,7 @@ export function CanvasToolbar({
           listsOpen ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
         }`}
       >
-        <span aria-hidden="true">☰</span> {txt(language, ...STRINGS.toolbarLists)}
+        <span aria-hidden="true">☰</span> {t(language, 'toolbarLists')}
       </button>
       <div className="flex-1" />
       {/* Compile is a LOCAL/air-gap action only — see the mode note above. In controller mode
@@ -56,7 +56,7 @@ export function CanvasToolbar({
           disabled={isCompiling || nodeCount === 0}
           className="h-8 rounded bg-green-600 px-3 text-sm hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400"
         >
-          {isCompiling ? txt(language, '编译中...', 'Compiling...') : txt(language, '🔨 编译', '🔨 Compile')}
+          {isCompiling ? t(language, 'canvasToolbar.compiling') : t(language, 'canvasToolbar.compile')}
         </button>
       )}
     </div>

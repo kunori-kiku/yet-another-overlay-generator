@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 
 // last_seen / enrolled_at 是 RFC3339 字符串；零值（"0001-01-01T00:00:00Z"）显示为「—」。
 function fmtTime(iso: string): string {
@@ -30,32 +30,32 @@ export function FleetNodeDetailPage() {
   return (
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-4">
       <Link to="/fleet" className="text-sm text-blue-400 hover:underline">
-        {txt(language, ...STRINGS.fleetBack)}
+        {t(language, 'fleetBack')}
       </Link>
 
       <h1 className="text-xl font-semibold text-gray-100">
-        {txt(language, ...STRINGS.fleetNodeDetailTitle)}
+        {t(language, 'fleetNodeDetailTitle')}
       </h1>
 
       {!node ? (
-        <p className="text-sm text-gray-400">{txt(language, ...STRINGS.fleetNodeNotFound)}</p>
+        <p className="text-sm text-gray-400">{t(language, 'fleetNodeNotFound')}</p>
       ) : (
         <section className="max-w-2xl space-y-3 rounded-lg border border-gray-700 bg-gray-800 p-4">
           <h2 className="break-all font-mono text-lg font-semibold text-blue-400">{node.nodeId}</h2>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-            <Field label={txt(language, '状态', 'Status')}>{node.status}</Field>
-            <Field label={txt(language, '代号 (已应用/期望)', 'Gen (applied/desired)')}>
+            <Field label={t(language, 'fleetNodeDetailPage.status')}>{node.status}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.genAppliedDesired')}>
               {node.appliedGeneration} / {node.desiredGeneration}
             </Field>
-            <Field label={txt(language, '健康', 'Health')}>{node.lastHealth || '—'}</Field>
-            <Field label={txt(language, '最近一次心跳', 'Last Seen')}>{fmtTime(node.lastSeen)}</Field>
-            <Field label={txt(language, '注册时间', 'Enrolled At')}>{fmtTime(node.enrolledAt)}</Field>
-            <Field label={txt(language, '已注册公钥', 'WG public key')}>
+            <Field label={t(language, 'fleetNodeDetailPage.health')}>{node.lastHealth || '—'}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.lastSeen')}>{fmtTime(node.lastSeen)}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.enrolledAt')}>{fmtTime(node.enrolledAt)}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.wgPublicKey')}>
               {node.hasWGPublicKey ? '✓' : '—'}
             </Field>
-            <Field label={txt(language, '最近校验和', 'Last checksum')}>{node.lastChecksum || '—'}</Field>
-            <Field label={txt(language, '轮换密钥中', 'Rekeying')}>
-              {node.rekeyRequested ? txt(language, '是', 'yes') : txt(language, '否', 'no')}
+            <Field label={t(language, 'fleetNodeDetailPage.lastChecksum')}>{node.lastChecksum || '—'}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.rekeying')}>
+              {node.rekeyRequested ? t(language, 'fleetNodeDetailPage.yes') : t(language, 'fleetNodeDetailPage.no')}
             </Field>
           </dl>
         </section>

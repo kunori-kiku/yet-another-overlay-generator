@@ -1,5 +1,5 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
-import { txt } from '../../../i18n';
+import { t } from '../../../i18n';
 
 // 网络域属性编辑器（从 RightPanel 的选中域区块原样抽出，供选择驱动的 Design 右侧 aside 使用）。
 export function DomainEditor() {
@@ -15,11 +15,11 @@ export function DomainEditor() {
   return (
     <section>
       <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        {txt(language, '网络域属性', 'Domain Properties')}
+        {t(language, 'domainEditor.domainProperties')}
       </h2>
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '名称', 'Name')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'domainEditor.name')}</label>
           <input
             type="text"
             value={selectedDomain.name}
@@ -37,7 +37,7 @@ export function DomainEditor() {
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, 'Transit CIDR (可选)', 'Transit CIDR (optional)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'domainEditor.transitCIDROptional')}</label>
           <input
             type="text"
             value={selectedDomain.transit_cidr || ''}
@@ -47,17 +47,13 @@ export function DomainEditor() {
               })
             }
             pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$"
-            title={txt(
-              language,
-              'IPv4 CIDR 格式，例: 10.10.0.0/24；留空使用默认 10.10.0.0/24',
-              'IPv4 CIDR format, e.g. 10.10.0.0/24; empty uses default 10.10.0.0/24',
-            )}
+            title={t(language, 'domainEditor.ipv4CIDRFormatE')}
             placeholder="10.10.0.0/24"
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '路由模式', 'Routing Mode')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'domainEditor.routingMode')}</label>
           <select
             value={selectedDomain.routing_mode}
             onChange={(e) =>
@@ -73,7 +69,7 @@ export function DomainEditor() {
           </select>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '分配模式', 'Allocation Mode')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'domainEditor.allocationMode')}</label>
           <select
             value={selectedDomain.allocation_mode}
             onChange={(e) =>
@@ -91,7 +87,7 @@ export function DomainEditor() {
           onClick={() => removeDomain(selectedDomain.id)}
           className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
         >
-          {txt(language, '删除网络域', 'Delete Domain')}
+          {t(language, 'domainEditor.deleteDomain')}
         </button>
       </div>
     </section>

@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useUiStore } from '../../stores/uiStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { ChevronLeftIcon } from './icons';
 import { navItemsForMode } from './nav';
 import { FOCUS_RING } from './styles';
@@ -17,8 +17,8 @@ export function Sidebar() {
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const navItems = navItemsForMode(mode);
   const foldLabel = collapsed
-    ? txt(language, ...STRINGS.sidebarExpand)
-    : txt(language, ...STRINGS.sidebarCollapse);
+    ? t(language, 'sidebarExpand')
+    : t(language, 'sidebarCollapse');
 
   return (
     <aside
@@ -31,16 +31,16 @@ export function Sidebar() {
           Y
         </div>
         {!collapsed && (
-          <span className="truncate font-semibold">{txt(language, ...STRINGS.brandName)}</span>
+          <span className="truncate font-semibold">{t(language, 'brandName')}</span>
         )}
       </div>
 
       <nav
-        aria-label={txt(language, ...STRINGS.primaryNavLabel)}
+        aria-label={t(language, 'primaryNavLabel')}
         className="flex-1 space-y-1 overflow-y-auto p-2"
       >
-        {navItems.map(({ key, path, label, Icon }) => {
-          const itemLabel = txt(language, ...label);
+        {navItems.map(({ key, path, labelKey, Icon }) => {
+          const itemLabel = t(language, labelKey);
           return (
             <NavLink
               key={key}

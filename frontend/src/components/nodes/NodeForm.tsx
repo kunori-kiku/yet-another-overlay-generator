@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
 import { uuid } from '../../lib/uuid';
 import type { Node } from '../../types/topology';
@@ -53,12 +53,12 @@ export function NodeForm() {
 
   const handleSubmit = () => {
     if (!name.trim()) {
-      setError(txt(language, '名称不能为空', 'Name is required'));
+      setError(t(language, 'nodeForm.nameIsRequired'));
       return;
     }
     const targetDomain = domainId || (domains.length > 0 ? domains[0].id : '');
     if (!targetDomain) {
-      setError(txt(language, '请先创建一个网络域', 'Please create a domain first'));
+      setError(t(language, 'nodeForm.pleaseCreateADomain'));
       return;
     }
 
@@ -131,7 +131,7 @@ export function NodeForm() {
         onClick={() => setIsOpen(true)}
         className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-500 rounded text-sm mb-2"
       >
-        + {txt(language, '添加节点', 'Add Node')}
+        + {t(language, 'nodeForm.addNode')}
       </button>
     );
   }
@@ -140,7 +140,7 @@ export function NodeForm() {
     <div className="p-2 bg-gray-700 rounded space-y-2 mb-2">
       <input
         type="text"
-        placeholder={txt(language, '节点名称', 'Node Name')}
+        placeholder={t(language, 'nodeForm.nodeName')}
         value={name}
         onChange={(e) => setName(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -149,25 +149,25 @@ export function NodeForm() {
       {role !== 'client' && (
         <div className="space-y-1">
           <label className="block text-xs text-gray-300">
-            {txt(language, ...STRINGS.publicAddressLabel)}
+            {t(language, 'publicAddressLabel')}
           </label>
           <input
             type="text"
-            placeholder={txt(language, ...STRINGS.publicAddressPlaceholder)}
+            placeholder={t(language, 'publicAddressPlaceholder')}
             value={publicAddress}
             onChange={(e) => setPublicAddress(e.target.value)}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
           {!publicAddress.trim() && (
             <p className="text-xs text-gray-400">
-              {txt(language, ...STRINGS.publicAddressHint)}
+              {t(language, 'publicAddressHint')}
             </p>
           )}
         </div>
       )}
       <input
         type="text"
-        placeholder={txt(language, '主机名 (可选)', 'Hostname (optional)')}
+        placeholder={t(language, 'nodeForm.hostnameOptional')}
         value={hostname}
         onChange={(e) => setHostname(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -196,7 +196,7 @@ export function NodeForm() {
       </select>
       <input
         type="number"
-        placeholder={txt(language, '监听端口', 'Listen Port')}
+        placeholder={t(language, 'nodeForm.listenPort')}
         value={listenPort}
         onChange={(e) => setListenPort(parseInt(e.target.value) || 51820)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -205,7 +205,7 @@ export function NodeForm() {
         type="number"
         min={576}
         max={65535}
-        placeholder={txt(language, 'MTU (留空使用默认值 1420)', 'MTU (leave empty for default 1420)')}
+        placeholder={t(language, 'nodeForm.mtuLeaveEmptyFor')}
         value={mtu || ''}
         onChange={(e) => setMtu(parseInt(e.target.value) || 0)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -221,7 +221,7 @@ export function NodeForm() {
             onChange={(e) => setHasPublicIP(e.target.checked)}
             className="rounded"
           />
-          {txt(language, '高级：添加更多公网端点映射', 'Advanced: add more public endpoint mappings')}
+          {t(language, 'nodeForm.advancedAddMorePublic')}
         </label>
       )}
       <label className="flex items-center gap-2 text-sm">
@@ -231,21 +231,21 @@ export function NodeForm() {
           onChange={(e) => setFixedPrivateKey(e.target.checked)}
           className="rounded"
         />
-        {txt(language, '固定私钥（编译后持久化）', 'Pin private key (persist after compile)')}
+        {t(language, 'nodeForm.pinPrivateKeyPersist')}
       </label>
       {hasPublicIP && (
         <div className="space-y-2 p-2 bg-gray-800 rounded border border-gray-600">
-          <p className="text-xs text-gray-300">{txt(language, '附加公网映射（与上方“公网地址”并存；可后续在右侧添加更多）', 'Additional public endpoint mapping (in addition to the address above; add more later in right panel)')}</p>
+          <p className="text-xs text-gray-300">{t(language, 'nodeForm.additionalPublicEndpointMapping')}</p>
           <input
             type="text"
-            placeholder={txt(language, '公网 IP 或域名', 'Public IP or domain')}
+            placeholder={t(language, 'nodeForm.publicIPOrDomain')}
             value={endpointHost}
             onChange={(e) => setEndpointHost(e.target.value)}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
           <input
             type="number"
-            placeholder={txt(language, '端口', 'Port')}
+            placeholder={t(language, 'nodeForm.port')}
             value={endpointPort}
             onChange={(e) => setEndpointPort(parseInt(e.target.value, 10) || 51820)}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -259,7 +259,7 @@ export function NodeForm() {
           onChange={(e) => setCanForward(e.target.checked)}
           className="rounded"
         />
-        {txt(language, '可转发流量', 'Can Forward Traffic')}
+        {t(language, 'nodeForm.canForwardTraffic')}
       </label>
       {error && <p className="text-xs text-red-400">{error}</p>}
       <div className="flex gap-2">
@@ -267,13 +267,13 @@ export function NodeForm() {
           onClick={handleSubmit}
           className="flex-1 py-1 bg-green-600 hover:bg-green-500 rounded text-sm"
         >
-          {txt(language, '确定', 'Confirm')}
+          {t(language, 'nodeForm.confirm')}
         </button>
         <button
           onClick={() => { setIsOpen(false); setError(''); }}
           className="flex-1 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm"
         >
-          {txt(language, '取消', 'Cancel')}
+          {t(language, 'nodeForm.cancel')}
         </button>
       </div>
     </div>

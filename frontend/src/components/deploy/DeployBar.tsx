@@ -6,7 +6,7 @@ import {
   selectHasAuth,
 } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 
 // 部署条：把当前拓扑发布到 fleet。controllerStore.deploy() 串联
 // update-topology → stage →（KEYSTONE 签名）→ promote → refresh，整套 promote-to-fleet。
@@ -53,11 +53,7 @@ export function DeployBar() {
   // ——节点重新注册后还需再 Deploy 一次才会收敛——故先 confirm 再触发。
   const onRollKeys = () => {
     const ok = window.confirm(
-      txt(
-        language,
-        '将为整个 fleet 请求 WireGuard 密钥轮换。流程：① 各节点重生本地私钥并向控制器重新注册新公钥（注册表里的「🔑 轮换中」徽标随之逐个消失）；② 待所有徽标消失后，再「发布」一次——新一代配置携带全员新公钥，使 fleet 收敛（滚动应用期间各链路会短暂抖动）。请勿在仍有节点轮换中时发布。是否继续？',
-        'This requests a WireGuard key rotation across the whole fleet. Sequence: (1) each node regenerates its local private key and re-registers a new public key with the controller (its "🔑 rekeying" badge in the registry clears one by one); (2) once every badge has cleared, Deploy once — the new generation carries everyone’s new public keys and the fleet converges (links flap briefly during the rolling apply). Do not Deploy while any node is still rotating. Continue?',
-      ),
+      t(language, 'deployBar.thisRequestsAWireGuard'),
     );
     if (ok) {
       rollKeys();
@@ -79,7 +75,7 @@ export function DeployBar() {
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-teal-400">
-          {txt(language, '发布到 Fleet', 'Deploy to Fleet')}
+          {t(language, 'deployBar.deployToFleet')}
         </h3>
         <div className="flex items-center gap-2">
           <button
@@ -87,43 +83,31 @@ export function DeployBar() {
             disabled={loading || noAuth}
             className="px-4 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
-            {txt(language, '🔑 轮换密钥', '🔑 Roll keys')}
+            {t(language, 'deployBar.rollKeys')}
           </button>
           <button
             onClick={() => deploy()}
             disabled={loading || noAuth || anyRekeying}
             title={
               anyRekeying
-                ? txt(
-                    language,
-                    `${rekeyingCount} 个节点仍在轮换密钥——待全部重新注册后再发布`,
-                    `${rekeyingCount} node(s) still rotating keys — Deploy when all have re-registered`,
-                  )
+                ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })
                 : undefined
             }
             className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {loading
-              ? txt(language, '发布中...', 'Deploying...')
-              : txt(language, '🚀 发布', '🚀 Deploy')}
+              ? t(language, 'deployBar.deploying')
+              : t(language, 'deployBar.deploy')}
           </button>
         </div>
       </div>
 
       <p className="text-sm text-gray-400">
-        {txt(
-          language,
-          '将当前拓扑上传到控制器，编译已注册节点的子图，并提升为新一代配置（已注册节点会自动拉取）。',
-          'Upload the current topology, compile the enrolled subgraph, and promote it as a new generation (enrolled nodes pull automatically).',
-        )}
+        {t(language, 'deployBar.uploadTheCurrentTopology')}
       </p>
 
       <p className="text-xs text-purple-300/80">
-        {txt(
-          language,
-          '「轮换密钥」会请求各节点重生 WireGuard 密钥；待节点重新注册新公钥后，再「发布」一次以使 fleet 收敛。',
-          'Roll keys asks each node to regenerate its WireGuard key; once nodes re-register their new public keys, Deploy once more to converge the fleet.',
-        )}
+        {t(language, 'deployBar.rollKeysAsksEach')}
       </p>
 
       {/* KEYSTONE（plan-5.1d）：off-host operator 签名密钥（passkey / YubiKey）。
@@ -131,25 +115,21 @@ export function DeployBar() {
       <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-amber-300">
-            {txt(language, '🔐 操作员签名密钥', '🔐 Operator signing key')}
+            {t(language, 'deployBar.operatorSigningKey')}
           </h4>
           {operatorEnrolled ? (
             <span className="text-xs text-green-300 bg-green-900/20 px-2 py-0.5 rounded">
-              {txt(language, '已注册', 'Enrolled')}
+              {t(language, 'deployBar.enrolled')}
               {operatorCredentialAlg ? ` (${operatorCredentialAlg})` : ''}
             </span>
           ) : (
             <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
-              {txt(language, '未注册', 'Not enrolled')}
+              {t(language, 'deployBar.notEnrolled')}
             </span>
           )}
         </div>
         <p className="text-xs text-gray-400">
-          {txt(
-            language,
-            '在浏览器外（passkey / YubiKey）pin 一个签名凭据，用于为每次发布的成员清单签名。私钥永不离开你的安全密钥；控制器只保存它的公钥。',
-            'Pin an off-host credential (passkey / YubiKey) used to sign each deploy’s trust-list. The private key never leaves your security key; the controller stores only its public key.',
-          )}
+          {t(language, 'deployBar.pinAnOffHost')}
         </p>
         <button
           onClick={() => enrollOperator()}
@@ -157,17 +137,13 @@ export function DeployBar() {
           className="px-4 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
         >
           {enrolling
-            ? txt(language, '等待安全密钥...', 'Waiting for security key...')
+            ? t(language, 'deployBar.waitingForSecurityKey')
             : operatorEnrolled
-              ? txt(language, '🔐 重新注册签名密钥（passkey / YubiKey）', '🔐 Re-enroll signing key (passkey / YubiKey)')
-              : txt(language, '🔐 注册签名密钥（passkey / YubiKey）', '🔐 Enroll signing key (passkey / YubiKey)')}
+              ? t(language, 'deployBar.reEnrollSigningKey')
+              : t(language, 'deployBar.enrollSigningKeyPasskey')}
         </button>
         <p className="text-[10px] text-gray-500">
-          {txt(
-            language,
-            'keystone 开启时，发布会要求你触碰一次安全密钥以授权本次部署。',
-            'When the keystone is on, Deploy will prompt for a tap on your security key to authorize the deploy.',
-          )}
+          {t(language, 'deployBar.whenTheKeystoneIs')}
         </p>
       </div>
 
@@ -176,36 +152,20 @@ export function DeployBar() {
       {(signing || enrolling) && (
         <p className="text-sm text-amber-200 bg-amber-900/30 border border-amber-700/50 px-3 py-2 rounded animate-pulse">
           {enrolling
-            ? txt(
-                language,
-                '👆 请触碰你的安全密钥以注册签名密钥...',
-                '👆 Touch your security key to enroll your signing key...',
-              )
-            : txt(
-                language,
-                '👆 请触碰你的安全密钥以授权本次部署...',
-                '👆 Touch your security key to authorize this deploy...',
-              )}
+            ? t(language, 'deployBar.touchYourSecurityKey')
+            : t(language, 'deployBar.touchYourSecurityKey_2')}
         </p>
       )}
 
       {noAuth && (
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
-          {txt(
-            language,
-            '请先在上方登录（或填写 break-glass Operator Token）。',
-            'Sign in above first (or enter the break-glass operator token).',
-          )}
+          {t(language, 'deployBar.signInAboveFirst')}
         </p>
       )}
 
       {anyRekeying && (
         <p className="text-xs text-purple-300 bg-purple-900/20 px-2 py-1 rounded">
-          {txt(
-            language,
-            `${rekeyingCount} 个节点仍在轮换密钥——待全部重新注册后再发布（否则会用旧+新混合公钥重编译）。`,
-            `${rekeyingCount} node(s) still rotating keys — Deploy when all have re-registered (deploying now would recompile with mixed old+new public keys).`,
-          )}
+          {t(language, 'deployBar.rekeyingBanner', { count: rekeyingCount })}
         </p>
       )}
 
@@ -219,16 +179,12 @@ export function DeployBar() {
       {lastStrippedKeys > 0 && (
         <div className="flex items-start justify-between gap-2 text-xs text-sky-300 bg-sky-900/20 px-2 py-1 rounded">
           <span>
-            {txt(
-              language,
-              `上传前已剥离 ${lastStrippedKeys} 个 WireGuard 私钥——控制器模式是零知识的（节点自持私钥）。`,
-              `${lastStrippedKeys} WireGuard private key(s) were removed before upload — controller mode is zero-knowledge (nodes hold their own private keys).`,
-            )}
+            {t(language, 'deployBar.strippedKeys', { count: lastStrippedKeys })}
           </span>
           <button
             type="button"
             onClick={dismissStripNotice}
-            aria-label={txt(language, '关闭提示', 'Dismiss notice')}
+            aria-label={t(language, 'deployBar.dismissNotice')}
             className="shrink-0 px-1 text-sky-400 hover:text-sky-200"
           >
             ✕
@@ -239,17 +195,17 @@ export function DeployBar() {
       {lastDeploy && (
         <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2 text-sm">
           <p className="text-gray-300">
-            {txt(language, '最近一次发布', 'Last deploy')} —{' '}
+            {t(language, 'deployBar.lastDeploy')} —{' '}
             <span className="font-mono text-cyan-300">
-              {txt(language, '代号', 'generation')} {lastDeploy.generation}
+              {t(language, 'deployBar.generation')} {lastDeploy.generation}
             </span>
           </p>
           <div>
             <p className="text-xs text-gray-400">
-              {txt(language, '已编译节点', 'Staged nodes')} ({lastDeploy.staged.length})
+              {t(language, 'deployBar.stagedNodes')} ({lastDeploy.staged.length})
             </p>
             {lastDeploy.staged.length === 0 ? (
-              <p className="text-xs text-gray-500 italic">{txt(language, '（无）', '(none)')}</p>
+              <p className="text-xs text-gray-500 italic">{t(language, 'deployBar.none')}</p>
             ) : (
               <p className="text-xs text-green-300 font-mono break-all">
                 {lastDeploy.staged.join(', ')}
@@ -259,7 +215,7 @@ export function DeployBar() {
           {lastDeploy.skippedUnenrolled.length > 0 && (
             <div>
               <p className="text-xs text-gray-400">
-                {txt(language, '因未注册被跳过', 'Skipped (unenrolled)')} (
+                {t(language, 'deployBar.skippedUnenrolled')} (
                 {lastDeploy.skippedUnenrolled.length})
               </p>
               <p className="text-xs text-yellow-300 font-mono break-all">
@@ -272,7 +228,7 @@ export function DeployBar() {
           {orphans.length > 0 && (
             <div>
               <p className="text-xs text-orange-300">
-                {txt(language, '已入网但不在本设计中（未部署到）', 'Enrolled but not in this design (not deployed to)')} (
+                {t(language, 'deployBar.enrolledButNotIn')} (
                 {orphans.length})
               </p>
               <ul className="mt-1 space-y-1">
@@ -284,7 +240,7 @@ export function DeployBar() {
                       disabled={loading}
                       className="shrink-0 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
                     >
-                      {txt(language, '驱逐', 'Revoke')}
+                      {t(language, 'deployBar.revoke')}
                     </button>
                   </li>
                 ))}
@@ -301,21 +257,16 @@ export function DeployBar() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-md space-y-4 rounded-lg border border-red-700 bg-gray-800 p-5">
             <h4 className="text-base font-semibold text-red-400">
-              {txt(language, '⚠️ 这次发布会大幅缩小服务端设计', '⚠️ This deploy shrinks the server design')}
+              {t(language, 'deployBar.thisDeployShrinksThe')}
             </h4>
             <p className="text-sm text-gray-300">
-              {txt(
-                language,
-                `服务端当前有 ${pendingShrink.serverNodeCount} 个节点，本次将上传 ${pendingShrink.canvasNodeCount} 个。被移除的节点会从下一代配置中消失。`,
-                `The server currently holds ${pendingShrink.serverNodeCount} node(s); this deploy uploads ${pendingShrink.canvasNodeCount}. Removed nodes drop out of the next generation.`,
-              )}
+              {t(language, 'deployBar.shrinkSummary', {
+                server: pendingShrink.serverNodeCount,
+                canvas: pendingShrink.canvasNodeCount,
+              })}
             </p>
             <p className="text-xs text-gray-400">
-              {txt(
-                language,
-                `如果这是有意的，请键入 “${pendingShrink.confirmPhrase}” 以确认。`,
-                `If this is intentional, type “${pendingShrink.confirmPhrase}” to confirm.`,
-              )}
+              {t(language, 'deployBar.shrinkConfirmPrompt', { phrase: pendingShrink.confirmPhrase })}
             </p>
             <input
               type="text"
@@ -334,7 +285,7 @@ export function DeployBar() {
                 }}
                 className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
               >
-                {txt(language, '取消', 'Cancel')}
+                {t(language, 'deployBar.cancel')}
               </button>
               <button
                 type="button"
@@ -345,7 +296,7 @@ export function DeployBar() {
                 }}
                 className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400"
               >
-                {txt(language, '确认发布', 'Confirm deploy')}
+                {t(language, 'deployBar.confirmDeploy')}
               </button>
             </div>
           </div>

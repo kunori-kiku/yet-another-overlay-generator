@@ -1,7 +1,7 @@
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 
 const roleColors: Record<string, string> = {
   peer: 'border-green-500 bg-green-900/50',
@@ -77,7 +77,7 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
   const icon = roleIcons[role] || '💻';
   const interfaces: IfaceChip[] = (data.interfaces as IfaceChip[]) || [];
   const handleClass = `${roleHandleColorClass[role] || roleHandleColorClass.peer} ${handleClassBase}`;
-  const dragHint = txt(language, '拖拽以连接', 'drag to connect');
+  const dragHint = t(language, 'customNode.dragToConnect');
   const deemphasized = data.deemphasized === true;
 
   return (

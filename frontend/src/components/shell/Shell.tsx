@@ -6,7 +6,7 @@ import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore
 import { useTopologyStore } from '../../stores/topologyStore';
 import { LoginPage } from '../auth/LoginPage';
 import { NoticeBanner } from './NoticeBanner';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { FOCUS_RING } from './styles';
 
 // Persistent app-shell chrome: collapsible sidebar + top app bar wrapping the
@@ -67,7 +67,7 @@ export function Shell() {
           className="grid h-screen place-items-center bg-[var(--surface)] text-sm text-[var(--content-muted)]"
           role="status"
         >
-          {txt(language, '正在检查会话…', 'Checking session…')}
+          {t(language, 'shell.checkingSession')}
         </div>
       );
     }
@@ -83,7 +83,7 @@ export function Shell() {
         href="#main-content"
         className={`sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-lg focus:bg-[var(--accent)] focus:px-3 focus:py-1.5 focus:text-sm focus:text-[var(--accent-fg)] ${FOCUS_RING}`}
       >
-        {txt(language, ...STRINGS.skipToContent)}
+        {t(language, 'skipToContent')}
       </a>
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -93,24 +93,16 @@ export function Shell() {
             keys. Both render live via txt() through the shared NoticeBanner. */}
         {hydrationNotice && (
           <NoticeBanner
-            message={txt(
-              language,
-              '本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。',
-              'Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.',
-            )}
+            message={t(language, 'shell.yourLocalDesignWas')}
             onDismiss={dismissHydrationNotice}
-            dismissLabel={txt(language, '关闭提示', 'Dismiss notice')}
+            dismissLabel={t(language, 'shell.dismissNotice')}
           />
         )}
         {importPlaceholdered > 0 && (
           <NoticeBanner
-            message={txt(
-              language,
-              `控制器模式导入：已将 ${importPlaceholdered} 个私钥替换为占位（节点将使用自持的 agent 密钥）。`,
-              `Imported under controller mode: ${importPlaceholdered} private key(s) replaced by placeholders — nodes will use their agent-held keys.`,
-            )}
+            message={t(language, 'shell.importPlaceholdered', { count: importPlaceholdered })}
             onDismiss={dismissImportNotice}
-            dismissLabel={txt(language, '关闭提示', 'Dismiss notice')}
+            dismissLabel={t(language, 'shell.dismissNotice_2')}
           />
         )}
         <main id="main-content" tabIndex={-1} className="flex-1 overflow-hidden outline-none">

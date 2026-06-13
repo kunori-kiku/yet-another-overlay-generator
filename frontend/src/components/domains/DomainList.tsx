@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 
 export function DomainList() {
   const { domains, removeDomain, reorderDomains, selectDomain, selectedDomainId, language } = useTopologyStore();
@@ -8,7 +8,7 @@ export function DomainList() {
 
   if (domains.length === 0) {
     return (
-      <p className="text-xs text-gray-500 italic">{txt(language, '尚未创建网络域', 'No domains created yet')}</p>
+      <p className="text-xs text-gray-500 italic">{t(language, 'domainList.noDomainsCreatedYet')}</p>
     );
   }
 
@@ -33,7 +33,7 @@ export function DomainList() {
               ? 'bg-blue-900/30 border-blue-500'
               : 'bg-gray-700 border-transparent hover:border-gray-500'
           }`}
-          title={txt(language, '点击编辑，拖拽排序', 'Click to edit, drag to reorder')}
+          title={t(language, 'domainList.clickToEditDrag')}
         >
           <div className="flex items-center justify-between">
             <span className="font-medium text-blue-300">☰ {domain.name}</span>
@@ -43,7 +43,7 @@ export function DomainList() {
                 removeDomain(domain.id);
               }}
               className="text-red-400 hover:text-red-300 text-xs"
-              title={txt(language, '删除', 'Delete')}
+              title={t(language, 'domainList.delete')}
             >
               ✕
             </button>

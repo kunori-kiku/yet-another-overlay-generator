@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 
 // 注册流程：操作员从拓扑里选一个节点 + 一个 TTL，铸造一次性 enrollment token，
 // 然后把生成的 token 与可复制的 `agent enroll ...` 命令交给节点持有者执行。
@@ -86,25 +86,21 @@ export function EnrollmentFlow() {
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
       <h3 className="text-lg font-semibold text-purple-400">
-        {txt(language, '节点注册', 'Node Enrollment')}
+        {t(language, 'enrollmentFlow.nodeEnrollment')}
       </h3>
       <p className="text-sm text-gray-400">
-        {txt(
-          language,
-          '为某个拓扑节点签发一次性注册令牌，并把下方命令交给该节点的持有者执行以加入控制器。',
-          'Mint a single-use token for a topology node, then hand the command below to that node’s operator to join the controller.',
-        )}
+        {t(language, 'enrollmentFlow.mintASingleUse')}
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
         <div className="md:col-span-1">
-          <label className="text-xs text-gray-400">{txt(language, '节点', 'Node')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'enrollmentFlow.node')}</label>
           <select
             value={nodeId}
             onChange={(e) => setNodeId(e.target.value)}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
           >
-            <option value="">{txt(language, '选择节点...', 'Select a node...')}</option>
+            <option value="">{t(language, 'enrollmentFlow.selectANode')}</option>
             {topoNodes.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name} ({n.id})
@@ -113,7 +109,7 @@ export function EnrollmentFlow() {
           </select>
         </div>
         <div className="md:col-span-1">
-          <label className="text-xs text-gray-400">{txt(language, 'TTL (秒)', 'TTL (seconds)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'enrollmentFlow.ttlSeconds')}</label>
           <input
             type="number"
             min={1}
@@ -129,19 +125,15 @@ export function EnrollmentFlow() {
             className="w-full py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
           >
             {minting
-              ? txt(language, '签发中...', 'Minting...')
-              : txt(language, '🔑 签发令牌', '🔑 Mint Token')}
+              ? t(language, 'enrollmentFlow.minting')
+              : t(language, 'enrollmentFlow.mintToken')}
           </button>
         </div>
       </div>
 
       {topoNodes.length === 0 && (
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
-          {txt(
-            language,
-            '当前拓扑没有节点，请先在「编辑拓扑」中添加节点。',
-            'The current topology has no nodes. Add nodes in Edit Topology first.',
-          )}
+          {t(language, 'enrollmentFlow.theCurrentTopologyHas')}
         </p>
       )}
 
@@ -157,35 +149,23 @@ export function EnrollmentFlow() {
       {mintWarning && (
         <p className="text-xs text-amber-300 bg-amber-900/20 px-2 py-1 rounded break-all">
           ⚠️{' '}
-          {txt(
-            language,
-            '该节点 ID 不在当前设计中——令牌可用，但在把它加入设计之前，stage 会跳过该节点。',
-            'This node id is not in the current design — the token works, but stage will skip the node until you add it to the design.',
-          )}
+          {t(language, 'enrollmentFlow.thisNodeIdIs')}
         </p>
       )}
 
       {token && (
         <div className="space-y-2 p-3 bg-gray-900 border border-gray-700 rounded">
           <p className="text-xs text-yellow-400">
-            {txt(
-              language,
-              '⚠️ 令牌仅此一次可见，请立即复制保存。',
-              '⚠️ This token is shown only once — copy it now.',
-            )}
+            {t(language, 'enrollmentFlow.thisTokenIsShown')}
           </p>
           {!agentPrefixKnown && (
             <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
-              {txt(
-                language,
-                '⚠️ 服务端设置尚未加载：以下命令可能缺少 agent 路径前缀。请等待设置加载或刷新后再复制。',
-                '⚠️ Server settings not loaded yet: the commands below may be missing the agent path prefix. Wait for settings to load (or refresh) before copying.',
-              )}
+              {t(language, 'enrollmentFlow.serverSettingsNotLoaded')}
             </p>
           )}
           <div>
             <label className="text-[10px] text-gray-500 uppercase tracking-wider">
-              {txt(language, '注册令牌', 'Enrollment token')}
+              {t(language, 'enrollmentFlow.enrollmentToken')}
             </label>
             <pre className="text-xs text-cyan-300 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
               {token}
@@ -195,13 +175,13 @@ export function EnrollmentFlow() {
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">
-                {txt(language, '一键安装（推荐，以 root 运行）', 'One-shot install (recommended, run as root)')}
+                {t(language, 'enrollmentFlow.oneShotInstallRecommended')}
               </label>
               <button
                 onClick={() => copyText(bootstrapCommand, 'bootstrap')}
                 className="px-2 py-0.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded text-gray-100"
               >
-                {copied === 'bootstrap' ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
+                {copied === 'bootstrap' ? t(language, 'enrollmentFlow.copied') : t(language, 'enrollmentFlow.copy')}
               </button>
             </div>
             <pre className="text-xs text-emerald-200 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
@@ -209,11 +189,7 @@ export function EnrollmentFlow() {
             </pre>
             {!settings?.publicAgentURL && (
               <p className="text-[10px] text-yellow-400 mt-1">
-                {txt(
-                  language,
-                  '提示：未配置「公开 Agent 地址」，已回退到上方 Agent 基础地址。请在「Bootstrap 设置」里设置节点可达的公开地址。',
-                  'Tip: no public agent URL configured — falling back to the Agent Base URL above. Set a node-reachable public URL in Bootstrap Settings.',
-                )}
+                {t(language, 'enrollmentFlow.tipNoPublicAgent')}
               </p>
             )}
           </div>
@@ -221,13 +197,13 @@ export function EnrollmentFlow() {
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-gray-500 uppercase tracking-wider">
-                {txt(language, '或：手动 enroll 命令', 'Or: manual enroll command')}
+                {t(language, 'enrollmentFlow.orManualEnrollCommand')}
               </label>
               <button
                 onClick={() => copyText(enrollCommand, 'enroll')}
                 className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
               >
-                {copied === 'enroll' ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
+                {copied === 'enroll' ? t(language, 'enrollmentFlow.copied_2') : t(language, 'enrollmentFlow.copy_2')}
               </button>
             </div>
             <pre className="text-xs text-gray-300 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">

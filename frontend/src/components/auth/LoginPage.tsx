@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { ThemeToggle } from '../shell/ThemeToggle';
 import { LanguageToggle } from '../shell/LanguageToggle';
 import { landingPathForMode } from '../shell/nav';
@@ -75,9 +75,9 @@ export function LoginPage() {
               Y
             </div>
             <div className="text-center">
-              <h1 className="text-lg font-semibold">{txt(language, ...STRINGS.brandName)}</h1>
+              <h1 className="text-lg font-semibold">{t(language, 'brandName')}</h1>
               <p className="text-sm text-[var(--content-muted)]">
-                {txt(language, '控制器模式 · 请登录', 'Controller mode · sign in to continue')}
+                {t(language, 'loginPage.controllerModeSignIn')}
               </p>
             </div>
           </div>
@@ -97,7 +97,7 @@ export function LoginPage() {
           >
             <div>
               <label htmlFor="login-username" className="mb-1 block text-xs text-[var(--content-muted)]">
-                {txt(language, '用户名', 'Username')}
+                {t(language, 'loginPage.username')}
               </label>
               <input
                 id="login-username"
@@ -116,7 +116,7 @@ export function LoginPage() {
             </div>
             <div>
               <label htmlFor="login-password" className="mb-1 block text-xs text-[var(--content-muted)]">
-                {txt(language, '密码', 'Password')}
+                {t(language, 'loginPage.password')}
               </label>
               <input
                 id="login-password"
@@ -134,7 +134,7 @@ export function LoginPage() {
             {totpRequired && (
               <div>
                 <label htmlFor="login-totp" className="mb-1 block text-xs text-[var(--content-muted)]">
-                  {txt(language, '验证码 (6 位)', 'Code (6 digits)')}
+                  {t(language, 'loginPage.code6Digits')}
                 </label>
                 <input
                   id="login-totp"
@@ -147,11 +147,7 @@ export function LoginPage() {
                   className={`${inputClass} font-mono tracking-widest`}
                 />
                 <p className="mt-1 text-xs text-[var(--content-muted)]">
-                  {txt(
-                    language,
-                    '此账户启用了两步验证，请输入验证器 App 的 6 位码。',
-                    'This account has 2FA enabled — enter the 6-digit code from your authenticator.',
-                  )}
+                  {t(language, 'loginPage.thisAccountHas2FA')}
                 </p>
               </div>
             )}
@@ -166,10 +162,10 @@ export function LoginPage() {
               className={`w-full rounded-lg bg-[var(--accent)] py-2 text-sm font-medium text-[var(--accent-fg)] transition-opacity disabled:opacity-40 ${FOCUS_RING}`}
             >
               {loading
-                ? txt(language, '登录中...', 'Signing in...')
+                ? t(language, 'loginPage.signingIn')
                 : totpRequired
-                ? txt(language, '验证并登录', 'Verify & sign in')
-                : txt(language, '登录', 'Sign in')}
+                ? t(language, 'loginPage.verifySignIn')
+                : t(language, 'loginPage.signIn')}
             </button>
           </form>
 
@@ -177,7 +173,7 @@ export function LoginPage() {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <div className="flex-1 border-t border-[var(--hairline)]" />
-              <span className="text-xs text-[var(--content-muted)]">{txt(language, '或', 'or')}</span>
+              <span className="text-xs text-[var(--content-muted)]">{t(language, 'loginPage.or')}</span>
               <div className="flex-1 border-t border-[var(--hairline)]" />
             </div>
             <button
@@ -195,20 +191,16 @@ export function LoginPage() {
               disabled={loading || loginCeremony}
               className={`w-full rounded-lg border border-[var(--hairline)] py-2 text-sm font-medium text-[var(--content)] transition-colors hover:bg-[var(--surface-sunken)] disabled:opacity-40 ${FOCUS_RING}`}
             >
-              {txt(language, '🔑 用 passkey 登录', '🔑 Sign in with passkey')}
+              {t(language, 'loginPage.signInWithPasskey')}
             </button>
             {passkeyHint && loginUser.trim() === '' && (
               <p className="text-center text-xs text-[var(--content-muted)]" role="status">
-                {txt(
-                  language,
-                  '先填写上方的用户名，再用 passkey 登录。',
-                  'Enter your username above first, then sign in with your passkey.',
-                )}
+                {t(language, 'loginPage.enterYourUsernameAbove')}
               </p>
             )}
             {loginCeremony && (
               <p className="text-center text-xs text-[var(--content-muted)]" role="status">
-                {txt(language, '请触碰你的安全密钥...', 'Touch your security key...')}
+                {t(language, 'loginPage.touchYourSecurityKey')}
               </p>
             )}
           </div>
@@ -227,13 +219,13 @@ export function LoginPage() {
               aria-expanded={showConnection}
               className={`text-xs text-[var(--content-muted)] underline-offset-2 hover:underline ${FOCUS_RING}`}
             >
-              {showConnection ? '▾' : '▸'} {txt(language, '连接设置', 'Connection settings')}
+              {showConnection ? '▾' : '▸'} {t(language, 'loginPage.connectionSettings')}
             </button>
             {showConnection && (
               <div className="space-y-2 rounded-lg border border-[var(--hairline)] p-3">
                 <div>
                   <label htmlFor="login-baseurl" className="mb-1 block text-xs text-[var(--content-muted)]">
-                    {txt(language, 'Operator 基础地址', 'Operator Base URL')}
+                    {t(language, 'loginPage.operatorBaseURL')}
                   </label>
                   <input
                     id="login-baseurl"
@@ -246,7 +238,7 @@ export function LoginPage() {
                 </div>
                 <div>
                   <label htmlFor="login-prefix" className="mb-1 block text-xs text-[var(--content-muted)]">
-                    {txt(language, 'Secret 路径前缀（可选）', 'Secret Path Prefix (optional)')}
+                    {t(language, 'loginPage.secretPathPrefixOptional')}
                   </label>
                   <input
                     id="login-prefix"
@@ -257,11 +249,7 @@ export function LoginPage() {
                     className={inputClass}
                   />
                   <p className="mt-1 text-xs text-[var(--content-muted)]">
-                    {txt(
-                      language,
-                      '需与服务端 YAOG_OPERATOR_PATH_PREFIX 一致；未设置则留空。',
-                      "Must match the server's YAOG_OPERATOR_PATH_PREFIX; leave blank if unset.",
-                    )}
+                    {t(language, 'loginPage.mustMatchTheServer')}
                   </p>
                 </div>
               </div>
@@ -275,7 +263,7 @@ export function LoginPage() {
               aria-expanded={showBreakGlass}
               className={`block text-xs text-[var(--content-muted)] underline-offset-2 hover:underline ${FOCUS_RING}`}
             >
-              {showBreakGlass ? '▾' : '▸'} {txt(language, '恢复（break-glass）', 'Recovery (break-glass)')}
+              {showBreakGlass ? '▾' : '▸'} {t(language, 'loginPage.recoveryBreakGlass')}
             </button>
             {showBreakGlass && (
               <form
@@ -290,14 +278,14 @@ export function LoginPage() {
                 }}
               >
                 <label htmlFor="login-breakglass" className="block text-xs text-[var(--content-muted)]">
-                  {txt(language, 'Operator Token（恢复用）', 'Operator token (break-glass)')}
+                  {t(language, 'loginPage.operatorTokenBreakGlass')}
                 </label>
                 <input
                   id="login-breakglass"
                   type="password"
                   value={breakGlassInput}
                   onChange={(e) => setBreakGlassInput(e.target.value)}
-                  placeholder={txt(language, '可选；不会被持久化', 'Optional; never persisted')}
+                  placeholder={t(language, 'loginPage.optionalNeverPersisted')}
                   autoComplete="off"
                   className={inputClass}
                 />
@@ -306,14 +294,10 @@ export function LoginPage() {
                   disabled={breakGlassInput.trim() === ''}
                   className={`w-full rounded-lg border border-[var(--hairline)] py-1.5 text-sm text-[var(--content)] transition-colors hover:bg-[var(--surface-sunken)] disabled:opacity-40 ${FOCUS_RING}`}
                 >
-                  {txt(language, '用恢复令牌进入', 'Enter with recovery token')}
+                  {t(language, 'loginPage.enterWithRecoveryToken')}
                 </button>
                 <p className="text-xs text-[var(--content-muted)]">
-                  {txt(
-                    language,
-                    '提交后即可进入面板（不创建会话；仅当后端设置了 YAOG_CONTROLLER_OPERATOR_TOKEN 时有效）。',
-                    'Submitting opens the panel (no session is created; only works when the backend sets YAOG_CONTROLLER_OPERATOR_TOKEN).',
-                  )}
+                  {t(language, 'loginPage.submittingOpensThePanel')}
                 </p>
               </form>
             )}
@@ -331,16 +315,8 @@ export function LoginPage() {
                 const serverHeld = useTopologyStore.getState().canvasFromServer;
                 const ok = window.confirm(
                   serverHeld
-                    ? txt(
-                        language,
-                        '未登录无法保留服务端设计：切换到本地模式会清空当前画布（它是控制器服务端的机密镜像，含 fleet 的地址与 SSH 信息）。是否继续？',
-                        "Not signed in, so the server's design cannot be carried over: switching to local mode clears the current canvas (it is the controller server's confidential mirror, including the fleet's addresses and SSH details). Continue?",
-                      )
-                    : txt(
-                        language,
-                        '切换到本地模式将保留设计图，但清除 WireGuard 密钥、分配 pin（IP/端口/transit）与编译历史（下次本地编译会重新生成）。此操作不可撤销。是否继续？',
-                        'Switching to local mode keeps your design graph but clears the WireGuard keys, allocation pins (IPs/ports/transit), and compile history (regenerated on the next local compile). This cannot be undone. Continue?',
-                      ),
+                    ? t(language, 'loginPage.notSignedInSo')
+                    : t(language, 'loginPage.switchingToLocalMode'),
                 );
                 if (ok) {
                   if (serverHeld) flushWorkspace();
@@ -352,7 +328,7 @@ export function LoginPage() {
               }}
               className={`block text-xs text-[var(--content-muted)] underline-offset-2 hover:underline ${FOCUS_RING}`}
             >
-              {txt(language, '← 切换到本地模式（无需登录）', '← Switch to local mode (no sign-in needed)')}
+              {t(language, 'loginPage.switchToLocalMode')}
             </button>
           </div>
         </div>

@@ -1,16 +1,16 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 
 export function NodeList() {
   const { nodes, domains, reorderNodes, selectNode, selectedNodeId, removeNode, language } = useTopologyStore();
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   if (nodes.length === 0) {
-    return <p className="text-xs text-gray-500 italic">{txt(language, '尚未添加节点', 'No nodes yet')}</p>;
+    return <p className="text-xs text-gray-500 italic">{t(language, 'nodeList.noNodesYet')}</p>;
   }
 
-  const domainName = (domainId: string) => domains.find((d) => d.id === domainId)?.name || txt(language, '未分配域', 'Unassigned domain');
+  const domainName = (domainId: string) => domains.find((d) => d.id === domainId)?.name || t(language, 'nodeList.unassignedDomain');
 
   return (
     <div className="space-y-2">
@@ -33,7 +33,7 @@ export function NodeList() {
               ? 'bg-blue-900/30 border-blue-500'
               : 'bg-gray-700 border-transparent hover:border-gray-500'
           }`}
-          title={txt(language, '点击编辑，拖拽排序', 'Click to edit, drag to reorder')}
+          title={t(language, 'nodeList.clickToEditDrag')}
         >
           <div className="flex items-center justify-between">
             <span className="font-medium text-green-300">☰ {node.name}</span>
@@ -43,7 +43,7 @@ export function NodeList() {
                 removeNode(node.id);
               }}
               className="text-red-400 hover:text-red-300 text-xs"
-              title={txt(language, '删除', 'Delete')}
+              title={t(language, 'nodeList.delete')}
             >
               ✕
             </button>

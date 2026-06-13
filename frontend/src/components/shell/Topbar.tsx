@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 import { ThemeToggle } from './ThemeToggle';
 import { LanguageToggle } from './LanguageToggle';
 import { UserMenu } from './UserMenu';
@@ -31,11 +31,7 @@ export function Topbar() {
   };
   const handleFlush = () => {
     const confirmed = window.confirm(
-      txt(
-        language,
-        '⚠️ 这将清空当前 Workspace 的项目、域、节点、边、编译结果和历史记录，且无法撤销。是否继续？',
-        '⚠️ This will clear project, domains, nodes, edges, compile results, and history in this workspace. This cannot be undone. Continue?',
-      ),
+      t(language, 'topbar.thisWillClearProject'),
     );
     if (confirmed) flushWorkspace();
   };
@@ -47,7 +43,7 @@ export function Topbar() {
   return (
     <header className="app-chrome flex h-14 shrink-0 items-center gap-3 border-b border-[var(--hairline)] px-4">
       <span className="text-sm font-medium text-[var(--content)]">
-        {active ? txt(language, ...active.label) : ''}
+        {active ? t(language, active.labelKey) : ''}
       </span>
       <div className="flex-1" />
 
@@ -61,17 +57,17 @@ export function Topbar() {
             onChange={handleFileChange}
           />
           <button type="button" onClick={handleImportClick} className={ioBtn}>
-            {txt(language, '导入项目', 'Import')}
+            {t(language, 'topbar.import')}
           </button>
           <button type="button" onClick={() => exportProject()} className={ioBtn}>
-            {txt(language, '导出项目', 'Export')}
+            {t(language, 'topbar.export')}
           </button>
           <button
             type="button"
             onClick={handleFlush}
             className={`px-2.5 py-1 text-xs rounded-lg text-red-500 transition-colors hover:bg-red-500/10 ${FOCUS_RING}`}
           >
-            {txt(language, '清空', 'Flush')}
+            {t(language, 'topbar.flush')}
           </button>
           <span className="mx-1 h-5 w-px bg-[var(--hairline)]" />
         </div>

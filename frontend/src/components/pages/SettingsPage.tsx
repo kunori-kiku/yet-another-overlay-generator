@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useUiStore, type ThemePref } from '../../stores/uiStore';
-import { txt, STRINGS } from '../../i18n';
+import { t, type MessageKey } from '../../i18n';
 import { ConnectionSettings } from '../deploy/ConnectionSettings';
 import { BootstrapSettings } from '../deploy/BootstrapSettings';
 
@@ -55,29 +55,29 @@ export function SettingsPage() {
     setShowSwitchToLocal(false);
   };
 
-  const themeOptions: ReadonlyArray<{ value: ThemePref; label: readonly [string, string] }> = [
-    { value: 'system', label: STRINGS.themeSystem },
-    { value: 'light', label: STRINGS.themeLight },
-    { value: 'dark', label: STRINGS.themeDark },
+  const themeOptions: ReadonlyArray<{ value: ThemePref; labelKey: MessageKey }> = [
+    { value: 'system', labelKey: 'themeSystem' },
+    { value: 'light', labelKey: 'themeLight' },
+    { value: 'dark', labelKey: 'themeDark' },
   ];
 
   return (
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
       <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
         <h3 className="text-lg font-semibold text-blue-400">
-          {txt(language, ...STRINGS.settingsModeHeading)}
+          {t(language, 'settingsModeHeading')}
         </h3>
-        <p className="text-sm text-gray-400">{txt(language, ...STRINGS.settingsModeHint)}</p>
+        <p className="text-sm text-gray-400">{t(language, 'settingsModeHint')}</p>
         <div className="flex w-fit items-center overflow-hidden rounded border border-gray-600 bg-gray-700">
           <button type="button" onClick={onSelectLocal} className={seg(mode === 'local')}>
-            {txt(language, ...STRINGS.modeLocal)}
+            {t(language, 'modeLocal')}
           </button>
           <button
             type="button"
             onClick={() => setMode('controller')}
             className={seg(mode === 'controller')}
           >
-            {txt(language, ...STRINGS.modeController)}
+            {t(language, 'modeController')}
           </button>
         </div>
       </section>
@@ -87,26 +87,18 @@ export function SettingsPage() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-5">
             <h4 className="text-base font-semibold text-amber-400">
-              {txt(language, '切换到本地模式？', 'Switch to local mode?')}
+              {t(language, 'settingsPage.switchToLocalMode')}
             </h4>
             <p className="text-sm text-gray-300">
-              {txt(
-                language,
-                '设计图会保留（项目、网络域、节点与连线）。但以下内容将被清除，下次本地编译时重新生成：',
-                'Your design graph is kept (project, domains, nodes, edges). The following will be cleared and regenerated on the next local compile:',
-              )}
+              {t(language, 'settingsPage.yourDesignGraphIs')}
             </p>
             <ul className="list-disc space-y-1 pl-5 text-sm text-gray-400">
-              <li>{txt(language, 'WireGuard 公私钥（重新生成一套新密钥）', 'WireGuard public/private keys (a fresh keypair is generated)')}</li>
-              <li>{txt(language, '分配 pin（overlay IP、端口、transit/链路本地地址将重新分配）', 'Allocation pins (overlay IPs, ports, transit/link-local addresses are reassigned)')}</li>
-              <li>{txt(language, '编译历史与上次编译/校验结果', 'Compile history and the last compile/validate result')}</li>
+              <li>{t(language, 'settingsPage.wireguardPublicPrivateKeys')}</li>
+              <li>{t(language, 'settingsPage.allocationPinsOverlayIPs')}</li>
+              <li>{t(language, 'settingsPage.compileHistoryAndThe')}</li>
             </ul>
             <p className="text-xs text-amber-300/80">
-              {txt(
-                language,
-                '这样可保证舰队（fleet）用过的密钥绝不残留在本地。此操作不可撤销。',
-                'This guarantees no fleet-used keys linger locally. This cannot be undone.',
-              )}
+              {t(language, 'settingsPage.thisGuaranteesNoFleet')}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -114,14 +106,14 @@ export function SettingsPage() {
                 onClick={() => setShowSwitchToLocal(false)}
                 className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
               >
-                {txt(language, '取消', 'Cancel')}
+                {t(language, 'settingsPage.cancel')}
               </button>
               <button
                 type="button"
                 onClick={confirmSwitchToLocal}
                 className="rounded bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500"
               >
-                {txt(language, '切换并清除', 'Switch and clear')}
+                {t(language, 'settingsPage.switchAndClear')}
               </button>
             </div>
           </div>
@@ -134,12 +126,12 @@ export function SettingsPage() {
 
       <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-4 max-w-2xl">
         <h3 className="text-lg font-semibold text-blue-400">
-          {txt(language, ...STRINGS.settingsAppearanceHeading)}
+          {t(language, 'settingsAppearanceHeading')}
         </h3>
 
         {/* Theme — mirrors the top-right toggle (client-persisted, per device). */}
         <div className="space-y-1">
-          <label className="text-xs text-gray-400">{txt(language, ...STRINGS.appearanceTheme)}</label>
+          <label className="text-xs text-gray-400">{t(language, 'appearanceTheme')}</label>
           <div className="flex w-fit items-center overflow-hidden rounded border border-gray-600 bg-gray-700">
             {themeOptions.map((opt) => (
               <button
@@ -149,7 +141,7 @@ export function SettingsPage() {
                 aria-pressed={theme === opt.value}
                 className={seg(theme === opt.value)}
               >
-                {txt(language, ...opt.label)}
+                {t(language, opt.labelKey)}
               </button>
             ))}
           </div>
@@ -168,10 +160,10 @@ export function SettingsPage() {
               // value), so gate on settings being present.
               disabled={mode === 'controller' && !settings}
             />
-            {txt(language, ...STRINGS.appearanceTranslucency)}
+            {t(language, 'appearanceTranslucency')}
           </label>
           <p className="text-xs text-gray-500">
-            {txt(language, ...STRINGS.appearanceTranslucencyHint)}
+            {t(language, 'appearanceTranslucencyHint')}
           </p>
         </div>
       </section>

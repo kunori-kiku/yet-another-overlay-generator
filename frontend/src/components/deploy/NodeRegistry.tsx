@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 import type { ControllerNodeStatus } from '../../types/controller';
 
 // 注册表里某节点的 applied-vs-desired 代号是否漂移（已审批节点的 applied 落后于 desired
@@ -60,28 +60,24 @@ export function NodeRegistry() {
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-4">
       <h3 className="text-lg font-semibold text-blue-400">
-        {txt(language, '节点注册表', 'Node Registry')}
+        {t(language, 'nodeRegistry.nodeRegistry')}
       </h3>
 
       {ctlNodes.length === 0 ? (
         <p className="text-sm text-gray-500 italic">
-          {txt(
-            language,
-            '暂无已注册节点。在「设置」中配置控制器连接并点击「连接 / 刷新」，或在下方为节点签发注册令牌。',
-            'No registered nodes. Configure the controller connection in Settings and click Connect / Refresh, or mint an enrollment token below.',
-          )}
+          {t(language, 'nodeRegistry.noRegisteredNodesConfigure')}
         </p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-700">
               <tr>
-                <th className="py-2 pr-3">{txt(language, '节点', 'Node')}</th>
-                <th className="py-2 pr-3">{txt(language, '状态', 'Status')}</th>
-                <th className="py-2 pr-3">{txt(language, '代号 (已应用/期望)', 'Gen (applied/desired)')}</th>
-                <th className="py-2 pr-3">{txt(language, '健康', 'Health')}</th>
-                <th className="py-2 pr-3">{txt(language, '最近一次心跳', 'Last Seen')}</th>
-                <th className="py-2 pr-3">{txt(language, '操作', 'Actions')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.node')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.status')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.genAppliedDesired')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.health')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.lastSeen')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -104,14 +100,14 @@ export function NodeRegistry() {
                       {/* plan-4.6：operator 已请求该节点轮换 WG 密钥，等待 agent 重生并注册新公钥。 */}
                       {n.rekeyRequested && (
                         <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
-                          {txt(language, '🔑 轮换中', '🔑 rekeying')}
+                          {t(language, 'nodeRegistry.rekeying')}
                         </span>
                       )}
                       {/* plan-6：该节点在 fleet 注册表里，但不在当前设计中——身份对账标记，
                           提示操作员它已脱离设计（可在右侧「驱逐」以从 fleet 移除）。 */}
                       {isOrphan(n.nodeId) && n.status !== 'revoked' && (
                         <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-900/40 text-orange-300 border-orange-700">
-                          {txt(language, '⚠ 不在设计中', '⚠ not in design')}
+                          {t(language, 'nodeRegistry.notInDesign')}
                         </span>
                       )}
                     </td>
@@ -121,7 +117,7 @@ export function NodeRegistry() {
                       </span>
                       {drift && (
                         <span className="ml-1 text-[10px] text-yellow-400">
-                          {txt(language, '漂移', 'drift')}
+                          {t(language, 'nodeRegistry.drift')}
                         </span>
                       )}
                     </td>
@@ -133,7 +129,7 @@ export function NodeRegistry() {
                         disabled={loading || n.status === 'revoked'}
                         className="px-2 py-1 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
                       >
-                        {txt(language, '驱逐', 'Revoke')}
+                        {t(language, 'nodeRegistry.revoke')}
                       </button>
                     </td>
                   </tr>
@@ -147,11 +143,11 @@ export function NodeRegistry() {
       {/* 每条边的就绪状态：两端节点均 approved 才算「就绪」（其链路可被编译进 fleet）。 */}
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-gray-400">
-          {txt(language, '链路就绪状态', 'Edge Readiness')}
+          {t(language, 'nodeRegistry.edgeReadiness')}
         </h4>
         {edges.length === 0 ? (
           <p className="text-xs text-gray-500 italic">
-            {txt(language, '当前拓扑没有链路。', 'The current topology has no edges.')}
+            {t(language, 'nodeRegistry.theCurrentTopologyHas')}
           </p>
         ) : (
           <ul className="space-y-1">
@@ -168,17 +164,17 @@ export function NodeRegistry() {
                     {fromName} → {toName}
                     {e.role === 'backup' && (
                       <span className="ml-1 text-gray-500">
-                        ({txt(language, '备份', 'backup')})
+                        ({t(language, 'nodeRegistry.backup')})
                       </span>
                     )}
                   </span>
                   {ready ? (
                     <span className="px-2 py-0.5 rounded border bg-green-900/40 text-green-300 border-green-700">
-                      {txt(language, '✓ 就绪', '✓ Ready')}
+                      {t(language, 'nodeRegistry.ready')}
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded border bg-gray-800 text-gray-400 border-gray-600">
-                      {txt(language, '未就绪', 'Not ready')}
+                      {t(language, 'nodeRegistry.notReady')}
                     </span>
                   )}
                 </li>
