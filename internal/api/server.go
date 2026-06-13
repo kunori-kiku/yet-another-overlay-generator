@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 )
 
 // Server HTTP API
@@ -113,7 +115,7 @@ func (s *Server) recoverPanics(next http.HandlerFunc) http.HandlerFunc {
 
 				// 仅当尚未写出任何响应头时才写 500，避免重复 WriteHeader。
 				if !tracked.wroteHeader {
-					writeError(tracked, http.StatusInternalServerError, "服务器内部错误")
+					writeAPIError(tracked, apierr.New(apierr.CodeInternalPanic))
 				}
 			}
 		}()
