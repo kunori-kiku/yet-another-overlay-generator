@@ -12,6 +12,12 @@ import type {
 } from '../types/topology';
 import { detectSystemLanguage, txt, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
+import { stripPrivateKeys } from '../lib/custody';
+// useControllerStore is read LAZILY (getState() inside actions, never at module
+// init) so the controller↔topology store cycle stays runtime-only — symmetric to how
+// controllerStore reads useTopologyStore.getState(). Needed for mode-aware import
+// custody (plan-5, D5).
+import { useControllerStore } from './controllerStore';
 
 interface TopologyState {
   // 数据
@@ -92,6 +98,15 @@ interface TopologyState {
   getTopology: () => Topology;
   loadTopology: (topo: Topology) => void;
   reset: () => void;
+  // 模式边界清洗（plan-5，D6）：controller→local 切换时调用。图（project/domains/节点身份/
+  // edges）保留，但清空一切密钥材料与编译产物——私钥/公钥、overlay_ip、edge 的 compiled_port
+  // 与 pinned_* 分配、alloc_schema_version、编译历史/结果。下次本地编译会重新生成一套干净的
+  // 密钥与分配。切换是有损操作，调用方须先经用户确认。
+  purgeModeBoundaryState: () => void;
+  // 控制器模式导入占位计数（plan-5，D5）：importProject 在 controller 模式下剥离导入文件里的
+  // 私钥后，置为被占位的数量（0=无提示）。Shell 据此显示一条可关闭提示（用 txt() 实时本地化）。
+  importPlaceholdered: number;
+  dismissImportNotice: () => void;
   exportProject: (filename?: string) => void;
   importProject: (file: File) => Promise<void>;
   clearHistory: () => void;
@@ -148,8 +163,11 @@ export const useTopologyStore = create<TopologyState>()(
       selectedEdgeId: null,
       selectedDomainId: null,
         language: defaultLanguage,
+      importPlaceholdered: 0,
 
       setLanguage: (lang) => set({ language: lang }),
+
+      dismissImportNotice: () => set({ importPlaceholdered: 0 }),
 
   // UI
   setShowInterfaces: (show) => set({ showInterfaces: show }),
@@ -341,7 +359,7 @@ export const useTopologyStore = create<TopologyState>()(
   importProject: async (file: File) => {
     try {
       const text = await file.text();
-      const topo = JSON.parse(text) as Topology;
+      let topo = JSON.parse(text) as Topology;
       if (topo.project && topo.domains && topo.nodes && topo.edges) {
         // D45/D55：route_policies 为保留特性，校验会拒绝非空数组。导入时若文件携带了
         // 非空 route_policies，则剥离它并通过 error 状态给出可见提示，避免静默丢弃。
@@ -350,9 +368,21 @@ export const useTopologyStore = create<TopologyState>()(
         if (hasReservedRoutePolicies) {
           delete topo.route_policies;
         }
+        // 控制器模式导入占位（plan-5，D5）：controller 模式是零知识的，导入文件携带的私钥
+        // 必须被剥离（节点改用 agent 持有的密钥），并提醒用户。本地模式不受影响（私钥在
+        // 本地/气隙模式下是合法的设计数据，往返保留）。
+        let placeholdered = 0;
+        if (useControllerStore.getState().mode === 'controller') {
+          const result = stripPrivateKeys(topo);
+          topo = result.topo;
+          placeholdered = result.stripped;
+        }
         // loadTopology 只接收四个切片 + 版本号，这里先加载再补提示，
         // 因为 loadTopology 会清空 error。
         get().loadTopology(topo);
+        if (placeholdered > 0) {
+          set({ importPlaceholdered: placeholdered });
+        }
         if (hasReservedRoutePolicies) {
           const { language } = get();
           set({
@@ -389,6 +419,41 @@ export const useTopologyStore = create<TopologyState>()(
       selectedEdgeId: null,
       selectedDomainId: null,
     }),
+
+  // 模式边界清洗（plan-5，D6）：controller→local 切换的有损动作。图保留（project/domains/
+  // 节点身份/edges/能力/endpoint/ssh 等），但每个节点的密钥材料（私钥/公钥/fixed 标志）与
+  // overlay_ip、每条 edge 的编译产物（compiled_port + 全部 pinned_* 分配）、拓扑级
+  // alloc_schema_version、以及编译历史/结果一并清空。这样下次本地编译会重新生成一套干净、
+  // 自洽的密钥与分配，绝不把舰队（fleet）用过的密钥残留在浏览器里。字段逐一显式枚举（而非
+  // 模式匹配），新增 secret/pin 字段时须同步更新这里（plan-5.5 插入点的清洗清单完整性风险）。
+  purgeModeBoundaryState: () =>
+    set((state) => ({
+      nodes: state.nodes.map((n) => ({
+        ...n,
+        wireguard_private_key: undefined,
+        wireguard_public_key: undefined,
+        fixed_private_key: undefined,
+        overlay_ip: undefined,
+      })),
+      edges: state.edges.map((e) => ({
+        ...e,
+        compiled_port: undefined,
+        pinned_from_port: undefined,
+        pinned_to_port: undefined,
+        pinned_from_transit_ip: undefined,
+        pinned_to_transit_ip: undefined,
+        pinned_from_link_local: undefined,
+        pinned_to_link_local: undefined,
+      })),
+      allocSchemaVersion: 0,
+      history: [],
+      validateResult: null,
+      compileResult: null,
+      error: null,
+      selectedNodeId: null,
+      selectedEdgeId: null,
+      selectedDomainId: null,
+    })),
 
   // 重置
   // D75：与 loadTopology 一致，连同历史与版本号一并清空，避免残留快照在下一份项目里继续 diff。

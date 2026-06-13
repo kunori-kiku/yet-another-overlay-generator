@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   useControllerStore,
   selectRekeyingCount,
@@ -26,6 +27,12 @@ export function DeployBar() {
   // 是否已 pin off-host 签名凭据（决定签名区回显与提示）。
   const operatorEnrolled = useControllerStore(selectOperatorEnrolled);
   const operatorCredentialAlg = useControllerStore((s) => s.operatorCredentialAlg);
+  // 缩水部署确认（plan-5）与「已剥离 N 个私钥」提示。
+  const pendingShrink = useControllerStore((s) => s.pendingShrink);
+  const cancelShrinkConfirm = useControllerStore((s) => s.cancelShrinkConfirm);
+  const lastStrippedKeys = useControllerStore((s) => s.lastStrippedKeys);
+  const dismissStripNotice = useControllerStore((s) => s.dismissStripNotice);
+  const [shrinkTyped, setShrinkTyped] = useState('');
   // 仍处于 rekey_requested 的节点数：>0 时禁用 Deploy（见下方说明）。
   const rekeyingCount = useControllerStore(selectRekeyingCount);
 
@@ -194,6 +201,27 @@ export function DeployBar() {
         </p>
       )}
 
+      {/* 已剥离 N 个私钥提示（plan-5，D4）：控制器模式零知识，上传前剥离了私钥。可关闭。 */}
+      {lastStrippedKeys > 0 && (
+        <div className="flex items-start justify-between gap-2 text-xs text-sky-300 bg-sky-900/20 px-2 py-1 rounded">
+          <span>
+            {txt(
+              language,
+              `上传前已剥离 ${lastStrippedKeys} 个 WireGuard 私钥——控制器模式是零知识的（节点自持私钥）。`,
+              `${lastStrippedKeys} WireGuard private key(s) were removed before upload — controller mode is zero-knowledge (nodes hold their own private keys).`,
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={dismissStripNotice}
+            aria-label={txt(language, '关闭提示', 'Dismiss notice')}
+            className="shrink-0 px-1 text-sky-400 hover:text-sky-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {lastDeploy && (
         <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2 text-sm">
           <p className="text-gray-300">
@@ -225,6 +253,64 @@ export function DeployBar() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* 缩水/清空部署的键入确认（plan-5）：这次发布会把服务端设计大幅缩水（清空或丢弃过半
+          节点）。要求键入项目名以确认，防止一次误点把整套 fleet 设计覆盖成空（审计的「一键
+          销毁」场景）。版本历史（plan-2）是事后兜底，本守卫是事前预防。 */}
+      {pendingShrink && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md space-y-4 rounded-lg border border-red-700 bg-gray-800 p-5">
+            <h4 className="text-base font-semibold text-red-400">
+              {txt(language, '⚠️ 这次发布会大幅缩小服务端设计', '⚠️ This deploy shrinks the server design')}
+            </h4>
+            <p className="text-sm text-gray-300">
+              {txt(
+                language,
+                `服务端当前有 ${pendingShrink.serverNodeCount} 个节点，本次将上传 ${pendingShrink.canvasNodeCount} 个。被移除的节点会从下一代配置中消失。`,
+                `The server currently holds ${pendingShrink.serverNodeCount} node(s); this deploy uploads ${pendingShrink.canvasNodeCount}. Removed nodes drop out of the next generation.`,
+              )}
+            </p>
+            <p className="text-xs text-gray-400">
+              {txt(
+                language,
+                `如果这是有意的，请键入项目名 “${pendingShrink.projectName}” 以确认。`,
+                `If this is intentional, type the project name “${pendingShrink.projectName}” to confirm.`,
+              )}
+            </p>
+            <input
+              type="text"
+              value={shrinkTyped}
+              onChange={(e) => setShrinkTyped(e.target.value)}
+              placeholder={pendingShrink.projectName}
+              autoFocus
+              className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-red-400 outline-none"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShrinkTyped('');
+                  cancelShrinkConfirm();
+                }}
+                className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+              >
+                {txt(language, '取消', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={shrinkTyped !== pendingShrink.projectName || loading}
+                onClick={() => {
+                  setShrinkTyped('');
+                  void deploy({ confirmedShrink: true });
+                }}
+                className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400"
+              >
+                {txt(language, '确认发布', 'Confirm deploy')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

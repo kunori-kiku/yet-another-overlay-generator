@@ -26,6 +26,8 @@ export function Shell() {
   const operatorToken = useControllerStore((s) => s.operatorToken);
   const hydrationNotice = useControllerStore((s) => s.hydrationNotice);
   const dismissHydrationNotice = useControllerStore((s) => s.dismissHydrationNotice);
+  const importPlaceholdered = useTopologyStore((s) => s.importPlaceholdered);
+  const dismissImportNotice = useTopologyStore((s) => s.dismissImportNotice);
   const language = useTopologyStore((s) => s.language);
 
   // The gate must not flash: until the session probe for the CURRENT controller-mode
@@ -103,6 +105,30 @@ export function Shell() {
             <button
               type="button"
               onClick={dismissHydrationNotice}
+              aria-label={txt(language, '关闭提示', 'Dismiss notice')}
+              className={`shrink-0 rounded px-2 text-[var(--content-muted)] hover:text-[var(--content)] ${FOCUS_RING}`}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        {/* plan-5 (D5): notice that a controller-mode import placeholdered private
+            keys. Rendered live via txt() and dismissible. */}
+        {importPlaceholdered > 0 && (
+          <div
+            className="flex items-start justify-between gap-3 border-b border-[var(--hairline)] bg-[var(--surface-sunken)] px-4 py-2 text-sm text-[var(--content)]"
+            role="status"
+          >
+            <span>
+              {txt(
+                language,
+                `控制器模式导入：已将 ${importPlaceholdered} 个私钥替换为占位（节点将使用自持的 agent 密钥）。`,
+                `Imported under controller mode: ${importPlaceholdered} private key(s) replaced by placeholders — nodes will use their agent-held keys.`,
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={dismissImportNotice}
               aria-label={txt(language, '关闭提示', 'Dismiss notice')}
               className={`shrink-0 rounded px-2 text-[var(--content-muted)] hover:text-[var(--content)] ${FOCUS_RING}`}
             >
