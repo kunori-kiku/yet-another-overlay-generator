@@ -248,6 +248,15 @@ function configOf(state: ControllerState): ControllerConfig {
   };
 }
 
+// 安全（controller server-authoritative）：当会话探测失败、即将退回登录门时，若画布是服务端
+// 机密镜像（canvasFromServer），清空它——否则登出态下任何拿到浏览器的人都能从画布/localStorage
+// 读出 fleet 的公网 IP 与 SSH 目标。仅 controller 模式生效；本地原创工作不动（那是用户自有数据）。
+function clearServerCanvasAtGate(mode: 'local' | 'controller'): void {
+  if (mode !== 'controller') return;
+  const topo = useTopologyStore.getState();
+  if (topo.canvasFromServer) topo.flushWorkspace();
+}
+
 // 派生选择器：是否已通过密码登录（持有有效 session）。DeployPanel 用它在登录区切换
 // 「登录表单 / 已登录为 X」。break-glass operatorToken 不算「已登录」（它是恢复路径）。
 export function selectLoggedIn(state: ControllerState): boolean {
@@ -541,7 +550,9 @@ export const useControllerStore = create<ControllerState>()(
             topoStore.exportProject(`pre-hydration-backup-${stamp}.json`);
             set({ hydrationNotice: true });
           }
-          topoStore.loadTopology(topo);
+          // fromServer=true：这份画布是服务端机密镜像，禁止落盘 / 登出后须清空（见
+          // topologyStore.canvasFromServer 的安全不变量）。
+          topoStore.loadTopology(topo, true);
         } catch {
           // 拉取失败：保留本地画布，不阻塞登录（见函数注释）。
         }
@@ -579,6 +590,11 @@ export const useControllerStore = create<ControllerState>()(
           settings: null,
           error: null,
         });
+        // 安全：登出后画布若是服务端机密镜像，立即清空（内存 + 由 persist 连带清掉 localStorage）。
+        // 否则登出态下任何人都能从画布/localStorage 读出 fleet 的公网 IP 与 SSH 目标。本地原创
+        // 工作（canvasFromServer=false）不动——那是用户自有数据。
+        const topo = useTopologyStore.getState();
+        if (topo.canvasFromServer) topo.flushWorkspace();
       },
 
       // 刷新后恢复登录态（P5）：GET /session 用 httpOnly cookie 探测当前会话。命中则置
@@ -609,9 +625,11 @@ export const useControllerStore = create<ControllerState>()(
             }
           } else {
             set({ loggedIn: false, csrfToken: '' });
+            clearServerCanvasAtGate(get().mode);
           }
         } catch {
           set({ loggedIn: false });
+          clearServerCanvasAtGate(get().mode);
         }
       },
 

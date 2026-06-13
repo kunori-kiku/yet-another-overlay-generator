@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
@@ -29,11 +29,17 @@ export function LoginPage() {
   const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
   const setMode = useControllerStore((s) => s.setMode);
   const purgeModeBoundaryState = useTopologyStore((s) => s.purgeModeBoundaryState);
+  const flushWorkspace = useTopologyStore((s) => s.flushWorkspace);
   const clearModeNotices = useControllerStore((s) => s.clearModeNotices);
 
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginTotp, setLoginTotp] = useState('');
+  // Passkey 登录是「用户名定向」的（服务端按用户名取该账户的 credential 来挑战），所以需要先有
+  // 用户名。与其把按钮置灰（看起来像坏的），不如让它始终可点：空用户名时聚焦用户名框并给出提示，
+  // 把死按钮变成有引导的活按钮。
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const [passkeyHint, setPasskeyHint] = useState(false);
   const [showConnection, setShowConnection] = useState(false);
   const [showBreakGlass, setShowBreakGlass] = useState(false);
   // The break-glass token uses a LOCAL buffer, committed to the store only on an
@@ -95,10 +101,12 @@ export function LoginPage() {
               </label>
               <input
                 id="login-username"
+                ref={usernameRef}
                 type="text"
                 value={loginUser}
                 onChange={(e) => {
                   setLoginUser(e.target.value);
+                  if (passkeyHint) setPasskeyHint(false);
                   onCredentialEdit();
                 }}
                 autoComplete="username"
@@ -174,12 +182,30 @@ export function LoginPage() {
             </div>
             <button
               type="button"
-              onClick={() => void loginWithPasskey(loginUser)}
-              disabled={loading || loginUser.trim() === ''}
+              onClick={() => {
+                // 用户名为空时不静默失败、也不置灰：聚焦用户名框并提示「先填用户名」，再让用户点一次。
+                if (loginUser.trim() === '') {
+                  setPasskeyHint(true);
+                  usernameRef.current?.focus();
+                  return;
+                }
+                setPasskeyHint(false);
+                void loginWithPasskey(loginUser);
+              }}
+              disabled={loading || loginCeremony}
               className={`w-full rounded-lg border border-[var(--hairline)] py-2 text-sm font-medium text-[var(--content)] transition-colors hover:bg-[var(--surface-sunken)] disabled:opacity-40 ${FOCUS_RING}`}
             >
               {txt(language, '🔑 用 passkey 登录', '🔑 Sign in with passkey')}
             </button>
+            {passkeyHint && loginUser.trim() === '' && (
+              <p className="text-center text-xs text-[var(--content-muted)]">
+                {txt(
+                  language,
+                  '先填写上方的用户名，再用 passkey 登录。',
+                  'Enter your username above first, then sign in with your passkey.',
+                )}
+              </p>
+            )}
             {loginCeremony && (
               <p className="text-center text-xs text-[var(--content-muted)]" role="status">
                 {txt(language, '请触碰你的安全密钥...', 'Touch your security key...')}
@@ -299,15 +325,26 @@ export function LoginPage() {
             <button
               type="button"
               onClick={() => {
+                // 安全分叉：若画布是服务端机密镜像（canvasFromServer），未登录者无权把它「带走」到
+                // 本地——整画布清空（flushWorkspace），绝不让 fleet 的公网 IP/SSH 目标随切换泄漏。
+                // 仅当画布是本地原创工作时，才走 D6 的「保图、清密钥/分配/历史」有损切换。
+                const serverHeld = useTopologyStore.getState().canvasFromServer;
                 const ok = window.confirm(
-                  txt(
-                    language,
-                    '切换到本地模式将保留设计图，但清除 WireGuard 密钥、分配 pin（IP/端口/transit）与编译历史（下次本地编译会重新生成）。此操作不可撤销。是否继续？',
-                    'Switching to local mode keeps your design graph but clears the WireGuard keys, allocation pins (IPs/ports/transit), and compile history (regenerated on the next local compile). This cannot be undone. Continue?',
-                  ),
+                  serverHeld
+                    ? txt(
+                        language,
+                        '未登录无法保留服务端设计：切换到本地模式会清空当前画布（它是控制器服务端的机密镜像，含 fleet 的地址与 SSH 信息）。是否继续？',
+                        "Not signed in, so the server's design cannot be carried over: switching to local mode clears the current canvas (it is the controller server's confidential mirror, including the fleet's addresses and SSH details). Continue?",
+                      )
+                    : txt(
+                        language,
+                        '切换到本地模式将保留设计图，但清除 WireGuard 密钥、分配 pin（IP/端口/transit）与编译历史（下次本地编译会重新生成）。此操作不可撤销。是否继续？',
+                        'Switching to local mode keeps your design graph but clears the WireGuard keys, allocation pins (IPs/ports/transit), and compile history (regenerated on the next local compile). This cannot be undone. Continue?',
+                      ),
                 );
                 if (ok) {
-                  purgeModeBoundaryState();
+                  if (serverHeld) flushWorkspace();
+                  else purgeModeBoundaryState();
                   clearModeNotices();
                   setMode('local');
                   navigate(landingPathForMode('local'));
