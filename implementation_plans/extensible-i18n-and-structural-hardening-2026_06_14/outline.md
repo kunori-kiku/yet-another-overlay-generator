@@ -174,7 +174,9 @@ debate Workflow, not a user prompt (user is asleep).
 | 2026-06-14 | D5: Clear the **highest-leverage structural debt** the audit confirms (god-functions, leaky boundaries, dup logic, dead code, weak typing, missing tests), not every nit; log any deferral | User: "cover all fixes, and most structural fixes that clear most structural debts… no compromises"; but keep the subject shippable |
 | 2026-06-14 | D6: No backward compatibility for internal API/i18n shapes; **never drop main-flow functionality** | User: "no backward compat needed… just don't drop functionalities that are the main flow" |
 | 2026-06-14 | D7: Decisions resolved by simulate-as-user; genuinely-unclear engineering forks → 2-Opus debate Workflow, not a user prompt | User asleep; [[simulate-user-decide-no-prompt]] |
-| 2026-06-14 | D8: Re-ran the whole-repo audit as 10-angle `wb6dq4uwc` after the first run (`wr61j4ogd`) was killed by a session interrupt; added 3 structural angles per the user's "focus on structural problem" | The killed run produced no findings; the user wanted more agents + structural focus |
+| 2026-06-14 | D8: Audit ran as background task `waaymn4es` (10 angles, 166 agents, adversarially verified) → `findings.md` (106 CONFIRMED / 18 PLAUSIBLE) | The user wanted more agents + structural focus; a duplicate relaunch (`wb6dq4uwc`) was stopped once `waaymn4es` was found complete |
+| 2026-06-14 | D9: Error-envelope design LOCKED via a 2-Opus debate+synthesis (`wmhzmpy2x`) — see `design-error-envelope.md`. Nested `{error:{code,message,params}}`; stdlib-only `internal/apierr` leaf (Code+registry+`New/.With/.Wrap`, init guard, `HasCode`); coded-at-the-source (deep packages import the leaf); sentinels kept + mapped to codes at the handler seam; `writeAPIError` replaces `writeError` (transitional delegate in plan-2, deleted in final plan-3 commit). | The single most consequential fork (shapes plans 1/2/3); the user authorized debate for genuinely-unclear forks. Key reframe: **plan-1 (i18n+tError) ships before plan-2 (envelope)** so the frontend reads both shapes before the backend flips — no PR breaks the app |
+| 2026-06-14 | D10: M1 split into plan-1 (core+seam, shipped) + plan-1.5 (full 406-site migration) | Keeps each PR reviewable; isolates the large mechanical sweep; satisfies the debate's "tError before plan-2" via plan-1 alone |
 
 ## Milestones
 
@@ -211,6 +213,20 @@ grep proving zero `txt(`/`STRINGS` references remain; spot-render check per majo
 **Stop-loss:** keep `txt` as an internal adapter delegating to `t()` only DURING the migration
 commits; the final commit removes it (clean end state). Candidate for a migration Workflow
 (pipeline over component groups → verify).
+
+**Split executed (2026-06-14):** to keep each PR reviewable and isolate the large mechanical sweep,
+M1 ships in two:
+- **plan-1 = i18n CORE + error seam** (PR shipped): the new `i18n/` module (`messages/en.ts`+`zh.ts`,
+  `t(lang, key, params?)` with interpolation + fallback, `tError(body, lang)` shape-tolerant over both
+  the legacy `{error:string}` and the coded `{error:{code,message,params}}` shapes, language registry),
+  seeded from the 77 `STRINGS` keys, with `tError` wired into the topologyStore error reads. `txt`/`STRINGS`
+  retained transitionally so the app is unchanged. **Signature note:** `t` threads `lang` explicitly
+  (not a global) so components that already subscribe to `language` keep their reactivity with a 1:1
+  `txt(language,…)`→`t(language,…)` transform — still keyed/extensible (adding a language = add a catalog +
+  widen the union + register; no call-site/signature change).
+- **plan-1.5 = full call-site migration** (the 406 `txt()` + 81 `STRINGS.*` sites across 38 files → `t`,
+  then delete `txt`/`STRINGS`), via a migration Workflow with disjoint per-component key namespaces +
+  central catalog assembly + the strict `MessageKey` union proving completeness at build.
 
 ### M2 — Backend: typed error-code envelope + registry → `plan-2`
 **Goal:** a typed domain error (`code string`, `params map`, default English `message`, HTTP status)
@@ -291,7 +307,8 @@ the new i18n + error envelope, a migration note, and `/close-phase`. **Finalized
 | Plan | Status | PR | Notes |
 |---|---|---|---|
 | plan-0 (security) | pending | — | finalized from findings.md (only if CONFIRMED security) |
-| plan-1 (i18n core + migration) | pending | — | design-locked (D1) |
+| plan-1 (i18n core + error seam) | in PR | — | core module + tError seam; txt/STRINGS retained transitionally (D1) |
+| plan-1.5 (full call-site migration) | pending | — | 406 txt + 81 STRINGS → t across 38 files; delete txt/STRINGS (migration Workflow) |
 | plan-2 (error envelope) | pending | — | design-locked (D2) |
 | plan-3 (backend string migration) | pending | — | design-locked (D3); may add plan-3.5 |
 | plan-4 (mode-boundary parity) | pending | — | design-locked (D4) |
