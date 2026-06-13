@@ -1,6 +1,6 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useUiStore } from '../../stores/uiStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { MonitorIcon, SunIcon, MoonIcon } from './icons';
 import { FOCUS_RING } from './styles';
 
@@ -12,12 +12,12 @@ export function ThemeToggle() {
   const cycleTheme = useUiStore((s) => s.cycleTheme);
 
   const current = {
-    system: { Icon: MonitorIcon, label: txt(language, ...STRINGS.themeSystem) },
-    light: { Icon: SunIcon, label: txt(language, ...STRINGS.themeLight) },
-    dark: { Icon: MoonIcon, label: txt(language, ...STRINGS.themeDark) },
+    system: { Icon: MonitorIcon, label: t(language, 'themeSystem') },
+    light: { Icon: SunIcon, label: t(language, 'themeLight') },
+    dark: { Icon: MoonIcon, label: t(language, 'themeDark') },
   }[theme];
   const Icon = current.Icon;
-  const toggleLabel = txt(language, ...STRINGS.themeToggleLabel);
+  const toggleLabel = t(language, 'themeToggleLabel');
 
   return (
     <button

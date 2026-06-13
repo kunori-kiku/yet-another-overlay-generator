@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 import type { TOTPEnrollment } from '../../api/controllerClient';
 
 // 两步验证（TOTP 2FA，plan-5.2）：让已用密码登录的 operator 自助开启/关闭一个时间口令第二因子。
@@ -108,34 +108,26 @@ export function TwoFactorSettings() {
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
       <h3 className="text-lg font-semibold text-sky-400">
-        {txt(language, '两步验证 (TOTP)', 'Two-Factor (TOTP)')}
+        {t(language, 'twoFactorSettings.twoFactorTOTP')}
       </h3>
       <p className="text-sm text-gray-400">
-        {txt(
-          language,
-          '为登录增加一个基于验证器 App 的时间口令第二因子。仅用于登录，不用于签名。',
-          'Add a time-based one-time code from an authenticator app as a second login factor. Used for login only, never for signing.',
-        )}
+        {t(language, 'twoFactorSettings.addATimeBased')}
       </p>
 
       {!loggedIn ? (
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
-          {txt(
-            language,
-            '请先用密码登录以管理两步验证（break-glass 令牌没有账户，无法管理 2FA）。',
-            'Sign in with your password to manage 2FA (the break-glass token has no account).',
-          )}
+          {t(language, 'twoFactorSettings.signInWithYour')}
         </p>
       ) : totpEnabled === null ? (
-        <p className="text-xs text-gray-500">{txt(language, '正在读取状态...', 'Checking status...')}</p>
+        <p className="text-xs text-gray-500">{t(language, 'twoFactorSettings.checkingStatus')}</p>
       ) : totpEnabled ? (
         // 已启用：展示状态 + 需当前码才能关闭。
         <div className="space-y-2">
           <p className="text-xs text-green-300 bg-green-900/20 px-2 py-1 rounded">
-            {txt(language, '✅ 两步验证已启用。', '✅ Two-factor is enabled.')}
+            {t(language, 'twoFactorSettings.twoFactorIsEnabled')}
           </p>
           <label className="text-xs text-gray-400 block">
-            {txt(language, '关闭两步验证需输入当前验证码：', 'Enter a current code to disable:')}
+            {t(language, 'twoFactorSettings.enterACurrentCode')}
           </label>
           <div className="flex gap-2">
             <input
@@ -152,7 +144,7 @@ export function TwoFactorSettings() {
               disabled={busy || code.length < 6}
               className="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
             >
-              {busy ? txt(language, '处理中...', 'Working...') : txt(language, '关闭 2FA', 'Disable 2FA')}
+              {busy ? t(language, 'twoFactorSettings.working') : t(language, 'twoFactorSettings.disable2FA')}
             </button>
           </div>
         </div>
@@ -163,28 +155,24 @@ export function TwoFactorSettings() {
           disabled={busy}
           className="px-4 py-1.5 text-sm bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
         >
-          {busy ? txt(language, '准备中...', 'Preparing...') : txt(language, '开启两步验证', 'Enable two-factor')}
+          {busy ? t(language, 'twoFactorSettings.preparing') : t(language, 'twoFactorSettings.enableTwoFactor')}
         </button>
       ) : (
         // enroll 进行中：展示 setup key + otpauth URI，收一个码完成激活。
         <div className="space-y-3 p-3 bg-gray-900 border border-gray-700 rounded">
           <p className="text-xs text-gray-300">
-            {txt(
-              language,
-              '1) 在验证器 App 中「手动输入密钥」或导入下方 otpauth 链接；2) 输入 App 生成的 6 位码并确认。',
-              '1) Add the key below to your authenticator (manual entry) or import the otpauth link; 2) enter the 6-digit code it generates and confirm.',
-            )}
+            {t(language, 'twoFactorSettings.1AddTheKey')}
           </p>
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-gray-500 uppercase tracking-wider">
-                {txt(language, '密钥 (Setup key)', 'Setup key')}
+                {t(language, 'twoFactorSettings.setupKey')}
               </label>
               <button
                 onClick={() => void copyText(pending.secret, 'secret')}
                 className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
               >
-                {copied === 'secret' ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
+                {copied === 'secret' ? t(language, 'twoFactorSettings.copied') : t(language, 'twoFactorSettings.copy')}
               </button>
             </div>
             <pre className="text-sm text-sky-200 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded tracking-widest">
@@ -194,13 +182,13 @@ export function TwoFactorSettings() {
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-gray-500 uppercase tracking-wider">
-                {txt(language, 'otpauth 链接', 'otpauth link')}
+                {t(language, 'twoFactorSettings.otpauthLink')}
               </label>
               <button
                 onClick={() => void copyText(pending.otpauthURI, 'uri')}
                 className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
               >
-                {copied === 'uri' ? txt(language, '已复制', 'Copied') : txt(language, '复制', 'Copy')}
+                {copied === 'uri' ? t(language, 'twoFactorSettings.copied_2') : t(language, 'twoFactorSettings.copy_2')}
               </button>
             </div>
             <pre className="text-[11px] text-gray-400 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
@@ -209,7 +197,7 @@ export function TwoFactorSettings() {
           </div>
           <div>
             <label className="text-xs text-gray-400 block mb-1">
-              {txt(language, '验证器生成的 6 位码：', '6-digit code from your authenticator:')}
+              {t(language, 'twoFactorSettings.6DigitCodeFrom')}
             </label>
             <div className="flex gap-2">
               <input
@@ -226,14 +214,14 @@ export function TwoFactorSettings() {
                 disabled={busy || code.length < 6}
                 className="px-4 py-1.5 text-sm bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
               >
-                {busy ? txt(language, '验证中...', 'Verifying...') : txt(language, '确认并启用', 'Confirm & enable')}
+                {busy ? t(language, 'twoFactorSettings.verifying') : t(language, 'twoFactorSettings.confirmEnable')}
               </button>
               <button
                 onClick={handleCancelEnroll}
                 disabled={busy}
                 className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 rounded text-gray-200"
               >
-                {txt(language, '取消', 'Cancel')}
+                {t(language, 'twoFactorSettings.cancel')}
               </button>
             </div>
           </div>

@@ -12,8 +12,8 @@ import { zh } from './messages/zh';
 export type UILanguage = 'zh' | 'en';
 
 // MessageKey is the compile-time set of valid keys: exactly the keys of the canonical
-// English catalog. t(), tError(), and the transitional STRINGS are all keyed by it, so
-// a typo or a dropped key is a BUILD error, never a silent blank at runtime.
+// English catalog. t() and tError() are keyed by it, so a typo or a dropped key is a
+// BUILD error, never a silent blank at runtime.
 export type MessageKey = keyof typeof en;
 
 // Values substituted into {placeholder} tokens by t().
@@ -69,16 +69,3 @@ export function tError(body: unknown, lang: UILanguage): string {
   }
   return t(lang, 'error.generic');
 }
-
-// ─── Transitional shims (removed in the final plan-1 commit) ──────────────────────
-// Kept ONLY so call sites not yet migrated to t() keep compiling during the txt→t
-// sweep. STRINGS is DERIVED from the catalogs (no text duplicated). Both are deleted
-// once every site uses t(); a grep for `txt(` / `STRINGS` is the removal gate.
-/** @deprecated migrate to t(lang, key, params?) — define the key in messages/en.ts + zh.ts. */
-export function txt(lang: UILanguage, zhText: string, enText: string): string {
-  return lang === 'zh' ? zhText : enText;
-}
-/** @deprecated migrate `txt(lang, ...STRINGS.key)` to `t(lang, 'key')`. */
-export const STRINGS = Object.fromEntries(
-  (Object.keys(en) as MessageKey[]).map((k) => [k, [zh[k] ?? en[k], en[k]] as const]),
-) as { [K in MessageKey]: readonly [string, string] };

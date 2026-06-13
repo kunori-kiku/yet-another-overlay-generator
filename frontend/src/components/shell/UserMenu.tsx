@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { UserIcon } from './icons';
 import { FOCUS_RING } from './styles';
 
@@ -21,7 +21,7 @@ export function UserMenu() {
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const label = txt(language, ...STRINGS.userMenuLabel);
+  const label = t(language, 'userMenuLabel');
 
   useEffect(() => {
     if (!open) return;
@@ -59,18 +59,18 @@ export function UserMenu() {
         >
           {mode !== 'controller' ? (
             <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
-              {txt(language, '本地模式（无需登录）', 'Local mode (no sign-in)')}
+              {t(language, 'userMenu.localModeNoSign')}
             </p>
           ) : loggedIn ? (
             <div className="space-y-2 px-2 py-1.5">
               <div>
                 <p className="text-sm font-medium text-[var(--content)]">
-                  {txt(language, '已登录为', 'Signed in as')}{' '}
+                  {t(language, 'userMenu.signedInAs')}{' '}
                   <span className="font-mono">{operatorName ?? ''}</span>
                 </p>
                 {sessionExpiresAt && (
                   <p className="text-xs text-[var(--content-muted)]">
-                    {txt(language, '会话到期：', 'Session until: ')}
+                    {t(language, 'userMenu.sessionUntil')}
                     {new Date(sessionExpiresAt).toLocaleString()}
                   </p>
                 )}
@@ -84,20 +84,16 @@ export function UserMenu() {
                 disabled={loading}
                 className={`w-full rounded-lg border border-[var(--hairline)] py-1.5 text-sm text-[var(--content)] transition-colors hover:bg-[var(--surface-sunken)] disabled:opacity-40 ${FOCUS_RING}`}
               >
-                {txt(language, '登出', 'Sign out')}
+                {t(language, 'userMenu.signOut')}
               </button>
             </div>
           ) : operatorToken !== '' ? (
             <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
-              {txt(
-                language,
-                '以 break-glass 令牌访问（非登录会话）',
-                'Using a break-glass token (not a login session)',
-              )}
+              {t(language, 'userMenu.usingABreakGlass')}
             </p>
           ) : (
             <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
-              {txt(language, '未登录', 'Not signed in')}
+              {t(language, 'userMenu.notSignedIn')}
             </p>
           )}
         </div>

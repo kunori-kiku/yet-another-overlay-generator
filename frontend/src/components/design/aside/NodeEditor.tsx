@@ -1,5 +1,5 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
-import { txt, STRINGS } from '../../../i18n';
+import { t } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
 import { uuid } from '../../../lib/uuid';
 
@@ -93,26 +93,22 @@ export function NodeEditor() {
   return (
     <section>
       <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        {txt(language, '节点属性', 'Node Properties')}
+        {t(language, 'nodeEditor.nodeProperties')}
       </h2>
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '名称', 'Name')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.name')}</label>
           <input
             type="text"
             value={selectedNode.name}
             onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
             pattern="^[A-Za-z0-9 ._-]+$"
-            title={txt(
-              language,
-              '仅允许字母、数字、空格、点(.)、下划线(_)、连字符(-)，禁止引号、反引号、$、; 等 shell 元字符',
-              'Only letters, digits, space, . _ - are allowed; no quotes, backticks, $, ; or other shell metacharacters',
-            )}
+            title={t(language, 'nodeEditor.onlyLettersDigitsSpace')}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '主机名 (可选)', 'Hostname (optional)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.hostnameOptional')}</label>
           <input
             type="text"
             value={selectedNode.hostname || ''}
@@ -125,7 +121,7 @@ export function NodeEditor() {
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '角色', 'Role')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.role')}</label>
           <select
             value={selectedNode.role}
             onChange={(e) => {
@@ -150,7 +146,7 @@ export function NodeEditor() {
           </select>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '网络域', 'Domain')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.domain')}</label>
           <select
             value={selectedNode.domain_id}
             onChange={(e) => updateNode(selectedNode.id, { domain_id: e.target.value })}
@@ -162,17 +158,17 @@ export function NodeEditor() {
           </select>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, 'Overlay IP (留空自动分配)', 'Overlay IP (empty for auto)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.overlayIPEmptyFor')}</label>
           <input
             type="text"
             value={selectedNode.overlay_ip || ''}
             onChange={(e) => updateNode(selectedNode.id, { overlay_ip: e.target.value || undefined })}
-            placeholder={txt(language, '自动分配', 'Auto assigned')}
+            placeholder={t(language, 'nodeEditor.autoAssigned')}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '监听端口', 'Listen Port')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.listenPort')}</label>
           <input
             type="number"
             value={selectedNode.listen_port || 51820}
@@ -181,7 +177,7 @@ export function NodeEditor() {
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, 'MTU (留空使用默认值 1420)', 'MTU (empty for default 1420)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.mtuEmptyForDefault')}</label>
           <input
             type="number"
             min={576}
@@ -195,16 +191,16 @@ export function NodeEditor() {
         {/* mimic XDP 模式：仅当该节点有 transport=tcp 的链路时才起作用。默认 skb（通用，
             兼容不支持 native 的 VPS 网卡）；操作员确认网卡支持时可选 native 以提升性能。 */}
         <div>
-          <label className="text-xs text-gray-400">{txt(language, ...STRINGS.xdpModeLabel)}</label>
+          <label className="text-xs text-gray-400">{t(language, 'xdpModeLabel')}</label>
           <select
             value={selectedNode.xdp_mode || 'skb'}
             onChange={(e) => updateNode(selectedNode.id, { xdp_mode: e.target.value === 'native' ? 'native' : undefined })}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
           >
-            <option value="skb">{txt(language, 'skb（通用，默认）', 'skb (generic, default)')}</option>
-            <option value="native">{txt(language, 'native（更快，需网卡支持）', 'native (faster, needs NIC support)')}</option>
+            <option value="skb">{t(language, 'nodeEditor.skbGenericDefault')}</option>
+            <option value="native">{t(language, 'nodeEditor.nativeFasterNeedsNIC')}</option>
           </select>
-          <p className="mt-1 text-xs text-gray-500">{txt(language, ...STRINGS.xdpModeHint)}</p>
+          <p className="mt-1 text-xs text-gray-500">{t(language, 'xdpModeHint')}</p>
         </div>
         {selectedNode.role !== 'client' && (
           <label className="flex items-center gap-2 text-sm">
@@ -221,7 +217,7 @@ export function NodeEditor() {
                 })
               }
             />
-            {txt(language, '公网可达', 'Publicly Reachable')}
+            {t(language, 'nodeEditor.publiclyReachable')}
           </label>
         )}
         <label className="flex items-center gap-2 text-sm">
@@ -240,16 +236,16 @@ export function NodeEditor() {
               })
             }
           />
-          {txt(language, '固定私钥（编译后持久化）', 'Pin private key (persist after compile)')}
+          {t(language, 'nodeEditor.pinPrivateKeyPersist')}
         </label>
         {selectedNode.fixed_private_key && (
           <div className="p-2 bg-gray-700 rounded space-y-1">
-            <p className="text-xs text-gray-300">{txt(language, '固定密钥状态', 'Pinned key status')}</p>
+            <p className="text-xs text-gray-300">{t(language, 'nodeEditor.pinnedKeyStatus')}</p>
             <p className="text-xs text-gray-400 break-all">
-              {txt(language, '公钥', 'Public key')}: {selectedNode.wireguard_public_key || txt(language, '将在下次编译后生成', 'Will be generated on next compile')}
+              {t(language, 'nodeEditor.publicKey')}: {selectedNode.wireguard_public_key || t(language, 'nodeEditor.willBeGeneratedOn')}
             </p>
             <p className="text-xs text-gray-500 break-all">
-              {txt(language, '私钥', 'Private key')}: {selectedNode.wireguard_private_key ? txt(language, '已生成并持久化', 'Generated and persisted') : txt(language, '尚未生成', 'Not generated yet')}
+              {t(language, 'nodeEditor.privateKey')}: {selectedNode.wireguard_private_key ? t(language, 'nodeEditor.generatedAndPersisted') : t(language, 'nodeEditor.notGeneratedYet')}
             </p>
           </div>
         )}
@@ -267,22 +263,22 @@ export function NodeEditor() {
                 })
               }
             />
-            {txt(language, '可转发流量', 'Can Forward Traffic')}
+            {t(language, 'nodeEditor.canForwardTraffic')}
           </label>
         )}
         {selectedNode.role !== 'client' && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs text-gray-400">{txt(language, '公网地址（其他节点如何访问）', 'Public addresses (how peers reach this node)')}</label>
+              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.publicAddressesHowPeers')}</label>
               <button
                 onClick={() => addNodeEndpoint(selectedNode.id)}
                 className="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500"
               >
-                + {txt(language, '添加', 'Add')}
+                + {t(language, 'nodeEditor.add')}
               </button>
             </div>
             {(selectedNode.public_endpoints || []).length === 0 && (
-              <p className="text-xs text-gray-500 italic">{txt(language, '尚未配置公网地址', 'No public addresses configured')}</p>
+              <p className="text-xs text-gray-500 italic">{t(language, 'nodeEditor.noPublicAddressesConfigured')}</p>
             )}
             {(selectedNode.public_endpoints || []).map((ep) => (
               <div key={ep.id} className="p-2 bg-gray-700 rounded space-y-1">
@@ -293,7 +289,7 @@ export function NodeEditor() {
                     onChange={(e) =>
                       updateNodeEndpoint(selectedNode.id, ep.id, { host: e.target.value })
                     }
-                    placeholder={txt(language, 'IP/域名', 'IP/Domain')}
+                    placeholder={t(language, 'nodeEditor.ipDomain')}
                     className="col-span-2 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500"
                   />
                   <input
@@ -304,7 +300,7 @@ export function NodeEditor() {
                         port: parseInt(e.target.value, 10) || 51820,
                       })
                     }
-                    placeholder={txt(language, '端口', 'Port')}
+                    placeholder={t(language, 'nodeEditor.port')}
                     className="px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500"
                   />
                 </div>
@@ -315,14 +311,14 @@ export function NodeEditor() {
                     onChange={(e) =>
                       updateNodeEndpoint(selectedNode.id, ep.id, { note: e.target.value })
                     }
-                    placeholder={txt(language, '备注 (可选)', 'Note (optional)')}
+                    placeholder={t(language, 'nodeEditor.noteOptional')}
                     className="flex-1 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500"
                   />
                   <button
                     onClick={() => removeNodeEndpoint(selectedNode.id, ep.id)}
                     className="px-2 py-1 text-xs bg-red-600 hover:bg-red-500 rounded"
                   >
-                    {txt(language, '删除', 'Delete')}
+                    {t(language, 'nodeEditor.delete')}
                   </button>
                 </div>
               </div>
@@ -337,25 +333,21 @@ export function NodeEditor() {
           selectedNode.role === 'relay') && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs text-gray-400">{txt(language, '对外通告的局域网网段', 'Advertised LAN prefixes')}</label>
+              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.advertisedLANPrefixes')}</label>
               <button
                 onClick={() => addExtraPrefix(selectedNode.id)}
                 className="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500"
               >
-                + {txt(language, '添加', 'Add')}
+                + {t(language, 'nodeEditor.add_2')}
               </button>
             </div>
             {(selectedNode.role === 'router' || selectedNode.role === 'relay') && (
               <p className="text-[10px] text-gray-500">
-                {txt(
-                  language,
-                  '设置后该节点会通告这些网段（未设置则不通告）',
-                  'When set, this node announces these prefixes (no-op if left empty)',
-                )}
+                {t(language, 'nodeEditor.whenSetThisNode')}
               </p>
             )}
             {(selectedNode.extra_prefixes || []).length === 0 && (
-              <p className="text-xs text-gray-500 italic">{txt(language, '尚未配置局域网网段', 'No LAN prefixes configured')}</p>
+              <p className="text-xs text-gray-500 italic">{t(language, 'nodeEditor.noLANPrefixesConfigured')}</p>
             )}
             {(selectedNode.extra_prefixes || []).map((prefix, index) => (
               <div key={`extra-prefix-${index}`} className="flex gap-1">
@@ -364,11 +356,7 @@ export function NodeEditor() {
                   value={prefix}
                   onChange={(e) => updateExtraPrefix(selectedNode.id, index, e.target.value)}
                   pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$"
-                  title={txt(
-                    language,
-                    'IPv4 CIDR 格式，例: 192.168.1.0/24',
-                    'IPv4 CIDR format, e.g. 192.168.1.0/24',
-                  )}
+                  title={t(language, 'nodeEditor.ipv4CIDRFormatE')}
                   placeholder="192.168.1.0/24"
                   className="flex-1 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
                 />
@@ -376,7 +364,7 @@ export function NodeEditor() {
                   onClick={() => removeExtraPrefix(selectedNode.id, index)}
                   className="px-2 py-1 text-xs bg-red-600 hover:bg-red-500 rounded"
                 >
-                  {txt(language, '删除', 'Delete')}
+                  {t(language, 'nodeEditor.delete_2')}
                 </button>
               </div>
             ))}
@@ -385,11 +373,11 @@ export function NodeEditor() {
         {/* SSH Connection Details (collapsible) */}
         <details className="bg-gray-700/50 rounded p-2">
           <summary className="text-xs cursor-pointer text-gray-400 font-semibold">
-            {txt(language, 'SSH 连接配置 (自动部署)', 'SSH Connection (Auto-Deploy)')}
+            {t(language, 'nodeEditor.sshConnectionAutoDeploy')}
           </summary>
           <div className="mt-2 space-y-2">
             <div>
-              <label className="text-xs text-gray-400">{txt(language, 'SSH 别名 (ssh_config Host)', 'SSH Alias (ssh_config Host)')}</label>
+              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshAliasSshConfig')}</label>
               <input
                 type="text"
                 value={selectedNode.ssh_alias || ''}
@@ -399,20 +387,16 @@ export function NodeEditor() {
                   })
                 }
                 pattern="^[A-Za-z0-9._:@-]+$"
-                title={txt(
-                  language,
-                  '仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符',
-                  'Only letters, digits, . _ : @ - are allowed; no whitespace or shell metacharacters',
-                )}
-                placeholder={txt(language, '如 my-server', 'e.g. my-server')}
+                title={t(language, 'nodeEditor.onlyLettersDigitsAre')}
+                placeholder={t(language, 'nodeEditor.eGMyServer')}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
               <p className="text-[10px] text-gray-500 mt-0.5">
-                {txt(language, '设置别名后将忽略下方手动配置', 'If set, overrides manual host/port/user/key below')}
+                {t(language, 'nodeEditor.ifSetOverridesManual')}
               </p>
             </div>
             <div>
-              <label className="text-xs text-gray-400">{txt(language, 'SSH 主机', 'SSH Host')}</label>
+              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshHost')}</label>
               <input
                 type="text"
                 value={selectedNode.ssh_host || ''}
@@ -422,18 +406,14 @@ export function NodeEditor() {
                   })
                 }
                 pattern="^[A-Za-z0-9._:@-]+$"
-                title={txt(
-                  language,
-                  '仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符',
-                  'Only letters, digits, . _ : @ - are allowed; no whitespace or shell metacharacters',
-                )}
-                placeholder={txt(language, 'IP 或域名', 'IP or hostname')}
+                title={t(language, 'nodeEditor.onlyLettersDigitsAre_2')}
+                placeholder={t(language, 'nodeEditor.ipOrHostname')}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-xs text-gray-400">{txt(language, 'SSH 端口', 'SSH Port')}</label>
+                <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshPort')}</label>
                 <input
                   type="number"
                   min={1}
@@ -449,7 +429,7 @@ export function NodeEditor() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400">{txt(language, 'SSH 用户', 'SSH User')}</label>
+                <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshUser')}</label>
                 <input
                   type="text"
                   value={selectedNode.ssh_user || ''}
@@ -459,18 +439,14 @@ export function NodeEditor() {
                     })
                   }
                   pattern="^[A-Za-z0-9._:@-]+$"
-                  title={txt(
-                    language,
-                    '仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符',
-                    'Only letters, digits, . _ : @ - are allowed; no whitespace or shell metacharacters',
-                  )}
+                  title={t(language, 'nodeEditor.onlyLettersDigitsAre_3')}
                   placeholder="root"
                   className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
                 />
               </div>
             </div>
             <div>
-              <label className="text-xs text-gray-400">{txt(language, 'SSH 密钥路径', 'SSH Key Path')}</label>
+              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshKeyPath')}</label>
               <input
                 type="text"
                 value={selectedNode.ssh_key_path || ''}
@@ -479,7 +455,7 @@ export function NodeEditor() {
                     ssh_key_path: e.target.value || undefined,
                   })
                 }
-                placeholder={txt(language, '如 ~/.ssh/id_ed25519', 'e.g. ~/.ssh/id_ed25519')}
+                placeholder={t(language, 'nodeEditor.eGSshId')}
                 className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
               />
             </div>
@@ -489,7 +465,7 @@ export function NodeEditor() {
           onClick={() => removeNode(selectedNode.id)}
           className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
         >
-          {txt(language, '删除节点', 'Delete Node')}
+          {t(language, 'nodeEditor.deleteNode')}
         </button>
       </div>
     </section>

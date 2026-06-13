@@ -1,5 +1,5 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
-import { txt, STRINGS } from '../../../i18n';
+import { t } from '../../../i18n';
 import { resolveEdgeInterface } from '../../../lib/compiledInterfaces';
 
 // 连接（边）属性编辑器（从 RightPanel 的选中边区块原样抽出，含目标端点选择 / 传输协议 /
@@ -67,11 +67,11 @@ export function EdgeEditor() {
   return (
     <section>
       <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
-        {txt(language, '连接属性', 'Edge Properties')}
+        {t(language, 'edgeEditor.edgeProperties')}
       </h2>
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '类型', 'Type')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.type')}</label>
           <select
             value={selectedEdge.type}
             onChange={(e) =>
@@ -91,7 +91,7 @@ export function EdgeEditor() {
         </div>
         {/* Endpoint IP — pick from target's public IPs or manual */}
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '目标 IP (从目标节点公网地址选择)', 'Endpoint IP (from target public IPs)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.endpointIPFromTarget')}</label>
           {targetHostOptions.length > 0 && (
             <select
               value={matchedTargetHost}
@@ -116,13 +116,13 @@ export function EdgeEditor() {
               }}
               className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
             >
-              <option value="__none__">{txt(language, '不设置', 'Unset')}</option>
+              <option value="__none__">{t(language, 'edgeEditor.unset')}</option>
               {targetHostOptions.map((host) => (
                 <option key={host} value={`host:${host}`}>
                   {host}
                 </option>
               ))}
-              <option value="__manual__">{txt(language, '手动输入', 'Manual input')}</option>
+              <option value="__manual__">{t(language, 'edgeEditor.manualInput')}</option>
             </select>
           )}
           <input
@@ -130,13 +130,13 @@ export function EdgeEditor() {
             type="text"
             value={selectedEdge.endpoint_host || ''}
             onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined, compiled_port: undefined })}
-            placeholder={txt(language, 'IP 或域名', 'IP or hostname')}
+            placeholder={t(language, 'edgeEditor.ipOrHostname')}
             className="w-full mt-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         {/* Endpoint Port — 0 or empty = auto, nonzero = NAT/port-forward override */}
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '目标端口 (0 = 自动分配, 非零 = NAT 覆盖)', 'Endpoint Port (0 = auto, nonzero = NAT override)')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.endpointPort0Auto')}</label>
           <div className="flex gap-1 items-center">
             <input
               key={`ep-port-${selectedEdge.id}`}
@@ -153,16 +153,16 @@ export function EdgeEditor() {
                   }
                 }
               }}
-              placeholder={txt(language, '0 = 自动', '0 = auto')}
+              placeholder={t(language, 'edgeEditor.0Auto')}
               className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
             />
           </div>
           {compiledEdgePort && (
             <p className="text-[10px] text-cyan-400 mt-0.5 font-mono">
-              {txt(language, '编译后端口', 'Compiled port')}: {compiledEdgePort}
+              {t(language, 'edgeEditor.compiledPort')}: {compiledEdgePort}
               {selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0 && selectedEdge.endpoint_port !== compiledEdgePort && (
                 <span className="text-yellow-400 ml-1">
-                  ({txt(language, 'NAT 覆盖生效', 'NAT override active')})
+                  ({t(language, 'edgeEditor.natOverrideActive')})
                 </span>
               )}
             </p>
@@ -185,12 +185,12 @@ export function EdgeEditor() {
           const endpointMatch = config?.match(/Endpoint\s*=\s*(.+)/);
           return (
             <div className="p-2 bg-gray-700/50 rounded space-y-1">
-              <p className="text-xs text-gray-400 font-semibold">{txt(language, '编译后实际值', 'Compiled values')}</p>
-              <p className="text-xs text-cyan-300 font-mono break-all">{txt(language, '本端接口', 'Local interface')}: {fromIface.interfaceName}</p>
+              <p className="text-xs text-gray-400 font-semibold">{t(language, 'edgeEditor.compiledValues')}</p>
+              <p className="text-xs text-cyan-300 font-mono break-all">{t(language, 'edgeEditor.localInterface')}: {fromIface.interfaceName}</p>
               {endpointMatch && (
-                <p className="text-xs text-cyan-300 font-mono break-all">{txt(language, '实际 Endpoint', 'Endpoint')}: {endpointMatch[1]}</p>
+                <p className="text-xs text-cyan-300 font-mono break-all">{t(language, 'edgeEditor.endpoint')}: {endpointMatch[1]}</p>
               )}
-              <p className="text-xs text-cyan-300 font-mono">{txt(language, '本端 ListenPort', 'Local ListenPort')}: {fromIface.listenPort}</p>
+              <p className="text-xs text-cyan-300 font-mono">{t(language, 'edgeEditor.localListenPort')}: {fromIface.listenPort}</p>
             </div>
           );
         })()}
@@ -200,11 +200,11 @@ export function EdgeEditor() {
             checked={selectedEdge.is_enabled}
             onChange={(e) => updateEdge(selectedEdge.id, { is_enabled: e.target.checked })}
           />
-          {txt(language, '启用', 'Enabled')}
+          {t(language, 'edgeEditor.enabled')}
         </label>
         {/* 传输协议 / 优先级 / 权重 / 备注（D68）。priority 与 weight 影响 Babel 的链路开销。 */}
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '传输协议', 'Transport')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.transport')}</label>
           <select
             value={selectedEdge.transport || 'udp'}
             onChange={(e) =>
@@ -215,11 +215,11 @@ export function EdgeEditor() {
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
           >
             <option value="udp">UDP</option>
-            <option value="tcp">{txt(language, 'TCP（mimic）', 'TCP (mimic)')}</option>
+            <option value="tcp">{t(language, 'edgeEditor.tcpMimic')}</option>
           </select>
           {selectedEdge.transport === 'tcp' && (
             <p className="mt-1 text-xs text-gray-400">
-              {txt(language, ...STRINGS.mimicHint)}
+              {t(language, 'mimicHint')}
             </p>
           )}
         </div>
@@ -227,7 +227,7 @@ export function EdgeEditor() {
             角色变更会改变链路身份（重新 key），属拨号相关编辑 ⇒ 与本文件其他拨号相关编辑一致，
             一并清空陈旧的 compiled_port。 */}
         <div>
-          <label className="text-xs text-gray-400">{txt(language, ...STRINGS.roleLabel)}</label>
+          <label className="text-xs text-gray-400">{t(language, 'roleLabel')}</label>
           <select
             value={selectedEdge.role || ''}
             onChange={(e) => {
@@ -239,21 +239,17 @@ export function EdgeEditor() {
             }}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
           >
-            <option value="">{txt(language, ...STRINGS.rolePrimary)} ({txt(language, '默认', 'default')})</option>
-            <option value="primary">{txt(language, ...STRINGS.rolePrimary)}</option>
-            <option value="backup">{txt(language, ...STRINGS.roleBackup)}</option>
+            <option value="">{t(language, 'rolePrimary')} ({t(language, 'edgeEditor.default')})</option>
+            <option value="primary">{t(language, 'rolePrimary')}</option>
+            <option value="backup">{t(language, 'roleBackup')}</option>
           </select>
           <p className="text-[10px] text-gray-500 mt-0.5">
-            {txt(
-              language,
-              '备份链路默认开销 384（高于主链路），仅在主链路失效时切换；显式设置的优先级/权重会覆盖此默认值。',
-              'Backup links default to cost 384 (higher than primary), used only when the primary fails; an explicit priority/weight overrides this default.',
-            )}
+            {t(language, 'edgeEditor.backupLinksDefaultTo')}
           </p>
         </div>
         <div>
           <label className="text-xs text-gray-400">
-            {txt(language, '优先级 (影响 Babel 链路开销)', 'Priority (drives Babel link cost)')}
+            {t(language, 'edgeEditor.priorityDrivesBabelLink')}
           </label>
           <input
             type="number"
@@ -269,13 +265,13 @@ export function EdgeEditor() {
                 updateEdge(selectedEdge.id, { priority: parsed });
               }
             }}
-            placeholder={txt(language, '默认', 'default')}
+            placeholder={t(language, 'edgeEditor.default_2')}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         <div>
           <label className="text-xs text-gray-400">
-            {txt(language, '权重 (影响 Babel 链路开销)', 'Weight (drives Babel link cost)')}
+            {t(language, 'edgeEditor.weightDrivesBabelLink')}
           </label>
           <input
             type="number"
@@ -291,19 +287,19 @@ export function EdgeEditor() {
                 updateEdge(selectedEdge.id, { weight: parsed });
               }
             }}
-            placeholder={txt(language, '默认', 'default')}
+            placeholder={t(language, 'edgeEditor.default_3')}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{txt(language, '备注', 'Notes')}</label>
+          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.notes')}</label>
           <input
             type="text"
             value={selectedEdge.notes || ''}
             onChange={(e) =>
               updateEdge(selectedEdge.id, { notes: e.target.value || undefined })
             }
-            placeholder={txt(language, '备注 (可选)', 'Notes (optional)')}
+            placeholder={t(language, 'edgeEditor.notesOptional')}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
@@ -316,12 +312,12 @@ export function EdgeEditor() {
             onClick={() => addBackupEdge(selectedEdge.id)}
             className="w-full py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm"
           >
-            + {txt(language, ...STRINGS.addBackupLink)}
+            + {t(language, 'addBackupLink')}
           </button>
         )}
         {showBackupEndpointNudge && (
           <p className="text-[10px] text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
-            {txt(language, ...STRINGS.backupEndpointNudge)}
+            {t(language, 'backupEndpointNudge')}
           </p>
         )}
         {/* 已固定的分配：编译器写回的 pin 值（端口 / transit IP / 链路本地地址）。
@@ -335,24 +331,24 @@ export function EdgeEditor() {
           selectedEdge.pinned_to_link_local !== undefined) && (
           <div className="p-2 bg-gray-700/50 rounded space-y-1">
             <p className="text-xs text-gray-400 font-semibold">
-              {txt(language, '已固定的分配', 'Pinned allocation')}
+              {t(language, 'edgeEditor.pinnedAllocation')}
             </p>
             {(selectedEdge.pinned_from_port !== undefined ||
               selectedEdge.pinned_to_port !== undefined) && (
               <p className="text-xs text-cyan-300 font-mono">
-                {txt(language, '端口', 'Ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
+                {t(language, 'edgeEditor.ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
               </p>
             )}
             {(selectedEdge.pinned_from_transit_ip !== undefined ||
               selectedEdge.pinned_to_transit_ip !== undefined) && (
               <p className="text-xs text-cyan-300 font-mono break-all">
-                {txt(language, 'Transit IP', 'Transit IPs')}: {selectedEdge.pinned_from_transit_ip ?? '—'} → {selectedEdge.pinned_to_transit_ip ?? '—'}
+                {t(language, 'edgeEditor.transitIPs')}: {selectedEdge.pinned_from_transit_ip ?? '—'} → {selectedEdge.pinned_to_transit_ip ?? '—'}
               </p>
             )}
             {(selectedEdge.pinned_from_link_local !== undefined ||
               selectedEdge.pinned_to_link_local !== undefined) && (
               <p className="text-xs text-cyan-300 font-mono break-all">
-                {txt(language, '链路本地地址', 'Link-locals')}: {selectedEdge.pinned_from_link_local ?? '—'} → {selectedEdge.pinned_to_link_local ?? '—'}
+                {t(language, 'edgeEditor.linkLocals')}: {selectedEdge.pinned_from_link_local ?? '—'} → {selectedEdge.pinned_to_link_local ?? '—'}
               </p>
             )}
             <button
@@ -369,7 +365,7 @@ export function EdgeEditor() {
               }
               className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
             >
-              {txt(language, '解除固定（下次编译重新分配）', 'Unpin - reallocate on next compile')}
+              {t(language, 'edgeEditor.unpinReallocateOnNext')}
             </button>
           </div>
         )}
@@ -377,7 +373,7 @@ export function EdgeEditor() {
           onClick={() => removeEdge(selectedEdge.id)}
           className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
         >
-          {txt(language, '删除连接', 'Delete Edge')}
+          {t(language, 'edgeEditor.deleteEdge')}
         </button>
       </div>
     </section>

@@ -1,5 +1,5 @@
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 
 export function BottomBar() {
   const { validateResult, error, validate, isValidating, nodes, edges, domains, language } =
@@ -9,18 +9,18 @@ export function BottomBar() {
     <div className="p-3 h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
-          {txt(language, '校验与状态', 'Validation & Status')}
+          {t(language, 'bottomBar.validationStatus')}
         </h2>
         <div className="flex items-center gap-4">
           <span className="text-xs text-gray-500">
-            {txt(language, '域', 'Domains')}: {domains.length} | {txt(language, '节点', 'Nodes')}: {nodes.length} | {txt(language, '边', 'Edges')}: {edges.length}
+            {t(language, 'bottomBar.domains')}: {domains.length} | {t(language, 'bottomBar.nodes')}: {nodes.length} | {t(language, 'bottomBar.edges')}: {edges.length}
           </span>
           <button
             onClick={() => validate()}
             disabled={isValidating || nodes.length === 0}
             className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-xs"
           >
-            {isValidating ? txt(language, '校验中...', 'Validating...') : txt(language, '🔍 校验拓扑', '🔍 Validate Topology')}
+            {isValidating ? t(language, 'bottomBar.validating') : t(language, 'bottomBar.validateTopology')}
           </button>
         </div>
       </div>
@@ -38,7 +38,7 @@ export function BottomBar() {
           <>
             {validateResult.valid && (
               <div className="text-sm text-green-400 bg-green-900/30 px-2 py-1 rounded">
-                {txt(language, '✅ 拓扑校验通过', '✅ Topology validation passed')}
+                {t(language, 'bottomBar.topologyValidationPassed')}
               </div>
             )}
 
@@ -64,7 +64,7 @@ export function BottomBar() {
 
         {!validateResult && !error && (
           <p className="text-xs text-gray-500 italic">
-            {txt(language, '点击“校验拓扑”检查配置是否正确', 'Click "Validate Topology" to check configuration')}
+            {t(language, 'bottomBar.clickValidateTopologyTo')}
           </p>
         )}
       </div>

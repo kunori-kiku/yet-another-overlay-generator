@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 
 // /overview — a thin landing dashboard: topology counts (local) + controller
 // fleet summary (last deploy / last synced). Read-only; deep links elsewhere.
@@ -29,24 +29,24 @@ export function OverviewPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mx-auto max-w-4xl space-y-8">
         <section>
-          <h2 className={heading}>{txt(language, ...STRINGS.overviewTopologyHeading)}</h2>
+          <h2 className={heading}>{t(language, 'overviewTopologyHeading')}</h2>
           <div className="grid grid-cols-3 gap-4">
-            <Stat label={txt(language, ...STRINGS.overviewDomains)} value={domains.length} />
-            <Stat label={txt(language, ...STRINGS.overviewNodes)} value={nodes.length} />
-            <Stat label={txt(language, ...STRINGS.overviewEdges)} value={edges.length} />
+            <Stat label={t(language, 'overviewDomains')} value={domains.length} />
+            <Stat label={t(language, 'overviewNodes')} value={nodes.length} />
+            <Stat label={t(language, 'overviewEdges')} value={edges.length} />
           </div>
         </section>
 
         <section>
-          <h2 className={heading}>{txt(language, ...STRINGS.overviewControllerHeading)}</h2>
+          <h2 className={heading}>{t(language, 'overviewControllerHeading')}</h2>
           <div className="grid grid-cols-3 gap-4">
-            <Stat label={txt(language, ...STRINGS.overviewFleetNodes)} value={fleetNodes.length} />
+            <Stat label={t(language, 'overviewFleetNodes')} value={fleetNodes.length} />
             <Stat
-              label={txt(language, ...STRINGS.overviewLastDeploy)}
+              label={t(language, 'overviewLastDeploy')}
               value={lastDeploy ? '✓' : '—'}
             />
             <Stat
-              label={txt(language, ...STRINGS.overviewLastSynced)}
+              label={t(language, 'overviewLastSynced')}
               value={
                 lastSyncedAt !== null ? (
                   <span className="text-base font-normal">
@@ -60,7 +60,7 @@ export function OverviewPage() {
           </div>
           {lastSyncedAt === null && (
             <p className="mt-3 text-xs text-[var(--content-muted)]">
-              {txt(language, ...STRINGS.overviewNotSynced)}
+              {t(language, 'overviewNotSynced')}
             </p>
           )}
         </section>

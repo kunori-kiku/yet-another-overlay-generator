@@ -1,6 +1,6 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 import { LocalDeploy } from '../deploy/LocalDeploy';
 import { DeployBar } from '../deploy/DeployBar';
 import { CompilePreview } from '../deploy/CompilePreview';
@@ -18,7 +18,7 @@ export function DeployPage() {
         <LocalDeploy />
       ) : (
         <>
-          <p className="text-sm text-gray-400">{txt(language, ...STRINGS.deployControllerHint)}</p>
+          <p className="text-sm text-gray-400">{t(language, 'deployControllerHint')}</p>
           <DeployBar />
         </>
       )}

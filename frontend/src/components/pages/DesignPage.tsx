@@ -5,7 +5,7 @@ import { CanvasToolbar } from '../design/CanvasToolbar';
 import { ElementsLists } from '../design/ElementsLists';
 import { DesignAside } from '../design/DesignAside';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt, STRINGS } from '../../i18n';
+import { t } from '../../i18n';
 
 // /design — topology editing. Node manipulation is demoted from an always-on
 // docked panel to: a canvas toolbar (create entry points + Domains&Nodes list
@@ -23,7 +23,7 @@ export function DesignPage() {
         {listsOpen && (
           <aside
             id="design-lists-drawer"
-            aria-label={txt(language, ...STRINGS.toolbarLists)}
+            aria-label={t(language, 'toolbarLists')}
             className="w-72 shrink-0 overflow-y-auto border-r border-gray-700 bg-gray-800"
           >
             <ElementsLists />

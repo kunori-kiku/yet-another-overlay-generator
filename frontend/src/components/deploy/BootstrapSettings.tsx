@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ControllerSettings } from '../../api/controllerClient';
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt, type UILanguage } from '../../i18n';
+import { t, type UILanguage } from '../../i18n';
 
 // Bootstrap 设置（plan-5.2）：服务端持久化的 public agent URL / GitHub 代理 / agent 发布
 // 基址。它们被烘焙进 GET /bootstrap 返回的一键安装脚本的默认值里。仅操作员可改。
@@ -28,18 +28,14 @@ export function BootstrapSettings() {
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
       <h3 className="text-lg font-semibold text-emerald-400">
-        {txt(language, 'Bootstrap 设置', 'Bootstrap Settings')}
+        {t(language, 'bootstrapSettings.bootstrapSettings')}
       </h3>
       <p className="text-sm text-gray-400">
-        {txt(
-          language,
-          '这些设置由服务端持久化，并烘焙进「一键安装」脚本的默认值。修改后保存即对后续注册生效。',
-          'These are persisted server-side and baked into the one-shot install script. Save to apply them to subsequent enrollments.',
-        )}
+        {t(language, 'bootstrapSettings.theseArePersistedServer')}
       </p>
       {!hasAuth ? (
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
-          {txt(language, '请先登录以读取/修改设置。', 'Sign in to read/edit settings.')}
+          {t(language, 'bootstrapSettings.signInToRead')}
         </p>
       ) : (
         <SettingsForm
@@ -103,37 +99,25 @@ function SettingsForm({
     <>
       <div className="grid grid-cols-1 gap-3">
         {field(
-          txt(language, '公开 Agent 地址', 'Public Agent URL'),
+          t(language, 'bootstrapSettings.publicAgentURL'),
           publicAgentURL,
           setPublicAgentURL,
           'https://overlay.example.com:9090',
-          txt(
-            language,
-            '节点可达的 agent 端口地址（一键脚本从这里 curl，agent 也连到这里）。',
-            'The node-reachable agent URL the install script curls from and the agent connects to.',
-          ),
+          t(language, 'bootstrapSettings.theNodeReachableAgent'),
         )}
         {field(
-          txt(language, 'GitHub 代理（可选）', 'GitHub Proxy (optional)'),
+          t(language, 'bootstrapSettings.githubProxyOptional'),
           githubProxy,
           setGithubProxy,
           'https://gh-proxy.com/',
-          txt(
-            language,
-            '为 GitHub 下载加前缀（如 gh-proxy.com/https://github.com/...）。留空=关闭。',
-            'Prefix for GitHub downloads (e.g. gh-proxy.com/https://github.com/...). Empty = off.',
-          ),
+          t(language, 'bootstrapSettings.prefixForGitHubDownloads'),
         )}
         {field(
-          txt(language, 'Agent 发布基址', 'Agent Release Base URL'),
+          t(language, 'bootstrapSettings.agentReleaseBaseURL'),
           agentReleaseBaseURL,
           setAgentReleaseBaseURL,
           'https://github.com/.../releases/latest/download',
-          txt(
-            language,
-            'per-arch 的 yaog-agent 二进制下载基址。一般无需改。',
-            'Where the per-arch yaog-agent binary is fetched from. Usually leave as default.',
-          ),
+          t(language, 'bootstrapSettings.whereThePerArch'),
         )}
       </div>
       <button
@@ -151,7 +135,7 @@ function SettingsForm({
         disabled={loading}
         className="mt-3 px-4 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
       >
-        {txt(language, '保存设置', 'Save settings')}
+        {t(language, 'bootstrapSettings.saveSettings')}
       </button>
     </>
   );

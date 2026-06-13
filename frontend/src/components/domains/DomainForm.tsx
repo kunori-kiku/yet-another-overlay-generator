@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { txt } from '../../i18n';
+import { t } from '../../i18n';
 import { uuid } from '../../lib/uuid';
 
 export function DomainForm() {
@@ -17,21 +17,21 @@ export function DomainForm() {
 
   const handleSubmit = () => {
     if (!name.trim()) {
-      setError(txt(language, '名称不能为空', 'Name is required'));
+      setError(t(language, 'domainForm.nameIsRequired'));
       return;
     }
     if (!cidr.trim()) {
-      setError(txt(language, 'CIDR 不能为空', 'CIDR is required'));
+      setError(t(language, 'domainForm.cidrIsRequired'));
       return;
     }
     // 简单 CIDR 格式校验
     if (!cidrRegex.test(cidr)) {
-      setError(txt(language, 'CIDR 格式无效，例: 10.10.0.0/24', 'Invalid CIDR format, e.g. 10.10.0.0/24'));
+      setError(t(language, 'domainForm.invalidCIDRFormatE'));
       return;
     }
     // transit_cidr 可选；填写时按同样的格式校验
     if (transitCidr.trim() && !cidrRegex.test(transitCidr.trim())) {
-      setError(txt(language, 'Transit CIDR 格式无效，例: 10.10.0.0/24', 'Invalid transit CIDR format, e.g. 10.10.0.0/24'));
+      setError(t(language, 'domainForm.invalidTransitCIDRFormat'));
       return;
     }
 
@@ -58,7 +58,7 @@ export function DomainForm() {
         onClick={() => setIsOpen(true)}
         className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-500 rounded text-sm mb-2"
       >
-        + {txt(language, '新建网络域', 'New Domain')}
+        + {t(language, 'domainForm.newDomain')}
       </button>
     );
   }
@@ -67,21 +67,21 @@ export function DomainForm() {
     <div className="p-2 bg-gray-700 rounded space-y-2 mb-2">
       <input
         type="text"
-        placeholder={txt(language, '域名称', 'Domain name')}
+        placeholder={t(language, 'domainForm.domainName')}
         value={name}
         onChange={(e) => setName(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
       />
       <input
         type="text"
-        placeholder={txt(language, 'CIDR (如 10.10.0.0/24)', 'CIDR (e.g. 10.10.0.0/24)')}
+        placeholder={t(language, 'domainForm.cidrEG10')}
         value={cidr}
         onChange={(e) => setCidr(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
       />
       <input
         type="text"
-        placeholder={txt(language, 'Transit CIDR (可选, 默认 10.10.0.0/24)', 'Transit CIDR (optional, default 10.10.0.0/24)')}
+        placeholder={t(language, 'domainForm.transitCIDROptionalDefault')}
         value={transitCidr}
         onChange={(e) => setTransitCidr(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
@@ -91,8 +91,8 @@ export function DomainForm() {
         onChange={(e) => setRoutingMode(e.target.value as 'babel' | 'static' | 'none')}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
       >
-        <option value="babel">{txt(language, 'Babel (动态路由)', 'Babel (dynamic routing)')}</option>
-        <option value="static">{txt(language, 'Static (静态路由)', 'Static routing')}</option>
+        <option value="babel">{t(language, 'domainForm.babelDynamicRouting')}</option>
+        <option value="static">{t(language, 'domainForm.staticRouting')}</option>
         <option value="none">None</option>
       </select>
       {error && <p className="text-xs text-red-400">{error}</p>}
@@ -101,13 +101,13 @@ export function DomainForm() {
           onClick={handleSubmit}
           className="flex-1 py-1 bg-green-600 hover:bg-green-500 rounded text-sm"
         >
-          {txt(language, '确定', 'Confirm')}
+          {t(language, 'domainForm.confirm')}
         </button>
         <button
           onClick={() => { setIsOpen(false); setError(''); }}
           className="flex-1 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm"
         >
-          {txt(language, '取消', 'Cancel')}
+          {t(language, 'domainForm.cancel')}
         </button>
       </div>
     </div>
