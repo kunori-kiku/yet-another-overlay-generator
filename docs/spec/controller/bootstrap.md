@@ -5,7 +5,7 @@ the agent, enrolls it, and applies the current generation — and, by default, i
 systemd daemon so every future Deploy auto-applies:
 
 ```
-bash <(curl -fsSL https://<public-agent-url>/api/v1/controller/bootstrap) \
+bash <(curl -fsSL https://<public-agent-url>/api/v1/agent/bootstrap) \
      --token <enrollment-token> --node-id <id>
 ```
 
@@ -16,7 +16,7 @@ host script — not a container.
 ## Server-persisted settings
 
 Operator-editable, non-secret, stored per-tenant (`ControllerSettings`), surfaced at
-`GET/POST /api/v1/controller/settings` (operator-auth) and a panel section:
+`GET/POST /api/v1/operator/settings` (operator-auth) and a panel section:
 
 - **`public_agent_url`** — the controller's public AGENT base URL (`scheme://host[:port]`).
   The bootstrap passes it as the agent's `--controller`; the server appends its own secret
@@ -30,7 +30,7 @@ Operator-editable, non-secret, stored per-tenant (`ControllerSettings`), surface
 
 ## The bootstrap route
 
-`GET /api/v1/controller/bootstrap` (agent port, **unauthenticated** — the script is generic;
+`GET /api/v1/agent/bootstrap` (agent port, **unauthenticated** — the script is generic;
 the single-use enrollment token is a flag) returns a bash script that:
 
 1. parses flags (`--token`, `--node-id`, `--controller`, `--gh-proxy`, `--release-base`,

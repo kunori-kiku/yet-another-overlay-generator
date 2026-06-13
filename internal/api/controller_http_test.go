@@ -181,14 +181,14 @@ func smallTopo() *model.Topology {
 	}
 }
 
-// agentURL builds an agent-mux URL for the given controller path suffix.
+// agentURL builds an agent-mux URL for the given agent-namespace path suffix.
 func (e *ctlTestEnv) agentURL(suffix string) string {
-	return e.agentSrv.URL + "/api/v1/controller/" + suffix
+	return e.agentSrv.URL + "/api/v1/agent/" + suffix
 }
 
-// opURL builds an operator-mux URL for the given controller path suffix.
+// opURL builds an operator-mux URL for the given operator-namespace path suffix.
 func (e *ctlTestEnv) opURL(suffix string) string {
-	return e.opSrv.URL + "/api/v1/controller/" + suffix
+	return e.opSrv.URL + "/api/v1/operator/" + suffix
 }
 
 // mintEnrollmentToken drives the operator-token /enrollment-token route to mint a
@@ -470,7 +470,7 @@ func TestControllerHTTP_AirGapOpen(t *testing.T) {
 		t.Fatalf("air-gap /api/health: status %d, want 200 (must stay open)", status)
 	}
 	// The operator route on the SAME mux still requires the operator token (401 absent).
-	if status := doJSON(t, http.MethodGet, ts.URL+"/api/v1/controller/nodes", "", nil, nil); status != http.StatusUnauthorized {
+	if status := doJSON(t, http.MethodGet, ts.URL+"/api/v1/operator/nodes", "", nil, nil); status != http.StatusUnauthorized {
 		t.Fatalf("operator /nodes without token: status %d, want 401", status)
 	}
 }

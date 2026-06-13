@@ -2,7 +2,8 @@ package api
 
 // handler_controller.go is the HTTP surface of the networked controller
 // (plan-4.5). It exposes the controller core (Store + enrollment + compile) under
-// /api/v1/controller/, with JSON request/response bodies. Authentication and the
+// two audience-named namespaces — operator/panel routes under /api/v1/operator/ and
+// agent/node routes under /api/v1/agent/ — with JSON request/response bodies. Authentication and the
 // tenant/node identity are handled entirely by the auth chokepoint in
 // auth_controller.go: every handler here reads the caller's node from the request
 // context (nodeFromCtx) rather than from the request, so a node can only ever act
@@ -76,8 +77,9 @@ type ControllerHandler struct {
 	pollDeadline time.Duration
 	// operatorPrefix and agentPrefix are optional secret path segments the OPERATOR
 	// routes (panel port) and AGENT routes (agent port) mount under, independently
-	// (e.g. "/s3cr3t" -> "/s3cr3t/api/v1/controller/..."). Empty = the bare
-	// "/api/v1/controller/..." paths. They are defense-in-depth obscurity (hiding the
+	// (e.g. "/s3cr3t" -> "/s3cr3t/api/v1/operator/..." and "/s3cr3t/api/v1/agent/...").
+	// Empty = the bare "/api/v1/{operator,agent}/..." paths. They are defense-in-depth
+	// obscurity (hiding the
 	// surface from drive-by scanners, CDN-friendly), NOT a security boundary — the
 	// boundary is the bearer tokens + the off-host signed trust-list. Two independent
 	// prefixes (YAOG_OPERATOR_PATH_PREFIX / YAOG_AGENT_PATH_PREFIX) let a path-based
@@ -156,7 +158,7 @@ func (h *ControllerHandler) originAllowed(origin string) bool {
 
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
 // on the agent port), under AgentBasePath() (the optional agent secret prefix + the
-// fixed /api/v1/controller/). /enroll is registered WITHOUT auth (reachable before the
+// fixed /api/v1/agent/). /enroll is registered WITHOUT auth (reachable before the
 // node has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
 // bearer token). recoverPanics/cors are NOT applied here — controller requests are
 // machine-to-machine JSON, with no browser CORS concern.
@@ -248,17 +250,21 @@ func (h *ControllerHandler) SetAgentPathPrefix(prefix string) {
 }
 
 // OperatorBasePath is the route prefix for the operator endpoints: the optional
-// operator secret prefix followed by the fixed "/api/v1/controller/". Exported so
-// cmd/server can name the mounted base path in its startup log.
+// operator secret prefix followed by the fixed "/api/v1/operator/". Exported so
+// cmd/server can name the mounted base path in its startup log. The audience name in
+// the path (operator vs agent) keeps the two surfaces distinct so a path-routing
+// proxy can split them without the secret prefix doing double duty.
 func (h *ControllerHandler) OperatorBasePath() string {
-	return h.operatorPrefix + "/api/v1/controller/"
+	return h.operatorPrefix + "/api/v1/operator/"
 }
 
 // AgentBasePath is the route prefix for the agent endpoints: the optional agent
-// secret prefix followed by the fixed "/api/v1/controller/". Exported so cmd/server
-// can name the mounted base path in its startup log.
+// secret prefix followed by the fixed "/api/v1/agent/". Exported so cmd/server can
+// name the mounted base path in its startup log. Distinct from the operator path so
+// the public agent surface (enroll/config/poll/report/bootstrap) is unambiguous and
+// can be exposed publicly while the operator panel stays behind a VPN.
 func (h *ControllerHandler) AgentBasePath() string {
-	return h.agentPrefix + "/api/v1/controller/"
+	return h.agentPrefix + "/api/v1/agent/"
 }
 
 // cors answers a browser CORS preflight (OPTIONS, which carries no auth) and stamps the

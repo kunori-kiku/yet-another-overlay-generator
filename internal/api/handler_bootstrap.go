@@ -147,7 +147,7 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// The agent's --controller is scheme://host[:port] + the AGENT secret path prefix
-	// (YAOG_AGENT_PATH_PREFIX; the agent appends /api/v1/controller/ itself). The
+	// (YAOG_AGENT_PATH_PREFIX; the agent appends /api/v1/agent/ itself). The
 	// server knows its own prefix, so it composes the full base here. The operator
 	// prefix is deliberately NOT used: agents only ever talk to the agent port.
 	// With no PublicAgentURL configured the base stays "" — appending the prefix to an
@@ -218,7 +218,7 @@ func renderBootstrapScript(controllerBase, ghProxy, releaseBase string, cred *co
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
 	b.WriteString("# YAOG one-shot agent bootstrap (plan-5.2). Run as root on the target node, e.g.:\n")
-	b.WriteString("#   bash <(curl -fsSL <public-agent-url>/api/v1/controller/bootstrap) --token <T> --node-id <ID>\n")
+	b.WriteString("#   bash <(curl -fsSL <public-agent-url>/api/v1/agent/bootstrap) --token <T> --node-id <ID>\n")
 	b.WriteString("set -euo pipefail\n\n")
 	b.WriteString("# --- server-injected defaults (operator settings; flags below override) ---\n")
 	fmt.Fprintf(&b, "CONTROLLER=%s\n", shQuote(controllerBase))

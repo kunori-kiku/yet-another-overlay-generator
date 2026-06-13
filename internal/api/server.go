@@ -43,8 +43,8 @@ func NewServer() *Server {
 // Both ports are served as PLAIN HTTP (plan-4.5); confidentiality is delegated to a
 // reverse proxy's TLS. Authentication is per-node bearer tokens (agent) and a shared
 // operator token (operator), enforced by the auth chokepoint in auth_controller.go.
-// The controller routes live under /api/v1/controller/ and never collide with the
-// air-gap /api/ routes on s.mux.
+// The controller routes live under /api/v1/operator/ (operator mux) and
+// /api/v1/agent/ (agent mux) and never collide with the air-gap /api/ routes on s.mux.
 func (s *Server) EnableController(ch *ControllerHandler) {
 	ch.RegisterOperatorRoutes(s.mux)
 	ch.RegisterAgentRoutes(s.agentMux)
@@ -168,7 +168,7 @@ func (s *Server) ListenAndServe(addr string) error {
 // is delegated to a reverse proxy (plan-4.5).
 func (s *Server) ListenAndServeAgent(addr string) error {
 	fmt.Printf("Controller agent service (HTTP): http://%s\n", addr)
-	fmt.Println("Agent endpoints (under /api/v1/controller/):")
+	fmt.Println("Agent endpoints (under /api/v1/agent/):")
 	fmt.Println("  POST /enroll          - node enrollment (no auth)")
 	fmt.Println("  GET  /config          - fetch current bundle (bearer)")
 	fmt.Println("  GET  /poll?after=N     - long-poll for a new generation (bearer)")

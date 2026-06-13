@@ -134,7 +134,7 @@ To let a remote node pull its config, first expose the agent port — for a lab,
 3. On the target host (Linux + systemd), as root:
 
 ```bash
-bash <(curl -fsSL https://<public-agent-url>/api/v1/controller/bootstrap) \
+bash <(curl -fsSL https://<public-agent-url>/api/v1/agent/bootstrap) \
      --token <enrollment-token> --node-id <id>
 ```
 
@@ -152,7 +152,7 @@ Controller behavior is configured through environment variables on the container
 | `YAOG_CONTROLLER_STATE_DIR` | unset | Controller state directory. Together with `YAOG_TENANT_ID`, this is what switches controller mode on (the image sets `/data`). |
 | `YAOG_TENANT_ID` | unset | Tenant identifier scoping all controller state (single-tenant for now; the compose defaults it to `default`). |
 | `YAOG_CONTROLLER_AGENT_ADDR` | `:9090` | Listen address of the node-facing agent API. |
-| `YAOG_OPERATOR_PATH_PREFIX` | empty | Optional **secret path prefix** for the operator/panel API (`:8080`) — mounts its routes under `/<prefix>/api/v1/controller/...`. See below. |
+| `YAOG_OPERATOR_PATH_PREFIX` | empty | Optional **secret path prefix** for the operator/panel API (`:8080`) — mounts its routes under `/<prefix>/api/v1/operator/...`. See below. |
 | `YAOG_AGENT_PATH_PREFIX` | empty | Optional **secret path prefix** for the agent API (`:9090`) — independent from the operator prefix; the bootstrap one-liner bakes it into the installed agent's controller URL. |
 | `YAOG_PANEL_ORIGIN` | empty | Comma-separated allowlist of origins permitted credentialed (cookie) cross-origin panel access; needed only when the panel is served from a different origin (requires HTTPS). Same-origin Docker needs none. |
 | `YAOG_SECURE_COOKIE` | `true` | `Secure` attribute on the session/CSRF cookies. Set `false` only for local non-TLS development. |
@@ -160,7 +160,7 @@ Controller behavior is configured through environment variables on the container
 | `YAOG_BUNDLE_SIGNING_KEY` | unset | Path to an Ed25519 private key (PKCS#8 PEM). When set, every exported bundle carries a detached signature and `install.sh` pins the public key; loading is fail-closed. |
 | `YAOG_WEB_DIR` | unset | Directory the server serves the panel SPA from (the image sets `/app/web`). |
 
-**Secret path prefixes.** Setting `YAOG_OPERATOR_PATH_PREFIX=s3cr3t` moves the operator/panel API to `/s3cr3t/api/v1/controller/...`; `YAOG_AGENT_PATH_PREFIX` does the same for the agent API, independently — so a path-based proxy on one hostname can route each audience to its own port (`/<operator-prefix>/*` → `:8080`, `/<agent-prefix>/*` → `:9090`) without ambiguity. This is defense-in-depth obscurity, **not** a security boundary — bearer tokens and the keystone signature remain the real ones. The panel's **Secret Path Prefix** field is a *mirror* of the **operator** prefix, not a setting: it tells the panel where the operator API lives and must match the server's deploy-time value. Nodes never type either — the bootstrap one-liner bakes the agent-prefixed URL into the installed agent. The server names both mounted base paths in its startup log, so a proxy misroute is diagnosable from `docker compose logs` in seconds.
+**Secret path prefixes.** The two audiences also live under distinct API namespaces — the operator/panel API under `/api/v1/operator/` and the agent API under `/api/v1/agent/` — so they never collide by path. Setting `YAOG_OPERATOR_PATH_PREFIX=s3cr3t` moves the operator/panel API to `/s3cr3t/api/v1/operator/...`; `YAOG_AGENT_PATH_PREFIX` does the same for the agent API (`/<agent-prefix>/api/v1/agent/...`), independently — so a path-based proxy on one hostname can route each audience to its own port (`/<operator-prefix>/*` → `:8080`, `/<agent-prefix>/*` → `:9090`) without ambiguity, and you can expose only the agent endpoint publicly while keeping the operator panel behind a VPN. This is defense-in-depth obscurity, **not** a security boundary — bearer tokens and the keystone signature remain the real ones. The panel's **Secret Path Prefix** field is a *mirror* of the **operator** prefix, not a setting: it tells the panel where the operator API lives and must match the server's deploy-time value. Nodes never type either — the bootstrap one-liner bakes the agent-prefixed URL into the installed agent. The server names both mounted base paths in its startup log, so a proxy misroute is diagnosable from `docker compose logs` in seconds.
 
 **Server-stored bootstrap settings** (edited on the panel's **Settings** page, persisted controller-side): the **Public Agent URL** nodes use to reach the controller, an optional **GitHub proxy** prefix for agent-binary downloads (useful behind restrictive egress), and an optional **agent release base URL** override.
 

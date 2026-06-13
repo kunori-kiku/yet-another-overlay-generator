@@ -1,6 +1,7 @@
 # Controller HTTP API (Phase 2 — bearer-token auth, plain HTTP, two ports)
 
-This document defines the controller's **networked surface**: the `/api/v1/controller/` HTTP routes,
+This document defines the controller's **networked surface**: the audience-split HTTP routes
+(operator/panel under `/api/v1/operator/`, agent/node under `/api/v1/agent/`),
 the **per-node bearer-token + operator-token** model that authenticates them, the **single auth
 chokepoint** that derives `tenant:node` from a presented token, the **two-port split** (an
 operator/panel port and an agent control-channel port), and the **env-gated controller mode** of
@@ -198,24 +199,26 @@ node token (it is not in the per-node index, so `authenticateNode` returns 401).
 
 ## Routes
 
-All controller routes live under `/api/v1/controller/`, accept and return **JSON** (`Content-Type:
+Agent/node routes live under `/api/v1/agent/` (agent port) and operator/panel routes under
+`/api/v1/operator/` (operator port) — distinct namespaces so the two surfaces never collide by
+path. All accept and return **JSON** (`Content-Type:
 application/json`), and carry the error-body convention of the air-gap API
 ([../api/http-api.md](../api/http-api.md)): a failure returns `{"error": "<message>"}` with the
 appropriate status. Byte-valued bundle files are transported **base64-encoded** in JSON.
 
-| Method | Port  | Path                                  | Auth          | Purpose                                                  |
-| ------ | ----- | ------------------------------------- | ------------- | ------------------------------------------------------- |
-| `POST` | agent | `/api/v1/controller/enroll`           | **none**      | Run the enrollment ceremony; issue the node's API token  |
-| `GET`  | agent | `/api/v1/controller/config`           | node bearer   | Fetch the caller's current promoted bundle              |
-| `GET`  | agent | `/api/v1/controller/poll?after=N`     | node bearer   | Long-poll for a generation strictly greater than `N`    |
-| `POST` | agent | `/api/v1/controller/report`           | node bearer   | Report the generation/checksum/health the node applied  |
-| `POST` | panel | `/api/v1/controller/update-topology`  | operator token | Store the tenant's topology (public-keys-only)         |
-| `POST` | panel | `/api/v1/controller/stage`            | operator token | Compile + stage the enrolled subgraph                  |
-| `POST` | panel | `/api/v1/controller/promote`          | operator token | Promote the staged generation to current               |
-| `GET`  | panel | `/api/v1/controller/nodes`            | operator token | List the registry (no key material, no tokens)         |
-| `GET`  | panel | `/api/v1/controller/audit`            | operator token | Read the hash-chained audit log + its verification     |
-| `GET`  | panel | `/api/v1/controller/topology`         | operator token | Read the current stored topology                       |
-| `POST` | panel | `/api/v1/controller/enrollment-token` | operator token | Mint a single-use enrollment token (plaintext once)    |
+| Method | Port  | Path                                | Auth           | Purpose                                                  |
+| ------ | ----- | ----------------------------------- | -------------- | ------------------------------------------------------- |
+| `POST` | agent | `/api/v1/agent/enroll`              | **none**       | Run the enrollment ceremony; issue the node's API token  |
+| `GET`  | agent | `/api/v1/agent/config`              | node bearer    | Fetch the caller's current promoted bundle              |
+| `GET`  | agent | `/api/v1/agent/poll?after=N`        | node bearer    | Long-poll for a generation strictly greater than `N`    |
+| `POST` | agent | `/api/v1/agent/report`              | node bearer    | Report the generation/checksum/health the node applied  |
+| `POST` | panel | `/api/v1/operator/update-topology`  | operator token | Store the tenant's topology (public-keys-only)         |
+| `POST` | panel | `/api/v1/operator/stage`            | operator token | Compile + stage the enrolled subgraph                  |
+| `POST` | panel | `/api/v1/operator/promote`          | operator token | Promote the staged generation to current               |
+| `GET`  | panel | `/api/v1/operator/nodes`            | operator token | List the registry (no key material, no tokens)         |
+| `GET`  | panel | `/api/v1/operator/audit`            | operator token | Read the hash-chained audit log + its verification     |
+| `GET`  | panel | `/api/v1/operator/topology`         | operator token | Read the current stored topology                       |
+| `POST` | panel | `/api/v1/operator/enrollment-token` | operator token | Mint a single-use enrollment token (plaintext once)    |
 
 ### `POST /enroll` — the unauthenticated bootstrap
 

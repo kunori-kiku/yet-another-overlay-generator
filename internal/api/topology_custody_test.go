@@ -49,7 +49,7 @@ func custodyTopology(withKey bool) model.Topology {
 func TestTopologyCustody_RejectsPrivateKeys(t *testing.T) {
 	srv, store := newCustodyEnv(t)
 
-	st := doJSON(t, http.MethodPost, srv.URL+"/api/v1/controller/update-topology", testOperatorToken, custodyTopology(true), nil)
+	st := doJSON(t, http.MethodPost, srv.URL+"/api/v1/operator/update-topology", testOperatorToken, custodyTopology(true), nil)
 	if st != http.StatusBadRequest {
 		t.Fatalf("keyed update-topology = %d, want 400", st)
 	}
@@ -69,7 +69,7 @@ func TestTopologyCustody_RejectionMessageNamesCustody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/controller/update-topology", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/operator/update-topology", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestTopologyCustody_CleanTopologyStored(t *testing.T) {
 	srv, store := newCustodyEnv(t)
 
 	var out map[string]int64
-	st := doJSON(t, http.MethodPost, srv.URL+"/api/v1/controller/update-topology", testOperatorToken, custodyTopology(false), &out)
+	st := doJSON(t, http.MethodPost, srv.URL+"/api/v1/operator/update-topology", testOperatorToken, custodyTopology(false), &out)
 	if st != http.StatusOK {
 		t.Fatalf("clean update-topology = %d, want 200", st)
 	}
@@ -138,7 +138,7 @@ func TestTopologyCustody_CleanTopologyStored(t *testing.T) {
 func TestTopologyCustody_NonSchemaJSONRejected(t *testing.T) {
 	srv, store := newCustodyEnv(t)
 
-	st := doJSON(t, http.MethodPost, srv.URL+"/api/v1/controller/update-topology", testOperatorToken,
+	st := doJSON(t, http.MethodPost, srv.URL+"/api/v1/operator/update-topology", testOperatorToken,
 		map[string]any{"nodes": "not-a-node-array"}, nil)
 	if st != http.StatusBadRequest {
 		t.Fatalf("non-schema update-topology = %d, want 400", st)
@@ -175,7 +175,7 @@ func TestTopologyCustody_CanonicalStorageDefeatsSmuggling(t *testing.T) {
 		t.Fatalf("test bug: crafted payload is not valid JSON:\n%s", payload)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/controller/update-topology", bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/operator/update-topology", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}

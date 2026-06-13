@@ -1,6 +1,6 @@
 # Panel Deploy & Fleet
 
-<!-- last-verified: 2026-06-13 -->
+<!-- last-verified: 2026-06-14 -->
 
 ## Responsibility
 Drives the controller deploy pipeline (update-topology → stage → keystone sign → promote → refresh) and the fleet UI (registry, enrollment, node detail, fleet-wide key rotation), plus the air-gap local-deploy downloads.
@@ -40,7 +40,7 @@ Routes registered in `frontend/src/App.tsx:38-40`. `AuditLog`, `TwoFactorSetting
 - **Topology to deploy** — `useTopologyStore.getState().getTopology(): Topology` (`frontend/src/stores/topologyStore.ts:318-326`), the same `model.Topology` JSON shape `compile()` POSTs; see specs/panel-design.md.
 - **Auth context** — effective bearer `sessionToken || operatorToken` + CSRF token via `configOf` (`frontend/src/stores/controllerStore.ts:163-170`); login/session lifecycle is specs/panel-auth.md.
 - **WebAuthn ceremonies** — `enrollOperatorCredential` / `signManifest` from `frontend/src/lib/webauthn.ts:210,315`; see specs/panel-auth.md.
-- **Controller responses** — snake_case JSON from the operator routes (`<baseURL><prefix>/api/v1/controller/<route>`, `frontend/src/api/controllerClient.ts:165-177`), mapped to camelCase at the boundary (544-566); server side is specs/controller-operator-api.md.
+- **Controller responses** — snake_case JSON from the operator routes (`<baseURL><prefix>/api/v1/operator/<route>`, `frontend/src/api/controllerClient.ts:165-177`), mapped to camelCase at the boundary (544-566); server side is specs/controller-operator-api.md.
 - **Local mode** — `compileResult` from topologyStore feeds CompilePreview (`frontend/src/components/deploy/CompilePreview.tsx:18-20`).
 
 ## Outputs

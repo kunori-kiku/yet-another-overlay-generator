@@ -216,7 +216,7 @@ There are two cooperating pieces:
   ```
 
   `NewControllerClient(baseURL, nodeToken string) (*ControllerClient, error)` builds it. It speaks the
-  four `/api/v1/controller/` routes the agent needs: `Enroll` (no auth), `Poll`, `Fetch` (the `Source`
+  four `/api/v1/agent/` routes the agent needs: `Enroll` (no auth), `Poll`, `Fetch` (the `Source`
   side, `GET /config`), and `Report` (the `Reporter` side). It implements the existing `agent.Source`
   (and `Reporter`) so the shared `Run` loop drives it the same way it drives `DirSource`/`HTTPSource`.
 - **two `cmd/agent` subcommands** — `enroll` (the one-time bootstrap) and `run --controller …` (the
@@ -258,7 +258,7 @@ control-channel** base URL (the proxy in front of the controller's agent port). 
    key** it has always held; only the WG **public** key is surfaced into the enroll request. The WG
    private key never leaves the host and is never sent to the controller.
 2. **Call `/enroll`** via `NewControllerClient(url, "").Enroll(enrollmentToken, nodeID, wgPub)`: a `POST`
-   to `/api/v1/controller/enroll` with **no auth header** (the node has no token yet), body
+   to `/api/v1/agent/enroll` with **no auth header** (the node has no token yet), body
    `{enrollment_token, node_id, wg_public_key}` (`enrollRequestJSON`,
    [controller-api.md](controller-api.md) §`POST /enroll`). The client is constructed with an **empty**
    `nodeToken` precisely because enroll is the unauthenticated bootstrap.

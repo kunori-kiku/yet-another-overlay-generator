@@ -42,7 +42,7 @@ const (
 	envAgentAddr = "YAOG_CONTROLLER_AGENT_ADDR"
 	// envOperatorPathPrefix is an optional secret path segment the OPERATOR/panel
 	// routes (the :8080 mux) mount under, e.g. "s3cr3t" ->
-	// "/s3cr3t/api/v1/controller/...". Empty = the bare paths. Defense-in-depth
+	// "/s3cr3t/api/v1/operator/...". Empty = the bare paths. Defense-in-depth
 	// obscurity, not a security boundary. Independent from the agent prefix so a
 	// path-based proxy can route each audience to its own port on one hostname.
 	envOperatorPathPrefix = "YAOG_OPERATOR_PATH_PREFIX"

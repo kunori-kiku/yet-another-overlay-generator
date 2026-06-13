@@ -1,6 +1,6 @@
 # Air-gap API & panel hosting
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-14 -->
 
 ## Responsibility
 Serve the five open (unauthenticated, wildcard-CORS) design endpoints — health/validate/compile/export/deploy-script — and optionally host the built panel SPA, on the operator/panel port of a two-mux HTTP server whose second (agent) mux stays empty until controller mode opts in.
@@ -37,12 +37,12 @@ Endpoint/status-code contract is specified in `docs/spec/api/http-api.md`; reque
 - **Deploy-script format**: `?format=ps1` selects PowerShell, anything else bash (`internal/api/handler.go:278-288`).
 - **Signing on/off**: `LoadConfigSignerFromEnv` returns nil when `YAOG_BUNDLE_SIGNING_KEY` is unset; nil signer means the installer wrapper is byte-identical to unsigned output (`internal/api/handler.go:344-351,471-517`).
 - **CORS preflight**: OPTIONS short-circuits with 204 before the handler runs (`internal/api/server.go:75-78`).
-- **SPA routing** (`internal/api/static.go:28-42`): any path with prefix `/api/` or containing `/api/v1/controller/` → hard 404 (never index.html, even under the optional secret path prefix); else serve the real file if one exists (via traversal-safe `http.Dir`); else fall back to `index.html` for client-side routes.
+- **SPA routing** (`internal/api/static.go:28-42`): any path with prefix `/api/` or containing `/api/v1/operator/` or `/api/v1/agent/` → hard 404 (never index.html, even under the optional secret path prefix); else serve the real file if one exists (via traversal-safe `http.Dir`); else fall back to `index.html` for client-side routes.
 - **Panic recovery**: writes a 500 JSON body only if no response header was written yet, tracked by `headerTrackingResponseWriter` (`internal/api/server.go:87-123`).
 
 ## Invariants
 - **Stateless per-request pipeline** — no server-side persistence; all allocation state returns inside the response topology (PRINCIPLES.md "Stateless compiler"; export's temp dir is created and removed per request, `internal/api/handler.go:204-209`).
-- **Air-gap surface is untouched by controller mode** — `EnableController` is the single opt-in seam; without it `agentMux` serves nothing and `s.mux` carries exactly the five `/api/*` routes (`internal/api/server.go:39-51,131-135`; gate in `cmd/server/main.go:89`). Controller routes live under `/api/v1/controller/` and cannot collide (`internal/api/server.go:47`).
+- **Air-gap surface is untouched by controller mode** — `EnableController` is the single opt-in seam; without it `agentMux` serves nothing and `s.mux` carries exactly the five `/api/*` routes (`internal/api/server.go:39-51,131-135`; gate in `cmd/server/main.go:89`). Controller routes live under `/api/v1/operator/` and `/api/v1/agent/` and cannot collide (`internal/api/server.go:47`).
 - **Integrity anchors are Go-emitted constants** — the installer's expected SHA-256 and optional signature/pubkey are computed server-side and embedded as literals, never derived from files the payload carries (PRINCIPLES.md "Generated scripts run as root on fleets"; `internal/api/handler.go:457-517`).
 
 ## Gotchas

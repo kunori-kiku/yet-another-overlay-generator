@@ -34,7 +34,7 @@ reads it on the next login).
 
 ## Login flow
 
-1. `POST /api/v1/controller/login` with `{ "username", "password" }` (UNAUTHENTICATED;
+1. `POST /api/v1/operator/login` with `{ "username", "password" }` (UNAUTHENTICATED;
    reachable before the operator has a session).
 2. The controller verifies the password against the stored argon2id hash and, on
    success, mints a **session**: a 256-bit random bearer token returned **once** in
@@ -43,7 +43,7 @@ reads it on the next login).
 3. The panel presents the session token as `Authorization: Bearer <session_token>` on
    operator routes. `operatorAuth` accepts **either** a valid (unexpired) session **or**,
    when configured, the break-glass token (constant-time compared).
-4. `POST /api/v1/controller/logout` (authenticated) deletes the presented session.
+4. `POST /api/v1/operator/logout` (authenticated) deletes the presented session.
 
 **Panel UX (controller-server-authority-redesign):** the login form is a **full-page
 gate** (`components/auth/LoginPage.tsx`), not a section inside Settings — entering the

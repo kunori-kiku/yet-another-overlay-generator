@@ -1,6 +1,6 @@
 // 控制器面板的 HTTP 客户端。每个函数针对 internal/api/handler_controller.go 暴露的
-// operator-facing 路由：
-//   <baseURL><pathPrefix>/api/v1/controller/<route>
+// operator-facing 路由（operator 命名空间，与 agent 命名空间 /api/v1/agent/ 分开）：
+//   <baseURL><pathPrefix>/api/v1/operator/<route>
 // 鉴权统一是 Authorization: Bearer <operatorToken>。后端响应是 snake_case JSON，本层
 // 在边界处把它映射成 camelCase 的 controller 类型（见 ../types/controller）。
 //
@@ -173,7 +173,7 @@ export function ctlURL(cfg: ControllerConfig, route: string): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('controller URL must use http or https');
   }
-  return `${base}${normalizePrefix(cfg.pathPrefix)}/api/v1/controller/${route}`;
+  return `${base}${normalizePrefix(cfg.pathPrefix)}/api/v1/operator/${route}`;
 }
 
 // --- 后端 snake_case 响应形状（仅本模块内部使用，映射后即丢弃）---
