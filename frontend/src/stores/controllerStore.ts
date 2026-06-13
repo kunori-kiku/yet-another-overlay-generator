@@ -42,6 +42,7 @@ import {
 } from '../api/controllerClient';
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
+import { stripPrivateKeys } from '../lib/custody';
 import { useTopologyStore } from './topologyStore';
 import { useUiStore } from './uiStore';
 
@@ -139,6 +140,27 @@ interface ControllerState {
   // 不冻结语言）。
   hydrationNotice: boolean;
 
+  // 部署 custody 与防缩水（plan-5，D4 + 审计「一键销毁」场景）：
+  // - lastStrippedKeys：上次 deploy 上传前从画布剥离的私钥数量（0=无提示）。控制器模式零
+  //   知识——私钥绝不上送（服务端 plan-1 的 400 在客户端的镜像），剥离后给一条信息提示。
+  // - pendingShrink：当一次 deploy 会让服务端设计大幅缩水（清空，或丢弃过半已存在节点）时，
+  //   先把待确认信息存这里、暂不部署；DeployBar 弹出「键入项目名确认」对话框，确认后以
+  //   confirmedShrink 重新调用 deploy。版本历史（plan-2）是事后兜底，本守卫是事前预防。
+  lastStrippedKeys: number;
+  // pendingShrink carries the typed-confirm phrase (project name, or a non-empty
+  // sentinel when the project is unnamed — an empty phrase would let an empty input
+  // match and bypass the gate), the node-count delta for the dialog copy, and a
+  // SNAPSHOT of the exact stripped design the warning was computed from (so the
+  // confirmed deploy binds to what the operator was warned about, not a since-changed
+  // canvas) plus its stripped-key count.
+  pendingShrink: {
+    serverNodeCount: number;
+    canvasNodeCount: number;
+    confirmPhrase: string;
+    snapshot: Topology;
+    stripped: number;
+  } | null;
+
   // KEYSTONE（plan-5.1d）：已 pin 的 off-host operator 签名凭据（passkey / YubiKey）。
   // 仅持久化非密信息——credential_id（base64url(rawId)）、alg、rpId——它们不是密钥材料
   // （私钥从不离开 authenticator），但记住它们让面板能跨刷新驱动后续签名（allowCredentials）
@@ -198,7 +220,17 @@ interface ControllerState {
   disableTOTP: (code: string) => Promise<void>;
   mintToken: (nodeId: string, ttl: number) => Promise<string>;
   enrollOperator: () => Promise<void>;
-  deploy: () => Promise<void>;
+  // deploy 上传当前画布（先剥离私钥）→ stage → (keystone 签名) → promote。当一次部署会让
+  // 服务端设计大幅缩水时，除非 confirmedShrink，否则设置 pendingShrink 并暂不部署（等键入
+  // 项目名确认）。
+  deploy: (opts?: { confirmedShrink?: boolean }) => Promise<void>;
+  // 取消待确认的缩水部署（用户在确认框点了取消）。
+  cancelShrinkConfirm: () => void;
+  // 关闭「已剥离 N 个私钥」提示。
+  dismissStripNotice: () => void;
+  // 清掉 controller 模式相关的临时提示（hydration / 剥离 / 待确认缩水）。controller→local
+  // 切换时调用，避免本地模式下还残留控制器模式的横幅（plan-5 review）。
+  clearModeNotices: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
 }
@@ -300,6 +332,8 @@ export const useControllerStore = create<ControllerState>()(
       settings: null,
 
       hydrationNotice: false,
+      lastStrippedKeys: 0,
+      pendingShrink: null,
 
       operatorCredentialId: null,
       operatorCredentialAlg: null,
@@ -771,12 +805,71 @@ export const useControllerStore = create<ControllerState>()(
       //     keystone gate 要求一个有效 off-host 签名，否则 422——所以必须先签后 promote。
       //   - 返回 null（keystone OFF / 404）：直接 promote（今日行为，无需签名）。
       // 若 keystone ON 但本地尚未 enroll operator 凭据，给出可执行报错（先注册签名密钥）。
-      deploy: async () => {
+      deploy: async (opts) => {
         set({ loading: true, error: null });
         try {
           const cfg = configOf(get());
-          const topo = useTopologyStore.getState().getTopology();
-          const topoJSON = JSON.stringify(topo);
+
+          // Resolve the design to upload + its stripped-key count. On a confirmed
+          // shrink we deploy the SNAPSHOT the warning was computed from (binds the
+          // confirmation to what the operator actually saw, not a since-changed
+          // canvas); otherwise we strip the live canvas now.
+          let cleanTopo: Topology;
+          let stripped: number;
+          const confirming = opts?.confirmedShrink ? get().pendingShrink : null;
+          if (confirming) {
+            cleanTopo = confirming.snapshot;
+            stripped = confirming.stripped;
+          } else {
+            // Custody strip (plan-5, D4): never send a private key to the server (the
+            // client mirror of the server's update-topology 400). In controller mode
+            // the hydrated design is already key-free, but a locally-compiled/imported
+            // design could carry keys — this is the fail-safe.
+            const local = useTopologyStore.getState().getTopology();
+            const r = stripPrivateKeys(local);
+            cleanTopo = r.topo;
+            stripped = r.stripped;
+
+            // Shrink/empty guard (plan-5): before mutating the server design, compare
+            // the canvas against the server copy. Emptying it, or dropping ≥50% of the
+            // server's node-IDs, requires a typed confirmation (the audit's
+            // one-click-destruction scenario). Version history (plan-2) is the recovery
+            // backstop; this is the prevention layer.
+            //
+            // The server read is best-effort: a 404 means no server topology yet (no
+            // shrink possible), and ANY other read failure (5xx/timeout/CSRF) must NOT
+            // abort an otherwise-valid deploy — we proceed and rely on version history,
+            // rather than blocking a legitimate upload on a transient guard-read error.
+            let server: Topology | null = null;
+            try {
+              server = (await ctlGetTopology(cfg)) as Topology | null;
+            } catch {
+              server = null; // guard read failed → skip the guard (history is the backstop)
+            }
+            if (server && Array.isArray(server.nodes) && server.nodes.length > 0) {
+              const canvasIds = new Set(cleanTopo.nodes.map((n) => n.id));
+              const dropped = server.nodes.filter((n) => !canvasIds.has(n.id)).length;
+              const emptied = cleanTopo.nodes.length === 0;
+              const majorityDropped = dropped / server.nodes.length >= 0.5;
+              if (emptied || majorityDropped) {
+                set({
+                  pendingShrink: {
+                    serverNodeCount: server.nodes.length,
+                    canvasNodeCount: cleanTopo.nodes.length,
+                    // Never empty: an empty phrase would let an empty input match and
+                    // one-click past the gate. Fall back to a typed sentinel.
+                    confirmPhrase: cleanTopo.project.name || cleanTopo.project.id || 'DELETE',
+                    snapshot: cleanTopo,
+                    stripped,
+                  },
+                  loading: false,
+                });
+                return; // wait for the typed confirmation, then deploy({confirmedShrink:true})
+              }
+            }
+          }
+
+          const topoJSON = JSON.stringify(cleanTopo);
           await updateTopology(cfg, topoJSON);
           const result = await stage(cfg);
           // 当没有已注册节点时 stage 不产生任何 bundle（staged 为空），此时 promote 会
@@ -818,7 +911,9 @@ export const useControllerStore = create<ControllerState>()(
             }
             await promote(cfg);
           }
-          set({ lastDeploy: result, loading: false });
+          // Clear any pending shrink-confirm (a confirmed deploy consumes it) and
+          // surface how many private keys were stripped before upload (0 = no notice).
+          set({ lastDeploy: result, loading: false, pendingShrink: null, lastStrippedKeys: stripped });
           await get().refresh();
         } catch (err) {
           set({
@@ -828,6 +923,10 @@ export const useControllerStore = create<ControllerState>()(
           });
         }
       },
+
+      cancelShrinkConfirm: () => set({ pendingShrink: null }),
+      dismissStripNotice: () => set({ lastStrippedKeys: 0 }),
+      clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null }),
 
       // 驱逐一个节点后刷新视图。
       revoke: async (nodeId) => {

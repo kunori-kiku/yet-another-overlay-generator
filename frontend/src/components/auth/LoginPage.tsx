@@ -28,6 +28,8 @@ export function LoginPage() {
   const totpRequired = useControllerStore((s) => s.totpRequired);
   const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
   const setMode = useControllerStore((s) => s.setMode);
+  const purgeModeBoundaryState = useTopologyStore((s) => s.purgeModeBoundaryState);
+  const clearModeNotices = useControllerStore((s) => s.clearModeNotices);
 
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -290,14 +292,26 @@ export function LoginPage() {
               </form>
             )}
 
-            {/* 回到本地模式：登录门不该把只想用本地设计器的用户锁在外面。切到本地模式后
-                直接导航到本地落地页，避免停留在 controller-only 的深链路由（如 /fleet）上
-                渲染空白（review）。 */}
+            {/* 回到本地模式：登录门不该把只想用本地设计器的用户锁在外面。controller→local
+                是有损切换（plan-5，D6）：window.confirm 列出损失（与 SettingsPage 对话框一致的
+                语义），确认后清洗密钥/分配/历史，再切换并导航到本地落地页（避免停留在
+                controller-only 的深链路由如 /fleet 上渲染空白）。 */}
             <button
               type="button"
               onClick={() => {
-                setMode('local');
-                navigate(landingPathForMode('local'));
+                const ok = window.confirm(
+                  txt(
+                    language,
+                    '切换到本地模式将保留设计图，但清除 WireGuard 密钥、分配 pin（IP/端口/transit）与编译历史（下次本地编译会重新生成）。此操作不可撤销。是否继续？',
+                    'Switching to local mode keeps your design graph but clears the WireGuard keys, allocation pins (IPs/ports/transit), and compile history (regenerated on the next local compile). This cannot be undone. Continue?',
+                  ),
+                );
+                if (ok) {
+                  purgeModeBoundaryState();
+                  clearModeNotices();
+                  setMode('local');
+                  navigate(landingPathForMode('local'));
+                }
               }}
               className={`block text-xs text-[var(--content-muted)] underline-offset-2 hover:underline ${FOCUS_RING}`}
             >
