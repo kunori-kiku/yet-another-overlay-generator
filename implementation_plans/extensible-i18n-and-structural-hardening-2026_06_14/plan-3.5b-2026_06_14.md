@@ -159,7 +159,17 @@ Every code → const + `registry` + `allCodes` (TestRegistryBijection enforces t
 | **3.5b-5** | controller domain A — enrollment / config / topology | apierr.go(+test), handler_controller.go, en/zh | 55 | 11 | api tests incl. topology_custody + enrollment; bad token→401, dup key→409, bad JSON→400 without regressing custody; build green |
 | **3.5b-6** | controller domain B — operator / deploy / keystone / sessions / audit | apierr.go(+test), handler_controller.go, en/zh | 55 | 6 | api tests incl. deploy/keystone perpetual; staged-mismatch + no-pinned-credential round-trip coded; build green |
 | **3.5b-7** | auth / login / passkey / totp / bootstrap / session + auth_controller producer fix (split 7a passkey+totp / 7b login+bootstrap+auth+session if >500 lines) | apierr.go(+test), handler_login/passkey/totp/bootstrap.go, cookie_session.go, auth_controller.go, en/zh | 65 | 8 | api tests; bad-login(401)+rate-limited(429)+bad-2FA+bearer-required each distinct coded in EN+ZH; build green |
-| **3.5b-8** | FINAL grep-gated shim deletion | handler.go, apierr.go, apierr_test.go | 4 | 0 | **THE gate:** `grep -rn 'writeError(' internal/ cmd/` zero non-test; `grep -rn 'CodeLegacyUncoded\|WithMessage' internal/` (incl. _test) zero; new CJK gate over internal/{api,compiler,render,artifacts,renderer} passes; `go test ./... && go vet ./...`; `npm run lint && npm run build`; bijection passes |
+| **3.5c** | deploy-artifact shell-content Englishization (distinct channel, discovered during 3.5b-4) | api/handler.go (self-extracting installer), renderer/script.go (install-script template) | 27 | 0 | install-script/installer golden + equivalence tests updated; CLI==API equivalence holds; `go test ./...`; CJK gate over the two files' string-literal positions zero |
+| **3.5b-8** | FINAL grep-gated shim deletion | handler.go, apierr.go, apierr_test.go | 4 | 0 | **THE gate:** `grep -rn 'writeError(' internal/ cmd/` zero non-test; `grep -rn 'CodeLegacyUncoded\|WithMessage' internal/` (incl. _test) zero; CJK gate over internal/{api,compiler,render,artifacts,renderer} string-literal positions passes (requires 3.5c done); `go test ./... && go vet ./...`; `npm run lint && npm run build`; bijection passes |
+
+> **plan-3.5c — deploy-artifact channel (discovered 2026-06-14 during 3.5b-4).** Separate from the HTTP
+> envelope: the generated **install scripts** carry operator-facing Chinese (`echo "错误…"` + embedded
+> `#` comments) shown on the target host at deploy time — `internal/api/handler.go`'s self-extracting
+> installer (4) + `internal/renderer/script.go`'s install-script template (23). No panel, no
+> Accept-Language ⇒ **Englishize in place** (English-default), exactly like the CLI in 3.5b-0. It is
+> test-sensitive (changes generated-script bytes ⇒ golden + equivalence tests need updating), so it is
+> its own PR, sequenced **before 3.5b-8** so the final broad CJK gate is achievable. Everything else in
+> `internal/renderer` is Go comments (out of any gate).
 
 ## Conversion patterns (the exact before→after a coder applies)
 

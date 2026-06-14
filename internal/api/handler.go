@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -85,7 +86,7 @@ type CompileResponse struct {
 // HandleHealth
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "仅支持 GET 请求")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 
@@ -98,17 +99,15 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // HandleValidate
 func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 
 	topo, err := readTopology(w, r)
 	if err != nil {
-		if isBodyTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		// readTopology returns a coded *apierr.Error (CodeReqBodyTooLarge 413 / CodeReqBodyEmpty 400 /
+		// CodeReqInvalidBody 400); writeCodedOr surfaces it with its own status via errors.As.
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -131,17 +130,15 @@ func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 // HandleCompile
 func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 
 	topo, err := readTopology(w, r)
 	if err != nil {
-		if isBodyTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		// readTopology returns a coded *apierr.Error (CodeReqBodyTooLarge 413 / CodeReqBodyEmpty 400 /
+		// CodeReqInvalidBody 400); writeCodedOr surfaces it with its own status via errors.As.
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -179,17 +176,15 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 // HandleExport
 func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 
 	topo, err := readTopology(w, r)
 	if err != nil {
-		if isBodyTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		// readTopology returns a coded *apierr.Error (CodeReqBodyTooLarge 413 / CodeReqBodyEmpty 400 /
+		// CodeReqInvalidBody 400); writeCodedOr surfaces it with its own status via errors.As.
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -240,17 +235,15 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 // Query parameter ?format=ps1 returns PowerShell; default is bash.
 func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "仅支持 POST 请求")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 
 	topo, err := readTopology(w, r)
 	if err != nil {
-		if isBodyTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		// readTopology returns a coded *apierr.Error (CodeReqBodyTooLarge 413 / CodeReqBodyEmpty 400 /
+		// CodeReqInvalidBody 400); writeCodedOr surfaces it with its own status via errors.As.
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -310,13 +303,15 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 // 由调用方映射为 413 Payload Too Large，防止无上限的 io.ReadAll 造成 OOM DoS（D34）。
 const maxRequestBodyBytes int64 = 4 << 20 // 4 MiB
 
-// errBodyTooLarge 标识请求体超出 maxRequestBodyBytes 的哨兵错误。
-// 调用方据此返回 413（http.StatusRequestEntityTooLarge），其余读取/解析错误返回 400。
-var errBodyTooLarge = fmt.Errorf("请求体超出大小上限（最大 %d 字节）", maxRequestBodyBytes)
+// errBodyTooLarge is the body-too-large sentinel returned by readTopology and the controller's
+// raw-body reader on overflow. It is a coded *apierr.Error (CodeReqBodyTooLarge, 413) so it both
+// satisfies isBodyTooLarge and serializes as the nested envelope. It is constructed once at init
+// and only ever read afterwards (never mutated), so sharing the pointer across requests is safe.
+var errBodyTooLarge = apierr.New(apierr.CodeReqBodyTooLarge).With("limit", strconv.FormatInt(maxRequestBodyBytes, 10))
 
-// isBodyTooLarge 判断 readTopology 返回的错误是否为请求体过大。
+// isBodyTooLarge reports whether err is, or wraps, the body-too-large coded error.
 func isBodyTooLarge(err error) bool {
-	return errors.Is(err, errBodyTooLarge)
+	return apierr.HasCode(err, apierr.CodeReqBodyTooLarge)
 }
 
 // readTopology 读取并解析请求体中的 Topology。
@@ -332,16 +327,16 @@ func readTopology(w http.ResponseWriter, r *http.Request) (*model.Topology, erro
 		if errors.As(err, &maxErr) {
 			return nil, errBodyTooLarge
 		}
-		return nil, fmt.Errorf("读取请求体失败: %w", err)
+		return nil, apierr.New(apierr.CodeReqInvalidBody).Wrap(fmt.Errorf("read request body: %w", err))
 	}
 
 	if len(body) == 0 {
-		return nil, fmt.Errorf("请求体为空")
+		return nil, apierr.New(apierr.CodeReqBodyEmpty)
 	}
 
 	var topo model.Topology
 	if err := json.Unmarshal(body, &topo); err != nil {
-		return nil, fmt.Errorf("JSON 解析失败: %w", err)
+		return nil, apierr.New(apierr.CodeReqInvalidBody).Wrap(fmt.Errorf("parse JSON: %w", err))
 	}
 
 	return &topo, nil

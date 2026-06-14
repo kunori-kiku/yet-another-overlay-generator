@@ -71,6 +71,10 @@ var allCodes = []Code{
 	CodeRenderFailed,
 	CodeExportUnsafeName,
 	CodeExportIOFailed,
+	CodeMethodNotAllowed,
+	CodeReqBodyTooLarge,
+	CodeReqBodyEmpty,
+	CodeReqInvalidBody,
 }
 
 func TestRegistryBijection(t *testing.T) {

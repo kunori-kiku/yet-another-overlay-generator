@@ -482,6 +482,11 @@ export const en = {
   'error.render_failed': 'Rendering the deployment artifacts failed.',
   'error.export_unsafe_name': 'Node name {name} is unsafe for export: it must be non-empty and must not be an absolute path or contain a path separator or "..".',
   'error.export_io_failed': 'Writing the export artifacts failed.',
+  // Request envelope (plan-3.5b) — method + body framing shared by every endpoint.
+  'error.method_not_allowed': 'Only {method} is supported for this endpoint.',
+  'error.req_body_too_large': 'The request body exceeds the maximum size of {limit} bytes.',
+  'error.req_body_empty': 'The request body is empty.',
+  'error.req_invalid_body': 'The request body could not be parsed.',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "Client {node} requires endpoint_host to reach the router",

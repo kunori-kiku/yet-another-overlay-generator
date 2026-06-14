@@ -464,6 +464,11 @@ export const zh: Record<keyof typeof en, string> = {
   'error.render_failed': '渲染部署产物失败。',
   'error.export_unsafe_name': '节点名称 {name} 不适合导出：名称不能为空，且不能为绝对路径或包含路径分隔符或 “..”。',
   'error.export_io_failed': '写入导出产物失败。',
+  // 请求信封（plan-3.5b）——所有接口共用的方法 + 请求体框架。
+  'error.method_not_allowed': '该接口仅支持 {method} 请求。',
+  'error.req_body_too_large': '请求体超出大小上限（最大 {limit} 字节）。',
+  'error.req_body_empty': '请求体为空。',
+  'error.req_invalid_body': '无法解析请求体。',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "client {node} 需要 endpoint_host 才能连接到 router",
