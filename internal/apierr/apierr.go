@@ -75,6 +75,12 @@ const (
 	CodeRenderFailed     Code = "render_failed"
 	CodeExportUnsafeName Code = "export_unsafe_name"
 	CodeExportIOFailed   Code = "export_io_failed"
+
+	// Request envelope (plan-3.5b) — method + body framing shared by every endpoint.
+	CodeMethodNotAllowed Code = "method_not_allowed"
+	CodeReqBodyTooLarge  Code = "req_body_too_large"
+	CodeReqBodyEmpty     Code = "req_body_empty"
+	CodeReqInvalidBody   Code = "req_invalid_body"
 )
 
 // def is the immutable per-code metadata: the default English message TEMPLATE (with
@@ -113,6 +119,11 @@ var registry = map[Code]def{
 	CodeRenderFailed:     {"Rendering the deployment artifacts failed.", http.StatusInternalServerError},
 	CodeExportUnsafeName: {"Node name {name} is unsafe for export: it must be non-empty and must not be an absolute path or contain a path separator or \"..\".", http.StatusBadRequest},
 	CodeExportIOFailed:   {"Writing the export artifacts failed.", http.StatusInternalServerError},
+
+	CodeMethodNotAllowed: {"Only {method} is supported for this endpoint.", http.StatusMethodNotAllowed},
+	CodeReqBodyTooLarge:  {"The request body exceeds the maximum size of {limit} bytes.", http.StatusRequestEntityTooLarge},
+	CodeReqBodyEmpty:     {"The request body is empty.", http.StatusBadRequest},
+	CodeReqInvalidBody:   {"The request body could not be parsed.", http.StatusBadRequest},
 }
 
 // Error is a coded API error. It implements error and supports errors.Is/As via Unwrap,
