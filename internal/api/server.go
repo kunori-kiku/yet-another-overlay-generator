@@ -177,13 +177,13 @@ func (s *Server) AgentHandler() http.Handler {
 // This serves s.mux: the air-gap routes plus, when controller mode is on, the
 // operator/panel controller routes. It is plain HTTP.
 func (s *Server) ListenAndServe(addr string) error {
-	fmt.Printf("API 服务地址: http://%s\n", addr)
-	fmt.Println("可用接口:")
-	fmt.Println("  GET  /api/health   - 健康检查")
-	fmt.Println("  POST /api/validate - 校验拓扑")
-	fmt.Println("  POST /api/compile  - 编译拓扑")
-	fmt.Println("  POST /api/export   - 导出产物 ZIP")
-	fmt.Println("  POST /api/deploy-script - 下载部署脚本")
+	fmt.Printf("API server listening on: http://%s\n", addr)
+	fmt.Println("available endpoints:")
+	fmt.Println("  GET  /api/health   - health check")
+	fmt.Println("  POST /api/validate - validate topology")
+	fmt.Println("  POST /api/compile  - compile topology")
+	fmt.Println("  POST /api/export   - export artifacts ZIP")
+	fmt.Println("  POST /api/deploy-script - download deploy script")
 
 	srv := &http.Server{
 		Addr:              addr,
