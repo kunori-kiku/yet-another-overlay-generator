@@ -447,7 +447,7 @@ export const en = {
   'deployBar.shrinkSummary': "The server currently holds {server} node(s); this deploy uploads {canvas}. Removed nodes drop out of the next generation.",
   'deployBar.shrinkConfirmPrompt': "If this is intentional, type “{phrase}” to confirm.",
   'auditView.collapsedLines': "... {count} unchanged lines collapsed ...",
-  'shell.importPlaceholdered': "Imported under controller mode: {count} private key(s) replaced by placeholders — nodes will use their agent-held keys.",
+  'shell.importKeysDropped': "Imported under controller mode: dropped the design's keys from {count} node(s) — the controller uses each node's agent-registered key.",
   'shell.importClearedKeys': "Imported: cleared {count} node(s) that had a public key but no private key — fresh keys will be generated on compile.",
 
   // Backend error-code localization (see tError). The per-code keys ('error.<code>')

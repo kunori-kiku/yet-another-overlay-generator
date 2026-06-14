@@ -27,7 +27,7 @@ export function Shell() {
   const operatorToken = useControllerStore((s) => s.operatorToken);
   const hydrationNotice = useControllerStore((s) => s.hydrationNotice);
   const dismissHydrationNotice = useControllerStore((s) => s.dismissHydrationNotice);
-  const importPlaceholdered = useTopologyStore((s) => s.importPlaceholdered);
+  const importKeysDropped = useTopologyStore((s) => s.importKeysDropped);
   const importClearedKeys = useTopologyStore((s) => s.importClearedKeys);
   const dismissImportNotice = useTopologyStore((s) => s.dismissImportNotice);
   const language = useTopologyStore((s) => s.language);
@@ -90,8 +90,9 @@ export function Shell() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar />
         {/* plan-4 (D9): the local design was replaced by the server copy + a backup
-            downloaded. plan-5 (D5): a controller-mode import placeholdered private
-            keys. Both render live via txt() through the shared NoticeBanner. */}
+            downloaded. plan-5/3.5e: a controller-mode import dropped the design's keys
+            (importKeysDropped), or a local import cleared stranded pubkey-only nodes
+            (importClearedKeys). All render live via t() through the shared NoticeBanner. */}
         {hydrationNotice && (
           <NoticeBanner
             message={t(language, 'shell.yourLocalDesignWas')}
@@ -99,9 +100,9 @@ export function Shell() {
             dismissLabel={t(language, 'shell.dismissNotice')}
           />
         )}
-        {importPlaceholdered > 0 && (
+        {importKeysDropped > 0 && (
           <NoticeBanner
-            message={t(language, 'shell.importPlaceholdered', { count: importPlaceholdered })}
+            message={t(language, 'shell.importKeysDropped', { count: importKeysDropped })}
             onDismiss={dismissImportNotice}
             dismissLabel={t(language, 'shell.dismissNotice_2')}
           />

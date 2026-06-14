@@ -12,7 +12,7 @@ import type {
 } from '../types/topology';
 import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
-import { stripPrivateKeys } from '../lib/custody';
+import { dropAllKeys } from '../lib/custody';
 // useControllerStore is read LAZILY (getState() inside actions, never at module
 // init) so the controller↔topology store cycle stays runtime-only — symmetric to how
 // controllerStore reads useTopologyStore.getState(). Needed for mode-aware import
@@ -125,9 +125,11 @@ interface TopologyState {
   // the node regenerates a fresh pair on the next local compile. Valid full keypairs (private key
   // present) are LEFT INTACT, preserving the local/air-gap round-trip-keys feature. Returns the count.
   clearStrandedKeys: () => number;
-  // 控制器模式导入占位计数（plan-5，D5）：importProject 在 controller 模式下剥离导入文件里的
-  // 私钥后，置为被占位的数量（0=无提示）。Shell 据此显示一条可关闭提示（用 txt() 实时本地化）。
-  importPlaceholdered: number;
+  // Controller-mode import: count of nodes whose design key material (private + public + pin) was
+  // dropped, because the controller is server-authoritative for keys (agents register their public
+  // keys; the design's keys are non-authoritative + confusing). 0 = no notice. Shell shows a
+  // dismissible banner. (Local-mode import uses importClearedKeys below instead.)
+  importKeysDropped: number;
   // Local-mode import: count of nodes whose stranded pubkey-only keys were cleared (0 = no notice).
   importClearedKeys: number;
   dismissImportNotice: () => void;
@@ -214,7 +216,7 @@ export const useTopologyStore = create<TopologyState>()(
       selectedEdgeId: null,
       selectedDomainId: null,
         language: defaultLanguage,
-      importPlaceholdered: 0,
+      importKeysDropped: 0,
       importClearedKeys: 0,
       // 默认 false：全新/本地工作区不是服务端机密数据。仅 hydrateFromServer 会置 true。
       canvasFromServer: false,
@@ -223,7 +225,7 @@ export const useTopologyStore = create<TopologyState>()(
 
       setLanguage: (lang) => set({ language: lang }),
 
-      dismissImportNotice: () => set({ importPlaceholdered: 0, importClearedKeys: 0 }),
+      dismissImportNotice: () => set({ importKeysDropped: 0, importClearedKeys: 0 }),
 
       clearStrandedKeys: () => {
         const { nodes } = get();
@@ -438,14 +440,17 @@ export const useTopologyStore = create<TopologyState>()(
         if (hasReservedRoutePolicies) {
           delete topo.route_policies;
         }
-        // 控制器模式导入占位（plan-5，D5）：controller 模式是零知识的，导入文件携带的私钥
-        // 必须被剥离（节点改用 agent 持有的密钥），并提醒用户。本地模式不受影响（私钥在
-        // 本地/气隙模式下是合法的设计数据，往返保留）。
-        let placeholdered = 0;
+        // Controller-mode import: the controller is server-authoritative for keys — each node's public
+        // key comes from its agent's enrollment and is stamped at compile (enrolledSubgraph), and a
+        // private key must never reach the server. So the imported design's key material is BOTH
+        // non-authoritative AND confusing; drop ALL of it (private + public + pin flag) before load
+        // (pre-load, so a private key never even enters store/localStorage). Local mode is untouched
+        // here (its valid keypairs are legitimate round-trip data) — see clearStrandedKeys below.
+        let keysDropped = 0;
         if (useControllerStore.getState().mode === 'controller') {
-          const result = stripPrivateKeys(topo);
+          const result = dropAllKeys(topo);
           topo = result.topo;
-          placeholdered = result.stripped;
+          keysDropped = result.dropped;
         }
         // loadTopology 只接收四个切片 + 版本号，这里先加载再补提示，
         // 因为 loadTopology 会清空 error。
@@ -453,15 +458,15 @@ export const useTopologyStore = create<TopologyState>()(
         // Local-mode import of a pubkey-only file (e.g. a controller-exported design, which carries
         // no private keys) would otherwise strand every node in GenerateKeys case (b) — a per-node
         // un-pin chore. Clear the stranded pubkey-only keys so they regenerate fresh on compile;
-        // full keypairs (private key present) are kept (round-trip). No-op in controller mode, where
-        // pubkey-only IS the intended state (the private keys were placeholdered above).
+        // full keypairs (private key present) are kept (round-trip). Controller mode already dropped
+        // ALL keys above, so this is a local-only step.
         let clearedKeys = 0;
         if (useControllerStore.getState().mode === 'local') {
           clearedKeys = get().clearStrandedKeys();
         }
         // 总是写入（含 0）：一次干净导入（0 个被占位）必须清掉上一次导入残留的「N 个被
         // 占位」横幅，否则提示会粘滞（plan-5 review）。
-        set({ importPlaceholdered: placeholdered, importClearedKeys: clearedKeys });
+        set({ importKeysDropped: keysDropped, importClearedKeys: clearedKeys });
         if (hasReservedRoutePolicies) {
           const { language } = get();
           set({
@@ -528,7 +533,7 @@ export const useTopologyStore = create<TopologyState>()(
       validateResult: null,
       compileResult: null,
       // 切到本地模式后，控制器模式导入残留的「已占位」横幅也一并清掉（plan-5 review）。
-      importPlaceholdered: 0,
+      importKeysDropped: 0,
       importClearedKeys: 0,
       error: null,
       selectedNodeId: null,
