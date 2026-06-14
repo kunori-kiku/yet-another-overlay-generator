@@ -388,6 +388,7 @@ export const en = {
   'settingsPage.allocationPinsOverlayIPs': "Allocation pins (overlay IPs, ports, transit/link-local addresses are reassigned)",
   'settingsPage.cancel': "Cancel",
   'settingsPage.compileHistoryAndThe': "Compile history and the last compile/validate result",
+  'settingsPage.serverHeldClearsLocal': "This canvas mirrors the controller server's authoritative fleet design — including the fleet's public addresses and SSH details. Switching to local mode clears it from this browser; the server keeps its copy (sign in again to restore it). Any unsaved edits since your last save are downloaded as a backup file (they are not on the server). This cannot be undone here. Continue?",
   'settingsPage.switchAndClear': "Switch and clear",
   'settingsPage.switchToLocalMode': "Switch to local mode?",
   'settingsPage.thisGuaranteesNoFleet': "This guarantees no fleet-used keys linger locally. This cannot be undone.",

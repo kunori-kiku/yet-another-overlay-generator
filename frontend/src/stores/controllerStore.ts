@@ -79,6 +79,87 @@ function stableStringify(value: unknown): string {
   );
 }
 
+// Go `omitempty`-tagged fields (internal/model/topology.go): the server DROPS these on
+// marshal when zero/empty, so a client design and its server round-trip only compare equal
+// if the client drops them too. NON-omitempty fields (ids/names, capabilities bools,
+// is_enabled, public_endpoint.port, domain cidr/modes) are PRESERVED even when zero. Listed
+// per-slice because `role` collides (Node.role is required, Edge.role is omitempty) — a flat
+// name set would wrongly drop a node's role. KEEP IN SYNC with the model's json tags.
+const PROJECT_OMITEMPTY = ['description', 'version'];
+const DOMAIN_OMITEMPTY = ['description', 'reserved_ranges', 'transit_cidr'];
+const NODE_OMITEMPTY = [
+  'hostname', 'platform', 'overlay_ip', 'listen_port', 'mtu', 'xdp_mode', 'router_id',
+  'fixed_private_key', 'wireguard_private_key', 'wireguard_public_key', 'public_endpoints',
+  'extra_prefixes', 'ssh_alias', 'ssh_host', 'ssh_port', 'ssh_user', 'ssh_key_path',
+];
+const EDGE_OMITEMPTY = [
+  'endpoint_host', 'endpoint_port', 'compiled_port', 'priority', 'weight', 'role', 'transport',
+  'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip', 'pinned_to_transit_ip',
+  'pinned_from_link_local', 'pinned_to_link_local',
+];
+// PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
+const PUBLIC_ENDPOINT_OMITEMPTY = ['note'];
+
+// isEmptyVal mirrors Go's encoding/json `omitempty` "empty" definition: false, 0, "", nil,
+// and zero-length slices. (Empty objects/structs are NOT omitted by Go, and aren't dropped here.)
+function isEmptyVal(v: unknown): boolean {
+  return (
+    v === undefined || v === null || v === '' || v === 0 || v === false ||
+    (Array.isArray(v) && v.length === 0)
+  );
+}
+
+function dropOmitempty(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out = { ...obj };
+  for (const k of keys) if (k in out && isEmptyVal(out[k])) delete out[k];
+  return out;
+}
+
+// canonicalDesign serializes a design exactly as the server stores it, for equality
+// comparison: the loadSlices projection, key-order-insensitive (stableStringify), with Go
+// `omitempty` zero-values dropped (so a save/hydrate round-trip compares equal) and every
+// node's wireguard_private_key dropped unconditionally (controller mode is zero-knowledge —
+// the server never stores a private key). Used for the dirty-state indicator + save-time
+// conflict check (plan-10 / T2). Comparison is conservative: any residual asymmetry reads as
+// "differs", which only over-warns (extra backup/conflict), never silently overwrites.
+export function canonicalDesign(t: Topology): string {
+  const s = loadSlices(t);
+  const norm: Record<string, unknown> = {
+    project: dropOmitempty(s.project as Record<string, unknown>, PROJECT_OMITEMPTY),
+    domains: (s.domains as Array<Record<string, unknown>>).map((d) => dropOmitempty(d, DOMAIN_OMITEMPTY)),
+    nodes: (s.nodes as Array<Record<string, unknown>>).map((n) => {
+      const x = dropOmitempty(n, NODE_OMITEMPTY);
+      delete x.wireguard_private_key; // always dropped (even if non-empty): never on the server
+      // public_endpoints survives when non-empty (kept by dropOmitempty); mirror its OWN nested
+      // omitempty (note) element-wise too, else an empty endpoint note ('' from the endpoint
+      // editor) the server drops would phantom a save-conflict (review).
+      if (Array.isArray(x.public_endpoints)) {
+        x.public_endpoints = (x.public_endpoints as Array<Record<string, unknown>>).map((pe) =>
+          dropOmitempty(pe, PUBLIC_ENDPOINT_OMITEMPTY),
+        );
+      }
+      return x;
+    }),
+    edges: (s.edges as Array<Record<string, unknown>>).map((e) => dropOmitempty(e, EDGE_OMITEMPTY)),
+  };
+  // alloc_schema_version is omitempty: present only when > 0 (mirrors loadSlices + the server).
+  if (s.alloc_schema_version) norm.alloc_schema_version = s.alloc_schema_version;
+  return stableStringify(norm);
+}
+
+// isDesignDirty: does the current design differ from the last server-synced snapshot
+// (plan-10 / T2)? snapshot===null (no server design synced yet) → a non-empty design is
+// dirty (unsaved work), empty is not. A PURE helper, not a store method, deliberately:
+// a synchronous store method calling useTopologyStore.getState() inside the
+// create<ControllerState>() literal forces TS to eagerly resolve the cross-store type
+// cycle (topologyStore imports controllerStore) and breaks state inference — async
+// methods defer that via Promise, but this is sync. Components pass the two values they
+// already subscribe to, which also makes the dirty indicator reactive.
+export function isDesignDirty(t: Topology, lastSyncedSnapshot: string | null): boolean {
+  if (lastSyncedSnapshot === null) return t.nodes.length > 0 || t.edges.length > 0;
+  return canonicalDesign(t) !== lastSyncedSnapshot;
+}
+
 // 控制器面板（Mode B）状态。它是 controller 连接 + fleet 视图的单一来源，独立于
 // topologyStore（后者仍是拓扑数据的唯一来源）。deploy() 时从 topologyStore 读取当前
 // 拓扑并复用 compile() 发送的同一 model.Topology JSON 形状。
@@ -178,6 +259,14 @@ interface ControllerState {
   loading: boolean;
   error: string | null;
   lastSyncedAt: number | null;
+  // 上次与服务端同步（hydrate / save）后记下的「服务端权威设计」规范化快照（canonicalDesign）。
+  // 用于：(1) dirty 指示——当前画布与它不同即有未保存改动；(2) save 前的冲突检测基线——save 时
+  // 重新 GET 服务端设计与它比对，若服务端已被改动则不盲目覆盖（plan-10 / T2，D13）。null=尚未
+  // 同步过任何服务端设计（服务端为空 / 首次部署前）。不持久化（刷新后由 hydrate 重新建立）。
+  lastSyncedSnapshot: string | null;
+  // save 冲突标志（plan-10 / T2）：saveDesign 检测到服务端设计自上次同步以来已变化时置真，UI
+  // 据此弹出「服务端已变更：从服务端重新同步（自动备份）/ 仍然覆盖 / 取消」对话框。
+  saveConflict: boolean;
   // signing 为真表示 WebAuthn 提示已弹出、正在等待用户触碰安全密钥（enroll 或 deploy 期间）。
   // UI 用它显示「触碰你的安全密钥」提示。enrolling 区分 enroll 与 deploy-sign 两种 ceremony。
   // 注意：signing/enrolling 专属 KEYSTONE 流程（deploy 签名 / 签名密钥注册），DeployBar 的
@@ -227,11 +316,21 @@ interface ControllerState {
   deploy: (opts?: { confirmedShrink?: boolean }) => Promise<void>;
   // 取消待确认的缩水部署（用户在确认框点了取消）。
   cancelShrinkConfirm: () => void;
+  // 控制器模式的轻量「保存」（plan-10 / T2）：剥离私钥 → update-topology（仅持久化权威副本 +
+  // 版本历史，绝不 stage/promote 触达在线 fleet）→ 标记 canvasFromServer → 刷新同步快照。save
+  // 前做客户端冲突检测（重新 GET 与 lastSyncedSnapshot 比对）；force=true 跳过检测强制覆盖。
+  saveDesign: (opts?: { force?: boolean }) => Promise<void>;
+  // 关闭 save 冲突提示（用户取消，或已通过重新同步 / 强制覆盖解决）。
+  dismissSaveConflict: () => void;
   // 关闭「已剥离 N 个私钥」提示。
   dismissStripNotice: () => void;
   // 清掉 controller 模式相关的临时提示（hydration / 剥离 / 待确认缩水）。controller→local
   // 切换时调用，避免本地模式下还残留控制器模式的横幅（plan-5 review）。
   clearModeNotices: () => void;
+  // controller→local 的统一切换（plan-10 / T1）：把「服务端镜像→整画布清空 / 本地原创→保图清密钥」
+  // 这一安全分叉收敛到一处，供登录门与设置页共用，杜绝两处实现发散导致的 fleet 机密泄漏。
+  // 同时清提示、还原本地 translucency 偏好（A3）、置 mode=local。调用方负责确认对话框与导航。
+  switchToLocal: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
 }
@@ -251,10 +350,19 @@ function configOf(state: ControllerState): ControllerConfig {
 // 安全（controller server-authoritative）：当会话探测失败、即将退回登录门时，若画布是服务端
 // 机密镜像（canvasFromServer），清空它——否则登出态下任何拿到浏览器的人都能从画布/localStorage
 // 读出 fleet 的公网 IP 与 SSH 目标。仅 controller 模式生效；本地原创工作不动（那是用户自有数据）。
-function clearServerCanvasAtGate(mode: 'local' | 'controller'): void {
+//
+// plan-10 / T2：冲刷前若镜像有未保存改动（dirty——与上次同步快照不同），先导出一次备份，否则
+// 登出 / 会话失效 / 切回本地会静默丢弃这些未部署的编辑。稳态（已 Save 或未改动）下 dirty=false，
+// 不触发下载。只接收所需的两个原语（mode + 同步快照基线），不耦合整个 ControllerState 类型。
+function clearServerCanvasAtGate(mode: 'local' | 'controller', lastSyncedSnapshot: string | null): void {
   if (mode !== 'controller') return;
   const topo = useTopologyStore.getState();
-  if (topo.canvasFromServer) topo.flushWorkspace();
+  if (!topo.canvasFromServer) return;
+  if (isDesignDirty(topo.getTopology(), lastSyncedSnapshot)) {
+    const stamp = new Date().toISOString().slice(0, 10);
+    topo.exportProject(`unsaved-changes-backup-${stamp}.json`);
+  }
+  topo.flushWorkspace();
 }
 
 // 派生选择器：是否已通过密码登录（持有有效 session）。DeployPanel 用它在登录区切换
@@ -353,6 +461,8 @@ export const useControllerStore = create<ControllerState>()(
       loading: false,
       error: null,
       lastSyncedAt: null,
+      lastSyncedSnapshot: null,
+      saveConflict: false,
       signing: false,
       enrolling: false,
       loginCeremony: false,
@@ -382,7 +492,7 @@ export const useControllerStore = create<ControllerState>()(
             const settings = await getSettings(cfg);
             set({ settings });
             if (get().mode === 'controller') {
-              useUiStore.getState().setTranslucency(settings.translucency);
+              useUiStore.getState().applyServerTranslucency(settings.translucency);
             }
           } catch {
             /* 设置拉取失败：保留已有 settings，不覆盖 fleet 视图的成功状态。 */
@@ -401,9 +511,12 @@ export const useControllerStore = create<ControllerState>()(
           const settings = await getSettings(configOf(get()));
           set({ settings });
           // In controller mode the server is the source of truth for translucency; apply
-          // it to the appearance store. In local mode the client uiStore value stands.
+          // it to the appearance store as the EFFECTIVE value only (applyServerTranslucency
+          // leaves the user's local preference intact, so a later controller→local switch
+          // restores it rather than inheriting the fleet's appearance — plan-10 / A3). In
+          // local mode the client uiStore value stands.
           if (get().mode === 'controller') {
-            useUiStore.getState().setTranslucency(settings.translucency);
+            useUiStore.getState().applyServerTranslucency(settings.translucency);
           }
         } catch (err) {
           set({ error: err instanceof Error ? err.message : 'Failed to load settings' });
@@ -531,6 +644,9 @@ export const useControllerStore = create<ControllerState>()(
           if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
             return; // 形状不符：不覆盖（服务端字节由 update-topology 的 custody 门保证，这只是防御）。
           }
+          // 记下服务端权威设计的规范化快照——dirty 指示 + save 冲突检测的基线（plan-10 / T2）。
+          // 不论下面是否真的覆盖本地画布（differs/!differs）都更新，保证基线始终等于服务端现状。
+          set({ lastSyncedSnapshot: canonicalDesign(topo) });
           const topoStore = useTopologyStore.getState();
           const local = topoStore.getTopology();
           // 语义比较（plan-4 review）：只比 loadTopology 实际消费的四个切片 + 版本号，且对
@@ -571,6 +687,10 @@ export const useControllerStore = create<ControllerState>()(
         } catch {
           // 撤销失败不阻塞本地登出（session 仍会在服务端按 TTL 过期）。
         }
+        // 在清空前捕获同步快照：下面的 set() 会把 lastSyncedSnapshot 置 null，而 set 是同步的，
+        // 若之后再 get().lastSyncedSnapshot 取到的就是 null —— gate 的 dirty 判定会把任何非空
+        // 服务端画布都当作 dirty，于是每次登出都误触一次备份下载（plan-10 review）。先存基线。
+        const snap = get().lastSyncedSnapshot;
         set({
           sessionToken: '',
           csrfToken: '',
@@ -589,12 +709,18 @@ export const useControllerStore = create<ControllerState>()(
           // (the guarded loadSettings effect re-fires on settings===null).
           settings: null,
           error: null,
+          // 同步快照与冲突标志是当前会话/服务端设计的派生态：登出一并清掉，下次登录 hydrate 重建。
+          lastSyncedSnapshot: null,
+          saveConflict: false,
         });
         // 安全：登出后画布若是服务端机密镜像，立即清空（内存 + 由 persist 连带清掉 localStorage）。
         // 否则登出态下任何人都能从画布/localStorage 读出 fleet 的公网 IP 与 SSH 目标。本地原创
         // 工作（canvasFromServer=false）不动——那是用户自有数据。复用 clearServerCanvasAtGate
-        // 让三处冲刷点（logout / 会话失效 / partialize）用同一个谓词，而非各自展开。
-        clearServerCanvasAtGate(get().mode);
+        // 让三处冲刷点（logout / 会话失效 / partialize）用同一个谓词，而非各自展开。传入登出前
+        // 捕获的 snap（而非已被置 null 的 get().lastSyncedSnapshot），dirty 判定才准确。
+        clearServerCanvasAtGate(get().mode, snap);
+        // A3：会话结束，外观回到本地偏好——服务端推送的舰队 translucency 不应在登出/登录门残留。
+        useUiStore.getState().restoreLocalTranslucency();
       },
 
       // 刷新后恢复登录态（P5）：GET /session 用 httpOnly cookie 探测当前会话。命中则置
@@ -618,18 +744,28 @@ export const useControllerStore = create<ControllerState>()(
               sessionExpiresAt: info.expiresAt || null,
               csrfToken: info.csrfToken,
             });
-            // 服务端权威 hydration（D1）：会话恢复也覆盖本地画布——但仅在登录态由假变真的
-            // 那次（mount/刷新恢复），避免 Shell 的 mode 翻转 effect 重复触发重复覆盖。
-            if (!wasLoggedIn) {
+            // 服务端权威 hydration（D1）：会话恢复覆盖本地画布。两种触发：
+            //   (1) 登录态由假变真（mount / 刷新恢复）——首次进入必拉取；
+            //   (2) 已登录但画布不是服务端镜像（!canvasFromServer）——这正是「已登录时
+            //       local→controller 再切回」的场景（plan-10 / A2）：Shell 的 mode 翻转 effect
+            //       会再调 checkSession，此时 wasLoggedIn 仍为真，旧逻辑不会重拉，于是陈旧的本地
+            //       状态冒充服务端设计。补这条件后，重新进入 controller 必从服务端权威重拉。
+            // 稳态（已登录 + 画布已是服务端镜像）下两条件皆假，不会无谓重复覆盖。
+            if (!wasLoggedIn || !useTopologyStore.getState().canvasFromServer) {
               await get().hydrateFromServer();
             }
           } else {
-            set({ loggedIn: false, csrfToken: '' });
-            clearServerCanvasAtGate(get().mode);
+            // 会话失效：先捕获基线再清（同 logout 的顺序修复），gate 用 live 基线判 dirty 才准。
+            const lostSnap = get().lastSyncedSnapshot;
+            set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, saveConflict: false });
+            clearServerCanvasAtGate(get().mode, lostSnap);
+            useUiStore.getState().restoreLocalTranslucency(); // A3：回登录门用本地外观偏好
           }
         } catch {
-          set({ loggedIn: false });
-          clearServerCanvasAtGate(get().mode);
+          const lostSnap = get().lastSyncedSnapshot;
+          set({ loggedIn: false, lastSyncedSnapshot: null, saveConflict: false });
+          clearServerCanvasAtGate(get().mode, lostSnap);
+          useUiStore.getState().restoreLocalTranslucency();
         }
       },
 
@@ -890,13 +1026,30 @@ export const useControllerStore = create<ControllerState>()(
 
           const topoJSON = JSON.stringify(cleanTopo);
           await updateTopology(cfg, topoJSON);
-          // The design is now the server's authoritative copy. Mark the local canvas
-          // server-held (even if stage/promote later fails — it IS on the server now) so
-          // it stops persisting at rest and is flushed on logout/gate. Without this, a
-          // design BUILT locally then deployed (first-deploy: server was empty, so hydrate
-          // never set the flag) would leave the live fleet's public IPs + SSH targets
-          // readable in localStorage while logged out (review: first-deploy leak).
-          useTopologyStore.getState().setCanvasFromServer(true);
+          // The design is now the server's authoritative copy. Mark the canvas server-held
+          // (even if stage/promote later fails — it IS on the server now) so it stops
+          // persisting at rest and is flushed on logout/gate. Without this, a design BUILT
+          // locally then deployed (first-deploy: server was empty, so hydrate never set the
+          // flag) would leave the live fleet's public IPs + SSH targets readable in
+          // localStorage while logged out (review: first-deploy leak).
+          //
+          // plan-10 / T7: on a CONFIRMED-shrink deploy the UPLOADED design is `confirming
+          // .snapshot` (what the warning was computed from), which may differ from the
+          // since-edited live canvas. Flipping the flag on the live canvas would mislabel a
+          // divergent canvas as server-held, so partialize/gate would later flush those
+          // post-warning edits with no backup. Load the snapshot so the canvas equals what
+          // was actually uploaded; otherwise just flip the flag (live canvas IS what we sent).
+          // (loadTopology also resets compile history + selection — intentional here, the canvas
+          // is being replaced by the uploaded snapshot; compile history is empty in controller
+          // mode anyway since local compile is refused.)
+          if (confirming) {
+            useTopologyStore.getState().loadTopology(confirming.snapshot, true);
+          } else {
+            useTopologyStore.getState().setCanvasFromServer(true);
+          }
+          // Keep the sync baseline (dirty/conflict — plan-10 / T2) in step with what we just
+          // persisted, so a freshly-deployed canvas reads as clean (not dirty).
+          set({ lastSyncedSnapshot: canonicalDesign(cleanTopo) });
           const result = await stage(cfg);
           // 当没有已注册节点时 stage 不产生任何 bundle（staged 为空），此时 promote 会
           // 返回 409 ErrNoStagedBundle —— 那不是错误，而是「还没有节点入网」。直接展示
@@ -962,6 +1115,82 @@ export const useControllerStore = create<ControllerState>()(
       cancelShrinkConfirm: () => set({ pendingShrink: null }),
       dismissStripNotice: () => set({ lastStrippedKeys: 0 }),
       clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null }),
+
+      // controller→local 的单一切换路径（plan-10 / T1）。安全分叉与登录门 LoginPage 完全一致：
+      //   - 画布是服务端机密镜像（canvasFromServer）→ flushWorkspace 整体清空（绝不让 fleet 的
+      //     公网 IP / SSH 目标随切换残留在本地 / localStorage）；
+      //   - 画布是本地原创工作 → purgeModeBoundaryState 保图、清密钥/分配/编译历史（D6 有损切换）。
+      // 之前 SettingsPage 只调 purgeModeBoundaryState（无 serverHeld 分叉），会把机密镜像降级为
+      // 可持久化的本地数据 → fleet 机密落 localStorage（审计 T1）。收敛到这里后两处不可能再发散。
+      // 另：还原本地 translucency 偏好（A3，服务端推送值不得带入本地模式）+ 清控制器横幅。
+      switchToLocal: () => {
+        const topo = useTopologyStore.getState();
+        // 服务端镜像走 clearServerCanvasAtGate（mode 此刻仍为 controller）：它会在镜像 dirty 时
+        // 先导出备份再 flush，与登出/会话失效路径共用同一「冲刷前备份未保存改动」逻辑（plan-10
+        // / T2）。本地原创工作走 D6 有损 purge（保图、清密钥/分配/历史）。
+        if (topo.canvasFromServer) clearServerCanvasAtGate(get().mode, get().lastSyncedSnapshot);
+        else topo.purgeModeBoundaryState();
+        get().clearModeNotices();
+        useUiStore.getState().restoreLocalTranslucency();
+        // 切回本地：清掉控制器模式的同步快照与冲突标志（它们是服务端权威概念）。
+        set({ mode: 'local', lastSyncedSnapshot: null, saveConflict: false });
+      },
+
+      // 控制器模式「保存」（plan-10 / T2）：把当前画布持久化为服务端权威副本（+ 版本历史），
+      // 但绝不 stage/promote——在线 fleet 不受影响。这是 deploy() 之外缺失的轻量持久化原语，
+      // 让未部署的进行中工作不再只活在可弃置的镜像里（刷新 / 登出即丢）。
+      saveDesign: async (opts) => {
+        set({ loading: true, error: null });
+        try {
+          const cfg = configOf(get());
+          // 零知识 fail-safe：与 deploy() 一致，上送前剥离私钥（控制器画布本就无私钥，这是兜底）。
+          const current = useTopologyStore.getState().getTopology();
+          const { topo: clean, stripped } = stripPrivateKeys(current);
+          // no-op 守卫：设计与上次同步基线一致就直接返回——既不发网络请求，也不在服务端徒增一条
+          // 相同内容的版本历史（后端不做内容去重，徒增的版本还会挤掉真正的旧版本）。force 跳过它。
+          // 用 isDesignDirty：基线为 null 且画布为空（首次、无可保存内容）也正确判为「非 dirty」。
+          if (!opts?.force && !isDesignDirty(current, get().lastSyncedSnapshot)) {
+            set({ loading: false });
+            return;
+          }
+          // 客户端冲突检测（D13）：除非 force，save 前重新 GET 服务端设计与上次同步快照比对。
+          // 服务端在我们之后被改动 → 不盲目覆盖，置 saveConflict 让 UI 给出「重新同步 / 覆盖 /
+          // 取消」。best-effort：守卫读取失败则跳过冲突检测照常保存（与 deploy 的缩水守卫一致），
+          // 避免瞬时网络错误误报冲突。注意这意味着一旦守卫读失败，本次保存会盲写覆盖——
+          // update-topology 只报告写入「失败」，不会报告「过期覆盖」（无后端乐观并发，见 D13）。
+          if (!opts?.force) {
+            let readOk = true;
+            let serverNow: Topology | null = null;
+            try {
+              serverNow = (await ctlGetTopology(cfg)) as Topology | null;
+            } catch {
+              readOk = false;
+            }
+            if (readOk) {
+              const serverCanon = serverNow ? canonicalDesign(serverNow) : null;
+              if (serverCanon !== get().lastSyncedSnapshot) {
+                set({ loading: false, saveConflict: true });
+                return;
+              }
+            }
+          }
+          await updateTopology(cfg, JSON.stringify(clean));
+          // 现在画布即服务端权威副本：标记 server-held（停止落盘、登出/gate 时清空），刷新同步
+          // 快照（dirty 复位）+ 时间戳，记录剥离的私钥数（0=无提示）。
+          useTopologyStore.getState().setCanvasFromServer(true);
+          set({
+            loading: false,
+            saveConflict: false,
+            lastStrippedKeys: stripped,
+            lastSyncedSnapshot: canonicalDesign(clean),
+            lastSyncedAt: Date.now(),
+          });
+        } catch (err) {
+          set({ error: err instanceof Error ? err.message : 'Save failed', loading: false });
+        }
+      },
+
+      dismissSaveConflict: () => set({ saveConflict: false }),
 
       // 驱逐一个节点后刷新视图。
       revoke: async (nodeId) => {

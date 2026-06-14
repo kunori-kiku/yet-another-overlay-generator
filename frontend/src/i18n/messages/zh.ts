@@ -378,6 +378,7 @@ export const zh: Record<keyof typeof en, string> = {
   'settingsPage.allocationPinsOverlayIPs': "分配 pin（overlay IP、端口、transit/链路本地地址将重新分配）",
   'settingsPage.cancel': "取消",
   'settingsPage.compileHistoryAndThe': "编译历史与上次编译/校验结果",
+  'settingsPage.serverHeldClearsLocal': "当前画布是控制器服务端权威舰队设计的镜像——含舰队的公网地址与 SSH 信息。切换到本地模式会把它从本浏览器清空；服务端仍保留其副本（重新登录即可恢复）。自上次保存以来的未保存改动会以备份文件形式下载（它们不在服务端）。此处的清空不可撤销。是否继续？",
   'settingsPage.switchAndClear': "切换并清除",
   'settingsPage.switchToLocalMode': "切换到本地模式？",
   'settingsPage.thisGuaranteesNoFleet': "这样可保证舰队（fleet）用过的密钥绝不残留在本地。此操作不可撤销。",
