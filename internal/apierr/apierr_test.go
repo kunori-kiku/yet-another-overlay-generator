@@ -3,8 +3,49 @@ package apierr
 import (
 	"errors"
 	"net/http"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 )
+
+var cjk = regexp.MustCompile(`\p{Han}`)
+
+// TestRegistryEnglishOnly: every registry template is the single source of the CLI/curl message
+// and the i18n English fallback, so it must be non-empty and carry no CJK — an English-locale
+// operator never sees another language, even for a code not yet keyed in the panel catalog.
+func TestRegistryEnglishOnly(t *testing.T) {
+	if len(registry) == 0 {
+		t.Fatal("registry is empty")
+	}
+	for code, d := range registry {
+		if strings.TrimSpace(d.tmpl) == "" {
+			t.Errorf("%s has an empty template", code)
+		}
+		if cjk.MatchString(d.tmpl) {
+			t.Errorf("%s template contains CJK (must be English): %q", code, d.tmpl)
+		}
+	}
+}
+
+// TestNoChineseInApierrSource: apierr.go carries no Chinese in code/string position (it is a
+// fully-English leaf package). Mirrors the validator's source gate: scan only the code portion
+// (strip the // comment) so a Chinese string literal can never regress in as a wire message.
+func TestNoChineseInApierrSource(t *testing.T) {
+	b, err := os.ReadFile("apierr.go")
+	if err != nil {
+		t.Fatalf("read apierr.go: %v", err)
+	}
+	for i, line := range strings.Split(string(b), "\n") {
+		code := line
+		if c := strings.Index(code, "//"); c >= 0 {
+			code = code[:c]
+		}
+		if cjk.MatchString(code) {
+			t.Errorf("apierr.go:%d has Chinese in code/string position (must be English): %s", i+1, strings.TrimSpace(line))
+		}
+	}
+}
 
 // allCodes is the authoritative list of declared Code consts. TestRegistryBijection
 // asserts it matches the registry exactly in BOTH directions, so a code can never be
@@ -13,6 +54,7 @@ import (
 var allCodes = []Code{
 	CodeLegacyUncoded,
 	CodeInternalPanic,
+	CodeInternal,
 	CodeCustodyPrivateKey,
 	CodeKeygenMissingPubkey,
 	CodeKeygenPrivkeyParse,
