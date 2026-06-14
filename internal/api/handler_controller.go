@@ -157,6 +157,14 @@ func (h *ControllerHandler) originAllowed(origin string) bool {
 	return false
 }
 
+// isReservedNodeID reports whether id is a reserved identity that may not be used for a node —
+// today only the operator's own name (the operator authenticates out-of-band, never via the
+// node-enrollment path). Centralized so enrollment and token-mint share one rule and a future
+// reserved set (e.g. system nodes) extends in a single place. See HandleEnroll / HandleEnrollmentToken.
+func (h *ControllerHandler) isReservedNodeID(id string) bool {
+	return id == h.operatorName
+}
+
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
 // on the agent port), under AgentBasePath() (the optional agent secret prefix + the
 // fixed /api/v1/agent/). /enroll is registered WITHOUT auth (reachable before the
@@ -511,7 +519,7 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 	// so would mint a node whose identity collides with the operator name stamped on
 	// operator routes. The operator is authenticated by its own out-of-band token,
 	// never through this node-enrollment path.
-	if req.NodeID == h.operatorName {
+	if h.isReservedNodeID(req.NodeID) {
 		writeAPIError(w, apierr.New(apierr.CodeNodeIDReserved))
 		return
 	}
@@ -1077,7 +1085,7 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 	// A node must never be granted an enrollment token AS the operator (the operator
 	// identity is reserved; enrolling under it is rejected at /enroll, but reject the
 	// token mint too for a clear, early error).
-	if req.NodeID == h.operatorName {
+	if h.isReservedNodeID(req.NodeID) {
 		writeAPIError(w, apierr.New(apierr.CodeNodeIDReserved))
 		return
 	}
