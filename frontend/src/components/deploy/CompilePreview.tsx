@@ -1,5 +1,5 @@
 import { useTopologyStore } from '../../stores/topologyStore';
-import { t } from '../../i18n';
+import { t, tValidationError } from '../../i18n';
 
 function previewText(content: string | undefined, maxLines = 4, maxChars = 220): string {
   if (!content) return 'N/A';
@@ -41,7 +41,7 @@ export function CompilePreview() {
               key={`compile-warn-${i}`}
               className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded"
             >
-              ⚠️ [{w.field}] {w.message}
+              ⚠️ [{w.field}] {tValidationError(w, language)}
             </div>
           ))}
         </div>

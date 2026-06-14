@@ -118,6 +118,10 @@ export interface RoutePolicy {
 // API 响应类型
 export interface ValidationError {
   field: string;
+  // code + params drive client localization via the 'error.<code>' catalog (tValidationError,
+  // plan-3.5a); message is the server-rendered English default (CLI/curl + i18n fallback).
+  code?: string;
+  params?: Record<string, string>;
   message: string;
   level: 'error' | 'warning';
 }

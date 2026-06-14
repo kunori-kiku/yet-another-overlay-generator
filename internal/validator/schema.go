@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -45,35 +46,6 @@ const (
 	mtuMaximum = 65535
 )
 
-// ValidationError
-type ValidationError struct {
-	Field   string `json:"field"`
-	Message string `json:"message"`
-	Level   string `json:"level"` // "error" | "warning"
-}
-
-func (e ValidationError) Error() string {
-	return fmt.Sprintf("[%s] %s: %s", e.Level, e.Field, e.Message)
-}
-
-// ValidationResult
-type ValidationResult struct {
-	Errors   []ValidationError `json:"errors"`
-	Warnings []ValidationError `json:"warnings"`
-}
-
-func (r *ValidationResult) AddError(field, message string) {
-	r.Errors = append(r.Errors, ValidationError{Field: field, Message: message, Level: "error"})
-}
-
-func (r *ValidationResult) AddWarning(field, message string) {
-	r.Warnings = append(r.Warnings, ValidationError{Field: field, Message: message, Level: "warning"})
-}
-
-func (r *ValidationResult) IsValid() bool {
-	return len(r.Errors) == 0
-}
-
 // ValidateSchema  Schema （ Pass 1）
 // 、、CIDR
 func ValidateSchema(topo *model.Topology) *ValidationResult {
@@ -96,16 +68,16 @@ func ValidateSchema(topo *model.Topology) *ValidationResult {
 
 func validateProjectSchema(topo *model.Topology, result *ValidationResult) {
 	if topo.Project.ID == "" {
-		result.AddError("project.id", " ID ")
+		result.AddError("project.id", CodeProjectIDRequired)
 	}
 	if topo.Project.Name == "" {
-		result.AddError("project.name", "")
+		result.AddError("project.name", CodeProjectNameRequired)
 	}
 }
 
 func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 	if len(topo.Domains) == 0 {
-		result.AddError("domains", "")
+		result.AddError("domains", CodeDomainNoneDefined)
 		return
 	}
 
@@ -116,29 +88,27 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 		prefix := fmt.Sprintf("domains[%d]", i)
 
 		if domain.ID == "" {
-			result.AddError(prefix+".id", "Domain ID ")
+			result.AddError(prefix+".id", CodeDomainIDRequired)
 		}
 		if domain.Name == "" {
-			result.AddError(prefix+".name", "Domain ")
+			result.AddError(prefix+".name", CodeDomainNameRequired)
 		}
 
 		// CIDR 格式校验
 		if domain.CIDR == "" {
-			result.AddError(prefix+".cidr", "CIDR 不能为空")
+			result.AddError(prefix+".cidr", CodeDomainCIDREmpty)
 		} else {
 			_, ipNet, err := net.ParseCIDR(domain.CIDR)
 			if err != nil {
-				result.AddError(prefix+".cidr", fmt.Sprintf("CIDR 格式无效: %s", domain.CIDR))
+				result.AddError(prefix+".cidr", CodeDomainCIDRInvalid, P{"cidr", domain.CIDR})
 			} else if ipNet.IP.To4() == nil {
 				// IPv4-only：分配器仅支持 IPv4，IPv6/其他地址族会使分配器崩溃
-				result.AddError(prefix+".cidr",
-					fmt.Sprintf("CIDR 必须为 IPv4 网段: %s（暂不支持 IPv6 及其他地址族）", domain.CIDR))
+				result.AddError(prefix+".cidr", CodeDomainCIDRNotIPv4, P{"cidr", domain.CIDR})
 			} else {
 				// CIDR 大小下限：前缀短于 /8 的网段过大，无法枚举分配
 				ones, _ := ipNet.Mask.Size()
 				if ones < 8 {
-					result.AddError(prefix+".cidr",
-						fmt.Sprintf("CIDR %s 过大，前缀长度不能小于 /8（无法枚举分配）", domain.CIDR))
+					result.AddError(prefix+".cidr", CodeDomainCIDRTooLarge, P{"cidr", domain.CIDR})
 				}
 			}
 		}
@@ -146,8 +116,7 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 		// AllocationMode
 		validAllocModes := map[string]bool{"auto": true, "manual": true}
 		if domain.AllocationMode != "" && !validAllocModes[domain.AllocationMode] {
-			result.AddError(prefix+".allocation_mode",
-				fmt.Sprintf(": %s, : auto, manual", domain.AllocationMode))
+			result.AddError(prefix+".allocation_mode", CodeDomainAllocationModeInvalid, P{"mode", domain.AllocationMode})
 		}
 
 		// RoutingMode 归一化与校验（D2/D72，Spec C：docs/spec/compiler/routing-modes.md）。
@@ -163,11 +132,9 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 		case "babel":
 			// 唯一实现的模式，放行。
 		case "static", "none":
-			result.AddError(prefix+".routing_mode",
-				fmt.Sprintf("路由模式 %s 尚未实现：当前仅支持 babel（唯一已实现的路由模式）", domain.RoutingMode))
+			result.AddError(prefix+".routing_mode", CodeDomainRoutingModeUnimplemented, P{"mode", domain.RoutingMode})
 		default:
-			result.AddError(prefix+".routing_mode",
-				fmt.Sprintf("路由模式无效: %s，当前仅支持 babel（唯一已实现的路由模式）", domain.RoutingMode))
+			result.AddError(prefix+".routing_mode", CodeDomainRoutingModeInvalid, P{"mode", domain.RoutingMode})
 		}
 
 		// ReservedRanges 校验：每项需为可解析的 CIDR 或 IP，且必须为 IPv4
@@ -177,19 +144,16 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			if err == nil {
 				// 解析为 CIDR：要求 IPv4 地址族
 				if rNet.IP.To4() == nil {
-					result.AddError(rrPrefix,
-						fmt.Sprintf("保留网段必须为 IPv4: %s（暂不支持 IPv6 及其他地址族）", rr))
+					result.AddError(rrPrefix, CodeDomainReservedRangeNotIPv4, P{"cidr", rr})
 				}
 				continue
 			}
 			// 退化为单个 IP：要求可解析且为 IPv4
 			ip := net.ParseIP(rr)
 			if ip == nil {
-				result.AddError(rrPrefix,
-					fmt.Sprintf("保留范围格式无效: %s", rr))
+				result.AddError(rrPrefix, CodeDomainReservedRangeInvalid, P{"value", rr})
 			} else if ip.To4() == nil {
-				result.AddError(rrPrefix,
-					fmt.Sprintf("保留地址必须为 IPv4: %s（暂不支持 IPv6 及其他地址族）", rr))
+				result.AddError(rrPrefix, CodeDomainReservedAddressNotIPv4, P{"ip", rr})
 			}
 		}
 	}
@@ -200,35 +164,32 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		prefix := fmt.Sprintf("nodes[%d]", i)
 
 		if node.ID == "" {
-			result.AddError(prefix+".id", " ID ")
+			result.AddError(prefix+".id", CodeNodeIDRequired)
 		}
 		if node.Name == "" {
-			result.AddError(prefix+".name", "")
+			result.AddError(prefix+".name", CodeNodeNameRequired)
 		} else if !nodeNameCharset.MatchString(node.Name) {
 			// 节点名称字符集校验（D15 纵深防御）：名称会派生 WireGuard 接口名，
 			// 并被插值进以 root 身份执行的安装脚本，禁止引号、反引号、$、; 等 shell 元字符。
-			result.AddError(prefix+".name",
-				fmt.Sprintf("节点名称 %q 含有非法字符：仅允许字母、数字、空格、点(.)、下划线(_)、连字符(-)，禁止引号、反引号、$、; 等 shell 元字符", node.Name))
+			result.AddError(prefix+".name", CodeNodeNameIllegalChars, P{"name", fmt.Sprintf("%q", node.Name)})
 		}
 		if node.DomainID == "" {
-			result.AddError(prefix+".domain_id", " Domain")
+			result.AddError(prefix+".domain_id", CodeNodeDomainIDRequired)
 		}
 
 		// Role
 		validRoles := map[string]bool{"peer": true, "router": true, "relay": true, "gateway": true, "client": true}
 		if node.Role == "" {
-			result.AddError(prefix+".role", "角色不能为空")
+			result.AddError(prefix+".role", CodeNodeRoleEmpty)
 		} else if !validRoles[node.Role] {
-			result.AddError(prefix+".role",
-				fmt.Sprintf("角色无效: %s，可选值: peer, router, relay, gateway, client", node.Role))
+			result.AddError(prefix+".role", CodeNodeRoleInvalid, P{"role", node.Role})
 		}
 
 		// Platform （，）
 		if node.Platform != "" {
 			validPlatforms := map[string]bool{"debian": true, "ubuntu": true}
 			if !validPlatforms[strings.ToLower(node.Platform)] {
-				result.AddWarning(prefix+".platform",
-					fmt.Sprintf("平台不受支持: %s，可选值: debian, ubuntu", node.Platform))
+				result.AddWarning(prefix+".platform", CodeNodePlatformUnsupported, P{"platform", node.Platform})
 			}
 		}
 
@@ -238,39 +199,33 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		if node.XDPMode != "" {
 			validXDPModes := map[string]bool{"skb": true, "native": true}
 			if !validXDPModes[node.XDPMode] {
-				result.AddError(prefix+".xdp_mode",
-					fmt.Sprintf("XDP 模式无效: %s，可选值: skb, native（留空等价于 skb）", node.XDPMode))
+				result.AddError(prefix+".xdp_mode", CodeNodeXDPModeInvalid, P{"mode", node.XDPMode})
 			}
 		}
 
 		// OverlayIP （）
 		if node.OverlayIP != "" {
 			if net.ParseIP(node.OverlayIP) == nil {
-				result.AddError(prefix+".overlay_ip",
-					fmt.Sprintf(" IP : %s", node.OverlayIP))
+				result.AddError(prefix+".overlay_ip", CodeNodeOverlayIPInvalid, P{"ip", node.OverlayIP})
 			}
 		}
 
 		// ListenPort
 		if node.ListenPort < 0 || node.ListenPort > 65535 {
-			result.AddError(prefix+".listen_port",
-				fmt.Sprintf(": %d", node.ListenPort))
+			result.AddError(prefix+".listen_port", CodeNodeListenPortInvalid, P{"port", strconv.Itoa(node.ListenPort)})
 		}
 
 		// MTU 校验（D64）：0 表示使用系统默认值（通常 1420），跳过。
 		// 非零时必须落在 [576, 65535] 内——低于 576（IPv4 数据报最小重组缓冲）
 		// 或高于 65535 的 MTU 会被 wg-quick 拒绝，生成无法部署的 WireGuard 配置。
 		if node.MTU != 0 && (node.MTU < mtuMinimum || node.MTU > mtuMaximum) {
-			result.AddError(prefix+".mtu",
-				fmt.Sprintf("MTU %d 越界：必须在 %d–%d 之间（576 为 IPv4 数据报最小值，越界的 MTU 会被 wg-quick 拒绝）",
-					node.MTU, mtuMinimum, mtuMaximum))
+			result.AddError(prefix+".mtu", CodeNodeMTUOutOfRange, P{"mtu", strconv.Itoa(node.MTU)}, P{"low", strconv.Itoa(mtuMinimum)}, P{"high", strconv.Itoa(mtuMaximum)})
 		}
 
 		// SSHPort 校验（D65）：0 表示使用默认端口 22，跳过。
 		// 非零时必须落在 1–65535 内，否则会被插值进无法连接的 SSH 部署命令。
 		if node.SSHPort != 0 && (node.SSHPort < 1 || node.SSHPort > 65535) {
-			result.AddError(prefix+".ssh_port",
-				fmt.Sprintf("ssh_port %d 越界：必须在 1–65535 之间", node.SSHPort))
+			result.AddError(prefix+".ssh_port", CodeNodeSSHPortOutOfRange, P{"port", strconv.Itoa(node.SSHPort)})
 		}
 
 		// RouterID 校验（D66）：留空时由编译器自动生成，跳过。
@@ -278,8 +233,7 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		// 或可解析为 IPv4 地址——babeld 两种形式都接受；其它取值会被 babeld 拒绝。
 		if node.RouterID != "" {
 			if !routerIDMAC48.MatchString(node.RouterID) && net.ParseIP(node.RouterID).To4() == nil {
-				result.AddError(prefix+".router_id",
-					fmt.Sprintf("router_id %q 格式无效：必须为 MAC-48 形式（六组冒号分隔的十六进制对，如 02:11:22:33:44:55）或 IPv4 地址，否则会被 babeld 拒绝", node.RouterID))
+				result.AddError(prefix+".router_id", CodeNodeRouterIDInvalid, P{"id", fmt.Sprintf("%q", node.RouterID)})
 			}
 		}
 
@@ -289,27 +243,22 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			epPrefix := fmt.Sprintf("%s.extra_prefixes[%d]", prefix, j)
 			_, epNet, err := net.ParseCIDR(prefixCIDR)
 			if err != nil {
-				result.AddError(epPrefix,
-					fmt.Sprintf("额外路由前缀格式无效: %s（必须为 CIDR 形式，如 192.168.0.0/24）", prefixCIDR))
+				result.AddError(epPrefix, CodeNodeExtraPrefixInvalid, P{"prefix", prefixCIDR})
 			} else if epNet.IP.To4() == nil {
-				result.AddError(epPrefix,
-					fmt.Sprintf("额外路由前缀必须为 IPv4: %s（暂不支持 IPv6 及其他地址族）", prefixCIDR))
+				result.AddError(epPrefix, CodeNodeExtraPrefixNotIPv4, P{"prefix", prefixCIDR})
 			}
 		}
 
 		// SSH 字段字符集校验（D44）：非空时各字段都会被插值进操作员本机执行的
 		// bash 与 PowerShell 部署脚本，必须排除空白与一切 shell 元字符。
 		if node.SSHHost != "" && !sshFieldCharset.MatchString(node.SSHHost) {
-			result.AddError(prefix+".ssh_host",
-				fmt.Sprintf("ssh_host %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHHost))
+			result.AddError(prefix+".ssh_host", CodeNodeSSHHostIllegalChars, P{"host", fmt.Sprintf("%q", node.SSHHost)})
 		}
 		if node.SSHAlias != "" && !sshFieldCharset.MatchString(node.SSHAlias) {
-			result.AddError(prefix+".ssh_alias",
-				fmt.Sprintf("ssh_alias %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHAlias))
+			result.AddError(prefix+".ssh_alias", CodeNodeSSHAliasIllegalChars, P{"alias", fmt.Sprintf("%q", node.SSHAlias)})
 		}
 		if node.SSHUser != "" && !sshFieldCharset.MatchString(node.SSHUser) {
-			result.AddError(prefix+".ssh_user",
-				fmt.Sprintf("ssh_user %q 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符", node.SSHUser))
+			result.AddError(prefix+".ssh_user", CodeNodeSSHUserIllegalChars, P{"user", fmt.Sprintf("%q", node.SSHUser)})
 		}
 		// ssh_key_path is also spliced into the operator's deploy shell command
 		// (ssh/scp -i <path>); it permits path characters (/ \ ~ : space) the
@@ -317,8 +266,7 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		// hostile path like `/k$(reboot).pem` or `k".pem` cannot inject. See
 		// sshKeyPathCharset.
 		if node.SSHKeyPath != "" && !sshKeyPathCharset.MatchString(node.SSHKeyPath) {
-			result.AddError(prefix+".ssh_key_path",
-				fmt.Sprintf("ssh_key_path %q contains illegal characters: only letters, digits, and path characters (. _ : @ / \\ ~ space and -) are allowed; shell metacharacters ($ ` \" ' ; | & < > ( ) etc.) are forbidden because the path is spliced into the operator's deploy shell command", node.SSHKeyPath))
+			result.AddError(prefix+".ssh_key_path", CodeNodeSSHKeyPathIllegalChars, P{"path", fmt.Sprintf("%q", node.SSHKeyPath)})
 		}
 	}
 }
@@ -330,22 +278,21 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		prefix := fmt.Sprintf("edges[%d]", i)
 
 		if edge.ID == "" {
-			result.AddError(prefix+".id", "Edge ID ")
+			result.AddError(prefix+".id", CodeEdgeIDRequired)
 		}
 		if edge.FromNodeID == "" {
-			result.AddError(prefix+".from_node_id", " ID ")
+			result.AddError(prefix+".from_node_id", CodeEdgeFromNodeIDRequired)
 		}
 		if edge.ToNodeID == "" {
-			result.AddError(prefix+".to_node_id", " ID ")
+			result.AddError(prefix+".to_node_id", CodeEdgeToNodeIDRequired)
 		}
 
 		// Type
 		validTypes := map[string]bool{"direct": true, "public-endpoint": true, "relay-path": true, "candidate": true}
 		if edge.Type == "" {
-			result.AddError(prefix+".type", "")
+			result.AddError(prefix+".type", CodeEdgeTypeEmpty)
 		} else if !validTypes[edge.Type] {
-			result.AddError(prefix+".type",
-				fmt.Sprintf(": %s", edge.Type))
+			result.AddError(prefix+".type", CodeEdgeTypeInvalid, P{"type", edge.Type})
 		}
 
 		// Transport 归一化与校验（D72，Spec C）。
@@ -356,16 +303,14 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		}
 		validTransports := map[string]bool{"udp": true, "tcp": true}
 		if !validTransports[edge.Transport] {
-			result.AddError(prefix+".transport",
-				fmt.Sprintf("传输协议无效: %s，可选值: udp, tcp", edge.Transport))
+			result.AddError(prefix+".transport", CodeEdgeTransportInvalid, P{"transport", edge.Transport})
 		}
 		// tcp 现已实现（mimic eBPF UDP→伪 TCP 封装），是合法取值、不再告警。
 		// 「两端必须为可部署 Linux」这一语义约束由 semantic.go 的 validateMimicTransport 负责。
 
 		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {
-			result.AddError(prefix+".endpoint_port",
-				fmt.Sprintf(": %d", edge.EndpointPort))
+			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})
 		}
 
 		// Role 校验（并行链路 / 故障切换）：仅允许空值、"primary"、"backup"。
@@ -373,13 +318,12 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		// "backup" 则每条 edge 各自成为一条独立备份链路。语义见
 		// docs/spec/compiler/allocation-stability.md（Link identity with parallel edges）。
 		if edge.Role != "" && edge.Role != model.EdgeRolePrimary && edge.Role != model.EdgeRoleBackup {
-			result.AddError(prefix+".role",
-				fmt.Sprintf("链路角色无效: %s，可选值: primary, backup（留空等价于 primary）", edge.Role))
+			result.AddError(prefix+".role", CodeEdgeRoleInvalid, P{"role", edge.Role})
 		}
 
 		//
 		if edge.FromNodeID != "" && edge.FromNodeID == edge.ToNodeID {
-			result.AddError(prefix, "（）")
+			result.AddError(prefix, CodeEdgeSelfLoop)
 		}
 	}
 }

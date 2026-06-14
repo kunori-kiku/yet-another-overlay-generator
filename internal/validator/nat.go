@@ -49,9 +49,7 @@ func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Nod
 
 		// 目标不可达：目标节点既无公网 IP 也不接受入站连接，且不是 relay
 		if !toNode.Capabilities.HasPublicIP && !toNode.Capabilities.CanAcceptInbound && toNode.Role != "relay" {
-			result.AddWarning(prefix,
-				fmt.Sprintf("Edge %s: 目标节点 %s 没有公网 IP 且不接受入站连接，对端将无法主动连入",
-					edge.ID, toNode.Name))
+			result.AddWarning(prefix, CodeNATTargetUnreachable, P{"edge", edge.ID}, P{"node", toNode.Name})
 		}
 
 		// 双端 NAT：两端均无公网 IP 的 direct 链路，且未指定 endpoint。
@@ -68,13 +66,9 @@ func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Nod
 				neitherCanBeDialed := !canBeDialed(fromNode) && !canBeDialed(toNode)
 
 				if !reverseHasEndpoint && neitherCanBeDialed {
-					result.AddError(prefix,
-						fmt.Sprintf("Edge %s: 节点 %s 与 %s 均位于 NAT 之后、两个方向都未提供 endpoint 主机地址，且任一端都不接受入站连接，直连隧道无法建立（确凿死链）；请为其中一端配置公网 endpoint，或改走 relay 中转路径",
-							edge.ID, fromNode.Name, toNode.Name))
+					result.AddError(prefix, CodeNATDeadLink, P{"edge", edge.ID}, P{"from", fromNode.Name}, P{"to", toNode.Name})
 				} else {
-					result.AddWarning(prefix,
-						fmt.Sprintf("Edge %s: 节点 %s 与 %s 均位于 NAT 之后且未提供 endpoint 主机地址，直连隧道无法建立（需借助 relay 或公网中转）",
-							edge.ID, fromNode.Name, toNode.Name))
+					result.AddWarning(prefix, CodeNATDoubleNATNoEndpoint, P{"edge", edge.ID}, P{"from", fromNode.Name}, P{"to", toNode.Name})
 				}
 			}
 		}
@@ -83,7 +77,7 @@ func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Nod
 	// ：/relay  Edge
 	for _, node := range topo.Nodes {
 		if node.Capabilities.HasPublicIP || node.Capabilities.CanAcceptInbound {
-			continue // 
+			continue //
 		}
 
 		hasOutboundToPublic := false
@@ -99,9 +93,7 @@ func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Nod
 		}
 
 		if !hasOutboundToPublic && len(topo.Edges) > 0 {
-			result.AddWarning("nat_reachability",
-				fmt.Sprintf("位于 NAT 之后的节点 %s (%s) 没有任何指向公网/可入站节点或 relay 的出站连接，将无法接入 overlay",
-					node.Name, node.ID))
+			result.AddWarning("nat_reachability", CodeNATNoOutboundToPublic, P{"name", node.Name}, P{"id", node.ID})
 		}
 	}
 }

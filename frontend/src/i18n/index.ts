@@ -69,3 +69,19 @@ export function tError(body: unknown, lang: UILanguage): string {
   }
   return t(lang, 'error.generic');
 }
+
+// A validation finding from the validator's 200 ValidateResponse channel (errors[]/warnings[]) —
+// distinct from the HTTP error envelope tError handles, but localized through the SAME
+// 'error.<code>' catalog + t() engine (plan-3.5a). Fallback ladder: error.<code> in the current
+// language → English (t()'s built-in per-key fallback) → the server-rendered English `message` →
+// the generic fallback. So an English operator never sees Chinese on a validation failure, even
+// for a brand-new code not yet keyed in the panel.
+type ValidationFinding = { code?: string; params?: TParams; message?: string };
+
+export function tValidationError(v: ValidationFinding, lang: UILanguage): string {
+  if (v.code) {
+    const key = ('error.' + v.code) as MessageKey;
+    if (key in en || catalogs[lang]?.[key] !== undefined) return t(lang, key, v.params);
+  }
+  return v.message?.trim() || t(lang, 'error.generic');
+}
