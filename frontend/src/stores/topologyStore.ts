@@ -551,9 +551,20 @@ export const useTopologyStore = create<TopologyState>()(
     set({ isValidating: true, error: null });
     try {
       const topo = get().getTopology();
+      // 控制器模式下 /api/validate 已置于 operator-auth 之后（plan-12 / T6）。该路由就在面板自身
+      // （operator）源上，httpOnly session cookie 会随同源请求自动带上；附上 operator 凭据让 POST 通过：
+      // 优先 Bearer（内存里的 session/break-glass token，免 CSRF），刷新后无内存 token 时回退到
+      // cookie + 双提交 CSRF 头（与 controllerClient 的 configOf 一致）。本地模式不加任何头（路由公开）。
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const cs = useControllerStore.getState();
+      if (cs.mode === 'controller') {
+        const bearer = cs.sessionToken || cs.operatorToken;
+        if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
+        if (cs.csrfToken) headers['X-CSRF-Token'] = cs.csrfToken;
+      }
       const res = await fetch('/api/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(topo),
       });
       if (!res.ok) {
