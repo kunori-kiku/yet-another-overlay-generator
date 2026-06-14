@@ -37,3 +37,27 @@ export function stripPrivateKeys(topo: Topology): StripResult {
   });
   return { topo: { ...topo, nodes }, stripped };
 }
+
+// dropAllKeys returns a copy of topo with EVERY node's WireGuard key material removed — private key,
+// public key, AND the fixed_private_key pin flag — plus the count of nodes that carried any. Used on
+// CONTROLLER-mode import: the controller is server-authoritative for keys, so each node's public key is
+// supplied by its agent at enrollment and stamped at compile (enrolledSubgraph), and any private key is
+// barred by custody. A design's imported keys are therefore non-authoritative — overwritten or dropped
+// before any deploy — and keeping them only confuses the operator. (Contrast stripPrivateKeys, the
+// upload/local custody primitive that removes ONLY the secret value; and clearStrandedKeys in
+// topologyStore, the LOCAL-import path that drops pubkey-only nodes but keeps valid round-trip keypairs.)
+export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number } {
+  let dropped = 0;
+  const nodes = topo.nodes.map((n) => {
+    const hasKeyMaterial =
+      (n.wireguard_private_key && n.wireguard_private_key !== '') ||
+      (n.wireguard_public_key && n.wireguard_public_key !== '') ||
+      n.fixed_private_key;
+    if (hasKeyMaterial) {
+      dropped++;
+      return { ...n, wireguard_private_key: undefined, wireguard_public_key: undefined, fixed_private_key: false };
+    }
+    return n;
+  });
+  return { topo: { ...topo, nodes }, dropped };
+}
