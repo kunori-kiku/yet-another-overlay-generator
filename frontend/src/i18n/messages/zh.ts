@@ -490,6 +490,16 @@ export const zh: Record<keyof typeof en, string> = {
   'error.staged_manifest_mismatch': '提交的清单与当前暂存清单不一致；请重新获取并重新签名。',
   'error.manifest_signature_invalid': '无法用已固定的凭据验证清单签名。',
   'error.stage_failed': '暂存或提升部署失败。',
+  // 认证 + 会话接口（plan-3.5b）——登录 / passkey / TOTP / bootstrap / 节点 + 操作员认证。
+  'error.req_bearer_required': '需要有效的 bearer 令牌。',
+  'error.auth_credentials_invalid': '用户名或密码错误。',
+  'error.req_csrf_invalid': 'CSRF 令牌缺失或无效。',
+  'error.req_operator_required': '需要操作员权限。',
+  'error.auth_rate_limited': '登录尝试过多，请稍后再试。',
+  'error.auth_passkey_failed': 'Passkey 登录失败。',
+  'error.auth_passkey_verify_failed': 'Passkey 验证失败。',
+  'error.totp_invalid_code': '两步验证码无效；请检查认证器的时间后重试。',
+  'error.totp_requires_login': '两步验证管理需要已登录的操作员账户，而非应急（break-glass）令牌。',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "client {node} 需要 endpoint_host 才能连接到 router",

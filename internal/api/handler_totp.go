@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
@@ -41,12 +42,12 @@ type totpStatusResponseJSON struct {
 func (h *ControllerHandler) currentOperator(w http.ResponseWriter, r *http.Request) (controller.Operator, controller.TenantID, bool) {
 	tenant, name, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return controller.Operator{}, "", false
 	}
 	op, err := h.store.GetOperator(r.Context(), tenant, name)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "two-factor management requires a logged-in operator account (not the break-glass token)")
+		writeAPIError(w, apierr.New(apierr.CodeTotpRequiresLogin).Wrap(err))
 		return controller.Operator{}, "", false
 	}
 	return op, tenant, true
@@ -55,7 +56,7 @@ func (h *ControllerHandler) currentOperator(w http.ResponseWriter, r *http.Reque
 // HandleTOTPStatus (GET) reports whether the current operator has 2FA enrolled.
 func (h *ControllerHandler) HandleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	op, _, ok := h.currentOperator(w, r)
@@ -70,7 +71,7 @@ func (h *ControllerHandler) HandleTOTPStatus(w http.ResponseWriter, r *http.Requ
 // can generate codes via /totp/confirm before it is activated.
 func (h *ControllerHandler) HandleTOTPEnroll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	op, tenant, ok := h.currentOperator(w, r)
@@ -87,7 +88,7 @@ func (h *ControllerHandler) HandleTOTPEnroll(w http.ResponseWriter, r *http.Requ
 // valid code is TOTP turned on.
 func (h *ControllerHandler) HandleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	op, tenant, ok := h.currentOperator(w, r)
@@ -96,24 +97,24 @@ func (h *ControllerHandler) HandleTOTPConfirm(w http.ResponseWriter, r *http.Req
 	}
 	var req totpConfirmRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	if strings.TrimSpace(req.Secret) == "" {
-		writeError(w, http.StatusBadRequest, "secret is required")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "secret"))
 		return
 	}
 	now := time.Now().UTC()
 	totpOK, step := controller.VerifyTOTP(req.Secret, req.Code, now, 0)
 	if !totpOK {
-		writeError(w, http.StatusBadRequest, "invalid code; check your authenticator's time and try again")
+		writeAPIError(w, apierr.New(apierr.CodeTotpInvalidCode))
 		return
 	}
 	op.TOTPSecret = req.Secret
 	op.TOTPLastUsedStep = step
 	op.UpdatedAt = now
 	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to enable two-factor")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -126,7 +127,7 @@ func (h *ControllerHandler) HandleTOTPConfirm(w http.ResponseWriter, r *http.Req
 // cannot trivially disable the second factor. Idempotent if already disabled.
 func (h *ControllerHandler) HandleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	op, tenant, ok := h.currentOperator(w, r)
@@ -139,19 +140,19 @@ func (h *ControllerHandler) HandleTOTPDisable(w http.ResponseWriter, r *http.Req
 	}
 	var req totpDisableRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	now := time.Now().UTC()
 	if totpOK, _ := controller.VerifyTOTP(op.TOTPSecret, req.Code, now, op.TOTPLastUsedStep); !totpOK {
-		writeError(w, http.StatusBadRequest, "invalid code")
+		writeAPIError(w, apierr.New(apierr.CodeTotpInvalidCode))
 		return
 	}
 	op.TOTPSecret = ""
 	op.TOTPLastUsedStep = 0
 	op.UpdatedAt = now
 	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to disable two-factor")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{

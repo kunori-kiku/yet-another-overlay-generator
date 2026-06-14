@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
@@ -127,7 +128,7 @@ func (h *ControllerHandler) issueLoginChallenge(ctx context.Context, operator st
 func (h *ControllerHandler) writePasskeyChallenge(w http.ResponseWriter, ctx context.Context, op controller.Operator, now time.Time) {
 	challenge, err := h.issueLoginChallenge(ctx, op.Username, now)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to issue passkey challenge")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusUnauthorized, passkeyRequiredJSON{
@@ -181,7 +182,7 @@ func (h *ControllerHandler) verifyLoginAssertion(ctx context.Context, tenant con
 // HandlePasskeyStatus (GET) reports whether the current operator has a login passkey.
 func (h *ControllerHandler) HandlePasskeyStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	op, _, ok := h.currentOperator(w, r)
@@ -197,7 +198,7 @@ func (h *ControllerHandler) HandlePasskeyStatus(w http.ResponseWriter, r *http.R
 // relying-party binding — the verifier rejects it). Only the PUBLIC half is stored.
 func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	op, tenant, ok := h.currentOperator(w, r)
@@ -206,30 +207,30 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 	}
 	var req passkeyRegisterRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	switch trustlist.Alg(req.Alg) {
 	case trustlist.AlgWebAuthnES256:
 		if _, err := trustlist.ParseES256Pin([]byte(req.PublicKeyPEM)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid public_key_pem for alg: "+err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
 			return
 		}
 	case trustlist.AlgWebAuthnEdDSA:
 		if _, err := trustlist.ParseEd25519PinPEM([]byte(req.PublicKeyPEM)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid public_key_pem for alg: "+err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
 			return
 		}
 	default:
-		writeError(w, http.StatusBadRequest, "unsupported alg (a login passkey must be webauthn-es256 or webauthn-eddsa)")
+		writeAPIError(w, apierr.New(apierr.CodeReqUnsupportedAlg).With("alg", req.Alg))
 		return
 	}
 	if strings.TrimSpace(req.CredentialID) == "" {
-		writeError(w, http.StatusBadRequest, "credential_id is required")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "credential_id"))
 		return
 	}
 	if strings.TrimSpace(req.RPID) == "" {
-		writeError(w, http.StatusBadRequest, "rpid is required (it binds the assertion's relying party)")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "rpid"))
 		return
 	}
 	now := time.Now().UTC()
@@ -242,7 +243,7 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 	}
 	op.UpdatedAt = now
 	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to register passkey")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -258,7 +259,7 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 // removes the credential. Idempotent when no passkey is registered.
 func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	op, tenant, ok := h.currentOperator(w, r)
@@ -271,7 +272,7 @@ func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.
 	}
 	var req passkeyDisableRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	now := time.Now().UTC()
@@ -279,7 +280,7 @@ func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.
 		// Leg 1: issue a re-auth challenge for the registered credential.
 		challenge, err := h.issueLoginChallenge(r.Context(), op.Username, now)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to issue passkey challenge")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, passkeyChallengeResponseJSON{
@@ -292,13 +293,13 @@ func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.
 	}
 	// Leg 2: verify the fresh assertion, then remove the credential.
 	if err := h.verifyLoginAssertion(r.Context(), tenant, op, *req.Passkey, now); err != nil {
-		writeError(w, http.StatusBadRequest, "passkey verification failed")
+		writeAPIError(w, apierr.New(apierr.CodeAuthPasskeyVerifyFailed))
 		return
 	}
 	op.LoginCredential = nil
 	op.UpdatedAt = now
 	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to disable passkey")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -318,16 +319,16 @@ func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.
 // low-value signal and the actual authentication is rate-limited at finish.
 func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	var req passkeyLoginBeginRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	if strings.TrimSpace(req.Username) == "" {
-		writeError(w, http.StatusBadRequest, "username is required")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "username"))
 		return
 	}
 	now := time.Now().UTC()
@@ -339,14 +340,14 @@ func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *ht
 	allowed, _, retry := h.loginLimiter.registerAttempt(now, "user:"+req.Username, "ip:"+clientIP(r))
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		writeAPIError(w, apierr.New(apierr.CodeAuthRateLimited))
 		return
 	}
 	op, err := h.store.GetOperator(r.Context(), h.tenant, req.Username)
 	if err == nil && op.LoginCredential != nil {
 		challenge, err := h.issueLoginChallenge(r.Context(), op.Username, now)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to issue passkey challenge")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, passkeyChallengeResponseJSON{
@@ -374,12 +375,12 @@ func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *ht
 // locked-out account is locked across both paths). Every failure is a uniform 401.
 func (h *ControllerHandler) HandlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	var req passkeyLoginFinishRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	now := time.Now().UTC()
@@ -388,18 +389,18 @@ func (h *ControllerHandler) HandlePasskeyLoginFinish(w http.ResponseWriter, r *h
 	allowed, justLocked, retry := h.loginLimiter.registerAttempt(now, userKey, ipKey)
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		writeAPIError(w, apierr.New(apierr.CodeAuthRateLimited))
 		return
 	}
 	op, err := h.store.GetOperator(r.Context(), h.tenant, req.Username)
 	if err != nil || op.LoginCredential == nil || req.Passkey == nil {
 		h.auditLockout(r.Context(), now, req.Username, justLocked)
-		writeError(w, http.StatusUnauthorized, "passkey login failed")
+		writeAPIError(w, apierr.New(apierr.CodeAuthPasskeyFailed))
 		return
 	}
 	if err := h.verifyLoginAssertion(r.Context(), h.tenant, op, *req.Passkey, now); err != nil {
 		h.auditLockout(r.Context(), now, req.Username, justLocked)
-		writeError(w, http.StatusUnauthorized, "passkey login failed")
+		writeAPIError(w, apierr.New(apierr.CodeAuthPasskeyFailed))
 		return
 	}
 	h.mintSessionResponse(w, r.Context(), op, now, userKey, ipKey)

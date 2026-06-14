@@ -39,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
@@ -107,18 +108,18 @@ func bearerToken(r *http.Request) (string, bool) {
 // the same opaque 401. There is therefore no separate revoked-node branch here: a
 // revoked node's token is indistinguishable from any other invalid token, which is
 // the desired behaviour (a revoked credential simply stops resolving).
-func (h *ControllerHandler) authenticateNode(r *http.Request) (authResult, int, string) {
+func (h *ControllerHandler) authenticateNode(r *http.Request) (authResult, *apierr.Error) {
 	tok, ok := bearerToken(r)
 	if !ok {
-		return authResult{}, http.StatusUnauthorized, "bearer token required"
+		return authResult{}, apierr.New(apierr.CodeReqBearerRequired)
 	}
 	node, err := h.store.LookupNodeByAPIToken(r.Context(), h.tenant, controller.HashToken(tok))
 	if err != nil {
 		// ErrTokenInvalid covers an unmapped/stale token AND any non-approved node
 		// (Store contract); either way the caller is not an authenticated active node.
-		return authResult{}, http.StatusUnauthorized, "invalid bearer token"
+		return authResult{}, apierr.New(apierr.CodeReqBearerRequired).Wrap(err)
 	}
-	return authResult{tenant: h.tenant, node: node.NodeID}, 0, ""
+	return authResult{tenant: h.tenant, node: node.NodeID}, nil
 }
 
 // requireNode wraps an agent handler: it authenticates the caller via its per-node
@@ -127,9 +128,9 @@ func (h *ControllerHandler) authenticateNode(r *http.Request) (authResult, int, 
 // itself.
 func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		auth, status, msg := h.authenticateNode(r)
-		if status != 0 {
-			writeError(w, status, msg)
+		auth, ae := h.authenticateNode(r)
+		if ae != nil {
+			writeAPIError(w, ae)
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, auth.tenant)
@@ -159,17 +160,17 @@ func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc
 			// (GET/HEAD/OPTIONS) are exempt.
 			tok, ok = sessionCookieToken(r)
 			if ok && isStateChanging(r.Method) && !csrfValid(r) {
-				writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+				writeAPIError(w, apierr.New(apierr.CodeReqCSRFInvalid))
 				return
 			}
 		}
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "bearer token required")
+			writeAPIError(w, apierr.New(apierr.CodeReqBearerRequired))
 			return
 		}
 		operator, ok := h.resolveOperator(r.Context(), tok)
 		if !ok {
-			writeError(w, http.StatusForbidden, "operator privileges required")
+			writeAPIError(w, apierr.New(apierr.CodeReqOperatorRequired))
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, h.tenant)

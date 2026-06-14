@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
@@ -74,7 +75,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 	case http.MethodGet:
 		cs, err := h.loadSettings(r)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read settings")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, h.settingsResponse(cs))
@@ -82,12 +83,12 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 	case http.MethodPost:
 		tenant, actor, ok := identity(r.Context())
 		if !ok {
-			writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+			writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 			return
 		}
 		var req settingsJSON
 		if err := decodeJSON(w, r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 			return
 		}
 		// A POST always carries an explicit translucency bool (the panel sends it), so pin
@@ -101,22 +102,22 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 		}.WithDefaults()
 		if cs.PublicAgentURL != "" {
 			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
-				writeError(w, http.StatusBadRequest, "public_agent_url: "+err.Error())
+				writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_agent_url").Wrap(err))
 				return
 			}
 		}
 		if cs.GithubProxy != "" {
 			if err := validateAbsoluteHTTPURL(cs.GithubProxy); err != nil {
-				writeError(w, http.StatusBadRequest, "github_proxy: "+err.Error())
+				writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "github_proxy").Wrap(err))
 				return
 			}
 		}
 		if err := validateAbsoluteHTTPURL(cs.AgentReleaseBaseURL); err != nil {
-			writeError(w, http.StatusBadRequest, "agent_release_base_url: "+err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_release_base_url").Wrap(err))
 			return
 		}
 		if err := h.store.PutSettings(r.Context(), tenant, cs); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to save settings")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 		_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -127,7 +128,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, h.settingsResponse(cs))
 
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "only GET and POST are supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET, POST"))
 	}
 }
 
@@ -138,12 +139,12 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 // the single-use enrollment token via a flag.
 func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	cs, err := h.loadSettings(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read settings")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	// The agent's --controller is scheme://host[:port] + the AGENT secret path prefix
@@ -166,7 +167,7 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	if oc, err := h.store.GetOperatorCredential(r.Context(), h.tenant); err == nil {
 		cred = &oc
 	} else if !errors.Is(err, controller.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "failed to read operator credential")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 

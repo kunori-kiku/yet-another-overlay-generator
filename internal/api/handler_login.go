@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
@@ -63,12 +64,12 @@ type loginResponseJSON struct {
 // scoped token). See docs/spec/controller/operator-auth.md.
 func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	var req loginRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -84,7 +85,7 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 	allowed, justLocked, retry := h.loginLimiter.registerAttempt(now, userKey, ipKey)
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		writeAPIError(w, apierr.New(apierr.CodeAuthRateLimited))
 		return
 	}
 
@@ -94,14 +95,14 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		// wrong-password branch (no username oracle), then fail uniformly.
 		controller.DummyVerifyPassword(req.Password)
 		h.auditLockout(r.Context(), now, req.Username, justLocked)
-		writeError(w, http.StatusUnauthorized, "invalid username or password")
+		writeAPIError(w, apierr.New(apierr.CodeAuthCredentialsInvalid))
 		return
 	}
 
 	ok, err := controller.VerifyPassword(op.PasswordHash, req.Password)
 	if err != nil || !ok {
 		h.auditLockout(r.Context(), now, req.Username, justLocked)
-		writeError(w, http.StatusUnauthorized, "invalid username or password")
+		writeAPIError(w, apierr.New(apierr.CodeAuthCredentialsInvalid))
 		return
 	}
 
@@ -140,7 +141,7 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 		if totpOK {
 			a, aerr := h.store.AdvanceTOTPStep(r.Context(), h.tenant, op.Username, step)
 			if aerr != nil {
-				writeError(w, http.StatusInternalServerError, "failed to update operator")
+				writeCodedOr(w, apierr.CodeInternalStorage, aerr)
 				return
 			}
 			advanced = a
@@ -173,12 +174,12 @@ func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx conte
 	// CSPRNG failure aborts without leaving an orphaned session in the store.
 	csrf, err := newCSRFToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create session")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	plaintext, sess := controller.NewSession(op.Username, h.sessionTTL, now)
 	if err := h.store.CreateSession(ctx, h.tenant, sess); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create session")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	h.loginLimiter.succeed(userKey, ipKey)
@@ -221,7 +222,7 @@ func (h *ControllerHandler) auditLockout(ctx context.Context, now time.Time, use
 // and still returns 204.
 func (h *ControllerHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	// The session may have authenticated via the Bearer header OR the httpOnly cookie;
@@ -235,7 +236,7 @@ func (h *ControllerHandler) HandleLogout(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := h.store.DeleteSession(r.Context(), h.tenant, controller.HashToken(tok)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to revoke session")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
