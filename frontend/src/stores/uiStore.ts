@@ -17,10 +17,22 @@ interface UiState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
   /** Vibrancy/translucency on the shell chrome. Default on; off = solid surfaces
-   *  ("plainer minimalism"). Client fallback here; P5 makes it server-backed in
-   *  controller mode (ControllerSettings.Translucency) with this as the local fallback. */
+   *  ("plainer minimalism"). This is the EFFECTIVE value the ThemeProvider reads. In
+   *  controller mode the server is the source of truth and drives it via
+   *  applyServerTranslucency(); in local mode the user's setTranslucency() drives it. */
   translucency: boolean;
+  /** The user's LOCAL preference, persisted independently of the controller server-pushed
+   *  value (plan-10 / A3). setTranslucency() (local-mode toggle) updates it;
+   *  applyServerTranslucency() (server push / controller-mode toggle) does NOT — so a
+   *  controller→local switch can restore the local preference instead of inheriting the
+   *  server's fleet appearance. */
+  localTranslucency: boolean;
+  /** Local-mode toggle: set the effective value AND remember it as the local preference. */
   setTranslucency: (on: boolean) => void;
+  /** Server push (controller mode): set the effective value ONLY; leave the local pref intact. */
+  applyServerTranslucency: (on: boolean) => void;
+  /** controller→local boundary: revert the effective value to the local preference (A3). */
+  restoreLocalTranslucency: () => void;
   toggleTranslucency: () => void;
 }
 
@@ -38,8 +50,12 @@ export const useUiStore = create<UiState>()(
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       translucency: true,
-      setTranslucency: (translucency) => set({ translucency }),
-      toggleTranslucency: () => set((state) => ({ translucency: !state.translucency })),
+      localTranslucency: true,
+      setTranslucency: (translucency) => set({ translucency, localTranslucency: translucency }),
+      applyServerTranslucency: (translucency) => set({ translucency }),
+      restoreLocalTranslucency: () => set((state) => ({ translucency: state.localTranslucency })),
+      toggleTranslucency: () =>
+        set((state) => ({ translucency: !state.translucency, localTranslucency: !state.translucency })),
     }),
     {
       name: 'ui-storage',
@@ -49,6 +65,7 @@ export const useUiStore = create<UiState>()(
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,
         translucency: state.translucency,
+        localTranslucency: state.localTranslucency,
       }),
     },
   ),

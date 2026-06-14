@@ -12,24 +12,31 @@ export function SettingsPage() {
   const language = useTopologyStore((s) => s.language);
   const mode = useControllerStore((s) => s.mode);
   const setMode = useControllerStore((s) => s.setMode);
-  const purgeModeBoundaryState = useTopologyStore((s) => s.purgeModeBoundaryState);
-  const clearModeNotices = useControllerStore((s) => s.clearModeNotices);
+  // controller→local goes through the shared, serverHeld-aware switch (plan-10 / T1) so the
+  // login gate and this page can never diverge (the old purge-only path here leaked the
+  // server-held fleet design into localStorage). canvasFromServer drives the confirm copy.
+  const switchToLocal = useControllerStore((s) => s.switchToLocal);
+  const canvasFromServer = useTopologyStore((s) => s.canvasFromServer);
   // controller→local is a LOSSY switch (plan-5, D6): confirm before purging.
   const [showSwitchToLocal, setShowSwitchToLocal] = useState(false);
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
   const translucency = useUiStore((s) => s.translucency);
   const setTranslucency = useUiStore((s) => s.setTranslucency);
+  const applyServerTranslucency = useUiStore((s) => s.applyServerTranslucency);
   const settings = useControllerStore((s) => s.settings);
   const saveSettings = useControllerStore((s) => s.saveSettings);
 
   // Translucency is applied via uiStore (the appearance source ThemeProvider reads). In
-  // controller mode the server is the source of truth, so also persist it there
-  // (merging the current bootstrap settings); local mode persists client-side only.
+  // controller mode the server is the source of truth: set only the EFFECTIVE value
+  // (applyServerTranslucency leaves the user's local preference intact — A3) and persist
+  // to the server. In local mode setTranslucency records the local preference.
   const onTranslucencyChange = (on: boolean) => {
-    setTranslucency(on);
-    if (mode === 'controller' && settings) {
-      void saveSettings({ ...settings, translucency: on });
+    if (mode === 'controller') {
+      applyServerTranslucency(on);
+      if (settings) void saveSettings({ ...settings, translucency: on });
+    } else {
+      setTranslucency(on);
     }
   };
 
@@ -49,9 +56,10 @@ export function SettingsPage() {
     }
   };
   const confirmSwitchToLocal = () => {
-    purgeModeBoundaryState(); // graph survives; keys/pins/compile-history purged
-    clearModeNotices(); // drop any controller-mode banners (hydration/strip/shrink)
-    setMode('local');
+    // Shared serverHeld-aware switch (plan-10 / T1): flushes a server-held mirror (no fleet
+    // secret leak) or purges local-original work (graph survives), clears notices, restores
+    // local translucency, sets mode=local — identical to the login-gate path.
+    switchToLocal();
     setShowSwitchToLocal(false);
   };
 
@@ -89,17 +97,28 @@ export function SettingsPage() {
             <h4 className="text-base font-semibold text-amber-400">
               {t(language, 'settingsPage.switchToLocalMode')}
             </h4>
-            <p className="text-sm text-gray-300">
-              {t(language, 'settingsPage.yourDesignGraphIs')}
-            </p>
-            <ul className="list-disc space-y-1 pl-5 text-sm text-gray-400">
-              <li>{t(language, 'settingsPage.wireguardPublicPrivateKeys')}</li>
-              <li>{t(language, 'settingsPage.allocationPinsOverlayIPs')}</li>
-              <li>{t(language, 'settingsPage.compileHistoryAndThe')}</li>
-            </ul>
-            <p className="text-xs text-amber-300/80">
-              {t(language, 'settingsPage.thisGuaranteesNoFleet')}
-            </p>
+            {/* Copy forks on canvasFromServer (plan-10 / T1): a server-held mirror is FLUSHED
+                (graph not kept) — say so accurately instead of the local-original "graph is
+                kept, secrets purged" copy, which would be false for a server mirror. */}
+            {canvasFromServer ? (
+              <p className="text-sm text-gray-300">
+                {t(language, 'settingsPage.serverHeldClearsLocal')}
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-gray-300">
+                  {t(language, 'settingsPage.yourDesignGraphIs')}
+                </p>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-gray-400">
+                  <li>{t(language, 'settingsPage.wireguardPublicPrivateKeys')}</li>
+                  <li>{t(language, 'settingsPage.allocationPinsOverlayIPs')}</li>
+                  <li>{t(language, 'settingsPage.compileHistoryAndThe')}</li>
+                </ul>
+                <p className="text-xs text-amber-300/80">
+                  {t(language, 'settingsPage.thisGuaranteesNoFleet')}
+                </p>
+              </>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"

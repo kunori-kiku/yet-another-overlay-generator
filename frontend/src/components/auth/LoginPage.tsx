@@ -27,10 +27,7 @@ export function LoginPage() {
   const loginCeremony = useControllerStore((s) => s.loginCeremony);
   const totpRequired = useControllerStore((s) => s.totpRequired);
   const resetTOTPChallenge = useControllerStore((s) => s.resetTOTPChallenge);
-  const setMode = useControllerStore((s) => s.setMode);
-  const purgeModeBoundaryState = useTopologyStore((s) => s.purgeModeBoundaryState);
-  const flushWorkspace = useTopologyStore((s) => s.flushWorkspace);
-  const clearModeNotices = useControllerStore((s) => s.clearModeNotices);
+  const switchToLocal = useControllerStore((s) => s.switchToLocal);
 
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -309,9 +306,10 @@ export function LoginPage() {
             <button
               type="button"
               onClick={() => {
-                // 安全分叉：若画布是服务端机密镜像（canvasFromServer），未登录者无权把它「带走」到
-                // 本地——整画布清空（flushWorkspace），绝不让 fleet 的公网 IP/SSH 目标随切换泄漏。
-                // 仅当画布是本地原创工作时，才走 D6 的「保图、清密钥/分配/历史」有损切换。
+                // 安全分叉的确认文案据 canvasFromServer 选择：服务端机密镜像 → 警告整画布清空
+                //（绝不让 fleet 的公网 IP/SSH 目标随切换泄漏）；本地原创工作 → D6 的「保图、清
+                // 密钥/分配/历史」。实际切换逻辑统一走 controllerStore.switchToLocal（与设置页共用，
+                // 杜绝两处发散——plan-10 / T1）。确认后导航到本地落地页。
                 const serverHeld = useTopologyStore.getState().canvasFromServer;
                 const ok = window.confirm(
                   serverHeld
@@ -319,10 +317,7 @@ export function LoginPage() {
                     : t(language, 'loginPage.switchingToLocalMode'),
                 );
                 if (ok) {
-                  if (serverHeld) flushWorkspace();
-                  else purgeModeBoundaryState();
-                  clearModeNotices();
-                  setMode('local');
+                  switchToLocal();
                   navigate(landingPathForMode('local'));
                 }
               }}

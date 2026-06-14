@@ -232,6 +232,10 @@ interface ControllerState {
   // 清掉 controller 模式相关的临时提示（hydration / 剥离 / 待确认缩水）。controller→local
   // 切换时调用，避免本地模式下还残留控制器模式的横幅（plan-5 review）。
   clearModeNotices: () => void;
+  // controller→local 的统一切换（plan-10 / T1）：把「服务端镜像→整画布清空 / 本地原创→保图清密钥」
+  // 这一安全分叉收敛到一处，供登录门与设置页共用，杜绝两处实现发散导致的 fleet 机密泄漏。
+  // 同时清提示、还原本地 translucency 偏好（A3）、置 mode=local。调用方负责确认对话框与导航。
+  switchToLocal: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
 }
@@ -382,7 +386,7 @@ export const useControllerStore = create<ControllerState>()(
             const settings = await getSettings(cfg);
             set({ settings });
             if (get().mode === 'controller') {
-              useUiStore.getState().setTranslucency(settings.translucency);
+              useUiStore.getState().applyServerTranslucency(settings.translucency);
             }
           } catch {
             /* 设置拉取失败：保留已有 settings，不覆盖 fleet 视图的成功状态。 */
@@ -401,9 +405,12 @@ export const useControllerStore = create<ControllerState>()(
           const settings = await getSettings(configOf(get()));
           set({ settings });
           // In controller mode the server is the source of truth for translucency; apply
-          // it to the appearance store. In local mode the client uiStore value stands.
+          // it to the appearance store as the EFFECTIVE value only (applyServerTranslucency
+          // leaves the user's local preference intact, so a later controller→local switch
+          // restores it rather than inheriting the fleet's appearance — plan-10 / A3). In
+          // local mode the client uiStore value stands.
           if (get().mode === 'controller') {
-            useUiStore.getState().setTranslucency(settings.translucency);
+            useUiStore.getState().applyServerTranslucency(settings.translucency);
           }
         } catch (err) {
           set({ error: err instanceof Error ? err.message : 'Failed to load settings' });
@@ -618,9 +625,14 @@ export const useControllerStore = create<ControllerState>()(
               sessionExpiresAt: info.expiresAt || null,
               csrfToken: info.csrfToken,
             });
-            // 服务端权威 hydration（D1）：会话恢复也覆盖本地画布——但仅在登录态由假变真的
-            // 那次（mount/刷新恢复），避免 Shell 的 mode 翻转 effect 重复触发重复覆盖。
-            if (!wasLoggedIn) {
+            // 服务端权威 hydration（D1）：会话恢复覆盖本地画布。两种触发：
+            //   (1) 登录态由假变真（mount / 刷新恢复）——首次进入必拉取；
+            //   (2) 已登录但画布不是服务端镜像（!canvasFromServer）——这正是「已登录时
+            //       local→controller 再切回」的场景（plan-10 / A2）：Shell 的 mode 翻转 effect
+            //       会再调 checkSession，此时 wasLoggedIn 仍为真，旧逻辑不会重拉，于是陈旧的本地
+            //       状态冒充服务端设计。补这条件后，重新进入 controller 必从服务端权威重拉。
+            // 稳态（已登录 + 画布已是服务端镜像）下两条件皆假，不会无谓重复覆盖。
+            if (!wasLoggedIn || !useTopologyStore.getState().canvasFromServer) {
               await get().hydrateFromServer();
             }
           } else {
@@ -962,6 +974,22 @@ export const useControllerStore = create<ControllerState>()(
       cancelShrinkConfirm: () => set({ pendingShrink: null }),
       dismissStripNotice: () => set({ lastStrippedKeys: 0 }),
       clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null }),
+
+      // controller→local 的单一切换路径（plan-10 / T1）。安全分叉与登录门 LoginPage 完全一致：
+      //   - 画布是服务端机密镜像（canvasFromServer）→ flushWorkspace 整体清空（绝不让 fleet 的
+      //     公网 IP / SSH 目标随切换残留在本地 / localStorage）；
+      //   - 画布是本地原创工作 → purgeModeBoundaryState 保图、清密钥/分配/编译历史（D6 有损切换）。
+      // 之前 SettingsPage 只调 purgeModeBoundaryState（无 serverHeld 分叉），会把机密镜像降级为
+      // 可持久化的本地数据 → fleet 机密落 localStorage（审计 T1）。收敛到这里后两处不可能再发散。
+      // 另：还原本地 translucency 偏好（A3，服务端推送值不得带入本地模式）+ 清控制器横幅。
+      switchToLocal: () => {
+        const topo = useTopologyStore.getState();
+        if (topo.canvasFromServer) topo.flushWorkspace();
+        else topo.purgeModeBoundaryState();
+        get().clearModeNotices();
+        useUiStore.getState().restoreLocalTranslucency();
+        set({ mode: 'local' });
+      },
 
       // 驱逐一个节点后刷新视图。
       revoke: async (nodeId) => {
