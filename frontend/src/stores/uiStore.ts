@@ -33,7 +33,6 @@ interface UiState {
   applyServerTranslucency: (on: boolean) => void;
   /** controller→local boundary: revert the effective value to the local preference (A3). */
   restoreLocalTranslucency: () => void;
-  toggleTranslucency: () => void;
 }
 
 export const useUiStore = create<UiState>()(
@@ -54,11 +53,21 @@ export const useUiStore = create<UiState>()(
       setTranslucency: (translucency) => set({ translucency, localTranslucency: translucency }),
       applyServerTranslucency: (translucency) => set({ translucency }),
       restoreLocalTranslucency: () => set((state) => ({ translucency: state.localTranslucency })),
-      toggleTranslucency: () =>
-        set((state) => ({ translucency: !state.translucency, localTranslucency: !state.translucency })),
     }),
     {
       name: 'ui-storage',
+      // localTranslucency was added in plan-10 (A3). For users upgrading from a blob that
+      // only had `translucency`, seed localTranslucency from it so their pre-upgrade local
+      // preference survives the first load (otherwise it would default to true and a
+      // translucency-OFF user could see it flip on after a controller round-trip).
+      version: 1,
+      migrate: (persisted, fromVersion) => {
+        const p = (persisted ?? {}) as Partial<UiState>;
+        if (fromVersion < 1 && p.localTranslucency === undefined && typeof p.translucency === 'boolean') {
+          p.localTranslucency = p.translucency;
+        }
+        return p as UiState;
+      },
       // Explicit allowlist: only non-secret UI prefs are persisted. Locks the
       // zero-knowledge custody invariant in for future fields added to this store.
       partialize: (state) => ({

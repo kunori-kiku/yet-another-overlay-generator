@@ -79,19 +79,62 @@ function stableStringify(value: unknown): string {
   );
 }
 
+// Go `omitempty`-tagged fields (internal/model/topology.go): the server DROPS these on
+// marshal when zero/empty, so a client design and its server round-trip only compare equal
+// if the client drops them too. NON-omitempty fields (ids/names, capabilities bools,
+// is_enabled, public_endpoint.port, domain cidr/modes) are PRESERVED even when zero. Listed
+// per-slice because `role` collides (Node.role is required, Edge.role is omitempty) — a flat
+// name set would wrongly drop a node's role. KEEP IN SYNC with the model's json tags.
+const PROJECT_OMITEMPTY = ['description', 'version'];
+const DOMAIN_OMITEMPTY = ['description', 'reserved_ranges', 'transit_cidr'];
+const NODE_OMITEMPTY = [
+  'hostname', 'platform', 'overlay_ip', 'listen_port', 'mtu', 'xdp_mode', 'router_id',
+  'fixed_private_key', 'wireguard_private_key', 'wireguard_public_key', 'public_endpoints',
+  'extra_prefixes', 'ssh_alias', 'ssh_host', 'ssh_port', 'ssh_user', 'ssh_key_path',
+];
+const EDGE_OMITEMPTY = [
+  'endpoint_host', 'endpoint_port', 'compiled_port', 'priority', 'weight', 'role', 'transport',
+  'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip', 'pinned_to_transit_ip',
+  'pinned_from_link_local', 'pinned_to_link_local',
+];
+
+// isEmptyVal mirrors Go's encoding/json `omitempty` "empty" definition: false, 0, "", nil,
+// and zero-length slices. (Empty objects/structs are NOT omitted by Go, and aren't dropped here.)
+function isEmptyVal(v: unknown): boolean {
+  return (
+    v === undefined || v === null || v === '' || v === 0 || v === false ||
+    (Array.isArray(v) && v.length === 0)
+  );
+}
+
+function dropOmitempty(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out = { ...obj };
+  for (const k of keys) if (k in out && isEmptyVal(out[k])) delete out[k];
+  return out;
+}
+
 // canonicalDesign serializes a design exactly as the server stores it, for equality
-// comparison: the loadSlices projection, key-order-insensitive (stableStringify), with
-// each node's wireguard_private_key dropped — controller mode is zero-knowledge, the
-// server never stores a private key, so a save/hydrate round-trip must compare equal.
-// Used for the dirty-state indicator and the save-time conflict check (plan-10 / T2).
+// comparison: the loadSlices projection, key-order-insensitive (stableStringify), with Go
+// `omitempty` zero-values dropped (so a save/hydrate round-trip compares equal) and every
+// node's wireguard_private_key dropped unconditionally (controller mode is zero-knowledge —
+// the server never stores a private key). Used for the dirty-state indicator + save-time
+// conflict check (plan-10 / T2). Comparison is conservative: any residual asymmetry reads as
+// "differs", which only over-warns (extra backup/conflict), never silently overwrites.
 export function canonicalDesign(t: Topology): string {
   const s = loadSlices(t);
-  const nodes = (s.nodes as Array<Record<string, unknown>>).map((n) => {
-    const copy = { ...n };
-    delete copy.wireguard_private_key;
-    return copy;
-  });
-  return stableStringify({ ...s, nodes });
+  const norm: Record<string, unknown> = {
+    project: dropOmitempty(s.project as Record<string, unknown>, PROJECT_OMITEMPTY),
+    domains: (s.domains as Array<Record<string, unknown>>).map((d) => dropOmitempty(d, DOMAIN_OMITEMPTY)),
+    nodes: (s.nodes as Array<Record<string, unknown>>).map((n) => {
+      const x = dropOmitempty(n, NODE_OMITEMPTY);
+      delete x.wireguard_private_key; // always dropped (even if non-empty): never on the server
+      return x;
+    }),
+    edges: (s.edges as Array<Record<string, unknown>>).map((e) => dropOmitempty(e, EDGE_OMITEMPTY)),
+  };
+  // alloc_schema_version is omitempty: present only when > 0 (mirrors loadSlices + the server).
+  if (s.alloc_schema_version) norm.alloc_schema_version = s.alloc_schema_version;
+  return stableStringify(norm);
 }
 
 // isDesignDirty: does the current design differ from the last server-synced snapshot
@@ -634,6 +677,10 @@ export const useControllerStore = create<ControllerState>()(
         } catch {
           // 撤销失败不阻塞本地登出（session 仍会在服务端按 TTL 过期）。
         }
+        // 在清空前捕获同步快照：下面的 set() 会把 lastSyncedSnapshot 置 null，而 set 是同步的，
+        // 若之后再 get().lastSyncedSnapshot 取到的就是 null —— gate 的 dirty 判定会把任何非空
+        // 服务端画布都当作 dirty，于是每次登出都误触一次备份下载（plan-10 review）。先存基线。
+        const snap = get().lastSyncedSnapshot;
         set({
           sessionToken: '',
           csrfToken: '',
@@ -659,8 +706,11 @@ export const useControllerStore = create<ControllerState>()(
         // 安全：登出后画布若是服务端机密镜像，立即清空（内存 + 由 persist 连带清掉 localStorage）。
         // 否则登出态下任何人都能从画布/localStorage 读出 fleet 的公网 IP 与 SSH 目标。本地原创
         // 工作（canvasFromServer=false）不动——那是用户自有数据。复用 clearServerCanvasAtGate
-        // 让三处冲刷点（logout / 会话失效 / partialize）用同一个谓词，而非各自展开。
-        clearServerCanvasAtGate(get().mode, get().lastSyncedSnapshot);
+        // 让三处冲刷点（logout / 会话失效 / partialize）用同一个谓词，而非各自展开。传入登出前
+        // 捕获的 snap（而非已被置 null 的 get().lastSyncedSnapshot），dirty 判定才准确。
+        clearServerCanvasAtGate(get().mode, snap);
+        // A3：会话结束，外观回到本地偏好——服务端推送的舰队 translucency 不应在登出/登录门残留。
+        useUiStore.getState().restoreLocalTranslucency();
       },
 
       // 刷新后恢复登录态（P5）：GET /session 用 httpOnly cookie 探测当前会话。命中则置
@@ -695,12 +745,17 @@ export const useControllerStore = create<ControllerState>()(
               await get().hydrateFromServer();
             }
           } else {
-            set({ loggedIn: false, csrfToken: '' });
-            clearServerCanvasAtGate(get().mode, get().lastSyncedSnapshot);
+            // 会话失效：先捕获基线再清（同 logout 的顺序修复），gate 用 live 基线判 dirty 才准。
+            const lostSnap = get().lastSyncedSnapshot;
+            set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, saveConflict: false });
+            clearServerCanvasAtGate(get().mode, lostSnap);
+            useUiStore.getState().restoreLocalTranslucency(); // A3：回登录门用本地外观偏好
           }
         } catch {
-          set({ loggedIn: false });
-          clearServerCanvasAtGate(get().mode, get().lastSyncedSnapshot);
+          const lostSnap = get().lastSyncedSnapshot;
+          set({ loggedIn: false, lastSyncedSnapshot: null, saveConflict: false });
+          clearServerCanvasAtGate(get().mode, lostSnap);
+          useUiStore.getState().restoreLocalTranslucency();
         }
       },
 
@@ -974,6 +1029,9 @@ export const useControllerStore = create<ControllerState>()(
           // divergent canvas as server-held, so partialize/gate would later flush those
           // post-warning edits with no backup. Load the snapshot so the canvas equals what
           // was actually uploaded; otherwise just flip the flag (live canvas IS what we sent).
+          // (loadTopology also resets compile history + selection — intentional here, the canvas
+          // is being replaced by the uploaded snapshot; compile history is empty in controller
+          // mode anyway since local compile is refused.)
           if (confirming) {
             useTopologyStore.getState().loadTopology(confirming.snapshot, true);
           } else {
@@ -1078,10 +1136,18 @@ export const useControllerStore = create<ControllerState>()(
           // 零知识 fail-safe：与 deploy() 一致，上送前剥离私钥（控制器画布本就无私钥，这是兜底）。
           const current = useTopologyStore.getState().getTopology();
           const { topo: clean, stripped } = stripPrivateKeys(current);
+          // no-op 守卫：设计与上次同步基线一致就直接返回——既不发网络请求，也不在服务端徒增一条
+          // 相同内容的版本历史（后端不做内容去重，徒增的版本还会挤掉真正的旧版本）。force 跳过它。
+          // 用 isDesignDirty：基线为 null 且画布为空（首次、无可保存内容）也正确判为「非 dirty」。
+          if (!opts?.force && !isDesignDirty(current, get().lastSyncedSnapshot)) {
+            set({ loading: false });
+            return;
+          }
           // 客户端冲突检测（D13）：除非 force，save 前重新 GET 服务端设计与上次同步快照比对。
           // 服务端在我们之后被改动 → 不盲目覆盖，置 saveConflict 让 UI 给出「重新同步 / 覆盖 /
-          // 取消」。best-effort：读取失败则跳过检测照常保存（与 deploy 的缩水守卫一致），避免
-          // 瞬时网络错误误报冲突；真正的写入问题由 update-topology 自身报错。
+          // 取消」。best-effort：守卫读取失败则跳过冲突检测照常保存（与 deploy 的缩水守卫一致），
+          // 避免瞬时网络错误误报冲突。注意这意味着一旦守卫读失败，本次保存会盲写覆盖——
+          // update-topology 只报告写入「失败」，不会报告「过期覆盖」（无后端乐观并发，见 D13）。
           if (!opts?.force) {
             let readOk = true;
             let serverNow: Topology | null = null;
