@@ -45,8 +45,16 @@ func TestNoChineseInValidatorSource(t *testing.T) {
 			t.Fatalf("read %s: %v", f, err)
 		}
 		for i, line := range strings.Split(string(b), "\n") {
-			if cjk.MatchString(line) && !strings.Contains(line, "//") {
-				t.Errorf("%s:%d has Chinese outside a // comment (code/strings must be English): %s", f, i+1, strings.TrimSpace(line))
+			// Scan only the CODE portion (strip the // comment): Chinese is allowed in
+			// developer comments, never in a string literal that could reach a user. Keying on
+			// the mere presence of "//" anywhere on the line would let a Chinese string literal
+			// with a trailing comment slip past (plan-3.5a review).
+			code := line
+			if c := strings.Index(code, "//"); c >= 0 {
+				code = code[:c]
+			}
+			if cjk.MatchString(code) {
+				t.Errorf("%s:%d has Chinese in code/string position (must be English): %s", f, i+1, strings.TrimSpace(line))
 			}
 		}
 	}

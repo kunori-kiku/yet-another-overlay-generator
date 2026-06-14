@@ -961,12 +961,17 @@ func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*m
 
 // linkDescription 为错误消息构造一条链路的可读描述：标明朝向的对端、链路类别（primary/backup）
 // 与代表边 ID，便于操作员定位需重命名的链路。
+// linkDescription builds a LANGUAGE-NEUTRAL locator for a colliding link from DATA only — the
+// role enum value (primary|backup), the remote node name, and the representative edge ID for a
+// backup — with NO translatable prose. It is interpolated as the {prefix}/{other} params of
+// CodeNodeInterfaceNameCollision, so it must render the same in every locale: prose here would
+// splice English into the zh message (plan-3.5a review). Role values are kept verbatim across
+// locales by the same convention as auto/manual/babel.
 func linkDescription(edge *model.Edge, remoteName string, backup bool) string {
-	kind := "primary link"
 	if backup {
-		kind = "backup link " + edge.ID
+		return fmt.Sprintf("backup→%s (%s)", remoteName, edge.ID)
 	}
-	return fmt.Sprintf("the %s toward %s", kind, remoteName)
+	return fmt.Sprintf("primary→%s", remoteName)
 }
 
 // validateSinglePrimaryPerPair 校验：同一对节点至多有一条显式标记 role=="primary" 的边。
