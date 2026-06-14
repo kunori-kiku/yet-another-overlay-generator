@@ -437,6 +437,7 @@ export const zh: Record<keyof typeof en, string> = {
   'deployBar.shrinkConfirmPrompt': "如果这是有意的，请键入 “{phrase}” 以确认。",
   'auditView.collapsedLines': "... {count} 行未变更已折叠 ...",
   'shell.importPlaceholdered': "控制器模式导入：已将 {count} 个私钥替换为占位（节点将使用自持的 agent 密钥）。",
+  'shell.importClearedKeys': "导入：已清除 {count} 个仅有公钥、缺少私钥的节点的密钥——编译时将重新生成。",
 
   'error.generic': '出错了，请重试。',
   // 基础 apierr 设施码（plan-2/3/3.5b）——始终可本地化的传输层错误。

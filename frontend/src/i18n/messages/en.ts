@@ -448,6 +448,7 @@ export const en = {
   'deployBar.shrinkConfirmPrompt': "If this is intentional, type “{phrase}” to confirm.",
   'auditView.collapsedLines': "... {count} unchanged lines collapsed ...",
   'shell.importPlaceholdered': "Imported under controller mode: {count} private key(s) replaced by placeholders — nodes will use their agent-held keys.",
+  'shell.importClearedKeys': "Imported: cleared {count} node(s) that had a public key but no private key — fresh keys will be generated on compile.",
 
   // Backend error-code localization (see tError). The per-code keys ('error.<code>')
   // are added as backend codes land; 'error.generic' is the shape-agnostic fallback.
