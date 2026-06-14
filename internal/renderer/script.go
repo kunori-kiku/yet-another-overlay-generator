@@ -159,15 +159,15 @@ if [ "$UNINSTALL" -eq 1 ]; then
 
     # Remove overlay SNAT rule and service
     #
-    # D52: 同 _overlay_snat_cleanup——按 wg 接口 + transit 源池整条删除，忽略 --to-source，
-    # 这样即便此前 overlay IP 变更过、留下了不同 --to-source 的旧规则，卸载也能彻底清除。
+    # D52: same as _overlay_snat_cleanup - delete each rule whole, matched by wg interface + transit
+    # source pool and ignoring --to-source, so uninstall fully clears even stale rules left by a prior overlay IP change.
     if command -v nft >/dev/null 2>&1; then
         nft delete table inet overlay-snat 2>/dev/null || true
     fi
     if command -v iptables >/dev/null 2>&1 && command -v iptables-save >/dev/null 2>&1; then
         {{ range .TransitCIDRs -}}
-        # 链式 grep -F 整条删除，顺序无关；见 Phase 1 的 _overlay_snat_cleanup 同样说明。
-        # grep 无匹配返回 1，叠加 set -o pipefail 会让管道非零、在 set -e 下中止；末尾 || true 兜底。
+        # Chained grep -F deletes each matching rule whole, order-independent; see Phase 1's _overlay_snat_cleanup.
+        # grep returns 1 on no match; with set -o pipefail that makes the pipe non-zero and aborts under set -e, so || true guards it.
         iptables-save -t nat 2>/dev/null \
             | grep -E '^-A POSTROUTING ' \
             | grep -F -- '-j SNAT' \
@@ -471,22 +471,22 @@ echo "Configuring overlay source address fix..."
 
 # Remove any previous overlay SNAT rules
 #
-# D52: 不能按精确规则（含 --to-source <当前 overlay IP>）删除——overlay IP 变更后
-# 重装会把旧的 --to-source 规则留在 POSTROUTING 里，导致包被错误地源改写为旧地址。
-# 改为：解析 iptables-save，把每条匹配 wg 接口 + transit 源池的 POSTROUTING SNAT 规则
-# 整条删除，无论其 --to-source 是什么。nft 路径直接删整张表，无此问题，保持原样。
+# D52: we cannot delete by an exact rule (with --to-source <current overlay IP>): after an overlay IP change a
+# reinstall would leave the old --to-source rule in POSTROUTING, wrongly source-rewriting packets to the old address.
+# Instead: parse iptables-save and delete EVERY POSTROUTING SNAT rule matching the wg interface + transit source
+# pool, whole, regardless of its --to-source. The nft path drops the whole table and has no such problem, so it is left as-is.
 _overlay_snat_cleanup() {
     if command -v nft >/dev/null 2>&1; then
         nft delete table inet overlay-snat 2>/dev/null || true
     fi
     if command -v iptables >/dev/null 2>&1 && command -v iptables-save >/dev/null 2>&1; then
         {{ range .TransitCIDRs -}}
-        # 逐条删除：iptables-save 输出里凡是 POSTROUTING 链中、出接口为 wg-+、源为 {{ . }}
-        # 且动作为 SNAT 的规则，都按其完整参数转成 -D 删除（忽略 --to-source 的具体值）。
-        # 用链式 grep -F 而非单条带顺序假设的正则：iptables-save 会规范化参数顺序
-        # （通常 -s 在 -o 之前），固定字符串匹配既不受顺序影响、也无需转义 CIDR 里的 . 和 /。
-        # grep 在无匹配时返回 1，叠加 set -o pipefail 会让整条管道返回非零；在 set -e 下
-        # 这会中止脚本。这里 || true 把「没有可删的旧规则」这一正常情形吞掉。
+        # Delete rule by rule: in the iptables-save output, every POSTROUTING rule whose out interface is wg-+, source is {{ . }},
+        # and action is SNAT is turned into a -D delete using its full parameters (ignoring the specific --to-source value).
+        # Use chained grep -F rather than a single order-assuming regex: iptables-save normalizes parameter order
+        # (usually -s before -o), so fixed-string matching is order-independent and needs no escaping of the . and / in the CIDR.
+        # grep returns 1 on no match; with set -o pipefail the whole pipe returns non-zero, and under set -e
+        # that would abort the script. The || true here swallows the normal "no old rule to delete" case.
         iptables-save -t nat 2>/dev/null \
             | grep -E '^-A POSTROUTING ' \
             | grep -F -- '-j SNAT' \
@@ -653,12 +653,12 @@ echo "  Started mimic@${MIMIC_EGRESS_IF}"
 
 # Start all WireGuard per-peer interfaces
 #
-# D53: 脚本运行在 set -euo pipefail 下。如果某个接口的 wg-quick up 失败而不容错，
-# 整个脚本会在 babeld 配置之前中止，留下一个「半启动」的节点（部分隧道起来了、
-# 路由守护进程却没配）。因此把每个接口的启动失败收集起来（FAILED_INTERFACES 累加），
-# 向 stderr 告警并继续，让 babeld 等后续步骤照常执行；脚本末尾打印失败汇总，并在
-# 有任何失败时以非零码退出（保证部署工具仍能感知失败），但退出发生在其余步骤之后。
-# 注意 set -e 的交互：必须用 if ! wg-quick up ...; then 形式，否则非零返回会直接中止。
+# D53: the script runs under set -euo pipefail. If one interface's wg-quick up failed without being tolerated,
+# the whole script would abort before configuring babeld, leaving a "half-started" node (some tunnels up but the
+# routing daemon unconfigured). So collect each interface's start failure (appended to FAILED_INTERFACES),
+# warn on stderr and continue so babeld and later steps still run; print a failure summary at the end and
+# exit non-zero if any failed (so the deploy tool still sees it), but only after the remaining steps have run.
+# Note the set -e interaction: use the 'if ! wg-quick up ...; then' form, or the non-zero return would abort outright.
 echo "Starting WireGuard interfaces..."
 FAILED_INTERFACES=""
 {{ range .WgInterfaces -}}
@@ -722,9 +722,9 @@ echo ""
 echo "Installation complete!"
 echo "Note: If peers are not yet online, connections will establish once they come up."
 
-# D53: 汇总 WireGuard 接口启动结果。若有接口未能启动，打印失败清单并以非零码退出，
-# 让上层部署工具能感知失败——但此退出发生在 babeld 配置、状态展示等其余步骤全部完成之后，
-# 所以节点不会被留在「半启动」状态。
+# D53: summarize the WireGuard interface start results. If any failed to start, print the failure list and exit
+# non-zero so the upstream deploy tool can detect it - but this exit happens after babeld config, status display,
+# and the other remaining steps have all completed, so the node is never left in a "half-started" state.
 if [ -n "$FAILED_INTERFACES" ]; then
     echo ""
     echo "WARNING: the following WireGuard interface(s) failed to start:$FAILED_INTERFACES" >&2

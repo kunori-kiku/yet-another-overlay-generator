@@ -507,7 +507,7 @@ printf '%%s' "${PAYLOAD_SIG_B64}" | base64 -d > "${SIG_RAW_FILE}" 2>/dev/null ||
 }
 # Ed25519 is a one-shot (raw) signature: -rawin feeds the message directly, no pre-hash.
 if ! openssl pkeyutl -verify -pubin -inkey "${SIG_PUBKEY_FILE}" -rawin -sigfile "${SIG_RAW_FILE}" -in "${ARCHIVE_PATH}" >/dev/null 2>&1; then
-	echo "错误：安装包签名校验失败（Ed25519，openssl 缺少 Ed25519 支持或签名无效），已中止。" >&2
+	echo "ERROR: installer signature verification failed (Ed25519 - openssl lacks Ed25519 support or the signature is invalid); aborting." >&2
 	exit 1
 fi
 cleanup_sig
@@ -537,10 +537,10 @@ fi
 
 tail -n +"${PAYLOAD_LINE}" "$0" | base64 -d > "${ARCHIVE_PATH}"
 
-%s# 完整性校验：在解包/执行之前，核对解码出的归档 SHA-256 与构建时嵌入的期望值。
-# 不一致说明 payload 被篡改或损坏，必须以 root 身份执行前立即中止（审计项 D25）。
+%s# Integrity check: before unpacking/executing, verify the decoded archive's SHA-256 against the value embedded at build time.
+# A mismatch means the payload was tampered with or corrupted; abort immediately, before running as root (audit item D25).
 echo "${EXPECTED_PAYLOAD_SHA256}  ${ARCHIVE_PATH}" | sha256sum -c - >/dev/null 2>&1 || {
-	echo "错误：安装包完整性校验失败（SHA-256 不匹配），已中止。payload 可能被篡改或在传输中损坏。" >&2
+	echo "ERROR: installer integrity check failed (SHA-256 mismatch); aborting. The payload may have been tampered with or corrupted in transit." >&2
 	exit 1
 }
 
