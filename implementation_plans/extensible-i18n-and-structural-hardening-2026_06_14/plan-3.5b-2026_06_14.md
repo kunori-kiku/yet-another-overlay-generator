@@ -153,7 +153,7 @@ Every code → const + `registry` + `allCodes` (TestRegistryBijection enforces t
 |----|-------|-------|------:|------:|------|
 | **3.5b-0** | CLI + server banner Englishization (this plan doc rides here) | cmd/compiler/main.go, internal/api/server.go | 13 | 0 | `go build ./cmd/...`; CJK grep zero in string-literal position over the two files; CLI prints English |
 | **3.5b-1** | apierr infra: evolve `writeCodedOr` fallback→bucket; rewrite the shim's second path; `TestRegistryEnglishOnly` + `TestNoChineseInApierrSource` | handler.go, apierr_test.go | 3 | 0 | `go test ./internal/apierr/... ./internal/api/...`; grep confirms `writeCodedOr` no longer calls `writeError` |
-| **3.5b-2** | deep compile-constraint codes + migrate coupled tests | apierr.go(+test), compiler/peers.go, compiler/compiler.go, allocator/ip.go, en/zh, transit_pools_test.go, peers_portbounds_test.go, handler.go | 11 | 7 | compiler/allocator/apierr tests; a `HandleCompile` test feeding invalid/exhausted transit CIDR → 422 coded envelope; build green; bijection+CJK pass |
+| **3.5b-2** | deep compile-constraint codes + migrate coupled tests | apierr.go(+test), compiler/peers.go, compiler/compiler.go, allocator/ip.go, en/zh, transit_pools_test.go, peers_portbounds_test.go, handler.go | 11 | 8 | compiler/allocator/apierr tests; a `HandleCompile` test feeding invalid/exhausted transit CIDR → 422 coded envelope; build green; bijection+CJK pass |
 | **3.5b-3** | render + renderer + artifacts buckets | apierr.go(+test), render/render.go, renderer/wireguard.go, artifacts/export.go, handler.go, en/zh | 25 | 3 | render/artifacts/api tests; unsafe-name export → coded 400; forced render fail → CodeRenderFailed 500; build green |
 | **3.5b-4** | handler.go entrypoints + readTopology body path + method-not-allowed | apierr.go(+test), handler.go, en/zh | 25 | 4 | api tests; wrong verb → method_not_allowed{method}; oversized body → coded 413; build green |
 | **3.5b-5** | controller domain A — enrollment / config / topology | apierr.go(+test), handler_controller.go, en/zh | 55 | 11 | api tests incl. topology_custody + enrollment; bad token→401, dup key→409, bad JSON→400 without regressing custody; build green |
@@ -172,7 +172,7 @@ Every code → const + `registry` + `allCodes` (TestRegistryBijection enforces t
 7. **deep source (allocator corrupted):** `fmt.Errorf(" CIDR: %s", cidr)` → `apierr.New(apierr.CodeOverlayCIDRInvalid).With("cidr", cidr)`.
 8. **export name-validation:** `fmt.Errorf("节点名称不安全…: %w", err)` → `apierr.New(apierr.CodeExportUnsafeName).With("name", node.Name).Wrap(err)`.
 9. **export I/O (bucket, log-only):** `fmt.Errorf("写入 WireGuard 配置失败: %w", err)` → `apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write wireguard config: %w", err))`.
-10. **handler relay:** `if err := render.All(...); err != nil { writeError(w, 500, err.Error()) }` → `{ writeCodedOr(w, apierr.CodeRenderFailed, err); return }` (source code wins via errors.As, else bucket). `HandleCompile` → `writeCodedOr(w, apierr.CodeCompileFailed?, err)` so the source 422 survives. *(No `CodeCompileFailed` is minted — every compile failure is now a source code; the relay's fallback bucket for compile is `CodeRenderFailed` or `CodeInternalStorage` per the seam.)*
+10. **handler relay:** `if err := render.All(...); err != nil { writeError(w, 500, err.Error()) }` → `{ writeCodedOr(w, apierr.CodeRenderFailed, err); return }` (source code wins via errors.As, else bucket). The 3 `Compile` relays → `writeCodedOr(w, apierr.CodeCompileFailed, err)` so a source 422 survives via errors.As, while an un-coded compile error (schema/semantic validation reaching compile) is bucketed 422. *(Shipped in 3.5b-2: `CodeCompileFailed` (422) IS minted — superseding the original open-note below — because schema/semantic failures reaching the relay genuinely are operator-fixable 422 topology problems, a better fit than a 500-class `CodeRenderFailed`/`CodeInternalStorage`.)*
 11. **compiler prefix strip:** `fmt.Errorf("推导 … 失败: %w", err)` → `return err`.
 12. **body path:** `errBodyTooLarge` → `apierr.New(apierr.CodeReqBodyTooLarge).With("limit", strconv.FormatInt(maxRequestBodyBytes, 10))`; `isBodyTooLarge(err)` → `apierr.HasCode(err, apierr.CodeReqBodyTooLarge)`.
 13. **producer fix (auth_controller:132):** `authenticateNode` returns `*apierr.Error`; `requireNode` calls `writeAPIError`.
@@ -180,9 +180,11 @@ Every code → const + `registry` + `allCodes` (TestRegistryBijection enforces t
 
 ## Open notes (resolved by the user-simulation lens; no owner input needed)
 
-- No `CodeCompileFailed` minted — every compile failure is a source 422 code; the relay fallback is a
-  defensive bucket only (in practice unreachable). One-line registry change if the owner ever wants a
-  distinct compile-relay bucket.
+- ~~No `CodeCompileFailed` minted~~ — SUPERSEDED in 3.5b-2: `CodeCompileFailed` (422) IS minted as the
+  `writeCodedOr` compile-relay fallback. The compile path's only un-coded errors are schema/semantic
+  validation failures reaching `Compile` — operator-fixable 422 topology problems, so a 422 compile
+  bucket is more correct than a 500-class one. Source-coded constraint failures still surface their own
+  precise 422 code via `errors.As`; `CodeCompileFailed` is the catch-all for the un-coded remainder.
 - `CodeInternalStorage` wire wording is a fully-localizable generic sentence; the op verb is log-only.
   Surfacing the op to operators would need a curated localized `{op}` enum (NOT free-text) — out of
   scope, note for a future plan.

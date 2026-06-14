@@ -66,6 +66,9 @@ func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
 
 		domain, ok := domainMap[result[i].DomainID]
 		if !ok {
+			// Defensive: via the HTTP compile relays the semantic validator (CodeNodeDomainRefMissing)
+			// catches an unknown-domain reference in Compile Pass 2 before AllocateIPs (Pass 3) runs,
+			// so this coded branch is the safety net for the direct allocator.AllocateIPs path.
 			return nil, apierr.New(apierr.CodeNodeUnknownDomain).With("node", result[i].Name).With("domain", result[i].DomainID)
 		}
 
