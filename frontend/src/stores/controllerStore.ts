@@ -97,6 +97,8 @@ const EDGE_OMITEMPTY = [
   'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip', 'pinned_to_transit_ip',
   'pinned_from_link_local', 'pinned_to_link_local',
 ];
+// PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
+const PUBLIC_ENDPOINT_OMITEMPTY = ['note'];
 
 // isEmptyVal mirrors Go's encoding/json `omitempty` "empty" definition: false, 0, "", nil,
 // and zero-length slices. (Empty objects/structs are NOT omitted by Go, and aren't dropped here.)
@@ -128,6 +130,14 @@ export function canonicalDesign(t: Topology): string {
     nodes: (s.nodes as Array<Record<string, unknown>>).map((n) => {
       const x = dropOmitempty(n, NODE_OMITEMPTY);
       delete x.wireguard_private_key; // always dropped (even if non-empty): never on the server
+      // public_endpoints survives when non-empty (kept by dropOmitempty); mirror its OWN nested
+      // omitempty (note) element-wise too, else an empty endpoint note ('' from the endpoint
+      // editor) the server drops would phantom a save-conflict (review).
+      if (Array.isArray(x.public_endpoints)) {
+        x.public_endpoints = (x.public_endpoints as Array<Record<string, unknown>>).map((pe) =>
+          dropOmitempty(pe, PUBLIC_ENDPOINT_OMITEMPTY),
+        );
+      }
       return x;
     }),
     edges: (s.edges as Array<Record<string, unknown>>).map((e) => dropOmitempty(e, EDGE_OMITEMPTY)),
