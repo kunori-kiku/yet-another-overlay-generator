@@ -150,7 +150,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
-		return fmt.Errorf("渲染 WireGuard 配置失败: %w", err)
+		return fmt.Errorf("rendering WireGuard configs failed: %w", err)
 	}
 	result.WireGuardConfigs = wgConfigs
 
@@ -158,7 +158,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	for nodeID, clientInfo := range result.ClientConfigs {
 		config, err := renderer.RenderClientWireGuardConfig(clientInfo)
 		if err != nil {
-			return fmt.Errorf("渲染 client %s 的 WireGuard 配置失败: %w", clientInfo.NodeName, err)
+			return fmt.Errorf("rendering WireGuard config for client %s failed: %w", clientInfo.NodeName, err)
 		}
 		result.WireGuardConfigs[nodeID+":wg0"] = config
 	}
@@ -166,14 +166,14 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	// Babel
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
 	if err != nil {
-		return fmt.Errorf("渲染 Babel 配置失败: %w", err)
+		return fmt.Errorf("rendering Babel configs failed: %w", err)
 	}
 	result.BabelConfigs = babelConfigs
 
 	// Sysctl
 	sysctlConfigs, err := renderer.RenderAllSysctlConfigs(result.Topology)
 	if err != nil {
-		return fmt.Errorf("渲染 sysctl 配置失败: %w", err)
+		return fmt.Errorf("rendering sysctl configs failed: %w", err)
 	}
 	result.SysctlConfigs = sysctlConfigs
 
@@ -186,7 +186,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 	// the air-gap path is unchanged. A misconfigured key fails closed here.
 	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
-		return fmt.Errorf("加载 bundle 签名密钥失败: %w", err)
+		return fmt.Errorf("loading the bundle signing key failed: %w", err)
 	}
 	var signingPubPEM string
 	if signer != nil {
@@ -206,7 +206,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 			// 也装配 mimic（决策 #5：client 也支持）。键缺失时为 nil，renderer 已做空值保护。
 			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, splice, result.ClientConfigs[node.ID])
 			if err != nil {
-				return fmt.Errorf("渲染 client %s 的安装脚本失败: %w", node.Name, err)
+				return fmt.Errorf("rendering install script for client %s failed: %w", node.Name, err)
 			}
 			result.InstallScripts[node.ID] = script
 		} else {
@@ -215,7 +215,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 			transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
 			script, err := renderer.RenderInstallScriptSigned(&node, peers, hasBabel, signingPubPEM, splice, transitCIDRs...)
 			if err != nil {
-				return fmt.Errorf("渲染节点 %s 的安装脚本失败: %w", node.Name, err)
+				return fmt.Errorf("rendering install script for node %s failed: %w", node.Name, err)
 			}
 			result.InstallScripts[node.ID] = script
 		}
