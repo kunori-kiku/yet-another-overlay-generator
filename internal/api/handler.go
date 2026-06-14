@@ -586,16 +586,6 @@ func writeAPIError(w http.ResponseWriter, e *apierr.Error) {
 	}})
 }
 
-// writeError is the TRANSITIONAL bridge: it wraps a bare, not-yet-coded message under
-// CodeLegacyUncoded so the ~200 existing call sites emit the nested envelope unchanged.
-// It is removed in the final plan-3 commit, once every site calls writeAPIError with a
-// real code (grep-gated). Do not use it in new code.
-//
-// Deprecated: use writeAPIError with an apierr.Code.
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeAPIError(w, apierr.New(apierr.CodeLegacyUncoded).WithStatus(status).WithMessage(message))
-}
-
 // writeCodedOr surfaces err as its coded envelope (with the error's own status) when err
 // is, or wraps, an *apierr.Error; otherwise it emits the given fallback bucket code, wrapping
 // err as the (log-only, never-serialized) cause. Used where a handler relays a deep error: a

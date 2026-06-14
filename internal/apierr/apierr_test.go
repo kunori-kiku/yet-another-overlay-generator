@@ -52,7 +52,6 @@ func TestNoChineseInApierrSource(t *testing.T) {
 // declared without a template nor a template left without a const. Add new codes here
 // too when extending the registry.
 var allCodes = []Code{
-	CodeLegacyUncoded,
 	CodeInternalPanic,
 	CodeInternal,
 	CodeCustodyPrivateKey,
@@ -157,34 +156,6 @@ func TestInterpolation(t *testing.T) {
 		if got := interpolate(c.tmpl, c.params); got != c.want {
 			t.Errorf("interpolate(%q,%v) = %q, want %q", c.tmpl, c.params, got, c.want)
 		}
-	}
-}
-
-func TestWithMessageOverridesTemplate(t *testing.T) {
-	// The legacy bridge: a verbatim message overrides the template, with no params on
-	// the wire.
-	e := New(CodeLegacyUncoded).WithStatus(http.StatusNotFound).WithMessage("node not found")
-	if e.Status() != http.StatusNotFound {
-		t.Errorf("status override = %d, want 404", e.Status())
-	}
-	if got := e.Message(); got != "node not found" {
-		t.Errorf("WithMessage override = %q, want %q", got, "node not found")
-	}
-	if len(e.Params()) != 0 {
-		t.Errorf("WithMessage must not populate params; got %v", e.Params())
-	}
-	// Enforced contract: WithMessage clears params set earlier, so "no params on the
-	// wire" holds even under With()-then-WithMessage() misuse.
-	cleared := New(CodeLegacyUncoded).With("k", "v").WithMessage("m")
-	if len(cleared.Params()) != 0 {
-		t.Errorf("WithMessage must clear params set via With(); got %v", cleared.Params())
-	}
-	if cleared.Message() != "m" {
-		t.Errorf("message after With+WithMessage = %q, want %q", cleared.Message(), "m")
-	}
-	// Without WithMessage, CodeLegacyUncoded falls back to its template.
-	if got := New(CodeLegacyUncoded).Message(); got != registry[CodeLegacyUncoded].tmpl {
-		t.Errorf("fallback template = %q, want %q", got, registry[CodeLegacyUncoded].tmpl)
 	}
 }
 

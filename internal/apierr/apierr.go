@@ -28,12 +28,6 @@ import (
 type Code string
 
 const (
-	// CodeLegacyUncoded is the TRANSITIONAL escape hatch used by the writeError shim: it
-	// carries a bare, not-yet-coded message verbatim (via WithMessage) so every legacy
-	// call site emits the nested envelope without being individually rewritten. It is
-	// DELETED in the final plan-3 commit, once every emit site is coded (grep-gated).
-	// New code must never use it.
-	CodeLegacyUncoded Code = "legacy_uncoded"
 	// CodeInternalPanic is the recovered-panic 500 (see Server.recoverPanics).
 	CodeInternalPanic Code = "internal_panic"
 	// CodeInternal is the generic internal-server-error fallback used by writeCodedOr when a
@@ -127,9 +121,6 @@ type def struct {
 // it here AND to the const block above; New panics on an unregistered code (fail-fast),
 // and TestRegistryBijection asserts the two sets match exactly.
 var registry = map[Code]def{
-	// CodeLegacyUncoded's template is only a defensive fallback; the bridge always
-	// supplies the verbatim message via WithMessage (which overrides the template).
-	CodeLegacyUncoded:     {"An unexpected error occurred.", http.StatusInternalServerError},
 	CodeInternalPanic:     {"An unexpected server error occurred.", http.StatusInternalServerError},
 	CodeInternal:          {"An internal server error occurred. Please try again.", http.StatusInternalServerError},
 	CodeCustodyPrivateKey: {"Topology payload carried a WireGuard private key; this is a key-custody violation — the panel must strip private keys client-side before upload.", http.StatusBadRequest},
@@ -192,11 +183,10 @@ var registry = map[Code]def{
 // so a handler can wrap an existing sentinel (e.g. controller.ErrTokenInvalid) and the
 // existing errors.Is branches keep working.
 type Error struct {
-	code    Code
-	params  map[string]string
-	cause   error // wrapped origin: logs + errors.Is/As; NEVER serialized
-	status  int
-	literal string // verbatim message set by WithMessage (legacy bridge); overrides the template
+	code   Code
+	params map[string]string
+	cause  error // wrapped origin: logs + errors.Is/As; NEVER serialized
+	status int
 }
 
 // New starts a coded error from its registry default status. It panics on an
@@ -218,18 +208,6 @@ func (e *Error) Wrap(cause error) *Error { e.cause = cause; return e }
 // WithStatus overrides the registry default HTTP status (rare).
 func (e *Error) WithStatus(s int) *Error { e.status = s; return e }
 
-// WithMessage sets a VERBATIM message that overrides the registry template (no
-// interpolation). It ENFORCES "no params on the wire" by clearing params, so the
-// documented contract holds even if a caller did With() first. It exists ONLY for the
-// transitional writeError->CodeLegacyUncoded bridge so a bare, not-yet-coded string can
-// ride the nested envelope; coded errors render from their template and must not use it.
-// Removed with CodeLegacyUncoded in the final plan-3 commit.
-func (e *Error) WithMessage(m string) *Error {
-	e.literal = m
-	e.params = nil
-	return e
-}
-
 func (e *Error) Error() string { return e.Message() }
 func (e *Error) Unwrap() error { return e.cause }
 func (e *Error) Code() Code    { return e.code }
@@ -238,13 +216,9 @@ func (e *Error) Status() int   { return e.status }
 // Params returns the template parameters (string→string) for client-side interpolation.
 func (e *Error) Params() map[string]string { return e.params }
 
-// Message renders the human message: a verbatim WithMessage override if set (legacy
-// bridge), else the registry template interpolated with params — the English default
-// for CLI/curl and the i18n English fallback.
+// Message renders the human message: the registry template interpolated with params — the
+// English default for CLI/curl and the i18n English fallback.
 func (e *Error) Message() string {
-	if e.literal != "" {
-		return e.literal
-	}
 	return interpolate(registry[e.code].tmpl, e.params)
 }
 
