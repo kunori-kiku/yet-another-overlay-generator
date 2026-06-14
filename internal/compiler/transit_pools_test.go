@@ -1,9 +1,9 @@
 package compiler
 
 import (
-	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
@@ -130,10 +130,10 @@ func TestPerCIDRTransitPools_SmallPoolExhausts(t *testing.T) {
 
 	_, _, err := DerivePeers(topo, keys)
 	if err == nil {
-		t.Fatalf("/30 池只能容一对，第二条链路应触发耗尽错误，但得到 nil")
+		t.Fatalf("a /30 pool holds only one pair; the second link should exhaust it, but got nil")
 	}
-	if !strings.Contains(err.Error(), "地址池已耗尽") {
-		t.Errorf("错误信息应表明地址池耗尽，实际: %q", err.Error())
+	if !apierr.HasCode(err, apierr.CodeTransitPoolExhausted) {
+		t.Errorf("expected a transit-pool-exhausted coded error, got: %q", err.Error())
 	}
 }
 

@@ -79,13 +79,13 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	// Pass 1: Schema 
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
-		return nil, fmt.Errorf("schema : %v", schemaResult.Errors)
+		return nil, fmt.Errorf("topology failed schema validation: %v", schemaResult.Errors)
 	}
 
 	// Pass 2:
 	semanticResult := validator.ValidateSemantic(topo)
 	if !semanticResult.IsValid() {
-		return nil, fmt.Errorf(": %v", semanticResult.Errors)
+		return nil, fmt.Errorf("topology failed semantic validation: %v", semanticResult.Errors)
 	}
 
 	// 汇总两个验证阶段产生的非致命告警，随编译结果一并返回，
@@ -97,7 +97,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	// Pass 3: IP 
 	allocatedNodes, err := c.ipAllocator.AllocateIPs(topo)
 	if err != nil {
-		return nil, fmt.Errorf("IP : %w", err)
+		return nil, fmt.Errorf("IP allocation failed: %w", err)
 	}
 
 	// 复制 edges 以避免修改输入
@@ -122,7 +122,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	// Pass 3 :  Peer
 	peerMap, pairAllocations, err := DerivePeers(compiledTopo, keys)
 	if err != nil {
-		return nil, fmt.Errorf("推导 WireGuard peer 配置失败: %w", err)
+		return nil, fmt.Errorf("deriving WireGuard peer configuration failed: %w", err)
 	}
 
 	// Client 配置
