@@ -139,9 +139,15 @@ export function SettingsPage() {
         </div>
       )}
 
-      <ConnectionSettings />
-
-      <BootstrapSettings />
+      {/* Connection (controller endpoints + sign-in) and Bootstrap (agent URLs, GitHub proxy)
+          are controller-only configuration — meaningless in local/air-gap mode. Gate them to
+          controller mode (plan-11 / T5) so they don't render as dead controls in local mode. */}
+      {mode === 'controller' && (
+        <>
+          <ConnectionSettings />
+          <BootstrapSettings />
+        </>
+      )}
 
       <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-4 max-w-2xl">
         <h3 className="text-lg font-semibold text-blue-400">

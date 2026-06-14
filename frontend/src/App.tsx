@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { ReactFlowProvider } from '@xyflow/react';
 import { Shell } from './components/shell/Shell';
@@ -18,6 +19,18 @@ function IndexRedirect() {
   return <Navigate to={landingPathForMode(mode)} replace />;
 }
 
+// Controller-only route guard (plan-11 / T5): Overview/Fleet/fleet-detail are controller
+// constructs (fleet registry, enrollment, deploy summary). nav.ts hides them in local mode, but
+// a DEEP LINK bypasses nav — so in local mode they'd render stale/empty controller UI (cached
+// fleet rows, enrollment-token mint affordances). Redirect to the local landing instead, making
+// reachability match nav visibility. (Local-internal routes — design/deploy/security/settings —
+// stay reachable in controller mode; each is mode-gated internally.)
+function RequireControllerMode({ children }: { children: ReactNode }) {
+  const mode = useControllerStore((s) => s.mode);
+  if (mode !== 'controller') return <Navigate to={landingPathForMode('local')} replace />;
+  return <>{children}</>;
+}
+
 // Deep-linkable routes under the persistent app-shell. ReactFlowProvider is
 // scoped to /design so the canvas only initializes on that route. The index
 // redirects to the mode's landing; unknown paths fall back to /design.
@@ -34,9 +47,9 @@ const router = createBrowserRouter([
           </ReactFlowProvider>
         ),
       },
-      { path: 'overview', element: <OverviewPage /> },
-      { path: 'fleet', element: <FleetPage /> },
-      { path: 'fleet/nodes/:id', element: <FleetNodeDetailPage /> },
+      { path: 'overview', element: <RequireControllerMode><OverviewPage /></RequireControllerMode> },
+      { path: 'fleet', element: <RequireControllerMode><FleetPage /></RequireControllerMode> },
+      { path: 'fleet/nodes/:id', element: <RequireControllerMode><FleetNodeDetailPage /></RequireControllerMode> },
       { path: 'deploy', element: <DeployPage /> },
       { path: 'security', element: <SecurityPage /> },
       { path: 'settings', element: <SettingsPage /> },

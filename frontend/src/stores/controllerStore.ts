@@ -1132,8 +1132,19 @@ export const useControllerStore = create<ControllerState>()(
         else topo.purgeModeBoundaryState();
         get().clearModeNotices();
         useUiStore.getState().restoreLocalTranslucency();
-        // 切回本地：清掉控制器模式的同步快照与冲突标志（它们是服务端权威概念）。
-        set({ mode: 'local', lastSyncedSnapshot: null, saveConflict: false });
+        // 切回本地：清掉控制器模式的同步快照与冲突标志（服务端权威概念），并清掉持久化的 fleet
+        // 视图缓存（nodes/audit/lastDeploy）——它们是控制器数据，本地模式既不展示也不该残留在
+        // localStorage（plan-11 / T5「在本地边界清掉持久化 fleet 缓存」）。下次进入控制器由
+        // refresh() 重新拉取。不动 session：切到本地不等于登出（沿用既有行为）。
+        set({
+          mode: 'local',
+          lastSyncedSnapshot: null,
+          saveConflict: false,
+          nodes: [],
+          audit: [],
+          auditVerified: false,
+          lastDeploy: null,
+        });
       },
 
       // 控制器模式「保存」（plan-10 / T2）：把当前画布持久化为服务端权威副本（+ 版本历史），
