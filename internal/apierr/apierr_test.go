@@ -60,6 +60,14 @@ var allCodes = []Code{
 	CodeKeygenPrivkeyParse,
 	CodeKeygenPinnedNoPrivkey,
 	CodeKeygenGenerateFailed,
+	CodeCompileFailed,
+	CodeTransitPoolExhausted,
+	CodeTransitCIDRInvalid,
+	CodeTransitCIDRNotIPv4,
+	CodeListenPortExhausted,
+	CodeOverlayCIDRInvalid,
+	CodeOverlayPoolExhausted,
+	CodeNodeUnknownDomain,
 }
 
 func TestRegistryBijection(t *testing.T) {

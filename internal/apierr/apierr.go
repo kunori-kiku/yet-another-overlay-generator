@@ -53,6 +53,20 @@ const (
 	CodeKeygenPrivkeyParse    Code = "keygen_privkey_parse_failed"
 	CodeKeygenPinnedNoPrivkey Code = "keygen_pinned_pubkey_no_privkey"
 	CodeKeygenGenerateFailed  Code = "keygen_generate_failed"
+
+	// Compile-time constraints (plan-3.5b) — surfaced to the operator via HandleCompile/
+	// HandleExport/HandleDeployScript as 422 (the topology is the thing to change). These are
+	// coded at the SOURCE in internal/compiler + internal/allocator and flow through the
+	// writeCodedOr relay; CodeCompileFailed is the relay's 422 fallback for any compile error
+	// not coded at the source (e.g. a schema/semantic validation failure reaching compile).
+	CodeCompileFailed         Code = "compile_failed"
+	CodeTransitPoolExhausted  Code = "compile_transit_pool_exhausted"
+	CodeTransitCIDRInvalid    Code = "compile_transit_cidr_invalid"
+	CodeTransitCIDRNotIPv4    Code = "compile_transit_cidr_not_ipv4"
+	CodeListenPortExhausted   Code = "compile_listen_port_exhausted"
+	CodeOverlayCIDRInvalid    Code = "compile_overlay_cidr_invalid"
+	CodeOverlayPoolExhausted  Code = "compile_overlay_pool_exhausted"
+	CodeNodeUnknownDomain     Code = "compile_node_unknown_domain"
 )
 
 // def is the immutable per-code metadata: the default English message TEMPLATE (with
@@ -78,6 +92,15 @@ var registry = map[Code]def{
 	CodeKeygenPrivkeyParse:    {"Node {node}'s WireGuard private key could not be parsed: {detail}", http.StatusBadRequest},
 	CodeKeygenPinnedNoPrivkey: {"Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.", http.StatusBadRequest},
 	CodeKeygenGenerateFailed:  {"Failed to generate a WireGuard key for node {node}: {detail}", http.StatusInternalServerError},
+
+	CodeCompileFailed:        {"Compilation failed. Check the topology and try again.", http.StatusUnprocessableEntity},
+	CodeTransitPoolExhausted: {"The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.", http.StatusUnprocessableEntity},
+	CodeTransitCIDRInvalid:   {"The transit CIDR {cidr} is invalid: {detail}", http.StatusUnprocessableEntity},
+	CodeTransitCIDRNotIPv4:   {"The transit CIDR {cidr} must be IPv4.", http.StatusUnprocessableEntity},
+	CodeListenPortExhausted:  {"Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; lower its listen_port or reduce its connections.", http.StatusUnprocessableEntity},
+	CodeOverlayCIDRInvalid:   {"The overlay CIDR {cidr} is invalid.", http.StatusUnprocessableEntity},
+	CodeOverlayPoolExhausted: {"The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.", http.StatusUnprocessableEntity},
+	CodeNodeUnknownDomain:    {"Node {node} references unknown domain {domain}.", http.StatusUnprocessableEntity},
 }
 
 // Error is a coded API error. It implements error and supports errors.Is/As via Unwrap,

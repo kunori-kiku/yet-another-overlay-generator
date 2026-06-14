@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
@@ -387,7 +389,9 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		if !transitPinned {
 			localTransit, remoteTransit, err := gapFillTransitPair(link.transitCIDR, transitUsed)
 			if err != nil {
-				return nil, nil, fmt.Errorf("节点 %s<->%s 的 transit 地址分配失败: %w", fromNode.Name, toNode.Name, err)
+				// Propagate the inner coded error (CodeTransit*); the English wrapper adds
+				// node context for logs/CLI only — errors.As still surfaces the inner code.
+				return nil, nil, fmt.Errorf("transit address allocation failed for %s<->%s: %w", fromNode.Name, toNode.Name, err)
 			}
 			markTransit(link.transitCIDR, localTransit)
 			markTransit(link.transitCIDR, remoteTransit)
@@ -706,12 +710,12 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 
 	_, ipNet, err := net.ParseCIDR(transitCIDR)
 	if err != nil {
-		return "", "", fmt.Errorf("无效的 transit CIDR %q: %w", transitCIDR, err)
+		return "", "", fmt.Errorf("invalid transit CIDR %q: %w", transitCIDR, err)
 	}
 
 	baseIP := ipNet.IP.To4()
 	if baseIP == nil {
-		return "", "", fmt.Errorf("transit CIDR 必须为 IPv4: %q", transitCIDR)
+		return "", "", fmt.Errorf("transit CIDR must be IPv4: %q", transitCIDR)
 	}
 
 	// 从掩码通用地推导网络地址与广播地址（不针对 /24 硬编码）。
@@ -721,7 +725,7 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 	// 对 /31、/32 这类没有可用广播位的掩码做保守处理：直接判定地址池容不下任何一对。
 	hostBits := 32 - maskBits
 	if hostBits < 2 {
-		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，index: %d）", transitCIDR, index)
+		return "", "", fmt.Errorf("transit address pool exhausted (CIDR: %s, index: %d)", transitCIDR, index)
 	}
 	hostMask := uint32(1)<<uint(hostBits) - 1
 	broadcastAddr := networkAddr | hostMask
@@ -735,7 +739,7 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 	if addr2 < addr1 ||
 		addr1 <= networkAddr || addr1 >= broadcastAddr ||
 		addr2 <= networkAddr || addr2 >= broadcastAddr {
-		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，index: %d）", transitCIDR, index)
+		return "", "", fmt.Errorf("transit address pool exhausted (CIDR: %s, index: %d)", transitCIDR, index)
 	}
 
 	ip1 := make(net.IP, 4)
@@ -760,10 +764,10 @@ func transitPoolPairCount(transitCIDR string) (int, error) {
 	}
 	_, ipNet, err := net.ParseCIDR(transitCIDR)
 	if err != nil {
-		return 0, fmt.Errorf("无效的 transit CIDR %q: %w", transitCIDR, err)
+		return 0, apierr.New(apierr.CodeTransitCIDRInvalid).With("cidr", transitCIDR).With("detail", err.Error()).Wrap(err)
 	}
 	if ipNet.IP.To4() == nil {
-		return 0, fmt.Errorf("transit CIDR 必须为 IPv4: %q", transitCIDR)
+		return 0, apierr.New(apierr.CodeTransitCIDRNotIPv4).With("cidr", transitCIDR)
 	}
 	maskBits, _ := ipNet.Mask.Size()
 	hostBits := 32 - maskBits
@@ -793,7 +797,7 @@ func gapFillTransitPair(transitCIDR string, transitUsed func(cidr, ip string) bo
 		return "", "", err
 	}
 	if poolPairs <= 0 {
-		return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s）", transitCIDR)
+		return "", "", apierr.New(apierr.CodeTransitPoolExhausted).With("cidr", transitCIDR)
 	}
 	for index := 0; index < poolPairs; index++ {
 		ip1, ip2, err := allocateTransitPair(index, transitCIDR)
@@ -806,7 +810,7 @@ func gapFillTransitPair(transitCIDR string, transitUsed func(cidr, ip string) bo
 		}
 		return ip1, ip2, nil
 	}
-	return "", "", fmt.Errorf("transit 地址池已耗尽（CIDR: %s，共 %d 对均已占用）", transitCIDR, poolPairs)
+	return "", "", apierr.New(apierr.CodeTransitPoolExhausted).With("cidr", transitCIDR)
 }
 
 // gapFillLinkLocalPair 为一条未 pin 的链路分配一对 IPv6 link-local。
@@ -837,8 +841,7 @@ func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, e
 			return port, nil
 		}
 	}
-	return 0, fmt.Errorf("节点 %s 的有效监听端口已无法在 [%d, 65535] 区间内分配：请降低该节点的 listen_port 或减少其连接数",
-		node.Name, base)
+	return 0, apierr.New(apierr.CodeListenPortExhausted).With("node", node.Name).With("base", strconv.Itoa(base))
 }
 
 // deriveLinkCost 推导一条链路的 Babel rxcost 覆盖值。

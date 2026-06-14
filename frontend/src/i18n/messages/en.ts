@@ -468,6 +468,16 @@ export const en = {
   'error.keygen_privkey_parse_failed': "Node {node}'s WireGuard private key could not be parsed: {detail}",
   'error.keygen_pinned_pubkey_no_privkey': "Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.",
   'error.keygen_generate_failed': "Failed to generate a WireGuard key for node {node}: {detail}",
+  // Compile-time constraint codes (plan-3.5b) — 422s from /api/compile|export|deploy-script. The en
+  // value mirrors the Go registry template verbatim (the English default + i18n fallback).
+  'error.compile_failed': 'Compilation failed. Check the topology and try again.',
+  'error.compile_transit_pool_exhausted': 'The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.',
+  'error.compile_transit_cidr_invalid': 'The transit CIDR {cidr} is invalid: {detail}',
+  'error.compile_transit_cidr_not_ipv4': 'The transit CIDR {cidr} must be IPv4.',
+  'error.compile_listen_port_exhausted': "Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; lower its listen_port or reduce its connections.",
+  'error.compile_overlay_cidr_invalid': 'The overlay CIDR {cidr} is invalid.',
+  'error.compile_overlay_pool_exhausted': 'The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.',
+  'error.compile_node_unknown_domain': 'Node {node} references unknown domain {domain}.',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "Client {node} requires endpoint_host to reach the router",

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
@@ -65,8 +66,10 @@ func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
 
 		domain, ok := domainMap[result[i].DomainID]
 		if !ok {
-			return nil, fmt.Errorf("node %s references unknown domain %s",
-				result[i].Name, result[i].DomainID)
+			// Defensive: via the HTTP compile relays the semantic validator (CodeNodeDomainRefMissing)
+			// catches an unknown-domain reference in Compile Pass 2 before AllocateIPs (Pass 3) runs,
+			// so this coded branch is the safety net for the direct allocator.AllocateIPs path.
+			return nil, apierr.New(apierr.CodeNodeUnknownDomain).With("node", result[i].Name).With("domain", result[i].DomainID)
 		}
 
 		ip, err := a.allocateFromCIDR(domain.CIDR, domain.ReservedRanges, usedIPs)
@@ -85,7 +88,7 @@ func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
 func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, usedIPs map[string]bool) (string, error) {
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return "", fmt.Errorf(" CIDR: %s", cidr)
+		return "", apierr.New(apierr.CodeOverlayCIDRInvalid).With("cidr", cidr).Wrap(err)
 	}
 
 	//
@@ -167,7 +170,7 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 		return candidateIP, nil
 	}
 
-	return "", fmt.Errorf("CIDR %s  IP ", cidr)
+	return "", apierr.New(apierr.CodeOverlayPoolExhausted).With("cidr", cidr)
 }
 
 // ipToUint32 将 IPv4 地址转换为 uint32。

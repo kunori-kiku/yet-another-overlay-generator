@@ -451,6 +451,15 @@ export const zh: Record<keyof typeof en, string> = {
   'error.keygen_privkey_parse_failed': "节点 {node} 的 WireGuard 私钥解析失败：{detail}",
   'error.keygen_pinned_pubkey_no_privkey': "节点 {node} 已固定 WireGuard 公钥，但缺少对应私钥：无状态编译器无法重建它。请从该主机的 /etc/wireguard/<接口>.conf 粘贴在用私钥，或清空两个密钥字段以显式轮换。",
   'error.keygen_generate_failed': "为节点 {node} 生成 WireGuard 密钥失败：{detail}",
+  // 编译期约束码（plan-3.5b）——/api/compile|export|deploy-script 返回的 422 失败。
+  'error.compile_failed': '编译失败，请检查拓扑后重试。',
+  'error.compile_transit_pool_exhausted': 'CIDR {cidr} 的 transit 地址池已耗尽；请扩大 transit CIDR 或减少这些节点之间的链路数。',
+  'error.compile_transit_cidr_invalid': 'transit CIDR {cidr} 无效：{detail}',
+  'error.compile_transit_cidr_not_ipv4': 'transit CIDR {cidr} 必须为 IPv4。',
+  'error.compile_listen_port_exhausted': '节点 {node} 的有效监听端口无法在 [{base}, 65535] 区间内分配；请降低其 listen_port 或减少其连接数。',
+  'error.compile_overlay_cidr_invalid': '覆盖网 CIDR {cidr} 无效。',
+  'error.compile_overlay_pool_exhausted': 'CIDR {cidr} 的覆盖网地址池已耗尽；请扩大网络域 CIDR 或减少节点数。',
+  'error.compile_node_unknown_domain': '节点 {node} 引用了未知网络域 {domain}。',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "client {node} 需要 endpoint_host 才能连接到 router",
