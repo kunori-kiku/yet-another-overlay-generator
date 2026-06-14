@@ -499,12 +499,12 @@ type trustListSignatureRequestJSON struct {
 // ONCE.
 func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	var req enrollRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	// Reserve the operator identity: a node must never enroll AS the operator. Doing
@@ -512,7 +512,7 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 	// operator routes. The operator is authenticated by its own out-of-band token,
 	// never through this node-enrollment path.
 	if req.NodeID == h.operatorName {
-		writeError(w, http.StatusForbidden, "node id is reserved")
+		writeAPIError(w, apierr.New(apierr.CodeNodeIDReserved))
 		return
 	}
 
@@ -527,16 +527,16 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		// the rest to 400 so a caller can distinguish "your token is no good" from a
 		// malformed request.
 		if errors.Is(err, controller.ErrTokenInvalid) || errors.Is(err, controller.ErrTokenConsumed) {
-			writeError(w, http.StatusUnauthorized, err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeEnrollmentTokenInvalid).Wrap(err))
 			return
 		}
 		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
 		// must resolve (revoke the other node or reuse its id), not a malformed request.
 		if errors.Is(err, controller.ErrDuplicateWGKey) {
-			writeError(w, http.StatusConflict, err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeDuplicateWGKey).Wrap(err))
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -551,22 +551,22 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 // TouchLastSeen-s the node so the registry reflects the check-in.
 func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, node, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 
 	bundle, err := h.store.GetCurrentBundle(r.Context(), tenant, node)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "no configuration available for this node yet")
+			writeAPIError(w, apierr.New(apierr.CodeConfigNotFound).Wrap(err))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load configuration")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 
@@ -598,13 +598,13 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 	if _, err := h.store.GetOperatorCredential(r.Context(), tenant); err == nil {
 		stored, err := h.store.GetCurrentSignedTrustList(r.Context(), tenant)
 		if err != nil || len(stored.SignatureJSON) == 0 {
-			writeError(w, http.StatusInternalServerError, "keystone is enabled but no signed membership manifest is available to serve")
+			writeAPIError(w, apierr.New(apierr.CodeKeystoneNoSignedManifest))
 			return
 		}
 		files["trustlist.json"] = base64.StdEncoding.EncodeToString(stored.TrustListJSON)
 		files["trustlist.sig"] = base64.StdEncoding.EncodeToString(stored.SignatureJSON)
 	} else if !errors.Is(err, controller.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "failed to load operator credential")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 
@@ -622,17 +622,17 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 // caller).
 func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, node, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	after, err := parseAfter(r.URL.Query().Get("after"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -653,7 +653,7 @@ func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "poll failed")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, pollResponseJSON{Generation: gen})
@@ -664,27 +664,27 @@ func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
 // body carries only the applied generation, checksum, and a health string.
 func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, node, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	var req reportRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
 	now := time.Now()
 	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "node not found")
+			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to record applied generation")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	_ = h.store.TouchLastSeen(r.Context(), tenant, node, now)
@@ -694,7 +694,7 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 		Action:    "report",
 		NodeID:    node,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -709,17 +709,17 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 // configured one.
 func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	body, err := readControllerBody(w, r)
 	if err != nil {
-		writeError(w, statusForBodyErr(err), err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	// Custody gate: unmarshal into the model (not a substring match, which would
@@ -732,10 +732,10 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 	if err := json.Unmarshal(body, &topo); err != nil {
 		var syn *json.SyntaxError
 		if errors.As(err, &syn) {
-			writeError(w, http.StatusBadRequest, "topology body is not valid JSON")
+			writeAPIError(w, apierr.New(apierr.CodeReqInvalidBody).Wrap(err))
 			return
 		}
-		writeError(w, http.StatusBadRequest, "topology body does not match the topology schema: "+err.Error())
+		writeAPIError(w, apierr.New(apierr.CodeReqInvalidBody).Wrap(err))
 		return
 	}
 	for _, n := range topo.Nodes {
@@ -752,13 +752,13 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 	// bug — and they are dropped here rather than persisted unchecked.
 	canonical, err := json.Marshal(topo)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to canonicalize topology")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 
 	rec, err := h.store.PutTopology(r.Context(), tenant, canonical)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store topology")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	// Post-commit audit is best-effort: the version is already stored, and converting
@@ -777,17 +777,22 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 // bundles staged at the next generation (operator-only). It returns the StageResult.
 func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	result, err := controller.CompileAndStage(r.Context(), h.store, tenant, time.Now())
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		// CompileAndStage wraps source-coded errors (%w), so writeCodedOr surfaces each at its
+		// OWN status — compile constraints stay 422, but a keygen error (e.g. an AgentHeld node
+		// with no registered public key) surfaces its native 400 and an export I/O failure its
+		// 500. This is intentionally MORE precise than the old blanket 422; CodeStageFailed (422)
+		// is only the fallback for an un-coded stage error. (See TestWriteCodedOr_* in handler_test.)
+		writeCodedOr(w, apierr.CodeStageFailed, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, stageResponseJSON{
@@ -807,23 +812,23 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 // empty staged set is a 409.
 func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	gen, err := controller.PromoteStaged(r.Context(), h.store, tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNoStagedBundle) {
-			writeError(w, http.StatusConflict, err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeNoStagedBundle).Wrap(err))
 			return
 		}
 		// The keystone gate (missing/unsigned/invalid manifest) is an operator-actionable
 		// precondition failure, not an internal error: surface its message at 422.
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeCodedOr(w, apierr.CodeStageFailed, err)
 		return
 	}
 	// Audit the flip: promote is the action that changes what the fleet RUNS, so its
@@ -842,17 +847,17 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 // returns a []nodeJSON view that carries fleet state but NO key material.
 func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	nodes, err := h.store.ListNodes(r.Context(), tenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list nodes")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	out := make([]nodeJSON, 0, len(nodes))
@@ -881,21 +886,21 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 // "revoke" audit entry and returns {node_id, revoked:true}.
 func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	var req revokeRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	if req.NodeID == "" {
-		writeError(w, http.StatusBadRequest, "node_id is required")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id"))
 		return
 	}
 
@@ -904,10 +909,10 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 	node, err := h.store.GetNode(r.Context(), tenant, req.NodeID)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "node not found")
+			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load node")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 
@@ -918,13 +923,13 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 	node.Status = controller.NodeRevoked
 	node.RekeyRequested = false
 	if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to revoke node")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	// Clear the API token + reverse index so the bearer credential stops resolving
 	// immediately (idempotent: a no-op success if the node had no token).
 	if err := h.store.RevokeNodeAPIToken(r.Context(), tenant, req.NodeID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to revoke node token")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -933,7 +938,7 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 		Action:    "revoke",
 		NodeID:    req.NodeID,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, revokeResponseJSON{NodeID: req.NodeID, Revoked: true})
@@ -943,17 +948,17 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 // (operator-only). verified is true when VerifyAuditChain finds no break.
 func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	entries, err := h.store.ListAudit(r.Context(), tenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	out := make([]auditEntryJSON, len(entries))
@@ -979,12 +984,12 @@ func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) 
 // for an unknown/pruned version.
 func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 
@@ -993,26 +998,26 @@ func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Reques
 	if vq := r.URL.Query().Get("version"); vq != "" {
 		version, perr := strconv.ParseInt(vq, 10, 64)
 		if perr != nil || version <= 0 {
-			writeError(w, http.StatusBadRequest, "version must be a positive integer")
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "version"))
 			return
 		}
 		rec, err = h.store.GetTopologyVersion(r.Context(), tenant, version)
 		if err != nil {
 			if errors.Is(err, controller.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "no such retained topology version (it may have been pruned)")
+				writeAPIError(w, apierr.New(apierr.CodeTopologyVersionNotFound))
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "failed to load topology version")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 	} else {
 		rec, err = h.store.GetTopology(r.Context(), tenant)
 		if err != nil {
 			if errors.Is(err, controller.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "no topology stored yet")
+				writeAPIError(w, apierr.New(apierr.CodeNoTopologyStored))
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "failed to load topology")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 	}
@@ -1027,17 +1032,17 @@ func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Reques
 // (operator-only; metadata only — fetch a payload via GET /topology?version=N).
 func (h *ControllerHandler) HandleTopologyVersions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	infos, err := h.store.ListTopologyVersions(r.Context(), tenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list topology versions")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	out := make([]topologyVersionJSON, len(infos))
@@ -1052,39 +1057,39 @@ func (h *ControllerHandler) HandleTopologyVersions(w http.ResponseWriter, r *htt
 // token hash (CreateEnrollmentToken), so the plaintext cannot be recovered later.
 func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	var req enrollmentTokenRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	if req.NodeID == "" {
-		writeError(w, http.StatusBadRequest, "node_id is required")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id"))
 		return
 	}
 	// A node must never be granted an enrollment token AS the operator (the operator
 	// identity is reserved; enrolling under it is rejected at /enroll, but reject the
 	// token mint too for a clear, early error).
 	if req.NodeID == h.operatorName {
-		writeError(w, http.StatusForbidden, "node id is reserved")
+		writeAPIError(w, apierr.New(apierr.CodeNodeIDReserved))
 		return
 	}
 	if req.TTLSeconds <= 0 {
-		writeError(w, http.StatusBadRequest, "ttl_seconds must be positive")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "ttl_seconds"))
 		return
 	}
 
 	now := time.Now()
 	plaintext, tok := controller.NewEnrollmentToken(req.NodeID, time.Duration(req.TTLSeconds)*time.Second, now)
 	if err := h.store.CreateEnrollmentToken(r.Context(), tenant, tok); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create enrollment token")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -1093,7 +1098,7 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 		Action:    "enrollment-token",
 		NodeID:    req.NodeID,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	// Design-membership advisory (plan-6, warn-not-block): if the stored design has
@@ -1143,17 +1148,17 @@ func topologyHasNode(topoJSON []byte, nodeID string) bool {
 // member, so the operator token authorizes it in v1. Returns {requested:<count>}.
 func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	nodes, err := h.store.ListNodes(r.Context(), tenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list nodes")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	requested := 0
@@ -1169,12 +1174,12 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 				// The node vanished between the list and the read; skip it.
 				continue
 			}
-			writeError(w, http.StatusInternalServerError, "failed to load node")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 		node.RekeyRequested = true
 		if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to flag node for rekey")
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
 		requested++
@@ -1186,7 +1191,7 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 	// even when requested==0 so the bump is unconditional and idempotent (a no-op-flag
 	// rekey-all still records the audit entry below).
 	if _, err := h.store.BumpGeneration(r.Context(), tenant); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to wake agents for rekey")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -1194,7 +1199,7 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 		Actor:     "operator:" + operator,
 		Action:    "rekey-request",
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rekeyAllResponseJSON{Requested: requested})
@@ -1208,21 +1213,21 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 // wg_public_key is a 400. Returns {ok:true}.
 func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, node, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	var req rekeyRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	if req.WGPublicKey == "" {
-		writeError(w, http.StatusBadRequest, "wg_public_key is required")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "wg_public_key"))
 		return
 	}
 
@@ -1231,14 +1236,14 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 	// write path must not be able to create a duplicate the enroll dedupe forbids).
 	if err := controller.Rekey(r.Context(), h.store, tenant, node, req.WGPublicKey, time.Now()); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "node not found")
+			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
 		}
 		if errors.Is(err, controller.ErrDuplicateWGKey) {
-			writeError(w, http.StatusConflict, err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeDuplicateWGKey).Wrap(err))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to record rekey")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})
@@ -1305,33 +1310,33 @@ func pinFromCredential(c controller.OperatorCredential) (trustlist.PinnedCredent
 // the credential and records a "pin-operator-credential" audit entry.
 func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	var req operatorCredentialRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 	// Validate the PEM parses for the declared algorithm before pinning it.
 	switch trustlist.Alg(req.Alg) {
 	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
 		if _, err := trustlist.ParseEd25519PinPEM([]byte(req.PublicKeyPEM)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid public_key_pem for alg: "+err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
 			return
 		}
 	case trustlist.AlgWebAuthnES256:
 		if _, err := trustlist.ParseES256Pin([]byte(req.PublicKeyPEM)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid public_key_pem for alg: "+err.Error())
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
 			return
 		}
 	default:
-		writeError(w, http.StatusBadRequest, "unsupported alg")
+		writeAPIError(w, apierr.New(apierr.CodeReqUnsupportedAlg).With("alg", req.Alg))
 		return
 	}
 
@@ -1342,7 +1347,7 @@ func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *h
 		RPID:         req.RPID,
 		Origin:       req.Origin,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to pin operator credential")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -1350,7 +1355,7 @@ func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *h
 		Actor:     "operator:" + operator,
 		Action:    "pin-operator-credential",
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -1363,21 +1368,21 @@ func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *h
 // only the member list. 404 when nothing has been staged yet (stage a deploy first).
 func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	canonical, epoch, err := h.stagedManifest(r.Context(), tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "no staged membership manifest; stage a deploy before signing")
+			writeAPIError(w, apierr.New(apierr.CodeNoStagedManifest))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load staged manifest")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, trustListResponseJSON{
@@ -1397,17 +1402,17 @@ func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Reque
 // when no operator credential is pinned; a 404 when nothing has been staged.
 func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	var req trustListSignatureRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
 
@@ -1415,10 +1420,10 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 	cred, err := h.store.GetOperatorCredential(r.Context(), tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusPreconditionFailed, "no operator credential is pinned; pin one before signing")
+			writeAPIError(w, apierr.New(apierr.CodeNoPinnedCredential))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load operator credential")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 
@@ -1426,21 +1431,21 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 	canonical, epoch, err := h.stagedManifest(r.Context(), tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "no staged membership manifest; stage a deploy before signing")
+			writeAPIError(w, apierr.New(apierr.CodeNoStagedManifest))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load staged manifest")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 
 	// (b) Substitution guard: the operator must have signed EXACTLY these bytes.
 	submitted, err := base64.StdEncoding.DecodeString(req.TrustListJSON)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "trustlist_json is not valid base64")
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "trustlist_json"))
 		return
 	}
 	if !bytes.Equal(submitted, canonical) {
-		writeError(w, http.StatusConflict, "submitted manifest does not match the current staged manifest; re-fetch and re-sign")
+		writeAPIError(w, apierr.New(apierr.CodeStagedManifestMismatch))
 		return
 	}
 
@@ -1448,18 +1453,18 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 	// canonical bytes (Verify re-canonicalizes the parsed value internally).
 	var manifest trustlist.TrustList
 	if err := json.Unmarshal(canonical, &manifest); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to parse staged manifest: "+err.Error())
+		writeAPIError(w, apierr.New(apierr.CodeInternalStorage).Wrap(err))
 		return
 	}
 
 	// (c) Verify the off-host signature against the PINNED credential.
 	pin, err := pinFromCredential(cred)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load pinned credential: "+err.Error())
+		writeAPIError(w, apierr.New(apierr.CodeInternalStorage).Wrap(err))
 		return
 	}
 	if err := trustlist.Verify(manifest, req.Signed, pin); err != nil {
-		writeError(w, http.StatusBadRequest, "manifest signature verification failed: "+err.Error())
+		writeAPIError(w, apierr.New(apierr.CodeManifestSignatureInvalid).Wrap(err))
 		return
 	}
 
@@ -1467,7 +1472,7 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 	// unchanged) and audit it.
 	signedJSON, err := json.Marshal(req.Signed)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to marshal signature")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	if err := h.store.PutSignedTrustList(r.Context(), tenant, controller.StoredTrustList{
@@ -1475,7 +1480,7 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 		SignatureJSON: signedJSON,
 		Epoch:         epoch,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store signed manifest")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
@@ -1483,7 +1488,7 @@ func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *h
 		Actor:     "operator:" + operator,
 		Action:    "sign-trustlist",
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to append audit")
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "epoch": epoch})
@@ -1536,17 +1541,10 @@ func readControllerBody(w http.ResponseWriter, r *http.Request) ([]byte, error) 
 	return body, nil
 }
 
-// errBodyEmpty marks an empty request body where one is required.
-var errBodyEmpty = errors.New("request body is empty")
-
-// statusForBodyErr maps a readControllerBody error to an HTTP status: 413 for
-// oversize, 400 otherwise.
-func statusForBodyErr(err error) int {
-	if isBodyTooLarge(err) {
-		return http.StatusRequestEntityTooLarge
-	}
-	return http.StatusBadRequest
-}
+// errBodyEmpty marks an empty request body where one is required. It is a coded
+// *apierr.Error (CodeReqBodyEmpty, 400) so writeCodedOr surfaces it via errors.As with the
+// right status; built once at init and only ever read after (never mutated), so sharing is safe.
+var errBodyEmpty = apierr.New(apierr.CodeReqBodyEmpty)
 
 // parseAfter parses the /poll ?after= cursor. An empty value means 0 (poll for any
 // generation). A non-numeric, negative, or out-of-range value is a 400 — strconv

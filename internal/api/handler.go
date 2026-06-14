@@ -304,19 +304,14 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 const maxRequestBodyBytes int64 = 4 << 20 // 4 MiB
 
 // errBodyTooLarge is the body-too-large sentinel returned by readTopology and the controller's
-// raw-body reader on overflow. It is a coded *apierr.Error (CodeReqBodyTooLarge, 413) so it both
-// satisfies isBodyTooLarge and serializes as the nested envelope. It is constructed once at init
-// and only ever read afterwards (never mutated), so sharing the pointer across requests is safe.
+// raw-body reader on overflow. It is a coded *apierr.Error (CodeReqBodyTooLarge, 413) so writeCodedOr
+// surfaces it via errors.As with the right status and the nested envelope. It is constructed once at
+// init and only ever read afterwards (never mutated), so sharing the pointer across requests is safe.
 var errBodyTooLarge = apierr.New(apierr.CodeReqBodyTooLarge).With("limit", strconv.FormatInt(maxRequestBodyBytes, 10))
 
-// isBodyTooLarge reports whether err is, or wraps, the body-too-large coded error.
-func isBodyTooLarge(err error) bool {
-	return apierr.HasCode(err, apierr.CodeReqBodyTooLarge)
-}
-
-// readTopology 读取并解析请求体中的 Topology。
-// 请求体被 http.MaxBytesReader 限制在 maxRequestBodyBytes 以内；
-// 超限时返回 errBodyTooLarge（调用方映射为 413），其余错误为可读性/格式问题（映射为 400）。
+// readTopology reads and parses the request body into a Topology. The body is capped at
+// maxRequestBodyBytes by http.MaxBytesReader; overflow returns errBodyTooLarge (413), other read/
+// parse failures return CodeReqInvalidBody / CodeReqBodyEmpty (400).
 func readTopology(w http.ResponseWriter, r *http.Request) (*model.Topology, error) {
 	defer r.Body.Close()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
