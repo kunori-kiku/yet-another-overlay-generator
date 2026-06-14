@@ -1,5 +1,5 @@
 import { useTopologyStore } from '../../stores/topologyStore';
-import { t } from '../../i18n';
+import { t, tValidationError } from '../../i18n';
 
 export function BottomBar() {
   const { validateResult, error, validate, isValidating, nodes, edges, domains, language } =
@@ -47,7 +47,7 @@ export function BottomBar() {
                 key={`err-${i}`}
                 className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded"
               >
-                ❌ [{e.field}] {e.message}
+                ❌ [{e.field}] {tValidationError(e, language)}
               </div>
             ))}
 
@@ -56,7 +56,7 @@ export function BottomBar() {
                 key={`warn-${i}`}
                 className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded"
               >
-                ⚠️ [{w.field}] {w.message}
+                ⚠️ [{w.field}] {tValidationError(w, language)}
               </div>
             ))}
           </>

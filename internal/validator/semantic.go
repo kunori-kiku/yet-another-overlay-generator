@@ -3,6 +3,7 @@ package validator
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
@@ -15,17 +16,17 @@ import (
 func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	result := &ValidationResult{}
 
-	// 
+	//
 	domainMap := buildDomainMap(topo)
 	nodeMap := buildNodeMap(topo)
 
-	//  Domain 
+	//  Domain
 	validateNodeDomainRefs(topo, domainMap, result)
 
-	//  Edge 
+	//  Edge
 	validateEdgeNodeRefs(topo, nodeMap, result)
 
-	//  IP 
+	//  IP
 	validateIPSemantics(topo, domainMap, result)
 
 	//  ID
@@ -40,7 +41,7 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// 生效监听端口范围：每节点 base..base+(对端接口数-1) 是否越界，以及同主机节点范围是否重叠
 	validateEffectivePortRanges(topo, result)
 
-	// 
+	//
 	detectIsolatedNodes(topo, result)
 
 	// NAT
@@ -87,8 +88,7 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 // LAN 桥接 / 路由注入这一用例由 extra_prefixes 与路由层承载，而非 route_policies。
 func validateRoutePoliciesReserved(topo *model.Topology, result *ValidationResult) {
 	if len(topo.RoutePolicies) > 0 {
-		result.AddError("route_policies",
-			fmt.Sprintf("route_policies 为保留特性，尚未实现：当前没有任何渲染器消费它，编译器仅原样透传，必须为空（检测到 %d 条策略，请清空 route_policies；LAN 桥接 / 路由注入请改用 extra_prefixes）", len(topo.RoutePolicies)))
+		result.AddError("route_policies", CodeRoutePolicyReserved, P{"count", strconv.Itoa(len(topo.RoutePolicies))})
 	}
 }
 
@@ -112,8 +112,7 @@ func validateNodeDomainRefs(topo *model.Topology, domainMap map[string]*model.Do
 	for i, node := range topo.Nodes {
 		if node.DomainID != "" {
 			if _, ok := domainMap[node.DomainID]; !ok {
-				result.AddError(fmt.Sprintf("nodes[%d].domain_id", i),
-					fmt.Sprintf(" %s  Domain %s ", node.Name, node.DomainID))
+				result.AddError(fmt.Sprintf("nodes[%d].domain_id", i), CodeNodeDomainRefMissing, P{"node", node.Name}, P{"id", node.DomainID})
 			}
 		}
 	}
@@ -124,14 +123,12 @@ func validateEdgeNodeRefs(topo *model.Topology, nodeMap map[string]*model.Node, 
 		prefix := fmt.Sprintf("edges[%d]", i)
 		if edge.FromNodeID != "" {
 			if _, ok := nodeMap[edge.FromNodeID]; !ok {
-				result.AddError(prefix+".from_node_id",
-					fmt.Sprintf("Edge %s  %s ", edge.ID, edge.FromNodeID))
+				result.AddError(prefix+".from_node_id", CodeEdgeNodeRefMissing, P{"id", edge.ID}, P{"other", edge.FromNodeID})
 			}
 		}
 		if edge.ToNodeID != "" {
 			if _, ok := nodeMap[edge.ToNodeID]; !ok {
-				result.AddError(prefix+".to_node_id",
-					fmt.Sprintf("Edge %s  %s ", edge.ID, edge.ToNodeID))
+				result.AddError(prefix+".to_node_id", CodeEdgeNodeRefMissing, P{"id", edge.ID}, P{"other", edge.ToNodeID})
 			}
 		}
 	}
@@ -157,17 +154,13 @@ func validateIPSemantics(topo *model.Topology, domainMap map[string]*model.Domai
 		if ok && domain.CIDR != "" {
 			_, cidrNet, err := net.ParseCIDR(domain.CIDR)
 			if err == nil && !cidrNet.Contains(ip) {
-				result.AddError(prefix,
-					fmt.Sprintf(" %s  IP %s  Domain %s  CIDR %s",
-						node.Name, node.OverlayIP, domain.Name, domain.CIDR))
+				result.AddError(prefix, CodeNodeOverlayIPOutOfCIDR, P{"node", node.Name}, P{"cidr", node.OverlayIP}, P{"name", domain.Name}, P{"prefix", domain.CIDR})
 			}
 		}
 
-		//  IP 
+		//  IP
 		if existingNode, exists := ipUsage[node.OverlayIP]; exists {
-			result.AddError(prefix,
-				fmt.Sprintf("IP %s :  %s ,  %s ",
-					node.OverlayIP, existingNode, node.Name))
+			result.AddError(prefix, CodeNodeOverlayIPConflict, P{"cidr", node.OverlayIP}, P{"other", existingNode}, P{"node", node.Name})
 		} else {
 			ipUsage[node.OverlayIP] = node.Name
 		}
@@ -175,32 +168,29 @@ func validateIPSemantics(topo *model.Topology, domainMap map[string]*model.Domai
 }
 
 func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
-	// Domain ID 
+	// Domain ID
 	domainIDs := make(map[string]bool)
 	for i, d := range topo.Domains {
 		if domainIDs[d.ID] {
-			result.AddError(fmt.Sprintf("domains[%d].id", i),
-				fmt.Sprintf("Domain ID : %s", d.ID))
+			result.AddError(fmt.Sprintf("domains[%d].id", i), CodeDomainIDDuplicate, P{"id", d.ID})
 		}
 		domainIDs[d.ID] = true
 	}
 
-	// Node ID 
+	// Node ID
 	nodeIDs := make(map[string]bool)
 	for i, n := range topo.Nodes {
 		if nodeIDs[n.ID] {
-			result.AddError(fmt.Sprintf("nodes[%d].id", i),
-				fmt.Sprintf("Node ID : %s", n.ID))
+			result.AddError(fmt.Sprintf("nodes[%d].id", i), CodeNodeIDDuplicate, P{"id", n.ID})
 		}
 		nodeIDs[n.ID] = true
 	}
 
-	// Edge ID 
+	// Edge ID
 	edgeIDs := make(map[string]bool)
 	for i, e := range topo.Edges {
 		if edgeIDs[e.ID] {
-			result.AddError(fmt.Sprintf("edges[%d].id", i),
-				fmt.Sprintf("Edge ID : %s", e.ID))
+			result.AddError(fmt.Sprintf("edges[%d].id", i), CodeEdgeIDDuplicate, P{"id", e.ID})
 		}
 		edgeIDs[e.ID] = true
 	}
@@ -229,9 +219,7 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 
 		// N1：原始名称冲突。
 		if firstNode, exists := rawNames[node.Name]; exists {
-			result.AddError(prefix,
-				fmt.Sprintf("节点名称重复：节点 %s 与节点 %s 使用了相同的名称 %q",
-					firstNode, node.Name, node.Name))
+			result.AddError(prefix, CodeNodeNameDuplicate, P{"other", firstNode}, P{"node", node.Name}, P{"name", fmt.Sprintf("%q", node.Name)})
 		} else {
 			rawNames[node.Name] = node.Name
 		}
@@ -240,9 +228,7 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 		installerName := naming.SafeInstallerFileName(node.Name)
 		if firstNode, exists := installerNames[installerName]; exists {
 			if firstNode != node.Name {
-				result.AddError(prefix,
-					fmt.Sprintf("节点名称会生成相同的安装脚本文件名：节点 %s 与节点 %s 都归一为 %q，将造成部署时静默跳过或身份错位",
-						firstNode, node.Name, installerName))
+				result.AddError(prefix, CodeNodeNameInstallerCollision, P{"other", firstNode}, P{"node", node.Name}, P{"name", fmt.Sprintf("%q", installerName)})
 			}
 		} else {
 			installerNames[installerName] = node.Name
@@ -252,9 +238,7 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 		interfaceName := naming.WgInterfaceName(node.Name)
 		if firstNode, exists := interfaceNames[interfaceName]; exists {
 			if firstNode != node.Name {
-				result.AddError(prefix,
-					fmt.Sprintf("节点名称会生成相同的 WireGuard 接口名：节点 %s 与节点 %s 都归一为 %q，将造成一个接口配置覆盖另一个",
-						firstNode, node.Name, interfaceName))
+				result.AddError(prefix, CodeNodeNameInterfaceCollision, P{"other", firstNode}, P{"node", node.Name}, P{"name", fmt.Sprintf("%q", interfaceName)})
 			}
 		} else {
 			interfaceNames[interfaceName] = node.Name
@@ -264,7 +248,7 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 
 func validateListenPortConflicts(topo *model.Topology, result *ValidationResult) {
 	//  listen port（ hostname ）
-	// ， hostname 
+	// ， hostname
 	type hostPort struct {
 		hostname string
 		port     int
@@ -277,9 +261,7 @@ func validateListenPortConflicts(topo *model.Topology, result *ValidationResult)
 		}
 		hp := hostPort{hostname: node.Hostname, port: node.ListenPort}
 		if existingNode, exists := seen[hp]; exists {
-			result.AddWarning(fmt.Sprintf("nodes[%d].listen_port", i),
-				fmt.Sprintf(" %s  %s  %s  %d",
-					node.Name, existingNode, node.Hostname, node.ListenPort))
+			result.AddWarning(fmt.Sprintf("nodes[%d].listen_port", i), CodeNodeListenPortHostConflict, P{"node", node.Name}, P{"other", existingNode}, P{"name", node.Hostname}, P{"port", strconv.Itoa(node.ListenPort)})
 		} else {
 			seen[hp] = node.Name
 		}
@@ -393,9 +375,7 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 
 		// 规则 1：生效范围最高端口越界。
 		if r.high() > 65535 {
-			result.AddError(fmt.Sprintf("nodes[%d].listen_port", r.nodeIndex),
-				fmt.Sprintf("节点 %s 的生效监听端口范围为 %d-%d（基准端口 %d + %d 个对端接口），最高端口 %d 超过 65535，将生成无法部署的 WireGuard 配置",
-					r.nodeName, r.base, r.high(), r.base, r.count, r.high()))
+			result.AddError(fmt.Sprintf("nodes[%d].listen_port", r.nodeIndex), CodeNodeEffectivePortRangeOverflow, P{"node", r.nodeName}, P{"low", strconv.Itoa(r.base)}, P{"high", strconv.Itoa(r.high())}, P{"base", strconv.Itoa(r.base)}, P{"count", strconv.Itoa(r.count)})
 		}
 	}
 
@@ -417,11 +397,7 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 					later = ra
 					earlier = rb
 				}
-				result.AddError(fmt.Sprintf("nodes[%d].listen_port", later.nodeIndex),
-					fmt.Sprintf("节点 %s（端口 %d-%d）与节点 %s（端口 %d-%d）共享主机 %s 且生效监听端口范围重叠，同一主机上的 WireGuard 接口会争用相同端口",
-						earlier.nodeName, earlier.base, earlier.high(),
-						later.nodeName, later.base, later.high(),
-						later.hostname))
+				result.AddError(fmt.Sprintf("nodes[%d].listen_port", later.nodeIndex), CodeNodeEffectivePortRangeOverlap, P{"node", earlier.nodeName}, P{"low", strconv.Itoa(earlier.base)}, P{"high", strconv.Itoa(earlier.high())}, P{"other", later.nodeName}, P{"other_low", strconv.Itoa(later.base)}, P{"other_high", strconv.Itoa(later.high())}, P{"name", later.hostname})
 			}
 		}
 	}
@@ -432,7 +408,7 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 		return
 	}
 
-	// 
+	//
 	connectedNodes := make(map[string]bool)
 	for _, edge := range topo.Edges {
 		if edge.IsEnabled {
@@ -441,11 +417,10 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 		}
 	}
 
-	// 
+	//
 	for _, node := range topo.Nodes {
 		if !connectedNodes[node.ID] {
-			result.AddWarning("topology",
-				fmt.Sprintf(" %s (%s) ，", node.Name, node.ID))
+			result.AddWarning("topology", CodeNodeIsolated, P{"node", node.Name}, P{"id", node.ID})
 		}
 	}
 }
@@ -453,7 +428,7 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 // validateClientEdges 验证 client 节点的边约束
 func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
 	// 收集每个 client 的出站和入站 edge 数量
-	clientOutbound := make(map[string]int)    // nodeID -> count of enabled outbound edges
+	clientOutbound := make(map[string]int)        // nodeID -> count of enabled outbound edges
 	clientOutboundEdges := make(map[string][]int) // nodeID -> edge indices
 
 	for i, edge := range topo.Edges {
@@ -466,8 +441,7 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 
 		// 拒绝以 client 为目标的入站边
 		if toNode != nil && toNode.Role == "client" {
-			result.AddError(fmt.Sprintf("edges[%d]", i),
-				fmt.Sprintf("Client node %s cannot accept inbound connections", toNode.Name))
+			result.AddError(fmt.Sprintf("edges[%d]", i), CodeClientInboundRejected, P{"node", toNode.Name})
 		}
 
 		// 统计 client 出站边
@@ -478,19 +452,16 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 			// Client 的目标必须是 router/relay/gateway（不能是 peer 或 client）
 			if toNode != nil {
 				if toNode.Role == "peer" {
-					result.AddError(fmt.Sprintf("edges[%d]", i),
-						fmt.Sprintf("Client %s cannot connect to peer %s (peers don't forward traffic)", fromNode.Name, toNode.Name))
+					result.AddError(fmt.Sprintf("edges[%d]", i), CodeClientTargetPeer, P{"node", fromNode.Name}, P{"other", toNode.Name})
 				}
 				if toNode.Role == "client" {
-					result.AddError(fmt.Sprintf("edges[%d]", i),
-						fmt.Sprintf("Client %s cannot connect to another client %s", fromNode.Name, toNode.Name))
+					result.AddError(fmt.Sprintf("edges[%d]", i), CodeClientTargetClient, P{"node", fromNode.Name}, P{"other", toNode.Name})
 				}
 			}
 
 			// Client 边必须有 endpoint_host
 			if edge.EndpointHost == "" {
-				result.AddError(fmt.Sprintf("edges[%d].endpoint_host", i),
-					fmt.Sprintf("Client %s requires endpoint_host to reach router", fromNode.Name))
+				result.AddError(fmt.Sprintf("edges[%d].endpoint_host", i), CodeClientEndpointHostRequired, P{"node", fromNode.Name})
 			}
 		}
 	}
@@ -502,21 +473,17 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 		}
 		count := clientOutbound[node.ID]
 		if count == 0 {
-			result.AddError("topology",
-				fmt.Sprintf("Client %s must have exactly one enabled outbound edge", node.Name))
+			result.AddError("topology", CodeClientNoOutboundEdge, P{"node", node.Name})
 		} else if count > 1 {
-			result.AddError("topology",
-				fmt.Sprintf("Client %s has %d outbound edges but must have exactly one (single wg0 interface)", node.Name, count))
+			result.AddError("topology", CodeClientMultipleOutboundEdges, P{"node", node.Name}, P{"count", strconv.Itoa(count)})
 		}
 
 		// 警告：client 设置了无意义的字段
 		if node.RouterID != "" {
-			result.AddWarning(fmt.Sprintf("node.%s.router_id", node.ID),
-				fmt.Sprintf("Client %s has router_id set but clients don't run Babel", node.Name))
+			result.AddWarning(fmt.Sprintf("node.%s.router_id", node.ID), CodeClientRouterIDMeaningless, P{"node", node.Name})
 		}
 		if len(node.ExtraPrefixes) > 0 {
-			result.AddWarning(fmt.Sprintf("node.%s.extra_prefixes", node.ID),
-				fmt.Sprintf("Client %s has extra_prefixes set but clients don't announce routes", node.Name))
+			result.AddWarning(fmt.Sprintf("node.%s.extra_prefixes", node.ID), CodeClientExtraPrefixesMeaningless, P{"node", node.Name})
 		}
 	}
 }
@@ -564,12 +531,10 @@ func validateMimicTransport(topo *model.Topology, nodeMap map[string]*model.Node
 		toNode := nodeMap[edge.ToNodeID]
 
 		if !mimicLinuxDeployable(fromNode) {
-			result.AddError(fmt.Sprintf("edges[%d].transport", i),
-				fmt.Sprintf("边 %s 使用 tcp 传输（mimic），但端点节点 %s 的平台 %q 不是可部署 Linux：mimic 是 eBPF/内核特性，tcp 边两端都必须为 Linux（debian / ubuntu）", edge.ID, fromNode.Name, fromNode.Platform))
+			result.AddError(fmt.Sprintf("edges[%d].transport", i), CodeEdgeMimicPlatformUnsupported, P{"id", edge.ID}, P{"node", fromNode.Name}, P{"platform", fmt.Sprintf("%q", fromNode.Platform)})
 		}
 		if !mimicLinuxDeployable(toNode) {
-			result.AddError(fmt.Sprintf("edges[%d].transport", i),
-				fmt.Sprintf("边 %s 使用 tcp 传输（mimic），但端点节点 %s 的平台 %q 不是可部署 Linux：mimic 是 eBPF/内核特性，tcp 边两端都必须为 Linux（debian / ubuntu）", edge.ID, toNode.Name, toNode.Platform))
+			result.AddError(fmt.Sprintf("edges[%d].transport", i), CodeEdgeMimicPlatformUnsupported, P{"id", edge.ID}, P{"node", toNode.Name}, P{"platform", fmt.Sprintf("%q", toNode.Platform)})
 		}
 	}
 }
@@ -659,13 +624,11 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		clientTouched := fromNode.Role == "client" || toNode.Role == "client"
 		if clientTouched {
 			if edge.PinnedFromPort != 0 || edge.PinnedToPort != 0 {
-				result.AddError(prefix,
-					fmt.Sprintf("边 %s 触及 client 节点却设置了端口 pin：client 使用单一 wg0，没有 per-peer 监听端口，请清除该边的 pinned_from_port / pinned_to_port", edge.ID))
+				result.AddError(prefix, CodePinClientPortPin, P{"id", edge.ID})
 			}
 			if edge.PinnedFromTransitIP != "" || edge.PinnedToTransitIP != "" ||
 				edge.PinnedFromLinkLocal != "" || edge.PinnedToLinkLocal != "" {
-				result.AddWarning(prefix,
-					fmt.Sprintf("边 %s 触及 client 节点，其分配 pin 将被忽略：client 使用单一 wg0，不参与 per-peer transit/link-local 分配", edge.ID))
+				result.AddWarning(prefix, CodePinClientAllocationIgnored, P{"id", edge.ID})
 			}
 			continue
 		}
@@ -699,16 +662,13 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 // pin 必须以完整成对的形式出现，否则编译器无法构造一条链路的双端配置。
 func validatePinPairCompleteness(prefix string, edge model.Edge, result *ValidationResult) {
 	if (edge.PinnedFromPort != 0) != (edge.PinnedToPort != 0) {
-		result.AddError(prefix,
-			fmt.Sprintf("边 %s 的监听端口 pin 不完整（仅一端被钉住）：pin 必须成对设置，请补全 pinned_from_port 与 pinned_to_port，或同时清空两者", edge.ID))
+		result.AddError(prefix, CodePinPortIncomplete, P{"id", edge.ID})
 	}
 	if (edge.PinnedFromTransitIP != "") != (edge.PinnedToTransitIP != "") {
-		result.AddError(prefix,
-			fmt.Sprintf("边 %s 的 transit IP pin 不完整（仅一端被钉住）：pin 必须成对设置，请补全 pinned_from_transit_ip 与 pinned_to_transit_ip，或同时清空两者", edge.ID))
+		result.AddError(prefix, CodePinTransitIPIncomplete, P{"id", edge.ID})
 	}
 	if (edge.PinnedFromLinkLocal != "") != (edge.PinnedToLinkLocal != "") {
-		result.AddError(prefix,
-			fmt.Sprintf("边 %s 的 link-local pin 不完整（仅一端被钉住）：pin 必须成对设置，请补全 pinned_from_link_local 与 pinned_to_link_local，或同时清空两者", edge.ID))
+		result.AddError(prefix, CodePinLinkLocalIncomplete, P{"id", edge.ID})
 	}
 }
 
@@ -724,9 +684,7 @@ func validatePinnedPortRange(prefix, field string, port int, node *model.Node, r
 		base = defaultListenPort
 	}
 	if port < base || port > 65535 {
-		result.AddError(prefix+"."+field,
-			fmt.Sprintf("节点 %s 的端口 pin %d 越界：必须不低于节点基准监听端口 %d 且不超过 65535（若需重新编号请清除该 pin）",
-				node.Name, port, base))
+		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(base)})
 	}
 }
 
@@ -738,8 +696,7 @@ func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, resul
 	}
 	ip := net.ParseIP(value)
 	if ip == nil {
-		result.AddError(prefix+"."+field,
-			fmt.Sprintf("transit IP pin %q 不是合法的 IP 地址", value))
+		result.AddError(prefix+"."+field, CodePinTransitIPInvalid, P{"cidr", fmt.Sprintf("%q", value)})
 		return
 	}
 	_, cidrNet, err := net.ParseCIDR(transitCIDR)
@@ -748,9 +705,7 @@ func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, resul
 		return
 	}
 	if !cidrNet.Contains(ip) {
-		result.AddError(prefix+"."+field,
-			fmt.Sprintf("transit IP pin %s 不在该边的 transit 地址池 %s 内（地址池可能被收窄，请清除该 pin 以重新编号）",
-				value, transitCIDR))
+		result.AddError(prefix+"."+field, CodePinTransitIPOutOfCIDR, P{"cidr", value}, P{"prefix", transitCIDR})
 	}
 }
 
@@ -768,8 +723,7 @@ func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID stri
 			// 同一链路（正反边），不是跨链路冲突。
 			return
 		}
-		result.AddError(prefix,
-			fmt.Sprintf("端口 pin %d 在节点上被两条不同链路重复占用：边 %s 与边 %s 钉住了同一节点的同一监听端口", port, existing.edge, edgeID))
+		result.AddError(prefix, CodePinPortDuplicateCrossLink, P{"port", strconv.Itoa(port)}, P{"other", existing.edge}, P{"id", edgeID})
 		return
 	}
 	portsByNode[nodeID] = append(portsByNode[nodeID], nodePortPin{port: port, linkID: link, edge: edgeID})
@@ -787,8 +741,7 @@ func checkDuplicateTransitIP(prefix, value, link, edgeID string, transitByValue 
 		if owner.linkID == link {
 			return
 		}
-		result.AddError(prefix,
-			fmt.Sprintf("transit IP pin %s 被两条不同链路重复占用：边 %s 与边 %s 钉住了同一 transit 地址", value, owner.edge, edgeID))
+		result.AddError(prefix, CodePinTransitIPDuplicateCrossLink, P{"cidr", value}, P{"other", owner.edge}, P{"id", edgeID})
 		return
 	}
 	transitByValue[key] = pinOwner{linkID: link, edge: edgeID}
@@ -805,8 +758,7 @@ func checkDuplicateLinkLocal(prefix, value, link, edgeID string, linkLocalByValu
 		if owner.linkID == link {
 			return
 		}
-		result.AddError(prefix,
-			fmt.Sprintf("link-local pin %s 被两条不同链路重复占用：边 %s 与边 %s 钉住了同一 link-local 地址", value, owner.edge, edgeID))
+		result.AddError(prefix, CodePinLinkLocalDuplicateCrossLink, P{"cidr", value}, P{"other", owner.edge}, P{"id", edgeID})
 		return
 	}
 	linkLocalByValue[key] = pinOwner{linkID: link, edge: edgeID}
@@ -846,9 +798,7 @@ func validateEdgeEndpointConsistency(topo *model.Topology, nodeMap map[string]*m
 		}
 
 		if !matched {
-			result.AddWarning(fmt.Sprintf("edges[%d].endpoint_host", i),
-				fmt.Sprintf("Edge %s dials %s but target %s has no matching public endpoint (the endpoint snapshot may be stale after a node edit)",
-					edge.ID, edge.EndpointHost, toNode.Name))
+			result.AddWarning(fmt.Sprintf("edges[%d].endpoint_host", i), CodeEdgeEndpointNoMatch, P{"id", edge.ID}, P{"other", edge.EndpointHost}, P{"node", toNode.Name})
 		}
 	}
 }
@@ -875,8 +825,7 @@ func detectDuplicateEnabledEdges(topo *model.Topology, result *ValidationResult)
 		}
 		direction := edge.FromNodeID + "->" + edge.ToNodeID
 		if firstID, exists := firstEdgeByDirection[direction]; exists {
-			result.AddWarning(fmt.Sprintf("edges[%d]", i),
-				fmt.Sprintf("边 %s 与边 %s 连接同一对节点（同方向）且同属 primary class，编译时只有首条生效，本条边的 endpoint 设置会被忽略；请删除或禁用多余的边——若本意是冗余备份，请将本条边的 role 设为 backup，使其成为一条独立的备份链路", edge.ID, firstID))
+			result.AddWarning(fmt.Sprintf("edges[%d]", i), CodeEdgeDuplicateEnabledSameDirection, P{"id", edge.ID}, P{"other", firstID})
 			continue
 		}
 		firstEdgeByDirection[direction] = edge.ID
@@ -954,9 +903,7 @@ func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*m
 			if node != nil {
 				nodeName = node.Name
 			}
-			result.AddError(fmt.Sprintf("nodes[%d]", nodeIndex),
-				fmt.Sprintf("节点 %s 上有两条链路生成了相同的 WireGuard 接口名 %q：%s 与 %s 相撞，一份接口配置会覆盖另一份；请重命名相撞节点之一以消除 4 位 hash 碰撞",
-					nodeName, ifaceName, first, linkDesc))
+			result.AddError(fmt.Sprintf("nodes[%d]", nodeIndex), CodeNodeInterfaceNameCollision, P{"node", nodeName}, P{"name", fmt.Sprintf("%q", ifaceName)}, P{"prefix", first}, P{"other", linkDesc})
 			return
 		}
 		ifaceByNode[nodeID][ifaceName] = linkDesc
@@ -1015,11 +962,11 @@ func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*m
 // linkDescription 为错误消息构造一条链路的可读描述：标明朝向的对端、链路类别（primary/backup）
 // 与代表边 ID，便于操作员定位需重命名的链路。
 func linkDescription(edge *model.Edge, remoteName string, backup bool) string {
-	kind := "primary 链路"
+	kind := "primary link"
 	if backup {
-		kind = "backup 边 " + edge.ID
+		kind = "backup link " + edge.ID
 	}
-	return fmt.Sprintf("朝 %s 的%s", remoteName, kind)
+	return fmt.Sprintf("the %s toward %s", kind, remoteName)
 }
 
 // validateSinglePrimaryPerPair 校验：同一对节点至多有一条显式标记 role=="primary" 的边。
@@ -1042,8 +989,7 @@ func validateSinglePrimaryPerPair(topo *model.Topology, nodeMap map[string]*mode
 		}
 		pk := linkid.PinKey(edge.FromNodeID, edge.ToNodeID)
 		if firstID, exists := firstPrimary[pk]; exists {
-			result.AddError(fmt.Sprintf("edges[%d].role", i),
-				fmt.Sprintf("边 %s 与边 %s 连接同一对节点且都显式标记为 role primary：每对节点至多只能有一条 primary 链路，编译器会折叠 primary class 并忽略多余者；请将其中一条改为 backup 或清除其 role", edge.ID, firstID))
+			result.AddError(fmt.Sprintf("edges[%d].role", i), CodeEdgeMultipleExplicitPrimary, P{"id", edge.ID}, P{"other", firstID})
 			continue
 		}
 		firstPrimary[pk] = edge.ID
@@ -1065,8 +1011,7 @@ func validateBackupClientEdges(topo *model.Topology, nodeMap map[string]*model.N
 		fromNode := nodeMap[edge.FromNodeID]
 		toNode := nodeMap[edge.ToNodeID]
 		if (fromNode != nil && fromNode.Role == "client") || (toNode != nil && toNode.Role == "client") {
-			result.AddError(fmt.Sprintf("edges[%d].role", i),
-				fmt.Sprintf("边 %s 触及 client 节点却被标记为 backup：client 使用单一 wg0、不运行 Babel，没有 per-peer 接口与基于代价的故障切换，备份链路对其无意义；请清除该边的 role 或删除该边", edge.ID))
+			result.AddError(fmt.Sprintf("edges[%d].role", i), CodeEdgeBackupTouchesClient, P{"id", edge.ID})
 		}
 	}
 }
@@ -1138,8 +1083,7 @@ func validateParallelLinkCosts(topo *model.Topology, nodeMap map[string]*model.N
 
 		// 无 primary 告警：该对节点存在链路但无 primary class 链路（全是 backup）。
 		if len(s.costs) > 0 && !s.hasPrimary {
-			result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex),
-				fmt.Sprintf("节点 %s 与 %s 之间的链路全部为 backup、没有 primary 主链路：Babel 将在备份链路间转发而无主备之分（可能是某次 role 翻转后遗漏了 primary）；请将其中一条改为 primary 或清除其 role", s.fromName, s.toName))
+			result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex), CodeLinkNoPrimary, P{"node", s.fromName}, P{"other", s.toName})
 		}
 
 		// 等代价告警：>=2 条链路且可比较代价全相同。
@@ -1152,8 +1096,7 @@ func validateParallelLinkCosts(topo *model.Topology, nodeMap map[string]*model.N
 				}
 			}
 			if allEqual {
-				result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex),
-					fmt.Sprintf("节点 %s 与 %s 之间有 %d 条链路但解析出的代价全部相同（%d）：Babel 无从偏好任何一条，配置表达不出故障切换；请通过 role backup 或 priority/weight 为各链路设置不同代价", s.fromName, s.toName, len(s.costs), s.costs[0]))
+				result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex), CodeLinkEqualCost, P{"node", s.fromName}, P{"other", s.toName}, P{"count", strconv.Itoa(len(s.costs))}, P{"low", strconv.Itoa(s.costs[0])})
 			}
 		}
 	}
