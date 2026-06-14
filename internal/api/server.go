@@ -22,6 +22,15 @@ type Server struct {
 	// keeping the operator port behind a tighter network boundary. Both are plain
 	// HTTP — TLS is delegated to a reverse proxy (plan-4.5).
 	agentMux *http.ServeMux
+
+	// operatorAuth is the operator-auth middleware, set by EnableController in controller
+	// mode and nil in air-gap mode (plan-12 / T6). The air-gap compute routes (validate/
+	// compile/export/deploy-script) read it AT REQUEST TIME via gateAirgap: in a controller
+	// deployment they are then gated behind operator auth (closing the unauthenticated
+	// compute / key-gen oracle on the operator port); in air-gap mode they stay open exactly
+	// as before. Stored as a field (not wired at registerRoutes time) because EnableController
+	// runs AFTER registerRoutes.
+	operatorAuth func(http.HandlerFunc) http.HandlerFunc
 }
 
 // NewServer  API
@@ -50,6 +59,24 @@ func NewServer() *Server {
 func (s *Server) EnableController(ch *ControllerHandler) {
 	ch.RegisterOperatorRoutes(s.mux)
 	ch.RegisterAgentRoutes(s.agentMux)
+	// plan-12 / T6: in a controller deployment the air-gap compute routes on s.mux must not be
+	// an unauthenticated compute/key-gen oracle on the operator port. Arm the operator-auth gate;
+	// gateAirgap (wrapping those routes since registerRoutes) reads it at request time.
+	s.operatorAuth = ch.operatorAuth
+}
+
+// gateAirgap wraps an air-gap compute handler so it requires operator auth IN CONTROLLER MODE
+// (s.operatorAuth armed by EnableController) and is a passthrough in air-gap mode (s.operatorAuth
+// nil), exactly as before. Read at request time because EnableController runs after registerRoutes.
+// /api/health is intentionally NOT wrapped (it stays a public liveness probe in both modes).
+func (s *Server) gateAirgap(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.operatorAuth != nil {
+			s.operatorAuth(h)(w, r)
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *Server) registerRoutes() {
@@ -60,11 +87,18 @@ func (s *Server) registerRoutes() {
 		return s.recoverPanics(s.cors(h))
 	}
 
+	// compute wraps an air-gap compute route with the controller-mode operator-auth gate
+	// (gateAirgap) INSIDE the panic/cors chain, so a 401/403 from the gate still gets CORS
+	// headers (the panel can read it). Health is exempt — public liveness probe in both modes.
+	compute := func(h http.HandlerFunc) http.HandlerFunc {
+		return s.recoverPanics(s.cors(s.gateAirgap(h)))
+	}
+
 	s.mux.HandleFunc("/api/health", wrap(s.handler.HandleHealth))
-	s.mux.HandleFunc("/api/validate", wrap(s.handler.HandleValidate))
-	s.mux.HandleFunc("/api/compile", wrap(s.handler.HandleCompile))
-	s.mux.HandleFunc("/api/export", wrap(s.handler.HandleExport))
-	s.mux.HandleFunc("/api/deploy-script", wrap(s.handler.HandleDeployScript))
+	s.mux.HandleFunc("/api/validate", compute(s.handler.HandleValidate))
+	s.mux.HandleFunc("/api/compile", compute(s.handler.HandleCompile))
+	s.mux.HandleFunc("/api/export", compute(s.handler.HandleExport))
+	s.mux.HandleFunc("/api/deploy-script", compute(s.handler.HandleDeployScript))
 }
 
 // cors CORS
