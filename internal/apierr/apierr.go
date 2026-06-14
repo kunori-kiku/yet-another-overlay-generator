@@ -36,6 +36,11 @@ const (
 	CodeLegacyUncoded Code = "legacy_uncoded"
 	// CodeInternalPanic is the recovered-panic 500 (see Server.recoverPanics).
 	CodeInternalPanic Code = "internal_panic"
+	// CodeInternal is the generic internal-server-error fallback used by writeCodedOr when a
+	// relayed error is NOT coded at the source. It is the safety net so a handler relay never
+	// has to reach for the legacy shim; a specific relay seam should pass a more precise bucket
+	// (e.g. CodeRenderFailed) instead where one fits.
+	CodeInternal Code = "internal"
 	// CodeCustodyPrivateKey rejects an update-topology payload that carried a WireGuard
 	// private key — a key-custody violation. The message names "private key" + "custody"
 	// so both the operator and the perpetual custody test see the WHY.
@@ -66,6 +71,7 @@ var registry = map[Code]def{
 	// supplies the verbatim message via WithMessage (which overrides the template).
 	CodeLegacyUncoded:     {"An unexpected error occurred.", http.StatusInternalServerError},
 	CodeInternalPanic:     {"An unexpected server error occurred.", http.StatusInternalServerError},
+	CodeInternal:          {"An internal server error occurred. Please try again.", http.StatusInternalServerError},
 	CodeCustodyPrivateKey: {"Topology payload carried a WireGuard private key; this is a key-custody violation — the panel must strip private keys client-side before upload.", http.StatusBadRequest},
 
 	CodeKeygenMissingPubkey:   {"Node {node} is in agent-held custody but has not registered a WireGuard public key yet — the agent must register one before the controller can render it.", http.StatusBadRequest},

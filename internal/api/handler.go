@@ -147,7 +147,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeCodedOr(w, "failed to generate WireGuard keys", err)
+		writeCodedOr(w, apierr.CodeInternal, err)
 		return
 	}
 
@@ -195,7 +195,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeCodedOr(w, "failed to generate WireGuard keys", err)
+		writeCodedOr(w, apierr.CodeInternal, err)
 		return
 	}
 
@@ -260,7 +260,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	// 拆除步骤（审计阻断项 D36）。
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
-		writeCodedOr(w, "failed to generate WireGuard keys", err)
+		writeCodedOr(w, apierr.CodeInternal, err)
 		return
 	}
 
@@ -607,15 +607,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // writeCodedOr surfaces err as its coded envelope (with the error's own status) when err
-// is, or wraps, an *apierr.Error; otherwise it falls back to a legacy 500 with the given
-// context message. Used where a handler relays a deep error (e.g. render.GenerateKeys)
-// that is coded at the source — the code + status flow through to the panel instead of
-// being flattened to a generic 500.
-func writeCodedOr(w http.ResponseWriter, fallbackMsg string, err error) {
+// is, or wraps, an *apierr.Error; otherwise it emits the given fallback bucket code, wrapping
+// err as the (log-only, never-serialized) cause. Used where a handler relays a deep error: a
+// source-coded failure (e.g. render.GenerateKeys) flows through with its own code+status+params,
+// while an un-coded one is bucketed under `fallback` so it still emits the nested envelope —
+// never the legacy shim. A relay seam should pass the most precise bucket that fits
+// (e.g. apierr.CodeRenderFailed); apierr.CodeInternal is the generic safety net.
+func writeCodedOr(w http.ResponseWriter, fallback apierr.Code, err error) {
 	var ae *apierr.Error
 	if errors.As(err, &ae) {
 		writeAPIError(w, ae)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, fmt.Sprintf("%s: %v", fallbackMsg, err))
+	writeAPIError(w, apierr.New(fallback).Wrap(err))
 }

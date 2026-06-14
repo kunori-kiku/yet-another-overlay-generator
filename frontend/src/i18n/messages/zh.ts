@@ -439,6 +439,10 @@ export const zh: Record<keyof typeof en, string> = {
   'shell.importPlaceholdered': "控制器模式导入：已将 {count} 个私钥替换为占位（节点将使用自持的 agent 密钥）。",
 
   'error.generic': '出错了，请重试。',
+  // 基础 apierr 设施码（plan-2/3/3.5b）——始终可本地化的传输层错误。
+  'error.internal': '服务器内部错误，请重试。',
+  'error.internal_panic': '服务器发生意外错误。',
+  'error.custody_private_key': '拓扑上传包含了 WireGuard 私钥，这违反密钥托管原则——面板必须在上传前于客户端剥离私钥。',
   'error.validateFailed': '校验失败',
   'error.compileFailed': '编译失败',
   'error.exportFailed': '导出失败',

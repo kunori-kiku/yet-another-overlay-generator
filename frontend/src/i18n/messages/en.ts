@@ -452,6 +452,11 @@ export const en = {
   // Backend error-code localization (see tError). The per-code keys ('error.<code>')
   // are added as backend codes land; 'error.generic' is the shape-agnostic fallback.
   'error.generic': 'Something went wrong. Please try again.',
+  // Foundational apierr infra codes (plan-2/3/3.5b) — always-localizable wire errors. The en
+  // value mirrors the Go registry template verbatim (the English default + i18n fallback).
+  'error.internal': 'An internal server error occurred. Please try again.',
+  'error.internal_panic': 'An unexpected server error occurred.',
+  'error.custody_private_key': 'Topology payload carried a WireGuard private key; this is a key-custody violation — the panel must strip private keys client-side before upload.',
   // Per-action fallbacks for readApiErrorMessage when the response body is NOT JSON
   // (proxy HTML 502/504, auth redirect, empty body) — keyed so they respect the UI
   // language instead of the former mixed zh/en literals.
