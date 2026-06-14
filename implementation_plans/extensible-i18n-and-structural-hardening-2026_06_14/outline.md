@@ -177,6 +177,10 @@ debate Workflow, not a user prompt (user is asleep).
 | 2026-06-14 | D8: Audit ran as background task `waaymn4es` (10 angles, 166 agents, adversarially verified) → `findings.md` (106 CONFIRMED / 18 PLAUSIBLE) | The user wanted more agents + structural focus; a duplicate relaunch (`wb6dq4uwc`) was stopped once `waaymn4es` was found complete |
 | 2026-06-14 | D9: Error-envelope design LOCKED via a 2-Opus debate+synthesis (`wmhzmpy2x`) — see `design-error-envelope.md`. Nested `{error:{code,message,params}}`; stdlib-only `internal/apierr` leaf (Code+registry+`New/.With/.Wrap`, init guard, `HasCode`); coded-at-the-source (deep packages import the leaf); sentinels kept + mapped to codes at the handler seam; `writeAPIError` replaces `writeError` (transitional delegate in plan-2, deleted in final plan-3 commit). | The single most consequential fork (shapes plans 1/2/3); the user authorized debate for genuinely-unclear forks. Key reframe: **plan-1 (i18n+tError) ships before plan-2 (envelope)** so the frontend reads both shapes before the backend flips — no PR breaks the app |
 | 2026-06-14 | D10: M1 split into plan-1 (core+seam, shipped) + plan-1.5 (full 406-site migration) | Keeps each PR reviewable; isolates the large mechanical sweep; satisfies the debate's "tError before plan-2" via plan-1 alone |
+| 2026-06-14 | D11: **Controller-mode boundary audit** (Opus workflow `wf_3e846c65-4b2`, 43 agents, 8 surfaces → adversarial verify → critic) → 25 confirmed + 6 critic-additional, deduped to 7 themes (`findings.md` addendum). New scope: LOCAL-mode UX/persistence/transition functionality leaking into the newly-introduced CONTROLLER mode (and reverse). Backend air-gap endpoints (`/api/compile|export|deploy-script|validate`) → **mount behind operator-auth in a controller deployment** (keeps `/validate` usable as a panel preflight; closes the unauth compute/key-gen oracle). | User-reported (the Topbar "Flush" exemplar). plan-4 only covered air-gap *key* paths; this class is new. A first Haiku-defaulted run was discarded (Explore agentType pinned Haiku) and re-run on Opus for trustworthy verification. |
+| 2026-06-14 | D12: Controller mode gets an explicit **Save** primitive — `saveDesign()` = `stripPrivateKeys` → `updateTopology` (persist authoritative copy + version history, NO stage/promote) → `setCanvasFromServer(true)` → `lastSyncedAt`; surfaced as a Save button distinct from Deploy + a dirty-state indicator | User asked directly. `updateTopology` already exists as the no-fleet-touch persist primitive (deploy() calls it before stage/promote); WIP is otherwise unrecoverable without going live to the fleet |
+| 2026-06-14 | D13: Save conflict handling = **client-side warn** (capture server base at hydrate; re-GET before save; on divergence warn + offer re-sync-with-backup, no blind overwrite). NO backend version field / optimistic-concurrency. | Sole-operator repo today; version history is the after-the-fact backstop; client-side warn covers the realistic case without a backend contract change |
+| 2026-06-14 | D14: Mode-boundary work = **3 new plans run BEFORE the i18n grind**: plan-10 (switch security parity + Save core + deploy flag), plan-11 (UI mode-gating both directions), plan-12 (backend endpoint auth). plan-3.5/7/8/9 follow. | Main-flow + security + data-loss; the user's active focus. Each is an independently-reviewed PR. |
 
 ## Milestones
 
@@ -280,6 +284,73 @@ drilling, weak typing, dup UI logic, API-error display path) — building on M1'
 **test-coverage gaps** on controller/login/custody paths, doc/spec drift), then docs/spec updates for
 the new i18n + error envelope, a migration note, and `/close-phase`. **Finalized from `findings.md`.**
 
+### M10 — Controller-mode boundary: switch-security parity + Save core → `plan-10`
+**Owns:** findings addendum T1 (mode-switch parity), T2 (Save primitive + dirty + conflict-warn +
+gate-flush hardening), T7 (deploy confirmed-shrink flag), A3 (translucency boundary).
+**Reads from specs:** panel-auth, panel-shell, panel-deploy-fleet, panel-design (+ controller-store,
+controller-operator-api for the `update-topology` contract).
+**Goal:** make the controller/local mode boundary leak-proof for *persistence and transitions*, and
+give controller mode a first-class persist path. (a) Factor ONE shared mode-switch helper
+(`serverHeld ? flushWorkspace : purgeModeBoundaryState` + `clearModeNotices` + `setMode`) used by BOTH
+`LoginPage` and `SettingsPage` (today only LoginPage flushes a server-held canvas → SettingsPage leaks
+fleet IPs/SSH to `localStorage`); fork the dialog copy on `canvasFromServer`; on local→controller purge
+local-only artifacts + force `hydrateFromServer` when not server-held; restore `uiStore.translucency`
+on controller→local. (b) Add `controllerStore.saveDesign()` (strip → `updateTopology` → mark
+server-held → `lastSyncedAt`), a dirty-state selector (current vs last-synced snapshot via the
+`hydrateFromServer` comparator), and client-side conflict detection (base snapshot at hydrate; re-GET
+before save; warn + backup on divergence). (c) Harden `clearServerCanvasAtGate` to back up / confirm a
+*dirty* mirror before flushing. (d) `deploy()` confirmed-shrink: `loadTopology(snapshot, true)` so the
+custody flag never mislabels a divergent canvas.
+**Hazards:** `flushWorkspace`/`exportProject` are security primitives reused by the gate-flush +
+pre-hydration-backup paths — gate at the call site, never refuse the store action unconditionally
+(would reintroduce the localStorage fleet-secret leak). The dirty/conflict snapshot must use the SAME
+canonicalization the existing hydrate-diff uses (`controllerStore.ts:535-539`) or it will false-positive.
+Key custody (HIGH): `saveDesign` MUST strip private keys before `updateTopology` (mirror deploy()).
+**Verification gate:** `cd frontend && npm run lint && npm run build` green; `go test ./... && go vet
+./...` green; subject-scoped tests — switch parity (both directions × serverHeld true/false flushes vs
+purges; copy forks), save round-trip (calls `update-topology` only, never stage/promote; sets
+server-held), conflict path (server-changed → warn, not overwrite), gate-flush backs up a dirty mirror.
+Manual: edit in controller → Save → refresh → edits survive (now server-held + re-hydrated).
+**Stop-loss:** each sub-part is an independent commit; the shared-helper refactor is revertable as a unit.
+
+### M11 — Controller-mode boundary: UI mode-gating (both directions) → `plan-11`
+**Owns:** T3 (Topbar I/O cluster + Save button surfacing), T4 (local-only constructs hidden in
+controller), T5 (controller-only constructs hidden in local + fleet-cache clear).
+**Reads from specs:** panel-shell, panel-design, panel-deploy-fleet, panel-auth.
+**Goal:** every UI affordance renders only in the mode where it is meaningful. (a) Gate the Topbar
+import/export/flush cluster to `mode==='local'` and surface the plan-10 **Save** button (+ dirty
+indicator) on the Design surface in controller mode. (b) Hide local-only constructs in controller mode:
+AuditView "Compile History"/config-diff, DeployPage `CompilePreview`, NodeEditor "Pin private key"
+toggle + pinned-key panel, the `clearHistory` button. **Keep the Validate button** (D11 keeps `/validate`
+usable as a controller preflight). (c) Hide controller-only constructs in local mode: render-gate
+`FleetPage` (covers NodeRegistry + EnrollmentFlow), the Overview controller section, and the
+Connection/Bootstrap settings sections; clear the persisted fleet cache on the local boundary.
+**Hazards:** depends on plan-10's `saveDesign` + dirty selector. Use the established `useControllerStore((s)=>s.mode)`
+gating idiom (CanvasToolbar.tsx:52, UserMenu.tsx:60); deep-link reachability must be gated, not just nav
+visibility. Do not strand a local-only feature with no home (nav.ts already keeps Security visible in
+local for compile history — keep that working).
+**Verification gate:** lint+build green; per-page spot check in both modes (no local-only control in
+controller, no controller-only control in local); Save button drives `saveDesign`; deep links to
+`/fleet` in local mode redirect.
+**Stop-loss:** per-surface commits; each gate is independently revertable.
+
+### M12 — Backend mode-awareness: air-gap endpoints behind operator-auth → `plan-12`
+**Owns:** T6.
+**Reads from specs:** controller-operator-api, controller-agent-api (+ the server bootstrap/mux wiring).
+**Goal:** in a controller deployment, mount `/api/compile`, `/api/export`, `/api/deploy-script`,
+`/api/validate` behind the existing operator-auth middleware (per D11) so they are not an
+unauthenticated compute / key-gen oracle on the operator port — while keeping `/validate` reachable for
+the panel's authenticated preflight. A pure air-gap (local) deployment leaves them open as today.
+**Hazards:** the server today has no explicit "mode" concept (T6) — determine the controller-vs-air-gap
+signal from the existing bootstrap/config (the same thing that decides whether controller routes mount)
+rather than inventing a parallel flag; do not break the air-gap CLI/local flow (those endpoints must
+stay open in a non-controller deployment). Generated-bundle byte-equivalence is unaffected (no change to
+compile output).
+**Verification gate:** `go test ./... && go vet ./...` green; subject-scoped Go handler tests — in a
+controller deployment the four endpoints return 401 without an operator session and 200/normal with one;
+in an air-gap deployment they remain open. curl matrix.
+**Stop-loss:** one middleware-wiring change; revertable as a unit.
+
 ## Insertion-point markers
 
 - **plan-1.5 — i18n migration fallout:** if the 406-site migration uncovers strings that aren't
@@ -313,7 +384,10 @@ the new i18n + error envelope, a migration note, and `/close-phase`. **Finalized
 | plan-2 (error envelope) | **done** (86c4014) | [#74](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/74) | internal/apierr leaf (Code+registry+Error) + nested {error:{code,message,params}} flip via writeError delegate; panic+custody coded. Review fixed WithMessage contract |
 | plan-1.5 (full call-site migration) | **done** (d1f0cc6) | [#75](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/75) | 410 txt sites → t via TS-AST codemod (7 parameterized, 3 tuple→key); txt/STRINGS deleted; build proves completeness; review 0-confirmed |
 | plan-3 (backend errors, bounded) | **done** (9a2fecd) | [#76](https://github.com/kunori-kiku/yet-another-overlay-generator/pull/76) | render.GenerateKeys → 4 keygen codes (incl. owner's reported pinned-pubkey error, now 400+localized) + handler writeCodedOr relay + frontend error.keygen_* + fixed corrupted allocator/ip.go strings; review 0-confirmed |
-| plan-3.5 (remaining backend strings) | **pending** | — | code validator/compiler/auth/login/passkey/totp/bootstrap/cmd user-facing strings (validator set surfaces on validate/compile) + remove the writeError shim. Follow the apierr pattern (task #27) |
+| plan-10 (controller-mode boundary CORE) | **pending** | — | mode-switch security parity (shared LoginPage+SettingsPage helper — fixes fleet-secret localStorage leak) + controller-mode `saveDesign()` (updateTopology-only) + dirty-state + client-side conflict warn + gate-flush hardening + deploy confirmed-shrink flag. **Runs before plan-3.5** (D14). |
+| plan-11 (controller-mode boundary UI gating) | **pending** | — | gate Topbar import/export/flush to local + surface Save; hide local-only constructs in controller (AuditView/CompilePreview/pin-key/clearHistory; keep Validate); render-gate FleetPage/Overview-controller/Connection+Bootstrap in local + clear fleet cache. Depends on plan-10. |
+| plan-12 (backend mode-awareness) | **pending** | — | mount air-gap /api/compile\|export\|deploy-script\|validate behind operator-auth in a controller deployment (keep validate usable); Go tests 401/200. |
+| plan-3.5 (remaining backend strings) | **pending** | — | code validator/compiler/auth/login/passkey/totp/bootstrap/cmd user-facing strings (validator set surfaces on validate/compile) + remove the writeError shim. Follow the apierr pattern (task #27). **After plan-10/11/12** (D14). |
 | plan-7 (struct-backend) | **pending** | — | triage struct-backend PLAUSIBLE (P7 reserved-id helper easy; P3/P5/P6 — verifiers rated several overstated) |
 | plan-8 (struct-frontend) | **pending** | — | triage struct-frontend PLAUSIBLE (god-store, coupling — verifiers rated quantitative claims wrong / core REFUTED) |
 | plan-9 (cross-cutting + docs + closure) | **pending** | — | test-coverage gaps, doc/spec for new i18n+envelope, migration note, subject close |

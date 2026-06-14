@@ -278,6 +278,101 @@ issues (the compile-gate verified complete), so these remain the M4 worklist:
 
 ---
 
+## Controller-mode boundary audit (2026-06-14 addendum)
+<!-- source: workflow wf_3e846c65-4b2 (Opus 4.8 re-run; 43 agents; 8 disjoint surfaces → per-finding
+     adversarial verify → completeness critic). 25 confirmed + 6 critic-additional, deduped into 7
+     themes. SUPERSEDES the first run wf_a4d0486b-7a3 (Explore/Haiku-defaulted — its confirm/reject
+     judgments are untrusted; only its candidate locations were reused). -->
+
+User-reported defect class: **LOCAL-mode functionality leaking into the newly-introduced CONTROLLER
+mode** (and the reverse). Exemplar: the Topbar "Flush" button. plan-4 (shipped) only guarded the
+air-gap *key* paths (`compile`/`exportArtifacts`/`downloadDeployScript` refuse in controller mode +
+`partialize` key-leak); this **UX / persistence / mode-transition** class is untouched by any shipped
+plan. Deduped into 7 themes → owned by new plans 10/11/12 (decisions D11–D14 in the outline).
+
+### T1. [security] Mode-switch boundary parity — `SettingsPage` switch leaks fleet secrets → **plan-10**
+- **What:** `LoginPage`'s controller→local switch flushes a server-held canvas (`LoginPage.tsx:315-325`,
+  `serverHeld ? flushWorkspace() : purgeModeBoundaryState()`); **`SettingsPage`'s switch does not**
+  (`SettingsPage.tsx:44-56` calls only `purgeModeBoundaryState`). So the server-held design (fleet
+  public IPs + SSH targets) survives the switch AND `canvasFromServer` is no longer controller-true, so
+  `partialize` (`topologyStore.ts:739`) re-enables persistence → confidential fleet data lands in
+  `localStorage`, readable while logged out. The reverse (local→controller) does **no** local-artifact
+  purge and **skips re-hydration when already logged in** (`checkSession`/`controllerStore.ts:621-625`,
+  `wasLoggedIn` short-circuit), so stale local state (compileResult/history/validateResult) masquerades
+  as the server design.
+- **Source findings:** confirmed #14, #17, #15; critic A2; A3 (translucency, cosmetic).
+- **Fix:** factor ONE shared switch helper (`serverHeld ? flushWorkspace : purgeModeBoundaryState`,
+  `clearModeNotices`, `setMode`) used by BOTH `LoginPage` and `SettingsPage` so they cannot diverge
+  again; fork the dialog copy on `canvasFromServer`; on local→controller purge local-only artifacts and
+  force `hydrateFromServer` when not server-held; restore `uiStore.translucency` to the local default on
+  controller→local (A3).
+
+### T2. [data-loss / missing-feature] No controller-mode Save primitive → **plan-10**
+- **What:** Canvas edits in controller mode never reach the server except via the heavyweight `deploy()`
+  (`controllerStore.ts:827`, which `updateTopology`→`stage`→`promote`s to the LIVE fleet behind the
+  shrink-confirm). The clean primitive — `updateTopology` (persist authoritative copy + version history,
+  NO fleet touch, `controllerClient.ts`) — is reachable only *inside* deploy. WIP is lost on
+  refresh/relogin (`partialize` blanks the server-held mirror; rehydrate restores the pre-edit server
+  copy) with no Save and no dirty indicator.
+- **Source findings:** confirmed #5, #6, #10, #12, #19, #8 (import non-durable); critic A4 (conflicts).
+- **Fix (decisions D12/D13):** add `controllerStore.saveDesign()` = `stripPrivateKeys` →
+  `updateTopology` (persist-only) → `setCanvasFromServer(true)` → refresh `lastSyncedAt`. Track a dirty
+  flag (compare current vs last-synced snapshot via the comparator `hydrateFromServer` uses,
+  `controllerStore.ts:539`). **Client-side conflict warn (D13):** capture the server base snapshot/hash
+  at hydrate; before save re-GET and compare; if the server changed, warn + offer re-sync-with-backup
+  (reuse `exportProject` like the hydrate path) instead of blind overwrite. NO backend version field.
+  Harden `clearServerCanvasAtGate` (`controllerStore.ts:254`): when the mirror is dirty, back up / confirm
+  before flushing rather than silently discarding.
+
+### T3. [confusing] Topbar I/O cluster (import/export/flush) is mode-blind → **plan-11**
+- **What:** `Topbar.tsx:50` gates import/export/flush on `onDesign` only, no mode check (unlike the
+  `mode==='local'` idiom in `CanvasToolbar.tsx:52` / `UserMenu.tsx:60`). Flush carries a false
+  "cannot be undone" promise (server keeps the copy; re-login re-hydrates); Export writes fleet IPs/SSH
+  to disk unwarned; Import flips `canvasFromServer=false` (`importProject`→`loadTopology(topo)` default,
+  `topologyStore.ts:428`) so the work is silently dropped at next hydrate.
+- **Source findings:** confirmed #1, #2, #3, #4, #7, #11, #13, #21.
+- **Fix:** gate the cluster to `mode==='local'` at the Topbar (do NOT refuse `flushWorkspace`/`exportProject`
+  in the store — both are security primitives used by the gate-flush + pre-hydration-backup paths; gate
+  the BUTTON). Surface the plan-10 **Save** button on the Design surface for controller mode in its place.
+
+### T4. [confusing] Local-only constructs surfaced in controller mode → **plan-11**
+- **What:** AuditView "Compile History" / config-diff (`SecurityPage`) live in controller mode though
+  compile history never populates; DeployPage renders the local `CompilePreview` in both modes;
+  NodeEditor's "Pin private key (persist)" toggle + pinned-key panel (`NodeEditor.tsx:223-251`) are live
+  and meaningless on a zero-knowledge server-held node (and write `fixed_private_key=true` into the
+  server-bound design); `clearHistory` is a dead no-op. **Validate is NOT a leak** — per D11 `/validate`
+  stays usable (auth'd) as a controller preflight; keep the Validate button.
+- **Source findings:** confirmed #9, #22, #23; critic A1. (#18 reclassified: keep.)
+- **Fix:** mode-gate each local-only construct to `mode==='local'`.
+
+### T5. [confusing] Controller-only constructs surfaced in local mode (reverse direction) → **plan-11**
+- **What:** Connection + Bootstrap settings sections render in local mode (#16); cached controller fleet
+  node data persists into local mode (Overview controller section + deep-linked `/fleet`,
+  `/fleet/nodes/:id`) (#20); EnrollmentFlow/NodeRegistry deep-linkable in local mode via `/fleet` (A5).
+- **Source findings:** confirmed #16, #20; critic A5.
+- **Fix:** render-gate `FleetPage` (covers NodeRegistry + EnrollmentFlow) and the Overview controller
+  section on `mode==='controller'`; gate the Connection/Bootstrap settings sections; clear the persisted
+  fleet cache on the local boundary.
+
+### T6. [security] Backend has zero mode-awareness → **plan-12**
+- **What:** `/api/compile`, `/api/export`, `/api/deploy-script`, `/api/validate` are mounted
+  **unauthenticated** on the controller's operator/panel port (`internal/api/server.go`,
+  `handler_controller.go`) — an unauthenticated compute / key-gen oracle + DoS surface in a controller
+  deployment.
+- **Source findings:** confirmed #25.
+- **Fix (decision D11):** mount the air-gap endpoints behind the existing operator-auth middleware in a
+  controller deployment (keeps `/validate` usable for the panel's preflight; closes the unauth hole).
+
+### T7. [data-loss, narrow] `deploy()` confirmed-shrink mislabels a divergent canvas → **plan-10**
+- **What:** on the confirmed-shrink success path `deploy()` sets `setCanvasFromServer(true)` on the LIVE
+  canvas (`controllerStore.ts:899`), but the uploaded design was the earlier `snapshot`; any edits made
+  after the warning are now marked server-held and get flushed by `partialize`/gate with no backup.
+- **Source findings:** critic A6.
+- **Fix:** on confirmed-shrink success `loadTopology(confirming.snapshot, true)` so the canvas matches
+  what was uploaded (or detect divergence + back up). Folded into plan-10 (custody-flag owner).
+
+---
+
 ## Milestone mapping (which findings each plan owns)
 
 | Plan | Owns |
@@ -291,3 +386,6 @@ issues (the compile-gate verified complete), so these remain the M4 worklist:
 | **plan-7 (struct-backend)** | struct-backend confirmed + the 7 struct-backend PLAUSIBLE (triage) |
 | **plan-8 (struct-frontend)** | struct-frontend confirmed (component decomposition, store coupling) + PLAUSIBLE |
 | **plan-9 (cross-cutting + docs + closure)** | struct-crosscutting confirmed (test-coverage gaps, namespace cleanliness, doc drift) + PLAUSIBLE + docs/migration/closure |
+| **plan-10 (controller-mode boundary CORE)** | T1 (mode-switch security parity — shared helper) + T2 (controller-mode Save primitive + dirty + client-side conflict warn + gate-flush hardening) + T7 (deploy confirmed-shrink flag) + A3 (translucency boundary) |
+| **plan-11 (controller-mode boundary UI gating)** | T3 (Topbar I/O cluster gating + Save button surfacing) + T4 (local-only constructs hidden in controller) + T5 (controller-only constructs hidden in local + fleet-cache clear) |
+| **plan-12 (backend mode-awareness)** | T6 (air-gap endpoints behind operator-auth in a controller deployment) |
