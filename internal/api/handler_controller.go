@@ -787,6 +787,11 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 	}
 	result, err := controller.CompileAndStage(r.Context(), h.store, tenant, time.Now())
 	if err != nil {
+		// CompileAndStage wraps source-coded errors (%w), so writeCodedOr surfaces each at its
+		// OWN status — compile constraints stay 422, but a keygen error (e.g. an AgentHeld node
+		// with no registered public key) surfaces its native 400 and an export I/O failure its
+		// 500. This is intentionally MORE precise than the old blanket 422; CodeStageFailed (422)
+		// is only the fallback for an un-coded stage error. (See TestWriteCodedOr_* in handler_test.)
 		writeCodedOr(w, apierr.CodeStageFailed, err)
 		return
 	}
