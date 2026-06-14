@@ -118,9 +118,18 @@ interface TopologyState {
   // 与 pinned_* 分配、alloc_schema_version、编译历史/结果。下次本地编译会重新生成一套干净的
   // 密钥与分配。切换是有损操作，调用方须先经用户确认。
   purgeModeBoundaryState: () => void;
+  // clearStrandedKeys clears the key material of every node that has a WireGuard PUBLIC key but no
+  // PRIVATE key — the "pinned pubkey, no privkey" state that the stateless air-gap compiler cannot
+  // render (GenerateKeys case (b)) and that would otherwise force the operator to un-pin node by node.
+  // It drops wireguard_public_key + the fixed_private_key flag (the private key is already absent), so
+  // the node regenerates a fresh pair on the next local compile. Valid full keypairs (private key
+  // present) are LEFT INTACT, preserving the local/air-gap round-trip-keys feature. Returns the count.
+  clearStrandedKeys: () => number;
   // 控制器模式导入占位计数（plan-5，D5）：importProject 在 controller 模式下剥离导入文件里的
   // 私钥后，置为被占位的数量（0=无提示）。Shell 据此显示一条可关闭提示（用 txt() 实时本地化）。
   importPlaceholdered: number;
+  // Local-mode import: count of nodes whose stranded pubkey-only keys were cleared (0 = no notice).
+  importClearedKeys: number;
   dismissImportNotice: () => void;
   exportProject: (filename?: string) => void;
   importProject: (file: File) => Promise<void>;
@@ -206,6 +215,7 @@ export const useTopologyStore = create<TopologyState>()(
       selectedDomainId: null,
         language: defaultLanguage,
       importPlaceholdered: 0,
+      importClearedKeys: 0,
       // 默认 false：全新/本地工作区不是服务端机密数据。仅 hydrateFromServer 会置 true。
       canvasFromServer: false,
 
@@ -213,7 +223,21 @@ export const useTopologyStore = create<TopologyState>()(
 
       setLanguage: (lang) => set({ language: lang }),
 
-      dismissImportNotice: () => set({ importPlaceholdered: 0 }),
+      dismissImportNotice: () => set({ importPlaceholdered: 0, importClearedKeys: 0 }),
+
+      clearStrandedKeys: () => {
+        const { nodes } = get();
+        let cleared = 0;
+        const next = nodes.map((n) => {
+          if (n.wireguard_public_key && !n.wireguard_private_key) {
+            cleared++;
+            return { ...n, wireguard_public_key: undefined, fixed_private_key: false };
+          }
+          return n;
+        });
+        if (cleared > 0) set({ nodes: next });
+        return cleared;
+      },
 
   // UI
   setShowInterfaces: (show) => set({ showInterfaces: show }),
@@ -426,9 +450,18 @@ export const useTopologyStore = create<TopologyState>()(
         // loadTopology 只接收四个切片 + 版本号，这里先加载再补提示，
         // 因为 loadTopology 会清空 error。
         get().loadTopology(topo);
+        // Local-mode import of a pubkey-only file (e.g. a controller-exported design, which carries
+        // no private keys) would otherwise strand every node in GenerateKeys case (b) — a per-node
+        // un-pin chore. Clear the stranded pubkey-only keys so they regenerate fresh on compile;
+        // full keypairs (private key present) are kept (round-trip). No-op in controller mode, where
+        // pubkey-only IS the intended state (the private keys were placeholdered above).
+        let clearedKeys = 0;
+        if (useControllerStore.getState().mode === 'local') {
+          clearedKeys = get().clearStrandedKeys();
+        }
         // 总是写入（含 0）：一次干净导入（0 个被占位）必须清掉上一次导入残留的「N 个被
         // 占位」横幅，否则提示会粘滞（plan-5 review）。
-        set({ importPlaceholdered: placeholdered });
+        set({ importPlaceholdered: placeholdered, importClearedKeys: clearedKeys });
         if (hasReservedRoutePolicies) {
           const { language } = get();
           set({
@@ -496,6 +529,7 @@ export const useTopologyStore = create<TopologyState>()(
       compileResult: null,
       // 切到本地模式后，控制器模式导入残留的「已占位」横幅也一并清掉（plan-5 review）。
       importPlaceholdered: 0,
+      importClearedKeys: 0,
       error: null,
       selectedNodeId: null,
       selectedEdgeId: null,

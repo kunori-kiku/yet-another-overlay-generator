@@ -28,6 +28,7 @@ export function Shell() {
   const hydrationNotice = useControllerStore((s) => s.hydrationNotice);
   const dismissHydrationNotice = useControllerStore((s) => s.dismissHydrationNotice);
   const importPlaceholdered = useTopologyStore((s) => s.importPlaceholdered);
+  const importClearedKeys = useTopologyStore((s) => s.importClearedKeys);
   const dismissImportNotice = useTopologyStore((s) => s.dismissImportNotice);
   const language = useTopologyStore((s) => s.language);
 
@@ -101,6 +102,13 @@ export function Shell() {
         {importPlaceholdered > 0 && (
           <NoticeBanner
             message={t(language, 'shell.importPlaceholdered', { count: importPlaceholdered })}
+            onDismiss={dismissImportNotice}
+            dismissLabel={t(language, 'shell.dismissNotice_2')}
+          />
+        )}
+        {importClearedKeys > 0 && (
+          <NoticeBanner
+            message={t(language, 'shell.importClearedKeys', { count: importClearedKeys })}
             onDismiss={dismissImportNotice}
             dismissLabel={t(language, 'shell.dismissNotice_2')}
           />

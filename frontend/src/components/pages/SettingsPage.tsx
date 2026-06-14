@@ -16,6 +16,7 @@ export function SettingsPage() {
   // login gate and this page can never diverge (the old purge-only path here leaked the
   // server-held fleet design into localStorage). canvasFromServer drives the confirm copy.
   const switchToLocal = useControllerStore((s) => s.switchToLocal);
+  const switchToController = useControllerStore((s) => s.switchToController);
   const canvasFromServer = useTopologyStore((s) => s.canvasFromServer);
   // controller→local is a LOSSY switch (plan-5, D6): confirm before purging.
   const [showSwitchToLocal, setShowSwitchToLocal] = useState(false);
@@ -55,6 +56,11 @@ export function SettingsPage() {
       setMode('local');
     }
   };
+  // local→controller: surgical, no confirm dialog (it never touches valid keypairs — only clears
+  // stranded pubkey-only nodes; see switchToController). A no-op when already in controller mode.
+  const onSelectController = () => {
+    if (mode === 'local') switchToController();
+  };
   const confirmSwitchToLocal = () => {
     // Shared serverHeld-aware switch (plan-10 / T1): flushes a server-held mirror (no fleet
     // secret leak) or purges local-original work (graph survives), clears notices, restores
@@ -82,7 +88,7 @@ export function SettingsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setMode('controller')}
+            onClick={onSelectController}
             className={seg(mode === 'controller')}
           >
             {t(language, 'modeController')}

@@ -335,6 +335,7 @@ interface ControllerState {
   // 这一安全分叉收敛到一处，供登录门与设置页共用，杜绝两处实现发散导致的 fleet 机密泄漏。
   // 同时清提示、还原本地 translucency 偏好（A3）、置 mode=local。调用方负责确认对话框与导航。
   switchToLocal: () => void;
+  switchToController: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
 }
@@ -1145,6 +1146,19 @@ export const useControllerStore = create<ControllerState>()(
         // 上色」：session 保留的 controller→local→controller 往返不会触发 refresh（checkSession 只
         // hydrate 不拉 fleet），届时会看到空 fleet 直到手动刷新（plan-11 review #2/#3）。故保留缓存。
         set({ mode: 'local', lastSyncedSnapshot: null, saveConflict: false });
+      },
+
+      // local→controller switch. Deliberately NOT a blanket key purge: the asymmetry vs switchToLocal
+      // is intentional (an accidental controller-click must not wipe a valid local design's private
+      // keys — that data-loss footgun is why this path historically did nothing and let the login gate
+      // + server hydration take over). Instead, clear ONLY the stranded pubkey-only nodes (public key
+      // present, no private key) — useless in either mode and the source of the per-node un-pin chore
+      // when a pubkey-only file was imported in local mode. Valid keypairs are untouched; once logged
+      // in, server hydration replaces the canvas anyway. Notices are cleared for a clean controller entry.
+      switchToController: () => {
+        useTopologyStore.getState().clearStrandedKeys();
+        get().clearModeNotices();
+        set({ mode: 'controller' });
       },
 
       // 控制器模式「保存」（plan-10 / T2）：把当前画布持久化为服务端权威副本（+ 版本历史），
