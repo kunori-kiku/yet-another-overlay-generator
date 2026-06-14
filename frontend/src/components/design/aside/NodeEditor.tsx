@@ -382,7 +382,12 @@ export function NodeEditor() {
             ))}
           </div>
         )}
-        {/* SSH Connection Details (collapsible) */}
+        {/* SSH Connection / Auto-Deploy is LOCAL/air-gap deploy-script metadata: the ssh_* fields
+            feed downloadDeployScript/exportArtifacts (both local-only); the controller agent-pull
+            model never pushes over SSH. Hide the EDITOR in controller mode (plan-11 / T4 review),
+            where it is a dead, misleading affordance. Do NOT strip the ssh_* DATA — custody.ts
+            deliberately preserves it so a controller→local switch retains the operator's SSH config. */}
+        {mode === 'local' && (
         <details className="bg-gray-700/50 rounded p-2">
           <summary className="text-xs cursor-pointer text-gray-400 font-semibold">
             {t(language, 'nodeEditor.sshConnectionAutoDeploy')}
@@ -473,6 +478,7 @@ export function NodeEditor() {
             </div>
           </div>
         </details>
+        )}
         <button
           onClick={() => removeNode(selectedNode.id)}
           className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"

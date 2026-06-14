@@ -34,7 +34,9 @@ export function CanvasToolbar({
   // is the controller-mode counterpart to local Compile. The Topbar import/export/flush cluster
   // is hidden in controller mode (it is local file-I/O), so this is the controller persist path.
   const saveDesign = useControllerStore((s) => s.saveDesign);
-  const loading = useControllerStore((s) => s.loading);
+  // save-scoped flag (not the global `loading`): so an unrelated in-flight controller op
+  // (refresh/deploy/saveSettings) can't mislabel Save as "Saving…" or disable it (plan-11 review #1).
+  const saving = useControllerStore((s) => s.saving);
   const saveConflict = useControllerStore((s) => s.saveConflict);
   const dismissSaveConflict = useControllerStore((s) => s.dismissSaveConflict);
   const hydrateFromServer = useControllerStore((s) => s.hydrateFromServer);
@@ -93,11 +95,11 @@ export function CanvasToolbar({
         <button
           type="button"
           onClick={() => saveDesign()}
-          disabled={loading || !dirty}
+          disabled={saving || !dirty}
           title={dirty ? undefined : t(language, 'canvasToolbar.saveUpToDate')}
           className="h-8 rounded bg-green-600 px-3 text-sm hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400"
         >
-          {loading
+          {saving
             ? t(language, 'canvasToolbar.saving')
             : dirty
               ? t(language, 'canvasToolbar.save')
@@ -127,7 +129,7 @@ export function CanvasToolbar({
               </button>
               <button
                 type="button"
-                disabled={loading}
+                disabled={saving}
                 onClick={() => {
                   dismissSaveConflict();
                   void hydrateFromServer();
@@ -138,7 +140,7 @@ export function CanvasToolbar({
               </button>
               <button
                 type="button"
-                disabled={loading}
+                disabled={saving}
                 onClick={() => void saveDesign({ force: true })}
                 className="rounded bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400"
               >
