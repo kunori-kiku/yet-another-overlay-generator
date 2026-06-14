@@ -67,6 +67,14 @@ const (
 	CodeOverlayCIDRInvalid    Code = "compile_overlay_cidr_invalid"
 	CodeOverlayPoolExhausted  Code = "compile_overlay_pool_exhausted"
 	CodeNodeUnknownDomain     Code = "compile_node_unknown_domain"
+
+	// Render + export (plan-3.5b) — the template/IO layer. CodeRenderFailed is a 500 bucket the
+	// handler assigns when render.All fails (internal template/plumbing, not operator-fixable).
+	// CodeExportUnsafeName is a 400 coded at the source (Export holds the node name). CodeExportIOFailed
+	// is a 500 bucket returned at the export source for disk/marshal/sign write failures.
+	CodeRenderFailed     Code = "render_failed"
+	CodeExportUnsafeName Code = "export_unsafe_name"
+	CodeExportIOFailed   Code = "export_io_failed"
 )
 
 // def is the immutable per-code metadata: the default English message TEMPLATE (with
@@ -101,6 +109,10 @@ var registry = map[Code]def{
 	CodeOverlayCIDRInvalid:   {"The overlay CIDR {cidr} is invalid.", http.StatusUnprocessableEntity},
 	CodeOverlayPoolExhausted: {"The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.", http.StatusUnprocessableEntity},
 	CodeNodeUnknownDomain:    {"Node {node} references unknown domain {domain}.", http.StatusUnprocessableEntity},
+
+	CodeRenderFailed:     {"Rendering the deployment artifacts failed.", http.StatusInternalServerError},
+	CodeExportUnsafeName: {"Node name {name} is unsafe for export: it must be non-empty and must not be an absolute path or contain a path separator or \"..\".", http.StatusBadRequest},
+	CodeExportIOFailed:   {"Writing the export artifacts failed.", http.StatusInternalServerError},
 }
 
 // Error is a coded API error. It implements error and supports errors.Is/As via Unwrap,

@@ -68,6 +68,9 @@ var allCodes = []Code{
 	CodeOverlayCIDRInvalid,
 	CodeOverlayPoolExhausted,
 	CodeNodeUnknownDomain,
+	CodeRenderFailed,
+	CodeExportUnsafeName,
+	CodeExportIOFailed,
 }
 
 func TestRegistryBijection(t *testing.T) {

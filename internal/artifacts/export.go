@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 )
@@ -59,7 +60,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	for _, node := range result.Topology.Nodes {
 		// Validate node name to prevent path traversal
 		if err := validateSafeName(node.Name); err != nil {
-			return nil, fmt.Errorf("节点名称不安全，跳过导出: %w", err)
+			return nil, apierr.New(apierr.CodeExportUnsafeName).With("name", node.Name).Wrap(err)
 		}
 		nodeDir := filepath.Join(outputDir, node.Name)
 		isClient := node.Role == "client"
@@ -74,7 +75,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		}
 		for _, dir := range dirs {
 			if err := os.MkdirAll(dir, 0755); err != nil {
-				return nil, fmt.Errorf("创建 %s 目录失败: %w", dir, err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("create dir %s: %w", dir, err))
 			}
 		}
 
@@ -91,7 +92,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			confFileName := ifaceName + ".conf"
 			path := filepath.Join(nodeDir, "wireguard", confFileName)
 			if err := os.WriteFile(path, []byte(wgConf), 0600); err != nil {
-				return nil, fmt.Errorf("写入 WireGuard 配置失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write wireguard config: %w", err))
 			}
 			wgFiles = append(wgFiles, "wireguard/"+confFileName)
 		}
@@ -100,7 +101,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if babelConf, ok := result.BabelConfigs[node.ID]; ok {
 			path := filepath.Join(nodeDir, "babel", "babeld.conf")
 			if err := os.WriteFile(path, []byte(babelConf), 0644); err != nil {
-				return nil, fmt.Errorf("写入 Babel 配置失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write babel config: %w", err))
 			}
 		}
 
@@ -108,7 +109,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
 			path := filepath.Join(nodeDir, "sysctl", "99-overlay.conf")
 			if err := os.WriteFile(path, []byte(sysctlConf), 0644); err != nil {
-				return nil, fmt.Errorf("写入 sysctl 配置失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write sysctl config: %w", err))
 			}
 		}
 
@@ -116,7 +117,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if script, ok := result.InstallScripts[node.ID]; ok {
 			path := filepath.Join(nodeDir, "install.sh")
 			if err := os.WriteFile(path, []byte(script), 0755); err != nil {
-				return nil, fmt.Errorf("写入安装脚本失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write install script: %w", err))
 			}
 		}
 
@@ -158,7 +159,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
 		if err := os.WriteFile(checksumsPath, canonical, 0644); err != nil {
-			return nil, fmt.Errorf("写入 checksums.sha256 失败: %w", err)
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write checksums.sha256: %w", err))
 		}
 
 		// 构建文件列表
@@ -180,16 +181,16 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if signEnabled {
 			sig, err := signer.Sign(canonical)
 			if err != nil {
-				return nil, fmt.Errorf("签名 bundle 失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("sign bundle: %w", err))
 			}
 			sigB64 := base64.StdEncoding.EncodeToString(sig)
 			sigPath := filepath.Join(nodeDir, "bundle.sig")
 			if err := os.WriteFile(sigPath, []byte(sigB64+"\n"), 0644); err != nil {
-				return nil, fmt.Errorf("写入 bundle.sig 失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write bundle.sig: %w", err))
 			}
 			pubPath := filepath.Join(nodeDir, "signing-pubkey.pem")
 			if err := os.WriteFile(pubPath, signer.PublicKeyPEM(), 0644); err != nil {
-				return nil, fmt.Errorf("写入 signing-pubkey.pem 失败: %w", err)
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write signing-pubkey.pem: %w", err))
 			}
 			allFiles = append(allFiles, "bundle.sig", "signing-pubkey.pem")
 		}
@@ -215,11 +216,11 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		}
 		manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 		if err != nil {
-			return nil, fmt.Errorf("生成 manifest 失败: %w", err)
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("marshal manifest: %w", err))
 		}
 		path := filepath.Join(nodeDir, "manifest.json")
 		if err := os.WriteFile(path, manifestJSON, 0644); err != nil {
-			return nil, fmt.Errorf("写入 manifest 失败: %w", err)
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write manifest: %w", err))
 		}
 
 		// 写入 README
@@ -231,7 +232,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			node.Name, node.OverlayIP, node.Role, architecture)
 		readmePath := filepath.Join(nodeDir, "README.txt")
 		if err := os.WriteFile(readmePath, []byte(readme), 0644); err != nil {
-			return nil, fmt.Errorf("写入 README 失败: %w", err)
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write README: %w", err))
 		}
 
 		exportResult.Nodes = append(exportResult.Nodes, node.Name)
@@ -245,7 +246,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			perm = 0755
 		}
 		if err := os.WriteFile(path, []byte(script), perm); err != nil {
-			return nil, fmt.Errorf("写入部署脚本 %s 失败: %w", name, err)
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write deploy script %s: %w", name, err))
 		}
 	}
 
@@ -256,19 +257,19 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 // component, rejecting names that could cause path traversal or other issues.
 func validateSafeName(name string) error {
 	if name == "" {
-		return fmt.Errorf("名称不能为空")
+		return fmt.Errorf("name must not be empty")
 	}
 	if name == "." || name == ".." {
-		return fmt.Errorf("名称不合法: %q", name)
+		return fmt.Errorf("invalid name: %q", name)
 	}
 	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("名称不能包含路径分隔符: %q", name)
+		return fmt.Errorf("name must not contain a path separator: %q", name)
 	}
 	if filepath.IsAbs(name) {
-		return fmt.Errorf("名称不能为绝对路径: %q", name)
+		return fmt.Errorf("name must not be an absolute path: %q", name)
 	}
 	if strings.Contains(name, "..") {
-		return fmt.Errorf("名称不能包含 '..': %q", name)
+		return fmt.Errorf("name must not contain '..': %q", name)
 	}
 	return nil
 }

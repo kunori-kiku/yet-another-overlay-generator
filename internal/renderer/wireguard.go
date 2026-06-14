@@ -189,13 +189,13 @@ func RenderAllWireGuardConfigs(topo *model.Topology, peerMap map[string][]compil
 
 		key, ok := keys[nodeID]
 		if !ok {
-			return nil, fmt.Errorf("节点 %s 缺少密钥", nodeID)
+			return nil, fmt.Errorf("node %s is missing its key", nodeID)
 		}
 
 		for _, peer := range peers {
 			config, err := RenderPerPeerWireGuardConfig(node, peer, key)
 			if err != nil {
-				return nil, fmt.Errorf("渲染 %s 的 WireGuard 配置失败: %w", node.Name, err)
+				return nil, fmt.Errorf("rendering WireGuard config for %s failed: %w", node.Name, err)
 			}
 
 			// key 格式："nodeID:interfaceName"
@@ -210,12 +210,12 @@ func RenderAllWireGuardConfigs(topo *model.Topology, peerMap map[string][]compil
 func renderTemplate(name, tmpl string, data interface{}) (string, error) {
 	t, err := template.New(name).Parse(tmpl)
 	if err != nil {
-		return "", fmt.Errorf("模板解析失败: %w", err)
+		return "", fmt.Errorf("template parse failed: %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("模板渲染失败: %w", err)
+		return "", fmt.Errorf("template render failed: %w", err)
 	}
 
 	return buf.String(), nil

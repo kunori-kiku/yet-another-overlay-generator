@@ -478,6 +478,10 @@ export const en = {
   'error.compile_overlay_cidr_invalid': 'The overlay CIDR {cidr} is invalid.',
   'error.compile_overlay_pool_exhausted': 'The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.',
   'error.compile_node_unknown_domain': 'Node {node} references unknown domain {domain}.',
+  // Render + export layer (plan-3.5b) — en value mirrors the Go registry template verbatim.
+  'error.render_failed': 'Rendering the deployment artifacts failed.',
+  'error.export_unsafe_name': 'Node name {name} is unsafe for export: it must be non-empty and must not be an absolute path or contain a path separator or "..".',
+  'error.export_io_failed': 'Writing the export artifacts failed.',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "Client {node} requires endpoint_host to reach the router",

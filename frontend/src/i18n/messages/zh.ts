@@ -460,6 +460,10 @@ export const zh: Record<keyof typeof en, string> = {
   'error.compile_overlay_cidr_invalid': '覆盖网 CIDR {cidr} 无效。',
   'error.compile_overlay_pool_exhausted': 'CIDR {cidr} 的覆盖网地址池已耗尽；请扩大网络域 CIDR 或减少节点数。',
   'error.compile_node_unknown_domain': '节点 {node} 引用了未知网络域 {domain}。',
+  // 渲染 + 导出层（plan-3.5b）。
+  'error.render_failed': '渲染部署产物失败。',
+  'error.export_unsafe_name': '节点名称 {name} 不适合导出：名称不能为空，且不能为绝对路径或包含路径分隔符或 “..”。',
+  'error.export_io_failed': '写入导出产物失败。',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "client {node} 需要 endpoint_host 才能连接到 router",

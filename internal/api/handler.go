@@ -160,7 +160,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 
 	//
 	if err := render.All(result, keys); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
@@ -206,26 +206,26 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := render.All(result, keys); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
 	// 创建临时目录用于写出导出产物
 	tmpDir, err := os.MkdirTemp("", "overlay-export-*")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "创建临时目录失败")
+		writeCodedOr(w, apierr.CodeExportIOFailed, err)
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	if _, err := artifacts.Export(result, tmpDir); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("导出产物失败: %v", err))
+		writeCodedOr(w, apierr.CodeExportIOFailed, err)
 		return
 	}
 
 	archiveBuf, err := createExportZip(tmpDir)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("打包 ZIP 失败: %v", err))
+		writeCodedOr(w, apierr.CodeExportIOFailed, err)
 		return
 	}
 
@@ -274,14 +274,14 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	// 因此必须先按编译路径渲染出 Babel 配置，再渲染部署脚本。
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("渲染 Babel 配置失败: %v", err))
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 	result.BabelConfigs = babelConfigs
 
 	bashScript, ps1Script, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("deploy script render: %v", err))
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
