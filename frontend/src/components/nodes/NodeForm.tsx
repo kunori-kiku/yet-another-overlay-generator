@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useControllerStore } from '../../stores/controllerStore';
 import { t } from '../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../lib/roleCapabilities';
 import { uuid } from '../../lib/uuid';
@@ -34,6 +35,11 @@ function parsePublicAddress(
 
 export function NodeForm() {
   const { addNode, domains, language } = useTopologyStore();
+  // fixed_private_key ("Pin private key") is a LOCAL/air-gap custody primitive — meaningless in
+  // zero-knowledge controller mode (the agent holds the key). Gate the create-form control too,
+  // mirroring the NodeEditor gate (plan-11 / T4 review): without this the create form is a
+  // parallel reachable path that defeats the edit-form gate.
+  const mode = useControllerStore((s) => s.mode);
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState<NodeRole>('peer');
@@ -110,7 +116,9 @@ export function NodeForm() {
       listen_port: listenPort,
       mtu: mtu > 0 ? mtu : undefined,
       capabilities,
-      fixed_private_key: fixedPrivateKey,
+      // Defense-in-depth: never write the local-only pin flag from controller mode, even if the
+      // checkbox state somehow lingered (it is hidden there).
+      fixed_private_key: mode === 'local' ? fixedPrivateKey : false,
       public_endpoints: publicEndpoints,
     });
 
@@ -224,15 +232,17 @@ export function NodeForm() {
           {t(language, 'nodeForm.advancedAddMorePublic')}
         </label>
       )}
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={fixedPrivateKey}
-          onChange={(e) => setFixedPrivateKey(e.target.checked)}
-          className="rounded"
-        />
-        {t(language, 'nodeForm.pinPrivateKeyPersist')}
-      </label>
+      {mode === 'local' && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={fixedPrivateKey}
+            onChange={(e) => setFixedPrivateKey(e.target.checked)}
+            className="rounded"
+          />
+          {t(language, 'nodeForm.pinPrivateKeyPersist')}
+        </label>
+      )}
       {hasPublicIP && (
         <div className="space-y-2 p-2 bg-gray-800 rounded border border-gray-600">
           <p className="text-xs text-gray-300">{t(language, 'nodeForm.additionalPublicEndpointMapping')}</p>

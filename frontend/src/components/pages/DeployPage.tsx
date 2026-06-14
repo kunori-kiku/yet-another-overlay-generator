@@ -22,8 +22,9 @@ export function DeployPage() {
           <DeployBar />
         </>
       )}
-      {/* 编译结果预览：从 RightPanel 迁来的稳定落点（有编译结果时才渲染）。 */}
-      <CompilePreview />
+      {/* 编译结果预览（本地编译产物）：仅本地模式渲染（plan-11 / T4）。控制器模式不本地编译，
+          预览只会显示切换前残留的陈旧本地编译结果——与服务端权威设计无关，故隐藏。 */}
+      {mode === 'local' && <CompilePreview />}
     </div>
   );
 }

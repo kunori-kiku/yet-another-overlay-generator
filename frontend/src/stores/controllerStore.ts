@@ -267,6 +267,10 @@ interface ControllerState {
   // save 冲突标志（plan-10 / T2）：saveDesign 检测到服务端设计自上次同步以来已变化时置真，UI
   // 据此弹出「服务端已变更：从服务端重新同步（自动备份）/ 仍然覆盖 / 取消」对话框。
   saveConflict: boolean;
+  // save 进行中（plan-11 review #1）：saveDesign 专用，区别于全局 loading。Save 按钮 / 冲突对话框
+  // 据此显示「保存中 / 禁用」，避免被无关的 controller 操作（refresh/deploy/saveSettings 等）误置的
+  // 全局 loading 错误点亮成「保存中」。
+  saving: boolean;
   // signing 为真表示 WebAuthn 提示已弹出、正在等待用户触碰安全密钥（enroll 或 deploy 期间）。
   // UI 用它显示「触碰你的安全密钥」提示。enrolling 区分 enroll 与 deploy-sign 两种 ceremony。
   // 注意：signing/enrolling 专属 KEYSTONE 流程（deploy 签名 / 签名密钥注册），DeployBar 的
@@ -463,6 +467,7 @@ export const useControllerStore = create<ControllerState>()(
       lastSyncedAt: null,
       lastSyncedSnapshot: null,
       saveConflict: false,
+      saving: false,
       signing: false,
       enrolling: false,
       loginCeremony: false,
@@ -1132,7 +1137,13 @@ export const useControllerStore = create<ControllerState>()(
         else topo.purgeModeBoundaryState();
         get().clearModeNotices();
         useUiStore.getState().restoreLocalTranslucency();
-        // 切回本地：清掉控制器模式的同步快照与冲突标志（它们是服务端权威概念）。
+        // 切回本地：清掉控制器模式的同步快照与冲突标志（服务端权威概念）。
+        // 关于 fleet 视图缓存（nodes/audit/lastDeploy/lastSyncedAt）：故意「不」在这里清。它是
+        // 非密的 advisory 缓存（仅 nodeId/状态/代号/时间戳，无密钥、无设计级公网 IP/SSH），且
+        // 本地模式下 fleet/overview 路由已被 RequireControllerMode 守卫重定向、不会展示它（plan-11
+        // / T5 的 render-gate 才是真正的修复）。清掉它反而会破坏 partialize 设计的「再进控制器即时
+        // 上色」：session 保留的 controller→local→controller 往返不会触发 refresh（checkSession 只
+        // hydrate 不拉 fleet），届时会看到空 fleet 直到手动刷新（plan-11 review #2/#3）。故保留缓存。
         set({ mode: 'local', lastSyncedSnapshot: null, saveConflict: false });
       },
 
@@ -1140,7 +1151,9 @@ export const useControllerStore = create<ControllerState>()(
       // 但绝不 stage/promote——在线 fleet 不受影响。这是 deploy() 之外缺失的轻量持久化原语，
       // 让未部署的进行中工作不再只活在可弃置的镜像里（刷新 / 登出即丢）。
       saveDesign: async (opts) => {
-        set({ loading: true, error: null });
+        // loading = 全局忙标志（与其他动作一致）；saving = 本次 save 专用，驱动 Save 按钮 / 冲突
+        // 对话框，避免被无关操作误置的全局 loading 点亮（plan-11 review #1）。两者都要在每个出口清。
+        set({ loading: true, saving: true, error: null });
         try {
           const cfg = configOf(get());
           // 零知识 fail-safe：与 deploy() 一致，上送前剥离私钥（控制器画布本就无私钥，这是兜底）。
@@ -1150,7 +1163,7 @@ export const useControllerStore = create<ControllerState>()(
           // 相同内容的版本历史（后端不做内容去重，徒增的版本还会挤掉真正的旧版本）。force 跳过它。
           // 用 isDesignDirty：基线为 null 且画布为空（首次、无可保存内容）也正确判为「非 dirty」。
           if (!opts?.force && !isDesignDirty(current, get().lastSyncedSnapshot)) {
-            set({ loading: false });
+            set({ loading: false, saving: false });
             return;
           }
           // 客户端冲突检测（D13）：除非 force，save 前重新 GET 服务端设计与上次同步快照比对。
@@ -1169,7 +1182,7 @@ export const useControllerStore = create<ControllerState>()(
             if (readOk) {
               const serverCanon = serverNow ? canonicalDesign(serverNow) : null;
               if (serverCanon !== get().lastSyncedSnapshot) {
-                set({ loading: false, saveConflict: true });
+                set({ loading: false, saving: false, saveConflict: true });
                 return;
               }
             }
@@ -1180,13 +1193,14 @@ export const useControllerStore = create<ControllerState>()(
           useTopologyStore.getState().setCanvasFromServer(true);
           set({
             loading: false,
+            saving: false,
             saveConflict: false,
             lastStrippedKeys: stripped,
             lastSyncedSnapshot: canonicalDesign(clean),
             lastSyncedAt: Date.now(),
           });
         } catch (err) {
-          set({ error: err instanceof Error ? err.message : 'Save failed', loading: false });
+          set({ error: err instanceof Error ? err.message : 'Save failed', loading: false, saving: false });
         }
       },
 

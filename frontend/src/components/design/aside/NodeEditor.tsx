@@ -1,4 +1,5 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
+import { useControllerStore } from '../../../stores/controllerStore';
 import { t } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
 import { uuid } from '../../../lib/uuid';
@@ -13,6 +14,13 @@ export function NodeEditor() {
   const updateNode = useTopologyStore((s) => s.updateNode);
   const removeNode = useTopologyStore((s) => s.removeNode);
   const reconcileEdgeEndpoints = useTopologyStore((s) => s.reconcileEdgeEndpoints);
+  // fixed_private_key is a LOCAL/air-gap custody primitive: it tells the client-side compiler to
+  // generate-and-persist a node's WireGuard private key into the design (+ localStorage).
+  // Controller mode is zero-knowledge — the agent owns the private key, the server never sees it,
+  // deploy() strips any private value — so the pin-key control is a dead, misleading affordance
+  // there (and would write a meaningless fixed_private_key flag into the server design). Gate it
+  // to local mode (plan-11 / T4), mirroring the Compile/export/deploy-script gates.
+  const mode = useControllerStore((s) => s.mode);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
@@ -220,25 +228,29 @@ export function NodeEditor() {
             {t(language, 'nodeEditor.publiclyReachable')}
           </label>
         )}
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={selectedNode.fixed_private_key || false}
-            onChange={(e) =>
-              updateNode(selectedNode.id, {
-                fixed_private_key: e.target.checked,
-                ...(e.target.checked
-                  ? {}
-                  : {
-                      wireguard_private_key: undefined,
-                      wireguard_public_key: undefined,
-                    }),
-              })
-            }
-          />
-          {t(language, 'nodeEditor.pinPrivateKeyPersist')}
-        </label>
-        {selectedNode.fixed_private_key && (
+        {/* Pin-key is a LOCAL/air-gap custody control (see the mode note above): hidden in
+            controller mode, where the agent holds the key and the server is zero-knowledge. */}
+        {mode === 'local' && (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={selectedNode.fixed_private_key || false}
+              onChange={(e) =>
+                updateNode(selectedNode.id, {
+                  fixed_private_key: e.target.checked,
+                  ...(e.target.checked
+                    ? {}
+                    : {
+                        wireguard_private_key: undefined,
+                        wireguard_public_key: undefined,
+                      }),
+                })
+              }
+            />
+            {t(language, 'nodeEditor.pinPrivateKeyPersist')}
+          </label>
+        )}
+        {mode === 'local' && selectedNode.fixed_private_key && (
           <div className="p-2 bg-gray-700 rounded space-y-1">
             <p className="text-xs text-gray-300">{t(language, 'nodeEditor.pinnedKeyStatus')}</p>
             <p className="text-xs text-gray-400 break-all">
@@ -370,7 +382,12 @@ export function NodeEditor() {
             ))}
           </div>
         )}
-        {/* SSH Connection Details (collapsible) */}
+        {/* SSH Connection / Auto-Deploy is LOCAL/air-gap deploy-script metadata: the ssh_* fields
+            feed downloadDeployScript/exportArtifacts (both local-only); the controller agent-pull
+            model never pushes over SSH. Hide the EDITOR in controller mode (plan-11 / T4 review),
+            where it is a dead, misleading affordance. Do NOT strip the ssh_* DATA — custody.ts
+            deliberately preserves it so a controller→local switch retains the operator's SSH config. */}
+        {mode === 'local' && (
         <details className="bg-gray-700/50 rounded p-2">
           <summary className="text-xs cursor-pointer text-gray-400 font-semibold">
             {t(language, 'nodeEditor.sshConnectionAutoDeploy')}
@@ -461,6 +478,7 @@ export function NodeEditor() {
             </div>
           </div>
         </details>
+        )}
         <button
           onClick={() => removeNode(selectedNode.id)}
           className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"

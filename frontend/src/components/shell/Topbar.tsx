@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useControllerStore } from '../../stores/controllerStore';
 import { t } from '../../i18n';
 import { ThemeToggle } from './ThemeToggle';
 import { LanguageToggle } from './LanguageToggle';
@@ -18,10 +19,18 @@ export function Topbar() {
   const exportProject = useTopologyStore((s) => s.exportProject);
   const importProject = useTopologyStore((s) => s.importProject);
   const flushWorkspace = useTopologyStore((s) => s.flushWorkspace);
+  const mode = useControllerStore((s) => s.mode);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const active = activeNavItem(location.pathname);
-  const onDesign = active?.key === 'design';
+  // The import/export/flush cluster is a LOCAL-mode file-I/O concept: import loads a JSON file
+  // into the canvas, export downloads it, flush clears it — all premised on "the browser holds
+  // the design". In controller mode the SERVER is authoritative (the canvas is a disposable
+  // mirror): flush would clear only the mirror (the false "cannot be undone" leak), export would
+  // write fleet IPs/SSH to disk, import would flip the mirror to local-only and be dropped at
+  // next hydrate (plan-11 / T3). Gate the cluster to local mode; controller mode persists via the
+  // Save button on the Design canvas (CanvasToolbar) instead (plan-10's saveDesign).
+  const showIOCluster = active?.key === 'design' && mode === 'local';
 
   const handleImportClick = () => fileInputRef.current?.click();
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,7 +56,7 @@ export function Topbar() {
       </span>
       <div className="flex-1" />
 
-      {onDesign && (
+      {showIOCluster && (
         <div className="flex items-center gap-1">
           <input
             type="file"
