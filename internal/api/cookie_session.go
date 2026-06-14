@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
@@ -141,12 +142,12 @@ type sessionResponseJSON struct {
 // in" (and reveals the operator + expiry); operatorAuth answers 401/403 otherwise.
 func (h *ControllerHandler) HandleSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
 		return
 	}
 	_, operator, ok := identity(r.Context())
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "missing authenticated identity")
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
 	// Best-effort expiry: only a cookie/session bearer resolves to a stored session with

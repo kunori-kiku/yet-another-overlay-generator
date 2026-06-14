@@ -59,14 +59,14 @@ const (
 	// coded at the SOURCE in internal/compiler + internal/allocator and flow through the
 	// writeCodedOr relay; CodeCompileFailed is the relay's 422 fallback for any compile error
 	// not coded at the source (e.g. a schema/semantic validation failure reaching compile).
-	CodeCompileFailed         Code = "compile_failed"
-	CodeTransitPoolExhausted  Code = "compile_transit_pool_exhausted"
-	CodeTransitCIDRInvalid    Code = "compile_transit_cidr_invalid"
-	CodeTransitCIDRNotIPv4    Code = "compile_transit_cidr_not_ipv4"
-	CodeListenPortExhausted   Code = "compile_listen_port_exhausted"
-	CodeOverlayCIDRInvalid    Code = "compile_overlay_cidr_invalid"
-	CodeOverlayPoolExhausted  Code = "compile_overlay_pool_exhausted"
-	CodeNodeUnknownDomain     Code = "compile_node_unknown_domain"
+	CodeCompileFailed        Code = "compile_failed"
+	CodeTransitPoolExhausted Code = "compile_transit_pool_exhausted"
+	CodeTransitCIDRInvalid   Code = "compile_transit_cidr_invalid"
+	CodeTransitCIDRNotIPv4   Code = "compile_transit_cidr_not_ipv4"
+	CodeListenPortExhausted  Code = "compile_listen_port_exhausted"
+	CodeOverlayCIDRInvalid   Code = "compile_overlay_cidr_invalid"
+	CodeOverlayPoolExhausted Code = "compile_overlay_pool_exhausted"
+	CodeNodeUnknownDomain    Code = "compile_node_unknown_domain"
 
 	// Render + export (plan-3.5b) — the template/IO layer. CodeRenderFailed is a 500 bucket the
 	// handler assigns when render.All fails (internal template/plumbing, not operator-fixable).
@@ -102,6 +102,17 @@ const (
 	CodeStagedManifestMismatch   Code = "staged_manifest_mismatch"
 	CodeManifestSignatureInvalid Code = "manifest_signature_invalid"
 	CodeStageFailed              Code = "stage_failed"
+
+	// Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
+	CodeReqBearerRequired       Code = "req_bearer_required"
+	CodeAuthCredentialsInvalid  Code = "auth_credentials_invalid"
+	CodeReqCSRFInvalid          Code = "req_csrf_invalid"
+	CodeReqOperatorRequired     Code = "req_operator_required"
+	CodeAuthRateLimited         Code = "auth_rate_limited"
+	CodeAuthPasskeyFailed       Code = "auth_passkey_failed"
+	CodeAuthPasskeyVerifyFailed Code = "auth_passkey_verify_failed"
+	CodeTotpInvalidCode         Code = "totp_invalid_code"
+	CodeTotpRequiresLogin       Code = "totp_requires_login"
 )
 
 // def is the immutable per-code metadata: the default English message TEMPLATE (with
@@ -165,6 +176,16 @@ var registry = map[Code]def{
 	CodeStagedManifestMismatch:   {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
 	CodeManifestSignatureInvalid: {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
 	CodeStageFailed:              {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
+
+	CodeReqBearerRequired:       {"A valid bearer token is required.", http.StatusUnauthorized},
+	CodeAuthCredentialsInvalid:  {"Invalid username or password.", http.StatusUnauthorized},
+	CodeReqCSRFInvalid:          {"Missing or invalid CSRF token.", http.StatusForbidden},
+	CodeReqOperatorRequired:     {"Operator privileges are required.", http.StatusForbidden},
+	CodeAuthRateLimited:         {"Too many login attempts; try again later.", http.StatusTooManyRequests},
+	CodeAuthPasskeyFailed:       {"Passkey login failed.", http.StatusUnauthorized},
+	CodeAuthPasskeyVerifyFailed: {"Passkey verification failed.", http.StatusBadRequest},
+	CodeTotpInvalidCode:         {"Invalid two-factor code; check your authenticator's time and try again.", http.StatusBadRequest},
+	CodeTotpRequiresLogin:       {"Two-factor management requires a logged-in operator account, not the break-glass token.", http.StatusForbidden},
 }
 
 // Error is a coded API error. It implements error and supports errors.Is/As via Unwrap,

@@ -94,6 +94,15 @@ var allCodes = []Code{
 	CodeStagedManifestMismatch,
 	CodeManifestSignatureInvalid,
 	CodeStageFailed,
+	CodeReqBearerRequired,
+	CodeAuthCredentialsInvalid,
+	CodeReqCSRFInvalid,
+	CodeReqOperatorRequired,
+	CodeAuthRateLimited,
+	CodeAuthPasskeyFailed,
+	CodeAuthPasskeyVerifyFailed,
+	CodeTotpInvalidCode,
+	CodeTotpRequiresLogin,
 }
 
 func TestRegistryBijection(t *testing.T) {

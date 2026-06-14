@@ -508,6 +508,16 @@ export const en = {
   'error.staged_manifest_mismatch': 'The submitted manifest does not match the current staged manifest; re-fetch and re-sign.',
   'error.manifest_signature_invalid': 'The manifest signature could not be verified against the pinned credential.',
   'error.stage_failed': 'Staging or promoting the deployment failed.',
+  // Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
+  'error.req_bearer_required': 'A valid bearer token is required.',
+  'error.auth_credentials_invalid': 'Invalid username or password.',
+  'error.req_csrf_invalid': 'Missing or invalid CSRF token.',
+  'error.req_operator_required': 'Operator privileges are required.',
+  'error.auth_rate_limited': 'Too many login attempts; try again later.',
+  'error.auth_passkey_failed': 'Passkey login failed.',
+  'error.auth_passkey_verify_failed': 'Passkey verification failed.',
+  'error.totp_invalid_code': "Invalid two-factor code; check your authenticator's time and try again.",
+  'error.totp_requires_login': 'Two-factor management requires a logged-in operator account, not the break-glass token.',
   // Validator-channel codes (plan-3.5a): the 200 ValidateResponse errors[]/warnings[]
   // localize through this same 'error.<code>' catalog via tValidationError (English fallback).
   'error.validation_client_endpoint_host_required': "Client {node} requires endpoint_host to reach the router",
