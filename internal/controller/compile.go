@@ -118,6 +118,38 @@ type StageResult struct {
 	Generation int64
 }
 
+// CompileSubgraph runs the read-only compile half shared by CompileAndStage and the
+// operator compile-preview: build the enrolled subgraph of `topo` from the registry
+// `nodes`, then drive the frozen, zero-knowledge pipeline — render.GenerateKeys in
+// AgentHeld custody (private keys are PRIVATEKEY_PLACEHOLDER, never real material) →
+// compiler.Compile → render.All. It performs NO store writes, NO allocation persist, NO
+// export, and NO staging; the caller decides what to do with the rendered result.
+//
+// Returns a NIL result when no node is enrolled (subgraph.Nodes empty) — the caller
+// handles that case (CompileAndStage purges + audits; a preview reports "nothing
+// enrolled"). `skipped` lists the node IDs present in the topology but dropped from the
+// render because they are not yet enrolled. Custody invariant: because GenerateKeys runs
+// AgentHeld, neither the returned result nor anything rendered from it contains a real
+// private key — making this safe to surface to an authenticated operator (PR6 preview).
+func CompileSubgraph(topo *model.Topology, nodes []Node) (*compiler.CompileResult, model.Topology, []string, error) {
+	subgraph, skipped := enrolledSubgraph(topo, nodes)
+	if len(subgraph.Nodes) == 0 {
+		return nil, subgraph, skipped, nil
+	}
+	keys, err := render.GenerateKeys(&subgraph, render.AgentHeld)
+	if err != nil {
+		return nil, subgraph, skipped, fmt.Errorf("controller: preparing keys for stage: %w", err)
+	}
+	result, err := compiler.NewCompiler().Compile(&subgraph, keys)
+	if err != nil {
+		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
+	}
+	if err := render.All(result, keys); err != nil {
+		return nil, subgraph, skipped, fmt.Errorf("controller: rendering enrolled subgraph: %w", err)
+	}
+	return result, subgraph, skipped, nil
+}
+
 // CompileAndStage renders the enrolled subgraph of the stored topology into signed
 // per-node bundles and stages them at the next generation. When the keystone is ON it
 // also builds the off-host-signable membership manifest (binding each node's bundle
@@ -162,12 +194,17 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		return StageResult{}, fmt.Errorf("controller: parsing stored topology: %w", err)
 	}
 
-	// (2) Build the enrolled subgraph from the registry.
+	// (2)+(3) Build the enrolled subgraph and drive the frozen compile pipeline
+	// (AgentHeld keys → compile → render) via the shared CompileSubgraph helper.
+	// `result` is nil when no node is enrolled — handled by the empty path below.
 	nodes, err := store.ListNodes(ctx, t)
 	if err != nil {
 		return StageResult{}, fmt.Errorf("controller: listing nodes to stage: %w", err)
 	}
-	subgraph, skipped := enrolledSubgraph(&topo, nodes)
+	result, subgraph, skipped, err := CompileSubgraph(&topo, nodes)
+	if err != nil {
+		return StageResult{}, err
+	}
 
 	// Nothing enrolled → nothing to render or stage. Report the skips so the caller
 	// can surface "no node has enrolled yet" — and leave an audit trace (plan-3):
@@ -202,19 +239,6 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		keystoneOn = true
 	} else if !errors.Is(err, ErrNotFound) {
 		return StageResult{}, fmt.Errorf("controller: loading operator credential to stage: %w", err)
-	}
-
-	// (3) Drive the frozen pipeline: AgentHeld keys (zero-knowledge), compile, render.
-	keys, err := render.GenerateKeys(&subgraph, render.AgentHeld)
-	if err != nil {
-		return StageResult{}, fmt.Errorf("controller: preparing keys for stage: %w", err)
-	}
-	result, err := compiler.NewCompiler().Compile(&subgraph, keys)
-	if err != nil {
-		return StageResult{}, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
-	}
-	if err := render.All(result, keys); err != nil {
-		return StageResult{}, fmt.Errorf("controller: rendering enrolled subgraph: %w", err)
 	}
 
 	// Persist the compiled allocation pins back into the FULL stored topology so a later
