@@ -312,6 +312,27 @@ type ControllerSettings struct {
 	Translucency *bool `json:"translucency,omitempty"`
 }
 
+// Clone returns a deep copy of cs: the MimicDebs map and the Translucency pointer are duplicated
+// so a value handed to or returned from an in-memory store cannot be mutated through a shared
+// reference (the FileStore is naturally isolated by its JSON round-trip; MemStore uses this to
+// match). renderer.Artifact is itself a value type with no nested references, so a shallow map
+// copy fully isolates the entries.
+func (cs ControllerSettings) Clone() ControllerSettings {
+	out := cs
+	if cs.MimicDebs != nil {
+		m := make(map[string]renderer.Artifact, len(cs.MimicDebs))
+		for k, v := range cs.MimicDebs {
+			m[k] = v
+		}
+		out.MimicDebs = m
+	}
+	if cs.Translucency != nil {
+		v := *cs.Translucency
+		out.Translucency = &v
+	}
+	return out
+}
+
 // Store is the single tenant-scoped data-access chokepoint for the controller.
 //
 // Contract for every implementation:

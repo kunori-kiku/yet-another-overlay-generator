@@ -361,3 +361,65 @@ func TestAll_MimicCatalog_ArtifactsJSONSignedMember(t *testing.T) {
 		}
 	}
 }
+
+// TestAll_MimicNode_ZeroCatalog_FailsClosedNoArtifacts locks the mimic-branch + zero-catalog path
+// the udp byte-identity test can't reach: a transport=tcp (mimic) topology rendered with a ZERO
+// FetchSettings emits NO artifacts.json (D4, the fleet-wide catalog gate), yet the mimic node's
+// install.sh STILL carries the GitHub fallback that FAILS CLOSED at runtime (distro-first works; the
+// fallback needs the now-absent $SCRIPT_DIR/artifacts.json). PERPETUAL.
+func TestAll_MimicNode_ZeroCatalog_FailsClosedNoArtifacts(t *testing.T) {
+	t.Setenv(bundlesig.EnvSigningKey, "")
+	rk := mustGenerateKey(t)
+	pk := mustGenerateKey(t)
+	topo := &model.Topology{
+		Project: model.Project{ID: "mimic-zero", Name: "MimicZero", Version: "1"},
+		Domains: []model.Domain{{ID: "d1", Name: "n", CIDR: "10.42.0.0/24", AllocationMode: "auto", RoutingMode: "babel"}},
+		Nodes: []model.Node{
+			{ID: "router-1", Name: "router-1", Role: "router", DomainID: "d1",
+				Capabilities:        model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+				PublicEndpoints:     []model.PublicEndpoint{{ID: "ep", Host: "router-1.example", Port: 51820}},
+				WireGuardPrivateKey: rk.String()},
+			{ID: "peer-1", Name: "peer-1", Role: "peer", DomainID: "d1", WireGuardPrivateKey: pk.String()},
+		},
+		Edges: []model.Edge{
+			// transport=tcp -> both endpoints get a mimic interface (both empty platform = Linux-deployable).
+			{ID: "e-peer", FromNodeID: "peer-1", ToNodeID: "router-1", Type: "public-endpoint",
+				EndpointHost: "router-1.example", Transport: "tcp", IsEnabled: true},
+		},
+	}
+	keys, err := GenerateKeys(topo, AirGap)
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+	result, err := compiler.NewCompiler().Compile(topo, keys)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if err := All(result, keys, FetchSettings{}); err != nil {
+		t.Fatalf("render.All (zero fs, mimic topo): %v", err)
+	}
+
+	// (a) zero catalog -> no artifacts.json content at all.
+	if len(result.ArtifactsJSON) != 0 {
+		t.Errorf("zero FetchSettings must produce no ArtifactsJSON, got %d entries", len(result.ArtifactsJSON))
+	}
+	// (b) the mimic node's install.sh still reads the verified $SCRIPT_DIR/artifacts.json and fails
+	// closed (the message proves the GitHub fallback aborts when the pin file is absent).
+	router := result.InstallScripts["router-1"]
+	if !strings.Contains(router, `"$SCRIPT_DIR/artifacts.json"`) {
+		t.Errorf("mimic node install.sh must read $SCRIPT_DIR/artifacts.json")
+	}
+	if !strings.Contains(router, "no mimic catalog was configured") {
+		t.Errorf("mimic node install.sh must fail closed when artifacts.json is absent")
+	}
+	// (c) export emits no artifacts.json file (so the fail-closed path is the real runtime behavior).
+	outDir := t.TempDir()
+	if _, err := artifacts.Export(result, outDir); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	for _, name := range []string{"router-1", "peer-1"} {
+		if _, err := os.Stat(filepath.Join(outDir, name, "artifacts.json")); !os.IsNotExist(err) {
+			t.Errorf("%s: artifacts.json must NOT be exported under a zero catalog (stat err=%v)", name, err)
+		}
+	}
+}

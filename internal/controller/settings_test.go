@@ -83,6 +83,13 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 			if !reflect.DeepEqual(got, cs) {
 				t.Fatalf("round-trip mismatch: got %+v want %+v", got, cs)
 			}
+			// Isolation: mutating the caller's MimicDebs map after Put must NOT change the stored
+			// value (the store deep-copies via Clone; the map is a shared reference otherwise).
+			cs.MimicDebs["bookworm-amd64"] = renderer.Artifact{Asset: "evil.deb", SHA256: "x"}
+			got2, _ := s.GetSettings(ctx, tn)
+			if got2.MimicDebs["bookworm-amd64"].Asset != "mimic_0.1.0_amd64.deb" {
+				t.Fatalf("stored MimicDebs aliased the caller's map: got %+v", got2.MimicDebs)
+			}
 			// Replace.
 			cs2 := ControllerSettings{PublicAgentURL: "https://b", AgentReleaseBaseURL: "https://b/dl"}
 			if err := s.PutSettings(ctx, tn, cs2); err != nil {

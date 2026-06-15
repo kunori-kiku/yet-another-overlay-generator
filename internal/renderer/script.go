@@ -448,11 +448,11 @@ if ! command -v mimic >/dev/null 2>&1; then
         echo "ERROR: mimic is not in this distro's repositories and the GitHub .deb fallback requires apt/dpkg" >&2
         exit 1
     fi
-    if [ ! -f artifacts.json ]; then
+    if [ ! -f "$SCRIPT_DIR/artifacts.json" ]; then
         echo "ERROR: mimic GitHub fallback needs artifacts.json (no mimic catalog was configured for this deploy)" >&2
         exit 1
     fi
-    _mimic_codename="$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}")"
+    _mimic_codename="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")"
     _mimic_arch="$(dpkg --print-architecture 2>/dev/null)"
     _mimic_key="${_mimic_codename}-${_mimic_arch}"
     # Read the pin with jq (auto-installed on this apt path if absent); fail closed if jq is
@@ -461,9 +461,9 @@ if ! command -v mimic >/dev/null 2>&1; then
         _pm_install jq || true
     fi
     command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; exit 1; }
-    _mimic_rel="$(jq -r '.mimic.release_url // ""' artifacts.json)"
-    _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' artifacts.json)"
-    _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' artifacts.json)"
+    _mimic_rel="$(jq -r '.mimic.release_url // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' "$SCRIPT_DIR/artifacts.json")"
     if [ -z "$_mimic_rel" ] || [ -z "$_mimic_asset" ] || [ -z "$_mimic_sha" ]; then
         echo "ERROR: no pinned mimic .deb for '$_mimic_key' in artifacts.json" >&2
         exit 1
@@ -1268,20 +1268,20 @@ if ! command -v mimic >/dev/null 2>&1; then
         echo "ERROR: mimic is not in this distro's repositories and the GitHub .deb fallback requires apt/dpkg" >&2
         exit 1
     fi
-    if [ ! -f artifacts.json ]; then
+    if [ ! -f "$SCRIPT_DIR/artifacts.json" ]; then
         echo "ERROR: mimic GitHub fallback needs artifacts.json (no mimic catalog was configured for this deploy)" >&2
         exit 1
     fi
-    _mimic_codename="$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}")"
+    _mimic_codename="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")"
     _mimic_arch="$(dpkg --print-architecture 2>/dev/null)"
     _mimic_key="${_mimic_codename}-${_mimic_arch}"
     if ! command -v jq >/dev/null 2>&1; then
         _pm_install jq || true
     fi
     command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; exit 1; }
-    _mimic_rel="$(jq -r '.mimic.release_url // ""' artifacts.json)"
-    _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' artifacts.json)"
-    _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' artifacts.json)"
+    _mimic_rel="$(jq -r '.mimic.release_url // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' "$SCRIPT_DIR/artifacts.json")"
     if [ -z "$_mimic_rel" ] || [ -z "$_mimic_asset" ] || [ -z "$_mimic_sha" ]; then
         echo "ERROR: no pinned mimic .deb for '$_mimic_key' in artifacts.json" >&2
         exit 1

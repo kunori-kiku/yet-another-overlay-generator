@@ -767,16 +767,20 @@ func (s *MemStore) GetSettings(ctx context.Context, t TenantID) (ControllerSetti
 	if ts.settings == nil {
 		return ControllerSettings{}, ErrNotFound
 	}
-	return *ts.settings, nil
+	// Return a deep copy so a caller cannot mutate the stored map/pointer through the shared
+	// reference (ControllerSettings now carries a MimicDebs map + a Translucency pointer).
+	return ts.settings.Clone(), nil
 }
 
-// PutSettings stores (replacing) the tenant's settings. ControllerSettings is a value
-// type with no reference fields, so the stored copy is independent.
+// PutSettings stores (replacing) the tenant's settings. ControllerSettings carries reference
+// fields (the MimicDebs map, the Translucency pointer), so it is deep-copied (Clone) before
+// storing — the stored value is then independent of the caller's, matching the FileStore's
+// JSON-round-trip isolation.
 func (s *MemStore) PutSettings(ctx context.Context, t TenantID, cs ControllerSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
-	cp := cs
+	cp := cs.Clone()
 	ts.settings = &cp
 	return nil
 }

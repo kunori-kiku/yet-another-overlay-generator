@@ -143,6 +143,7 @@ func TestValidateMimicCatalog(t *testing.T) {
 		{MimicVersion: "not.semver", MimicReleaseBase: base, MimicDebs: goodDebs},                                                   // bad semver
 		{MimicReleaseBase: "ftp://x", MimicDebs: goodDebs},                                                                          // non-http base
 		{MimicReleaseBase: "https://ok/ p", MimicDebs: goodDebs},                                                                    // whitespace in base
+		{MimicReleaseBase: "https://ok/p$(reboot)", MimicDebs: goodDebs},                                                            // shell metachars (valid URL, caught by the charset guard)
 		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bookworm-amd64": {Asset: "mimic.deb", SHA256: "short"}}},  // bad sha
 		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bookworm-amd64": {Asset: "m$(reboot).deb", SHA256: sha}}}, // unsafe asset
 		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bad key": {Asset: "mimic.deb", SHA256: sha}}},             // bad key

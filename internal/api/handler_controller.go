@@ -867,7 +867,7 @@ func (h *ControllerHandler) HandleCompilePreview(w http.ResponseWriter, r *http.
 	// settings record is normal → fall back to defaults (zero cs + WithDefaults), never fail.
 	cs, err := h.store.GetSettings(r.Context(), tenant)
 	if err != nil && !errors.Is(err, controller.ErrNotFound) {
-		writeCodedOr(w, apierr.CodeInternal, err)
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
 

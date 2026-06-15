@@ -102,9 +102,14 @@ func TestRenderInstallScript_MimicGitHubFallback_VerifiesBeforeInstall(t *testin
 		t.Errorf("mimic .deb must be SHA-256-verified before install (verify=%d, install=%d)", verifyIdx, installIdx)
 	}
 	// The pin comes from the integrity-verified artifacts.json, not from untrusted transport
-	// (no trust in an upstream .sha256 sidecar).
-	if !strings.Contains(script, "artifacts.json") {
-		t.Errorf("mimic fallback must read its pin from artifacts.json")
+	// (no trust in an upstream .sha256 sidecar). It MUST be read from the bundle copy whose hash
+	// was verified — "$SCRIPT_DIR/artifacts.json" — not a bare cwd-relative path that, under an
+	// invocation like `cd /tmp && sudo bash /bundle/install.sh`, could consume an unverified file.
+	if !strings.Contains(script, `"$SCRIPT_DIR/artifacts.json"`) {
+		t.Errorf("mimic fallback must read its pin from $SCRIPT_DIR/artifacts.json (the integrity-verified copy)")
+	}
+	if strings.Contains(script, " artifacts.json)") || strings.Contains(script, "-f artifacts.json ") {
+		t.Errorf("mimic fallback must not read artifacts.json by a bare cwd-relative path")
 	}
 	// Fail-closed guards: a non-apt host and a missing pin both abort rather than install blind.
 	for _, frag := range []string{

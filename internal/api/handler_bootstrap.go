@@ -239,6 +239,12 @@ func validateMimicCatalog(cs controller.ControllerSettings) *apierr.Error {
 		if err := validateAbsoluteHTTPURL(cs.MimicReleaseBase); err != nil {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_release_base").Wrap(err)
 		}
+		// Defense-in-depth: the base is emitted into artifacts.json and read into a root install.sh
+		// (used quoted, so this is not a live injection), but reject shell-dangerous bytes anyway so
+		// it is as strict as the sibling asset/key pins. A real release URL contains none of these.
+		if strings.ContainsAny(cs.MimicReleaseBase, "$`;|&<>(){}[]'\"\\*? ") {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_release_base")
+		}
 	}
 	if len(cs.MimicDebs) > 0 && cs.MimicReleaseBase == "" {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_release_base")
