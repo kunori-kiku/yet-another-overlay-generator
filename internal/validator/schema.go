@@ -33,6 +33,15 @@ var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 // the defence-in-depth runtime half.
 var sshKeyPathCharset = regexp.MustCompile(`^[A-Za-z0-9._:@/\\~ -]+$`)
 
+// endpointHostCharset constrains edge endpoint_host and node public_endpoints[].host (plan-6).
+// These hosts are rendered into the per-peer WireGuard config FILE that root's wg-quick parses
+// (the `Endpoint = <host>:<port>` line), so the charset admits exactly what a WireGuard endpoint
+// host can be — hostnames, IPv4, and bracketed IPv6 (letters, digits, dot, underscore, colon,
+// square brackets, hyphen) — and forbids whitespace and control/metacharacters that would
+// corrupt the config or confuse the parser. (It is NOT spliced onto a root shell command line —
+// the host never reaches the install script's shell; this is config-integrity defense-in-depth.)
+var endpointHostCharset = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
+
 // routerIDMAC48 约束 Babel router-id 的 MAC-48 形式（D66）：六组以冒号分隔的十六进制对，
 // 如 02:11:22:33:44:55。babeld 也接受 IPv4 形式的 router-id，因此 IPv4 形式由 net.ParseIP
 // 单独判定（见 validateNodesSchema），二者满足其一即合法。
@@ -48,8 +57,50 @@ const (
 
 // ValidateSchema  Schema （ Pass 1）
 // 、、CIDR
+// Topology size bounds (plan-6 item 6): a DoS guard DISTINCT from the HTTP body-size cap.
+// They reject obviously-abusive topologies before the per-entity loops and the O(n²)
+// semantic pass (IP-collision/NAT-reachability) ever run on attacker-controlled bulk. The
+// ceilings are far above any realistic overlay (hundreds of nodes) — they stop "a million
+// nodes", not a power user.
+const (
+	maxTopologyNodes = 2000
+	maxTopologyEdges = 10000
+)
+
+// topologyExceedsBounds reports whether a topology must be rejected at the root before any
+// further validation: it is too large to process safely (count bound) OR is stamped with an
+// allocation-schema version newer than this build understands (forward-compat fail-closed,
+// plan-6 item 7 — a newer YAOG may use a pin format we would misread as v1). Both
+// ValidateSchema and ValidateSemantic short-circuit on it so neither the per-entity loops
+// nor the O(n²) semantic checks touch abusive bulk or a future-format topology.
+func topologyExceedsBounds(topo *model.Topology) bool {
+	return topo.AllocSchemaVersion > model.CurrentAllocSchemaVersion ||
+		len(topo.Nodes) > maxTopologyNodes ||
+		len(topo.Edges) > maxTopologyEdges
+}
+
 func ValidateSchema(topo *model.Topology) *ValidationResult {
 	result := &ValidationResult{}
+
+	// Topology-root guards reported HERE (schema is the canonical reporter) and
+	// short-circuiting: an oversized or future-format topology is rejected outright rather
+	// than merged into a pile of misleading downstream errors, and the expensive passes
+	// never run on it. ValidateSemantic guards on the same predicate without re-reporting.
+	if topologyExceedsBounds(topo) {
+		if topo.AllocSchemaVersion > model.CurrentAllocSchemaVersion {
+			result.AddError("alloc_schema_version", CodeTopologySchemaVersionUnsupported,
+				P{"version", strconv.Itoa(topo.AllocSchemaVersion)}, P{"max", strconv.Itoa(model.CurrentAllocSchemaVersion)})
+		}
+		if len(topo.Nodes) > maxTopologyNodes {
+			result.AddError("nodes", CodeTopologyTooManyNodes,
+				P{"count", strconv.Itoa(len(topo.Nodes))}, P{"max", strconv.Itoa(maxTopologyNodes)})
+		}
+		if len(topo.Edges) > maxTopologyEdges {
+			result.AddError("edges", CodeTopologyTooManyEdges,
+				P{"count", strconv.Itoa(len(topo.Edges))}, P{"max", strconv.Itoa(maxTopologyEdges)})
+		}
+		return result
+	}
 
 	//  Project
 	validateProjectSchema(topo, result)
@@ -154,6 +205,25 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 				result.AddError(rrPrefix, CodeDomainReservedRangeInvalid, P{"value", rr})
 			} else if ip.To4() == nil {
 				result.AddError(rrPrefix, CodeDomainReservedAddressNotIPv4, P{"ip", rr})
+			}
+		}
+
+		// transit_cidr 校验（plan-6）：可解析、IPv4-only，且大小足以容纳 per-link transit 地址对
+		// （每条链路占用一对 transit IP）。镜像 domain CIDR 的 IPv4 + 大小守卫；空值由编译器回退
+		// 到默认 10.10.0.0/24，无需校验。
+		if domain.TransitCIDR != "" {
+			_, tNet, err := net.ParseCIDR(domain.TransitCIDR)
+			if err != nil {
+				result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRInvalid, P{"cidr", domain.TransitCIDR})
+			} else if tNet.IP.To4() == nil {
+				result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRNotIPv4, P{"cidr", domain.TransitCIDR})
+			} else {
+				ones, _ := tNet.Mask.Size()
+				if ones < 8 {
+					result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRTooLarge, P{"cidr", domain.TransitCIDR})
+				} else if ones > 30 {
+					result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRTooSmall, P{"cidr", domain.TransitCIDR})
+				}
 			}
 		}
 	}
@@ -263,6 +333,17 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		if node.SSHKeyPath != "" && !sshKeyPathCharset.MatchString(node.SSHKeyPath) {
 			result.AddError(prefix+".ssh_key_path", CodeNodeSSHKeyPathIllegalChars, P{"path", fmt.Sprintf("%q", node.SSHKeyPath)})
 		}
+
+		// public_endpoints[].host 字符集校验（plan-6）：host 会被渲染进 root 的 wg-quick 解析的
+		// per-peer WireGuard 配置文件（Endpoint = 行），必须排除空白与控制/元字符以免破坏配置或
+		// 混淆解析器。PublicEndpoint.Port 不在此校验：它只是一个节点可达性提示，编译器从不渲染它
+		// （反向 endpoint 回退使用分配到的监听端口，见 peers.go），因此只需守 host。
+		for k := range node.PublicEndpoints {
+			ep := &node.PublicEndpoints[k]
+			if ep.Host != "" && !endpointHostCharset.MatchString(ep.Host) {
+				result.AddError(fmt.Sprintf("%s.public_endpoints[%d].host", prefix, k), CodeNodePublicEndpointHostIllegalChars, P{"host", fmt.Sprintf("%q", ep.Host)})
+			}
+		}
 	}
 }
 
@@ -306,6 +387,12 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {
 			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})
+		}
+
+		// endpoint_host 字符集校验（plan-6）：非空时会被渲染进 root 的 wg-quick 解析的 per-peer
+		// WireGuard 配置文件（Endpoint = 行），必须排除空白与控制/元字符以免破坏配置或混淆解析器。
+		if edge.EndpointHost != "" && !endpointHostCharset.MatchString(edge.EndpointHost) {
+			result.AddError(prefix+".endpoint_host", CodeEdgeEndpointHostIllegalChars, P{"host", fmt.Sprintf("%q", edge.EndpointHost)})
 		}
 
 		// Role 校验（并行链路 / 故障切换）：仅允许空值、"primary"、"backup"。

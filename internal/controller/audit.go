@@ -7,6 +7,19 @@ import (
 	"time"
 )
 
+// Audit-log bound (plan-6). The append-only log is capped so a long-lived controller (or
+// an abuse pattern that appends many entries) cannot grow it without bound. The cap uses
+// hysteresis: the log is allowed to reach auditRotateAt entries, then a single rotation
+// trims it back to the most-recent auditRetain. The gap between the two is what amortizes
+// the rotation — a full rewrite happens once per (auditRotateAt-auditRetain) appends, so
+// steady-state appends never rewrite the whole file (FileStore appends one line; MemStore
+// appends to a slice). Both Store implementations share these constants so their bound —
+// and the shared compat test — stay identical.
+const (
+	auditRetain   = 10000
+	auditRotateAt = 12000
+)
+
 // canonicalAuditBytes returns the stable byte encoding of an audit entry's content
 // (every field EXCEPT its own Hash), used as the SHA-256 input for the hash chain.
 // The field order and the RFC3339Nano/UTC timestamp formatting are fixed so the
@@ -39,8 +52,20 @@ func chainAudit(e AuditEntry, prevHash string) AuditEntry {
 // operational visibility only: an actor with write access to the backing store can
 // recompute every Hash, so this is not a cryptographic anti-tamper guarantee
 // (that is Plan 5). See the AuditEntry doc in store.go.
+//
+// Anchoring: the chain is verified relative to the FIRST entry's PrevHash, not the empty
+// genesis, so a bounded log that has rotated out its oldest entries (plan-6) — whose first
+// retained entry carries a non-empty PrevHash — still verifies its retained window instead
+// of false-positiving at index 0. Trade-off (honest): prefix-truncation of an un-rotated log
+// is therefore NO LONGER detected (the trimmed window verifies clean). That is acceptable
+// under the operational-only guarantee above — an actor with store write access can re-forge
+// the chain forward regardless, so truncation was never cryptographically prevented; a clean
+// result must not be read as proof the head was not trimmed.
 func VerifyAuditChain(entries []AuditEntry) int {
-	prev := ""
+	if len(entries) == 0 {
+		return -1
+	}
+	prev := entries[0].PrevHash
 	for i, e := range entries {
 		if e.PrevHash != prev {
 			return i

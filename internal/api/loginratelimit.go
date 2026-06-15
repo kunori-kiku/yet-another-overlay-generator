@@ -29,6 +29,13 @@ import (
 const (
 	maxLoginFailures = 10
 	loginWindow      = 15 * time.Minute
+	// maxEnrollFailures is the per-IP failure cap for /enroll. It is HIGHER than the login cap
+	// because the threat models differ: login guards a human password (low-entropy, so a tight
+	// cap matters), whereas /enroll guards single-use, high-entropy enrollment tokens where
+	// guessing is hopeless regardless. The higher cap accommodates a legitimate parallel
+	// bootstrap of many nodes behind one NAT (whose concurrent enrolls all reserve a slot
+	// before any refunds) without false 429s, while still bounding a token sprayer.
+	maxEnrollFailures = 60
 	// loginLimiterSweepAt bounds the tracked-key map: when it grows past this, a full
 	// sweep drops expired records so a random-username/IP spray cannot grow it without
 	// bound.
@@ -49,13 +56,18 @@ type loginLimiter struct {
 	window   time.Duration
 }
 
-// newLoginLimiter returns a limiter with the default thresholds.
-func newLoginLimiter() *loginLimiter {
+// newLimiter returns a limiter with the given failure cap and window.
+func newLimiter(max int, window time.Duration) *loginLimiter {
 	return &loginLimiter{
 		attempts: make(map[string]*attemptRecord),
-		max:      maxLoginFailures,
-		window:   loginWindow,
+		max:      max,
+		window:   window,
 	}
+}
+
+// newLoginLimiter returns a limiter with the default operator-login thresholds.
+func newLoginLimiter() *loginLimiter {
+	return newLimiter(maxLoginFailures, loginWindow)
 }
 
 // registerAttempt is the single atomic check-and-reserve gate for one login attempt.

@@ -14,8 +14,10 @@ import (
 // AllocationSchemaVersion 是粘性 pin 分配方案的 schema 版本号（不变量 I10）。
 // 编译器把它写回到编译后拓扑的 AllocSchemaVersion 字段，使未来对 pin 格式的改动
 // 能够检测并迁移旧拓扑，而不是把旧格式当成新格式静默误读。
+// 规范来源是 model.CurrentAllocSchemaVersion（validator 据此 fail-closed 拒绝来自更新版本
+// 的拓扑，且 compiler→validator 的依赖方向使 validator 无法反向引用 compiler 常量）。
 // 详见 docs/spec/compiler/allocation-stability.md（不变量 I10）。
-const AllocationSchemaVersion = 1
+const AllocationSchemaVersion = model.CurrentAllocSchemaVersion
 
 // CompileResult
 type CompileResult struct {

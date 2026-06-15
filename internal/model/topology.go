@@ -1,5 +1,15 @@
 package model
 
+// CurrentAllocSchemaVersion is the highest sticky-pin allocation-schema version this build
+// understands (invariant I10). The compiler stamps it onto a compiled topology's
+// AllocSchemaVersion; the validator fails closed on any INPUT topology stamped HIGHER than
+// this (one written by a newer YAOG whose pin format we would otherwise misread as v1). It
+// lives in model — alongside the AllocSchemaVersion field — so both the compiler (which
+// stamps it) and the validator (which guards it) reference one source of truth without an
+// import cycle (compiler imports validator, so the validator cannot import the compiler).
+// See docs/spec/compiler/allocation-stability.md.
+const CurrentAllocSchemaVersion = 1
+
 // Topology 完整的网络拓扑定义
 type Topology struct {
 	// 项目信息

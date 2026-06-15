@@ -43,7 +43,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `allocation_mode` | schema | enum `auto`/`manual`; empty allowed | schema |
 | `routing_mode` | schema | empty normalizes to `babel`; `static`/`none` rejected as not-yet-implemented | schema |
 | `reserved_ranges[]` | schema | each a parseable CIDR or IP | schema |
-| `transit_cidr` | schema | parseable IPv4 CIDR with enough host pairs | none-yet |
+| `transit_cidr` | schema | parseable IPv4 CIDR, IPv4-only, /8–/30 (enough host pairs) | schema |
 
 > **Compliance — IPv4-only CIDR:** `validateDomainsSchema` accepts any address family
 > (`net.ParseCIDR` at `schema.go:89`), so an IPv6 domain CIDR passes and then panics the IPv4-only
@@ -76,7 +76,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `fixed_private_key` | — | flag | n/a |
 | `wireguard_private_key` | schema | parseable WG key when fixed | partial (parsed in `generateKeys`) |
 | `wireguard_public_key` | — | non-empty ⇒ key-fixed (allocation-stability) | n/a |
-| `public_endpoints[]` | — | host/port sanity | none-yet |
+| `public_endpoints[].host` | schema | **strict charset** (rendered into the per-peer WireGuard config `Endpoint =` parsed by root's wg-quick); `.Port` is an unrendered reachability hint (the reverse-endpoint fallback uses the allocated listen port), so it is not validated | schema |
 | `extra_prefixes[]` | schema | each a parseable IPv4 CIDR | schema |
 | `ssh_alias` | schema | **strict charset** (interpolated into root/operator shell) | schema |
 | `ssh_host` | schema | **strict charset** (interpolated into bash + PowerShell) | schema |
@@ -117,7 +117,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `from_node_id` | schema + semantic | non-empty; references a node | schema + semantic |
 | `to_node_id` | schema + semantic | non-empty; references a node; no self-loop | schema + semantic |
 | `type` | schema | enum `direct`/`public-endpoint`/`relay-path`/`candidate` | schema |
-| `endpoint_host` | semantic | required for client edges | partial (client only) |
+| `endpoint_host` | schema + semantic | **strict charset** (schema; rendered into the per-peer WireGuard config `Endpoint =` parsed by root's wg-quick) + required for client edges (semantic) | schema + semantic |
 | `endpoint_port` | schema | range 0–65535 (NAT override only) | schema |
 | `compiled_port` | — | compiler-written | n/a |
 | `priority` | — | optional | none-yet |
@@ -134,6 +134,18 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `project.id` / `project.name` | schema | non-empty | schema |
 | `domains` | schema | at least one domain | schema |
 | `route_policies` | semantic | **RESERVED** — reject if non-empty | semantic |
+| `nodes` / `edges` (count) | schema | DoS bound: ≤ `maxTopologyNodes` (2000) / `maxTopologyEdges` (10000); short-circuits both passes before the O(n²) semantic checks (distinct from the HTTP body-size cap) | schema |
+| `alloc_schema_version` | schema | forward-compat fail-closed: reject `> model.CurrentAllocSchemaVersion` (a topology from a newer YAOG whose pin format would be misread); absent/0 restamps to current | schema |
+
+> **Compliance — topology-root size & schema-version (plan-6):** `HandleValidate` runs BOTH
+> `ValidateSchema` and `ValidateSemantic` unconditionally, so an unbounded topology is a DoS surface on
+> `/validate` as well as `/compile`. `topologyExceedsBounds` is checked at the TOP of both passes and
+> short-circuits (`schema.go`): the schema pass reports the coded error
+> (`CodeTopologyTooManyNodes`/`CodeTopologyTooManyEdges`/`CodeTopologySchemaVersionUnsupported`), the
+> semantic pass guards silently (no duplicate). The schema-version guard fails closed against a future
+> pin format rather than silently misreading it as v1 (I10); the canonical max lives in
+> `model.CurrentAllocSchemaVersion` because `compiler` imports `validator` (so the validator cannot
+> import the compiler's constant).
 
 > **Compliance — `route_policies` RESERVED:** `route_policies` is validated nowhere (`schema.go` and
 > `semantic.go` never inspect it, D62) and is consumed by no renderer. Per the binding decision
