@@ -117,6 +117,15 @@ stacked branches, per-plan PR + green gate; serialize branch work vs. read-only 
   charset + `transit_cidr`); outline `render.All` caller corrected (`compile.go:147` carries the non-zero
   `fs`). Should-fix anchor corrections (server.go→internal/api/server.go, LoadSigningFromEnv, schema-stamp,
   release.yml-already-publishes, semver comparator, agent.release_url source) folded into the plans.
+- 2026-06-16 — **beta.2 shipped + SUBJECT CLOSED (plan-10):** plans 9–10 merged (PRs #117–#118);
+  tagged `v2.0.0-beta.2` (GitHub *latest*). The RISKY CORE (plan-9, signed self-update) went through
+  a 4-dimension deep review (12 confirmed defects — genuine fleet-brick + anti-downgrade bugs caught
+  before merge), a re-review (caught R1-1 still broken), a round-2 fix, and a final verification
+  (all_fixes_correct=true). Self-update field smoke recorded **owed (owner-accepted risk)** — no live
+  fleet available; the mechanism is extensively unit-tested + thrice-reviewed. Deferred to rc.2/GA:
+  the bootstrap-TOFU hole, the FileStore SPOF mutex/poll fix, the full wiki rewrite. rc.1 is a later
+  owner call once the owed smokes pass and beta soak is clean. CLOSURE.md written; subject archived
+  to `_completed/`.
 - 2026-06-16 — **beta.1 shipped (plan-8 partial close):** plans 1–8 merged (PRs #109–#115); tagged
   `v2.0.0-beta.1` and set as the GitHub *latest* release. Each PR passed an independent multi-agent
   review before merge (plan-6 caught 1 MAJOR audit-log torn-line brick + 6 MINOR/NIT, all fixed +
@@ -184,5 +193,5 @@ subject archived to `_completed/`; beta.2 tagged. rc.1 remains a later owner cal
 | plan-6 | beta.1 | done | `3a41653` (PR #114 — backend robustness & full input validation) |
 | plan-7 | beta.1 | done | `f129b1b` (PR #115 — air-gap mimic catalog + honest mimic docs) |
 | plan-8 | beta.1 | done | beta.1 tagged `v2.0.0-beta.1` (GitHub latest); CHANGELOG/STATUS rolled (PR #116) |
-| plan-9 | beta.2 | pending | — |
-| plan-10 | beta.2 | pending | — |
+| plan-9 | beta.2 | done | `d45fc02` (PR #117 — signed agent self-update + canary-then-fleet) |
+| plan-10 | beta.2 | done | beta.2 tagged `v2.0.0-beta.2` (GitHub latest); subject closed (PR #118) |

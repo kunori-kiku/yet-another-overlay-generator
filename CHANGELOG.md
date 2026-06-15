@@ -9,7 +9,47 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
-_Nothing yet — beta.2 (the signed agent self-update swap + canary-then-fleet rollout) accumulates here._
+_Nothing yet._
+
+## [2.0.0-beta.2] - 2026-06-16
+
+The second beta (set as the GitHub *latest* release): closes the
+`signed-self-update-and-rc-hardening` subject by shipping the **signed agent self-update
+swap** + **canary-then-fleet rollout** — the mutable half whose observable half (version
+reporting) shipped in beta.1.
+
+### Added
+- **Signed agent self-update (canary-then-fleet).** A controller-managed agent replaces its own
+  binary with the version pinned in the bundle's controller-signed, keystone-bound
+  `artifacts.json` — verified against the signed SHA-256 pin BEFORE exec (never the upstream
+  `.sha256` sidecar), self-tested, then atomically swapped (install-then-flip, so the binary is
+  never absent) and re-exec'd. It never downgrades below the health-confirmed `AgentVersionFloor`,
+  and a bad swap **cannot brick a node**: a crash-durable breadcrumb is reconciled on every boot
+  (two-phase — an early attempt-bump bounds even an early-init crash; a probationary promote that
+  finalizes only after one clean daemon cycle; rollback to the prior binary + abandon at the
+  attempt cap), bounding the systemd restart loop with no unit-file change.
+- **Canary rollout controls.** `ControllerSettings` gains `TargetAgentVersion` (empty ⇒ no
+  self-update — the safety contract), `MinAgentVersion` (forces an update before applying an
+  incompatible bundle), `AgentBins` (`linux-<arch>` → {asset, sha256}, strict-validated at POST),
+  `AgentCanaryNodeIDs`, and `AgentRolloutFleetWide` (the promote-to-fleet action). The
+  `artifacts.json` agent block is **per-node** (only rollout nodes), so a bad target is caught on
+  the canary subset before it reaches the fleet; air-gap byte-identity holds (no rollout ⇒ no
+  block). `PRINCIPLES.md` gains the HIGH self-update custody invariant; see
+  `docs/spec/controller/agent-selfupdate.md`.
+- The agent `run` gains `--gh-proxy` (baked into the bootstrap systemd unit) for self-update
+  downloads through a GitHub mirror.
+
+### Notes
+- **Owed self-update field smoke (owner-accepted risk).** The end-to-end field smoke (publish a
+  canary agent version → download/verify/swap/re-exec → badge flips → promote to fleet; a tampered
+  hash refused keep-last-good; a crashing binary rolls back within the attempt cap) requires a live
+  two-node fleet and could not run in this environment. Recorded **owed** per `RELEASING.md`. The
+  mechanism is extensively unit-tested (decision table, custody hash-mismatch/self-test refusal,
+  probation/finalize/rollback/abandon, in-flight guard) and was hardened across a deep review +
+  two re-reviews; rc.1 remains a later owner call once this smoke and the two owed beta.1 hardware
+  smokes pass and beta soak is clean.
+
+PR #117.
 
 ## [2.0.0-beta.1] - 2026-06-16
 
@@ -215,7 +255,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.1...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.2...HEAD
+[2.0.0-beta.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.1...v2.0.0-beta.2
 [2.0.0-beta.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.10...v2.0.0-beta.1
 [2.0.0-preview.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.9...v2.0.0-preview.10
 [2.0.0-preview.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.8...v2.0.0-preview.9
