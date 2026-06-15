@@ -336,7 +336,12 @@ func readAuditJSONL(path string) (entries []AuditEntry, tornTail bool, err error
 		var e AuditEntry
 		if jerr := json.Unmarshal([]byte(line), &e); jerr != nil {
 			if i == lastNonBlank {
-				// Torn trailing line from a crashed append: drop it, keep the durable prefix.
+				// A malformed FINAL line: drop it, keep the durable prefix. This is the torn
+				// residue of a crashed append (the common case — a torn O_APPEND never has a
+				// trailing newline), and ALSO subsumes on-disk corruption of just the last
+				// record, which is indistinguishable and was previously a brick. So a clean
+				// read is not proof the last record was uncorrupted — only INTERIOR corruption
+				// (below) is surfaced.
 				return entries, true, nil
 			}
 			return nil, false, fmt.Errorf("controller: parse %s: %w", auditFileName, jerr)
