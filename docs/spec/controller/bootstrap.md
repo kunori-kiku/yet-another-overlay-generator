@@ -54,12 +54,15 @@ metacharacter cannot break out of its assignment.
 
 ## Honest limits
 
-- **The agent binary download is not integrity-checked** in v1 (SHA verification skipped per
-  decision). A compromised proxy/MITM could swap the binary; the config **bundle** the agent
-  then pulls is still keystone-verified, so a rogue binary cannot forge membership, but it
-  could misbehave on the host. Closing this later means publishing a `checksums.txt` in the
-  release and verifying it (the proxy can then stay untrusted). The `--gh-proxy` hop is an
-  explicitly-trusted intermediary.
-- The agent release binaries must be published (the Release workflow now builds + uploads
-  `yaog-agent-<os>-<arch>` alongside the bundles).
+- **The agent binary download is not integrity-checked at bootstrap** (the first-fetch TOFU hole).
+  A compromised proxy/MITM could swap the *bootstrap-time* binary; the config **bundle** the agent
+  then pulls is still keystone-verified, so a rogue binary cannot forge membership, but it could
+  misbehave on the host. As of **beta.1 (plan-4, D9)** the Release workflow publishes a per-arch
+  `yaog-agent-<os>-<arch>.sha256` sidecar next to each binary, so the operator can read the pin;
+  having the bootstrap script verify the download against it (letting the `--gh-proxy` hop stay
+  untrusted) is **deferred to rc.2**. Until then `--gh-proxy` is an explicitly-trusted intermediary.
+  NOTE: this TOFU hole is the FIRST-fetch only — the **signed self-update** path (beta.2) always
+  verifies a fetched agent binary against the in-bundle, controller-signed `artifacts.json` pin.
+- The agent release binaries + their `.sha256` sidecars are published by the Release workflow
+  (`yaog-agent-<os>-<arch>` and `yaog-agent-<os>-<arch>.sha256`) alongside the bundles.
 - The bootstrap is Linux + systemd (the controller's only supported node host).
