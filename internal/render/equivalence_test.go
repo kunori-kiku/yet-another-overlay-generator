@@ -93,7 +93,7 @@ func TestEntrypointParity(t *testing.T) {
 		t.Fatalf("Compile 失败: %v", err)
 	}
 
-	if err := All(result, keys); err != nil {
+	if err := All(result, keys, FetchSettings{}); err != nil {
 		t.Fatalf("render.All 失败: %v", err)
 	}
 

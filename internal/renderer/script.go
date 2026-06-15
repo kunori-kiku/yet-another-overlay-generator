@@ -65,6 +65,11 @@ type InstallScriptConfig struct {
 	// The splice block matches the literal line 'PrivateKey = <token>' and replaces only that line.
 	// Only meaningful when SplicePlaceholder is true.
 	SplicePlaceholderToken string
+	// Fetch carries the GitHub-.deb mimic-fallback pins (plan-3). The zero value means no
+	// catalog is configured, so the template emits no fetch branch and the install.sh stays
+	// byte-identical to the pre-FetchSettings output (air-gap byte-identity). Set by the
+	// signed renderer after buildInstallScriptConfig, mirroring SigningPubkeyPEM.
+	Fetch InstallFetch
 }
 
 // WgIfaceInfo 单个 WireGuard 接口信息
@@ -787,13 +792,15 @@ type CustodySplice struct {
 // splice gates the AgentHeld custody-splice block (CustodySplice{} disables it, keeping output
 // byte-identical to the pre-splice path). This is the entry point the export path calls only when an
 // operator signing key is configured (YAOG_BUNDLE_SIGNING_KEY). When signingPubkeyPEM is empty, the
-// output is byte-identical to RenderInstallScript (opt-in back-compat). All other parameters match
-// RenderInstallScript. See docs/spec/controller/signing.md and docs/spec/controller/key-custody.md.
-func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, splice CustodySplice, transitCIDRs ...string) (string, error) {
+// output is byte-identical to RenderInstallScript (opt-in back-compat). fetch carries the optional
+// GitHub-.deb mimic-fallback pins (plan-3); its zero value adds nothing, keeping output identical.
+// See docs/spec/controller/signing.md and docs/spec/controller/key-custody.md.
+func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, splice CustodySplice, fetch InstallFetch, transitCIDRs ...string) (string, error) {
 	config := buildInstallScriptConfig(node, peers, hasBabel, transitCIDRs)
 	config.SigningPubkeyPEM = signingPubkeyPEM
 	config.SplicePlaceholder = splice.Enabled
 	config.SplicePlaceholderToken = splice.Token
+	config.Fetch = fetch
 	return renderTemplate("install.sh", installScriptTemplate, config)
 }
 
@@ -939,6 +946,10 @@ type ClientInstallScriptConfig struct {
 	// (PrivateKeyPlaceholder); same semantics as InstallScriptConfig.SplicePlaceholderToken. Only
 	// meaningful when SplicePlaceholder is true.
 	SplicePlaceholderToken string
+	// Fetch carries the GitHub-.deb mimic-fallback pins (plan-3); same semantics as
+	// InstallScriptConfig.Fetch. Zero value = no catalog → no fetch branch → client install.sh
+	// byte-identical. Set by the signed renderer after buildClientInstallScriptConfig.
+	Fetch InstallFetch
 }
 
 const clientInstallScriptTemplate = `#!/usr/bin/env bash
@@ -1349,12 +1360,14 @@ func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientP
 // custody-splice block on the copied wg0.conf (CustodySplice{} disables it, keeping output
 // byte-identical to the pre-splice path). Empty signingPubkeyPEM yields output byte-identical to
 // RenderClientInstallScript (opt-in). The export path calls this only when an operator signing key
-// is configured. See docs/spec/controller/signing.md and docs/spec/controller/key-custody.md.
-func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, splice CustodySplice, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
+// is configured. fetch carries the optional GitHub-.deb mimic-fallback pins (plan-3); its zero value
+// adds nothing, keeping output identical. See docs/spec/controller/signing.md and key-custody.md.
+func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, splice CustodySplice, fetch InstallFetch, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
 	config := buildClientInstallScriptConfig(node, clientInfo)
 	config.SigningPubkeyPEM = signingPubkeyPEM
 	config.SplicePlaceholder = splice.Enabled
 	config.SplicePlaceholderToken = splice.Token
+	config.Fetch = fetch
 	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
 }
 

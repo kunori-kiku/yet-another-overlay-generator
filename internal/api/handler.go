@@ -156,7 +156,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//
-	if err := render.All(result, keys); err != nil {
+	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
 		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
@@ -200,7 +200,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := render.All(result, keys); err != nil {
+	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
 		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}

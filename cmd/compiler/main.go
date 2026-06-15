@@ -75,7 +75,7 @@ func main() {
 	// 渲染全部部署产物，走与 API 入口完全相同的共享路径（render.All）：per-peer WireGuard
 	// 配置、client 的单一 wg0 配置与 client 安装脚本（D27/D28/D29）、Babel 配置、sysctl 配置、
 	// 每节点安装脚本，以及 deploy-all.sh/.ps1（D59）。CLI 由此与 API 产物逐字一致。
-	if err := render.All(result, keys); err != nil {
+	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to render deployment artifacts: %v\n", err)
 		os.Exit(1)
 	}

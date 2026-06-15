@@ -26,7 +26,7 @@ func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile(AirGap): %v", err)
 	}
-	if err := All(air, airKeys); err != nil {
+	if err := All(air, airKeys, FetchSettings{}); err != nil {
 		t.Fatalf("All(AirGap): %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile(AgentHeld): %v", err)
 	}
-	if err := All(held, heldKeys); err != nil {
+	if err := All(held, heldKeys, FetchSettings{}); err != nil {
 		t.Fatalf("All(AgentHeld): %v", err)
 	}
 

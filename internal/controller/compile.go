@@ -144,7 +144,7 @@ func CompileSubgraph(topo *model.Topology, nodes []Node) (*compiler.CompileResul
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
 	}
-	if err := render.All(result, keys); err != nil {
+	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: rendering enrolled subgraph: %w", err)
 	}
 	return result, subgraph, skipped, nil

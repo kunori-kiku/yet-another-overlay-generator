@@ -140,13 +140,42 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 	return keys, nil
 }
 
+// Artifact is one fetchable, integrity-pinned file (release asset + SHA-256). It is an alias for
+// renderer.Artifact: callers and plans 3/4/9 write render.Artifact, while the single underlying type
+// lives in renderer (the install.sh template consumes it), avoiding a render<->renderer import cycle.
+type Artifact = renderer.Artifact
+
+// FetchSettings is the typed channel of install-time fetch pins threaded through the single shared
+// render path (All). It is populated from ControllerSettings (controller mode; plan-3/4/9) or from
+// env/flags (air-gap; plan-7). The ZERO value means "no catalog configured", which MUST leave
+// install.sh and the signed bundle byte-identical to today — the air-gap byte-identity HIGH principle.
+// Every field is defined now so plans 3/4/9 fill them without re-opening All's signature.
+type FetchSettings struct {
+	// GithubProxy is an optional prefix applied to GitHub downloads (e.g. "https://gh-proxy.com/").
+	GithubProxy string
+	// Mimic GitHub-.deb fallback (plan-3): the pinned release version, its release base URL, and the
+	// per-"<codename>-<arch>" .deb asset + SHA-256 install.sh verifies before dpkg. Only this subset is
+	// threaded into install.sh (via renderer.InstallFetch).
+	MimicVersion     string
+	MimicReleaseBase string
+	MimicDebs        map[string]Artifact
+	// Agent self-update (plan-9): the desired/floor agent versions, the agent release base URL, and the
+	// per-"linux-<arch>" binary asset + SHA-256 the agent verifies against the signed artifacts.json
+	// pin. NOT consumed by install.sh (the agent self-updates at runtime); carried here for the signed
+	// artifacts.json emitted on the export path (plan-3/9).
+	AgentVersion     string
+	AgentMinVersion  string
+	AgentReleaseBase string
+	AgentBins        map[string]Artifact
+}
+
 // All 把一份编译结果渲染成全部部署产物，并把结果写回 result 的各 map 字段：
 // per-peer WireGuard 配置、client 的单一 wg0 配置、Babel 配置、sysctl 配置、
 // 每节点安装脚本（含 client 角色分支与 transit-CIDR 解析），以及 deploy-all 脚本（bash + ps1）。
 //
 // 这是 API 与 CLI 共享的唯一渲染入口——两个入口走完全相同的路径，
 // 从而保证产物一致性（入口等价性，见 equivalence_test.go）。
-func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error {
+func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs FetchSettings) error {
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
@@ -193,6 +222,16 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 		signingPubPEM = string(signer.PublicKeyPEM())
 	}
 
+	// Install-time fetch settings (fleet-wide catalog), threaded — the install.sh-relevant subset
+	// only — into the signed install-script renderers. A zero FetchSettings yields a zero InstallFetch,
+	// so the template emits no fetch branch and install.sh stays byte-identical (air-gap byte-identity).
+	installFetch := renderer.InstallFetch{
+		GithubProxy:      fs.GithubProxy,
+		MimicVersion:     fs.MimicVersion,
+		MimicReleaseBase: fs.MimicReleaseBase,
+		MimicDebs:        fs.MimicDebs,
+	}
+
 	//
 	for _, node := range result.Topology.Nodes {
 		// AgentHeld custody is detected per-node from the rendered private key: when the node's key
@@ -204,7 +243,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 		if node.Role == "client" {
 			// 传入该 client 的 ClientPeerInfo，使其单一 wg0 链路在 transport=="tcp" 时
 			// 也装配 mimic（决策 #5：client 也支持）。键缺失时为 nil，renderer 已做空值保护。
-			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, splice, result.ClientConfigs[node.ID])
+			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, splice, installFetch, result.ClientConfigs[node.ID])
 			if err != nil {
 				return fmt.Errorf("rendering install script for client %s failed: %w", node.Name, err)
 			}
@@ -213,7 +252,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair) error
 			peers := result.PeerMap[node.ID]
 			_, hasBabel := result.BabelConfigs[node.ID]
 			transitCIDRs := renderer.NodeTransitCIDRs(result.Topology, &node)
-			script, err := renderer.RenderInstallScriptSigned(&node, peers, hasBabel, signingPubPEM, splice, transitCIDRs...)
+			script, err := renderer.RenderInstallScriptSigned(&node, peers, hasBabel, signingPubPEM, splice, installFetch, transitCIDRs...)
 			if err != nil {
 				return fmt.Errorf("rendering install script for node %s failed: %w", node.Name, err)
 			}
