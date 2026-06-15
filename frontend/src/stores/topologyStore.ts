@@ -21,9 +21,11 @@ import { useControllerStore } from './controllerStore';
 
 // The server-derived per-edge allocation fields: the compiled_port echo plus the six
 // pinned_* ports / transit IPs / link-locals. mergeServerAllocations overlays exactly
-// these. KEEP IN SYNC with EDGE_OMITEMPTY's pin entries in controllerStore.ts and with
-// controllerStore's ALLOC_PIN_FIELDS (the conflict-check pin set).
-const ALLOCATION_PIN_FIELDS = [
+// these, and controllerStore imports this same constant for its save-time conflict-check
+// pin set (canonicalDesignIgnoringPins) — single source of truth, no hand-synced copy.
+// KEEP IN SYNC only with EDGE_OMITEMPTY's pin entries in controllerStore.ts (a superset
+// that also carries non-pin fields, so it cannot share this array directly).
+export const ALLOCATION_PIN_FIELDS = [
   'compiled_port',
   'pinned_from_port',
   'pinned_to_port',
