@@ -64,6 +64,27 @@ export function EdgeEditor() {
 
   if (!selectedEdge) return null;
 
+  // Directional NAT target (PR2): the internal listen port a NAT forward must hit. The
+  // compiler renders a forward edge's endpoint UNCONDITIONALLY at the to-side port —
+  // formatEndpoint(edge.EndpointHost, alloc.toPort), written back to pinned_to_port and
+  // echoed as compiled_port (compiler peers.go / compiler.go); it never branches on which
+  // node owns the host string. endpoint_host on the canvas is likewise always a snapshot of
+  // the TO node (reconcileEdgeEndpoints only writes it for the edge's target). So a forward
+  // edge always dials the to-node at pinned_to_port — mirror that here. Sourced from the
+  // edge's own fields — independent of the controller-null compileResult.
+  const natTargetPort = selectedEdge.pinned_to_port;
+  const natTargetNode = selectedEdgeTarget;
+  // External dial port: the NAT-override endpoint_port when set, else the compiled echo (or the
+  // internal listen port when nothing else is known). When it differs from the internal listen
+  // port an external→internal forward is required — surface the hint then.
+  const natDialPort =
+    selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0
+      ? selectedEdge.endpoint_port
+      : selectedEdge.compiled_port ?? natTargetPort;
+  const natForwardActive = natTargetPort !== undefined && natDialPort !== natTargetPort;
+  const hasPinnedPort =
+    selectedEdge.pinned_from_port !== undefined || selectedEdge.pinned_to_port !== undefined;
+
   return (
     <section>
       <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
@@ -246,6 +267,11 @@ export function EdgeEditor() {
           <p className="text-[10px] text-gray-500 mt-0.5">
             {t(language, 'edgeEditor.backupLinksDefaultTo')}
           </p>
+          {hasPinnedPort && (
+            <p className="text-[10px] text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded mt-1">
+              {t(language, 'edgeEditor.roleChangeRealloc')}
+            </p>
+          )}
         </div>
         <div>
           <label className="text-xs text-gray-400">
@@ -333,12 +359,24 @@ export function EdgeEditor() {
             <p className="text-xs text-gray-400 font-semibold">
               {t(language, 'edgeEditor.pinnedAllocation')}
             </p>
-            {(selectedEdge.pinned_from_port !== undefined ||
-              selectedEdge.pinned_to_port !== undefined) && (
-              <p className="text-xs text-cyan-300 font-mono">
-                {t(language, 'edgeEditor.ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
-              </p>
-            )}
+            {hasPinnedPort &&
+              (selectedEdge.endpoint_host ? (
+                // NAT-relevant edge: show the DIRECTIONAL dial→listen mapping so the operator
+                // knows which internal port to point the external→internal forward at.
+                <div className="space-y-0.5">
+                  <p className="text-xs text-cyan-300 font-mono break-all">
+                    {t(language, 'edgeEditor.natForwardTitle')}: {selectedEdge.endpoint_host}:{natDialPort ?? '—'} → {natTargetNode?.name ? `${natTargetNode.name} ` : ''}{natTargetPort ?? '—'}
+                  </p>
+                  {natForwardActive && (
+                    <p className="text-[10px] text-gray-400">{t(language, 'edgeEditor.natForwardHint')}</p>
+                  )}
+                </div>
+              ) : (
+                // Direct (non-NAT) edge: the plain from→to listen-port pair.
+                <p className="text-xs text-cyan-300 font-mono">
+                  {t(language, 'edgeEditor.ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
+                </p>
+              ))}
             {(selectedEdge.pinned_from_transit_ip !== undefined ||
               selectedEdge.pinned_to_transit_ip !== undefined) && (
               <p className="text-xs text-cyan-300 font-mono break-all">
