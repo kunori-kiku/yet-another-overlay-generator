@@ -155,8 +155,14 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//
-	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
+	// Local-mode mimic catalog (plan-7): resolved from env. Unset ⇒ zero FetchSettings ⇒
+	// byte-identical bundle (D4); a misconfigured catalog fails the request loud, not silently.
+	fetch, err := render.FetchSettingsFromEnv()
+	if err != nil {
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
+		return
+	}
+	if err := render.All(result, keys, fetch); err != nil {
 		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
@@ -200,7 +206,14 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
+	// Local-mode mimic catalog (plan-7): resolved from env. Unset ⇒ zero FetchSettings ⇒
+	// byte-identical bundle (D4); a misconfigured catalog fails the request loud, not silently.
+	fetch, err := render.FetchSettingsFromEnv()
+	if err != nil {
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
+		return
+	}
+	if err := render.All(result, keys, fetch); err != nil {
 		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
