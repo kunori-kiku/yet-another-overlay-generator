@@ -188,6 +188,7 @@ func runRun(args []string) int {
 	tokenPath := fs.String("token", defaultTokenPath, "path to the per-node bearer token file (controller mode)")
 	after := fs.Int64("after", 0, "controller mode: poll for a generation strictly greater than this (the last applied generation; a daemon advances it each cycle)")
 	daemon := fs.Bool("daemon", false, "controller mode: keep running, continuously long-polling and applying new generations (default: a single poll->apply->report cycle)")
+	ghProxy := fs.String("gh-proxy", "", "controller mode: optional GitHub download proxy prefix for signed agent self-update (e.g. https://gh-proxy.com/)")
 	_ = fs.Parse(args)
 
 	if *nodeID == "" {
@@ -210,6 +211,7 @@ func runRun(args []string) int {
 			stagingDir:       *stagingDir,
 			after:            *after,
 			daemon:           *daemon,
+			ghProxy:          *ghProxy,
 		})
 	}
 
@@ -282,6 +284,9 @@ type controllerModeOpts struct {
 	after int64
 	// daemon keeps the cycle looping (continuous long-poll); false runs one cycle.
 	daemon bool
+	// ghProxy is the optional GitHub download proxy prefix for signed agent self-update
+	// (plan-9), baked into the systemd unit by the bootstrap when configured. Empty = direct.
+	ghProxy string
 }
 
 // runControllerMode drives controller-pull deploys: load the per-node bearer token,
@@ -328,6 +333,28 @@ func runControllerMode(o controllerModeOpts) int {
 		return 1
 	}
 
+	// Self-update (plan-9): the running build version is the comparison baseline; the optional
+	// GitHub proxy is the download prefix. Nil-safe — an empty BuildVersion ("dev") just means a
+	// pinned target always compares as newer (a dev binary updates to any real target).
+	selfUpdate := &agent.SelfUpdateParams{RunningVersion: BuildVersion, GithubProxy: o.ghProxy}
+
+	// Startup reconcile of a pending self-update BEFORE the loop — this is what bounds the
+	// systemd Restart=always loop. The health gate is one clean Fetch + VerifyBundle: it proves
+	// THIS (possibly just-swapped) binary can reach the controller and cryptographically verify a
+	// bundle. A clean gate promotes (advancing the floor); a failure rolls back to the prior
+	// binary; the attempt cap abandons a binary that keeps crashing. A no-op without a breadcrumb.
+	healthCheck := func() error {
+		files, ferr := client.Fetch(o.nodeID)
+		if ferr != nil {
+			return fmt.Errorf("fetch: %w", ferr)
+		}
+		if _, verr := agent.VerifyBundle(files, pinned); verr != nil {
+			return fmt.Errorf("verify: %w", verr)
+		}
+		return nil
+	}
+	agent.ReconcileSelfUpdate(o.stateDir, BuildVersion, healthCheck, os.Stderr)
+
 	// Resume from the supplied cursor so a re-run does not re-fetch an already-applied
 	// generation: long-poll for anything strictly newer than --after. (The agent State
 	// keys anti-rollback on the manifest compiled_at string, not the controller's int64
@@ -356,6 +383,7 @@ func runControllerMode(o controllerModeOpts) int {
 			KeyPath:         agent.DefaultKeyPath,
 			Stdout:          os.Stdout,
 			Stderr:          os.Stderr,
+			SelfUpdate:      selfUpdate,
 		})
 	}
 

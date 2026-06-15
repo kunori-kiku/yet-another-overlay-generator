@@ -432,6 +432,10 @@ echo ">> enrolling node: $NODE_ID"
 
 if [ "$DAEMON" -eq 1 ]; then
   echo ">> installing systemd daemon (continuous; future deploys auto-apply)"
+  # Pass the GitHub proxy to the daemon (plan-9) so signed agent self-update fetches the new
+  # binary through the same mirror the bootstrap used; empty = direct (flag omitted).
+  GH_PROXY_FLAG=""
+  [ -n "$GH_PROXY" ] && GH_PROXY_FLAG="--gh-proxy ${GH_PROXY}"
   cat > /etc/systemd/system/yaog-agent.service <<UNIT
 [Unit]
 Description=YAOG overlay agent
@@ -440,7 +444,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}" --daemon ${OP_FLAGS}
+ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}" --daemon ${GH_PROXY_FLAG} ${OP_FLAGS}
 Restart=always
 RestartSec=5
 

@@ -49,6 +49,10 @@ type CycleConfig struct {
 	// When nil, the process stdio is used.
 	Stdout io.Writer
 	Stderr io.Writer
+	// SelfUpdate, when non-nil, enables signed agent self-update (plan-9): the apply path may
+	// swap the agent binary to the version pinned in the verified bundle's artifacts.json. Nil
+	// disables it (the cycle behaves exactly as before).
+	SelfUpdate *SelfUpdateParams
 }
 
 // RunControllerCycle runs ONE controller-pull cycle from cfg.After against client and
@@ -197,6 +201,7 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 		StagingDir:      cfg.StagingDir,
 		Stdout:          cfg.Stdout,
 		Stderr:          cfg.Stderr,
+		SelfUpdate:      cfg.SelfUpdate,
 	})
 	if runErr != nil {
 		return after, false, fmt.Errorf("run: %w", runErr) // keep-last-good

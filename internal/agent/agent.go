@@ -42,6 +42,11 @@ type Config struct {
 	// stdio is used.
 	Stdout io.Writer
 	Stderr io.Writer
+	// SelfUpdate, when non-nil, enables signed agent self-update (plan-9, controller mode):
+	// after the bundle is verified, the agent may swap its own binary to the version pinned in
+	// the bundle's (signed) artifacts.json. Nil in air-gap (DirSource / cmd/compiler) ⇒ no
+	// self-update, Run behaves exactly as before.
+	SelfUpdate *SelfUpdateParams
 }
 
 // RunResult summarizes one Run for the caller (and the status report).
@@ -135,6 +140,37 @@ func Run(cfg *Config) (*RunResult, error) {
 		return res, fmt.Errorf("agent: membership verify: %w", err)
 	}
 
+	// 2c. Signed self-update (plan-9), controller mode only (cfg.SelfUpdate != nil). The bundle's
+	// artifacts.json — verified above (VerifyBundle's coverage guard) — may pin a newer agent. A
+	// FORCED update (running < agent.min_version) must happen BEFORE applying an incompatible
+	// bundle; a non-forced update is deferred until AFTER a successful apply. The download is
+	// verified against the signed pin (custody) and self-tested before exec; on success the
+	// process is replaced (performSelfUpdate does not return).
+	var selfUpdateCatalog *agentCatalog
+	deferSelfUpdate := false
+	if cfg.SelfUpdate != nil {
+		selfUpdateCatalog = parseAgentCatalog(files)
+		running := cfg.SelfUpdate.RunningVersion
+		dec, reason := decideSelfUpdate(selfUpdateCatalog, running, prev.AgentVersionFloor)
+		if isForced(selfUpdateCatalog, running) {
+			if dec != updateForced {
+				// Forced but the update is impermissible (downgrade / missing pin / target below
+				// min): refuse to apply an incompatible bundle, keep last-good, report unhealthy.
+				recordFailure(cfg, prev, "below min_version and cannot self-update: "+reason)
+				return res, fmt.Errorf("agent: below required min_version, cannot self-update: %s", reason)
+			}
+			if err := performSelfUpdate(cfg, selfUpdateCatalog, running, cfg.SelfUpdate.GithubProxy, stderrOf(cfg)); err != nil {
+				recordFailure(cfg, prev, fmt.Sprintf("below min_version, self-update failed: %v", err))
+				return res, fmt.Errorf("agent: below min_version, self-update failed: %w", err)
+			}
+			// performSelfUpdate execs on success and never returns; reaching here means the
+			// re-exec itself failed AFTER the swap — rare, surfaced as an error.
+			recordFailure(cfg, prev, "self-update re-exec did not take effect")
+			return res, fmt.Errorf("agent: self-update re-exec failed")
+		}
+		deferSelfUpdate = dec == updateAfterApply
+	}
+
 	// 3. anti-rollback. NOTE: compiled_at comes from manifest.json, which export deliberately
 	// leaves OUT of the signed/checksummed set, so this stub only guards against an honest source
 	// accidentally serving a stale bundle — NOT an active attacker/MITM, who could forge compiled_at
@@ -165,6 +201,15 @@ func Run(cfg *Config) (*RunResult, error) {
 
 	// 6. report (record success, POST best-effort)
 	recordSuccess(cfg, man, vr, membershipEpoch)
+
+	// 7. deferred self-update (plan-9): the bundle applied cleanly and a newer agent is pinned.
+	// Best-effort — the bundle is already applied, so a download/verify failure is logged and the
+	// next cycle retries; it never fails this Run. On success performSelfUpdate re-execs (no return).
+	if deferSelfUpdate {
+		if err := performSelfUpdate(cfg, selfUpdateCatalog, cfg.SelfUpdate.RunningVersion, cfg.SelfUpdate.GithubProxy, stderrOf(cfg)); err != nil {
+			fmt.Fprintf(stderrOf(cfg), "agent: post-apply self-update deferred: %v\n", err)
+		}
+	}
 	return res, nil
 }
 
