@@ -647,7 +647,7 @@ func TestStoreAgentReports(t *testing.T) {
 				t.Fatalf("UpsertNode: %v", err)
 			}
 
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy"); err != nil {
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy", "v2.0.0-beta.1"); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 			seen := time.Date(2026, 6, 8, 15, 30, 0, 0, time.UTC)

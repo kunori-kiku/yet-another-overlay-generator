@@ -344,8 +344,9 @@ func (fs *FileStore) listNodesLocked(dir string) ([]Node, error) {
 }
 
 // SetAppliedGeneration records what an agent reported applying (generation,
-// checksum, and health).
-func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error {
+// checksum, health, and the reported agent build version). An empty agentVersion
+// (a legacy agent) leaves the stored version untouched.
+func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -370,6 +371,9 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 	n.AppliedGeneration = gen
 	n.LastChecksum = checksum
 	n.LastHealth = health
+	if agentVersion != "" {
+		n.LastAgentVersion = agentVersion
+	}
 	return writeJSONAtomic(p, n)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -63,7 +64,16 @@ const (
 	envSecureCookie = "YAOG_SECURE_COOKIE"
 )
 
+// BuildVersion is the server's build version, overwritten at release link time via
+// -ldflags "-X main.BuildVersion=<tag>" (see RELEASING.md). A non-release build reports "dev".
+var BuildVersion = "dev"
+
 func main() {
+	// Subcommand: `yaog-server version` prints the build version and exits (before flag parsing).
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println(BuildVersion)
+		return
+	}
 	// Subcommand: `yaog-server create-operator ...` bootstraps an operator login
 	// account into the controller FileStore, then exits. It must be intercepted before
 	// the default flag set parses the serve flags.

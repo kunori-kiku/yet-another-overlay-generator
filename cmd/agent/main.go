@@ -37,6 +37,11 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
 )
 
+// BuildVersion is the agent's build version, overwritten at release link time via
+// -ldflags "-X main.BuildVersion=<tag>" (see RELEASING.md). A non-release build reports "dev".
+// It is printed by `agent version` and reported to the controller on every check-in.
+var BuildVersion = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -50,6 +55,9 @@ func main() {
 		os.Exit(runEnroll(os.Args[2:]))
 	case "run":
 		os.Exit(runRun(os.Args[2:]))
+	case "version", "--version", "-v":
+		fmt.Println(BuildVersion)
+		os.Exit(0)
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -304,6 +312,9 @@ func runControllerMode(o controllerModeOpts) int {
 		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
 		return 1
 	}
+	// Report this binary's build version on every check-in so the controller + panel show
+	// each node's running version (plan-4 observability; the self-update floor is plan-9).
+	client.AgentVersion = BuildVersion
 
 	pinned, err := readPinnedPubkey(o.pubkeyPath)
 	if err != nil {

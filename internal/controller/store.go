@@ -93,8 +93,11 @@ type Node struct {
 	// LastHealth is the free-form health string the agent last reported alongside
 	// its applied generation ("" until the first report carries one).
 	LastHealth string
-	LastSeen   time.Time
-	EnrolledAt time.Time
+	// LastAgentVersion is the agent build version reported alongside the last apply ("" until a
+	// version-aware agent reports). Observability only (plan-4); the binary-swap floor is plan-9.
+	LastAgentVersion string
+	LastSeen         time.Time
+	EnrolledAt       time.Time
 	// RekeyRequested is set by the operator's fleet-wide key-rotation request
 	// (POST /rekey-all) and cleared when the agent re-registers its new WireGuard
 	// PUBLIC key (POST /rekey). It is a flag the agent observes via /config; it
@@ -357,8 +360,9 @@ type Store interface {
 	// ListNodes returns all nodes for the tenant (stable order by NodeID).
 	ListNodes(ctx context.Context, t TenantID) ([]Node, error)
 	// SetAppliedGeneration records what an agent reported applying (the applied
-	// generation, the manifest checksum, and the free-form health string).
-	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health string) error
+	// generation, the manifest checksum, the free-form health string, and the agent's
+	// reported build version — "" from a legacy agent leaves the stored version unchanged).
+	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 
