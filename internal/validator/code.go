@@ -184,7 +184,7 @@ var registry = map[Code]string{
 	CodePinPortIncomplete:                 "Edge {id} has an incomplete listen port pin (only one end is pinned): pins must be set in pairs; please complete both pinned_from_port and pinned_to_port, or clear both",
 	CodePinTransitIPIncomplete:            "Edge {id} has an incomplete transit IP pin (only one end is pinned): pins must be set in pairs; please complete both pinned_from_transit_ip and pinned_to_transit_ip, or clear both",
 	CodePinLinkLocalIncomplete:            "Edge {id} has an incomplete link-local pin (only one end is pinned): pins must be set in pairs; please complete both pinned_from_link_local and pinned_to_link_local, or clear both",
-	CodePinPortOutOfRange:                 "Port pin {port} for node {node} is out of range: it must be no lower than the node base listen port {base} and no higher than 65535 (clear this pin if renumbering is needed)",
+	CodePinPortOutOfRange:                 "Port pin {port} for node {node} is out of range: it must be between {base} and 65535 (clear this pin if renumbering is needed)",
 	CodePinTransitIPInvalid:               "transit IP pin {cidr} is not a valid IP address",
 	CodePinTransitIPOutOfCIDR:             "transit IP pin {cidr} is not within the edge transit address pool {prefix} (the pool may have been narrowed; clear this pin to renumber)",
 	CodePinPortDuplicateCrossLink:         "Port pin {port} is occupied by two different links on the node: edge {other} and edge {id} pin the same listen port on the same node",

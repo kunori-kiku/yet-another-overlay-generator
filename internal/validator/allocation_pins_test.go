@@ -127,14 +127,29 @@ func TestValidateAllocationPins_PortAboveMax(t *testing.T) {
 	assertHasError(t, result, "pinned_from_port")
 }
 
-// TestValidateAllocationPins_PortBelowBase 低于节点基准 listen_port 的端口 pin 应被拒绝（陈旧基准检测）。
-func TestValidateAllocationPins_PortBelowBase(t *testing.T) {
+// TestValidateAllocationPins_PortBelowMin 低于手填 pin 下界 minPinnedPort（1024，特权端口区）
+// 的端口 pin 应被拒绝。
+func TestValidateAllocationPins_PortBelowMin(t *testing.T) {
 	topo := pinnedTopology()
-	// node-1 基准 listen_port = 51820；把 node-1 侧端口钉到基准之下。
-	topo.Edges[0].PinnedFromPort = 51000
-	topo.Edges[1].PinnedToPort = 51000 // 反向边镜像
+	topo.Edges[0].PinnedFromPort = 500 // < 1024（特权端口区）
+	topo.Edges[1].PinnedToPort = 500   // 反向边镜像
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "pinned_from_port")
+}
+
+// TestValidateAllocationPins_NATRangePortAccepted 是 PR7 的回归守卫：自动分配从 51820 起，但
+// 端口受限的 NAT VPS 往往只转发一段低于 51820 的端口（如 30000-30100）。操作员手填一个该范围内
+// 的内部监听端口（>=1024）必须被接受——否则无法配合 NAT 转发规则（这正是放宽下界的目的）。
+func TestValidateAllocationPins_NATRangePortAccepted(t *testing.T) {
+	topo := pinnedTopology()
+	topo.Edges[0].PinnedFromPort = 30050 // NAT 范围内、低于旧的 51820 下界、但 >=1024
+	topo.Edges[1].PinnedToPort = 30050   // 反向边镜像
+	result := ValidateSemantic(topo)
+	for _, e := range result.Errors {
+		if contains(e.Field, "pinned_from_port") || contains(e.Field, "pinned_to_port") {
+			t.Errorf("NAT 范围端口 30050（>=1024）应被接受，却报错：%s", e.Error())
+		}
+	}
 }
 
 // --- transit IP 越池 ---
