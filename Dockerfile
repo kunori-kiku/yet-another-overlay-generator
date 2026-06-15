@@ -40,6 +40,12 @@ COPY --from=frontend --chown=yaog:yaog /app/frontend/dist /app/web
 ENV YAOG_WEB_DIR=/app/web \
     YAOG_CONTROLLER_STATE_DIR=/data
 EXPOSE 8080 9090
+# Liveness probe: hit the public, unauthenticated /api/health on the operator/panel port
+# (served in both air-gap and controller mode). busybox wget (in the alpine base) exits
+# non-zero on connection failure or an HTTP error, which marks the container unhealthy so
+# an orchestrator can restart/replace it. start-period covers the brief startup window.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1
 # /data is owned by uid 65532 above. A fresh NAMED volume inherits that ownership; a
 # BIND mount (the shipped docker-compose.yml uses ./data) does NOT — the host dir must
 # be chowned to 65532 (documented in docker-compose.yml / docs/spec/controller/docker.md).
