@@ -72,6 +72,14 @@ type ControllerHandler struct {
 	operatorName      string
 	// loginLimiter throttles failed POST /login attempts (per username + source IP).
 	loginLimiter *loginLimiter
+	// enrollLimiter throttles failed POST /enroll attempts (per source IP). /enroll is
+	// the one agent route with NO bearer token — its only credential is a single-use
+	// enrollment token — so it is the brute-force surface for guessing live tokens. A
+	// SEPARATE limiter from loginLimiter keeps the two surfaces independent (enroll spray
+	// must not lock out operator logins from the same IP, and vice versa). It refunds on a
+	// successful enroll (succeed), so only failures count: an operator bulk-enrolling many
+	// nodes behind one NAT never trips it, but a token-guessing sprayer is throttled.
+	enrollLimiter *loginLimiter
 	// sessionTTL is the lifetime of a session minted at /login.
 	sessionTTL time.Duration
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
@@ -117,6 +125,7 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		operatorTokenHash: operatorTokenHash,
 		operatorName:      operatorName,
 		loginLimiter:      newLoginLimiter(),
+		enrollLimiter:     newLoginLimiter(),
 		sessionTTL:        controller.DefaultSessionTTL,
 		pollDeadline:      defaultPollDeadline,
 		// Secure cookies by default: a non-TLS deployment must opt out explicitly
@@ -518,6 +527,18 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
+	// Per-IP brute-force gate BEFORE parsing the body: /enroll has no bearer token, so an
+	// attacker can spray enrollment-token guesses here. Reserve a slot atomically; if this IP
+	// is locked out, reject with 429 + Retry-After without touching the body. A successful
+	// enroll refunds the slot below, so only failures count toward the lockout.
+	now := time.Now().UTC()
+	ipKey := "ip:" + clientIP(r)
+	allowed, _, retry := h.enrollLimiter.registerAttempt(now, ipKey)
+	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+		writeAPIError(w, apierr.New(apierr.CodeAuthRateLimited))
+		return
+	}
 	var req enrollRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
@@ -556,6 +577,9 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Success: refund the reserved slot so a legitimate node (and an operator bulk-enrolling
+	// several nodes behind one NAT) never accumulates toward the per-IP lockout.
+	h.enrollLimiter.succeed(ipKey)
 	writeJSON(w, http.StatusOK, enrollResponseJSON{
 		ApiToken: result.APIToken,
 		NodeID:   result.NodeID,
