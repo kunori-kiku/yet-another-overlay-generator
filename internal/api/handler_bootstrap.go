@@ -17,11 +17,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 )
 
 // settingsJSON is the wire form of the operator-editable controller settings.
@@ -38,6 +40,10 @@ type settingsJSON struct {
 	// server-authoritatively instead of mirroring a second env by hand. It is
 	// env-derived, not a stored setting — POST ignores any submitted value.
 	AgentPathPrefix string `json:"agent_path_prefix"`
+	// Mimic GitHub-.deb catalog (plan-3). All NON-SECRET pins. Empty = distro-only mimic.
+	MimicVersion     string                       `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
+	MimicDebs        map[string]renderer.Artifact `json:"mimic_debs,omitempty"`
 }
 
 // settingsResponse builds the wire view of cs: the stored settings plus the
@@ -51,6 +57,9 @@ func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) s
 		AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
 		Translucency:        cs.Translucency != nil && *cs.Translucency,
 		AgentPathPrefix:     h.agentPrefix,
+		MimicVersion:        cs.MimicVersion,
+		MimicReleaseBase:    cs.MimicReleaseBase,
+		MimicDebs:           cs.MimicDebs,
 	}
 }
 
@@ -99,6 +108,9 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			GithubProxy:         strings.TrimSpace(req.GithubProxy),
 			AgentReleaseBaseURL: strings.TrimSpace(req.AgentReleaseBaseURL),
 			Translucency:        &translucency,
+			MimicVersion:        strings.TrimSpace(req.MimicVersion),
+			MimicReleaseBase:    strings.TrimSpace(req.MimicReleaseBase),
+			MimicDebs:           req.MimicDebs,
 		}.WithDefaults()
 		if cs.PublicAgentURL != "" {
 			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
@@ -114,6 +126,10 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 		}
 		if err := validateAbsoluteHTTPURL(cs.AgentReleaseBaseURL); err != nil {
 			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_release_base_url").Wrap(err))
+			return
+		}
+		if err := validateMimicCatalog(cs); err != nil {
+			writeAPIError(w, err)
 			return
 		}
 		if err := h.store.PutSettings(r.Context(), tenant, cs); err != nil {
@@ -196,6 +212,47 @@ func validateAbsoluteHTTPURL(s string) error {
 	}
 	if u.Host == "" {
 		return errors.New("must include a host")
+	}
+	return nil
+}
+
+// Strict format patterns for the mimic GitHub-.deb catalog (D8). These pins are operator-set and
+// flow into the controller-signed artifacts.json + a root-executed install.sh, so they are
+// validated at save time, not trusted at deploy time.
+var (
+	semverPattern    = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$`)
+	sha256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	debKeyPattern    = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+$`) // "<codename>-<arch>"
+	debAssetPattern  = regexp.MustCompile(`^[A-Za-z0-9._+-]+\.deb$`)
+)
+
+// validateMimicCatalog enforces D8 on the mimic GitHub-.deb catalog: a semver version, an http(s)
+// release base, a "<codename>-<arch>" key, a safe ".deb" asset name (no path/shell metacharacters),
+// and a 64-hex SHA-256 per pin. Every field is optional (empty = no catalog), but a partially
+// specified catalog that could not actually fetch (debs without a release base) is rejected.
+// Returns a coded *apierr.Error (CodeReqFieldInvalid) naming the offending field, or nil.
+func validateMimicCatalog(cs controller.ControllerSettings) *apierr.Error {
+	if cs.MimicVersion != "" && !semverPattern.MatchString(cs.MimicVersion) {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_version")
+	}
+	if cs.MimicReleaseBase != "" {
+		if err := validateAbsoluteHTTPURL(cs.MimicReleaseBase); err != nil {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_release_base").Wrap(err)
+		}
+	}
+	if len(cs.MimicDebs) > 0 && cs.MimicReleaseBase == "" {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_release_base")
+	}
+	for key, art := range cs.MimicDebs {
+		if !debKeyPattern.MatchString(key) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs.key")
+		}
+		if !debAssetPattern.MatchString(art.Asset) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs["+key+"].asset")
+		}
+		if !sha256HexPattern.MatchString(art.SHA256) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs["+key+"].sha256")
+		}
 	}
 	return nil
 }

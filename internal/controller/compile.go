@@ -131,7 +131,7 @@ type StageResult struct {
 // render because they are not yet enrolled. Custody invariant: because GenerateKeys runs
 // AgentHeld, neither the returned result nor anything rendered from it contains a real
 // private key — making this safe to surface to an authenticated operator (PR6 preview).
-func CompileSubgraph(topo *model.Topology, nodes []Node) (*compiler.CompileResult, model.Topology, []string, error) {
+func CompileSubgraph(topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
 	subgraph, skipped := enrolledSubgraph(topo, nodes)
 	if len(subgraph.Nodes) == 0 {
 		return nil, subgraph, skipped, nil
@@ -144,10 +144,22 @@ func CompileSubgraph(topo *model.Topology, nodes []Node) (*compiler.CompileResul
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
 	}
-	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
+	if err := render.All(result, keys, fs); err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: rendering enrolled subgraph: %w", err)
 	}
 	return result, subgraph, skipped, nil
+}
+
+// BuildFetchSettings maps the controller's persisted settings into the render-layer FetchSettings
+// channel that drives install.sh fetches + the signed artifacts.json. Plan-3 populates only the
+// mimic catalog; the agent self-update block is filled by plan-9 (reusing AgentReleaseBaseURL).
+func BuildFetchSettings(cs ControllerSettings) render.FetchSettings {
+	return render.FetchSettings{
+		GithubProxy:      cs.GithubProxy,
+		MimicVersion:     cs.MimicVersion,
+		MimicReleaseBase: cs.MimicReleaseBase,
+		MimicDebs:        cs.MimicDebs,
+	}
 }
 
 // CompileAndStage renders the enrolled subgraph of the stored topology into signed
@@ -201,7 +213,16 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	if err != nil {
 		return StageResult{}, fmt.Errorf("controller: listing nodes to stage: %w", err)
 	}
-	result, subgraph, skipped, err := CompileSubgraph(&topo, nodes)
+	// Load the tenant settings (defaults applied) and map them into the render FetchSettings so a
+	// configured mimic catalog flows into install.sh + the signed artifacts.json. No mimic catalog
+	// ⇒ zero-relevant fs ⇒ no artifacts.json (D4), bundles byte-identical to today. An absent
+	// settings record is normal (most deploys never set one) → fall back to defaults, never fail.
+	cs, err := store.GetSettings(ctx, t)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return StageResult{}, fmt.Errorf("controller: loading settings to stage: %w", err)
+	}
+	fs := BuildFetchSettings(cs.WithDefaults())
+	result, subgraph, skipped, err := CompileSubgraph(&topo, nodes, fs)
 	if err != nil {
 		return StageResult{}, err
 	}

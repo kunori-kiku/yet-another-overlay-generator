@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 )
 
 // TenantID scopes every Store operation. It is the structural tenant-isolation
@@ -292,6 +294,15 @@ type ControllerSettings struct {
 	// the bootstrap fetches "<AgentReleaseBaseURL>/yaog-agent-linux-<arch>". Defaults to
 	// the project's "releases/latest/download".
 	AgentReleaseBaseURL string `json:"agent_release_base_url"`
+	// Mimic GitHub-.deb catalog (plan-3): when set, a generated install.sh for a node with a
+	// transport="tcp" link falls back to a SHA-256-pinned .deb from GitHub on distros that do
+	// not package mimic (Debian 12 / Ubuntu 24.04). All NON-SECRET — a release version tag, the
+	// release base URL, and per-"<codename>-<arch>" (e.g. "bookworm-amd64") asset names + SHA-256
+	// hashes the installer verifies before dpkg. The pins are emitted into the controller-signed
+	// artifacts.json. Empty ⇒ distro-only mimic, no GitHub fallback, no artifacts.json (D4).
+	MimicVersion     string                       `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
+	MimicDebs        map[string]renderer.Artifact `json:"mimic_debs,omitempty"`
 	// Translucency is the operator panel's vibrancy preference (panel-appshell P5). It is
 	// a PANEL APPEARANCE setting served via GET/POST /settings; it is deliberately NOT
 	// baked into the agent bootstrap script (it has no bearing on a node). A POINTER so a
