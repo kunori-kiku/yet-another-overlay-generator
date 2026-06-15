@@ -363,71 +363,89 @@ else
     exit 1
 fi
 
-# Install dependencies
+# Install dependencies (cross-distro, idempotent)
+#
+# This runs on EVERY controller apply (the daemon re-runs install.sh per generation) and on a
+# manual air-gap run, so it is a fast no-op once the tools exist: each MISSING command is mapped
+# to a package and installed via the detected manager. Supported: apt / dnf / yum / zypper /
+# pacman / apk. Package names match across managers except iproute2 -> iproute on dnf/yum/zypper.
+# An unknown manager with tools still missing fails with an explicit list (no confusing mid-run error).
 echo "Installing dependencies..."
 
-if [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
-    export DEBIAN_FRONTEND=noninteractive
+YAOG_PM=""
+for _c in apt-get dnf yum zypper pacman apk; do
+    if command -v "$_c" >/dev/null 2>&1; then YAOG_PM="$_c"; break; fi
+done
 
-    ensure_pkg() {
-        local pkg="$1"
-        if dpkg -s "$pkg" >/dev/null 2>&1; then
-            echo "  - $pkg already installed"
-            return 0
-        fi
-        echo "  - installing $pkg"
-        apt-get install -y -qq "$pkg"
-    }
+_pm_pkg() { # map a generic package name to this manager's concrete name
+    case "$1:$YAOG_PM" in
+        iproute2:dnf|iproute2:yum|iproute2:zypper) echo iproute ;;
+        *) echo "$1" ;;
+    esac
+}
 
-    apt-get update -qq
-    ensure_pkg iproute2
-    ensure_pkg ca-certificates
-    ensure_pkg coreutils
-    ensure_pkg wireguard
-    ensure_pkg wireguard-tools
-{{ if .HasBabel -}}
-    ensure_pkg babeld
-{{ end -}}
-{{ if .HasMimic -}}
-    # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): one or more links use
-    # transport="tcp". YAOG does not bundle mimic; install it from the distro.
-    ensure_pkg mimic
-    # Kernel/eBPF sanity: mimic is an eBPF (TC/XDP) program. The mimic@<egress> unit pulls in
-    # the kernel module via Requires=modprobe@mimic.service, but warn early if BPF looks absent.
-    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
-        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+_PM_REFRESHED=0
+_pm_install() {
+    local _pkg; _pkg="$(_pm_pkg "$1")"
+    if [ "$_PM_REFRESHED" -eq 0 ]; then
+        case "$YAOG_PM" in
+            apt-get) apt-get update -qq || true ;;
+            apk)     apk update >/dev/null 2>&1 || true ;;
+        esac
+        _PM_REFRESHED=1
     fi
-{{ end -}}
-else
-    echo "Checking dependencies on $OS_ID..."
-    missing_bins=""
-    require_bin() {
-        if ! command -v "$1" >/dev/null 2>&1; then
-            missing_bins="$missing_bins $1"
-        fi
-    }
-    require_bin wg
-    require_bin wg-quick
-    require_bin ip
-{{ if .HasBabel -}}
-    require_bin babeld
-{{ end -}}
-{{ if .HasMimic -}}
-    # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): require the mimic binary on
-    # non-Debian platforms (YAOG ships no binary — install from the distro / AUR).
-    require_bin mimic
-{{ end -}}
-    if [ -n "$missing_bins" ]; then
-        echo "ERROR: Missing:$missing_bins" >&2
-        exit 1
+    case "$YAOG_PM" in
+        apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$_pkg" ;;
+        dnf)     dnf install -y "$_pkg" ;;
+        yum)     yum install -y "$_pkg" ;;
+        zypper)  zypper --non-interactive install "$_pkg" ;;
+        pacman)  pacman -Sy --noconfirm "$_pkg" ;;
+        apk)     apk add --no-progress "$_pkg" ;;
+        *)       return 1 ;;
+    esac
+}
+
+YAOG_MISSING=""
+ensure_cmd() { # ensure_cmd <command> <generic-package>: install only if the command is absent
+    command -v "$1" >/dev/null 2>&1 && return 0
+    if [ -n "$YAOG_PM" ]; then
+        echo "  - installing $2 (provides '$1')"
+        _pm_install "$2" || true
     fi
-{{ if .HasMimic -}}
-    # Kernel/eBPF sanity check (mimic is an eBPF program).
-    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
-        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
-    fi
-{{ end -}}
+    command -v "$1" >/dev/null 2>&1 || YAOG_MISSING="$YAOG_MISSING $1"
+}
+
+ensure_cmd wg       wireguard-tools
+ensure_cmd wg-quick wireguard-tools
+ensure_cmd ip       iproute2
+ensure_cmd openssl  openssl
+# SNAT uses nft when present, else iptables (+iptables-save, same package) — ensure one exists.
+if ! command -v nft >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
+    ensure_cmd iptables iptables
 fi
+{{ if .HasBabel -}}
+ensure_cmd babeld babeld
+{{ end -}}
+{{ if .HasMimic -}}
+# mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): a link uses transport="tcp".
+# YAOG ships no mimic binary — install it from the distro / AUR.
+ensure_cmd mimic mimic
+# Kernel/eBPF sanity: mimic is an eBPF (TC/XDP) program; warn early if BPF looks absent.
+if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+    echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+fi
+{{ end -}}
+
+if [ -n "$YAOG_MISSING" ]; then
+    echo "ERROR: missing required tools:$YAOG_MISSING" >&2
+    echo "  No supported package manager installed them automatically. Install the equivalents of" >&2
+    echo "  wireguard-tools (wg, wg-quick), iproute2 (ip), openssl, iptables or nftables{{ if .HasBabel }}, babeld{{ end }}{{ if .HasMimic }}, mimic{{ end }}, then re-run." >&2
+    exit 1
+fi
+
+# WireGuard kernel module: built into Linux >= 5.6; load it (best-effort) on older kernels.
+# If it is genuinely unavailable, wg-quick below surfaces the real error per interface.
+modprobe wireguard 2>/dev/null || true
 
 mkdir -p /etc/wireguard
 {{ if .HasBabel -}}
@@ -1126,60 +1144,79 @@ else
     exit 1
 fi
 
-# Install dependencies (no Babel for client)
+# Install dependencies (cross-distro, idempotent; no Babel/iptables for a client)
+#
+# A client needs only the WireGuard userspace + iproute2 + openssl (signed bundles). Same
+# fast-no-op-once-present logic as the router script: map each MISSING command to a package
+# and install via the detected manager (apt/dnf/yum/zypper/pacman/apk). iproute2 -> iproute
+# on dnf/yum/zypper. Unknown manager with tools still missing fails with an explicit list.
 echo "Installing dependencies..."
 
-if [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
-    export DEBIAN_FRONTEND=noninteractive
+YAOG_PM=""
+for _c in apt-get dnf yum zypper pacman apk; do
+    if command -v "$_c" >/dev/null 2>&1; then YAOG_PM="$_c"; break; fi
+done
 
-    ensure_pkg() {
-        local pkg="$1"
-        if dpkg -s "$pkg" >/dev/null 2>&1; then
-            echo "  - $pkg already installed"
-            return 0
-        fi
-        echo "  - installing $pkg"
-        apt-get install -y -qq "$pkg"
-    }
+_pm_pkg() {
+    case "$1:$YAOG_PM" in
+        iproute2:dnf|iproute2:yum|iproute2:zypper) echo iproute ;;
+        *) echo "$1" ;;
+    esac
+}
 
-    apt-get update -qq
-    ensure_pkg iproute2
-    ensure_pkg ca-certificates
-    ensure_pkg coreutils
-    ensure_pkg wireguard
-    ensure_pkg wireguard-tools
-{{ if .HasMimic -}}
-    # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): the client wg0 link uses
-    # transport="tcp". YAOG does not bundle mimic; install it from the distro.
-    ensure_pkg mimic
-    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
-        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
+_PM_REFRESHED=0
+_pm_install() {
+    local _pkg; _pkg="$(_pm_pkg "$1")"
+    if [ "$_PM_REFRESHED" -eq 0 ]; then
+        case "$YAOG_PM" in
+            apt-get) apt-get update -qq || true ;;
+            apk)     apk update >/dev/null 2>&1 || true ;;
+        esac
+        _PM_REFRESHED=1
     fi
-{{ end -}}
-else
-    echo "Checking dependencies on $OS_ID..."
-    missing_bins=""
-    require_bin() {
-        if ! command -v "$1" >/dev/null 2>&1; then
-            missing_bins="$missing_bins $1"
-        fi
-    }
-    require_bin wg
-    require_bin wg-quick
-    require_bin ip
-{{ if .HasMimic -}}
-    require_bin mimic
-{{ end -}}
-    if [ -n "$missing_bins" ]; then
-        echo "ERROR: Missing:$missing_bins" >&2
-        exit 1
+    case "$YAOG_PM" in
+        apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$_pkg" ;;
+        dnf)     dnf install -y "$_pkg" ;;
+        yum)     yum install -y "$_pkg" ;;
+        zypper)  zypper --non-interactive install "$_pkg" ;;
+        pacman)  pacman -Sy --noconfirm "$_pkg" ;;
+        apk)     apk add --no-progress "$_pkg" ;;
+        *)       return 1 ;;
+    esac
+}
+
+YAOG_MISSING=""
+ensure_cmd() {
+    command -v "$1" >/dev/null 2>&1 && return 0
+    if [ -n "$YAOG_PM" ]; then
+        echo "  - installing $2 (provides '$1')"
+        _pm_install "$2" || true
     fi
+    command -v "$1" >/dev/null 2>&1 || YAOG_MISSING="$YAOG_MISSING $1"
+}
+
+ensure_cmd wg       wireguard-tools
+ensure_cmd wg-quick wireguard-tools
+ensure_cmd ip       iproute2
+ensure_cmd openssl  openssl
 {{ if .HasMimic -}}
-    if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
-        echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
-    fi
-{{ end -}}
+# mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): the client wg0 link uses
+# transport="tcp". YAOG ships no mimic binary — install it from the distro / AUR.
+ensure_cmd mimic mimic
+if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+    echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
 fi
+{{ end -}}
+
+if [ -n "$YAOG_MISSING" ]; then
+    echo "ERROR: missing required tools:$YAOG_MISSING" >&2
+    echo "  No supported package manager installed them automatically. Install the equivalents of" >&2
+    echo "  wireguard-tools (wg, wg-quick), iproute2 (ip), openssl{{ if .HasMimic }}, mimic{{ end }}, then re-run." >&2
+    exit 1
+fi
+
+# WireGuard kernel module: built into Linux >= 5.6; load it (best-effort) on older kernels.
+modprobe wireguard 2>/dev/null || true
 
 mkdir -p /etc/wireguard
 

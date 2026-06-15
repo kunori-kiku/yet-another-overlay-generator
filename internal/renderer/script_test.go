@@ -101,7 +101,7 @@ func TestRenderInstallScript_PeerWithoutBabel(t *testing.T) {
 	}
 
 	// 无 babel 时不应安装 babeld
-	if strings.Contains(script, "ensure_pkg babeld") {
+	if strings.Contains(script, "ensure_cmd babeld babeld") {
 		t.Errorf("无 Babel 时不应安装 babeld")
 	}
 

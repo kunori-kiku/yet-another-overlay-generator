@@ -43,8 +43,8 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 
 	// 必须包含的 mimic 装配片段（存在性断言）。
 	required := []string{
-		// 1) mimic 包安装（Debian 路径）
-		"ensure_pkg mimic",
+		// 1) mimic 包安装（跨发行版 ensure_cmd 路径）
+		"ensure_cmd mimic mimic",
 		// 2) egress NIC + IP 运行时探测（mimic 附着在默认路由接口，非 wg 接口）
 		"ip route show default",
 		"ip route get 1.1.1.1",
@@ -134,7 +134,7 @@ func TestRenderInstallScript_UdpOnly_NoMimic(t *testing.T) {
 	absent := []string{
 		"/etc/mimic",
 		"mimic@",
-		"ensure_pkg mimic",
+		"ensure_cmd mimic mimic",
 		"filter = local=",
 		"Provisioning mimic",
 	}
