@@ -67,7 +67,7 @@ func renderAll(t *testing.T, topo *model.Topology) *compiler.CompileResult {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if err := All(result, keys); err != nil {
+	if err := All(result, keys, FetchSettings{}); err != nil {
 		t.Fatalf("render.All: %v", err)
 	}
 	return result
@@ -161,7 +161,7 @@ func TestAll_BadSigningKeyFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if err := All(result, keys); err == nil {
+	if err := All(result, keys, FetchSettings{}); err == nil {
 		t.Fatal("render.All must fail closed when the signing key path is unreadable")
 	}
 }
@@ -253,5 +253,62 @@ func TestSignedExport_EmbeddedPubkeyMatchesShippedAndVerifies(t *testing.T) {
 	tampered[0] ^= 0xff
 	if bundlesig.Verify(tampered, sig, embPub) {
 		t.Error("tampered checksums.sha256 must not verify")
+	}
+}
+
+// TestAll_ZeroFetchSettings_OmitsArtifactsJSON is the air-gap byte-identity gate for the
+// FetchSettings channel (a HIGH principle): threading a ZERO render.FetchSettings must add NOTHING
+// to the bundle. Concretely it must NOT emit an artifacts.json (D4: that file appears only when a
+// mimic/agent catalog is configured) and the rendered install scripts must carry no reference to it.
+// This guards plan-3+, where artifacts.json enters bundleFiles ONLY under a non-zero FetchSettings —
+// a regression that leaked it under the zero value would silently break the air-gap byte-identity.
+// PERPETUAL: never retire while the air-gap path exists.
+func TestAll_ZeroFetchSettings_OmitsArtifactsJSON(t *testing.T) {
+	// Force the unsigned air-gap path so the assertion is about the FetchSettings channel alone.
+	t.Setenv(bundlesig.EnvSigningKey, "")
+
+	topo := signingTestTopology(t)
+	keys, err := GenerateKeys(topo, AirGap)
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+	result, err := compiler.NewCompiler().Compile(topo, keys)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if err := All(result, keys, FetchSettings{}); err != nil {
+		t.Fatalf("render.All (zero FetchSettings): %v", err)
+	}
+
+	outDir := t.TempDir()
+	if _, err := artifacts.Export(result, outDir); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	// No artifacts.json in any node's exported bundle directory.
+	nodeDirs, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatalf("read export dir: %v", err)
+	}
+	for _, nd := range nodeDirs {
+		if !nd.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(outDir, nd.Name()))
+		if err != nil {
+			t.Fatalf("read node dir %s: %v", nd.Name(), err)
+		}
+		for _, f := range files {
+			if f.Name() == "artifacts.json" {
+				t.Errorf("zero FetchSettings must not emit artifacts.json (found in %s/)", nd.Name())
+			}
+		}
+	}
+
+	// And no install script references artifacts.json under the zero value.
+	for nodeID, script := range result.InstallScripts {
+		if strings.Contains(script, "artifacts.json") {
+			t.Errorf("%s: zero-FetchSettings install.sh must not reference artifacts.json", nodeID)
+		}
 	}
 }

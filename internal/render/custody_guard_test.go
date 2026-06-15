@@ -106,7 +106,7 @@ func TestGenerateKeys_AgentHeld_NoPrivateKeyEmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if err := All(result, keys); err != nil {
+	if err := All(result, keys, FetchSettings{}); err != nil {
 		t.Fatalf("render.All: %v", err)
 	}
 
