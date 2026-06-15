@@ -150,7 +150,7 @@ export function EdgeEditor() {
     selectedEdge.pinned_to_transit_ip !== undefined ||
     hasLinkLocalPin;
 
-  // parsePinPort maps a number input's raw value to a pin field value: '' clears the pin
+  // setPinPort maps a number input's raw value to a pin field value: '' clears the pin
   // (undefined); a valid integer sets it; anything else is ignored (keeps the prior value).
   const setPinPort = (field: 'pinned_from_port' | 'pinned_to_port', raw: string) => {
     if (raw === '') {

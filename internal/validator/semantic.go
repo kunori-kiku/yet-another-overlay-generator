@@ -581,7 +581,7 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		// --- 规则：部分 pin（一端钉住、另一端为空）。逐资源检查。 ---
 		validatePinPairCompleteness(prefix, edge, result)
 
-		// --- 规则：端口越界（低于基准端口 defaultListenPort（51820），或 > 65535）。 ---
+		// --- 规则：端口越界（低于 minPinnedPort（1024，PR7 放宽后的手填下界），或 > 65535）。 ---
 		validatePinnedPortRange(prefix, "pinned_from_port", edge.PinnedFromPort, fromNode, result)
 		validatePinnedPortRange(prefix, "pinned_to_port", edge.PinnedToPort, toNode, result)
 
