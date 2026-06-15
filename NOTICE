@@ -1,0 +1,35 @@
+YAOG — yet-another-overlay-generator
+Copyright 2026 kunori-kiku
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file in the root
+of this repository). You may not use these files except in compliance with the
+License. Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+This product includes software developed by kunori-kiku.
+
+Redistributions, including modified versions, must retain this NOTICE and the
+above attribution (Apache-2.0 section 4).
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+This repository depends on third-party software, each under its own license:
+
+  - Go module dependencies — see go.mod / go.sum; each module retains its own
+    license (predominantly BSD/MIT/Apache-2.0).
+  - Frontend (npm) dependencies — see frontend/package.json; each package retains
+    its own license (predominantly MIT/BSD/Apache-2.0).
+
+A full, enumerated third-party attribution (THIRD-PARTY.md) may be generated from
+the dependency manifests; until then this NOTICE points to those manifests.
+
+--------------------------------------------------------------------------------
+A note on "mimic"
+--------------------------------------------------------------------------------
+"mimic" (github.com/hack3ric/mimic, GPL-2.0) is NOT bundled or redistributed by
+YAOG. YAOG only generates an install-script section that downloads mimic at
+install time on the operator's own node. No mimic source or binary is included
+in this repository or in YAOG's release artifacts, so YAOG's own licensing is
+unaffected by mimic's GPL-2.0 terms.

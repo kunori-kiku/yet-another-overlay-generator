@@ -22,16 +22,16 @@ type CompileResult struct {
 	// （ IP）
 	Topology *model.Topology
 
-	//  Peer 
+	//  Peer
 	PeerMap map[string][]PeerInfo
 
-	//  WireGuard 
+	//  WireGuard
 	WireGuardConfigs map[string]string
 
-	//  Babel 
+	//  Babel
 	BabelConfigs map[string]string
 
-	//  sysctl 
+	//  sysctl
 	SysctlConfigs map[string]string
 
 	//
@@ -52,7 +52,7 @@ type CompileResult struct {
 	Manifest CompileManifest
 }
 
-// CompileManifest 
+// CompileManifest
 type CompileManifest struct {
 	ProjectID   string    `json:"project_id"`
 	ProjectName string    `json:"project_name"`
@@ -62,21 +62,21 @@ type CompileManifest struct {
 	Checksum    string    `json:"checksum"`
 }
 
-// Compiler 
+// Compiler
 type Compiler struct {
 	ipAllocator *allocator.IPAllocator
 }
 
-// NewCompiler 
+// NewCompiler
 func NewCompiler() *Compiler {
 	return &Compiler{
 		ipAllocator: allocator.NewIPAllocator(),
 	}
 }
 
-// Compile 
+// Compile
 func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error) {
-	// Pass 1: Schema 
+	// Pass 1: Schema
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
 		return nil, fmt.Errorf("topology failed schema validation: %v", schemaResult.Errors)
@@ -94,7 +94,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	warnings = append(warnings, schemaResult.Warnings...)
 	warnings = append(warnings, semanticResult.Warnings...)
 
-	// Pass 3: IP 
+	// Pass 3: IP
 	allocatedNodes, err := c.ipAllocator.AllocateIPs(topo)
 	if err != nil {
 		return nil, fmt.Errorf("IP allocation failed: %w", err)

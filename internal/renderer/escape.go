@@ -26,8 +26,12 @@ import "strings"
 // command substitution `$(...)`, no backticks, no globbing. The single
 // exception is the single-quote character itself, which cannot appear inside a
 // single-quoted string. The standard POSIX-safe idiom for an embedded single
-// quote is to close the quote, emit an escaped single quote, and reopen the
-// quote: the literal sequence '\'' . For example the input
+// quote is to close the quote, emit a backslash-escaped quote, and reopen the
+// quote — the four-character sequence:
+//
+//	'\''
+//
+// For example the input
 //
 //	don't
 //
@@ -56,7 +60,7 @@ func bashSingleQuote(s string) string {
 // string also expands `$var` / `$(...)` and treats the backtick as its escape
 // character. This helper:
 //
-//   - escapes each backtick as `` (PowerShell's literal-backtick escape) FIRST,
+//   - escapes each backtick by doubling it (PowerShell's literal-backtick escape) FIRST,
 //     so the backticks it introduces for the other escapes are not themselves
 //     re-escaped, and so a literal user backtick cannot start an escape;
 //   - escapes each double quote as `" (backtick-quote, the PowerShell escape

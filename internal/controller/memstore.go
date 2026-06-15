@@ -66,9 +66,9 @@ type tenantState struct {
 
 func newTenantState() *tenantState {
 	return &tenantState{
-		nodes:     make(map[string]Node),
-		staged:    make(map[string]SignedBundle),
-		current:   make(map[string]SignedBundle),
+		nodes:           make(map[string]Node),
+		staged:          make(map[string]SignedBundle),
+		current:         make(map[string]SignedBundle),
 		tokens:          make(map[string]EnrollmentToken),
 		loginChallenges: make(map[string]LoginChallenge),
 		apiTokens:       make(map[string]string),

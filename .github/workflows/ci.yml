@@ -7,13 +7,21 @@ on:
 
 jobs:
   go:
-    name: Go vet + test
+    name: Go fmt + vet + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Format check
+        run: |
+          drift="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$drift" ]; then
+            echo "::error::gofmt drift — run 'gofmt -w ./cmd ./internal':"
+            echo "$drift"
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test

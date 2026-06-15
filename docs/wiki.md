@@ -2,6 +2,11 @@
 
 > Also available in: [中文](wiki-zh.md)
 
+> **Scope:** This wiki covers **local / air-gap mode** — design in the browser, export
+> per-node bundles, deploy over SSH. It predates Controller Mode 2.0. For the controller
+> (the long-lived control plane: operator login, agent enrollment, keystone signing,
+> signed self-update) see [`docs/spec/controller/`](spec/controller/).
+
 ## 1. Overview
 
 Yet Another Overlay Generator is a web-based interactive network design and configuration generation system. Users define nodes, network domains, and connectivity through a graphical topology interface. The system automatically allocates addresses and generates WireGuard + Babel configuration files along with one-click install scripts.

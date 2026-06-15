@@ -34,8 +34,8 @@ func signingTestTopology(t *testing.T) *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "router-1", Name: "router-1", Role: "router", DomainID: "domain-1",
-				Capabilities:    model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
-				PublicEndpoints: []model.PublicEndpoint{{ID: "ep", Host: "router-1.example", Port: 51820}},
+				Capabilities:        model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+				PublicEndpoints:     []model.PublicEndpoint{{ID: "ep", Host: "router-1.example", Port: 51820}},
 				WireGuardPrivateKey: routerKey.String(),
 			},
 			{

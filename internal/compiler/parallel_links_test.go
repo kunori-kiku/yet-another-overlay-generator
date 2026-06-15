@@ -77,10 +77,10 @@ func TestParallelLinks_TwoDistinctInterfacesPerSide(t *testing.T) {
 	}
 
 	// 期望接口名（由唯一命名权威给出，验证编译器确实通过 naming 包派生）。
-	primaryIfaceOnA := naming.WgInterfaceName("beta")                          // A 侧指向 beta 的 primary 接口
-	backupIfaceOnA := naming.WgInterfaceNameForEdge("beta", backupID, true)    // A 侧指向 beta 的 backup 接口
-	primaryIfaceOnB := naming.WgInterfaceName("alpha")                         // B 侧指向 alpha 的 primary 接口
-	backupIfaceOnB := naming.WgInterfaceNameForEdge("alpha", backupID, true)   // B 侧指向 alpha 的 backup 接口
+	primaryIfaceOnA := naming.WgInterfaceName("beta")                        // A 侧指向 beta 的 primary 接口
+	backupIfaceOnA := naming.WgInterfaceNameForEdge("beta", backupID, true)  // A 侧指向 beta 的 backup 接口
+	primaryIfaceOnB := naming.WgInterfaceName("alpha")                       // B 侧指向 alpha 的 primary 接口
+	backupIfaceOnB := naming.WgInterfaceNameForEdge("alpha", backupID, true) // B 侧指向 alpha 的 backup 接口
 
 	// primary 与 backup 的接口名必须不同，否则两条链路的配置会相互覆盖。
 	if primaryIfaceOnA == backupIfaceOnA {

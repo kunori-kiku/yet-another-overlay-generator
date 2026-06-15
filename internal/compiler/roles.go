@@ -4,25 +4,25 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// RoleSemantics 
+// RoleSemantics
 type RoleSemantics struct {
-	//  IP 
+	//  IP
 	EnableForwarding bool
 
-	// 
+	//
 	AcceptAllInbound bool
 
 	//  Babel
 	RunBabel bool
 
-	// Babel 
+	// Babel
 	BabelAnnounce BabelAnnouncePolicy
 
-	// AllowedIPs 
+	// AllowedIPs
 	AllowedIPsMode string // "point-to-point" | "relay-all" | "gateway"
 }
 
-// BabelAnnouncePolicy Babel 
+// BabelAnnouncePolicy Babel
 type BabelAnnouncePolicy struct {
 	//  /32
 	AnnounceSelf bool
@@ -30,14 +30,14 @@ type BabelAnnouncePolicy struct {
 	//  Domain CIDR
 	AnnounceDomainCIDR bool
 
-	// 
+	//
 	AnnounceExtraPrefixes bool
 
 	//  0.0.0.0/0
 	AnnounceDefault bool
 }
 
-// DeriveRoleSemantics 
+// DeriveRoleSemantics
 func DeriveRoleSemantics(node *model.Node) RoleSemantics {
 	switch node.Role {
 	case "router":
@@ -103,7 +103,8 @@ func DeriveRoleSemantics(node *model.Node) RoleSemantics {
 }
 
 // InferCapabilitiesFromRole /
-//  capabilities（）
+//
+//	capabilities（）
 func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 	caps := node.Capabilities
 
@@ -139,23 +140,23 @@ func DeriveAllowedIPsForPeer(remoteNode *model.Node, domain *model.Domain) []str
 
 	switch semantics.AllowedIPsMode {
 	case "relay-all":
-		// Relay  AllowedIPs 
+		// Relay  AllowedIPs
 		if domain != nil && domain.CIDR != "" {
 			ips = append(ips, domain.CIDR)
 		}
-		// 
+		//
 		ips = append(ips, remoteNode.ExtraPrefixes...)
 		if len(ips) == 0 && remoteNode.OverlayIP != "" {
 			ips = append(ips, remoteNode.OverlayIP+"/32")
 		}
 
 	case "gateway":
-		// Gateway  Domain CIDR +  + 
+		// Gateway  Domain CIDR +  +
 		if domain != nil && domain.CIDR != "" {
 			ips = append(ips, domain.CIDR)
 		}
 		ips = append(ips, remoteNode.ExtraPrefixes...)
-		// 
+		//
 		if semantics.BabelAnnounce.AnnounceDefault {
 			ips = append(ips, "0.0.0.0/0")
 		}
