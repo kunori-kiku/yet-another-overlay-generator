@@ -292,7 +292,7 @@ func TestValidateSemantic_EffectivePortRangeInBounds(t *testing.T) {
 	topo := portRangeTopology(8, "")
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
-		if contains(e.Field, "nodes[0].listen_port") {
+		if e.Code == string(CodeNodeEffectivePortRangeOverflow) {
 			t.Errorf("基准 51820 + 8 接口（51820-51827）不应越界，却得到：%s", e.Error())
 		}
 	}
@@ -376,13 +376,13 @@ func sameHostTopology(hostname string, ifacesA, ifacesB int) *model.Topology {
 // TestValidateSemantic_CoHostedNodesValidateClean 是 listen_port 移除的回归守卫：基准端口统一为
 // 51820 后，两个共享同一 hostname 的节点（各有 >=1 个 per-peer 接口）其生效端口范围必然重叠——
 // 旧的「同主机范围重叠」规则会因此误杀所有「一机多节点」部署，故该规则已删除。此处正是这种共置
-// 场景，断言不再产生任何 listen_port 错误。
+// 场景，断言不再产生生效端口范围越界错误（CodeNodeEffectivePortRangeOverflow）。
 func TestValidateSemantic_CoHostedNodesValidateClean(t *testing.T) {
 	topo := sameHostTopology("shared.example.com", 3, 3)
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
-		if contains(e.Field, "listen_port") {
-			t.Errorf("共置节点（一机多节点）不应再产生 listen_port 错误，却得到：%s", e.Error())
+		if e.Code == string(CodeNodeEffectivePortRangeOverflow) {
+			t.Errorf("共置节点（一机多节点）不应再产生生效端口范围越界错误，却得到：%s", e.Error())
 		}
 	}
 }
