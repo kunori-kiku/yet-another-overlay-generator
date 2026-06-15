@@ -49,7 +49,7 @@ export function NodeEditor() {
     const newEndpoint = {
       id: `${nodeId}-ep-${uuid()}`,
       host: '',
-      port: node.listen_port || 51820,
+      port: 51820,
       note: '',
     };
     updateNode(nodeId, {
@@ -172,15 +172,6 @@ export function NodeEditor() {
             value={selectedNode.overlay_ip || ''}
             onChange={(e) => updateNode(selectedNode.id, { overlay_ip: e.target.value || undefined })}
             placeholder={t(language, 'nodeEditor.autoAssigned')}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.listenPort')}</label>
-          <input
-            type="number"
-            value={selectedNode.listen_port || 51820}
-            onChange={(e) => updateNode(selectedNode.id, { listen_port: parseInt(e.target.value) || 51820 })}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>

@@ -148,7 +148,7 @@ export function AuditView() {
                   return (
                     <li key={n.id} className="text-gray-300">
                       <strong>{n.name}</strong> ({n.role}) - {n.overlay_ip}<br />
-                      <span className="text-gray-500 text-xs pl-2">{t(language, 'chListensOnPort')}: {n.listen_port || 'Auto'} | {t(language, 'chInboundPaths')}: {inboundEdges.length}</span>
+                      <span className="text-gray-500 text-xs pl-2">{t(language, 'chInboundPaths')}: {inboundEdges.length}</span>
                     </li>
                   )
                 })}
