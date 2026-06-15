@@ -21,8 +21,11 @@ RUN go mod download
 COPY . .
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+# BUILD_VERSION stamps the binary's `version` subcommand; pass --build-arg BUILD_VERSION=<tag> from
+# the image build (the docker workflow forwards the release tag). EXTENDS the existing -s -w flags.
+ARG BUILD_VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags "-s -w" -o /out/yaog-server ./cmd/server
+    go build -trimpath -ldflags "-s -w -X main.BuildVersion=${BUILD_VERSION}" -o /out/yaog-server ./cmd/server
 
 # --- final image ---
 FROM alpine:3.20

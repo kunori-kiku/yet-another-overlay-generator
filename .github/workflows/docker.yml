@@ -66,5 +66,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the image's yaog-server build version with the release tag (workflow is
+          # tag-triggered, so github.ref_name is the tag, e.g. v2.0.0-beta.1).
+          build-args: |
+            BUILD_VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

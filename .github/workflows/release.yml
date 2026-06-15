@@ -156,6 +156,10 @@ jobs:
           GOARCH: ${{ matrix.target.goarch }}
           GOARM: ${{ matrix.target.goarm }}
           CGO_ENABLED: 0
+          # The release tag (e.g. v2.0.0-beta.1) injected via -X main.BuildVersion so each binary's
+          # `version` subcommand + the agent's per-node report carry the real tag. Passed via env
+          # (not inline ${{ }}) to keep the tag out of the shell-parse path.
+          BUILD_VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -175,10 +179,12 @@ jobs:
           echo "Using module: $(go env GOMOD)"
 
           mkdir -p "$GITHUB_WORKSPACE/.tmp/bin"
-          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
-          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
+          # EXTEND the existing "-s -w" ldflags with the build-version stamp; do not replace it.
+          LDFLAGS="-s -w -X main.BuildVersion=${BUILD_VERSION}"
+          go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
+          go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
           # yaog-agent is the node-side binary the one-shot bootstrap downloads (plan-5.2).
-          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" ./cmd/agent
+          go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" ./cmd/agent
 
       - name: Assemble Bundle Directory
         run: |
@@ -204,14 +210,25 @@ jobs:
       # Publish the agent as a STANDALONE per-arch binary too, so the one-shot
       # bootstrap (plan-5.2) can download just the node binary (curl + chmod +x)
       # rather than the whole bundle.
-      - name: Stage Standalone Agent Binary
-        run: cp ".tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" "yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}"
+      - name: Stage Standalone Agent Binary + SHA-256
+        run: |
+          set -euo pipefail
+          AGENT="yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}"
+          cp ".tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" "$AGENT"
+          # D9: emit a SHA-256 sidecar so beta.2's signed artifacts.json agent pin (AgentBinSHA256)
+          # is populatable from the published release. NOTE: the agent ALWAYS verifies a self-update
+          # against the SIGNED in-bundle artifacts.json pin, NEVER this sidecar (which rides the same
+          # untrusted transport as the binary) — this file is an operator convenience for FILLING the
+          # pin, not itself a trust anchor.
+          sha256sum "$AGENT" | awk '{print $1}' > "$AGENT.sha256"
 
       - name: Upload Standalone Agent Binary Artifact
         uses: actions/upload-artifact@v4
         with:
           name: yaog-agent-${{ matrix.target.id }}
-          path: yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}
+          path: |
+            yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}
+            yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}.sha256
           if-no-files-found: error
 
   release:
