@@ -41,7 +41,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `name` | schema | non-empty | schema |
 | `cidr` | schema | non-empty, parseable, **IPv4-only** | partial — see below |
 | `allocation_mode` | schema | enum `auto`/`manual`; empty allowed | schema |
-| `routing_mode` | schema | empty normalizes to `babel`; `static`/`none` rejected as not-yet-implemented | none-yet |
+| `routing_mode` | schema | empty normalizes to `babel`; `static`/`none` rejected as not-yet-implemented | schema |
 | `reserved_ranges[]` | schema | each a parseable CIDR or IP | schema |
 | `transit_cidr` | schema | parseable IPv4 CIDR with enough host pairs | none-yet |
 
@@ -50,14 +50,13 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > allocator (`ipToUint32` slices `ip[12:16]` on a nil `To4()`, `ip.go:129,164-169` — D4/D35/D20). A
 > `/0` CIDR overflows the host count (`uint32(1) << 32`, `ip.go:116`) into a multi-billion-iteration
 > CPU spin (D56). Schema validation MUST add an IPv4-family guard and a CIDR-size bound (reject
-> prefixes too small to allocate from, and too large to enumerate). Closed by Plan 3.
+> prefixes too small to allocate from, and too large to enumerate).
 
 > **Compliance — `routing_mode`:** schema accepts `static`/`babel`/`none` as the valid enum
 > (`schema.go:103-107`) and an empty value bypasses the enum check entirely (`schema.go:104`, D72).
 > Per Decisions log #3 the contract is: empty → `babel`, and `static`/`none` are **rejected** as not
 > yet implemented. Validation MUST normalize empty to `babel` and reject `static`/`none` with a
-> "not yet implemented" error. Routing-mode semantics: [routing-modes.md](routing-modes.md). Closed
-> by Plan 6.
+> "not yet implemented" error. Routing-mode semantics: [routing-modes.md](routing-modes.md).
 
 ### Node fields
 
@@ -70,20 +69,20 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `role` | schema | enum `peer`/`router`/`relay`/`gateway`/`client` | schema |
 | `domain_id` | schema + semantic | non-empty; references an existing domain | schema + semantic |
 | `overlay_ip` | schema + semantic | parseable; inside domain CIDR; no collision | schema + semantic |
-| `mtu` | schema | sane WireGuard MTU range (else `wg-quick` rejects) | none-yet |
+| `mtu` | schema | sane WireGuard MTU range (else `wg-quick` rejects) | schema |
 | `xdp_mode` | schema | enum `skb`/`native`; empty allowed (→`skb`) | schema |
-| `router_id` | schema | MAC-48 format (else `babeld` rejects) | none-yet |
+| `router_id` | schema | MAC-48 format (else `babeld` rejects) | schema |
 | `capabilities` | — | derived from role; FE-supplied caps reconciled | none-yet |
 | `fixed_private_key` | — | flag | n/a |
 | `wireguard_private_key` | schema | parseable WG key when fixed | partial (parsed in `generateKeys`) |
 | `wireguard_public_key` | — | non-empty ⇒ key-fixed (allocation-stability) | n/a |
 | `public_endpoints[]` | — | host/port sanity | none-yet |
-| `extra_prefixes[]` | schema | each a parseable IPv4 CIDR | none-yet |
-| `ssh_alias` | schema | **strict charset** (interpolated into root/operator shell) | none-yet |
-| `ssh_host` | schema | **strict charset** (interpolated into bash + PowerShell) | none-yet |
-| `ssh_port` | schema | range 1–65535 | none-yet |
-| `ssh_user` | schema | **strict charset** | none-yet |
-| `ssh_key_path` | — | path | none-yet |
+| `extra_prefixes[]` | schema | each a parseable IPv4 CIDR | schema |
+| `ssh_alias` | schema | **strict charset** (interpolated into root/operator shell) | schema |
+| `ssh_host` | schema | **strict charset** (interpolated into bash + PowerShell) | schema |
+| `ssh_port` | schema | range 1–65535 | schema |
+| `ssh_user` | schema | **strict charset** | schema |
+| `ssh_key_path` | schema | path charset (forbids shell metacharacters) | schema |
 
 > **Compliance — node-name charset & uniqueness:** node names are interpolated unescaped into a
 > root-executed `install.sh echo` (`script.go:61`, D15) and into a deploy-script heredoc that a
@@ -91,14 +90,13 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > names sanitizing identically collide (`peers.go:492-522`, D13/D14). There is no name-charset check
 > and no raw-name or sanitized-name uniqueness check anywhere. Validation MUST enforce a strict node
 > name charset and reject both raw-name and sanitized-name collisions. Canonical naming and the
-> uniqueness invariant: [../artifacts/naming.md](../artifacts/naming.md). Closed by Plan 5 (charset)
-> and Plan 4 (uniqueness).
+> uniqueness invariant: [../artifacts/naming.md](../artifacts/naming.md).
 
 > **Compliance — effective per-peer port range:** the compiler binds each peer interface at
 > `base+offset`, which can exceed 65535 and would then be rendered verbatim into the WG config
 > (D11). Validation checks the *effective* per-peer port range (base + max offset across that
 > node's edges) fits in 0–65535 (`validateEffectivePortRanges` → `CodeNodeEffectivePortRangeOverflow`).
-> Closed by Plan 3. The per-node `listen_port` field — and its schema range check — were REMOVED in
+> The per-node `listen_port` field — and its schema range check — were REMOVED in
 > the controller-nat subject: in the per-peer interface model a single node-level listen port is
 > meaningless (each edge gets its own interface + auto-allocated port from the uniform base 51820).
 > The co-hosted effective-range overlap check (D47) was likewise removed: under a uniform base it
@@ -109,8 +107,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > anywhere end-to-end (`schema.go`/`semantic.go` never inspect them — D64/D65/D66/D67/D44). An
 > out-of-range MTU or malformed router-id produces a config `wg-quick`/`babeld` rejects at deploy
 > time; unvalidated SSH fields combine with unquoted interpolation into a local command-injection
-> path. Validation MUST cover all of these. Closed by Plans 3 (config-correctness fields) and 5
-> (SSH/charset fields).
+> path. Validation MUST cover all of these.
 
 ### Edge fields
 
@@ -125,8 +122,8 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `compiled_port` | — | compiler-written | n/a |
 | `priority` | — | optional | none-yet |
 | `weight` | — | optional | none-yet |
-| `role` | schema + semantic | enum `primary`/`backup`/empty; at most one explicit `primary` per pair; no `backup` on client edges | planned (parallel-links plan-2) |
-| `transport` | schema + semantic | enum `udp`/`tcp`; empty→`udp`; `tcp` = mimic-wrapped; semantic: both endpoints must be Linux-deployable | schema; semantic planned (mimic-tcp-transport) |
+| `role` | schema + semantic | enum `primary`/`backup`/empty; at most one explicit `primary` per pair; no `backup` on client edges | schema + semantic |
+| `transport` | schema + semantic | enum `udp`/`tcp`; empty→`udp`; `tcp` = mimic-wrapped; semantic: both endpoints must be Linux-deployable | schema + semantic |
 | `is_enabled` | — | flag | n/a |
 | `notes` | — | free-form | n/a |
 
@@ -136,14 +133,14 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 |---|---|---|---|
 | `project.id` / `project.name` | schema | non-empty | schema |
 | `domains` | schema | at least one domain | schema |
-| `route_policies` | semantic | **RESERVED** — reject if non-empty | none-yet |
+| `route_policies` | semantic | **RESERVED** — reject if non-empty | semantic |
 
 > **Compliance — `route_policies` RESERVED:** `route_policies` is validated nowhere (`schema.go` and
 > `semantic.go` never inspect it, D62) and is consumed by no renderer. Per the binding decision
 > (Decisions log #2) it is reserved. Semantic validation MUST reject a non-empty `route_policies`
 > with a clear "reserved / not yet implemented" error, following the existing locale pattern (no
 > English-only string where zh strings exist). See [../api/wire-contract.md](../api/wire-contract.md)
-> for the wire-side reservation. Closed by Plan 9.
+> for the wire-side reservation.
 
 ### Cross-entity rules (semantic)
 
@@ -158,12 +155,12 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
   (see [../api/http-api.md](../api/http-api.md) compile contract).
 - Client edge constraints — exactly one enabled outbound edge, target must be router/relay/gateway,
   must carry `endpoint_host`, must not be an inbound target (`validateClientEdges`).
-- mimic transport (planned, mimic-tcp-transport plan-2): a `transport: "tcp"` edge requires **both
+- mimic transport (`transport: "tcp"`): a `transport: "tcp"` edge requires **both
   endpoints be Linux-deployable** (platform `debian`/`ubuntu`) — mimic is an eBPF/kernel feature;
   error otherwise. The v1.3.0 `tcp` reserved-warning is REMOVED (the value is now implemented).
   Kernel-eBPF availability is an install-time check, not a compile error
   ([../artifacts/mimic.md](../artifacts/mimic.md)).
-- Parallel links (planned, parallel-links plan-2):
+- Parallel links:
   - **Interface-name uniqueness (N4)** — per node, across all primary and backup peer interfaces;
     collision = compile-blocking error naming the colliding pair ([naming.md](../artifacts/naming.md)).
   - **One explicit primary per pair** — at most one edge of a pair carries `role: "primary"`.
