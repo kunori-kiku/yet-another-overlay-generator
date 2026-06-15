@@ -1260,7 +1260,16 @@ export const useControllerStore = create<ControllerState>()(
       // when a pubkey-only file was imported in local mode. Valid keypairs are untouched; once logged
       // in, server hydration replaces the canvas anyway. Notices are cleared for a clean controller entry.
       switchToController: () => {
-        useTopologyStore.getState().clearStrandedKeys();
+        const ts = useTopologyStore.getState();
+        ts.clearStrandedKeys();
+        // Drop any LOCAL air-gap compile result on the way into controller mode (review should-fix #1).
+        // A local compile carries reconstructed REAL private keys in compileResult, and the Deploy
+        // page renders CompilePreview whenever compileResult is present — so a stale local result would
+        // surface real private keys inside controller mode, the very boundary controller mode exists to
+        // protect. compileResult is never persisted, so clearing it here closes the only in-memory path
+        // (local compile → toggle to controller); a controller Compile re-populates it after entry with
+        // placeholder-key configs.
+        ts.setCompileResult(null);
         get().clearModeNotices();
         set({ mode: 'controller' });
       },
