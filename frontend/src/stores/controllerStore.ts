@@ -44,7 +44,7 @@ import {
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { stripPrivateKeys } from '../lib/custody';
-import { useTopologyStore } from './topologyStore';
+import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
 import { useUiStore } from './uiStore';
 
 // loadSlices projects a Topology down to exactly the fields loadTopology consumes
@@ -147,19 +147,6 @@ export function canonicalDesign(t: Topology): string {
   return stableStringify(norm);
 }
 
-// ALLOC_PIN_FIELDS lists the server-derived per-edge allocation fields (compiled_port echo +
-// the six pinned_* ports / transit IPs / link-locals). KEEP IN SYNC with topologyStore's
-// ALLOCATION_PIN_FIELDS and EDGE_OMITEMPTY's pin entries above.
-const ALLOC_PIN_FIELDS = [
-  'compiled_port',
-  'pinned_from_port',
-  'pinned_to_port',
-  'pinned_from_transit_ip',
-  'pinned_to_transit_ip',
-  'pinned_from_link_local',
-  'pinned_to_link_local',
-] as const;
-
 // sameIdSet reports whether two edge/node collections carry exactly the same set of ids
 // (order-independent). Post-deploy it decides between an in-place pin overlay (set unchanged →
 // preserve selection / open EdgeEditor) and a full hydrate (set diverged → overlay would be wrong).
@@ -179,7 +166,7 @@ function canonicalDesignIgnoringPins(t: Topology): string {
     ...t,
     edges: t.edges.map((e) => {
       const x = { ...e } as Record<string, unknown>;
-      for (const f of ALLOC_PIN_FIELDS) delete x[f];
+      for (const f of ALLOCATION_PIN_FIELDS) delete x[f];
       return x as unknown as typeof e;
     }),
   };
@@ -1267,23 +1254,11 @@ export const useControllerStore = create<ControllerState>()(
           } catch {
             readOk = false;
           }
-          // Non-clobber pin adoption (PR1): if the server carries freshly-allocated NAT ports/IPs
-          // (compiled_port + pinned_*) that NEITHER the canvas NOR the last-synced base had — a
-          // deploy on another tab, or one whose post-promote reconcile failed — adopt them onto the
-          // canvas so this Save does not drop them and break the configured NAT forward. Operator-set
-          // / operator-unpinned values win (lastSyncedTopology is the 3-way base). This is what makes
-          // even a force-Save non-clobbering. Recompute `clean` from the merged canvas before writing.
-          if (readOk && serverNow && Array.isArray(serverNow.edges)) {
-            const base = get().lastSyncedTopology;
-            const ts = useTopologyStore.getState();
-            ts.mergeServerAllocations(serverNow.edges, base ? base.edges : []);
-            const reread = stripPrivateKeys(ts.getTopology());
-            clean = reread.topo;
-            stripped = reread.stripped;
-          }
           // 客户端冲突检测（D13）：除非 force，比较「服务端现状 vs 上次同步基线」时忽略 pin 字段。
-          // 这样「另一处 deploy 仅新增了 pin」（已在上面吸纳进画布）不会误报冲突，而真正的并发改动
-          //（节点/边/非 pin 字段变化）仍触发「重新同步 / 覆盖 / 取消」。best-effort：守卫读失败则跳过
+          // 这样「另一处 deploy 仅新增了 pin」（仅 pin 差异，会被下面的非破坏性合并吸纳）不会误报
+          // 冲突，而真正的并发改动（节点/边/非 pin 字段变化）仍触发「重新同步 / 覆盖 / 取消」。
+          // 必须在下面的合并之前判定：冲突即提前返回且不触碰画布——否则一次被「取消」的 Save 也会把
+          // 服务端 pin 静默叠加到画布上，留下用户没要求的第三种状态。best-effort：守卫读失败则跳过
           // 冲突检测照常保存（与 deploy 缩水守卫一致），避免瞬时网络错误误报；此时本次保存会盲写覆盖
           //（update-topology 无后端乐观并发，见 D13）。
           if (!opts?.force && readOk) {
@@ -1294,6 +1269,22 @@ export const useControllerStore = create<ControllerState>()(
               set({ loading: false, saving: false, saveConflict: true });
               return;
             }
+          }
+          // Non-clobber pin adoption (PR1): if the server carries freshly-allocated NAT ports/IPs
+          // (compiled_port + pinned_*) that NEITHER the canvas NOR the last-synced base had — a
+          // deploy on another tab, or one whose post-promote reconcile failed — adopt them onto the
+          // canvas so this Save does not drop them and break the configured NAT forward. Operator-set
+          // / operator-unpinned values win (lastSyncedTopology is the 3-way base). Runs only PAST the
+          // conflict gate above (and on force, which skips that gate), so a cancelled/conflicted Save
+          // never mutates the canvas — this is also what makes even a force-Save non-clobbering.
+          // Recompute `clean` from the merged canvas before writing.
+          if (readOk && serverNow && Array.isArray(serverNow.edges)) {
+            const base = get().lastSyncedTopology;
+            const ts = useTopologyStore.getState();
+            ts.mergeServerAllocations(serverNow.edges, base ? base.edges : []);
+            const reread = stripPrivateKeys(ts.getTopology());
+            clean = reread.topo;
+            stripped = reread.stripped;
           }
           await updateTopology(cfg, JSON.stringify(clean));
           // 现在画布即服务端权威副本：标记 server-held（停止落盘、登出/gate 时清空），刷新同步
