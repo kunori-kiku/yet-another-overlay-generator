@@ -23,6 +23,17 @@ import (
 // atomic renames, but FileStore does not arbitrate between separate processes
 // sharing a root (a single controller process owns its root).
 //
+// SPOF / scaling note (plan-6, deferred to rc.2/GA — NOT fixed here): this design has two
+// known single-point limits, acceptable for the single-tenant v1 controller but called out
+// so they are not mistaken for oversights. (1) ONE global mutex (fs.mu) serializes EVERY
+// store operation — including disk writes — so throughput is single-writer and a slow disk
+// stalls all callers; a future revision can shard the lock per tenant/record or move to an
+// embedded transactional KV. (2) WaitForGeneration POLLS generation.json every 200ms (no
+// in-process condition variable on the disk store), so promotion is observed with up to
+// ~200ms latency and N waiting agents each re-stat the file; a future revision can wake
+// waiters via a notifier. Neither limit is a correctness bug; the bound work in plan-6 is
+// the audit log, not these.
+//
 // On-disk layout under <root>/<tenant>/:
 //
 //	nodes/<nodeID>.json                 one Node record

@@ -201,6 +201,21 @@ Durability discipline:
 Both implementations satisfy the **same Store contract** — the only differences are where the bytes
 live and the (documented) crash-durability and ctx-cancellation properties noted above.
 
+#### Known single-point limits — deferred to rc.2 / GA (plan-6, NOT fixed)
+
+`FileStore` has two single-point limits that are **acceptable for the single-tenant v1 controller** and
+called out here (and in the `FileStore` doc comment) so they are not mistaken for oversights:
+
+1. **One global mutex** (`fs.mu`) serializes **every** store operation, including disk writes, so
+   throughput is single-writer and a slow disk stalls all callers. A future revision can shard the lock
+   per tenant/record or move to an embedded transactional KV (and ultimately the Postgres adapter below).
+2. **`WaitForGeneration` polls `generation.json` every ~200 ms** (the disk store has no in-process
+   condition variable), so a promote is observed with up to ~200 ms latency and N waiting agents each
+   re-stat the file. A future revision can wake waiters via a notifier.
+
+Neither is a correctness bug, and the audit-log bound above is the only persistence work plan-6 lands;
+these scaling fixes are deferred to rc.2/GA, aligned with the Postgres adapter.
+
 ## Generation, stage → promote, and the long-poll primitive
 
 The controller's deploy workflow is built on a monotonic, per-tenant **generation** counter and a
@@ -262,6 +277,26 @@ This matches the agent's anti-rollback honesty framing ([agent.md](agent.md)): P
 chain *mechanism* and its on-disk shape so that **real** anti-tamper — an external, append-only or
 externally-witnessed audit sink whose integrity does not depend on the writer's honesty — is a **Plan
 5** hardening that builds on this contract rather than reinventing it.
+
+### Bounded + append-only on disk (plan-6)
+
+The log is **bounded** and the per-append cost is **O(1)**, hardening two RC gaps in the original
+full-array design (which re-read and rewrote the whole `audit.json` on every append, growing without
+limit):
+
+- **FileStore storage is append-only JSONL** (`audit.jsonl`, one `AuditEntry` per line). An append is a
+  single `O_APPEND` line write; the next `Seq` + `PrevHash` come from an in-memory **per-tenant tail
+  cache** (last `Seq`/`Hash` + count), seeded once via a single read (`loadAuditTail`). A pre-existing
+  legacy `audit.json` array is migrated to JSONL **once**, on first access, so the two formats never
+  coexist. `ListAudit` reads the JSONL (falling back to a not-yet-migrated legacy array).
+- **Both stores cap the log with hysteresis** (`auditRetain` = 10000 / `auditRotateAt` = 12000, shared in
+  `audit.go`): MemStore trims its slice; FileStore **rotates** the file down to `auditRetain` once it
+  reaches `auditRotateAt` — a full rewrite **amortized to once per 2000 appends**, never per append. A
+  FileStore rotation failure keeps the durable entry and self-heals on the next append.
+- **`VerifyAuditChain` anchors on the first entry's `PrevHash`**, so a rotated (oldest-trimmed) log still
+  verifies its retained window. An un-rotated log has a genesis (`""`) `PrevHash`, so its behaviour is
+  unchanged. Losing the genesis anchor on rotation is inherent to a bounded log and consistent with the
+  operational-only (tamper-evident, not anti-tamper) guarantee above.
 
 ## Postgres adapter (future)
 
