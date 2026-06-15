@@ -52,7 +52,8 @@ byte-identity invariant). This subject ADDS one HIGH principle (plan-9 amends `P
   `verify.go`.
 - The mimic bug is live: `internal/renderer/script.go:432` `ensure_cmd mimic mimic`.
 - `render.All(result, keys)` (`render.go:149`) has **4** callers: `handler.go:159`, `handler.go:203`,
-  `compile.go:147`, `cmd/compiler/main.go:78` (only the last gets a non-zero `fs`).
+  `compile.go:147` (the controller stage-promote path — the ONLY caller that gets a non-zero `fs`),
+  `cmd/compiler/main.go:78` (air-gap CLI — stays flag/catalog-driven, plan-7).
 
 ## Must-read references
 
@@ -62,16 +63,22 @@ byte-identity invariant). This subject ADDS one HIGH principle (plan-9 amends `P
 **Upstream syntheses (this session's workflows, full text in the task outputs):** RC-readiness survey
 `wiakgi4v5`; self-update/mimic design `wfhuw2hd8`; comprehensiveness refine `wxajvgzp5`.
 
-**Architecture/specs:** `PRINCIPLES.md`; `docs/spec/artifacts/mimic.md`; `docs/spec/controller/*`
-(stage-promote, agent-api, keystone-trustlist, bootstrap); `docs/spec/compiler/validation.md` (the
-coverage contract); `docs/spec/api/wire-contract.md` + `http-api.md`.
+**Specs (two trees — `Reads from specs:` resolves against the FLAT root `specs/` cache, per
+`specs/README.md` and the execute skill's loader `<repo-root>/specs/<component>.md`, which STOPs on a
+missing file):** root `specs/` — `controller-stage-promote`, `controller-agent-api`, `controller-store`,
+`keystone-trustlist`, `model-validation`, `artifacts-signing`, `render-keys`,
+`panel-{auth,shell,deploy-fleet,design}`, `airgap-api`, `compiler-allocation`. Deep prose lives in
+`docs/spec/`: `PRINCIPLES.md`; `docs/spec/artifacts/mimic.md`;
+`docs/spec/controller/{agent,deploy,signing,persistence,bootstrap,controller-api}.md`;
+`docs/spec/compiler/validation.md` (the coverage contract); `docs/spec/api/wire-contract.md` + `http-api.md`.
 
 **Production code (file:line):** `internal/render/render.go:149`; `internal/artifacts/export.go:135,141,159,166`;
 `internal/renderer/script.go:11,87,432,442,641-669,792,1353`; `internal/agent/verify.go:112-339`,
 `state.go:34-58`, `cycle.go`, `agent.go`, `controller_client.go:91-94`; `cmd/agent/main.go:46,289`;
 `internal/controller/store.go:74,281-302`, `settings.go:20-34`, `compile.go:147,288`;
 `internal/api/handler_bootstrap.go:104-118,183,295,324`, `handler_controller.go:390-405`;
-`internal/controller/filestore.go:48,903,1559,1574`; `cmd/server/server.go:188-224`;
+`internal/controller/filestore.go:48,903,1561,1574`; `internal/api/server.go:179-224`
+(listeners/timeouts + `/enroll` no-auth) + `cmd/server/main.go:178-179` (serve goroutines — SIGTERM→Shutdown wires here);
 `frontend/src/api/controllerClient.ts` (raw-error throws), `frontend/src/components/deploy/NodeRegistry.tsx`,
 `frontend/src/i18n/messages/{en,zh}.ts`; `.github/workflows/release.yml`, `Dockerfile`, `.github/workflows/ci.yml`.
 
@@ -102,6 +109,14 @@ stacked branches, per-plan PR + green gate; serialize branch work vs. read-only 
   OMIT `artifacts.json` when catalog/version inputs are zero; D6 `artifacts.json` = `bundleFiles` member
   (signed), never a `/config`-only append; D7 `BuildVersion` via `-X main.BuildVersion=<tag>` ldflags in
   `release.yml`+`Dockerfile`; D8 pin-field validation strict at POST (semver, 64-hex SHA, http(s) base).
+- 2026-06-15 — **Plan self-review** (`wwy805xww`, all-Opus, 75 agents): NO-GO→GO after M1–M3 doc fixes —
+  `Reads from specs:` slugs rewritten to the FLAT root `specs/` cache (the execute loader's target, which
+  STOPs on a missing file; `implementation_plans/README.md` corrected to match); plan-6/plan-1 validator
+  scope corrected (mtu/router_id/extra_prefixes/ssh_*/route_policies ALREADY shipped on `main` → plan-1
+  flips the stale doc rows, plan-6 closes only the genuinely-missing `endpoint_host` + `public_endpoints[].host`
+  charset + `transit_cidr`); outline `render.All` caller corrected (`compile.go:147` carries the non-zero
+  `fs`). Should-fix anchor corrections (server.go→internal/api/server.go, LoadSigningFromEnv, schema-stamp,
+  release.yml-already-publishes, semver comparator, agent.release_url source) folded into the plans.
 
 ## Milestones (PR per plan; gate each; see plan-N file for detail)
 
