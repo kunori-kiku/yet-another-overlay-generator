@@ -64,6 +64,29 @@ export function EdgeEditor() {
 
   if (!selectedEdge) return null;
 
+  // Directional NAT target (PR2): the internal listen port a NAT forward must hit is the
+  // pinned port of whichever END carries endpoint_host. By convention the edge dials the TO
+  // node (endpoint_host is picked from the target's public endpoints), so the target is
+  // pinned_to_port; only when the host UNIQUELY matches the FROM node's public endpoints (the
+  // reverse-peer path, peers.go reverse endpoint) is it pinned_from_port. Sourced from the
+  // edge's own fields — independent of the controller-null compileResult.
+  const dialsFromNode =
+    !!selectedEdge.endpoint_host &&
+    (selectedEdgeFrom?.public_endpoints || []).some((ep) => ep.host === selectedEdge.endpoint_host) &&
+    !(selectedEdgeTarget?.public_endpoints || []).some((ep) => ep.host === selectedEdge.endpoint_host);
+  const natTargetPort = dialsFromNode ? selectedEdge.pinned_from_port : selectedEdge.pinned_to_port;
+  const natTargetNode = dialsFromNode ? selectedEdgeFrom : selectedEdgeTarget;
+  // External dial port: the NAT-override endpoint_port when set, else the compiled echo (or the
+  // internal listen port when nothing else is known). When it differs from the internal listen
+  // port an external→internal forward is required — surface the hint then.
+  const natDialPort =
+    selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0
+      ? selectedEdge.endpoint_port
+      : selectedEdge.compiled_port ?? natTargetPort;
+  const natForwardActive = natTargetPort !== undefined && natDialPort !== natTargetPort;
+  const hasPinnedPort =
+    selectedEdge.pinned_from_port !== undefined || selectedEdge.pinned_to_port !== undefined;
+
   return (
     <section>
       <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
@@ -246,6 +269,11 @@ export function EdgeEditor() {
           <p className="text-[10px] text-gray-500 mt-0.5">
             {t(language, 'edgeEditor.backupLinksDefaultTo')}
           </p>
+          {hasPinnedPort && (
+            <p className="text-[10px] text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded mt-1">
+              {t(language, 'edgeEditor.roleChangeRealloc')}
+            </p>
+          )}
         </div>
         <div>
           <label className="text-xs text-gray-400">
@@ -333,12 +361,24 @@ export function EdgeEditor() {
             <p className="text-xs text-gray-400 font-semibold">
               {t(language, 'edgeEditor.pinnedAllocation')}
             </p>
-            {(selectedEdge.pinned_from_port !== undefined ||
-              selectedEdge.pinned_to_port !== undefined) && (
-              <p className="text-xs text-cyan-300 font-mono">
-                {t(language, 'edgeEditor.ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
-              </p>
-            )}
+            {hasPinnedPort &&
+              (selectedEdge.endpoint_host ? (
+                // NAT-relevant edge: show the DIRECTIONAL dial→listen mapping so the operator
+                // knows which internal port to point the external→internal forward at.
+                <div className="space-y-0.5">
+                  <p className="text-xs text-cyan-300 font-mono break-all">
+                    {t(language, 'edgeEditor.natForwardTitle')}: {selectedEdge.endpoint_host}:{natDialPort ?? '—'} → {natTargetNode?.name ? `${natTargetNode.name} ` : ''}{natTargetPort ?? '—'}
+                  </p>
+                  {natForwardActive && (
+                    <p className="text-[10px] text-gray-400">{t(language, 'edgeEditor.natForwardHint')}</p>
+                  )}
+                </div>
+              ) : (
+                // Direct (non-NAT) edge: the plain from→to listen-port pair.
+                <p className="text-xs text-cyan-300 font-mono">
+                  {t(language, 'edgeEditor.ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
+                </p>
+              ))}
             {(selectedEdge.pinned_from_transit_ip !== undefined ||
               selectedEdge.pinned_to_transit_ip !== undefined) && (
               <p className="text-xs text-cyan-300 font-mono break-all">
