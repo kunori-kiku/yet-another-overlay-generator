@@ -9,23 +9,64 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
-Work accumulating toward **`v2.0.0-beta.1`** (the first RC-candidate beta):
+_Nothing yet — beta.2 (the signed agent self-update swap + canary-then-fleet rollout) accumulates here._
+
+## [2.0.0-beta.1] - 2026-06-16
+
+The first RC-candidate beta (set as the GitHub *latest* release): feature-complete for the
+beta.1 milestone of the `signed-self-update-and-rc-hardening` subject — mimic-from-GitHub
+install, agent version *reporting*, full input validation, controller-mode UX & resilience,
+and the RC legal/process paperwork. The signed self-update *swap* itself lands in beta.2.
 
 ### Added
-- Apache-2.0 `LICENSE` + `NOTICE`, `CHANGELOG.md`, and `RELEASING.md` — the
-  RC legal/process paperwork.
+- **mimic GitHub-`.deb` install** (plan-3/7). When mimic is not in the node's distro repos
+  (Debian 12 / Ubuntu 24.04), `install.sh` falls back to a **SHA-256-pinned `.deb` from
+  GitHub**: distro-first → pinned download → `sha256sum -c` verify → `apt-get install`, failing
+  closed under `set -euo pipefail`. The pin lives in a new signed `artifacts.json` bundle member
+  (pin ∈ `artifacts.json` ∈ `bundleFiles` ∈ `checksums.sha256` ∈ `bundle.sig` ∈ keystone
+  trust-list — no new trust primitive). Air-gap / local mode supplies the catalog via
+  `YAOG_ARTIFACT_CATALOG` (+ `YAOG_GITHUB_PROXY` / `YAOG_MIMIC_VERSION`) or `cmd/compiler`
+  `--artifact-catalog` / `--gh-proxy` / `--mimic-version`. With no catalog, `artifacts.json` is
+  omitted and the bundle stays **byte-identical** to before (D4).
+- **Agent version reporting + build-version injection** (plan-4). `release.yml` and the Docker
+  image stamp the release tag via `-X main.BuildVersion=<tag>`; `yaog-server|compiler|agent
+  version` print it; the agent reports its version on `/report` and the panel shows each node's
+  reported version. Per-arch standalone agent binaries + `.sha256` sidecars are published.
+- **Controller-mode UX & resilience** (plan-5). Every controller error is localized through the
+  shared `localizeError` (no raw `<status> <JSON>` reaches the operator); a React `ErrorBoundary`
+  replaces the white-screen crash; revoke is confirmation-gated.
+- **Backend robustness & full input validation** (plan-6). New schema gates for `transit_cidr`
+  (IPv4-only, /8–/30) and the `endpoint_host` / `public_endpoints[].host` charset; a per-IP
+  `/enroll` brute-force throttle; **graceful SIGTERM/SIGINT shutdown** draining both listeners
+  (long-polls cancelled at once); a **bounded, append-only audit log** (JSONL + amortized
+  rotation, no full-file rewrite per append); a Docker `HEALTHCHECK` on `/api/health`; a
+  topology node/edge **count bound**; and a schema-version **forward-compat guard** (reject a
+  topology stamped by a newer YAOG).
+- Apache-2.0 `LICENSE` + `NOTICE`, `CHANGELOG.md`, and `RELEASING.md` — the RC legal/process
+  paperwork (plan-1).
 - CI `gofmt` gate over `./cmd ./internal` (repo-wide format cleanliness, fails on drift).
 
 ### Changed
-- `docs/spec/compiler/validation.md` made honest: every coverage-table row whose
-  validator already ships on `main` (including `mtu`, `router_id`, `extra_prefixes[]`,
-  the `ssh_*` charset/port checks, `routing_mode`, `route_policies`, and the edge
-  `role`/`transport` rows) flipped from `none-yet`/`planned` to its validating pass;
-  stale audit-era "Closed by Plan N" references removed. The three genuinely-missing
-  rows (`transit_cidr`, `public_endpoints[].host`, `endpoint_host` charset) stay
-  not-done for plan-6.
-- `README.md` toolchain versions corrected (Go `1.25+`, Node `v20+`); "Full
-  documentation" links point at `docs/spec/`; both wikis carry an air-gap-scope banner.
+- **`render.FetchSettings`** threaded through the single shared render path (plan-2) as the typed
+  channel for install-time fetch pins; the zero value is byte-identical to the prior output (the
+  perpetual equivalence/signing gates enforce it).
+- `docs/spec/compiler/validation.md` made honest: every coverage-table row whose validator
+  already ships on `main` (including `mtu`, `router_id`, `extra_prefixes[]`, the `ssh_*`
+  charset/port checks, `routing_mode`, `route_policies`, and the edge `role`/`transport` rows)
+  flipped from `none-yet`/`planned` to its validating pass; the three genuinely-missing rows
+  (`transit_cidr`, `public_endpoints[].host`, `endpoint_host` charset) closed by plan-6. The
+  mimic and persistence specs document the GitHub-`.deb` trust chain and the bounded audit log.
+- `README.md` toolchain versions corrected (Go `1.25+`, Node `v20+`); "Full documentation" links
+  point at `docs/spec/`; both wikis carry an air-gap-scope banner.
+
+### Notes
+- **Owed hardware smokes (owner-accepted risk).** The three beta.1 manual smokes — two-node
+  controller WebAuthn login/hydration, NAT sticky-pin deploy round-trip, and the mimic
+  GitHub-`.deb` install on a real kernel-≥6.1 Debian host — gate the *tag*, not code-merge, and
+  could not run in this environment (no two-node hardware / browser authenticator / real host).
+  They are recorded **owed** per `RELEASING.md`; rc.1 remains a later owner call once they pass.
+
+PRs #109–#115.
 
 ## [2.0.0-preview.10] - 2026-06-15
 
@@ -174,7 +215,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.10...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.1...HEAD
+[2.0.0-beta.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.10...v2.0.0-beta.1
 [2.0.0-preview.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.9...v2.0.0-preview.10
 [2.0.0-preview.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.8...v2.0.0-preview.9
 [2.0.0-preview.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.7...v2.0.0-preview.8
