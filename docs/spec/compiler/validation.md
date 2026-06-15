@@ -76,7 +76,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `fixed_private_key` | — | flag | n/a |
 | `wireguard_private_key` | schema | parseable WG key when fixed | partial (parsed in `generateKeys`) |
 | `wireguard_public_key` | — | non-empty ⇒ key-fixed (allocation-stability) | n/a |
-| `public_endpoints[]` | schema | **host strict charset** (interpolated into root-executed install scripts); port via `endpoint_port` | schema |
+| `public_endpoints[].host` | schema | **strict charset** (rendered into the per-peer WireGuard config `Endpoint =` parsed by root's wg-quick); `.Port` is an unrendered reachability hint (the reverse-endpoint fallback uses the allocated listen port), so it is not validated | schema |
 | `extra_prefixes[]` | schema | each a parseable IPv4 CIDR | schema |
 | `ssh_alias` | schema | **strict charset** (interpolated into root/operator shell) | schema |
 | `ssh_host` | schema | **strict charset** (interpolated into bash + PowerShell) | schema |
@@ -117,7 +117,7 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `from_node_id` | schema + semantic | non-empty; references a node | schema + semantic |
 | `to_node_id` | schema + semantic | non-empty; references a node; no self-loop | schema + semantic |
 | `type` | schema | enum `direct`/`public-endpoint`/`relay-path`/`candidate` | schema |
-| `endpoint_host` | schema + semantic | **strict charset** (schema; interpolated into root-executed install scripts) + required for client edges (semantic) | schema + semantic |
+| `endpoint_host` | schema + semantic | **strict charset** (schema; rendered into the per-peer WireGuard config `Endpoint =` parsed by root's wg-quick) + required for client edges (semantic) | schema + semantic |
 | `endpoint_port` | schema | range 0–65535 (NAT override only) | schema |
 | `compiled_port` | — | compiler-written | n/a |
 | `priority` | — | optional | none-yet |

@@ -17,7 +17,7 @@ import (
 
 // TestControllerHTTP_EnrollThrottle drives failed /enroll attempts (bad enrollment token)
 // from the same loopback IP and asserts the per-IP limiter trips: the first
-// maxLoginFailures attempts reach the enroll logic (and are rejected for the bad token,
+// maxEnrollFailures attempts reach the enroll logic (and are rejected for the bad token,
 // never 429), and the next attempt is throttled with 429 — independent of token validity.
 func TestControllerHTTP_EnrollThrottle(t *testing.T) {
 	env := newCtlTestEnv(t)
@@ -32,10 +32,10 @@ func TestControllerHTTP_EnrollThrottle(t *testing.T) {
 		WGPublicKey: wgPriv.PublicKey().String(),
 	}
 
-	for i := 0; i < maxLoginFailures; i++ {
+	for i := 0; i < maxEnrollFailures; i++ {
 		status := doJSON(t, http.MethodPost, env.agentURL("enroll"), "", badReq, nil)
 		if status == http.StatusTooManyRequests {
-			t.Fatalf("attempt %d throttled too early (429); want the limiter to allow the first %d", i+1, maxLoginFailures)
+			t.Fatalf("attempt %d throttled too early (429); want the limiter to allow the first %d", i+1, maxEnrollFailures)
 		}
 		if status == http.StatusOK {
 			t.Fatalf("attempt %d unexpectedly succeeded with a bogus token", i+1)
@@ -45,7 +45,7 @@ func TestControllerHTTP_EnrollThrottle(t *testing.T) {
 	// The next attempt is over the threshold → 429 regardless of token validity.
 	status := doJSON(t, http.MethodPost, env.agentURL("enroll"), "", badReq, nil)
 	if status != http.StatusTooManyRequests {
-		t.Fatalf("attempt %d status = %d, want 429 (per-IP enroll throttle)", maxLoginFailures+1, status)
+		t.Fatalf("attempt %d status = %d, want 429 (per-IP enroll throttle)", maxEnrollFailures+1, status)
 	}
 }
 

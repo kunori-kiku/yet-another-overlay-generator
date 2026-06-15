@@ -7,9 +7,9 @@ import (
 )
 
 // TestValidateSchema_EndpointHostCharset pins the edge endpoint_host charset gate (plan-6).
-// endpoint_host is interpolated into the root-executed install script (the WireGuard
-// `Endpoint =` line and the mimic curl), so whitespace and shell metacharacters must be
-// rejected at schema time; hostnames, IPv4, and bracketed IPv6 must pass.
+// endpoint_host is rendered into the per-peer WireGuard config `Endpoint =` line that root's
+// wg-quick parses, so whitespace and control/metacharacters (which would corrupt the config)
+// must be rejected at schema time; hostnames, IPv4, and bracketed IPv6 must pass.
 func TestValidateSchema_EndpointHostCharset(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -46,8 +46,8 @@ func TestValidateSchema_EndpointHostCharset(t *testing.T) {
 }
 
 // TestValidateSchema_PublicEndpointHostCharset pins the node public_endpoints[].host charset
-// gate (plan-6): the same root-script interpolation surface as endpoint_host. The field path
-// includes the index so a second endpoint's bad host is located precisely.
+// gate (plan-6): the same WireGuard-config sink as endpoint_host. The field path includes the
+// index so a second endpoint's bad host is located precisely.
 func TestValidateSchema_PublicEndpointHostCharset(t *testing.T) {
 	cases := []struct {
 		name        string

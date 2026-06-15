@@ -192,6 +192,12 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	log.Printf("controller: operator routes at %s (addr %s); agent routes at %s (addr %s)",
 		ch.OperatorBasePath(), addr, ch.AgentBasePath(), agentAddr)
 
+	// Register the shutdown signal handler BEFORE spawning the serve goroutines: a SIGTERM
+	// delivered during the startup window must be captured (and drained) rather than falling
+	// through to the kernel's default terminate-immediately disposition.
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+
 	// Serve both ports concurrently; the first error from either wins. A buffered
 	// channel of size 2 ensures the second goroutine's send never blocks on exit.
 	errc := make(chan error, 2)
@@ -204,8 +210,6 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	// Long-polls return at once (Shutdown cancels their context), so a polling fleet does
 	// not stretch every restart to the full grace. A genuine listener error (e.g. address
 	// already in use) still wins immediately via errc.
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case err := <-errc:
 		return err

@@ -34,10 +34,12 @@ var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 var sshKeyPathCharset = regexp.MustCompile(`^[A-Za-z0-9._:@/\\~ -]+$`)
 
 // endpointHostCharset constrains edge endpoint_host and node public_endpoints[].host (plan-6).
-// These hosts are interpolated into root-executed install scripts (WireGuard `Endpoint =`, the
-// mimic curl), so the charset admits hostnames, IPv4, and bracketed IPv6 (letters, digits, dot,
-// underscore, colon, square brackets, hyphen) and forbids whitespace and every shell metacharacter
-// ($ ` " ' ; | & < > ( ) space etc.).
+// These hosts are rendered into the per-peer WireGuard config FILE that root's wg-quick parses
+// (the `Endpoint = <host>:<port>` line), so the charset admits exactly what a WireGuard endpoint
+// host can be — hostnames, IPv4, and bracketed IPv6 (letters, digits, dot, underscore, colon,
+// square brackets, hyphen) — and forbids whitespace and control/metacharacters that would
+// corrupt the config or confuse the parser. (It is NOT spliced onto a root shell command line —
+// the host never reaches the install script's shell; this is config-integrity defense-in-depth.)
 var endpointHostCharset = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
 
 // routerIDMAC48 约束 Babel router-id 的 MAC-48 形式（D66）：六组以冒号分隔的十六进制对，
@@ -332,9 +334,10 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".ssh_key_path", CodeNodeSSHKeyPathIllegalChars, P{"path", fmt.Sprintf("%q", node.SSHKeyPath)})
 		}
 
-		// public_endpoints[].host 字符集校验（plan-6）：host 会被插值进 root 身份执行的安装脚本
-		// （WireGuard Endpoint =、mimic curl），必须排除空白与一切 shell 元字符。port 已由
-		// endpoint_port 的范围校验覆盖；此处只守 host。
+		// public_endpoints[].host 字符集校验（plan-6）：host 会被渲染进 root 的 wg-quick 解析的
+		// per-peer WireGuard 配置文件（Endpoint = 行），必须排除空白与控制/元字符以免破坏配置或
+		// 混淆解析器。PublicEndpoint.Port 不在此校验：它只是一个节点可达性提示，编译器从不渲染它
+		// （反向 endpoint 回退使用分配到的监听端口，见 peers.go），因此只需守 host。
 		for k := range node.PublicEndpoints {
 			ep := &node.PublicEndpoints[k]
 			if ep.Host != "" && !endpointHostCharset.MatchString(ep.Host) {
@@ -386,8 +389,8 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})
 		}
 
-		// endpoint_host 字符集校验（plan-6）：非空时会被插值进 root 身份执行的安装脚本
-		// （WireGuard Endpoint =、mimic curl），必须排除空白与一切 shell 元字符。
+		// endpoint_host 字符集校验（plan-6）：非空时会被渲染进 root 的 wg-quick 解析的 per-peer
+		// WireGuard 配置文件（Endpoint = 行），必须排除空白与控制/元字符以免破坏配置或混淆解析器。
 		if edge.EndpointHost != "" && !endpointHostCharset.MatchString(edge.EndpointHost) {
 			result.AddError(prefix+".endpoint_host", CodeEdgeEndpointHostIllegalChars, P{"host", fmt.Sprintf("%q", edge.EndpointHost)})
 		}

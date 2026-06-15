@@ -76,9 +76,11 @@ type ControllerHandler struct {
 	// the one agent route with NO bearer token — its only credential is a single-use
 	// enrollment token — so it is the brute-force surface for guessing live tokens. A
 	// SEPARATE limiter from loginLimiter keeps the two surfaces independent (enroll spray
-	// must not lock out operator logins from the same IP, and vice versa). It refunds on a
-	// successful enroll (succeed), so only failures count: an operator bulk-enrolling many
-	// nodes behind one NAT never trips it, but a token-guessing sprayer is throttled.
+	// must not lock out operator logins from the same IP, and vice versa) and uses the higher
+	// maxEnrollFailures cap. It refunds on a successful enroll (succeed), so a SEQUENTIAL bulk
+	// enroll never accumulates; the higher cap also absorbs a PARALLEL bootstrap of many nodes
+	// behind one NAT (whose concurrent enrolls all reserve a slot before any refunds) without
+	// false 429s, while still throttling a token-guessing sprayer.
 	enrollLimiter *loginLimiter
 	// sessionTTL is the lifetime of a session minted at /login.
 	sessionTTL time.Duration
@@ -125,7 +127,7 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		operatorTokenHash: operatorTokenHash,
 		operatorName:      operatorName,
 		loginLimiter:      newLoginLimiter(),
-		enrollLimiter:     newLoginLimiter(),
+		enrollLimiter:     newLimiter(maxEnrollFailures, loginWindow),
 		sessionTTL:        controller.DefaultSessionTTL,
 		pollDeadline:      defaultPollDeadline,
 		// Secure cookies by default: a non-TLS deployment must opt out explicitly
@@ -570,6 +572,10 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
 		// must resolve (revoke the other node or reuse its id), not a malformed request.
 		if errors.Is(err, controller.ErrDuplicateWGKey) {
+			// This path is reached only AFTER a VALID enrollment token was burned (the dedupe
+			// check runs post-consume), so it is a legitimate-operator conflict, not a
+			// token-guess — refund the throttle slot rather than counting it toward lockout.
+			h.enrollLimiter.succeed(ipKey)
 			writeAPIError(w, apierr.New(apierr.CodeDuplicateWGKey).Wrap(err))
 			return
 		}
