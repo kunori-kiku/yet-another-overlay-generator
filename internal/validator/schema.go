@@ -33,6 +33,13 @@ var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 // the defence-in-depth runtime half.
 var sshKeyPathCharset = regexp.MustCompile(`^[A-Za-z0-9._:@/\\~ -]+$`)
 
+// endpointHostCharset constrains edge endpoint_host and node public_endpoints[].host (plan-6).
+// These hosts are interpolated into root-executed install scripts (WireGuard `Endpoint =`, the
+// mimic curl), so the charset admits hostnames, IPv4, and bracketed IPv6 (letters, digits, dot,
+// underscore, colon, square brackets, hyphen) and forbids whitespace and every shell metacharacter
+// ($ ` " ' ; | & < > ( ) space etc.).
+var endpointHostCharset = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
+
 // routerIDMAC48 约束 Babel router-id 的 MAC-48 形式（D66）：六组以冒号分隔的十六进制对，
 // 如 02:11:22:33:44:55。babeld 也接受 IPv4 形式的 router-id，因此 IPv4 形式由 net.ParseIP
 // 单独判定（见 validateNodesSchema），二者满足其一即合法。
@@ -156,6 +163,25 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 				result.AddError(rrPrefix, CodeDomainReservedAddressNotIPv4, P{"ip", rr})
 			}
 		}
+
+		// transit_cidr 校验（plan-6）：可解析、IPv4-only，且大小足以容纳 per-link transit 地址对
+		// （每条链路占用一对 transit IP）。镜像 domain CIDR 的 IPv4 + 大小守卫；空值由编译器回退
+		// 到默认 10.10.0.0/24，无需校验。
+		if domain.TransitCIDR != "" {
+			_, tNet, err := net.ParseCIDR(domain.TransitCIDR)
+			if err != nil {
+				result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRInvalid, P{"cidr", domain.TransitCIDR})
+			} else if tNet.IP.To4() == nil {
+				result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRNotIPv4, P{"cidr", domain.TransitCIDR})
+			} else {
+				ones, _ := tNet.Mask.Size()
+				if ones < 8 {
+					result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRTooLarge, P{"cidr", domain.TransitCIDR})
+				} else if ones > 30 {
+					result.AddError(prefix+".transit_cidr", CodeDomainTransitCIDRTooSmall, P{"cidr", domain.TransitCIDR})
+				}
+			}
+		}
 	}
 }
 
@@ -263,6 +289,16 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		if node.SSHKeyPath != "" && !sshKeyPathCharset.MatchString(node.SSHKeyPath) {
 			result.AddError(prefix+".ssh_key_path", CodeNodeSSHKeyPathIllegalChars, P{"path", fmt.Sprintf("%q", node.SSHKeyPath)})
 		}
+
+		// public_endpoints[].host 字符集校验（plan-6）：host 会被插值进 root 身份执行的安装脚本
+		// （WireGuard Endpoint =、mimic curl），必须排除空白与一切 shell 元字符。port 已由
+		// endpoint_port 的范围校验覆盖；此处只守 host。
+		for k := range node.PublicEndpoints {
+			ep := &node.PublicEndpoints[k]
+			if ep.Host != "" && !endpointHostCharset.MatchString(ep.Host) {
+				result.AddError(fmt.Sprintf("%s.public_endpoints[%d].host", prefix, k), CodeNodePublicEndpointHostIllegalChars, P{"host", fmt.Sprintf("%q", ep.Host)})
+			}
+		}
 	}
 }
 
@@ -306,6 +342,12 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {
 			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})
+		}
+
+		// endpoint_host 字符集校验（plan-6）：非空时会被插值进 root 身份执行的安装脚本
+		// （WireGuard Endpoint =、mimic curl），必须排除空白与一切 shell 元字符。
+		if edge.EndpointHost != "" && !endpointHostCharset.MatchString(edge.EndpointHost) {
+			result.AddError(prefix+".endpoint_host", CodeEdgeEndpointHostIllegalChars, P{"host", fmt.Sprintf("%q", edge.EndpointHost)})
 		}
 
 		// Role 校验（并行链路 / 故障切换）：仅允许空值、"primary"、"backup"。
