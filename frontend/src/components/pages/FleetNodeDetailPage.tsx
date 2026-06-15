@@ -48,6 +48,7 @@ export function FleetNodeDetailPage() {
               {node.appliedGeneration} / {node.desiredGeneration}
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.health')}>{node.lastHealth || '—'}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.agentVersion')}>{node.agentVersion || '—'}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.lastSeen')}>{fmtTime(node.lastSeen)}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.enrolledAt')}>{fmtTime(node.enrolledAt)}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.wgPublicKey')}>

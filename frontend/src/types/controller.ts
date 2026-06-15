@@ -17,6 +17,8 @@ export interface ControllerNode {
   appliedGeneration: number;
   lastChecksum: string;
   lastHealth: string;
+  // plan-4：agent 上报的构建版本（observability）；版本感知前的旧 agent 上报为空串，UI 显示「—」。
+  agentVersion: string;
   lastSeen: string;
   enrolledAt: string;
   // plan-4.6 fleet-wide key rotation：operator 已为该节点请求轮换 WG 密钥，等待 agent
