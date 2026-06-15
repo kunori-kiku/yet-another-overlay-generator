@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -31,14 +34,30 @@ type Server struct {
 	// as before. Stored as a field (not wired at registerRoutes time) because EnableController
 	// runs AFTER registerRoutes.
 	operatorAuth func(http.HandlerFunc) http.HandlerFunc
+
+	// srvMu guards the live *http.Server handles, which ListenAndServe[Agent] publish
+	// once they start so Shutdown can drain them.
+	srvMu    sync.Mutex
+	httpSrv  *http.Server
+	agentSrv *http.Server
+	// baseCtx is the parent context handed to every in-flight request (via the servers'
+	// BaseContext). Shutdown cancels it FIRST so long-poll handlers — which select on
+	// their request context and answer 204 on cancellation — return immediately instead
+	// of pinning the drain open for their full deadline. A polling fleet therefore does
+	// not make every restart wait the whole grace window.
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
 }
 
 // NewServer  API
 func NewServer() *Server {
+	baseCtx, baseCancel := context.WithCancel(context.Background())
 	s := &Server{
-		handler:  NewHandler(),
-		mux:      http.NewServeMux(),
-		agentMux: http.NewServeMux(),
+		handler:    NewHandler(),
+		mux:        http.NewServeMux(),
+		agentMux:   http.NewServeMux(),
+		baseCtx:    baseCtx,
+		baseCancel: baseCancel,
 	}
 	s.registerRoutes()
 	return s
@@ -193,7 +212,11 @@ func (s *Server) ListenAndServe(addr string) error {
 		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
+		BaseContext:       func(net.Listener) context.Context { return s.baseCtx },
 	}
+	s.srvMu.Lock()
+	s.httpSrv = srv
+	s.srvMu.Unlock()
 	return srv.ListenAndServe()
 }
 
@@ -220,6 +243,42 @@ func (s *Server) ListenAndServeAgent(addr string) error {
 		WriteTimeout:   90 * time.Second,
 		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 1 << 20,
+		BaseContext:    func(net.Listener) context.Context { return s.baseCtx },
 	}
+	s.srvMu.Lock()
+	s.agentSrv = srv
+	s.srvMu.Unlock()
 	return srv.ListenAndServe()
+}
+
+// Shutdown gracefully drains both listeners (operator/panel + agent): it first cancels
+// the shared base context so in-flight long-polls return immediately, then waits for the
+// remaining in-flight requests on each server to finish, bounded by ctx's deadline. A
+// listener that never started (nil handle, e.g. air-gap mode where only ListenAndServe
+// ran) is skipped. After Shutdown, the corresponding ListenAndServe[Agent] returns
+// http.ErrServerClosed, which the caller treats as a clean stop. It returns the first
+// non-nil per-server shutdown error (typically context.DeadlineExceeded if the grace
+// window elapsed with connections still active).
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.srvMu.Lock()
+	httpSrv, agentSrv := s.httpSrv, s.agentSrv
+	s.srvMu.Unlock()
+
+	// Cancel in-flight request contexts before draining so long-polls unblock now.
+	if s.baseCancel != nil {
+		s.baseCancel()
+	}
+
+	var firstErr error
+	if httpSrv != nil {
+		if err := httpSrv.Shutdown(ctx); err != nil {
+			firstErr = err
+		}
+	}
+	if agentSrv != nil {
+		if err := agentSrv.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

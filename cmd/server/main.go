@@ -7,11 +7,21 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/api"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
+
+// controllerShutdownGrace bounds how long graceful shutdown waits for in-flight requests
+// to finish after a SIGTERM/SIGINT before forcing exit. It comfortably exceeds a normal
+// operator request; in-flight /poll long-polls are cancelled immediately by Shutdown, so
+// the window is spent only on genuinely active work. Kept at/under a typical orchestrator
+// termination grace (k8s default 30s) so we drain rather than get SIGKILLed mid-drain.
+const controllerShutdownGrace = 25 * time.Second
 
 // Controller-mode environment gates. When BOTH the state dir and the tenant id are
 // set, cmd/server builds the controller dependencies (FileStore) and serves the
@@ -187,5 +197,28 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	errc := make(chan error, 2)
 	go func() { errc <- server.ListenAndServe(addr) }()
 	go func() { errc <- server.ListenAndServeAgent(agentAddr) }()
-	return <-errc
+
+	// Graceful shutdown: on SIGTERM/SIGINT (a `docker stop`, a k8s pod termination, or
+	// Ctrl-C), drain BOTH listeners within a bounded grace window before exiting, so a
+	// restart does not sever an in-flight operator request or agent report mid-write.
+	// Long-polls return at once (Shutdown cancels their context), so a polling fleet does
+	// not stretch every restart to the full grace. A genuine listener error (e.g. address
+	// already in use) still wins immediately via errc.
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-errc:
+		return err
+	case sig := <-sigc:
+		log.Printf("controller: received %s, draining listeners (grace %s)…", sig, controllerShutdownGrace)
+		ctx, cancel := context.WithTimeout(context.Background(), controllerShutdownGrace)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			// The grace window elapsed with connections still active: the listeners are
+			// closed regardless, so exit cleanly — affected agents simply re-poll/re-report.
+			log.Printf("controller: shutdown grace elapsed with connections still active: %v", err)
+		}
+		log.Printf("controller: listeners drained, exiting")
+		return nil
+	}
 }
