@@ -101,18 +101,16 @@ export function EdgeEditor() {
 
   if (!selectedEdge) return null;
 
-  // Directional NAT target (PR2): the internal listen port a NAT forward must hit is the
-  // pinned port of whichever END carries endpoint_host. By convention the edge dials the TO
-  // node (endpoint_host is picked from the target's public endpoints), so the target is
-  // pinned_to_port; only when the host UNIQUELY matches the FROM node's public endpoints (the
-  // reverse-peer path, peers.go reverse endpoint) is it pinned_from_port. Sourced from the
+  // Directional NAT target (PR2): the internal listen port a NAT forward must hit. The
+  // compiler renders a forward edge's endpoint UNCONDITIONALLY at the to-side port —
+  // formatEndpoint(edge.EndpointHost, alloc.toPort), written back to pinned_to_port and
+  // echoed as compiled_port (compiler peers.go / compiler.go); it never branches on which
+  // node owns the host string. endpoint_host on the canvas is likewise always a snapshot of
+  // the TO node (reconcileEdgeEndpoints only writes it for the edge's target). So a forward
+  // edge always dials the to-node at pinned_to_port — mirror that here. Sourced from the
   // edge's own fields — independent of the controller-null compileResult.
-  const dialsFromNode =
-    !!selectedEdge.endpoint_host &&
-    (selectedEdgeFrom?.public_endpoints || []).some((ep) => ep.host === selectedEdge.endpoint_host) &&
-    !(selectedEdgeTarget?.public_endpoints || []).some((ep) => ep.host === selectedEdge.endpoint_host);
-  const natTargetPort = dialsFromNode ? selectedEdge.pinned_from_port : selectedEdge.pinned_to_port;
-  const natTargetNode = dialsFromNode ? selectedEdgeFrom : selectedEdgeTarget;
+  const natTargetPort = selectedEdge.pinned_to_port;
+  const natTargetNode = selectedEdgeTarget;
   // External dial port: the NAT-override endpoint_port when set, else the compiled echo (or the
   // internal listen port when nothing else is known). When it differs from the internal listen
   // port an external→internal forward is required — surface the hint then.
