@@ -634,4 +634,7 @@ export const en = {
   'error.validation_project_id_required': "Project ID is required.",
   'error.validation_project_name_required': "Project name is required.",
   'error.validation_routepolicy_reserved': "route_policies is a reserved feature that is not yet implemented: no renderer consumes it, the compiler only passes it through verbatim, so it must be empty (detected {count} policies; please clear route_policies; for LAN bridging / route injection use extra_prefixes instead)",
+  'error.validation_topology_schema_version_unsupported': "Topology allocation-schema version {version} is newer than this build supports (max {max}); it was created by a newer version of YAOG. Upgrade YAOG to open it.",
+  'error.validation_topology_too_many_edges': "Topology has too many edges: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
+  'error.validation_topology_too_many_nodes': "Topology has too many nodes: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
 } as const;

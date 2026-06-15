@@ -134,6 +134,18 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `project.id` / `project.name` | schema | non-empty | schema |
 | `domains` | schema | at least one domain | schema |
 | `route_policies` | semantic | **RESERVED** — reject if non-empty | semantic |
+| `nodes` / `edges` (count) | schema | DoS bound: ≤ `maxTopologyNodes` (2000) / `maxTopologyEdges` (10000); short-circuits both passes before the O(n²) semantic checks (distinct from the HTTP body-size cap) | schema |
+| `alloc_schema_version` | schema | forward-compat fail-closed: reject `> model.CurrentAllocSchemaVersion` (a topology from a newer YAOG whose pin format would be misread); absent/0 restamps to current | schema |
+
+> **Compliance — topology-root size & schema-version (plan-6):** `HandleValidate` runs BOTH
+> `ValidateSchema` and `ValidateSemantic` unconditionally, so an unbounded topology is a DoS surface on
+> `/validate` as well as `/compile`. `topologyExceedsBounds` is checked at the TOP of both passes and
+> short-circuits (`schema.go`): the schema pass reports the coded error
+> (`CodeTopologyTooManyNodes`/`CodeTopologyTooManyEdges`/`CodeTopologySchemaVersionUnsupported`), the
+> semantic pass guards silently (no duplicate). The schema-version guard fails closed against a future
+> pin format rather than silently misreading it as v1 (I10); the canonical max lives in
+> `model.CurrentAllocSchemaVersion` because `compiler` imports `validator` (so the validator cannot
+> import the compiler's constant).
 
 > **Compliance — `route_policies` RESERVED:** `route_policies` is validated nowhere (`schema.go` and
 > `semantic.go` never inspect it, D62) and is consumed by no renderer. Per the binding decision

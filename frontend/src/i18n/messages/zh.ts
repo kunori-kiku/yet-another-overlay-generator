@@ -616,4 +616,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_project_id_required': "项目 ID 不能为空",
   'error.validation_project_name_required': "项目名称不能为空",
   'error.validation_routepolicy_reserved': "route_policies 为保留特性，尚未实现：当前没有任何渲染器消费它，编译器仅原样透传，必须为空（检测到 {count} 条策略，请清空 route_policies；LAN 桥接 / 路由注入请改用 extra_prefixes）",
+  'error.validation_topology_schema_version_unsupported': "拓扑分配方案版本 {version} 高于当前构建支持的版本（最高 {max}），它由更新版本的 YAOG 创建；请升级 YAOG 后再打开。",
+  'error.validation_topology_too_many_edges': "拓扑边数过多：{count} 超过上限 {max}，请将部署拆分为多个拓扑。",
+  'error.validation_topology_too_many_nodes': "拓扑节点数过多：{count} 超过上限 {max}，请将部署拆分为多个拓扑。",
 };

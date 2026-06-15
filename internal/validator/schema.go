@@ -55,8 +55,50 @@ const (
 
 // ValidateSchema  Schema （ Pass 1）
 // 、、CIDR
+// Topology size bounds (plan-6 item 6): a DoS guard DISTINCT from the HTTP body-size cap.
+// They reject obviously-abusive topologies before the per-entity loops and the O(n²)
+// semantic pass (IP-collision/NAT-reachability) ever run on attacker-controlled bulk. The
+// ceilings are far above any realistic overlay (hundreds of nodes) — they stop "a million
+// nodes", not a power user.
+const (
+	maxTopologyNodes = 2000
+	maxTopologyEdges = 10000
+)
+
+// topologyExceedsBounds reports whether a topology must be rejected at the root before any
+// further validation: it is too large to process safely (count bound) OR is stamped with an
+// allocation-schema version newer than this build understands (forward-compat fail-closed,
+// plan-6 item 7 — a newer YAOG may use a pin format we would misread as v1). Both
+// ValidateSchema and ValidateSemantic short-circuit on it so neither the per-entity loops
+// nor the O(n²) semantic checks touch abusive bulk or a future-format topology.
+func topologyExceedsBounds(topo *model.Topology) bool {
+	return topo.AllocSchemaVersion > model.CurrentAllocSchemaVersion ||
+		len(topo.Nodes) > maxTopologyNodes ||
+		len(topo.Edges) > maxTopologyEdges
+}
+
 func ValidateSchema(topo *model.Topology) *ValidationResult {
 	result := &ValidationResult{}
+
+	// Topology-root guards reported HERE (schema is the canonical reporter) and
+	// short-circuiting: an oversized or future-format topology is rejected outright rather
+	// than merged into a pile of misleading downstream errors, and the expensive passes
+	// never run on it. ValidateSemantic guards on the same predicate without re-reporting.
+	if topologyExceedsBounds(topo) {
+		if topo.AllocSchemaVersion > model.CurrentAllocSchemaVersion {
+			result.AddError("alloc_schema_version", CodeTopologySchemaVersionUnsupported,
+				P{"version", strconv.Itoa(topo.AllocSchemaVersion)}, P{"max", strconv.Itoa(model.CurrentAllocSchemaVersion)})
+		}
+		if len(topo.Nodes) > maxTopologyNodes {
+			result.AddError("nodes", CodeTopologyTooManyNodes,
+				P{"count", strconv.Itoa(len(topo.Nodes))}, P{"max", strconv.Itoa(maxTopologyNodes)})
+		}
+		if len(topo.Edges) > maxTopologyEdges {
+			result.AddError("edges", CodeTopologyTooManyEdges,
+				P{"count", strconv.Itoa(len(topo.Edges))}, P{"max", strconv.Itoa(maxTopologyEdges)})
+		}
+		return result
+	}
 
 	//  Project
 	validateProjectSchema(topo, result)
