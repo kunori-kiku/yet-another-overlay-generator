@@ -109,7 +109,7 @@ func TestInferCapabilitiesFromRole_Relay(t *testing.T) {
 }
 
 func TestInferCapabilitiesFromRole_Peer(t *testing.T) {
-	// peer 
+	// peer
 	node := &model.Node{ID: "n1", Role: "peer", Capabilities: model.NodeCapabilities{
 		CanForward: false,
 	}}
@@ -149,7 +149,7 @@ func TestDeriveAllowedIPsForPeer_Gateway(t *testing.T) {
 
 	ips := DeriveAllowedIPsForPeer(node, domain)
 
-	//  Domain CIDR +  + 
+	//  Domain CIDR +  +
 	hasDefault := false
 	hasExtra := false
 	hasDomain := false

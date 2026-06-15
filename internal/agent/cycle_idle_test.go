@@ -143,9 +143,9 @@ func TestCycleIdle_ApplyPathStillTakenWhenWarranted(t *testing.T) {
 	const futureCompiledAt = "2099-01-02T15:04:05Z"
 
 	cases := []struct {
-		name   string
-		after  int64
-		state  func(checksum, compiledAt string) (lastChecksum, lastResult string)
+		name  string
+		after int64
+		state func(checksum, compiledAt string) (lastChecksum, lastResult string)
 	}{
 		{
 			// A failed last apply must retry even though the checksum matches.

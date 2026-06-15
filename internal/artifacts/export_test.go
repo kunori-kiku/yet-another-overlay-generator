@@ -12,7 +12,7 @@ import (
 )
 
 func TestExport_BasicStructure(t *testing.T) {
-	// 
+	//
 	result := &compiler.CompileResult{
 		Topology: &model.Topology{
 			Project: model.Project{ID: "test-001", Name: "Test", Version: "0.1.0"},
@@ -52,19 +52,19 @@ func TestExport_BasicStructure(t *testing.T) {
 		},
 	}
 
-	// 
+	//
 	outputDir := t.TempDir()
 	exportResult, err := Export(result, outputDir)
 	if err != nil {
 		t.Fatalf(": %v", err)
 	}
 
-	//  2 
+	//  2
 	if len(exportResult.Nodes) != 2 {
 		t.Errorf(" 2 ,  %d", len(exportResult.Nodes))
 	}
 
-	// 
+	//
 	for _, nodeName := range []string{"alpha", "beta"} {
 		nodeDir := filepath.Join(outputDir, nodeName)
 
@@ -130,7 +130,7 @@ func TestExport_InstallScriptExecutable(t *testing.T) {
 		t.Fatalf(": %v", err)
 	}
 
-	// 
+	//
 	scriptPath := filepath.Join(outputDir, "alpha", "install.sh")
 	info, err := os.Stat(scriptPath)
 	if err != nil {

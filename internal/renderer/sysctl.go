@@ -4,7 +4,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// SysctlConfig sysctl 
+// SysctlConfig sysctl
 type SysctlConfig struct {
 	NodeName         string
 	EnableForwarding bool
@@ -33,7 +33,7 @@ net.ipv4.conf.default.rp_filter = 2
 {{- end }}
 `
 
-// RenderSysctlConfig  sysctl 
+// RenderSysctlConfig  sysctl
 func RenderSysctlConfig(node *model.Node) (string, error) {
 	config := SysctlConfig{
 		NodeName:         node.Name,
@@ -43,7 +43,7 @@ func RenderSysctlConfig(node *model.Node) (string, error) {
 	return renderTemplate("sysctl.conf", sysctlConfigTemplate, config)
 }
 
-// RenderAllSysctlConfigs  sysctl 
+// RenderAllSysctlConfigs  sysctl
 func RenderAllSysctlConfigs(topo *model.Topology) (map[string]string, error) {
 	configs := make(map[string]string)
 

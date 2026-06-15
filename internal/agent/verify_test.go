@@ -35,10 +35,10 @@ func newSignedBundle(t *testing.T, compiledAt string) *bundleFixture {
 
 	// The checksummed file set (string content; matches export.go's bundleFiles).
 	checksummed := map[string]string{
-		"install.sh":             "#!/usr/bin/env bash\necho stub-install\n",
+		"install.sh":              "#!/usr/bin/env bash\necho stub-install\n",
 		"wireguard/wg-alpha.conf": "[Interface]\nPrivateKey = PRIVATEKEY_PLACEHOLDER\n",
-		"babel/babeld.conf":      "interface wg-alpha\n",
-		"sysctl/99-overlay.conf": "net.ipv4.ip_forward=1\n",
+		"babel/babeld.conf":       "interface wg-alpha\n",
+		"sysctl/99-overlay.conf":  "net.ipv4.ip_forward=1\n",
 	}
 	canonical := bundlesig.Canonicalize(checksummed)
 	sig := bundlesig.Sign(canonical, priv)
@@ -337,7 +337,7 @@ func TestRunAppliesValidBundle(t *testing.T) {
 // cannot get the agent to apply another node's (validly-signed) bundle.
 func TestRunRefusesNodeIDMismatch(t *testing.T) {
 	b := newSignedBundle(t, "2026-06-08T12:00:00Z") // manifest node_id = "alpha"
-	root := writeBundleToDir(t, "bravo", b.files)    // served under "bravo"
+	root := writeBundleToDir(t, "bravo", b.files)   // served under "bravo"
 	cfg := &Config{
 		NodeID:       "bravo", // matches the fetch path, but NOT the manifest node_id ("alpha")
 		Source:       NewDirSource(root),

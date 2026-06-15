@@ -37,7 +37,7 @@ func TestAllocateIPs_AutoAssignment(t *testing.T) {
 		}
 	}
 
-	//  IP ： 10.10.0.1 
+	//  IP ： 10.10.0.1
 	expectedIPs := []string{"10.10.0.1", "10.10.0.2", "10.10.0.3"}
 	for i, node := range nodes {
 		if node.OverlayIP != expectedIPs[i] {
@@ -69,17 +69,17 @@ func TestAllocateIPs_ManualIPPreserved(t *testing.T) {
 		t.Fatalf(" IP : %v", err)
 	}
 
-	//  IP 
+	//  IP
 	if nodes[0].OverlayIP != "10.10.0.50" {
 		t.Errorf(" IP :  10.10.0.50,  %s", nodes[0].OverlayIP)
 	}
 
-	//  IP 
+	//  IP
 	if nodes[1].OverlayIP == "10.10.0.50" {
 		t.Errorf(" IP  IP ")
 	}
 
-	//  10.10.0.1 
+	//  10.10.0.1
 	if nodes[1].OverlayIP != "10.10.0.1" {
 		t.Errorf(" IP  10.10.0.1,  %s", nodes[1].OverlayIP)
 	}
@@ -109,7 +109,7 @@ func TestAllocateIPs_SkipManualIPInSequence(t *testing.T) {
 		t.Fatalf(" IP : %v", err)
 	}
 
-	// 10.10.0.1 ， 10.10.0.2 
+	// 10.10.0.1 ， 10.10.0.2
 	if nodes[1].OverlayIP != "10.10.0.2" {
 		t.Errorf(" 10.10.0.2,  %s", nodes[1].OverlayIP)
 	}
@@ -245,7 +245,7 @@ func TestAllocateIPs_OriginalNotModified(t *testing.T) {
 		t.Fatalf(" IP : %v", err)
 	}
 
-	// 
+	//
 	if topo.Nodes[0].OverlayIP != "" {
 		t.Errorf(" IP ,  %s", topo.Nodes[0].OverlayIP)
 	}

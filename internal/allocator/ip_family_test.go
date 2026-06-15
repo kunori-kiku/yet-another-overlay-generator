@@ -14,10 +14,10 @@ import (
 // ——这是针对历史上 ip[12:16] 越界切片 panic 的回归门禁。
 func TestAllocateIPs_AddressFamilyAndSizeBounds(t *testing.T) {
 	tests := []struct {
-		name      string
-		cidr      string
-		wantErr   bool
-		wantIP    string // 仅当 wantErr 为 false 时校验
+		name    string
+		cidr    string
+		wantErr bool
+		wantIP  string // 仅当 wantErr 为 false 时校验
 	}{
 		{
 			// 回归门禁：IPv6 域 CIDR 必须返回干净错误，绝不 panic。
