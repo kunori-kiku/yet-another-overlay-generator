@@ -59,11 +59,11 @@ type settingsJSON struct {
 // forgotten for POST (which would make it flicker empty right after every save).
 func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) settingsJSON {
 	return settingsJSON{
-		PublicAgentURL:      cs.PublicAgentURL,
-		GithubProxy:         cs.GithubProxy,
-		AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
-		Translucency:        cs.Translucency != nil && *cs.Translucency,
-		AgentPathPrefix:     h.agentPrefix,
+		PublicAgentURL:        cs.PublicAgentURL,
+		GithubProxy:           cs.GithubProxy,
+		AgentReleaseBaseURL:   cs.AgentReleaseBaseURL,
+		Translucency:          cs.Translucency != nil && *cs.Translucency,
+		AgentPathPrefix:       h.agentPrefix,
 		MimicVersion:          cs.MimicVersion,
 		MimicReleaseBase:      cs.MimicReleaseBase,
 		MimicDebs:             cs.MimicDebs,
@@ -116,10 +116,10 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 		// it as a non-nil pointer; WithDefaults only fills a nil (legacy-load) value.
 		translucency := req.Translucency
 		cs := controller.ControllerSettings{
-			PublicAgentURL:      strings.TrimSpace(req.PublicAgentURL),
-			GithubProxy:         strings.TrimSpace(req.GithubProxy),
-			AgentReleaseBaseURL: strings.TrimSpace(req.AgentReleaseBaseURL),
-			Translucency:        &translucency,
+			PublicAgentURL:        strings.TrimSpace(req.PublicAgentURL),
+			GithubProxy:           strings.TrimSpace(req.GithubProxy),
+			AgentReleaseBaseURL:   strings.TrimSpace(req.AgentReleaseBaseURL),
+			Translucency:          &translucency,
 			MimicVersion:          strings.TrimSpace(req.MimicVersion),
 			MimicReleaseBase:      strings.TrimSpace(req.MimicReleaseBase),
 			MimicDebs:             req.MimicDebs,
