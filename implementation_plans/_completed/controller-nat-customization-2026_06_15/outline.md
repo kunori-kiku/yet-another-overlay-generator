@@ -47,6 +47,8 @@ plus the owner's answers to the three gating questions (2026-06-15).
   transit IP from the pool) stickily, same as ports.
 - 2026-06-15 — Controller stays zero-knowledge (AgentHeld placeholder keys).
 - 2026-06-15 — Legacy non-default base normalizes to 51820 (no live-fleet impact; pins are absolute).
+- 2026-06-15 — SUBJECT DELIVERED & CLOSED: all 7 PRs (#98–#104) + the locator follow-up (#105) merged to
+  main; reviewed all-Opus twice (fixes applied per-PR, re-review GO); main gates green. See README.md.
 
 ## Milestones (PR per milestone; verification gate each)
 
@@ -121,12 +123,18 @@ Client-side pair-completeness + transit-CIDR validation + a live validate before
 
 ## Status table
 
-| PR | Status | Commit |
+| PR | Status | PR# / merge commit |
 |----|--------|--------|
-| PR1 | done (lint+build green) | controller-nat/pr1-pin-reconcile |
-| PR2 | pending | — |
-| PR3 | pending | — |
-| PR4 | pending | — |
-| PR5 | pending | — |
-| PR6 | pending | — |
-| PR7 | pending | — |
+| PR1 | done — merged | #98 / `63ad33b` |
+| PR2 | done — merged | #99 / `e4afe99` |
+| PR3 | done — merged | #100 / `2ffe0e2` |
+| PR4 | done — merged | #101 / `baca9a7` |
+| PR5 | done — merged | #102 / `6cded0b` |
+| PR6 | done — merged | #103 / `9e41716` |
+| PR7 | done — merged | #104 / `899ff54` |
+| follow-up | done — merged | #105 (effective-range-overflow error locator nit) |
+
+All 7 PRs + 1 follow-up merged to main on 2026-06-15. Two all-Opus reviews: the comprehensive review
+(`wpxkwp77i`, 49 agents) found 0 hard blockers + 5 should-fix + 3 nits — all fixed on their source PR
+branches and propagated up the stack; the focused re-review of those fixes (`wlpo7gsfk`) returned **GO**.
+Integrated main green: `go build`/`vet`/`test ./internal/...` + frontend `lint`+`build`.
