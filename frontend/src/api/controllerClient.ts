@@ -4,8 +4,9 @@
 // 鉴权统一是 Authorization: Bearer <operatorToken>。后端响应是 snake_case JSON，本层
 // 在边界处把它映射成 camelCase 的 controller 类型（见 ../types/controller）。
 //
-// 错误约定：任何非 2xx 都抛出 Error(`${status} ${body}`)，让 store 把原始状态码与正文
-// 直接呈现给 operator（控制器是机器对机器的纯 JSON 接口，不做花哨的错误包装）。
+// 错误约定：任何非 2xx 都抛出 ControllerError，它在 .body 上保留后端的 coded 错误信封
+// （{ error: { code, message, params } }，非 JSON 正文则包成 { error: "<text>" }）。store 在
+// catch 处用 tError 据当前语言本地化（绝不把原始 "<status> <JSON>" 直接呈现给 operator）。
 
 import type {
   ControllerNode,
@@ -13,6 +14,39 @@ import type {
   StageResult,
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
+
+// ControllerError is thrown for any non-2xx controller response. It preserves the parsed coded
+// error envelope on .body so the store can localize it via tError; .status is the HTTP status and
+// .message is an English "<status> <body>" fallback for logs / non-localized contexts.
+export class ControllerError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(status: number, body: unknown, message: string) {
+    super(message);
+    this.name = 'ControllerError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+// controllerErrorFromText builds a ControllerError from an already-read response body: a JSON body
+// becomes the coded envelope tError localizes; a non-JSON body is wrapped as { error: <text> } so
+// tError still surfaces it. Used directly where the body was consumed for status branching (login).
+function controllerErrorFromText(status: number, text: string): ControllerError {
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : { error: '' };
+  } catch {
+    body = { error: text };
+  }
+  return new ControllerError(status, body, `${status} ${text}`);
+}
+
+// errorFromResponse drains a non-2xx Response and builds a ControllerError carrying the parsed
+// body. The Response body is consumed exactly once.
+async function errorFromResponse(res: Response): Promise<ControllerError> {
+  return controllerErrorFromText(res.status, await res.text());
+}
 
 // 控制器连接配置：operator base URL、可选的 secret path 前缀、operator bearer token。
 // 注意这是连接层配置，agentBaseURL 等面板偏好留在 store，不参与请求构造。
@@ -263,8 +297,7 @@ async function request(
   }
   const res = await fetch(ctlURL(cfg, route), { ...init, headers, credentials: 'include' });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${res.status} ${body}`);
+    throw await errorFromResponse(res);
   }
   return res;
 }
@@ -331,7 +364,7 @@ export async function login(
         /* not JSON — fall through to the generic error */
       }
     }
-    throw new Error(`${res.status} ${text}`);
+    throw controllerErrorFromText(res.status, text);
   }
   const data = (await res.json()) as LoginResponseJSON;
   return {
@@ -475,8 +508,7 @@ export async function passkeyLoginBegin(cfg: ControllerConfig, username: string)
     credentials: 'include',
   });
   if (!res.ok) {
-    const b = await res.text();
-    throw new Error(`${res.status} ${b}`);
+    throw await errorFromResponse(res);
   }
   return mapPasskeyChallenge((await res.json()) as passkeyChallengeJSON);
 }
@@ -495,8 +527,7 @@ export async function passkeyLoginFinish(
     credentials: 'include',
   });
   if (!res.ok) {
-    const b = await res.text();
-    throw new Error(`${res.status} ${b}`);
+    throw await errorFromResponse(res);
   }
   const d = (await res.json()) as LoginResponseJSON;
   return {
@@ -536,8 +567,7 @@ export async function getSession(cfg: ControllerConfig): Promise<SessionInfo | n
     return null;
   }
   if (!res.ok) {
-    const b = await res.text();
-    throw new Error(`${res.status} ${b}`);
+    throw await errorFromResponse(res);
   }
   const d = (await res.json()) as SessionResponseJSON;
   return { operator: d.operator, expiresAt: d.expires_at, csrfToken: d.csrf_token };
@@ -763,8 +793,7 @@ export async function getTrustlist(cfg: ControllerConfig): Promise<TrustListToSi
     return null;
   }
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${res.status} ${body}`);
+    throw await errorFromResponse(res);
   }
   const data = (await res.json()) as TrustListResponseJSON;
   return { trustlistJson: data.trustlist_json, epoch: data.epoch };

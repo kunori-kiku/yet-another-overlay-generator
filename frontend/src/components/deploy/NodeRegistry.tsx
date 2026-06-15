@@ -127,7 +127,13 @@ export function NodeRegistry() {
                     <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(n.lastSeen)}</td>
                     <td className="py-2 pr-3">
                       <button
-                        onClick={() => revoke(n.nodeId)}
+                        onClick={() => {
+                          // Revocation evicts a node from the fleet — confirm before firing (no
+                          // immediate, single-click destructive action).
+                          if (window.confirm(t(language, 'nodeRegistry.revokeConfirm', { node: n.nodeId }))) {
+                            revoke(n.nodeId);
+                          }
+                        }}
                         disabled={loading || n.status === 'revoked'}
                         className="px-2 py-1 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
                       >
