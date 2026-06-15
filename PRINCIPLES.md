@@ -23,6 +23,19 @@ principle-risk assessment.
 - **Backend is the sole port authority.** The frontend never allocates ports and never
   auto-stamps `endpoint_port`; a nonzero `endpoint_port` is an explicit operator NAT override
   only. Examples of violation: copying `public_endpoints[0].port` onto an edge at draw time.
+- **Signed-artifact self-update custody.** An agent NEVER executes a self-fetched binary (its own
+  replacement, or a mimic `.deb`) that it has not verified against a SHA-256 pin carried in the
+  controller-signed, keystone-bound `artifacts.json` (a `bundleFiles` member, covered by
+  `checksums.sha256` — `VerifyBundle` rejects a present-but-uncovered `artifacts.json`); and NEVER
+  downgrades below the health-confirmed `AgentVersionFloor` (which advances ONLY after a swapped
+  binary survives one clean cycle). The gh-proxy and github.com are untrusted transport. A bad
+  swap must not be able to brick a node: a crash-durable breadcrumb is reconciled on every boot
+  (promote on health / roll back to the prior binary / abandon at the attempt cap), bounding the
+  systemd restart loop. Examples of violation: trusting the upstream `.sha256` sidecar (same
+  untrusted transport as the binary); putting the pin in the unsigned `manifest.json`; changing
+  `verify.go`'s signature path; advancing the floor before a health-confirmed update; an unbounded
+  `Restart=always` swap loop. (Self-update touches only binaries — never WireGuard private keys, so
+  the Key-custody zero-knowledge guarantee below is unaffected.)
 
 ## Project-wide standards
 

@@ -33,33 +33,56 @@ type artifactsMimic struct {
 	Debs       map[string]renderer.Artifact `json:"debs,omitempty"`
 }
 
-// artifactsAgent is the RESERVED agent self-update block, filled by plan-9. Empty marshals as
-// "{}" so the schema is stable and plan-9 only adds fields.
-type artifactsAgent struct{}
+// artifactsAgent is the agent self-update block (plan-9): the version the node should run, the
+// floor below which it must update before applying a bundle, the release base URL the binary is
+// fetched from (the GitHub proxy is prepended at runtime, not stored here), and the
+// per-"linux-<arch>" binary asset + SHA-256 the agent verifies before exec. All fields omitempty,
+// so a node NOT in the rollout marshals an empty "{}" agent block — byte-identical to plan-3's
+// reserved-empty block. The floor's JSON key is min_version UNDER agent (.agent.min_version),
+// never a bare top-level min_version, to avoid conflation with the bundle anti-rollback floor.
+type artifactsAgent struct {
+	Version    string                       `json:"version,omitempty"`
+	MinVersion string                       `json:"min_version,omitempty"`
+	ReleaseURL string                       `json:"release_url,omitempty"`
+	Bins       map[string]renderer.Artifact `json:"bins,omitempty"`
+}
 
-// hasCatalog reports whether fs configures any external artifact (mimic or agent). When false,
-// buildArtifactsJSON returns "" and export emits no artifacts.json, so the air-gap bundle stays
-// byte-identical to today (D4).
+// hasCatalog reports whether fs configures any external artifact at the FLEET level (mimic or
+// agent). It answers the air-gap "is anything configured at all" question (used by the air-gap
+// loader/tests); the per-NODE emit decision is buildArtifactsJSON's, which additionally gates the
+// agent block on rollout membership.
 func hasCatalog(fs FetchSettings) bool {
 	return fs.MimicVersion != "" || len(fs.MimicDebs) > 0 ||
 		fs.AgentVersion != "" || len(fs.AgentBins) > 0
 }
 
-// buildArtifactsJSON serializes the artifacts.json content for fs, or returns "" when no catalog
-// is configured (the D4 air-gap-omit). The content is fleet-wide in plan-3 (the same pins for
-// every node); plan-9 makes the agent block per-node.
-func buildArtifactsJSON(fs FetchSettings) (string, error) {
-	if !hasCatalog(fs) {
+// buildArtifactsJSON serializes the artifacts.json content for ONE node, or returns "" when that
+// node gets neither a mimic nor an agent block (the D4 air-gap-omit / non-rollout case → export
+// omits the file). The MIMIC block is fleet-wide (every node with a mimic catalog gets the same
+// one); the AGENT block is PER-NODE — emitted only when a target version is set AND this node is
+// in the rollout set (canary subset, or the whole fleet once promoted). A node that gets only the
+// mimic block produces bytes identical to plan-3 (empty agent block "{}").
+func buildArtifactsJSON(fs FetchSettings, nodeID string) (string, error) {
+	hasMimic := fs.MimicVersion != "" || len(fs.MimicDebs) > 0
+	hasAgent := fs.AgentVersion != "" && fs.AgentRolloutNodeIDs[nodeID]
+	if !hasMimic && !hasAgent {
 		return "", nil
 	}
-	af := artifactsFile{
-		Schema: artifactsFileSchema,
-		Mimic: artifactsMimic{
+	af := artifactsFile{Schema: artifactsFileSchema}
+	if hasMimic {
+		af.Mimic = artifactsMimic{
 			Version:    fs.MimicVersion,
 			ReleaseURL: fs.MimicReleaseBase,
 			Debs:       fs.MimicDebs,
-		},
-		Agent: artifactsAgent{},
+		}
+	}
+	if hasAgent {
+		af.Agent = artifactsAgent{
+			Version:    fs.AgentVersion,
+			MinVersion: fs.AgentMinVersion,
+			ReleaseURL: fs.AgentReleaseBase,
+			Bins:       fs.AgentBins,
+		}
 	}
 	b, err := json.MarshalIndent(af, "", "  ")
 	if err != nil {

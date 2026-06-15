@@ -151,15 +151,47 @@ func CompileSubgraph(topo *model.Topology, nodes []Node, fs render.FetchSettings
 }
 
 // BuildFetchSettings maps the controller's persisted settings into the render-layer FetchSettings
-// channel that drives install.sh fetches + the signed artifacts.json. Plan-3 populates only the
-// mimic catalog; the agent self-update block is filled by plan-9 (reusing AgentReleaseBaseURL).
+// channel that drives install.sh fetches + the signed artifacts.json. It carries the mimic catalog
+// (plan-3) and the agent self-update scalars (plan-9, reusing AgentReleaseBaseURL as the agent
+// release base — no duplicate field). It does NOT set AgentRolloutNodeIDs: that per-node canary set
+// needs the node list, so the caller fills it via AgentRolloutNodeIDs(cs, nodes) — an empty target
+// version means no agent block is emitted regardless, so the set only matters when a rollout is on.
 func BuildFetchSettings(cs ControllerSettings) render.FetchSettings {
 	return render.FetchSettings{
 		GithubProxy:      cs.GithubProxy,
 		MimicVersion:     cs.MimicVersion,
 		MimicReleaseBase: cs.MimicReleaseBase,
 		MimicDebs:        cs.MimicDebs,
+		AgentVersion:     cs.TargetAgentVersion,
+		AgentMinVersion:  cs.MinAgentVersion,
+		AgentReleaseBase: cs.AgentReleaseBaseURL,
+		AgentBins:        cs.AgentBins,
 	}
+}
+
+// AgentRolloutNodeIDs computes the set of node IDs that receive the artifacts.json agent block
+// (and thus self-update) for the canary-then-fleet rollout (plan-9 D2). When the operator has
+// promoted the rollout fleet-wide, EVERY supplied node is in the set; otherwise only the
+// configured canary subset (intersected with the actual nodes) is. With no target version
+// configured the set is irrelevant (no agent block is emitted), but it is still computed honestly.
+func AgentRolloutNodeIDs(cs ControllerSettings, nodes []Node) map[string]bool {
+	set := make(map[string]bool)
+	if cs.AgentRolloutFleetWide {
+		for _, n := range nodes {
+			set[n.NodeID] = true
+		}
+		return set
+	}
+	canary := make(map[string]bool, len(cs.AgentCanaryNodeIDs))
+	for _, id := range cs.AgentCanaryNodeIDs {
+		canary[id] = true
+	}
+	for _, n := range nodes {
+		if canary[n.NodeID] {
+			set[n.NodeID] = true
+		}
+	}
+	return set
 }
 
 // CompileAndStage renders the enrolled subgraph of the stored topology into signed
@@ -222,6 +254,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		return StageResult{}, fmt.Errorf("controller: loading settings to stage: %w", err)
 	}
 	fs := BuildFetchSettings(cs.WithDefaults())
+	fs.AgentRolloutNodeIDs = AgentRolloutNodeIDs(cs, nodes)
 	result, subgraph, skipped, err := CompileSubgraph(&topo, nodes, fs)
 	if err != nil {
 		return StageResult{}, err

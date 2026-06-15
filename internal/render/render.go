@@ -167,6 +167,12 @@ type FetchSettings struct {
 	AgentMinVersion  string
 	AgentReleaseBase string
 	AgentBins        map[string]Artifact
+	// AgentRolloutNodeIDs is the set of node IDs that receive the artifacts.json AGENT block
+	// (plan-9 canary-then-fleet): the agent block is PER-NODE, so a canary subset self-updates
+	// while the rest of the fleet does not. A node's artifacts.json carries the agent block iff
+	// AgentVersion != "" AND AgentRolloutNodeIDs[nodeID]. Nil/empty ⇒ no node self-updates
+	// (the air-gap and pre-rollout default). The mimic block stays fleet-wide.
+	AgentRolloutNodeIDs map[string]bool
 }
 
 // All 把一份编译结果渲染成全部部署产物，并把结果写回 result 的各 map 字段：
@@ -228,16 +234,15 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs Fe
 	// template emits no fetch branch and install.sh stays byte-identical (air-gap byte-identity).
 	installFetch := renderer.InstallFetch{GithubProxy: fs.GithubProxy}
 
-	// artifacts.json content (fleet-wide mimic catalog + reserved agent block). Empty string when
-	// no catalog is configured — export then omits the file, keeping the air-gap bundle
-	// byte-identical (D4). Built once; it is the same for every node in this plan.
-	artifactsContent, err := buildArtifactsJSON(fs)
-	if err != nil {
-		return fmt.Errorf("building artifacts.json failed: %w", err)
-	}
-
 	//
 	for _, node := range result.Topology.Nodes {
+		// artifacts.json is PER-NODE (plan-9): the mimic block is fleet-wide, but the agent
+		// self-update block is emitted only for nodes in the rollout set. Empty ⇒ export omits
+		// the file, keeping a non-catalog / non-rollout bundle byte-identical (D4).
+		artifactsContent, err := buildArtifactsJSON(fs, node.ID)
+		if err != nil {
+			return fmt.Errorf("building artifacts.json failed: %w", err)
+		}
 		if artifactsContent != "" {
 			result.ArtifactsJSON[node.ID] = artifactsContent
 		}
