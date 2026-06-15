@@ -581,7 +581,7 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		// --- 规则：部分 pin（一端钉住、另一端为空）。逐资源检查。 ---
 		validatePinPairCompleteness(prefix, edge, result)
 
-		// --- 规则：端口越界（低于基准端口 defaultListenPort（51820），或 > 65535）。 ---
+		// --- 规则：端口越界（低于 minPinnedPort（1024，PR7 放宽后的手填下界），或 > 65535）。 ---
 		validatePinnedPortRange(prefix, "pinned_from_port", edge.PinnedFromPort, fromNode, result)
 		validatePinnedPortRange(prefix, "pinned_to_port", edge.PinnedToPort, toNode, result)
 
@@ -617,16 +617,24 @@ func validatePinPairCompleteness(prefix string, edge model.Edge, result *Validat
 	}
 }
 
+// minPinnedPort is the lower bound for an OPERATOR-CHOSEN pinned listen port (PR7). Auto-
+// allocation still starts at defaultListenPort (51820), but a port-restricted NAT VPS often only
+// forwards a fixed range BELOW 51820 (e.g. 30000-30100), and the internal listen port must fall
+// inside that range for the external→internal forward to work — so a manual pin may legitimately
+// go lower than the auto base. 1024 keeps pins out of the privileged-port range (the agent runs
+// as root and could bind lower, but 1-1023 risks clashing with system services) while admitting
+// every realistic NAT-VPS range.
+const minPinnedPort = 1024
+
 // validatePinnedPortRange 校验单个被钉住的端口是否落在合法区间内：
-// 必须 >= 基准端口 defaultListenPort（51820），且 <= 65535。
+// 必须 >= minPinnedPort（1024，PR7 放宽后的手填下界），且 <= 65535。
 // 端口为 0 表示未钉住，跳过（成对完整性由 validatePinPairCompleteness 负责）。
-// 注意：PR7 将放宽此下界，以支持只能转发固定端口段的 NAT VPS（彼时操作员可手填低于 51820 的内部端口）。
 func validatePinnedPortRange(prefix, field string, port int, node *model.Node, result *ValidationResult) {
 	if port == 0 {
 		return
 	}
-	if port < defaultListenPort || port > 65535 {
-		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(defaultListenPort)})
+	if port < minPinnedPort || port > 65535 {
+		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(minPinnedPort)})
 	}
 }
 

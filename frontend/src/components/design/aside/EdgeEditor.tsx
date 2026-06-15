@@ -2,11 +2,48 @@ import { useTopologyStore } from '../../../stores/topologyStore';
 import { t } from '../../../i18n';
 import { resolveEdgeInterface } from '../../../lib/compiledInterfaces';
 
+// MIN_PINNED_PORT mirrors the backend's minPinnedPort (validator) — the lower bound for an
+// operator-chosen pinned listen port. Auto-allocation still starts at 51820, but a port-
+// restricted NAT VPS may forward a fixed range below it, so manual pins go down to 1024.
+const MIN_PINNED_PORT = 1024;
+
+// Default transit pool when a domain leaves transit_cidr empty (mirrors the backend default).
+const DEFAULT_TRANSIT_CIDR = '10.10.0.0/24';
+
+// ipv4ToInt parses an IPv4 dotted-quad to a uint32, or null when malformed.
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.trim().split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    const o = parseInt(p, 10);
+    if (o < 0 || o > 255) return null;
+    n = (n << 8) | o;
+  }
+  return n >>> 0;
+}
+
+// ipv4InCidr reports whether an IPv4 address falls within an IPv4 CIDR. IPv4-only (transit pools
+// are IPv4); returns false on malformed input so the UI flags it (the backend validator is the
+// authoritative check — this is just early, inline feedback before Save).
+function ipv4InCidr(ip: string, cidr: string): boolean {
+  const [net, bitsStr] = cidr.split('/');
+  const bits = parseInt(bitsStr, 10);
+  if (isNaN(bits) || bits < 0 || bits > 32) return false;
+  const ipInt = ipv4ToInt(ip);
+  const netInt = ipv4ToInt(net);
+  if (ipInt === null || netInt === null) return false;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (ipInt & mask) === (netInt & mask);
+}
+
 // 连接（边）属性编辑器（从 RightPanel 的选中边区块原样抽出，含目标端点选择 / 传输协议 /
 // 链路角色 / 优先级 / 权重 / 备份链路 / 已固定分配 / 编译后实际值）。供 Design 右侧 aside 使用。
 export function EdgeEditor() {
   const language = useTopologyStore((s) => s.language);
   const nodes = useTopologyStore((s) => s.nodes);
+  const domains = useTopologyStore((s) => s.domains);
   const edges = useTopologyStore((s) => s.edges);
   const selectedEdgeId = useTopologyStore((s) => s.selectedEdgeId);
   const updateEdge = useTopologyStore((s) => s.updateEdge);
@@ -84,6 +121,49 @@ export function EdgeEditor() {
   const natForwardActive = natTargetPort !== undefined && natDialPort !== natTargetPort;
   const hasPinnedPort =
     selectedEdge.pinned_from_port !== undefined || selectedEdge.pinned_to_port !== undefined;
+
+  // PR7 — operator-settable pin validation (inline early feedback; the backend validator is the
+  // authoritative gate at Validate/Compile/Deploy). The transit pool is resolved from the edge's
+  // from-node domain (default 10.10.0.0/24), matching the backend's edgeTransitCIDR resolution.
+  const edgeTransitCidr =
+    (selectedEdgeFrom && domains.find((d) => d.id === selectedEdgeFrom.domain_id)?.transit_cidr) ||
+    DEFAULT_TRANSIT_CIDR;
+  const portPairIncomplete =
+    (selectedEdge.pinned_from_port !== undefined) !== (selectedEdge.pinned_to_port !== undefined);
+  const portOutOfRange = [selectedEdge.pinned_from_port, selectedEdge.pinned_to_port].some(
+    (p) => p !== undefined && (p < MIN_PINNED_PORT || p > 65535),
+  );
+  const transitPairIncomplete =
+    !!selectedEdge.pinned_from_transit_ip !== !!selectedEdge.pinned_to_transit_ip;
+  const transitOutOfPool = [
+    selectedEdge.pinned_from_transit_ip,
+    selectedEdge.pinned_to_transit_ip,
+  ].some((ip) => !!ip && !ipv4InCidr(ip, edgeTransitCidr));
+  const hasLinkLocalPin =
+    selectedEdge.pinned_from_link_local !== undefined ||
+    selectedEdge.pinned_to_link_local !== undefined;
+  // The pinned-allocation editor shows once the edge carries ANY pin (the common post-Compile /
+  // post-Deploy state) so the operator can adjust the NAT-relevant values, then Save.
+  const hasAnyPin =
+    hasPinnedPort ||
+    selectedEdge.pinned_from_transit_ip !== undefined ||
+    selectedEdge.pinned_to_transit_ip !== undefined ||
+    hasLinkLocalPin;
+
+  // setPinPort maps a number input's raw value to a pin field value: '' clears the pin
+  // (undefined); a valid integer sets it; anything else is ignored (keeps the prior value).
+  const setPinPort = (field: 'pinned_from_port' | 'pinned_to_port', raw: string) => {
+    if (raw === '') {
+      updateEdge(selectedEdge.id, { [field]: undefined });
+      return;
+    }
+    const parsed = parseInt(raw, 10);
+    if (!isNaN(parsed)) updateEdge(selectedEdge.id, { [field]: parsed });
+  };
+  const setPinTransit = (
+    field: 'pinned_from_transit_ip' | 'pinned_to_transit_ip',
+    raw: string,
+  ) => updateEdge(selectedEdge.id, { [field]: raw || undefined });
 
   return (
     <section>
@@ -346,45 +426,88 @@ export function EdgeEditor() {
             {t(language, 'backupEndpointNudge')}
           </p>
         )}
-        {/* 已固定的分配：编译器写回的 pin 值（端口 / transit IP / 链路本地地址）。
-            只读展示；操作员可显式解除固定以便下次编译重新分配。
-            参见 docs/spec/compiler/allocation-stability.md。 */}
-        {(selectedEdge.pinned_from_port !== undefined ||
-          selectedEdge.pinned_to_port !== undefined ||
-          selectedEdge.pinned_from_transit_ip !== undefined ||
-          selectedEdge.pinned_to_transit_ip !== undefined ||
-          selectedEdge.pinned_from_link_local !== undefined ||
-          selectedEdge.pinned_to_link_local !== undefined) && (
-          <div className="p-2 bg-gray-700/50 rounded space-y-1">
+        {/* 已固定的分配（PR7）：编译器/服务端写回的 pin，现可由操作员手填——把内部监听端口与
+            transit IP 钉到端口受限 NAT VPS 允许的范围内；Save 后持久化、下次编译/部署粘性沿用。
+            link-local 仍只读（自动 fe80::）。下方校验为即时行内反馈，后端校验器（Validate/Compile/
+            Deploy）才是权威闸门。参见 docs/spec/compiler/allocation-stability.md。 */}
+        {hasAnyPin && (
+          <div className="p-2 bg-gray-700/50 rounded space-y-2">
             <p className="text-xs text-gray-400 font-semibold">
               {t(language, 'edgeEditor.pinnedAllocation')}
             </p>
-            {hasPinnedPort &&
-              (selectedEdge.endpoint_host ? (
-                // NAT-relevant edge: show the DIRECTIONAL dial→listen mapping so the operator
-                // knows which internal port to point the external→internal forward at.
-                <div className="space-y-0.5">
-                  <p className="text-xs text-cyan-300 font-mono break-all">
-                    {t(language, 'edgeEditor.natForwardTitle')}: {selectedEdge.endpoint_host}:{natDialPort ?? '—'} → {natTargetNode?.name ? `${natTargetNode.name} ` : ''}{natTargetPort ?? '—'}
-                  </p>
-                  {natForwardActive && (
-                    <p className="text-[10px] text-gray-400">{t(language, 'edgeEditor.natForwardHint')}</p>
-                  )}
-                </div>
-              ) : (
-                // Direct (non-NAT) edge: the plain from→to listen-port pair.
-                <p className="text-xs text-cyan-300 font-mono">
-                  {t(language, 'edgeEditor.ports')}: {selectedEdge.pinned_from_port ?? '—'} → {selectedEdge.pinned_to_port ?? '—'}
+            {/* Directional NAT readout (info): which internal port the external→internal forward
+                must target. Shown when the edge dials a host (endpoint_host). */}
+            {hasPinnedPort && selectedEdge.endpoint_host && (
+              <div className="space-y-0.5">
+                <p className="text-xs text-cyan-300 font-mono break-all">
+                  {t(language, 'edgeEditor.natForwardTitle')}: {selectedEdge.endpoint_host}:{natDialPort ?? '—'} → {natTargetNode?.name ? `${natTargetNode.name} ` : ''}{natTargetPort ?? '—'}
                 </p>
-              ))}
-            {(selectedEdge.pinned_from_transit_ip !== undefined ||
-              selectedEdge.pinned_to_transit_ip !== undefined) && (
-              <p className="text-xs text-cyan-300 font-mono break-all">
-                {t(language, 'edgeEditor.transitIPs')}: {selectedEdge.pinned_from_transit_ip ?? '—'} → {selectedEdge.pinned_to_transit_ip ?? '—'}
-              </p>
+                {natForwardActive && (
+                  <p className="text-[10px] text-gray-400">{t(language, 'edgeEditor.natForwardHint')}</p>
+                )}
+              </div>
             )}
-            {(selectedEdge.pinned_from_link_local !== undefined ||
-              selectedEdge.pinned_to_link_local !== undefined) && (
+            {/* Editable listen ports (from → to). */}
+            <div>
+              <label className="text-xs text-gray-400">{t(language, 'edgeEditor.ports')}</label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={selectedEdge.pinned_from_port ?? ''}
+                  onChange={(e) => setPinPort('pinned_from_port', e.target.value)}
+                  placeholder={t(language, 'edgeEditor.pinFrom')}
+                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
+                />
+                <span className="text-gray-500">→</span>
+                <input
+                  type="number"
+                  value={selectedEdge.pinned_to_port ?? ''}
+                  onChange={(e) => setPinPort('pinned_to_port', e.target.value)}
+                  placeholder={t(language, 'edgeEditor.pinTo')}
+                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
+                />
+              </div>
+              {portPairIncomplete && (
+                <p className="text-[10px] text-yellow-400 mt-0.5">{t(language, 'edgeEditor.pinPairBoth')}</p>
+              )}
+              {portOutOfRange && (
+                <p className="text-[10px] text-yellow-400 mt-0.5">
+                  {t(language, 'edgeEditor.pinPortRange', { min: MIN_PINNED_PORT })}
+                </p>
+              )}
+            </div>
+            {/* Editable transit IPs (from → to), chosen from the edge's transit pool. */}
+            <div>
+              <label className="text-xs text-gray-400">{t(language, 'edgeEditor.transitIPs')}</label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={selectedEdge.pinned_from_transit_ip ?? ''}
+                  onChange={(e) => setPinTransit('pinned_from_transit_ip', e.target.value)}
+                  placeholder={t(language, 'edgeEditor.pinFrom')}
+                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none font-mono"
+                />
+                <span className="text-gray-500">→</span>
+                <input
+                  type="text"
+                  value={selectedEdge.pinned_to_transit_ip ?? ''}
+                  onChange={(e) => setPinTransit('pinned_to_transit_ip', e.target.value)}
+                  placeholder={t(language, 'edgeEditor.pinTo')}
+                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none font-mono"
+                />
+              </div>
+              <p className="text-[10px] text-gray-500 mt-0.5">
+                {t(language, 'edgeEditor.transitPoolPick', { cidr: edgeTransitCidr })}
+              </p>
+              {transitPairIncomplete && (
+                <p className="text-[10px] text-yellow-400 mt-0.5">{t(language, 'edgeEditor.pinPairBoth')}</p>
+              )}
+              {transitOutOfPool && (
+                <p className="text-[10px] text-yellow-400 mt-0.5">{t(language, 'edgeEditor.transitOutOfPool')}</p>
+              )}
+            </div>
+            {/* Link-locals stay read-only (auto fe80::; manual editing is error-prone). */}
+            {hasLinkLocalPin && (
               <p className="text-xs text-cyan-300 font-mono break-all">
                 {t(language, 'edgeEditor.linkLocals')}: {selectedEdge.pinned_from_link_local ?? '—'} → {selectedEdge.pinned_to_link_local ?? '—'}
               </p>
