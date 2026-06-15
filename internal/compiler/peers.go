@@ -827,14 +827,12 @@ func gapFillLinkLocalPair(usedLinkLocals map[string]bool) (string, string) {
 	}
 }
 
-// lowestFreePort 返回某节点不低于其 base listen_port 的最低空闲端口（在 usedPorts 中跳过已用值）。
-// base 默认 51820。有效端口不得超过 65535（审计项 D11）：超过即返回干净的编译期错误，
-// 避免渲染出 wg-quick 在部署期才会拒绝的非法端口。
+// lowestFreePort 返回某节点不低于基准端口 51820 的最低空闲端口（在 usedPorts 中跳过已用值）。
+// 基准端口是固定的 51820——per-node listen_port 在 per-peer 接口模型下无意义，已移除。
+// 有效端口不得超过 65535（审计项 D11）：超过即返回干净的编译期错误，
+// 避免渲染出 wg-quick 在部署期才会拒绝的非法端口。node 仍需用于错误消息（node.Name）与按节点去重（node.ID）。
 func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, error) {
-	base := node.ListenPort
-	if base == 0 {
-		base = 51820
-	}
+	const base = 51820
 	used := usedPorts[node.ID]
 	for port := base; port <= 65535; port++ {
 		if used == nil || !used[port] {
@@ -1055,11 +1053,8 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			appendCIDR(transitCIDR)
 		}
 
-		// Client 监听端口
-		listenPort := node.ListenPort
-		if listenPort == 0 {
-			listenPort = 51820
-		}
+		// Client 监听端口（固定基准 51820；per-node listen_port 已移除）。
+		listenPort := 51820
 
 		// mimic 性取自 client 的唯一出站 edge 的 transport（docs/spec/data-model/edge.md
 		// §TCP transport）；MTU 用 client（node）MTU 按 mimic 公式推导

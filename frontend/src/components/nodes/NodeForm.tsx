@@ -45,7 +45,6 @@ export function NodeForm() {
   const [role, setRole] = useState<NodeRole>('peer');
   const [domainId, setDomainId] = useState('');
   const [hostname, setHostname] = useState('');
-  const [listenPort, setListenPort] = useState(51820);
   // UX-5：顶层“公网地址”输入（主入口）。非空即派生 has_public_ip=true 并生成 public_endpoints[0]。
   const [publicAddress, setPublicAddress] = useState('');
   // 复选框现降为“高级”路径，揭示多端点（多组公网映射）编辑区；不再是公网可达的唯一开关。
@@ -113,7 +112,6 @@ export function NodeForm() {
       hostname: hostname.trim() || undefined,
       role,
       domain_id: targetDomain,
-      listen_port: listenPort,
       mtu: mtu > 0 ? mtu : undefined,
       capabilities,
       // Defense-in-depth: never write the local-only pin flag from controller mode, even if the
@@ -202,13 +200,6 @@ export function NodeForm() {
         <option value="gateway">Gateway</option>
         <option value="client">Client</option>
       </select>
-      <input
-        type="number"
-        placeholder={t(language, 'nodeForm.listenPort')}
-        value={listenPort}
-        onChange={(e) => setListenPort(parseInt(e.target.value) || 51820)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
-      />
       <input
         type="number"
         min={576}

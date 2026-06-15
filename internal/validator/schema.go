@@ -210,11 +210,6 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// ListenPort
-		if node.ListenPort < 0 || node.ListenPort > 65535 {
-			result.AddError(prefix+".listen_port", CodeNodeListenPortInvalid, P{"port", strconv.Itoa(node.ListenPort)})
-		}
-
 		// MTU 校验（D64）：0 表示使用系统默认值（通常 1420），跳过。
 		// 非零时必须落在 [576, 65535] 内——低于 576（IPv4 数据报最小重组缓冲）
 		// 或高于 65535 的 MTU 会被 wg-quick 拒绝，生成无法部署的 WireGuard 配置。

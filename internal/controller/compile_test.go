@@ -39,17 +39,17 @@ func stageTestTopo() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-router", Name: "router", Hostname: "router.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 			{
 				ID: "node-peer", Name: "peer",
-				Role: "peer", DomainID: "domain-1", ListenPort: 51820,
+				Role: "peer", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: false, CanForward: false, HasPublicIP: false},
 			},
 			{
 				ID: "node-client", Name: "client",
-				Role: "client", DomainID: "domain-1", ListenPort: 51820,
+				Role: "client", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: false, CanForward: false, HasPublicIP: false},
 			},
 		},

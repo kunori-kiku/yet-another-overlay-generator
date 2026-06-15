@@ -167,11 +167,11 @@ func TestValidateSchema_SSHKeyPathCharset(t *testing.T) {
 	}
 }
 
-// portRangeTopology 构造一个最小拓扑：单个 router 节点，给定基准端口、hostname，
-// 以及连向 peerCount 个对端 peer 的启用边。每条边都是一个去重节点对，
-// 因此该 router 会获得 peerCount 个 per-peer 接口，生效监听端口范围为
-// [base, base+peerCount-1]，用于覆盖生效端口越界校验（D11）。
-func portRangeTopology(base, peerCount int, hostname string) *model.Topology {
+// portRangeTopology 构造一个最小拓扑：单个 router 节点，给定 hostname，以及连向 peerCount
+// 个对端 peer 的启用边。每条边都是一个去重节点对，因此该 router 会获得 peerCount 个 per-peer
+// 接口，生效监听端口范围为 [51820, 51820+peerCount-1]（基准端口统一为 51820），用于覆盖
+// 生效端口范围校验（D11）。
+func portRangeTopology(peerCount int, hostname string) *model.Topology {
 	topo := &model.Topology{
 		Project: model.Project{ID: "test-port", Name: "Port Range Test"},
 		Domains: []model.Domain{
@@ -185,12 +185,11 @@ func portRangeTopology(base, peerCount int, hostname string) *model.Topology {
 		},
 		Nodes: []model.Node{
 			{
-				ID:         "hub",
-				Name:       "hub",
-				Hostname:   hostname,
-				Role:       "router",
-				DomainID:   "domain-1",
-				ListenPort: base,
+				ID:       "hub",
+				Name:     "hub",
+				Hostname: hostname,
+				Role:     "router",
+				DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true,
 					CanForward:       true,
@@ -235,9 +234,9 @@ func transportTopology(transport string) *model.Topology {
 			{ID: "domain-1", Name: "net", CIDR: "10.10.0.0/24", AllocationMode: "auto", RoutingMode: "babel"},
 		},
 		Nodes: []model.Node{
-			{ID: "a", Name: "a", Role: "router", DomainID: "domain-1", ListenPort: 51820,
+			{ID: "a", Name: "a", Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true}},
-			{ID: "b", Name: "b", Role: "router", DomainID: "domain-1", ListenPort: 51820,
+			{ID: "b", Name: "b", Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true}},
 		},
 		Edges: []model.Edge{
@@ -286,19 +285,11 @@ func itoaTest(n int) string {
 	return string(buf)
 }
 
-// TestValidateSemantic_EffectivePortRangeOverflow 覆盖生效监听端口越界（D11）：
-// 基准端口 65530 的节点连向 8 个对端，会占用 8 个接口（端口 65530..65537），
-// 最高端口 65537 超过 65535，必须报错。
-func TestValidateSemantic_EffectivePortRangeOverflow(t *testing.T) {
-	topo := portRangeTopology(65530, 8, "")
-	result := ValidateSemantic(topo)
-	assertHasError(t, result, "nodes[0].listen_port")
-}
-
-// TestValidateSemantic_EffectivePortRangeInBounds 验证基准端口 51820 的节点连向
-// 8 个对端时（端口 51820..51827）不会触发越界错误。
+// TestValidateSemantic_EffectivePortRangeInBounds 验证统一基准端口 51820 的节点连向 8 个对端时
+// （端口 51820..51827）不会触发越界错误。基准端口移除后无法再人为构造越界基准——越界规则在
+// base=51820 下需上万个接口才会触发，已退化为防御性保留，故不再单测越界报错路径。
 func TestValidateSemantic_EffectivePortRangeInBounds(t *testing.T) {
-	topo := portRangeTopology(51820, 8, "")
+	topo := portRangeTopology(8, "")
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
 		if contains(e.Field, "nodes[0].listen_port") {
@@ -307,10 +298,11 @@ func TestValidateSemantic_EffectivePortRangeInBounds(t *testing.T) {
 	}
 }
 
-// sameHostTopology 构造两个共享同一非空 hostname 的 router 节点，
-// 各自的基准端口与对端接口数可独立设置，用于覆盖同主机生效范围重叠校验（D47）。
-// 每个 hub 各连向独立的一组 peer，使两个 hub 的接口数互不干扰。
-func sameHostTopology(hostname string, baseA, ifacesA, baseB, ifacesB int) *model.Topology {
+// sameHostTopology 构造两个共享同一非空 hostname 的 router 节点，各自连向独立的一组 peer
+// （接口数可独立设置）。基准端口统一为 51820 后，旧的「同主机生效范围重叠」规则已删除——
+// 否则任意两个共置节点都会被误判重叠，从而阻断所有「一机多节点」部署。本助手用于覆盖
+// 共置节点必须校验通过的回归。
+func sameHostTopology(hostname string, ifacesA, ifacesB int) *model.Topology {
 	topo := &model.Topology{
 		Project: model.Project{ID: "test-samehost", Name: "Same Host Test"},
 		Domains: []model.Domain{
@@ -324,12 +316,11 @@ func sameHostTopology(hostname string, baseA, ifacesA, baseB, ifacesB int) *mode
 		},
 		Nodes: []model.Node{
 			{
-				ID:         "hub-a",
-				Name:       "hub-a",
-				Hostname:   hostname,
-				Role:       "router",
-				DomainID:   "domain-1",
-				ListenPort: baseA,
+				ID:       "hub-a",
+				Name:     "hub-a",
+				Hostname: hostname,
+				Role:     "router",
+				DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true,
 					CanForward:       true,
@@ -337,12 +328,11 @@ func sameHostTopology(hostname string, baseA, ifacesA, baseB, ifacesB int) *mode
 				},
 			},
 			{
-				ID:         "hub-b",
-				Name:       "hub-b",
-				Hostname:   hostname,
-				Role:       "router",
-				DomainID:   "domain-1",
-				ListenPort: baseB,
+				ID:       "hub-b",
+				Name:     "hub-b",
+				Hostname: hostname,
+				Role:     "router",
+				DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true,
 					CanForward:       true,
@@ -383,25 +373,16 @@ func sameHostTopology(hostname string, baseA, ifacesA, baseB, ifacesB int) *mode
 	return topo
 }
 
-// TestValidateSemantic_SameHostRangeOverlap 覆盖同主机生效范围重叠（D47）：
-// hub-a 基准 51820 占 3 个接口（51820-51822），hub-b 基准 51821 占 1 个接口（51821），
-// 二者共享同一 hostname 且范围重叠，必须报错。
-func TestValidateSemantic_SameHostRangeOverlap(t *testing.T) {
-	topo := sameHostTopology("shared.example.com", 51820, 3, 51821, 1)
-	result := ValidateSemantic(topo)
-	// 重叠错误报在下标较大的节点（hub-b）的 listen_port 上。
-	assertHasError(t, result, "nodes[1].listen_port")
-}
-
-// TestValidateSemantic_SameHostRangeDisjoint 验证同主机但范围互不相交时不报错：
-// hub-a 基准 51820 占 3 个接口（51820-51822），hub-b 基准 51900 占 3 个接口（51900-51902），
-// 区间不相交，应当通过。
-func TestValidateSemantic_SameHostRangeDisjoint(t *testing.T) {
-	topo := sameHostTopology("shared.example.com", 51820, 3, 51900, 3)
+// TestValidateSemantic_CoHostedNodesValidateClean 是 listen_port 移除的回归守卫：基准端口统一为
+// 51820 后，两个共享同一 hostname 的节点（各有 >=1 个 per-peer 接口）其生效端口范围必然重叠——
+// 旧的「同主机范围重叠」规则会因此误杀所有「一机多节点」部署，故该规则已删除。此处正是这种共置
+// 场景，断言不再产生任何 listen_port 错误。
+func TestValidateSemantic_CoHostedNodesValidateClean(t *testing.T) {
+	topo := sameHostTopology("shared.example.com", 3, 3)
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
 		if contains(e.Field, "listen_port") {
-			t.Errorf("不相交的同主机范围不应报错，却得到：%s", e.Error())
+			t.Errorf("共置节点（一机多节点）不应再产生 listen_port 错误，却得到：%s", e.Error())
 		}
 	}
 }

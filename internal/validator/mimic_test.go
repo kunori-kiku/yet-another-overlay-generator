@@ -19,9 +19,9 @@ func mimicTransportTopology(transport, fromPlatform, toPlatform string) *model.T
 			{ID: "domain-1", Name: "net", CIDR: "10.10.0.0/24", AllocationMode: "auto", RoutingMode: "babel"},
 		},
 		Nodes: []model.Node{
-			{ID: "a", Name: "a", Role: "router", DomainID: "domain-1", ListenPort: 51820, Platform: fromPlatform,
+			{ID: "a", Name: "a", Role: "router", DomainID: "domain-1", Platform: fromPlatform,
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true}},
-			{ID: "b", Name: "b", Role: "router", DomainID: "domain-1", ListenPort: 51820, Platform: toPlatform,
+			{ID: "b", Name: "b", Role: "router", DomainID: "domain-1", Platform: toPlatform,
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true}},
 		},
 		Edges: []model.Edge{

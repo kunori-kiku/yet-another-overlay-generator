@@ -39,7 +39,6 @@ export interface Node {
   role: 'peer' | 'router' | 'relay' | 'gateway' | 'client';
   domain_id: string;
   overlay_ip?: string;
-  listen_port?: number;
   mtu?: number;
   // mimic（transport=tcp）的 XDP 附着模式：留空/'skb' = 通用 XDP（默认，兼容性最好）；
   // 'native' = 驱动级 XDP（更快，需网卡支持）。详见 docs/spec/artifacts/mimic.md。
