@@ -1,38 +1,33 @@
 # STATUS
 <!-- regenerated: 2026-06-15 -->
-<!-- by: close-phase (subject: controller-nat-customization) + post-release update (v2.0.0-preview.10) -->
+<!-- by: draft-implementation-plan (subject: signed-self-update-and-rc-hardening) -->
 
 ## Active work
 
-- **Subject:** none active. `controller-nat-customization-2026_06_15` just closed **DELIVERED** and
-  moved to `implementation_plans/_completed/`. The only remaining non-archived folder is
-  `implementation_plans/controller-panel-2026_06_08/` — status not assessed; a candidate for its own
-  review/closure or a draft-the-next-subject decision.
-- **Branch:** `main` @ `b32a10e` — only `main` remains (all merged work branches deleted:
-  `controller-nat/*` + the stale `plan-*` from the prior subject).
-- **Released:** `v2.0.0-preview.10` (2026-06-15) — #97 + the controller-nat subject (#98–#106);
-  `preview.9` already shipped the i18n + structural-hardening program through #96.
-- **Current plan:** all-done for the closed subject.
-- **Last shipped:** controller-nat-customization — server-authoritative compile + sticky
-  operator-settable NAT port/IP per edge + `listen_port` removal (PRs #98–#104), plus the
-  effective-range-overflow locator follow-up (#105) and closeout (#106), `899ff54`, 2026-06-15.
-  Reviewed all-Opus twice (comprehensive `wpxkwp77i` → 5 should-fix + 3 nits fixed per-PR;
-  re-review `wlpo7gsfk` → GO).
+- **Subject:** `signed-self-update-and-rc-hardening-2026_06_15` — **DRAFTED, awaiting execution** (10 plans;
+  two release milestones: beta.1 = plans 1–8, beta.2 = plans 9–10). Combines mimic-from-GitHub install +
+  signed agent self-update ("both now") + the full RC-hardening sweep (Units A+B+C). Refined via 3 all-Opus
+  workflows (`wfhuw2hd8` design, `wxajvgzp5` comprehensiveness, on the `wiakgi4v5` RC survey).
+- **Branch:** `plan/signed-self-update-and-rc-hardening` (plan docs, off main); `rc-hardening` carries the
+  already-landed Apache-2.0 LICENSE+NOTICE (plan-1's first deliverable).
+- **Released:** `v2.0.0-preview.10` (latest); the subject targets `beta.1` next, then `beta.2`; rc.1 a later
+  owner call.
+- **Current plan:** plan-1 (RC paperwork & trust) — pending; runs parallel to plan-2/6.
 
 ## Open questions / blockers
 
-- **Live NAT round-trip owed (manual).** The subject's end-to-end closure criterion — Compile → edit
-  internal port + transit IP on a port-restricted NAT VPS → Save → deploy → confirm the agent listens
-  on the chosen port/IP and the forward survives a re-deploy (no drift). Needs a browser + a real NAT
-  VPS; code paths are unit/build-verified.
-- **Two-node controller smoke owed** (manual; browser + authenticator + two real nodes) — carried from
-  the keystone program; code paths are unit/build-verified.
-- No code blockers. `go build/vet/test ./internal/...` + frontend `lint`/`build` green on `main`.
+- **Locked owner decisions** (in the outline Decisions log): beta.1 excludes the self-update swap (→ beta.2);
+  self-update = canary-then-fleet; full validator none-yet table; release.yml publishes agent SHAs now,
+  bootstrap-TOFU hole deferred to rc.2; Apache-2.0; manual mimic catalog; air-gap omits `artifacts.json`.
+- **Two manual hardware smokes** (two-node controller login/hydration; NAT sticky round-trip) — gate the
+  beta.1 TAG (plan-8), not code-merge. Plus a self-update field smoke gates beta.2 (plan-10).
+- No code blockers. `main` green; the subject is drafted, not executed.
 
 ## Next actions
 
-1. **Live NAT round-trip + two-node controller smoke** on a real deployment when convenient.
-2. **Next subject** — either review/close `controller-panel-2026_06_08`, or draft the next subject.
+1. **Execute plan-1** (RC paperwork & trust) — no code, runs parallel to everything; then plan-2 (FetchSettings
+   byte-identical gate) → plan-3 (mimic) → plan-4 (version reporting), with plan-6 (robustness) in parallel.
+2. Owner to run the two beta.1 hardware smokes when convenient (plan-8 gate).
 
 ## Recently closed subjects (last 3)
 
