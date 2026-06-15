@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { t } from '../../i18n';
+import { localizeError } from '../../lib/localizeError';
 
 // 登录 Passkey（plan-5.2）：让已用密码登录的 operator 注册/移除一个 WebAuthn 登录 passkey
 // ——phishing-resistant 的第二因子，且可用于无密码登录。它与 keystone 的签名 passkey 是不同
@@ -35,7 +36,7 @@ export function PasskeySettings() {
     try {
       await registerPasskey();
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to register passkey');
+      setLocalError(localizeError(err, language));
     }
   };
 
@@ -44,7 +45,7 @@ export function PasskeySettings() {
     try {
       await disablePasskey();
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to disable passkey');
+      setLocalError(localizeError(err, language));
     }
   };
 

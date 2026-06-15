@@ -41,25 +41,21 @@ import {
   passkeyLoginFinish,
   getSession,
   getTopology as ctlGetTopology,
-  ControllerError,
 } from '../api/controllerClient';
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { stripPrivateKeys } from '../lib/custody';
+import { localizeError as localizeErrorFor } from '../lib/localizeError';
 import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
 import { useUiStore } from './uiStore';
-import { t, tError, type MessageKey, type TParams } from '../i18n';
+import { t, type MessageKey, type TParams } from '../i18n';
 
-// localizeError turns a caught error into an operator-facing, LANGUAGE-LOCALIZED string. A
-// ControllerError carries the backend's coded error envelope, so tError localizes it through the
-// 'error.<code>' catalog (no raw "<status> <JSON>" ever reaches the UI); any other Error keeps its
-// browser-generated message; a non-Error falls back to the given catalog key. Language is read live
-// from the topology store (the panel's single source of UI language).
+// localizeError localizes a caught error at the live UI language via the shared localizer (a
+// ControllerError -> tError so no raw "<status> <JSON>" reaches the UI; else its message; else the
+// fallback key). A thin wrapper that supplies the language so the store's catch sites stay terse;
+// the same shared localizer is used by the components that surface re-thrown errors.
 function localizeError(err: unknown, fallbackKey: MessageKey): string {
-  const lang = useTopologyStore.getState().language;
-  if (err instanceof ControllerError) return tError(err.body, lang);
-  if (err instanceof Error && err.message) return err.message;
-  return t(lang, fallbackKey);
+  return localizeErrorFor(err, useTopologyStore.getState().language, fallbackKey);
 }
 
 // tLocal localizes a catalog key against the live UI language — for store-set notices that are not
@@ -961,7 +957,7 @@ export const useControllerStore = create<ControllerState>()(
           const ch = begin.challenge;
           if (!ch.credentialId || !ch.alg) {
             set({ loginCeremony: false });
-            throw new Error('Cannot disable: no credential to re-authenticate with.');
+            throw new Error(tLocal('controllerStore.cannotDisableNoCredential'));
           }
           const assertion = await assertLogin(
             ch.challenge,

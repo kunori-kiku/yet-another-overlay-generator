@@ -184,10 +184,10 @@ export function EdgeEditor() {
             }
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
           >
-            <option value="direct">Direct</option>
-            <option value="public-endpoint">Public Endpoint</option>
-            <option value="relay-path">Relay Path</option>
-            <option value="candidate">Candidate</option>
+            <option value="direct">{t(language, 'edgeEditor.typeDirect')}</option>
+            <option value="public-endpoint">{t(language, 'edgeEditor.typePublicEndpoint')}</option>
+            <option value="relay-path">{t(language, 'edgeEditor.typeRelayPath')}</option>
+            <option value="candidate">{t(language, 'edgeEditor.typeCandidate')}</option>
           </select>
         </div>
         {/* Endpoint IP — pick from target's public IPs or manual */}

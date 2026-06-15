@@ -61,11 +61,11 @@ const router = createBrowserRouter([
 
 function App() {
   return (
-    <ThemeProvider>
-      <ErrorBoundary>
+    <ErrorBoundary>
+      <ThemeProvider>
         <RouterProvider router={router} />
-      </ErrorBoundary>
-    </ThemeProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }
 

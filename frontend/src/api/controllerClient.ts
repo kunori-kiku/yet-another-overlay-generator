@@ -692,8 +692,9 @@ export async function getTopology(cfg: ControllerConfig): Promise<unknown | null
     const res = await request(cfg, 'topology', { method: 'GET' });
     return (await res.json()) as unknown;
   } catch (err) {
-    // request() 抛 Error(`${status} ${body}`)；404 是「尚无拓扑」的正常形状。
-    if (err instanceof Error && err.message.startsWith('404')) {
+    // request() throws ControllerError on non-2xx; 404 = "no topology stored yet" (the normal
+    // first-run shape), surfaced as null. Match on the typed status, not the message string.
+    if (err instanceof ControllerError && err.status === 404) {
       return null;
     }
     throw err;

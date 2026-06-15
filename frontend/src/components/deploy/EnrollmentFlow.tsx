@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
+import { localizeError } from '../../lib/localizeError';
 
 // 注册流程：操作员从拓扑里选一个节点 + 一个 TTL，铸造一次性 enrollment token，
 // 然后把生成的 token 与可复制的 `agent enroll ...` 命令交给节点持有者执行。
@@ -66,7 +67,7 @@ export function EnrollmentFlow() {
       setToken(result.token);
       setMintWarning(result.warning);
     } catch (err) {
-      setMintError(err instanceof Error ? err.message : 'Failed to mint enrollment token');
+      setMintError(localizeError(err, language));
     } finally {
       setMinting(false);
     }
