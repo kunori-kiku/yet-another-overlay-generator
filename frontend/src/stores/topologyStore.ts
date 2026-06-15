@@ -19,6 +19,20 @@ import { dropAllKeys } from '../lib/custody';
 // custody (plan-5, D5).
 import { useControllerStore } from './controllerStore';
 
+// The server-derived per-edge allocation fields: the compiled_port echo plus the six
+// pinned_* ports / transit IPs / link-locals. mergeServerAllocations overlays exactly
+// these. KEEP IN SYNC with EDGE_OMITEMPTY's pin entries in controllerStore.ts and with
+// controllerStore's ALLOC_PIN_FIELDS (the conflict-check pin set).
+const ALLOCATION_PIN_FIELDS = [
+  'compiled_port',
+  'pinned_from_port',
+  'pinned_to_port',
+  'pinned_from_transit_ip',
+  'pinned_to_transit_ip',
+  'pinned_from_link_local',
+  'pinned_to_link_local',
+] as const;
+
 interface TopologyState {
   // 数据
   project: Project;
@@ -75,6 +89,19 @@ interface TopologyState {
   // 参见 docs/spec/data-model/edge.md（§Parallel links）。
   addBackupEdge: (primaryEdgeId: string) => string | null;
   updateEdge: (id: string, updates: Partial<Edge>) => void;
+  // mergeServerAllocations overlays the server's per-edge compiled allocation (the
+  // server-derived compiled_port echo + the six pinned_* ports / transit IPs / link-locals)
+  // onto the matching canvas edges BY EDGE ID, leaving every other edge field and the current
+  // selection / compile history untouched (no full reload). Used after a deploy/compile so the
+  // operator immediately SEES the allocated internal port + IP — the value a NAT port-forward
+  // must target. Two modes:
+  //   - baseEdges OMITTED: unconditional — the server is authoritative, mirror all allocation
+  //     fields verbatim (including a cleared pin). For deploy/compile reconciliation.
+  //   - baseEdges GIVEN: conditional non-clobber adoption — adopt a server pin ONLY when
+  //     neither the canvas NOR the last-synced base had one (i.e. the server ADDED it). An
+  //     operator-set or operator-unpinned value (canvas or base defined) is preserved. For
+  //     save-time, so even a force-Save never drops a NAT pin the operator never saw.
+  mergeServerAllocations: (serverEdges: Edge[], baseEdges?: Edge[]) => void;
   removeEdge: (id: string) => void;
   // 当某节点的 public_endpoints 主机变更/移除时，同步指向它的 edge 上快照的 endpoint_host
   reconcileEdgeEndpoints: (
@@ -366,6 +393,40 @@ export const useTopologyStore = create<TopologyState>()(
         e.id === id ? { ...e, ...updates } : e
       ),
     })),
+
+  mergeServerAllocations: (serverEdges, baseEdges) =>
+    set((state) => {
+      const srv = new Map(serverEdges.map((e) => [e.id, e]));
+      const base = baseEdges ? new Map(baseEdges.map((e) => [e.id, e])) : null;
+      let changed = false;
+      const edges = state.edges.map((e) => {
+        const s = srv.get(e.id);
+        if (!s) return e; // edge not in the server set — leave it (set divergence handled upstream)
+        const cur = e as unknown as Record<string, unknown>;
+        const srvRec = s as unknown as Record<string, unknown>;
+        const baseRec = base?.get(e.id) as unknown as Record<string, unknown> | undefined;
+        const next: Record<string, unknown> = { ...cur };
+        let edgeChanged = false;
+        for (const f of ALLOCATION_PIN_FIELDS) {
+          if (base) {
+            // Conditional non-clobber adoption: take a server pin only when the server ADDED
+            // it (neither canvas nor base carried one). Operator-set / operator-unpinned wins.
+            if (cur[f] === undefined && srvRec[f] !== undefined && (!baseRec || baseRec[f] === undefined)) {
+              next[f] = srvRec[f];
+              edgeChanged = true;
+            }
+          } else if (cur[f] !== srvRec[f]) {
+            // Unconditional reconciliation: the server is authoritative for these fields.
+            next[f] = srvRec[f];
+            edgeChanged = true;
+          }
+        }
+        if (!edgeChanged) return e;
+        changed = true;
+        return next as unknown as Edge;
+      });
+      return changed ? { edges } : { edges: state.edges };
+    }),
 
   removeEdge: (id) =>
     set((state) => ({
