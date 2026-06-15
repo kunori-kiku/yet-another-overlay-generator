@@ -804,6 +804,13 @@ func (s *MemStore) AppendAudit(ctx context.Context, t TenantID, e AuditEntry) (A
 	ts.audit = append(ts.audit, entry)
 	ts.lastHash = entry.Hash
 	ts.nextSeq++
+	// Bound the in-memory log (plan-6): once it reaches auditRotateAt, keep only the most
+	// recent auditRetain. Copy into a fresh slice so the dropped prefix's backing array is
+	// released rather than pinned by a re-slice. Seq/lastHash keep advancing — the retained
+	// window stays a valid chain under the FIRST-entry anchoring in VerifyAuditChain.
+	if len(ts.audit) > auditRotateAt {
+		ts.audit = append([]AuditEntry(nil), ts.audit[len(ts.audit)-auditRetain:]...)
+	}
 	return entry, nil
 }
 
