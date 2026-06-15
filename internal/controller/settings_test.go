@@ -3,7 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 )
 
 // TestDefaultSettingsAndWithDefaults: defaults carry the release URL; WithDefaults
@@ -63,6 +67,11 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 				PublicAgentURL:      "https://overlay.example.com",
 				GithubProxy:         "https://gh-proxy.com/",
 				AgentReleaseBaseURL: "https://github.com/o/r/releases/latest/download",
+				MimicVersion:        "0.1.0",
+				MimicReleaseBase:    "https://github.com/hack3ric/mimic/releases/download/v0.1.0",
+				MimicDebs: map[string]renderer.Artifact{
+					"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: strings.Repeat("a", 64)},
+				},
 			}
 			if err := s.PutSettings(ctx, tn, cs); err != nil {
 				t.Fatalf("PutSettings: %v", err)
@@ -71,8 +80,15 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetSettings: %v", err)
 			}
-			if got != cs {
+			if !reflect.DeepEqual(got, cs) {
 				t.Fatalf("round-trip mismatch: got %+v want %+v", got, cs)
+			}
+			// Isolation: mutating the caller's MimicDebs map after Put must NOT change the stored
+			// value (the store deep-copies via Clone; the map is a shared reference otherwise).
+			cs.MimicDebs["bookworm-amd64"] = renderer.Artifact{Asset: "evil.deb", SHA256: "x"}
+			got2, _ := s.GetSettings(ctx, tn)
+			if got2.MimicDebs["bookworm-amd64"].Asset != "mimic_0.1.0_amd64.deb" {
+				t.Fatalf("stored MimicDebs aliased the caller's map: got %+v", got2.MimicDebs)
 			}
 			// Replace.
 			cs2 := ControllerSettings{PublicAgentURL: "https://b", AgentReleaseBaseURL: "https://b/dl"}
@@ -80,7 +96,7 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 				t.Fatalf("PutSettings(2): %v", err)
 			}
 			got, _ = s.GetSettings(ctx, tn)
-			if got != cs2 {
+			if !reflect.DeepEqual(got, cs2) {
 				t.Fatalf("replace mismatch: got %+v want %+v", got, cs2)
 			}
 		})

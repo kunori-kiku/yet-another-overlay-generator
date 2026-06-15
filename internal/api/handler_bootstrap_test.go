@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 )
 
 // TestShQuote: values are single-quoted; embedded single quotes are escaped as '\”;
@@ -114,6 +115,43 @@ func TestValidateAbsoluteHTTPURL(t *testing.T) {
 	for _, s := range bad {
 		if err := validateAbsoluteHTTPURL(s); err == nil {
 			t.Errorf("validateAbsoluteHTTPURL(%q) = nil, want error", s)
+		}
+	}
+}
+
+// TestValidateMimicCatalog: D8 strict format rules on the mimic GitHub-.deb catalog. An empty
+// catalog is valid; a good catalog passes; bad semver / non-http base / bad sha / unsafe asset /
+// bad key / debs-without-base are each rejected with a coded field error.
+func TestValidateMimicCatalog(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	base := "https://github.com/hack3ric/mimic/releases/download/v0.1.0"
+	goodDebs := map[string]renderer.Artifact{"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: sha}}
+
+	good := []controller.ControllerSettings{
+		{}, // empty = no catalog
+		{MimicVersion: "0.1.0", MimicReleaseBase: base, MimicDebs: goodDebs},         // full
+		{MimicVersion: "v1.2.3-beta.1", MimicReleaseBase: base, MimicDebs: goodDebs}, // semver pre-release
+		{MimicReleaseBase: base, MimicDebs: goodDebs},                                // version optional
+	}
+	for i, cs := range good {
+		if err := validateMimicCatalog(cs); err != nil {
+			t.Errorf("good[%d] validateMimicCatalog = %v, want nil", i, err)
+		}
+	}
+
+	bad := []controller.ControllerSettings{
+		{MimicVersion: "not.semver", MimicReleaseBase: base, MimicDebs: goodDebs},                                                   // bad semver
+		{MimicReleaseBase: "ftp://x", MimicDebs: goodDebs},                                                                          // non-http base
+		{MimicReleaseBase: "https://ok/ p", MimicDebs: goodDebs},                                                                    // whitespace in base
+		{MimicReleaseBase: "https://ok/p$(reboot)", MimicDebs: goodDebs},                                                            // shell metachars (valid URL, caught by the charset guard)
+		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bookworm-amd64": {Asset: "mimic.deb", SHA256: "short"}}},  // bad sha
+		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bookworm-amd64": {Asset: "m$(reboot).deb", SHA256: sha}}}, // unsafe asset
+		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bad key": {Asset: "mimic.deb", SHA256: sha}}},             // bad key
+		{MimicDebs: goodDebs}, // debs without a release base
+	}
+	for i, cs := range bad {
+		if err := validateMimicCatalog(cs); err == nil {
+			t.Errorf("bad[%d] validateMimicCatalog = nil, want error (cs=%+v)", i, cs)
 		}
 	}
 }

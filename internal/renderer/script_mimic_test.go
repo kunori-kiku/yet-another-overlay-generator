@@ -43,8 +43,13 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 
 	// 必须包含的 mimic 装配片段（存在性断言）。
 	required := []string{
-		// 1) mimic 包安装（跨发行版 ensure_cmd 路径）
-		"ensure_cmd mimic mimic",
+		// 1) mimic 安装阶梯：发行版优先（command -v / _pm_install），否则校验过 SHA-256 的
+		//    GitHub .deb 回退——读 integrity-verified 的 artifacts.json、硬化 curl、sha256sum 校验。
+		"command -v mimic",
+		"_pm_install mimic",
+		"artifacts.json",
+		"--proto '=https,http'",
+		"sha256sum -c -",
 		// 2) egress NIC + IP 运行时探测（mimic 附着在默认路由接口，非 wg 接口）
 		"ip route show default",
 		"ip route get 1.1.1.1",
@@ -69,6 +74,51 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 	// 监听端口必须出现在 filter 行里（更强的关联断言：不是孤立地出现 51820）。
 	if !strings.Contains(script, "filter = local=${MIMIC_EGRESS_IP}:51820") {
 		t.Errorf("mimic filter 行应携带接口监听端口 51820（local=...:51820），实际缺失")
+	}
+}
+
+// TestRenderInstallScript_MimicGitHubFallback_VerifiesBeforeInstall is the SCRIPT-LEVEL mimic
+// custody guard (PERPETUAL, custody tier): when the distro lacks mimic, install.sh downloads the
+// .deb, VERIFIES it against the SHA-256 pin read from the integrity-verified artifacts.json, and
+// only THEN installs it — and FAILS CLOSED (no install) on a missing pin or a non-apt host. It
+// pins the "downloaded bytes verified against the controller-signed artifacts.json pin" boundary
+// (PRINCIPLES "generated scripts run as root" + the signed-artifact custody invariant).
+func TestRenderInstallScript_MimicGitHubFallback_VerifiesBeforeInstall(t *testing.T) {
+	node := mimicRenderNode()
+	peers := []compiler.PeerInfo{
+		{NodeID: "node-2", NodeName: "beta", InterfaceName: "wg-beta",
+			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408},
+	}
+	script, err := RenderInstallScript(node, peers, true)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// Verify-before-install ordering: the SHA-256 check must precede the apt-get install of the
+	// downloaded .deb, so an unverified binary can never be installed.
+	verifyIdx := strings.Index(script, "sha256sum -c -")
+	installIdx := strings.Index(script, `apt-get install -y "$_mimic_deb"`)
+	if verifyIdx < 0 || installIdx < 0 || verifyIdx >= installIdx {
+		t.Errorf("mimic .deb must be SHA-256-verified before install (verify=%d, install=%d)", verifyIdx, installIdx)
+	}
+	// The pin comes from the integrity-verified artifacts.json, not from untrusted transport
+	// (no trust in an upstream .sha256 sidecar). It MUST be read from the bundle copy whose hash
+	// was verified — "$SCRIPT_DIR/artifacts.json" — not a bare cwd-relative path that, under an
+	// invocation like `cd /tmp && sudo bash /bundle/install.sh`, could consume an unverified file.
+	if !strings.Contains(script, `"$SCRIPT_DIR/artifacts.json"`) {
+		t.Errorf("mimic fallback must read its pin from $SCRIPT_DIR/artifacts.json (the integrity-verified copy)")
+	}
+	if strings.Contains(script, " artifacts.json)") || strings.Contains(script, "-f artifacts.json ") {
+		t.Errorf("mimic fallback must not read artifacts.json by a bare cwd-relative path")
+	}
+	// Fail-closed guards: a non-apt host and a missing pin both abort rather than install blind.
+	for _, frag := range []string{
+		"mimic is not in this distro's repositories",
+		"no pinned mimic .deb for",
+	} {
+		if !strings.Contains(script, frag) {
+			t.Errorf("mimic fallback missing fail-closed guard %q", frag)
+		}
 	}
 }
 
@@ -134,9 +184,10 @@ func TestRenderInstallScript_UdpOnly_NoMimic(t *testing.T) {
 	absent := []string{
 		"/etc/mimic",
 		"mimic@",
-		"ensure_cmd mimic mimic",
+		"_pm_install mimic",
 		"filter = local=",
 		"Provisioning mimic",
+		"--proto '=https,http'",
 	}
 	for _, frag := range absent {
 		if strings.Contains(script, frag) {

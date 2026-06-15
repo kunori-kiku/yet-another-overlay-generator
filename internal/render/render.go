@@ -222,18 +222,25 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs Fe
 		signingPubPEM = string(signer.PublicKeyPEM())
 	}
 
-	// Install-time fetch settings (fleet-wide catalog), threaded — the install.sh-relevant subset
-	// only — into the signed install-script renderers. A zero FetchSettings yields a zero InstallFetch,
-	// so the template emits no fetch branch and install.sh stays byte-identical (air-gap byte-identity).
-	installFetch := renderer.InstallFetch{
-		GithubProxy:      fs.GithubProxy,
-		MimicVersion:     fs.MimicVersion,
-		MimicReleaseBase: fs.MimicReleaseBase,
-		MimicDebs:        fs.MimicDebs,
+	// Install-time fetch settings threaded into the signed install-script renderers. Only the
+	// GitHub proxy is baked into install.sh; the mimic pins are read at install time from the
+	// integrity-verified artifacts.json. A zero FetchSettings yields a zero InstallFetch, so the
+	// template emits no fetch branch and install.sh stays byte-identical (air-gap byte-identity).
+	installFetch := renderer.InstallFetch{GithubProxy: fs.GithubProxy}
+
+	// artifacts.json content (fleet-wide mimic catalog + reserved agent block). Empty string when
+	// no catalog is configured — export then omits the file, keeping the air-gap bundle
+	// byte-identical (D4). Built once; it is the same for every node in this plan.
+	artifactsContent, err := buildArtifactsJSON(fs)
+	if err != nil {
+		return fmt.Errorf("building artifacts.json failed: %w", err)
 	}
 
 	//
 	for _, node := range result.Topology.Nodes {
+		if artifactsContent != "" {
+			result.ArtifactsJSON[node.ID] = artifactsContent
+		}
 		// AgentHeld custody is detected per-node from the rendered private key: when the node's key
 		// is the placeholder, the install.sh must splice the agent-held key at install time. Air-gap
 		// nodes carry a real private key here, so custody=false and no splice block is emitted

@@ -862,10 +862,19 @@ func (h *ControllerHandler) HandleCompilePreview(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Settings → FetchSettings so the preview reflects the configured mimic catalog (the previewed
+	// install.sh matches what a deploy would render). No catalog ⇒ no artifacts.json (D4). An absent
+	// settings record is normal → fall back to defaults (zero cs + WithDefaults), never fail.
+	cs, err := h.store.GetSettings(r.Context(), tenant)
+	if err != nil && !errors.Is(err, controller.ErrNotFound) {
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
+
 	// The COMPILE HALF only — enrolled subgraph → AgentHeld keys → compile → render — with no
 	// persistAllocations / Export / StageBundle / Prune / manifest / audit. That absence of
 	// side effects is exactly what distinguishes a preview from a deploy.
-	result, _, skipped, err := controller.CompileSubgraph(topo, nodes)
+	result, _, skipped, err := controller.CompileSubgraph(topo, nodes, controller.BuildFetchSettings(cs.WithDefaults()))
 	if err != nil {
 		// CompileSubgraph wraps source-coded errors (%w); writeCodedOr surfaces each at its own
 		// status (compile constraints 422, keygen 400, etc.), CodeCompileFailed the fallback.

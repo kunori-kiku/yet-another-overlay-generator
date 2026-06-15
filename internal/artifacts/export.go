@@ -121,6 +121,19 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
+		// 写入 artifacts.json（仅当配置了 mimic/agent catalog 时由 render.All 填充）。它是已签名
+		// 的 bundleFiles 成员，携带 mimic 的 GitHub-.deb pin（asset+sha256）；安装脚本在完成完整性
+		// 校验后才读取其中的 pin。未配置 catalog ⇒ 内容为空 ⇒ 整份省略，保持 air-gap bundle 逐字
+		// 不变（D4）。
+		artifactsJSON, hasArtifacts := result.ArtifactsJSON[node.ID]
+		hasArtifacts = hasArtifacts && artifactsJSON != ""
+		if hasArtifacts {
+			path := filepath.Join(nodeDir, "artifacts.json")
+			if err := os.WriteFile(path, []byte(artifactsJSON), 0644); err != nil {
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write artifacts.json: %w", err))
+			}
+		}
+
 		// Build the canonical bundle file set as a path->content map and let
 		// bundlesig.Canonicalize emit the checksums.sha256 content. This replaces
 		// the previous ad-hoc, append-ordered checksum writing: the output is now
@@ -155,6 +168,11 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		if script, ok := result.InstallScripts[node.ID]; ok {
 			bundleFiles["install.sh"] = script
 		}
+		// artifacts.json joins the checksummed set so its pins inherit the bundle's Ed25519
+		// signature + keystone digest binding — no new trust primitive. Omitted when absent (D4).
+		if hasArtifacts {
+			bundleFiles["artifacts.json"] = artifactsJSON
+		}
 
 		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
@@ -169,6 +187,9 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			allFiles = append(allFiles, "babel/babeld.conf")
 		}
 		allFiles = append(allFiles, "sysctl/99-overlay.conf", "install.sh")
+		if hasArtifacts {
+			allFiles = append(allFiles, "artifacts.json")
+		}
 
 		// When signing is enabled, sign the canonical checksums and write the
 		// detached signature (base64) plus the verifying public key (PKIX PEM)
