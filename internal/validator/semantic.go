@@ -251,7 +251,7 @@ const defaultListenPort = 51820
 //
 //	[base, base+count-1]
 //
-// 其中 base 为节点的基准 listen_port（未设置时取 defaultListenPort），
+// 其中 base 统一为 defaultListenPort（51820，per-node listen_port 已移除），
 // count 为该节点作为「非 client 端点」参与的去重链路数量（并行链路下，同一对节点的
 // primary class 折叠为一条链路、每条 backup 各为一条链路）——
 // 这正是编译器为它分配的 WireGuard 接口个数。
@@ -581,7 +581,7 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		// --- 规则：部分 pin（一端钉住、另一端为空）。逐资源检查。 ---
 		validatePinPairCompleteness(prefix, edge, result)
 
-		// --- 规则：端口越界（< 1、> 65535，或低于节点基准 listen_port）。 ---
+		// --- 规则：端口越界（低于基准端口 defaultListenPort（51820），或 > 65535）。 ---
 		validatePinnedPortRange(prefix, "pinned_from_port", edge.PinnedFromPort, fromNode, result)
 		validatePinnedPortRange(prefix, "pinned_to_port", edge.PinnedToPort, toNode, result)
 
