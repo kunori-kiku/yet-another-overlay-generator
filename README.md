@@ -149,6 +149,8 @@ Controller behavior is configured through environment variables on the container
 | Variable | Default | What it does |
 |---|---|---|
 | `YAOG_BIND_ADDR` | `127.0.0.1` | Compose-only: the host interface both published ports bind to. Set `0.0.0.0` to expose them beyond loopback. |
+| `YAOG_PANEL_PORT` | `8080` | Compose-only: the **host** port the operator/panel API is published on (the container always listens on `8080`). Override to avoid a clash or match a proxy rule. |
+| `YAOG_AGENT_PORT` | `9090` | Compose-only: the **host** port the agent API is published on (the container always listens on `9090`). |
 | `YAOG_CONTROLLER_STATE_DIR` | unset | Controller state directory. Together with `YAOG_TENANT_ID`, this is what switches controller mode on (the image sets `/data`). |
 | `YAOG_TENANT_ID` | unset | Tenant identifier scoping all controller state (single-tenant for now; the compose defaults it to `default`). |
 | `YAOG_CONTROLLER_AGENT_ADDR` | `:9090` | Listen address of the node-facing agent API. |

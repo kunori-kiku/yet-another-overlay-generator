@@ -37,6 +37,11 @@ neither is reachable from other hosts out of the box. Access patterns:
   without a proxy — set the bind address: `YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`.
   `YAOG_BIND_ADDR` overrides the host IP for **both** published ports; leave it unset for the
   secure loopback default. (With a reverse proxy you usually don't publish host ports at all.)
+- **Host ports:** the published host ports default to `8080` (panel) and `9090` (agent) and are
+  overridable via `YAOG_PANEL_PORT` / `YAOG_AGENT_PORT` (e.g. to avoid a clash or match a proxy
+  rule). These are compose host-side mappings only — the container always listens on `8080`/`9090`,
+  and they are NOT read by the binary (its in-container listen address is `YAOG_CONTROLLER_AGENT_ADDR`
+  / the `--addr` flag, both fixed at the defaults inside the image).
 
 The image's `ENTRYPOINT` is the bare binary and the serve flags are a `CMD`, so
 `docker compose run --rm controller create-operator …` correctly replaces the command and
