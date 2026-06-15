@@ -56,6 +56,9 @@ shippable across sessions, agents, and context resets.
 
 ## Project-specific note
 
-This repo's architectural ground truth lives at **`docs/spec/`** (nested folder of logical
-components), not a root `specs/` directory. Plan files' `Reads from specs:` lists name
-`docs/spec/<component>/<file>` paths.
+This repo has TWO spec trees. `Reads from specs:` lists name the **flat root `specs/<component>`** cache
+(e.g. `controller-stage-promote`, `model-validation`, `panel-auth`) — that is what
+`execute-implementation-plan` partial-loads as `<repo-root>/specs/<component>.md` (it STOPs on a missing
+file; see `specs/README.md`). The deeper, nested prose lives at `docs/spec/<area>/<file>.md` (e.g.
+`docs/spec/artifacts/mimic.md`, `docs/spec/compiler/validation.md`) and is referenced by explicit path in a
+plan's `Read first` list when needed.
