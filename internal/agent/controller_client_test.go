@@ -323,6 +323,9 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal state payload: %v", err)
 	}
+	// plan-4: the agent reports its build version on /report; assert it round-trips end to end
+	// (agent reportRequestWire -> server reportRequestJSON -> store -> Node.LastAgentVersion).
+	agentClient.AgentVersion = "v2.0.0-beta.1-test"
 	if err := agentClient.Report("node-1", statePayload); err != nil {
 		t.Fatalf("Report(node-1): %v", err)
 	}
@@ -335,6 +338,9 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 	}
 	if node.LastChecksum != "deadbeef" {
 		t.Fatalf("GetNode checksum %q, want deadbeef", node.LastChecksum)
+	}
+	if node.LastAgentVersion != "v2.0.0-beta.1-test" {
+		t.Fatalf("GetNode agent version %q, want v2.0.0-beta.1-test (the reported BuildVersion)", node.LastAgentVersion)
 	}
 }
 

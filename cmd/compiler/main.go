@@ -12,7 +12,15 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 )
 
+// BuildVersion is the compiler's build version, overwritten at release link time via
+// -ldflags "-X main.BuildVersion=<tag>" (see RELEASING.md). A non-release build reports "dev".
+var BuildVersion = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println(BuildVersion)
+		return
+	}
 	inputFile := flag.String("input", "", "path to the topology JSON file")
 	outputDir := flag.String("output", "output", "output directory")
 	flag.Parse()

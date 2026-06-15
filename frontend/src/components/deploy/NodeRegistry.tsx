@@ -76,6 +76,7 @@ export function NodeRegistry() {
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.status')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.genAppliedDesired')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.health')}</th>
+                <th className="py-2 pr-3">{t(language, 'nodeRegistry.agentVersion')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.lastSeen')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.actions')}</th>
               </tr>
@@ -122,6 +123,7 @@ export function NodeRegistry() {
                       )}
                     </td>
                     <td className="py-2 pr-3 text-gray-300">{n.lastHealth || '—'}</td>
+                    <td className="py-2 pr-3 font-mono text-xs text-gray-400">{n.agentVersion || '—'}</td>
                     <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(n.lastSeen)}</td>
                     <td className="py-2 pr-3">
                       <button

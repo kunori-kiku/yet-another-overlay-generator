@@ -354,6 +354,8 @@ type reportRequestJSON struct {
 	AppliedGeneration int64  `json:"applied_generation"`
 	Checksum          string `json:"checksum"`
 	Health            string `json:"health"`
+	// AgentVersion is the reporting agent's build version (omitempty; "" from a legacy agent).
+	AgentVersion string `json:"agent_version,omitempty"`
 }
 
 // stageResponseJSON is the wire form of a stage result.
@@ -388,15 +390,18 @@ type topologyVersionsResponseJSON struct {
 // only a boolean that a public key is on file. The operator panel lists fleet state
 // without ever seeing secrets.
 type nodeJSON struct {
-	NodeID            string    `json:"node_id"`
-	Status            string    `json:"status"`
-	HasWGPublicKey    bool      `json:"has_wg_public_key"`
-	DesiredGeneration int64     `json:"desired_generation"`
-	AppliedGeneration int64     `json:"applied_generation"`
-	LastChecksum      string    `json:"last_checksum"`
-	LastHealth        string    `json:"last_health"`
-	LastSeen          time.Time `json:"last_seen"`
-	EnrolledAt        time.Time `json:"enrolled_at"`
+	NodeID            string `json:"node_id"`
+	Status            string `json:"status"`
+	HasWGPublicKey    bool   `json:"has_wg_public_key"`
+	DesiredGeneration int64  `json:"desired_generation"`
+	AppliedGeneration int64  `json:"applied_generation"`
+	LastChecksum      string `json:"last_checksum"`
+	LastHealth        string `json:"last_health"`
+	// AgentVersion is the build version the node last reported ("" until the first report from a
+	// version-aware agent; the panel renders absent/empty as "unknown").
+	AgentVersion string    `json:"agent_version,omitempty"`
+	LastSeen     time.Time `json:"last_seen"`
+	EnrolledAt   time.Time `json:"enrolled_at"`
 	// RekeyRequested is true while the node is pending a key rotation (the operator
 	// requested one and the agent has not yet re-registered its new public key). The
 	// panel renders a "rekeying" badge from this flag. No key material is exposed.
@@ -690,7 +695,7 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 	}
 
 	now := time.Now()
-	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health); err != nil {
+	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health, req.AgentVersion); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
@@ -969,6 +974,7 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			AppliedGeneration: n.AppliedGeneration,
 			LastChecksum:      n.LastChecksum,
 			LastHealth:        n.LastHealth,
+			AgentVersion:      n.LastAgentVersion,
 			LastSeen:          n.LastSeen,
 			EnrolledAt:        n.EnrolledAt,
 			RekeyRequested:    n.RekeyRequested,

@@ -14,6 +14,11 @@ All POST endpoints accept `Content-Type: application/json` with a `Topology` obj
 wire shape of that body — field parity with the Go model and round-trip rules — is specified in
 [wire-contract.md](wire-contract.md).
 
+> The endpoints above are the open topology-design surface (operator/panel port `:8080`). The
+> separate controller **agent** surface (`/enroll`, `/config`, `/poll`, `/report`, `/rekey`,
+> `/bootstrap` on the agent port `:9090`) and its wire — including the `agent_version` field on
+> `POST /report` — are documented in `specs/controller-agent-api.md`, not here.
+
 CORS is enabled for all origins (`Access-Control-Allow-Origin: *`).
 
 ## Status-code contract

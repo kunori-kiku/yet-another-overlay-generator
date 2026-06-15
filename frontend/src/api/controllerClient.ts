@@ -187,6 +187,7 @@ interface NodeJSON {
   applied_generation: number;
   last_checksum: string;
   last_health: string;
+  agent_version?: string;
   last_seen: string;
   enrolled_at: string;
   rekey_requested: boolean;
@@ -560,6 +561,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     appliedGeneration: n.applied_generation,
     lastChecksum: n.last_checksum,
     lastHealth: n.last_health,
+    agentVersion: n.agent_version ?? '',
     lastSeen: n.last_seen,
     enrolledAt: n.enrolled_at,
     rekeyRequested: n.rekey_requested,

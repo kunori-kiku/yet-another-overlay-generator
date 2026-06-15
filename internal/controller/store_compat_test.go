@@ -647,7 +647,7 @@ func TestStoreAgentReports(t *testing.T) {
 				t.Fatalf("UpsertNode: %v", err)
 			}
 
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy"); err != nil {
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy", "v2.0.0-beta.1"); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 			seen := time.Date(2026, 6, 8, 15, 30, 0, 0, time.UTC)
@@ -668,8 +668,27 @@ func TestStoreAgentReports(t *testing.T) {
 			if got.LastHealth != "healthy" {
 				t.Fatalf("LastHealth = %q, want %q", got.LastHealth, "healthy")
 			}
+			if got.LastAgentVersion != "v2.0.0-beta.1" {
+				t.Fatalf("LastAgentVersion = %q, want %q", got.LastAgentVersion, "v2.0.0-beta.1")
+			}
 			if !got.LastSeen.Equal(seen) {
 				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, seen)
+			}
+
+			// A later report from a legacy (versionless) agent must NOT wipe the known version,
+			// while still advancing the generation. Pins the empty-agentVersion guard in both impls.
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 8, "checksum-8", "healthy", ""); err != nil {
+				t.Fatalf("SetAppliedGeneration (empty version): %v", err)
+			}
+			got2, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode (after empty version): %v", err)
+			}
+			if got2.LastAgentVersion != "v2.0.0-beta.1" {
+				t.Fatalf("empty agentVersion must leave the stored version unchanged: got %q, want v2.0.0-beta.1", got2.LastAgentVersion)
+			}
+			if got2.AppliedGeneration != 8 {
+				t.Fatalf("AppliedGeneration after second report = %d, want 8", got2.AppliedGeneration)
 			}
 		})
 	}

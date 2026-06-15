@@ -92,6 +92,10 @@ type reportRequestWire struct {
 	AppliedGeneration int64  `json:"applied_generation"`
 	Checksum          string `json:"checksum"`
 	Health            string `json:"health"`
+	// AgentVersion is the agent's build version (cmd/agent main.BuildVersion). Reported so the
+	// controller + panel can show each node's running version. omitempty: a legacy agent that
+	// does not send it round-trips as "" (the operator view shows "unknown").
+	AgentVersion string `json:"agent_version,omitempty"`
 }
 
 // EnrollResult is what a successful Enroll hands back to the caller (cmd/agent):
@@ -131,6 +135,10 @@ type ControllerClient struct {
 	// fetched generation, so the controller registry never shows a generation the node
 	// did not actually apply.
 	priorGen int64
+	// AgentVersion is the agent's build version (set by cmd/agent from its main.BuildVersion).
+	// postReport sends it on every /report so the controller + panel show the running version
+	// per node. Empty when unset (a dev build / legacy caller); reported as-is.
+	AgentVersion string
 }
 
 // SetPriorGeneration records the last-applied generation watermark for this cycle (the
@@ -377,6 +385,7 @@ func (c *ControllerClient) postReport(gen int64, checksum, health string) error 
 		AppliedGeneration: gen,
 		Checksum:          checksum,
 		Health:            health,
+		AgentVersion:      c.AgentVersion,
 	})
 	if err != nil {
 		return fmt.Errorf("agent: marshal report request: %w", err)
