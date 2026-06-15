@@ -120,6 +120,11 @@ interface TopologyState {
   // API 操作
   validate: () => Promise<void>;
   compile: () => Promise<void>;
+  // setCompileResult overwrites the compile result directly (without running the local
+  // air-gap compile()). Controller mode uses it to surface the SERVER's compile-preview
+  // result (PR6) — which carries placeholder private keys only — so CompilePreview and the
+  // EdgeEditor "compiled values" block render the controller's authoritative compiled output.
+  setCompileResult: (result: CompileResponse | null) => void;
   exportArtifacts: () => Promise<void>;
   downloadDeployScript: (format: 'sh' | 'ps1') => Promise<void>;
 
@@ -251,6 +256,10 @@ export const useTopologyStore = create<TopologyState>()(
       canvasFromServer: false,
 
       setCanvasFromServer: (v) => set({ canvasFromServer: v }),
+
+      // Controller compile-preview (PR6): adopt the server's compiled output directly. No
+      // local compile, no history push — just surface the result for CompilePreview/EdgeEditor.
+      setCompileResult: (result) => set({ compileResult: result }),
 
       setLanguage: (lang) => set({ language: lang }),
 

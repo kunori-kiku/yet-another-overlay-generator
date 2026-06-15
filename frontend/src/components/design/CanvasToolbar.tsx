@@ -34,6 +34,13 @@ export function CanvasToolbar({
   // is the controller-mode counterpart to local Compile. The Topbar import/export/flush cluster
   // is hidden in controller mode (it is local file-I/O), so this is the controller persist path.
   const saveDesign = useControllerStore((s) => s.saveDesign);
+  // Controller-mode Compile (PR6): a SERVER-authoritative read-only compile — POSTs the current
+  // design, the server renders the enrolled subgraph (zero-knowledge, placeholder keys), then the
+  // store shows the result and merges the allocated ports/IPs onto the canvas so the operator can
+  // see + adjust the NAT-relevant fields and Save. This is the controller counterpart to the
+  // local air-gap Compile (which is unavailable in controller mode — see the mode note above).
+  const compilePreview = useControllerStore((s) => s.compilePreview);
+  const previewing = useControllerStore((s) => s.previewing);
   // save-scoped flag (not the global `loading`): so an unrelated in-flight controller op
   // (refresh/deploy/saveSettings) can't mislabel Save as "Saving…" or disable it (plan-11 review #1).
   const saving = useControllerStore((s) => s.saving);
@@ -87,6 +94,18 @@ export function CanvasToolbar({
           className="h-8 rounded bg-green-600 px-3 text-sm hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400"
         >
           {isCompiling ? t(language, 'canvasToolbar.compiling') : t(language, 'canvasToolbar.compile')}
+        </button>
+      )}
+      {/* Controller-mode Compile (PR6): server-authoritative read-only compile + merge-to-canvas.
+          Separate from local Compile (which reconstructs keys client-side and is local-only). */}
+      {mode === 'controller' && (
+        <button
+          type="button"
+          onClick={() => compilePreview()}
+          disabled={previewing || nodeCount === 0}
+          className="h-8 rounded bg-cyan-700 px-3 text-sm hover:bg-cyan-600 disabled:bg-gray-600 disabled:text-gray-400"
+        >
+          {previewing ? t(language, 'canvasToolbar.compiling') : t(language, 'canvasToolbar.compile')}
         </button>
       )}
       {/* Save persists the draft to the server (controller mode). Disabled when nothing changed

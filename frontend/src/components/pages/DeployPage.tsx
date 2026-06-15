@@ -11,6 +11,9 @@ import { CompilePreview } from '../deploy/CompilePreview';
 export function DeployPage() {
   const language = useTopologyStore((s) => s.language);
   const mode = useControllerStore((s) => s.mode);
+  // compileResult is set by the local air-gap compile AND (PR6) by the controller's server-side
+  // compile-preview. Subscribe so the preview appears as soon as either populates it.
+  const compileResult = useTopologyStore((s) => s.compileResult);
 
   return (
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
@@ -22,9 +25,11 @@ export function DeployPage() {
           <DeployBar />
         </>
       )}
-      {/* 编译结果预览（本地编译产物）：仅本地模式渲染（plan-11 / T4）。控制器模式不本地编译，
-          预览只会显示切换前残留的陈旧本地编译结果——与服务端权威设计无关，故隐藏。 */}
-      {mode === 'local' && <CompilePreview />}
+      {/* Compile-result preview. Local mode: the air-gap compile output. Controller mode (PR6):
+          the SERVER-side compile-preview output (controller has no local compile; entering
+          controller hydrates and clears any stale local result, so this only shows a fresh
+          server preview). Gated on compileResult so a stale result never lingers across modes. */}
+      {(mode === 'local' || compileResult) && <CompilePreview />}
     </div>
   );
 }

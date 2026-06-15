@@ -18,6 +18,7 @@ import {
   mintEnrollmentToken,
   updateTopology,
   stage,
+  compilePreview as ctlCompilePreview,
   promote,
   revoke,
   rekeyAll,
@@ -302,6 +303,9 @@ interface ControllerState {
   // 据此显示「保存中 / 禁用」，避免被无关的 controller 操作（refresh/deploy/saveSettings 等）误置的
   // 全局 loading 错误点亮成「保存中」。
   saving: boolean;
+  // previewing 进行中（PR6）：compilePreview 专用，区别于全局 loading（同 saving 的理由）。
+  // Compile 按钮据此显示「编译中 / 禁用」，避免被无关 controller 操作误置的全局 loading 点亮。
+  previewing: boolean;
   // signing 为真表示 WebAuthn 提示已弹出、正在等待用户触碰安全密钥（enroll 或 deploy 期间）。
   // UI 用它显示「触碰你的安全密钥」提示。enrolling 区分 enroll 与 deploy-sign 两种 ceremony。
   // 注意：signing/enrolling 专属 KEYSTONE 流程（deploy 签名 / 签名密钥注册），DeployBar 的
@@ -345,6 +349,11 @@ interface ControllerState {
   disableTOTP: (code: string) => Promise<void>;
   mintToken: (nodeId: string, ttl: number) => Promise<MintTokenResult>;
   enrollOperator: () => Promise<void>;
+  // compilePreview（PR6）：服务端权威的只读编译。POST 当前画布（先剥离私钥）→ 服务端编译已
+  // enroll 的子图（不 stage、不持久化）→ 把编译结果设为 compileResult（供 CompilePreview /
+  // EdgeEditor 展示），并把服务端算出的分配（compiled_port + pinned_*）合并回画布，让操作员
+  // 看到并据此调整 NAT ip:port，随后 Save 持久化、Deploy 时粘性沿用。
+  compilePreview: () => Promise<void>;
   // deploy 上传当前画布（先剥离私钥）→ stage → (keystone 签名) → promote。当一次部署会让
   // 服务端设计大幅缩水时，除非 confirmedShrink，否则设置 pendingShrink 并暂不部署（等键入
   // 项目名确认）。
@@ -501,6 +510,7 @@ export const useControllerStore = create<ControllerState>()(
       lastSyncedTopology: null,
       saveConflict: false,
       saving: false,
+      previewing: false,
       signing: false,
       enrolling: false,
       loginCeremony: false,
@@ -988,6 +998,37 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
+      // compilePreview（PR6）：服务端权威只读编译。见接口注释。previewing 专用标志（非全局 loading）。
+      compilePreview: async () => {
+        set({ previewing: true, error: null });
+        try {
+          const cfg = configOf(get());
+          // POST 当前画布（零知识 fail-safe：剥离私钥；控制器画布本就无私钥）。
+          const current = useTopologyStore.getState().getTopology();
+          const { topo: clean } = stripPrivateKeys(current);
+          const resp = await ctlCompilePreview(cfg, JSON.stringify(clean));
+          // 没有已 enroll 的节点 → 无渲染配置：清空预览并给出可执行提示，不动画布。
+          if (!resp.topology || !resp.wireguard_configs || Object.keys(resp.wireguard_configs).length === 0) {
+            useTopologyStore.getState().setCompileResult(null);
+            set({
+              previewing: false,
+              error: 'No enrolled nodes to compile yet — enroll nodes in Fleet, then Compile.',
+            });
+            return;
+          }
+          // 展示服务端权威编译结果（CompilePreview / EdgeEditor 的「编译后实际值」）。
+          useTopologyStore.getState().setCompileResult(resp);
+          // 把服务端算出的分配（compiled_port + 全部 pinned_*）无条件合并回画布（服务端权威），
+          // 让操作员立即看到内部监听端口/IP 并据此配置 NAT；随后 Save 持久化、Deploy 粘性沿用。
+          if (resp.topology.edges) {
+            useTopologyStore.getState().mergeServerAllocations(resp.topology.edges);
+          }
+          set({ previewing: false });
+        } catch (err) {
+          set({ error: err instanceof Error ? err.message : 'Compile preview failed', previewing: false });
+        }
+      },
+
       // 部署当前拓扑到 fleet：复用 topologyStore.compile() 发往 /api/compile 的同一
       // model.Topology JSON 形状（getTopology() → {project,domains,nodes,edges,...}），
       // 经 update-topology → stage →（KEYSTONE 签名）→ promote → refresh。
@@ -1219,7 +1260,16 @@ export const useControllerStore = create<ControllerState>()(
       // when a pubkey-only file was imported in local mode. Valid keypairs are untouched; once logged
       // in, server hydration replaces the canvas anyway. Notices are cleared for a clean controller entry.
       switchToController: () => {
-        useTopologyStore.getState().clearStrandedKeys();
+        const ts = useTopologyStore.getState();
+        ts.clearStrandedKeys();
+        // Drop any LOCAL air-gap compile result on the way into controller mode (review should-fix #1).
+        // A local compile carries reconstructed REAL private keys in compileResult, and the Deploy
+        // page renders CompilePreview whenever compileResult is present — so a stale local result would
+        // surface real private keys inside controller mode, the very boundary controller mode exists to
+        // protect. compileResult is never persisted, so clearing it here closes the only in-memory path
+        // (local compile → toggle to controller); a controller Compile re-populates it after entry with
+        // placeholder-key configs.
+        ts.setCompileResult(null);
         get().clearModeNotices();
         set({ mode: 'controller' });
       },

@@ -32,6 +32,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -948,5 +949,84 @@ func TestControllerHTTP_RevokeClearsRekey(t *testing.T) {
 				t.Errorf("node-1 rekey_requested still true after revoke (would stick the Deploy gate)")
 			}
 		}
+	}
+}
+
+// TestControllerHTTP_CompilePreview covers the read-only, server-authoritative compile
+// preview (PR6): it renders the enrolled subgraph and returns the configs + allocated ports,
+// preserves zero-knowledge custody (placeholder private keys only), and has NO side effects —
+// it neither persists allocation pins back into the stored topology nor stages any bundle.
+func TestControllerHTTP_CompilePreview(t *testing.T) {
+	env := newCtlTestEnv(t)
+
+	// Store the design (unpinned) and enroll BOTH nodes so the whole graph compiles.
+	topoJSON, err := json.Marshal(smallTopo())
+	if err != nil {
+		t.Fatalf("marshal topology: %v", err)
+	}
+	if status := doRaw(t, http.MethodPost, env.opURL("update-topology"), testOperatorToken, topoJSON); status != http.StatusOK {
+		t.Fatalf("update-topology: status %d, want 200", status)
+	}
+	env.enrollNode(t, "node-1")
+	env.enrollNode(t, "node-2")
+
+	// Snapshot the stored topology BEFORE the preview to prove the preview does not persist.
+	var before model.Topology
+	if status := doJSON(t, http.MethodGet, env.opURL("topology"), testOperatorToken, nil, &before); status != http.StatusOK {
+		t.Fatalf("GET topology (before): status %d, want 200", status)
+	}
+
+	// The preview itself — POST the CURRENT design (the canvas the operator is editing).
+	var resp compilePreviewResponseJSON
+	if status := doJSON(t, http.MethodPost, env.opURL("compile-preview"), testOperatorToken, smallTopo(), &resp); status != http.StatusOK {
+		t.Fatalf("compile-preview: status %d, want 200", status)
+	}
+
+	// Both nodes enrolled → nothing skipped, and a full render.
+	if len(resp.SkippedUnenrolled) != 0 {
+		t.Errorf("compile-preview skipped_unenrolled = %v, want empty (both enrolled)", resp.SkippedUnenrolled)
+	}
+	if resp.CompileResponse == nil || len(resp.WireGuardConfigs) == 0 {
+		t.Fatalf("compile-preview returned no wireguard_configs")
+	}
+
+	// The allocation must be surfaced: the single edge carries a compiled port.
+	if resp.Topology == nil || len(resp.Topology.Edges) == 0 {
+		t.Fatalf("compile-preview response has no topology edges")
+	}
+	if resp.Topology.Edges[0].CompiledPort == 0 {
+		t.Errorf("compile-preview edge has no compiled_port (allocation not surfaced)")
+	}
+
+	// Zero-knowledge custody: every rendered wg config carries the placeholder private key,
+	// never real base64 key material (render.PrivateKeyPlaceholder).
+	realKey := regexp.MustCompile(`PrivateKey\s*=\s*[A-Za-z0-9+/]{43}=`)
+	for key, cfg := range resp.WireGuardConfigs {
+		if !strings.Contains(cfg, "PRIVATEKEY_PLACEHOLDER") {
+			t.Errorf("wg config %q lacks the placeholder private key (custody)", key)
+		}
+		if realKey.MatchString(cfg) {
+			t.Errorf("wg config %q contains a real base64 private key — custody violation", key)
+		}
+	}
+
+	// No side effects (1): the stored topology is byte-identical — the preview did NOT persist
+	// allocation pins back (that write-back is the deploy path's job, not a preview's).
+	var after model.Topology
+	if status := doJSON(t, http.MethodGet, env.opURL("topology"), testOperatorToken, nil, &after); status != http.StatusOK {
+		t.Fatalf("GET topology (after): status %d, want 200", status)
+	}
+	if len(after.Edges) > 0 && after.Edges[0].CompiledPort != 0 {
+		t.Errorf("preview persisted a compiled_port (%d) into the stored topology — must have no side effects", after.Edges[0].CompiledPort)
+	}
+	beforeJSON, _ := json.Marshal(before)
+	afterJSON, _ := json.Marshal(after)
+	if string(beforeJSON) != string(afterJSON) {
+		t.Errorf("preview mutated the stored topology:\nbefore=%s\nafter=%s", beforeJSON, afterJSON)
+	}
+
+	// No side effects (2): nothing was staged — a promote finds no staged bundle (409).
+	if status := doJSON(t, http.MethodPost, env.opURL("promote"), testOperatorToken, struct{}{}, nil); status != http.StatusConflict {
+		t.Errorf("promote after preview: status %d, want 409 (preview staged nothing)", status)
 	}
 }

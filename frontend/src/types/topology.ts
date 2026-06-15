@@ -151,6 +151,9 @@ export interface CompileResponse {
   // 非致命提示（双重 NAT、缺少端点的边、孤立节点等）。
   // 编译路径会运行语义校验并把这些 warning 一并返回，UI 在编译成功后展示。
   warnings?: ValidationError[];
+  // 仅控制器编译预览（PR6）返回：拓扑中存在但因尚未 enroll 而被排除出本次渲染的节点 ID。
+  // 面板据此提示「N 个节点尚未入网（未编译到）」。air-gap /api/compile 不返回此字段。
+  skipped_unenrolled?: string[];
 }
 
 export interface CompileHistoryEntry {

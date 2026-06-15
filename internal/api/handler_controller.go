@@ -218,6 +218,9 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"passkey/disable", op(h.HandlePasskeyDisable))
 	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
 	mux.HandleFunc(base+"stage", op(h.HandleStage))
+	// Read-only, server-authoritative compile preview (the controller "Compile" button):
+	// renders the enrolled subgraph WITHOUT staging/persisting, returning configs + skipped.
+	mux.HandleFunc(base+"compile-preview", op(h.HandleCompilePreview))
 	mux.HandleFunc(base+"promote", op(h.HandlePromote))
 	mux.HandleFunc(base+"nodes", op(h.HandleNodes))
 	mux.HandleFunc(base+"revoke", op(h.HandleRevoke))
@@ -807,6 +810,85 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 		Staged:            result.Staged,
 		SkippedUnenrolled: result.SkippedUnenrolled,
 		Generation:        result.Generation,
+	})
+}
+
+// compilePreviewResponseJSON is the read-only compile-preview wire shape. It promotes the
+// same fields as the air-gap CompileResponse (so the panel reuses CompilePreview/EdgeEditor
+// verbatim) and adds skipped_unenrolled — the node IDs present in the topology but dropped
+// from the render because they are not yet enrolled. The embedded *CompileResponse is nil
+// when nothing is enrolled, so its fields are absent and only skipped_unenrolled is sent.
+type compilePreviewResponseJSON struct {
+	*CompileResponse
+	SkippedUnenrolled []string `json:"skipped_unenrolled"`
+}
+
+// HandleCompilePreview compiles the enrolled subgraph of the POSTed current design and returns
+// the rendered configs + the skipped (unenrolled) node IDs — WITHOUT staging, persisting pins,
+// exporting bundles, or writing the audit log (operator-only). It is the read-only, server-
+// authoritative compile the panel's "Compile" button drives in controller mode: the operator
+// sees the server-computed allocation (ports, transit IPs, link-locals) and the full wg/babel/
+// sysctl text BEFORE deploying, then adjusts the NAT-relevant fields and saves.
+//
+// Zero-knowledge: it drives controller.CompileSubgraph, whose render.GenerateKeys runs in
+// AgentHeld custody — every [Interface] PrivateKey is PRIVATEKEY_PLACEHOLDER, never real key
+// material — so the rendered text is safe to return to an authenticated operator. It MUST NOT
+// reuse the air-gap HandleCompile (render.AirGap reconstructs real private keys).
+func (h *ControllerHandler) HandleCompilePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
+		return
+	}
+
+	// Compile the POSTed CURRENT design (the canvas the operator is editing) — NOT the stored
+	// copy — so the operator can compile before saving ("Compile → adjust the NAT ip:port →
+	// Save"). The body is public-keys-only (the panel strips private keys); enrollment and
+	// public keys come from the registry via CompileSubgraph → enrolledSubgraph, so the POSTed
+	// key fields are never trusted (and GenerateKeys(AgentHeld) emits placeholder private keys).
+	topo, err := readTopology(w, r)
+	if err != nil {
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+
+	nodes, err := h.store.ListNodes(r.Context(), tenant)
+	if err != nil {
+		writeCodedOr(w, apierr.CodeInternal, err)
+		return
+	}
+
+	// The COMPILE HALF only — enrolled subgraph → AgentHeld keys → compile → render — with no
+	// persistAllocations / Export / StageBundle / Prune / manifest / audit. That absence of
+	// side effects is exactly what distinguishes a preview from a deploy.
+	result, _, skipped, err := controller.CompileSubgraph(topo, nodes)
+	if err != nil {
+		// CompileSubgraph wraps source-coded errors (%w); writeCodedOr surfaces each at its own
+		// status (compile constraints 422, keygen 400, etc.), CodeCompileFailed the fallback.
+		writeCodedOr(w, apierr.CodeCompileFailed, err)
+		return
+	}
+	if result == nil {
+		// Nothing enrolled yet: report the skipped set so the panel can say "no node enrolled".
+		writeJSON(w, http.StatusOK, compilePreviewResponseJSON{SkippedUnenrolled: skipped})
+		return
+	}
+	writeJSON(w, http.StatusOK, compilePreviewResponseJSON{
+		CompileResponse: &CompileResponse{
+			Topology:         result.Topology,
+			WireGuardConfigs: result.WireGuardConfigs,
+			BabelConfigs:     result.BabelConfigs,
+			SysctlConfigs:    result.SysctlConfigs,
+			InstallScripts:   result.InstallScripts,
+			DeployScripts:    result.DeployScripts,
+			Warnings:         result.Warnings,
+			Manifest:         result.Manifest,
+		},
+		SkippedUnenrolled: skipped,
 	})
 }
 
