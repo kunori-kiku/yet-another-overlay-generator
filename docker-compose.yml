@@ -31,12 +31,16 @@ services:
       YAOG_CONTROLLER_STATE_DIR: /data
       YAOG_WEB_DIR: /app/web
       # Optional break-glass operator token (recovery). Prefer `create-operator`.
-      # YAOG_CONTROLLER_OPERATOR_TOKEN: "${YAOG_CONTROLLER_OPERATOR_TOKEN:-}"
+      # Unset (the `:-` default) = no break-glass token; set it in .env to enable.
+      YAOG_CONTROLLER_OPERATOR_TOKEN: "${YAOG_CONTROLLER_OPERATOR_TOKEN:-}"
       # Optional secret path prefixes (defense-in-depth obscurity), one per audience:
       # the operator/panel API (:8080) and the agent API (:9090) mount independently,
-      # so a path-based proxy rule per audience works on a single hostname.
-      # YAOG_OPERATOR_PATH_PREFIX: "${YAOG_OPERATOR_PATH_PREFIX:-}"
-      # YAOG_AGENT_PATH_PREFIX: "${YAOG_AGENT_PATH_PREFIX:-}"
+      # so a path-based proxy rule per audience works on a single hostname. Passed through
+      # ALWAYS: the `:-` default is empty (= no prefix, identical to leaving it unset), so
+      # these stay declared here and simply pick up whatever you set in .env — a commented
+      # line would silently drop a .env prefix because compose only injects vars named here.
+      YAOG_OPERATOR_PATH_PREFIX: "${YAOG_OPERATOR_PATH_PREFIX:-}"
+      YAOG_AGENT_PATH_PREFIX: "${YAOG_AGENT_PATH_PREFIX:-}"
     ports:
       # Loopback-only by DEFAULT (secure): the panel's POST /login carries a plaintext password
       # and the agent API authorizes nodes, so neither port is published on public interfaces out
