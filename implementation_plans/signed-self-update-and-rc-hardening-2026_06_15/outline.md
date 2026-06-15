@@ -117,6 +117,13 @@ stacked branches, per-plan PR + green gate; serialize branch work vs. read-only 
   charset + `transit_cidr`); outline `render.All` caller corrected (`compile.go:147` carries the non-zero
   `fs`). Should-fix anchor corrections (server.go→internal/api/server.go, LoadSigningFromEnv, schema-stamp,
   release.yml-already-publishes, semver comparator, agent.release_url source) folded into the plans.
+- 2026-06-16 — **beta.1 shipped (plan-8 partial close):** plans 1–8 merged (PRs #109–#115); tagged
+  `v2.0.0-beta.1` and set as the GitHub *latest* release. Each PR passed an independent multi-agent
+  review before merge (plan-6 caught 1 MAJOR audit-log torn-line brick + 6 MINOR/NIT, all fixed +
+  re-reviewed; plan-7 reviewed clean). The three beta.1 hardware smokes (two-node controller WebAuthn
+  login/hydration, NAT sticky-pin round-trip, mimic GitHub-`.deb` on a real Debian host) are recorded
+  **owed (owner-accepted risk)** — no hardware/authenticator/host available in the execution
+  environment. Subject stays OPEN for beta.2 (plans 9–10): the self-update *swap* + canary rollout.
 
 ## Milestones (PR per plan; gate each; see plan-N file for detail)
 
@@ -175,7 +182,7 @@ subject archived to `_completed/`; beta.2 tagged. rc.1 remains a later owner cal
 | plan-4 | beta.1 | done | `e3a24f4` (PR #112 — agent version reporting + build-version) |
 | plan-5 | beta.1 | done | `93b26bf` (PR #113 — controller-mode UX & resilience) |
 | plan-6 | beta.1 | done | `3a41653` (PR #114 — backend robustness & full input validation) |
-| plan-7 | beta.1 | in progress | — |
-| plan-8 | beta.1 | pending | — |
+| plan-7 | beta.1 | done | `f129b1b` (PR #115 — air-gap mimic catalog + honest mimic docs) |
+| plan-8 | beta.1 | done | beta.1 tagged `v2.0.0-beta.1` (GitHub latest); CHANGELOG/STATUS rolled (PR #116) |
 | plan-9 | beta.2 | pending | — |
 | plan-10 | beta.2 | pending | — |

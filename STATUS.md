@@ -1,33 +1,41 @@
 # STATUS
-<!-- regenerated: 2026-06-15 -->
-<!-- by: draft-implementation-plan (subject: signed-self-update-and-rc-hardening) -->
+<!-- regenerated: 2026-06-16 -->
+<!-- by: plan-8 (beta.1 closure) — subject: signed-self-update-and-rc-hardening -->
 
 ## Active work
 
-- **Subject:** `signed-self-update-and-rc-hardening-2026_06_15` — **DRAFTED, awaiting execution** (10 plans;
-  two release milestones: beta.1 = plans 1–8, beta.2 = plans 9–10). Combines mimic-from-GitHub install +
-  signed agent self-update ("both now") + the full RC-hardening sweep (Units A+B+C). Refined via 3 all-Opus
-  workflows (`wfhuw2hd8` design, `wxajvgzp5` comprehensiveness, on the `wiakgi4v5` RC survey).
-- **Branch:** `plan/signed-self-update-and-rc-hardening` (plan docs, off main); `rc-hardening` carries the
-  already-landed Apache-2.0 LICENSE+NOTICE (plan-1's first deliverable).
-- **Released:** `v2.0.0-preview.10` (latest); the subject targets `beta.1` next, then `beta.2`; rc.1 a later
-  owner call.
-- **Current plan:** plan-1 (RC paperwork & trust) — pending; runs parallel to plan-2/6.
+- **Subject:** `signed-self-update-and-rc-hardening-2026_06_15` — **beta.1 DELIVERED, beta.2 PENDING**
+  (10 plans across two release milestones). beta.1 = plans 1–8 (all merged + tagged); beta.2 = plans
+  9–10 (the signed agent self-update *swap* + canary-then-fleet rollout, then subject close).
+- **Released:** **`v2.0.0-beta.1`** (set as GitHub *latest*) — mimic-from-GitHub install, agent version
+  *reporting*, full input validation, controller-mode UX & resilience, RC paperwork. rc.1 is a later
+  owner call once the owed hardware smokes pass and the beta soak is clean.
+- **Current plan:** **plan-9** — agent self-update mechanism + canary-then-fleet (the RISKY CORE; R1
+  brick-a-fleet hazard). plan-10 then cuts beta.2 and closes the subject.
+- `main` is green; plans 1–8 merged (PRs #109–#115).
 
 ## Open questions / blockers
 
-- **Locked owner decisions** (in the outline Decisions log): beta.1 excludes the self-update swap (→ beta.2);
-  self-update = canary-then-fleet; full validator none-yet table; release.yml publishes agent SHAs now,
-  bootstrap-TOFU hole deferred to rc.2; Apache-2.0; manual mimic catalog; air-gap omits `artifacts.json`.
-- **Two manual hardware smokes** (two-node controller login/hydration; NAT sticky round-trip) — gate the
-  beta.1 TAG (plan-8), not code-merge. Plus a self-update field smoke gates beta.2 (plan-10).
-- No code blockers. `main` green; the subject is drafted, not executed.
+- **Owed hardware smokes (owner-accepted risk).** Three beta.1 manual smokes gate the *tag*, not
+  code-merge, and could not run here (no two-node hardware / browser authenticator / real Debian host):
+  (1) two-node controller WebAuthn login → hydrated canvas + login-survives-refresh + no token in
+  localStorage; (2) NAT sticky-pin Compile → edit port/transit IP → deploy → no drift; (3) mimic
+  GitHub-`.deb` install on a kernel-≥6.1 Debian host. Recorded owed per `RELEASING.md`.
+- A **self-update field smoke** (canary self-update + badge flip + tampered-hash refuse) will gate
+  beta.2 (plan-10).
+- **plan-9.5 insertion risk:** bounding the agent's `Restart=always` crash-loop may need a systemd
+  unit-file change (`StartLimitBurst`) that ripples into the bootstrap renderer — the most probable wall.
+- No code blockers.
 
 ## Next actions
 
-1. **Execute plan-1** (RC paperwork & trust) — no code, runs parallel to everything; then plan-2 (FetchSettings
-   byte-identical gate) → plan-3 (mimic) → plan-4 (version reporting), with plan-6 (robustness) in parallel.
-2. Owner to run the two beta.1 hardware smokes when convenient (plan-8 gate).
+1. **Execute plan-9** — `selfupdate.go`: verify a fetched agent binary against the signed
+   `artifacts.json` pin (never the upstream `.sha256` sidecar), refuse downgrades below
+   `AgentVersionFloor`, bound the crash-loop via a `PendingUpdate` breadcrumb, canary-then-fleet
+   promotion; amend `PRINCIPLES.md` with the signed-self-update custody HIGH principle. Deepest review.
+2. **Execute plan-10** — beta.2 closure: tag `v2.0.0-beta.2`, full close-phase (CLOSURE.md, archive the
+   subject to `_completed/`, regenerate STATUS, memory update).
+3. Owner to run the owed beta.1 hardware smokes when convenient.
 
 ## Recently closed subjects (last 3)
 
