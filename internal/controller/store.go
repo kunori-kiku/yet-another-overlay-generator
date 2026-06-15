@@ -306,6 +306,27 @@ type ControllerSettings struct {
 	MimicVersion     string                       `json:"mimic_version,omitempty"`
 	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
 	MimicDebs        map[string]renderer.Artifact `json:"mimic_debs,omitempty"`
+	// Signed agent self-update (plan-9, canary-then-fleet D2). All NON-SECRET. The agent
+	// release base URL is the EXISTING AgentReleaseBaseURL above (reused as the self-update
+	// download base — no duplicate field). The pins below are emitted into the per-node,
+	// controller-signed artifacts.json agent block and the agent verifies a fetched binary
+	// against them before exec.
+	//
+	// TargetAgentVersion is the version the rollout drives toward. EMPTY ⇒ no agent block is
+	// emitted for any node ⇒ no self-update happens (the safety contract). MinAgentVersion is
+	// the floor below which a node must self-update BEFORE applying a bundle (a bundle/wire
+	// break); empty ⇒ no forced update. AgentBins maps "linux-<arch>" (e.g. "linux-amd64") to
+	// the release asset + SHA-256 the agent verifies.
+	TargetAgentVersion string                       `json:"target_agent_version,omitempty"`
+	MinAgentVersion    string                       `json:"min_agent_version,omitempty"`
+	AgentBins          map[string]renderer.Artifact `json:"agent_bins,omitempty"`
+	// Canary rollout (D2): during the canary phase only AgentCanaryNodeIDs receive the agent
+	// block (and thus self-update). AgentRolloutFleetWide is the operator's "promote canary →
+	// fleet" action: when true, EVERY enrolled node receives the agent block. Together they
+	// stage the rollout — a bad target is caught on the canary subset before it reaches the
+	// fleet.
+	AgentCanaryNodeIDs    []string `json:"agent_canary_node_ids,omitempty"`
+	AgentRolloutFleetWide bool     `json:"agent_rollout_fleet_wide,omitempty"`
 	// Translucency is the operator panel's vibrancy preference (panel-appshell P5). It is
 	// a PANEL APPEARANCE setting served via GET/POST /settings; it is deliberately NOT
 	// baked into the agent bootstrap script (it has no bearing on a node). A POINTER so a
@@ -328,6 +349,16 @@ func (cs ControllerSettings) Clone() ControllerSettings {
 			m[k] = v
 		}
 		out.MimicDebs = m
+	}
+	if cs.AgentBins != nil {
+		m := make(map[string]renderer.Artifact, len(cs.AgentBins))
+		for k, v := range cs.AgentBins {
+			m[k] = v
+		}
+		out.AgentBins = m
+	}
+	if cs.AgentCanaryNodeIDs != nil {
+		out.AgentCanaryNodeIDs = append([]string(nil), cs.AgentCanaryNodeIDs...)
 	}
 	if cs.Translucency != nil {
 		v := *cs.Translucency

@@ -909,7 +909,9 @@ func (h *ControllerHandler) HandleCompilePreview(w http.ResponseWriter, r *http.
 	// The COMPILE HALF only — enrolled subgraph → AgentHeld keys → compile → render — with no
 	// persistAllocations / Export / StageBundle / Prune / manifest / audit. That absence of
 	// side effects is exactly what distinguishes a preview from a deploy.
-	result, _, skipped, err := controller.CompileSubgraph(topo, nodes, controller.BuildFetchSettings(cs.WithDefaults()))
+	pfs := controller.BuildFetchSettings(cs.WithDefaults())
+	pfs.AgentRolloutNodeIDs = controller.AgentRolloutNodeIDs(cs, nodes)
+	result, _, skipped, err := controller.CompileSubgraph(topo, nodes, pfs)
 	if err != nil {
 		// CompileSubgraph wraps source-coded errors (%w); writeCodedOr surfaces each at its own
 		// status (compile constraints 422, keygen 400, etc.), CodeCompileFailed the fallback.

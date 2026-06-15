@@ -44,6 +44,13 @@ type settingsJSON struct {
 	MimicVersion     string                       `json:"mimic_version,omitempty"`
 	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
 	MimicDebs        map[string]renderer.Artifact `json:"mimic_debs,omitempty"`
+	// Signed agent self-update (plan-9, canary-then-fleet). All NON-SECRET pins; the agent
+	// release base is the existing AgentReleaseBaseURL above. Empty target ⇒ no self-update.
+	TargetAgentVersion    string                       `json:"target_agent_version,omitempty"`
+	MinAgentVersion       string                       `json:"min_agent_version,omitempty"`
+	AgentBins             map[string]renderer.Artifact `json:"agent_bins,omitempty"`
+	AgentCanaryNodeIDs    []string                     `json:"agent_canary_node_ids,omitempty"`
+	AgentRolloutFleetWide bool                         `json:"agent_rollout_fleet_wide,omitempty"`
 }
 
 // settingsResponse builds the wire view of cs: the stored settings plus the
@@ -57,9 +64,14 @@ func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) s
 		AgentReleaseBaseURL: cs.AgentReleaseBaseURL,
 		Translucency:        cs.Translucency != nil && *cs.Translucency,
 		AgentPathPrefix:     h.agentPrefix,
-		MimicVersion:        cs.MimicVersion,
-		MimicReleaseBase:    cs.MimicReleaseBase,
-		MimicDebs:           cs.MimicDebs,
+		MimicVersion:          cs.MimicVersion,
+		MimicReleaseBase:      cs.MimicReleaseBase,
+		MimicDebs:             cs.MimicDebs,
+		TargetAgentVersion:    cs.TargetAgentVersion,
+		MinAgentVersion:       cs.MinAgentVersion,
+		AgentBins:             cs.AgentBins,
+		AgentCanaryNodeIDs:    cs.AgentCanaryNodeIDs,
+		AgentRolloutFleetWide: cs.AgentRolloutFleetWide,
 	}
 }
 
@@ -108,9 +120,14 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			GithubProxy:         strings.TrimSpace(req.GithubProxy),
 			AgentReleaseBaseURL: strings.TrimSpace(req.AgentReleaseBaseURL),
 			Translucency:        &translucency,
-			MimicVersion:        strings.TrimSpace(req.MimicVersion),
-			MimicReleaseBase:    strings.TrimSpace(req.MimicReleaseBase),
-			MimicDebs:           req.MimicDebs,
+			MimicVersion:          strings.TrimSpace(req.MimicVersion),
+			MimicReleaseBase:      strings.TrimSpace(req.MimicReleaseBase),
+			MimicDebs:             req.MimicDebs,
+			TargetAgentVersion:    strings.TrimSpace(req.TargetAgentVersion),
+			MinAgentVersion:       strings.TrimSpace(req.MinAgentVersion),
+			AgentBins:             req.AgentBins,
+			AgentCanaryNodeIDs:    req.AgentCanaryNodeIDs,
+			AgentRolloutFleetWide: req.AgentRolloutFleetWide,
 		}.WithDefaults()
 		if cs.PublicAgentURL != "" {
 			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
@@ -129,6 +146,10 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if err := validateMimicCatalog(cs); err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		if err := validateAgentRollout(cs); err != nil {
 			writeAPIError(w, err)
 			return
 		}
@@ -224,6 +245,10 @@ var (
 	sha256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 	debKeyPattern    = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+$`) // "<codename>-<arch>"
 	debAssetPattern  = regexp.MustCompile(`^[A-Za-z0-9._+-]+\.deb$`)
+	// Agent self-update pins (plan-9 D8): key "linux-<arch>" (e.g. "linux-amd64"); a safe
+	// asset filename (the published per-arch agent binary, no shell/path metacharacters).
+	agentBinKeyPattern   = regexp.MustCompile(`^linux-[a-z0-9]+$`)
+	agentBinAssetPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 )
 
 // validateMimicCatalog enforces D8 on the mimic GitHub-.deb catalog: a semver version, an http(s)
@@ -259,6 +284,38 @@ func validateMimicCatalog(cs controller.ControllerSettings) *apierr.Error {
 		if !sha256HexPattern.MatchString(art.SHA256) {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs["+key+"].sha256")
 		}
+	}
+	return nil
+}
+
+// validateAgentRollout enforces D8 on the signed agent self-update pins: semver target/min
+// versions, a "linux-<arch>" bin key, a safe asset filename, and a 64-hex SHA-256 per pin. These
+// flow into the controller-signed artifacts.json the agent verifies a fetched binary against
+// before exec, so they are validated at save time. A non-empty TargetAgentVersion REQUIRES at
+// least one AgentBins entry — a target with no fetchable asset can only ever no-op, so reject it
+// as a misconfiguration rather than silently freeze the rollout. The agent release base is the
+// already-validated AgentReleaseBaseURL (http(s)). Canary node-ids need no format check: an id
+// matching no enrolled node is simply absent from the rollout set (AgentRolloutNodeIDs intersects).
+func validateAgentRollout(cs controller.ControllerSettings) *apierr.Error {
+	if cs.TargetAgentVersion != "" && !semverPattern.MatchString(cs.TargetAgentVersion) {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "target_agent_version")
+	}
+	if cs.MinAgentVersion != "" && !semverPattern.MatchString(cs.MinAgentVersion) {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "min_agent_version")
+	}
+	for key, art := range cs.AgentBins {
+		if !agentBinKeyPattern.MatchString(key) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_bins.key")
+		}
+		if !agentBinAssetPattern.MatchString(art.Asset) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_bins["+key+"].asset")
+		}
+		if !sha256HexPattern.MatchString(art.SHA256) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_bins["+key+"].sha256")
+		}
+	}
+	if cs.TargetAgentVersion != "" && len(cs.AgentBins) == 0 {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_bins")
 	}
 	return nil
 }
