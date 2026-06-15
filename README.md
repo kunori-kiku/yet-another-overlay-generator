@@ -27,8 +27,8 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 
 ### Prerequisites
 
-- Go `1.21+`
-- Node.js `v18+` (LTS recommended)
+- Go `1.25+`
+- Node.js `v20+` (LTS recommended)
 
 ### 1. Quick Start (Dev Script)
 
@@ -171,12 +171,13 @@ Full reference: [`docs/spec/controller/docker.md`](docs/spec/controller/docker.m
 ## Documentation
 
 - Architectural ground truth: [`specs/`](specs/) — start with [`specs/README.md`](specs/README.md).
-- [Wiki (English)](docs/wiki.md) — Full documentation including architecture, parameters, and troubleshooting
-- [Wiki (中文)](docs/wiki-zh.md) — 完整中文文档
+- Controller-mode operations & internals: [`docs/spec/controller/`](docs/spec/controller/) (the wikis below predate Controller Mode 2.0 and cover local/air-gap mode only).
+- [Wiki (English)](docs/wiki.md) — user guide for **local / air-gap mode** (architecture, parameters, troubleshooting).
+- [Wiki (中文)](docs/wiki-zh.md) — **本地 / air-gap 模式**用户文档。
 
 ## Debugging
 
-Quick debugging reference (see the [Wiki](docs/wiki.md#6-debugging-and-troubleshooting) for full details):
+Quick debugging reference (see the [Wiki](docs/wiki.md#6-debugging-and-troubleshooting) for local-mode details):
 
 ```bash
 # Dev environment logs

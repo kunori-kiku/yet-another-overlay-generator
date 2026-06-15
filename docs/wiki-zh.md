@@ -1,5 +1,9 @@
 # Yet Another Overlay Generator Wiki
 
+> **适用范围：** 本 Wiki 仅涵盖**本地 / air-gap 模式**——在浏览器内设计、导出各节点配置包、通过 SSH 部署，
+> 内容早于 Controller 模式 2.0。**Controller 模式**（长期运行的控制平面：运营者登录、Agent 注册、keystone
+> 签名、签名自更新）请见 [`docs/spec/controller/`](spec/controller/)。
+
 ## 1. 项目简介
 
 Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配置生成系统。用户通过图形化拓扑界面定义节点、网络域和可达关系，系统自动分配地址、生成 WireGuard + Babel 配置文件及一键安装脚本。
