@@ -1,6 +1,7 @@
 # Controller agent API
 
-<!-- last-verified: 2026-06-14 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 > **controller-server-authority-redesign (plan-6):** enrollment and rekey now enforce
 > the identity invariant — one APPROVED WireGuard public key binds to one node-id.

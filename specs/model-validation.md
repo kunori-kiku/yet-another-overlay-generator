@@ -1,6 +1,7 @@
 # Model & Validation
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): validation findings now carry Code+Params on the 200 ValidateResponse, panel-localized via tValidationError; English-default; no validation-logic change. -->
 
 ## Responsibility
 Define the canonical topology JSON data model and reject invalid topologies in two passes (schema, then semantic) before any allocation, rendering, or deployment consumes them.

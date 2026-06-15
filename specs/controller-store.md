@@ -1,6 +1,7 @@
 # Controller store (persistence)
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Persist all tenant-scoped controller state — node registry, topology versions, staged/current signed bundles, generation counter, enrollment tokens, node API tokens, operator accounts/sessions/login-challenges, keystone credential + signed trust-list, settings, and the hash-chained audit log — behind one swappable `Store` interface with two stdlib-only implementations.

@@ -1,6 +1,7 @@
 # Keystone trust-list (off-host signing)
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Define, canonically encode, and fail-closed-verify the off-host-signed membership manifest (trust list) that binds each node's WireGuard key and bundle digest under a monotonic epoch, so a breached controller can stage but never promote or serve content a node will trust.

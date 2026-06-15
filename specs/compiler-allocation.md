@@ -1,6 +1,7 @@
 # Compiler & Allocation
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Deterministically transform a validated topology plus a key map into a compiled topology (sticky resource allocations written back as edge pins) and per-node WireGuard peer derivations, guaranteeing byte-identical re-allocation for every pre-existing entity on recompile.

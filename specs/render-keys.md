@@ -1,6 +1,7 @@
 # Render & Key Custody
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): key-gen/export errors coded via internal/apierr; install scripts + self-extracting installer + CLI output Englishized; no artifact/signing-format change. -->
 
 ## Responsibility
 Prepare each node's WireGuard key material under the selected custody model (AirGap vs AgentHeld), then render a compile result into every deployable artifact: per-peer/client WireGuard configs, Babel configs, sysctl configs, per-node install scripts (with optional signature-verify and key-splice blocks), and deploy-all scripts.

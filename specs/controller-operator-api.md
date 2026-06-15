@@ -1,6 +1,7 @@
 # Controller operator API
 
-<!-- last-verified: 2026-06-13 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, plus an optional break-glass bearer token) and serves the operator-port HTTP routes that drive the fleet lifecycle: topology, stage/promote, nodes, revoke, audit, settings, enrollment tokens, rekey-all, and keystone signing.

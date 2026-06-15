@@ -1,6 +1,7 @@
 # Artifacts & Signing
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): key-gen/export errors coded via internal/apierr; install scripts + self-extracting installer + CLI output Englishized; no artifact/signing-format change. -->
 
 ## Responsibility
 Materialize each compiled node's config bundle as an on-disk directory (configs + `manifest.json` + canonical `checksums.sha256`) and, when a signing key is configured, attach a detached Ed25519 signature (`bundle.sig`) plus the verifying public key over that canonical checksum content.

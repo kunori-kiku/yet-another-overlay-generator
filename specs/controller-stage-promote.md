@@ -1,6 +1,7 @@
 # Controller stage & promote orchestration
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Compiles the enrolled subgraph of the stored topology into per-node bundles staged at the next generation, and gates the operator's promote that flips them live.

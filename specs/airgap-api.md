@@ -1,6 +1,7 @@
 # Air-gap API & panel hosting
 
-<!-- last-verified: 2026-06-14 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Serve the five open (unauthenticated, wildcard-CORS) design endpoints — health/validate/compile/export/deploy-script — and optionally host the built panel SPA, on the operator/panel port of a two-mux HTTP server whose second (agent) mux stays empty until controller mode opts in.
