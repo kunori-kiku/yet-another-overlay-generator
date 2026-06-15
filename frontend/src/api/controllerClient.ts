@@ -12,6 +12,7 @@ import type {
   ControllerAuditEntry,
   StageResult,
 } from '../types/controller';
+import type { CompileResponse } from '../types/topology';
 
 // 控制器连接配置：operator base URL、可选的 secret path 前缀、operator bearer token。
 // 注意这是连接层配置，agentBaseURL 等面板偏好留在 store，不参与请求构造。
@@ -689,6 +690,17 @@ export async function updateTopology(
   topoJSON: string
 ): Promise<void> {
   await postJSON(cfg, 'update-topology', topoJSON);
+}
+
+// 只读、服务端权威的编译预览（operator-only）：POST 当前设计，服务端渲染已 enroll 的子图
+// （不 stage、不持久化、无副作用），返回配置 + 被跳过（未入网）的节点 ID。零知识——渲染出的
+// wg 配置只含占位私钥。响应是 air-gap CompileResponse 形状外加 skipped_unenrolled。
+export async function compilePreview(
+  cfg: ControllerConfig,
+  topoJSON: string
+): Promise<CompileResponse> {
+  const res = await postJSON(cfg, 'compile-preview', topoJSON);
+  return (await res.json()) as CompileResponse;
 }
 
 // 把已 enroll 的子图编译并暂存到下一代（operator-only）。
