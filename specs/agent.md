@@ -1,6 +1,7 @@
 # Agent (node-side pull/verify/apply daemon)
 
-<!-- last-verified: 2026-06-14 -->
+<!-- last-verified: 2026-06-15 -->
+<!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 
 ## Responsibility
 Pull a per-node install bundle from a configured source or the networked controller, verify it fail-closed (signature, per-file SHA-256, keystone trust-list, anti-rollback), then execute the bundle's own `install.sh` as root — never tearing down the running overlay on failure.
