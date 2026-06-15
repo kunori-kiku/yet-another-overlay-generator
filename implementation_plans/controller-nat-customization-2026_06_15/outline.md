@@ -123,7 +123,7 @@ Client-side pair-completeness + transit-CIDR validation + a live validate before
 
 | PR | Status | Commit |
 |----|--------|--------|
-| PR1 | in progress | — |
+| PR1 | done (lint+build green) | controller-nat/pr1-pin-reconcile |
 | PR2 | pending | — |
 | PR3 | pending | — |
 | PR4 | pending | — |

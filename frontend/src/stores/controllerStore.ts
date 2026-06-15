@@ -44,7 +44,7 @@ import {
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { stripPrivateKeys } from '../lib/custody';
-import { useTopologyStore } from './topologyStore';
+import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
 import { useUiStore } from './uiStore';
 
 // loadSlices projects a Topology down to exactly the fields loadTopology consumes
@@ -145,6 +145,32 @@ export function canonicalDesign(t: Topology): string {
   // alloc_schema_version is omitempty: present only when > 0 (mirrors loadSlices + the server).
   if (s.alloc_schema_version) norm.alloc_schema_version = s.alloc_schema_version;
   return stableStringify(norm);
+}
+
+// sameIdSet reports whether two edge/node collections carry exactly the same set of ids
+// (order-independent). Post-deploy it decides between an in-place pin overlay (set unchanged →
+// preserve selection / open EdgeEditor) and a full hydrate (set diverged → overlay would be wrong).
+function sameIdSet(a: Array<{ id: string }>, b: Array<{ id: string }>): boolean {
+  if (a.length !== b.length) return false;
+  const ids = new Set(a.map((x) => x.id));
+  for (const x of b) if (!ids.has(x.id)) return false;
+  return true;
+}
+
+// canonicalDesignIgnoringPins is canonicalDesign with every server-derived allocation field
+// dropped from edges, so the save-time conflict check tells a genuine concurrent edit
+// (nodes/edges/non-pin fields changed under us) apart from a benign server-side pin addition
+// (a deploy on another tab) — the latter is ADOPTED onto the canvas, not flagged as a conflict.
+function canonicalDesignIgnoringPins(t: Topology): string {
+  const stripped: Topology = {
+    ...t,
+    edges: t.edges.map((e) => {
+      const x = { ...e } as Record<string, unknown>;
+      for (const f of ALLOCATION_PIN_FIELDS) delete x[f];
+      return x as unknown as typeof e;
+    }),
+  };
+  return canonicalDesign(stripped);
 }
 
 // isDesignDirty: does the current design differ from the last server-synced snapshot
@@ -264,6 +290,11 @@ interface ControllerState {
   // 重新 GET 服务端设计与它比对，若服务端已被改动则不盲目覆盖（plan-10 / T2，D13）。null=尚未
   // 同步过任何服务端设计（服务端为空 / 首次部署前）。不持久化（刷新后由 hydrate 重新建立）。
   lastSyncedSnapshot: string | null;
+  // lastSyncedTopology 是与 lastSyncedSnapshot 同一时刻记录的「服务端权威设计」Topology 对象（而非
+  // 规范化字符串）。saveDesign 用它做三方比较的 base：区分「服务端新增了 pin」（良性 → 吸纳到画布，
+  // 不报冲突 / 不被 force 覆盖丢弃）与「操作员清了 pin / 改了别处」（保留操作员意图）。null=尚未同步。
+  // 不持久化（不在 partialize allowlist 中——刷新后由 hydrate 重建，且绝不让 fleet 公网 IP 落盘）。
+  lastSyncedTopology: Topology | null;
   // save 冲突标志（plan-10 / T2）：saveDesign 检测到服务端设计自上次同步以来已变化时置真，UI
   // 据此弹出「服务端已变更：从服务端重新同步（自动备份）/ 仍然覆盖 / 取消」对话框。
   saveConflict: boolean;
@@ -467,6 +498,7 @@ export const useControllerStore = create<ControllerState>()(
       error: null,
       lastSyncedAt: null,
       lastSyncedSnapshot: null,
+      lastSyncedTopology: null,
       saveConflict: false,
       saving: false,
       signing: false,
@@ -652,7 +684,7 @@ export const useControllerStore = create<ControllerState>()(
           }
           // 记下服务端权威设计的规范化快照——dirty 指示 + save 冲突检测的基线（plan-10 / T2）。
           // 不论下面是否真的覆盖本地画布（differs/!differs）都更新，保证基线始终等于服务端现状。
-          set({ lastSyncedSnapshot: canonicalDesign(topo) });
+          set({ lastSyncedSnapshot: canonicalDesign(topo), lastSyncedTopology: topo });
           const topoStore = useTopologyStore.getState();
           const local = topoStore.getTopology();
           // 语义比较（plan-4 review）：只比 loadTopology 实际消费的四个切片 + 版本号，且对
@@ -717,6 +749,7 @@ export const useControllerStore = create<ControllerState>()(
           error: null,
           // 同步快照与冲突标志是当前会话/服务端设计的派生态：登出一并清掉，下次登录 hydrate 重建。
           lastSyncedSnapshot: null,
+          lastSyncedTopology: null,
           saveConflict: false,
         });
         // 安全：登出后画布若是服务端机密镜像，立即清空（内存 + 由 persist 连带清掉 localStorage）。
@@ -763,13 +796,13 @@ export const useControllerStore = create<ControllerState>()(
           } else {
             // 会话失效：先捕获基线再清（同 logout 的顺序修复），gate 用 live 基线判 dirty 才准。
             const lostSnap = get().lastSyncedSnapshot;
-            set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, saveConflict: false });
+            set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
             clearServerCanvasAtGate(get().mode, lostSnap);
             useUiStore.getState().restoreLocalTranslucency(); // A3：回登录门用本地外观偏好
           }
         } catch {
           const lostSnap = get().lastSyncedSnapshot;
-          set({ loggedIn: false, lastSyncedSnapshot: null, saveConflict: false });
+          set({ loggedIn: false, lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
           clearServerCanvasAtGate(get().mode, lostSnap);
           useUiStore.getState().restoreLocalTranslucency();
         }
@@ -1054,8 +1087,11 @@ export const useControllerStore = create<ControllerState>()(
             useTopologyStore.getState().setCanvasFromServer(true);
           }
           // Keep the sync baseline (dirty/conflict — plan-10 / T2) in step with what we just
-          // persisted, so a freshly-deployed canvas reads as clean (not dirty).
-          set({ lastSyncedSnapshot: canonicalDesign(cleanTopo) });
+          // persisted, so a freshly-deployed canvas reads as clean (not dirty). This is the
+          // UNPINNED upload; the post-deploy reconciliation below re-bases it to the pinned
+          // design once stage's allocation has been read back (and is the fallback baseline
+          // if that read fails).
+          set({ lastSyncedSnapshot: canonicalDesign(cleanTopo), lastSyncedTopology: cleanTopo });
           const result = await stage(cfg);
           // 当没有已注册节点时 stage 不产生任何 bundle（staged 为空），此时 promote 会
           // 返回 409 ErrNoStagedBundle —— 那不是错误，而是「还没有节点入网」。直接展示
@@ -1095,6 +1131,33 @@ export const useControllerStore = create<ControllerState>()(
               });
             }
             await promote(cfg);
+          }
+          // Post-deploy reconciliation (PR1): stage() ran CompileAndStage → persistAllocations,
+          // which merged the freshly-allocated compiled_port + pinned_* (ports, transit IPs,
+          // link-locals) BY EDGE ID into the STORED topology. Re-GET it and overlay those onto
+          // the canvas so the operator immediately SEES the allocated internal port/IP — the
+          // value a NAT port-forward must target — WITHOUT a full hydrate that would drop the
+          // current selection / open EdgeEditor. Full hydrate only if the node/edge SET diverged
+          // (a concurrent edit), where a field overlay would be wrong. Re-base the sync baseline
+          // from the reconciled canvas so the freshly-pinned design reads clean (not dirty, and
+          // no phantom save-conflict on the next edit). best-effort: a failed re-GET leaves the
+          // canvas as the uploaded (unpinned) design — the pins are on the server and a later
+          // Save adopts them (non-clobber) or a re-login hydrates them.
+          try {
+            const persisted = (await ctlGetTopology(cfg)) as Topology | null;
+            if (persisted && Array.isArray(persisted.nodes) && Array.isArray(persisted.edges)) {
+              const ts = useTopologyStore.getState();
+              const canvas = ts.getTopology();
+              if (sameIdSet(canvas.nodes, persisted.nodes) && sameIdSet(canvas.edges, persisted.edges)) {
+                ts.mergeServerAllocations(persisted.edges);
+              } else {
+                ts.loadTopology(persisted, true);
+              }
+              const reconciled = useTopologyStore.getState().getTopology();
+              set({ lastSyncedSnapshot: canonicalDesign(reconciled), lastSyncedTopology: reconciled });
+            }
+          } catch {
+            // best-effort (see comment above) — never fail an otherwise-successful deploy on it.
           }
           // Clear any pending shrink-confirm (a confirmed deploy consumes it) and
           // surface how many private keys were stripped before upload (0 = no notice).
@@ -1145,7 +1208,7 @@ export const useControllerStore = create<ControllerState>()(
         // / T5 的 render-gate 才是真正的修复）。清掉它反而会破坏 partialize 设计的「再进控制器即时
         // 上色」：session 保留的 controller→local→controller 往返不会触发 refresh（checkSession 只
         // hydrate 不拉 fleet），届时会看到空 fleet 直到手动刷新（plan-11 review #2/#3）。故保留缓存。
-        set({ mode: 'local', lastSyncedSnapshot: null, saveConflict: false });
+        set({ mode: 'local', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
       },
 
       // local→controller switch. Deliberately NOT a blanket key purge: the asymmetry vs switchToLocal
@@ -1172,7 +1235,7 @@ export const useControllerStore = create<ControllerState>()(
           const cfg = configOf(get());
           // 零知识 fail-safe：与 deploy() 一致，上送前剥离私钥（控制器画布本就无私钥，这是兜底）。
           const current = useTopologyStore.getState().getTopology();
-          const { topo: clean, stripped } = stripPrivateKeys(current);
+          let { topo: clean, stripped } = stripPrivateKeys(current);
           // no-op 守卫：设计与上次同步基线一致就直接返回——既不发网络请求，也不在服务端徒增一条
           // 相同内容的版本历史（后端不做内容去重，徒增的版本还会挤掉真正的旧版本）。force 跳过它。
           // 用 isDesignDirty：基线为 null 且画布为空（首次、无可保存内容）也正确判为「非 dirty」。
@@ -1180,26 +1243,48 @@ export const useControllerStore = create<ControllerState>()(
             set({ loading: false, saving: false });
             return;
           }
-          // 客户端冲突检测（D13）：除非 force，save 前重新 GET 服务端设计与上次同步快照比对。
-          // 服务端在我们之后被改动 → 不盲目覆盖，置 saveConflict 让 UI 给出「重新同步 / 覆盖 /
-          // 取消」。best-effort：守卫读取失败则跳过冲突检测照常保存（与 deploy 的缩水守卫一致），
-          // 避免瞬时网络错误误报冲突。注意这意味着一旦守卫读失败，本次保存会盲写覆盖——
-          // update-topology 只报告写入「失败」，不会报告「过期覆盖」（无后端乐观并发，见 D13）。
-          if (!opts?.force) {
-            let readOk = true;
-            let serverNow: Topology | null = null;
-            try {
-              serverNow = (await ctlGetTopology(cfg)) as Topology | null;
-            } catch {
-              readOk = false;
+          // Re-GET the server design — for BOTH the non-clobber pin merge and the conflict check.
+          // best-effort: a read failure skips both guards and writes `clean` (update-topology has
+          // no optimistic-concurrency token; version history — plan-2 — is the backstop). The read
+          // runs on force too, so even a force-Save adopts server pins before it overwrites.
+          let readOk = true;
+          let serverNow: Topology | null = null;
+          try {
+            serverNow = (await ctlGetTopology(cfg)) as Topology | null;
+          } catch {
+            readOk = false;
+          }
+          // 客户端冲突检测（D13）：除非 force，比较「服务端现状 vs 上次同步基线」时忽略 pin 字段。
+          // 这样「另一处 deploy 仅新增了 pin」（仅 pin 差异，会被下面的非破坏性合并吸纳）不会误报
+          // 冲突，而真正的并发改动（节点/边/非 pin 字段变化）仍触发「重新同步 / 覆盖 / 取消」。
+          // 必须在下面的合并之前判定：冲突即提前返回且不触碰画布——否则一次被「取消」的 Save 也会把
+          // 服务端 pin 静默叠加到画布上，留下用户没要求的第三种状态。best-effort：守卫读失败则跳过
+          // 冲突检测照常保存（与 deploy 缩水守卫一致），避免瞬时网络错误误报；此时本次保存会盲写覆盖
+          //（update-topology 无后端乐观并发，见 D13）。
+          if (!opts?.force && readOk) {
+            const baseTopo = get().lastSyncedTopology;
+            const baseNoPins = baseTopo ? canonicalDesignIgnoringPins(baseTopo) : null;
+            const serverNoPins = serverNow ? canonicalDesignIgnoringPins(serverNow) : null;
+            if (serverNoPins !== baseNoPins) {
+              set({ loading: false, saving: false, saveConflict: true });
+              return;
             }
-            if (readOk) {
-              const serverCanon = serverNow ? canonicalDesign(serverNow) : null;
-              if (serverCanon !== get().lastSyncedSnapshot) {
-                set({ loading: false, saving: false, saveConflict: true });
-                return;
-              }
-            }
+          }
+          // Non-clobber pin adoption (PR1): if the server carries freshly-allocated NAT ports/IPs
+          // (compiled_port + pinned_*) that NEITHER the canvas NOR the last-synced base had — a
+          // deploy on another tab, or one whose post-promote reconcile failed — adopt them onto the
+          // canvas so this Save does not drop them and break the configured NAT forward. Operator-set
+          // / operator-unpinned values win (lastSyncedTopology is the 3-way base). Runs only PAST the
+          // conflict gate above (and on force, which skips that gate), so a cancelled/conflicted Save
+          // never mutates the canvas — this is also what makes even a force-Save non-clobbering.
+          // Recompute `clean` from the merged canvas before writing.
+          if (readOk && serverNow && Array.isArray(serverNow.edges)) {
+            const base = get().lastSyncedTopology;
+            const ts = useTopologyStore.getState();
+            ts.mergeServerAllocations(serverNow.edges, base ? base.edges : []);
+            const reread = stripPrivateKeys(ts.getTopology());
+            clean = reread.topo;
+            stripped = reread.stripped;
           }
           await updateTopology(cfg, JSON.stringify(clean));
           // 现在画布即服务端权威副本：标记 server-held（停止落盘、登出/gate 时清空），刷新同步
@@ -1211,6 +1296,7 @@ export const useControllerStore = create<ControllerState>()(
             saveConflict: false,
             lastStrippedKeys: stripped,
             lastSyncedSnapshot: canonicalDesign(clean),
+            lastSyncedTopology: clean,
             lastSyncedAt: Date.now(),
           });
         } catch (err) {
