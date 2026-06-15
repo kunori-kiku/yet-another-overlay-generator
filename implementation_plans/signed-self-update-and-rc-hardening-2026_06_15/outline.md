@@ -169,13 +169,13 @@ subject archived to `_completed/`; beta.2 tagged. rc.1 remains a later owner cal
 
 | Plan | Milestone | Status | Commit |
 |------|-----------|--------|--------|
-| plan-1 | beta.1 | pending (LICENSE/NOTICE done on `rc-hardening`) | — |
-| plan-2 | beta.1 | pending | — |
-| plan-3 | beta.1 | pending | — |
-| plan-4 | beta.1 | pending | — |
-| plan-5 | beta.1 | pending | — |
-| plan-6 | beta.1 | pending | — |
-| plan-7 | beta.1 | pending | — |
+| plan-1 | beta.1 | done | `bb6fe75` (PR #109 — RC paperwork & trust-doc honesty) |
+| plan-2 | beta.1 | done | `9c7f398` (PR #110 — render.FetchSettings plumbing, byte-identical) |
+| plan-3 | beta.1 | done | `2b2eb71` (PR #111 — mimic GitHub-.deb + signed artifacts.json) |
+| plan-4 | beta.1 | done | `e3a24f4` (PR #112 — agent version reporting + build-version) |
+| plan-5 | beta.1 | done | `93b26bf` (PR #113 — controller-mode UX & resilience) |
+| plan-6 | beta.1 | done | `3a41653` (PR #114 — backend robustness & full input validation) |
+| plan-7 | beta.1 | in progress | — |
 | plan-8 | beta.1 | pending | — |
 | plan-9 | beta.2 | pending | — |
 | plan-10 | beta.2 | pending | — |
