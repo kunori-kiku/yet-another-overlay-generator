@@ -97,12 +97,82 @@ func TestFileStoreAuditAppendIsJSONL(t *testing.T) {
 		t.Errorf("legacy %s must not be written by the append path (err=%v)", legacyAuditFileName, err)
 	}
 	// The JSONL file has exactly one line per entry.
-	parsed, err := readAuditJSONL(filepath.Join(dir, auditFileName))
+	parsed, tornTail, err := readAuditJSONL(filepath.Join(dir, auditFileName))
 	if err != nil {
 		t.Fatalf("readAuditJSONL: %v", err)
 	}
+	if tornTail {
+		t.Errorf("a cleanly-appended log must not report a torn tail")
+	}
 	if len(parsed) != 5 {
 		t.Fatalf("JSONL lines = %d, want 5", len(parsed))
+	}
+}
+
+// TestFileStoreAuditTornTrailingLineTolerated simulates a crash mid-O_APPEND (a partial,
+// newline-less final line) and asserts the log is NOT bricked: ListAudit returns the durable
+// prefix, the next AppendAudit succeeds and continues the chain, the torn bytes are self-healed
+// (so they never become an unreadable interior line), and the chain verifies clean.
+func TestFileStoreAuditTornTrailingLineTolerated(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	fs, err := NewFileStore(root)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	const tn = TenantID("torn-tenant")
+
+	// Append three clean entries through the store, then simulate a crash that left a partial
+	// final line (no trailing newline) appended after them.
+	appendN(t, fs, tn, 3)
+	dir := filepath.Join(root, string(tn))
+	jsonlPath := filepath.Join(dir, auditFileName)
+	f, err := os.OpenFile(jsonlPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("open for torn append: %v", err)
+	}
+	if _, err := f.WriteString(`{"seq":4,"timestamp":"2026-06-15T00:00:0`); err != nil { // truncated JSON, no newline
+		t.Fatalf("write torn line: %v", err)
+	}
+	_ = f.Close()
+
+	// A fresh FileStore (cold tail cache) models the post-crash restart.
+	fs2, err := NewFileStore(root)
+	if err != nil {
+		t.Fatalf("NewFileStore (restart): %v", err)
+	}
+
+	// ListAudit returns the durable prefix, not an error.
+	listed, err := fs2.ListAudit(ctx, tn)
+	if err != nil {
+		t.Fatalf("ListAudit after torn tail: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("ListAudit len = %d, want 3 (torn 4th dropped)", len(listed))
+	}
+
+	// The next append succeeds (not bricked) and continues the chain at Seq 4.
+	e4, err := fs2.AppendAudit(ctx, tn, AuditEntry{Timestamp: time.Date(2026, 6, 15, 1, 0, 0, 0, time.UTC), Actor: "operator", Action: "post-crash", NodeID: "node-1"})
+	if err != nil {
+		t.Fatalf("AppendAudit after torn tail: %v", err)
+	}
+	if e4.Seq != 4 {
+		t.Errorf("post-crash append Seq = %d, want 4", e4.Seq)
+	}
+
+	final, err := fs2.ListAudit(ctx, tn)
+	if err != nil {
+		t.Fatalf("ListAudit (final): %v", err)
+	}
+	if len(final) != 4 {
+		t.Fatalf("final len = %d, want 4", len(final))
+	}
+	if bad := VerifyAuditChain(final); bad != -1 {
+		t.Fatalf("VerifyAuditChain(self-healed) = %d, want -1", bad)
+	}
+	// The torn bytes were self-healed: a re-read sees no torn tail.
+	if _, tornTail, err := readAuditJSONL(jsonlPath); err != nil || tornTail {
+		t.Errorf("expected a clean self-healed file; tornTail=%v err=%v", tornTail, err)
 	}
 }
 

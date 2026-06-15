@@ -54,11 +54,13 @@ func chainAudit(e AuditEntry, prevHash string) AuditEntry {
 // (that is Plan 5). See the AuditEntry doc in store.go.
 //
 // Anchoring: the chain is verified relative to the FIRST entry's PrevHash, not the empty
-// genesis. An un-rotated log's first entry has PrevHash == "" so this is identical to
-// genesis anchoring; a bounded log that has rotated out its oldest entries (plan-6) has a
-// non-empty PrevHash on its first retained entry, yet its retained window is still
-// internally consistent and tamper-evident. The lost genesis anchor is inherent to a
-// bounded log and consistent with the operational-only guarantee above.
+// genesis, so a bounded log that has rotated out its oldest entries (plan-6) — whose first
+// retained entry carries a non-empty PrevHash — still verifies its retained window instead
+// of false-positiving at index 0. Trade-off (honest): prefix-truncation of an un-rotated log
+// is therefore NO LONGER detected (the trimmed window verifies clean). That is acceptable
+// under the operational-only guarantee above — an actor with store write access can re-forge
+// the chain forward regardless, so truncation was never cryptographically prevented; a clean
+// result must not be read as proof the head was not trimmed.
 func VerifyAuditChain(entries []AuditEntry) int {
 	if len(entries) == 0 {
 		return -1

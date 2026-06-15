@@ -289,14 +289,29 @@ limit):
   cache** (last `Seq`/`Hash` + count), seeded once via a single read (`loadAuditTail`). A pre-existing
   legacy `audit.json` array is migrated to JSONL **once**, on first access, so the two formats never
   coexist. `ListAudit` reads the JSONL (falling back to a not-yet-migrated legacy array).
+- **Torn-write tolerance.** The append is `O_APPEND` (not the temp-file+`rename` used elsewhere), so it
+  does NOT inherit the store-wide rename-atomicity. To keep the same *effective* guarantee — "lose at
+  most the last record, never corrupt/brick" — `readAuditJSONL` treats a malformed **trailing** line as
+  the torn residue of a crash mid-append: it drops that line and returns the durable prefix. The append
+  path (`loadAuditTail`) then **self-heals** by rewriting the clean prefix before the next append, so the
+  torn bytes never become an unreadable interior line. A malformed **interior** line is real corruption
+  and is still surfaced as an error. A crash can therefore lose the just-appended (best-effort) entry,
+  exactly as the rename-atomic writers can — but never bricks the log or the enrollment/audit handlers
+  that call `AppendAudit`.
 - **Both stores cap the log with hysteresis** (`auditRetain` = 10000 / `auditRotateAt` = 12000, shared in
   `audit.go`): MemStore trims its slice; FileStore **rotates** the file down to `auditRetain` once it
   reaches `auditRotateAt` — a full rewrite **amortized to once per 2000 appends**, never per append. A
   FileStore rotation failure keeps the durable entry and self-heals on the next append.
 - **`VerifyAuditChain` anchors on the first entry's `PrevHash`**, so a rotated (oldest-trimmed) log still
-  verifies its retained window. An un-rotated log has a genesis (`""`) `PrevHash`, so its behaviour is
-  unchanged. Losing the genesis anchor on rotation is inherent to a bounded log and consistent with the
-  operational-only (tamper-evident, not anti-tamper) guarantee above.
+  verifies its retained window. A **pristine** un-rotated log has a genesis (`""`) `PrevHash`, so it
+  verifies exactly as before. **Honest caveat:** because the anchor is now the first *retained* entry
+  rather than the genesis, prefix-truncation of an un-rotated log (a botched manual edit, a backup that
+  lost the head, a truncate-only actor) is **no longer detected** — the trimmed window still verifies
+  clean. This is a deliberate relaxation (genesis anchoring would false-positive on every legitimately
+  rotated log) and is consistent with the operational-only (tamper-evident, **not** anti-tamper)
+  guarantee above: an actor with store write access can already re-forge the chain forward, so truncation
+  was never cryptographically prevented. Operators must not read a clean `VerifyAuditChain` as proof the
+  head was not trimmed.
 
 ## Postgres adapter (future)
 

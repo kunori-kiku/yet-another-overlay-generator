@@ -283,7 +283,7 @@ const (
 // is present (pre-plan-6 data, not yet migrated by an append) it falls back to that, so
 // ListAudit returns the full history either way.
 func (fs *FileStore) readAudit(dir string) ([]AuditEntry, error) {
-	entries, err := readAuditJSONL(filepath.Join(dir, auditFileName))
+	entries, _, err := readAuditJSONL(filepath.Join(dir, auditFileName))
 	if err != nil {
 		return nil, err
 	}
@@ -302,28 +302,48 @@ func (fs *FileStore) readAudit(dir string) ([]AuditEntry, error) {
 }
 
 // readAuditJSONL parses an append-only JSONL audit log (one AuditEntry per line). It
-// returns (nil, nil) when the file does not exist so the caller can distinguish "no JSONL
-// log" from "empty log". Blank lines are skipped (tolerant of a trailing newline).
-func readAuditJSONL(path string) ([]AuditEntry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+// returns (nil, false, nil) when the file does not exist so the caller can distinguish "no
+// JSONL log" from "empty log". Blank lines are skipped (tolerant of a trailing newline).
+//
+// Crash tolerance: the append path is a bare O_APPEND write (not rename-atomic), so a crash
+// or power loss can leave a partially-written FINAL line. That torn trailing line is DROPPED
+// and reported via tornTail=true — preserving the durably-committed prefix so the log stays
+// readable AND appendable (loadAuditTail self-heals by rewriting the clean prefix before the
+// next append, so the torn bytes never become an interior line). A malformed INTERIOR line
+// is real corruption, not a torn append, and is still surfaced as a hard error. This restores
+// the store-wide "lose at most the last record, never corrupt/brick" guarantee that the
+// rename-atomic writers provide.
+func readAuditJSONL(path string) (entries []AuditEntry, tornTail bool, err error) {
+	data, rerr := os.ReadFile(path)
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, rerr
 	}
-	entries := []AuditEntry{}
-	for _, line := range strings.Split(string(data), "\n") {
+	lines := strings.Split(string(data), "\n")
+	lastNonBlank := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			lastNonBlank = i
+		}
+	}
+	entries = []AuditEntry{}
+	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		var e AuditEntry
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			return nil, fmt.Errorf("controller: parse %s: %w", auditFileName, err)
+		if jerr := json.Unmarshal([]byte(line), &e); jerr != nil {
+			if i == lastNonBlank {
+				// Torn trailing line from a crashed append: drop it, keep the durable prefix.
+				return entries, true, nil
+			}
+			return nil, false, fmt.Errorf("controller: parse %s: %w", auditFileName, jerr)
 		}
 		entries = append(entries, e)
 	}
-	return entries, nil
+	return entries, false, nil
 }
 
 // writeAuditJSONL atomically rewrites the whole JSONL log (temp file + rename). Used only
@@ -371,9 +391,17 @@ func (fs *FileStore) loadAuditTail(t TenantID, dir string) (*auditTail, error) {
 			return nil, err
 		}
 	}
-	entries, err := readAuditJSONL(jsonlPath)
+	entries, tornTail, err := readAuditJSONL(jsonlPath)
 	if err != nil {
 		return nil, err
+	}
+	if tornTail {
+		// A crash left a partial trailing line. Rewrite the clean prefix so the next O_APPEND
+		// lands on a well-formed file rather than concatenating onto the torn bytes (which
+		// would turn the torn line into an unreadable interior line). One-time, under fs.mu.
+		if werr := writeAuditJSONL(jsonlPath, entries); werr != nil {
+			return nil, werr
+		}
 	}
 	tail := &auditTail{count: len(entries)}
 	if n := len(entries); n > 0 {
@@ -389,7 +417,9 @@ func (fs *FileStore) loadAuditTail(t TenantID, dir string) (*auditTail, error) {
 // (auditRotateAt-auditRetain) appends (amortized), so steady-state appends stay O(1). The
 // caller must hold fs.mu and pass the tenant's cached tail.
 func (fs *FileStore) rotateAudit(dir string, tail *auditTail) error {
-	entries, err := readAuditJSONL(filepath.Join(dir, auditFileName))
+	// A torn tail was already self-healed by loadAuditTail before any append, so the read
+	// here sees a clean file; the tornTail flag is irrelevant at rotation time.
+	entries, _, err := readAuditJSONL(filepath.Join(dir, auditFileName))
 	if err != nil {
 		return err
 	}
@@ -1748,7 +1778,10 @@ func (fs *FileStore) AppendAudit(ctx context.Context, t TenantID, e AuditEntry) 
 		// The entry is already durably appended, so a rotation failure must neither lose it
 		// nor fail the caller (many callers treat AppendAudit as best-effort). count stays
 		// above the high-water mark, so the NEXT append retries rotation and self-heals; the
-		// log just stays slightly over auditRetain until then.
+		// log just stays slightly over auditRetain until then. Caveat: while rotation keeps
+		// failing (e.g. a full disk — writeAuditJSONL needs a momentary full temp copy), each
+		// append re-reads + re-attempts the full rewrite, so the O(1) append degrades to O(N)
+		// until space frees; it self-corrects once the rewrite succeeds.
 		_ = fs.rotateAudit(dir, tail)
 	}
 	return e, nil
