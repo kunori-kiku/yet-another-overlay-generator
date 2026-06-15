@@ -180,6 +180,20 @@ func VerifyBundle(files map[string][]byte, pinnedPubPEM []byte) (*VerifyResult, 
 		return nil, fmt.Errorf("agent: checksums.sha256 does not cover install.sh")
 	}
 
+	// artifacts.json (plan-9): OPTIONAL (omitted in air-gap / no-catalog deploys), but when
+	// PRESENT it carries the self-update + mimic pins the root install.sh and the agent
+	// self-update read, so it MUST be covered by checksums.sha256 — i.e. part of the signed
+	// set. The per-file loop above only verifies LISTED files, so without this guard an
+	// attacker who can ADD a file to the bundle (but not re-sign checksums) could smuggle in
+	// an UNLISTED artifacts.json carrying a malicious agent-binary/.deb pin that passes
+	// VerifyBundle and is then trusted. Mirror the install.sh coverage guard, conditional on
+	// presence. (A LISTED-but-absent artifacts.json is already caught by the per-file loop.)
+	if _, ok := files["artifacts.json"]; ok {
+		if _, covered := listed["artifacts.json"]; !covered {
+			return nil, fmt.Errorf("agent: artifacts.json present but not covered by checksums.sha256; refusing")
+		}
+	}
+
 	return res, nil
 }
 

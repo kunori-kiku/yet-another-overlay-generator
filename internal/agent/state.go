@@ -55,6 +55,32 @@ type State struct {
 	AppliedAt string `json:"applied_at"`
 	// Health is a short human-readable health line.
 	Health string `json:"health"`
+	// AgentVersionFloor is the anti-downgrade floor for SELF-UPDATE (plan-9): the agent
+	// refuses to self-update to a version strictly below this. It advances ONLY when a
+	// self-update is HEALTH-CONFIRMED (the startup reconcile promotes the swapped binary
+	// after one clean cycle), never on a mere swap — so a rolled-back bad update cannot
+	// lower the bar. Empty means no floor yet (the running build is the implicit floor).
+	AgentVersionFloor string `json:"agent_version_floor,omitempty"`
+	// PendingUpdate is the crash-durable breadcrumb written just before an agent self-update
+	// swaps and re-execs (plan-9). Its presence on startup means a swap is in flight and the
+	// reconcile must resolve it (promote on health, rollback on failure, abandon at the
+	// attempt cap) — this is what bounds the systemd Restart=always loop without a unit-file
+	// change. Nil when no update is in flight.
+	PendingUpdate *PendingUpdate `json:"pending_update,omitempty"`
+}
+
+// PendingUpdate is the self-update breadcrumb (plan-9): the swap that was attempted and how
+// many boots have tried to resolve it. Written crash-durably (SaveState temp-renames) BEFORE
+// the binary is replaced + re-exec'd, so a crash mid-swap leaves a record the next boot
+// reconciles rather than an unbounded restart loop.
+type PendingUpdate struct {
+	// From is the version running before the swap (the rollback target).
+	From string `json:"from"`
+	// To is the version being swapped in (matched against BuildVersion on the next boot).
+	To string `json:"to"`
+	// Attempts counts boots that have tried to resolve this update; the reconcile abandons
+	// (rolls back to From) once it exceeds the cap, bounding the crash-loop.
+	Attempts int `json:"attempts"`
 }
 
 // statePath returns the state file path inside stateDir.
