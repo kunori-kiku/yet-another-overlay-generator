@@ -343,7 +343,7 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 
 		// 规则：生效范围最高端口越界（base+count-1 > 65535 会被原样渲染进 WireGuard 配置）。
 		if r.high() > 65535 {
-			result.AddError(fmt.Sprintf("nodes[%d].listen_port", r.nodeIndex), CodeNodeEffectivePortRangeOverflow, P{"node", r.nodeName}, P{"low", strconv.Itoa(r.base)}, P{"high", strconv.Itoa(r.high())}, P{"base", strconv.Itoa(r.base)}, P{"count", strconv.Itoa(r.count)})
+			result.AddError(fmt.Sprintf("nodes[%d]", r.nodeIndex), CodeNodeEffectivePortRangeOverflow, P{"node", r.nodeName}, P{"low", strconv.Itoa(r.base)}, P{"high", strconv.Itoa(r.high())}, P{"base", strconv.Itoa(r.base)}, P{"count", strconv.Itoa(r.count)})
 		}
 	}
 }
