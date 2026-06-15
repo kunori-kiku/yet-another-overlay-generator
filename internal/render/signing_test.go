@@ -312,3 +312,52 @@ func TestAll_ZeroFetchSettings_OmitsArtifactsJSON(t *testing.T) {
 		}
 	}
 }
+
+// TestAll_MimicCatalog_ArtifactsJSONSignedMember is the EXPORT-LEVEL custody-chain gate
+// (PERPETUAL): when a mimic catalog is configured, render.All emits artifacts.json into every
+// node's bundle and export lists it in that node's checksums.sha256 — so the pin inherits the
+// bundle's Ed25519 signature + keystone digest binding with NO new trust primitive (pin ∈
+// artifacts.json ∈ bundleFiles ∈ signed checksums). The air-gap path proves checksum membership;
+// signing/keystone layer over the same checksums.
+func TestAll_MimicCatalog_ArtifactsJSONSignedMember(t *testing.T) {
+	t.Setenv(bundlesig.EnvSigningKey, "")
+
+	topo := signingTestTopology(t)
+	keys, err := GenerateKeys(topo, AirGap)
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+	result, err := compiler.NewCompiler().Compile(topo, keys)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	fs := FetchSettings{
+		MimicVersion:     "0.1.0",
+		MimicReleaseBase: "https://github.com/hack3ric/mimic/releases/download/v0.1.0",
+		MimicDebs: map[string]Artifact{
+			"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: strings.Repeat("a", 64)},
+		},
+	}
+	if err := All(result, keys, fs); err != nil {
+		t.Fatalf("render.All (mimic catalog): %v", err)
+	}
+
+	outDir := t.TempDir()
+	if _, err := artifacts.Export(result, outDir); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	for _, name := range []string{"router-1", "peer-1", "client-1"} {
+		nodeDir := filepath.Join(outDir, name)
+		if _, err := os.Stat(filepath.Join(nodeDir, "artifacts.json")); err != nil {
+			t.Errorf("%s: artifacts.json must be written when a catalog is configured: %v", name, err)
+		}
+		checks, err := os.ReadFile(filepath.Join(nodeDir, "checksums.sha256"))
+		if err != nil {
+			t.Fatalf("%s: read checksums.sha256: %v", name, err)
+		}
+		if !strings.Contains(string(checks), "artifacts.json") {
+			t.Errorf("%s: artifacts.json must be a signed member (listed in checksums.sha256):\n%s", name, checks)
+		}
+	}
+}

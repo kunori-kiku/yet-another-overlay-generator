@@ -13,27 +13,20 @@ type Artifact struct {
 	SHA256 string `json:"sha256"`
 }
 
-// InstallFetch is the install.sh-relevant subset of render.FetchSettings: the pins the
-// generated install script needs to fetch mimic from GitHub when the distro package is
-// unavailable (plan-3). It is threaded into InstallScriptConfig/ClientInstallScriptConfig
-// by the signed renderers (set after buildInstallScriptConfig, mirroring SigningPubkeyPEM).
+// InstallFetch is the install.sh-relevant subset of render.FetchSettings. The install.sh
+// mimic-from-GitHub fallback reads the pin (release_url + per-"<codename>-<arch>" asset +
+// sha256) from the integrity-verified artifacts.json bundle member at install time — the
+// single signed source of truth — so the only value that must be BAKED into the script is
+// the optional GitHub proxy prefix (a deploy-network preference, kept out of the signed
+// catalog so changing it does not churn the bundle digest). It is set on
+// InstallScriptConfig/ClientInstallScriptConfig by the signed renderers (after
+// buildInstallScriptConfig, mirroring SigningPubkeyPEM).
 //
-// The zero value carries no catalog, so the install.sh template emits no fetch branch and
-// stays byte-identical to the pre-FetchSettings output — the air-gap byte-identity
-// invariant. The agent self-update fields of render.FetchSettings are deliberately NOT
-// here: install.sh never fetches the agent binary (the agent self-updates from the signed
-// artifacts.json at runtime).
+// The zero value carries no proxy and, paired with HasMimic=false / no artifacts.json,
+// leaves install.sh byte-identical to the pre-FetchSettings output (air-gap byte-identity).
 type InstallFetch struct {
 	// GithubProxy is an optional prefix applied to GitHub downloads (e.g.
-	// "https://gh-proxy.com/"). Empty = direct github.com.
+	// "https://gh-proxy.com/"). Empty = direct github.com. It is shell-escaped (shq) at the
+	// template boundary before being baked as GH_PROXY.
 	GithubProxy string
-	// MimicVersion is the pinned mimic release version (semver), used to locate the
-	// release and as a sanity tag. Empty = no GitHub fallback configured.
-	MimicVersion string
-	// MimicReleaseBase is the release base URL the .deb is downloaded from (the proxy is
-	// prepended at install time). Empty = no GitHub fallback configured.
-	MimicReleaseBase string
-	// MimicDebs maps "<codename>-<arch>" (e.g. "bookworm-amd64") to the pinned .deb asset
-	// + its SHA-256. Nil/empty = no GitHub fallback (distro-only mimic install).
-	MimicDebs map[string]Artifact
 }

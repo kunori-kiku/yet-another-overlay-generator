@@ -37,6 +37,13 @@ type CompileResult struct {
 	//
 	InstallScripts map[string]string
 
+	// ArtifactsJSON holds the per-node, controller-signed artifacts.json content (nodeID ->
+	// JSON), carrying the mimic GitHub-.deb pins (and, from plan-9, the agent self-update
+	// block). render.All populates it from FetchSettings; it is EMPTY when no catalog is
+	// configured, so export omits the file and the air-gap bundle stays byte-identical (D4).
+	// It is a signed bundleFiles member — the install.sh reads its pins after integrity verify.
+	ArtifactsJSON map[string]string
+
 	// 自动部署脚本
 	DeployScripts map[string]string
 
@@ -192,6 +199,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		BabelConfigs:     make(map[string]string),
 		SysctlConfigs:    make(map[string]string),
 		InstallScripts:   make(map[string]string),
+		ArtifactsJSON:    make(map[string]string),
 		DeployScripts:    make(map[string]string),
 		ClientConfigs:    clientConfigs,
 		Warnings:         warnings,

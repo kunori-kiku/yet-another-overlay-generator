@@ -207,8 +207,17 @@ func RenderAllWireGuardConfigs(topo *model.Topology, peerMap map[string][]compil
 	return configs, nil
 }
 
+// templateFuncs are the helpers available to every renderer template. shq wraps a value as a
+// single shell token via the audited bashSingleQuote escaper, so user-controlled text (e.g. a
+// GitHub proxy URL) baked into a root-executed install.sh cannot break out of its quoting —
+// the defense-in-depth half of the "generated scripts run as root" principle. Adding the
+// func is output-neutral for templates that do not call it.
+var templateFuncs = template.FuncMap{
+	"shq": bashSingleQuote,
+}
+
 func renderTemplate(name, tmpl string, data interface{}) (string, error) {
-	t, err := template.New(name).Parse(tmpl)
+	t, err := template.New(name).Funcs(templateFuncs).Parse(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("template parse failed: %w", err)
 	}

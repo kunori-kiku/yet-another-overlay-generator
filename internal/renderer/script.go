@@ -433,8 +433,53 @@ ensure_cmd babeld babeld
 {{ end -}}
 {{ if .HasMimic -}}
 # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): a link uses transport="tcp".
-# YAOG ships no mimic binary — install it from the distro / AUR.
-ensure_cmd mimic mimic
+# YAOG ships no mimic binary. Prefer the distro package (Debian 13+, AUR, ...); on Debian 12 /
+# Ubuntu 24.04, where mimic is not yet packaged, fall back to a SHA-256-PINNED .deb from GitHub.
+# The pin lives in artifacts.json (a controller-signed bundle member, already integrity-verified
+# above), so reading it here is not a trust boundary; the download is verified against that pin
+# and FAILS CLOSED under set -e. GH_PROXY is shell-escaped (shq) at generation time.
+GH_PROXY={{ shq .Fetch.GithubProxy }}
+if ! command -v mimic >/dev/null 2>&1 && [ -n "$YAOG_PM" ]; then
+    _pm_install mimic || true
+fi
+if ! command -v mimic >/dev/null 2>&1; then
+    # Distro package unavailable -> pinned GitHub .deb (apt/dpkg systems only).
+    if [ "$YAOG_PM" != "apt-get" ] || ! command -v dpkg >/dev/null 2>&1; then
+        echo "ERROR: mimic is not in this distro's repositories and the GitHub .deb fallback requires apt/dpkg" >&2
+        exit 1
+    fi
+    if [ ! -f artifacts.json ]; then
+        echo "ERROR: mimic GitHub fallback needs artifacts.json (no mimic catalog was configured for this deploy)" >&2
+        exit 1
+    fi
+    _mimic_codename="$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}")"
+    _mimic_arch="$(dpkg --print-architecture 2>/dev/null)"
+    _mimic_key="${_mimic_codename}-${_mimic_arch}"
+    # Read the pin with jq (auto-installed on this apt path if absent); fail closed if jq is
+    # unavailable rather than hand-parse nested JSON in bash.
+    if ! command -v jq >/dev/null 2>&1; then
+        _pm_install jq || true
+    fi
+    command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; exit 1; }
+    _mimic_rel="$(jq -r '.mimic.release_url // ""' artifacts.json)"
+    _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' artifacts.json)"
+    _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' artifacts.json)"
+    if [ -z "$_mimic_rel" ] || [ -z "$_mimic_asset" ] || [ -z "$_mimic_sha" ]; then
+        echo "ERROR: no pinned mimic .deb for '$_mimic_key' in artifacts.json" >&2
+        exit 1
+    fi
+    echo "Installing mimic from a SHA-256-pinned GitHub .deb ($_mimic_key)..."
+    _mimic_deb="$(mktemp --suffix=.deb)"
+    curl -fL --retry 3 --proto '=https,http' "${GH_PROXY}${_mimic_rel}/${_mimic_asset}" -o "$_mimic_deb"
+    echo "${_mimic_sha}  ${_mimic_deb}" | sha256sum -c -
+    # mimic's .deb builds its eBPF module via DKMS -> kernel headers + toolchain.
+    _pm_install "linux-headers-$(uname -r)" || _pm_install linux-headers-generic || true
+    _pm_install dkms || true
+    _pm_install gcc || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$_mimic_deb"
+    rm -f "$_mimic_deb"
+fi
+command -v mimic >/dev/null 2>&1 || { echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2; exit 1; }
 # Kernel/eBPF sanity: mimic is an eBPF (TC/XDP) program; warn early if BPF looks absent.
 if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
     echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
@@ -444,7 +489,7 @@ fi
 if [ -n "$YAOG_MISSING" ]; then
     echo "ERROR: missing required tools:$YAOG_MISSING" >&2
     echo "  No supported package manager installed them automatically. Install the equivalents of" >&2
-    echo "  wireguard-tools (wg, wg-quick), iproute2 (ip), openssl, iptables or nftables{{ if .HasBabel }}, babeld{{ end }}{{ if .HasMimic }}, mimic{{ end }}, then re-run." >&2
+    echo "  wireguard-tools (wg, wg-quick), iproute2 (ip), openssl, iptables or nftables{{ if .HasBabel }}, babeld{{ end }}, then re-run." >&2
     exit 1
 fi
 
@@ -1212,8 +1257,46 @@ ensure_cmd ip       iproute2
 ensure_cmd openssl  openssl
 {{ if .HasMimic -}}
 # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): the client wg0 link uses
-# transport="tcp". YAOG ships no mimic binary — install it from the distro / AUR.
-ensure_cmd mimic mimic
+# transport="tcp". YAOG ships no mimic binary. Distro-first, else a SHA-256-PINNED GitHub .deb
+# whose pin lives in the integrity-verified artifacts.json (mirrors the per-peer install.sh).
+GH_PROXY={{ shq .Fetch.GithubProxy }}
+if ! command -v mimic >/dev/null 2>&1 && [ -n "$YAOG_PM" ]; then
+    _pm_install mimic || true
+fi
+if ! command -v mimic >/dev/null 2>&1; then
+    if [ "$YAOG_PM" != "apt-get" ] || ! command -v dpkg >/dev/null 2>&1; then
+        echo "ERROR: mimic is not in this distro's repositories and the GitHub .deb fallback requires apt/dpkg" >&2
+        exit 1
+    fi
+    if [ ! -f artifacts.json ]; then
+        echo "ERROR: mimic GitHub fallback needs artifacts.json (no mimic catalog was configured for this deploy)" >&2
+        exit 1
+    fi
+    _mimic_codename="$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}")"
+    _mimic_arch="$(dpkg --print-architecture 2>/dev/null)"
+    _mimic_key="${_mimic_codename}-${_mimic_arch}"
+    if ! command -v jq >/dev/null 2>&1; then
+        _pm_install jq || true
+    fi
+    command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; exit 1; }
+    _mimic_rel="$(jq -r '.mimic.release_url // ""' artifacts.json)"
+    _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' artifacts.json)"
+    _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' artifacts.json)"
+    if [ -z "$_mimic_rel" ] || [ -z "$_mimic_asset" ] || [ -z "$_mimic_sha" ]; then
+        echo "ERROR: no pinned mimic .deb for '$_mimic_key' in artifacts.json" >&2
+        exit 1
+    fi
+    echo "Installing mimic from a SHA-256-pinned GitHub .deb ($_mimic_key)..."
+    _mimic_deb="$(mktemp --suffix=.deb)"
+    curl -fL --retry 3 --proto '=https,http' "${GH_PROXY}${_mimic_rel}/${_mimic_asset}" -o "$_mimic_deb"
+    echo "${_mimic_sha}  ${_mimic_deb}" | sha256sum -c -
+    _pm_install "linux-headers-$(uname -r)" || _pm_install linux-headers-generic || true
+    _pm_install dkms || true
+    _pm_install gcc || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$_mimic_deb"
+    rm -f "$_mimic_deb"
+fi
+command -v mimic >/dev/null 2>&1 || { echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2; exit 1; }
 if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
     echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
 fi
@@ -1222,7 +1305,7 @@ fi
 if [ -n "$YAOG_MISSING" ]; then
     echo "ERROR: missing required tools:$YAOG_MISSING" >&2
     echo "  No supported package manager installed them automatically. Install the equivalents of" >&2
-    echo "  wireguard-tools (wg, wg-quick), iproute2 (ip), openssl{{ if .HasMimic }}, mimic{{ end }}, then re-run." >&2
+    echo "  wireguard-tools (wg, wg-quick), iproute2 (ip), openssl, then re-run." >&2
     exit 1
 fi
 
