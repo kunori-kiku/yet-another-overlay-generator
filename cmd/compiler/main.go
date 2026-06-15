@@ -23,6 +23,12 @@ func main() {
 	}
 	inputFile := flag.String("input", "", "path to the topology JSON file")
 	outputDir := flag.String("output", "output", "output directory")
+	// Air-gap artifact-catalog inputs (plan-7), layered OVER the env vars of the same purpose
+	// (flag wins when set). All unset ⇒ distro-only mimic + no artifacts.json ⇒ byte-identical
+	// bundle (D4).
+	artifactCatalog := flag.String("artifact-catalog", "", "path to an artifacts.json-shaped mimic catalog (env "+render.EnvArtifactCatalog+")")
+	ghProxy := flag.String("gh-proxy", "", "GitHub download proxy prefix baked into install.sh (env "+render.EnvGithubProxy+")")
+	mimicVersion := flag.String("mimic-version", "", "pinned mimic version label override (env "+render.EnvMimicVersion+")")
 	flag.Parse()
 
 	if *inputFile == "" {
@@ -80,10 +86,22 @@ func main() {
 		fmt.Printf("  %s -> %s\n", node.Name, node.OverlayIP)
 	}
 
+	// Air-gap mimic catalog: flags override the env vars of the same purpose. All unset ⇒ zero
+	// FetchSettings ⇒ distro-only mimic install + no artifacts.json ⇒ byte-identical bundle (D4).
+	fetch, err := render.LoadFetchSettings(
+		firstNonEmpty(*artifactCatalog, os.Getenv(render.EnvArtifactCatalog)),
+		firstNonEmpty(*ghProxy, os.Getenv(render.EnvGithubProxy)),
+		firstNonEmpty(*mimicVersion, os.Getenv(render.EnvMimicVersion)),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load artifact catalog: %v\n", err)
+		os.Exit(1)
+	}
+
 	// 渲染全部部署产物，走与 API 入口完全相同的共享路径（render.All）：per-peer WireGuard
 	// 配置、client 的单一 wg0 配置与 client 安装脚本（D27/D28/D29）、Babel 配置、sysctl 配置、
 	// 每节点安装脚本，以及 deploy-all.sh/.ps1（D59）。CLI 由此与 API 产物逐字一致。
-	if err := render.All(result, keys, render.FetchSettings{}); err != nil {
+	if err := render.All(result, keys, fetch); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to render deployment artifacts: %v\n", err)
 		os.Exit(1)
 	}
@@ -99,4 +117,12 @@ func main() {
 		fmt.Printf("  📦 %s/\n", nodeName)
 	}
 	fmt.Printf("\ndone! checksum: %s\n", result.Manifest.Checksum)
+}
+
+// firstNonEmpty returns a if it is non-empty, else b — the flag-over-env precedence helper.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

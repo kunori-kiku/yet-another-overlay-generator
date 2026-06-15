@@ -24,9 +24,84 @@ field. mimic is protocol-shaping, not confidentiality (see [../security/security
 ## Not bundled
 
 YAOG ships no mimic binary. It generates mimic's config and the install command only — the same
-relationship it has with `wg-quick` and `babeld`. mimic is installed from the node's distribution
-(Debian 13+, `.deb` for Debian 12 / Ubuntu 24.04, Arch AUR, OpenWrt experimental). Because YAOG
-does not distribute mimic, mimic's GPL-2.0 license imposes no obligation on YAOG's own code.
+relationship it has with `wg-quick` and `babeld`. Because YAOG does not distribute mimic, mimic's
+GPL-2.0 license imposes no obligation on YAOG's own code.
+
+## Install ladder (distro → pinned GitHub `.deb`)
+
+The generated `install.sh` installs mimic with a fallback ladder (`internal/renderer/script.go`,
+the `.HasMimic` block), so a node on a distro that does not yet package mimic still comes up:
+
+1. **Distro package first.** If `mimic` is in the node's repositories (Debian 13+, Arch AUR,
+   OpenWrt experimental, …), the package manager installs it — unchanged from before.
+2. **Pinned GitHub `.deb` fallback** (apt/dpkg systems only — Debian 12 / Ubuntu 24.04, where
+   mimic is not yet packaged). The installer derives `<codename>-<arch>` from `/etc/os-release` +
+   `dpkg --print-architecture`, reads the matching pin from `artifacts.json`
+   (`.mimic.release_url` + `.mimic.debs["<codename>-<arch>"].{asset,sha256}`), downloads
+   `${GH_PROXY}${release_url}/${asset}` with `curl --proto '=https,http'`, and **verifies the
+   bytes against the pinned SHA-256 with `sha256sum -c` before `apt-get install`**. mimic's `.deb`
+   builds its eBPF module via DKMS, so kernel headers + dkms + gcc are pulled in first. The whole
+   script runs under `set -euo pipefail`, so a hash mismatch or a missing pin **fails closed** —
+   no unverified `.deb` is ever installed. A non-apt distro without the package errors out clearly
+   rather than silently skipping mimic.
+
+If no mimic catalog was configured for the deploy there is no `artifacts.json` (see the air-gap
+default below), and the fallback step prints a clear error instead of guessing a download.
+
+## Trust chain for the pinned `.deb`
+
+The GitHub `.deb` is fetched over untrusted transport (github.com / a `GH_PROXY` mirror), so its
+integrity rests entirely on the pin — and the pin rides the **same signature the rest of the
+bundle already has**, adding no new trust primitive:
+
+```
+sha256 pin  ∈  artifacts.json  ∈  bundleFiles  ∈  checksums.sha256  ∈  bundle.sig (Ed25519)  ∈  keystone trust-list
+```
+
+`artifacts.json` is a `bundleFiles` member (`internal/artifacts/export.go`), so its bytes are in
+the canonical `checksums.sha256` the controller signs and the keystone trust-list binds
+(specs/artifacts-signing.md, specs/keystone-trustlist.md). The agent verifies `bundle.sig` and the
+keystone membership **before** `install.sh` runs, and `install.sh` reads the pin from
+`$SCRIPT_DIR/artifacts.json` only after that verification — so reading the pin is not itself a
+trust boundary, and the `GH_PROXY` mirror cannot substitute a different `.deb` without failing the
+SHA-256 check. `GH_PROXY` is a deploy-network preference baked into `install.sh` (shell-escaped),
+deliberately kept OUT of the signed catalog so changing the mirror does not churn the bundle
+digest. The agent self-update block of `artifacts.json` is reserved for the agent's own binary and
+is covered in `agent-selfupdate.md` (created in plan-9, this directory).
+
+## Populating the catalog (manual, per release)
+
+The catalog is **manual** for beta (no controller→GitHub automation, D1): an operator copies the
+exact asset filenames + SHA-256s from a mimic GitHub release into the catalog. Both modes feed the
+identical `artifacts.json`:
+
+- **Controller mode** — set the operator-editable `ControllerSettings` fields
+  (`internal/controller/store.go`): `MimicVersion`, `MimicReleaseBase` (the release base URL the
+  `.deb` is fetched from), and `MimicDebs` — a map keyed `"<codename>-<arch>"` (e.g.
+  `"bookworm-amd64"`) to `{asset, sha256}`. The stage/promote path threads these into
+  `render.FetchSettings`, which emits `artifacts.json` into each node's signed bundle.
+- **Air-gap / local mode** — there is no controller, so supply the same pins out-of-band
+  (plan-7). Point `YAOG_ARTIFACT_CATALOG` at a JSON file in the **same shape as the emitted
+  `artifacts.json`** (`{ "schema": 1, "mimic": { "version", "release_url", "debs": { "<codename>-<arch>": {"asset","sha256"} } } }`)
+  — a controller-emitted `artifacts.json` round-trips directly. `YAOG_GITHUB_PROXY` sets the
+  mirror prefix and `YAOG_MIMIC_VERSION` overrides the version label. `cmd/compiler` also exposes
+  `--artifact-catalog` / `--gh-proxy` / `--mimic-version` layered over those env vars (flag wins).
+
+> **Runbook (per mimic release):** 1) open the mimic GitHub release page and note the release
+> base URL (`.../releases/download/<tag>`); 2) for each supported `<codename>-<arch>` download the
+> `.deb` and compute `sha256sum <file>`; 3) record `version`, `release_url`, and one
+> `debs["<codename>-<arch>"] = {asset: "<filename>", sha256: "<hex>"}` per asset; 4) in controller
+> mode save those to settings, or in air-gap mode write them into the catalog JSON. A node whose
+> `<codename>-<arch>` has no pin falls through to a clear error (it never installs an unpinned
+> `.deb`).
+
+## Air-gap byte-identity (D4)
+
+With **no** catalog configured (zero `render.FetchSettings`), `artifacts.json` is **omitted**
+entirely and `install.sh` carries no fetch branch, so the signed bundle is **byte-identical** to a
+pre-mimic-catalog deploy. This is the air-gap byte-identity HIGH principle, enforced by the
+perpetual `internal/render` equivalence/signing gates: configuring a catalog is purely additive,
+and the default deploy is unchanged.
 
 ## Deployment model
 
