@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { t } from '../../i18n';
+import { localizeError } from '../../lib/localizeError';
 import type { TOTPEnrollment } from '../../api/controllerClient';
 
 // 两步验证（TOTP 2FA，plan-5.2）：让已用密码登录的 operator 自助开启/关闭一个时间口令第二因子。
@@ -47,7 +48,7 @@ export function TwoFactorSettings() {
     try {
       setPending(await enrollTOTP());
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to start 2FA enrollment');
+      setLocalError(localizeError(err, language));
     } finally {
       setBusy(false);
     }
@@ -63,7 +64,7 @@ export function TwoFactorSettings() {
       setPending(null);
       setCode('');
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to enable 2FA');
+      setLocalError(localizeError(err, language));
     } finally {
       setBusy(false);
     }
@@ -85,7 +86,7 @@ export function TwoFactorSettings() {
       await disableTOTP(code);
       setCode('');
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Failed to disable 2FA');
+      setLocalError(localizeError(err, language));
     } finally {
       setBusy(false);
     }

@@ -3,6 +3,7 @@ import { TwoFactorSettings } from '../deploy/TwoFactorSettings';
 import { PasskeySettings } from '../deploy/PasskeySettings';
 import { AuditLog } from '../deploy/AuditLog';
 import { AuditView } from '../audit/AuditView';
+import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
 
 // /security — mode-split (plan-11 / T4+T5). The page is visible in both modes (nav.ts keeps it
 // so the local "Compile History" isn't stranded), but its contents are mode-specific:
@@ -17,6 +18,7 @@ export function SecurityPage() {
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
       {mode === 'controller' ? (
         <>
+          <ControllerErrorBanner />
           <TwoFactorSettings />
           <PasskeySettings />
           <AuditLog />

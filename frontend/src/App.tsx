@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { ReactFlowProvider } from '@xyflow/react';
 import { Shell } from './components/shell/Shell';
+import { ErrorBoundary } from './components/shell/ErrorBoundary';
 import { ThemeProvider } from './theme/ThemeProvider';
 import { useControllerStore } from './stores/controllerStore';
 import { landingPathForMode } from './components/shell/nav';
@@ -60,9 +61,11 @@ const router = createBrowserRouter([
 
 function App() {
   return (
-    <ThemeProvider>
-      <RouterProvider router={router} />
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }
 

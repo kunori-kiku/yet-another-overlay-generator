@@ -45,8 +45,24 @@ import {
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { stripPrivateKeys } from '../lib/custody';
+import { localizeError as localizeErrorFor } from '../lib/localizeError';
 import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
 import { useUiStore } from './uiStore';
+import { t, type MessageKey, type TParams } from '../i18n';
+
+// localizeError localizes a caught error at the live UI language via the shared localizer (a
+// ControllerError -> tError so no raw "<status> <JSON>" reaches the UI; else its message; else the
+// fallback key). A thin wrapper that supplies the language so the store's catch sites stay terse;
+// the same shared localizer is used by the components that surface re-thrown errors.
+function localizeError(err: unknown, fallbackKey: MessageKey): string {
+  return localizeErrorFor(err, useTopologyStore.getState().language, fallbackKey);
+}
+
+// tLocal localizes a catalog key against the live UI language — for store-set notices that are not
+// derived from a caught error, so zh operators see translated strings instead of English literals.
+function tLocal(key: MessageKey, params?: TParams): string {
+  return t(useTopologyStore.getState().language, key, params);
+}
 
 // loadSlices projects a Topology down to exactly the fields loadTopology consumes
 // (project/domains/nodes/edges + the schema version), so the hydration diff compares
@@ -547,7 +563,7 @@ export const useControllerStore = create<ControllerState>()(
           }
         } catch (err) {
           set({
-            error: err instanceof Error ? err.message : 'Failed to refresh controller state',
+            error: localizeError(err, 'error.generic'),
             loading: false,
           });
         }
@@ -567,7 +583,7 @@ export const useControllerStore = create<ControllerState>()(
             useUiStore.getState().applyServerTranslucency(settings.translucency);
           }
         } catch (err) {
-          set({ error: err instanceof Error ? err.message : 'Failed to load settings' });
+          set({ error: localizeError(err, 'error.generic') });
         }
       },
 
@@ -578,7 +594,7 @@ export const useControllerStore = create<ControllerState>()(
           const saved = await postSettings(configOf(get()), s);
           set({ settings: saved, loading: false });
         } catch (err) {
-          set({ error: err instanceof Error ? err.message : 'Failed to save settings', loading: false });
+          set({ error: localizeError(err, 'error.generic'), loading: false });
         }
       },
 
@@ -595,7 +611,7 @@ export const useControllerStore = create<ControllerState>()(
             // ——登录表单无需 passkey 输入框，store 自动完成 ceremony。
             const ch = outcome.challenge;
             if (!ch.credentialId || !ch.alg) {
-              set({ error: 'This account requires a passkey, but none is registered.', loading: false });
+              set({ error: tLocal('controllerStore.passkeyRequiredNoneRegistered'), loading: false });
               return;
             }
             set({ loginCeremony: true });
@@ -625,10 +641,10 @@ export const useControllerStore = create<ControllerState>()(
                 return;
               }
               // A passkey resubmit should either succeed or throw; anything else is unexpected.
-              set({ error: 'Passkey login did not complete — please try again.', loginCeremony: false, loading: false });
+              set({ error: tLocal('controllerStore.passkeyDidNotComplete'), loginCeremony: false, loading: false });
             } catch (err) {
               set({
-                error: err instanceof Error ? err.message : 'Passkey login failed',
+                error: localizeError(err, 'error.generic'),
                 loginCeremony: false,
                 loading: false,
               });
@@ -644,7 +660,7 @@ export const useControllerStore = create<ControllerState>()(
             set({
               totpRequired: true,
               error: submittedCode
-                ? 'Two-factor code not accepted — check the code and your device clock, then try again.'
+                ? tLocal('controllerStore.totpNotAccepted')
                 : null,
               loading: false,
             });
@@ -669,7 +685,7 @@ export const useControllerStore = create<ControllerState>()(
           // totpRequired，回到纯密码表单——避免「输入用户名或密码错误」却仍显示验证码框的
           // 错位提示。真正需要二次码的下一次（密码正确）会重新干净地触发 totp_required。
           set({
-            error: err instanceof Error ? err.message : 'Login failed',
+            error: localizeError(err, 'error.generic'),
             totpRequired: false,
             loading: false,
           });
@@ -856,7 +872,7 @@ export const useControllerStore = create<ControllerState>()(
           const ch = await passkeyLoginBegin(cfg, username);
           if (!ch.credentialId || !ch.alg) {
             // 空 allow_credentials = 该用户名没有注册 passkey（后端返回 decoy）。
-            set({ error: 'No passkey is registered for this account.', loading: false });
+            set({ error: tLocal('controllerStore.noPasskeyRegistered'), loading: false });
             return;
           }
           set({ loginCeremony: true });
@@ -886,7 +902,7 @@ export const useControllerStore = create<ControllerState>()(
           await get().loadPasskeyStatus();
         } catch (err) {
           set({
-            error: err instanceof Error ? err.message : 'Passkey login failed',
+            error: localizeError(err, 'error.generic'),
             loading: false,
             loginCeremony: false,
           });
@@ -941,7 +957,7 @@ export const useControllerStore = create<ControllerState>()(
           const ch = begin.challenge;
           if (!ch.credentialId || !ch.alg) {
             set({ loginCeremony: false });
-            throw new Error('Cannot disable: no credential to re-authenticate with.');
+            throw new Error(tLocal('controllerStore.cannotDisableNoCredential'));
           }
           const assertion = await assertLogin(
             ch.challenge,
@@ -992,7 +1008,7 @@ export const useControllerStore = create<ControllerState>()(
           await get().refresh();
         } catch (err) {
           set({
-            error: err instanceof Error ? err.message : 'Failed to enroll operator signing key',
+            error: localizeError(err, 'error.generic'),
             enrolling: false,
           });
         }
@@ -1012,7 +1028,7 @@ export const useControllerStore = create<ControllerState>()(
             useTopologyStore.getState().setCompileResult(null);
             set({
               previewing: false,
-              error: 'No enrolled nodes to compile yet — enroll nodes in Fleet, then Compile.',
+              error: tLocal('controllerStore.noEnrolledNodes'),
             });
             return;
           }
@@ -1025,7 +1041,7 @@ export const useControllerStore = create<ControllerState>()(
           }
           set({ previewing: false });
         } catch (err) {
-          set({ error: err instanceof Error ? err.message : 'Compile preview failed', previewing: false });
+          set({ error: localizeError(err, 'error.generic'), previewing: false });
         }
       },
 
@@ -1214,7 +1230,7 @@ export const useControllerStore = create<ControllerState>()(
           // error in the deploy bar and lets the operator retry Deploy, which
           // re-evaluates the shrink guard against the current server state.
           set({
-            error: err instanceof Error ? err.message : 'Deploy failed',
+            error: localizeError(err, 'error.generic'),
             loading: false,
             signing: false,
             pendingShrink: null,
@@ -1350,7 +1366,7 @@ export const useControllerStore = create<ControllerState>()(
             lastSyncedAt: Date.now(),
           });
         } catch (err) {
-          set({ error: err instanceof Error ? err.message : 'Save failed', loading: false, saving: false });
+          set({ error: localizeError(err, 'error.generic'), loading: false, saving: false });
         }
       },
 
@@ -1365,7 +1381,7 @@ export const useControllerStore = create<ControllerState>()(
           await get().refresh();
         } catch (err) {
           set({
-            error: err instanceof Error ? err.message : 'Revoke failed',
+            error: localizeError(err, 'error.generic'),
             loading: false,
           });
         }
@@ -1383,7 +1399,7 @@ export const useControllerStore = create<ControllerState>()(
           await get().refresh();
         } catch (err) {
           set({
-            error: err instanceof Error ? err.message : 'Roll keys failed',
+            error: localizeError(err, 'error.generic'),
             loading: false,
           });
         }
