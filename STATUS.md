@@ -1,52 +1,40 @@
 # STATUS
-<!-- regenerated: 2026-06-14 (extensible-i18n-and-structural-hardening checkpoint) -->
-<!-- by: post-audit fix program (autonomous) -->
+<!-- regenerated: 2026-06-15 -->
+<!-- by: close-phase (subject: extensible-i18n-and-structural-hardening) -->
 
 ## Active work
 
-- **Subject:** `extensible-i18n-and-structural-hardening-2026_06_14` (in progress — core delivered,
-  follow-through remaining). Spine: `implementation_plans/extensible-i18n-and-structural-hardening-2026_06_14/`
-  (`outline.md`, `findings.md` = the 10-angle audit's 106 CONFIRMED/18 PLAUSIBLE, `design-error-envelope.md`).
-- **Branch:** `main` @ `9a2fecd` (PR #76 merged), synced with origin. No open feature branch.
-- **Last shipped:** plan-3 — WireGuard key-gen errors coded (the owner's reported Chinese
-  pinned-pubkey error now localizes as a 400) + corrupted `allocator/ip.go` strings fixed
-  (PR #76, `9a2fecd`).
-
-### Delivered this program (7 PRs, each independently reviewed → 0 confirmed after fixes)
-
-- **#70 plan-0** — security: `ssh_key_path` PowerShell command-injection (escape via bash/PS helpers + `sshKeyPathCharset` validation + perpetual injection-gate test).
-- **#71 plan-4** — controller mode-boundary parity (export/deploy-script guards + in-flight compile mode-flip guard).
-- **#72 plan-6** — frontend robustness (clear stuck shrink-modal on deploy error; tolerant API-error reader).
-- **#73 plan-1** — extensible keyed i18n core: `t(lang, key, params?)` + `tError` (shape-tolerant) + fallback chain + N-language registry.
-- **#74 plan-2** — `internal/apierr` typed error-code package + nested `{error:{code,message,params}}` envelope (frontend already reads it).
-- **#75 plan-1.5** — full `txt`→`t` migration (410 sites via TS-AST codemod, 7 parameterized + 3 tuple→key); `txt`/`STRINGS` deleted.
-- **#76 plan-3** — render key-gen errors coded + localized; corrupted allocator strings fixed.
-
-All of the owner's explicit asks (extensible i18n; backend errors localizable; the specific Chinese
-key-gen error) + all CONFIRMED audit security/robustness findings + the two highest-leverage
-structural fixes (i18n architecture + error envelope) are shipped.
+- **Subject:** none active. `extensible-i18n-and-structural-hardening-2026_06_14` just closed
+  **DELIVERED** and moved to `implementation_plans/_completed/`. The only remaining non-archived
+  folder is `implementation_plans/controller-panel-2026_06_08/` — status not assessed this session;
+  a candidate for its own review/closure or a draft-the-next-subject decision.
+- **Branch:** `main` @ HEAD (closure commits on `close-i18n-hardening-subject`, pending merge/release).
+- **Current plan:** all-done for the closed subject.
+- **Last shipped:** plan-9 closeout (outline status refresh + architecture/migration note), PR #95,
+  `ef917b0`, 2026-06-14 — completing the i18n + error-envelope subject (PRs #70–#95).
 
 ## Open questions / blockers
 
-- **Release pending (user-gated).** `main` is ahead of the last tag by #70–#76 (security fix + i18n
-  redesign + error envelope). Cutting a `v*` tag is outward-facing — the owner's call.
+- **Release pending (user-gated).** `main` is ahead of the last tag by the whole i18n + structural-
+  hardening program (#70–#95). Cutting a `v*` tag is outward-facing — the owner's call (the user asked
+  to "release", so a tag is the next outward step).
+- **Two-node controller smoke owed** (manual; needs a browser + authenticator + two real nodes) —
+  carried from the keystone program; code paths are unit-/build-verified.
 - No code blockers. `go build/vet/test ./...` + frontend `lint`/`build` green on `main`.
 
 ## Next actions
 
-1. **plan-3.5** — code the remaining backend user-facing strings to apierr codes (validator
-   schema/semantic/nat is the largest set and surfaces on validate/compile; plus compiler, auth/login/
-   passkey/totp/bootstrap, cmd/compiler), add their `error.<code>` frontend catalog keys, then delete
-   the transitional `writeError` delegate + `CodeLegacyUncoded` (grep-gated). Pattern is established +
-   demonstrated in plan-3 / `design-error-envelope.md`. (Task #27.)
-2. **plan-7/8/9** — structural triage (P7 reserved-id helper is the clearest win; the rest were rated
-   minor/overstated by the audit verifiers), then docs/spec refresh for the new i18n + error envelope,
-   migration note, and `/close-phase` to archive the subject.
-3. **Release** when the owner wants (covers #70–#76).
+1. **Release** — merge the closure branch, then cut the `v*` tag covering #70–#95 (i18n + error
+   envelope + mode-boundary + security/robustness remediation + key-custody fixes).
+2. **Two-node controller smoke** on a real deployment when convenient (the long-owed end-to-end pass).
+3. **Next subject** — either review/close `controller-panel-2026_06_08`, or draft the next subject.
 
 ## Recently closed subjects (last 3)
 
+- `extensible-i18n-and-structural-hardening-2026_06_14` (2026-06-14, **delivered**) — extensible keyed
+  i18n + coded-at-source HTTP error envelope (`internal/apierr`) + validator-finding localizer; deploy
+  artifacts Englishized; perpetual CJK/bijection gates; the `writeError` shim deleted; post-audit
+  security/robustness/mode-boundary remediation + key-custody edge-case fixes (#70–#95).
 - `controller-server-authority-redesign-2026_06_12` (2026-06-14, delivered) — server-authoritative
   controller mode, login gate, key custody, prefix split (#59–#65).
-- `panel-appshell-redesign-2026_06_09` (closed) — panel shell/routes.
-- `audit-remediation-and-allocation-stability-2026_06_07` (closed).
+- `panel-appshell-redesign-2026_06_09` (closed) — panel shell / routes.
