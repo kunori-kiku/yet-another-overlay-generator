@@ -17,7 +17,7 @@ Cross-reference and logical checks:
 - Overlay IPs within domain CIDRs
 - No duplicate IDs (domains, nodes, edges)
 - No IP address collisions
-- Listen port conflicts (same hostname)
+- Effective per-peer port range in-bounds (`base`+offset must not overflow past 65535)
 - Isolated node detection (warning)
 - NAT reachability warnings (double-NAT, no public endpoint)
 - Client edge constraints (exactly one outbound, must target router/relay/gateway, must have endpoint_host)
@@ -70,7 +70,6 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 | `role` | schema | enum `peer`/`router`/`relay`/`gateway`/`client` | schema |
 | `domain_id` | schema + semantic | non-empty; references an existing domain | schema + semantic |
 | `overlay_ip` | schema + semantic | parseable; inside domain CIDR; no collision | schema + semantic |
-| `listen_port` | schema | range 0–65535; **effective per-peer range** also in-bounds | partial — see below |
 | `mtu` | schema | sane WireGuard MTU range (else `wg-quick` rejects) | none-yet |
 | `xdp_mode` | schema | enum `skb`/`native`; empty allowed (→`skb`) | schema |
 | `router_id` | schema | MAC-48 format (else `babeld` rejects) | none-yet |
@@ -95,12 +94,15 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > uniqueness invariant: [../artifacts/naming.md](../artifacts/naming.md). Closed by Plan 5 (charset)
 > and Plan 4 (uniqueness).
 
-> **Compliance — effective listen port:** schema validates only `node.listen_port` itself
-> (`schema.go:164-167`); the compiler binds per-peer interfaces at `base+offset`, which can exceed
-> 65535 and is then rendered verbatim into the WG config (`peers.go:175-191`, D11). Validation MUST
-> check the *effective* per-peer port range (base + max offset across that node's edges) fits in
-> 0–65535. Closed by Plan 3. The co-hosted effective-range overlap check (D47) is currently
-> warning-only on base ports (`semantic.go:160-181`).
+> **Compliance — effective per-peer port range:** the compiler binds each peer interface at
+> `base+offset`, which can exceed 65535 and would then be rendered verbatim into the WG config
+> (D11). Validation checks the *effective* per-peer port range (base + max offset across that
+> node's edges) fits in 0–65535 (`validateEffectivePortRanges` → `CodeNodeEffectivePortRangeOverflow`).
+> Closed by Plan 3. The per-node `listen_port` field — and its schema range check — were REMOVED in
+> the controller-nat subject: in the per-peer interface model a single node-level listen port is
+> meaningless (each edge gets its own interface + auto-allocated port from the uniform base 51820).
+> The co-hosted effective-range overlap check (D47) was likewise removed: under a uniform base it
+> false-flagged every multi-node-per-host deployment, so co-hosted nodes now validate clean.
 
 > **Compliance — MTU / ssh_port / router_id / extra_prefixes / ssh fields:** none of `mtu`,
 > `ssh_port`, `router_id`, `extra_prefixes`, `ssh_alias`, `ssh_host`, or `ssh_user` are validated
@@ -147,8 +149,10 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 
 - ID uniqueness across domains, nodes, and edges (`validateIDUniqueness`).
 - Overlay-IP collision and in-CIDR membership (`validateIPSemantics`).
-- Listen-port conflict on co-hosted nodes — currently a **warning** on base ports only
-  (`validateListenPortConflicts`); the effective-range overlap (D47) is the gap above.
+- Effective per-peer port-range overflow on each node — `base`+offset across that node's edges
+  must fit in 0–65535 (`validateEffectivePortRanges`). (The former per-node listen-port conflict
+  and co-hosted effective-range overlap (D47) checks were removed with `node.listen_port`; see the
+  compliance note above.)
 - NAT reachability — double-NAT direct links and endpoint-less inbound targets produce **warnings**
   (`validateNATReachability`). These warnings MUST reach the user on compile, not only on validate
   (see [../api/http-api.md](../api/http-api.md) compile contract).

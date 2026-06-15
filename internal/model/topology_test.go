@@ -50,7 +50,7 @@ func TestLoadSimpleMesh(t *testing.T) {
 		t.Errorf("Domain RoutingMode  babel,  %s", topo.Domains[0].RoutingMode)
 	}
 
-	// 
+	//
 	if len(topo.Nodes) != 3 {
 		t.Fatalf(" 3 ,  %d", len(topo.Nodes))
 	}
@@ -79,7 +79,7 @@ func TestLoadNatHub(t *testing.T) {
 		t.Errorf("Project ID  nat-hub-001,  %s", topo.Project.ID)
 	}
 
-	// 
+	//
 	if len(topo.Nodes) != 3 {
 		t.Fatalf(" 3 ,  %d", len(topo.Nodes))
 	}
@@ -95,7 +95,7 @@ func TestLoadNatHub(t *testing.T) {
 		t.Errorf("Hub  has_public_ip=true")
 	}
 
-	// NAT 
+	// NAT
 	for _, client := range topo.Nodes[1:] {
 		if client.Role != "peer" {
 			t.Errorf(" %s  peer,  %s", client.Name, client.Role)
@@ -124,7 +124,7 @@ func TestLoadRelayTopology(t *testing.T) {
 		t.Errorf("Project ID  relay-topo-001,  %s", topo.Project.ID)
 	}
 
-	// 
+	//
 	relay := topo.Nodes[0]
 	if relay.Role != "relay" {
 		t.Errorf(" relay,  %s", relay.Role)
@@ -133,7 +133,7 @@ func TestLoadRelayTopology(t *testing.T) {
 		t.Errorf(" can_relay=true")
 	}
 
-	//  IP 
+	//  IP
 	peer2 := topo.Nodes[2]
 	if peer2.OverlayIP != "10.30.0.100" {
 		t.Errorf("peer-2  IP  10.30.0.100,  %s", peer2.OverlayIP)
@@ -145,14 +145,14 @@ func TestLoadRelayTopology(t *testing.T) {
 		t.Errorf("peer-1  IP,  %s", peer1.OverlayIP)
 	}
 
-	// 2 
+	// 2
 	if len(topo.Edges) != 2 {
 		t.Fatalf(" 2 ,  %d", len(topo.Edges))
 	}
 }
 
 func TestTopologyDefaultValues(t *testing.T) {
-	//  JSON 
+	//  JSON
 	jsonData := `{
 		"project": {"id": "test", "name": "Test"},
 		"domains": [],
@@ -205,8 +205,5 @@ func TestNodeSerialization(t *testing.T) {
 	}
 	if decoded.OverlayIP != "" {
 		t.Errorf("OverlayIP ,  %s", decoded.OverlayIP)
-	}
-	if decoded.ListenPort != 0 {
-		t.Errorf("ListenPort  0,  %d", decoded.ListenPort)
 	}
 }

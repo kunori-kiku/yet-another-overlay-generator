@@ -111,12 +111,12 @@ func smallTopo() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-1", Name: "router", Hostname: "router.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 			{
 				ID: "node-2", Name: "peer",
-				Role: "peer", DomainID: "domain-1", ListenPort: 51820,
+				Role: "peer", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: false, CanForward: false, HasPublicIP: false},
 			},
 		},
