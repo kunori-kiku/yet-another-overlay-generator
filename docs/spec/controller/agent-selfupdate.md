@@ -96,6 +96,16 @@ bounded:
   cycle (proving it actually runs). It **advances `AgentVersionFloor`** (the ONLY place the floor
   advances), clears the breadcrumb + the abandoned-target memory, and drops `.bak`.
 
+Accepted residual (fails safe): a crash-reboot during probation and a *benign* host reboot during
+probation are indistinguishable to the agent, so both count toward Phase A's Attempts cap. If a
+HEALTHY new binary's host happens to reboot the full cap (3) of times before its first cycle
+finalizes (e.g. repeated power loss during a long-poll-bound first cycle), the target is abandoned
+(rolled back to `.bak` + `AbandonedAgentVersion` recorded) even though the binary was fine. This errs
+toward the SAFE direction — rollback to the known-good binary, never a brick — and is irreducible
+without an external liveness signal (resetting Attempts on a Confirmed resume would reintroduce the
+unbounded crash loop). The operator re-triggers by changing `TargetAgentVersion`. The window is the
+first-cycle duration (seconds to one long-poll), so the trigger is rare.
+
 In-flight guard: `performSelfUpdate` refuses to start a second swap while a breadcrumb is already
 pending (e.g. a prior re-exec failed and the daemon retried the cycle) — re-swapping would overwrite
 the `.bak` rollback target with the already-installed new binary and reset `Attempts`, both of which
