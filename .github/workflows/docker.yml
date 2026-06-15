@@ -66,9 +66,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Stamp the image's yaog-server build version with the release tag (workflow is
-          # tag-triggered, so github.ref_name is the tag, e.g. v2.0.0-beta.1).
+          # Stamp the image's yaog-server build version with the release tag on a v* tag push;
+          # a manual workflow_dispatch run has no tag (github.ref_name is the branch), so report
+          # 'edge' rather than baking a branch name as the version.
           build-args: |
-            BUILD_VERSION=${{ github.ref_name }}
+            BUILD_VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'edge' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
