@@ -19,27 +19,30 @@ import (
 func TestDecideSelfUpdate(t *testing.T) {
 	cat := func(ver, min string) *agentCatalog { return &agentCatalog{Version: ver, MinVersion: min} }
 	cases := []struct {
-		name    string
-		cat     *agentCatalog
-		running string
-		floor   string
-		want    updateDecision
+		name      string
+		cat       *agentCatalog
+		running   string
+		floor     string
+		abandoned string
+		want      updateDecision
 	}{
-		{"no catalog", nil, "1.0.0", "", updateSkip},
-		{"no version", &agentCatalog{}, "1.0.0", "", updateSkip},
-		{"already at desired", cat("1.0.0", ""), "1.0.0", "", updateSkip},
-		{"after-apply forward", cat("1.1.0", ""), "1.0.0", "", updateAfterApply},
-		{"downgrade below running refused", cat("1.0.0", ""), "1.1.0", "", updateRefuse},
-		{"downgrade below floor refused", cat("1.1.0", ""), "1.0.0", "1.2.0", updateRefuse},
-		{"forced when below min", cat("1.2.0", "1.2.0"), "1.0.0", "", updateForced},
-		{"forced target reaches min", cat("1.3.0", "1.2.0"), "1.0.0", "", updateForced},
-		{"forced but target below min is misconfig", cat("1.1.0", "1.2.0"), "1.0.0", "", updateRefuse},
-		{"legacy empty running updates", cat("1.0.0", ""), "", "", updateAfterApply},
-		{"legacy empty running forced below min", cat("1.0.0", "1.0.0"), "", "", updateForced},
+		{"no catalog", nil, "1.0.0", "", "", updateSkip},
+		{"no version", &agentCatalog{}, "1.0.0", "", "", updateSkip},
+		{"already at desired", cat("1.0.0", ""), "1.0.0", "", "", updateSkip},
+		{"after-apply forward", cat("1.1.0", ""), "1.0.0", "", "", updateAfterApply},
+		{"downgrade below running refused", cat("1.0.0", ""), "1.1.0", "", "", updateRefuse},
+		{"downgrade below floor refused", cat("1.1.0", ""), "1.0.0", "1.2.0", "", updateRefuse},
+		{"forced when below min", cat("1.2.0", "1.2.0"), "1.0.0", "", "", updateForced},
+		{"forced target reaches min", cat("1.3.0", "1.2.0"), "1.0.0", "", "", updateForced},
+		{"forced but target below min is misconfig", cat("1.1.0", "1.2.0"), "1.0.0", "", "", updateRefuse},
+		{"legacy empty running updates", cat("1.0.0", ""), "", "", "", updateAfterApply},
+		{"legacy empty running forced below min", cat("1.0.0", "1.0.0"), "", "", "", updateForced},
+		{"abandoned target refused", cat("1.1.0", ""), "1.0.0", "", "1.1.0", updateRefuse},
+		{"non-abandoned target proceeds", cat("1.2.0", ""), "1.0.0", "", "1.1.0", updateAfterApply},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := decideSelfUpdate(tc.cat, tc.running, tc.floor)
+			got, reason := decideSelfUpdate(tc.cat, tc.running, tc.floor, tc.abandoned)
 			if got != tc.want {
 				t.Errorf("decideSelfUpdate = %v (%s), want %v", got, reason, tc.want)
 			}
@@ -193,9 +196,10 @@ func TestPerformSelfUpdate_SelfTestFailRefused(t *testing.T) {
 	}
 }
 
-// TestReconcileSelfUpdate_Promote: booted as the target, a clean health gate promotes — floor
-// advances, breadcrumb + .bak cleared, no re-exec.
-func TestReconcileSelfUpdate_Promote(t *testing.T) {
+// TestReconcileSelfUpdatePromote_Probation: booted as the target, a clean health gate marks the
+// update PROBATIONARY (Confirmed) — it does NOT advance the floor, drop .bak, or re-exec yet;
+// FinalizeSelfUpdate (after a full cycle) does that.
+func TestReconcileSelfUpdatePromote_Probation(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "yaog-agent")
 	_ = os.WriteFile(self, []byte("NEW"), 0o755)
@@ -205,35 +209,49 @@ func TestReconcileSelfUpdate_Promote(t *testing.T) {
 
 	execed, restore := stubSwap(t, self)
 	defer restore()
-	ReconcileSelfUpdate(stateDir, "1.1.0", func() error { return nil }, io.Discard)
+	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard)
 
 	if *execed != "" {
-		t.Errorf("promote must not re-exec")
+		t.Errorf("probation must not re-exec")
 	}
 	st, _ := LoadState(stateDir)
+	if st.PendingUpdate == nil || !st.PendingUpdate.Confirmed {
+		t.Fatalf("health-gate pass must mark the breadcrumb Confirmed (probationary), got %+v", st.PendingUpdate)
+	}
+	if st.AgentVersionFloor == "1.1.0" {
+		t.Errorf("floor must NOT advance until FinalizeSelfUpdate (probation, not yet promoted)")
+	}
+	if _, e := os.Stat(self + ".bak"); e != nil {
+		t.Errorf(".bak must be KEPT during probation (rollback target)")
+	}
+
+	// FinalizeSelfUpdate (after a clean cycle) promotes: floor advances, breadcrumb + .bak cleared.
+	FinalizeSelfUpdate(stateDir, "1.1.0", io.Discard)
+	st, _ = LoadState(stateDir)
 	if st.PendingUpdate != nil {
-		t.Errorf("breadcrumb not cleared after promote")
+		t.Errorf("finalize must clear the breadcrumb")
 	}
 	if st.AgentVersionFloor != "1.1.0" {
-		t.Errorf("floor = %q, want 1.1.0 (advances only on health-confirmed promote)", st.AgentVersionFloor)
+		t.Errorf("finalize must advance the floor to 1.1.0; got %q", st.AgentVersionFloor)
 	}
 	if _, e := os.Stat(self + ".bak"); e == nil {
-		t.Errorf(".bak should be removed after promote")
+		t.Errorf(".bak must be removed after finalize")
 	}
 }
 
-// TestReconcileSelfUpdate_Rollback: booted as the target but unhealthy → rollback to .bak + re-exec.
-func TestReconcileSelfUpdate_Rollback(t *testing.T) {
+// TestReconcileSelfUpdatePromote_HealthFailRollback: booted as the target but unhealthy → roll back
+// to .bak, re-exec, and remember the abandoned target.
+func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "yaog-agent")
 	_ = os.WriteFile(self, []byte("NEW-BROKEN"), 0o755)
 	_ = os.WriteFile(self+".bak", []byte("OLD-GOOD"), 0o755)
 	stateDir := filepath.Join(dir, "state")
-	mustSave(t, stateDir, &State{NodeID: "n1", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0"}})
+	mustSave(t, stateDir, &State{NodeID: "n1", AgentVersionFloor: "1.0.0", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0"}})
 
 	execed, restore := stubSwap(t, self)
 	defer restore()
-	ReconcileSelfUpdate(stateDir, "1.1.0", func() error { return fmt.Errorf("poll failed") }, io.Discard)
+	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return fmt.Errorf("poll failed") }, io.Discard)
 
 	if *execed != self {
 		t.Errorf("rollback must re-exec the restored binary")
@@ -245,14 +263,36 @@ func TestReconcileSelfUpdate_Rollback(t *testing.T) {
 	if st.PendingUpdate != nil {
 		t.Errorf("breadcrumb not cleared after rollback")
 	}
-	if st.AgentVersionFloor == "1.1.0" {
-		t.Errorf("floor must NOT advance on a rolled-back update")
+	if st.AgentVersionFloor != "1.0.0" {
+		t.Errorf("floor must be preserved (not advanced, not wiped) on rollback; got %q", st.AgentVersionFloor)
+	}
+	if st.AbandonedAgentVersion != "1.1.0" {
+		t.Errorf("rollback must remember the abandoned target to prevent re-arm; got %q", st.AbandonedAgentVersion)
 	}
 }
 
-// TestReconcileSelfUpdate_AbandonAtCap: a target that never takes effect (boots keep coming up as
-// `from`) is abandoned after the attempt cap — the breadcrumb is cleared so the loop ends.
-func TestReconcileSelfUpdate_AbandonAtCap(t *testing.T) {
+// TestReconcileSelfUpdatePromote_ProbationReboot: a binary that passed the gate (Confirmed) but
+// rebooted before finalizing (crashed during probation) rolls back.
+func TestReconcileSelfUpdatePromote_ProbationReboot(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("NEW-BROKEN"), 0o755)
+	_ = os.WriteFile(self+".bak", []byte("OLD-GOOD"), 0o755)
+	stateDir := filepath.Join(dir, "state")
+	mustSave(t, stateDir, &State{NodeID: "n1", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: true}})
+
+	execed, restore := stubSwap(t, self)
+	defer restore()
+	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard)
+
+	if *execed != self || func() bool { g, _ := os.ReadFile(self); return string(g) != "OLD-GOOD" }() {
+		t.Errorf("a crash during probation (Confirmed + reboot) must roll back to .bak")
+	}
+}
+
+// TestReconcileSelfUpdateEarly_AbandonAtCap: a target that never takes effect (boots keep coming up
+// as `from`) is abandoned by the EARLY phase after the attempt cap — breadcrumb cleared, loop ends.
+func TestReconcileSelfUpdateEarly_AbandonAtCap(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "yaog-agent")
 	_ = os.WriteFile(self, []byte("OLD"), 0o755) // still running `from` — swap never stuck
@@ -261,19 +301,54 @@ func TestReconcileSelfUpdate_AbandonAtCap(t *testing.T) {
 
 	_, restore := stubSwap(t, self)
 	defer restore()
-	// Boot repeatedly as `from`; the health gate never runs (buildVersion != To). After the cap
-	// the breadcrumb must be cleared (abandoned), ending the restart loop.
 	cleared := false
 	for i := 0; i < maxSelfUpdateAttempts+2; i++ {
-		ReconcileSelfUpdate(stateDir, "1.0.0", func() error { return nil }, io.Discard)
+		ReconcileSelfUpdateEarly(stateDir, "1.0.0", io.Discard)
 		st, _ := LoadState(stateDir)
 		if st.PendingUpdate == nil {
 			cleared = true
+			if st.AbandonedAgentVersion != "1.1.0" {
+				t.Errorf("abandon-at-cap must remember the target; got %q", st.AbandonedAgentVersion)
+			}
 			break
 		}
 	}
 	if !cleared {
 		t.Errorf("a never-applying update must be abandoned at the attempt cap, not loop forever")
+	}
+}
+
+// TestRecordPreservesSelfUpdateState pins F1/R1-5/R1-1: a routine apply (success OR failure) must
+// NOT wipe the health-confirmed AgentVersionFloor or an in-flight breadcrumb (else a later signed
+// downgrade slips below the floor, or a forced re-exec-fail loses the breadcrumb and bricks).
+func TestRecordPreservesSelfUpdateState(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{NodeID: "n1", StateDir: dir}
+	prev := &State{
+		NodeID:                "n1",
+		AgentVersionFloor:     "1.1.0",
+		AbandonedAgentVersion: "0.9.0",
+		PendingUpdate:         &PendingUpdate{From: "1.1.0", To: "1.2.0", Attempts: 1},
+	}
+	man := &manifestInfo{NodeID: "n1", CompiledAt: "2026-06-16T00:00:00Z", Checksum: "abc"}
+
+	recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 0)
+	st, _ := LoadState(dir)
+	if st.AgentVersionFloor != "1.1.0" {
+		t.Errorf("recordSuccess wiped AgentVersionFloor (custody regression); got %q", st.AgentVersionFloor)
+	}
+	if st.PendingUpdate == nil || st.PendingUpdate.To != "1.2.0" {
+		t.Errorf("recordSuccess wiped the in-flight breadcrumb; got %+v", st.PendingUpdate)
+	}
+	if st.AbandonedAgentVersion != "0.9.0" {
+		t.Errorf("recordSuccess wiped AbandonedAgentVersion; got %q", st.AbandonedAgentVersion)
+	}
+
+	recordFailure(cfg, prev, "boom")
+	st, _ = LoadState(dir)
+	if st.AgentVersionFloor != "1.1.0" || st.PendingUpdate == nil || st.AbandonedAgentVersion != "0.9.0" {
+		t.Errorf("recordFailure wiped self-update custody state; got floor=%q pending=%+v abandoned=%q",
+			st.AgentVersionFloor, st.PendingUpdate, st.AbandonedAgentVersion)
 	}
 }
 

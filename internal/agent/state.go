@@ -67,6 +67,11 @@ type State struct {
 	// attempt cap) — this is what bounds the systemd Restart=always loop without a unit-file
 	// change. Nil when no update is in flight.
 	PendingUpdate *PendingUpdate `json:"pending_update,omitempty"`
+	// AbandonedAgentVersion is the last self-update target that was abandoned (rolled back at the
+	// attempt cap). decideSelfUpdate refuses to re-arm this exact version, so a doomed target does
+	// not perpetually re-flap; it is cleared when the operator moves to a different target. Empty
+	// means nothing abandoned.
+	AbandonedAgentVersion string `json:"abandoned_agent_version,omitempty"`
 }
 
 // PendingUpdate is the self-update breadcrumb (plan-9): the swap that was attempted and how
@@ -81,6 +86,12 @@ type PendingUpdate struct {
 	// Attempts counts boots that have tried to resolve this update; the reconcile abandons
 	// (rolls back to From) once it exceeds the cap, bounding the crash-loop.
 	Attempts int `json:"attempts"`
+	// Confirmed is set once the swapped binary has passed the startup health gate. It is still
+	// PROBATIONARY: the update is finalized (floor advanced, .bak dropped, breadcrumb cleared)
+	// only after the new binary completes a full daemon cycle. A reboot while Confirmed (the
+	// daemon crashed during probation, before finalizing) rolls back — so a binary that passes
+	// the health gate but then crashes in its daemon loop cannot brick the node.
+	Confirmed bool `json:"confirmed,omitempty"`
 }
 
 // statePath returns the state file path inside stateDir.

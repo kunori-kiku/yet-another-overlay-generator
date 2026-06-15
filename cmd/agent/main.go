@@ -300,6 +300,13 @@ type controllerModeOpts struct {
 // single poll->apply->report cycle — the deterministic unit the daemon loops over, and
 // what the e2e test exercises.
 func runControllerMode(o controllerModeOpts) int {
+	// PHASE A of the self-update reconcile (plan-9), the VERY FIRST thing: bump the pending-update
+	// attempt counter crash-durably and abandon (roll back to .bak) at the cap, BEFORE any
+	// crash-prone setup (token/client/pubkey reads) below. This is what bounds the systemd
+	// Restart=always loop even for a swapped binary that crashes during early init. No-op without a
+	// breadcrumb; re-execs the rolled-back binary on abandon (never returns in that case).
+	agent.ReconcileSelfUpdateEarly(o.stateDir, BuildVersion, os.Stderr)
+
 	tokenBytes, err := os.ReadFile(o.tokenPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent: read controller token %s: %v\n", o.tokenPath, err)
@@ -338,11 +345,12 @@ func runControllerMode(o controllerModeOpts) int {
 	// pinned target always compares as newer (a dev binary updates to any real target).
 	selfUpdate := &agent.SelfUpdateParams{RunningVersion: BuildVersion, GithubProxy: o.ghProxy}
 
-	// Startup reconcile of a pending self-update BEFORE the loop — this is what bounds the
-	// systemd Restart=always loop. The health gate is one clean Fetch + VerifyBundle: it proves
-	// THIS (possibly just-swapped) binary can reach the controller and cryptographically verify a
-	// bundle. A clean gate promotes (advancing the floor); a failure rolls back to the prior
-	// binary; the attempt cap abandons a binary that keeps crashing. A no-op without a breadcrumb.
+	// PHASE B of the self-update reconcile: now that the client + pinned key exist, health-gate a
+	// swapped binary. The gate is one clean Fetch + VerifyBundle — it proves THIS (possibly
+	// just-swapped) binary can reach the controller and cryptographically verify a bundle. A pass
+	// marks the update PROBATIONARY (FinalizeSelfUpdate promotes it after the first clean cycle
+	// below); a failure (or a reboot during probation) rolls back to the prior binary. No-op
+	// without a breadcrumb.
 	healthCheck := func() error {
 		files, ferr := client.Fetch(o.nodeID)
 		if ferr != nil {
@@ -353,7 +361,7 @@ func runControllerMode(o controllerModeOpts) int {
 		}
 		return nil
 	}
-	agent.ReconcileSelfUpdate(o.stateDir, BuildVersion, healthCheck, os.Stderr)
+	agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
 
 	// Resume from the supplied cursor so a re-run does not re-fetch an already-applied
 	// generation: long-poll for anything strictly newer than --after. (The agent State
@@ -390,6 +398,10 @@ func runControllerMode(o controllerModeOpts) int {
 	if !o.daemon {
 		// Single-shot: one cycle (deterministic — the unit the daemon loops over).
 		resumeGen, applied, err := cycle()
+		// FINALIZE a probationary self-update: the cycle returned, proving this (possibly
+		// just-swapped) binary can actually RUN a full cycle, not merely pass `version`+verify.
+		// No-op unless a Confirmed breadcrumb for this build exists.
+		agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent: %v\n", err)
 			return 1
@@ -417,8 +429,18 @@ func runControllerMode(o controllerModeOpts) int {
 	// for OTHER nodes. install.sh never runs in those cycles.
 	const errBackoff = 5 * time.Second
 	fmt.Fprintf(os.Stderr, "agent: controller daemon started (node %s, resume @%d)\n", o.nodeID, lastAppliedGen)
+	finalizedSelfUpdate := false
 	for {
 		resumeGen, applied, err := cycle()
+		// FINALIZE a probationary self-update after the FIRST completed cycle (once): the cycle
+		// returning proves this (possibly just-swapped) binary RUNS its daemon loop, not merely
+		// that `version`+verify pass — so a daemon-only crash AFTER the health gate cannot brick
+		// (it reboots Confirmed-but-unfinalized and rolls back). No-op without a Confirmed
+		// breadcrumb for this build.
+		if !finalizedSelfUpdate {
+			agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr)
+			finalizedSelfUpdate = true
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agent: %v (keeping last-good; retrying in %s)\n", err, errBackoff)
 			time.Sleep(errBackoff)

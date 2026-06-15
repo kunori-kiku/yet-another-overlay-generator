@@ -123,9 +123,11 @@ func isForced(cat *agentCatalog, running string) bool {
 }
 
 // decideSelfUpdate is the PURE decision (no network, no disk): given the verified catalog, the
-// running version, and the persisted floor, what should the agent do? Custody is enforced here —
-// a downgrade below the running version OR below the health-confirmed floor is REFUSED.
-func decideSelfUpdate(cat *agentCatalog, running, floor string) (updateDecision, string) {
+// running version, the persisted floor, and the last abandoned target, what should the agent do?
+// Custody is enforced here — a downgrade below the running version OR below the health-confirmed
+// floor is REFUSED, and a target previously abandoned (rolled back at the attempt cap) is NOT
+// re-armed until the operator moves to a different version (avoids a doomed target re-flapping).
+func decideSelfUpdate(cat *agentCatalog, running, floor, abandoned string) (updateDecision, string) {
 	if cat == nil || strings.TrimSpace(cat.Version) == "" {
 		return updateSkip, "no agent catalog"
 	}
@@ -134,6 +136,9 @@ func decideSelfUpdate(cat *agentCatalog, running, floor string) (updateDecision,
 
 	if compareVersions(desired, running) == 0 && !forced {
 		return updateSkip, "already at desired version " + desired
+	}
+	if abandoned != "" && compareVersions(desired, abandoned) == 0 {
+		return updateRefuse, fmt.Sprintf("target %s was previously abandoned (rolled back at the attempt cap); change the target to retry", desired)
 	}
 	// Anti-downgrade (custody): never below the running version or the health-confirmed floor.
 	if compareVersions(desired, running) < 0 {
@@ -205,12 +210,16 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 	if err != nil {
 		return fmt.Errorf("self-test of new binary failed: %w", err)
 	}
-	if got := strings.TrimSpace(string(out)); got != cat.Version {
+	// Compare with the SemVer comparator (not a raw byte compare): BuildVersion is the released
+	// git tag (e.g. "v2.0.0-beta.2") while a hand-set TargetAgentVersion may omit the "v" — an
+	// exact-equality check would silently refuse every such update.
+	if got := strings.TrimSpace(string(out)); compareVersions(got, cat.Version) != 0 {
 		return fmt.Errorf("self-test version %q != desired %q; refusing", got, cat.Version)
 	}
 
 	// Crash-durable breadcrumb BEFORE the swap: the next boot reconciles it (promote/rollback/
-	// abandon), which is what bounds the Restart=always loop.
+	// abandon), which is what bounds the Restart=always loop. Confirmed=false — the swap is not
+	// trusted until it passes the startup health gate AND survives a full daemon cycle.
 	st, _ := LoadState(cfg.StateDir)
 	if st == nil {
 		st = &State{}
@@ -221,14 +230,16 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 		return fmt.Errorf("persist self-update breadcrumb: %w", err)
 	}
 
-	// Swap: move the current binary aside (rollback target), install the new one. If the install
-	// fails after the move, restore the current binary so the node is never left binary-less.
+	// Install-then-flip: COPY the current binary to .bak (leaving the live binary in place), then
+	// atomically rename the new binary over it. A same-directory rename atomically REPLACES the
+	// target, so `self` always names a valid executable across ANY crash point — there is never a
+	// window with no binary at the systemd ExecStart path. The .bak copy is the rollback artifact.
 	bak := self + ".bak"
-	if err := os.Rename(self, bak); err != nil {
+	if err := copyFile(self, bak); err != nil {
 		return fmt.Errorf("back up current binary: %w", err)
 	}
 	if err := renameOrCopy(partial, self); err != nil {
-		_ = os.Rename(bak, self)
+		_ = os.Remove(bak)
 		return fmt.Errorf("install new binary: %w", err)
 	}
 
@@ -238,85 +249,158 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 	return execFn(self, os.Args, os.Environ())
 }
 
-// reconcileSelfUpdate resolves a PendingUpdate breadcrumb on startup, BEFORE the daemon loop. It
-// runs on EVERY boot (no-op without a breadcrumb). It increments Attempts FIRST (crash-durable)
-// so even a new binary that crashes before the health gate is bounded: after maxSelfUpdateAttempts
-// boots it ABANDONS (rolls back to the .bak binary, clears the breadcrumb). When the running build
-// IS the target, one clean healthCheck PROMOTES (advancing the floor — the ONLY place it
-// advances) and a failure ABANDONS. healthCheck is injected (a single Poll+VerifyBundle in
-// production) so the reconcile is unit-testable.
-func ReconcileSelfUpdate(stateDir, buildVersion string, healthCheck func() error, stderr io.Writer) {
+// ReconcileSelfUpdateEarly is PHASE A of the startup reconcile (plan-9): it MUST run as the very
+// first thing in controller mode — BEFORE any crash-prone setup (token/client/pubkey reads) — so a
+// freshly swapped binary that crashes during early init is still bounded. With no breadcrumb it is
+// a no-op. Otherwise it bumps Attempts crash-durably FIRST (every boot counts toward the cap, even
+// an early-init panic), then ABANDONS at the cap (roll back to .bak, remember the target). It needs
+// only stateDir + buildVersion — no controller client.
+func ReconcileSelfUpdateEarly(stateDir, buildVersion string, stderr io.Writer) {
 	st, err := LoadState(stateDir)
 	if err != nil || st == nil || st.PendingUpdate == nil {
 		return
 	}
 	pu := st.PendingUpdate
+	pu.Attempts++
+	_ = SaveState(stateDir, st)
+	if pu.Attempts > maxSelfUpdateAttempts {
+		rollbackAndAbandon(stateDir, buildVersion, pu, fmt.Sprintf("attempt cap %d exceeded", maxSelfUpdateAttempts), stderr)
+	}
+}
 
+// ReconcileSelfUpdatePromote is PHASE B: once the controller client + pinned key exist, it
+// health-gates a swapped binary. It runs AFTER ReconcileSelfUpdateEarly (Attempts already bumped).
+// No breadcrumb ⇒ no-op. When the running build IS the target:
+//   - not yet Confirmed: run healthCheck; a pass marks the update PROBATIONARY (Confirmed, .bak
+//     kept, floor NOT yet advanced) so the daemon proceeds; a failure rolls back.
+//   - already Confirmed: it passed the gate on a PRIOR boot but rebooted before finalizing — it
+//     crashed during probation — so roll back.
+//
+// The promote is FINALIZED (floor advanced, .bak dropped, breadcrumb cleared) by FinalizeSelfUpdate
+// once the new binary completes a full daemon cycle — proving it can actually run, not merely pass
+// `version` + a fetch/verify. healthCheck is injected (a Fetch + VerifyBundle in production) so
+// this is unit-testable.
+func ReconcileSelfUpdatePromote(stateDir, buildVersion string, healthCheck func() error, stderr io.Writer) {
+	st, err := LoadState(stateDir)
+	if err != nil || st == nil || st.PendingUpdate == nil {
+		return
+	}
+	pu := st.PendingUpdate
+	if buildVersion != pu.To {
+		// Swap/exec never took effect (or we are mid-rollback): Phase A bounds it via Attempts.
+		fmt.Fprintf(stderr, "agent: pending self-update to %s not applied (running %s, attempt %d/%d)\n",
+			pu.To, buildVersion, pu.Attempts, maxSelfUpdateAttempts)
+		return
+	}
+	if pu.Confirmed {
+		rollbackAndAbandon(stateDir, buildVersion, pu, "did not survive probation (rebooted before finalizing)", stderr)
+		return
+	}
+	if err := healthCheck(); err != nil {
+		rollbackAndAbandon(stateDir, buildVersion, pu, "health gate failed: "+err.Error(), stderr)
+		return
+	}
+	// Health-confirmed: begin PROBATION. Keep .bak + breadcrumb and do NOT advance the floor yet;
+	// FinalizeSelfUpdate promotes once a full daemon cycle proves the binary runs.
+	pu.Confirmed = true
+	st.Health = "self-update to " + pu.To + " health-confirmed (probationary)"
+	_ = SaveState(stateDir, st)
+	fmt.Fprintf(stderr, "agent: self-update to %s health-confirmed; probationary until one clean cycle\n", pu.To)
+}
+
+// FinalizeSelfUpdate promotes a Confirmed (probationary) self-update once the new binary has
+// completed a full daemon cycle — proving it actually RUNS, not just that `version` + a fetch/verify
+// succeed (the gap that would otherwise leave a daemon-only crash after the health gate unrecoverable).
+// It advances AgentVersionFloor (the ONLY place it advances), clears the breadcrumb + the
+// abandoned-target memory, and drops .bak. No-op unless a Confirmed breadcrumb for the running
+// version exists. Called from the daemon/single-shot loop after the first cycle returns.
+func FinalizeSelfUpdate(stateDir, buildVersion string, stderr io.Writer) {
+	st, err := LoadState(stateDir)
+	if err != nil || st == nil || st.PendingUpdate == nil {
+		return
+	}
+	pu := st.PendingUpdate
+	if !pu.Confirmed || buildVersion != pu.To {
+		return
+	}
+	self, _ := osExecutable()
+	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+		self = resolved
+	}
+	st.PendingUpdate = nil
+	st.AgentVersionFloor = pu.To
+	st.AbandonedAgentVersion = "" // a successful promote supersedes any prior abandonment
+	st.Health = "self-updated to " + pu.To
+	_ = SaveState(stateDir, st)
+	_ = os.Remove(self + ".bak")
+	fmt.Fprintf(stderr, "agent: self-update to %s finalized after a clean cycle (floor=%s)\n", pu.To, pu.To)
+}
+
+// rollbackAndAbandon is the shared failure path for every doomed self-update (cap exceeded, health
+// gate failed, crashed during probation): when running the failed target with a .bak available it
+// restores the prior binary and re-execs it; otherwise it stays on the current (from) binary and
+// reports unhealthy. It records AbandonedAgentVersion so decideSelfUpdate will not re-arm the SAME
+// target (no perpetual flap) until the operator moves to a different version. Crash-safe ordering:
+// the .bak→binary rename happens BEFORE the breadcrumb is cleared, so a crash mid-rollback re-tries
+// on the next boot rather than stranding a broken binary unbreadcrumbed. A failed update NEVER
+// advances the floor (the load below leaves it untouched).
+func rollbackAndAbandon(stateDir, buildVersion string, pu *PendingUpdate, reason string, stderr io.Writer) {
 	self, _ := osExecutable()
 	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
 		self = resolved
 	}
 	bak := self + ".bak"
 
-	// Crash-durable attempt bump BEFORE any crash-prone work, so a new binary that panics during
-	// early init is still bounded (each boot counts) rather than looping forever.
-	pu.Attempts++
-	_ = SaveState(stateDir, st)
-
-	// clearAndStay drops the breadcrumb (and .bak) and keeps the CURRENT binary running.
-	clearAndStay := func(health string) {
-		st.PendingUpdate = nil
-		st.Health = health
-		_ = SaveState(stateDir, st)
-		_ = os.Remove(bak)
-	}
-	// rollback restores the prior binary from .bak and re-execs it. Only meaningful when the
-	// running build IS the failed target; otherwise we are already on (or below) `from`.
-	rollback := func(reason string) {
-		if buildVersion == pu.To {
-			if _, e := os.Stat(bak); e == nil {
-				st.PendingUpdate = nil
-				st.AgentVersionFloor = "" // a failed update never advances the floor; leave prior
-				st.Health = "self-update to " + pu.To + " rolled back: " + reason
-				_ = SaveState(stateDir, st)
-				if e := os.Rename(bak, self); e == nil {
-					fmt.Fprintf(stderr, "agent: self-update to %s failed (%s); rolled back to %s; re-exec\n", pu.To, reason, pu.From)
-					_ = execFn(self, os.Args, os.Environ())
-					return // execFn returned (error) — fall through to staying on current
-				}
+	rolledBack := false
+	if buildVersion == pu.To {
+		if _, e := os.Stat(bak); e == nil {
+			if e := os.Rename(bak, self); e == nil { // restore the good binary FIRST
+				rolledBack = true
 			}
 		}
-		// Already on `from`, or no .bak / rollback failed: clear and stay, report unhealthy.
-		fmt.Fprintf(stderr, "agent: self-update to %s abandoned (%s); staying on %s\n", pu.To, reason, buildVersion)
-		clearAndStay("self-update to " + pu.To + " abandoned: " + reason)
 	}
 
-	if pu.Attempts > maxSelfUpdateAttempts {
-		rollback(fmt.Sprintf("attempt cap %d exceeded", maxSelfUpdateAttempts))
-		return
+	st, _ := LoadState(stateDir)
+	if st == nil {
+		st = &State{}
 	}
+	st.PendingUpdate = nil // cleared AFTER the rename above
+	st.AbandonedAgentVersion = pu.To
+	st.Health = "self-update to " + pu.To + " abandoned: " + reason
+	_ = SaveState(stateDir, st)
 
-	if buildVersion == pu.To {
-		// Booted as the new binary: one clean cycle promotes; any failure rolls back.
-		if err := healthCheck(); err != nil {
-			rollback("health gate failed: " + err.Error())
-			return
-		}
-		// Health-confirmed: PROMOTE. This is the ONLY place AgentVersionFloor advances.
-		st.PendingUpdate = nil
-		st.AgentVersionFloor = pu.To
-		st.Health = "self-updated to " + pu.To
-		_ = SaveState(stateDir, st)
-		_ = os.Remove(bak)
-		fmt.Fprintf(stderr, "agent: self-update to %s health-confirmed; promoted (floor=%s)\n", pu.To, pu.To)
-		return
+	if rolledBack {
+		fmt.Fprintf(stderr, "agent: self-update to %s failed (%s); rolled back to %s; re-exec\n", pu.To, reason, pu.From)
+		_ = execFn(self, os.Args, os.Environ())
+		return // execFn returns only on error — fall through to staying on the restored binary
 	}
+	_ = os.Remove(bak)
+	fmt.Fprintf(stderr, "agent: self-update to %s abandoned (%s); staying on %s\n", pu.To, reason, buildVersion)
+}
 
-	// Running build is NOT the target (the swap/exec never took effect, or we are mid-rollback):
-	// leave the breadcrumb so Attempts keeps climbing toward the cap on subsequent boots; the
-	// cycle may retry the swap, bounded by the cap above.
-	fmt.Fprintf(stderr, "agent: pending self-update to %s not applied (running %s, attempt %d/%d)\n",
-		pu.To, buildVersion, pu.Attempts, maxSelfUpdateAttempts)
+// copyFile copies src to dst (0755), used to snapshot the current binary to .bak WITHOUT removing
+// it, so the live binary is never absent during an install-then-flip swap.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	return out.Close()
 }
 
 // downloadTo fetches url into path (truncating), with a bounded timeout and the same

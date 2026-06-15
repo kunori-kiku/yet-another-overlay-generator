@@ -55,37 +55,52 @@ any failure BEFORE the swap keeps the running binary (keep-last-good):
 3. **CUSTODY: verify** the bytes' SHA-256 against the signed pin — mismatch ⇒ refuse.
 4. **self-test** `<partial> version` must print EXACTLY `desired` — else refuse (catches a corrupt
    or wrong-arch binary that somehow matched a hash).
-5. **breadcrumb** `State.PendingUpdate{from, to, attempts:0}` written crash-durably (temp-rename)
-   BEFORE the swap.
-6. **swap** `rename(target → target.bak)` then install the new binary; on install failure the
-   backup is restored so the node is never left binary-less.
+5. **breadcrumb** `State.PendingUpdate{from, to, attempts:0, confirmed:false}` written crash-durably
+   (temp-rename) BEFORE the swap.
+6. **swap (install-then-flip)** `copy(target → target.bak)` (the live binary stays in place), then
+   atomically `rename(partial → target)`. A same-directory rename **replaces** the target, so the
+   ExecStart path always names a valid executable across ANY crash point — there is never a window
+   with no binary (a crash during a move-then-install ordering would otherwise brick). `.bak` is the
+   rollback artifact. A cross-FS layout falls back to copy+fsync+rename.
 7. **re-exec** `syscall.Exec(target, os.Args, env)` — the new binary resumes as the daemon and the
    startup reconcile resolves the breadcrumb.
 
 `min_version` ordering (D3 — bumped ONLY on a bundle/wire-format break): a `forced` update runs
-AFTER verify+membership but BEFORE apply, so an agent below the bundle's required floor never
-applies an incompatible bundle (if it cannot update — no pin / downgrade — it refuses to apply and
-reports unhealthy). A non-forced update runs after a clean apply (best-effort; the next cycle
-retries).
+AFTER verify+membership+anti-rollback but BEFORE apply, so an agent below the bundle's required
+floor never applies an incompatible bundle (if it cannot update — no pin / downgrade / abandoned /
+target-below-min — it refuses to apply and reports unhealthy). A non-forced update runs after a
+clean apply (best-effort; the next cycle retries). The anti-rollback (`compiled_at`) check precedes
+the self-update so a stale bundle never triggers an agent swap.
 
-## Startup reconcile + crash-loop bound (`ReconcileSelfUpdate`)
+## Startup reconcile + crash-loop bound (two phases + finalize)
 
-Runs on EVERY boot, BEFORE the daemon loop — this is what bounds the systemd `Restart=always` loop
-WITHOUT a unit-file change. With no breadcrumb it is a no-op. With one:
+This is what bounds the systemd `Restart=always` loop WITHOUT a unit-file change. No breadcrumb ⇒
+no-op. The reconcile is split so a freshly-swapped binary that crashes during early init is STILL
+bounded:
 
-- It increments `Attempts` **crash-durably FIRST**, so even a new binary that crashes during early
-  init is bounded (each boot counts).
-- `Attempts > maxSelfUpdateAttempts` (3) ⇒ **abandon**: roll back to `.bak` (if running the failed
-  target) and clear the breadcrumb — the loop ends.
-- Running build **is** the target ⇒ run the **health gate** (one clean `Fetch + VerifyBundle`): a
-  pass **promotes** (advance `AgentVersionFloor` to the new version — the ONLY place the floor
-  advances — drop `.bak`, clear the breadcrumb); a failure **rolls back** to `.bak` and re-execs the
-  prior binary.
-- Running build is NOT the target (swap/exec never took effect) ⇒ leave the breadcrumb so attempts
-  keep climbing toward the cap.
+- **Phase A — `ReconcileSelfUpdateEarly`** runs as the VERY FIRST thing in controller mode, BEFORE
+  any crash-prone setup (token/client/pubkey reads). It increments `Attempts` **crash-durably
+  FIRST** (so every boot counts, even an early-init panic), and at `Attempts > maxSelfUpdateAttempts`
+  (3) it **abandons** (rolls back to `.bak`, records the abandoned target). Needs only the state dir
+  + build version — no controller client.
+- **Phase B — `ReconcileSelfUpdatePromote`** runs after the client + pinned key exist. When the
+  running build IS the target and not yet `Confirmed`, it runs the **health gate** (one clean
+  `Fetch + VerifyBundle`): a pass marks the update **PROBATIONARY** (`Confirmed`, keep `.bak`, floor
+  NOT yet advanced); a failure rolls back. A breadcrumb that is ALREADY `Confirmed` on boot means the
+  binary passed the gate but rebooted before finalizing — it crashed during probation — so it rolls
+  back. This closes the daemon-only-crash-after-promote brick class: the health gate alone proves
+  only `version` + fetch/verify, not that the daemon loop runs.
+- **Finalize — `FinalizeSelfUpdate`** runs after the new binary completes its FIRST full daemon
+  cycle (proving it actually runs). It **advances `AgentVersionFloor`** (the ONLY place the floor
+  advances), clears the breadcrumb + the abandoned-target memory, and drops `.bak`.
 
-A failed update **never** advances the floor, so an attacker cannot use a rolled-back update to
-lower the anti-downgrade bar.
+Crash-safety: rollback renames `.bak → target` BEFORE clearing the breadcrumb, so a crash
+mid-rollback re-tries on the next boot rather than stranding a broken binary unbreadcrumbed. A
+failed update **never** advances the floor; `AbandonedAgentVersion` records a doomed target so
+`decideSelfUpdate` will not re-arm the SAME version (no perpetual flap) until the operator moves to
+a different target. And the routine apply-state writers (`recordSuccess`/`recordFailure`) **preserve**
+`AgentVersionFloor` + the in-flight breadcrumb (the same discipline as the membership floor), so a
+normal cycle can neither wipe the anti-downgrade floor nor erase a swap in flight.
 
 ## Canary-then-fleet rollout (D2)
 

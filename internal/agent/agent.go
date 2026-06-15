@@ -140,7 +140,18 @@ func Run(cfg *Config) (*RunResult, error) {
 		return res, fmt.Errorf("agent: membership verify: %w", err)
 	}
 
-	// 2c. Signed self-update (plan-9), controller mode only (cfg.SelfUpdate != nil). The bundle's
+	// 3. anti-rollback. NOTE: compiled_at comes from manifest.json, which export deliberately
+	// leaves OUT of the signed/checksummed set, so this stub only guards against an honest source
+	// accidentally serving a stale bundle — NOT an active attacker/MITM, who could forge compiled_at
+	// to force a rollback to any previously signed bundle. Attacker-resistant anti-rollback (a signed
+	// version/generation bound into the bundle) is a Phase 2/3 item (docs/spec/controller/agent.md).
+	// Runs BEFORE the self-update so a stale bundle never triggers an agent swap (F4).
+	if err := CheckRollback(prev, man.CompiledAt); err != nil {
+		recordFailure(cfg, prev, err.Error())
+		return res, err
+	}
+
+	// 3b. Signed self-update (plan-9), controller mode only (cfg.SelfUpdate != nil). The bundle's
 	// artifacts.json — verified above (VerifyBundle's coverage guard) — may pin a newer agent. A
 	// FORCED update (running < agent.min_version) must happen BEFORE applying an incompatible
 	// bundle; a non-forced update is deferred until AFTER a successful apply. The download is
@@ -151,11 +162,11 @@ func Run(cfg *Config) (*RunResult, error) {
 	if cfg.SelfUpdate != nil {
 		selfUpdateCatalog = parseAgentCatalog(files)
 		running := cfg.SelfUpdate.RunningVersion
-		dec, reason := decideSelfUpdate(selfUpdateCatalog, running, prev.AgentVersionFloor)
+		dec, reason := decideSelfUpdate(selfUpdateCatalog, running, prev.AgentVersionFloor, prev.AbandonedAgentVersion)
 		if isForced(selfUpdateCatalog, running) {
 			if dec != updateForced {
 				// Forced but the update is impermissible (downgrade / missing pin / target below
-				// min): refuse to apply an incompatible bundle, keep last-good, report unhealthy.
+				// min / abandoned): refuse to apply an incompatible bundle, keep last-good.
 				recordFailure(cfg, prev, "below min_version and cannot self-update: "+reason)
 				return res, fmt.Errorf("agent: below required min_version, cannot self-update: %s", reason)
 			}
@@ -164,21 +175,13 @@ func Run(cfg *Config) (*RunResult, error) {
 				return res, fmt.Errorf("agent: below min_version, self-update failed: %w", err)
 			}
 			// performSelfUpdate execs on success and never returns; reaching here means the
-			// re-exec itself failed AFTER the swap — rare, surfaced as an error.
-			recordFailure(cfg, prev, "self-update re-exec did not take effect")
+			// re-exec itself failed AFTER the swap. Do NOT recordFailure — that would rebuild State
+			// from the stale pre-swap `prev` and ERASE the on-disk breadcrumb performSelfUpdate just
+			// wrote, leaving the (now-swapped) binary with no breadcrumb for the next-boot reconcile
+			// to resolve — an unbounded crash loop. Returning leaves the breadcrumb intact (R1-1).
 			return res, fmt.Errorf("agent: self-update re-exec failed")
 		}
 		deferSelfUpdate = dec == updateAfterApply
-	}
-
-	// 3. anti-rollback. NOTE: compiled_at comes from manifest.json, which export deliberately
-	// leaves OUT of the signed/checksummed set, so this stub only guards against an honest source
-	// accidentally serving a stale bundle — NOT an active attacker/MITM, who could forge compiled_at
-	// to force a rollback to any previously signed bundle. Attacker-resistant anti-rollback (a signed
-	// version/generation bound into the bundle) is a Phase 2/3 item (docs/spec/controller/agent.md).
-	if err := CheckRollback(prev, man.CompiledAt); err != nil {
-		recordFailure(cfg, prev, err.Error())
-		return res, err
 	}
 
 	// 4. stage to disk (only after verify+rollback pass)
@@ -200,7 +203,7 @@ func Run(cfg *Config) (*RunResult, error) {
 	res.Applied = true
 
 	// 6. report (record success, POST best-effort)
-	recordSuccess(cfg, man, vr, membershipEpoch)
+	recordSuccess(cfg, prev, man, vr, membershipEpoch)
 
 	// 7. deferred self-update (plan-9): the bundle applied cleanly and a newer agent is pinned.
 	// Best-effort — the bundle is already applied, so a download/verify failure is logged and the
@@ -298,7 +301,7 @@ func apply(cfg *Config, staging string) error {
 // report to the source when it is a Reporter (best-effort). membershipEpoch is the
 // verified trust-list epoch this apply locked in (0 when keystone is OFF); it becomes
 // the new anti-rollback floor for the next VerifyMembership.
-func recordSuccess(cfg *Config, man *manifestInfo, vr *VerifyResult, membershipEpoch int64) {
+func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult, membershipEpoch int64) {
 	s := &State{
 		NodeID:          cfg.NodeID,
 		LastCompiledAt:  man.CompiledAt,
@@ -308,6 +311,16 @@ func recordSuccess(cfg *Config, man *manifestInfo, vr *VerifyResult, membershipE
 		MembershipEpoch: membershipEpoch,
 		AppliedAt:       time.Now().UTC().Format(compiledAtLayout),
 		Health:          "applied",
+	}
+	// Preserve the self-update custody state across the apply-state rebuild (plan-9): the
+	// health-confirmed AgentVersionFloor must NOT be wiped by a routine apply (or a later signed
+	// downgrade could slip below it), and a self-update breadcrumb / abandoned-target memory in
+	// flight must survive (a normal apply does not own it — the reconcile/finalize does). Same
+	// discipline as MembershipEpoch above.
+	if prev != nil {
+		s.AgentVersionFloor = prev.AgentVersionFloor
+		s.PendingUpdate = prev.PendingUpdate
+		s.AbandonedAgentVersion = prev.AbandonedAgentVersion
 	}
 	persistAndReport(cfg, s)
 }
@@ -332,6 +345,12 @@ func recordFailure(cfg *Config, prev *State, detail string) {
 		// Keep the membership anti-rollback floor: a failed apply must never lower it,
 		// or a rejected older trust-list could be retried successfully afterward.
 		s.MembershipEpoch = prev.MembershipEpoch
+		// Likewise preserve the self-update custody state (plan-9): a failed apply must not wipe
+		// the health-confirmed AgentVersionFloor, a self-update breadcrumb in flight, or the
+		// abandoned-target memory.
+		s.AgentVersionFloor = prev.AgentVersionFloor
+		s.PendingUpdate = prev.PendingUpdate
+		s.AbandonedAgentVersion = prev.AbandonedAgentVersion
 	}
 	if s.NodeID == "" {
 		s.NodeID = cfg.NodeID
