@@ -55,19 +55,24 @@ numeric suffix without the dotted identifier.
    Use `--latest` for the current stable-most release; use `--prerelease` (and omit
    `--latest`) for a release that should not be advertised as latest yet.
 
-## Build-version injection
+## Build-version injection (lands in plan-4 / beta.1)
 
-Release binaries embed their version via linker flags, so a deployed agent/server
-can report exactly which tag it was built from. The convention (consumed by
-`release.yml` and the `Dockerfile`) is to **extend** the existing
-`-ldflags "-s -w"` string rather than replace it:
+> This convention is **introduced by plan-4** of the
+> `signed-self-update-and-rc-hardening` subject; it is documented here ahead of the
+> wiring so the release process is complete once plan-4 lands. Until then, release
+> binaries report `dev`.
+
+Release binaries will embed their version via linker flags, so a deployed agent/server
+can report exactly which tag it was built from. The convention (to be consumed by
+`release.yml` and the `Dockerfile`) is to **extend** the existing `-ldflags "-s -w"`
+string rather than replace it:
 
 ```bash
 go build -trimpath -ldflags "-s -w -X main.BuildVersion=${TAG}" -o yaog-agent ./cmd/agent/
 ```
 
-Each `main` package declares `var BuildVersion = "dev"`; the `-X` flag overwrites it
-at link time. A non-release build keeps `dev`. The `version` subcommand
-(`yaog-agent version`, `yaog-server version`, `yaog-compiler version`) prints it.
+Each `main` package will declare `var BuildVersion = "dev"`; the `-X` flag overwrites it
+at link time, and a non-release build keeps `dev`. A `version` subcommand
+(`yaog-agent version`, `yaog-server version`, `yaog-compiler version`) will print it.
 This rail underpins the controller's per-node version reporting and the signed agent
 self-update floor.

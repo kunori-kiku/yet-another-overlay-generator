@@ -17,10 +17,13 @@ Work accumulating toward **`v2.0.0-beta.1`** (the first RC-candidate beta):
 - CI `gofmt` gate over `./cmd ./internal` (repo-wide format cleanliness, fails on drift).
 
 ### Changed
-- `docs/spec/compiler/validation.md` made honest: validator rows already shipped on
-  `main` (`mtu`, `router_id`, `extra_prefixes[]`, the `ssh_*` charset/port checks,
-  `routing_mode`, `route_policies` reject-if-non-empty) flipped from `none-yet` to
-  their validating pass; stale audit-era "Closed by Plan N" references removed.
+- `docs/spec/compiler/validation.md` made honest: every coverage-table row whose
+  validator already ships on `main` (including `mtu`, `router_id`, `extra_prefixes[]`,
+  the `ssh_*` charset/port checks, `routing_mode`, `route_policies`, and the edge
+  `role`/`transport` rows) flipped from `none-yet`/`planned` to its validating pass;
+  stale audit-era "Closed by Plan N" references removed. The three genuinely-missing
+  rows (`transit_cidr`, `public_endpoints[].host`, `endpoint_host` charset) stay
+  not-done for plan-6.
 - `README.md` toolchain versions corrected (Go `1.25+`, Node `v20+`); "Full
   documentation" links point at `docs/spec/`; both wikis carry an air-gap-scope banner.
 
@@ -146,12 +149,20 @@ PRs #59–#65.
   (enroll → poll → verify → anti-rollback → splice key → apply).
 
 ## [1.3.2] - 2026-06-07
+
+### Fixed
+- mimic `xdp_mode` override (`skb`/`native`) for VPS NIC compatibility.
+
 ## [1.3.1] - 2026-06-07
-## [1.3.0] - 2026-06-07
 
 ### Added
 - `transport: "tcp"` edges wrapped with mimic (eBPF UDP-over-fake-TCP) for
-  UDP-hostile networks; parallel links + Babel failover.
+  UDP-hostile networks.
+
+## [1.3.0] - 2026-06-07
+
+### Added
+- Parallel links + Babel failover; audit remediation + allocation-stability hardening.
 
 ## [1.2.0] - 2026-03-26
 
@@ -178,5 +189,5 @@ PRs #59–#65.
 [1.3.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v1.0.0...v1.2.0
+[1.2.0]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v1.0.0-release...v1.2.0
 [1.0.0]: https://github.com/kunori-kiku/yet-another-overlay-generator/releases/tag/v1.0.0-release
