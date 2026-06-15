@@ -22,7 +22,7 @@ func mimicTwoRouterTopo(transport string, fromMTU, toMTU int) *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-a", Name: "alpha", Hostname: "a.example", Platform: "debian",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820, MTU: fromMTU,
+				Role: "router", DomainID: "domain-1", MTU: fromMTU,
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 				PublicEndpoints: []model.PublicEndpoint{
 					{ID: "node-a-ep", Host: "a.example", Port: 51820},
@@ -30,7 +30,7 @@ func mimicTwoRouterTopo(transport string, fromMTU, toMTU int) *model.Topology {
 			},
 			{
 				ID: "node-b", Name: "beta", Hostname: "b.example", Platform: "ubuntu",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820, MTU: toMTU,
+				Role: "router", DomainID: "domain-1", MTU: toMTU,
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 				PublicEndpoints: []model.PublicEndpoint{
 					{ID: "node-b-ep", Host: "b.example", Port: 51820},
@@ -203,7 +203,7 @@ func mimicClientTopo(transport string, clientMTU int) *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "router-a", Name: "router-a", Platform: "debian",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 				PublicEndpoints: []model.PublicEndpoint{
 					{ID: "router-a-ep", Host: "router-a.example", Port: 51820},

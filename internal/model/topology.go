@@ -63,9 +63,6 @@ type Node struct {
 	// Overlay IP，编译时自动分配
 	OverlayIP string `json:"overlay_ip,omitempty"`
 
-	// WireGuard 基础监听端口（每个 peer 接口会从此端口递增）
-	ListenPort int `json:"listen_port,omitempty"`
-
 	// WireGuard 接口 MTU（0 = 使用系统默认值，通常 1420）
 	MTU int `json:"mtu,omitempty"`
 
@@ -96,7 +93,7 @@ type Node struct {
 	ExtraPrefixes []string `json:"extra_prefixes,omitempty"`
 
 	// SSH 连接信息（用于自动部署）
-	SSHAlias   string `json:"ssh_alias,omitempty"`   // ssh_config 中的 Host 别名
+	SSHAlias   string `json:"ssh_alias,omitempty"`    // ssh_config 中的 Host 别名
 	SSHHost    string `json:"ssh_host,omitempty"`     // SSH 主机地址
 	SSHPort    int    `json:"ssh_port,omitempty"`     // SSH 端口（默认 22）
 	SSHUser    string `json:"ssh_user,omitempty"`     // SSH 用户名

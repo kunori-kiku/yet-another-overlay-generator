@@ -1,20 +1,19 @@
 package compiler
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// portBoundsTopo 构建一个以 hub 为中心、向外连接 spokeCount 个 spoke 的星型拓扑，
-// hub 的基础监听端口为 hubBasePort。hub 的每条 peer 接口在 base+offset 处监听，
-// 因此当 spokeCount 足够大时，hub 的有效端口会越过 65535（审计项 D11）。
-func portBoundsTopo(hubBasePort, spokeCount int) (*model.Topology, map[string]KeyPair) {
+// portBoundsTopo 构建一个以 hub 为中心、向外连接 spokeCount 个 spoke 的星型拓扑。
+// 基准监听端口统一为 51820（per-node listen_port 已移除），hub 的每条 peer 接口在
+// 51820+offset 处监听，用于覆盖多接口分配的编译路径。
+func portBoundsTopo(spokeCount int) (*model.Topology, map[string]KeyPair) {
 	nodes := []model.Node{
 		{
 			ID: "node-hub", Name: "hub", Hostname: "hub.example.com",
-			Role: "router", DomainID: "domain-1", ListenPort: hubBasePort,
+			Role: "router", DomainID: "domain-1",
 			Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 		},
 	}
@@ -26,7 +25,7 @@ func portBoundsTopo(hubBasePort, spokeCount int) (*model.Topology, map[string]Ke
 		spokeID := spokeName(i)
 		nodes = append(nodes, model.Node{
 			ID: spokeID, Name: spokeID, Hostname: spokeID + ".example.com",
-			Role: "router", DomainID: "domain-1", ListenPort: 51820,
+			Role: "router", DomainID: "domain-1",
 			Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 		})
 		keys[spokeID] = KeyPair{PrivateKey: "privkey-" + spokeID + "-fake", PublicKey: "pubkey-" + spokeID + "-fake"}
@@ -73,42 +72,14 @@ func itoaTest(n int) string {
 	return s
 }
 
-// TestDerivePeers_EffectivePortOverflowErrors 验证：基础端口 65530 且 peer 数量足以让
-// 有效端口越过 65535 时，DerivePeers 返回错误，且错误中点名越界的节点（审计项 D11）。
-// 直接调用编译器（而非经验证器）能确保该不变量在 API/CLI 直连路径上同样不可被绕过。
-func TestDerivePeers_EffectivePortOverflowErrors(t *testing.T) {
-	// base=65530：offset 0..5 -> 65530..65535（合法），offset 6 -> 65536（越界）。
-	// 7 个 spoke 使第 7 条 peer 接口的有效端口达到 65536。
-	topo, keys := portBoundsTopo(65530, 7)
-
-	_, _, err := DerivePeers(topo, keys)
-	if err == nil {
-		t.Fatalf("有效监听端口越过 65535 时应返回错误，但得到 nil")
-	}
-	if !strings.Contains(err.Error(), "hub") {
-		t.Errorf("错误信息应点名越界节点 \"hub\"，实际: %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "65535") {
-		t.Errorf("错误信息应提及上限 65535，实际: %q", err.Error())
-	}
-}
-
-// TestCompile_EffectivePortOverflowErrors 经完整 Compile 路径再验证一次：同一越界拓扑
-// 应使 Compile 返回错误且点名节点；标准基础端口（51820）的同规模拓扑则正常编译。
-func TestCompile_EffectivePortOverflowErrors(t *testing.T) {
+// TestCompile_ManyInterfacesCompileClean 验证：基准端口统一为 51820 后，一个 hub 连向 7 个
+// spoke（hub 获得 7 个 per-peer 接口，监听 51820..51826）能正常编译。越界规则（lowestFreePort
+// 在 port>65535 时返回 CodeListenPortExhausted）仍然保留，但在统一基准下需上万个接口才会触发，
+// 无法再经一个高基准人为构造，故不再单测越界报错路径（per-node listen_port 已移除）。
+func TestCompile_ManyInterfacesCompileClean(t *testing.T) {
 	c := NewCompiler()
-
-	// 越界：base=65530，7 个 spoke。
-	overflowTopo, overflowKeys := portBoundsTopo(65530, 7)
-	if _, err := c.Compile(overflowTopo, overflowKeys); err == nil {
-		t.Fatalf("有效端口越界拓扑应使 Compile 返回错误，但得到 nil")
-	} else if !strings.Contains(err.Error(), "hub") {
-		t.Errorf("Compile 错误应点名越界节点 \"hub\"，实际: %q", err.Error())
-	}
-
-	// 同规模、合法基础端口：应正常编译。
-	okTopo, okKeys := portBoundsTopo(51820, 7)
-	if _, err := c.Compile(okTopo, okKeys); err != nil {
-		t.Fatalf("基础端口 51820 的同规模拓扑应正常编译，但失败: %v", err)
+	topo, keys := portBoundsTopo(7)
+	if _, err := c.Compile(topo, keys); err != nil {
+		t.Fatalf("基准端口 51820 下 hub 连 7 个 spoke 应正常编译，但失败: %v", err)
 	}
 }

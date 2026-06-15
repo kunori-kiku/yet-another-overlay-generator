@@ -46,7 +46,6 @@ const (
 	CodeNodePlatformUnsupported           Code = "validation_node_platform_unsupported"
 	CodeNodeXDPModeInvalid                Code = "validation_node_xdp_mode_invalid"
 	CodeNodeOverlayIPInvalid              Code = "validation_node_overlay_ip_invalid"
-	CodeNodeListenPortInvalid             Code = "validation_node_listen_port_invalid"
 	CodeNodeMTUOutOfRange                 Code = "validation_node_mtu_out_of_range"
 	CodeNodeSSHPortOutOfRange             Code = "validation_node_ssh_port_out_of_range"
 	CodeNodeRouterIDInvalid               Code = "validation_node_router_id_invalid"
@@ -76,9 +75,7 @@ const (
 	CodeNodeNameDuplicate                 Code = "validation_node_name_duplicate"
 	CodeNodeNameInstallerCollision        Code = "validation_node_name_installer_collision"
 	CodeNodeNameInterfaceCollision        Code = "validation_node_name_interface_collision"
-	CodeNodeListenPortHostConflict        Code = "validation_node_listen_port_host_conflict"
 	CodeNodeEffectivePortRangeOverflow    Code = "validation_node_effective_port_range_overflow"
-	CodeNodeEffectivePortRangeOverlap     Code = "validation_node_effective_port_range_overlap"
 	CodeNodeIsolated                      Code = "validation_node_isolated"
 	CodeClientInboundRejected             Code = "validation_client_inbound_rejected"
 	CodeClientTargetPeer                  Code = "validation_client_target_peer"
@@ -142,7 +139,6 @@ var registry = map[Code]string{
 	CodeNodePlatformUnsupported:           "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
 	CodeNodeXDPModeInvalid:                "Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).",
 	CodeNodeOverlayIPInvalid:              "Invalid overlay IP address: {ip}.",
-	CodeNodeListenPortInvalid:             "Invalid listen port: {port}.",
 	CodeNodeMTUOutOfRange:                 "MTU {mtu} is out of range: it must be between {low} and {high} (576 is the IPv4 datagram minimum; an out-of-range MTU is rejected by wg-quick).",
 	CodeNodeSSHPortOutOfRange:             "ssh_port {port} is out of range: it must be between 1 and 65535.",
 	CodeNodeRouterIDInvalid:               "Invalid router_id format: {id}. It must be in MAC-48 form (six colon-separated hex pairs, e.g. 02:11:22:33:44:55) or an IPv4 address; otherwise babeld will reject it.",
@@ -172,9 +168,7 @@ var registry = map[Code]string{
 	CodeNodeNameDuplicate:                 "Duplicate node name: node {other} and node {node} use the same name {name}",
 	CodeNodeNameInstallerCollision:        "Node names produce the same installer script filename: node {other} and node {node} both normalize to {name}, which will cause silent skips or identity mismatches during deployment",
 	CodeNodeNameInterfaceCollision:        "Node names produce the same WireGuard interface name: node {other} and node {node} both normalize to {name}, which will cause one interface configuration to overwrite the other",
-	CodeNodeListenPortHostConflict:        "Node {node} and node {other} share the same listen port {port} on host {name}",
 	CodeNodeEffectivePortRangeOverflow:    "Node {node} has an effective listen port range of {low}-{high} (base port {base} + {count} peer interfaces); the highest port {high} exceeds 65535 and will produce an undeployable WireGuard configuration",
-	CodeNodeEffectivePortRangeOverlap:     "Node {node} (ports {low}-{high}) and node {other} (ports {other_low}-{other_high}) share host {name} and have overlapping effective listen port ranges; WireGuard interfaces on the same host will contend for the same ports",
 	CodeNodeIsolated:                      "Node {node} ({id}) is isolated and not connected to any enabled edge",
 	CodeClientInboundRejected:             "Client node {node} cannot accept inbound connections",
 	CodeClientTargetPeer:                  "Client {node} cannot connect to peer {other} (peers do not forward traffic)",

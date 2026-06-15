@@ -104,13 +104,6 @@ func TestValidateSchema_SelfReferenceEdge(t *testing.T) {
 	assertHasError(t, result, "edges[0]")
 }
 
-func TestValidateSchema_InvalidPort(t *testing.T) {
-	topo := validTopology()
-	topo.Nodes[0].ListenPort = 70000
-	result := ValidateSchema(topo)
-	assertHasError(t, result, "nodes[0].listen_port")
-}
-
 // ---  ---
 
 func TestValidateSemantic_ValidTopology(t *testing.T) {
@@ -148,7 +141,7 @@ func TestValidateSemantic_DuplicateIP(t *testing.T) {
 
 func TestValidateSemantic_IPOutsideDomainCIDR(t *testing.T) {
 	topo := validTopology()
-	topo.Nodes[0].OverlayIP = "192.168.1.1" //  10.10.0.0/24 
+	topo.Nodes[0].OverlayIP = "192.168.1.1" //  10.10.0.0/24
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "nodes[0].overlay_ip")
 }
@@ -156,7 +149,7 @@ func TestValidateSemantic_IPOutsideDomainCIDR(t *testing.T) {
 func TestValidateSemantic_DuplicateDomainID(t *testing.T) {
 	topo := validTopology()
 	topo.Domains = append(topo.Domains, model.Domain{
-		ID:             "domain-1", // 
+		ID:             "domain-1", //
 		Name:           "duplicate",
 		CIDR:           "10.20.0.0/24",
 		AllocationMode: "auto",
@@ -169,7 +162,7 @@ func TestValidateSemantic_DuplicateDomainID(t *testing.T) {
 func TestValidateSemantic_DuplicateNodeID(t *testing.T) {
 	topo := validTopology()
 	topo.Nodes = append(topo.Nodes, model.Node{
-		ID:       "node-1", // 
+		ID:       "node-1", //
 		Name:     "duplicate-node",
 		Role:     "peer",
 		DomainID: "domain-1",
@@ -180,7 +173,7 @@ func TestValidateSemantic_DuplicateNodeID(t *testing.T) {
 
 func TestValidateSemantic_IsolatedNode(t *testing.T) {
 	topo := validTopology()
-	// 
+	//
 	topo.Nodes = append(topo.Nodes, model.Node{
 		ID:       "node-isolated",
 		Name:     "isolated-node",
@@ -193,13 +186,13 @@ func TestValidateSemantic_IsolatedNode(t *testing.T) {
 
 func TestValidateSemantic_NATDirectConnect(t *testing.T) {
 	topo := validTopology()
-	//  NAT 
+	//  NAT
 	topo.Nodes[0].Capabilities.HasPublicIP = false
 	topo.Nodes[0].Capabilities.CanAcceptInbound = false
 	topo.Nodes[1].Capabilities.HasPublicIP = false
 	topo.Nodes[1].Capabilities.CanAcceptInbound = false
 	result := ValidateSemantic(topo)
-	//  NAT 
+	//  NAT
 	found := false
 	for _, w := range result.Warnings {
 		if containsSubstring(w.Message, "NAT") || containsSubstring(w.Message, "") {
@@ -229,12 +222,12 @@ func TestValidateSemantic_NATNodeNoOutbound(t *testing.T) {
 				Capabilities: model.NodeCapabilities{HasPublicIP: true, CanAcceptInbound: true},
 			},
 		},
-		// NAT 
+		// NAT
 		Edges: []model.Edge{},
 	}
 	result := ValidateSemantic(topo)
 	// NAT（）
-	// 
+	//
 	if len(result.Warnings) == 0 {
 		t.Errorf("")
 	}
@@ -313,13 +306,12 @@ func validTopology() *model.Topology {
 		},
 		Nodes: []model.Node{
 			{
-				ID:         "node-1",
-				Name:       "node-alpha",
-				Hostname:   "alpha.example.com",
-				Platform:   "debian",
-				Role:       "router",
-				DomainID:   "domain-1",
-				ListenPort: 51820,
+				ID:       "node-1",
+				Name:     "node-alpha",
+				Hostname: "alpha.example.com",
+				Platform: "debian",
+				Role:     "router",
+				DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true,
 					CanForward:       true,
@@ -327,13 +319,12 @@ func validTopology() *model.Topology {
 				},
 			},
 			{
-				ID:         "node-2",
-				Name:       "node-beta",
-				Hostname:   "beta.example.com",
-				Platform:   "ubuntu",
-				Role:       "router",
-				DomainID:   "domain-1",
-				ListenPort: 51820,
+				ID:       "node-2",
+				Name:     "node-beta",
+				Hostname: "beta.example.com",
+				Platform: "ubuntu",
+				Role:     "router",
+				DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true,
 					CanForward:       true,

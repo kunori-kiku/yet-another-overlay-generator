@@ -134,7 +134,7 @@ var registry = map[Code]def{
 	CodeTransitPoolExhausted: {"The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.", http.StatusUnprocessableEntity},
 	CodeTransitCIDRInvalid:   {"The transit CIDR {cidr} is invalid: {detail}", http.StatusUnprocessableEntity},
 	CodeTransitCIDRNotIPv4:   {"The transit CIDR {cidr} must be IPv4.", http.StatusUnprocessableEntity},
-	CodeListenPortExhausted:  {"Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; lower its listen_port or reduce its connections.", http.StatusUnprocessableEntity},
+	CodeListenPortExhausted:  {"Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; reduce its connections.", http.StatusUnprocessableEntity},
 	CodeOverlayCIDRInvalid:   {"The overlay CIDR {cidr} is invalid.", http.StatusUnprocessableEntity},
 	CodeOverlayPoolExhausted: {"The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.", http.StatusUnprocessableEntity},
 	CodeNodeUnknownDomain:    {"Node {node} references unknown domain {domain}.", http.StatusUnprocessableEntity},

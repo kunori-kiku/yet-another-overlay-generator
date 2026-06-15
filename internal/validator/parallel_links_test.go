@@ -61,7 +61,7 @@ func parallelBaseTopology() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-a", Name: "alpha", Hostname: "alpha.example.com",
-				Platform: "debian", Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Platform: "debian", Role: "router", DomainID: "domain-1",
 				OverlayIP: "10.10.0.1",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true, CanForward: true, HasPublicIP: true,
@@ -69,7 +69,7 @@ func parallelBaseTopology() *model.Topology {
 			},
 			{
 				ID: "node-b", Name: "beta", Hostname: "beta.example.com",
-				Platform: "debian", Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Platform: "debian", Role: "router", DomainID: "domain-1",
 				OverlayIP: "10.10.0.2",
 				Capabilities: model.NodeCapabilities{
 					CanAcceptInbound: true, CanForward: true, HasPublicIP: true,
@@ -160,7 +160,7 @@ func TestParallelLinks_BackupOnClientRejected(t *testing.T) {
 			Nodes: []model.Node{
 				{
 					ID: "router-1", Name: "router", Role: "router", DomainID: "domain-1",
-					OverlayIP: "10.10.0.1", ListenPort: 51820,
+					OverlayIP:    "10.10.0.1",
 					Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 				},
 				{

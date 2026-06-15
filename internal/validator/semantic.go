@@ -35,10 +35,7 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// 节点名称冲突（原始名称、安装脚本文件名、WireGuard 接口名）
 	validateNodeNameCollisions(topo, result)
 
-	//  listen port
-	validateListenPortConflicts(topo, result)
-
-	// 生效监听端口范围：每节点 base..base+(对端接口数-1) 是否越界，以及同主机节点范围是否重叠
+	// 生效监听端口范围：每节点 base..base+(对端接口数-1) 是否越界
 	validateEffectivePortRanges(topo, result)
 
 	//
@@ -246,30 +243,8 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 	}
 }
 
-func validateListenPortConflicts(topo *model.Topology, result *ValidationResult) {
-	//  listen port（ hostname ）
-	// ， hostname
-	type hostPort struct {
-		hostname string
-		port     int
-	}
-
-	seen := make(map[hostPort]string) // hostPort -> node name
-	for i, node := range topo.Nodes {
-		if node.ListenPort == 0 || node.Hostname == "" {
-			continue
-		}
-		hp := hostPort{hostname: node.Hostname, port: node.ListenPort}
-		if existingNode, exists := seen[hp]; exists {
-			result.AddWarning(fmt.Sprintf("nodes[%d].listen_port", i), CodeNodeListenPortHostConflict, P{"node", node.Name}, P{"other", existingNode}, P{"name", node.Hostname}, P{"port", strconv.Itoa(node.ListenPort)})
-		} else {
-			seen[hp] = node.Name
-		}
-	}
-}
-
-// defaultListenPort 是节点未显式设置 listen_port 时编译器采用的基准端口，
-// 必须与 peers.go Pass 1 中的默认值（51820）保持一致。
+// defaultListenPort 是 per-peer 接口分配的唯一基准端口，必须与 peers.go lowestFreePort
+// 的基准（51820）保持一致。per-node listen_port 已移除——它在 per-peer 模型下无意义。
 const defaultListenPort = 51820
 
 // effectivePortRange 描述一个节点在 per-peer 接口模型下实际占用的监听端口范围。
@@ -283,7 +258,6 @@ const defaultListenPort = 51820
 type effectivePortRange struct {
 	nodeIndex int    // 节点在 topo.Nodes 中的下标，用于定位错误字段
 	nodeName  string // 节点名称，用于错误消息
-	hostname  string // 节点 hostname（可能为空）
 	base      int    // 基准监听端口
 	count     int    // 该节点占用的接口数（= 去重链路数）
 }
@@ -293,8 +267,7 @@ func (r effectivePortRange) high() int {
 	return r.base + r.count - 1
 }
 
-// validateEffectivePortRanges 校验 per-peer 接口模型下每个节点的「生效监听端口范围」
-// （D47 + D11 的一部分）。
+// validateEffectivePortRanges 校验 per-peer 接口模型下每个节点的「生效监听端口范围」（D11）。
 //
 // 编译器为每条链路的每个非 client 端点分配一个独立 WireGuard 接口，监听端口从
 // 节点基准端口起按 base+offset 递增（见 peers.go Pass 1 中 nodePortOffset 的逻辑）。
@@ -305,10 +278,11 @@ func (r effectivePortRange) high() int {
 //   - 因此一对节点若有 1 条 primary 链路 + 2 条 backup，会为其两端各贡献 3 个接口；
 //   - 每条链路为其两端中的「非 client」端点各 +1。
 //
-// 计算出每个节点的占用区间 [base, base+count-1] 后：
-//  1. 当区间最高端口超过 65535 时报错（D11：base+offset 越界会被原样渲染进 WireGuard 配置）。
-//  2. 当两个共享同一非空 hostname 的节点区间发生重叠时报错（D47：今日仅对完全相同的 base 端口告警，
-//     无法发现共置节点的范围交叠）。
+// 计算出每个节点的占用区间 [base, base+count-1] 后，当区间最高端口超过 65535 时报错
+// （D11：base+offset 越界会被原样渲染进 WireGuard 配置）。
+//
+// 注意：基准端口统一为 51820（per-node listen_port 已移除），故「共置节点范围重叠」规则已删除——
+// 在统一基准下，任意两个共置且各有 >=1 个接口的节点必然重叠，该规则会误杀所有「一机多节点」部署。
 func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult) {
 	// 节点索引（与 peers.go 一致：以 ID 查找）。
 	nodeMap := make(map[string]*model.Node)
@@ -352,53 +326,24 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 		}
 	}
 
-	// 为占用了至少一个接口的节点构建生效端口范围。
-	var ranges []effectivePortRange
+	// 为占用了至少一个接口的节点校验生效端口范围。
 	for _, node := range topo.Nodes {
 		count := interfaceCount[node.ID]
 		if count == 0 {
 			// 没有 per-peer 接口（无启用边，或为 client 节点）：无生效范围可校验。
 			continue
 		}
-		base := node.ListenPort
-		if base == 0 {
-			base = defaultListenPort
-		}
+		// 基准端口统一为 51820（per-node listen_port 已移除）。
 		r := effectivePortRange{
 			nodeIndex: nodeIndex[node.ID],
 			nodeName:  node.Name,
-			hostname:  node.Hostname,
-			base:      base,
+			base:      defaultListenPort,
 			count:     count,
 		}
-		ranges = append(ranges, r)
 
-		// 规则 1：生效范围最高端口越界。
+		// 规则：生效范围最高端口越界（base+count-1 > 65535 会被原样渲染进 WireGuard 配置）。
 		if r.high() > 65535 {
 			result.AddError(fmt.Sprintf("nodes[%d].listen_port", r.nodeIndex), CodeNodeEffectivePortRangeOverflow, P{"node", r.nodeName}, P{"low", strconv.Itoa(r.base)}, P{"high", strconv.Itoa(r.high())}, P{"base", strconv.Itoa(r.base)}, P{"count", strconv.Itoa(r.count)})
-		}
-	}
-
-	// 规则 2：共享同一非空 hostname 的节点之间，生效范围不得重叠。
-	// 两两比较（节点数量很小），仅对 hostname 非空且相同的节点对生效。
-	for a := 0; a < len(ranges); a++ {
-		for b := a + 1; b < len(ranges); b++ {
-			ra := ranges[a]
-			rb := ranges[b]
-			if ra.hostname == "" || ra.hostname != rb.hostname {
-				continue
-			}
-			// 区间重叠判定：max(low) <= min(high)。
-			if ra.base <= rb.high() && rb.base <= ra.high() {
-				// 在下标较大的节点上报错，便于测试与定位。
-				later := rb
-				earlier := ra
-				if ra.nodeIndex > rb.nodeIndex {
-					later = ra
-					earlier = rb
-				}
-				result.AddError(fmt.Sprintf("nodes[%d].listen_port", later.nodeIndex), CodeNodeEffectivePortRangeOverlap, P{"node", earlier.nodeName}, P{"low", strconv.Itoa(earlier.base)}, P{"high", strconv.Itoa(earlier.high())}, P{"other", later.nodeName}, P{"other_low", strconv.Itoa(later.base)}, P{"other_high", strconv.Itoa(later.high())}, P{"name", later.hostname})
-			}
 		}
 	}
 }
@@ -673,18 +618,15 @@ func validatePinPairCompleteness(prefix string, edge model.Edge, result *Validat
 }
 
 // validatePinnedPortRange 校验单个被钉住的端口是否落在合法区间内：
-// 必须 >= 节点基准 listen_port（未设置时取 defaultListenPort），且 <= 65535。
+// 必须 >= 基准端口 defaultListenPort（51820），且 <= 65535。
 // 端口为 0 表示未钉住，跳过（成对完整性由 validatePinPairCompleteness 负责）。
+// 注意：PR7 将放宽此下界，以支持只能转发固定端口段的 NAT VPS（彼时操作员可手填低于 51820 的内部端口）。
 func validatePinnedPortRange(prefix, field string, port int, node *model.Node, result *ValidationResult) {
 	if port == 0 {
 		return
 	}
-	base := node.ListenPort
-	if base == 0 {
-		base = defaultListenPort
-	}
-	if port < base || port > 65535 {
-		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(base)})
+	if port < defaultListenPort || port > 65535 {
+		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(defaultListenPort)})
 	}
 }
 

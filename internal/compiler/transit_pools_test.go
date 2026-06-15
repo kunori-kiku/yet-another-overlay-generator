@@ -16,7 +16,7 @@ import (
 func transitPoolNode(id, domainID, overlayIP string) model.Node {
 	return model.Node{
 		ID: id, Name: id, Hostname: id + ".example.com",
-		Role: "router", DomainID: domainID, ListenPort: 51820,
+		Role: "router", DomainID: domainID,
 		OverlayIP:    overlayIP,
 		Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 	}

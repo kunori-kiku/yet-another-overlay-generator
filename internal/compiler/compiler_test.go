@@ -24,17 +24,17 @@ func simpleMeshTopo() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-1", Name: "alpha", Hostname: "alpha.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 			{
 				ID: "node-2", Name: "beta", Hostname: "beta.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 			{
 				ID: "node-3", Name: "gamma", Hostname: "gamma.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 		},
@@ -59,17 +59,17 @@ func natHubTopo() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-1", Name: "hub", Hostname: "hub.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, CanRelay: true, HasPublicIP: true},
 			},
 			{
 				ID: "node-2", Name: "client-a",
-				Role: "peer", DomainID: "domain-1", ListenPort: 51820,
+				Role: "peer", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: false, CanForward: false, HasPublicIP: false},
 			},
 			{
 				ID: "node-3", Name: "client-b",
-				Role: "peer", DomainID: "domain-1", ListenPort: 51820,
+				Role: "peer", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: false, CanForward: false, HasPublicIP: false},
 			},
 		},
@@ -176,7 +176,7 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 		}
 	}
 
-	// Hub (node-1)  node-2  node-3， Peer 
+	// Hub (node-1)  node-2  node-3， Peer
 	if len(peerMap["node-1"]) != 2 {
 		t.Errorf("Hub  2  Peer， %d", len(peerMap["node-1"]))
 	}
@@ -188,14 +188,14 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo.Nodes[1].OverlayIP = "10.11.0.2"
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
-	//  node-1 <-> node-2 
+	//  node-1 <-> node-2
 	topo.Edges[0].IsEnabled = false
 	topo.Edges[1].IsEnabled = false
 
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// node-1  1  peer（node-3）， node-2 
+	// node-1  1  peer（node-3）， node-2
 	if len(peerMap["node-1"]) != 1 {
 		t.Errorf("node-1  node-2  1  peer,  %d", len(peerMap["node-1"]))
 	}
@@ -213,12 +213,12 @@ func unidirectionalPublicEndpointTopo() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID: "node-1", Name: "server-a", Hostname: "a.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 			{
 				ID: "node-2", Name: "server-b", Hostname: "b.example.com",
-				Role: "router", DomainID: "domain-1", ListenPort: 51820,
+				Role: "router", DomainID: "domain-1",
 				Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
 			},
 		},
@@ -390,9 +390,9 @@ func TestWgInterfaceName(t *testing.T) {
 		expected string
 	}{
 		{"beta", "wg-beta"},
-		{"Alpha", "wg-alpha"},          // 大写转小写
-		{"my_server", "wg-my-server"},   // 下划线转连字符
-		{"a.b.c", "wg-a-b-c"},          // 点转连字符
+		{"Alpha", "wg-alpha"},                   // 大写转小写
+		{"my_server", "wg-my-server"},           // 下划线转连字符
+		{"a.b.c", "wg-a-b-c"},                   // 点转连字符
 		{"abcdefghijklmnop", "wg-abcdefghf39d"}, // 超过15字符：使用哈希后缀避免截断冲突
 	}
 

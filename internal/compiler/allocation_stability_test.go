@@ -20,13 +20,12 @@ import (
 // 供本文件的属性测试直接喂给 Compile（IP 分配器会保留已设的 overlay IP）。
 func stableRouterNode(id, name, overlayIP string) model.Node {
 	return model.Node{
-		ID:         id,
-		Name:       name,
-		Hostname:   name + ".example.com",
-		Role:       "router",
-		DomainID:   "domain-1",
-		ListenPort: 51820,
-		OverlayIP:  overlayIP,
+		ID:        id,
+		Name:      name,
+		Hostname:  name + ".example.com",
+		Role:      "router",
+		DomainID:  "domain-1",
+		OverlayIP: overlayIP,
 		Capabilities: model.NodeCapabilities{
 			CanAcceptInbound: true,
 			CanForward:       true,

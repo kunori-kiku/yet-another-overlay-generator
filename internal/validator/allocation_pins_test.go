@@ -170,13 +170,12 @@ func threeNodeTwoLinkTopology() *model.Topology {
 
 	// 追加 node-3 并把 validTopology 中冗余的反向边替换为指向 node-3 的新链路。
 	topo.Nodes = append(topo.Nodes, model.Node{
-		ID:         "node-3",
-		Name:       "node-gamma",
-		Hostname:   "gamma.example.com",
-		Platform:   "debian",
-		Role:       "router",
-		DomainID:   "domain-1",
-		ListenPort: 51820,
+		ID:       "node-3",
+		Name:     "node-gamma",
+		Hostname: "gamma.example.com",
+		Platform: "debian",
+		Role:     "router",
+		DomainID: "domain-1",
 		Capabilities: model.NodeCapabilities{
 			CanAcceptInbound: true,
 			CanForward:       true,

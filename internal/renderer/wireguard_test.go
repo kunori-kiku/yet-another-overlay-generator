@@ -10,10 +10,9 @@ import (
 
 func TestRenderPerPeerWireGuardConfig_Basic(t *testing.T) {
 	node := &model.Node{
-		ID:         "node-1",
-		Name:       "alpha",
-		OverlayIP:  "10.11.0.1",
-		ListenPort: 51820,
+		ID:        "node-1",
+		Name:      "alpha",
+		OverlayIP: "10.11.0.1",
 	}
 
 	peer := compiler.PeerInfo{
@@ -93,16 +92,15 @@ func TestRenderPerPeerWireGuardConfig_Basic(t *testing.T) {
 
 func TestRenderPerPeerWireGuardConfig_NoEndpoint(t *testing.T) {
 	node := &model.Node{
-		ID:         "node-2",
-		Name:       "beta",
-		OverlayIP:  "10.11.0.2",
-		ListenPort: 51821,
+		ID:        "node-2",
+		Name:      "beta",
+		OverlayIP: "10.11.0.2",
 	}
 
 	peer := compiler.PeerInfo{
 		NodeID:          "node-1",
 		NodeName:        "alpha",
-		PublicKey:        "peer-pubkey-fake",
+		PublicKey:       "peer-pubkey-fake",
 		OverlayIP:       "10.11.0.1",
 		AllowedIPs:      []string{"0.0.0.0/0", "::/0"},
 		InterfaceName:   "wg-alpha",
@@ -128,20 +126,19 @@ func TestRenderPerPeerWireGuardConfig_NoEndpoint(t *testing.T) {
 
 func TestRenderPerPeerWireGuardConfig_WithMTU(t *testing.T) {
 	node := &model.Node{
-		ID:         "node-1",
-		Name:       "alpha",
-		OverlayIP:  "10.11.0.1",
-		ListenPort: 51820,
-		MTU:        1280,
+		ID:        "node-1",
+		Name:      "alpha",
+		OverlayIP: "10.11.0.1",
+		MTU:       1280,
 	}
 
 	peer := compiler.PeerInfo{
-		NodeID:         "node-2",
-		NodeName:       "beta",
-		PublicKey:       "peer-pubkey",
-		AllowedIPs:     []string{"0.0.0.0/0", "::/0"},
-		InterfaceName:  "wg-beta",
-		ListenPort:     51820,
+		NodeID:        "node-2",
+		NodeName:      "beta",
+		PublicKey:     "peer-pubkey",
+		AllowedIPs:    []string{"0.0.0.0/0", "::/0"},
+		InterfaceName: "wg-beta",
+		ListenPort:    51820,
 		// MTU 现由 per-interface 的 PeerInfo.MTU 决定（mimic 链路 -12），渲染器读 peer.MTU 而非 node.MTU。
 		MTU:            1280,
 		LocalTransitIP: "10.10.0.1",
@@ -167,8 +164,8 @@ func TestRenderAllWireGuardConfigs_PerPeer(t *testing.T) {
 			RoutingMode: "babel",
 		}},
 		Nodes: []model.Node{
-			{ID: "n1", Name: "alpha", Role: "router", DomainID: "domain-1", OverlayIP: "10.11.0.1", ListenPort: 51820},
-			{ID: "n2", Name: "beta", Role: "router", DomainID: "domain-1", OverlayIP: "10.11.0.2", ListenPort: 51820},
+			{ID: "n1", Name: "alpha", Role: "router", DomainID: "domain-1", OverlayIP: "10.11.0.1"},
+			{ID: "n2", Name: "beta", Role: "router", DomainID: "domain-1", OverlayIP: "10.11.0.2"},
 		},
 	}
 
@@ -176,14 +173,14 @@ func TestRenderAllWireGuardConfigs_PerPeer(t *testing.T) {
 		"n1": {{
 			NodeID: "n2", NodeName: "beta", PublicKey: "pub-n2",
 			InterfaceName: "wg-beta", ListenPort: 51820,
-			AllowedIPs: []string{"0.0.0.0/0", "::/0"},
+			AllowedIPs:     []string{"0.0.0.0/0", "::/0"},
 			LocalTransitIP: "10.10.0.1", RemoteTransitIP: "10.10.0.2",
 			LocalLinkLocal: "fe80::1", RemoteLinkLocal: "fe80::2",
 		}},
 		"n2": {{
 			NodeID: "n1", NodeName: "alpha", PublicKey: "pub-n1",
 			InterfaceName: "wg-alpha", ListenPort: 51820,
-			AllowedIPs: []string{"0.0.0.0/0", "::/0"},
+			AllowedIPs:     []string{"0.0.0.0/0", "::/0"},
 			LocalTransitIP: "10.10.0.2", RemoteTransitIP: "10.10.0.1",
 			LocalLinkLocal: "fe80::2", RemoteLinkLocal: "fe80::1",
 		}},
