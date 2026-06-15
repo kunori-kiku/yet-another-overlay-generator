@@ -160,24 +160,33 @@ func decideSelfUpdate(cat *agentCatalog, running, floor, abandoned string) (upda
 
 // performSelfUpdate downloads, verifies-against-the-signed-pin, self-tests, breadcrumbs, swaps,
 // and re-execs the desired agent binary. On success it does NOT return (the process is replaced).
-// It returns an error if any step fails BEFORE the swap (the caller keeps the running binary).
-// The custody check (SHA-256 vs the signed pin) gates everything that follows.
-func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, stderr io.Writer) error {
+// It returns (swapped, err): swapped=true means the binary on disk WAS replaced (a re-exec failure
+// after that point must NOT be recorded as a routine failure — the breadcrumb on disk has to
+// survive for the next-boot reconcile, else the bad swap bricks). The custody check (SHA-256 vs the
+// signed pin) gates everything that follows.
+func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, stderr io.Writer) (swapped bool, err error) {
 	arch := runtime.GOARCH
 	// D9: self-update is certified for amd64/arm64 only; fail closed on other arches (the
 	// bootstrap may install 386/armv7 binaries, but self-update is not enabled for them yet).
 	if arch != "amd64" && arch != "arm64" {
-		return fmt.Errorf("self-update unsupported on arch %q", arch)
+		return false, fmt.Errorf("self-update unsupported on arch %q", arch)
+	}
+	// In-flight guard: if a breadcrumb is already pending, a swap is in progress (e.g. a prior
+	// re-exec failed and this daemon retried the cycle). Do NOT re-swap — that would overwrite the
+	// .bak rollback target with the already-installed new binary AND reset Attempts, defeating the
+	// crash-loop cap. Leave it for the next-boot reconcile to resolve.
+	if st, _ := LoadState(cfg.StateDir); st != nil && st.PendingUpdate != nil {
+		return false, fmt.Errorf("self-update to %s already in flight; awaiting restart to reconcile", st.PendingUpdate.To)
 	}
 	key := "linux-" + arch
 	pin, ok := cat.Bins[key]
 	if !ok || pin.Asset == "" || pin.SHA256 == "" {
-		return fmt.Errorf("no signed self-update pin for %q", key)
+		return false, fmt.Errorf("no signed self-update pin for %q", key)
 	}
 
 	self, err := osExecutable()
 	if err != nil {
-		return fmt.Errorf("locate self: %w", err)
+		return false, fmt.Errorf("locate self: %w", err)
 	}
 	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
 		self = resolved // resolve symlinks so the rename targets the real binary
@@ -189,32 +198,32 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 
 	url := ghProxy + cat.ReleaseURL + "/" + pin.Asset
 	if err := downloadTo(url, partial); err != nil {
-		return fmt.Errorf("download %s: %w", url, err)
+		return false, fmt.Errorf("download %s: %w", url, err)
 	}
 
 	// CUSTODY: verify the downloaded bytes against the SIGNED artifacts.json pin BEFORE the
 	// binary is made executable or run. A mismatch (a tampered mirror) is refused, keep-last-good.
 	gotSHA, err := fileSHA256(partial)
 	if err != nil {
-		return fmt.Errorf("hash downloaded binary: %w", err)
+		return false, fmt.Errorf("hash downloaded binary: %w", err)
 	}
 	if !strings.EqualFold(gotSHA, pin.SHA256) {
-		return fmt.Errorf("self-update hash mismatch for %s: got %s, want %s (refusing)", key, gotSHA, pin.SHA256)
+		return false, fmt.Errorf("self-update hash mismatch for %s: got %s, want %s (refusing)", key, gotSHA, pin.SHA256)
 	}
 	if err := os.Chmod(partial, 0o755); err != nil {
-		return fmt.Errorf("chmod new binary: %w", err)
+		return false, fmt.Errorf("chmod new binary: %w", err)
 	}
-	// Self-test: the new binary must run and report EXACTLY the desired version, or we refuse to
-	// swap it in (catches a corrupt-but-hash-matching or wrong-arch binary before it can brick).
+	// Self-test: the new binary must run and report the desired version, or we refuse to swap it
+	// in (catches a corrupt-but-hash-matching or wrong-arch binary before it can brick).
 	out, err := exec.Command(partial, "version").Output()
 	if err != nil {
-		return fmt.Errorf("self-test of new binary failed: %w", err)
+		return false, fmt.Errorf("self-test of new binary failed: %w", err)
 	}
 	// Compare with the SemVer comparator (not a raw byte compare): BuildVersion is the released
 	// git tag (e.g. "v2.0.0-beta.2") while a hand-set TargetAgentVersion may omit the "v" — an
 	// exact-equality check would silently refuse every such update.
 	if got := strings.TrimSpace(string(out)); compareVersions(got, cat.Version) != 0 {
-		return fmt.Errorf("self-test version %q != desired %q; refusing", got, cat.Version)
+		return false, fmt.Errorf("self-test version %q != desired %q; refusing", got, cat.Version)
 	}
 
 	// Crash-durable breadcrumb BEFORE the swap: the next boot reconciles it (promote/rollback/
@@ -227,26 +236,27 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 	st.NodeID = cfg.NodeID
 	st.PendingUpdate = &PendingUpdate{From: running, To: cat.Version, Attempts: 0}
 	if err := SaveState(cfg.StateDir, st); err != nil {
-		return fmt.Errorf("persist self-update breadcrumb: %w", err)
+		return false, fmt.Errorf("persist self-update breadcrumb: %w", err)
 	}
 
 	// Install-then-flip: COPY the current binary to .bak (leaving the live binary in place), then
 	// atomically rename the new binary over it. A same-directory rename atomically REPLACES the
-	// target, so `self` always names a valid executable across ANY crash point — there is never a
-	// window with no binary at the systemd ExecStart path. The .bak copy is the rollback artifact.
+	// target, so the binary is never absent at the systemd ExecStart path across ANY crash point.
+	// The .bak copy is the rollback artifact.
 	bak := self + ".bak"
 	if err := copyFile(self, bak); err != nil {
-		return fmt.Errorf("back up current binary: %w", err)
+		return false, fmt.Errorf("back up current binary: %w", err)
 	}
 	if err := renameOrCopy(partial, self); err != nil {
 		_ = os.Remove(bak)
-		return fmt.Errorf("install new binary: %w", err)
+		return false, fmt.Errorf("install new binary: %w", err)
 	}
 
+	// From HERE the binary on disk IS the new one (swapped=true): a re-exec failure below must NOT
+	// be recorded as a routine failure, or the on-disk breadcrumb would be erased and the swapped
+	// (possibly bad) binary would boot with nothing for the reconcile to roll back — a brick.
 	fmt.Fprintf(stderr, "agent: self-updated %s -> %s; re-exec\n", running, cat.Version)
-	// Replace the process with the new binary, same argv/env, so it resumes as the daemon and the
-	// startup reconcile resolves the breadcrumb. execFn returns ONLY on failure.
-	return execFn(self, os.Args, os.Environ())
+	return true, execFn(self, os.Args, os.Environ())
 }
 
 // ReconcileSelfUpdateEarly is PHASE A of the startup reconcile (plan-9): it MUST run as the very
@@ -293,7 +303,12 @@ func ReconcileSelfUpdatePromote(stateDir, buildVersion string, healthCheck func(
 		return
 	}
 	if pu.Confirmed {
-		rollbackAndAbandon(stateDir, buildVersion, pu, "did not survive probation (rebooted before finalizing)", stderr)
+		// Health-confirmed on a PRIOR boot but rebooted before finalizing. Do NOT roll back here:
+		// a benign host reboot during the short probation window would otherwise FALSELY abandon a
+		// perfectly healthy binary and silently drop the node from the rollout. Instead RESUME
+		// probation — the daemon retries finalize on its next cycle. A genuinely-crashing binary
+		// never finalizes and is bounded by Phase A's Attempts cap (which rolls back + abandons).
+		fmt.Fprintf(stderr, "agent: self-update to %s resuming probation (attempt %d/%d)\n", pu.To, pu.Attempts, maxSelfUpdateAttempts)
 		return
 	}
 	if err := healthCheck(); err != nil {

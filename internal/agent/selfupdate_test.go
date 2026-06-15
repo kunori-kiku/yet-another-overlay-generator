@@ -121,8 +121,12 @@ func TestPerformSelfUpdate_Happy(t *testing.T) {
 
 	cfg := &Config{NodeID: "n1", StateDir: stateDir}
 	cat := selfUpdateCatalog(t, srv, "1.2.0", sha)
-	if err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard); err != nil {
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard)
+	if err != nil {
 		t.Fatalf("performSelfUpdate: %v", err)
+	}
+	if !swapped {
+		t.Errorf("a completed swap must report swapped=true")
 	}
 	if *execed != self {
 		t.Errorf("re-exec target = %q, want %q", *execed, self)
@@ -155,9 +159,12 @@ func TestPerformSelfUpdate_HashMismatchRefused(t *testing.T) {
 
 	cfg := &Config{NodeID: "n1", StateDir: filepath.Join(dir, "state")}
 	cat := selfUpdateCatalog(t, srv, "1.2.0", "00"+hex.EncodeToString(make([]byte, 31))) // wrong 64-hex
-	err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard)
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard)
 	if err == nil {
 		t.Fatalf("expected a hash-mismatch refusal")
+	}
+	if swapped {
+		t.Errorf("CUSTODY VIOLATION: reported swapped=true despite hash mismatch")
 	}
 	if *execed != "" {
 		t.Errorf("CUSTODY VIOLATION: re-exec happened despite hash mismatch")
@@ -188,11 +195,82 @@ func TestPerformSelfUpdate_SelfTestFailRefused(t *testing.T) {
 
 	cfg := &Config{NodeID: "n1", StateDir: filepath.Join(dir, "state")}
 	cat := selfUpdateCatalog(t, srv, "1.2.0", sha) // hash matches the 9.9.9 binary, but version != desired
-	if err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard); err == nil {
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard)
+	if err == nil {
 		t.Fatalf("expected a self-test version-mismatch refusal")
 	}
-	if *execed != "" || func() bool { g, _ := os.ReadFile(self); return string(g) != "OLD" }() {
+	if swapped || *execed != "" || func() bool { g, _ := os.ReadFile(self); return string(g) != "OLD" }() {
 		t.Errorf("CUSTODY VIOLATION: swapped/exec'd a binary that failed its self-test")
+	}
+}
+
+// TestPerformSelfUpdate_PostSwapExecFailKeepsBreadcrumb pins the R1-1 fix: when the swap completes
+// but the re-exec fails, performSelfUpdate reports swapped=true (so the caller must NOT recordFailure)
+// and the on-disk breadcrumb survives for the next-boot reconcile.
+func TestPerformSelfUpdate_PostSwapExecFailKeepsBreadcrumb(t *testing.T) {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("arch %s", runtime.GOARCH)
+	}
+	bin, sha := fakeBinary(t, "1.2.0")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(bin) }))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("OLD"), 0o755)
+	stateDir := filepath.Join(dir, "state")
+
+	oldExec, oldOSExe := execFn, osExecutable
+	defer func() { execFn, osExecutable = oldExec, oldOSExe }()
+	execFn = func(string, []string, []string) error { return fmt.Errorf("exec failed") } // simulate a post-swap exec failure
+	osExecutable = func() (string, error) { return self, nil }
+
+	cfg := &Config{NodeID: "n1", StateDir: stateDir}
+	cat := selfUpdateCatalog(t, srv, "1.2.0", sha)
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard)
+	if err == nil || !swapped {
+		t.Fatalf("post-swap exec failure must report (swapped=true, err!=nil); got (%v, %v)", swapped, err)
+	}
+	st, _ := LoadState(stateDir)
+	if st.PendingUpdate == nil || st.PendingUpdate.To != "1.2.0" {
+		t.Errorf("breadcrumb must survive a post-swap exec failure (R1-1); got %+v", st.PendingUpdate)
+	}
+	if got, _ := os.ReadFile(self); string(got) != string(bin) {
+		t.Errorf("binary should be swapped before the failed exec; on-disk=%q", got)
+	}
+}
+
+// TestPerformSelfUpdate_InFlightGuard pins NEW-MAJOR-1: a second performSelfUpdate while a breadcrumb
+// is already pending must NOT re-swap (it would overwrite the .bak rollback target with the
+// already-installed new binary and reset Attempts).
+func TestPerformSelfUpdate_InFlightGuard(t *testing.T) {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("arch %s", runtime.GOARCH)
+	}
+	bin, sha := fakeBinary(t, "1.2.0")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(bin) }))
+	defer srv.Close()
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("NEW"), 0o755)        // already swapped
+	_ = os.WriteFile(self+".bak", []byte("OLD"), 0o755) // the precious rollback target
+	stateDir := filepath.Join(dir, "state")
+	mustSave(t, stateDir, &State{NodeID: "n1", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.2.0", Attempts: 2}})
+
+	_, restore := stubSwap(t, self)
+	defer restore()
+	cfg := &Config{NodeID: "n1", StateDir: stateDir}
+	cat := selfUpdateCatalog(t, srv, "1.2.0", sha)
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", "", io.Discard)
+	if err == nil || swapped {
+		t.Fatalf("an in-flight breadcrumb must block a re-swap; got (swapped=%v, err=%v)", swapped, err)
+	}
+	if got, _ := os.ReadFile(self + ".bak"); string(got) != "OLD" {
+		t.Errorf("the .bak rollback target must NOT be overwritten by a blocked re-swap; got %q", got)
+	}
+	st, _ := LoadState(stateDir)
+	if st.PendingUpdate.Attempts != 2 {
+		t.Errorf("a blocked re-swap must not reset Attempts; got %d, want 2", st.PendingUpdate.Attempts)
 	}
 }
 
@@ -271,13 +349,15 @@ func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
 	}
 }
 
-// TestReconcileSelfUpdatePromote_ProbationReboot: a binary that passed the gate (Confirmed) but
-// rebooted before finalizing (crashed during probation) rolls back.
-func TestReconcileSelfUpdatePromote_ProbationReboot(t *testing.T) {
+// TestReconcileSelfUpdatePromote_ProbationRebootResumes: a Confirmed binary that reboots before
+// finalizing RESUMES probation (it does NOT immediately roll back — a benign reboot must not
+// falsely abandon a healthy binary). A genuinely-crashing binary is bounded by the Attempts cap
+// (Phase A), exercised separately.
+func TestReconcileSelfUpdatePromote_ProbationRebootResumes(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "yaog-agent")
-	_ = os.WriteFile(self, []byte("NEW-BROKEN"), 0o755)
-	_ = os.WriteFile(self+".bak", []byte("OLD-GOOD"), 0o755)
+	_ = os.WriteFile(self, []byte("NEW"), 0o755)
+	_ = os.WriteFile(self+".bak", []byte("OLD"), 0o755)
 	stateDir := filepath.Join(dir, "state")
 	mustSave(t, stateDir, &State{NodeID: "n1", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: true}})
 
@@ -285,8 +365,52 @@ func TestReconcileSelfUpdatePromote_ProbationReboot(t *testing.T) {
 	defer restore()
 	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard)
 
-	if *execed != self || func() bool { g, _ := os.ReadFile(self); return string(g) != "OLD-GOOD" }() {
-		t.Errorf("a crash during probation (Confirmed + reboot) must roll back to .bak")
+	if *execed != "" {
+		t.Errorf("a benign probation reboot must NOT roll back (no re-exec); it should resume probation")
+	}
+	st, _ := LoadState(stateDir)
+	if st.PendingUpdate == nil || !st.PendingUpdate.Confirmed {
+		t.Errorf("resume must keep the Confirmed breadcrumb so the next cycle can finalize; got %+v", st.PendingUpdate)
+	}
+	if st.AbandonedAgentVersion != "" {
+		t.Errorf("a benign probation reboot must NOT abandon the target; got %q", st.AbandonedAgentVersion)
+	}
+	if got, _ := os.ReadFile(self); string(got) != "NEW" {
+		t.Errorf("resume must keep the new binary in place; got %q", got)
+	}
+}
+
+// TestReconcileSelfUpdate_ProbationCrashLoopAbandons: a Confirmed binary that keeps rebooting
+// (crashing during probation, never finalizing) is bounded by Phase A's Attempts cap — it rolls
+// back to .bak and abandons the target.
+func TestReconcileSelfUpdate_ProbationCrashLoopAbandons(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("NEW-CRASHY"), 0o755)
+	_ = os.WriteFile(self+".bak", []byte("OLD-GOOD"), 0o755)
+	stateDir := filepath.Join(dir, "state")
+	mustSave(t, stateDir, &State{NodeID: "n1", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: true}})
+
+	_, restore := stubSwap(t, self)
+	defer restore()
+	abandoned := false
+	for i := 0; i < maxSelfUpdateAttempts+2; i++ {
+		ReconcileSelfUpdateEarly(stateDir, "1.1.0", io.Discard) // Phase A bumps; abandons at cap
+		st, _ := LoadState(stateDir)
+		if st.PendingUpdate == nil {
+			abandoned = true
+			if got, _ := os.ReadFile(self); string(got) != "OLD-GOOD" {
+				t.Errorf("crash-loop abandon must roll back to .bak; got %q", got)
+			}
+			if st.AbandonedAgentVersion != "1.1.0" {
+				t.Errorf("crash-loop abandon must remember the target; got %q", st.AbandonedAgentVersion)
+			}
+			break
+		}
+		ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard) // resumes (Confirmed)
+	}
+	if !abandoned {
+		t.Errorf("a binary that crashes throughout probation must be abandoned at the attempt cap")
 	}
 }
 

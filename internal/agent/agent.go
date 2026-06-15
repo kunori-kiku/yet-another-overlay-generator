@@ -170,15 +170,20 @@ func Run(cfg *Config) (*RunResult, error) {
 				recordFailure(cfg, prev, "below min_version and cannot self-update: "+reason)
 				return res, fmt.Errorf("agent: below required min_version, cannot self-update: %s", reason)
 			}
-			if err := performSelfUpdate(cfg, selfUpdateCatalog, running, cfg.SelfUpdate.GithubProxy, stderrOf(cfg)); err != nil {
-				recordFailure(cfg, prev, fmt.Sprintf("below min_version, self-update failed: %v", err))
-				return res, fmt.Errorf("agent: below min_version, self-update failed: %w", err)
+			swapped, suErr := performSelfUpdate(cfg, selfUpdateCatalog, running, cfg.SelfUpdate.GithubProxy, stderrOf(cfg))
+			if suErr != nil {
+				// recordFailure ONLY when the binary was NOT swapped (pre-swap failure: download /
+				// verify / self-test / in-flight). If swapped=true, performSelfUpdate already
+				// replaced the binary + wrote the on-disk breadcrumb and only the re-exec failed —
+				// recordFailure would rebuild State from the stale pre-swap `prev` and ERASE that
+				// breadcrumb, leaving the swapped (possibly bad) binary with nothing for the
+				// next-boot reconcile to roll back: an unbounded crash loop (R1-1).
+				if !swapped {
+					recordFailure(cfg, prev, fmt.Sprintf("below min_version, self-update failed: %v", suErr))
+				}
+				return res, fmt.Errorf("agent: below min_version, self-update failed: %w", suErr)
 			}
-			// performSelfUpdate execs on success and never returns; reaching here means the
-			// re-exec itself failed AFTER the swap. Do NOT recordFailure — that would rebuild State
-			// from the stale pre-swap `prev` and ERASE the on-disk breadcrumb performSelfUpdate just
-			// wrote, leaving the (now-swapped) binary with no breadcrumb for the next-boot reconcile
-			// to resolve — an unbounded crash loop. Returning leaves the breadcrumb intact (R1-1).
+			// performSelfUpdate execs on success and never returns; this is unreachable.
 			return res, fmt.Errorf("agent: self-update re-exec failed")
 		}
 		deferSelfUpdate = dec == updateAfterApply
@@ -209,7 +214,10 @@ func Run(cfg *Config) (*RunResult, error) {
 	// Best-effort — the bundle is already applied, so a download/verify failure is logged and the
 	// next cycle retries; it never fails this Run. On success performSelfUpdate re-execs (no return).
 	if deferSelfUpdate {
-		if err := performSelfUpdate(cfg, selfUpdateCatalog, cfg.SelfUpdate.RunningVersion, cfg.SelfUpdate.GithubProxy, stderrOf(cfg)); err != nil {
+		// Best-effort: the bundle is already applied. On a pre-swap failure the next cycle retries;
+		// on a post-swap re-exec failure (swapped=true) the on-disk breadcrumb survives for the
+		// next-boot reconcile — either way we only log, never recordFailure (which never runs here).
+		if _, err := performSelfUpdate(cfg, selfUpdateCatalog, cfg.SelfUpdate.RunningVersion, cfg.SelfUpdate.GithubProxy, stderrOf(cfg)); err != nil {
 			fmt.Fprintf(stderrOf(cfg), "agent: post-apply self-update deferred: %v\n", err)
 		}
 	}

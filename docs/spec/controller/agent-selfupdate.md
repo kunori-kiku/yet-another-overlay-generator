@@ -86,13 +86,21 @@ bounded:
 - **Phase B — `ReconcileSelfUpdatePromote`** runs after the client + pinned key exist. When the
   running build IS the target and not yet `Confirmed`, it runs the **health gate** (one clean
   `Fetch + VerifyBundle`): a pass marks the update **PROBATIONARY** (`Confirmed`, keep `.bak`, floor
-  NOT yet advanced); a failure rolls back. A breadcrumb that is ALREADY `Confirmed` on boot means the
-  binary passed the gate but rebooted before finalizing — it crashed during probation — so it rolls
-  back. This closes the daemon-only-crash-after-promote brick class: the health gate alone proves
-  only `version` + fetch/verify, not that the daemon loop runs.
+  NOT yet advanced); a failure rolls back + abandons. A breadcrumb that is ALREADY `Confirmed` on
+  boot **resumes probation** (it does NOT immediately roll back — a benign host reboot during the
+  short probation window must not falsely abandon a healthy binary); a genuinely-crashing binary
+  never completes a cycle to finalize and is caught by Phase A's Attempts cap. This closes the
+  daemon-only-crash-after-promote brick class (the health gate alone proves only `version` +
+  fetch/verify, not that the daemon loop runs) without false-abandoning healthy nodes.
 - **Finalize — `FinalizeSelfUpdate`** runs after the new binary completes its FIRST full daemon
   cycle (proving it actually runs). It **advances `AgentVersionFloor`** (the ONLY place the floor
   advances), clears the breadcrumb + the abandoned-target memory, and drops `.bak`.
+
+In-flight guard: `performSelfUpdate` refuses to start a second swap while a breadcrumb is already
+pending (e.g. a prior re-exec failed and the daemon retried the cycle) — re-swapping would overwrite
+the `.bak` rollback target with the already-installed new binary and reset `Attempts`, both of which
+would defeat the bound. A post-swap re-exec failure reports `swapped=true` so the caller does NOT
+record a routine failure (that would erase the on-disk breadcrumb the next-boot reconcile needs).
 
 Crash-safety: rollback renames `.bak → target` BEFORE clearing the breadcrumb, so a crash
 mid-rollback re-tries on the next boot rather than stranding a broken binary unbreadcrumbed. A
