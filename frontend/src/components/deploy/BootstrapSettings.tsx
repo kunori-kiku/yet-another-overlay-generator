@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ControllerSettings } from '../../api/controllerClient';
+import { emptyControllerSettings, type ControllerSettings } from '../../api/controllerClient';
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type UILanguage } from '../../i18n';
@@ -40,15 +40,7 @@ export function BootstrapSettings() {
       ) : (
         <SettingsForm
           key={settings ? JSON.stringify(settings) : 'empty'}
-          initial={
-            settings ?? {
-              publicAgentURL: '',
-              githubProxy: '',
-              agentReleaseBaseURL: '',
-              translucency: true,
-              agentPathPrefix: '',
-            }
-          }
+          initial={settings ?? emptyControllerSettings()}
           loading={loading}
           language={language}
           onSave={saveSettings}
@@ -122,14 +114,15 @@ function SettingsForm({
       </div>
       <button
         onClick={() =>
+          // Spread ...initial first: POST /settings is FULL-REPLACE, so this form (which edits
+          // only the three bootstrap fields) MUST carry every other persisted field — the rollout
+          // + mimic config, translucency, the read-only agentPathPrefix — through untouched, or
+          // saving here would wipe them.
           void onSave({
+            ...initial,
             publicAgentURL: publicAgentURL.trim(),
             githubProxy: githubProxy.trim(),
             agentReleaseBaseURL: agentReleaseBaseURL.trim(),
-            // Preserve the appearance setting — this form edits only the bootstrap fields.
-            translucency: initial.translucency,
-            // Read-only, server-reported; carried for type completeness, never posted.
-            agentPathPrefix: initial.agentPathPrefix,
           })
         }
         disabled={loading}

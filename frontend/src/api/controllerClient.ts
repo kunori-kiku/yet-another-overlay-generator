@@ -609,9 +609,18 @@ function mapAuditEntry(e: AuditEntryJSON): ControllerAuditEntry {
 
 // --- bootstrap settings (plan-5.2) ---
 
-// ControllerSettings is the operator-editable, server-persisted bootstrap config:
-// the public agent URL (where nodes curl the bootstrap / enroll), an optional GitHub
-// proxy prefix (default off), and the agent-binary release base URL.
+// AgentPin is one integrity-pinned release asset: the asset filename and the SHA-256 the agent
+// verifies the downloaded bytes against before exec. Mirrors renderer.Artifact (Go) and the map
+// values of agent_bins / mimic_debs on the wire.
+export interface AgentPin {
+  asset: string;
+  sha256: string;
+}
+
+// ControllerSettings is the operator-editable, server-persisted bootstrap config: the public
+// agent URL (where nodes curl the bootstrap / enroll), an optional GitHub proxy prefix (default
+// off), the agent-binary release base URL, the signed agent self-update rollout, and the mimic
+// GitHub-.deb catalog. POST /settings is FULL-REPLACE — see postSettings.
 export interface ControllerSettings {
   publicAgentURL: string;
   githubProxy: string;
@@ -624,15 +633,37 @@ export interface ControllerSettings {
   // composes the bootstrap one-liner / enroll command from it — never from the
   // operator-prefix mirror, which belongs to the panel's own API base.
   agentPathPrefix: string;
+  // Signed agent self-update rollout (controller-panel-rollout-ui). All NON-SECRET pins.
+  // EMPTY targetAgentVersion ⇒ no self-update (the safety contract). agentBins maps
+  // "linux-<arch>" to the pinned asset; canary/fleet-wide stage the canary-then-fleet rollout.
+  targetAgentVersion: string;
+  minAgentVersion: string;
+  agentBins: Record<string, AgentPin>;
+  agentCanaryNodeIds: string[];
+  agentRolloutFleetWide: boolean;
+  // Mimic GitHub-.deb catalog. mimicDebs maps "<codename>-<arch>" to the pinned .deb; empty
+  // mimicReleaseBase ⇒ distro-only mimic (no GitHub fallback).
+  mimicVersion: string;
+  mimicReleaseBase: string;
+  mimicDebs: Record<string, AgentPin>;
 }
 
-// SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go.
+// SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go. The rollout + mimic
+// fields are omitempty on the wire (Go), hence optional here; mapSettings supplies safe defaults.
 interface SettingsJSON {
   public_agent_url: string;
   github_proxy: string;
   agent_release_base_url: string;
   translucency: boolean;
   agent_path_prefix?: string;
+  target_agent_version?: string;
+  min_agent_version?: string;
+  agent_bins?: Record<string, AgentPin>;
+  agent_canary_node_ids?: string[];
+  agent_rollout_fleet_wide?: boolean;
+  mimic_version?: string;
+  mimic_release_base?: string;
+  mimic_debs?: Record<string, AgentPin>;
 }
 
 function mapSettings(d: SettingsJSON): ControllerSettings {
@@ -642,6 +673,59 @@ function mapSettings(d: SettingsJSON): ControllerSettings {
     agentReleaseBaseURL: d.agent_release_base_url,
     translucency: d.translucency,
     agentPathPrefix: d.agent_path_prefix ?? '',
+    targetAgentVersion: d.target_agent_version ?? '',
+    minAgentVersion: d.min_agent_version ?? '',
+    agentBins: d.agent_bins ?? {},
+    agentCanaryNodeIds: d.agent_canary_node_ids ?? [],
+    agentRolloutFleetWide: d.agent_rollout_fleet_wide ?? false,
+    mimicVersion: d.mimic_version ?? '',
+    mimicReleaseBase: d.mimic_release_base ?? '',
+    mimicDebs: d.mimic_debs ?? {},
+  };
+}
+
+// emptyControllerSettings is the all-unset initial value for a controlled settings form before the
+// server record loads: the rollout + mimic fields mirror mapSettings's omitempty defaults, while
+// translucency intentionally seeds the server's default-on appearance (the real GET always carries a
+// concrete translucency + a defaulted release base, so this is never produced from a live response).
+// Shared so each settings form does not re-spell the full field set (and they stay in sync as fields grow).
+export function emptyControllerSettings(): ControllerSettings {
+  return {
+    publicAgentURL: '',
+    githubProxy: '',
+    agentReleaseBaseURL: '',
+    translucency: true,
+    agentPathPrefix: '',
+    targetAgentVersion: '',
+    minAgentVersion: '',
+    agentBins: {},
+    agentCanaryNodeIds: [],
+    agentRolloutFleetWide: false,
+    mimicVersion: '',
+    mimicReleaseBase: '',
+    mimicDebs: {},
+  };
+}
+
+// toSettingsJSON maps the FULL ControllerSettings to its wire form. Every persisted field is
+// included because POST /settings is FULL-REPLACE: the server rebuilds ControllerSettings purely
+// from the body (handler_bootstrap.go), so any omitted field is persisted as its zero value — an
+// omit-list literal here would silently WIPE the rollout/mimic config on an unrelated edit. The
+// read-only agent_path_prefix is deliberately NOT sent (server-derived; POST ignores it).
+function toSettingsJSON(s: ControllerSettings): SettingsJSON {
+  return {
+    public_agent_url: s.publicAgentURL,
+    github_proxy: s.githubProxy,
+    agent_release_base_url: s.agentReleaseBaseURL,
+    translucency: s.translucency,
+    target_agent_version: s.targetAgentVersion,
+    min_agent_version: s.minAgentVersion,
+    agent_bins: s.agentBins,
+    agent_canary_node_ids: s.agentCanaryNodeIds,
+    agent_rollout_fleet_wide: s.agentRolloutFleetWide,
+    mimic_version: s.mimicVersion,
+    mimic_release_base: s.mimicReleaseBase,
+    mimic_debs: s.mimicDebs,
   };
 }
 
@@ -651,16 +735,60 @@ export async function getSettings(cfg: ControllerConfig): Promise<ControllerSett
   return mapSettings((await res.json()) as SettingsJSON);
 }
 
-// postSettings saves the bootstrap settings and returns the stored values.
+// postSettings saves the bootstrap settings and returns the stored values. It sends the FULL
+// settings (toSettingsJSON) — POST is full-replace, so a caller editing one field must still
+// round-trip every other field or it is wiped (see toSettingsJSON).
 export async function postSettings(cfg: ControllerConfig, s: ControllerSettings): Promise<ControllerSettings> {
-  const body = JSON.stringify({
-    public_agent_url: s.publicAgentURL,
-    github_proxy: s.githubProxy,
-    agent_release_base_url: s.agentReleaseBaseURL,
-    translucency: s.translucency,
-  });
-  const res = await postJSON(cfg, 'settings', body);
+  const res = await postJSON(cfg, 'settings', JSON.stringify(toSettingsJSON(s)));
   return mapSettings((await res.json()) as SettingsJSON);
+}
+
+// AgentPinFetchRequest is the body of the assisted release-pin fetch (POST release-pins, plan-1):
+// kind selects the asset grammar + default base; version optionally pins a "latest" base to a tag;
+// base optionally overrides the saved base; assets may be empty for kind='agent' (certified arches
+// derived server-side).
+export interface AgentPinFetchRequest {
+  kind: 'agent' | 'mimic';
+  version?: string;
+  base?: string;
+  assets: { key: string; asset: string }[];
+}
+
+// AgentPinFetchResult is the resolved pins + resolution metadata. versionApplied is REQUIRED by
+// the rollout-UI contract: when true, base is the TAGGED url the pins were computed against and
+// the UI must persist it as the agent release base — the agent fetches the verbatim saved base
+// with no latest→tag rewrite, so a tagged pin + a moving "latest" base is a fail-closed hash
+// mismatch (see the release_pins.go Base doc + the outline decisions log).
+export interface AgentPinFetchResult {
+  pins: Record<string, AgentPin>;
+  base: string;
+  version: string;
+  versionApplied: boolean;
+  proxyApplied: boolean;
+  resolved: Record<string, string>;
+}
+
+// fetchPins calls the operator release-pins endpoint to pre-fill artifact pins for REVIEW. The
+// fetched sidecar is convenience-only transport; trust stays the signed artifacts.json the agent
+// verifies against. A coded error surfaces as ControllerError for tError to localize.
+export async function fetchPins(cfg: ControllerConfig, body: AgentPinFetchRequest): Promise<AgentPinFetchResult> {
+  const res = await postJSON(cfg, 'release-pins', JSON.stringify(body));
+  const d = (await res.json()) as {
+    pins?: Record<string, AgentPin>;
+    base: string;
+    version: string;
+    version_applied: boolean;
+    proxy_applied: boolean;
+    resolved?: Record<string, string>;
+  };
+  return {
+    pins: d.pins ?? {},
+    base: d.base,
+    version: d.version,
+    versionApplied: d.version_applied,
+    proxyApplied: d.proxy_applied,
+    resolved: d.resolved ?? {},
+  };
 }
 
 // --- 公开 API（每个都接收 (cfg, ...)）---

@@ -315,7 +315,7 @@ CHANGELOG + STATUS; archive this subject; cut `v2.0.0-beta.3` (tag user-gated).
 | Plan | Milestone | Status | Commit / note |
 |---|---|---|---|
 | plan-1 | backend pin-fetch + in_rollout | done | 38b2d3b — release-pins endpoint (egress-guarded) + apierr codes + nodeJSON in_rollout; SSRF/cap/version-rewrite tests |
-| plan-2 | frontend data layer + drop-on-save fix | pending | |
+| plan-2 | frontend data layer + drop-on-save fix | done | 7256a6a — AgentPin + rollout/mimic TS contract, full-replace toSettingsJSON round-trip (drop-on-save fixed), fetchPins (carries versionApplied) |
 | plan-3 | agent rollout config card | pending | |
 | plan-4 | mimic catalog config card | pending | |
 | plan-5 | per-node status surface + poll | pending | |
