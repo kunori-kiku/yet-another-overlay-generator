@@ -78,14 +78,14 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | Field | Go (`model`) | TS (`types`) | UI editor | Round-trip | Notes |
 |---|---|---|---|---|---|
 | `id` | `ID` | `id` | yes | ✅ | |
-| `name` | `Name` | `name` | yes | ✅ | feeds WG interface name; charset MUST be validated |
+| `name` | `Name` | `name` | yes | ✅ | feeds WG interface name; strict charset + raw/sanitized-collision validated (D15) |
 | `hostname` | `Hostname` | `hostname` | yes | ✅ | |
 | `platform` | `Platform` | `platform` | yes | ✅ | |
 | `role` | `Role` | `role` | node form | ⚠️ | form cannot create `client` (D69) |
 | `domain_id` | `DomainID` | `domain_id` | yes | ✅ | |
 | `overlay_ip` | `OverlayIP` | `overlay_ip` | read-back | ✅ | compiler-allocated, preserved across recompile |
 | `listen_port` | `ListenPort` | `listen_port` | yes | ✅ | base port; per-peer ports derived by compiler |
-| `mtu` | `MTU` | `mtu` | yes | ✅ | unvalidated (D64) |
+| `mtu` | `MTU` | `mtu` | yes | ✅ | range-validated: 0 or [576, 65535] (D64) |
 | `xdp_mode` | `XDPMode` | `xdp_mode` | RightPanel select | ✅ | mimic XDP mode for tcp links; empty→`skb`; enum `skb`/`native` (validated) |
 | `router_id` | `RouterID` | — | none | ⚠️ | absent from TS interface; survives via untyped import passthrough |
 | `capabilities` | `Capabilities` | `capabilities` | derived | ⚠️ | FE-stamped caps can contradict role inference (D69/D54) |
@@ -93,11 +93,11 @@ dropped or mishandled on return/import; ✗ = not transported at all.
 | `wireguard_private_key` | `WireGuardPrivateKey` | `wireguard_private_key` | yes | see key-blanking | |
 | `wireguard_public_key` | `WireGuardPublicKey` | `wireguard_public_key` | read-back | see key-blanking | non-empty ⇒ key-fixed (target) |
 | `public_endpoints` | `PublicEndpoints` | `public_endpoints` | yes | ✅ | reachability hints, NOT per-edge dial overrides |
-| `extra_prefixes` | `ExtraPrefixes` | `extra_prefixes` | none | ⚠️ | no editor (UX-6); unvalidated (D67) |
-| `ssh_alias` | `SSHAlias` | `ssh_alias` | yes | ✅ | validated nowhere (D44) |
-| `ssh_host` | `SSHHost` | `ssh_host` | yes | ✅ | validated nowhere (D44) |
-| `ssh_port` | `SSHPort` | `ssh_port` | yes | ✅ | unvalidated (D65) |
-| `ssh_user` | `SSHUser` | `ssh_user` | yes | ✅ | validated nowhere (D44) |
+| `extra_prefixes` | `ExtraPrefixes` | `extra_prefixes` | none | ⚠️ | no editor (UX-6); each entry IPv4-CIDR validated (D67) |
+| `ssh_alias` | `SSHAlias` | `ssh_alias` | yes | ✅ | strict charset validated (D44) |
+| `ssh_host` | `SSHHost` | `ssh_host` | yes | ✅ | strict charset validated (D44) |
+| `ssh_port` | `SSHPort` | `ssh_port` | yes | ✅ | range-validated 1–65535 (D65) |
+| `ssh_user` | `SSHUser` | `ssh_user` | yes | ✅ | strict charset validated (D44) |
 | `ssh_key_path` | `SSHKeyPath` | `ssh_key_path` | yes | ✅ | |
 
 > **Compliance:** `Node.router_id` exists in the Go model (`topology.go:68`) but has no frontend
@@ -153,9 +153,9 @@ shipping feature.
   through `extra_prefixes` and the routing layer, not through `route_policies`, until the feature is
   designed.
 
-> **Compliance:** there is currently no validation of `route_policies` (`schema.go`/`semantic.go`
-> never inspect it; D62) and the compiler passes it through untouched (`compiler.go:94`). The
-> rejection rule above is the target; closed by Plan 9.
+> **Compliance:** semantic validation rejects a non-empty `route_policies`
+> (`validateRoutePoliciesReserved` → `CodeRoutePolicyReserved`, `semantic.go:95-97`, D62); the compiler
+> only passes it through (`compiler.go:94`), so the reservation is enforced at the validation pass.
 
 ## Key-blanking round-trip semantics
 
