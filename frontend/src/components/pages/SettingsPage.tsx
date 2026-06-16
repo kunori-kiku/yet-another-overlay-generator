@@ -5,6 +5,7 @@ import { useUiStore, type ThemePref } from '../../stores/uiStore';
 import { t, type MessageKey } from '../../i18n';
 import { ConnectionSettings } from '../deploy/ConnectionSettings';
 import { BootstrapSettings } from '../deploy/BootstrapSettings';
+import { AgentUpdateSettings } from '../deploy/AgentUpdateSettings';
 
 // /settings — Mode (local/controller) · Connection (endpoints + sign-in) ·
 // Bootstrap · Appearance. Mode persistence + the Appearance controls land in P4.
@@ -152,6 +153,7 @@ export function SettingsPage() {
         <>
           <ConnectionSettings />
           <BootstrapSettings />
+          <AgentUpdateSettings />
         </>
       )}
 

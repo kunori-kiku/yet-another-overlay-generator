@@ -29,6 +29,9 @@ import {
   logout as ctlLogout,
   getSettings,
   postSettings,
+  fetchPins as ctlFetchPins,
+  type AgentPinFetchRequest,
+  type AgentPinFetchResult,
   getTOTPStatus,
   enrollTOTP as ctlEnrollTOTP,
   confirmTOTP as ctlConfirmTOTP,
@@ -337,7 +340,17 @@ interface ControllerState {
   // actions
   setConfig: (partial: Partial<ControllerConfig & { agentBaseURL: string }>) => void;
   loadSettings: () => Promise<void>;
-  saveSettings: (s: ControllerSettings) => Promise<void>;
+  // saveSettings persists settings (full-replace) and updates the store. It also RETURNS the
+  // outcome — null on success, the localized error string on failure — so a card that lives on a
+  // page without the global ControllerErrorBanner (e.g. Settings) can surface the failure locally
+  // and show a success notice only on a real success. The global `error` is still set too (for the
+  // banner consumers); fire-and-forget callers ignore the return (void-return bivalence).
+  saveSettings: (s: ControllerSettings) => Promise<string | null>;
+  // fetchReleasePins runs the assisted release-pin fetch (POST release-pins) over the current
+  // controller config. It returns the resolved pins for a config CARD to review — it neither
+  // persists nor auto-trusts anything (custody) and does NOT touch global loading/error; the
+  // caller surfaces its own busy/localError. Throws ControllerError on a coded failure.
+  fetchReleasePins: (body: AgentPinFetchRequest) => Promise<AgentPinFetchResult>;
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -593,10 +606,17 @@ export const useControllerStore = create<ControllerState>()(
         try {
           const saved = await postSettings(configOf(get()), s);
           set({ settings: saved, loading: false });
+          return null;
         } catch (err) {
-          set({ error: localizeError(err, 'error.generic'), loading: false });
+          const msg = localizeError(err, 'error.generic');
+          set({ error: msg, loading: false });
+          return msg;
         }
       },
+
+      // Convenience pin-fetch for the rollout/mimic config cards: wraps the client over the current
+      // auth config and rethrows so the card localizes its own error. No global state side effects.
+      fetchReleasePins: (body) => ctlFetchPins(configOf(get()), body),
 
       // 操作员密码登录（plan-5.2）：POST /login 换取 session token，仅存内存。成功后立即
       // refresh 拉取 fleet 视图。session 优先于 break-glass token（见 configOf）。失败把

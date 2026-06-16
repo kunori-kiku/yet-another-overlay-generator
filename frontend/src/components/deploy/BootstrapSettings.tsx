@@ -61,7 +61,9 @@ function SettingsForm({
   initial: ControllerSettings;
   loading: boolean;
   language: UILanguage;
-  onSave: (s: ControllerSettings) => Promise<void>;
+  // saveSettings now returns the localized error (or null) so cards can surface failures locally;
+  // this form fire-and-forgets it (the global error banner covers it where mounted).
+  onSave: (s: ControllerSettings) => Promise<string | null>;
 }) {
   const [publicAgentURL, setPublicAgentURL] = useState(initial.publicAgentURL);
   const [githubProxy, setGithubProxy] = useState(initial.githubProxy);
