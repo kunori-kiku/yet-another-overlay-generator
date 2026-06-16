@@ -75,6 +75,9 @@ func TestTenantIsolation(t *testing.T) {
 			if err := s.PutSettings(ctx, tenantA, ControllerSettings{PublicAgentURL: "https://a"}); err != nil {
 				t.Fatalf("PutSettings(A): %v", err)
 			}
+			if err := s.PutSigningAnchor(ctx, tenantA, SigningAnchor{PubKeyPEM: "pub-a"}); err != nil {
+				t.Fatalf("PutSigningAnchor(A): %v", err)
+			}
 
 			// Tenant B must see nothing: point reads -> ErrNotFound.
 			if _, err := s.GetNode(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
@@ -146,11 +149,17 @@ func TestTenantIsolation(t *testing.T) {
 			if _, err := s.GetSettings(ctx, tenantB); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetSettings(B): err = %v, want ErrNotFound", err)
 			}
+			if _, err := s.GetSigningAnchor(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetSigningAnchor(B): err = %v, want ErrNotFound", err)
+			}
 
 			// Sanity: tenant A still sees its own data (isolation is symmetric, not
 			// a blanket wipe).
 			if _, err := s.GetNode(ctx, tenantA, "alpha"); err != nil {
 				t.Fatalf("GetNode(A, alpha) after isolation checks: %v", err)
+			}
+			if a, err := s.GetSigningAnchor(ctx, tenantA); err != nil || a.PubKeyPEM != "pub-a" {
+				t.Fatalf("GetSigningAnchor(A): got %+v err %v, want pub-a", a, err)
 			}
 			// ...and tenant A CAN resolve its own node API token to its node.
 			if n, err := s.LookupNodeByAPIToken(ctx, tenantA, tokenHash("a-api-secret")); err != nil {

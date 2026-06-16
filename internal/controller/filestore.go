@@ -54,6 +54,7 @@ import (
 //	operators/<username>.json           one operator account (argon2id PHC hash)
 //	sessions/<tokenHash>.json           one operator login session, keyed by token hash
 //	settings.json                       operator-editable controller settings (bootstrap)
+//	signing-anchor.json                 the pinned bundle-signing PUBLIC key (TOFU; non-secret)
 //
 // Directories are created 0700 and files written 0600. SignedBundle.Files
 // (map[string][]byte) serializes as base64 under encoding/json, which round-trips

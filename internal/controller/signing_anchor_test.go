@@ -10,10 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 )
+
+// TestMain unsets the bundle-signing env vars before this package's tests run, so the many
+// CompileAndStage staging tests (which assume a never-signed / unpinned baseline) are immune to a
+// polluted developer environment. Tests that need a signer set it via t.Setenv, which restores it.
+func TestMain(m *testing.M) {
+	os.Unsetenv(bundlesig.EnvSigningKey)
+	os.Unsetenv(bundlesig.EnvSigningKeyRotate)
+	os.Exit(m.Run())
+}
 
 // writeEd25519KeyPEM writes a fresh Ed25519 PKCS#8 PEM (the form YAOG_BUNDLE_SIGNING_KEY points at)
 // to dir/name and returns its path + the matching PKIX public-key PEM (what the anchor stores).
@@ -40,13 +50,29 @@ func TestEnforceSigningAnchor(t *testing.T) {
 	ctx := context.Background()
 	const tnt = TenantID("acme")
 	dir := t.TempDir()
+	now := time.Now()
 	keyA, pubA := writeEd25519KeyPEM(t, dir, "a.pem")
 	keyB, pubB := writeEd25519KeyPEM(t, dir, "b.pem")
+
+	// hasAudit reports whether the tenant's audit log contains an entry with the given action.
+	hasAudit := func(t *testing.T, s Store, action string) bool {
+		t.Helper()
+		entries, err := s.ListAudit(ctx, tnt)
+		if err != nil {
+			t.Fatalf("ListAudit: %v", err)
+		}
+		for _, e := range entries {
+			if e.Action == action {
+				return true
+			}
+		}
+		return false
+	}
 
 	t.Run("never-signed: no anchor + no key is a no-op", func(t *testing.T) {
 		t.Setenv(bundlesig.EnvSigningKey, "")
 		s := NewMemStore()
-		if err := enforceSigningAnchor(ctx, s, tnt); err != nil {
+		if err := enforceSigningAnchor(ctx, s, tnt, now); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if _, err := s.GetSigningAnchor(ctx, tnt); !errors.Is(err, ErrNotFound) {
@@ -57,7 +83,7 @@ func TestEnforceSigningAnchor(t *testing.T) {
 	t.Run("TOFU: no anchor + key pins the pubkey", func(t *testing.T) {
 		t.Setenv(bundlesig.EnvSigningKey, keyA)
 		s := NewMemStore()
-		if err := enforceSigningAnchor(ctx, s, tnt); err != nil {
+		if err := enforceSigningAnchor(ctx, s, tnt, now); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		a, err := s.GetSigningAnchor(ctx, tnt)
@@ -67,13 +93,16 @@ func TestEnforceSigningAnchor(t *testing.T) {
 		if a.PubKeyPEM != pubA {
 			t.Fatalf("pinned the wrong pubkey")
 		}
+		if !hasAudit(t, s, "signing-anchor-pin") {
+			t.Error("a trust-on-first-use pin must be audited (signing-anchor-pin)")
+		}
 	})
 
 	t.Run("same key passes", func(t *testing.T) {
 		t.Setenv(bundlesig.EnvSigningKey, keyA)
 		s := NewMemStore()
 		mustPin(t, s, tnt, pubA)
-		if err := enforceSigningAnchor(ctx, s, tnt); err != nil {
+		if err := enforceSigningAnchor(ctx, s, tnt, now); err != nil {
 			t.Fatalf("same key should pass: %v", err)
 		}
 	})
@@ -82,7 +111,7 @@ func TestEnforceSigningAnchor(t *testing.T) {
 		t.Setenv(bundlesig.EnvSigningKey, "")
 		s := NewMemStore()
 		mustPin(t, s, tnt, pubA)
-		err := enforceSigningAnchor(ctx, s, tnt)
+		err := enforceSigningAnchor(ctx, s, tnt, now)
 		if !apierr.HasCode(err, apierr.CodeSigningKeyMissing) {
 			t.Fatalf("want signing_key_missing, got %v", err)
 		}
@@ -93,7 +122,7 @@ func TestEnforceSigningAnchor(t *testing.T) {
 		t.Setenv(bundlesig.EnvSigningKeyRotate, "")
 		s := NewMemStore()
 		mustPin(t, s, tnt, pubA)
-		err := enforceSigningAnchor(ctx, s, tnt)
+		err := enforceSigningAnchor(ctx, s, tnt, now)
 		if !apierr.HasCode(err, apierr.CodeSigningKeyMismatch) {
 			t.Fatalf("want signing_key_mismatch, got %v", err)
 		}
@@ -107,11 +136,14 @@ func TestEnforceSigningAnchor(t *testing.T) {
 		t.Setenv(bundlesig.EnvSigningKeyRotate, "1")
 		s := NewMemStore()
 		mustPin(t, s, tnt, pubA)
-		if err := enforceSigningAnchor(ctx, s, tnt); err != nil {
+		if err := enforceSigningAnchor(ctx, s, tnt, now); err != nil {
 			t.Fatalf("rotate should pass: %v", err)
 		}
 		if a, _ := s.GetSigningAnchor(ctx, tnt); a.PubKeyPEM != pubB {
 			t.Fatalf("rotate must re-pin to the new key")
+		}
+		if !hasAudit(t, s, "signing-anchor-rotate") {
+			t.Error("an explicit rotation must be audited (signing-anchor-rotate)")
 		}
 	})
 }
@@ -151,6 +183,13 @@ func TestSigningAnchorStore(t *testing.T) {
 			a, err := s.GetSigningAnchor(ctx, "t1")
 			if err != nil || a.PubKeyPEM != "PUB-1" {
 				t.Fatalf("round-trip: got %+v err %v", a, err)
+			}
+			// Replace-in-place: a second pin overwrites (anchors are single-valued per tenant).
+			if err := s.PutSigningAnchor(ctx, "t1", SigningAnchor{PubKeyPEM: "PUB-2"}); err != nil {
+				t.Fatalf("re-put: %v", err)
+			}
+			if a, err := s.GetSigningAnchor(ctx, "t1"); err != nil || a.PubKeyPEM != "PUB-2" {
+				t.Fatalf("replace-in-place: got %+v err %v, want PUB-2", a, err)
 			}
 			// Tenant isolation: t2 must not see t1's anchor.
 			if _, err := s.GetSigningAnchor(ctx, "t2"); !errors.Is(err, ErrNotFound) {

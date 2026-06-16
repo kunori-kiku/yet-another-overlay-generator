@@ -207,7 +207,7 @@ func AgentRolloutNodeIDs(cs ControllerSettings, nodes []Node) map[string]bool {
 //   - anchor + different key  → CodeSigningKeyMismatch, unless YAOG_BUNDLE_SIGNING_KEY_ROTATE re-pins
 //
 // The two refusal cases return a coded *apierr.Error so the operator gets a precise reason on stage.
-func enforceSigningAnchor(ctx context.Context, store Store, t TenantID) error {
+func enforceSigningAnchor(ctx context.Context, store Store, t TenantID, now time.Time) error {
 	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
 		// A set-but-unreadable/unparsable key already fails the export closed; surface it here too
@@ -225,7 +225,13 @@ func enforceSigningAnchor(ctx context.Context, store Store, t TenantID) error {
 		if configuredPub == "" {
 			return nil // never-signed fleet: nothing to pin, nothing to enforce
 		}
-		return store.PutSigningAnchor(ctx, t, SigningAnchor{PubKeyPEM: configuredPub}) // trust-on-first-use
+		if err := store.PutSigningAnchor(ctx, t, SigningAnchor{PubKeyPEM: configuredPub}); err != nil {
+			return err
+		}
+		// Trust-on-first-use: this re-points which key the fleet is signed under, so audit it
+		// (best-effort, like the stage audits) — a trust transition must be attributable.
+		appendStageAudit(ctx, store, t, now, "signing-anchor-pin", "")
+		return nil
 	case err != nil:
 		return fmt.Errorf("controller: loading signing anchor: %w", err)
 	}
@@ -236,7 +242,13 @@ func enforceSigningAnchor(ctx context.Context, store Store, t TenantID) error {
 	case configuredPub == anchor.PubKeyPEM:
 		return nil // same key as pinned — normal signed stage
 	case bundlesig.RotateRequested():
-		return store.PutSigningAnchor(ctx, t, SigningAnchor{PubKeyPEM: configuredPub}) // explicit rotation
+		if err := store.PutSigningAnchor(ctx, t, SigningAnchor{PubKeyPEM: configuredPub}); err != nil {
+			return err
+		}
+		// Explicit rotation (YAOG_BUNDLE_SIGNING_KEY_ROTATE) — audit the re-pin so a key change is
+		// attributable in the hash-chained log, not indistinguishable from a routine stage.
+		appendStageAudit(ctx, store, t, now, "signing-anchor-rotate", "")
+		return nil
 	default:
 		return apierr.New(apierr.CodeSigningKeyMismatch) // configured key != pinned → refuse
 	}
@@ -355,7 +367,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// signing key against the per-tenant pinned anchor, so a redeploy that DROPPED or SWAPPED the
 	// key is caught here instead of silently shipping unsigned/differently-signed bundles. (The
 	// actual signing still happens inside artifacts.Export from the same env key.)
-	if err := enforceSigningAnchor(ctx, store, t); err != nil {
+	if err := enforceSigningAnchor(ctx, store, t, now); err != nil {
 		return StageResult{}, err
 	}
 
