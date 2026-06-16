@@ -89,6 +89,39 @@ func parsePinnedPublicKey(pemBytes []byte) (ed25519.PublicKey, error) {
 	return pub, nil
 }
 
+// credFingerprint returns the hex SHA-256 of the CANONICAL x509 PKIX DER of the public key in
+// pemBytes — the SAME basis the controller's KeystoneFingerprint uses, so a node's displayed
+// fingerprint matches the operator panel's. It handles any PKIX key type (ed25519, ecdsa) since
+// it re-marshals the parsed key. It is INFORMATIONAL only (the trust decision is the signature
+// check), so callers treat an error as "unknown" rather than failing on it.
+func credFingerprint(pemBytes []byte) (string, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return "", fmt.Errorf("agent: no PEM block in credential")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// CredFingerprintShort is a short, human-comparable form of credFingerprint (the first 12 hex
+// chars), or "unknown" when the PEM does not parse. Used in operator-facing diagnostics — the
+// reprovision-keystone confirmation and the membership-mismatch remedy message.
+func CredFingerprintShort(pemBytes []byte) string {
+	fp, err := credFingerprint(pemBytes)
+	if err != nil || len(fp) < 12 {
+		return "unknown"
+	}
+	return fp[:12]
+}
+
 // VerifyBundle is the Go-side, fail-closed integrity gate run BEFORE install.sh.
 // It is defense in depth: install.sh re-verifies as root, but verifying here
 // means a tampered or rolled-back bundle never reaches a root-executed script.
@@ -312,9 +345,20 @@ func VerifyMembership(files map[string][]byte, cfg MembershipConfig, prevEpoch i
 		return 0, err
 	}
 
-	// Offline signature check against the pinned anchor. Fail-closed on any error.
+	// Offline signature check against the pinned anchor. Fail-closed on any error. The wrap is
+	// actionable: a mismatch here is almost always a keystone ROTATION, so name the pinned vs
+	// served fingerprints and BOTH remedies. The served fingerprint is derived from the artifact's
+	// self-reported PublicKey (attacker-influenceable), so it is labelled UNVERIFIED — it is a
+	// diagnostic hint, never a trust input (the trust decision is this very signature check).
 	if err := trustlist.Verify(tl, signed, pin); err != nil {
-		return 0, fmt.Errorf("agent: trust-list signature verification failed: %w", err)
+		pinnedFP := CredFingerprintShort(cfg.OperatorCredPEM)
+		servedFP := CredFingerprintShort([]byte(signed.PublicKey))
+		return 0, fmt.Errorf("agent: trust-list signature verification failed: the served membership trust-list does not verify "+
+			"against this node's pinned operator credential (pinned keystone fingerprint %s; the served signature claims credential %s, "+
+			"controller-reported and UNVERIFIED). The keystone was most likely rotated. Remedy: either (a) if you rotated the keystone, "+
+			"re-provision THIS node with the new public key out of band — `yaog-agent reprovision-keystone --operator-cred <new-cred.pem> "+
+			"--operator-cred-alg %s`; or (b) the controller has not re-deployed since the rotation, so re-stage, re-sign, and promote a "+
+			"fresh bundle under the current keystone: %w", pinnedFP, servedFP, cfg.OperatorCredAlg, err)
 	}
 
 	// This node must itself be a signed member, AND its signed member entry carries the

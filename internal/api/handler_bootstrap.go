@@ -420,9 +420,21 @@ install -m 0755 "$tmp_bin" /usr/local/bin/yaog-agent
 OP_FLAGS=""
 if [ -n "$OPERATOR_CRED_PEM" ]; then
   install -d -m 0700 /etc/wireguard
-  printf '%s\n' "$OPERATOR_CRED_PEM" > /etc/wireguard/operator-cred.pem
-  chmod 0600 /etc/wireguard/operator-cred.pem
-  OP_FLAGS="--operator-cred /etc/wireguard/operator-cred.pem --operator-cred-alg ${OPERATOR_CRED_ALG}"
+  cred_file=/etc/wireguard/operator-cred.pem
+  # Do NOT silently clobber an existing pin that DIFFERS from this script's baked credential:
+  # re-running a STALE bootstrap (downloaded before a keystone rotation) would otherwise quietly
+  # re-pin the OLD key. Compare newline-normalized (command substitution strips trailing newlines
+  # on both sides). A keystone rotation is adopted deliberately via yaog-agent reprovision-keystone.
+  if [ -f "$cred_file" ] && [ "$(cat "$cred_file" 2>/dev/null)" != "$(printf '%s' "$OPERATOR_CRED_PEM")" ]; then
+    echo "bootstrap: WARNING: $cred_file already exists and DIFFERS from this script's baked operator credential." >&2
+    echo "bootstrap: NOT overwriting it via bootstrap (a stale script must not silently re-pin an old key)." >&2
+    echo "bootstrap: to adopt a ROTATED keystone, run on this node:" >&2
+    echo "bootstrap:   yaog-agent reprovision-keystone --operator-cred <new-cred.pem> --operator-cred-alg ${OPERATOR_CRED_ALG}" >&2
+  else
+    printf '%s\n' "$OPERATOR_CRED_PEM" > "$cred_file"
+    chmod 0600 "$cred_file"
+  fi
+  OP_FLAGS="--operator-cred $cred_file --operator-cred-alg ${OPERATOR_CRED_ALG}"
   [ -n "$OPERATOR_RPID" ]   && OP_FLAGS="$OP_FLAGS --operator-rpid ${OPERATOR_RPID}"
   [ -n "$OPERATOR_ORIGIN" ] && OP_FLAGS="$OP_FLAGS --operator-origin ${OPERATOR_ORIGIN}"
 fi

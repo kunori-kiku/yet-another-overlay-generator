@@ -56,9 +56,16 @@ func TestRenderBootstrapScript_KeystoneOn(t *testing.T) {
 		"yaog-agent-linux-amd64",
 		"yaog-agent-linux-arm64",
 		`yaog-agent enroll --controller "$CONTROLLER"`,
-		"--operator-cred /etc/wireguard/operator-cred.pem",
+		"cred_file=/etc/wireguard/operator-cred.pem",
+		"--operator-cred $cred_file --operator-cred-alg ${OPERATOR_CRED_ALG}",
 		"systemctl enable --now yaog-agent.service",
 		`URL="${GH_PROXY}${RELEASE_BASE}/${ASSET}"`,
+		// The stale-clobber guard: a differing existing pin is NOT overwritten, and the operator
+		// is pointed at reprovision-keystone to adopt a rotated keystone deliberately.
+		"DIFFERS from this script's baked operator credential",
+		"yaog-agent reprovision-keystone --operator-cred <new-cred.pem>",
+		// A fresh node (no existing pin) still writes the credential as before.
+		`printf '%s\n' "$OPERATOR_CRED_PEM" > "$cred_file"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered script is missing %q", want)

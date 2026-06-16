@@ -30,7 +30,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -53,6 +55,8 @@ func main() {
 		os.Exit(runKeygen(os.Args[2:]))
 	case "enroll":
 		os.Exit(runEnroll(os.Args[2:]))
+	case "reprovision-keystone":
+		os.Exit(runReprovisionKeystone(os.Args[2:]))
 	case "run":
 		os.Exit(runRun(os.Args[2:]))
 	case "version", "--version", "-v":
@@ -69,10 +73,11 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: agent <keygen|enroll|run> [flags]")
-	fmt.Fprintln(os.Stderr, "  keygen  ensure the local WireGuard private key exists and print its public key")
-	fmt.Fprintln(os.Stderr, "  enroll  enroll against the networked controller and persist the per-node bearer token")
-	fmt.Fprintln(os.Stderr, "  run     pull -> verify -> anti-rollback -> apply -> report (configured-source or --controller mode)")
+	fmt.Fprintln(os.Stderr, "usage: agent <keygen|enroll|reprovision-keystone|run> [flags]")
+	fmt.Fprintln(os.Stderr, "  keygen               ensure the local WireGuard private key exists and print its public key")
+	fmt.Fprintln(os.Stderr, "  enroll               enroll against the networked controller and persist the per-node bearer token")
+	fmt.Fprintln(os.Stderr, "  reprovision-keystone adopt a ROTATED off-host operator credential supplied out of band (rewrites the pinned PEM + restarts)")
+	fmt.Fprintln(os.Stderr, "  run                  pull -> verify -> anti-rollback -> apply -> report (configured-source or --controller mode)")
 }
 
 // defaultTokenPath is where enrollment writes (and run reads) the per-node bearer
@@ -156,6 +161,71 @@ func runEnroll(args []string) int {
 	}
 
 	fmt.Fprintf(os.Stderr, "agent: enrolled node %q; bearer token written to %s\n", *nodeID, *tokenOut)
+	return 0
+}
+
+// defaultOperatorCredPath is where the bootstrap writes (and run reads) the pinned off-host
+// operator credential, and where reprovision-keystone rewrites it on a rotation.
+const defaultOperatorCredPath = "/etc/wireguard/operator-cred.pem"
+
+// runReprovisionKeystone implements `agent reprovision-keystone`: the guided, single-action
+// adoption of a ROTATED keystone. The operator delivers the NEW credential PUBLIC key OUT OF BAND
+// (a local file or stdin) — exactly as the original bootstrap delivered it — and this rewrites the
+// pinned PEM (validate-before-atomic-write, fail-closed) then restarts the daemon so it re-reads
+// the new credential. It NEVER fetches a credential from the controller, so the off-host trust
+// anchor is never bridged automatically.
+func runReprovisionKeystone(args []string) int {
+	fs := flag.NewFlagSet("reprovision-keystone", flag.ExitOnError)
+	credPath := fs.String("operator-cred", "", "path to the NEW operator credential public-key PEM, supplied out of band ('-' reads stdin) [required]")
+	alg := fs.String("operator-cred-alg", "", "operator credential algorithm: ed25519 | webauthn-es256 | webauthn-eddsa [required]")
+	credOut := fs.String("cred-out", defaultOperatorCredPath, "where to write the pinned credential the daemon reads")
+	restart := fs.Bool("restart", true, "restart the yaog-agent systemd service so the running daemon re-reads the new credential")
+	_ = fs.Parse(args)
+
+	switch {
+	case *credPath == "":
+		fmt.Fprintln(os.Stderr, "agent: reprovision-keystone: --operator-cred is required (the NEW public key, supplied out of band)")
+		return 2
+	case *alg == "":
+		fmt.Fprintln(os.Stderr, "agent: reprovision-keystone: --operator-cred-alg is required")
+		return 2
+	}
+
+	var newPEM []byte
+	var err error
+	if *credPath == "-" {
+		newPEM, err = io.ReadAll(os.Stdin)
+	} else {
+		newPEM, err = os.ReadFile(*credPath)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: reprovision-keystone: read credential: %v\n", err)
+		return 1
+	}
+
+	if err := agent.ReprovisionKeystone(*credOut, *alg, newPEM); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
+		return 1
+	}
+	// The credential public key is non-secret, but print only its fingerprint (not the body) to
+	// keep the operator's terminal scrollback clean and comparable to the panel's fingerprint.
+	fmt.Fprintf(os.Stderr, "agent: pinned operator credential rewritten at %s (fingerprint %s)\n", *credOut, agent.CredFingerprintShort(newPEM))
+
+	if !*restart {
+		fmt.Fprintln(os.Stderr, "agent: --restart=false: the RUNNING daemon still holds the previous credential in memory; restart yaog-agent for the new pin to take effect")
+		return 0
+	}
+	// The daemon reads the pinned credential once at process start, so it must be restarted to
+	// re-read it. try-restart is a no-op when the unit is not loaded/active (a --once / non-systemd
+	// host), which we surface loudly with a non-zero exit so a split-brain (new pin on disk, old
+	// key in memory) is never mistaken for success.
+	cmd := exec.Command("systemctl", "try-restart", "yaog-agent.service")
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: WARNING: the pin was rewritten but yaog-agent could not be restarted (%v); the running daemon keeps the OLD key in memory — restart it yourself (e.g. `systemctl restart yaog-agent`)\n", err)
+		return 1
+	}
+	fmt.Fprintln(os.Stderr, "agent: yaog-agent restarted; it now verifies membership against the new credential")
 	return 0
 }
 
