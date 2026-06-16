@@ -684,9 +684,11 @@ function mapSettings(d: SettingsJSON): ControllerSettings {
   };
 }
 
-// emptyControllerSettings is the all-unset value used as a controlled form's initial state before
-// the server record loads (it equals mapSettings over an empty wire record). Shared so each
-// settings form does not re-spell the full field set (and stay in sync as fields are added).
+// emptyControllerSettings is the all-unset initial value for a controlled settings form before the
+// server record loads: the rollout + mimic fields mirror mapSettings's omitempty defaults, while
+// translucency intentionally seeds the server's default-on appearance (the real GET always carries a
+// concrete translucency + a defaulted release base, so this is never produced from a live response).
+// Shared so each settings form does not re-spell the full field set (and they stay in sync as fields grow).
 export function emptyControllerSettings(): ControllerSettings {
   return {
     publicAgentURL: '',
