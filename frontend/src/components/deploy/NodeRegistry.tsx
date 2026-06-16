@@ -3,6 +3,7 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 import type { ControllerNodeStatus } from '../../types/controller';
+import { UpdateStatusChip } from './UpdateStatusChip';
 
 // 注册表里某节点的 applied-vs-desired 代号是否漂移（已审批节点的 applied 落后于 desired
 // ⇒ 该节点尚未拉取/应用最新一代配置）。
@@ -37,6 +38,9 @@ export function NodeRegistry() {
   const ctlNodes = useControllerStore((s) => s.nodes);
   const revoke = useControllerStore((s) => s.revoke);
   const loading = useControllerStore((s) => s.loading);
+  // The configured rollout drives the per-node update-status chip (plan-5). null (settings not yet
+  // loaded) ⇒ deriveUpdateState returns 'off' ⇒ a muted dash, never a misleading chip.
+  const settings = useControllerStore((s) => s.settings);
 
   // controller 注册表按 nodeId 索引（agent enroll 时用的 --node-id 即拓扑节点 id）。
   const statusByNodeId = new Map<string, ControllerNodeStatus>(
@@ -77,6 +81,7 @@ export function NodeRegistry() {
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.genAppliedDesired')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.health')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.agentVersion')}</th>
+                <th className="py-2 pr-3">{t(language, 'updateStatus.label')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.lastSeen')}</th>
                 <th className="py-2 pr-3">{t(language, 'nodeRegistry.actions')}</th>
               </tr>
@@ -124,6 +129,9 @@ export function NodeRegistry() {
                     </td>
                     <td className="py-2 pr-3 text-gray-300">{n.lastHealth || '—'}</td>
                     <td className="py-2 pr-3 font-mono text-xs text-gray-400">{n.agentVersion || '—'}</td>
+                    <td className="py-2 pr-3">
+                      <UpdateStatusChip node={n} settings={settings} language={language} />
+                    </td>
                     <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(n.lastSeen)}</td>
                     <td className="py-2 pr-3">
                       <button
