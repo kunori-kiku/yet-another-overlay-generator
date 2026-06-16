@@ -12,7 +12,7 @@ symmetric mimic-catalog config form and a per-node update-status surface. Target
 
 | Plan | What | PR | Commit |
 |---|---|---|---|
-| plan-1 | Backend: assisted `release-pins` endpoint (gh-proxy-applied `.sha256` fetch, egress-guarded) + nodeJSON `in_rollout` + 3 apierr codes | #121 | `cc60bc7` |
+| plan-1 | Backend: assisted `release-pins` endpoint (gh-proxy-applied `.sha256` fetch, egress-guarded) + nodeJSON `in_rollout` + 3 apierr codes | #121 | `38b2d3b` + `cc60bc7` |
 | plan-2 | Frontend data layer: rollout+mimic TS contract + **full-replace drop-on-save fix** + `fetchPins` | #122 | `7256a6a` |
 | plan-3 | `AgentUpdateSettings` card: target/min version, per-arch bins + assist, canary multiselect, fleet-wide confirm, version_applied→persist-base | #123 | `b712537` |
 | plan-4 | `MimicCatalogSettings` card: dynamic per-`<codename>-<arch>` rows, best-effort per-row assist | #124 | `986ca0b` |

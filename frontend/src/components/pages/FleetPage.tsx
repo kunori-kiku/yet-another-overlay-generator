@@ -16,7 +16,9 @@ export function FleetPage() {
   const language = useTopologyStore((s) => s.language);
   const refresh = useControllerStore((s) => s.refresh);
   const loggedIn = useControllerStore(selectLoggedIn);
-  const [live, setLive] = useState(true);
+  // Opt-in (default OFF, per the outline post-flight decision): the operator turns on "Live" to
+  // watch transitions; otherwise the view is a static snapshot they refresh on demand.
+  const [live, setLive] = useState(false);
 
   // Opt-in live poll (plan-5): while enabled AND logged in, refresh on an interval so a
   // canary→applied transition appears without a manual reload. It PAUSES while the tab is hidden
