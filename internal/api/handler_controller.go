@@ -110,6 +110,12 @@ type ControllerHandler struct {
 	// (YAOG_SECURE_COOKIE, default true). Set false ONLY for local non-TLS development;
 	// production MUST keep it true (the deployment fronts the controller with TLS).
 	secureCookie bool
+	// releaseClient is the egress-guarded HTTP client the assisted release-pin fetch
+	// (HandleReleasePins) uses: a bounded timeout, a redirect cap that refuses non-http(s)
+	// hops, and a dial-time private-IP reject (newReleasePinClient). A struct field so a
+	// test can inject a permissive client pointed at a loopback test server — the production
+	// guard rejects loopback by design, so the happy path cannot be exercised through it.
+	releaseClient *http.Client
 }
 
 // NewControllerHandler builds a ControllerHandler. operatorTokenHash is the hex
@@ -133,6 +139,9 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		// Secure cookies by default: a non-TLS deployment must opt out explicitly
 		// (YAOG_SECURE_COOKIE=false) for local development.
 		secureCookie: true,
+		// The assisted release-pin fetch egresses to github.com / the gh-proxy, so it gets
+		// an egress-guarded client (SSRF private-IP reject + redirect/timeout caps).
+		releaseClient: newReleasePinClient(),
 	}
 }
 
@@ -244,6 +253,11 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
 	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL.
 	mux.HandleFunc(base+"settings", op(h.HandleSettings))
+	// Assisted release-pin fetch (controller-panel-rollout-ui plan-1): fetch the per-asset
+	// .sha256 sidecars for agent/mimic release assets through the gh-proxy and return Artifact
+	// pins for operator REVIEW. A convenience only — trust stays the keystone-signed
+	// artifacts.json the agent verifies against (see release_pins.go custody note).
+	mux.HandleFunc(base+"release-pins", op(h.HandleReleasePins))
 	// Keystone (plan-5.1b): pin the off-host operator credential, fetch the canonical
 	// trust-list bytes to sign, and submit the off-host signature.
 	mux.HandleFunc(base+"operator-credential", op(h.HandleOperatorCredential))
@@ -417,6 +431,13 @@ type nodeJSON struct {
 	// requested one and the agent has not yet re-registered its new public key). The
 	// panel renders a "rekeying" badge from this flag. No key material is exposed.
 	RekeyRequested bool `json:"rekey_requested"`
+	// InRollout is true when this node is in the agent self-update rollout set — the canary
+	// subset, or the whole fleet once promoted (AgentRolloutNodeIDs). It is server-computed
+	// so the panel never re-derives canary membership client-side; the per-node update-status
+	// chip combines it with the reported AgentVersion vs the configured target. Always present
+	// (false when no rollout is configured); the target itself is read from /settings, not echoed
+	// per node.
+	InRollout bool `json:"in_rollout"`
 }
 
 // revokeRequestJSON is the operator's request to revoke (evict) a node: the target
@@ -996,6 +1017,16 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
+	// Compute agent self-update rollout membership ONCE for the whole list (one settings load +
+	// one membership pass): the per-node in_rollout flag the panel's update-status chip reads.
+	// An absent settings record (most fleets never configure a rollout) is a benign no-op — the
+	// zero ControllerSettings yields an empty rollout set (every node not-targeted).
+	cs, err := h.store.GetSettings(r.Context(), tenant)
+	if err != nil && !errors.Is(err, controller.ErrNotFound) {
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
+	rollout := controller.AgentRolloutNodeIDs(cs, nodes)
 	out := make([]nodeJSON, 0, len(nodes))
 	for _, n := range nodes {
 		out = append(out, nodeJSON{
@@ -1010,6 +1041,7 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			LastSeen:          n.LastSeen,
 			EnrolledAt:        n.EnrolledAt,
 			RekeyRequested:    n.RekeyRequested,
+			InRollout:         rollout[n.NodeID],
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -512,6 +512,10 @@ export const zh: Record<keyof typeof en, string> = {
   'error.staged_manifest_mismatch': '提交的清单与当前暂存清单不一致；请重新获取并重新签名。',
   'error.manifest_signature_invalid': '无法用已固定的凭据验证清单签名。',
   'error.stage_failed': '暂存或提升部署失败。',
+  // 辅助获取发布 pin（controller-panel-rollout-ui plan-1）——操作员 release-pins 接口。
+  'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
+  'error.agent_release_fetch_failed': '无法从 {url} 获取发布校验和：{detail}',
+  'error.agent_release_sidecar_invalid': '从 {url} 获取的发布校验和不是有效的 SHA-256。',
   // 认证 + 会话接口（plan-3.5b）——登录 / passkey / TOTP / bootstrap / 节点 + 操作员认证。
   'error.req_bearer_required': '需要有效的 bearer 令牌。',
   'error.auth_credentials_invalid': '用户名或密码错误。',

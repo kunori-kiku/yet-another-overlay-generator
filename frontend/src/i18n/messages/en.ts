@@ -530,6 +530,10 @@ export const en = {
   'error.staged_manifest_mismatch': 'The submitted manifest does not match the current staged manifest; re-fetch and re-sign.',
   'error.manifest_signature_invalid': 'The manifest signature could not be verified against the pinned credential.',
   'error.stage_failed': 'Staging or promoting the deployment failed.',
+  // Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator release-pins endpoint.
+  'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
+  'error.agent_release_fetch_failed': 'Could not fetch the release checksum from {url}: {detail}',
+  'error.agent_release_sidecar_invalid': 'The release checksum fetched from {url} is not a valid SHA-256.',
   // Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
   'error.req_bearer_required': 'A valid bearer token is required.',
   'error.auth_credentials_invalid': 'Invalid username or password.',
