@@ -6,11 +6,7 @@ import {
 } from '../../stores/controllerStore';
 import { t, type UILanguage } from '../../i18n';
 import { localizeError } from '../../lib/localizeError';
-import {
-  emptyControllerSettings,
-  type AgentPin,
-  type ControllerSettings,
-} from '../../api/controllerClient';
+import { type AgentPin, type ControllerSettings } from '../../api/controllerClient';
 
 // AgentUpdateSettings (controller-panel-rollout-ui plan-3): the operator card that configures the
 // signed agent self-update rollout — target/min version, per-arch binary pins (with an
@@ -33,6 +29,13 @@ const SEMVER_RE = /^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$/;
 const ASSET_RE = /^[A-Za-z0-9._-]+$/;
 const SHA256_RE = /^[0-9a-fA-F]{64}$/;
 
+// blankBins is the empty per-arch pin map (both certified arches unset).
+function blankBins(): Record<string, AgentPin> {
+  const out: Record<string, AgentPin> = {};
+  for (const arch of CERTIFIED_ARCHES) out[arch] = { asset: '', sha256: '' };
+  return out;
+}
+
 export function AgentUpdateSettings() {
   const language = useTopologyStore((s) => s.language);
   const settings = useControllerStore((s) => s.settings);
@@ -53,14 +56,15 @@ export function AgentUpdateSettings() {
         <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
           {t(language, 'agentUpdate.signInToConfigure')}
         </p>
+      ) : settings === null ? (
+        <p className="text-xs text-gray-500">{t(language, 'agentUpdate.loading')}</p>
       ) : (
-        // Keyed on the loaded settings so the form's useState re-initializes on (re)mount from the
-        // server values — no setState-in-effect sync (same pattern as BootstrapSettings).
-        <AgentUpdateForm
-          key={settings ? JSON.stringify(settings) : 'empty'}
-          initial={settings ?? emptyControllerSettings()}
-          language={language}
-        />
+        // Render only once settings have loaded, with NO settings-keyed remount: the form seeds its
+        // local state from the loaded values on mount and then OWNS the operator's edits — a save
+        // (or an unrelated settings change, e.g. the appearance toggle) must not remount it and
+        // discard in-progress edits or the just-saved success notice. handleSave round-trips the
+        // FRESH store settings (not this snapshot) so the full-replace contract still holds.
+        <AgentUpdateForm initial={settings} language={language} />
       )}
     </section>
   );
@@ -77,9 +81,9 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
   const [showAdvanced, setShowAdvanced] = useState(initial.minAgentVersion !== '');
   // Per-arch bin rows for the two certified arches (others not offered for self-update).
   const [bins, setBins] = useState<Record<string, AgentPin>>(() => {
-    const seed: Record<string, AgentPin> = {};
+    const seed = blankBins();
     for (const arch of CERTIFIED_ARCHES) {
-      seed[arch] = initial.agentBins[arch] ?? { asset: '', sha256: '' };
+      if (initial.agentBins[arch]) seed[arch] = initial.agentBins[arch];
     }
     return seed;
   });
@@ -100,10 +104,17 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
 
   const onTargetChange = (v: string) => {
     setTargetVersion(v);
-    // The pinned tagged base is only valid for the version it was fetched at; a target change
-    // invalidates it so a stale base can never be saved against a different version.
+    // A versionApplied assist keys BOTH the tagged base AND the tagged pins (asset names are
+    // version-agnostic; only the SHA-256 differs per tag) to the version it was fetched at. A
+    // target change invalidates that whole assisted set: clear the pinned base AND the
+    // assist-derived pins so neither a stale base nor wrong-hash pins can be saved against a
+    // different version — the operator must re-assist (or enter pins manually) for the new target.
+    // pinnedForVersion === '' means the current pins are manual or from a no-version (latest)
+    // assist, which stay valid across a target edit, so they are left untouched.
     if (v.trim() !== pinnedForVersion) {
+      if (pinnedForVersion !== '') setBins(blankBins());
       setPinnedBase(null);
+      setPinnedForVersion('');
       setAssistNote(null);
     }
     setSaved(false);
@@ -203,22 +214,28 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
   const handleSave = async () => {
     if (validate()) return;
     setLocalError(null);
-    try {
-      await saveSettings({
-        ...initial,
-        targetAgentVersion: targetVersion.trim(),
-        minAgentVersion: minVersion.trim(),
-        agentBins: filledBins(),
-        agentCanaryNodeIds: canary,
-        agentRolloutFleetWide: fleetWide,
-        // Persist the tagged base when an assist pinned a version (see pinnedBase above), so the
-        // agent fetches the binary the pins were computed against. Otherwise leave it untouched.
-        agentReleaseBaseURL:
-          pinnedBase && targetVersion.trim() === pinnedForVersion ? pinnedBase : initial.agentReleaseBaseURL,
-      });
+    // Round-trip the FRESH store settings (not the mount-time snapshot), so an unrelated field
+    // changed since mount (mimic catalog, translucency) is not wiped by this full-replace save.
+    const current = useControllerStore.getState().settings ?? initial;
+    // saveSettings returns the localized error on failure, null on success — derive the outcome
+    // from that, NOT from the call resolving (the store action never throws).
+    const err = await saveSettings({
+      ...current,
+      targetAgentVersion: targetVersion.trim(),
+      minAgentVersion: minVersion.trim(),
+      agentBins: filledBins(),
+      agentCanaryNodeIds: canary,
+      agentRolloutFleetWide: fleetWide,
+      // Persist the tagged base when an assist pinned a version (see pinnedBase above), so the
+      // agent fetches the binary the pins were computed against. Otherwise leave it untouched.
+      agentReleaseBaseURL:
+        pinnedBase && targetVersion.trim() === pinnedForVersion ? pinnedBase : current.agentReleaseBaseURL,
+    });
+    if (err) {
+      setLocalError(err);
+      setSaved(false);
+    } else {
       setSaved(true);
-    } catch (err) {
-      setLocalError(localizeError(err, language));
     }
   };
 
@@ -279,7 +296,7 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
           <button
             type="button"
             onClick={() => void handleAssist()}
-            disabled={busy}
+            disabled={busy || loading}
             className="px-3 py-1 text-xs bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {busy ? t(language, 'agentUpdate.assisting') : t(language, 'agentUpdate.assistButton')}
@@ -300,7 +317,7 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
                 t(language, 'agentUpdate.sha256Label'),
                 bins[arch].sha256,
                 (v) => setBin(arch, { sha256: v }),
-                '64 hex characters',
+                t(language, 'agentUpdate.sha256Placeholder'),
               )}
             </div>
           </div>
@@ -358,7 +375,7 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
 
       <button
         onClick={() => void handleSave()}
-        disabled={loading || validationHint !== null}
+        disabled={loading || busy || validationHint !== null}
         className="px-4 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
       >
         {loading ? t(language, 'agentUpdate.saving') : t(language, 'agentUpdate.saveButton')}
