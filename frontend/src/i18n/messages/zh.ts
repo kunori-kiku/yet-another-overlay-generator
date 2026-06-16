@@ -606,6 +606,9 @@ export const zh: Record<keyof typeof en, string> = {
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
   'error.agent_release_fetch_failed': '无法从 {url} 获取发布校验和：{detail}',
   'error.agent_release_sidecar_invalid': '从 {url} 获取的发布校验和不是有效的 SHA-256。',
+  // 捆绑签名锚（persist-signing-anchor）：暂存时若签名密钥缺失/变更则明确报错。
+  'error.signing_key_missing': '本 fleet 的捆绑包是签名的，但当前未配置签名密钥（YAOG_BUNDLE_SIGNING_KEY 未设置或不可读）。拒绝暂存未签名的捆绑包——请恢复签名密钥。',
+  'error.signing_key_mismatch': '当前配置的捆绑签名密钥与本 fleet 已固定的密钥不一致。请恢复原密钥，或在一次部署时设置 YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 以有意轮换。',
   // 认证 + 会话接口（plan-3.5b）——登录 / passkey / TOTP / bootstrap / 节点 + 操作员认证。
   'error.req_bearer_required': '需要有效的 bearer 令牌。',
   'error.auth_credentials_invalid': '用户名或密码错误。',

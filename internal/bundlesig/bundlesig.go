@@ -35,6 +35,23 @@ import (
 // constructor LoadConfigSignerFromEnv (which delegates to LoadSigningFromEnv).
 const EnvSigningKey = "YAOG_BUNDLE_SIGNING_KEY"
 
+// EnvSigningKeyRotate, when truthy, lets a controller stage RE-PIN its persisted signing anchor to
+// the CURRENT EnvSigningKey — an intentional rotation, or recovery after the prior key was lost.
+// Set it for ONE deploy when changing the signing key, then unset it: leaving it on disables the
+// change-detection guard (a silently-swapped key would be accepted). It only matters when the
+// configured key differs from the pinned anchor; normal same-key operation ignores it.
+const EnvSigningKeyRotate = "YAOG_BUNDLE_SIGNING_KEY_ROTATE"
+
+// RotateRequested reports whether EnvSigningKeyRotate is set to a truthy value (1/true/yes/on).
+func RotateRequested() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvSigningKeyRotate))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // Signing carries loaded Ed25519 signing material: the private key used to sign
 // the canonical bundle digest (or the self-extracting payload) and the PKIX
 // public-key PEM that is pinned into install.sh / the wrapper for verification.

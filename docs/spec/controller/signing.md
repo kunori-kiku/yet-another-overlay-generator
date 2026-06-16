@@ -110,6 +110,33 @@ Phase 0's key is **operator-configured and single** (one key for the whole expor
 and KMS-held sign-only handles arrive in Phase 3; this variable is the Phase 0 stop-gap, not the
 long-term custody model.
 
+## Persisted signing anchor (controller — no silent downgrade)
+
+`YAOG_BUNDLE_SIGNING_KEY` is read fresh at export time, so on its own a controller redeploy that
+**drops or swaps** the env var would silently revert a previously-signed fleet to hash-only (or to a
+different key) with no signal — a downgrade the system should detect, not ignore. The **private** key
+stays off the controller's persisted state by design (a server-state compromise must not be able to
+lift it; `internal/bundlesig`), but the **public** key is not secret, and persisting it strengthens
+the model rather than weakening it.
+
+So the controller (`controller.enforceSigningAnchor`, run inside `CompileAndStage` before any bundle
+is produced) pins the signing **public** key per tenant as a non-secret `SigningAnchor`
+(FileStore `signing-anchor.json`) and reconciles it on every stage:
+
+| persisted anchor | `YAOG_BUNDLE_SIGNING_KEY` | result |
+|---|---|---|
+| none | present | **pin** the pubkey (trust-on-first-use), sign |
+| none | absent  | never-signed fleet — allowed (hash-only, back-compat) |
+| present | present, **same** pubkey | normal signed stage |
+| present | **absent** | refuse — `CodeSigningKeyMissing` (412); would silently downgrade to unsigned |
+| present | present, **different** | refuse — `CodeSigningKeyMismatch` (409) |
+
+**Rotation / recovery:** `YAOG_BUNDLE_SIGNING_KEY_ROTATE` (truthy) lets one stage RE-PIN the anchor to
+the current key — an intentional rotation, or recovery after the prior key was lost. Set it for one
+deploy, then **unset** it (leaving it on disables the change-detection guard). This is controller-only:
+the air-gap export path (`cmd/compiler`, `/api/export`) has no persistent state, so it is unchanged —
+it still signs iff the env key is set.
+
 ## At-rest protection of the signing key (operator requirement)
 
 The file at `YAOG_BUNDLE_SIGNING_KEY` is a **private** Ed25519 key. Anyone who can read it can forge

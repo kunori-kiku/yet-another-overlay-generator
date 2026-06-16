@@ -56,6 +56,9 @@ type tenantState struct {
 	// settings is the tenant's saved controller settings (bootstrap), or nil when none
 	// has been saved (the caller applies DefaultSettings).
 	settings *ControllerSettings
+	// signingAnchor is the tenant's pinned bundle-signing public key, or nil when none is
+	// pinned (never-signed fleet / pre-first-signed-stage). See SigningAnchor.
+	signingAnchor *SigningAnchor
 	// audit is the append-only, hash-chained audit log in Seq order.
 	audit []AuditEntry
 	// lastHash is the Hash of the most recent audit entry ("" if none yet).
@@ -787,6 +790,27 @@ func (s *MemStore) PutSettings(ctx context.Context, t TenantID, cs ControllerSet
 	ts := s.tenant(t)
 	cp := cs.Clone()
 	ts.settings = &cp
+	return nil
+}
+
+// GetSigningAnchor returns the tenant's pinned signing public key, or ErrNotFound when none.
+func (s *MemStore) GetSigningAnchor(ctx context.Context, t TenantID) (SigningAnchor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	if ts.signingAnchor == nil {
+		return SigningAnchor{}, ErrNotFound
+	}
+	return *ts.signingAnchor, nil // SigningAnchor is a flat value type; a copy fully isolates it
+}
+
+// PutSigningAnchor pins (replacing any prior) the tenant's signing public key.
+func (s *MemStore) PutSigningAnchor(ctx context.Context, t TenantID, a SigningAnchor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	cp := a
+	ts.signingAnchor = &cp
 	return nil
 }
 

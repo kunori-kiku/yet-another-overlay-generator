@@ -367,6 +367,17 @@ func (cs ControllerSettings) Clone() ControllerSettings {
 	return out
 }
 
+// SigningAnchor is the per-tenant pinned bundle-signing PUBLIC key. It is NON-SECRET (a public key)
+// and persists two facts a controller redeploy must not silently lose: THAT this fleet's bundles
+// are signed, and WHICH key signs them. With it stored, a redeploy that drops or swaps
+// YAOG_BUNDLE_SIGNING_KEY is DETECTED at stage time (CodeSigningKeyMissing / CodeSigningKeyMismatch)
+// instead of silently shipping unsigned or differently-signed bundles. The matching PRIVATE key
+// stays off-host (the env-referenced PEM), never persisted here. It is pinned trust-on-first-use on
+// the first signed stage and re-pinned only via the explicit YAOG_BUNDLE_SIGNING_KEY_ROTATE hatch.
+type SigningAnchor struct {
+	PubKeyPEM string `json:"pub_key_pem"`
+}
+
 // Store is the single tenant-scoped data-access chokepoint for the controller.
 //
 // Contract for every implementation:
@@ -580,4 +591,9 @@ type Store interface {
 	GetSettings(ctx context.Context, t TenantID) (ControllerSettings, error)
 	// PutSettings stores (replacing any prior) the tenant's controller settings.
 	PutSettings(ctx context.Context, t TenantID, s ControllerSettings) error
+	// GetSigningAnchor returns the tenant's pinned bundle-signing public key, or ErrNotFound when
+	// none is pinned (a never-signed fleet, or before the first signed stage). PutSigningAnchor
+	// pins/replaces it. See SigningAnchor.
+	GetSigningAnchor(ctx context.Context, t TenantID) (SigningAnchor, error)
+	PutSigningAnchor(ctx context.Context, t TenantID, a SigningAnchor) error
 }

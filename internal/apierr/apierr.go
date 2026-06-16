@@ -105,6 +105,15 @@ const (
 	CodeAgentReleaseFetchFailed    Code = "agent_release_fetch_failed"    // 502: upstream fetch failed
 	CodeAgentReleaseSidecarInvalid Code = "agent_release_sidecar_invalid" // 502: sidecar not a SHA-256
 
+	// Bundle-signing anchor (persist-signing-anchor) — the controller pins the signing PUBLIC key
+	// a fleet's bundles are signed with, so a redeploy that drops or swaps the signing key is
+	// DETECTED at stage time instead of silently downgrading. CodeSigningKeyMissing: the fleet is
+	// pinned to a signing key but YAOG_BUNDLE_SIGNING_KEY is now unset/unreadable.
+	// CodeSigningKeyMismatch: the configured key differs from the pinned anchor (set
+	// YAOG_BUNDLE_SIGNING_KEY_ROTATE to re-pin intentionally).
+	CodeSigningKeyMissing  Code = "signing_key_missing"  // 412: pinned-but-absent
+	CodeSigningKeyMismatch Code = "signing_key_mismatch" // 409: configured key != pinned anchor
+
 	// Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
 	CodeReqBearerRequired       Code = "req_bearer_required"
 	CodeAuthCredentialsInvalid  Code = "auth_credentials_invalid"
@@ -179,6 +188,9 @@ var registry = map[Code]def{
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},
 	CodeAgentReleaseFetchFailed:    {"Could not fetch the release checksum from {url}: {detail}", http.StatusBadGateway},
 	CodeAgentReleaseSidecarInvalid: {"The release checksum fetched from {url} is not a valid SHA-256.", http.StatusBadGateway},
+
+	CodeSigningKeyMissing:  {"This fleet's bundles are signed, but no signing key is configured (YAOG_BUNDLE_SIGNING_KEY is unset or unreadable). Refusing to stage unsigned bundles — restore the signing key.", http.StatusPreconditionFailed},
+	CodeSigningKeyMismatch: {"The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.", http.StatusConflict},
 
 	CodeReqBearerRequired:       {"A valid bearer token is required.", http.StatusUnauthorized},
 	CodeAuthCredentialsInvalid:  {"Invalid username or password.", http.StatusUnauthorized},
