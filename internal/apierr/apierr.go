@@ -114,6 +114,14 @@ const (
 	CodeSigningKeyMissing  Code = "signing_key_missing"  // 412: pinned-but-absent
 	CodeSigningKeyMismatch Code = "signing_key_mismatch" // 409: configured key != pinned anchor
 
+	// Keystone rotation (keystone-rotation-safety) — re-pinning the OFF-HOST operator
+	// credential to a DIFFERENT key strands every enrolled node (each verifies the served
+	// trust-list against the credential it was provisioned with out of band) until it is
+	// re-provisioned AND a fresh deploy is signed under the new key. So a CHANGED credential
+	// is refused unless the operator explicitly acknowledges the rotation (rotate:true) —
+	// the anti-footgun analogue of YAOG_BUNDLE_SIGNING_KEY_ROTATE for the keystone.
+	CodeKeystoneRotationRequiresAck Code = "keystone_rotation_requires_ack" // 409: changed cred, no rotate ack
+
 	// Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
 	CodeReqBearerRequired       Code = "req_bearer_required"
 	CodeAuthCredentialsInvalid  Code = "auth_credentials_invalid"
@@ -191,6 +199,8 @@ var registry = map[Code]def{
 
 	CodeSigningKeyMissing:  {"This fleet's bundles are signed, but no signing key is configured (YAOG_BUNDLE_SIGNING_KEY is unset or unreadable). Refusing to stage unsigned bundles — restore the signing key.", http.StatusPreconditionFailed},
 	CodeSigningKeyMismatch: {"The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.", http.StatusConflict},
+
+	CodeKeystoneRotationRequiresAck: {"A different operator signing credential is already pinned. Rotating it strands every enrolled node until each is re-provisioned (yaog-agent reprovision-keystone) AND a fresh deploy is signed under the new key. Re-send with rotate:true to acknowledge and proceed.", http.StatusConflict},
 
 	CodeReqBearerRequired:       {"A valid bearer token is required.", http.StatusUnauthorized},
 	CodeAuthCredentialsInvalid:  {"Invalid username or password.", http.StatusUnauthorized},
