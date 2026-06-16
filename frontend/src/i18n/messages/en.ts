@@ -263,9 +263,14 @@ export const en = {
   'deployBar.lastDeploy': "Last deploy",
   'deployBar.none': "(none)",
   'deployBar.notEnrolled': "Not enrolled",
+  'deployBar.keystoneChecking': "checking…",
+  'deployBar.keystoneRedeployRequired': "⚠️ The signing key was rotated but the fleet has not been re-deployed under it. Every node is stranded (it still verifies the previous key) until you Deploy again to ship a bundle signed with the new key.",
+  'deployBar.keystonePinnedNoLocalKey': "A signing key is enrolled on the controller, but this browser holds no local signing key — sign deploys on the enrolling device, or rotate to a key on this device.",
+  'deployBar.rotateKeystone': "🔁 Rotate signing key…",
+  'deployBar.rotateKeystoneWarning': "A signing key is already enrolled. Rotating it strands EVERY node until you re-provision each one out of band (run `yaog-agent reprovision-keystone --operator-cred <new-cred.pem> --operator-cred-alg <alg>`) AND Deploy again under the new key. Continue only if you intend to rotate the keystone.",
+  'deployBar.rotateKeystoneConfirm': "🔁 Rotate now (touch your security key)",
   'deployBar.operatorSigningKey': "🔐 Operator signing key",
   'deployBar.pinAnOffHost': "Pin an off-host credential (passkey / YubiKey) used to sign each deploy’s trust-list. The private key never leaves your security key; the controller stores only its public key.",
-  'deployBar.reEnrollSigningKey': "🔐 Re-enroll signing key (passkey / YubiKey)",
   'deployBar.revoke': "Revoke",
   'deployBar.rollKeys': "🔑 Roll keys",
   'deployBar.rollKeysAsksEach': "Roll keys asks each node to regenerate its WireGuard key; once nodes re-register their new public keys, Deploy once more to converge the fleet.",
@@ -627,6 +632,7 @@ export const en = {
   // Bundle-signing anchor (persist-signing-anchor): stage-time fail-loud when the signing key is missing/changed.
   'error.signing_key_missing': "This fleet's bundles are signed, but no signing key is configured (YAOG_BUNDLE_SIGNING_KEY is unset or unreadable). Refusing to stage unsigned bundles — restore the signing key.",
   'error.signing_key_mismatch': 'The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.',
+  'error.keystone_rotation_requires_ack': 'A different operator signing credential is already pinned. Rotating it strands every enrolled node until each is re-provisioned (yaog-agent reprovision-keystone) AND a fresh deploy is signed under the new key. Confirm the rotation to proceed.',
   // Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
   'error.req_bearer_required': 'A valid bearer token is required.',
   'error.auth_credentials_invalid': 'Invalid username or password.',
