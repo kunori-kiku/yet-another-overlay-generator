@@ -253,6 +253,12 @@ export const zh: Record<keyof typeof en, string> = {
   'deployBar.lastDeploy': "最近一次发布",
   'deployBar.none': "（无）",
   'deployBar.notEnrolled': "未注册",
+  'deployBar.keystoneChecking': "检查中…",
+  'deployBar.keystoneRedeployRequired': "⚠️ 签名密钥已轮换，但 fleet 尚未在新密钥下重新部署。在你再次部署、下发由新密钥签名的捆绑之前，所有节点都将处于失效状态（它们仍按旧密钥校验）。",
+  'deployBar.keystonePinnedNoLocalKey': "控制器上已注册签名密钥，但此浏览器没有本地签名密钥——请在当初注册的设备上签名部署，或轮换为本设备上的密钥。",
+  'deployBar.rotateKeystone': "🔁 轮换签名密钥…",
+  'deployBar.rotateKeystoneWarning': "已注册一个签名密钥。轮换它会让每个节点失效，直到你逐台带外重新配置（运行 `yaog-agent reprovision-keystone --operator-cred <new-cred.pem> --operator-cred-alg <alg>`）并在新密钥下再次部署。仅在确实要轮换 keystone 时继续。",
+  'deployBar.rotateKeystoneConfirm': "🔁 立即轮换（触碰你的安全密钥）",
   'deployBar.operatorSigningKey': "🔐 操作员签名密钥",
   'deployBar.pinAnOffHost': "在浏览器外（passkey / YubiKey）pin 一个签名凭据，用于为每次发布的成员清单签名。私钥永不离开你的安全密钥；控制器只保存它的公钥。",
   'deployBar.reEnrollSigningKey': "🔐 重新注册签名密钥（passkey / YubiKey）",
@@ -609,6 +615,7 @@ export const zh: Record<keyof typeof en, string> = {
   // 捆绑签名锚（persist-signing-anchor）：暂存时若签名密钥缺失/变更则明确报错。
   'error.signing_key_missing': '本 fleet 的捆绑包是签名的，但当前未配置签名密钥（YAOG_BUNDLE_SIGNING_KEY 未设置或不可读）。拒绝暂存未签名的捆绑包——请恢复签名密钥。',
   'error.signing_key_mismatch': '当前配置的捆绑签名密钥与本 fleet 已固定的密钥不一致。请恢复原密钥，或在一次部署时设置 YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 以有意轮换。',
+  'error.keystone_rotation_requires_ack': '已固定了一个不同的操作员签名凭据。轮换它会让每个已注册节点失效，直到逐台重新配置（yaog-agent reprovision-keystone）并在新密钥下重新签名部署。请确认轮换以继续。',
   // 认证 + 会话接口（plan-3.5b）——登录 / passkey / TOTP / bootstrap / 节点 + 操作员认证。
   'error.req_bearer_required': '需要有效的 bearer 令牌。',
   'error.auth_credentials_invalid': '用户名或密码错误。',

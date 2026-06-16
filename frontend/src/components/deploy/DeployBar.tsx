@@ -2,7 +2,8 @@ import { useState } from 'react';
 import {
   useControllerStore,
   selectRekeyingCount,
-  selectOperatorEnrolled,
+  selectKeystoneStatusKnown,
+  selectHasLocalSigningKey,
   selectHasAuth,
 } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
@@ -24,9 +25,21 @@ export function DeployBar() {
   const enrolling = useControllerStore((s) => s.enrolling);
   const error = useControllerStore((s) => s.error);
   const lastDeploy = useControllerStore((s) => s.lastDeploy);
-  // 是否已 pin off-host 签名凭据（决定签名区回显与提示）。
-  const operatorEnrolled = useControllerStore(selectOperatorEnrolled);
-  const operatorCredentialAlg = useControllerStore((s) => s.operatorCredentialAlg);
+  // Keystone status is SERVER-authoritative (never the browser-local cache): null = checking,
+  // true = a credential is pinned on the controller, false = none. This is what kills the false
+  // "Not enrolled" a browser-data clear used to show (which invited a fleet-stranding re-pin).
+  const serverOperatorPinned = useControllerStore((s) => s.serverOperatorPinned);
+  const keystoneKnown = useControllerStore(selectKeystoneStatusKnown);
+  const serverOperatorAlg = useControllerStore((s) => s.serverOperatorAlg);
+  const serverOperatorFingerprint = useControllerStore((s) => s.serverOperatorFingerprint);
+  const serverRedeployRequired = useControllerStore((s) => s.serverRedeployRequired);
+  // A credential can be pinned on the server yet ABSENT from this browser (enrolled on another
+  // device / after a browser-data clear) — then the operator must sign on the enrolling device.
+  const hasLocalSigningKey = useControllerStore(selectHasLocalSigningKey);
+  // Pending rotate confirmation: arming this (instead of starting the ceremony) is how a re-pin of
+  // an already-pinned keystone is gated behind an explicit acknowledgement.
+  const pendingKeystoneRotate = useControllerStore((s) => s.pendingKeystoneRotate);
+  const cancelKeystoneRotate = useControllerStore((s) => s.cancelKeystoneRotate);
   // 部署后孤儿清单（plan-6）：仍在 fleet 注册表、但不在「刚刚发布的那一代」里的已审批节点。
   const ctlNodes = useControllerStore((s) => s.nodes);
   const revoke = useControllerStore((s) => s.revoke);
@@ -110,17 +123,23 @@ export function DeployBar() {
         {t(language, 'deployBar.rollKeysAsksEach')}
       </p>
 
-      {/* KEYSTONE（plan-5.1d）：off-host operator 签名密钥（passkey / YubiKey）。
-          回显是否已注册 + 注册按钮；并提示 keystone 开启时 Deploy 会要求触碰安全密钥。 */}
+      {/* KEYSTONE（plan-5.1d）：off-host operator 签名密钥（passkey / YubiKey）。状态来自服务端
+          权威（serverOperatorPinned），不再依赖浏览器本地缓存——清浏览器数据不会再误报「未注册」。
+          已注册时显示算法 + 指纹；轮换是会让全 fleet 失效的危险操作，故走显式确认。 */}
       <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-amber-300">
             {t(language, 'deployBar.operatorSigningKey')}
           </h4>
-          {operatorEnrolled ? (
-            <span className="text-xs text-green-300 bg-green-900/20 px-2 py-0.5 rounded">
+          {!keystoneKnown ? (
+            <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
+              {t(language, 'deployBar.keystoneChecking')}
+            </span>
+          ) : serverOperatorPinned ? (
+            <span className="text-xs text-green-300 bg-green-900/20 px-2 py-0.5 rounded font-mono">
               {t(language, 'deployBar.enrolled')}
-              {operatorCredentialAlg ? ` (${operatorCredentialAlg})` : ''}
+              {serverOperatorAlg ? ` (${serverOperatorAlg})` : ''}
+              {serverOperatorFingerprint ? ` · ${serverOperatorFingerprint.slice(0, 12)}` : ''}
             </span>
           ) : (
             <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
@@ -131,17 +150,59 @@ export function DeployBar() {
         <p className="text-xs text-gray-400">
           {t(language, 'deployBar.pinAnOffHost')}
         </p>
-        <button
-          onClick={() => enrollOperator()}
-          disabled={enrolling || loading || noAuth}
-          className="px-4 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
-        >
-          {enrolling
-            ? t(language, 'deployBar.waitingForSecurityKey')
-            : operatorEnrolled
-              ? t(language, 'deployBar.reEnrollSigningKey')
-              : t(language, 'deployBar.enrollSigningKeyPasskey')}
-        </button>
+
+        {/* Rotated-but-not-redeployed: the served bundle is still signed under the OLD key, so every
+            node is stranded until a fresh signed deploy lands. Surface it loudly. */}
+        {serverRedeployRequired && (
+          <p className="text-xs text-red-200 bg-red-900/30 border border-red-700/50 px-2 py-1 rounded">
+            {t(language, 'deployBar.keystoneRedeployRequired')}
+          </p>
+        )}
+
+        {/* Pinned on the server but this browser has no local signing key (enrolled elsewhere / after
+            a browser-data clear): you can't sign a deploy here — do it on the enrolling device. */}
+        {serverOperatorPinned && !hasLocalSigningKey && (
+          <p className="text-xs text-amber-200 bg-amber-900/20 border border-amber-700/40 px-2 py-1 rounded">
+            {t(language, 'deployBar.keystonePinnedNoLocalKey')}
+          </p>
+        )}
+
+        {/* Pending rotate confirmation: rotating strands the fleet, so demand an explicit confirm. */}
+        {pendingKeystoneRotate ? (
+          <div className="space-y-2 border border-red-700/50 bg-red-900/20 rounded p-2">
+            <p className="text-xs text-red-200">
+              {t(language, 'deployBar.rotateKeystoneWarning')}
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => enrollOperator({ rotate: true })}
+                disabled={enrolling || loading || noAuth}
+                className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+              >
+                {t(language, 'deployBar.rotateKeystoneConfirm')}
+              </button>
+              <button
+                onClick={() => cancelKeystoneRotate()}
+                disabled={enrolling}
+                className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+              >
+                {t(language, 'deployBar.cancel')}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => enrollOperator()}
+            disabled={enrolling || loading || noAuth || !keystoneKnown}
+            className="px-4 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+          >
+            {enrolling
+              ? t(language, 'deployBar.waitingForSecurityKey')
+              : serverOperatorPinned
+                ? t(language, 'deployBar.rotateKeystone')
+                : t(language, 'deployBar.enrollSigningKeyPasskey')}
+          </button>
+        )}
         <p className="text-[10px] text-gray-500">
           {t(language, 'deployBar.whenTheKeystoneIs')}
         </p>

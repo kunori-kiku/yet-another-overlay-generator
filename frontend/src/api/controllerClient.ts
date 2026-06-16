@@ -185,6 +185,46 @@ export interface OperatorCredentialBody {
   publicKeyPEM: string; // PKIX "PUBLIC KEY" PEM
   rpId: string; // location.hostname
   origin: string; // location.origin
+  // rotate ACKNOWLEDGES that this pin REPLACES a different already-pinned credential (which
+  // strands every node until re-provisioned + redeployed). The controller refuses a changed
+  // credential without it (409 keystone_rotation_requires_ack). Ignored on a first/idempotent pin.
+  rotate?: boolean;
+}
+
+// OperatorCredentialPinResult is the POST /operator-credential result: rotated true only when the
+// pin REPLACED a different credential; unchanged true on an idempotent re-pin; redeployRequired
+// true when (after a rotation) the served fleet is still signed under the old key.
+export interface OperatorCredentialPinResult {
+  ok: boolean;
+  rotated: boolean;
+  unchanged: boolean;
+  redeployRequired: boolean;
+}
+
+// OperatorCredentialStatus is the SERVER-authoritative keystone status (GET /operator-credential):
+// the panel reflects THIS, never a browser-local cache, so a cleared browser can never falsely
+// read "Not enrolled". It carries only non-secret public identifiers (never the PEM body).
+export interface OperatorCredentialStatus {
+  pinned: boolean;
+  alg: string;
+  credentialId: string;
+  rpId: string;
+  origin: string;
+  fingerprint: string;
+  redeployRequired: boolean;
+}
+
+// controllerErrorCode extracts the backend error CODE from a caught ControllerError's coded
+// envelope ({ error: { code } }), or null for any other error / shape. Lets the store branch on a
+// specific failure (e.g. keystone_rotation_requires_ack) without string-matching messages.
+export function controllerErrorCode(err: unknown): string | null {
+  if (!(err instanceof ControllerError)) return null;
+  const inner = (err.body as { error?: unknown } | null | undefined)?.error;
+  if (inner && typeof inner === 'object') {
+    const code = (inner as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return null;
 }
 
 // 把用户输入的 secret path 前缀规范化为 "" 或 "/<seg>"（单个前导斜杠、无尾随斜杠），
@@ -953,8 +993,8 @@ export async function postTrustlistSignature(
 export async function postOperatorCredential(
   cfg: ControllerConfig,
   body: OperatorCredentialBody,
-): Promise<void> {
-  await postJSON(
+): Promise<OperatorCredentialPinResult> {
+  const res = await postJSON(
     cfg,
     'operator-credential',
     JSON.stringify({
@@ -963,6 +1003,47 @@ export async function postOperatorCredential(
       public_key_pem: body.publicKeyPEM,
       rpid: body.rpId,
       origin: body.origin,
+      rotate: body.rotate ?? false,
     }),
   );
+  const d = (await res.json()) as {
+    ok?: boolean;
+    rotated?: boolean;
+    unchanged?: boolean;
+    redeploy_required?: boolean;
+  };
+  return {
+    ok: d.ok ?? false,
+    rotated: d.rotated ?? false,
+    unchanged: d.unchanged ?? false,
+    redeployRequired: d.redeploy_required ?? false,
+  };
+}
+
+// getOperatorCredentialStatus reads the SERVER-authoritative keystone status (GET
+// /operator-credential, operator-only). It is the source of truth for the panel's "enrolled"
+// display — a browser-local cache must never decide it (a cleared browser would falsely read
+// "Not enrolled" and invite a fleet-stranding re-pin).
+export async function getOperatorCredentialStatus(
+  cfg: ControllerConfig,
+): Promise<OperatorCredentialStatus> {
+  const res = await request(cfg, 'operator-credential', { method: 'GET' });
+  const d = (await res.json()) as {
+    pinned?: boolean;
+    alg?: string;
+    credential_id?: string;
+    rpid?: string;
+    origin?: string;
+    fingerprint?: string;
+    redeploy_required?: boolean;
+  };
+  return {
+    pinned: d.pinned ?? false,
+    alg: d.alg ?? '',
+    credentialId: d.credential_id ?? '',
+    rpId: d.rpid ?? '',
+    origin: d.origin ?? '',
+    fingerprint: d.fingerprint ?? '',
+    redeployRequired: d.redeploy_required ?? false,
+  };
 }
