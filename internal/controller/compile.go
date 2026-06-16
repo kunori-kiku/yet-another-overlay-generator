@@ -47,7 +47,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
@@ -194,6 +196,64 @@ func AgentRolloutNodeIDs(cs ControllerSettings, nodes []Node) map[string]bool {
 	return set
 }
 
+// enforceSigningAnchor reconciles the configured bundle signing key (YAOG_BUNDLE_SIGNING_KEY,
+// resolved here exactly as artifacts.Export will) against the tenant's persisted SigningAnchor, so
+// a redeploy that dropped or swapped the key is caught BEFORE any bundle is produced:
+//
+//   - no anchor + key present → pin it (trust-on-first-use), then sign as usual
+//   - no anchor + no key      → never-signed fleet, allowed (back-compat, hash-only bundles)
+//   - anchor + same key       → normal signed stage
+//   - anchor + NO key         → CodeSigningKeyMissing (refuse: would silently downgrade to unsigned)
+//   - anchor + different key  → CodeSigningKeyMismatch, unless YAOG_BUNDLE_SIGNING_KEY_ROTATE re-pins
+//
+// The two refusal cases return a coded *apierr.Error so the operator gets a precise reason on stage.
+func enforceSigningAnchor(ctx context.Context, store Store, t TenantID, now time.Time) error {
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		// A set-but-unreadable/unparsable key already fails the export closed; surface it here too
+		// so a half-configured signer never slips past the anchor reconciliation.
+		return fmt.Errorf("controller: loading bundle signing key: %w", err)
+	}
+	var configuredPub string
+	if signer != nil {
+		configuredPub = string(signer.PublicKeyPEM())
+	}
+
+	anchor, err := store.GetSigningAnchor(ctx, t)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		if configuredPub == "" {
+			return nil // never-signed fleet: nothing to pin, nothing to enforce
+		}
+		if err := store.PutSigningAnchor(ctx, t, SigningAnchor{PubKeyPEM: configuredPub}); err != nil {
+			return err
+		}
+		// Trust-on-first-use: this re-points which key the fleet is signed under, so audit it
+		// (best-effort, like the stage audits) — a trust transition must be attributable.
+		appendStageAudit(ctx, store, t, now, "signing-anchor-pin", "")
+		return nil
+	case err != nil:
+		return fmt.Errorf("controller: loading signing anchor: %w", err)
+	}
+
+	switch {
+	case configuredPub == "":
+		return apierr.New(apierr.CodeSigningKeyMissing) // pinned-but-absent → refuse
+	case configuredPub == anchor.PubKeyPEM:
+		return nil // same key as pinned — normal signed stage
+	case bundlesig.RotateRequested():
+		if err := store.PutSigningAnchor(ctx, t, SigningAnchor{PubKeyPEM: configuredPub}); err != nil {
+			return err
+		}
+		// Explicit rotation (YAOG_BUNDLE_SIGNING_KEY_ROTATE) — audit the re-pin so a key change is
+		// attributable in the hash-chained log, not indistinguishable from a routine stage.
+		appendStageAudit(ctx, store, t, now, "signing-anchor-rotate", "")
+		return nil
+	default:
+		return apierr.New(apierr.CodeSigningKeyMismatch) // configured key != pinned → refuse
+	}
+}
+
 // CompileAndStage renders the enrolled subgraph of the stored topology into signed
 // per-node bundles and stages them at the next generation. When the keystone is ON it
 // also builds the off-host-signable membership manifest (binding each node's bundle
@@ -300,6 +360,14 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// that changes NOTHING (sticky pins re-derived byte-identically) is skipped instead
 	// of burning one of the bounded history slots.
 	if err := persistAllocations(ctx, store, t, &topo, result.Topology, rec.JSON); err != nil {
+		return StageResult{}, err
+	}
+
+	// Signing-anchor invariant: before producing any bundle, reconcile the configured bundle
+	// signing key against the per-tenant pinned anchor, so a redeploy that DROPPED or SWAPPED the
+	// key is caught here instead of silently shipping unsigned/differently-signed bundles. (The
+	// actual signing still happens inside artifacts.Export from the same env key.)
+	if err := enforceSigningAnchor(ctx, store, t, now); err != nil {
 		return StageResult{}, err
 	}
 

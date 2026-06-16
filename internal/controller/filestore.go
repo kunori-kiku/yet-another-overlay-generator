@@ -54,6 +54,7 @@ import (
 //	operators/<username>.json           one operator account (argon2id PHC hash)
 //	sessions/<tokenHash>.json           one operator login session, keyed by token hash
 //	settings.json                       operator-editable controller settings (bootstrap)
+//	signing-anchor.json                 the pinned bundle-signing PUBLIC key (TOFU; non-secret)
 //
 // Directories are created 0700 and files written 0600. SignedBundle.Files
 // (map[string][]byte) serializes as base64 under encoding/json, which round-trips
@@ -1727,6 +1728,45 @@ func (fs *FileStore) PutSettings(ctx context.Context, t TenantID, cs ControllerS
 		return err
 	}
 	return writeJSONAtomic(filepath.Join(dir, "settings.json"), cs)
+}
+
+// GetSigningAnchor reads the tenant's pinned signing public key from signing-anchor.json, or
+// ErrNotFound when none is pinned.
+func (fs *FileStore) GetSigningAnchor(ctx context.Context, t TenantID) (SigningAnchor, error) {
+	if err := ctx.Err(); err != nil {
+		return SigningAnchor{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return SigningAnchor{}, err
+	}
+	var a SigningAnchor
+	if err := readJSON(filepath.Join(dir, "signing-anchor.json"), &a); err != nil {
+		if os.IsNotExist(err) {
+			return SigningAnchor{}, ErrNotFound
+		}
+		return SigningAnchor{}, err
+	}
+	return a, nil
+}
+
+// PutSigningAnchor pins (replacing any prior) the tenant's signing public key as
+// signing-anchor.json (0700 dir / 0600 file, atomic write).
+func (fs *FileStore) PutSigningAnchor(ctx context.Context, t TenantID, a SigningAnchor) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.ensureTenantDir(t)
+	if err != nil {
+		return err
+	}
+	return writeJSONAtomic(filepath.Join(dir, "signing-anchor.json"), a)
 }
 
 // ================================ Audit ====================================

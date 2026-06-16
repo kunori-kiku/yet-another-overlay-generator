@@ -624,6 +624,9 @@ export const en = {
   'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
   'error.agent_release_fetch_failed': 'Could not fetch the release checksum from {url}: {detail}',
   'error.agent_release_sidecar_invalid': 'The release checksum fetched from {url} is not a valid SHA-256.',
+  // Bundle-signing anchor (persist-signing-anchor): stage-time fail-loud when the signing key is missing/changed.
+  'error.signing_key_missing': "This fleet's bundles are signed, but no signing key is configured (YAOG_BUNDLE_SIGNING_KEY is unset or unreadable). Refusing to stage unsigned bundles — restore the signing key.",
+  'error.signing_key_mismatch': 'The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.',
   // Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
   'error.req_bearer_required': 'A valid bearer token is required.',
   'error.auth_credentials_invalid': 'Invalid username or password.',

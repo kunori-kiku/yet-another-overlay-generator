@@ -11,6 +11,22 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 _Nothing yet._
 
+## [2.0.0-beta.4] - 2026-06-16
+
+A security hardening fix: the controller no longer silently ships **unsigned** bundles when a
+previously-signed fleet's signing key goes missing (or changes) across a redeploy.
+
+### Security
+- **Persisted bundle-signing anchor — no silent downgrade.** `YAOG_BUNDLE_SIGNING_KEY` is read
+  fresh at export time, so a controller redeploy that dropped or swapped it silently reverted a
+  signed fleet to hash-only (or to a different key) with no signal. The controller now pins the
+  signing **public** key per tenant (the private key stays off-host, env-referenced) and reconciles
+  it at stage time: trust-on-first-use on the first signed stage; a **missing** key on a pinned
+  fleet fails loud (`signing_key_missing`, 412); a **changed** key fails loud (`signing_key_mismatch`,
+  409); intentional rotation/recovery via `YAOG_BUNDLE_SIGNING_KEY_ROTATE` (one deploy, then unset).
+  Pin and rotate are recorded in the hash-chained audit log. Controller-only — the air-gap export
+  path has no persisted state and is unchanged (still signs iff the env key is set).
+
 ## [2.0.0-beta.3] - 2026-06-16
 
 The third beta: closes the `controller-panel-rollout-ui` subject by building the operator-panel UI
@@ -291,7 +307,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.3...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.4...HEAD
+[2.0.0-beta.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.3...v2.0.0-beta.4
 [2.0.0-beta.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.2...v2.0.0-beta.3
 [2.0.0-beta.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.1...v2.0.0-beta.2
 [2.0.0-beta.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.10...v2.0.0-beta.1
