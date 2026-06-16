@@ -261,7 +261,6 @@ export const zh: Record<keyof typeof en, string> = {
   'deployBar.rotateKeystoneConfirm': "🔁 立即轮换（触碰你的安全密钥）",
   'deployBar.operatorSigningKey': "🔐 操作员签名密钥",
   'deployBar.pinAnOffHost': "在浏览器外（passkey / YubiKey）pin 一个签名凭据，用于为每次发布的成员清单签名。私钥永不离开你的安全密钥；控制器只保存它的公钥。",
-  'deployBar.reEnrollSigningKey': "🔐 重新注册签名密钥（passkey / YubiKey）",
   'deployBar.revoke': "驱逐",
   'deployBar.rollKeys': "🔑 轮换密钥",
   'deployBar.rollKeysAsksEach': "「轮换密钥」会请求各节点重生 WireGuard 密钥；待节点重新注册新公钥后，再「发布」一次以使 fleet 收敛。",

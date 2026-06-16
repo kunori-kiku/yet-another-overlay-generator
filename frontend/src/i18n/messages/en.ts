@@ -271,7 +271,6 @@ export const en = {
   'deployBar.rotateKeystoneConfirm': "🔁 Rotate now (touch your security key)",
   'deployBar.operatorSigningKey': "🔐 Operator signing key",
   'deployBar.pinAnOffHost': "Pin an off-host credential (passkey / YubiKey) used to sign each deploy’s trust-list. The private key never leaves your security key; the controller stores only its public key.",
-  'deployBar.reEnrollSigningKey': "🔐 Re-enroll signing key (passkey / YubiKey)",
   'deployBar.revoke': "Revoke",
   'deployBar.rollKeys': "🔑 Roll keys",
   'deployBar.rollKeysAsksEach': "Roll keys asks each node to regenerate its WireGuard key; once nodes re-register their new public keys, Deploy once more to converge the fleet.",

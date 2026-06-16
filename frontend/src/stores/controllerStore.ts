@@ -306,19 +306,20 @@ interface ControllerState {
   // SERVER-authoritative keystone status (NOT persisted): the panel derives "enrolled" from THIS,
   // never the browser-local operatorCredential* cache, so clearing browser data can no longer
   // falsely read "Not enrolled" and invite a fleet-stranding re-pin. null = not yet probed
-  // ("checking"); true/false = the server's answer. serverOperatorFingerprint identifies the pinned
-  // key (comparable to the panel's local key + the agent's node fingerprint); serverRedeployRequired
-  // is the controller's "rotated-but-not-redeployed" signal (every node stranded until a fresh
-  // signed deploy lands). Re-probed on connect/login/refresh via hydrateKeystoneStatus.
+  // ("checking"); true/false = the server's answer. serverOperatorFingerprint is the controller's
+  // non-secret identifier for the pinned key, shown truncated in the DeployBar chip (the panel does
+  // not derive a local fingerprint nor compare the two). serverRedeployRequired is the controller's
+  // "rotated-but-not-redeployed" signal (every node stranded until a fresh signed deploy lands).
+  // Re-probed on connect/login/refresh via hydrateKeystoneStatus.
   serverOperatorPinned: boolean | null;
   serverOperatorAlg: string | null;
   serverOperatorFingerprint: string | null;
   serverRedeployRequired: boolean;
   // pendingKeystoneRotate gates the dangerous re-pin: when a credential is ALREADY pinned on the
-  // server, enrollOperator() refuses to start the WebAuthn ceremony and instead sets this (carrying
-  // the existing fingerprint) so the UI can demand an explicit rotate confirmation; only
-  // enrollOperator({rotate:true}) proceeds. null = no rotation pending. (Mirrors pendingShrink.)
-  pendingKeystoneRotate: { fingerprint: string } | null;
+  // server, enrollOperator() refuses to start the WebAuthn ceremony and instead sets this true so
+  // the UI can demand an explicit rotate confirmation (the pinned key is already shown in the
+  // enrolled chip); only enrollOperator({rotate:true}) proceeds. (Mirrors pendingShrink as a gate.)
+  pendingKeystoneRotate: boolean;
 
   // 易失 UI 状态
   loading: boolean;
@@ -513,26 +514,18 @@ export function selectRekeyingCount(state: ControllerState): number {
   return state.nodes.filter((n) => n.rekeyRequested && n.status === 'approved').length;
 }
 
-// selectOperatorEnrolled is SERVER-authoritative: a credential is "enrolled" iff the controller
-// says one is pinned (serverOperatorPinned === true). It deliberately does NOT consult the
-// browser-local operatorCredential* cache — that cache is cleared by a browser-data wipe even
-// though the server still holds the credential, which previously made the panel falsely read
-// "Not enrolled" and invite a fleet-stranding re-pin. While the status is still being probed
-// (serverOperatorPinned === null) this is false; the UI distinguishes that "checking" state via
-// selectKeystoneStatusKnown so it never shows a premature "Not enrolled".
-export function selectOperatorEnrolled(state: ControllerState): boolean {
-  return state.serverOperatorPinned === true;
-}
-
 // selectKeystoneStatusKnown reports whether the server keystone status has been probed yet, so the
-// UI can show "checking…" (null) instead of a premature "Not enrolled" (false).
+// UI can show "checking…" (null) instead of a premature "Not enrolled" (false). The live UI reads
+// serverOperatorPinned directly (server-authoritative — never the browser-local cache, which a
+// browser-data wipe clears even though the server still holds the credential, the false "Not
+// enrolled" that invited a fleet-stranding re-pin) together with this "known" gate.
 export function selectKeystoneStatusKnown(state: ControllerState): boolean {
   return state.serverOperatorPinned !== null;
 }
 
 // selectHasLocalSigningKey reports whether THIS browser holds the local signing material (the
 // public-key PEM cache) the deploy() signing path needs. A credential can be enrolled on the
-// server (selectOperatorEnrolled) yet absent here — e.g. enrolled on another device or after a
+// server (serverOperatorPinned) yet absent here — e.g. enrolled on another device or after a
 // browser-data clear — in which case the operator must sign on the enrolling device.
 export function selectHasLocalSigningKey(state: ControllerState): boolean {
   return (
@@ -541,6 +534,19 @@ export function selectHasLocalSigningKey(state: ControllerState): boolean {
     !!state.operatorPublicKeyPEM
   );
 }
+
+// serverKeystoneReset is the "unknown" state of the SERVER-authoritative keystone fields. It is the
+// single reset used at every session-flush point (initial state, logout, and both session-loss
+// branches of checkSession) so they stay in lockstep — a session expiry must not strand a stale
+// "enrolled / redeploy-required" status that a not-noAuth-gated DeployBar chip could render before
+// the next probe (mirrors the clearServerCanvasAtGate single-definition discipline).
+const serverKeystoneReset = {
+  serverOperatorPinned: null,
+  serverOperatorAlg: null,
+  serverOperatorFingerprint: null,
+  serverRedeployRequired: false,
+  pendingKeystoneRotate: false,
+} as const;
 
 export const useControllerStore = create<ControllerState>()(
   persist(
@@ -579,11 +585,7 @@ export const useControllerStore = create<ControllerState>()(
       operatorPublicKeyPEM: null,
 
       // SERVER-authoritative keystone status (not persisted): null = not yet probed ("checking").
-      serverOperatorPinned: null,
-      serverOperatorAlg: null,
-      serverOperatorFingerprint: null,
-      serverRedeployRequired: false,
-      pendingKeystoneRotate: null,
+      ...serverKeystoneReset,
 
       loading: false,
       error: null,
@@ -856,11 +858,7 @@ export const useControllerStore = create<ControllerState>()(
           saveConflict: false,
           // Server-authoritative keystone status is session-derived: reset to "unknown" on logout
           // so the next operator re-probes (never inherits a stale "enrolled" / redeploy banner).
-          serverOperatorPinned: null,
-          serverOperatorAlg: null,
-          serverOperatorFingerprint: null,
-          serverRedeployRequired: false,
-          pendingKeystoneRotate: null,
+          ...serverKeystoneReset,
         });
         // 安全：登出后画布若是服务端机密镜像，立即清空（内存 + 由 persist 连带清掉 localStorage）。
         // 否则登出态下任何人都能从画布/localStorage 读出 fleet 的公网 IP 与 SSH 目标。本地原创
@@ -911,14 +909,16 @@ export const useControllerStore = create<ControllerState>()(
             }
           } else {
             // 会话失效：先捕获基线再清（同 logout 的顺序修复），gate 用 live 基线判 dirty 才准。
+            // Also flush the server-authoritative keystone status (lockstep with logout) so a stale
+            // enrolled/redeploy status can't render before the next probe.
             const lostSnap = get().lastSyncedSnapshot;
-            set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
+            set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
             clearServerCanvasAtGate(get().mode, lostSnap);
             useUiStore.getState().restoreLocalTranslucency(); // A3：回登录门用本地外观偏好
           }
         } catch {
           const lostSnap = get().lastSyncedSnapshot;
-          set({ loggedIn: false, lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
+          set({ loggedIn: false, lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
           clearServerCanvasAtGate(get().mode, lostSnap);
           useUiStore.getState().restoreLocalTranslucency();
         }
@@ -1081,7 +1081,7 @@ export const useControllerStore = create<ControllerState>()(
         // — arm pendingKeystoneRotate so the UI demands confirmation first (a rotation strands every
         // node until each is re-provisioned out of band AND a fresh deploy is signed).
         if (get().serverOperatorPinned === true && !rotate) {
-          set({ pendingKeystoneRotate: { fingerprint: get().serverOperatorFingerprint ?? '' }, error: null });
+          set({ pendingKeystoneRotate: true, error: null });
           return;
         }
         // rp.id 必须是注册域（location.hostname）；WebAuthn 在非安全上下文不可用。
@@ -1104,7 +1104,7 @@ export const useControllerStore = create<ControllerState>()(
             operatorRpId: rpId,
             operatorPublicKeyPEM: cred.publicKeyPEM,
             enrolling: false,
-            pendingKeystoneRotate: null,
+            pendingKeystoneRotate: false,
           });
           // Re-probe server truth (pinned + fingerprint + redeploy-required) and refresh the fleet.
           await get().hydrateKeystoneStatus();
@@ -1115,7 +1115,7 @@ export const useControllerStore = create<ControllerState>()(
           if (controllerErrorCode(err) === 'keystone_rotation_requires_ack') {
             set({
               enrolling: false,
-              pendingKeystoneRotate: { fingerprint: get().serverOperatorFingerprint ?? '' },
+              pendingKeystoneRotate: true,
               error: null,
             });
             return;
@@ -1144,7 +1144,7 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      cancelKeystoneRotate: () => set({ pendingKeystoneRotate: null }),
+      cancelKeystoneRotate: () => set({ pendingKeystoneRotate: false }),
 
       // compilePreview（PR6）：服务端权威只读编译。见接口注释。previewing 专用标志（非全局 loading）。
       compilePreview: async () => {
