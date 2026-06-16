@@ -25,6 +25,13 @@
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin), the FileStore SPOF (global mutex + 200ms generation poll) fix,
   the full wiki rewrite, and a frontend test runner.
+- **Descoped deliverables surfaced by the 2026-06-16 post-close audit** (now tracked, see
+  `CLOSURE.md` "Descoped deliverables"): (a) the plan-9 **Canary UI** (per-node update-status surface +
+  in-panel target-version/canary editor) was not built — agent self-update is configured via
+  `POST /api/v1/operator/settings` and observed via the plan-4 version badge; a canary-progress widget
+  is a follow-up (build vs. defer is an open owner decision). (b) the `v2.0.0-beta.1` release notes omit
+  the prior #98–#106 closure (cosmetic; body may be amended). The stale `validation.md` compliance prose
+  (a third finding) was **fixed** in the post-audit doc change.
 - No code blockers. `main` is green.
 
 ## Next actions

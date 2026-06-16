@@ -91,6 +91,24 @@ authenticator in the build environment:
 fetched without a pre-shared pin); the FileStore SPOF (one global mutex + a 200ms generation poll) fix;
 the full wiki rewrite (a redirect banner ships now); a frontend test runner.
 
+**Descoped deliverables surfaced by the post-close audit (2026-06-16)** — recorded here so the scope-down
+is visible, not buried in a spec footnote:
+- **Canary UI (plan-9 step 8) — not built.** The promised panel surface (a per-node
+  "update pending/applied/failed" chip + an in-panel target-version/canary editor) was descoped to the
+  **mimic-catalog precedent**: agent self-update is configured via the operator `POST /api/v1/operator/settings`
+  API (`TargetAgentVersion`, `AgentBins`, `AgentCanaryNodeIDs`, `AgentRolloutFleetWide`), and observed via the
+  plan-4 per-node version badge (`NodeRegistry.tsx` / `FleetNodeDetailPage.tsx`), which flips on a successful
+  swap. PR #117 touched zero frontend files. A dedicated canary-progress widget + in-panel pin editor is a
+  follow-up (build vs. defer is an open owner decision), not an rc.1 blocker.
+- **beta.1 release notes (plan-8 step 2) — partial.** The published `v2.0.0-beta.1` notes cover the beta.1
+  scope but omit the prior controller-nat subject (#98–#106) closure that step 2 asked them to cover; the
+  CHANGELOG attributes #97–#106 to the separate `[2.0.0-preview.10]` section. Cosmetic; the release body may be
+  amended.
+
+(The stale `docs/spec/compiler/validation.md` "Compliance" prose — table rows flipped to `schema`/`semantic`
+while the prose below still said "validated nowhere / MUST cover" — was a third audit finding and is **fixed**
+in this same change, so it is not owed.)
+
 **rc.1 is a later owner call** once the four owed smokes pass and the beta soak is clean.
 
 ## Pointers

@@ -25,13 +25,15 @@ Cross-reference and logical checks:
 ## Validation coverage contract
 
 The validator's job is to reject every input that cannot produce a deployable overlay *before* the
-compiler or a root-executed install script ever sees it. Today the validated surface is a fraction of
-the model surface (audit theme T4), so several field classes pass validation and then crash the
-allocator, render non-deployable configs, or inject shell into root-executed scripts. The table below
-is the **target coverage contract**: every model field, the pass that MUST validate it, and the rule.
+compiler or a root-executed install script ever sees it. The beta hardening pass (audit theme T4)
+closed the field classes that previously passed validation and then crashed the allocator, rendered
+non-deployable configs, or injected shell into root-executed scripts; the `none-yet` rows that remain
+are optional or compiler-derived fields, not safety gaps. The table below is the authoritative
+coverage contract: every model field, the pass that validates it, and the rule.
 
 Status column: `schema` / `semantic` = validated in that pass today; `none-yet` = no validation
-exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
+exists yet (an optional/derived field, or a deferred gap); `n/a` = compiler-allocated, not
+user-supplied.
 
 ### Domain fields
 
@@ -39,31 +41,33 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 |---|---|---|---|
 | `id` | schema | non-empty; unique (semantic) | schema + semantic |
 | `name` | schema | non-empty | schema |
-| `cidr` | schema | non-empty, parseable, **IPv4-only** | partial — see below |
+| `cidr` | schema | non-empty, parseable, **IPv4-only**, prefix not shorter than /8 | schema |
 | `allocation_mode` | schema | enum `auto`/`manual`; empty allowed | schema |
 | `routing_mode` | schema | empty normalizes to `babel`; `static`/`none` rejected as not-yet-implemented | schema |
 | `reserved_ranges[]` | schema | each a parseable CIDR or IP | schema |
 | `transit_cidr` | schema | parseable IPv4 CIDR, IPv4-only, /8–/30 (enough host pairs) | schema |
 
-> **Compliance — IPv4-only CIDR:** `validateDomainsSchema` accepts any address family
-> (`net.ParseCIDR` at `schema.go:89`), so an IPv6 domain CIDR passes and then panics the IPv4-only
-> allocator (`ipToUint32` slices `ip[12:16]` on a nil `To4()`, `ip.go:129,164-169` — D4/D35/D20). A
-> `/0` CIDR overflows the host count (`uint32(1) << 32`, `ip.go:116`) into a multi-billion-iteration
-> CPU spin (D56). Schema validation MUST add an IPv4-family guard and a CIDR-size bound (reject
-> prefixes too small to allocate from, and too large to enumerate).
+> **Compliance — IPv4-only CIDR:** `validateDomainsSchema` rejects a non-IPv4 domain CIDR
+> (`net.ParseCIDR` then `ipNet.IP.To4() == nil` → `CodeDomainCIDRNotIPv4`, `schema.go:152-157`),
+> closing the IPv4-only-allocator crash (`ipToUint32` slices `ip[12:16]` on a nil `To4()`,
+> `ip.go:129,164-169` — D4/D35/D20). It also bounds the prefix size: a CIDR shorter than `/8`
+> (e.g. `/0`, which would overflow the host count `uint32(1) << 32`, `ip.go:116`, D56) is rejected as
+> too large to enumerate (`CodeDomainCIDRTooLarge`, `schema.go:160-162`). The per-link `transit_cidr`
+> carries the analogous IPv4 guard plus a `/8`–`/30` size band (`schema.go:214-227`).
 
-> **Compliance — `routing_mode`:** schema accepts `static`/`babel`/`none` as the valid enum
-> (`schema.go:103-107`) and an empty value bypasses the enum check entirely (`schema.go:104`, D72).
-> Per Decisions log #3 the contract is: empty → `babel`, and `static`/`none` are **rejected** as not
-> yet implemented. Validation MUST normalize empty to `babel` and reject `static`/`none` with a
-> "not yet implemented" error. Routing-mode semantics: [routing-modes.md](routing-modes.md).
+> **Compliance — `routing_mode`:** an empty `routing_mode` is normalized to `babel` and written back
+> to the topology so the value round-trips explicitly (`schema.go:177-179`, D2/D72); `static` and
+> `none` are **rejected** as not-yet-implemented (`CodeDomainRoutingModeUnimplemented`,
+> `schema.go:185-186`) rather than rendered into a routing-less dead overlay, and any other value is
+> rejected as invalid (`CodeDomainRoutingModeInvalid`, `schema.go:188`). Routing-mode semantics:
+> [routing-modes.md](routing-modes.md).
 
 ### Node fields
 
 | Field | Pass | Rule | Status |
 |---|---|---|---|
 | `id` | schema | non-empty; unique (semantic) | schema + semantic |
-| `name` | schema + semantic | non-empty; **strict charset** (feeds WG interface + root-executed scripts); raw-name AND sanitized-name uniqueness | partial — see below |
+| `name` | schema + semantic | non-empty; **strict charset** (feeds WG interface + root-executed scripts); raw-name AND sanitized-name uniqueness | schema + semantic |
 | `hostname` | — | optional | none-yet |
 | `platform` | schema | enum `debian`/`ubuntu` (warning if other) | schema |
 | `role` | schema | enum `peer`/`router`/`relay`/`gateway`/`client` | schema |
@@ -87,10 +91,13 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > **Compliance — node-name charset & uniqueness:** node names are interpolated unescaped into a
 > root-executed `install.sh echo` (`script.go:61`, D15) and into a deploy-script heredoc that a
 > single quote breaks (`deploy.go:237`, D16); names also feed `wg-<name>` interface names where two
-> names sanitizing identically collide (`peers.go:492-522`, D13/D14). There is no name-charset check
-> and no raw-name or sanitized-name uniqueness check anywhere. Validation MUST enforce a strict node
-> name charset and reject both raw-name and sanitized-name collisions. Canonical naming and the
-> uniqueness invariant: [../artifacts/naming.md](../artifacts/naming.md).
+> names sanitizing identically collide (`peers.go:492-522`, D13/D14). Schema validation enforces a
+> strict name charset (`nodeNameCharset` — letters, digits, space, `.`, `_`, `-` only →
+> `CodeNodeNameIllegalChars`, `schema.go:241-244`); semantic validation rejects raw-name duplicates
+> (`CodeNodeNameDuplicate`, `semantic.go:228`), installer-name collisions
+> (`CodeNodeNameInstallerCollision`, `semantic.go:237`), and sanitized interface-name collisions
+> (`CodeNodeNameInterfaceCollision`, `semantic.go:247`). Canonical naming and the uniqueness
+> invariant: [../artifacts/naming.md](../artifacts/naming.md).
 
 > **Compliance — effective per-peer port range:** the compiler binds each peer interface at
 > `base+offset`, which can exceed 65535 and would then be rendered verbatim into the WG config
@@ -102,12 +109,16 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > The co-hosted effective-range overlap check (D47) was likewise removed: under a uniform base it
 > false-flagged every multi-node-per-host deployment, so co-hosted nodes now validate clean.
 
-> **Compliance — MTU / ssh_port / router_id / extra_prefixes / ssh fields:** none of `mtu`,
-> `ssh_port`, `router_id`, `extra_prefixes`, `ssh_alias`, `ssh_host`, or `ssh_user` are validated
-> anywhere end-to-end (`schema.go`/`semantic.go` never inspect them — D64/D65/D66/D67/D44). An
-> out-of-range MTU or malformed router-id produces a config `wg-quick`/`babeld` rejects at deploy
-> time; unvalidated SSH fields combine with unquoted interpolation into a local command-injection
-> path. Validation MUST cover all of these.
+> **Compliance — MTU / ssh_port / router_id / extra_prefixes / ssh fields:** all of these are
+> validated at the schema pass (D64/D65/D66/D67/D44). `mtu` must be 0 (system default) or within
+> [576, 65535] (`CodeNodeMTUOutOfRange`, `schema.go:286`); `ssh_port`, when set, within 1–65535
+> (`CodeNodeSSHPortOutOfRange`, `schema.go:293`); `router_id`, when set, must be MAC-48 or an IPv4
+> address (`CodeNodeRouterIDInvalid`, `schema.go:299-301`); each `extra_prefixes[]` entry must be a
+> parseable IPv4 CIDR (`CodeNodeExtraPrefixInvalid`/`NotIPv4`, `schema.go:307-313`); and `ssh_alias`,
+> `ssh_host`, `ssh_user` must match the strict SSH charset (`sshFieldCharset` →
+> `CodeNodeSSH*IllegalChars`, `schema.go:319-326`), closing the unquoted-interpolation
+> command-injection path. Without these guards an out-of-range MTU or malformed router-id would
+> produce a config `wg-quick`/`babeld` rejects only at deploy time.
 
 ### Edge fields
 
@@ -147,12 +158,13 @@ exists yet (a gap to close); `n/a` = compiler-allocated, not user-supplied.
 > `model.CurrentAllocSchemaVersion` because `compiler` imports `validator` (so the validator cannot
 > import the compiler's constant).
 
-> **Compliance — `route_policies` RESERVED:** `route_policies` is validated nowhere (`schema.go` and
-> `semantic.go` never inspect it, D62) and is consumed by no renderer. Per the binding decision
-> (Decisions log #2) it is reserved. Semantic validation MUST reject a non-empty `route_policies`
-> with a clear "reserved / not yet implemented" error, following the existing locale pattern (no
-> English-only string where zh strings exist). See [../api/wire-contract.md](../api/wire-contract.md)
-> for the wire-side reservation.
+> **Compliance — `route_policies` RESERVED:** `route_policies` is declared on both the Go and TS
+> sides but consumed by no renderer and exposed by no editor entry (D10/D37/D62). Per the binding
+> decision (Decisions log #2) it is reserved: semantic validation rejects a non-empty `route_policies`
+> with a clear "reserved / not yet implemented" coded error (`validateRoutePoliciesReserved` →
+> `CodeRoutePolicyReserved`, `semantic.go:95-97`) rather than compiling a topology that silently
+> diverges from the user's intent. See [../api/wire-contract.md](../api/wire-contract.md) for the
+> wire-side reservation.
 
 ### Cross-entity rules (semantic)
 
