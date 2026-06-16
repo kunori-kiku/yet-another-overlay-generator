@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
+import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 
 // last_seen / enrolled_at 是 RFC3339 字符串；零值（"0001-01-01T00:00:00Z"）显示为「—」。
 function fmtTime(iso: string): string {
@@ -26,6 +27,7 @@ export function FleetNodeDetailPage() {
   const { id } = useParams();
   const language = useTopologyStore((s) => s.language);
   const node = useControllerStore((s) => s.nodes.find((n) => n.nodeId === id));
+  const settings = useControllerStore((s) => s.settings);
 
   return (
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-4">
@@ -49,6 +51,9 @@ export function FleetNodeDetailPage() {
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.health')}>{node.lastHealth || '—'}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.agentVersion')}>{node.agentVersion || '—'}</Field>
+            <Field label={t(language, 'updateStatus.label')}>
+              <UpdateStatusChip node={node} settings={settings} language={language} />
+            </Field>
             <Field label={t(language, 'fleetNodeDetailPage.lastSeen')}>{fmtTime(node.lastSeen)}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.enrolledAt')}>{fmtTime(node.enrolledAt)}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.wgPublicKey')}>

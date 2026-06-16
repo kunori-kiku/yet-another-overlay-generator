@@ -225,6 +225,7 @@ interface NodeJSON {
   last_seen: string;
   enrolled_at: string;
   rekey_requested: boolean;
+  in_rollout?: boolean;
 }
 
 interface AuditEntryJSON {
@@ -595,6 +596,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     lastSeen: n.last_seen,
     enrolledAt: n.enrolled_at,
     rekeyRequested: n.rekey_requested,
+    inRollout: n.in_rollout ?? false,
   };
 }
 

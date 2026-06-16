@@ -24,6 +24,10 @@ export interface ControllerNode {
   // plan-4.6 fleet-wide key rotation：operator 已为该节点请求轮换 WG 密钥，等待 agent
   // 重新生成本地私钥并经 POST /rekey 注册新公钥（注册成功后由后端清零此标志）。
   rekeyRequested: boolean;
+  // controller-panel-rollout-ui plan-1: server-computed agent self-update rollout membership
+  // (AgentRolloutNodeIDs — the canary subset, or the whole fleet once promoted). The per-node
+  // update-status chip reads it; the panel never re-derives canary membership client-side.
+  inRollout: boolean;
 }
 
 // 审计链中的一条记录。镜像 controller.AuditEntry 的 operator-facing 字段。
