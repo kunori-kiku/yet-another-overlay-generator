@@ -49,11 +49,12 @@ user-supplied.
 
 > **Compliance — IPv4-only CIDR:** `validateDomainsSchema` rejects a non-IPv4 domain CIDR
 > (`net.ParseCIDR` then `ipNet.IP.To4() == nil` → `CodeDomainCIDRNotIPv4`, `schema.go:152-157`),
-> closing the IPv4-only-allocator crash (`ipToUint32` slices `ip[12:16]` on a nil `To4()`,
-> `ip.go:129,164-169` — D4/D35/D20). It also bounds the prefix size: a CIDR shorter than `/8`
-> (e.g. `/0`, which would overflow the host count `uint32(1) << 32`, `ip.go:116`, D56) is rejected as
-> too large to enumerate (`CodeDomainCIDRTooLarge`, `schema.go:160-162`). The per-link `transit_cidr`
-> carries the analogous IPv4 guard plus a `/8`–`/30` size band (`schema.go:214-227`).
+> keeping IPv6/other-family CIDRs out of the IPv4-only allocator (which now also fails closed rather
+> than panicking: `ipToUint32` errors on a non-IPv4 address, `ip.go:179-185` — D4/D35/D20). It also
+> bounds the prefix size: a CIDR shorter than `/8` is rejected as too large to enumerate
+> (`CodeDomainCIDRTooLarge`, `schema.go:160-162`, D56), which keeps the allocator's host-count-overflow
+> backstop (`hostBits >= 32`, `ip.go:119-123`) unreachable. The per-link `transit_cidr` carries the
+> analogous IPv4 guard plus a `/8`–`/30` size band (`schema.go:214-227`).
 
 > **Compliance — `routing_mode`:** an empty `routing_mode` is normalized to `babel` and written back
 > to the topology so the value round-trips explicitly (`schema.go:177-179`, D2/D72); `static` and
