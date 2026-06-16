@@ -97,9 +97,10 @@ func TestSameKeystoneCredential(t *testing.T) {
 		t.Fatalf("ed25519 must ignore rpid/credential_id: %v / %v", same, err)
 	}
 
-	// WebAuthn ES256: same key but a changed rpid or credential_id is a rotation.
+	// WebAuthn ES256: same key but a changed rpid, origin, or credential_id is a rotation — all
+	// three feed trustlist.Verify (rpIdHash + the fail-closed origin check + allowCredentials).
 	pemES, _ := es256CredPEM(t)
-	base := OperatorCredential{Alg: string(trustlist.AlgWebAuthnES256), PublicKeyPEM: pemES, RPID: "rp.example", CredentialID: "cred-1"}
+	base := OperatorCredential{Alg: string(trustlist.AlgWebAuthnES256), PublicKeyPEM: pemES, RPID: "rp.example", Origin: "https://rp.example", CredentialID: "cred-1"}
 	if same, err := SameKeystoneCredential(base, base); err != nil || !same {
 		t.Fatalf("identical webauthn cred must be same: %v / %v", same, err)
 	}
@@ -113,9 +114,59 @@ func TestSameKeystoneCredential(t *testing.T) {
 	if same, _ := SameKeystoneCredential(base, diffCred); same {
 		t.Fatal("webauthn: a changed credential_id must be a rotation")
 	}
+	// Origin is load-bearing: trustlist.Verify fail-closes on an origin mismatch and SKIPS the
+	// check when the pinned origin is empty, so a changed OR cleared origin is a real rebinding.
+	diffOrigin := base
+	diffOrigin.Origin = "https://evil.example"
+	if same, _ := SameKeystoneCredential(base, diffOrigin); same {
+		t.Fatal("webauthn: a changed origin must be a rotation (it changes what Verify accepts)")
+	}
+	clearedOrigin := base
+	clearedOrigin.Origin = ""
+	if same, _ := SameKeystoneCredential(base, clearedOrigin); same {
+		t.Fatal("webauthn: clearing the origin must be a rotation (it loosens the origin binding)")
+	}
 	// A different alg is always a rotation.
 	if same, _ := SameKeystoneCredential(a, base); same {
 		t.Fatal("different algs must be a rotation")
+	}
+}
+
+// TestKeystoneHelpers_ErrorPaths: an unparsable PEM or unknown alg must SURFACE an error from the
+// helpers, never be masked as "same" / "not required" — masking would silently re-enable the
+// silent-overwrite this PR removes.
+func TestKeystoneHelpers_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	const tnt = TenantID("acme")
+	bad := OperatorCredential{Alg: string(trustlist.AlgEd25519), PublicKeyPEM: "not a pem"}
+	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
+	good := ed25519Cred(t, pubA)
+
+	if _, err := KeystoneFingerprint(bad); err == nil {
+		t.Fatal("KeystoneFingerprint(bad PEM) must error")
+	}
+	if _, err := KeystoneFingerprint(OperatorCredential{Alg: "bogus-alg", PublicKeyPEM: good.PublicKeyPEM}); err == nil {
+		t.Fatal("KeystoneFingerprint(unknown alg) must error")
+	}
+	// SameKeystoneCredential must not mask an unparsable side as "same".
+	if same, err := SameKeystoneCredential(bad, good); err == nil || same {
+		t.Fatalf("SameKeystoneCredential(bad, good) = (%v, %v), want (false, err)", same, err)
+	}
+
+	// KeystoneRedeployRequired over a CORRUPT stored manifest (with a well-formed signature) must
+	// surface the parse error, never silently report "not required".
+	s := NewMemStore()
+	manifest := trustlist.TrustList{SchemaVersion: 1, Tenant: string(tnt), Epoch: 1, Members: []trustlist.Member{{NodeID: "n1", BundleSHA256: "abc"}}}
+	signed, err := trustlist.NewEd25519Signer(privA).Sign(manifest)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	sigJSON, _ := json.Marshal(signed)
+	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: []byte("{not json"), SignatureJSON: sigJSON, Epoch: 1}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, err := KeystoneRedeployRequired(ctx, s, tnt, good); err == nil {
+		t.Fatal("KeystoneRedeployRequired over a corrupt stored manifest must surface the parse error")
 	}
 }
 

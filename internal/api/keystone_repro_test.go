@@ -38,8 +38,8 @@ import (
 // changed credential without it); it is ignored on a first pin or an idempotent re-pin.
 func pinKeystone(t *testing.T, env *ctlTestEnv, pub ed25519.PublicKey, rotate bool) {
 	t.Helper()
-	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken,
-		operatorCredentialRequestJSON{Alg: string(trustlist.AlgEd25519), PublicKeyPEM: ed25519PinPEM(t, pub), Rotate: rotate}, nil); status != http.StatusOK {
+	// Delegates to postCred (keystone_rotation_test.go) so the request body shape is defined once.
+	if status, _ := postCred(t, env, pub, rotate); status != http.StatusOK {
 		t.Fatalf("operator-credential pin (rotate=%v): status %d, want 200", rotate, status)
 	}
 }
@@ -186,8 +186,18 @@ func TestKeystoneRotation_Repro(t *testing.T) {
 			t.Logf("EXPECTED refusal (node pinned-B, served bundle still signed-A): %v", err)
 		}
 
-		// A fresh signed deploy under B clears the signal and the B-node then accepts.
-		deploy(t, env, signerB)
+		// Mid-deploy window: re-staging clears the served signature (staged-but-unsigned), which
+		// must read as NOT-required (a deploy is in flight), not as a spurious strand signal.
+		env.stageOnly(t)
+		if st := keystoneStatus(t, env); st.RedeployRequired {
+			t.Fatalf("staged-but-unsigned window must NOT report redeploy_required, got %+v", st)
+		}
+
+		// Completing the fresh signed deploy under B clears the signal and the B-node then accepts.
+		signStaged(t, env, signerB)
+		if status := doJSON(t, http.MethodPost, env.opURL("promote"), testOperatorToken, struct{}{}, nil); status != http.StatusOK {
+			t.Fatalf("promote after re-sign: status %d, want 200", status)
+		}
 		if st := keystoneStatus(t, env); st.RedeployRequired {
 			t.Fatalf("after the fresh B deploy: redeploy_required must clear, got %+v", st)
 		}

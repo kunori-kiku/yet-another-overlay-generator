@@ -587,23 +587,15 @@ func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) 
 	}
 
 	// Verify the stored off-host signature over the staged manifest against the pinned
-	// credential — exactly what a node does offline. The stored TrustListJSON IS the
-	// staged manifest canonical bytes; trustlist.Verify re-canonicalizes internally, and
-	// the SignedTrustList carries the detached signature.
-	var manifest trustlist.TrustList
-	if err := json.Unmarshal(stored.TrustListJSON, &manifest); err != nil {
-		return 0, fmt.Errorf("controller: parsing staged manifest to promote: %w", err)
-	}
-	var signed trustlist.SignedTrustList
-	if err := json.Unmarshal(stored.SignatureJSON, &signed); err != nil {
-		return 0, fmt.Errorf("controller: parsing staged manifest signature to promote: %w", err)
-	}
-	pin, err := pinFromOperatorCredential(cred)
-	if err != nil {
-		return 0, fmt.Errorf("controller: building pinned credential to promote: %w", err)
-	}
-	if err := trustlist.Verify(manifest, signed, pin); err != nil {
-		return 0, fmt.Errorf("controller: the staged membership manifest is signed under a credential that is no longer the pinned keystone (it was likely signed before a rotation); re-sign it with the current credential (GET /trustlist, POST /trustlist-signature) before promote: %w", err)
+	// credential — exactly what a node does offline (the shared verifyStoredAgainstPin, so the
+	// promote gate and the redeploy-required signal can never drift). The promote gate refuses on
+	// EITHER failure kind (a corrupt record or a non-verifying signature both block a promote).
+	if parseErr, verifyErr := verifyStoredAgainstPin(stored, cred); parseErr != nil || verifyErr != nil {
+		blocking := verifyErr
+		if blocking == nil {
+			blocking = parseErr
+		}
+		return 0, fmt.Errorf("controller: the staged membership manifest is signed under a credential that is no longer the pinned keystone (it was likely signed before a rotation); re-sign it with the current credential (GET /trustlist, POST /trustlist-signature) before promote: %w", blocking)
 	}
 
 	return store.PromoteStaged(ctx, t)
@@ -644,24 +636,21 @@ func pinFromOperatorCredential(c OperatorCredential) (trustlist.PinnedCredential
 // re-encode — a trailing newline, different line wrapping — of the SAME key yields the
 // SAME fingerprint. It is the single identity used to tell a keystone ROTATION (a genuinely
 // different key) apart from an idempotent re-pin, and is surfaced to the operator panel as
-// a short, comparable credential identity. It is NON-SECRET (a public-key digest).
+// a short, comparable credential identity. It is NON-SECRET (a public-key digest). The
+// alg→parse dispatch is reused from pinFromOperatorCredential so it lives in one place.
 func KeystoneFingerprint(c OperatorCredential) (string, error) {
+	pin, err := pinFromOperatorCredential(c)
+	if err != nil {
+		return "", err
+	}
 	var pub any
-	switch trustlist.Alg(c.Alg) {
-	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
-		k, err := trustlist.ParseEd25519PinPEM([]byte(c.PublicKeyPEM))
-		if err != nil {
-			return "", err
-		}
-		pub = k
-	case trustlist.AlgWebAuthnES256:
-		k, err := trustlist.ParseES256Pin([]byte(c.PublicKeyPEM))
-		if err != nil {
-			return "", err
-		}
-		pub = k
+	switch {
+	case pin.Ed25519Pub != nil:
+		pub = pin.Ed25519Pub
+	case pin.ES256Pub != nil:
+		pub = pin.ES256Pub
 	default:
-		return "", fmt.Errorf("controller: unsupported operator credential algorithm %q", c.Alg)
+		return "", fmt.Errorf("controller: operator credential has no public key to fingerprint")
 	}
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
@@ -673,10 +662,12 @@ func KeystoneFingerprint(c OperatorCredential) (string, error) {
 
 // SameKeystoneCredential reports whether two operator credentials are the SAME trust anchor:
 // the same public key (by fingerprint), the same algorithm, and — for the WebAuthn algorithms
-// whose assertion binds them — the same relying-party ID and credential id. Any difference is
-// a ROTATION (a new key, or a rebinding that changes what a node verifies against), which the
-// handler refuses without an explicit ack. A fingerprint error (an unparsable PEM) is returned
-// to the caller rather than masked as "same".
+// whose assertion binds them — the same relying-party ID, origin, and credential id. Any
+// difference is a ROTATION (a new key, or a rebinding that changes what trustlist.Verify
+// accepts), which the handler refuses without an explicit ack. RPID/Origin/CredentialID all
+// feed trustlist.Verify (rpIdHash + the fail-closed origin check + allowCredentials), so a
+// change in any of them is a real trust shift, not cosmetic. A fingerprint error (an unparsable
+// PEM) is returned to the caller rather than masked as "same".
 func SameKeystoneCredential(a, b OperatorCredential) (bool, error) {
 	if a.Alg != b.Alg {
 		return false, nil
@@ -692,26 +683,54 @@ func SameKeystoneCredential(a, b OperatorCredential) (bool, error) {
 	if fpA != fpB {
 		return false, nil
 	}
-	// The WebAuthn assertion binds rpid + credential id, so a change in either changes what a
-	// node verifies even with the same key; raw ed25519 ignores both (empty on both sides).
+	// The WebAuthn assertion binds rpid + origin + credential id (all consumed by
+	// trustlist.Verify), so a change in ANY of them changes what verifies even with the same
+	// key; raw ed25519 ignores all three (empty on both sides).
 	switch trustlist.Alg(a.Alg) {
 	case trustlist.AlgWebAuthnES256, trustlist.AlgWebAuthnEdDSA:
-		return a.RPID == b.RPID && a.CredentialID == b.CredentialID, nil
+		return a.RPID == b.RPID && a.Origin == b.Origin && a.CredentialID == b.CredentialID, nil
 	default:
 		return true, nil
 	}
 }
 
-// KeystoneRedeployRequired reports whether the membership trust-list the controller currently
-// SERVES carries a signature that no longer verifies against the pinned credential `cred` —
-// i.e. the keystone was rotated but no fresh deploy has been signed + promoted under the new
-// key yet, so every (correctly re-provisioned) node would refuse the served bundle. It is the
-// single source of the operator-facing "redeploy required" signal.
+// verifyStoredAgainstPin is the single trust-critical parse-and-verify of a stored signed
+// manifest against a pinned credential, shared by the promote gate (PromoteStaged) and the
+// redeploy-required signal (KeystoneRedeployRequired) so the two can never drift. It SEPARATES
+// the two failure kinds the callers must treat differently:
+//
+//   - parseErr: a corrupt stored record or an unparsable pinned credential — a real fault.
+//   - verifyErr: a well-formed signature that does NOT verify against the pin — for the redeploy
+//     signal this is precisely the "rotated away from the served key" condition, not a fault.
+//
+// Exactly one is non-nil on failure; both are nil on success.
+func verifyStoredAgainstPin(stored StoredTrustList, cred OperatorCredential) (parseErr, verifyErr error) {
+	var manifest trustlist.TrustList
+	if err := json.Unmarshal(stored.TrustListJSON, &manifest); err != nil {
+		return fmt.Errorf("controller: parsing stored manifest: %w", err), nil
+	}
+	var signed trustlist.SignedTrustList
+	if err := json.Unmarshal(stored.SignatureJSON, &signed); err != nil {
+		return fmt.Errorf("controller: parsing stored signature: %w", err), nil
+	}
+	pin, err := pinFromOperatorCredential(cred)
+	if err != nil {
+		return err, nil
+	}
+	return nil, trustlist.Verify(manifest, signed, pin)
+}
+
+// KeystoneRedeployRequired reports whether the current stored signed membership trust-list (the
+// slot /config serves once promoted) carries a signature that no longer verifies against the
+// pinned credential `cred` — i.e. the keystone was rotated but no fresh deploy has been signed +
+// promoted under the new key yet, so every (correctly re-provisioned) node would refuse the
+// served bundle. It is the single source of the operator-facing "redeploy required" signal.
 //
 // It is deliberately CONSERVATIVE: it returns false (not "required") when no manifest is
 // stored, when the stored manifest has no signature yet (the normal stage→sign→promote
 // window), or when the signature still verifies — so it fires ONLY for a genuine
-// rotated-but-not-redeployed fleet, never mid-deploy.
+// rotated-but-not-redeployed fleet, never mid-deploy. A parse/pin error (a corrupt stored record
+// or an unparsable pinned credential) is surfaced to the caller, never masked as "not required".
 func KeystoneRedeployRequired(ctx context.Context, store Store, t TenantID, cred OperatorCredential) (bool, error) {
 	stored, err := store.GetCurrentSignedTrustList(ctx, t)
 	if errors.Is(err, ErrNotFound) {
@@ -723,20 +742,12 @@ func KeystoneRedeployRequired(ctx context.Context, store Store, t TenantID, cred
 	if len(stored.SignatureJSON) == 0 {
 		return false, nil // staged-but-unsigned window — not stranded, a deploy is in flight
 	}
-	var manifest trustlist.TrustList
-	if err := json.Unmarshal(stored.TrustListJSON, &manifest); err != nil {
-		return false, fmt.Errorf("controller: parsing served manifest for redeploy check: %w", err)
+	parseErr, verifyErr := verifyStoredAgainstPin(stored, cred)
+	if parseErr != nil {
+		return false, parseErr // a real fault — never silently "not required"
 	}
-	var signed trustlist.SignedTrustList
-	if err := json.Unmarshal(stored.SignatureJSON, &signed); err != nil {
-		return false, fmt.Errorf("controller: parsing served signature for redeploy check: %w", err)
-	}
-	pin, err := pinFromOperatorCredential(cred)
-	if err != nil {
-		return false, err
-	}
-	// Verify FAILS once the pin has rotated away from the key that signed the served manifest.
-	return trustlist.Verify(manifest, signed, pin) != nil, nil
+	// verifyErr != nil is the rotated-away-from-the-served-key signal: redeploy required.
+	return verifyErr != nil, nil
 }
 
 // enrolledSubgraph projects a stored topology down to its enrolled subgraph under
