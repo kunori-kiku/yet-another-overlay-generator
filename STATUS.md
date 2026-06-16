@@ -4,15 +4,17 @@
 
 ## Active work
 
-- **Released:** **`v2.0.0-beta.3`** (GitHub *latest*) — `controller-panel-rollout-ui-2026_06_16`: the
-  operator-panel UI for the agent self-update + canary-then-fleet engine (closes the descoped plan-9
-  "Canary UI"): the `AgentUpdateSettings` + `MimicCatalogSettings` config cards (with assisted
-  release-pin pre-fill via the new operator `POST /release-pins`), a per-node update-status chip +
-  opt-in live poll on the Fleet view, and the full-replace drop-on-save fix. All 6 plans merged
-  (PRs #121–#126), each through an independent review workflow + fix + re-review; subject archived.
-- **Prior releases:** **`v2.0.0-beta.2`** (signed agent self-update swap + canary-then-fleet) atop
-  **`v2.0.0-beta.1`**. The `signed-self-update-and-rc-hardening-2026_06_15` subject is DELIVERED +
-  CLOSED (PRs #109–#118; archived).
+- **Released:** **`v2.0.0-beta.4`** (GitHub *latest*) — a security hardening fix (PR #128): the
+  controller persists the bundle-signing **public** key per tenant (`SigningAnchor`) and reconciles
+  it at stage time, so a redeploy that drops or swaps `YAOG_BUNDLE_SIGNING_KEY` now FAILS LOUD
+  (`signing_key_missing` 412 / `signing_key_mismatch` 409) instead of silently shipping unsigned
+  bundles. Trust-on-first-use; rotation via `YAOG_BUNDLE_SIGNING_KEY_ROTATE`; private key stays
+  off-host; pin/rotate audited; air-gap export unchanged. Reviewed (5 findings) → fixed → re-review clean.
+- **Prior releases:** **`v2.0.0-beta.3`** — the operator-panel UI for agent self-update +
+  canary-then-fleet (the descoped plan-9 "Canary UI"): agent + mimic config cards, assisted
+  release-pin fetch (`POST /release-pins`, SSRF-guarded), per-node update-status chip + opt-in live
+  poll, the full-replace drop-on-save fix (PRs #121–#126). Atop **`v2.0.0-beta.2`** /
+  **`v2.0.0-beta.1`** (`signed-self-update-and-rc-hardening`, PRs #109–#118).
 
 ## Open questions / blockers
 
