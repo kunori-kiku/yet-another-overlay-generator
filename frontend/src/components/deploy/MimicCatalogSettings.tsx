@@ -114,7 +114,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
   const validate = (): string | null => {
     if (version.trim() && !SEMVER_RE.test(version.trim())) return t(language, 'mimicCatalog.invalidVersion');
     if (releaseBase.trim() && SHELL_BYTES_RE.test(releaseBase.trim())) return t(language, 'mimicCatalog.invalidReleaseBase');
-    if (releaseBase.trim() && !/^https?:\/\/.+/.test(releaseBase.trim())) return t(language, 'mimicCatalog.invalidReleaseBase');
+    // Case-insensitive scheme to match the server (Go's url.Parse lowercases the scheme, so it
+    // accepts HTTP://… ); a case-sensitive test would wrongly block a server-valid base client-side.
+    if (releaseBase.trim() && !/^https?:\/\/.+/i.test(releaseBase.trim())) return t(language, 'mimicCatalog.invalidReleaseBase');
     let anyFilled = false;
     for (const r of debs) {
       const key = r.key.trim();
