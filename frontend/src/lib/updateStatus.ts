@@ -82,6 +82,10 @@ function parseSemver(v: string): ParsedSemver | null {
 // gets wrong) else lexically, with fewer identifiers ranking lower when all else is equal. An
 // unparseable/empty version sorts BELOW any valid one, so an unknown reported version is never
 // judged "applied".
+//
+// Numeric identifiers (core and prerelease) are compared as JS Number, so they are exact only below
+// 2^53; the project's release scheme (v2.0.0-beta.N with small N, server-validated by semverPattern)
+// stays far under that, so BigInt would be overkill here.
 export function compareSemver(a: string, b: string): number {
   const pa = parseSemver(a);
   const pb = parseSemver(b);
