@@ -155,15 +155,31 @@ A bad swap is self-healing (rollback + abandon at the cap), but a human can inte
   have) is the fleet-visible signal of a pending-or-failed update, distinguished by the node's
   reported health line and the agent journal.
 
-## Panel scope (observability)
+## Panel scope (observability + configuration)
 
-Per-node self-update is observed through the **existing** beta.1 surfaces: the reported-version
-badge flips to the target on success, and the health line carries the apply outcome. The rollout
-*pins* (`AgentBins`, `TargetAgentVersion`, `MinAgentVersion`, the canary set) are configured via the
-operator `POST /settings` API and validated strictly there — **the same model as the mimic
-GitHub-`.deb` catalog**, which deliberately has no bespoke panel form for its signed-pin map. A
-dedicated canary-progress widget (a per-node pending/applied/failed chip + an in-panel pin editor)
-is a documented follow-up, not a beta.2 blocker.
+Per-node self-update is observed through the beta.1 surfaces (the reported-version badge flips to
+the target on success; the health line carries the apply outcome) AND, since
+`controller-panel-rollout-ui` (beta.3), a dedicated panel surface:
+
+- **Configuration.** The rollout *pins* (`AgentBins`, `TargetAgentVersion`, `MinAgentVersion`, the
+  canary set, `AgentRolloutFleetWide`) are edited in the `AgentUpdateSettings` card on the Settings
+  page (controller-mode only) — and the mimic GitHub-`.deb` catalog in the symmetric
+  `MimicCatalogSettings` card. Both still POST the same strictly-validated operator
+  `POST /settings` (full-replace), so the API remains the authority; the cards add an **"Assist from
+  GitHub release"** affordance that fetches the `.sha256` sidecars (via the new operator
+  `POST /release-pins`, gh-proxy-applied + SSRF-guarded) to PRE-FILL the per-asset pins for the
+  operator to REVIEW. The assist is convenience only — it never auto-saves a pin, and trust stays
+  the keystone-signed `artifacts.json` the agent verifies against (custody unchanged).
+- **Observability.** A per-node update-status chip (`off / not-targeted / pending / applying /
+  applied / failed / stale`) on `NodeRegistry` + `FleetNodeDetailPage`, derived (pure
+  `deriveUpdateState`) from the server-computed `in_rollout` membership, the reported version vs the
+  configured target (a real SemVer comparator), and the `lastHealth` markers — with an opt-in live
+  poll. `failed` is best-effort (the agent's `abandoned:` marker is transient); a reliable
+  persistent failed state would need a positive agent-reported field (a deliberate future wire
+  change, not built).
+
+Promotion fleet-wide is gated behind an explicit confirm (the empty-target safety contract: an
+empty `TargetAgentVersion` ⇒ no self-update ⇒ no chip). This closes the descoped plan-9 "Canary UI".
 
 ## Out of scope
 

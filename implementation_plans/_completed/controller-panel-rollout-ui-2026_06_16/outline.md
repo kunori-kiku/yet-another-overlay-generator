@@ -319,4 +319,4 @@ CHANGELOG + STATUS; archive this subject; cut `v2.0.0-beta.3` (tag user-gated).
 | plan-3 | agent rollout config card | done | b712537 + fc4b260 — AgentUpdateSettings (assist, canary, fleet-wide confirm, version_applied→persist-base); review wkg90vfyx 6 findings fixed (HIGH save-notice, stale-pins), re-review clean |
 | plan-4 | mimic catalog config card | done | 986ca0b + e915cf5 — MimicCatalogSettings (dynamic rows, per-row best-effort assist, validateMimicCatalog mirror, 36 EN/ZH keys); review w1jl0boqi 1 nit (case-insensitive scheme) fixed |
 | plan-5 | per-node status surface + poll | done | 475d56c + 5538985 — deriveUpdateState (pure, SemVer comparator) + UpdateStatusChip on registry/detail + in_rollout + opt-in Live poll; 9 EN/ZH keys; review w8z69a2r9 1 nit (semver bound doc) |
-| plan-6 | closure & v2.0.0-beta.3 | pending | |
+| plan-6 | closure & v2.0.0-beta.3 | done | specs flipped (agent-selfupdate §Panel scope built; controller-operator-api + panel-deploy-fleet); CLOSURE descope→delivered; CHANGELOG beta.3; STATUS regenerated; subject archived. Tag owner-gated. |
