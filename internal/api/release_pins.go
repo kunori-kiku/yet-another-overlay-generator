@@ -13,6 +13,7 @@ package api
 // for the operator to inspect and (separately) save through the validated /settings path.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -63,8 +64,9 @@ func blockPrivateAddr(_ /*network*/, address string, _ syscall.RawConn) error {
 }
 
 // isPublicUnicastIP reports whether ip is a routable public unicast address — i.e. NOT loopback,
-// link-local, multicast, unspecified, RFC1918/ULA private, or RFC6598 CGNAT. This is the egress
-// allow predicate for the assisted release fetch.
+// link-local, multicast, unspecified, RFC1918/ULA private, or RFC6598 CGNAT, and not a
+// special-purpose IPv6 prefix that embeds such an IPv4. This is the egress allow predicate for
+// the assisted release fetch.
 func isPublicUnicastIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() {
@@ -73,11 +75,39 @@ func isPublicUnicastIP(ip net.IP) bool {
 	if ip.IsPrivate() { // 10/8, 172.16/12, 192.168/16 and fc00::/7 (ULA)
 		return false
 	}
-	// 100.64.0.0/10 (RFC6598 CGNAT) is not covered by IsPrivate but is not public either.
-	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1]&0xc0 == 64 {
-		return false
+	if ip4 := ip.To4(); ip4 != nil {
+		// 100.64.0.0/10 (RFC6598 CGNAT) is not covered by IsPrivate but is not public either.
+		return !(ip4[0] == 100 && ip4[1]&0xc0 == 64)
+	}
+	// A non-v4-mapped IPv6 (To4 already unwraps ::ffff:a.b.c.d) may still EMBED an internal
+	// IPv4 inside a special-purpose prefix (6to4 2002::/16, NAT64 64:ff9b::/96) that a host's
+	// 6to4 relay or DNS64/NAT64 gateway can translate onto the internal network. Go's net.IP
+	// predicates do not look through these, so unwrap and re-check the embedded IPv4 — else a
+	// 6to4/NAT64 form of 127.0.0.1 / 169.254.169.254 would slip past the guard.
+	if embedded := embeddedIPv4(ip); embedded != nil {
+		return isPublicUnicastIP(embedded)
 	}
 	return true
+}
+
+// nat64WellKnownPrefix is the 96-bit RFC 6052 NAT64 well-known prefix 64:ff9b::/96; the embedded
+// IPv4 is the trailing 4 bytes.
+var nat64WellKnownPrefix = []byte{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0}
+
+// embeddedIPv4 returns the IPv4 carried inside a 6to4 (2002::/16) or NAT64 well-known
+// (64:ff9b::/96) IPv6 address, or nil if ip is neither.
+func embeddedIPv4(ip net.IP) net.IP {
+	ip = ip.To16()
+	if ip == nil {
+		return nil
+	}
+	if ip[0] == 0x20 && ip[1] == 0x02 { // 6to4: IPv4 W.X.Y.Z lives in bytes 2..5
+		return net.IPv4(ip[2], ip[3], ip[4], ip[5])
+	}
+	if bytes.Equal(ip[:12], nat64WellKnownPrefix) { // NAT64: IPv4 in the trailing 4 bytes
+		return net.IPv4(ip[12], ip[13], ip[14], ip[15])
+	}
+	return nil
 }
 
 // newReleasePinClient builds the egress-guarded HTTP client the release-pin handler fetches

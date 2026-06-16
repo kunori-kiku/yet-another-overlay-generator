@@ -47,12 +47,20 @@ func TestNodes_InRollout(t *testing.T) {
 	// No settings record → no rollout → both not-targeted.
 	assertInRollout(getNodes(), map[string]bool{"node-1": false, "node-2": false})
 
-	// Canary = node-1 → only node-1 in rollout.
+	// Canary = node-1 plus a NON-enrolled id: AgentRolloutNodeIDs intersects the configured
+	// canary set with the actual node list, so the unenrolled "ghost" must never appear and
+	// node-2 stays out (guards against a regression that echoed the raw canary set un-intersected).
 	putSettings(controller.ControllerSettings{
 		TargetAgentVersion: "v2.0.0-beta.3",
-		AgentCanaryNodeIDs: []string{"node-1"},
+		AgentCanaryNodeIDs: []string{"node-1", "ghost"},
 	})
-	assertInRollout(getNodes(), map[string]bool{"node-1": true, "node-2": false})
+	canaryNodes := getNodes()
+	assertInRollout(canaryNodes, map[string]bool{"node-1": true, "node-2": false})
+	for _, n := range canaryNodes {
+		if n.NodeID == "ghost" {
+			t.Error("unenrolled canary id leaked into the node list")
+		}
+	}
 
 	// Promote fleet-wide → every enrolled node in rollout.
 	putSettings(controller.ControllerSettings{

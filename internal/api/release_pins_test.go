@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -8,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
 // testSidecarHash is a valid 64-hex SHA-256 (sha256 of the empty string) used as sidecar content.
@@ -43,18 +48,25 @@ func TestIsPublicUnicastIP(t *testing.T) {
 	}{
 		{"8.8.8.8", true},
 		{"1.1.1.1", true},
-		{"2606:4700:4700::1111", true}, // public IPv6
-		{"127.0.0.1", false},           // loopback
-		{"::1", false},                 // loopback IPv6
-		{"169.254.169.254", false},     // link-local (cloud metadata)
-		{"10.0.0.1", false},            // RFC1918
-		{"172.16.5.4", false},          // RFC1918
-		{"192.168.1.1", false},         // RFC1918
-		{"100.64.0.1", false},          // RFC6598 CGNAT
-		{"fc00::1", false},             // ULA
-		{"fe80::1", false},             // link-local IPv6
-		{"0.0.0.0", false},             // unspecified
-		{"224.0.0.1", false},           // multicast
+		{"2606:4700:4700::1111", true},    // public IPv6
+		{"127.0.0.1", false},              // loopback
+		{"::1", false},                    // loopback IPv6
+		{"169.254.169.254", false},        // link-local (cloud metadata)
+		{"10.0.0.1", false},               // RFC1918
+		{"172.16.5.4", false},             // RFC1918
+		{"192.168.1.1", false},            // RFC1918
+		{"100.64.0.1", false},             // RFC6598 CGNAT
+		{"fc00::1", false},                // ULA
+		{"fe80::1", false},                // link-local IPv6
+		{"0.0.0.0", false},                // unspecified
+		{"224.0.0.1", false},              // multicast
+		{"::ffff:127.0.0.1", false},       // IPv4-mapped loopback
+		{"::ffff:169.254.169.254", false}, // IPv4-mapped link-local (metadata)
+		{"2002:7f00:1::", false},          // 6to4 of 127.0.0.1
+		{"2002:a9fe:a9fe::", false},       // 6to4 of 169.254.169.254 (metadata)
+		{"64:ff9b::7f00:1", false},        // NAT64 of 127.0.0.1
+		{"64:ff9b::a9fe:a9fe", false},     // NAT64 of 169.254.169.254 (metadata)
+		{"64:ff9b::808:808", true},        // NAT64 of public 8.8.8.8 → still public
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.ip)
@@ -73,7 +85,9 @@ func TestBlockPrivateAddr(t *testing.T) {
 	blocked := []string{
 		"127.0.0.1:443", "169.254.169.254:80", "10.1.2.3:80", "192.168.0.5:8080",
 		"100.64.0.1:443", "[fc00::1]:443", "[::1]:80", "[fe80::1]:443",
-		"example.com:443", // unresolved hostname → not an IP → refused
+		"[2002:7f00:1::]:443",      // 6to4 of loopback
+		"[64:ff9b::a9fe:a9fe]:443", // NAT64 of the cloud-metadata IP
+		"example.com:443",          // unresolved hostname → not an IP → refused
 	}
 	for _, a := range blocked {
 		if err := blockPrivateAddr("tcp", a, nil); err == nil {
@@ -193,6 +207,84 @@ func TestReleasePins_VersionAppliedRewritesTag(t *testing.T) {
 	}
 }
 
+func TestReleasePins_MimicHappyPath(t *testing.T) {
+	srv := newSidecarServer(t, testSidecarHash+"\n")
+	env := newCtlTestEnvWith(t, permissiveReleaseClient)
+
+	var resp releasePinResponseJSON
+	status := doJSON(t, http.MethodPost, env.opURL("release-pins"), testOperatorToken, releasePinRequestJSON{
+		Kind:   "mimic",
+		Base:   srv.URL,
+		Assets: []releasePinAssetJSON{{Key: "bookworm-amd64", Asset: "yaog-mimic_1.0_amd64.deb"}},
+	}, &resp)
+	if status != http.StatusOK {
+		t.Fatalf("status %d, want 200", status)
+	}
+	// Exercises the mimic grammar (debKeyPattern + debAssetPattern) + the mimic base wiring,
+	// distinct from the agent branch — a regression mis-wiring the kind switch would surface here.
+	pin, ok := resp.Pins["bookworm-amd64"]
+	if !ok {
+		t.Fatalf("no pin for bookworm-amd64: %+v", resp.Pins)
+	}
+	if pin.Asset != "yaog-mimic_1.0_amd64.deb" || pin.SHA256 != testSidecarHash {
+		t.Fatalf("pin = %+v", pin)
+	}
+	if got := resp.Resolved["bookworm-amd64"]; !strings.HasSuffix(got, "/yaog-mimic_1.0_amd64.deb.sha256") {
+		t.Errorf("resolved url = %q, want the .deb.sha256 sidecar path", got)
+	}
+}
+
+func TestReleasePins_ProxyApplied(t *testing.T) {
+	// The whole reason this endpoint is server-side is to apply the gh-proxy. Prove it: with a
+	// configured proxy, the fetched URL is proxy-prefixed and proxy_applied is true.
+	srv := newSidecarServer(t, testSidecarHash+"\n")
+	env := newCtlTestEnvWith(t, permissiveReleaseClient)
+	// Persist a proxy pointing at the test server; the github base then rides as the proxy path.
+	if err := env.store.PutSettings(context.Background(), testTenant, controller.ControllerSettings{
+		GithubProxy: srv.URL + "/",
+	}); err != nil {
+		t.Fatalf("PutSettings: %v", err)
+	}
+
+	var resp releasePinResponseJSON
+	status := doJSON(t, http.MethodPost, env.opURL("release-pins"), testOperatorToken, releasePinRequestJSON{
+		Kind:   "agent",
+		Base:   "https://github.com/o/r/releases/download/v1",
+		Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}},
+	}, &resp)
+	if status != http.StatusOK {
+		t.Fatalf("status %d, want 200", status)
+	}
+	if !resp.ProxyApplied {
+		t.Error("a configured gh-proxy should report proxy_applied=true")
+	}
+	if got := resp.Resolved["linux-amd64"]; !strings.HasPrefix(got, srv.URL+"/") {
+		t.Errorf("resolved url = %q, want the gh-proxy prefix %q", got, srv.URL+"/")
+	}
+	if resp.Pins["linux-amd64"].SHA256 != testSidecarHash {
+		t.Errorf("pin sha256 = %q, want %q", resp.Pins["linux-amd64"].SHA256, testSidecarHash)
+	}
+}
+
+func TestReleasePins_UpstreamNon200(t *testing.T) {
+	// The status-code 502 sub-branch (distinct from a refused/transport dial): upstream answers
+	// the .sha256 path with a non-200.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	env := newCtlTestEnvWith(t, permissiveReleaseClient)
+
+	status := doJSON(t, http.MethodPost, env.opURL("release-pins"), testOperatorToken, releasePinRequestJSON{
+		Kind:   "agent",
+		Base:   srv.URL,
+		Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}},
+	}, nil)
+	if status != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502 (non-200 upstream)", status)
+	}
+}
+
 func TestReleasePins_SSRFRefusesLoopback(t *testing.T) {
 	// The PRODUCTION (default) client must refuse to dial the loopback test server: SSRF + the
 	// DNS-rebind defense. A refused dial surfaces as the 502 upstream-fetch-failed code.
@@ -243,23 +335,57 @@ func TestReleasePins_ResponseCapTruncatesBeforeHash(t *testing.T) {
 func TestReleasePins_BadInput(t *testing.T) {
 	env := newCtlTestEnv(t)
 	cases := []struct {
-		name string
-		body releasePinRequestJSON
+		name      string
+		body      releasePinRequestJSON
+		wantField string // each row violates exactly one guard; pin it to its own field
 	}{
-		{"unknown kind", releasePinRequestJSON{Kind: "weird", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "a"}}}},
-		{"non-semver version", releasePinRequestJSON{Kind: "agent", Version: "not a version", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}}}},
-		{"mimic without base", releasePinRequestJSON{Kind: "mimic", Assets: []releasePinAssetJSON{{Key: "bookworm-amd64", Asset: "mimic.deb"}}}},
-		{"bad agent asset", releasePinRequestJSON{Kind: "agent", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "bad/asset"}}}},
-		{"bad agent key", releasePinRequestJSON{Kind: "agent", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "win-amd64", Asset: "yaog-agent"}}}},
-		{"mimic empty assets", releasePinRequestJSON{Kind: "mimic", Base: "https://github.com/x"}},
-		{"base not http(s)", releasePinRequestJSON{Kind: "agent", Base: "ftp://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}}}},
+		{"unknown kind", releasePinRequestJSON{Kind: "weird", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "a"}}}, "kind"},
+		{"non-semver version", releasePinRequestJSON{Kind: "agent", Version: "not a version", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}}}, "version"},
+		{"mimic without base", releasePinRequestJSON{Kind: "mimic", Assets: []releasePinAssetJSON{{Key: "bookworm-amd64", Asset: "mimic.deb"}}}, "base"},
+		{"bad agent asset", releasePinRequestJSON{Kind: "agent", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "bad/asset"}}}, "assets.asset"},
+		{"bad agent key", releasePinRequestJSON{Kind: "agent", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "win-amd64", Asset: "yaog-agent"}}}, "assets.key"},
+		{"mimic empty assets", releasePinRequestJSON{Kind: "mimic", Base: "https://github.com/x"}, "assets"},
+		{"base not http(s)", releasePinRequestJSON{Kind: "agent", Base: "ftp://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}}}, "base"},
 	}
 	for _, c := range cases {
-		status := doJSON(t, http.MethodPost, env.opURL("release-pins"), testOperatorToken, c.body, nil)
+		status, code, field := postReleasePinErr(t, env, c.body)
 		if status != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400", c.name, status)
 		}
+		if code != "agent_release_request_invalid" {
+			t.Errorf("%s: code %q, want agent_release_request_invalid", c.name, code)
+		}
+		if field != c.wantField {
+			t.Errorf("%s: field %q, want %q (a reordered guard would fire the wrong one)", c.name, field, c.wantField)
+		}
 	}
+}
+
+// postReleasePinErr POSTs a release-pin request and decodes the coded-error envelope
+// ({"error":{"code","params":{...}}}), returning the status, the apierr code, and the "field"
+// param — so a bad-input test pins each guard to its own field rather than only checking 400.
+func postReleasePinErr(t *testing.T, env *ctlTestEnv, body releasePinRequestJSON) (int, string, string) {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, env.opURL("release-pins"), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testOperatorToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	var env2 struct {
+		Error struct {
+			Code   string            `json:"code"`
+			Params map[string]string `json:"params"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&env2)
+	return resp.StatusCode, env2.Error.Code, env2.Error.Params["field"]
 }
 
 func TestReleasePins_MethodAndAuth(t *testing.T) {
