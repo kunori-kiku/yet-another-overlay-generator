@@ -93,13 +93,16 @@ the full wiki rewrite (a redirect banner ships now); a frontend test runner.
 
 **Descoped deliverables surfaced by the post-close audit (2026-06-16)** — recorded here so the scope-down
 is visible, not buried in a spec footnote:
-- **Canary UI (plan-9 step 8) — not built.** The promised panel surface (a per-node
-  "update pending/applied/failed" chip + an in-panel target-version/canary editor) was descoped to the
-  **mimic-catalog precedent**: agent self-update is configured via the operator `POST /api/v1/operator/settings`
-  API (`TargetAgentVersion`, `AgentBins`, `AgentCanaryNodeIDs`, `AgentRolloutFleetWide`), and observed via the
-  plan-4 per-node version badge (`NodeRegistry.tsx` / `FleetNodeDetailPage.tsx`), which flips on a successful
-  swap. PR #117 touched zero frontend files. A dedicated canary-progress widget + in-panel pin editor is a
-  follow-up (build vs. defer is an open owner decision), not an rc.1 blocker.
+- **Canary UI (plan-9 step 8) — DELIVERED 2026-06-16 by `controller-panel-rollout-ui-2026_06_16`
+  (PRs #121–#125, v2.0.0-beta.3).** _Originally descoped here_ to the mimic-catalog precedent: agent
+  self-update was configured only via the operator `POST /api/v1/operator/settings` API
+  (`TargetAgentVersion`, `AgentBins`, `AgentCanaryNodeIDs`, `AgentRolloutFleetWide`) and observed via the
+  plan-4 per-node version badge (`NodeRegistry.tsx` / `FleetNodeDetailPage.tsx`); PR #117 touched zero
+  frontend files. The follow-up subject then built the promised surface: the `AgentUpdateSettings` +
+  `MimicCatalogSettings` config cards (with assisted release-pin pre-fill via the new operator
+  `POST /release-pins`) and a per-node update-status chip (`pending/applying/applied/failed/stale`) +
+  opt-in live poll on the Fleet view. The open build-vs-defer decision is therefore resolved (built);
+  custody unchanged — the assist is convenience only, trust stays the signed `artifacts.json`.
 - **beta.1 release notes (plan-8 step 2) — partial.** The published `v2.0.0-beta.1` notes cover the beta.1
   scope but omit the prior controller-nat subject (#98–#106) closure that step 2 asked them to cover; the
   CHANGELOG attributes #97–#106 to the separate `[2.0.0-preview.10]` section. Cosmetic; the release body may be

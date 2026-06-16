@@ -1,9 +1,10 @@
 # Panel Deploy & Fleet
 
 <!-- last-verified: 2026-06-14 -->
+<!-- 2026-06-16 (controller-panel-rollout-ui, beta.3): added the agent self-update rollout config card (AgentUpdateSettings) + the mimic .deb catalog card (MimicCatalogSettings) on the Settings page, a per-node update-status chip (UpdateStatusChip / deriveUpdateState) on NodeRegistry + FleetNodeDetailPage, and an opt-in "Live" auto-poll on FleetPage. The TS settings contract gained the rollout+mimic fields and postSettings became a full-replace round-trip (the drop-on-save fix); fetchReleasePins wraps the assisted pin fetch. -->
 
 ## Responsibility
-Drives the controller deploy pipeline (update-topology → stage → keystone sign → promote → refresh) and the fleet UI (registry, enrollment, node detail, fleet-wide key rotation), plus the air-gap local-deploy downloads.
+Drives the controller deploy pipeline (update-topology → stage → keystone sign → promote → refresh) and the fleet UI (registry, enrollment, node detail, fleet-wide key rotation, per-node agent-update-status chip + opt-in live poll), the agent self-update rollout + mimic-catalog config cards, plus the air-gap local-deploy downloads.
 
 > **controller-server-authority-redesign (plans 5–6):** `deploy()` strips private keys
 > (`lib/custody.ts` `stripPrivateKeys`) before `update-topology` — the client mirror of
@@ -26,13 +27,16 @@ Drives the controller deploy pipeline (update-topology → stage → keystone si
 - `frontend/src/components/deploy/CompilePreview.tsx:16-146` — read-only render of `topologyStore.compileResult`: manifest, compile warnings, per-node WG/babel/sysctl/install previews, project deploy scripts
 - `frontend/src/components/deploy/LocalDeploy.tsx:6-72` — air-gap mode: compile, export artifacts ZIP, download `.sh`/`.ps1` deploy scripts (all via topologyStore)
 - `frontend/src/components/deploy/ConnectionSettings.tsx:8-263` — controller base URL / secret path prefix / agent URL inputs, sign-in form, break-glass token field, Connect/Refresh action
-- `frontend/src/components/deploy/BootstrapSettings.tsx:13-150` — server-persisted bootstrap settings form (public agent URL, GitHub proxy, agent release base), keyed-remount controlled form (59-61)
+- `frontend/src/components/deploy/BootstrapSettings.tsx:13-150` — server-persisted bootstrap settings form (public agent URL, GitHub proxy, agent release base), keyed-remount controlled form (59-61); its onSave now spreads `...initial` so a bootstrap-field edit round-trips the rollout/mimic fields (full-replace drop-on-save fix)
+- `frontend/src/components/deploy/AgentUpdateSettings.tsx` — agent self-update rollout card (target/min version, per-arch bins editor + "Assist from GitHub release", canary multiselect, promote-fleet-wide behind a confirm modal, read-only gh-proxy echo); persists via full-replace `saveSettings`; when an assist pins a tag it also persists the tagged release base (version_applied contract)
+- `frontend/src/components/deploy/MimicCatalogSettings.tsx` — mimic GitHub-`.deb` catalog card (version, release base, dynamic per-`<codename>-<arch>` rows, best-effort per-row assist with manual fallback)
+- `frontend/src/components/deploy/UpdateStatusChip.tsx` + `frontend/src/lib/updateStatus.ts` — the per-node update-status chip and its PURE `deriveUpdateState(node, settings, now)` (off/not-targeted/pending/applying/applied/failed/stale; verbatim `lastHealth` markers + a SemVer-2.0 comparator); `off`/null settings render a muted dash
 - `frontend/src/components/deploy/EnrollmentFlow.tsx:9-201` — mint single-use enrollment token; emits one-shot bootstrap command (34-40) and manual `agent enroll` command (26-29)
-- `frontend/src/components/deploy/NodeRegistry.tsx:32-177` — fleet table (status badge, applied/desired drift, rekeying badge, revoke) + per-edge readiness list (133-173)
-- `frontend/src/components/pages/FleetPage.tsx:6-13` — `/fleet` route composing NodeRegistry + EnrollmentFlow
+- `frontend/src/components/deploy/NodeRegistry.tsx:32-177` — fleet table (status badge, applied/desired drift, rekeying badge, **update-status chip**, revoke) + per-edge readiness list (133-173)
+- `frontend/src/components/pages/FleetPage.tsx` — `/fleet` route composing NodeRegistry + EnrollmentFlow + an opt-in "Live" auto-poll (20s; pauses while the tab is hidden; torn down on unmount and on logout/mode-switch via the loggedIn effect dep)
 - `frontend/src/components/pages/FleetNodeDetailPage.tsx:25-65` — `/fleet/nodes/:id` detail (registry node-id cell links here)
-- `frontend/src/api/controllerClient.ts:617-769` — fleet/deploy HTTP layer: `getNodes` (620), `getAudit` (627), `mintEnrollmentToken` (646), `updateTopology` (662), `stage` (670), `promote` (681), `revoke` (690), `rekeyAll` (700), `getTrustlist` (717), `postTrustlistSignature` (739), `postOperatorCredential` (754); URL builder `ctlURL` (165-177)
-- `frontend/src/types/controller.ts:8-41` — `ControllerNode`, `ControllerAuditEntry`, `StageResult` (camelCase mirrors of the operator JSON)
+- `frontend/src/api/controllerClient.ts:617-769` — fleet/deploy HTTP layer: `getNodes` (620), `getAudit` (627), `mintEnrollmentToken` (646), `updateTopology` (662), `stage` (670), `promote` (681), `revoke` (690), `rekeyAll` (700), `getTrustlist` (717), `postTrustlistSignature` (739), `postOperatorCredential` (754); URL builder `ctlURL` (165-177). Settings layer: `ControllerSettings`/`SettingsJSON`/`mapSettings`/`toSettingsJSON` (rollout+mimic fields), `emptyControllerSettings`, `fetchPins` (assisted release-pin fetch → `AgentPinFetchResult`)
+- `frontend/src/types/controller.ts:8-41` — `ControllerNode` (now incl. `inRollout`), `ControllerAuditEntry`, `StageResult` (camelCase mirrors of the operator JSON)
 
 Routes registered in `frontend/src/App.tsx:38-40`. `AuditLog`, `TwoFactorSettings`, `PasskeySettings` live in the same directory but belong to siblings (see specs/panel-shell.md, specs/panel-auth.md).
 

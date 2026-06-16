@@ -11,6 +11,42 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 _Nothing yet._
 
+## [2.0.0-beta.3] - 2026-06-16
+
+The third beta: closes the `controller-panel-rollout-ui` subject by building the operator-panel UI
+for the signed agent self-update + canary-then-fleet engine that shipped headless in beta.2 — i.e.
+the descoped plan-9 "Canary UI". Configuration and observation are no longer API-only.
+
+### Added
+- **Agent self-update rollout config card** (`AgentUpdateSettings`, Settings page, controller-mode
+  only): target/min version, per-arch binary pins for the two self-update-certified arches, a canary
+  node multiselect, and promote-fleet-wide behind a confirm modal (the empty-target safety contract:
+  an empty target ⇒ no self-update). An **"Assist from GitHub release"** button pre-fills the per-asset
+  SHA-256 pins for operator review.
+- **Mimic GitHub-`.deb` catalog config card** (`MimicCatalogSettings`): version, release base, and a
+  dynamic per-`<codename>-<arch>` `.deb` pins list, with a best-effort per-row assist (manual entry is
+  the guaranteed fallback — external mirrors often publish no `.sha256`).
+- **Assisted release-pin fetch endpoint** — operator `POST /api/v1/operator/release-pins`: fetches the
+  `.sha256` sidecars through the persisted GitHub proxy and returns `renderer.Artifact` pins. Egress is
+  guarded: http(s)-only, a redirect cap, a response cap, and a **dial-time private-IP reject** (loopback
+  / link-local / RFC1918 / ULA / CGNAT / 6to4 / NAT64) that also defeats DNS-rebind. A
+  `releases/latest/download` base + a requested version is rewritten to the tagged URL.
+- **Per-node update-status chip** on the Fleet registry + node detail (`off / not-targeted / pending /
+  applying / applied / failed / stale`), derived from the server-computed rollout membership
+  (`in_rollout` on the nodes view), the reported version vs the target (a real SemVer comparator), and
+  the agent health line. Plus an **opt-in "Live" auto-poll** (pauses while the tab is hidden, stops on
+  logout).
+
+### Fixed
+- **Full-replace drop-on-save**: `POST /settings` rebuilds the settings from the body, so the panel now
+  round-trips every persisted field — editing one card no longer silently wipes another's config.
+
+### Security
+- The assisted pin fetch is **convenience only and never a trust anchor**: the fetched sidecar rides the
+  same untrusted transport as the binary; trust stays the controller-signed, keystone-bound
+  `artifacts.json` the agent verifies a download against before exec. The panel never auto-saves or
+  auto-trusts a fetched pin.
+
 ## [2.0.0-beta.2] - 2026-06-16
 
 The second beta (set as the GitHub *latest* release): closes the
@@ -255,7 +291,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.2...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.3...HEAD
+[2.0.0-beta.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.2...v2.0.0-beta.3
 [2.0.0-beta.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.1...v2.0.0-beta.2
 [2.0.0-beta.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.10...v2.0.0-beta.1
 [2.0.0-preview.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-preview.9...v2.0.0-preview.10

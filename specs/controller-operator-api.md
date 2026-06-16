@@ -2,9 +2,10 @@
 
 <!-- last-verified: 2026-06-15 -->
 <!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
+<!-- 2026-06-16 (controller-panel-rollout-ui): added the operator POST /release-pins endpoint (assisted .sha256 sidecar fetch through the gh-proxy, SSRF-guarded, agent + mimic) and an in_rollout bool on the nodes view (server-computed AgentRolloutNodeIDs membership). The agent self-update + mimic pins are now ALSO edited via the panel (specs/panel-deploy-fleet.md), but still through the same strictly-validated POST /settings. New apierr codes agent_release_*. -->
 
 ## Responsibility
-Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, plus an optional break-glass bearer token) and serves the operator-port HTTP routes that drive the fleet lifecycle: topology, stage/promote, nodes, revoke, audit, settings, enrollment tokens, rekey-all, and keystone signing.
+Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, plus an optional break-glass bearer token) and serves the operator-port HTTP routes that drive the fleet lifecycle: topology, stage/promote, nodes, revoke, audit, settings, **release-pins** (assisted release-`.sha256` fetch for the agent/mimic pin editors), enrollment tokens, rekey-all, and keystone signing.
 
 > **controller-server-authority-redesign (plans 1/2/6):** `POST /update-topology`
 > enforces key custody — it rejects (400) any payload carrying a non-empty
@@ -26,7 +27,8 @@ Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, p
 - `internal/api/cookie_session.go:1-176` — httpOnly `yaog_session` + readable `yaog_csrf` cookies, double-submit CSRF check (96-106), GET /session probe (142-167)
 - `internal/api/auth_controller.go:141-201` — `operatorAuth` middleware (bearer-or-cookie, CSRF gate) and `resolveOperator` (session lookup, then constant-time break-glass compare)
 - `internal/api/loginratelimit.go:1-145` — per-username + per-IP failed-login limiter with atomic check-and-reserve gate (73-116)
-- `internal/api/handler_bootstrap.go:49-123` — GET/POST /settings (operator half; GET /bootstrap is agent-port, see specs/controller-agent-api.md)
+- `internal/api/handler_bootstrap.go:49-123` — GET/POST /settings (operator half; GET /bootstrap is agent-port, see specs/controller-agent-api.md). The settings wire now carries the agent self-update pins (`target_agent_version`, `min_agent_version`, `agent_bins`, `agent_canary_node_ids`, `agent_rollout_fleet_wide`) + the mimic catalog (`mimic_version`, `mimic_release_base`, `mimic_debs`); `validateAgentRollout`/`validateMimicCatalog` gate them.
+- `internal/api/release_pins.go` — `HandleReleasePins` (`POST {operatorBase}release-pins`): fetches per-asset `.sha256` sidecars through the persisted gh-proxy with an egress-guarded client (bounded timeout + redirect cap + dial-time private-IP reject defeating DNS-rebind) and returns `renderer.Artifact` pins for operator REVIEW. Convenience only — never a trust anchor (custody stays the signed `artifacts.json`).
 - `internal/api/server.go:48-51` — `EnableController` mounts operator routes on the operator/panel mux (shared with the air-gap API)
 - `cmd/server/main.go:29-63,119-175` — env wiring: `YAOG_OPERATOR_PATH_PREFIX` / `YAOG_AGENT_PATH_PREFIX` (split per audience), `YAOG_PANEL_ORIGIN`, `YAOG_SECURE_COOKIE`, break-glass token hashed before handler construction; startup log names both mounted base paths
 
@@ -37,7 +39,7 @@ Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, p
 - `trustlist.Verify` / `trustlist.VerifyAssertion` for keystone signatures and WebAuthn login assertions (see specs/keystone-trustlist.md), at `internal/api/handler_controller.go:1289` and `internal/api/handler_passkey.go:176`.
 
 ## Outputs
-- JSON DTOs to the panel (snake_case wire structs, `internal/api/handler_controller.go:270-437`); the node view exposes no key material — only `has_wg_public_key` (`internal/api/handler_controller.go:330-344`).
+- JSON DTOs to the panel (snake_case wire structs, `internal/api/handler_controller.go:270-437`); the node view exposes no key material — only `has_wg_public_key` (`internal/api/handler_controller.go:330-344`) — plus `in_rollout` (server-computed `controller.AgentRolloutNodeIDs` membership: one settings load + one pass per list call), which the panel's per-node update-status chip reads instead of re-deriving canary membership client-side.
 - `Set-Cookie` headers: httpOnly session + readable CSRF cookie, written before the body on every successful login path (`internal/api/cookie_session.go:48-69`, `internal/api/handler_login.go:188`).
 - Store mutations: sessions, operator records (TOTP/passkey fields), topology versions, settings, enrollment-token hashes, signed trust lists, and audit entries on every operator action.
 - Generation bumps (`HandleRekeyAll` → `BumpGeneration`, `internal/api/handler_controller.go:1005`; promote, 718) that wake agent `/poll` waiters — consumed by specs/controller-agent-api.md and specs/agent.md.
