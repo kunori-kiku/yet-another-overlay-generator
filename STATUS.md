@@ -1,14 +1,16 @@
 # STATUS
 <!-- regenerated: 2026-06-16 -->
-<!-- by: plan-10 (subject close) — subject: signed-self-update-and-rc-hardening -->
+<!-- by: draft-implementation-plan — subject: controller-panel-rollout-ui -->
 
 ## Active work
 
-- **None in flight.** The `signed-self-update-and-rc-hardening-2026_06_15` subject is **DELIVERED and
-  CLOSED** (all 10 plans merged, PRs #109–#118; archived to `implementation_plans/_completed/`).
-- **Released:** **`v2.0.0-beta.2`** (GitHub *latest*) — the signed agent self-update swap +
-  canary-then-fleet rollout. Built atop **`v2.0.0-beta.1`** (mimic-from-GitHub install, agent version
-  reporting, full input validation, controller-mode UX, RC paperwork).
+- **Drafted, awaiting execution:** `controller-panel-rollout-ui-2026_06_16` (6 plans) — the operator-panel
+  UI for the shipped agent self-update + canary-then-fleet (closes the descoped plan-9 step 8 "Canary UI"),
+  a symmetric mimic-catalog form, and a per-node update-status surface. Targets **v2.0.0-beta.3**.
+  Next: execute plan-1 (backend assisted release-pin-fetch endpoint + nodeJSON `in_rollout`).
+- **Last released:** **`v2.0.0-beta.2`** (GitHub *latest*) — signed agent self-update swap +
+  canary-then-fleet. Built atop **`v2.0.0-beta.1`**. The `signed-self-update-and-rc-hardening-2026_06_15`
+  subject is DELIVERED + CLOSED (PRs #109–#118; archived).
 
 ## Open questions / blockers
 
@@ -25,13 +27,11 @@
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin), the FileStore SPOF (global mutex + 200ms generation poll) fix,
   the full wiki rewrite, and a frontend test runner.
-- **Descoped deliverables surfaced by the 2026-06-16 post-close audit** (now tracked, see
-  `CLOSURE.md` "Descoped deliverables"): (a) the plan-9 **Canary UI** (per-node update-status surface +
-  in-panel target-version/canary editor) was not built — agent self-update is configured via
-  `POST /api/v1/operator/settings` and observed via the plan-4 version badge; a canary-progress widget
-  is a follow-up (build vs. defer is an open owner decision). (b) the `v2.0.0-beta.1` release notes omit
-  the prior #98–#106 closure (cosmetic; body may be amended). The stale `validation.md` compliance prose
-  (a third finding) was **fixed** in the post-audit doc change.
+- **Descoped deliverables surfaced by the 2026-06-16 post-close audit** (see `CLOSURE.md` "Descoped
+  deliverables"): (a) the plan-9 **Canary UI** — now **scoped for build** as the
+  `controller-panel-rollout-ui-2026_06_16` subject (see Active work); no longer an open decision. (b) the
+  `v2.0.0-beta.1` release notes omit the prior #98–#106 closure (cosmetic; body may be amended). The stale
+  `validation.md` compliance prose (a third finding) was **fixed** in the post-audit doc change.
 - No code blockers. `main` is green.
 
 ## Next actions
