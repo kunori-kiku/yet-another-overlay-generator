@@ -186,11 +186,17 @@ func TestKeystoneRotation_Repro(t *testing.T) {
 			t.Logf("EXPECTED refusal (node pinned-B, served bundle still signed-A): %v", err)
 		}
 
-		// Mid-deploy window: re-staging clears the served signature (staged-but-unsigned), which
-		// must read as NOT-required (a deploy is in flight), not as a spurious strand signal.
+		// Mid-deploy window (bug #1 fix): re-staging touches only the STAGED slot — the SERVED slot
+		// still holds the A-signed manifest, so /config keeps serving it (200, never blinded) AND the
+		// strand signal STAYS true. Before the served-slot split, a re-stage clobbered the served
+		// signature, which both stranded the fleet on /config and spuriously flickered the operator
+		// signal off mid-deploy; now the signal is stable until a fresh B deploy is PROMOTED.
 		env.stageOnly(t)
-		if st := keystoneStatus(t, env); st.RedeployRequired {
-			t.Fatalf("staged-but-unsigned window must NOT report redeploy_required, got %+v", st)
+		if st := keystoneStatus(t, env); !st.RedeployRequired {
+			t.Fatalf("re-stage must NOT clear the strand signal (served slot still A-signed); got %+v", st)
+		}
+		if files := fetchServedBundle(t, env, nodeTok); len(files) == 0 {
+			t.Fatal("re-stage must keep /config serving the prior promoted bundle, not blind the node")
 		}
 
 		// Completing the fresh signed deploy under B clears the signal and the B-node then accepts.

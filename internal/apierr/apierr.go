@@ -186,7 +186,7 @@ var registry = map[Code]def{
 	CodeReqUnsupportedAlg:        {"Unsupported algorithm {alg}.", http.StatusBadRequest},
 	CodeTopologyVersionNotFound:  {"No such retained topology version (it may have been pruned).", http.StatusNotFound},
 	CodeNoTopologyStored:         {"No topology has been stored yet.", http.StatusNotFound},
-	CodeKeystoneNoSignedManifest: {"The keystone is enabled but no signed membership manifest is available to serve.", http.StatusInternalServerError},
+	CodeKeystoneNoSignedManifest: {"The keystone is enabled but no signed membership manifest has been promoted to serve yet; sign and promote a deploy under the pinned credential. Nodes keep their current config and retry.", http.StatusConflict},
 	CodeNoStagedManifest:         {"No staged membership manifest; stage a deploy before signing.", http.StatusNotFound},
 	CodeNoPinnedCredential:       {"No operator credential is pinned; pin one before signing.", http.StatusPreconditionFailed},
 	CodeStagedManifestMismatch:   {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},

@@ -50,7 +50,9 @@ import (
 //	                                    (plan-6); a legacy audit.json array is migrated
 //	                                    to this on first access
 //	operator_credential.json            the pinned off-host operator credential (keystone)
-//	signed_trustlist.json               the operator-signed membership trust-list (keystone)
+//	signed_trustlist.json               the STAGED (to-be-signed/just-signed) membership manifest
+//	served_trustlist.json               the SERVED (last-promoted) signed membership manifest
+
 //	operators/<username>.json           one operator account (argon2id PHC hash)
 //	sessions/<tokenHash>.json           one operator login session, keyed by token hash
 //	settings.json                       operator-editable controller settings (bootstrap)
@@ -994,6 +996,21 @@ func (fs *FileStore) PromoteStaged(ctx context.Context, t TenantID) (int64, erro
 		}
 	}
 
+	// Promote the staged trust-list to the SERVED slot together with the bundles, so /config always
+	// serves a (bundle, manifest) pair from one generation and a STAGE never disturbs the live
+	// served manifest. Only a SIGNED staged manifest is promoted (the controller PromoteStaged gate
+	// verified it before calling this); an unsigned/absent staged slot leaves the served slot intact.
+	var stagedTL StoredTrustList
+	if err := readJSON(filepath.Join(dir, "signed_trustlist.json"), &stagedTL); err == nil {
+		if len(stagedTL.SignatureJSON) > 0 {
+			if err := writeJSONAtomic(filepath.Join(dir, "served_trustlist.json"), stagedTL); err != nil {
+				return 0, err
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+
 	// Commit the new generation last: WaitForGeneration polls generation.json,
 	// so the bundles/nodes are already in place before the counter advances.
 	if err := writeJSONAtomic(filepath.Join(dir, "generation.json"), generationFile{Generation: newGen}); err != nil {
@@ -1466,6 +1483,77 @@ func (fs *FileStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) 
 		return StoredTrustList{}, err
 	}
 	return sl, nil
+}
+
+// GetServedTrustList returns the tenant's SERVED (last-promoted) signed trust-list from
+// served_trustlist.json, or ErrNotFound when nothing has been promoted under a keystone.
+func (fs *FileStore) GetServedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
+	if err := ctx.Err(); err != nil {
+		return StoredTrustList{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return StoredTrustList{}, err
+	}
+	var sl StoredTrustList
+	if err := readJSON(filepath.Join(dir, "served_trustlist.json"), &sl); err != nil {
+		if os.IsNotExist(err) {
+			return StoredTrustList{}, ErrNotFound
+		}
+		return StoredTrustList{}, err
+	}
+	return sl, nil
+}
+
+// GetServedConfig atomically snapshots what /config serves nodeID — the current bundle, the
+// keystone-on flag (operator_credential.json present), and the served signed trust-list — all
+// under one fs.mu lock so a concurrent PromoteStaged cannot expose a torn (old-bundle,
+// new-manifest) pair. ErrNotFound when the node has no current bundle.
+func (fs *FileStore) GetServedConfig(ctx context.Context, t TenantID, nodeID string) (ServedConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return ServedConfig{}, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return ServedConfig{}, err
+	}
+	p, err := fs.bundlePath(dir, nodeID, "current")
+	if err != nil {
+		return ServedConfig{}, err
+	}
+	var b SignedBundle
+	if err := readJSON(p, &b); err != nil {
+		if os.IsNotExist(err) {
+			return ServedConfig{}, ErrNotFound
+		}
+		return ServedConfig{}, err
+	}
+	sc := ServedConfig{Bundle: b}
+	// Keystone ON iff a pinned operator credential exists.
+	var cred OperatorCredential
+	if err := readJSON(filepath.Join(dir, "operator_credential.json"), &cred); err == nil {
+		sc.KeystoneOn = true
+	} else if !os.IsNotExist(err) {
+		return ServedConfig{}, err
+	}
+	if sc.KeystoneOn {
+		var sl StoredTrustList
+		if err := readJSON(filepath.Join(dir, "served_trustlist.json"), &sl); err == nil {
+			if len(sl.SignatureJSON) > 0 {
+				sc.TrustList = sl
+				sc.HasTrustList = true
+			}
+		} else if !os.IsNotExist(err) {
+			return ServedConfig{}, err
+		}
+	}
+	return sc, nil
 }
 
 // ===================== Operators + sessions (login) ========================

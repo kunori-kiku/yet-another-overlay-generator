@@ -732,9 +732,9 @@ func verifyStoredAgainstPin(stored StoredTrustList, cred OperatorCredential) (pa
 // rotated-but-not-redeployed fleet, never mid-deploy. A parse/pin error (a corrupt stored record
 // or an unparsable pinned credential) is surfaced to the caller, never masked as "not required".
 func KeystoneRedeployRequired(ctx context.Context, store Store, t TenantID, cred OperatorCredential) (bool, error) {
-	stored, err := store.GetCurrentSignedTrustList(ctx, t)
+	stored, err := store.GetServedTrustList(ctx, t)
 	if errors.Is(err, ErrNotFound) {
-		return false, nil // nothing served yet — not a rotation
+		return false, nil // nothing promoted/served yet — not a rotation
 	}
 	if err != nil {
 		return false, fmt.Errorf("controller: loading served trust-list for redeploy check: %w", err)

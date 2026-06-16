@@ -43,9 +43,14 @@ type tenantState struct {
 	// operatorCred is the tenant's pinned off-host operator signing credential, or nil
 	// when none is pinned (keystone OFF). The keystone trust anchor.
 	operatorCred *OperatorCredential
-	// signedTrustList is the tenant's current operator-signed membership trust-list, or
-	// nil when none has been signed yet.
+	// signedTrustList is the tenant's STAGED membership trust-list (the to-be-signed / just-signed
+	// manifest of the pending generation), or nil when none is staged. NOT what /config serves.
 	signedTrustList *StoredTrustList
+	// servedTrustList is the tenant's SERVED (last-promoted) signed membership trust-list — what
+	// /config hands to nodes — or nil when nothing has been promoted under a keystone. PromoteStaged
+	// copies signedTrustList here once its signature has verified, so STAGING a new deploy never
+	// clobbers the live fleet's served manifest (a re-stage used to 500 every /config).
+	servedTrustList *StoredTrustList
 	// operators maps an operator Username -> the Operator account (argon2id PHC hash;
 	// never a plaintext password). Operator login, plan-5.2.
 	operators map[string]Operator
@@ -358,6 +363,14 @@ func (s *MemStore) PromoteStaged(ctx context.Context, t TenantID) (int64, error)
 		return 0, ErrNoStagedBundle
 	}
 	ts.generation = newGen
+	// Promote the staged trust-list to the SERVED slot ATOMICALLY with the bundle flip (same lock),
+	// so /config always serves a (bundle, manifest) pair from one generation. Only a SIGNED staged
+	// manifest is promoted (the controller PromoteStaged gate verified it before calling this); an
+	// unsigned/absent staged slot leaves the prior served manifest intact (keystone OFF, or a raw
+	// store-level promote in a test).
+	if ts.signedTrustList != nil && len(ts.signedTrustList.SignatureJSON) > 0 {
+		ts.servedTrustList = cloneStoredTrustList(ts.signedTrustList)
+	}
 	// Wake all WaitForGeneration waiters across tenants; each rechecks its predicate.
 	s.cond.Broadcast()
 	return newGen, nil
@@ -638,8 +651,9 @@ func (s *MemStore) PutSignedTrustList(ctx context.Context, t TenantID, sl Stored
 	return nil
 }
 
-// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
-// ErrNotFound when none has been signed yet. A deep copy is returned.
+// GetCurrentSignedTrustList returns the tenant's STAGED signed trust-list, or ErrNotFound when none
+// is staged. A deep copy is returned. (Historical name; this is the staged slot — see the Store
+// interface doc. The served manifest is GetServedTrustList.)
 func (s *MemStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -648,6 +662,38 @@ func (s *MemStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (S
 		return StoredTrustList{}, ErrNotFound
 	}
 	return *cloneStoredTrustList(ts.signedTrustList), nil
+}
+
+// GetServedTrustList returns the tenant's SERVED (last-promoted) signed trust-list, or ErrNotFound
+// when nothing has been promoted under a keystone. A deep copy is returned.
+func (s *MemStore) GetServedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	if ts.servedTrustList == nil {
+		return StoredTrustList{}, ErrNotFound
+	}
+	return *cloneStoredTrustList(ts.servedTrustList), nil
+}
+
+// GetServedConfig atomically snapshots what /config serves nodeID: its current bundle, whether the
+// keystone is ON (a credential is pinned), and the served signed trust-list when present — all
+// under one lock, so a concurrent PromoteStaged can never expose a torn (old-bundle, new-manifest)
+// pair. ErrNotFound when the node has no current bundle.
+func (s *MemStore) GetServedConfig(ctx context.Context, t TenantID, nodeID string) (ServedConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	b, ok := ts.current[nodeID]
+	if !ok {
+		return ServedConfig{}, ErrNotFound
+	}
+	sc := ServedConfig{Bundle: cloneBundle(b), KeystoneOn: ts.operatorCred != nil}
+	if sc.KeystoneOn && ts.servedTrustList != nil && len(ts.servedTrustList.SignatureJSON) > 0 {
+		sc.TrustList = *cloneStoredTrustList(ts.servedTrustList)
+		sc.HasTrustList = true
+	}
+	return sc, nil
 }
 
 // cloneStoredTrustList returns a deep copy of a StoredTrustList, copying its byte

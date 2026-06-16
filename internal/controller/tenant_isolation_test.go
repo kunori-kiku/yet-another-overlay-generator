@@ -38,6 +38,19 @@ func TestTenantIsolation(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("StageBundle(A): %v", err)
 			}
+			// Pin a keystone credential and a SIGNED staged trust-list under A before the promote, so
+			// the promote populates A's SERVED trust-list slot — letting B's served reads below assert
+			// the served slot is tenant-scoped too.
+			if err := s.SetOperatorCredential(ctx, tenantA, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub-a-keystone"}); err != nil {
+				t.Fatalf("SetOperatorCredential(A): %v", err)
+			}
+			if err := s.PutSignedTrustList(ctx, tenantA, StoredTrustList{
+				TrustListJSON: []byte(`{"epoch":1,"members":[{"node_id":"alpha"}]}` + "\n"),
+				SignatureJSON: []byte(`{"alg":"ed25519","signature":"sig-a"}`),
+				Epoch:         1,
+			}); err != nil {
+				t.Fatalf("PutSignedTrustList(A): %v", err)
+			}
 			if _, err := s.PromoteStaged(ctx, tenantA); err != nil {
 				t.Fatalf("PromoteStaged(A): %v", err)
 			}
@@ -95,6 +108,20 @@ func TestTenantIsolation(t *testing.T) {
 			}
 			if _, err := s.GetCurrentBundle(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetCurrentBundle(B, alpha): err = %v, want ErrNotFound", err)
+			}
+			// The keystone is tenant-scoped: B sees neither A's pinned credential, A's staged
+			// trust-list, A's served trust-list, nor a served config for A's node.
+			if _, err := s.GetOperatorCredential(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetOperatorCredential(B): err = %v, want ErrNotFound", err)
+			}
+			if _, err := s.GetCurrentSignedTrustList(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetCurrentSignedTrustList(B): err = %v, want ErrNotFound", err)
+			}
+			if _, err := s.GetServedTrustList(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetServedTrustList(B): err = %v, want ErrNotFound", err)
+			}
+			if _, err := s.GetServedConfig(ctx, tenantB, "alpha"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetServedConfig(B, alpha): err = %v, want ErrNotFound", err)
 			}
 
 			// Tenant B must see nothing: list reads -> empty.

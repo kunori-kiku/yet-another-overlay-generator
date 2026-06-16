@@ -351,6 +351,57 @@ func TestRunRefusesNodeIDMismatch(t *testing.T) {
 	}
 }
 
+// TestRecordSuccessEpochFloorMonotonic pins bug #2: recordSuccess must persist
+// max(membershipEpoch, prev.MembershipEpoch) — a successful apply must NEVER lower the
+// anti-rollback floor. The trap: a keystone-OFF apply reports membershipEpoch==0
+// (VerifyMembership is a no-op without a pinned credential), so a node that locked in floor
+// E under the keystone, then ran once with it disabled, would reset its floor to 0 — and
+// afterward accept a replayed older-but-validly-signed (E-1) membership once re-enabled.
+func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
+	man := &manifestInfo{NodeID: "n1", CompiledAt: "2026-06-16T00:00:00Z", Checksum: "abc"}
+
+	t.Run("keystone-OFF apply (epoch 0) preserves a prior floor", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		prev := &State{NodeID: "n1", MembershipEpoch: 5}
+		recordSuccess(cfg, prev, man, &VerifyResult{}, 0) // keystone OFF this run
+		st, err := LoadState(dir)
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if st.MembershipEpoch != 5 {
+			t.Fatalf("keystone-OFF apply lowered the anti-rollback floor: got %d, want 5", st.MembershipEpoch)
+		}
+	})
+
+	t.Run("a real epoch bump advances the floor", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		prev := &State{NodeID: "n1", MembershipEpoch: 5}
+		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 7) // genuine advance
+		st, err := LoadState(dir)
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if st.MembershipEpoch != 7 {
+			t.Fatalf("a real epoch bump must advance the floor: got %d, want 7", st.MembershipEpoch)
+		}
+	})
+
+	t.Run("no prior state takes the applied epoch verbatim", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		recordSuccess(cfg, nil, man, &VerifyResult{Signed: true}, 3) // first ever apply
+		st, err := LoadState(dir)
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if st.MembershipEpoch != 3 {
+			t.Fatalf("first apply must record the applied epoch: got %d, want 3", st.MembershipEpoch)
+		}
+	})
+}
+
 // resign recomputes checksums.sha256 over the current checksummed file set and
 // re-signs it, keeping the fixture internally consistent after a test mutates a
 // checksummed file (e.g. install.sh).

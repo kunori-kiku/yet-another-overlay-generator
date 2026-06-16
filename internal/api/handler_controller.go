@@ -657,7 +657,11 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bundle, err := h.store.GetCurrentBundle(r.Context(), tenant, node)
+	// One ATOMIC snapshot of what this node is served: its current promoted bundle plus,
+	// when the keystone is ON, the SERVED (last-promoted) signed trust-list — read under a
+	// single store lock so a concurrent PromoteStaged can never hand the node a torn
+	// (old-bundle, new-manifest) pair that would spuriously fail its bundle-digest binding.
+	sc, err := h.store.GetServedConfig(r.Context(), tenant, node)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeAPIError(w, apierr.New(apierr.CodeConfigNotFound).Wrap(err))
@@ -679,8 +683,8 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 		rekeyRequested = n.RekeyRequested
 	}
 
-	files := make(map[string]string, len(bundle.Files)+2)
-	for path, content := range bundle.Files {
+	files := make(map[string]string, len(sc.Bundle.Files)+2)
+	for path, content := range sc.Bundle.Files {
 		files[path] = base64.StdEncoding.EncodeToString(content)
 	}
 
@@ -691,22 +695,18 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 	// set; the agent verifies it against its pinned credential and asserts this node's
 	// member.BundleSHA256 matches hex(sha256(checksums.sha256)). A promote cannot occur
 	// without a valid signed manifest (PromoteStaged gate), so a promoted bundle always
-	// has one to serve; we still fail closed if it is somehow absent.
-	if _, err := h.store.GetOperatorCredential(r.Context(), tenant); err == nil {
-		stored, err := h.store.GetCurrentSignedTrustList(r.Context(), tenant)
-		if err != nil || len(stored.SignatureJSON) == 0 {
+	// has one to serve; we still fail closed (HasTrustList false) if it is somehow absent.
+	if sc.KeystoneOn {
+		if !sc.HasTrustList {
 			writeAPIError(w, apierr.New(apierr.CodeKeystoneNoSignedManifest))
 			return
 		}
-		files["trustlist.json"] = base64.StdEncoding.EncodeToString(stored.TrustListJSON)
-		files["trustlist.sig"] = base64.StdEncoding.EncodeToString(stored.SignatureJSON)
-	} else if !errors.Is(err, controller.ErrNotFound) {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		files["trustlist.json"] = base64.StdEncoding.EncodeToString(sc.TrustList.TrustListJSON)
+		files["trustlist.sig"] = base64.StdEncoding.EncodeToString(sc.TrustList.SignatureJSON)
 	}
 
 	writeJSON(w, http.StatusOK, configResponseJSON{
-		Generation:     bundle.Generation,
+		Generation:     sc.Bundle.Generation,
 		Files:          files,
 		RekeyRequested: rekeyRequested,
 	})

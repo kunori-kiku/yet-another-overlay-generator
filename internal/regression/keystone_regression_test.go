@@ -17,9 +17,13 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,23 +160,23 @@ func (e *regEnv) signStaged(ks keystone) {
 
 // served assembles the file map the controller would serve a node at /config: the promoted bundle
 // files PLUS trustlist.json (canonical) + trustlist.sig (the signed artifact), exactly as the HTTP
-// /config handler appends them (never embedded in the bundle's checksum set).
+// /config handler appends them (never embedded in the bundle's checksum set). It reads the atomic
+// GetServedConfig — the SERVED (last-promoted) slots — so it mirrors what a node actually fetches,
+// not the in-flight STAGED manifest (which a mid-deploy re-stage may have left unsigned).
 func (e *regEnv) served(nodeID string) map[string][]byte {
 	e.t.Helper()
-	bundle, err := e.store.GetCurrentBundle(e.ctx, tenant, nodeID)
+	sc, err := e.store.GetServedConfig(e.ctx, tenant, nodeID)
 	if err != nil {
-		e.t.Fatalf("GetCurrentBundle(%s): %v", nodeID, err)
+		e.t.Fatalf("GetServedConfig(%s): %v", nodeID, err)
 	}
-	files := make(map[string][]byte, len(bundle.Files)+2)
-	for k, v := range bundle.Files {
+	files := make(map[string][]byte, len(sc.Bundle.Files)+2)
+	for k, v := range sc.Bundle.Files {
 		files[k] = v
 	}
-	stored, err := e.store.GetCurrentSignedTrustList(e.ctx, tenant)
-	if err != nil {
-		e.t.Fatalf("GetCurrentSignedTrustList(served): %v", err)
+	if sc.HasTrustList {
+		files["trustlist.json"] = sc.TrustList.TrustListJSON
+		files["trustlist.sig"] = sc.TrustList.SignatureJSON
 	}
-	files["trustlist.json"] = stored.TrustListJSON
-	files["trustlist.sig"] = stored.SignatureJSON
 	return files
 }
 
@@ -366,22 +370,141 @@ func TestRegression_RevokeUpdatesMembership(t *testing.T) {
 	}
 }
 
+// --- Scenario 8: a mid-deploy RE-STAGE must not brick the served fleet (bug #1) ---
+// After a clean deploy(A), starting a NEW deploy that only RE-STAGES (CompileAndStage, not yet
+// signed/promoted) must leave the SERVED slot intact: /config keeps serving the A-signed bundle and
+// a node pinned to A still verifies. Before the served-slot split, the re-stage overwrote the single
+// trust-list slot with an UNSIGNED manifest, so /config served no signature — every node was
+// stranded (the agent's membership gate refused, /config 500'd) until the next promote landed. The
+// served (last-promoted) slot now advances ONLY on promote, so a half-finished deploy is invisible
+// to the fleet.
+func TestRegression_RestageDoesNotBrickServedConfig(t *testing.T) {
+	e := newRegEnv(t, twoNodeTopo(), "node-1", "node-2")
+	a := newKeystone(t)
+	e.pinKeystone(a)
+	e.deploy(a)
+
+	// Sanity: the freshly-deployed bundle verifies.
+	if _, err := verifyAsNode(e.served("node-1"), "node-1", a.pubPEM, 0); err != nil {
+		t.Fatalf("pre-restage: node-1 must verify the A-signed bundle, got %v", err)
+	}
+
+	// Start a new deploy that only RE-STAGES (no off-host signature, no promote yet).
+	if _, err := controller.CompileAndStage(e.ctx, e.store, tenant, time.Now()); err != nil {
+		t.Fatalf("re-stage CompileAndStage: %v", err)
+	}
+
+	// The served slot is unchanged: a node pinned to A still verifies the SAME promoted bundle.
+	files := e.served("node-1")
+	if len(files["trustlist.sig"]) == 0 {
+		t.Fatal("re-stage stranded the fleet: the served trust-list signature went missing (bug #1)")
+	}
+	if _, err := verifyAsNode(files, "node-1", a.pubPEM, 0); err != nil {
+		t.Fatalf("re-stage must not brick the served bundle; node-1 must still verify, got %v", err)
+	}
+}
+
+// --- Scenario 9: GetServedConfig is an ATOMIC (bundle, trust-list) snapshot (bug #3) ---
+// /config reads the bundle and the served trust-list under ONE store lock. A two-call reader could
+// observe a TORN pair across a concurrent PromoteStaged — an old bundle with a new manifest (or vice
+// versa) — whose digest binding then spuriously fails the agent. We hammer GetServedConfig from one
+// goroutine while another promotes a sequence of membership-changing deploys, asserting every
+// snapshot is internally consistent: the served manifest lists node-1 with a BundleSHA256 equal to
+// hex(sha256(checksums.sha256)) of the bundle returned in the SAME snapshot. Run under -race.
+func TestRegression_ServedConfigAtomicUnderConcurrentPromote(t *testing.T) {
+	e := newRegEnv(t, twoNodeTopo(), "node-1", "node-2")
+	a := newKeystone(t)
+	e.pinKeystone(a)
+	e.deploy(a) // an initial promoted snapshot must exist before the reader starts
+
+	// The READER runs in a background goroutine: it only ever calls t.Errorf (which is safe from
+	// non-test goroutines) and a PURE consistency check — never t.Fatalf, whose FailNow must stay on
+	// the test goroutine. The WRITER (e.deploy, which uses t.Fatalf) therefore stays on the main
+	// goroutine.
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			sc, err := e.store.GetServedConfig(e.ctx, tenant, "node-1")
+			if err != nil {
+				t.Errorf("GetServedConfig: %v", err)
+				return
+			}
+			if cerr := servedSnapshotConsistent(sc); cerr != nil {
+				t.Errorf("inconsistent served snapshot: %v", cerr)
+				return
+			}
+		}
+	}()
+
+	// Writer (main goroutine): each round flips node-2's membership, which changes node-1's peer set
+	// (hence its bundle) AND the manifest's member tuple — so a torn read would pair mismatched
+	// generations. node-1 (the router) stays a member throughout, so its digest binding is always
+	// assertable.
+	const rounds = 12
+	for i := 0; i < rounds; i++ {
+		if i%2 == 0 {
+			e.revoke("node-2")
+		} else {
+			e.approve("node-2")
+		}
+		e.deploy(a)
+	}
+	close(stop)
+	<-readerDone
+}
+
 // --- helpers ---
+
+// servedSnapshotConsistent is a PURE check (no *testing.T, safe to call from any goroutine): the
+// served snapshot must carry a trust-list whose node-1 member entry binds the EXACT digest of the
+// bundle in the SAME snapshot (BundleSHA256 == hex(sha256(checksums.sha256))). A torn (old-bundle,
+// new-manifest) read returned by a non-atomic /config reader would violate this.
+func servedSnapshotConsistent(sc controller.ServedConfig) error {
+	if !sc.HasTrustList {
+		return errors.New("served snapshot under keystone must carry a trust-list")
+	}
+	checksums, ok := sc.Bundle.Files["checksums.sha256"]
+	if !ok {
+		return errors.New("served bundle is missing checksums.sha256")
+	}
+	sum := sha256.Sum256(checksums)
+	want := hex.EncodeToString(sum[:])
+	var tl trustlist.TrustList
+	if err := json.Unmarshal(sc.TrustList.TrustListJSON, &tl); err != nil {
+		return fmt.Errorf("unmarshal served manifest: %w", err)
+	}
+	for _, m := range tl.Members {
+		if m.NodeID == "node-1" {
+			if m.BundleSHA256 != want {
+				return fmt.Errorf("TORN read: served manifest binds node-1 digest %s but the snapshot bundle hashes to %s", m.BundleSHA256, want)
+			}
+			return nil
+		}
+	}
+	return errors.New("served manifest does not list node-1")
+}
 
 func mustEpoch(t *testing.T, e *regEnv) int64 {
 	t.Helper()
-	stored, err := e.store.GetCurrentSignedTrustList(e.ctx, tenant)
+	stored, err := e.store.GetServedTrustList(e.ctx, tenant)
 	if err != nil {
-		t.Fatalf("GetCurrentSignedTrustList(epoch): %v", err)
+		t.Fatalf("GetServedTrustList(epoch): %v", err)
 	}
 	return stored.Epoch
 }
 
 func membersContain(t *testing.T, e *regEnv, nodeID string) bool {
 	t.Helper()
-	stored, err := e.store.GetCurrentSignedTrustList(e.ctx, tenant)
+	stored, err := e.store.GetServedTrustList(e.ctx, tenant)
 	if err != nil {
-		t.Fatalf("GetCurrentSignedTrustList(members): %v", err)
+		t.Fatalf("GetServedTrustList(members): %v", err)
 	}
 	var tl trustlist.TrustList
 	if err := json.Unmarshal(stored.TrustListJSON, &tl); err != nil {

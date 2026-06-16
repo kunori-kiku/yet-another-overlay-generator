@@ -324,11 +324,20 @@ func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult
 	// health-confirmed AgentVersionFloor must NOT be wiped by a routine apply (or a later signed
 	// downgrade could slip below it), and a self-update breadcrumb / abandoned-target memory in
 	// flight must survive (a normal apply does not own it — the reconcile/finalize does). Same
-	// discipline as MembershipEpoch above.
+	// discipline as MembershipEpoch below.
 	if prev != nil {
 		s.AgentVersionFloor = prev.AgentVersionFloor
 		s.PendingUpdate = prev.PendingUpdate
 		s.AbandonedAgentVersion = prev.AbandonedAgentVersion
+		// The membership anti-rollback floor is MONOTONIC: a successful apply must never LOWER it
+		// (mirrors recordFailure). A keystone-OFF apply reports membershipEpoch==0 (VerifyMembership
+		// is a no-op without a pinned credential), so without this a node that had a keystone-ON
+		// floor of E, run once with the keystone disabled, would silently reset its floor to 0 — and
+		// then accept a replayed older (E-1) but validly-signed membership once re-enabled. Persist
+		// max(membershipEpoch, prev): advance on a real epoch bump, preserve E across a keystone-OFF run.
+		if prev.MembershipEpoch > s.MembershipEpoch {
+			s.MembershipEpoch = prev.MembershipEpoch
+		}
 	}
 	persistAndReport(cfg, s)
 }
