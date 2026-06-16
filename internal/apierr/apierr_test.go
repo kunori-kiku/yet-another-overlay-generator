@@ -98,6 +98,7 @@ var allCodes = []Code{
 	CodeAgentReleaseSidecarInvalid,
 	CodeSigningKeyMissing,
 	CodeSigningKeyMismatch,
+	CodeKeystoneRotationRequiresAck,
 	CodeReqBearerRequired,
 	CodeAuthCredentialsInvalid,
 	CodeReqCSRFInvalid,

@@ -39,6 +39,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -602,7 +603,7 @@ func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) 
 		return 0, fmt.Errorf("controller: building pinned credential to promote: %w", err)
 	}
 	if err := trustlist.Verify(manifest, signed, pin); err != nil {
-		return 0, fmt.Errorf("controller: staged membership manifest signature is invalid; re-sign before promote: %w", err)
+		return 0, fmt.Errorf("controller: the staged membership manifest is signed under a credential that is no longer the pinned keystone (it was likely signed before a rotation); re-sign it with the current credential (GET /trustlist, POST /trustlist-signature) before promote: %w", err)
 	}
 
 	return store.PromoteStaged(ctx, t)
@@ -636,6 +637,106 @@ func pinFromOperatorCredential(c OperatorCredential) (trustlist.PinnedCredential
 		return trustlist.PinnedCredential{}, fmt.Errorf("controller: unsupported operator credential algorithm %q", c.Alg)
 	}
 	return pin, nil
+}
+
+// KeystoneFingerprint is the stable hex SHA-256 of a pinned operator credential's PUBLIC
+// key, hashed over its CANONICAL x509 PKIX DER (never the PEM string) so a benign
+// re-encode — a trailing newline, different line wrapping — of the SAME key yields the
+// SAME fingerprint. It is the single identity used to tell a keystone ROTATION (a genuinely
+// different key) apart from an idempotent re-pin, and is surfaced to the operator panel as
+// a short, comparable credential identity. It is NON-SECRET (a public-key digest).
+func KeystoneFingerprint(c OperatorCredential) (string, error) {
+	var pub any
+	switch trustlist.Alg(c.Alg) {
+	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
+		k, err := trustlist.ParseEd25519PinPEM([]byte(c.PublicKeyPEM))
+		if err != nil {
+			return "", err
+		}
+		pub = k
+	case trustlist.AlgWebAuthnES256:
+		k, err := trustlist.ParseES256Pin([]byte(c.PublicKeyPEM))
+		if err != nil {
+			return "", err
+		}
+		pub = k
+	default:
+		return "", fmt.Errorf("controller: unsupported operator credential algorithm %q", c.Alg)
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("controller: marshalling operator credential public key: %w", err)
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// SameKeystoneCredential reports whether two operator credentials are the SAME trust anchor:
+// the same public key (by fingerprint), the same algorithm, and — for the WebAuthn algorithms
+// whose assertion binds them — the same relying-party ID and credential id. Any difference is
+// a ROTATION (a new key, or a rebinding that changes what a node verifies against), which the
+// handler refuses without an explicit ack. A fingerprint error (an unparsable PEM) is returned
+// to the caller rather than masked as "same".
+func SameKeystoneCredential(a, b OperatorCredential) (bool, error) {
+	if a.Alg != b.Alg {
+		return false, nil
+	}
+	fpA, err := KeystoneFingerprint(a)
+	if err != nil {
+		return false, err
+	}
+	fpB, err := KeystoneFingerprint(b)
+	if err != nil {
+		return false, err
+	}
+	if fpA != fpB {
+		return false, nil
+	}
+	// The WebAuthn assertion binds rpid + credential id, so a change in either changes what a
+	// node verifies even with the same key; raw ed25519 ignores both (empty on both sides).
+	switch trustlist.Alg(a.Alg) {
+	case trustlist.AlgWebAuthnES256, trustlist.AlgWebAuthnEdDSA:
+		return a.RPID == b.RPID && a.CredentialID == b.CredentialID, nil
+	default:
+		return true, nil
+	}
+}
+
+// KeystoneRedeployRequired reports whether the membership trust-list the controller currently
+// SERVES carries a signature that no longer verifies against the pinned credential `cred` —
+// i.e. the keystone was rotated but no fresh deploy has been signed + promoted under the new
+// key yet, so every (correctly re-provisioned) node would refuse the served bundle. It is the
+// single source of the operator-facing "redeploy required" signal.
+//
+// It is deliberately CONSERVATIVE: it returns false (not "required") when no manifest is
+// stored, when the stored manifest has no signature yet (the normal stage→sign→promote
+// window), or when the signature still verifies — so it fires ONLY for a genuine
+// rotated-but-not-redeployed fleet, never mid-deploy.
+func KeystoneRedeployRequired(ctx context.Context, store Store, t TenantID, cred OperatorCredential) (bool, error) {
+	stored, err := store.GetCurrentSignedTrustList(ctx, t)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil // nothing served yet — not a rotation
+	}
+	if err != nil {
+		return false, fmt.Errorf("controller: loading served trust-list for redeploy check: %w", err)
+	}
+	if len(stored.SignatureJSON) == 0 {
+		return false, nil // staged-but-unsigned window — not stranded, a deploy is in flight
+	}
+	var manifest trustlist.TrustList
+	if err := json.Unmarshal(stored.TrustListJSON, &manifest); err != nil {
+		return false, fmt.Errorf("controller: parsing served manifest for redeploy check: %w", err)
+	}
+	var signed trustlist.SignedTrustList
+	if err := json.Unmarshal(stored.SignatureJSON, &signed); err != nil {
+		return false, fmt.Errorf("controller: parsing served signature for redeploy check: %w", err)
+	}
+	pin, err := pinFromOperatorCredential(cred)
+	if err != nil {
+		return false, err
+	}
+	// Verify FAILS once the pin has rotated away from the key that signed the served manifest.
+	return trustlist.Verify(manifest, signed, pin) != nil, nil
 }
 
 // enrolledSubgraph projects a stored topology down to its enrolled subgraph under
