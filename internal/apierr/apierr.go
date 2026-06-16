@@ -97,6 +97,14 @@ const (
 	CodeManifestSignatureInvalid Code = "manifest_signature_invalid"
 	CodeStageFailed              Code = "stage_failed"
 
+	// Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator-only
+	// release-pins endpoint that fetches per-asset .sha256 sidecars through the gh-proxy to
+	// PRE-FILL agent/mimic artifact pins for operator review. The sidecar is convenience-only
+	// transport; trust stays the keystone-signed artifacts.json the agent verifies against.
+	CodeAgentReleaseRequestInvalid Code = "agent_release_request_invalid" // 400: bad request shape
+	CodeAgentReleaseFetchFailed    Code = "agent_release_fetch_failed"    // 502: upstream fetch failed
+	CodeAgentReleaseSidecarInvalid Code = "agent_release_sidecar_invalid" // 502: sidecar not a SHA-256
+
 	// Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
 	CodeReqBearerRequired       Code = "req_bearer_required"
 	CodeAuthCredentialsInvalid  Code = "auth_credentials_invalid"
@@ -167,6 +175,10 @@ var registry = map[Code]def{
 	CodeStagedManifestMismatch:   {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
 	CodeManifestSignatureInvalid: {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
 	CodeStageFailed:              {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
+
+	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},
+	CodeAgentReleaseFetchFailed:    {"Could not fetch the release checksum from {url}: {detail}", http.StatusBadGateway},
+	CodeAgentReleaseSidecarInvalid: {"The release checksum fetched from {url} is not a valid SHA-256.", http.StatusBadGateway},
 
 	CodeReqBearerRequired:       {"A valid bearer token is required.", http.StatusUnauthorized},
 	CodeAuthCredentialsInvalid:  {"Invalid username or password.", http.StatusUnauthorized},

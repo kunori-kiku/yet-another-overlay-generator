@@ -208,6 +208,15 @@ sync `main` → delete branch. Git author `kunori-kiku <rokuyanlin@gmail.com>` o
   pending-vs-applied version compare must use a real SemVer prerelease comparator (naive string `<`
   mis-orders `-beta.10` vs `-beta.2`) — but prefer the health markers; use version compare only when no
   marker is present.
+- **`version_applied` ⇒ persist `resp.base` (plan-2/3 contract; from plan-1 re-review `w2as35mxk`):** the
+  agent fetches the **verbatim** saved `AgentReleaseBaseURL` with NO latest→tag rewrite
+  (`render/artifacts_json.go` → `agent/selfupdate.go`). So when the assist returns
+  `version_applied=true`, the resolved **tagged** `base` is the value that must be saved as the release
+  base — pinning a tagged hash while leaving the base at the moving `latest` alias makes the agent
+  download a different binary whose hash won't match (fail-closed, silent stall). Therefore: plan-2
+  `fetchPins` MUST carry `version_applied` (do not drop it); plan-3, when `version_applied` is true on an
+  assist, MUST persist the returned tagged `base` into the agent release base (or block-and-warn) rather
+  than leave the `latest` alias. (Backend already surfaces this; the coupling lives in the FE.)
 
 ## Milestones
 
@@ -305,7 +314,7 @@ CHANGELOG + STATUS; archive this subject; cut `v2.0.0-beta.3` (tag user-gated).
 
 | Plan | Milestone | Status | Commit / note |
 |---|---|---|---|
-| plan-1 | backend pin-fetch + in_rollout | pending | |
+| plan-1 | backend pin-fetch + in_rollout | done | 38b2d3b — release-pins endpoint (egress-guarded) + apierr codes + nodeJSON in_rollout; SSRF/cap/version-rewrite tests |
 | plan-2 | frontend data layer + drop-on-save fix | pending | |
 | plan-3 | agent rollout config card | pending | |
 | plan-4 | mimic catalog config card | pending | |
