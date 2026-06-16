@@ -159,10 +159,18 @@ type releasePinAssetJSON struct {
 }
 
 // releasePinResponseJSON returns the resolved pins for operator review. pins maps each requested
-// key to a renderer.Artifact ({asset, sha256}) the operator can save through /settings. base +
-// version echo what was used; version_applied is false when a custom/mirror base ignored the
-// requested version (so the UI can warn). proxy_applied reports whether the gh-proxy prefixed the
-// fetch. resolved carries the exact fetched URL per key so a 404 cause is visible.
+// key to a renderer.Artifact ({asset, sha256}) the operator can save through /settings.
+//
+// base + version echo what was used. version_applied is false when a custom/mirror base ignored
+// the requested version (so the UI can warn). IMPORTANT when version_applied is TRUE: base is the
+// TAGGED url the pins were computed against, and the UI MUST persist it as the agent release base
+// (AgentReleaseBaseURL) — the agent fetches the VERBATIM saved base with no latest->tag rewrite
+// (render/artifacts_json.go -> agent/selfupdate.go), so pinning a tagged hash while leaving the
+// base at the moving "latest" alias makes the agent download a different binary whose hash will
+// not match (a fail-closed mismatch that silently stalls the rollout).
+//
+// proxy_applied reports whether the gh-proxy prefixed the fetch. resolved carries the exact
+// fetched URL per key so a 404 cause is visible.
 type releasePinResponseJSON struct {
 	Pins           map[string]renderer.Artifact `json:"pins"`
 	Base           string                       `json:"base"`

@@ -275,13 +275,19 @@ func TestReleasePins_UpstreamNon200(t *testing.T) {
 	t.Cleanup(srv.Close)
 	env := newCtlTestEnvWith(t, permissiveReleaseClient)
 
-	status := doJSON(t, http.MethodPost, env.opURL("release-pins"), testOperatorToken, releasePinRequestJSON{
+	// Assert the CODE, not just 502: both 502 sub-branches (this status branch and the
+	// sidecar-invalid hex branch) map to 502, so a status-only check would still pass if the
+	// status guard were removed (the body would then fail the hex check → sidecar-invalid).
+	status, code, _ := postReleasePinErr(t, env, releasePinRequestJSON{
 		Kind:   "agent",
 		Base:   srv.URL,
 		Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}},
-	}, nil)
+	})
 	if status != http.StatusBadGateway {
 		t.Fatalf("status %d, want 502 (non-200 upstream)", status)
+	}
+	if code != "agent_release_fetch_failed" {
+		t.Errorf("code %q, want agent_release_fetch_failed (the status sub-branch, distinct from sidecar-invalid)", code)
 	}
 }
 
