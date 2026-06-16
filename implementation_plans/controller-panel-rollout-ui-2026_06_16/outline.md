@@ -66,17 +66,29 @@ Subject-specific principles on top:
    an English-only user string; a raw error surfaced.
 
 6. **SSRF safety on the pin-fetch endpoint.** `[INFERRED FROM DOMAIN]` **MEDIUM.** The endpoint fetches
-   an operator-influenced URL server-side. Enforce: http(s)-only on the *resolved* URL, a bounded
-   timeout, a tiny response cap (a sidecar is one hex line, ~80 bytes), refuse redirects to non-http(s),
-   and validate asset names against the existing safe patterns *before* fetching. *Violations:* fetching
-   an arbitrary operator URL with no guards; following a redirect to `file://`/an internal address.
+   an operator-influenced URL server-side. Enforce: http(s)-only on the *resolved* URL; a bounded timeout
+   + a tiny response cap (a sidecar is one hex line, ~80 bytes); refuse redirects to non-http(s); validate
+   asset names against the existing safe patterns *before* fetching; and **reject resolved IPs that are
+   loopback / link-local (169.254/fe80) / RFC1918 / ULA — on the dial, to also defeat DNS-rebind**
+   (`validateAbsoluteHTTPURL` is a FORMAT check, not an SSRF control). *Violations:* fetching an arbitrary
+   operator URL with no guards; following a redirect to `file://`/an internal address; relying on the
+   format check alone for egress safety.
 
-7. **Status-chip derivation honesty.** `[INFERRED FROM CODE]` **LOW.** "Failed" has no positive backend
-   field — it is inferred from the `lastHealth` `abandoned:` prefix (a failed node rolls back to its
-   OLD version, so a version-only compare mislabels failed as pending). Parse `lastHealth` on stable
-   PREFIXES, never equality. A node mid-self-update legitimately goes quiet (re-execs) — do not flag a
-   healthy in-progress update as failed. *Violations:* equality-matching the free-form health string;
-   labelling a quiet mid-update node failed on staleness alone.
+7. **Status-chip derivation honesty.** `[INFERRED FROM CODE]` **MEDIUM.** The chip is derived from the
+   agent's free-form `lastHealth` string (reported through to nodeJSON) plus the reported version. The
+   three real markers (`internal/agent/selfupdate.go`) are SUBSTRINGS, not prefixes — match with
+   `includes`, ordered failed→applying→applied, and quote them verbatim (do NOT paraphrase):
+   - applied — `lastHealth.startsWith('self-updated to ')` (note the 'd' — the only true prefix), `:348`.
+   - applying (probationary) — `lastHealth.includes('health-confirmed (probationary)')`, `:321`.
+   - failed — `lastHealth.includes(' abandoned:')` (an INFIX: the line is
+     `self-update to <v> abandoned: <reason>`), `:384`.
+   `failed` is also **transient**: the `abandoned:` line is overwritten by the next routine apply report,
+   so a permanently-failed canary degrades to `pending`. `failed` is therefore best-effort and
+   documented as such; a *reliable* failed state would need a positive agent-reported field (see
+   plan-5.5). A node mid-self-update legitimately goes quiet (re-execs) — do not flag a healthy
+   in-progress update as failed. *Violations:* `startsWith` on the probationary/abandoned markers (never
+   fires); equality on the free-form string; claiming `failed` is reliably derivable; labelling a quiet
+   mid-update node failed on staleness alone.
 
 ## Current state of the world
 
@@ -121,8 +133,9 @@ Subject-specific principles on top:
   `internal/controller/settings.go:11-40` (DefaultSettings/WithDefaults),
   `internal/controller/compile.go:159-195,248-257` (BuildFetchSettings, AgentRolloutNodeIDs, CompileAndStage).
 - `internal/renderer/fetch.go:11-14` (Artifact {asset, sha256}), `internal/render/artifacts_json.go:56-84`
-  (per-node agent block gate), `internal/agent/selfupdate.go:171` (certified arches), `:321/348/384`
-  (lastHealth prefixes: self-updated / probationary / abandoned).
+  (per-node agent block gate), `internal/agent/selfupdate.go:171` (certified arches), `:348`
+  (`self-updated to ` → applied, true prefix), `:321` (`health-confirmed (probationary)` → applying,
+  substring), `:384` (` abandoned:` → failed, substring) — match with `includes`, not `startsWith` on all.
 - `.github/workflows/release.yml:218-231` (per-arch agent `.sha256` sidecar publishing).
 - `internal/apierr/apierr.go` (CodeReqFieldInvalid etc.; add new codes here).
 - `frontend/src/api/controllerClient.ts:615-664` (ControllerSettings TS, SettingsJSON, mapSettings,
@@ -132,7 +145,8 @@ Subject-specific principles on top:
 - `frontend/src/components/deploy/NodeRegistry.tsx:73-126` (badge + derived-cell patterns),
   `frontend/src/components/pages/FleetNodeDetailPage.tsx:45-61`, `FleetPage.tsx`,
   `frontend/src/stores/controllerStore.ts` (refresh/nodes/settings), `frontend/src/lib/localizeError.ts`.
-- `frontend/src/i18n/messages/{en,zh}.ts` (catalogs + the bijection type).
+- `frontend/src/i18n/index.ts` (`t()`/`tError()`/`MessageKey`) + `frontend/src/i18n/messages/{en,zh}.ts`
+  (catalogs + the `Record<keyof typeof en, string>` bijection type).
 
 ### Test gates
 - `internal/api/i18n_gate_test.go` (English-only wire surfaces — must stay green).
@@ -174,16 +188,26 @@ sync `main` → delete branch. Git author `kunori-kiku <rokuyanlin@gmail.com>` o
   forced-before-apply semantics.
 - The agent pin-fetch / form offers **only the self-update-certified arches** (`linux-amd64`,
   `linux-arm64`, `selfupdate.go:171`); 386/armv7 are bootstrap-install-only and not offered for self-update.
-- The pin-fetch endpoint resolves a specific `?version` by **rewriting the default
-  `releases/latest/download` base to `releases/download/<version>`** (the release.yml asset names are a
-  fixed contract), so a target version is never checked against a moving "latest".
+- The pin-fetch endpoint resolves a specific `version` by rewriting a `releases/latest/download` base to
+  `releases/download/<tag>`, where `<tag>` is the version **with a leading `v` prepended if absent** (git
+  tags are `v`-prefixed though `semverPattern` allows the bare form). If the base is NOT the default
+  `releases/latest/download` (a custom/mirror), it is used as-is and `version` is ignored — the response
+  flags this so the UI can warn. The endpoint returns the exact resolved URL it fetched (so a 404 cause
+  is visible).
+- The per-node target is single-sourced from `settings.targetAgentVersion` (the chip reads it from the
+  store); nodeJSON carries only `in_rollout` (the expensive-to-recompute membership), NOT a redundant
+  per-node target echo.
 - The mimic assist is **best-effort** (the mimic `.deb` release base is external and may not publish
   `.sha256` sidecars); manual entry is the guaranteed path and the always-available default.
-- Update-status enum (the i18n vocabulary): `off` (no target) / `not-targeted` (target set, node not in
-  rollout) / `pending` (in rollout, version < target, no failure marker) / `applying` (probationary
-  health marker) / `applied` (version == target) / `failed` (lastHealth `abandoned:` prefix) / `stale`
-  (no recent check-in AND not legitimately mid-update). `lastHealth`-prefix→state mapping per
-  `selfupdate.go:321/348/384`.
+- Update-status enum (the i18n vocabulary): `off` (target empty) / `not-targeted` (target set, node not
+  in `in_rollout`) / `pending` (in rollout, no health marker, reported version below target) / `applying`
+  (`lastHealth.includes('health-confirmed (probationary)')`) / `applied`
+  (`lastHealth.startsWith('self-updated to ')`) / `failed` (`lastHealth.includes(' abandoned:')`,
+  best-effort — see Principle 7) / `stale` (no recent check-in AND not legitimately mid-update). Match
+  order failed→applying→applied→pending; verbatim literals from `selfupdate.go:348/321/384`. The
+  pending-vs-applied version compare must use a real SemVer prerelease comparator (naive string `<`
+  mis-orders `-beta.10` vs `-beta.2`) — but prefer the health markers; use version compare only when no
+  marker is present.
 
 ## Milestones
 
@@ -255,8 +279,12 @@ CHANGELOG + STATUS; archive this subject; cut `v2.0.0-beta.3` (tag user-gated).
   http(s)-only; or SSRF posture needs an allowlist.
 - **plan-2.5** — the drop-on-save fix uncovers a deeper store/round-trip or generation-poll bug.
 - **plan-3.5** — the agent + mimic forms warrant a shared field/editor component before duplicating.
-- **plan-5.5** — reliable per-node status genuinely needs a new agent-reported update-state field
-  (an agent wire change — must be a deliberate, separately-reviewed decision).
+- **plan-5.5** — a reliable, persistent `failed` state needs a positive agent-reported update-outcome
+  field (e.g. surface `AbandonedAgentVersion` / the last update result through the report → nodeJSON),
+  because the `lastHealth` `abandoned:` marker is transient (overwritten by the next apply). This is an
+  agent wire change — a deliberate, separately-reviewed decision. If during plan-5 the transient
+  best-effort `failed` is judged insufficient, STOP and draft plan-5.5 rather than ship a rarely-firing
+  chip state.
 
 ## Closure criteria
 
