@@ -214,7 +214,7 @@ sync `main` → delete branch. Git author `kunori-kiku <rokuyanlin@gmail.com>` o
 ### plan-1 — Backend: assisted release-pin-fetch endpoint + `in_rollout` flag
 **Goal.** Add an operator-only endpoint that fetches per-asset `.sha256` sidecars through the persisted
 gh-proxy and returns `renderer.Artifact`-shaped pins for both the agent (per-arch) and mimic
-(per-`<codename>-<arch>`) cases, plus a server-computed `in_rollout` (and target echo) on `nodeJSON`.
+(per-`<codename>-<arch>`) cases, plus a server-computed `in_rollout` flag on `nodeJSON`.
 **Proposed solution.** New handler registered beside `settings` under `op := cors(operatorAuth)`; an
 injected bounded-timeout, http(s)-only, redirect-restricted, response-capped `http.Client`; reuse
 `AgentRolloutNodeIDs` for `in_rollout`. New `apierr` codes + EN/ZH `error.<code>` keys. Go tests.
