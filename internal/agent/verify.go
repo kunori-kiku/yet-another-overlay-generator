@@ -91,9 +91,10 @@ func parsePinnedPublicKey(pemBytes []byte) (ed25519.PublicKey, error) {
 
 // credFingerprint returns the hex SHA-256 of the CANONICAL x509 PKIX DER of the public key in
 // pemBytes — the SAME basis the controller's KeystoneFingerprint uses, so a node's displayed
-// fingerprint matches the operator panel's. It handles any PKIX key type (ed25519, ecdsa) since
-// it re-marshals the parsed key. It is INFORMATIONAL only (the trust decision is the signature
-// check), so callers treat an error as "unknown" rather than failing on it.
+// fingerprint is directly comparable to the value the controller computes and returns from GET
+// /operator-credential. It handles any PKIX key type (ed25519, ecdsa) since it re-marshals the
+// parsed key. It is INFORMATIONAL only (the trust decision is the signature check), so callers
+// treat an error as "unknown" rather than failing on it.
 func credFingerprint(pemBytes []byte) (string, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
@@ -355,10 +356,11 @@ func VerifyMembership(files map[string][]byte, cfg MembershipConfig, prevEpoch i
 		servedFP := CredFingerprintShort([]byte(signed.PublicKey))
 		return 0, fmt.Errorf("agent: trust-list signature verification failed: the served membership trust-list does not verify "+
 			"against this node's pinned operator credential (pinned keystone fingerprint %s; the served signature claims credential %s, "+
-			"controller-reported and UNVERIFIED). The keystone was most likely rotated. Remedy: either (a) if you rotated the keystone, "+
-			"re-provision THIS node with the new public key out of band — `yaog-agent reprovision-keystone --operator-cred <new-cred.pem> "+
-			"--operator-cred-alg %s`; or (b) the controller has not re-deployed since the rotation, so re-stage, re-sign, and promote a "+
-			"fresh bundle under the current keystone: %w", pinnedFP, servedFP, cfg.OperatorCredAlg, err)
+			"controller-reported and UNVERIFIED). If you just rotated the keystone this is expected; if you did NOT, treat it as a possible "+
+			"tampered/forged trust-list (a breached controller cannot forge this signature, so the node correctly refuses). Remedy: either "+
+			"(a) if you rotated the keystone, re-provision THIS node with the new public key out of band — `yaog-agent reprovision-keystone "+
+			"--operator-cred <new-cred.pem> --operator-cred-alg %s`; or (b) the controller has not re-deployed since the rotation, so re-stage, "+
+			"re-sign, and promote a fresh bundle under the current keystone: %w", pinnedFP, servedFP, cfg.OperatorCredAlg, err)
 	}
 
 	// This node must itself be a signed member, AND its signed member entry carries the

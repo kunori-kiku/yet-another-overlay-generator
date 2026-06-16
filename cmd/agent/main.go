@@ -20,6 +20,12 @@
 //	    token (0600). TLS, if any, is terminated by a reverse proxy; the agent speaks
 //	    plain HTTP to the URL it is given.
 //
+//	agent reprovision-keystone --operator-cred FILE|- --operator-cred-alg ALG [--cred-out PATH] [--restart]
+//	    Adopt a ROTATED off-host operator credential supplied OUT OF BAND: validate the
+//	    NEW public key parses for the given alg, atomically rewrite the pinned PEM (0600),
+//	    then (by default) restart yaog-agent so the daemon re-reads it. Never fetches or
+//	    auto-trusts a controller-supplied key; same-alg rotation only (see the flag help).
+//
 //	agent run --controller URL --token PATH --node-id ID [flags]
 //	    Controller mode: load the per-node bearer token, long-poll /poll for a new
 //	    generation, then run the same pull -> verify -> apply -> report loop against
@@ -177,7 +183,7 @@ const defaultOperatorCredPath = "/etc/wireguard/operator-cred.pem"
 func runReprovisionKeystone(args []string) int {
 	fs := flag.NewFlagSet("reprovision-keystone", flag.ExitOnError)
 	credPath := fs.String("operator-cred", "", "path to the NEW operator credential public-key PEM, supplied out of band ('-' reads stdin) [required]")
-	alg := fs.String("operator-cred-alg", "", "operator credential algorithm: ed25519 | webauthn-es256 | webauthn-eddsa [required]")
+	alg := fs.String("operator-cred-alg", "", "operator credential algorithm: ed25519 | webauthn-es256 | webauthn-eddsa [required]. MUST match the alg the running daemon was started with (the ExecStart --operator-cred-alg); reprovision rewrites only the PEM, not the unit, so adopting a DIFFERENT-alg (or different rpid/origin) keystone needs a fresh bootstrap / unit edit instead.")
 	credOut := fs.String("cred-out", defaultOperatorCredPath, "where to write the pinned credential the daemon reads")
 	restart := fs.Bool("restart", true, "restart the yaog-agent systemd service so the running daemon re-reads the new credential")
 	_ = fs.Parse(args)
@@ -207,22 +213,25 @@ func runReprovisionKeystone(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
 		return 1
 	}
-	// The credential public key is non-secret, but print only its fingerprint (not the body) to
-	// keep the operator's terminal scrollback clean and comparable to the panel's fingerprint.
+	// The credential public key is non-secret, but print only its fingerprint (not the body) to keep
+	// the operator's terminal scrollback clean and comparable to the controller's GET-status fingerprint.
 	fmt.Fprintf(os.Stderr, "agent: pinned operator credential rewritten at %s (fingerprint %s)\n", *credOut, agent.CredFingerprintShort(newPEM))
 
 	if !*restart {
 		fmt.Fprintln(os.Stderr, "agent: --restart=false: the RUNNING daemon still holds the previous credential in memory; restart yaog-agent for the new pin to take effect")
 		return 0
 	}
-	// The daemon reads the pinned credential once at process start, so it must be restarted to
-	// re-read it. try-restart is a no-op when the unit is not loaded/active (a --once / non-systemd
-	// host), which we surface loudly with a non-zero exit so a split-brain (new pin on disk, old
-	// key in memory) is never mistaken for success.
-	cmd := exec.Command("systemctl", "try-restart", "yaog-agent.service")
+	// The daemon reads the pinned credential once at process start, so it must be (re)started to
+	// re-read it. Use `restart` (NOT `try-restart`): try-restart is a benign no-op (exit 0) for a
+	// loaded-but-STOPPED unit, which would print success while no daemon is actually running the new
+	// pin (a silent split-brain). `restart` STARTS a stopped unit and restarts a running one, so the
+	// daemon always ends up running the new pin; it exits non-zero only when the unit is not loaded
+	// at all (a --once / non-systemd host, or systemctl absent) — which we surface loudly so the
+	// operator restarts the agent themselves.
+	cmd := exec.Command("systemctl", "restart", "yaog-agent.service")
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "agent: WARNING: the pin was rewritten but yaog-agent could not be restarted (%v); the running daemon keeps the OLD key in memory — restart it yourself (e.g. `systemctl restart yaog-agent`)\n", err)
+		fmt.Fprintf(os.Stderr, "agent: WARNING: the pin was rewritten but yaog-agent could not be restarted (%v); if a daemon is running it still holds the OLD key in memory — start/restart yaog-agent yourself (e.g. `systemctl restart yaog-agent`)\n", err)
 		return 1
 	}
 	fmt.Fprintln(os.Stderr, "agent: yaog-agent restarted; it now verifies membership against the new credential")

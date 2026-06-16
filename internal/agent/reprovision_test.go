@@ -5,7 +5,12 @@ package agent_test
 // served bundle verify while the actionable mismatch error guides the operator otherwise.
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +30,21 @@ func freshEd25519PEM(t *testing.T) []byte {
 	return bundlesig.MarshalPublicKeyPEM(pub)
 }
 
+// freshES256PEM returns a real ES256 (P-256) PKIX public-key PEM — a VALID key of the WRONG type
+// for the ed25519 alg, used to exercise the algorithm-confusion fail-closed path.
+func freshES256PEM(t *testing.T) []byte {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa gen: %v", err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal pkix: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
 // TestReprovisionKeystone_FailClosed: an empty or unparsable PEM is REFUSED before any write, so a
 // botched rotation never blanks the pin (which would silently turn the keystone OFF).
 func TestReprovisionKeystone_FailClosed(t *testing.T) {
@@ -37,14 +57,19 @@ func TestReprovisionKeystone_FailClosed(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
+		alg  string
 		pem  []byte
 	}{
-		{"empty", nil},
-		{"garbage", []byte("not a pem")},
-		{"wrong-key-type-for-alg", []byte("-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n")},
+		{"empty", string(trustlist.AlgEd25519), nil},
+		{"garbage", string(trustlist.AlgEd25519), []byte("not a pem")},
+		{"malformed-pem-block", string(trustlist.AlgEd25519), []byte("-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n")},
+		// A VALID key of the WRONG type for the declared alg (the algorithm-confusion guard): a real
+		// ES256 key offered as ed25519, and a real ed25519 key offered as webauthn-es256.
+		{"valid-es256-as-ed25519", string(trustlist.AlgEd25519), freshES256PEM(t)},
+		{"valid-ed25519-as-es256", string(trustlist.AlgWebAuthnES256), freshEd25519PEM(t)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := agent.ReprovisionKeystone(credPath, string(trustlist.AlgEd25519), tc.pem); err == nil {
+			if err := agent.ReprovisionKeystone(credPath, tc.alg, tc.pem); err == nil {
 				t.Fatal("expected an error for an invalid PEM, got nil")
 			}
 			got, err := os.ReadFile(credPath)
