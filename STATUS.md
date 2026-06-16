@@ -4,16 +4,15 @@
 
 ## Active work
 
-- **Delivered to `main`, tag pending (user-gated):** `controller-panel-rollout-ui-2026_06_16` — the
+- **Released:** **`v2.0.0-beta.3`** (GitHub *latest*) — `controller-panel-rollout-ui-2026_06_16`: the
   operator-panel UI for the agent self-update + canary-then-fleet engine (closes the descoped plan-9
   "Canary UI"): the `AgentUpdateSettings` + `MimicCatalogSettings` config cards (with assisted
   release-pin pre-fill via the new operator `POST /release-pins`), a per-node update-status chip +
   opt-in live poll on the Fleet view, and the full-replace drop-on-save fix. All 6 plans merged
-  (PRs #121–#125), each through an independent review workflow + fix + re-review. **Targets
-  `v2.0.0-beta.3`** — the annotated tag push is the only remaining step and is owner-gated.
-- **Last released:** **`v2.0.0-beta.2`** (GitHub *latest*) — signed agent self-update swap +
-  canary-then-fleet. Built atop **`v2.0.0-beta.1`**. The `signed-self-update-and-rc-hardening-2026_06_15`
-  subject is DELIVERED + CLOSED (PRs #109–#118; archived).
+  (PRs #121–#126), each through an independent review workflow + fix + re-review; subject archived.
+- **Prior releases:** **`v2.0.0-beta.2`** (signed agent self-update swap + canary-then-fleet) atop
+  **`v2.0.0-beta.1`**. The `signed-self-update-and-rc-hardening-2026_06_15` subject is DELIVERED +
+  CLOSED (PRs #109–#118; archived).
 
 ## Open questions / blockers
 
@@ -39,19 +38,16 @@
 
 ## Next actions
 
-1. **Owner: push the annotated `v2.0.0-beta.3` tag** (the single remaining release step). `release.yml`
-   then builds + creates the GitHub release + attaches assets; finish with
-   `gh release edit v2.0.0-beta.3 --notes-file <notes> --latest`.
-2. Owner: run the five owed smokes on real hardware/fleet when convenient.
-3. Owner: once smokes pass + the beta soak is clean, cut `rc.1` (no new features; fixes only), then GA.
-4. No drafted subject is awaiting execution.
+1. Owner: run the five owed smokes on real hardware/fleet when convenient.
+2. Owner: once the smokes pass + the beta soak is clean, cut `rc.1` (no new features; fixes only), then GA.
+3. No drafted subject is awaiting execution.
 
 ## Recently closed subjects (last 3)
 
-- `controller-panel-rollout-ui-2026_06_16` (2026-06-16, **delivered to main; beta.3 tag owner-gated**) —
+- `controller-panel-rollout-ui-2026_06_16` (2026-06-16, **released `v2.0.0-beta.3`, GitHub latest**) —
   the operator-panel UI for signed agent self-update + canary-then-fleet (the descoped plan-9 Canary
   UI): agent + mimic config cards, assisted release-pin fetch (`POST /release-pins`, SSRF-guarded),
-  per-node update-status chip + opt-in live poll, and the full-replace drop-on-save fix. PRs #121–#125.
+  per-node update-status chip + opt-in live poll, and the full-replace drop-on-save fix. PRs #121–#126.
 - `signed-self-update-and-rc-hardening-2026_06_15` (2026-06-16, **delivered**) — beta.1 (mimic from
   GitHub with SHA-256-pinned `.deb` + signed `artifacts.json`, agent version reporting + build-version
   injection, full input validation + backend robustness, controller-mode UX/resilience, RC paperwork)
