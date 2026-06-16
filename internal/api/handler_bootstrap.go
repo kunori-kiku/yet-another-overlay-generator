@@ -415,14 +415,34 @@ trap 'rm -f "$tmp_bin"' EXIT
 curl -fL --retry 3 --proto '=https,http' "$URL" -o "$tmp_bin"
 install -m 0755 "$tmp_bin" /usr/local/bin/yaog-agent
 
+# write_operator_cred "$cred_file" "$pem": write the baked operator-credential PEM to $cred_file
+# at 0600, UNLESS the file already exists with DIFFERENT content — in which case it refuses (a
+# stale bootstrap, downloaded before a keystone rotation, must not silently re-pin the OLD key).
+# The comparison is byte-level on the newline-normalized PEM (command substitution strips trailing
+# newlines on both sides), so it is conservative: a benign re-encode of the SAME key also warns.
+# A keystone rotation is adopted deliberately via yaog-agent reprovision-keystone. Returns 0 in
+# both branches (a refusal is not a script failure); the function is unit-tested in isolation.
+write_operator_cred() {
+  woc_file="$1"; woc_pem="$2"
+  if [ -f "$woc_file" ] && [ "$(cat "$woc_file" 2>/dev/null)" != "$(printf '%s' "$woc_pem")" ]; then
+    echo "bootstrap: WARNING: $woc_file already exists and DIFFERS (byte comparison; may be the same key re-encoded) from this script's baked operator credential." >&2
+    echo "bootstrap: NOT overwriting it via bootstrap (a stale script must not silently re-pin an old key)." >&2
+    echo "bootstrap: to adopt a ROTATED keystone, run on this node:" >&2
+    echo "bootstrap:   yaog-agent reprovision-keystone --operator-cred <new-cred.pem> --operator-cred-alg ${OPERATOR_CRED_ALG}" >&2
+    return 0
+  fi
+  printf '%s\n' "$woc_pem" > "$woc_file"
+  chmod 0600 "$woc_file"
+}
+
 # Build the keystone (off-host operator credential) flags when the controller baked a
 # credential into this script (keystone ON). The PEM is public; written 0600 anyway.
 OP_FLAGS=""
 if [ -n "$OPERATOR_CRED_PEM" ]; then
   install -d -m 0700 /etc/wireguard
-  printf '%s\n' "$OPERATOR_CRED_PEM" > /etc/wireguard/operator-cred.pem
-  chmod 0600 /etc/wireguard/operator-cred.pem
-  OP_FLAGS="--operator-cred /etc/wireguard/operator-cred.pem --operator-cred-alg ${OPERATOR_CRED_ALG}"
+  cred_file=/etc/wireguard/operator-cred.pem
+  write_operator_cred "$cred_file" "$OPERATOR_CRED_PEM"
+  OP_FLAGS="--operator-cred $cred_file --operator-cred-alg ${OPERATOR_CRED_ALG}"
   [ -n "$OPERATOR_RPID" ]   && OP_FLAGS="$OP_FLAGS --operator-rpid ${OPERATOR_RPID}"
   [ -n "$OPERATOR_ORIGIN" ] && OP_FLAGS="$OP_FLAGS --operator-origin ${OPERATOR_ORIGIN}"
 fi
