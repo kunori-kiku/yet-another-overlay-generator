@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { useControllerStore } from '../../stores/controllerStore';
+import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { t } from '../../i18n';
 import { LocalDeploy } from '../deploy/LocalDeploy';
 import { DeployBar } from '../deploy/DeployBar';
@@ -11,9 +12,18 @@ import { CompilePreview } from '../deploy/CompilePreview';
 export function DeployPage() {
   const language = useTopologyStore((s) => s.language);
   const mode = useControllerStore((s) => s.mode);
+  const loggedIn = useControllerStore(selectLoggedIn);
+  const refresh = useControllerStore((s) => s.refresh);
   // compileResult is set by the local air-gap compile AND (PR6) by the controller's server-side
   // compile-preview. Subscribe so the preview appears as soon as either populates it.
   const compileResult = useTopologyStore((s) => s.compileResult);
+
+  // Refresh-on-auth (controller mode): pull fresh fleet node state when the page is shown with a
+  // valid session, so the DeployBar's rekeying advisory + orphan list reflect server truth rather
+  // than a stale persisted cache (the phantom "rekeying" Deploy gate). Mirrors FleetPage.
+  useEffect(() => {
+    if (mode === 'controller' && loggedIn) void refresh();
+  }, [mode, loggedIn, refresh]);
 
   return (
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
