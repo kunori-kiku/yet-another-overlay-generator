@@ -9,7 +9,40 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+### Added
+- **Release a stuck key rotation without evicting the node.** A fleet-wide "Roll keys" only completes
+  once every node re-registers; a dead/offline straggler used to wedge the panel's Deploy gate with
+  no way out but to *revoke* (evict) it. New operator endpoint `POST {operator}/clear-rekey {node_id}`
+  clears a node's pending rekey flag while preserving its approval and API token (idempotent, audited),
+  surfaced as a per-node **"Cancel rekey"** button in the registry.
+
+### Changed
+- **The Deploy button is advisory, not hard-blocked, while nodes are rekeying.** Deploy is the step
+  that *completes* a rotation, so blocking it on a still-rekeying fleet was backwards (and a single
+  offline straggler wedged every deploy). Deploy now stays enabled and routes through an advisory
+  confirm — a node that hasn't re-registered deploys with its current key and re-rotates later, or you
+  "Cancel rekey" a node that never will.
+- **Bootstrap re-pins the operator credential by default.** The one-shot node bootstrap now overwrites
+  an existing `/etc/wireguard/operator-cred.pem` with the script's baked credential instead of
+  refusing when it differs. The bootstrap runs as root and is fetched fresh from the controller, so
+  its baked credential is the current pinned keystone — refusing bought no security (root can rewrite
+  the file directly) and only blocked a legitimate re-provision. The overwrite is still LOUD: a
+  differing credential logs a NOTICE (so a stale script silently downgrading the pin stays visible)
+  and points at `yaog-agent reprovision-keystone` for the if-that-was-wrong case.
+
 ### Fixed
+- **Edge role change no longer corrupts allocation pins.** Flipping an edge primary↔backup re-keys its
+  link identity, but the editor cleared only `compiled_port` — so a primary flipped to backup kept the
+  primary's transit IPs / port / link-locals and collided with its sibling, which validation reported
+  as "pin occupied by two different links" (while deploy silently tolerated it). The role change now
+  clears all six `pinned_*` fields too, so the edge re-allocates fresh; a load-time migration
+  auto-heals existing topologies (a backup whose pins collide with a same-pair primary is stripped and
+  re-allocated; a backup with its own distinct pins is untouched).
+- **The fleet view reflects server truth without a re-login.** The node registry showed only the
+  persisted cache until a manual re-login, and the "Live" toggle did nothing (its poll was gated on an
+  in-memory `loggedIn` lost on reload, with a 20s-delayed first tick). The Fleet/Deploy pages now
+  refresh on auth (on mount and when the cookie session is restored), and enabling "Live" refreshes
+  immediately.
 - **Bootstrap restarts the agent so a re-bootstrap actually takes effect.** The installer set up the
   daemon with `systemctl enable --now`, which only *starts* a stopped unit — on an already-running
   agent it was a no-op, so a re-bootstrap wrote a new bearer token + operator credential to disk but
@@ -19,15 +52,6 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
   the restart re-applies the current bundle once on startup — a brief keep-last-good per-interface
   WireGuard/Babel flap, identical to the existing `Restart=always` crash/reboot re-apply. (Once-off
   `--once` installs are unaffected.)
-
-### Changed
-- **Bootstrap re-pins the operator credential by default.** The one-shot node bootstrap now overwrites
-  an existing `/etc/wireguard/operator-cred.pem` with the script's baked credential instead of
-  refusing when it differs. The bootstrap runs as root and is fetched fresh from the controller, so
-  its baked credential is the current pinned keystone — refusing bought no security (root can rewrite
-  the file directly) and only blocked a legitimate re-provision. The overwrite is still LOUD: a
-  differing credential logs a NOTICE (so a stale script silently downgrading the pin stays visible)
-  and points at `yaog-agent reprovision-keystone` for the if-that-was-wrong case.
 
 ## [2.0.0-beta.5] - 2026-06-17
 
