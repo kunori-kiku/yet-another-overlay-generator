@@ -1,10 +1,23 @@
 # STATUS
 <!-- regenerated: 2026-06-17 -->
-<!-- by: keystone-rotation-safety subject -->
+<!-- by: fleet-keystone-operability subject -->
 
 ## Active work
 
-- **Released:** **`v2.0.0-beta.5`** (GitHub *latest*) — keystone-rotation safety (PRs #129/#130/#131
+- **Released:** **`v2.0.0-beta.6`** (GitHub *latest*) — fleet/keystone operability (PR #134, atop
+  #133), bundling the bugs surfaced during live fleet operation. A stuck "Roll keys" rotation can now
+  be released without evicting the node (`POST {operator}/clear-rekey`, idempotent + audited +
+  strictly weaker than revoke; per-node **"Cancel rekey"** button); the panel's **Deploy gate is
+  advisory** (a `window.confirm`), not a hard block, so a single offline straggler no longer wedges
+  every deploy; an **edge role flip no longer corrupts allocation pins** (the editor now clears all
+  six `pinned_*` + `compiled_port`, with a pure/idempotent **load-time auto-heal**
+  `healDuplicatePinnedBackups` that strips a backup's pins iff its transit IPs collide with a same-pair
+  primary); the **fleet view reflects server truth without a re-login** (refresh-on-auth on
+  Fleet/Deploy + immediate refresh when "Live" is enabled); and **bootstrap re-pins the operator
+  credential by default + `systemctl restart`s the agent** (#133) so a re-bootstrap's new
+  token/credential actually takes effect. Reviewed by an independent multi-dimension workflow (GO, 0
+  blockers) → nits applied → full suite + `tsc -b` + eslint green; CI green.
+- **Prior releases:** **`v2.0.0-beta.5`** — keystone-rotation safety (PRs #129/#130/#131
   + #132). Reproduced and fixed the root cause where rotating the off-host operator credential
   silently stranded the whole fleet: a changed credential now requires an acknowledged rotation, the
   controller exposes a server-truth `redeploy_required` signal, and the agent gains
@@ -12,9 +25,7 @@
   surfaced three adjacent trust-list-serving bugs — all fixed: the **served-vs-staged trust-list
   split** (a mid-deploy re-stage no longer bricks `/config`), a **monotonic anti-rollback floor**
   across a keystone-OFF apply, and an **atomic `GetServedConfig`** snapshot (no torn bundle/manifest
-  pair); plus `keystone_no_signed_manifest` reclassified 500→409. Reviewed → fixed → re-reviewed by
-  independent multi-agent workflows; full suite + `-race` + `vet` + `gofmt` green.
-- **Prior releases:** **`v2.0.0-beta.4`** — a security hardening fix (PR #128): the
+  pair); plus `keystone_no_signed_manifest` reclassified 500→409. **`v2.0.0-beta.4`** — a security hardening fix (PR #128): the
   controller persists the bundle-signing **public** key per tenant (`SigningAnchor`) and reconciles
   it at stage time, so a redeploy that drops or swaps `YAOG_BUNDLE_SIGNING_KEY` now FAILS LOUD
   (`signing_key_missing` 412 / `signing_key_mismatch` 409) instead of silently shipping unsigned
@@ -46,6 +57,13 @@
      key and `systemctl restart`s so it trusts the fresh signed deploy; plus the WebAuthn-passkey
      rotation path. The headless path is covered (in-process + real-binary ed25519 bash repro + the
      `internal/regression` suite); the real-host restart + passkey legs are owed.
+  7. **Fleet-operability panel smoke (beta.6):** in controller mode — a stuck "Roll keys" straggler
+     is released by the per-node "Cancel rekey" button (node stays approved, keeps polling); Deploy
+     stays enabled while nodes rekey and routes through the advisory confirm; flipping an edge
+     primary↔backup then re-compiling shows NO "pin occupied by two different links"; an existing
+     topology with a duplicate-pinned backup auto-heals on load; the registry reflects server truth on
+     login/reload without a manual re-login and "Live" refreshes immediately. No FE test runner, so
+     owner-verified in a browser.
 - **rc.1 is a later owner call** once the owed smokes pass and the beta soak is clean.
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
