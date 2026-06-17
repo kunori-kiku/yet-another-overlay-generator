@@ -9,7 +9,25 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+- **Bootstrap restarts the agent so a re-bootstrap actually takes effect.** The installer set up the
+  daemon with `systemctl enable --now`, which only *starts* a stopped unit — on an already-running
+  agent it was a no-op, so a re-bootstrap wrote a new bearer token + operator credential to disk but
+  the live daemon kept the OLD ones in memory (it reads them only at startup), leaving the node
+  stuck (e.g. a `req_bearer_required` 401 poll loop). It now `systemctl restart`s the unit, which
+  starts a stopped daemon and restarts a running one, so a re-bootstrap is always picked up. Cost:
+  the restart re-applies the current bundle once on startup — a brief keep-last-good per-interface
+  WireGuard/Babel flap, identical to the existing `Restart=always` crash/reboot re-apply. (Once-off
+  `--once` installs are unaffected.)
+
+### Changed
+- **Bootstrap re-pins the operator credential by default.** The one-shot node bootstrap now overwrites
+  an existing `/etc/wireguard/operator-cred.pem` with the script's baked credential instead of
+  refusing when it differs. The bootstrap runs as root and is fetched fresh from the controller, so
+  its baked credential is the current pinned keystone — refusing bought no security (root can rewrite
+  the file directly) and only blocked a legitimate re-provision. The overwrite is still LOUD: a
+  differing credential logs a NOTICE (so a stale script silently downgrading the pin stays visible)
+  and points at `yaog-agent reprovision-keystone` for the if-that-was-wrong case.
 
 ## [2.0.0-beta.5] - 2026-06-17
 

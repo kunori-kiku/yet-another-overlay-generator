@@ -415,21 +415,20 @@ trap 'rm -f "$tmp_bin"' EXIT
 curl -fL --retry 3 --proto '=https,http' "$URL" -o "$tmp_bin"
 install -m 0755 "$tmp_bin" /usr/local/bin/yaog-agent
 
-# write_operator_cred "$cred_file" "$pem": write the baked operator-credential PEM to $cred_file
-# at 0600, UNLESS the file already exists with DIFFERENT content — in which case it refuses (a
-# stale bootstrap, downloaded before a keystone rotation, must not silently re-pin the OLD key).
-# The comparison is byte-level on the newline-normalized PEM (command substitution strips trailing
-# newlines on both sides), so it is conservative: a benign re-encode of the SAME key also warns.
-# A keystone rotation is adopted deliberately via yaog-agent reprovision-keystone. Returns 0 in
-# both branches (a refusal is not a script failure); the function is unit-tested in isolation.
+# write_operator_cred "$cred_file" "$pem": write the baked operator-credential PEM to $cred_file at
+# 0600, RE-PINNING (overwriting) any existing file by default. The bootstrap runs as root and is
+# fetched fresh from the controller, so its baked credential IS the current pinned keystone — so a
+# re-bootstrap SHOULD (re)pin it, and refusing would buy no security (root can rewrite this file
+# directly) while blocking a legitimate re-provision. We do NOT do it silently: when we replace a
+# DIFFERING credential we log a loud NOTICE, so the one real downside (re-running a STALE script that
+# downgrades the pin to an old key) is visible rather than hidden. To re-pin WITHOUT a full
+# bootstrap, use yaog-agent reprovision-keystone. The function is unit-tested in isolation.
 write_operator_cred() {
   woc_file="$1"; woc_pem="$2"
   if [ -f "$woc_file" ] && [ "$(cat "$woc_file" 2>/dev/null)" != "$(printf '%s' "$woc_pem")" ]; then
-    echo "bootstrap: WARNING: $woc_file already exists and DIFFERS (byte comparison; may be the same key re-encoded) from this script's baked operator credential." >&2
-    echo "bootstrap: NOT overwriting it via bootstrap (a stale script must not silently re-pin an old key)." >&2
-    echo "bootstrap: to adopt a ROTATED keystone, run on this node:" >&2
-    echo "bootstrap:   yaog-agent reprovision-keystone --operator-cred <new-cred.pem> --operator-cred-alg ${OPERATOR_CRED_ALG}" >&2
-    return 0
+    echo "bootstrap: NOTICE: re-pinning $woc_file — the existing operator credential DIFFERS (byte comparison; may be the same key re-encoded) from this script's baked credential. Overwriting with the script's credential." >&2
+    echo "bootstrap: if that was NOT intended (e.g. a STALE script baked an OLD key), re-pin the correct one with:" >&2
+    echo "bootstrap:   yaog-agent reprovision-keystone --operator-cred <cred.pem> --operator-cred-alg ${OPERATOR_CRED_ALG}" >&2
   fi
   printf '%s\n' "$woc_pem" > "$woc_file"
   chmod 0600 "$woc_file"
@@ -472,8 +471,17 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now yaog-agent.service
-  echo ">> agent installed as a daemon; the current generation applies on the next poll"
+  systemctl enable yaog-agent.service
+  # RESTART, not "enable --now": a re-bootstrap of an ALREADY-RUNNING daemon must pick up the freshly
+  # enrolled bearer token and the (re-pinned) operator credential, both of which the daemon reads
+  # ONLY at startup. "enable --now" is start-if-stopped only, so on an active unit it leaves the OLD
+  # in-memory token (401 loop) and OLD pinned credential in place; "restart" re-execs a running unit
+  # AND starts a stopped one, so a re-bootstrap always takes effect. Cost: the re-exec'd daemon
+  # re-applies the current bundle once on startup (a brief keep-last-good per-interface WG/Babel
+  # flap), identical to the Restart=always crash/reboot re-apply — the deliberate price of reloading
+  # the at-startup-only token + credential.
+  systemctl restart yaog-agent.service
+  echo ">> agent installed + (re)started as a daemon; the current generation applies on the next poll"
 else
   echo ">> applying once"
   # shellcheck disable=SC2086

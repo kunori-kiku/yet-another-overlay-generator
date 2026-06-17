@@ -62,19 +62,28 @@ func TestRenderBootstrapScript_KeystoneOn(t *testing.T) {
 		"cred_file=/etc/wireguard/operator-cred.pem",
 		`write_operator_cred "$cred_file" "$OPERATOR_CRED_PEM"`,
 		"--operator-cred $cred_file --operator-cred-alg ${OPERATOR_CRED_ALG}",
-		"systemctl enable --now yaog-agent.service",
+		// Bootstrap must RESTART (not "enable --now") so a re-bootstrap of a running daemon picks up
+		// the new bearer token + re-pinned operator credential (read only at daemon startup).
+		"systemctl enable yaog-agent.service",
+		"systemctl restart yaog-agent.service",
 		`URL="${GH_PROXY}${RELEASE_BASE}/${ASSET}"`,
-		// The stale-clobber guard lives in write_operator_cred: a differing existing pin is NOT
-		// overwritten, and the operator is pointed at reprovision-keystone (behavior tested below).
+		// write_operator_cred RE-PINS by default: a differing existing pin is overwritten (the script
+		// runs as root and bakes the current keystone), with a loud NOTICE and a reprovision-keystone
+		// pointer for the if-this-was-a-stale-script case (behavior tested below).
 		"write_operator_cred() {",
-		"already exists and DIFFERS",
-		"yaog-agent reprovision-keystone --operator-cred <new-cred.pem>",
-		// A fresh node (no existing pin) still writes the credential as before.
+		"re-pinning",
+		"yaog-agent reprovision-keystone --operator-cred <cred.pem>",
+		// Every node (fresh or re-pinned) writes the credential.
 		`printf '%s\n' "$woc_pem" > "$woc_file"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered script is missing %q", want)
 		}
+	}
+	// The restart fix is only meaningful if the no-op-on-running "enable --now" is GONE: a substring
+	// check for "enable" alone would pass either way, so assert the old form is absent.
+	if strings.Contains(s, "enable --now yaog-agent.service") {
+		t.Error("rendered script still uses `enable --now` (no-op on a running daemon); must `restart` so a re-bootstrap reloads the token/cred")
 	}
 }
 
@@ -373,10 +382,10 @@ func extractWriteOperatorCred(t *testing.T, script string) string {
 }
 
 // TestBootstrap_WriteOperatorCredBehavior runs the EXTRACTED write_operator_cred function under
-// bash to prove the stale-clobber guard actually behaves (a textual strings.Contains gives false
-// confidence — inverting the != would pass it). It asserts: a fresh node writes the PEM at 0600;
-// an existing file with DIFFERENT content is NOT overwritten and warns; an existing file with the
-// SAME content stays put (idempotent).
+// bash to prove the RE-PIN-BY-DEFAULT behavior actually behaves (a textual strings.Contains gives
+// false confidence). It asserts: a fresh node writes the PEM at 0600; an existing file with
+// DIFFERENT content IS overwritten (re-pinned) AND logs a loud NOTICE pointing at
+// reprovision-keystone; an existing file with the SAME content stays put with no NOTICE (idempotent).
 func TestBootstrap_WriteOperatorCredBehavior(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -416,7 +425,7 @@ func TestBootstrap_WriteOperatorCredBehavior(t *testing.T) {
 		}
 	})
 
-	t.Run("differing existing pin is NOT overwritten + warns", func(t *testing.T) {
+	t.Run("differing existing pin IS re-pinned + loud NOTICE", func(t *testing.T) {
 		dir := t.TempDir()
 		credFile := filepath.Join(dir, "operator-cred.pem")
 		old := "-----BEGIN PUBLIC KEY-----\nOLDKEY\n-----END PUBLIC KEY-----\n"
@@ -425,11 +434,18 @@ func TestBootstrap_WriteOperatorCredBehavior(t *testing.T) {
 		}
 		out := run(t, credFile, pem)
 		got, _ := os.ReadFile(credFile)
-		if string(got) != old {
-			t.Fatalf("a DIFFERING existing pin must NOT be overwritten; got %q", got)
+		// Re-pin by default: a differing existing pin IS overwritten with the script's baked credential.
+		if strings.TrimRight(string(got), "\n") != strings.TrimRight(pem, "\n") {
+			t.Fatalf("a DIFFERING existing pin must be RE-PINNED to the baked credential; got %q", got)
 		}
-		if !strings.Contains(out, "already exists and DIFFERS") || !strings.Contains(out, "reprovision-keystone") {
-			t.Fatalf("expected a differ warning pointing at reprovision-keystone, got:\n%s", out)
+		// 0600 preserved on the overwrite.
+		if info, _ := os.Stat(credFile); info.Mode().Perm() != 0o600 {
+			t.Fatalf("re-pin mode = %v, want 0600", info.Mode().Perm())
+		}
+		// The overwrite must be LOUD (not silent), and still point at reprovision-keystone for the
+		// stale-script-downgrade case.
+		if !strings.Contains(out, "re-pinning") || !strings.Contains(out, "reprovision-keystone") {
+			t.Fatalf("expected a loud re-pin NOTICE pointing at reprovision-keystone, got:\n%s", out)
 		}
 	})
 
@@ -440,12 +456,12 @@ func TestBootstrap_WriteOperatorCredBehavior(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 		out := run(t, credFile, pem)
-		// Same key material (the guard normalizes trailing newlines, so it is not a "DIFFERS").
+		// Same key material (the compare normalizes trailing newlines, so it is not a re-pin).
 		if got, _ := os.ReadFile(credFile); strings.TrimRight(string(got), "\n") != strings.TrimRight(pem, "\n") {
 			t.Fatalf("idempotent write changed the key material: %q", got)
 		}
-		if strings.Contains(out, "DIFFERS") {
-			t.Fatalf("an identical pin must not warn DIFFERS, got:\n%s", out)
+		if strings.Contains(out, "re-pinning") || strings.Contains(out, "DIFFERS") {
+			t.Fatalf("an identical pin must not log a re-pin NOTICE, got:\n%s", out)
 		}
 	})
 }
