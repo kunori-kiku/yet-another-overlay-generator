@@ -325,8 +325,10 @@ export function EdgeEditor() {
           )}
         </div>
         {/* 链路角色（edge.md 并行链路）：空 = 主链路类；backup = 独立的备份链路。
-            角色变更会改变链路身份（重新 key），属拨号相关编辑 ⇒ 与本文件其他拨号相关编辑一致，
-            一并清空陈旧的 compiled_port。 */}
+            角色变更会改变链路身份（重新 key：backup 的 LinkKey 带 #edgeID 后缀，与同对主链路不同），
+            因此所有与旧身份绑定的分配 pin（compiled_port + 六个 pinned_*）都已陈旧，必须一并清空 ——
+            否则一个由 primary 翻成 backup 的边会保留主链路的 .1/.2/51820，与仍在的同对 primary 撞 pin
+            （validator 报“two different links”，正是该 bug）。清空后该边在下次编译重新分配（如 .3/.4）。 */}
         <div>
           <label className="text-xs text-gray-400">{t(language, 'roleLabel')}</label>
           <select
@@ -336,6 +338,12 @@ export function EdgeEditor() {
               updateEdge(selectedEdge.id, {
                 role: value === '' ? undefined : (value as 'primary' | 'backup'),
                 compiled_port: undefined,
+                pinned_from_port: undefined,
+                pinned_to_port: undefined,
+                pinned_from_transit_ip: undefined,
+                pinned_to_transit_ip: undefined,
+                pinned_from_link_local: undefined,
+                pinned_to_link_local: undefined,
               });
             }}
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
