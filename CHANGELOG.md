@@ -9,9 +9,13 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [2.0.0-beta.5] - 2026-06-17
+
 Keystone-rotation safety: rotating the off-host operator credential no longer silently strands the
 fleet, and a family of adjacent trust-list-serving bugs found by a new adversarial regression suite
-are fixed. No release tag yet.
+are fixed.
 
 ### Fixed
 - **Keystone rotation no longer silently strands the fleet.** Re-pinning a *different* operator
@@ -348,7 +352,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.4...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.5...HEAD
+[2.0.0-beta.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.4...v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.3...v2.0.0-beta.4
 [2.0.0-beta.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.2...v2.0.0-beta.3
 [2.0.0-beta.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.1...v2.0.0-beta.2

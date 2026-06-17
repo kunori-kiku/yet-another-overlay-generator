@@ -4,24 +4,22 @@
 
 ## Active work
 
-- **In progress — keystone-rotation safety (untagged; on `main` + branch `test/keystone-regression-suite`).**
-  Reproduced and fixed the root cause where rotating the off-host operator credential silently
-  stranded the whole fleet: a changed credential now requires an acknowledged rotation, the
+- **Released:** **`v2.0.0-beta.5`** (GitHub *latest*) — keystone-rotation safety (PRs #129/#130/#131
+  + #132). Reproduced and fixed the root cause where rotating the off-host operator credential
+  silently stranded the whole fleet: a changed credential now requires an acknowledged rotation, the
   controller exposes a server-truth `redeploy_required` signal, and the agent gains
-  `reprovision-keystone` (PRs #129/#130/#131, on `main`). A non-release adversarial regression suite
-  (`internal/regression`) then surfaced three adjacent trust-list-serving bugs — all fixed on
-  `test/keystone-regression-suite`: the **served-vs-staged trust-list split** (a mid-deploy re-stage
-  no longer bricks `/config`), a **monotonic anti-rollback floor** across a keystone-OFF apply, and an
-  **atomic `GetServedConfig`** snapshot (no torn bundle/manifest pair); plus
-  `keystone_no_signed_manifest` reclassified 500→409. Reviewed → fixed → re-reviewed by independent
-  multi-agent workflows; full suite + `-race` + `vet` + `gofmt` green. See CHANGELOG `[Unreleased]`.
-- **Released:** **`v2.0.0-beta.4`** (GitHub *latest*) — a security hardening fix (PR #128): the
+  `reprovision-keystone`. A non-release adversarial regression suite (`internal/regression`) then
+  surfaced three adjacent trust-list-serving bugs — all fixed: the **served-vs-staged trust-list
+  split** (a mid-deploy re-stage no longer bricks `/config`), a **monotonic anti-rollback floor**
+  across a keystone-OFF apply, and an **atomic `GetServedConfig`** snapshot (no torn bundle/manifest
+  pair); plus `keystone_no_signed_manifest` reclassified 500→409. Reviewed → fixed → re-reviewed by
+  independent multi-agent workflows; full suite + `-race` + `vet` + `gofmt` green.
+- **Prior releases:** **`v2.0.0-beta.4`** — a security hardening fix (PR #128): the
   controller persists the bundle-signing **public** key per tenant (`SigningAnchor`) and reconciles
   it at stage time, so a redeploy that drops or swaps `YAOG_BUNDLE_SIGNING_KEY` now FAILS LOUD
   (`signing_key_missing` 412 / `signing_key_mismatch` 409) instead of silently shipping unsigned
   bundles. Trust-on-first-use; rotation via `YAOG_BUNDLE_SIGNING_KEY_ROTATE`; private key stays
-  off-host; pin/rotate audited; air-gap export unchanged. Reviewed (5 findings) → fixed → re-review clean.
-- **Prior releases:** **`v2.0.0-beta.3`** — the operator-panel UI for agent self-update +
+  off-host; pin/rotate audited; air-gap export unchanged. **`v2.0.0-beta.3`** — the operator-panel UI for agent self-update +
   canary-then-fleet (the descoped plan-9 "Canary UI"): agent + mimic config cards, assisted
   release-pin fetch (`POST /release-pins`, SSRF-guarded), per-node update-status chip + opt-in live
   poll, the full-replace drop-on-save fix (PRs #121–#126). Atop **`v2.0.0-beta.2`** /
@@ -42,6 +40,12 @@
      config (drop-on-save), fleet-wide gates on the confirm, the per-node chip shows
      pending→applying→applied as a canary advances, and the Live poll stops on logout. No FE test
      runner exists, so this is owner-verified in a browser.
+  6. **Keystone rotation + reprovision smoke (beta.5):** on two real systemd hosts — rotate the
+     operator credential (acked), confirm the fleet refuses the served bundle (fail-closed) and the
+     panel shows `redeploy_required`, then `yaog-agent reprovision-keystone` on a node re-pins the new
+     key and `systemctl restart`s so it trusts the fresh signed deploy; plus the WebAuthn-passkey
+     rotation path. The headless path is covered (in-process + real-binary ed25519 bash repro + the
+     `internal/regression` suite); the real-host restart + passkey legs are owed.
 - **rc.1 is a later owner call** once the owed smokes pass and the beta soak is clean.
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
@@ -57,7 +61,13 @@
 
 ## Recently closed subjects (last 3)
 
-- `controller-panel-rollout-ui-2026_06_16` (2026-06-16, **released `v2.0.0-beta.3`, GitHub latest**) —
+- `keystone-rotation-safety` (2026-06-17, **released `v2.0.0-beta.5`, GitHub latest**) — reproduced +
+  fixed the keystone-rotation fleet-stranding root cause (acked rotation, server-truth
+  `redeploy_required`, `yaog-agent reprovision-keystone`; PRs #129/#130/#131); built the non-release
+  `internal/regression` suite, which surfaced three adjacent fixes — served-vs-staged trust-list split
+  (re-stage no longer bricks `/config`), monotonic anti-rollback floor, atomic `GetServedConfig` — plus
+  `keystone_no_signed_manifest` 500→409 (PR #132). Reviewed → fixed → re-reviewed.
+- `controller-panel-rollout-ui-2026_06_16` (2026-06-16, **released `v2.0.0-beta.3`**) —
   the operator-panel UI for signed agent self-update + canary-then-fleet (the descoped plan-9 Canary
   UI): agent + mimic config cards, assisted release-pin fetch (`POST /release-pins`, SSRF-guarded),
   per-node update-status chip + opt-in live poll, and the full-replace drop-on-save fix. PRs #121–#126.
