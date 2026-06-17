@@ -93,9 +93,21 @@ func BuildReservedFromExcludedEdges(full *model.Topology, includedEdgeIDs map[st
 			r.reservePort(e.ToNodeID, e.PinnedToPort)
 		}
 		if e.PinnedFromTransitIP != "" && e.PinnedToTransitIP != "" {
-			cidr := transitCIDRForNode(from, domainMap)
-			r.reserveTransit(cidr, e.PinnedFromTransitIP)
-			r.reserveTransit(cidr, e.PinnedToTransitIP)
+			// Reserve into BOTH endpoint domains' pools. The transit pair physically lives in the
+			// LINK-DRIVING (first enabled primary) edge's from-node pool, which — for a cross-domain
+			// pair whose excluded representative is the REVERSE-direction edge — is the to-node's
+			// domain, not this edge's from-node domain. Resolving from a single side could key the
+			// reservation to the wrong pool and miss the collision. A transit IP only belongs to one
+			// pool's range, so reserving it in the other endpoint's pool is a harmless no-op for that
+			// pool's gap-fill; reserving in both guarantees it is avoided wherever it actually lives.
+			cidrFrom := transitCIDRForNode(from, domainMap)
+			cidrTo := transitCIDRForNode(to, domainMap)
+			r.reserveTransit(cidrFrom, e.PinnedFromTransitIP)
+			r.reserveTransit(cidrFrom, e.PinnedToTransitIP)
+			if cidrTo != cidrFrom {
+				r.reserveTransit(cidrTo, e.PinnedFromTransitIP)
+				r.reserveTransit(cidrTo, e.PinnedToTransitIP)
+			}
 		}
 		if e.PinnedFromLinkLocal != "" && e.PinnedToLinkLocal != "" {
 			r.linkLocals[e.PinnedFromLinkLocal] = true

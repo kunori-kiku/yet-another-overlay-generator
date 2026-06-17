@@ -48,6 +48,10 @@ func isClientTouched(e *model.Edge, roleByNode map[string]string) bool {
 // Two-phase per edge: first test ALL of the edge's resources against the claim tables, then either
 // claim them all (no collision) or strip the edge and claim nothing (collision) — so a partially
 // colliding edge never leaves a stale half-claim behind.
+//
+// Scope: only COMPLETE pin pairs participate (both ends present), matching the allocator's
+// reservation unit. A single-ended (incomplete) pin is a distinct corruption that the validator
+// flags separately (CodePin*Incomplete) and the heal deliberately does not claim to repair.
 func HealCollidingPins(topo *model.Topology) bool {
 	if topo == nil {
 		return false

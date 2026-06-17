@@ -59,6 +59,39 @@ func TestBuildReservedFromExcludedEdges_SkipRules(t *testing.T) {
 	}
 }
 
+// TestBuildReservedFromExcludedEdges_CrossDomainBothPools confirms the superset reservation: an
+// excluded cross-domain edge's transit IPs are reserved into BOTH endpoint domains' pools, so a
+// reverse-direction edge (whose own from-node domain differs from where the pair's IPs physically
+// live) still reserves into the pool the allocation actually occupies.
+func TestBuildReservedFromExcludedEdges_CrossDomainBothPools(t *testing.T) {
+	topo := &model.Topology{
+		Domains: []model.Domain{
+			{ID: "d1", Name: "net1", CIDR: "10.60.0.0/24", TransitCIDR: "10.10.0.0/24"},
+			{ID: "d2", Name: "net2", CIDR: "10.61.0.0/24", TransitCIDR: "10.20.0.0/24"},
+		},
+		Nodes: []model.Node{
+			{ID: "a", Role: "router", DomainID: "d1"},
+			{ID: "b", Role: "router", DomainID: "d2"},
+		},
+		// Excluded reverse-direction edge b(d2)->a(d1) pinning IPs that physically live in d1's pool
+		// (10.10.x). Resolving from the from-node (b => d2 => 10.20.0.0/24) alone would key them to the
+		// WRONG pool; the superset reservation must also reserve them under d1's 10.10.0.0/24.
+		Edges: []model.Edge{
+			{ID: "rev", FromNodeID: "b", ToNodeID: "a", IsEnabled: true,
+				PinnedFromTransitIP: "10.10.0.2", PinnedToTransitIP: "10.10.0.1"},
+		},
+	}
+	r := BuildReservedFromExcludedEdges(topo, map[string]bool{})
+	for _, ip := range []string{"10.10.0.1", "10.10.0.2"} {
+		if !(r.transitIPs["10.10.0.0/24"] != nil && r.transitIPs["10.10.0.0/24"][ip]) {
+			t.Errorf("transit %s must be reserved under d1's pool 10.10.0.0/24 (where the IP lives)", ip)
+		}
+		if !(r.transitIPs["10.20.0.0/24"] != nil && r.transitIPs["10.20.0.0/24"][ip]) {
+			t.Errorf("transit %s must also be reserved under d2's pool 10.20.0.0/24 (superset, harmless)", ip)
+		}
+	}
+}
+
 // TestBuildReservedFromExcludedEdges_PartialPinIgnored confirms a single-ended (partial) pin is
 // NOT reserved — it is treated as "unpinned" exactly as the pre-allocation pass does, so a
 // half-written pin never reserves a resource and forces spurious gap-fill churn.

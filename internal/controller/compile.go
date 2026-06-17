@@ -53,6 +53,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
@@ -311,6 +312,13 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	if err := json.Unmarshal(rec.JSON, &topo); err != nil {
 		return StageResult{}, fmt.Errorf("controller: parsing stored topology: %w", err)
 	}
+	// Self-heal any pre-existing cross-link pin collision in the STORED topology before compiling, so
+	// a fleet still carrying corruption persisted by an older buggy compile converges on DEPLOY without
+	// requiring an explicit re-save: the colliding edges are stripped here, re-allocated cleanly by the
+	// subgraph compile below (the out-of-subgraph reservation keeps every other edge stable), and
+	// persisted back via persistAllocations. No-op (and no re-store) when already collision-free, so
+	// healthy fleets see zero drift. Complements the update-topology write-path heal (clean on save).
+	normalize.HealCollidingPins(&topo)
 
 	// (2)+(3) Build the enrolled subgraph and drive the frozen compile pipeline
 	// (AgentHeld keys → compile → render) via the shared CompileSubgraph helper.

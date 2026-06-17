@@ -1523,8 +1523,17 @@ export const useControllerStore = create<ControllerState>()(
             set({ error: t(useTopologyStore.getState().language, 'topbar.importParseError'), loading: false });
             return;
           }
-          // 形状校验：必须是一份完整设计（与 importProject 同口径），否则拒绝而非写坏服务端。
-          if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
+          // 形状校验：必须是一份完整设计（与 importProject 同口径）。domains/nodes/edges 必须是数组——
+          // 用 Array.isArray 而非真值判断，否则一个 {} 或数字会逃过校验、在 dropAllKeys 的 .map 处抛通用
+          // 错误，而非给出精确的「不是合法设计」提示。
+          if (
+            !topo ||
+            typeof topo !== 'object' ||
+            !topo.project ||
+            !Array.isArray(topo.domains) ||
+            !Array.isArray(topo.nodes) ||
+            !Array.isArray(topo.edges)
+          ) {
             set({ error: t(useTopologyStore.getState().language, 'topbar.importShapeError'), loading: false });
             return;
           }
@@ -1538,7 +1547,10 @@ export const useControllerStore = create<ControllerState>()(
           // 写到服务端：update-topology 落一条版本历史，并在写入边界 heal 冲突 pin + 规范化。绝不
           // stage/promote——导入只更新权威设计，触达 fleet 仍需独立 Deploy。
           await updateTopology(configOf(get()), JSON.stringify(cleaned));
-          // 用服务端权威副本（已 heal）刷新画布；hydrateFromServer 会置 canvasFromServer 并刷新同步基线。
+          // 乐观载入（已 heal 的导入设计，fromServer=true 不落盘）：即便随后的 hydrateFromServer
+          // 因瞬时网络错误失败，画布也已反映这次导入，而非停留在导入前的陈旧设计（POST 已成功提交）。
+          useTopologyStore.getState().loadTopology(cleaned, true);
+          // 再用服务端权威副本（已 heal + 规范化）对齐画布与同步基线；成功则覆盖上面的乐观值。
           await get().hydrateFromServer();
           set({ loading: false });
         } catch (err) {

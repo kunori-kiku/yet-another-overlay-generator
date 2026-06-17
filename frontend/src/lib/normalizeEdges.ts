@@ -44,6 +44,22 @@ function linkKey(e: Edge): string {
   return e.role === 'backup' ? `${pair}#${e.id}` : pair;
 }
 
+// canonicalIP mirrors Go's net.IP.String() (used by the validator + Go heal's canonicalIP) so the
+// browser heal detects the SAME address collisions regardless of spelling — e.g. "FE80::1" and
+// "fe80::1", or an expanded "fe80:0:0:0:0:0:0:1", all canonicalize to "fe80::1". The WHATWG URL
+// parser implements the same RFC 5952 IPv6 serialization Go does. Unparseable values fall through
+// unchanged (matching Go, where net.ParseIP returns nil and canonicalIP keeps the raw string), so a
+// non-canonical IPv4 like "10.10.0.001" stays raw in both — the validator's invalid-IP rule owns it.
+function canonicalIP(value: string): string {
+  if (!value.includes(':')) return value; // IPv4 / non-IP: identity (canonical IPv4 already matches Go)
+  try {
+    const host = new URL(`http://[${value}]`).hostname; // "[fe80::1]"
+    return host.startsWith('[') ? host.slice(1, -1) : host;
+  } catch {
+    return value;
+  }
+}
+
 function stripPins(e: Edge): Edge {
   const out: Edge = { ...e };
   // Delete each pin by dynamic key. Edge does not structurally overlap Record<string, unknown>
@@ -66,7 +82,10 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
 
   let changed = false;
   const healed = edges.map((e) => {
-    if (e.is_enabled === false || isClientTouched(e)) return e;
+    // Match Go's zero-value semantics: a missing is_enabled (undefined, e.g. in a hand-edited import)
+    // is DISABLED, like Go's bool zero — so skip unless strictly true. (=== false would wrongly treat
+    // undefined as enabled and could claim/strip on a logically-disabled edge.)
+    if (e.is_enabled !== true || isClientTouched(e)) return e;
     const link = linkKey(e);
 
     // The resources this edge would claim (only complete pin pairs, matching the allocator).
@@ -76,12 +95,12 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
       claims.push({ table: portOwner, key: `${e.to_node_id}:${e.pinned_to_port}` });
     }
     if (e.pinned_from_transit_ip && e.pinned_to_transit_ip) {
-      claims.push({ table: transitOwner, key: e.pinned_from_transit_ip });
-      claims.push({ table: transitOwner, key: e.pinned_to_transit_ip });
+      claims.push({ table: transitOwner, key: canonicalIP(e.pinned_from_transit_ip) });
+      claims.push({ table: transitOwner, key: canonicalIP(e.pinned_to_transit_ip) });
     }
     if (e.pinned_from_link_local && e.pinned_to_link_local) {
-      claims.push({ table: llOwner, key: e.pinned_from_link_local });
-      claims.push({ table: llOwner, key: e.pinned_to_link_local });
+      claims.push({ table: llOwner, key: canonicalIP(e.pinned_from_link_local) });
+      claims.push({ table: llOwner, key: canonicalIP(e.pinned_to_link_local) });
     }
 
     // Phase 1: does any resource already belong to a DIFFERENT link?
