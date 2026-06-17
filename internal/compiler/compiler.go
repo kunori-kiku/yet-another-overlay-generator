@@ -74,6 +74,9 @@ type CompileManifest struct {
 // Compiler
 type Compiler struct {
 	ipAllocator *allocator.IPAllocator
+	// reserved 携带「子图之外的 edge」所占的分配资源（端口 / transit IP / link-local），
+	// 供子图编译时让 gap-fill 避让，避免跨子图 pin 碰撞。nil（默认）= 全量编译，行为不变。
+	reserved *ReservedAllocations
 }
 
 // NewCompiler
@@ -81,6 +84,14 @@ func NewCompiler() *Compiler {
 	return &Compiler{
 		ipAllocator: allocator.NewIPAllocator(),
 	}
+}
+
+// WithReserved 设定一组「子图之外的 edge」预留资源，返回同一个 *Compiler 以便链式调用
+// （compiler.NewCompiler().WithReserved(r).Compile(...)）。仅 controller 子图编译需要；
+// 全量编译（air-gap CLI / API）不调用它，reserved 保持 nil。
+func (c *Compiler) WithReserved(r *ReservedAllocations) *Compiler {
+	c.reserved = r
+	return c
 }
 
 // Compile
@@ -129,7 +140,9 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	}
 
 	// Pass 3 :  Peer
-	peerMap, pairAllocations, err := DerivePeers(compiledTopo, keys)
+	// 子图编译时 c.reserved 非 nil，让 gap-fill 避开子图外 edge 占用的资源（跨子图碰撞根因修复）；
+	// 全量编译 c.reserved==nil，derivePeers 退化为原 DerivePeers 行为。
+	peerMap, pairAllocations, err := derivePeers(compiledTopo, keys, c.reserved)
 	if err != nil {
 		return nil, fmt.Errorf("deriving WireGuard peer configuration failed: %w", err)
 	}

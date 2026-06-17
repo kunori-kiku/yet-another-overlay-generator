@@ -9,6 +9,38 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+### Added
+- **Design Export / Import in controller mode.** The top-bar Export/Import buttons now appear in
+  controller mode too (previously local-only). Export downloads the current design as a JSON backup.
+  Import is server-authoritative: the file is parsed, all key material is dropped (the controller is
+  key-authoritative), it is written to the controller as a new retained topology version (where the
+  server heals any colliding pins), and the canvas re-hydrates from the server — so fleet endpoint
+  data is never persisted to `localStorage` and the import never auto-deploys (Deploy stays a
+  separate step). Flush remains local-only.
+
+### Fixed
+- **"Port/transit/link-local pin occupied by two different links" — root cause + cleanup.** During
+  incremental enrollment the controller compiles only the enrolled subgraph, dropping edges whose far
+  end is not enrolled yet; the allocator's gap-fill then restarted from the bottom of each pool
+  without seeing those dropped edges' pins, so across successive enrollments two edges that were never
+  compiled together could be handed the same transit IP / listen port / link-local — persisted back as
+  a cross-link collision that `validate` reported (and that blocked a full-graph compile) while
+  incremental deploys appeared fine.
+  - **Prevent:** subgraph compiles now reserve the allocation pins held by every edge *outside* the
+    subgraph (into both endpoint domains' transit pools), so a new node's links never re-use a live
+    link's resource. Full (air-gap) compiles are unaffected — byte-for-byte identical allocations.
+  - **Clean:** a new normalize pass strips the colliding edge's pins so it re-allocates fresh. It runs
+    on the controller's topology write path (every save/import is stored collision-free), at the start
+    of a deploy/stage (an already-corrupt fleet self-heals on the next deploy, no manual re-save), and
+    on every panel canvas load/hydrate (a stale design validates cleanly without hand-fixing edges).
+    It is the exact inverse of the validator's cross-link dedup — it never touches a primary link's
+    legitimately-mirrored reverse edge.
+
+### Changed
+- The edge inspector's compiled "Local ListenPort" line now names the node it belongs to, so a
+  per-peer link's two distinct per-end listen ports (e.g. the local node's vs the NAT-forward target's)
+  no longer read as a contradiction. Display-only.
+
 ## [2.0.0-beta.6] - 2026-06-17
 
 Fleet/keystone operability, from live fleet operation: a stuck key rotation can be released without

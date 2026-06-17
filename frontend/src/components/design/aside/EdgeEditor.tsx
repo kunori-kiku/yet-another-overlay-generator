@@ -291,7 +291,14 @@ export function EdgeEditor() {
               {endpointMatch && (
                 <p className="text-xs text-cyan-300 font-mono break-all">{t(language, 'edgeEditor.endpoint')}: {endpointMatch[1]}</p>
               )}
-              <p className="text-xs text-cyan-300 font-mono">{t(language, 'edgeEditor.localListenPort')}: {fromIface.listenPort}</p>
+              {/* Name the node on the local listen port so it does NOT read as a contradiction with
+                  the NAT-forward line below: per-peer links have a DISTINCT listen port per end, so
+                  this (the from node's, e.g. 51822) and the forward's "→ <to-node> <port>" (the to
+                  node's, e.g. 51821) are two different ends, both correct — not a mismatch. */}
+              <p className="text-xs text-cyan-300 font-mono">
+                {t(language, 'edgeEditor.localListenPort')}
+                {selectedEdgeFrom ? ` (${selectedEdgeFrom.name})` : ''}: {fromIface.listenPort}
+              </p>
             </div>
           );
         })()}

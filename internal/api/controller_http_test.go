@@ -1060,6 +1060,59 @@ func TestControllerHTTP_ClearRekey(t *testing.T) {
 	}
 }
 
+// TestControllerHTTP_UpdateTopologyHealsCollidingPins is the write-path heal regression guard:
+// POSTing a design whose two DIFFERENT links pin the same transit IPs / port (the "occupied by two
+// different links" corruption) must store a collision-free topology — the later-claiming edge's
+// pins are stripped so it re-allocates fresh — without the operator hand-fixing each edge.
+func TestControllerHTTP_UpdateTopologyHealsCollidingPins(t *testing.T) {
+	env := newCtlTestEnv(t)
+
+	router := func(id, name, host string) model.Node {
+		return model.Node{
+			ID: id, Name: name, Hostname: host, Role: "router", DomainID: "domain-1",
+			Capabilities: model.NodeCapabilities{CanAcceptInbound: true, CanForward: true, HasPublicIP: true},
+		}
+	}
+	// e-12 and e-23 are DIFFERENT links (different node pairs) yet both pin transit .1/.2 — the
+	// corruption. e-12 is first in slice order, so it keeps its pins; e-23 must be stripped.
+	colliding := &model.Topology{
+		Project: model.Project{ID: "heal-001", Name: "Heal Test"},
+		Domains: []model.Domain{{ID: "domain-1", Name: "net", CIDR: "10.60.0.0/24", AllocationMode: "auto", RoutingMode: "babel"}},
+		Nodes:   []model.Node{router("node-1", "r1", "r1.example.com"), router("node-2", "r2", "r2.example.com"), router("node-3", "r3", "r3.example.com")},
+		Edges: []model.Edge{
+			{ID: "e-12", FromNodeID: "node-1", ToNodeID: "node-2", Type: "public-endpoint", EndpointHost: "198.51.100.2", Transport: "udp", IsEnabled: true,
+				PinnedFromPort: 51820, PinnedToPort: 51820, PinnedFromTransitIP: "10.10.0.1", PinnedToTransitIP: "10.10.0.2", PinnedFromLinkLocal: "fe80::1", PinnedToLinkLocal: "fe80::2"},
+			{ID: "e-23", FromNodeID: "node-2", ToNodeID: "node-3", Type: "public-endpoint", EndpointHost: "198.51.100.3", Transport: "udp", IsEnabled: true,
+				PinnedFromPort: 51821, PinnedToPort: 51821, PinnedFromTransitIP: "10.10.0.1", PinnedToTransitIP: "10.10.0.2", PinnedFromLinkLocal: "fe80::1", PinnedToLinkLocal: "fe80::2"},
+		},
+	}
+	body, err := json.Marshal(colliding)
+	if err != nil {
+		t.Fatalf("marshal colliding topo: %v", err)
+	}
+	if st := doRaw(t, http.MethodPost, env.opURL("update-topology"), testOperatorToken, body); st != http.StatusOK {
+		t.Fatalf("update-topology: status %d, want 200", st)
+	}
+
+	// Read the STORED topology back: e-12 keeps .1/.2; e-23 must be fully stripped (re-allocates next compile).
+	var stored model.Topology
+	if st := doJSON(t, http.MethodGet, env.opURL("topology"), testOperatorToken, nil, &stored); st != http.StatusOK {
+		t.Fatalf("GET topology: status %d, want 200", st)
+	}
+	byID := map[string]model.Edge{}
+	for _, e := range stored.Edges {
+		byID[e.ID] = e
+	}
+	if e12 := byID["e-12"]; e12.PinnedFromTransitIP != "10.10.0.1" {
+		t.Errorf("e-12 transit = %q, want kept 10.10.0.1 (first claimant)", e12.PinnedFromTransitIP)
+	}
+	e23 := byID["e-23"]
+	if e23.PinnedFromTransitIP != "" || e23.PinnedToTransitIP != "" || e23.PinnedFromPort != 0 || e23.PinnedToPort != 0 ||
+		e23.PinnedFromLinkLocal != "" || e23.PinnedToLinkLocal != "" || e23.CompiledPort != 0 {
+		t.Errorf("e-23 still carries pins after heal: %+v (want all stripped)", e23)
+	}
+}
+
 // TestControllerHTTP_CompilePreview covers the read-only, server-authoritative compile
 // preview (PR6): it renders the enrolled subgraph and returns the configs + allocated ports,
 // preserves zero-knowledge custody (placeholder private keys only), and has NO side effects —

@@ -53,6 +53,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
@@ -143,7 +144,20 @@ func CompileSubgraph(topo *model.Topology, nodes []Node, fs render.FetchSettings
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: preparing keys for stage: %w", err)
 	}
-	result, err := compiler.NewCompiler().Compile(&subgraph, keys)
+	// Reserve the allocation pins held by edges in the FULL topology that are NOT in this
+	// subgraph (dropped because a far end is not yet enrolled). Without this, the subgraph's
+	// gap-fill restarts from .1 and can hand a fresh edge a transit IP / port / link-local that
+	// a dropped edge still pins in storage — and since each incremental enrollment compiles a
+	// DIFFERENT subgraph, two edges that were never compiled together collide (the "pin occupied
+	// by two different links" validate error). Reserving the excluded edges' pins makes the
+	// subgraph allocate around them, so a new node's links never collide with an out-of-subgraph
+	// link. (Existing corruption is cleaned by the normalize-layer heal; this only prevents new.)
+	included := make(map[string]bool, len(subgraph.Edges))
+	for i := range subgraph.Edges {
+		included[subgraph.Edges[i].ID] = true
+	}
+	reserved := compiler.BuildReservedFromExcludedEdges(topo, included)
+	result, err := compiler.NewCompiler().WithReserved(reserved).Compile(&subgraph, keys)
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
 	}
@@ -298,6 +312,13 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	if err := json.Unmarshal(rec.JSON, &topo); err != nil {
 		return StageResult{}, fmt.Errorf("controller: parsing stored topology: %w", err)
 	}
+	// Self-heal any pre-existing cross-link pin collision in the STORED topology before compiling, so
+	// a fleet still carrying corruption persisted by an older buggy compile converges on DEPLOY without
+	// requiring an explicit re-save: the colliding edges are stripped here, re-allocated cleanly by the
+	// subgraph compile below (the out-of-subgraph reservation keeps every other edge stable), and
+	// persisted back via persistAllocations. No-op (and no re-store) when already collision-free, so
+	// healthy fleets see zero drift. Complements the update-topology write-path heal (clean on save).
+	normalize.HealCollidingPins(&topo)
 
 	// (2)+(3) Build the enrolled subgraph and drive the frozen compile pipeline
 	// (AgentHeld keys → compile → render) via the shared CompileSubgraph helper.

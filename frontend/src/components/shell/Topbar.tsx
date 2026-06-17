@@ -20,22 +20,38 @@ export function Topbar() {
   const importProject = useTopologyStore((s) => s.importProject);
   const flushWorkspace = useTopologyStore((s) => s.flushWorkspace);
   const mode = useControllerStore((s) => s.mode);
+  const importDesignToServer = useControllerStore((s) => s.importDesignToServer);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const active = activeNavItem(location.pathname);
-  // The import/export/flush cluster is a LOCAL-mode file-I/O concept: import loads a JSON file
-  // into the canvas, export downloads it, flush clears it — all premised on "the browser holds
-  // the design". In controller mode the SERVER is authoritative (the canvas is a disposable
-  // mirror): flush would clear only the mirror (the false "cannot be undone" leak), export would
-  // write fleet IPs/SSH to disk, import would flip the mirror to local-only and be dropped at
-  // next hydrate (plan-11 / T3). Gate the cluster to local mode; controller mode persists via the
-  // Save button on the Design canvas (CanvasToolbar) instead (plan-10's saveDesign).
-  const showIOCluster = active?.key === 'design' && mode === 'local';
+  const onDesign = active?.key === 'design';
+  // Export + Import are available in BOTH modes on the Design route, but their meaning is
+  // mode-aware (they are NOT a local-mode-only concept masked off elsewhere):
+  //   - Export downloads the current design JSON — a backup the operator owns, on their machine.
+  //   - Import: LOCAL mode loads the file into the canvas as a disposable draft (importProject);
+  //     CONTROLLER mode is server-authoritative — it strips keys, writes the design to the
+  //     controller as a new version (which heals colliding pins), and re-hydrates the canvas from
+  //     the server (importDesignToServer). A naive local-style import in controller mode would flip
+  //     the canvas to local-only and PERSIST fleet IPs/SSH to localStorage — the leak we avoid.
+  // Flush stays LOCAL-only: in controller mode it would clear only the disposable mirror (the false
+  // "cannot be undone" leak), and persistence there is the Save button on the canvas (saveDesign).
+  const showIOCluster = onDesign;
+  const showFlush = onDesign && mode === 'local';
 
   const handleImportClick = () => fileInputRef.current?.click();
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) await importProject(file);
+    if (file) {
+      if (mode === 'controller') {
+        // Confirm before overwriting the server's working design (non-destructive: a new retained
+        // version, and hydrateFromServer backs up the current canvas first). Never auto-deploys.
+        if (window.confirm(t(language, 'topbar.importToServerConfirm'))) {
+          await importDesignToServer(file);
+        }
+      } else {
+        await importProject(file);
+      }
+    }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
   const handleFlush = () => {
@@ -71,13 +87,15 @@ export function Topbar() {
           <button type="button" onClick={() => exportProject()} className={ioBtn}>
             {t(language, 'topbar.export')}
           </button>
-          <button
-            type="button"
-            onClick={handleFlush}
-            className={`px-2.5 py-1 text-xs rounded-lg text-red-500 transition-colors hover:bg-red-500/10 ${FOCUS_RING}`}
-          >
-            {t(language, 'topbar.flush')}
-          </button>
+          {showFlush && (
+            <button
+              type="button"
+              onClick={handleFlush}
+              className={`px-2.5 py-1 text-xs rounded-lg text-red-500 transition-colors hover:bg-red-500/10 ${FOCUS_RING}`}
+            >
+              {t(language, 'topbar.flush')}
+            </button>
+          )}
           <span className="mx-1 h-5 w-px bg-[var(--hairline)]" />
         </div>
       )}
