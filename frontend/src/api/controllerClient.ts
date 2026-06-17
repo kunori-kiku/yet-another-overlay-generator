@@ -312,6 +312,11 @@ interface RekeyAllResponseJSON {
   requested: number;
 }
 
+interface ClearRekeyResponseJSON {
+  node_id: string;
+  cleared: boolean;
+}
+
 // --- 共享 request 辅助 ---
 
 // 判断 HTTP 方法是否会改写状态（用于决定 cookie 路径是否要带 CSRF 头）。
@@ -941,6 +946,15 @@ export async function rekeyAll(cfg: ControllerConfig): Promise<{ requested: numb
   const res = await postJSON(cfg, 'rekey-all', '');
   const data = (await res.json()) as RekeyAllResponseJSON;
   return { requested: data.requested };
+}
+
+// 清除单个节点的待轮换标记（operator-only），但不驱逐它——节点保留审批状态与 bearer 凭据（与
+// revoke 不同）。用于释放卡住的 "Roll keys" 散兵（已下线/dead 的节点，或误点的全量轮换），否则
+// 面板的 rekeying 门会一直禁用 Deploy。幂等：无待轮换标记时返回 cleared:false。
+export async function clearRekey(cfg: ControllerConfig, nodeId: string): Promise<{ cleared: boolean }> {
+  const res = await postJSON(cfg, 'clear-rekey', JSON.stringify({ node_id: nodeId }));
+  const data = (await res.json()) as ClearRekeyResponseJSON;
+  return { cleared: data.cleared };
 }
 
 // --- keystone (off-host operator signing) ---

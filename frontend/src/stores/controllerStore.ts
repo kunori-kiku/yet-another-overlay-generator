@@ -22,6 +22,7 @@ import {
   promote,
   revoke,
   rekeyAll,
+  clearRekey,
   getTrustlist,
   postTrustlistSignature,
   postOperatorCredential,
@@ -437,6 +438,7 @@ interface ControllerState {
   switchToController: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
+  clearRekey: (nodeId: string) => Promise<void>;
 }
 
 // 从连接字段切出 controllerClient 需要的 ControllerConfig（不含 agentBaseURL）。
@@ -1527,6 +1529,23 @@ export const useControllerStore = create<ControllerState>()(
         set({ loading: true, error: null });
         try {
           await rekeyAll(configOf(get()));
+          set({ loading: false });
+          await get().refresh();
+        } catch (err) {
+          set({
+            error: localizeError(err, 'error.generic'),
+            loading: false,
+          });
+        }
+      },
+
+      // 清除单个节点的待轮换标记但不驱逐它（与 revoke 不同：保留审批状态与 bearer token），随后刷新
+      // 视图使 rekeying 徽标/计数收敛。用于释放卡住的 "Roll keys" 散兵（dead/离线节点或误点全量轮换），
+      // 否则该节点会一直把面板的 Deploy 门钉住。
+      clearRekey: async (nodeId) => {
+        set({ loading: true, error: null });
+        try {
+          await clearRekey(configOf(get()), nodeId);
           set({ loading: false });
           await get().refresh();
         } catch (err) {

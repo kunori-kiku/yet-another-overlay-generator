@@ -73,6 +73,23 @@ export function DeployBar() {
     }
   };
 
+  // Deploy is the step that COMPLETES a "Roll keys" rotation (it recompiles each node with its
+  // CURRENT registered key). We do NOT hard-block it while nodes still owe a rotation — the backend
+  // never gated on the flag, a mixed old/new-key deploy is consistent (each node is compiled with
+  // whatever key the registry holds), and a single stuck/offline straggler must not wedge every
+  // deploy. Instead, an advisory confirm: a straggler deploys with its OLD key (it re-rotates and
+  // needs another deploy, or use "Cancel rekey" in the registry to release a node that will never
+  // re-register). With no rekey pending, Deploy fires directly.
+  const onDeploy = () => {
+    if (anyRekeying) {
+      const ok = window.confirm(
+        t(language, 'deployBar.deployWhileRekeyingConfirm', { count: rekeyingCount }),
+      );
+      if (!ok) return;
+    }
+    deploy();
+  };
+
   // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
   // generation. Computed against lastDeploy.staged — the node-ids actually deployed —
   // NOT the live canvas (which can drift from what was promoted after a local edit;
@@ -99,8 +116,8 @@ export function DeployBar() {
             {t(language, 'deployBar.rollKeys')}
           </button>
           <button
-            onClick={() => deploy()}
-            disabled={loading || noAuth || anyRekeying}
+            onClick={onDeploy}
+            disabled={loading || noAuth}
             title={
               anyRekeying
                 ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })

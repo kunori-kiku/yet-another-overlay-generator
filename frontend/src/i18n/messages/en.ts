@@ -497,6 +497,8 @@ export const en = {
   'nodeRegistry.notReady': "Not ready",
   'nodeRegistry.ready': "✓ Ready",
   'nodeRegistry.rekeying': "🔑 rekeying",
+  'nodeRegistry.cancelRekey': "Cancel rekey",
+  'nodeRegistry.cancelRekeyHint': "Clear this node's pending key rotation WITHOUT evicting it (it keeps its approval and token). Use for a node that will never re-register (offline/decommissioned) or a mis-clicked \"Roll keys\" — so it stops blocking Deploy.",
   'nodeRegistry.revoke': "Revoke",
   'nodeRegistry.revokeConfirm': "Revoke (evict) node {node}? It will stop receiving configuration until it re-enrolls.",
   'nodeRegistry.status': "Status",
@@ -558,8 +560,9 @@ export const en = {
   'userMenu.usingABreakGlass': "Using a break-glass token (not a login session)",
 
   // ── Parameterized strings (plan-1.5 manual: {param} interpolation) ──
-  'deployBar.rekeyingTitle': "{count} node(s) still rotating keys — Deploy when all have re-registered",
-  'deployBar.rekeyingBanner': "{count} node(s) still rotating keys — Deploy when all have re-registered (deploying now would recompile with mixed old+new public keys).",
+  'deployBar.rekeyingTitle': "{count} node(s) still rotating keys — Deploy completes the rotation; a straggler deploys with its current key",
+  'deployBar.rekeyingBanner': "{count} node(s) still owe a key rotation. Deploy is the step that completes it — you can Deploy now (a node that hasn't re-registered deploys with its current key and re-rotates on a later Deploy), or use \"Cancel rekey\" in the registry to release a node that will never re-register.",
+  'deployBar.deployWhileRekeyingConfirm': "{count} node(s) have not finished rotating their keys. Deploy now? A node that has re-registered gets its new key; one that hasn't deploys with its CURRENT key (it will re-rotate and need another Deploy). To release a node that will never re-register, use \"Cancel rekey\" in the registry instead. Continue?",
   'deployBar.strippedKeys': "{count} WireGuard private key(s) were removed before upload — controller mode is zero-knowledge (nodes hold their own private keys).",
   'deployBar.shrinkSummary': "The server currently holds {server} node(s); this deploy uploads {canvas}. Removed nodes drop out of the next generation.",
   'deployBar.shrinkConfirmPrompt': "If this is intentional, type “{phrase}” to confirm.",
