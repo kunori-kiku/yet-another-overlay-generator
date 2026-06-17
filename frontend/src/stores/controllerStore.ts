@@ -50,7 +50,7 @@ import {
 } from '../api/controllerClient';
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
-import { stripPrivateKeys } from '../lib/custody';
+import { stripPrivateKeys, dropAllKeys } from '../lib/custody';
 import { localizeError as localizeErrorFor } from '../lib/localizeError';
 import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
 import { useUiStore } from './uiStore';
@@ -424,6 +424,12 @@ interface ControllerState {
   // 版本历史，绝不 stage/promote 触达在线 fleet）→ 标记 canvasFromServer → 刷新同步快照。save
   // 前做客户端冲突检测（重新 GET 与 lastSyncedSnapshot 比对）；force=true 跳过检测强制覆盖。
   saveDesign: (opts?: { force?: boolean }) => Promise<void>;
+  // 控制器模式的「导入设计」（server-authoritative）：解析 JSON 文件 → 剥离全部密钥材料（控制器
+  // 为密钥权威）→ update-topology 写到服务端（落一条版本历史，服务端会顺手 heal 冲突 pin）→
+  // hydrateFromServer 用服务端权威副本刷新画布。绝不把 fleet 设计落到 localStorage，也绝不直接触达
+  // 在线 fleet（部署仍是独立的 stage/sign/promote）。与 local 模式的 importProject 区分：后者把文件
+  // 当作可丢弃的本地草稿载入画布，会让机密镜像落盘——controller 模式不可。
+  importDesignToServer: (file: File) => Promise<void>;
   // 关闭 save 冲突提示（用户取消，或已通过重新同步 / 强制覆盖解决）。
   dismissSaveConflict: () => void;
   // 关闭「已剥离 N 个私钥」提示。
@@ -1505,6 +1511,40 @@ export const useControllerStore = create<ControllerState>()(
       },
 
       dismissSaveConflict: () => set({ saveConflict: false }),
+
+      importDesignToServer: async (file) => {
+        set({ loading: true, error: null });
+        try {
+          const text = await file.text();
+          let topo: Topology;
+          try {
+            topo = JSON.parse(text) as Topology;
+          } catch {
+            set({ error: t(useTopologyStore.getState().language, 'topbar.importParseError'), loading: false });
+            return;
+          }
+          // 形状校验：必须是一份完整设计（与 importProject 同口径），否则拒绝而非写坏服务端。
+          if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
+            set({ error: t(useTopologyStore.getState().language, 'topbar.importShapeError'), loading: false });
+            return;
+          }
+          // 保留特性 route_policies：非空则剥离（与 importProject 一致；语义校验会拒绝非空数组）。
+          if (Array.isArray(topo.route_policies) && topo.route_policies.length > 0) {
+            delete topo.route_policies;
+          }
+          // 控制器为密钥权威：丢弃文件里的全部密钥材料（私钥绝不上送、公钥来自各 agent enrollment），
+          // 在写到服务端之前就清空，确保私钥连一瞬都不进入请求体。
+          const { topo: cleaned } = dropAllKeys(topo);
+          // 写到服务端：update-topology 落一条版本历史，并在写入边界 heal 冲突 pin + 规范化。绝不
+          // stage/promote——导入只更新权威设计，触达 fleet 仍需独立 Deploy。
+          await updateTopology(configOf(get()), JSON.stringify(cleaned));
+          // 用服务端权威副本（已 heal）刷新画布；hydrateFromServer 会置 canvasFromServer 并刷新同步基线。
+          await get().hydrateFromServer();
+          set({ loading: false });
+        } catch (err) {
+          set({ error: localizeError(err, 'error.generic'), loading: false });
+        }
+      },
 
       // 驱逐一个节点后刷新视图。
       revoke: async (nodeId) => {
