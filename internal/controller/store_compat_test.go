@@ -1187,6 +1187,205 @@ func TestStoreSignedTrustList(t *testing.T) {
 	}
 }
 
+// TestStoreServedTrustList covers the SERVED (last-promoted) trust-list slot and the atomic
+// GetServedConfig snapshot across both Store impls — the served-slot split that fixes the
+// re-stage-bricks-the-fleet bug. Invariants:
+//   - GetServedTrustList / GetServedConfig are ErrNotFound before anything is promoted.
+//   - PromoteStaged copies a SIGNED staged trust-list into the served slot atomically with the
+//     bundle flip; GetServedConfig then reports KeystoneOn + the served (bundle, trust-list) pair.
+//   - A subsequent RE-STAGE (PutSignedTrustList of a new UNSIGNED manifest + StageBundle, no promote)
+//     leaves the served slot UNTOUCHED — the staged slot diverges, the served slot does not. This is
+//     the bug: before the split, the single slot was clobbered and /config served no signature.
+//   - Promoting a bundle while the staged manifest is UNSIGNED leaves the served slot absent, so
+//     GetServedConfig reports KeystoneOn but HasTrustList=false (the /config fail-closed case).
+func TestStoreServedTrustList(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode: %v", err)
+			}
+			// Keystone ON: pin a credential so GetServedConfig reports KeystoneOn (its presence, not
+			// its bytes, is what flips the flag).
+			if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{
+				Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n",
+			}); err != nil {
+				t.Fatalf("SetOperatorCredential: %v", err)
+			}
+
+			// Nothing promoted yet -> both served reads are ErrNotFound.
+			if _, err := s.GetServedTrustList(ctx, tenant); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetServedTrustList(none): err = %v, want ErrNotFound", err)
+			}
+			if _, err := s.GetServedConfig(ctx, tenant, "alpha"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetServedConfig(none): err = %v, want ErrNotFound", err)
+			}
+
+			// Stage a bundle + a SIGNED staged trust-list (epoch 1), then promote.
+			b1 := SignedBundle{NodeID: "alpha", Generation: 1, Files: map[string][]byte{"checksums.sha256": []byte("sum-v1")}, IsStaged: true}
+			if err := s.StageBundle(ctx, tenant, b1); err != nil {
+				t.Fatalf("StageBundle v1: %v", err)
+			}
+			signedTL := StoredTrustList{TrustListJSON: []byte(`{"epoch":1,"members":[{"node_id":"alpha"}]}` + "\n"), SignatureJSON: []byte(`{"alg":"ed25519","signature":"sig-v1"}`), Epoch: 1}
+			if err := s.PutSignedTrustList(ctx, tenant, signedTL); err != nil {
+				t.Fatalf("PutSignedTrustList v1: %v", err)
+			}
+			if _, err := s.PromoteStaged(ctx, tenant); err != nil {
+				t.Fatalf("PromoteStaged v1: %v", err)
+			}
+
+			// Served slot now mirrors the promoted manifest.
+			served, err := s.GetServedTrustList(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetServedTrustList after promote: %v", err)
+			}
+			if !bytes.Equal(served.TrustListJSON, signedTL.TrustListJSON) || !bytes.Equal(served.SignatureJSON, signedTL.SignatureJSON) || served.Epoch != 1 {
+				t.Fatalf("served trust-list mismatch:\n got = %+v\nwant = %+v", served, signedTL)
+			}
+			sc, err := s.GetServedConfig(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetServedConfig after promote: %v", err)
+			}
+			if !sc.KeystoneOn || !sc.HasTrustList {
+				t.Fatalf("GetServedConfig flags = KeystoneOn:%v HasTrustList:%v, want true/true", sc.KeystoneOn, sc.HasTrustList)
+			}
+			if sc.Bundle.Generation != 1 || string(sc.Bundle.Files["checksums.sha256"]) != "sum-v1" {
+				t.Fatalf("GetServedConfig bundle = %+v, want gen 1 / sum-v1", sc.Bundle)
+			}
+			if !bytes.Equal(sc.TrustList.SignatureJSON, signedTL.SignatureJSON) {
+				t.Fatalf("GetServedConfig trust-list sig = %q, want %q", sc.TrustList.SignatureJSON, signedTL.SignatureJSON)
+			}
+
+			// BUG #1 invariant: a RE-STAGE (new UNSIGNED manifest + new staged bundle, NO promote) must
+			// NOT touch the served slot. The staged slot diverges; the served slot is frozen at v1.
+			restaged := StoredTrustList{TrustListJSON: []byte(`{"epoch":2,"members":[{"node_id":"alpha"},{"node_id":"beta"}]}` + "\n"), Epoch: 2}
+			if err := s.PutSignedTrustList(ctx, tenant, restaged); err != nil {
+				t.Fatalf("PutSignedTrustList(re-stage unsigned): %v", err)
+			}
+			if err := s.StageBundle(ctx, tenant, SignedBundle{NodeID: "alpha", Generation: 2, Files: map[string][]byte{"checksums.sha256": []byte("sum-v2")}, IsStaged: true}); err != nil {
+				t.Fatalf("StageBundle v2: %v", err)
+			}
+			staged, err := s.GetCurrentSignedTrustList(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetCurrentSignedTrustList(staged) after re-stage: %v", err)
+			}
+			if staged.Epoch != 2 || len(staged.SignatureJSON) != 0 {
+				t.Fatalf("staged slot after re-stage = epoch %d sig-len %d, want epoch 2 unsigned", staged.Epoch, len(staged.SignatureJSON))
+			}
+			servedAfter, err := s.GetServedTrustList(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetServedTrustList after re-stage: %v", err)
+			}
+			if servedAfter.Epoch != 1 || !bytes.Equal(servedAfter.SignatureJSON, signedTL.SignatureJSON) {
+				t.Fatalf("re-stage clobbered the served slot: got epoch %d, want frozen at epoch 1 (bug #1)", servedAfter.Epoch)
+			}
+			scAfter, err := s.GetServedConfig(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetServedConfig after re-stage: %v", err)
+			}
+			if !scAfter.HasTrustList || scAfter.Bundle.Generation != 1 {
+				t.Fatalf("GetServedConfig after re-stage = HasTrustList:%v gen:%d, want true/1 (served still v1)", scAfter.HasTrustList, scAfter.Bundle.Generation)
+			}
+
+			// Completing the deploy: promote the (still unsigned, in this raw store-level test) staged
+			// slot. PromoteStaged copies staged->served ONLY when the staged manifest is signed, so an
+			// unsigned promote leaves the served trust-list ABSENT — GetServedConfig then reports
+			// KeystoneOn but HasTrustList=false (the /config fail-closed case).
+			s2 := impl.factory(t)
+			if err := s2.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
+				t.Fatalf("SetOperatorCredential s2: %v", err)
+			}
+			if err := s2.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode s2: %v", err)
+			}
+			if err := s2.StageBundle(ctx, tenant, SignedBundle{NodeID: "alpha", Generation: 1, Files: map[string][]byte{"checksums.sha256": []byte("x")}, IsStaged: true}); err != nil {
+				t.Fatalf("StageBundle s2: %v", err)
+			}
+			if err := s2.PutSignedTrustList(ctx, tenant, StoredTrustList{TrustListJSON: []byte(`{"epoch":1}` + "\n"), Epoch: 1}); err != nil {
+				t.Fatalf("PutSignedTrustList(unsigned) s2: %v", err)
+			}
+			if _, err := s2.PromoteStaged(ctx, tenant); err != nil {
+				t.Fatalf("PromoteStaged(unsigned) s2: %v", err)
+			}
+			scUnsigned, err := s2.GetServedConfig(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetServedConfig s2: %v", err)
+			}
+			if !scUnsigned.KeystoneOn || scUnsigned.HasTrustList {
+				t.Fatalf("unsigned promote: GetServedConfig = KeystoneOn:%v HasTrustList:%v, want true/false", scUnsigned.KeystoneOn, scUnsigned.HasTrustList)
+			}
+		})
+	}
+}
+
+// TestFileStoreServedConfigSurvivesGenerationLagCrash simulates a FileStore crash mid-PromoteStaged
+// AFTER the per-node current-bundle and served_trustlist.json atomic renames but BEFORE the final
+// generation.json commit (generation.json is written LAST). /config reads via GetServedConfig, which
+// is NOT gated on the generation counter, so on reopen the node still gets a COHERENT
+// (new-bundle, new-served-manifest) pair; only the counter lags (it self-heals on the next
+// promote/bump). This pins the "generation committed last, /config independent of it" ordering
+// invariant the PromoteStaged comment documents. The OTHER crash shape (a node's new bundle paired
+// with an OLD served manifest, from a kill mid per-node loop) is covered by the agent's offline
+// digest-binding rejection in the regression suite — the store faithfully returns whatever is on
+// disk; the agent fails closed on the mismatch.
+func TestFileStoreServedConfigSurvivesGenerationLagCrash(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
+		t.Fatalf("SetOperatorCredential: %v", err)
+	}
+	if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+		t.Fatalf("UpsertNode: %v", err)
+	}
+	if err := s.StageBundle(ctx, tenant, SignedBundle{NodeID: "alpha", Generation: 1, Files: map[string][]byte{"checksums.sha256": []byte("sum-v1")}, IsStaged: true}); err != nil {
+		t.Fatalf("StageBundle: %v", err)
+	}
+	signed := StoredTrustList{TrustListJSON: []byte(`{"epoch":1}` + "\n"), SignatureJSON: []byte(`{"alg":"ed25519","signature":"s"}`), Epoch: 1}
+	if err := s.PutSignedTrustList(ctx, tenant, signed); err != nil {
+		t.Fatalf("PutSignedTrustList: %v", err)
+	}
+	if _, err := s.PromoteStaged(ctx, tenant); err != nil {
+		t.Fatalf("PromoteStaged: %v", err)
+	}
+
+	// Simulate the crash: roll generation.json back to the PRIOR counter (0), as if the process died
+	// after the bundle + served_trustlist atomic renames but before the final generation commit.
+	genPath := filepath.Join(dir, string(tenant), "generation.json")
+	rolled, err := json.Marshal(generationFile{Generation: 0})
+	if err != nil {
+		t.Fatalf("marshal generationFile: %v", err)
+	}
+	if err := os.WriteFile(genPath, rolled, 0600); err != nil {
+		t.Fatalf("roll back generation.json: %v", err)
+	}
+
+	// Reopen (crash + restart) and assert /config is still coherent even though the counter lags.
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if gen, err := s2.CurrentGeneration(ctx, tenant); err != nil || gen != 0 {
+		t.Fatalf("counter should read the lagged 0 (the crash dropped the commit) = (%d, %v)", gen, err)
+	}
+	sc, err := s2.GetServedConfig(ctx, tenant, "alpha")
+	if err != nil {
+		t.Fatalf("GetServedConfig after reopen: %v", err)
+	}
+	if !sc.HasTrustList || sc.Bundle.Generation != 1 || string(sc.Bundle.Files["checksums.sha256"]) != "sum-v1" {
+		t.Fatalf("post-crash /config must be coherent (new bundle + served manifest); got HasTrustList=%v gen=%d", sc.HasTrustList, sc.Bundle.Generation)
+	}
+	if !bytes.Equal(sc.TrustList.SignatureJSON, signed.SignatureJSON) {
+		t.Fatalf("post-crash served manifest signature mismatch: the (bundle, manifest) pair must stay coherent")
+	}
+}
+
 // TestStoreAPITokenRotation pins the rotation invariant across both Store impls:
 // issuing a fresh token for a node that already has one must invalidate the OLD
 // token at the lookup chokepoint. This is the re-enroll-leaves-old-token bug: a

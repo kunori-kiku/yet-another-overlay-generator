@@ -185,6 +185,30 @@ type StoredTrustList struct {
 	Epoch         int64  `json:"epoch"`
 }
 
+// ServedConfig is the ATOMIC snapshot of what /config serves one node: its current promoted Bundle,
+// whether the keystone is ON (KeystoneOn), and — when ON and something has been promoted under it —
+// the served signed trust-list (TrustList, valid iff HasTrustList). Reading these together under a
+// single store lock (GetServedConfig) guarantees that for any IN-PROCESS reader the (bundle,
+// trust-list) pair is always from one promoted generation, so a concurrent PromoteStaged can never
+// make a node fetch a torn (old-bundle, new-manifest) pair that would spuriously fail the agent's
+// bundle-digest binding.
+//
+// The single-lock guarantee is in-process only. Across a FileStore PROCESS crash mid-PromoteStaged
+// (current bundles and served_trustlist.json are separate atomic renames) a (new-bundle,
+// old-served-manifest) pair can transiently exist on disk; that is FAIL-CLOSED — the agent's
+// offline bundle-digest binding refuses the mismatch and keeps last-good — and SELF-REPAIRING (a
+// re-run of PromoteStaged rewrites the served slot). See FileStore.PromoteStaged. (Generation-
+// tagging the served slot to force crash-atomicity would be WRONG here: a node not re-staged in a
+// later promote keeps an older-generation bundle while the tenant-wide manifest advances, yet the
+// manifest still binds that node's unchanged digest, so the bundle generation and the served
+// manifest's promote generation legitimately differ.)
+type ServedConfig struct {
+	Bundle       SignedBundle
+	KeystoneOn   bool
+	TrustList    StoredTrustList
+	HasTrustList bool
+}
+
 // EnrollmentToken authorizes one node to enroll: single-use, short-TTL, and scoped
 // to a NodeID. The plaintext token is NEVER stored — only TokenHash (hex SHA-256 of
 // the plaintext) — so a store/DB read cannot recover a usable token.
@@ -540,12 +564,25 @@ type Store interface {
 	// GetOperatorCredential returns the tenant's pinned operator credential, or
 	// ErrNotFound when none is pinned (keystone OFF — behave as today).
 	GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error)
-	// PutSignedTrustList stores (replacing any prior) the operator-signed membership
-	// trust-list for the tenant.
+	// PutSignedTrustList stores (replacing any prior) the STAGED membership trust-list — the
+	// to-be-signed manifest CompileAndStage builds and the operator signs off-host. It is NOT what
+	// /config serves; staging it must never disturb the live fleet (the served slot below).
 	PutSignedTrustList(ctx context.Context, t TenantID, s StoredTrustList) error
-	// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
-	// ErrNotFound when none has been signed yet.
+	// GetCurrentSignedTrustList returns the tenant's STAGED trust-list (the to-be-signed / just-
+	// signed manifest of the pending generation), or ErrNotFound when none is staged. PromoteStaged
+	// copies it into the SERVED slot. (The name is historical; this is the staged slot — the served
+	// manifest is GetServedTrustList.)
 	GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error)
+	// GetServedTrustList returns the tenant's SERVED (last-promoted) signed membership trust-list —
+	// the one /config hands to nodes — or ErrNotFound when nothing has been promoted under a
+	// keystone yet. It is updated ONLY by PromoteStaged (copied from the staged slot once its
+	// signature has verified), so STAGING a new deploy never disturbs what the live fleet is served.
+	GetServedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error)
+	// GetServedConfig is the ATOMIC snapshot /config serves a node: its current promoted bundle,
+	// whether the keystone is ON, and (when ON) the served signed trust-list — all read under a
+	// single lock so a concurrent PromoteStaged can never expose a torn (old-bundle, new-manifest)
+	// pair. Returns ErrNotFound when the node has no current bundle.
+	GetServedConfig(ctx context.Context, t TenantID, nodeID string) (ServedConfig, error)
 
 	// --- Operators + sessions (operator login, plan-5.2) ---
 

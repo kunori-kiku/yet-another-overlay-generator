@@ -30,10 +30,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -328,4 +330,71 @@ func TestControllerKeystone_OptInOff(t *testing.T) {
 	if _, ok := cfg.Files["trustlist.sig"]; ok {
 		t.Fatalf("keystone OFF but /config served trustlist.sig")
 	}
+}
+
+// TestControllerKeystone_ConfigFailsClosedWhenPinnedButNoSignedManifest pins the FAIL-CLOSED wire
+// contract of /config in the keystone-ON-but-nothing-signed-yet state: a bundle is promoted while
+// the keystone is OFF, then a credential is pinned (keystone ON) but no deploy has been signed +
+// promoted under it. HandleConfig must return 409 CodeKeystoneNoSignedManifest — NOT a 500 (the
+// pre-reclassification status), and NOT a config carrying an empty/partial trust-list — so the node
+// keeps its current config and retries rather than applying anything unverified. Without this test
+// nothing pins either the 409 wire status or the fail-closed file-omission through the real handler.
+func TestControllerKeystone_ConfigFailsClosedWhenPinnedButNoSignedManifest(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.enrollNode(t, "node-2")
+
+	// Deploy a bundle with the keystone OFF (no operator credential): stage + promote, no signing.
+	env.promoteSmallTopo(t)
+	var off configResponseJSON
+	if status := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, &off); status != http.StatusOK {
+		t.Fatalf("keystone-OFF config: status %d, want 200", status)
+	}
+
+	// Now PIN a credential (keystone ON) WITHOUT signing + promoting a manifest under it: the served
+	// slot holds no signed trust-list, so /config must fail closed.
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken,
+		operatorCredentialRequestJSON{Alg: string(trustlist.AlgEd25519), PublicKeyPEM: ed25519PinPEM(t, pub)}, nil); status != http.StatusOK {
+		t.Fatalf("operator-credential: status %d, want 200", status)
+	}
+
+	status, code, files := getConfigErr(t, env, node1Token)
+	if status != http.StatusConflict {
+		t.Fatalf("keystone-ON-but-unsigned /config: status %d, want 409 (was 500 before reclassification)", status)
+	}
+	if code != string(apierr.CodeKeystoneNoSignedManifest) {
+		t.Fatalf("error code = %q, want %q", code, apierr.CodeKeystoneNoSignedManifest)
+	}
+	if len(files) != 0 {
+		t.Fatalf("fail-closed /config must serve NO files (no empty/partial trust-list leak), got %d files", len(files))
+	}
+}
+
+// getConfigErr GETs /config and decodes BOTH the coded-error envelope and any files map, so a
+// fail-closed assertion can pin the status, the apierr code, AND that no files leaked in the body.
+func getConfigErr(t *testing.T, env *ctlTestEnv, token string) (int, string, map[string]string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, env.agentURL("config"), nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("config GET: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var envl struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Files map[string]string `json:"files"`
+	}
+	_ = json.Unmarshal(raw, &envl)
+	return resp.StatusCode, envl.Error.Code, envl.Files
 }

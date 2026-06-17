@@ -9,7 +9,48 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
-_Nothing yet._
+Keystone-rotation safety: rotating the off-host operator credential no longer silently strands the
+fleet, and a family of adjacent trust-list-serving bugs found by a new adversarial regression suite
+are fixed. No release tag yet.
+
+### Fixed
+- **Keystone rotation no longer silently strands the fleet.** Re-pinning a *different* operator
+  credential used to leave every enrolled node refusing the served bundle with no signal and no
+  recovery path: `agent enroll` never re-pinned the node's `/etc/wireguard/operator-cred.pem` (only a
+  fresh bootstrap did), and re-pinning the controller credential did not refresh what `/config`
+  served. Now a changed credential requires an explicit acknowledged rotation
+  (`CodeKeystoneRotationRequiresAck`, 409), the controller surfaces a server-truth
+  **`redeploy_required`** signal (panel reads it instead of a browser-local cache), and the agent
+  gains **`yaog-agent reprovision-keystone`** to re-pin the new public key out of band and restart
+  (PRs #129/#130/#131).
+- **A mid-deploy re-stage no longer bricks `/config`.** The signed membership trust-list lived in a
+  single slot that staging (unsigned) and signing both wrote and `/config` served, so a fresh
+  `CompileAndStage` blanked the served signature until the next promote — every node's membership
+  gate refused and `/config` 500'd while a perfectly good promoted bundle was still current. The
+  trust-list is now split into a **staged** slot (the in-flight, to-be-signed manifest) and a
+  **served** slot (advanced only by a signed promote); `/config` and the redeploy signal read the
+  served slot, so a half-finished deploy is invisible to the fleet.
+- **The agent anti-rollback floor is monotonic across a keystone-OFF run.** A keystone-OFF apply
+  reports membership epoch 0, which previously reset a node's floor to 0 — letting a replayed
+  older-but-validly-signed membership be accepted once the keystone was re-enabled. A successful
+  apply now persists `max(applied, prior)`.
+- **`/config` reads the bundle and served trust-list under one store lock** (`GetServedConfig`), so a
+  concurrent promote can never hand a node a torn (old-bundle, new-manifest) pair that would
+  spuriously fail its offline bundle-digest binding.
+
+### Changed
+- **`keystone_no_signed_manifest` is now 409, not 500.** Keystone-on with nothing yet signed +
+  promoted under it is an operator-actionable state (sign and promote a deploy), not a server fault;
+  nodes keep their current config and retry. `/config` fails closed (no partial trust-list served).
+
+### Internal
+- **Non-release adversarial regression suite** (`internal/regression`, test-only — never compiled
+  into a release binary): black-box drives the real controller↔agent keystone/membership path
+  end to end (rotation across a mixed fleet, anti-rollback across a rotation, algorithm confusion,
+  bundle-signing-anchor × keystone composition, revoke-driven membership, re-stage-doesn't-brick,
+  and an atomic-served-config concurrency probe under `-race`). Each fix above is pinned by a test
+  verified load-bearing (it fails when the fix is reverted). The work was reviewed → fixed →
+  re-reviewed by independent multi-agent workflows.
 
 ## [2.0.0-beta.4] - 2026-06-16
 

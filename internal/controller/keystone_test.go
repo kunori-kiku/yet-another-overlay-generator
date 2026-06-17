@@ -38,6 +38,25 @@ func es256CredPEM(t *testing.T) (string, *ecdsa.PublicKey) {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), &priv.PublicKey
 }
 
+// promoteServedTrustList drives the store's real stage->promote flow so the SERVED trust-list slot
+// (what KeystoneRedeployRequired and /config read after the served-slot split) ends up holding sl.
+// PromoteStaged copies only a staged manifest carrying a NON-EMPTY signature into the served slot,
+// so sl must include one. It stages one throwaway bundle at the fresh tenant's first generation (1)
+// so PromoteStaged has something to flip; callers promote at most once.
+func promoteServedTrustList(t *testing.T, s Store, tnt TenantID, sl StoredTrustList) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.StageBundle(ctx, tnt, SignedBundle{NodeID: "n1", Generation: 1, Files: map[string][]byte{"checksums.sha256": []byte("x")}}); err != nil {
+		t.Fatalf("stage bundle: %v", err)
+	}
+	if err := s.PutSignedTrustList(ctx, tnt, sl); err != nil {
+		t.Fatalf("put signed trust-list: %v", err)
+	}
+	if _, err := s.PromoteStaged(ctx, tnt); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+}
+
 // TestKeystoneFingerprint_StableAcrossReencode: the fingerprint is over the parsed canonical DER,
 // so a re-encoded PEM (extra whitespace, a leading comment pem.Decode skips) of the SAME key
 // yields the SAME fingerprint — and two DIFFERENT keys yield different fingerprints.
@@ -153,8 +172,9 @@ func TestKeystoneHelpers_ErrorPaths(t *testing.T) {
 		t.Fatalf("SameKeystoneCredential(bad, good) = (%v, %v), want (false, err)", same, err)
 	}
 
-	// KeystoneRedeployRequired over a CORRUPT stored manifest (with a well-formed signature) must
-	// surface the parse error, never silently report "not required".
+	// KeystoneRedeployRequired over a CORRUPT SERVED manifest (with a well-formed signature) must
+	// surface the parse error, never silently report "not required". The check reads the SERVED
+	// slot, so the corrupt record must be PROMOTED, not merely staged.
 	s := NewMemStore()
 	manifest := trustlist.TrustList{SchemaVersion: 1, Tenant: string(tnt), Epoch: 1, Members: []trustlist.Member{{NodeID: "n1", BundleSHA256: "abc"}}}
 	signed, err := trustlist.NewEd25519Signer(privA).Sign(manifest)
@@ -162,11 +182,9 @@ func TestKeystoneHelpers_ErrorPaths(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 	sigJSON, _ := json.Marshal(signed)
-	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: []byte("{not json"), SignatureJSON: sigJSON, Epoch: 1}); err != nil {
-		t.Fatalf("put: %v", err)
-	}
+	promoteServedTrustList(t, s, tnt, StoredTrustList{TrustListJSON: []byte("{not json"), SignatureJSON: sigJSON, Epoch: 1})
 	if _, err := KeystoneRedeployRequired(ctx, s, tnt, good); err == nil {
-		t.Fatal("KeystoneRedeployRequired over a corrupt stored manifest must surface the parse error")
+		t.Fatal("KeystoneRedeployRequired over a corrupt served manifest must surface the parse error")
 	}
 }
 
@@ -177,7 +195,7 @@ func TestKeystoneRedeployRequired(t *testing.T) {
 	ctx := context.Background()
 	const tnt = TenantID("acme")
 	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
-	pubB, _, _ := ed25519.GenerateKey(rand.Reader)
+	pubB, privB, _ := ed25519.GenerateKey(rand.Reader)
 	credA := ed25519Cred(t, pubA)
 	credB := ed25519Cred(t, pubB)
 
@@ -198,17 +216,19 @@ func TestKeystoneRedeployRequired(t *testing.T) {
 		}
 	}
 
-	// No manifest stored at all -> not required.
+	// Nothing PROMOTED yet (served slot empty) -> not required, even with a credential pinned.
 	s := NewMemStore()
 	mustRedeploy(t, s, credA, false)
 
-	// Staged but UNSIGNED (empty signature) -> mid-deploy window, not required.
+	// Staged but UNSIGNED, never promoted: the served slot stays empty, so the redeploy signal
+	// reads the served slot and reports false (a deploy is mid-flight, the fleet is not stranded).
 	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: canonical, Epoch: 1}); err != nil {
 		t.Fatalf("put unsigned: %v", err)
 	}
 	mustRedeploy(t, s, credA, false)
 
-	// Signed by A: matches pin A -> not required; pin B -> rotated, required.
+	// Promote a manifest SIGNED by A into the served slot: matches pin A -> not required; pin B
+	// (rotated away from the served key) -> required.
 	signedA, err := trustlist.NewEd25519Signer(privA).Sign(manifest)
 	if err != nil {
 		t.Fatalf("sign A: %v", err)
@@ -217,9 +237,31 @@ func TestKeystoneRedeployRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal sig: %v", err)
 	}
-	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: canonical, SignatureJSON: sigJSON, Epoch: 1}); err != nil {
-		t.Fatalf("put signed: %v", err)
-	}
+	promoteServedTrustList(t, s, tnt, StoredTrustList{TrustListJSON: canonical, SignatureJSON: sigJSON, Epoch: 1})
 	mustRedeploy(t, s, credA, false)
 	mustRedeploy(t, s, credB, true)
+
+	// Bug #1 (re-stage must not strand the served fleet) — and load-bearing for the staged/served
+	// SPLIT specifically: re-stage a NEW manifest signed by a DIFFERENT key B into the STAGED slot
+	// without promoting. The SERVED slot is still the A-signed epoch-1 manifest, so the redeploy
+	// signal (which reads served) must still report not-required for pin A. This DISTINGUISHES the
+	// split from the pre-fix single-slot world: if KeystoneRedeployRequired read the staged slot, it
+	// would see the B-signed manifest, fail to verify it against pin A, and wrongly report required.
+	restaged := trustlist.TrustList{SchemaVersion: 1, Tenant: string(tnt), Epoch: 2, Members: []trustlist.Member{{NodeID: "n1", BundleSHA256: "def"}}}
+	restagedCanonical, err := trustlist.Canonical(restaged)
+	if err != nil {
+		t.Fatalf("canonical restaged: %v", err)
+	}
+	signedB, err := trustlist.NewEd25519Signer(privB).Sign(restaged)
+	if err != nil {
+		t.Fatalf("sign B: %v", err)
+	}
+	sigBJSON, err := json.Marshal(signedB)
+	if err != nil {
+		t.Fatalf("marshal sig B: %v", err)
+	}
+	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: restagedCanonical, SignatureJSON: sigBJSON, Epoch: 2}); err != nil {
+		t.Fatalf("re-stage signed-by-B: %v", err)
+	}
+	mustRedeploy(t, s, credA, false) // served slot still A-signed -> not required (would be true if it read staged)
 }
