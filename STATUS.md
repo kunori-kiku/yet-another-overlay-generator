@@ -1,10 +1,27 @@
 # STATUS
 <!-- regenerated: 2026-06-17 -->
-<!-- by: fleet-keystone-operability subject -->
+<!-- by: edge-pin-collision-rootcause subject -->
 
 ## Active work
 
-- **Released:** **`v2.0.0-beta.6`** (GitHub *latest*) — fleet/keystone operability (PR #134, atop
+- **Released:** **`v2.0.0-beta.7`** (GitHub *latest*) — edge-pin-collision root-cause fix (PR #135).
+  Fixed the **"pin occupied by two different links"** corruption the operator hit on a live fleet
+  (validate showed 10 errors while incremental deploys looked fine). Root cause: incremental
+  enrollment compiles only the enrolled subgraph (dropping not-yet-enrolled edges), so the allocator's
+  gap-fill restarted each pool from the bottom without seeing the dropped edges' pins, handing two
+  edges that were never compiled together the same transit IP / port / link-local. **Prevent:**
+  subgraph compiles now **reserve out-of-subgraph edge pins** (into both endpoint domains' pools) so a
+  new node's links never re-use a live link's resource — full compiles byte-for-byte unchanged.
+  **Clean:** `internal/normalize.HealCollidingPins` (inverse of the validator's cross-link dedup)
+  strips the colliding edge so it re-allocates fresh, wired at the `update-topology` write path, at
+  `CompileAndStage` start (**deploy self-heals** an already-corrupt fleet), and on every panel canvas
+  load (TS mirror). Verified against the real topology: **10 collisions → 0.** Also: **controller-mode
+  design Export/Import** (server-authoritative — strip keys → update-topology → re-hydrate; no
+  localStorage fleet-data leak; never auto-deploys) and an edge-inspector port-label clarification
+  (names the node, display-only). Reviewed by an independent 4-dimension workflow (GO, 0 blockers) →
+  findings applied (multi-CIDR superset reservation, heal-on-stage, TS↔Go heal parity) → full suite +
+  `tsc -b` + eslint green; CI green.
+- **Prior releases:** **`v2.0.0-beta.6`** — fleet/keystone operability (PR #134, atop
   #133), bundling the bugs surfaced during live fleet operation. A stuck "Roll keys" rotation can now
   be released without evicting the node (`POST {operator}/clear-rekey`, idempotent + audited +
   strictly weaker than revoke; per-node **"Cancel rekey"** button); the panel's **Deploy gate is
@@ -17,7 +34,7 @@
   credential by default + `systemctl restart`s the agent** (#133) so a re-bootstrap's new
   token/credential actually takes effect. Reviewed by an independent multi-dimension workflow (GO, 0
   blockers) → nits applied → full suite + `tsc -b` + eslint green; CI green.
-- **Prior releases:** **`v2.0.0-beta.5`** — keystone-rotation safety (PRs #129/#130/#131
+- **`v2.0.0-beta.5`** — keystone-rotation safety (PRs #129/#130/#131
   + #132). Reproduced and fixed the root cause where rotating the off-host operator credential
   silently stranded the whole fleet: a changed credential now requires an acknowledged rotation, the
   controller exposes a server-truth `redeploy_required` signal, and the agent gains
@@ -64,6 +81,12 @@
      topology with a duplicate-pinned backup auto-heals on load; the registry reflects server truth on
      login/reload without a manual re-login and "Live" refreshes immediately. No FE test runner, so
      owner-verified in a browser.
+  8. **Pin-collision + Export/Import smoke (beta.7):** on the real fleet whose stored topology had the
+     collision — log in (canvas heals, local Validate now passes), then Deploy and confirm the staged
+     bundles compile clean (deploy self-heal) and the previously-colliding links come up with fresh,
+     non-overlapping transit IPs/ports. Separately: controller-mode Export downloads the design;
+     Import of that file writes a new server version, re-hydrates the canvas, and does NOT deploy or
+     leave fleet data in localStorage. No FE test runner, so owner-verified in a browser.
 - **rc.1 is a later owner call** once the owed smokes pass and the beta soak is clean.
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
