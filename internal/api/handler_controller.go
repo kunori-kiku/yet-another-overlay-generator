@@ -34,6 +34,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -849,6 +850,12 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 			return
 		}
 	}
+	// Heal colliding allocation pins on the write path: an incremental-enrollment compile could once
+	// persist a transit IP / port / link-local onto two different links (the "pin occupied by two
+	// different links" validate error). Stripping the colliding edge's pins here means every saved or
+	// imported design is stored collision-free and re-allocates cleanly on the next stage; the
+	// allocator's out-of-subgraph reservation prevents NEW instances, so this is a one-way convergence.
+	normalize.HealCollidingPins(&topo)
 	// Store the CANONICAL re-marshaled form, not the raw bytes: the gate above checks
 	// the parsed view, and raw bytes could smuggle key material past it via duplicate
 	// JSON keys (last-key-wins parsing) or fields outside the model. Canonicalizing

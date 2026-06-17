@@ -20,6 +20,105 @@ import (
 // 解析保持一致——同一池绝不会被记成两份。
 const defaultTransitCIDR = "10.10.0.0/24"
 
+// transitCIDRForNode 解析一条链路（或一条待预留的外部 edge）的 transit CIDR 归属：
+// 取 from 节点所属域的 TransitCIDR，空值（无域 / 未配置）回退默认池。这是「链路构建」
+// （derivePeersWithDomains）与「外部 pin 预留」（ReservedAllocations）共用的唯一归属逻辑，
+// 二者必须按同一 CIDR 键归并 transit IP，否则跨子图预留会错配池、漏掉真正的冲突。
+func transitCIDRForNode(from *model.Node, domainMap map[string]*model.Domain) string {
+	if from != nil {
+		if domain := domainMap[from.DomainID]; domain != nil && domain.TransitCIDR != "" {
+			return domain.TransitCIDR
+		}
+	}
+	return defaultTransitCIDR
+}
+
+// ReservedAllocations 是「子图编译」时需要避让的、由「子图之外的 edge」占用的分配资源。
+//
+// 背景（跨子图冲突根因）：controller 增量纳管时只编译「已 enroll 子图」，远端尚未 enroll 的
+// edge 会被 enrolledSubgraph 丢弃；编译器看不到它们，gap-fill 便会从 .1 起重新分配，与那些
+// 被丢弃 edge 仍持有的 pin（持久化在全量拓扑里）撞车。把全量拓扑中「不在本次子图内」的 edge
+// 的 pin 预留进来，子图的 gap-fill 就会跳过它们，从而绝不再产生跨子图碰撞（既有健康分配零漂移，
+// 因为预留值本就是别的 edge 已占用、本就该避让的值）。
+//
+// 注意：它只「预留」（影响 gap-fill 的避让集合），不改动子图内 edge 自身的 sticky pin——既有
+// 碰撞数据的清理由 normalize 层的 heal 负责，二者职责分离（预留=防新增，heal=清存量）。
+type ReservedAllocations struct {
+	ports      map[string]map[int]bool    // nodeID -> 端口集合
+	transitIPs map[string]map[string]bool // 解析后的 CIDR -> IP 字符串集合
+	linkLocals map[string]bool            // link-local 字符串集合
+}
+
+// BuildReservedFromExcludedEdges 扫描全量拓扑，为「ID 不在 includedEdgeIDs 内」的每条
+// enabled、非 client 触及、且成对完整 pin 的 edge 预留其 port / transit IP / link-local。
+// 这正是子图编译时被丢弃、却仍在存储中持有 pin 的那些 edge——把它们预留下来，子图的新分配
+// 就不会撞上它们。CIDR 经 transitCIDRForNode 解析（与链路构建同源）。
+//
+//   - 跳过 disabled edge：验证器与分配器都忽略它们，其 pin 不构成冲突，预留只会徒增避让。
+//   - 跳过 client 触及的 edge：client 用单一 wg0、无 per-peer 资源，其 port pin 本就是错误、
+//     transit/LL 被忽略（与预分配阶段的 client 处理一致）。
+//   - 仅预留「成对完整」的 pin（单端有值按未 pin 处理，与预分配阶段一致）。
+func BuildReservedFromExcludedEdges(full *model.Topology, includedEdgeIDs map[string]bool) *ReservedAllocations {
+	r := &ReservedAllocations{
+		ports:      make(map[string]map[int]bool),
+		transitIPs: make(map[string]map[string]bool),
+		linkLocals: make(map[string]bool),
+	}
+	if full == nil {
+		return r
+	}
+	nodeMap := make(map[string]*model.Node, len(full.Nodes))
+	for i := range full.Nodes {
+		nodeMap[full.Nodes[i].ID] = &full.Nodes[i]
+	}
+	domainMap := make(map[string]*model.Domain, len(full.Domains))
+	for i := range full.Domains {
+		domainMap[full.Domains[i].ID] = &full.Domains[i]
+	}
+	for i := range full.Edges {
+		e := &full.Edges[i]
+		if includedEdgeIDs[e.ID] || !e.IsEnabled {
+			continue
+		}
+		from := nodeMap[e.FromNodeID]
+		to := nodeMap[e.ToNodeID]
+		if from == nil || to == nil {
+			continue
+		}
+		if from.Role == "client" || to.Role == "client" {
+			continue
+		}
+		if e.PinnedFromPort > 0 && e.PinnedToPort > 0 {
+			r.reservePort(e.FromNodeID, e.PinnedFromPort)
+			r.reservePort(e.ToNodeID, e.PinnedToPort)
+		}
+		if e.PinnedFromTransitIP != "" && e.PinnedToTransitIP != "" {
+			cidr := transitCIDRForNode(from, domainMap)
+			r.reserveTransit(cidr, e.PinnedFromTransitIP)
+			r.reserveTransit(cidr, e.PinnedToTransitIP)
+		}
+		if e.PinnedFromLinkLocal != "" && e.PinnedToLinkLocal != "" {
+			r.linkLocals[e.PinnedFromLinkLocal] = true
+			r.linkLocals[e.PinnedToLinkLocal] = true
+		}
+	}
+	return r
+}
+
+func (r *ReservedAllocations) reservePort(nodeID string, port int) {
+	if r.ports[nodeID] == nil {
+		r.ports[nodeID] = make(map[int]bool)
+	}
+	r.ports[nodeID][port] = true
+}
+
+func (r *ReservedAllocations) reserveTransit(cidr, ip string) {
+	if r.transitIPs[cidr] == nil {
+		r.transitIPs[cidr] = make(map[string]bool)
+	}
+	r.transitIPs[cidr][ip] = true
+}
+
 // backupDefaultLinkCost 是 backup 链路在没有显式 Priority/Weight 时采用的 Babel rxcost
 // 预设值：384 = 4× babeld 有线默认 cost（96）。这样 Babel 在主链路存活时绝不优先 backup，
 // 而多跳备选路径仍能正常参与 cost 比较。详见 docs/spec/artifacts/babel.md（Link cost resolution）。
@@ -138,13 +237,20 @@ type PeerInfo struct {
 // 新架构：每个 peer 一个独立接口
 // 返回 map[nodeID][]PeerInfo
 func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
+	return derivePeers(topo, keys, nil)
+}
+
+// derivePeers 是 DerivePeers 的内部变体，额外接收一组「子图之外的 edge」预留资源（reserved）。
+// 全量编译（air-gap CLI / API）传 nil——拓扑里没有被丢弃的 edge，行为与改造前逐字节一致；
+// 仅 controller 的子图编译会传入非 nil 的预留集合（见 CompileSubgraph）。
+func derivePeers(topo *model.Topology, keys map[string]KeyPair, reserved *ReservedAllocations) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	// 构建 Domain 索引
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
 		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
 	}
 
-	return derivePeersWithDomains(topo, keys, domainMap)
+	return derivePeersWithDomains(topo, keys, domainMap, reserved)
 }
 
 // pairAllocation 预分配的节点对资源（端口、transit IP、link-local）
@@ -162,7 +268,7 @@ type pairAllocation struct {
 // derivePeersWithDomains 核心推导逻辑（两阶段算法）
 // Pass 1: 预分配所有节点对的端口和地址资源
 // Pass 2: 使用预分配的端口构建 PeerInfo（确保 endpoint 端口 = 对端接口监听端口）
-func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
+func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain, reserved *ReservedAllocations) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	peerMap := make(map[string][]PeerInfo)
 
 	// 节点索引
@@ -251,10 +357,8 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 
 		// 解析该链路所属域的 transit CIDR（空值回退默认池）。必须与 allocateTransitPair
 		// 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs 解析保持一致（审计项 D12）。
-		transitCIDR := defaultTransitCIDR
-		if domain := domainMap[fromNode.DomainID]; domain != nil && domain.TransitCIDR != "" {
-			transitCIDR = domain.TransitCIDR
-		}
+		// 经 transitCIDRForNode 统一解析，使「链路构建」与「外部 pin 预留」走同一份 CIDR 归属逻辑。
+		transitCIDR := transitCIDRForNode(fromNode, domainMap)
 
 		link := &linkEntity{
 			linkKey:     lk,
@@ -289,6 +393,26 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 	}
 	transitUsed := func(cidr, ip string) bool {
 		return usedTransitIPs[cidr] != nil && usedTransitIPs[cidr][ip]
+	}
+
+	// ======== Pass 1 阶段 2.5：预留「子图之外」的 edge 所占资源 ========
+	// 在本子图自身的 pin 预留与 gap-fill 之前，先把 reserved（全量拓扑里不在本子图内、却仍持有
+	// pin 的 edge）的资源标记为已用。这样子图内任何「未 pin、需 gap-fill」的 edge 都会避开它们，
+	// 跨子图碰撞从源头消失。仅子图编译会传入 reserved；全量编译为 nil，此处空转、行为不变（I1）。
+	if reserved != nil {
+		for nodeID, ports := range reserved.ports {
+			for port := range ports {
+				markPort(nodeID, port)
+			}
+		}
+		for cidr, ips := range reserved.transitIPs {
+			for ip := range ips {
+				markTransit(cidr, ip)
+			}
+		}
+		for ll := range reserved.linkLocals {
+			usedLinkLocals[ll] = true
+		}
 	}
 
 	// ======== Pass 1 阶段 3：预留所有 pin ========

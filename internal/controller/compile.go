@@ -143,7 +143,20 @@ func CompileSubgraph(topo *model.Topology, nodes []Node, fs render.FetchSettings
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: preparing keys for stage: %w", err)
 	}
-	result, err := compiler.NewCompiler().Compile(&subgraph, keys)
+	// Reserve the allocation pins held by edges in the FULL topology that are NOT in this
+	// subgraph (dropped because a far end is not yet enrolled). Without this, the subgraph's
+	// gap-fill restarts from .1 and can hand a fresh edge a transit IP / port / link-local that
+	// a dropped edge still pins in storage — and since each incremental enrollment compiles a
+	// DIFFERENT subgraph, two edges that were never compiled together collide (the "pin occupied
+	// by two different links" validate error). Reserving the excluded edges' pins makes the
+	// subgraph allocate around them, so a new node's links never collide with an out-of-subgraph
+	// link. (Existing corruption is cleaned by the normalize-layer heal; this only prevents new.)
+	included := make(map[string]bool, len(subgraph.Edges))
+	for i := range subgraph.Edges {
+		included[subgraph.Edges[i].ID] = true
+	}
+	reserved := compiler.BuildReservedFromExcludedEdges(topo, included)
+	result, err := compiler.NewCompiler().WithReserved(reserved).Compile(&subgraph, keys)
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
 	}
