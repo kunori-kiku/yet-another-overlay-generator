@@ -35,7 +35,10 @@ function transitIPs(e: Edge): string[] {
 
 function stripPins(e: Edge): Edge {
   const out: Edge = { ...e };
-  for (const f of PIN_FIELDS) delete (out as Record<string, unknown>)[f];
+  // Delete each pin by dynamic key. Edge does not structurally overlap Record<string, unknown>
+  // (tsc -b TS2352), so route the index access through unknown — the keys are the literal,
+  // all-optional PIN_FIELDS, so the delete is well-formed.
+  for (const f of PIN_FIELDS) delete (out as unknown as Record<string, unknown>)[f];
   return out;
 }
 
