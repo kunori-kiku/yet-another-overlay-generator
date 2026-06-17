@@ -9,6 +9,13 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.7] - 2026-06-17
+
+Fixes the cross-subgraph allocation-pin collision ("pin occupied by two different links") at its root
+— subgraph compiles now reserve the pins held by not-yet-enrolled edges, and a normalize pass cleans
+any existing corruption on save, on deploy, and on canvas load — plus controller-mode design
+Export/Import and an edge-inspector port-label clarification.
+
 ### Added
 - **Design Export / Import in controller mode.** The top-bar Export/Import buttons now appear in
   controller mode too (previously local-only). Export downloads the current design as a JSON backup.
@@ -434,7 +441,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.6...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.7...HEAD
+[2.0.0-beta.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.6...v2.0.0-beta.7
 [2.0.0-beta.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.5...v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.4...v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.3...v2.0.0-beta.4
