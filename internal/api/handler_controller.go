@@ -1184,6 +1184,7 @@ func (h *ControllerHandler) HandleClearRekey(w http.ResponseWriter, r *http.Requ
 			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
 		}
+		// Reserved for a persistent Store; MemStore only ever returns ErrNotFound from GetNode.
 		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}

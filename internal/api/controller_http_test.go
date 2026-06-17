@@ -975,6 +975,42 @@ func TestControllerHTTP_ClearRekey(t *testing.T) {
 		t.Fatalf("clear-rekey cleared=false, want true (a pending flag was set)")
 	}
 
+	// Audit contract (TestControllerHTTP_RekeyFlow sets the bar): the active clear writes exactly one
+	// "rekey-clear" entry (actor operator:*, node_id node-1) and the chain still verifies; the
+	// idempotent no-op below must add NONE. countClearRekeyAudit returns the current rekey-clear count.
+	countClearRekeyAudit := func() int {
+		var audit struct {
+			Entries []struct {
+				Actor  string `json:"actor"`
+				Action string `json:"action"`
+				NodeID string `json:"node_id"`
+			} `json:"entries"`
+			Verified bool `json:"verified"`
+		}
+		if st := doJSON(t, http.MethodGet, env.opURL("audit"), testOperatorToken, nil, &audit); st != http.StatusOK {
+			t.Fatalf("audit: status %d, want 200", st)
+		}
+		if !audit.Verified {
+			t.Fatalf("audit verified = false after clear-rekey, want true")
+		}
+		n := 0
+		for _, e := range audit.Entries {
+			if e.Action == "rekey-clear" {
+				if !strings.HasPrefix(e.Actor, "operator:") {
+					t.Errorf("rekey-clear actor = %q, want operator:* prefix", e.Actor)
+				}
+				if e.NodeID != "node-1" {
+					t.Errorf("rekey-clear node_id = %q, want node-1", e.NodeID)
+				}
+				n++
+			}
+		}
+		return n
+	}
+	if n := countClearRekeyAudit(); n != 1 {
+		t.Fatalf("rekey-clear audit entries = %d after one clear, want exactly 1", n)
+	}
+
 	// node-1 must be STILL APPROVED with rekey_requested cleared (NOT evicted like revoke).
 	var nodes []struct {
 		NodeID         string `json:"node_id"`
@@ -1012,6 +1048,10 @@ func TestControllerHTTP_ClearRekey(t *testing.T) {
 	}
 	if resp2.Cleared {
 		t.Errorf("second clear-rekey cleared=true, want false (idempotent no-op)")
+	}
+	// The idempotent no-op must NOT have written a second audit entry.
+	if n := countClearRekeyAudit(); n != 1 {
+		t.Fatalf("rekey-clear audit entries = %d after idempotent no-op, want still 1 (no-op writes no audit)", n)
 	}
 
 	// Unknown node -> 404.

@@ -507,9 +507,9 @@ function base64StdToBytes(s: string): Uint8Array {
   return out;
 }
 
-// 派生选择器：fleet 中是否仍有节点处于 rekey_requested（已请求轮换、尚未重新注册新公钥）。
-// DeployBar 用它在轮换收口前禁用 Deploy——否则中途 Deploy 会用「旧+新」混合公钥重编译，
-// 导致 fleet 收敛错乱。返回仍在轮换中的节点数，便于回显「N 个节点仍在轮换密钥」。
+// 派生选择器：fleet 中仍处于 rekey_requested（已请求轮换、尚未重新注册新公钥）的节点数。
+// 驱动「建议性」轮换体验——DeployBar 的 Deploy 二次确认 + title 提示，以及 NodeRegistry 里
+// 每个节点的「Cancel rekey」入口的显隐；不再硬禁用 Deploy。便于回显「N 个节点仍在轮换密钥」。
 export function selectRekeyingCount(state: ControllerState): number {
   // Only APPROVED nodes can re-register (a revoked node never clears its flag), so
   // exclude non-approved to avoid permanently gating Deploy on a stale flag.
