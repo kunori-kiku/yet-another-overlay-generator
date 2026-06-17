@@ -1,9 +1,20 @@
 # STATUS
-<!-- regenerated: 2026-06-16 -->
-<!-- by: close-phase — subject: controller-panel-rollout-ui -->
+<!-- regenerated: 2026-06-17 -->
+<!-- by: keystone-rotation-safety subject -->
 
 ## Active work
 
+- **In progress — keystone-rotation safety (untagged; on `main` + branch `test/keystone-regression-suite`).**
+  Reproduced and fixed the root cause where rotating the off-host operator credential silently
+  stranded the whole fleet: a changed credential now requires an acknowledged rotation, the
+  controller exposes a server-truth `redeploy_required` signal, and the agent gains
+  `reprovision-keystone` (PRs #129/#130/#131, on `main`). A non-release adversarial regression suite
+  (`internal/regression`) then surfaced three adjacent trust-list-serving bugs — all fixed on
+  `test/keystone-regression-suite`: the **served-vs-staged trust-list split** (a mid-deploy re-stage
+  no longer bricks `/config`), a **monotonic anti-rollback floor** across a keystone-OFF apply, and an
+  **atomic `GetServedConfig`** snapshot (no torn bundle/manifest pair); plus
+  `keystone_no_signed_manifest` reclassified 500→409. Reviewed → fixed → re-reviewed by independent
+  multi-agent workflows; full suite + `-race` + `vet` + `gofmt` green. See CHANGELOG `[Unreleased]`.
 - **Released:** **`v2.0.0-beta.4`** (GitHub *latest*) — a security hardening fix (PR #128): the
   controller persists the bundle-signing **public** key per tenant (`SigningAnchor`) and reconciles
   it at stage time, so a redeploy that drops or swaps `YAOG_BUNDLE_SIGNING_KEY` now FAILS LOUD
