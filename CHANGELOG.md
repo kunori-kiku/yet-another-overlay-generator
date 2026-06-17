@@ -9,6 +9,14 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.6] - 2026-06-17
+
+Fleet/keystone operability, from live fleet operation: a stuck key rotation can be released without
+evicting the node, the Deploy gate is advisory instead of a hard block, an edge role flip no longer
+corrupts allocation pins (with a load-time auto-heal for existing topologies), the fleet view reflects
+server truth without a re-login, and a re-bootstrap restarts the agent so its new credential takes
+effect.
+
 ### Added
 - **Release a stuck key rotation without evicting the node.** A fleet-wide "Roll keys" only completes
   once every node re-registers; a dead/offline straggler used to wedge the panel's Deploy gate with
@@ -394,7 +402,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.5...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.6...HEAD
+[2.0.0-beta.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.5...v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.4...v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.3...v2.0.0-beta.4
 [2.0.0-beta.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.2...v2.0.0-beta.3
