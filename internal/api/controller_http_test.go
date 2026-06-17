@@ -952,6 +952,74 @@ func TestControllerHTTP_RevokeClearsRekey(t *testing.T) {
 	}
 }
 
+// TestControllerHTTP_ClearRekey covers the clear-rekey operator escape hatch: it clears a node's
+// pending RekeyRequested flag WITHOUT evicting it (unlike revoke) — the node stays approved and its
+// bearer token keeps working — so a stuck "Roll keys" straggler can be released without removing it
+// from the fleet. It is idempotent (cleared:false the second time) and 404s an unknown node.
+func TestControllerHTTP_ClearRekey(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// Flag the fleet for rekey so node-1 has a pending RekeyRequested.
+	if st := doJSON(t, http.MethodPost, env.opURL("rekey-all"), testOperatorToken, struct{}{}, nil); st != http.StatusOK {
+		t.Fatalf("rekey-all: status %d, want 200", st)
+	}
+
+	// Clear node-1's pending rekey -> cleared:true.
+	var resp clearRekeyResponseJSON
+	if st := doJSON(t, http.MethodPost, env.opURL("clear-rekey"), testOperatorToken, map[string]string{"node_id": "node-1"}, &resp); st != http.StatusOK {
+		t.Fatalf("clear-rekey: status %d, want 200", st)
+	}
+	if !resp.Cleared {
+		t.Fatalf("clear-rekey cleared=false, want true (a pending flag was set)")
+	}
+
+	// node-1 must be STILL APPROVED with rekey_requested cleared (NOT evicted like revoke).
+	var nodes []struct {
+		NodeID         string `json:"node_id"`
+		Status         string `json:"status"`
+		RekeyRequested bool   `json:"rekey_requested"`
+	}
+	if st := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); st != http.StatusOK {
+		t.Fatalf("nodes: status %d, want 200", st)
+	}
+	found := false
+	for _, n := range nodes {
+		if n.NodeID == "node-1" {
+			found = true
+			if n.Status != "approved" {
+				t.Errorf("node-1 status = %q, want approved (clear-rekey must NOT evict)", n.Status)
+			}
+			if n.RekeyRequested {
+				t.Errorf("node-1 rekey_requested still true after clear-rekey")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("node-1 missing from registry after clear-rekey (must not be removed)")
+	}
+
+	// The bearer token must STILL authenticate (clear-rekey does not touch the API token, unlike revoke).
+	if st := doJSON(t, http.MethodGet, env.agentURL("config"), node1Token, nil, &configResponseJSON{}); st != http.StatusOK {
+		t.Fatalf("node-1 /config after clear-rekey: status %d, want 200 (token must still work)", st)
+	}
+
+	// Idempotent: clearing again is a 200 no-op with cleared=false.
+	var resp2 clearRekeyResponseJSON
+	if st := doJSON(t, http.MethodPost, env.opURL("clear-rekey"), testOperatorToken, map[string]string{"node_id": "node-1"}, &resp2); st != http.StatusOK {
+		t.Fatalf("clear-rekey (idempotent): status %d, want 200", st)
+	}
+	if resp2.Cleared {
+		t.Errorf("second clear-rekey cleared=true, want false (idempotent no-op)")
+	}
+
+	// Unknown node -> 404.
+	if st := doJSON(t, http.MethodPost, env.opURL("clear-rekey"), testOperatorToken, map[string]string{"node_id": "nope"}, nil); st != http.StatusNotFound {
+		t.Fatalf("clear-rekey(unknown): status %d, want 404", st)
+	}
+}
+
 // TestControllerHTTP_CompilePreview covers the read-only, server-authoritative compile
 // preview (PR6): it renders the enrolled subgraph and returns the configs + allocated ports,
 // preserves zero-knowledge custody (placeholder private keys only), and has NO side effects —

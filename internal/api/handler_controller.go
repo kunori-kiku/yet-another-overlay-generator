@@ -251,6 +251,7 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"topology/versions", op(h.HandleTopologyVersions))
 	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
 	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
+	mux.HandleFunc(base+"clear-rekey", op(h.HandleClearRekey))
 	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL.
 	mux.HandleFunc(base+"settings", op(h.HandleSettings))
 	// Assisted release-pin fetch (controller-panel-rollout-ui plan-1): fetch the per-asset
@@ -452,6 +453,13 @@ type revokeRequestJSON struct {
 type revokeResponseJSON struct {
 	NodeID  string `json:"node_id"`
 	Revoked bool   `json:"revoked"`
+}
+
+// clearRekeyResponseJSON confirms a clear-rekey: the node id and whether a pending rekey flag
+// was actually cleared (false = idempotent no-op, the node had no pending rekey).
+type clearRekeyResponseJSON struct {
+	NodeID  string `json:"node_id"`
+	Cleared bool   `json:"cleared"`
 }
 
 // auditEntryJSON is the operator-facing wire form of one audit entry. It is an
@@ -1141,6 +1149,65 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, revokeResponseJSON{NodeID: req.NodeID, Revoked: true})
+}
+
+// HandleClearRekey clears a node's pending RekeyRequested flag WITHOUT evicting it — the operator's
+// escape hatch for a "Roll keys" straggler (a dead/offline node, or a mis-clicked rekey-all) that
+// would otherwise keep the panel's rekeying gate stuck and force a revoke. Unlike HandleRevoke it
+// does NOT change Status, does NOT clear the API token, and does NOT BumpGeneration (it changes no
+// bundle, so there is nothing to wake). Idempotent: a node with no pending rekey returns 200 with
+// cleared:false and writes no audit entry. It is best-effort against a racing in-flight /rekey — an
+// agent that already saw rekey_requested may still complete its rotation, which is benign (the agent
+// holds the new key, so the swap stays consistent); the operator can clear again.
+func (h *ControllerHandler) HandleClearRekey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
+		return
+	}
+	tenant, operator, ok := identity(r.Context())
+	if !ok {
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
+		return
+	}
+	var req revokeRequestJSON // {node_id} — same shape as revoke
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	if req.NodeID == "" {
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id"))
+		return
+	}
+	node, err := h.store.GetNode(r.Context(), tenant, req.NodeID)
+	if err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
+			return
+		}
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
+	// Idempotent no-op: nothing pending, so no mutation and no (misleading) audit entry.
+	if !node.RekeyRequested {
+		writeJSON(w, http.StatusOK, clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: false})
+		return
+	}
+	// Clear ONLY the flag, preserving every other field (mirrors the revoke path's preserve-and-set).
+	node.RekeyRequested = false
+	if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
+	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+		Timestamp: time.Now(),
+		Actor:     "operator:" + operator,
+		Action:    "rekey-clear",
+		NodeID:    req.NodeID,
+	}); err != nil {
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: true})
 }
 
 // HandleAudit returns the tenant's audit chain plus whether it verifies intact
