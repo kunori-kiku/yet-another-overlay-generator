@@ -12,6 +12,7 @@ import type {
 } from '../types/topology';
 import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
+import { healDuplicatePinnedBackups } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
 // useControllerStore is read LAZILY (getState() inside actions, never at module
 // init) so the controller↔topology store cycle stays runtime-only — symmetric to how
@@ -561,7 +562,9 @@ export const useTopologyStore = create<TopologyState>()(
       project: topo.project,
       domains: topo.domains,
       nodes: topo.nodes,
-      edges: topo.edges,
+      // Self-heal the legacy duplicate-pinned-backup corruption on every load (server hydrate or
+      // local import) so a stale topology validates/compiles cleanly. See lib/normalizeEdges.
+      edges: healDuplicatePinnedBackups(topo.edges),
       allocSchemaVersion: topo.alloc_schema_version ?? 0,
       history: [],
       validateResult: null,
@@ -873,6 +876,15 @@ export const useTopologyStore = create<TopologyState>()(
           // 画布偏好与语言同级持久化：刷新后保持用户选择的接口详情展开状态。
           showInterfaces: state.showInterfaces,
         };
+      },
+      // Self-heal a stale localStorage topology on rehydrate: strip a backup edge's pins when they
+      // collide with a same-pair primary (see lib/normalizeEdges), so a persisted corrupted design
+      // validates cleanly without the operator hand-fixing each edge. Runs AFTER hydration and adds
+      // NO version/migrate, so the partialize init-safety note above still holds.
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.edges = healDuplicatePinnedBackups(state.edges);
+        }
       },
     }
   )
