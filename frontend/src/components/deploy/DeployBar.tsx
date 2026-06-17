@@ -49,16 +49,16 @@ export function DeployBar() {
   const lastStrippedKeys = useControllerStore((s) => s.lastStrippedKeys);
   const dismissStripNotice = useControllerStore((s) => s.dismissStripNotice);
   const [shrinkTyped, setShrinkTyped] = useState('');
-  // 仍处于 rekey_requested 的节点数：>0 时禁用 Deploy（见下方说明）。
+  // 仍处于 rekey_requested 的节点数：>0 时触发 Deploy 的建议性确认与提示（见下方说明）。
   const rekeyingCount = useControllerStore(selectRekeyingCount);
 
   // 未登录且未填 break-glass token 时无法发起 operator 请求，禁用按钮并给出提示。
   // 用 selectHasAuth（session || token），不能只看 operatorToken——否则登录后会被误拦。
   const noAuth = !useControllerStore(selectHasAuth);
 
-  // 轮换收口前（仍有节点 rekey_requested）禁用 Deploy：此时各 agent 尚未全部重生密钥并
-  // 重新注册新公钥，若此刻 Deploy 会用「旧+新」混合公钥重编译，导致 fleet 收敛错乱。
-  // 待所有「轮换中」徽标消失（节点已重新注册）后再 Deploy 一次即可收敛。
+  // 仍有节点 rekey_requested 时，Deploy 不再被硬禁用（后端从不按此标志拦截）：anyRekeying 现在
+  // 只驱动「建议性」体验——按钮 title 提示 + onDeploy 里的 window.confirm 二次确认（见下方说明），
+  // 让单个掉队/离线节点无法卡住整个 fleet 的部署。
   const anyRekeying = rekeyingCount > 0;
 
   // 「Roll keys」是 plan-4.6 ROUTINE tier 的全 fleet 密钥轮换：标记每个已审批节点 rekey，
@@ -71,6 +71,23 @@ export function DeployBar() {
     if (ok) {
       rollKeys();
     }
+  };
+
+  // Deploy is the step that COMPLETES a "Roll keys" rotation (it recompiles each node with its
+  // CURRENT registered key). We do NOT hard-block it while nodes still owe a rotation — the backend
+  // never gated on the flag, a mixed old/new-key deploy is consistent (each node is compiled with
+  // whatever key the registry holds), and a single stuck/offline straggler must not wedge every
+  // deploy. Instead, an advisory confirm: a straggler deploys with its OLD key (it re-rotates and
+  // needs another deploy, or use "Cancel rekey" in the registry to release a node that will never
+  // re-register). With no rekey pending, Deploy fires directly.
+  const onDeploy = () => {
+    if (anyRekeying) {
+      const ok = window.confirm(
+        t(language, 'deployBar.deployWhileRekeyingConfirm', { count: rekeyingCount }),
+      );
+      if (!ok) return;
+    }
+    deploy();
   };
 
   // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
@@ -99,8 +116,8 @@ export function DeployBar() {
             {t(language, 'deployBar.rollKeys')}
           </button>
           <button
-            onClick={() => deploy()}
-            disabled={loading || noAuth || anyRekeying}
+            onClick={onDeploy}
+            disabled={loading || noAuth}
             title={
               anyRekeying
                 ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })

@@ -37,6 +37,7 @@ export function NodeRegistry() {
 
   const ctlNodes = useControllerStore((s) => s.nodes);
   const revoke = useControllerStore((s) => s.revoke);
+  const clearRekey = useControllerStore((s) => s.clearRekey);
   const loading = useControllerStore((s) => s.loading);
   // The configured rollout drives the per-node update-status chip (plan-5). null (settings not yet
   // loaded) ⇒ deriveUpdateState returns 'off' ⇒ a muted dash, never a misleading chip.
@@ -133,7 +134,21 @@ export function NodeRegistry() {
                       <UpdateStatusChip node={n} settings={settings} language={language} />
                     </td>
                     <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(n.lastSeen)}</td>
-                    <td className="py-2 pr-3">
+                    <td className="py-2 pr-3 whitespace-nowrap">
+                      {/* Cancel rekey: release a stuck "Roll keys" straggler WITHOUT evicting it
+                          (clears the flag; node keeps its approval + token). Shown only while the
+                          node still owes a rotation — it is the non-destructive fix for a node that
+                          never re-registered and is wedging the Deploy gate. */}
+                      {n.rekeyRequested && n.status === 'approved' && (
+                        <button
+                          onClick={() => clearRekey(n.nodeId)}
+                          disabled={loading}
+                          title={t(language, 'nodeRegistry.cancelRekeyHint')}
+                          className="mr-2 px-2 py-1 text-xs bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
+                        >
+                          {t(language, 'nodeRegistry.cancelRekey')}
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           // Revocation evicts a node from the fleet — confirm before firing (no

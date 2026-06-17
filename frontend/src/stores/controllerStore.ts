@@ -22,6 +22,7 @@ import {
   promote,
   revoke,
   rekeyAll,
+  clearRekey,
   getTrustlist,
   postTrustlistSignature,
   postOperatorCredential,
@@ -437,6 +438,7 @@ interface ControllerState {
   switchToController: () => void;
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
+  clearRekey: (nodeId: string) => Promise<void>;
 }
 
 // 从连接字段切出 controllerClient 需要的 ControllerConfig（不含 agentBaseURL）。
@@ -505,9 +507,9 @@ function base64StdToBytes(s: string): Uint8Array {
   return out;
 }
 
-// 派生选择器：fleet 中是否仍有节点处于 rekey_requested（已请求轮换、尚未重新注册新公钥）。
-// DeployBar 用它在轮换收口前禁用 Deploy——否则中途 Deploy 会用「旧+新」混合公钥重编译，
-// 导致 fleet 收敛错乱。返回仍在轮换中的节点数，便于回显「N 个节点仍在轮换密钥」。
+// 派生选择器：fleet 中仍处于 rekey_requested（已请求轮换、尚未重新注册新公钥）的节点数。
+// 驱动「建议性」轮换体验——DeployBar 的 Deploy 二次确认 + title 提示，以及 NodeRegistry 里
+// 每个节点的「Cancel rekey」入口的显隐；不再硬禁用 Deploy。便于回显「N 个节点仍在轮换密钥」。
 export function selectRekeyingCount(state: ControllerState): number {
   // Only APPROVED nodes can re-register (a revoked node never clears its flag), so
   // exclude non-approved to avoid permanently gating Deploy on a stale flag.
@@ -1527,6 +1529,23 @@ export const useControllerStore = create<ControllerState>()(
         set({ loading: true, error: null });
         try {
           await rekeyAll(configOf(get()));
+          set({ loading: false });
+          await get().refresh();
+        } catch (err) {
+          set({
+            error: localizeError(err, 'error.generic'),
+            loading: false,
+          });
+        }
+      },
+
+      // 清除单个节点的待轮换标记但不驱逐它（与 revoke 不同：保留审批状态与 bearer token），随后刷新
+      // 视图使 rekeying 徽标/计数收敛。用于释放卡住的 "Roll keys" 散兵（dead/离线节点或误点全量轮换），
+      // 否则该节点会一直把面板的 Deploy 门钉住。
+      clearRekey: async (nodeId) => {
+        set({ loading: true, error: null });
+        try {
+          await clearRekey(configOf(get()), nodeId);
           set({ loading: false });
           await get().refresh();
         } catch (err) {
