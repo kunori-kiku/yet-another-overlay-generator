@@ -474,9 +474,12 @@ UNIT
   systemctl enable yaog-agent.service
   # RESTART, not "enable --now": a re-bootstrap of an ALREADY-RUNNING daemon must pick up the freshly
   # enrolled bearer token and the (re-pinned) operator credential, both of which the daemon reads
-  # ONLY at startup. "enable --now" merely start-if-stopped (a no-op on an active unit), which would
-  # leave the OLD in-memory token (401 loop) and OLD pinned credential in place. "restart" starts a
-  # stopped unit AND restarts a running one, so a re-bootstrap always takes effect.
+  # ONLY at startup. "enable --now" is start-if-stopped only, so on an active unit it leaves the OLD
+  # in-memory token (401 loop) and OLD pinned credential in place; "restart" re-execs a running unit
+  # AND starts a stopped one, so a re-bootstrap always takes effect. Cost: the re-exec'd daemon
+  # re-applies the current bundle once on startup (a brief keep-last-good per-interface WG/Babel
+  # flap), identical to the Restart=always crash/reboot re-apply — the deliberate price of reloading
+  # the at-startup-only token + credential.
   systemctl restart yaog-agent.service
   echo ">> agent installed + (re)started as a daemon; the current generation applies on the next poll"
 else

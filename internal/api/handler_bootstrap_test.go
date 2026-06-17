@@ -80,6 +80,11 @@ func TestRenderBootstrapScript_KeystoneOn(t *testing.T) {
 			t.Errorf("rendered script is missing %q", want)
 		}
 	}
+	// The restart fix is only meaningful if the no-op-on-running "enable --now" is GONE: a substring
+	// check for "enable" alone would pass either way, so assert the old form is absent.
+	if strings.Contains(s, "enable --now yaog-agent.service") {
+		t.Error("rendered script still uses `enable --now` (no-op on a running daemon); must `restart` so a re-bootstrap reloads the token/cred")
+	}
 }
 
 // TestRenderBootstrapScript_KeystoneOff: with no pinned credential, the operator-cred

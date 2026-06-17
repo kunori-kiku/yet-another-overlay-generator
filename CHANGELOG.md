@@ -15,7 +15,10 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
   agent it was a no-op, so a re-bootstrap wrote a new bearer token + operator credential to disk but
   the live daemon kept the OLD ones in memory (it reads them only at startup), leaving the node
   stuck (e.g. a `req_bearer_required` 401 poll loop). It now `systemctl restart`s the unit, which
-  starts a stopped daemon and restarts a running one, so a re-bootstrap is always picked up.
+  starts a stopped daemon and restarts a running one, so a re-bootstrap is always picked up. Cost:
+  the restart re-applies the current bundle once on startup — a brief keep-last-good per-interface
+  WireGuard/Babel flap, identical to the existing `Restart=always` crash/reboot re-apply. (Once-off
+  `--once` installs are unaffected.)
 
 ### Changed
 - **Bootstrap re-pins the operator credential by default.** The one-shot node bootstrap now overwrites
