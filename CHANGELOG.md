@@ -9,6 +9,14 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+### Fixed
+- **Bootstrap restarts the agent so a re-bootstrap actually takes effect.** The installer set up the
+  daemon with `systemctl enable --now`, which only *starts* a stopped unit — on an already-running
+  agent it was a no-op, so a re-bootstrap wrote a new bearer token + operator credential to disk but
+  the live daemon kept the OLD ones in memory (it reads them only at startup), leaving the node
+  stuck (e.g. a `req_bearer_required` 401 poll loop). It now `systemctl restart`s the unit, which
+  starts a stopped daemon and restarts a running one, so a re-bootstrap is always picked up.
+
 ### Changed
 - **Bootstrap re-pins the operator credential by default.** The one-shot node bootstrap now overwrites
   an existing `/etc/wireguard/operator-cred.pem` with the script's baked credential instead of

@@ -62,7 +62,10 @@ func TestRenderBootstrapScript_KeystoneOn(t *testing.T) {
 		"cred_file=/etc/wireguard/operator-cred.pem",
 		`write_operator_cred "$cred_file" "$OPERATOR_CRED_PEM"`,
 		"--operator-cred $cred_file --operator-cred-alg ${OPERATOR_CRED_ALG}",
-		"systemctl enable --now yaog-agent.service",
+		// Bootstrap must RESTART (not "enable --now") so a re-bootstrap of a running daemon picks up
+		// the new bearer token + re-pinned operator credential (read only at daemon startup).
+		"systemctl enable yaog-agent.service",
+		"systemctl restart yaog-agent.service",
 		`URL="${GH_PROXY}${RELEASE_BASE}/${ASSET}"`,
 		// write_operator_cred RE-PINS by default: a differing existing pin is overwritten (the script
 		// runs as root and bakes the current keystone), with a loud NOTICE and a reprovision-keystone

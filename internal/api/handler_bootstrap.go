@@ -471,8 +471,14 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable --now yaog-agent.service
-  echo ">> agent installed as a daemon; the current generation applies on the next poll"
+  systemctl enable yaog-agent.service
+  # RESTART, not "enable --now": a re-bootstrap of an ALREADY-RUNNING daemon must pick up the freshly
+  # enrolled bearer token and the (re-pinned) operator credential, both of which the daemon reads
+  # ONLY at startup. "enable --now" merely start-if-stopped (a no-op on an active unit), which would
+  # leave the OLD in-memory token (401 loop) and OLD pinned credential in place. "restart" starts a
+  # stopped unit AND restarts a running one, so a re-bootstrap always takes effect.
+  systemctl restart yaog-agent.service
+  echo ">> agent installed + (re)started as a daemon; the current generation applies on the next poll"
 else
   echo ">> applying once"
   # shellcheck disable=SC2086
