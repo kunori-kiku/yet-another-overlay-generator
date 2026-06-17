@@ -1337,8 +1337,8 @@ func topologyHasNode(topoJSON []byte, nodeID string) bool {
 // left untouched. After flagging, it calls Store.BumpGeneration to WAKE every parked
 // daemon agent: those agents long-poll WaitForGeneration, which fires ONLY on a
 // generation advance, so without the bump a flagged agent would never wake to see
-// rekey_requested (the deadlock this fixes). The bump changes NO bundle —
-// GetCurrentBundle still returns the last promoted bundle — so a woken agent sees the
+// rekey_requested (the deadlock this fixes). The bump changes NO bundle — /config
+// (via GetServedConfig) still serves the last promoted bundle — so a woken agent sees the
 // rekey signal on /config and skip-applies (rotate+re-register) rather than treating
 // the bumped generation as a deploy. Each flagged node's agent then learns of the
 // request on its next /config fetch (rekey_requested=true), regenerates its key, and

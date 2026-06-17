@@ -52,7 +52,6 @@ import (
 //	operator_credential.json            the pinned off-host operator credential (keystone)
 //	signed_trustlist.json               the STAGED (to-be-signed/just-signed) membership manifest
 //	served_trustlist.json               the SERVED (last-promoted) signed membership manifest
-
 //	operators/<username>.json           one operator account (argon2id PHC hash)
 //	sessions/<tokenHash>.json           one operator login session, keyed by token hash
 //	settings.json                       operator-editable controller settings (bootstrap)
@@ -1000,6 +999,16 @@ func (fs *FileStore) PromoteStaged(ctx context.Context, t TenantID) (int64, erro
 	// serves a (bundle, manifest) pair from one generation and a STAGE never disturbs the live
 	// served manifest. Only a SIGNED staged manifest is promoted (the controller PromoteStaged gate
 	// verified it before calling this); an unsigned/absent staged slot leaves the served slot intact.
+	//
+	// CRASH ORDERING: these are independent atomic renames, NOT one transaction. Per-node current
+	// bundles and served_trustlist.json are written BEFORE generation.json (committed last), so the
+	// generation counter never runs ahead of the bundle/manifest pair. In-process, GetServedConfig
+	// holds fs.mu across all three reads, so a live reader never sees a torn pair. Across a PROCESS
+	// crash in the narrow window after a bundle flip but before this served write, a node could be
+	// served a (new-bundle, old-served-manifest) pair; that is FAIL-CLOSED (the agent's offline
+	// bundle-digest binding refuses the mismatch and keeps last-good) and SELF-REPAIRING (a re-run of
+	// PromoteStaged rewrites served_trustlist.json). It is not a forgery (the off-host signature is
+	// still mandatory) and is the same severity class as the pre-existing partial-promote window.
 	var stagedTL StoredTrustList
 	if err := readJSON(filepath.Join(dir, "signed_trustlist.json"), &stagedTL); err == nil {
 		if len(stagedTL.SignatureJSON) > 0 {
@@ -1421,6 +1430,35 @@ func (fs *FileStore) SetOperatorCredential(ctx context.Context, t TenantID, c Op
 	return writeJSONAtomic(filepath.Join(dir, "operator_credential.json"), c)
 }
 
+// readOperatorCredentialLocked decodes the tenant's pinned operator credential from dir, mapping a
+// missing file to ErrNotFound. It does NO locking — the caller must hold fs.mu — so the same
+// read+ErrNotFound mapping serves both the standalone GetOperatorCredential and the atomic
+// GetServedConfig snapshot, keeping their semantics in lockstep.
+func readOperatorCredentialLocked(dir string) (OperatorCredential, error) {
+	var c OperatorCredential
+	if err := readJSON(filepath.Join(dir, "operator_credential.json"), &c); err != nil {
+		if os.IsNotExist(err) {
+			return OperatorCredential{}, ErrNotFound
+		}
+		return OperatorCredential{}, err
+	}
+	return c, nil
+}
+
+// readServedTrustListLocked decodes the tenant's SERVED (last-promoted) signed trust-list from dir,
+// mapping a missing file to ErrNotFound. It does NO locking — the caller must hold fs.mu — so it
+// composes into the atomic GetServedConfig snapshot alongside the standalone GetServedTrustList.
+func readServedTrustListLocked(dir string) (StoredTrustList, error) {
+	var sl StoredTrustList
+	if err := readJSON(filepath.Join(dir, "served_trustlist.json"), &sl); err != nil {
+		if os.IsNotExist(err) {
+			return StoredTrustList{}, ErrNotFound
+		}
+		return StoredTrustList{}, err
+	}
+	return sl, nil
+}
+
 // GetOperatorCredential returns the tenant's pinned operator credential, or
 // ErrNotFound when operator_credential.json is absent (keystone OFF).
 func (fs *FileStore) GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error) {
@@ -1434,20 +1472,14 @@ func (fs *FileStore) GetOperatorCredential(ctx context.Context, t TenantID) (Ope
 	if err != nil {
 		return OperatorCredential{}, err
 	}
-	var c OperatorCredential
-	if err := readJSON(filepath.Join(dir, "operator_credential.json"), &c); err != nil {
-		if os.IsNotExist(err) {
-			return OperatorCredential{}, ErrNotFound
-		}
-		return OperatorCredential{}, err
-	}
-	return c, nil
+	return readOperatorCredentialLocked(dir)
 }
 
-// PutSignedTrustList stores (replacing any prior) the operator-signed membership
-// trust-list as <root>/<tenant>/signed_trustlist.json (0700 dir / 0600 file, atomic
-// write). The byte fields serialize as base64 under encoding/json, round-tripping the
-// raw bytes faithfully.
+// PutSignedTrustList stores (replacing any prior) the STAGED membership trust-list as
+// <root>/<tenant>/signed_trustlist.json (0700 dir / 0600 file, atomic write) — the
+// to-be-signed / just-signed manifest of the pending generation, NOT the served slot
+// (served_trustlist.json, advanced only by PromoteStaged). The byte fields serialize as
+// base64 under encoding/json, round-tripping the raw bytes faithfully.
 func (fs *FileStore) PutSignedTrustList(ctx context.Context, t TenantID, sl StoredTrustList) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1462,8 +1494,9 @@ func (fs *FileStore) PutSignedTrustList(ctx context.Context, t TenantID, sl Stor
 	return writeJSONAtomic(filepath.Join(dir, "signed_trustlist.json"), sl)
 }
 
-// GetCurrentSignedTrustList returns the tenant's current signed trust-list, or
-// ErrNotFound when signed_trustlist.json is absent (none signed yet).
+// GetCurrentSignedTrustList returns the tenant's STAGED signed trust-list (the to-be-signed /
+// just-signed manifest backing signed_trustlist.json), or ErrNotFound when none is staged. The
+// name is historical; the served manifest is GetServedTrustList.
 func (fs *FileStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
 	if err := ctx.Err(); err != nil {
 		return StoredTrustList{}, err
@@ -1498,14 +1531,7 @@ func (fs *FileStore) GetServedTrustList(ctx context.Context, t TenantID) (Stored
 	if err != nil {
 		return StoredTrustList{}, err
 	}
-	var sl StoredTrustList
-	if err := readJSON(filepath.Join(dir, "served_trustlist.json"), &sl); err != nil {
-		if os.IsNotExist(err) {
-			return StoredTrustList{}, ErrNotFound
-		}
-		return StoredTrustList{}, err
-	}
-	return sl, nil
+	return readServedTrustListLocked(dir)
 }
 
 // GetServedConfig atomically snapshots what /config serves nodeID — the current bundle, the
@@ -1535,21 +1561,26 @@ func (fs *FileStore) GetServedConfig(ctx context.Context, t TenantID, nodeID str
 		return ServedConfig{}, err
 	}
 	sc := ServedConfig{Bundle: b}
-	// Keystone ON iff a pinned operator credential exists.
-	var cred OperatorCredential
-	if err := readJSON(filepath.Join(dir, "operator_credential.json"), &cred); err == nil {
+	// Keystone ON iff a pinned operator credential exists (same read+ErrNotFound mapping as the
+	// standalone GetOperatorCredential, via the shared lock-free helper).
+	switch _, err := readOperatorCredentialLocked(dir); {
+	case err == nil:
 		sc.KeystoneOn = true
-	} else if !os.IsNotExist(err) {
+	case errors.Is(err, ErrNotFound):
+		// keystone OFF — leave KeystoneOn false.
+	default:
 		return ServedConfig{}, err
 	}
 	if sc.KeystoneOn {
-		var sl StoredTrustList
-		if err := readJSON(filepath.Join(dir, "served_trustlist.json"), &sl); err == nil {
+		switch sl, err := readServedTrustListLocked(dir); {
+		case err == nil:
 			if len(sl.SignatureJSON) > 0 {
 				sc.TrustList = sl
 				sc.HasTrustList = true
 			}
-		} else if !os.IsNotExist(err) {
+		case errors.Is(err, ErrNotFound):
+			// nothing promoted under the keystone yet — HasTrustList stays false (fail-closed at /config).
+		default:
 			return ServedConfig{}, err
 		}
 	}

@@ -195,8 +195,12 @@ func TestKeystoneRotation_Repro(t *testing.T) {
 		if st := keystoneStatus(t, env); !st.RedeployRequired {
 			t.Fatalf("re-stage must NOT clear the strand signal (served slot still A-signed); got %+v", st)
 		}
-		if files := fetchServedBundle(t, env, nodeTok); len(files) == 0 {
-			t.Fatal("re-stage must keep /config serving the prior promoted bundle, not blind the node")
+		// fetchServedBundle fatals on any non-200, so reaching here proves /config is NOT blinded
+		// (a 409 would abort inside the helper). The served slot must still carry the intact,
+		// A-signed bundle+manifest: a node still pinned to A verifies it cleanly.
+		restagedFiles := fetchServedBundle(t, env, nodeTok)
+		if err := verifyAsNode(t, restagedFiles, "node-1", pubA); err != nil {
+			t.Fatalf("re-stage must keep /config serving the intact A-signed bundle; pinned-A node must still verify, got: %v", err)
 		}
 
 		// Completing the fresh signed deploy under B clears the signal and the B-node then accepts.

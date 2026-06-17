@@ -1321,6 +1321,71 @@ func TestStoreServedTrustList(t *testing.T) {
 	}
 }
 
+// TestFileStoreServedConfigSurvivesGenerationLagCrash simulates a FileStore crash mid-PromoteStaged
+// AFTER the per-node current-bundle and served_trustlist.json atomic renames but BEFORE the final
+// generation.json commit (generation.json is written LAST). /config reads via GetServedConfig, which
+// is NOT gated on the generation counter, so on reopen the node still gets a COHERENT
+// (new-bundle, new-served-manifest) pair; only the counter lags (it self-heals on the next
+// promote/bump). This pins the "generation committed last, /config independent of it" ordering
+// invariant the PromoteStaged comment documents. The OTHER crash shape (a node's new bundle paired
+// with an OLD served manifest, from a kill mid per-node loop) is covered by the agent's offline
+// digest-binding rejection in the regression suite — the store faithfully returns whatever is on
+// disk; the agent fails closed on the mismatch.
+func TestFileStoreServedConfigSurvivesGenerationLagCrash(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
+		t.Fatalf("SetOperatorCredential: %v", err)
+	}
+	if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+		t.Fatalf("UpsertNode: %v", err)
+	}
+	if err := s.StageBundle(ctx, tenant, SignedBundle{NodeID: "alpha", Generation: 1, Files: map[string][]byte{"checksums.sha256": []byte("sum-v1")}, IsStaged: true}); err != nil {
+		t.Fatalf("StageBundle: %v", err)
+	}
+	signed := StoredTrustList{TrustListJSON: []byte(`{"epoch":1}` + "\n"), SignatureJSON: []byte(`{"alg":"ed25519","signature":"s"}`), Epoch: 1}
+	if err := s.PutSignedTrustList(ctx, tenant, signed); err != nil {
+		t.Fatalf("PutSignedTrustList: %v", err)
+	}
+	if _, err := s.PromoteStaged(ctx, tenant); err != nil {
+		t.Fatalf("PromoteStaged: %v", err)
+	}
+
+	// Simulate the crash: roll generation.json back to the PRIOR counter (0), as if the process died
+	// after the bundle + served_trustlist atomic renames but before the final generation commit.
+	genPath := filepath.Join(dir, string(tenant), "generation.json")
+	rolled, err := json.Marshal(generationFile{Generation: 0})
+	if err != nil {
+		t.Fatalf("marshal generationFile: %v", err)
+	}
+	if err := os.WriteFile(genPath, rolled, 0600); err != nil {
+		t.Fatalf("roll back generation.json: %v", err)
+	}
+
+	// Reopen (crash + restart) and assert /config is still coherent even though the counter lags.
+	s2, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if gen, err := s2.CurrentGeneration(ctx, tenant); err != nil || gen != 0 {
+		t.Fatalf("counter should read the lagged 0 (the crash dropped the commit) = (%d, %v)", gen, err)
+	}
+	sc, err := s2.GetServedConfig(ctx, tenant, "alpha")
+	if err != nil {
+		t.Fatalf("GetServedConfig after reopen: %v", err)
+	}
+	if !sc.HasTrustList || sc.Bundle.Generation != 1 || string(sc.Bundle.Files["checksums.sha256"]) != "sum-v1" {
+		t.Fatalf("post-crash /config must be coherent (new bundle + served manifest); got HasTrustList=%v gen=%d", sc.HasTrustList, sc.Bundle.Generation)
+	}
+	if !bytes.Equal(sc.TrustList.SignatureJSON, signed.SignatureJSON) {
+		t.Fatalf("post-crash served manifest signature mismatch: the (bundle, manifest) pair must stay coherent")
+	}
+}
+
 // TestStoreAPITokenRotation pins the rotation invariant across both Store impls:
 // issuing a fresh token for a node that already has one must invalidate the OLD
 // token at the lookup chokepoint. This is the re-enroll-leaves-old-token bug: a

@@ -400,6 +400,37 @@ func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
 			t.Fatalf("first apply must record the applied epoch: got %d, want 3", st.MembershipEpoch)
 		}
 	})
+
+	t.Run("equal prior and applied epoch is preserved", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		prev := &State{NodeID: "n1", MembershipEpoch: 5}
+		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 5) // idempotent re-apply at the same epoch
+		st, err := LoadState(dir)
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if st.MembershipEpoch != 5 {
+			t.Fatalf("equal-epoch re-apply must keep the floor: got %d, want 5", st.MembershipEpoch)
+		}
+	})
+
+	t.Run("a lower NON-ZERO applied epoch is floored to the higher prior", func(t *testing.T) {
+		// Proves the guard is max(applied, prev) generally — not merely a keystone-OFF (epoch 0)
+		// special case. prev=5, applied=3 (a stale/older but validly-signed manifest) must NOT lower
+		// the floor below 5.
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		prev := &State{NodeID: "n1", MembershipEpoch: 5}
+		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 3)
+		st, err := LoadState(dir)
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if st.MembershipEpoch != 5 {
+			t.Fatalf("a lower applied epoch must be floored to the prior: got %d, want 5", st.MembershipEpoch)
+		}
+	})
 }
 
 // resign recomputes checksums.sha256 over the current checksummed file set and

@@ -142,6 +142,17 @@ func TestNewUsesRegistryStatusAndMessage(t *testing.T) {
 	}
 }
 
+// TestKeystoneNoSignedManifestIs409 pins the wire status of the keystone-on-but-nothing-promoted
+// state to 409 Conflict. It was reclassified from 500: the state is operator-actionable (sign +
+// promote a deploy under the pinned credential), not a server fault, and nodes keep their current
+// config and retry. A regression that flips it back to a 5xx would trip ops 5xx alerting and
+// mislabel an expected mid-rotation state as a server bug.
+func TestKeystoneNoSignedManifestIs409(t *testing.T) {
+	if got := New(CodeKeystoneNoSignedManifest).Status(); got != http.StatusConflict {
+		t.Fatalf("CodeKeystoneNoSignedManifest status = %d, want 409 (must not be a 5xx server-fault)", got)
+	}
+}
+
 func TestInterpolation(t *testing.T) {
 	cases := []struct {
 		tmpl   string

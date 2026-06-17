@@ -243,23 +243,35 @@ func TestRegression_MixedFleetRotation(t *testing.T) {
 // node that had applied that epoch under A (prevEpoch = E) must still ACCEPT the B-signed manifest
 // at the SAME epoch E once re-provisioned to B (equal epoch is allowed — not a rollback). This pins
 // the design's residual concern that equal-epoch re-applies stay accepted across a rotation.
+//
+// It deliberately works at a POSITIVE epoch (not the degenerate epoch 0 of a first deploy): we first
+// change membership (revoke node-2, redeploy) to advance to epoch 1, THEN rotate the keystone with
+// UNCHANGED membership so epoch 1 is REUSED across the rotation. Equal epoch 0==0 would still catch a
+// `<`→`<=` regression, but only a positive equal epoch exercises the documented "a non-trivial epoch
+// survives a rotation" invariant.
 func TestRegression_EqualEpochAcrossRotation(t *testing.T) {
 	e := newRegEnv(t, twoNodeTopo(), "node-1", "node-2")
 	a, b := newKeystone(t), newKeystone(t)
 	e.pinKeystone(a)
 	e.deploy(a)
 
+	// Advance to a POSITIVE epoch via a real membership change (revoke node-2).
+	e.revoke("node-2")
+	e.deploy(a)
 	epochA := mustEpoch(t, e)
+	if epochA == 0 {
+		t.Fatalf("membership change must advance to a positive epoch, got %d", epochA)
+	}
 	// node-1 applied epoch epochA under A.
 	if _, err := verifyAsNode(e.served("node-1"), "node-1", a.pubPEM, epochA); err != nil {
 		t.Fatalf("node-1 under A at its own epoch must verify, got %v", err)
 	}
 
 	e.pinKeystone(b)
-	e.deploy(b) // identical topology → epoch REUSED
+	e.deploy(b) // UNCHANGED membership (node-2 still revoked) → epoch REUSED at epochA
 	epochB := mustEpoch(t, e)
 	if epochB != epochA {
-		t.Fatalf("unchanged-membership rotation must reuse the epoch: A=%d B=%d", epochA, epochB)
+		t.Fatalf("unchanged-membership rotation must reuse the (positive) epoch: A=%d B=%d", epochA, epochB)
 	}
 	// node-1 (prevEpoch = epochA) re-provisioned to B must accept the B-signed manifest at epochB==epochA.
 	if _, err := verifyAsNode(e.served("node-1"), "node-1", b.pubPEM, epochA); err != nil {

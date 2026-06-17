@@ -195,7 +195,7 @@ func TestKeystoneRedeployRequired(t *testing.T) {
 	ctx := context.Background()
 	const tnt = TenantID("acme")
 	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
-	pubB, _, _ := ed25519.GenerateKey(rand.Reader)
+	pubB, privB, _ := ed25519.GenerateKey(rand.Reader)
 	credA := ed25519Cred(t, pubA)
 	credB := ed25519Cred(t, pubB)
 
@@ -241,16 +241,27 @@ func TestKeystoneRedeployRequired(t *testing.T) {
 	mustRedeploy(t, s, credA, false)
 	mustRedeploy(t, s, credB, true)
 
-	// Bug #1 (re-stage must not strand the served fleet): re-staging a NEW unsigned manifest over
-	// the staged slot (a fresh CompileAndStage) leaves the SERVED signed-A manifest intact, so the
-	// redeploy signal still reads served and reports not-required for pin A.
+	// Bug #1 (re-stage must not strand the served fleet) — and load-bearing for the staged/served
+	// SPLIT specifically: re-stage a NEW manifest signed by a DIFFERENT key B into the STAGED slot
+	// without promoting. The SERVED slot is still the A-signed epoch-1 manifest, so the redeploy
+	// signal (which reads served) must still report not-required for pin A. This DISTINGUISHES the
+	// split from the pre-fix single-slot world: if KeystoneRedeployRequired read the staged slot, it
+	// would see the B-signed manifest, fail to verify it against pin A, and wrongly report required.
 	restaged := trustlist.TrustList{SchemaVersion: 1, Tenant: string(tnt), Epoch: 2, Members: []trustlist.Member{{NodeID: "n1", BundleSHA256: "def"}}}
 	restagedCanonical, err := trustlist.Canonical(restaged)
 	if err != nil {
 		t.Fatalf("canonical restaged: %v", err)
 	}
-	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: restagedCanonical, Epoch: 2}); err != nil {
-		t.Fatalf("re-stage unsigned: %v", err)
+	signedB, err := trustlist.NewEd25519Signer(privB).Sign(restaged)
+	if err != nil {
+		t.Fatalf("sign B: %v", err)
 	}
-	mustRedeploy(t, s, credA, false)
+	sigBJSON, err := json.Marshal(signedB)
+	if err != nil {
+		t.Fatalf("marshal sig B: %v", err)
+	}
+	if err := s.PutSignedTrustList(ctx, tnt, StoredTrustList{TrustListJSON: restagedCanonical, SignatureJSON: sigBJSON, Epoch: 2}); err != nil {
+		t.Fatalf("re-stage signed-by-B: %v", err)
+	}
+	mustRedeploy(t, s, credA, false) // served slot still A-signed -> not required (would be true if it read staged)
 }

@@ -188,9 +188,20 @@ type StoredTrustList struct {
 // ServedConfig is the ATOMIC snapshot of what /config serves one node: its current promoted Bundle,
 // whether the keystone is ON (KeystoneOn), and — when ON and something has been promoted under it —
 // the served signed trust-list (TrustList, valid iff HasTrustList). Reading these together under a
-// single store lock (GetServedConfig) guarantees the (bundle, trust-list) pair is always from one
-// promoted generation, so a concurrent PromoteStaged can never make a node fetch a torn
-// (old-bundle, new-manifest) pair that would spuriously fail the agent's bundle-digest binding.
+// single store lock (GetServedConfig) guarantees that for any IN-PROCESS reader the (bundle,
+// trust-list) pair is always from one promoted generation, so a concurrent PromoteStaged can never
+// make a node fetch a torn (old-bundle, new-manifest) pair that would spuriously fail the agent's
+// bundle-digest binding.
+//
+// The single-lock guarantee is in-process only. Across a FileStore PROCESS crash mid-PromoteStaged
+// (current bundles and served_trustlist.json are separate atomic renames) a (new-bundle,
+// old-served-manifest) pair can transiently exist on disk; that is FAIL-CLOSED — the agent's
+// offline bundle-digest binding refuses the mismatch and keeps last-good — and SELF-REPAIRING (a
+// re-run of PromoteStaged rewrites the served slot). See FileStore.PromoteStaged. (Generation-
+// tagging the served slot to force crash-atomicity would be WRONG here: a node not re-staged in a
+// later promote keeps an older-generation bundle while the tenant-wide manifest advances, yet the
+// manifest still binds that node's unchanged digest, so the bundle generation and the served
+// manifest's promote generation legitimately differ.)
 type ServedConfig struct {
 	Bundle       SignedBundle
 	KeystoneOn   bool

@@ -499,7 +499,11 @@ func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKey
 		newMembers[m.NodeID] = memberKey{wgPublicKey: m.WGPublicKey, bundleSHA256: m.BundleSHA256}
 	}
 
-	// Monotonic epoch relative to the prior stored manifest.
+	// Monotonic epoch relative to the prior STAGED manifest (GetCurrentSignedTrustList) — NOT the
+	// served slot. Chaining off the staging history keeps in-flight re-stages monotonic; because the
+	// served epoch is always a subsequence of staged epochs (served only ever takes a value that was
+	// once staged, at promote), anti-rollback on the served path is preserved. Do not "simplify" this
+	// to read the served slot — that would lose monotonicity across un-promoted re-stages.
 	var epoch int64
 	if stored, err := store.GetCurrentSignedTrustList(ctx, t); err == nil {
 		priorMembers, perr := manifestMembers(stored.TrustListJSON)
@@ -720,17 +724,19 @@ func verifyStoredAgainstPin(stored StoredTrustList, cred OperatorCredential) (pa
 	return nil, trustlist.Verify(manifest, signed, pin)
 }
 
-// KeystoneRedeployRequired reports whether the current stored signed membership trust-list (the
-// slot /config serves once promoted) carries a signature that no longer verifies against the
-// pinned credential `cred` — i.e. the keystone was rotated but no fresh deploy has been signed +
-// promoted under the new key yet, so every (correctly re-provisioned) node would refuse the
-// served bundle. It is the single source of the operator-facing "redeploy required" signal.
+// KeystoneRedeployRequired reports whether the SERVED signed membership trust-list (read from the
+// served slot via GetServedTrustList — exactly what /config hands the fleet) carries a signature
+// that no longer verifies against the pinned credential `cred` — i.e. the keystone was rotated but
+// no fresh deploy has been signed + promoted under the new key yet, so every (correctly
+// re-provisioned) node would refuse the served bundle. It is the single source of the operator-
+// facing "redeploy required" signal.
 //
-// It is deliberately CONSERVATIVE: it returns false (not "required") when no manifest is
-// stored, when the stored manifest has no signature yet (the normal stage→sign→promote
-// window), or when the signature still verifies — so it fires ONLY for a genuine
-// rotated-but-not-redeployed fleet, never mid-deploy. A parse/pin error (a corrupt stored record
-// or an unparsable pinned credential) is surfaced to the caller, never masked as "not required".
+// It is deliberately CONSERVATIVE: it returns false (not "required") when nothing has been promoted
+// (served slot empty — a stage→sign→promote may be mid-flight in the STAGED slot, which this
+// function does not read) or when the served signature still verifies — so it fires ONLY for a
+// genuine rotated-but-not-redeployed fleet, never mid-deploy. A parse/pin error (a corrupt stored
+// record or an unparsable pinned credential) is surfaced to the caller, never masked as "not
+// required".
 func KeystoneRedeployRequired(ctx context.Context, store Store, t TenantID, cred OperatorCredential) (bool, error) {
 	stored, err := store.GetServedTrustList(ctx, t)
 	if errors.Is(err, ErrNotFound) {
@@ -740,7 +746,10 @@ func KeystoneRedeployRequired(ctx context.Context, store Store, t TenantID, cred
 		return false, fmt.Errorf("controller: loading served trust-list for redeploy check: %w", err)
 	}
 	if len(stored.SignatureJSON) == 0 {
-		return false, nil // staged-but-unsigned window — not stranded, a deploy is in flight
+		// Defensive only: the served slot is signed-only by construction (both PromoteStaged writers
+		// gate the served copy on a non-empty signature, and the keystone-ON promote gate refuses an
+		// unsigned promote). Treat an impossible unsigned served manifest as not-required.
+		return false, nil
 	}
 	parseErr, verifyErr := verifyStoredAgainstPin(stored, cred)
 	if parseErr != nil {
