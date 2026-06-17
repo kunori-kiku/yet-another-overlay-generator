@@ -1572,6 +1572,15 @@ func (h *ControllerHandler) handleOperatorCredentialStatus(w http.ResponseWriter
 //   - changed credential WITHOUT rotate:true: refused (CodeKeystoneRotationRequiresAck), no mutation.
 //   - changed credential WITH rotate:true: stored, audited "rotate-operator-credential", and the
 //     result reports redeploy_required when the served fleet is still signed under the old key.
+//
+// A keystone, once pinned, is intentionally NEVER turned OFF through any API/CLI surface (there is
+// no DELETE here, no Store unset, no command). This is deliberate: pinning is a one-way trust
+// commitment. The only way to clear it is to delete operator_credential.json out of band on the
+// controller host — which is UNSUPPORTED and strands the fleet. Because a keystone-OFF promote does
+// not advance the served trust-list, an out-of-band un-pin followed by a keystone-OFF deploy and a
+// re-pin would leave /config serving a fresh bundle paired with the stale last-keystone-ON manifest;
+// every node then fails closed on its digest binding until the operator signs + promotes a fresh
+// deploy under the re-enabled keystone. That is recoverable (re-sign + promote), never a forgery.
 func (h *ControllerHandler) handleOperatorCredentialPin(w http.ResponseWriter, r *http.Request) {
 	tenant, operator, ok := identity(r.Context())
 	if !ok {
