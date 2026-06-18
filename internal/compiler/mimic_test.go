@@ -6,12 +6,14 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// mimicTwoRouterTopo 构造一个最小的双 router 拓扑，两节点之间一条单向 edge，
-// transport 与两端节点 MTU 由参数指定。用于覆盖 mimic（tcp 传输）下 PeerInfo 的
-// Mimic / MTU 推导（docs/spec/artifacts/mimic.md「MTU −12」、契约 item 1）。
+// mimicTwoRouterTopo constructs a minimal two-router topology with a single
+// unidirectional edge between the two nodes; the transport and each end's node MTU
+// are given as parameters. It covers the Mimic / MTU derivation of PeerInfo under
+// mimic (tcp transport) (docs/spec/artifacts/mimic.md "MTU −12", contract item 1).
 //
-// 两端都声明为可部署 Linux（debian / ubuntu）并公网可达，使 tcp 边能通过验证器的
-// mimic 平台约束，并产生双向 peer（正向 + 自动反向）。
+// Both ends are declared as deployable Linux (debian / ubuntu) and publicly
+// reachable, so the tcp edge passes the validator's mimic platform constraints and
+// produces bidirectional peers (forward + auto reverse).
 func mimicTwoRouterTopo(transport string, fromMTU, toMTU int) *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "mimic-2r", Name: "Mimic Two Router"},
@@ -44,9 +46,10 @@ func mimicTwoRouterTopo(transport string, fromMTU, toMTU int) *model.Topology {
 	}
 }
 
-// TestDerivePeers_MimicTcpEdge_FlagsAndMTU 覆盖契约 item 1 的核心：
-// 一条 tcp 边 → 该链路两端的 PeerInfo 都有 Mimic==true，且 MTU == (effective)−12，
-// 其中 effective = node.MTU>0 ? node.MTU : 1420。两端各按本端节点 MTU 推导。
+// TestDerivePeers_MimicTcpEdge_FlagsAndMTU covers the core of contract item 1:
+// a tcp edge => the PeerInfo at both ends of the link both have Mimic==true, and
+// MTU == (effective)−12, where effective = node.MTU>0 ? node.MTU : 1420. Each end
+// is derived from its own node's MTU.
 //
 //	node.MTU==0    ⇒ 1420 − 12 = 1408
 //	node.MTU==1500 ⇒ 1500 − 12 = 1488
@@ -55,8 +58,8 @@ func TestDerivePeers_MimicTcpEdge_FlagsAndMTU(t *testing.T) {
 		name    string
 		fromMTU int
 		toMTU   int
-		wantA   int // node-a 接口的期望 MTU
-		wantB   int // node-b 接口的期望 MTU
+		wantA   int // expected MTU for the node-a interface
+		wantB   int // expected MTU for the node-b interface
 	}{
 		{name: "both default MTU (0 ⇒ 1408)", fromMTU: 0, toMTU: 0, wantA: 1408, wantB: 1408},
 		{name: "both explicit 1500 (⇒ 1488)", fromMTU: 1500, toMTU: 1500, wantA: 1488, wantB: 1488},
@@ -71,39 +74,40 @@ func TestDerivePeers_MimicTcpEdge_FlagsAndMTU(t *testing.T) {
 
 			peerMap, _, err := DerivePeers(topo, testKeys2())
 			if err != nil {
-				t.Fatalf("DerivePeers 失败: %v", err)
+				t.Fatalf("DerivePeers failed: %v", err)
 			}
 
-			// node-a 上指向 node-b 的接口（本端 = node-a）。
+			// The interface on node-a pointing at node-b (local end = node-a).
 			aToB := findPeer(peerMap["node-a"], "node-b")
 			if aToB == nil {
-				t.Fatalf("node-a 应有指向 node-b 的 peer")
+				t.Fatalf("node-a should have a peer pointing at node-b")
 			}
 			if !aToB.Mimic {
-				t.Errorf("tcp 边：node-a→node-b 应 Mimic==true，实际 false")
+				t.Errorf("tcp edge: node-a->node-b should have Mimic==true, got false")
 			}
 			if aToB.MTU != tc.wantA {
-				t.Errorf("node-a→node-b MTU = %d，期望 %d（本端 node.MTU=%d − 12）", aToB.MTU, tc.wantA, tc.fromMTU)
+				t.Errorf("node-a->node-b MTU = %d, want %d (local node.MTU=%d − 12)", aToB.MTU, tc.wantA, tc.fromMTU)
 			}
 
-			// node-b 上指向 node-a 的（自动反向）接口（本端 = node-b）。
+			// The (auto reverse) interface on node-b pointing at node-a (local end = node-b).
 			bToA := findPeer(peerMap["node-b"], "node-a")
 			if bToA == nil {
-				t.Fatalf("node-b 应有指向 node-a 的反向 peer")
+				t.Fatalf("node-b should have a reverse peer pointing at node-a")
 			}
 			if !bToA.Mimic {
-				t.Errorf("tcp 边：node-b→node-a 应 Mimic==true，实际 false")
+				t.Errorf("tcp edge: node-b->node-a should have Mimic==true, got false")
 			}
 			if bToA.MTU != tc.wantB {
-				t.Errorf("node-b→node-a MTU = %d，期望 %d（本端 node.MTU=%d − 12）", bToA.MTU, tc.wantB, tc.toMTU)
+				t.Errorf("node-b->node-a MTU = %d, want %d (local node.MTU=%d − 12)", bToA.MTU, tc.wantB, tc.toMTU)
 			}
 		})
 	}
 }
 
-// TestDerivePeers_UdpEdge_NoMimicNoMTUChange 覆盖契约 item 1 的反面：
-// 一条 udp 边 → Mimic==false，且 MTU == node.MTU 原样（此处 node.MTU==0 ⇒ 0，
-// 渲染器据此省略 MTU 行）。这是 mimic 改造前的逐字节行为。
+// TestDerivePeers_UdpEdge_NoMimicNoMTUChange covers the opposite of contract item 1:
+// a udp edge => Mimic==false, and MTU == node.MTU verbatim (here node.MTU==0 ⇒ 0,
+// so the renderer omits the MTU line). This is the byte-exact behavior from before
+// the mimic change.
 func TestDerivePeers_UdpEdge_NoMimicNoMTUChange(t *testing.T) {
 	topo := mimicTwoRouterTopo("udp", 0, 0)
 	topo.Nodes[0].OverlayIP = "10.50.0.1"
@@ -111,7 +115,7 @@ func TestDerivePeers_UdpEdge_NoMimicNoMTUChange(t *testing.T) {
 
 	peerMap, _, err := DerivePeers(topo, testKeys2())
 	if err != nil {
-		t.Fatalf("DerivePeers 失败: %v", err)
+		t.Fatalf("DerivePeers failed: %v", err)
 	}
 
 	for _, dir := range []struct {
@@ -122,20 +126,21 @@ func TestDerivePeers_UdpEdge_NoMimicNoMTUChange(t *testing.T) {
 	} {
 		p := findPeer(peerMap[dir.node], dir.remote)
 		if p == nil {
-			t.Fatalf("%s 应有指向 %s 的 peer", dir.node, dir.remote)
+			t.Fatalf("%s should have a peer pointing at %s", dir.node, dir.remote)
 		}
 		if p.Mimic {
-			t.Errorf("udp 边：%s→%s 应 Mimic==false，实际 true", dir.node, dir.remote)
+			t.Errorf("udp edge: %s->%s should have Mimic==false, got true", dir.node, dir.remote)
 		}
 		if p.MTU != 0 {
-			t.Errorf("udp 边且 node.MTU==0：%s→%s MTU 应保持 0（不降），实际 %d", dir.node, dir.remote, p.MTU)
+			t.Errorf("udp edge with node.MTU==0: %s->%s MTU should stay 0 (no reduction), got %d", dir.node, dir.remote, p.MTU)
 		}
 	}
 }
 
-// TestDerivePeers_UdpEdge_ExplicitMTUUnchanged 验证 udp 边不动 node.MTU：
-// 显式 MTU 1500 的 udp 边，peer.MTU 必须仍是 1500（绝不扣 12）。这与 mimic 链路的
-// −12 行为形成对照，确保非 mimic 拓扑的 MTU 完全不受 mimic 逻辑影响。
+// TestDerivePeers_UdpEdge_ExplicitMTUUnchanged verifies that a udp edge does not
+// touch node.MTU: for a udp edge with explicit MTU 1500, peer.MTU must still be 1500
+// (never subtract 12). This contrasts with the −12 behavior of mimic links, ensuring
+// the MTU of non-mimic topologies is completely unaffected by the mimic logic.
 func TestDerivePeers_UdpEdge_ExplicitMTUUnchanged(t *testing.T) {
 	topo := mimicTwoRouterTopo("udp", 1500, 1500)
 	topo.Nodes[0].OverlayIP = "10.50.0.1"
@@ -143,7 +148,7 @@ func TestDerivePeers_UdpEdge_ExplicitMTUUnchanged(t *testing.T) {
 
 	peerMap, _, err := DerivePeers(topo, testKeys2())
 	if err != nil {
-		t.Fatalf("DerivePeers 失败: %v", err)
+		t.Fatalf("DerivePeers failed: %v", err)
 	}
 
 	for _, dir := range []struct {
@@ -154,20 +159,21 @@ func TestDerivePeers_UdpEdge_ExplicitMTUUnchanged(t *testing.T) {
 	} {
 		p := findPeer(peerMap[dir.node], dir.remote)
 		if p == nil {
-			t.Fatalf("%s 应有指向 %s 的 peer", dir.node, dir.remote)
+			t.Fatalf("%s should have a peer pointing at %s", dir.node, dir.remote)
 		}
 		if p.Mimic {
-			t.Errorf("udp 边：%s→%s 应 Mimic==false，实际 true", dir.node, dir.remote)
+			t.Errorf("udp edge: %s->%s should have Mimic==false, got true", dir.node, dir.remote)
 		}
 		if p.MTU != 1500 {
-			t.Errorf("udp 边：%s→%s MTU 应保持 1500（绝不扣 12），实际 %d", dir.node, dir.remote, p.MTU)
+			t.Errorf("udp edge: %s->%s MTU should stay 1500 (never subtract 12), got %d", dir.node, dir.remote, p.MTU)
 		}
 	}
 }
 
-// TestDerivePeers_EmptyTransportTreatedAsUdp 验证空 transport（缺省）不被当作 mimic：
-// DerivePeers 不做归一，空 transport 直接判定为非 tcp ⇒ Mimic==false、MTU 不降。
-// 这保证既有未设置 transport 的拓扑不会意外启用 mimic。
+// TestDerivePeers_EmptyTransportTreatedAsUdp verifies that an empty transport
+// (default) is not treated as mimic: DerivePeers does no normalization, so an empty
+// transport is judged non-tcp ⇒ Mimic==false, MTU not reduced. This ensures existing
+// topologies with no transport set never accidentally enable mimic.
 func TestDerivePeers_EmptyTransportTreatedAsUdp(t *testing.T) {
 	topo := mimicTwoRouterTopo("", 1500, 1500)
 	topo.Nodes[0].OverlayIP = "10.50.0.1"
@@ -175,24 +181,25 @@ func TestDerivePeers_EmptyTransportTreatedAsUdp(t *testing.T) {
 
 	peerMap, _, err := DerivePeers(topo, testKeys2())
 	if err != nil {
-		t.Fatalf("DerivePeers 失败: %v", err)
+		t.Fatalf("DerivePeers failed: %v", err)
 	}
 
 	p := findPeer(peerMap["node-a"], "node-b")
 	if p == nil {
-		t.Fatalf("node-a 应有指向 node-b 的 peer")
+		t.Fatalf("node-a should have a peer pointing at node-b")
 	}
 	if p.Mimic {
-		t.Errorf("空 transport 不应被当作 mimic，实际 Mimic==true")
+		t.Errorf("empty transport should not be treated as mimic, got Mimic==true")
 	}
 	if p.MTU != 1500 {
-		t.Errorf("空 transport：MTU 应保持 1500（node.MTU 原样），实际 %d", p.MTU)
+		t.Errorf("empty transport: MTU should stay 1500 (node.MTU verbatim), got %d", p.MTU)
 	}
 }
 
-// mimicClientTopo 构造一个 client → router 的拓扑，client 出站 edge 的 transport
-// 由参数指定。两节点均为可部署 Linux 以满足 tcp 边的平台约束。用于覆盖
-// ClientPeerInfo.Mimic / MTU（契约 item 1 末句）。
+// mimicClientTopo constructs a client -> router topology where the transport of the
+// client's outbound edge is given as a parameter. Both nodes are deployable Linux to
+// satisfy the platform constraints of a tcp edge. It covers ClientPeerInfo.Mimic / MTU
+// (last sentence of contract item 1).
 func mimicClientTopo(transport string, clientMTU int) *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "mimic-cl", Name: "Mimic Client"},
@@ -221,9 +228,10 @@ func mimicClientTopo(transport string, clientMTU int) *model.Topology {
 	}
 }
 
-// TestDeriveClientConfigs_MimicTcpEdge 覆盖 ClientPeerInfo 在 client tcp 边下的推导：
-// client 的单 wg0 链路若为 tcp，则 ClientPeerInfo.Mimic==true 且 MTU == effective−12
-// （node.MTU==0 ⇒ 1408，node.MTU==1500 ⇒ 1488）。对照 udp：Mimic==false、MTU 原样。
+// TestDeriveClientConfigs_MimicTcpEdge covers the derivation of ClientPeerInfo under a
+// client tcp edge: if the client's single wg0 link is tcp, then ClientPeerInfo.Mimic==true
+// and MTU == effective−12 (node.MTU==0 ⇒ 1408, node.MTU==1500 ⇒ 1488). Contrast udp:
+// Mimic==false, MTU verbatim.
 func TestDeriveClientConfigs_MimicTcpEdge(t *testing.T) {
 	clientKeys := func() map[string]KeyPair {
 		return map[string]KeyPair{
@@ -252,25 +260,26 @@ func TestDeriveClientConfigs_MimicTcpEdge(t *testing.T) {
 			c := NewCompiler()
 			result, err := c.Compile(topo, clientKeys())
 			if err != nil {
-				t.Fatalf("Compile 失败: %v", err)
+				t.Fatalf("Compile failed: %v", err)
 			}
 
 			cfg := result.ClientConfigs["client-a"]
 			if cfg == nil {
-				t.Fatalf("应为 client-a 生成 ClientPeerInfo")
+				t.Fatalf("a ClientPeerInfo should be generated for client-a")
 			}
 			if cfg.Mimic != tc.wantMimic {
-				t.Errorf("ClientPeerInfo.Mimic = %v，期望 %v", cfg.Mimic, tc.wantMimic)
+				t.Errorf("ClientPeerInfo.Mimic = %v, want %v", cfg.Mimic, tc.wantMimic)
 			}
 			if cfg.MTU != tc.wantMTU {
-				t.Errorf("ClientPeerInfo.MTU = %d，期望 %d", cfg.MTU, tc.wantMTU)
+				t.Errorf("ClientPeerInfo.MTU = %d, want %d", cfg.MTU, tc.wantMTU)
 			}
 		})
 	}
 }
 
-// TestEffectiveMTU_PureFunction 直接覆盖 MTU 公式（契约 item 1 的算术核心），
-// 与上面的拓扑级断言互补：非 mimic 时原样透传（含 0），mimic 时 (base?:1420)−12。
+// TestEffectiveMTU_PureFunction directly covers the MTU formula (the arithmetic core
+// of contract item 1), complementing the topology-level assertions above: non-mimic
+// passes through verbatim (including 0), mimic gives (base?:1420)−12.
 func TestEffectiveMTU_PureFunction(t *testing.T) {
 	cases := []struct {
 		nodeMTU int
@@ -286,7 +295,7 @@ func TestEffectiveMTU_PureFunction(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := effectiveMTU(tc.nodeMTU, tc.mimic); got != tc.want {
-			t.Errorf("effectiveMTU(%d, %v) = %d，期望 %d", tc.nodeMTU, tc.mimic, got, tc.want)
+			t.Errorf("effectiveMTU(%d, %v) = %d, want %d", tc.nodeMTU, tc.mimic, got, tc.want)
 		}
 	}
 }

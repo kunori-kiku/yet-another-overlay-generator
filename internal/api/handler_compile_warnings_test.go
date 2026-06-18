@@ -8,12 +8,15 @@ import (
 	"testing"
 )
 
-// TestHandleCompile_SurfacesWarnings 验证 /api/compile 在编译成功（200）的同时，
-// 把语义校验产生的非致命告警通过 warnings 数组返回（关闭审计阻断项 UX-1）。
+// TestHandleCompile_SurfacesWarnings verifies that /api/compile, on a successful compile
+// (200), also returns the non-fatal warnings produced by semantic validation via the
+// warnings array (closing audit blocker UX-1).
 //
-// 构造一个可成功编译但会触发告警的拓扑：一条 alpha→beta 的可用链路（beta 公网
-// 可达且边上带 endpoint_host，避免触发 D50 的「确凿死链」硬错误），外加一个没有任何
-// 边的孤立节点——孤立节点检测是稳定的 warning 级校验，不阻断编译。
+// It builds a topology that compiles successfully but triggers a warning: a usable
+// alpha->beta link (beta is publicly reachable and the edge carries endpoint_host,
+// avoiding the D50 "definite dead link" hard error), plus an isolated node with no edges
+// at all -- isolated-node detection is a stable warning-level check that does not block
+// compilation.
 func TestHandleCompile_SurfacesWarnings(t *testing.T) {
 	server := NewServer()
 
@@ -25,31 +28,33 @@ func TestHandleCompile_SurfacesWarnings(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("期望 200，实际 %d，body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	var resp CompileResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("解码 CompileResponse 失败: %v", err)
+		t.Fatalf("failed to decode CompileResponse: %v", err)
 	}
 
 	if len(resp.Warnings) == 0 {
-		t.Fatalf("期望编译响应携带非空 warnings 数组（孤立节点应产生告警），实际为空")
+		t.Fatalf("want compile response to carry a non-empty warnings array (isolated node should produce a warning), got empty")
 	}
 
-	// 每条告警都应是 warning 级别，且字段/消息非空，确保前端可直接渲染。
+	// Every warning should be warning-level, with non-empty fields/message, so the frontend
+	// can render it directly.
 	for i, w := range resp.Warnings {
 		if w.Level != "warning" {
-			t.Errorf("warnings[%d].level 期望 \"warning\"，实际 %q", i, w.Level)
+			t.Errorf("warnings[%d].level want \"warning\", got %q", i, w.Level)
 		}
 		if w.Message == "" {
-			t.Errorf("warnings[%d].message 不应为空", i)
+			t.Errorf("warnings[%d].message should not be empty", i)
 		}
 	}
 }
 
-// natWarningTopologyJSON 返回一个可成功编译但会触发孤立节点告警的拓扑：
-// alpha→beta 链路完整可用（beta 公网可达、边带 endpoint_host），gamma 无任何边。
+// natWarningTopologyJSON returns a topology that compiles successfully but triggers an
+// isolated-node warning: the alpha->beta link is fully usable (beta is publicly reachable
+// and the edge carries endpoint_host), while gamma has no edges.
 func natWarningTopologyJSON() []byte {
 	topo := map[string]interface{}{
 		"project": map[string]interface{}{

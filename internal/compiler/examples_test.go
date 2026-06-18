@@ -9,30 +9,30 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// shippedExampleTopologies 列出仓库中随产品发布的示例拓扑。
-// 路径相对于本包目录（internal/compiler）。
+// shippedExampleTopologies lists the example topologies shipped with the product in the repo.
+// Paths are relative to this package directory (internal/compiler).
 var shippedExampleTopologies = []string{
 	"../../examples/simple-mesh/topology.json",
 	"../../examples/nat-hub/topology.json",
 	"../../examples/relay-topology/topology.json",
 }
 
-// loadExampleTopology 读取并反序列化一个示例拓扑文件。
+// loadExampleTopology reads and deserializes one example topology file.
 func loadExampleTopology(t *testing.T, path string) *model.Topology {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("无法读取示例拓扑 %s: %v", path, err)
+		t.Fatalf("cannot read example topology %s: %v", path, err)
 	}
 	var topo model.Topology
 	if err := json.Unmarshal(data, &topo); err != nil {
-		t.Fatalf("无法解析示例拓扑 %s: %v", path, err)
+		t.Fatalf("cannot parse example topology %s: %v", path, err)
 	}
 	return &topo
 }
 
-// exampleKeys 为拓扑中的每个节点生成一份测试用密钥对，
-// 使编译产物完整填充（与 testKeys 风格一致，但按节点 ID 动态生成）。
+// exampleKeys generates a test key pair for each node in the topology, so the compiled
+// artifacts are fully populated (consistent with testKeys' style, but generated dynamically by node ID).
 func exampleKeys(topo *model.Topology) map[string]KeyPair {
 	keys := make(map[string]KeyPair, len(topo.Nodes))
 	for _, node := range topo.Nodes {
@@ -44,16 +44,18 @@ func exampleKeys(topo *model.Topology) map[string]KeyPair {
 	return keys
 }
 
-// TestExampleTopologiesDialCorrectPorts 是“示例永远可部署”的守门测试。
+// TestExampleTopologiesDialCorrectPorts is the gatekeeper test for "examples are always deployable".
 //
-// 它对每个随产品发布的示例拓扑运行完整编译流水线，然后验证端口归属
-// 的核心不变量：对于结果 PeerMap 中每个带有非空 Endpoint 的 PeerInfo，
-// 其 Endpoint 中拨出的端口必须等于对端节点为这条链路分配的接口监听端口
-// （即对端 PeerMap 中指回本节点的那个 PeerInfo 的 ListenPort）。
+// It runs the full compilation pipeline on each example topology shipped with the
+// product, then verifies the core invariant of port attribution: for each PeerInfo in
+// the resulting PeerMap with a non-empty Endpoint, the port dialed in its Endpoint must
+// equal the interface listen port the remote node allocated for this link (i.e. the
+// ListenPort of the PeerInfo in the remote PeerMap that points back at this node).
 //
-// 一旦有人重新在示例 edge 上写死 endpoint_port（曾经的头号缺陷：把节点
-// 的 public_endpoints[0].port 当成每条链路的拨号端口），拨出端口就会偏离
-// 对端实际监听的端口，本测试随即失败。
+// The moment someone hardcodes endpoint_port on an example edge again (the former #1
+// defect: treating a node's public_endpoints[0].port as the dial port for every link),
+// the dialed port will diverge from the port the remote actually listens on, and this
+// test will immediately fail.
 func TestExampleTopologiesDialCorrectPorts(t *testing.T) {
 	for _, relPath := range shippedExampleTopologies {
 		relPath := relPath
@@ -64,20 +66,20 @@ func TestExampleTopologiesDialCorrectPorts(t *testing.T) {
 			c := NewCompiler()
 			result, err := c.Compile(topo, keys)
 			if err != nil {
-				t.Fatalf("示例 %s 编译失败: %v", relPath, err)
+				t.Fatalf("example %s failed to compile: %v", relPath, err)
 			}
 
-			// 对每个节点的每个带 endpoint 的 peer，验证拨出端口
-			// 等于对端为本节点分配的接口监听端口。
+			// For each peer with an endpoint on each node, verify the dialed port
+			// equals the interface listen port the remote allocated for this node.
 			for nodeID, peers := range result.PeerMap {
 				for _, p := range peers {
 					if p.Endpoint == "" {
-						continue // 无 endpoint 的被动 peer 跳过
+						continue // skip passive peers without an endpoint
 					}
 
 					dialedPort := extractPortFromEndpoint(p.Endpoint)
 
-					// 在对端节点的 peer 列表中找到指回本节点的条目。
+					// Find the entry pointing back at this node in the remote node's peer list.
 					remotePeers := result.PeerMap[p.NodeID]
 					found := false
 					for _, rp := range remotePeers {
@@ -86,16 +88,16 @@ func TestExampleTopologiesDialCorrectPorts(t *testing.T) {
 						}
 						found = true
 						if dialedPort != rp.ListenPort {
-							t.Errorf("示例 %s: %s→%s 拨出端口=%d (endpoint %q)，"+
-								"但 %s 为 %s 分配的接口 ListenPort=%d",
+							t.Errorf("example %s: %s->%s dialed port=%d (endpoint %q), "+
+								"but the interface ListenPort %s allocated for %s=%d",
 								relPath, nodeID, p.NodeID, dialedPort, p.Endpoint,
 								p.NodeID, nodeID, rp.ListenPort)
 						}
 						break
 					}
 					if !found {
-						t.Errorf("示例 %s: %s 有指向 %s 的 peer (带 endpoint %q)，"+
-							"但 %s 没有指回 %s 的反向 peer",
+						t.Errorf("example %s: %s has a peer pointing at %s (with endpoint %q), "+
+							"but %s has no reverse peer pointing back at %s",
 							relPath, nodeID, p.NodeID, p.Endpoint, p.NodeID, nodeID)
 					}
 				}

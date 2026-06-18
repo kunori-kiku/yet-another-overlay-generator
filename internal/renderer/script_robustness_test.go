@@ -8,7 +8,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// robustnessTestNode 返回一个带转发能力的 router 节点，用于安装脚本健壮性测试。
+// robustnessTestNode returns a forwarding-capable router node for the install-script robustness tests.
 func robustnessTestNode() *model.Node {
 	return &model.Node{
 		ID:        "node-1",
@@ -22,8 +22,8 @@ func robustnessTestNode() *model.Node {
 	}
 }
 
-// robustnessTestPeers 返回两个 per-peer 接口，确保 wg-quick 启动块与 SNAT 块
-// 都按多接口/多 CIDR 的形态被渲染。
+// robustnessTestPeers returns two per-peer interfaces so that both the wg-quick startup block and the
+// SNAT block are rendered in their multi-interface / multi-CIDR shape.
 func robustnessTestPeers() []compiler.PeerInfo {
 	return []compiler.PeerInfo{
 		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta",
@@ -33,19 +33,21 @@ func robustnessTestPeers() []compiler.PeerInfo {
 	}
 }
 
-// TestRenderInstallScript_D52_IptablesLoopDelete 验证 D52：iptables 的 SNAT 清理
-// 不再按精确规则（含 --to-source <当前 overlay IP>）删除，而是解析 iptables-save，
-// 把每条匹配 wg 接口 + transit 源池的 POSTROUTING SNAT 规则整条删除，无论 --to-source
-// 是什么。这样 overlay IP 变更后重装/卸载都能清掉留下的旧规则，避免错误的源改写。
+// TestRenderInstallScript_D52_IptablesLoopDelete verifies D52: the iptables SNAT cleanup no longer
+// deletes by an exact rule (including --to-source <current overlay IP>). Instead it parses
+// iptables-save and deletes every POSTROUTING SNAT rule matching the wg interface + transit source
+// pool in full, regardless of what --to-source is. This way a reinstall/uninstall after an overlay-IP
+// change clears the stale rules left behind, avoiding incorrect source rewrites.
 func TestRenderInstallScript_D52_IptablesLoopDelete(t *testing.T) {
 	script, err := RenderInstallScript(robustnessTestNode(), robustnessTestPeers(), true)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
-	// 默认池下，loop-delete 应基于 iptables-save 解析 + 整条删除。断言稳定的模板子串：
-	// 管道头（iptables-save），顺序无关的链式 grep -F 过滤（POSTROUTING / SNAT / 出接口
-	// wg-+ / 源池），把 -A 改写成 -D 的替换，以及在删除分支里调用 iptables -t nat 删除整条规则。
+	// Under the default pool the loop-delete should be iptables-save parse + full-rule delete. Assert
+	// the stable template substrings: the pipe head (iptables-save), the order-independent chained
+	// grep -F filters (POSTROUTING / SNAT / egress interface wg-+ / source pool), the substitution
+	// rewriting -A to -D, and the iptables -t nat call in the delete branch that removes the whole rule.
 	loopDeleteFragments := []string{
 		`iptables-save -t nat 2>/dev/null \`,
 		`| grep -E '^-A POSTROUTING '`,
@@ -57,42 +59,45 @@ func TestRenderInstallScript_D52_IptablesLoopDelete(t *testing.T) {
 	}
 	for _, frag := range loopDeleteFragments {
 		if !strings.Contains(script, frag) {
-			t.Errorf("D52: 缺少 iptables-save loop-delete 片段:\n  %q", frag)
+			t.Errorf("D52: missing iptables-save loop-delete fragment:\n  %q", frag)
 		}
 	}
 
-	// loop-delete 必须在两个清理上下文里各出现：安装前的 _overlay_snat_cleanup 函数，
-	// 以及卸载段的 "Remove overlay SNAT rule and service" 块。统计管道头出现次数。
+	// The loop-delete must appear in both cleanup contexts: the pre-install _overlay_snat_cleanup
+	// function and the uninstall section's "Remove overlay SNAT rule and service" block. Count the
+	// occurrences of the pipe head.
 	pipeHead := `iptables-save -t nat 2>/dev/null \`
 	if got := strings.Count(script, pipeHead); got < 2 {
-		t.Errorf("D52: loop-delete 应同时出现在安装清理与卸载清理两处，实际出现 %d 次", got)
+		t.Errorf("D52: loop-delete should appear in both the install cleanup and the uninstall cleanup, got %d occurrences", got)
 	}
 
-	// 关键否定断言：旧的「精确匹配删除」形式（带引号的 -o "wg-+" 且含 --to-source）
-	// 不应再出现在任何 *清理* 路径里。systemd 持久化单元用的是不带引号的 -o wg-+，
-	// 不会与此子串冲突，所以这条断言专门盯住被 D52 移除的清理写法。
+	// Key negative assertion: the old "exact-match delete" form (quoted -o "wg-+" with --to-source)
+	// must no longer appear in any *cleanup* path. The persistent systemd unit uses the unquoted
+	// -o wg-+, which does not collide with this substring, so this assertion specifically targets the
+	// cleanup form that D52 removed.
 	staleExactDelete := `iptables -t nat -D POSTROUTING -o "wg-+"`
 	if strings.Contains(script, staleExactDelete) {
-		t.Errorf("D52 回归: 清理路径仍使用精确匹配删除（含 --to-source），应改为 loop-delete:\n  %q", staleExactDelete)
+		t.Errorf("D52 regression: cleanup path still uses exact-match delete (with --to-source); it should use loop-delete:\n  %q", staleExactDelete)
 	}
 }
 
-// TestRenderInstallScript_D53_WgQuickFailureTolerant 验证 D53：Phase 3 启动每个
-// WireGuard 接口时失败可容忍——用 `if ! wg-quick up ...; then` 收集失败（不被 set -e
-// 直接中止），向 stderr 告警并继续，让 babeld 等后续步骤照常执行；脚本末尾打印失败
-// 汇总并在有失败时以非零码退出（部署工具仍能感知失败），但退出在其余步骤之后。
+// TestRenderInstallScript_D53_WgQuickFailureTolerant verifies D53: bringing up each WireGuard
+// interface in Phase 3 tolerates failure — `if ! wg-quick up ...; then` collects failures (without
+// set -e aborting outright), warns on stderr and continues so that later steps such as babeld still
+// run; the end of the script prints a failure summary and exits with a non-zero code when there were
+// failures (deployment tooling can still detect failure), but the exit happens after the remaining steps.
 func TestRenderInstallScript_D53_WgQuickFailureTolerant(t *testing.T) {
 	script, err := RenderInstallScript(robustnessTestNode(), robustnessTestPeers(), true)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
-	// 失败累加器初始化。
+	// Failure accumulator initialization.
 	if !strings.Contains(script, `FAILED_INTERFACES=""`) {
-		t.Errorf("D53: 缺少 FAILED_INTERFACES 累加器初始化")
+		t.Errorf("D53: missing FAILED_INTERFACES accumulator initialization")
 	}
 
-	// 每个接口必须用 if ! wg-quick up 形式（set -e 安全），失败时累加并告警。
+	// Each interface must use the if ! wg-quick up form (set -e safe), accumulating and warning on failure.
 	tolerantFragments := []string{
 		`if ! wg-quick up "wg-beta"; then`,
 		`if ! wg-quick up "wg-gamma"; then`,
@@ -102,20 +107,21 @@ func TestRenderInstallScript_D53_WgQuickFailureTolerant(t *testing.T) {
 	}
 	for _, frag := range tolerantFragments {
 		if !strings.Contains(script, frag) {
-			t.Errorf("D53: 缺少失败容忍片段:\n  %q", frag)
+			t.Errorf("D53: missing failure-tolerant fragment:\n  %q", frag)
 		}
 	}
 
-	// 绝不能再出现「裸」的 wg-quick up（无 if 守护）——那会在 set -e 下中止脚本。
-	// 渲染后每个接口对应一行启动；裸形式形如 `\nwg-quick up "wg-beta"\n`。
+	// A "bare" wg-quick up (without an if guard) must never appear again — that would abort the
+	// script under set -e. After rendering, each interface gets one startup line; the bare form looks
+	// like `\nwg-quick up "wg-beta"\n`.
 	for _, iface := range []string{"wg-beta", "wg-gamma"} {
 		bare := "\nwg-quick up \"" + iface + "\""
 		if strings.Contains(script, bare) {
-			t.Errorf("D53 回归: 接口 %s 仍以裸 wg-quick up 启动（无 set -e 守护）", iface)
+			t.Errorf("D53 regression: interface %s is still brought up with a bare wg-quick up (no set -e guard)", iface)
 		}
 	}
 
-	// 末尾汇总块：有失败时打印清单并以非零码退出。
+	// End-of-script summary block: print the list and exit non-zero when there were failures.
 	summaryFragments := []string{
 		`if [ -n "$FAILED_INTERFACES" ]; then`,
 		`the following WireGuard interface(s) failed to start:$FAILED_INTERFACES" >&2`,
@@ -123,87 +129,90 @@ func TestRenderInstallScript_D53_WgQuickFailureTolerant(t *testing.T) {
 	}
 	for _, frag := range summaryFragments {
 		if !strings.Contains(script, frag) {
-			t.Errorf("D53: 缺少末尾失败汇总片段:\n  %q", frag)
+			t.Errorf("D53: missing end-of-script failure summary fragment:\n  %q", frag)
 		}
 	}
 
-	// 顺序：babeld 配置必须在 wg-quick 启动块之后、汇总退出之前，证明「半启动」不会发生
-	// （即便接口失败，babeld 也已配置；非零退出发生在最后）。
+	// Ordering: the babeld configuration must come after the wg-quick startup block and before the
+	// summary exit, proving that a "half-started" state cannot happen (even if an interface fails,
+	// babeld is already configured; the non-zero exit happens last).
 	startIdx := strings.Index(script, `FAILED_INTERFACES=""`)
 	babelIdx := strings.Index(script, "Configuring babeld systemd service")
 	summaryIdx := strings.Index(script, `if [ -n "$FAILED_INTERFACES" ]; then`)
 	if startIdx < 0 || babelIdx < 0 || summaryIdx < 0 {
-		t.Fatalf("D53: 缺少关键锚点 (start=%d babel=%d summary=%d)", startIdx, babelIdx, summaryIdx)
+		t.Fatalf("D53: missing key anchors (start=%d babel=%d summary=%d)", startIdx, babelIdx, summaryIdx)
 	}
 	if !(startIdx < babelIdx && babelIdx < summaryIdx) {
-		t.Errorf("D53: 顺序应为 wg启动(%d) → babeld配置(%d) → 失败汇总退出(%d)", startIdx, babelIdx, summaryIdx)
+		t.Errorf("D53: order should be wg startup(%d) -> babeld config(%d) -> failure summary exit(%d)", startIdx, babelIdx, summaryIdx)
 	}
 }
 
-// parallelLinksPeers 返回指向同一对端的两条并行链路（primary + backup），接口名互异，
-// 监听端口 / transit 互异——模拟节点对某一邻居同时持有 primary 与 backup 隧道。
+// parallelLinksPeers returns two parallel links (primary + backup) pointing at the same peer, with
+// distinct interface names and distinct listen ports / transit IPs — simulating a node holding both a
+// primary and a backup tunnel toward one neighbor.
 func parallelLinksPeers() []compiler.PeerInfo {
 	return []compiler.PeerInfo{
 		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta",
 			ListenPort: 51820, LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1"},
-		// backup：edge-aware 接口名（形态不同即可），独立端口与 transit。
+		// backup: edge-aware interface name (just a different shape), with its own port and transit IP.
 		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta-bk1",
 			ListenPort: 51821, LocalTransitIP: "10.10.0.3", LocalLinkLocal: "fe80::3", LinkCost: 384},
 	}
 }
 
-// TestRenderInstallScript_ParallelLinks_BothInterfacesEveryPhase 验证并行链路（primary + backup）
-// 节点的安装脚本在每一个 per-interface 阶段都同时列出两条接口：
-//   - Phase 3 启动（D53 的 `if ! wg-quick up "<iface>"`）
-//   - Phase 3 开机自启（systemctl enable wg-quick@"<iface>"）
-//   - 卸载段的停止 / 禁用 / 删除配置（wg-quick down / systemctl disable / rm 配置文件）
+// TestRenderInstallScript_ParallelLinks_BothInterfacesEveryPhase verifies that the install script of
+// a parallel-links (primary + backup) node lists both interfaces in every per-interface phase:
+//   - Phase 3 startup (D53's `if ! wg-quick up "<iface>"`)
+//   - Phase 3 boot autostart (systemctl enable wg-quick@"<iface>")
+//   - the uninstall section's stop / disable / delete config (wg-quick down / systemctl disable / rm config file)
 //
-// 安装脚本按 PeerInfo 列表逐接口展开模板的 {{ range .WgInterfaces }} 区段，因此两条链路
-// （两个 InterfaceName）都必须在每个 per-interface 区段各出现一次，缺一即意味着某条隧道
-// 不会被启动 / 启用 / 清理。
+// The install script expands the template's {{ range .WgInterfaces }} block per interface from the
+// PeerInfo list, so both links (two InterfaceNames) must appear exactly once in each per-interface
+// block; a missing one means some tunnel would not be started / enabled / cleaned up.
 func TestRenderInstallScript_ParallelLinks_BothInterfacesEveryPhase(t *testing.T) {
 	script, err := RenderInstallScript(robustnessTestNode(), parallelLinksPeers(), true)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	ifaces := []string{"wg-beta", "wg-beta-bk1"}
 
 	for _, iface := range ifaces {
-		// Phase 3 启动：D53 容错形式的 wg-quick up。
+		// Phase 3 startup: the D53 fault-tolerant form of wg-quick up.
 		if !strings.Contains(script, `if ! wg-quick up "`+iface+`"; then`) {
-			t.Errorf("启动阶段缺少接口 %s 的 wg-quick up 行", iface)
+			t.Errorf("startup phase missing the wg-quick up line for interface %s", iface)
 		}
-		// Phase 3 开机自启。
+		// Phase 3 boot autostart.
 		if !strings.Contains(script, `systemctl enable wg-quick@"`+iface+`"`) {
-			t.Errorf("启动阶段缺少接口 %s 的 systemctl enable 行", iface)
+			t.Errorf("startup phase missing the systemctl enable line for interface %s", iface)
 		}
-		// 卸载段停止：wg-quick down。
+		// Uninstall section stop: wg-quick down.
 		if !strings.Contains(script, `wg-quick down "`+iface+`"`) {
-			t.Errorf("卸载/清理阶段缺少接口 %s 的 wg-quick down 行", iface)
+			t.Errorf("uninstall/cleanup phase missing the wg-quick down line for interface %s", iface)
 		}
-		// 卸载段禁用 systemd unit。
+		// Uninstall section disable of the systemd unit.
 		if !strings.Contains(script, `systemctl disable "wg-quick@`+iface+`"`) {
-			t.Errorf("卸载/清理阶段缺少接口 %s 的 systemctl disable 行", iface)
+			t.Errorf("uninstall/cleanup phase missing the systemctl disable line for interface %s", iface)
 		}
-		// 配置文件清理（卸载段与 Phase 0 各有一次删除）。
+		// Config-file cleanup (deleted once in the uninstall section and once in Phase 0).
 		if !strings.Contains(script, `/etc/wireguard/`+iface+`.conf`) {
-			t.Errorf("脚本缺少接口 %s 的配置文件路径引用", iface)
+			t.Errorf("script missing the config-file path reference for interface %s", iface)
 		}
 	}
 
-	// 非空门禁：backup 接口（wg-beta-bk1）确实是新增的——它必须区别于 primary（wg-beta），
-	// 否则模板可能只展开了一条链路而测试假性通过。统计两条 up 行各出现。
+	// Non-empty gate: the backup interface (wg-beta-bk1) is genuinely new — it must differ from the
+	// primary (wg-beta), otherwise the template might have expanded only one link and the test passes
+	// spuriously. Count that both up lines appear.
 	if strings.Count(script, `if ! wg-quick up "wg-beta"; then`) < 1 ||
 		strings.Count(script, `if ! wg-quick up "wg-beta-bk1"; then`) < 1 {
-		t.Errorf("primary 与 backup 两条接口的启动行都必须出现且各异，实际脚本:\n%s", script)
+		t.Errorf("the startup lines for both the primary and backup interfaces must appear and be distinct, actual script:\n%s", script)
 	}
 }
 
-// TestRenderClientInstallScript_RobustnessUnaffected 验证 client 安装脚本不受
-// D52/D53 改动影响：client 走单接口 wg0、无 Babel、无 SNAT，因此既不应出现
-// per-peer 的 FAILED_INTERFACES 容错块，也不应出现 iptables-save loop-delete。
-// client 仍保持其原有的单接口 wg-quick up 行为。
+// TestRenderClientInstallScript_RobustnessUnaffected verifies that the client install script is
+// unaffected by the D52/D53 changes: a client uses a single wg0 interface, no Babel, and no SNAT, so
+// it should contain neither the per-peer FAILED_INTERFACES tolerance block nor the iptables-save
+// loop-delete. The client retains its original single-interface wg-quick up behavior.
 func TestRenderClientInstallScript_RobustnessUnaffected(t *testing.T) {
 	node := &model.Node{
 		ID:        "client-1",
@@ -215,21 +224,21 @@ func TestRenderClientInstallScript_RobustnessUnaffected(t *testing.T) {
 
 	script, err := RenderClientInstallScript(node)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
-	// client 不引入 per-peer 的失败累加器。
+	// The client does not introduce a per-peer failure accumulator.
 	if strings.Contains(script, "FAILED_INTERFACES") {
-		t.Errorf("client 脚本不应包含 per-peer 的 FAILED_INTERFACES 容错块")
+		t.Errorf("client script should not contain the per-peer FAILED_INTERFACES tolerance block")
 	}
 
-	// client 无 SNAT，因此不应出现 iptables-save loop-delete。
+	// The client has no SNAT, so iptables-save loop-delete should not appear.
 	if strings.Contains(script, "iptables-save -t nat") {
-		t.Errorf("client 脚本不应包含 iptables-save loop-delete（client 无 SNAT）")
+		t.Errorf("client script should not contain iptables-save loop-delete (client has no SNAT)")
 	}
 
-	// client 仍以单接口 wg0 启动（原有行为不变）。
+	// The client still starts with a single wg0 interface (original behavior unchanged).
 	if !strings.Contains(script, `wg-quick up "wg0"`) {
-		t.Errorf("client 脚本应保持单接口 wg0 的启动")
+		t.Errorf("client script should keep its single-interface wg0 startup")
 	}
 }

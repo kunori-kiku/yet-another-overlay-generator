@@ -9,10 +9,13 @@ import (
 	"testing"
 )
 
-// TestHandleDeployScript_BashIncludesPerInterfaceTeardown 验证 /api/deploy-script?format=sh
-// 端点运行完整编译流水线，从而把每条 per-peer 隧道的接口名填入 PeerMap，使生成的卸载块
-// 含逐接口拆除步骤（wg-quick down wg-<remote>）。这是审计阻断项 D36 的回归测试：旧实现
-// 以 nil PeerMap 渲染部署脚本，卸载块完全缺失 per-peer 拆除步骤。
+// TestHandleDeployScript_BashIncludesPerInterfaceTeardown verifies that the
+// /api/deploy-script?format=sh endpoint runs the full compilation pipeline, which
+// populates PeerMap with each per-peer tunnel's interface name so that the generated
+// teardown block contains per-interface removal steps (wg-quick down wg-<remote>).
+// This is a regression test for audit blocker D36: the old implementation rendered the
+// deploy script with a nil PeerMap, so the teardown block was missing all per-peer
+// removal steps.
 func TestHandleDeployScript_BashIncludesPerInterfaceTeardown(t *testing.T) {
 	server := NewServer()
 
@@ -24,38 +27,40 @@ func TestHandleDeployScript_BashIncludesPerInterfaceTeardown(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("期望 200，得到 %d，body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	ct := rec.Header().Get("Content-Type")
 	if ct != "text/x-shellscript; charset=utf-8" {
-		t.Errorf("期望 Content-Type=text/x-shellscript; charset=utf-8，得到 %s", ct)
+		t.Errorf("want Content-Type=text/x-shellscript; charset=utf-8, got %s", ct)
 	}
 
 	cd := rec.Header().Get("Content-Disposition")
 	if !strings.Contains(cd, "deploy-all.sh") {
-		t.Errorf("期望 Content-Disposition 含 deploy-all.sh，得到 %s", cd)
+		t.Errorf("want Content-Disposition to contain deploy-all.sh, got %s", cd)
 	}
 
 	script := rec.Body.String()
 
-	// per-peer 架构下，节点 node-beta 与 node-alpha 互为对端：
-	// node-beta 的接口名取自远端 node-alpha → wg-node-alpha；
-	// node-alpha 的接口名取自远端 node-beta → wg-node-beta。
-	// 这两条逐接口拆除行只有在 PeerMap 被正确填充时才会出现；旧的 nil PeerMap 实现
-	// 不会产生任何 wg-node-* 行（仅有按 ID 无关的兜底循环）。
+	// In the per-peer architecture, node-beta and node-alpha are each other's peers:
+	// node-beta's interface name is derived from the remote node-alpha -> wg-node-alpha;
+	// node-alpha's interface name is derived from the remote node-beta -> wg-node-beta.
+	// These two per-interface teardown lines only appear when PeerMap is correctly
+	// populated; the old nil-PeerMap implementation produced no wg-node-* lines (only an
+	// ID-agnostic fallback loop).
 	teardownAlpha := "wg-quick down wg-node-alpha"
 	teardownBeta := "wg-quick down wg-node-beta"
 	if !strings.Contains(script, teardownAlpha) {
-		t.Errorf("部署脚本缺少 node-beta 对端的逐接口拆除行 %q（PeerMap 未填充）", teardownAlpha)
+		t.Errorf("deploy script missing per-interface teardown line for node-beta's peer %q (PeerMap not populated)", teardownAlpha)
 	}
 	if !strings.Contains(script, teardownBeta) {
-		t.Errorf("部署脚本缺少 node-alpha 对端的逐接口拆除行 %q（PeerMap 未填充）", teardownBeta)
+		t.Errorf("deploy script missing per-interface teardown line for node-alpha's peer %q (PeerMap not populated)", teardownBeta)
 	}
 }
 
-// TestHandleDeployScript_InvalidTopologyReturns422 验证无效拓扑（边引用了不存在的节点）
-// 会让编译流水线在语义校验阶段失败，端点返回 422，与 HandleCompile 的行为一致。
+// TestHandleDeployScript_InvalidTopologyReturns422 verifies that an invalid topology (an
+// edge referencing a non-existent node) makes the compilation pipeline fail during
+// semantic validation, so the endpoint returns 422, consistent with HandleCompile.
 func TestHandleDeployScript_InvalidTopologyReturns422(t *testing.T) {
 	server := NewServer()
 
@@ -67,21 +72,22 @@ func TestHandleDeployScript_InvalidTopologyReturns422(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("期望 422，得到 %d，body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 422, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	var resp apiError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("解析错误响应失败: %v", err)
+		t.Fatalf("failed to parse error response: %v", err)
 	}
 	if resp.Error.Message == "" {
-		t.Errorf("期望 422 响应体含非空 error.message 字段")
+		t.Errorf("want 422 response body to contain a non-empty error.message field")
 	}
 }
 
-// deployTopologyWithSSHJSON 返回一个含 SSH 详情的双 router 拓扑。
-// 两个节点互为对端并都配置了 SSH，确保部署脚本会为每个节点渲染卸载/部署块，
-// 块内含 per-peer 接口的逐一拆除行。
+// deployTopologyWithSSHJSON returns a two-router topology with SSH details.
+// The two nodes are each other's peers and both have SSH configured, ensuring the deploy
+// script renders teardown/deploy blocks for each node, with the blocks containing
+// per-peer interface removal lines.
 func deployTopologyWithSSHJSON() []byte {
 	topo := map[string]interface{}{
 		"project": map[string]interface{}{
@@ -166,8 +172,9 @@ func deployTopologyWithSSHJSON() []byte {
 	return out
 }
 
-// deployTopologyDanglingEdgeJSON 返回一个无效拓扑：edge-1 引用了不存在的节点 node-missing。
-// 该错误在语义校验阶段被 validateEdgeNodeRefs 捕获，使编译流水线返回错误（422）。
+// deployTopologyDanglingEdgeJSON returns an invalid topology: edge-1 references the
+// non-existent node node-missing. This error is caught by validateEdgeNodeRefs during
+// semantic validation, making the compilation pipeline return an error (422).
 func deployTopologyDanglingEdgeJSON() []byte {
 	topo := map[string]interface{}{
 		"project": map[string]interface{}{

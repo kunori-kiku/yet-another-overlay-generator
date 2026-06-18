@@ -6,7 +6,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// countOccurrences 统计 cidr 在切片中出现的次数，用于断言「恰好出现一次」。
+// countOccurrences counts how many times cidr appears in the slice, used to assert "appears exactly once".
 func countOccurrences(slice []string, target string) int {
 	n := 0
 	for _, v := range slice {
@@ -17,13 +17,14 @@ func countOccurrences(slice []string, target string) int {
 	return n
 }
 
-// TestClientAllowedIPs_MultiDomainUnion 覆盖 D30（Decision 6）：
-// client 的 wg0 是它通往整个 overlay 的唯一隧道，因此 DomainCIDRs 必须是
-// 「所有域 CIDR」与「每个域解析后的 transit CIDR」的并集，且各前缀恰好出现一次。
+// TestClientAllowedIPs_MultiDomainUnion covers D30 (Decision 6):
+// a client's wg0 is its sole tunnel into the entire overlay, so DomainCIDRs must be
+// the union of "all domain CIDRs" and "each domain's resolved transit CIDR", with
+// each prefix appearing exactly once.
 //
-// 拓扑：两个域（10.11.0.0/24 与 10.12.0.0/24），其中域 B 自定义 transit
-// （10.20.0.0/24），域 A 留空 transit（解析为默认 10.10.0.0/24）。
-// client 位于域 A，连向同域的一个 router。
+// Topology: two domains (10.11.0.0/24 and 10.12.0.0/24), where domain B has a custom
+// transit (10.20.0.0/24) and domain A leaves transit empty (resolving to the default
+// 10.10.0.0/24). The client is in domain A, connecting to a router in the same domain.
 func TestClientAllowedIPs_MultiDomainUnion(t *testing.T) {
 	topo := &model.Topology{
 		Project: model.Project{ID: "cl-multi", Name: "Client Multi-Domain"},
@@ -31,7 +32,7 @@ func TestClientAllowedIPs_MultiDomainUnion(t *testing.T) {
 			{
 				ID: "domain-a", Name: "alpha-net", CIDR: "10.11.0.0/24",
 				AllocationMode: "auto", RoutingMode: "babel",
-				// transit 留空 → 解析为默认 10.10.0.0/24
+				// transit left empty -> resolves to default 10.10.0.0/24
 			},
 			{
 				ID: "domain-b", Name: "beta-net", CIDR: "10.12.0.0/24",
@@ -47,8 +48,8 @@ func TestClientAllowedIPs_MultiDomainUnion(t *testing.T) {
 					{ID: "router-a-ep", Host: "router-a.example", Port: 51820},
 				},
 			},
-			// 域 B 中放一个 router，确保该域（含其自定义 transit）参与并集，
-			// 即便 client 不直接连它。
+			// Place a router in domain B to ensure that domain (including its custom
+			// transit) participates in the union, even though the client does not connect to it directly.
 			{
 				ID: "router-b", Name: "router-b", Role: "router", DomainID: "domain-b",
 				Capabilities: model.NodeCapabilities{HasPublicIP: true},
@@ -61,10 +62,10 @@ func TestClientAllowedIPs_MultiDomainUnion(t *testing.T) {
 			},
 		},
 		Edges: []model.Edge{
-			// router-a <-> router-b：跨域骨干，使两域都「在用」。
+			// router-a <-> router-b: cross-domain backbone, making both domains "in use".
 			{ID: "e-backbone", FromNodeID: "router-a", ToNodeID: "router-b", Type: "public-endpoint",
 				EndpointHost: "router-b.example", Transport: "udp", IsEnabled: true},
-			// client-a -> router-a：client 的唯一出站边（必须带 endpoint_host）。
+			// client-a -> router-a: the client's sole outbound edge (must carry endpoint_host).
 			{ID: "e-client", FromNodeID: "client-a", ToNodeID: "router-a", Type: "public-endpoint",
 				EndpointHost: "router-a.example", Transport: "udp", IsEnabled: true},
 		},
@@ -79,39 +80,39 @@ func TestClientAllowedIPs_MultiDomainUnion(t *testing.T) {
 	c := NewCompiler()
 	result, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("Compile 失败: %v", err)
+		t.Fatalf("Compile failed: %v", err)
 	}
 
 	clientCfg := result.ClientConfigs["client-a"]
 	if clientCfg == nil {
-		t.Fatalf("应为 client-a 生成 ClientPeerInfo")
+		t.Fatalf("a ClientPeerInfo should be generated for client-a")
 	}
 
-	// 两个域 CIDR 各恰好一次。
+	// Each of the two domain CIDRs exactly once.
 	for _, cidr := range []string{"10.11.0.0/24", "10.12.0.0/24"} {
 		if got := countOccurrences(clientCfg.DomainCIDRs, cidr); got != 1 {
-			t.Errorf("DomainCIDRs 应恰好包含一次域 CIDR %s，实际 %d 次（DomainCIDRs=%v）",
+			t.Errorf("DomainCIDRs should contain domain CIDR %s exactly once, got %d times (DomainCIDRs=%v)",
 				cidr, got, clientCfg.DomainCIDRs)
 		}
 	}
 
-	// 两个 transit CIDR 各恰好一次：域 A 解析为默认 10.10.0.0/24，域 B 自定义 10.20.0.0/24。
+	// Each of the two transit CIDRs exactly once: domain A resolves to default 10.10.0.0/24, domain B custom 10.20.0.0/24.
 	for _, cidr := range []string{"10.10.0.0/24", "10.20.0.0/24"} {
 		if got := countOccurrences(clientCfg.DomainCIDRs, cidr); got != 1 {
-			t.Errorf("DomainCIDRs 应恰好包含一次 transit CIDR %s，实际 %d 次（DomainCIDRs=%v）",
+			t.Errorf("DomainCIDRs should contain transit CIDR %s exactly once, got %d times (DomainCIDRs=%v)",
 				cidr, got, clientCfg.DomainCIDRs)
 		}
 	}
 
-	// 并集恰好是 4 个前缀（2 域 + 2 transit），无多余、无重复。
+	// The union is exactly 4 prefixes (2 domains + 2 transit), with no extras and no duplicates.
 	if len(clientCfg.DomainCIDRs) != 4 {
-		t.Errorf("DomainCIDRs 应恰好为 4 个前缀（2 域 + 2 transit），实际 %d 个：%v",
+		t.Errorf("DomainCIDRs should be exactly 4 prefixes (2 domains + 2 transit), got %d: %v",
 			len(clientCfg.DomainCIDRs), clientCfg.DomainCIDRs)
 	}
 }
 
-// TestClientAllowedIPs_SingleDomain 验证单域场景仍然可用：
-// DomainCIDRs == [域 CIDR, 默认 transit CIDR]，各恰好一次。
+// TestClientAllowedIPs_SingleDomain verifies the single-domain case still works:
+// DomainCIDRs == [domain CIDR, default transit CIDR], each exactly once.
 func TestClientAllowedIPs_SingleDomain(t *testing.T) {
 	topo := &model.Topology{
 		Project: model.Project{ID: "cl-single", Name: "Client Single-Domain"},
@@ -119,7 +120,7 @@ func TestClientAllowedIPs_SingleDomain(t *testing.T) {
 			{
 				ID: "domain-a", Name: "alpha-net", CIDR: "10.13.0.0/24",
 				AllocationMode: "auto", RoutingMode: "babel",
-				// transit 留空 → 默认 10.10.0.0/24
+				// transit left empty -> default 10.10.0.0/24
 			},
 		},
 		Nodes: []model.Node{
@@ -148,32 +149,32 @@ func TestClientAllowedIPs_SingleDomain(t *testing.T) {
 	c := NewCompiler()
 	result, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("Compile 失败: %v", err)
+		t.Fatalf("Compile failed: %v", err)
 	}
 
 	clientCfg := result.ClientConfigs["client-a"]
 	if clientCfg == nil {
-		t.Fatalf("应为 client-a 生成 ClientPeerInfo")
+		t.Fatalf("a ClientPeerInfo should be generated for client-a")
 	}
 
 	if got := countOccurrences(clientCfg.DomainCIDRs, "10.13.0.0/24"); got != 1 {
-		t.Errorf("单域：DomainCIDRs 应恰好包含一次域 CIDR 10.13.0.0/24，实际 %d 次（%v）",
+		t.Errorf("single domain: DomainCIDRs should contain domain CIDR 10.13.0.0/24 exactly once, got %d times (%v)",
 			got, clientCfg.DomainCIDRs)
 	}
 	if got := countOccurrences(clientCfg.DomainCIDRs, "10.10.0.0/24"); got != 1 {
-		t.Errorf("单域：DomainCIDRs 应恰好包含一次默认 transit CIDR 10.10.0.0/24，实际 %d 次（%v）",
+		t.Errorf("single domain: DomainCIDRs should contain default transit CIDR 10.10.0.0/24 exactly once, got %d times (%v)",
 			got, clientCfg.DomainCIDRs)
 	}
 	if len(clientCfg.DomainCIDRs) != 2 {
-		t.Errorf("单域：DomainCIDRs 应恰好为 2 个前缀（域 + 默认 transit），实际 %d 个：%v",
+		t.Errorf("single domain: DomainCIDRs should be exactly 2 prefixes (domain + default transit), got %d: %v",
 			len(clientCfg.DomainCIDRs), clientCfg.DomainCIDRs)
 	}
 }
 
-// TestInferCapabilitiesFromRole_PublicRouterAcceptsInbound 覆盖 D49：
-// 具备 HasPublicIP 的 router 经能力推导后应得到 CanAcceptInbound=true，
-// 与 DeriveRoleSemantics 的 AcceptAllInbound 保持一致。
-// 同时验证：不具备公网 IP 的 router 不会被推导为接受入站。
+// TestInferCapabilitiesFromRole_PublicRouterAcceptsInbound covers D49:
+// a router with HasPublicIP should, after capability inference, get CanAcceptInbound=true,
+// consistent with DeriveRoleSemantics' AcceptAllInbound.
+// It also verifies that a router without a public IP is not inferred to accept inbound.
 func TestInferCapabilitiesFromRole_PublicRouterAcceptsInbound(t *testing.T) {
 	publicRouter := &model.Node{
 		ID: "r1", Role: "router",
@@ -181,7 +182,7 @@ func TestInferCapabilitiesFromRole_PublicRouterAcceptsInbound(t *testing.T) {
 	}
 	caps := InferCapabilitiesFromRole(publicRouter)
 	if !caps.CanAcceptInbound {
-		t.Errorf("具备公网 IP 的 router 推导后应 CanAcceptInbound=true，实际 false")
+		t.Errorf("a router with a public IP should infer CanAcceptInbound=true, got false")
 	}
 
 	privateRouter := &model.Node{
@@ -189,21 +190,21 @@ func TestInferCapabilitiesFromRole_PublicRouterAcceptsInbound(t *testing.T) {
 		Capabilities: model.NodeCapabilities{HasPublicIP: false},
 	}
 	if caps := InferCapabilitiesFromRole(privateRouter); caps.CanAcceptInbound {
-		t.Errorf("不具备公网 IP 的 router 推导后不应 CanAcceptInbound=true")
+		t.Errorf("a router without a public IP should not infer CanAcceptInbound=true")
 	}
 
-	// gateway 同样的语义。
+	// gateway has the same semantics.
 	publicGateway := &model.Node{
 		ID: "g1", Role: "gateway",
 		Capabilities: model.NodeCapabilities{HasPublicIP: true},
 	}
 	if caps := InferCapabilitiesFromRole(publicGateway); !caps.CanAcceptInbound {
-		t.Errorf("具备公网 IP 的 gateway 推导后应 CanAcceptInbound=true，实际 false")
+		t.Errorf("a gateway with a public IP should infer CanAcceptInbound=true, got false")
 	}
 }
 
-// TestPeerInfo_LinkCostFromEdgePriority 覆盖 D63：
-// edge.Priority（>0）应映射到正向与反向 PeerInfo 的 LinkCost。
+// TestPeerInfo_LinkCostFromEdgePriority covers D63:
+// edge.Priority (>0) should map to the LinkCost of both the forward and reverse PeerInfo.
 func TestPeerInfo_LinkCostFromEdgePriority(t *testing.T) {
 	const wantCost = 77
 
@@ -227,29 +228,29 @@ func TestPeerInfo_LinkCostFromEdgePriority(t *testing.T) {
 
 	peerMap, _, err := DerivePeers(topo, testKeys2())
 	if err != nil {
-		t.Fatalf("DerivePeers 失败: %v", err)
+		t.Fatalf("DerivePeers failed: %v", err)
 	}
 
 	fwd := findPeer(peerMap["node-a"], "node-b")
 	if fwd == nil {
-		t.Fatalf("node-a 应有指向 node-b 的正向 peer")
+		t.Fatalf("node-a should have a forward peer pointing at node-b")
 	}
 	if fwd.LinkCost != wantCost {
-		t.Errorf("正向 LinkCost = %d, 期望 %d（来自 edge.Priority）", fwd.LinkCost, wantCost)
+		t.Errorf("forward LinkCost = %d, want %d (from edge.Priority)", fwd.LinkCost, wantCost)
 	}
 
 	rev := findPeer(peerMap["node-b"], "node-a")
 	if rev == nil {
-		t.Fatalf("node-b 应有指向 node-a 的反向 peer")
+		t.Fatalf("node-b should have a reverse peer pointing at node-a")
 	}
 	if rev.LinkCost != wantCost {
-		t.Errorf("反向 LinkCost = %d, 期望 %d（反向 peer 共用同一 edge）", rev.LinkCost, wantCost)
+		t.Errorf("reverse LinkCost = %d, want %d (reverse peer shares the same edge)", rev.LinkCost, wantCost)
 	}
 }
 
-// TestPeerInfo_LinkCostFallback 验证 D63 的回退顺序：
-//   - 无 Priority 但有 Weight → LinkCost = Weight；
-//   - 两者皆无 → LinkCost = 0（交由角色 preset 默认）。
+// TestPeerInfo_LinkCostFallback verifies the fallback order of D63:
+//   - no Priority but a Weight -> LinkCost = Weight;
+//   - neither set -> LinkCost = 0 (deferred to the role preset default).
 func TestPeerInfo_LinkCostFallback(t *testing.T) {
 	t.Run("weight used when priority absent", func(t *testing.T) {
 		const wantWeight = 42
@@ -273,14 +274,14 @@ func TestPeerInfo_LinkCostFallback(t *testing.T) {
 
 		peerMap, _, err := DerivePeers(topo, testKeys2())
 		if err != nil {
-			t.Fatalf("DerivePeers 失败: %v", err)
+			t.Fatalf("DerivePeers failed: %v", err)
 		}
 		fwd := findPeer(peerMap["node-a"], "node-b")
 		if fwd == nil {
-			t.Fatalf("node-a 应有指向 node-b 的 peer")
+			t.Fatalf("node-a should have a peer pointing at node-b")
 		}
 		if fwd.LinkCost != wantWeight {
-			t.Errorf("LinkCost = %d, 期望 %d（回退到 edge.Weight）", fwd.LinkCost, wantWeight)
+			t.Errorf("LinkCost = %d, want %d (fell back to edge.Weight)", fwd.LinkCost, wantWeight)
 		}
 	})
 
@@ -305,14 +306,14 @@ func TestPeerInfo_LinkCostFallback(t *testing.T) {
 
 		peerMap, _, err := DerivePeers(topo, testKeys2())
 		if err != nil {
-			t.Fatalf("DerivePeers 失败: %v", err)
+			t.Fatalf("DerivePeers failed: %v", err)
 		}
 		fwd := findPeer(peerMap["node-a"], "node-b")
 		if fwd == nil {
-			t.Fatalf("node-a 应有指向 node-b 的 peer")
+			t.Fatalf("node-a should have a peer pointing at node-b")
 		}
 		if fwd.LinkCost != 0 {
-			t.Errorf("LinkCost = %d, 期望 0（未设置 priority/weight）", fwd.LinkCost)
+			t.Errorf("LinkCost = %d, want 0 (no priority/weight set)", fwd.LinkCost)
 		}
 	})
 }

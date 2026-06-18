@@ -10,49 +10,51 @@ import (
 	"testing"
 )
 
-// TestExport_ChecksumsCoversInstallScript 验证 install.sh —— 以 root 执行的信任锚点 ——
-// 被纳入 checksums.sha256（审计项 D24），且记录的哈希与落盘文件内容一致。
+// TestExport_ChecksumsCoversInstallScript verifies that install.sh -- the trust anchor
+// executed as root -- is included in checksums.sha256 (audit item D24), and that the
+// recorded hash matches the on-disk file contents.
 func TestExport_ChecksumsCoversInstallScript(t *testing.T) {
 	result := minimalCompileResult()
 	outputDir := t.TempDir()
 
 	if _, err := Export(result, outputDir); err != nil {
-		t.Fatalf("Export 失败: %v", err)
+		t.Fatalf("Export failed: %v", err)
 	}
 
 	nodeDir := filepath.Join(outputDir, "alpha")
 
-	// 读取 checksums.sha256 并解析出 install.sh 那一行记录的哈希。
+	// Read checksums.sha256 and parse out the hash recorded on the install.sh line.
 	checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
 	recordedHash, ok := readChecksumFor(t, checksumsPath, "install.sh")
 	if !ok {
-		t.Fatalf("checksums.sha256 中缺少 install.sh 行（D24：信任锚点未被覆盖）；文件内容:\n%s",
+		t.Fatalf("checksums.sha256 missing the install.sh line (D24: trust anchor not covered); file contents:\n%s",
 			mustReadFile(t, checksumsPath))
 	}
 
-	// 计算 install.sh 实际落盘内容的哈希，与记录值比对。
+	// Compute the hash of install.sh's actual on-disk contents and compare against the recorded value.
 	installPath := filepath.Join(nodeDir, "install.sh")
 	actualBytes := mustReadFileBytes(t, installPath)
 	actualHash := fmt.Sprintf("%x", sha256.Sum256(actualBytes))
 
 	if recordedHash != actualHash {
-		t.Errorf("install.sh 记录的校验和与实际内容不符:\n  记录: %s\n  实际: %s", recordedHash, actualHash)
+		t.Errorf("install.sh recorded checksum does not match actual contents:\n  recorded: %s\n  actual: %s", recordedHash, actualHash)
 	}
 
-	// manifest.json 携带 compiled_at 等编译期时间戳，按 spec 刻意排除于完整性校验之外。
+	// manifest.json carries compile-time timestamps such as compiled_at and is deliberately excluded from integrity checking per spec.
 	if _, present := readChecksumFor(t, checksumsPath, "manifest.json"); present {
-		t.Errorf("manifest.json 不应出现在 checksums.sha256 中（spec 明确排除）")
+		t.Errorf("manifest.json should not appear in checksums.sha256 (explicitly excluded by spec)")
 	}
 }
 
-// readChecksumFor 解析 sha256sum 风格的校验文件，返回指定相对路径的哈希。
-// 校验行格式为 "<hex>  <relpath>"（两个空格分隔）。
+// readChecksumFor parses a sha256sum-style checksum file and returns the hash for the
+// given relative path. A checksum line has the format "<hex>  <relpath>" (separated by two
+// spaces).
 func readChecksumFor(t *testing.T, checksumsPath, relPath string) (string, bool) {
 	t.Helper()
 
 	f, err := os.Open(checksumsPath)
 	if err != nil {
-		t.Fatalf("读取 checksums.sha256 失败: %v", err)
+		t.Fatalf("failed to read checksums.sha256: %v", err)
 	}
 	defer f.Close()
 
@@ -71,7 +73,7 @@ func readChecksumFor(t *testing.T, checksumsPath, relPath string) (string, bool)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		t.Fatalf("扫描 checksums.sha256 失败: %v", err)
+		t.Fatalf("failed to scan checksums.sha256: %v", err)
 	}
 	return "", false
 }
@@ -85,7 +87,7 @@ func mustReadFileBytes(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("读取 %s 失败: %v", path, err)
+		t.Fatalf("failed to read %s: %v", path, err)
 	}
 	return data
 }

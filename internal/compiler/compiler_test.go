@@ -82,7 +82,7 @@ func natHubTopo() *model.Topology {
 
 func TestDerivePeers_SimpleMesh(t *testing.T) {
 	topo := simpleMeshTopo()
-	//  IP
+	// Assign overlay IPs.
 	topo.Nodes[0].OverlayIP = "10.11.0.1"
 	topo.Nodes[1].OverlayIP = "10.11.0.2"
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
@@ -90,11 +90,11 @@ func TestDerivePeers_SimpleMesh(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// ： 2  peer
+	// Full mesh: each node should have 2 peers.
 	for _, node := range topo.Nodes {
 		peers := peerMap[node.ID]
 		if len(peers) != 2 {
-			t.Errorf(" %s  2  peer,  %d", node.Name, len(peers))
+			t.Errorf("node %s should have 2 peers, got %d", node.Name, len(peers))
 		}
 	}
 }
@@ -108,17 +108,17 @@ func TestDerivePeers_EdgeConsistency(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// node-1  peer  node-2  node-3
+	// node-1's peers should be node-2 and node-3.
 	node1Peers := peerMap["node-1"]
 	peerIDs := make(map[string]bool)
 	for _, p := range node1Peers {
 		peerIDs[p.NodeID] = true
 	}
 	if !peerIDs["node-2"] {
-		t.Errorf("node-1  peer  node-2")
+		t.Errorf("node-1 is missing peer node-2")
 	}
 	if !peerIDs["node-3"] {
-		t.Errorf("node-1  peer  node-3")
+		t.Errorf("node-1 is missing peer node-3")
 	}
 }
 
@@ -131,11 +131,11 @@ func TestDerivePeers_EndpointCorrect(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// node-1 -> node-2  endpoint  203.0.113.2:51820
+	// node-1 -> node-2 endpoint should be 203.0.113.2:51820.
 	for _, p := range peerMap["node-1"] {
 		if p.NodeID == "node-2" {
 			if p.Endpoint != "203.0.113.2:51820" {
-				t.Errorf("node-1->node-2 endpoint  203.0.113.2:51820,  %s", p.Endpoint)
+				t.Errorf("node-1->node-2 endpoint should be 203.0.113.2:51820, got %s", p.Endpoint)
 			}
 		}
 	}
@@ -150,11 +150,11 @@ func TestDerivePeers_AllowedIPs(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// per-peer 架构：AllowedIPs 使用宽松策略
+	// per-peer architecture: AllowedIPs uses a permissive policy.
 	for _, p := range peerMap["node-1"] {
 		if p.NodeID == "node-2" {
 			if len(p.AllowedIPs) != 2 || p.AllowedIPs[0] != "0.0.0.0/0" || p.AllowedIPs[1] != "::/0" {
-				t.Errorf("AllowedIPs 应为 [0.0.0.0/0, ::/0]，实际 %v", p.AllowedIPs)
+				t.Errorf("AllowedIPs should be [0.0.0.0/0, ::/0], got %v", p.AllowedIPs)
 			}
 		}
 	}
@@ -169,16 +169,16 @@ func TestDerivePeers_NATKeepalive(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// NAT  (node-2, node-3)  hub  PersistentKeepalive
+	// NAT nodes (node-2, node-3) toward the hub should have PersistentKeepalive.
 	for _, p := range peerMap["node-2"] {
 		if p.NodeID == "node-1" && p.PersistentKeepalive == 0 {
-			t.Errorf("NAT  hub  PersistentKeepalive")
+			t.Errorf("NAT node toward hub should have PersistentKeepalive")
 		}
 	}
 
-	// Hub (node-1)  node-2  node-3， Peer
+	// Hub (node-1) should have node-2 and node-3 as peers.
 	if len(peerMap["node-1"]) != 2 {
-		t.Errorf("Hub  2  Peer， %d", len(peerMap["node-1"]))
+		t.Errorf("Hub should have 2 peers, got %d", len(peerMap["node-1"]))
 	}
 }
 
@@ -188,21 +188,22 @@ func TestDerivePeers_DisabledEdgeIgnored(t *testing.T) {
 	topo.Nodes[1].OverlayIP = "10.11.0.2"
 	topo.Nodes[2].OverlayIP = "10.11.0.3"
 
-	//  node-1 <-> node-2
+	// Disable the node-1 <-> node-2 link.
 	topo.Edges[0].IsEnabled = false
 	topo.Edges[1].IsEnabled = false
 
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// node-1  1  peer（node-3）， node-2
+	// node-1 should have 1 peer (node-3), node-2 dropped.
 	if len(peerMap["node-1"]) != 1 {
-		t.Errorf("node-1  node-2  1  peer,  %d", len(peerMap["node-1"]))
+		t.Errorf("node-1 should have 1 peer after dropping node-2, got %d", len(peerMap["node-1"]))
 	}
 }
 
-// unidirectionalPublicEndpointTopo 模拟两个都有公网IP的节点，但只画了一条单向edge (A→B)
-// 这种情况下 A 应该有 PersistentKeepalive，因为 B 没有反向 edge 去主动连 A
+// unidirectionalPublicEndpointTopo models two nodes that both have a public IP
+// but with only a single unidirectional edge drawn (A->B). In this case A must
+// have PersistentKeepalive, because B has no reverse edge to actively connect to A.
 func unidirectionalPublicEndpointTopo() *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "test-003", Name: "Unidirectional Public Endpoint"},
@@ -223,7 +224,7 @@ func unidirectionalPublicEndpointTopo() *model.Topology {
 			},
 		},
 		Edges: []model.Edge{
-			// 只有 A→B 这一条单向 edge，没有 B→A
+			// Only the single unidirectional edge A->B, no B->A.
 			{ID: "e1", FromNodeID: "node-1", ToNodeID: "node-2", Type: "public-endpoint", EndpointHost: "203.0.113.2", EndpointPort: 0, Transport: "udp", IsEnabled: true},
 		},
 	}
@@ -237,26 +238,26 @@ func TestDerivePeers_UnidirectionalKeepalive(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// node-1 (发起方) 应该有 node-2 作为 peer
+	// node-1 (initiator) should have node-2 as a peer.
 	node1Peers := peerMap["node-1"]
 	if len(node1Peers) != 1 {
-		t.Fatalf("node-1 应该有 1 个 peer，实际 %d", len(node1Peers))
+		t.Fatalf("node-1 should have 1 peer, got %d", len(node1Peers))
 	}
 
-	// node-1→node-2: 因为没有反向 edge (node-2→node-1)，所以必须有 keepalive
+	// node-1->node-2: because there is no reverse edge (node-2->node-1), it must have keepalive.
 	if node1Peers[0].PersistentKeepalive == 0 {
-		t.Errorf("单向 edge 场景: node-1→node-2 应该有 PersistentKeepalive (期望 25，实际 0)")
+		t.Errorf("unidirectional edge case: node-1->node-2 should have PersistentKeepalive (want 25, got 0)")
 	}
 
-	// node-2 应该有自动生成的反向 peer (node-1)
+	// node-2 should have an auto-generated reverse peer (node-1).
 	node2Peers := peerMap["node-2"]
 	if len(node2Peers) != 1 {
-		t.Fatalf("node-2 应该有 1 个自动生成的 peer，实际 %d", len(node2Peers))
+		t.Fatalf("node-2 should have 1 auto-generated peer, got %d", len(node2Peers))
 	}
 
-	// node-2 的反向 peer 没有 endpoint，但 node-2 可以接受入站，所以不需要 keepalive
+	// node-2's reverse peer has no endpoint, but node-2 can accept inbound so it needs no keepalive.
 	if node2Peers[0].Endpoint != "" {
-		t.Errorf("自动生成的反向 peer 不应该有 endpoint，实际 %s", node2Peers[0].Endpoint)
+		t.Errorf("auto-generated reverse peer should have no endpoint, got %s", node2Peers[0].Endpoint)
 	}
 }
 
@@ -269,10 +270,10 @@ func TestDerivePeers_BidirectionalNoExtraKeepalive(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// 双向 edge + 都有公网IP 的情况下，不需要 keepalive
+	// With a bidirectional edge and both having a public IP, no keepalive is needed.
 	for _, p := range peerMap["node-1"] {
 		if p.PersistentKeepalive != 0 {
-			t.Errorf("双向 edge 场景: node-1→%s 不应该有 PersistentKeepalive (期望 0，实际 %d)",
+			t.Errorf("bidirectional edge case: node-1->%s should not have PersistentKeepalive (want 0, got %d)",
 				p.NodeID, p.PersistentKeepalive)
 		}
 	}
@@ -287,49 +288,49 @@ func TestDerivePeers_PerPeerFields(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// 验证 node-1 的第一个 peer 的 per-peer 字段
+	// Verify the per-peer fields of node-1's first peer.
 	node1Peers := peerMap["node-1"]
 	if len(node1Peers) != 2 {
-		t.Fatalf("node-1 应有 2 个 peer，实际 %d", len(node1Peers))
+		t.Fatalf("node-1 should have 2 peers, got %d", len(node1Peers))
 	}
 
 	for _, p := range node1Peers {
-		// InterfaceName 格式：wg-<peername>
+		// InterfaceName format: wg-<peername>.
 		if p.InterfaceName == "" {
-			t.Errorf("peer %s 的 InterfaceName 不应为空", p.NodeID)
+			t.Errorf("peer %s InterfaceName should not be empty", p.NodeID)
 		}
 		if len(p.InterfaceName) > 15 {
-			t.Errorf("peer %s 的 InterfaceName 超过 15 字符: %s", p.NodeID, p.InterfaceName)
+			t.Errorf("peer %s InterfaceName exceeds 15 chars: %s", p.NodeID, p.InterfaceName)
 		}
 
-		// ListenPort 应有值且从 basePort 递增
+		// ListenPort should be set and increment from basePort.
 		if p.ListenPort == 0 {
-			t.Errorf("peer %s 的 ListenPort 不应为 0", p.NodeID)
+			t.Errorf("peer %s ListenPort should not be 0", p.NodeID)
 		}
 
-		// Transit IP 应有值
+		// Transit IP should be set.
 		if p.LocalTransitIP == "" {
-			t.Errorf("peer %s 的 LocalTransitIP 不应为空", p.NodeID)
+			t.Errorf("peer %s LocalTransitIP should not be empty", p.NodeID)
 		}
 		if p.RemoteTransitIP == "" {
-			t.Errorf("peer %s 的 RemoteTransitIP 不应为空", p.NodeID)
+			t.Errorf("peer %s RemoteTransitIP should not be empty", p.NodeID)
 		}
 
-		// Link-local 应有值
+		// Link-local should be set.
 		if p.LocalLinkLocal == "" {
-			t.Errorf("peer %s 的 LocalLinkLocal 不应为空", p.NodeID)
+			t.Errorf("peer %s LocalLinkLocal should not be empty", p.NodeID)
 		}
 		if p.RemoteLinkLocal == "" {
-			t.Errorf("peer %s 的 RemoteLinkLocal 不应为空", p.NodeID)
+			t.Errorf("peer %s RemoteLinkLocal should not be empty", p.NodeID)
 		}
 	}
 
-	// 验证两个 peer 的 ListenPort 不同（递增分配）
+	// Verify the two peers have different ListenPorts (incremental allocation).
 	if node1Peers[0].ListenPort == node1Peers[1].ListenPort {
-		t.Errorf("同一节点的两个 peer 接口 ListenPort 应不同，实际都为 %d", node1Peers[0].ListenPort)
+		t.Errorf("the two peer interfaces of the same node should have different ListenPorts, both are %d", node1Peers[0].ListenPort)
 	}
 
-	// 验证 transit IP 互补：node-1 到 node-2 的 local 应等于 node-2 到 node-1 的 remote
+	// Verify transit IP complementarity: node-1->node-2 local should equal node-2->node-1 remote.
 	var n1ToN2, n2ToN1 *PeerInfo
 	for i, p := range peerMap["node-1"] {
 		if p.NodeID == "node-2" {
@@ -343,24 +344,24 @@ func TestDerivePeers_PerPeerFields(t *testing.T) {
 	}
 	if n1ToN2 != nil && n2ToN1 != nil {
 		if n1ToN2.LocalTransitIP != n2ToN1.RemoteTransitIP {
-			t.Errorf("transit IP 不互补: n1→n2 local=%s, n2→n1 remote=%s",
+			t.Errorf("transit IP not complementary: n1->n2 local=%s, n2->n1 remote=%s",
 				n1ToN2.LocalTransitIP, n2ToN1.RemoteTransitIP)
 		}
 		if n1ToN2.RemoteTransitIP != n2ToN1.LocalTransitIP {
-			t.Errorf("transit IP 不互补: n1→n2 remote=%s, n2→n1 local=%s",
+			t.Errorf("transit IP not complementary: n1->n2 remote=%s, n2->n1 local=%s",
 				n1ToN2.RemoteTransitIP, n2ToN1.LocalTransitIP)
 		}
 	}
 }
 
 func TestGenerateRouterID(t *testing.T) {
-	// 验证 MAC-48 格式
+	// Verify the MAC-48 format.
 	rid := GenerateRouterID("node-1")
 	if len(rid) != 17 { // xx:xx:xx:xx:xx:xx = 17 chars
-		t.Errorf("RouterID 长度应为 17，实际 %d: %s", len(rid), rid)
+		t.Errorf("RouterID length should be 17, got %d: %s", len(rid), rid)
 	}
 
-	// 验证格式包含 5 个冒号
+	// Verify the format contains 5 colons.
 	colonCount := 0
 	for _, c := range rid {
 		if c == ':' {
@@ -368,19 +369,19 @@ func TestGenerateRouterID(t *testing.T) {
 		}
 	}
 	if colonCount != 5 {
-		t.Errorf("RouterID 应包含 5 个冒号，实际 %d: %s", colonCount, rid)
+		t.Errorf("RouterID should contain 5 colons, got %d: %s", colonCount, rid)
 	}
 
-	// 验证稳定性（同输入 → 同输出）
+	// Verify stability (same input -> same output).
 	rid2 := GenerateRouterID("node-1")
 	if rid != rid2 {
-		t.Errorf("RouterID 不稳定: 第一次=%s, 第二次=%s", rid, rid2)
+		t.Errorf("RouterID not stable: first=%s, second=%s", rid, rid2)
 	}
 
-	// 验证不同输入 → 不同输出
+	// Verify different input -> different output.
 	rid3 := GenerateRouterID("node-2")
 	if rid == rid3 {
-		t.Errorf("不同节点的 RouterID 应不同: node-1=%s, node-2=%s", rid, rid3)
+		t.Errorf("RouterID should differ for different nodes: node-1=%s, node-2=%s", rid, rid3)
 	}
 }
 
@@ -390,19 +391,19 @@ func TestWgInterfaceName(t *testing.T) {
 		expected string
 	}{
 		{"beta", "wg-beta"},
-		{"Alpha", "wg-alpha"},                   // 大写转小写
-		{"my_server", "wg-my-server"},           // 下划线转连字符
-		{"a.b.c", "wg-a-b-c"},                   // 点转连字符
-		{"abcdefghijklmnop", "wg-abcdefghf39d"}, // 超过15字符：使用哈希后缀避免截断冲突
+		{"Alpha", "wg-alpha"},                   // uppercase to lowercase
+		{"my_server", "wg-my-server"},           // underscore to hyphen
+		{"a.b.c", "wg-a-b-c"},                   // dot to hyphen
+		{"abcdefghijklmnop", "wg-abcdefghf39d"}, // over 15 chars: use a hash suffix to avoid truncation collisions
 	}
 
 	for _, tt := range tests {
 		got := wgInterfaceName(tt.input)
 		if got != tt.expected {
-			t.Errorf("wgInterfaceName(%q) = %q, 期望 %q", tt.input, got, tt.expected)
+			t.Errorf("wgInterfaceName(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 		if len(got) > 15 {
-			t.Errorf("wgInterfaceName(%q) = %q 超过 15 字符", tt.input, got)
+			t.Errorf("wgInterfaceName(%q) = %q exceeds 15 chars", tt.input, got)
 		}
 	}
 }
@@ -414,33 +415,33 @@ func TestCompile_SimpleMesh(t *testing.T) {
 	c := NewCompiler()
 	result, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("compile failed: %v", err)
 	}
 
-	//  IP
+	// Every node should have an overlay IP.
 	for _, node := range result.Topology.Nodes {
 		if node.OverlayIP == "" {
-			t.Errorf(" %s  IP", node.Name)
+			t.Errorf("node %s is missing its overlay IP", node.Name)
 		}
 	}
 
-	//  PeerMap
+	// Verify the PeerMap.
 	if len(result.PeerMap) != 3 {
-		t.Errorf("PeerMap  3 ,  %d", len(result.PeerMap))
+		t.Errorf("PeerMap should have 3 entries, got %d", len(result.PeerMap))
 	}
 
-	//  Manifest
+	// Verify the Manifest.
 	if result.Manifest.NodeCount != 3 {
-		t.Errorf("Manifest NodeCount  3,  %d", result.Manifest.NodeCount)
+		t.Errorf("Manifest NodeCount should be 3, got %d", result.Manifest.NodeCount)
 	}
 }
 
-// extractPortFromEndpoint 从 "host:port" 或 "[ipv6]:port" 中提取端口号
+// extractPortFromEndpoint extracts the port number from "host:port" or "[ipv6]:port".
 func extractPortFromEndpoint(endpoint string) int {
 	if endpoint == "" {
 		return 0
 	}
-	// 从末尾找最后一个冒号
+	// Scan from the end for the last colon.
 	lastColon := -1
 	for i := len(endpoint) - 1; i >= 0; i-- {
 		if endpoint[i] == ':' {
@@ -460,8 +461,9 @@ func extractPortFromEndpoint(endpoint string) int {
 	return port
 }
 
-// TestDerivePeers_PortEndpointSymmetry 验证核心不变量：
-// 对于每对 (A, B)，A 用来连 B 的 endpoint 端口 == B 为 A 分配的接口 ListenPort
+// TestDerivePeers_PortEndpointSymmetry verifies the core invariant:
+// for each pair (A, B), the endpoint port A uses to connect to B == the interface
+// ListenPort B allocated for A.
 func TestDerivePeers_PortEndpointSymmetry(t *testing.T) {
 	topo := simpleMeshTopo()
 	topo.Nodes[0].OverlayIP = "10.11.0.1"
@@ -471,37 +473,37 @@ func TestDerivePeers_PortEndpointSymmetry(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// 对每个节点的每个 peer，验证端口对称性
+	// For each peer of each node, verify port symmetry.
 	for nodeID, peers := range peerMap {
 		for _, p := range peers {
 			if p.Endpoint == "" {
-				continue // 没有 endpoint 的 peer（如反向自动生成的无 endpoint peer）跳过
+				continue // skip peers without an endpoint (e.g. auto-generated reverse peers with no endpoint)
 			}
 
 			endpointPort := extractPortFromEndpoint(p.Endpoint)
 
-			// 在对端节点的 peer 列表中找到指向当前节点的条目
+			// Find the entry pointing back at the current node in the remote node's peer list.
 			remotePeers := peerMap[p.NodeID]
 			found := false
 			for _, rp := range remotePeers {
 				if rp.NodeID == nodeID {
 					found = true
 					if endpointPort != rp.ListenPort {
-						t.Errorf("端口对称性违反: %s->%s endpoint 端口=%d, 但 %s 为 %s 分配的 ListenPort=%d",
+						t.Errorf("port symmetry violated: %s->%s endpoint port=%d, but the ListenPort %s allocated for %s=%d",
 							nodeID, p.NodeID, endpointPort, p.NodeID, nodeID, rp.ListenPort)
 					}
 					break
 				}
 			}
 			if !found {
-				t.Errorf("对称性检查失败: %s 有 peer %s, 但 %s 没有反向 peer %s",
+				t.Errorf("symmetry check failed: %s has peer %s, but %s has no reverse peer %s",
 					nodeID, p.NodeID, p.NodeID, nodeID)
 			}
 		}
 	}
 }
 
-// TestDerivePeers_MultiPeerPortIncrement 验证 hub 节点有多个 peer 时端口正确递增
+// TestDerivePeers_MultiPeerPortIncrement verifies that ports increment correctly when a hub node has multiple peers.
 func TestDerivePeers_MultiPeerPortIncrement(t *testing.T) {
 	topo := natHubTopo()
 	topo.Nodes[0].OverlayIP = "10.20.0.1"
@@ -511,37 +513,37 @@ func TestDerivePeers_MultiPeerPortIncrement(t *testing.T) {
 	keys := testKeys()
 	peerMap, _, _ := DerivePeers(topo, keys)
 
-	// Hub (node-1) 应该有 2 个 peer 接口，端口递增
+	// Hub (node-1) should have 2 peer interfaces with incrementing ports.
 	hubPeers := peerMap["node-1"]
 	if len(hubPeers) != 2 {
-		t.Fatalf("Hub 应有 2 个 peer，实际 %d", len(hubPeers))
+		t.Fatalf("Hub should have 2 peers, got %d", len(hubPeers))
 	}
 
-	// Hub 的两个接口端口应该不同且从 base 递增
+	// The hub's two interface ports should differ and increment from base.
 	if hubPeers[0].ListenPort == hubPeers[1].ListenPort {
-		t.Errorf("Hub 的两个接口端口不应相同，都为 %d", hubPeers[0].ListenPort)
+		t.Errorf("the hub's two interface ports should not be the same, both are %d", hubPeers[0].ListenPort)
 	}
 
-	// 验证每个 client 的 endpoint 端口 == hub 为该 client 分配的 ListenPort
+	// Verify each client's endpoint port == the ListenPort the hub allocated for that client.
 	for _, clientID := range []string{"node-2", "node-3"} {
 		clientPeers := peerMap[clientID]
 		if len(clientPeers) != 1 {
-			t.Fatalf("Client %s 应有 1 个 peer，实际 %d", clientID, len(clientPeers))
+			t.Fatalf("Client %s should have 1 peer, got %d", clientID, len(clientPeers))
 		}
 
 		cp := clientPeers[0]
 		if cp.Endpoint == "" {
-			t.Errorf("Client %s 的 endpoint 不应为空", clientID)
+			t.Errorf("Client %s endpoint should not be empty", clientID)
 			continue
 		}
 
 		endpointPort := extractPortFromEndpoint(cp.Endpoint)
 
-		// 找到 hub 中对应该 client 的 peer
+		// Find the hub's peer corresponding to this client.
 		for _, hp := range hubPeers {
 			if hp.NodeID == clientID {
 				if endpointPort != hp.ListenPort {
-					t.Errorf("Client %s endpoint 端口=%d, 但 Hub 为 %s 分配的 ListenPort=%d",
+					t.Errorf("Client %s endpoint port=%d, but the ListenPort the Hub allocated for %s=%d",
 						clientID, endpointPort, clientID, hp.ListenPort)
 				}
 				break

@@ -6,31 +6,32 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// model_coverage_test.go 覆盖「字段覆盖」分区新增的若干结构性校验规则
-// （Spec E 字段平价表 + Spec docs/spec/compiler/validation.md 覆盖表）：
-//   - route_policies 保留特性拒绝（D10/D37/D62，semantic）
-//   - MTU 范围（D64，schema）
-//   - ssh_port 范围（D65，schema）
-//   - router_id MAC-48 / IPv4 格式（D66，schema）
-//   - extra_prefixes IPv4 CIDR（D67，schema）
+// model_coverage_test.go covers several structural validation rules added in the "field coverage"
+// partition (Spec E field-parity table + the coverage table in Spec docs/spec/compiler/validation.md):
+//   - route_policies reserved-feature rejection (D10/D37/D62, semantic)
+//   - MTU range (D64, schema)
+//   - ssh_port range (D65, schema)
+//   - router_id MAC-48 / IPv4 format (D66, schema)
+//   - extra_prefixes IPv4 CIDR (D67, schema)
 //
-// 每张表都成对覆盖「应通过」与「应拒绝」两类取值，沿用既有 validator 测试的
-// validTopology()/assertHasError()/contains() 辅助函数。
+// Each table covers both "should pass" and "should reject" value classes in pairs, reusing the existing
+// validator tests' validTopology()/assertHasError()/contains() helpers.
 
-// assertNoErrorOnField 断言结果中不存在任何字段名包含 fieldSubstring 的错误。
-// 用于「应通过」分支：合法取值不得在目标字段上触发任何校验错误。
+// assertNoErrorOnField asserts that the result contains no error whose field name contains
+// fieldSubstring. Used by the "should pass" branch: a legal value must not trigger any validation
+// error on the target field.
 func assertNoErrorOnField(t *testing.T, result *ValidationResult, fieldSubstring, value string) {
 	t.Helper()
 	for _, e := range result.Errors {
 		if contains(e.Field, fieldSubstring) {
-			t.Errorf("取值 %q 不应在字段 %s 上触发错误，却得到：%s", value, fieldSubstring, e.Error())
+			t.Errorf("value %q should not trigger an error on field %s, but got: %s", value, fieldSubstring, e.Error())
 		}
 	}
 }
 
-// TestValidateSemantic_RoutePoliciesReserved 覆盖 route_policies 保留特性拒绝（D10/D37/D62）。
-// route_policies 没有任何渲染器消费，编译器仅原样透传，因此非空数组必须在语义校验阶段被拒绝；
-// 空数组（或 nil）则应当通过。
+// TestValidateSemantic_RoutePoliciesReserved covers route_policies reserved-feature rejection (D10/D37/D62).
+// route_policies is consumed by no renderer and the compiler merely passes it through unchanged, so a
+// non-empty array must be rejected in the semantic-validation phase; an empty array (or nil) should pass.
 func TestValidateSemantic_RoutePoliciesReserved(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -38,24 +39,24 @@ func TestValidateSemantic_RoutePoliciesReserved(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:        "空 route_policies 通过",
+			name:        "nil route_policies passes",
 			policies:    nil,
 			expectError: false,
 		},
 		{
-			name:        "零长 route_policies 通过",
+			name:        "zero-length route_policies passes",
 			policies:    []model.RoutePolicy{},
 			expectError: false,
 		},
 		{
-			name: "单条 route_policy 被拒绝",
+			name: "single route_policy rejected",
 			policies: []model.RoutePolicy{
 				{ID: "rp-1", DomainID: "domain-1", DestinationCIDR: "192.168.0.0/24"},
 			},
 			expectError: true,
 		},
 		{
-			name: "多条 route_policy 被拒绝",
+			name: "multiple route_policies rejected",
 			policies: []model.RoutePolicy{
 				{ID: "rp-1", DomainID: "domain-1", DestinationCIDR: "192.168.0.0/24"},
 				{ID: "rp-2", DomainID: "domain-1", DestinationCIDR: "10.0.0.0/8"},
@@ -78,21 +79,22 @@ func TestValidateSemantic_RoutePoliciesReserved(t *testing.T) {
 	}
 }
 
-// TestValidateSchema_MTURange 覆盖 MTU 范围校验（D64）。
-// 0 表示使用系统默认值，应通过；非零时必须落在 [576, 65535] 内，越界（含 575、65536）应拒绝。
+// TestValidateSchema_MTURange covers MTU range validation (D64).
+// 0 means use the system default and should pass; when non-zero it must fall within [576, 65535],
+// and out-of-range values (including 575 and 65536) should be rejected.
 func TestValidateSchema_MTURange(t *testing.T) {
 	cases := []struct {
 		name        string
 		mtu         int
 		expectError bool
 	}{
-		{name: "0 使用默认值", mtu: 0, expectError: false},
-		{name: "下限 576", mtu: 576, expectError: false},
-		{name: "常用 1420", mtu: 1420, expectError: false},
-		{name: "上限 65535", mtu: 65535, expectError: false},
-		{name: "低于下限 575", mtu: 575, expectError: true},
-		{name: "负值", mtu: -1, expectError: true},
-		{name: "超过上限 65536", mtu: 65536, expectError: true},
+		{name: "0 uses default", mtu: 0, expectError: false},
+		{name: "lower bound 576", mtu: 576, expectError: false},
+		{name: "common 1420", mtu: 1420, expectError: false},
+		{name: "upper bound 65535", mtu: 65535, expectError: false},
+		{name: "below lower bound 575", mtu: 575, expectError: true},
+		{name: "negative", mtu: -1, expectError: true},
+		{name: "above upper bound 65536", mtu: 65536, expectError: true},
 	}
 
 	for _, tc := range cases {
@@ -109,20 +111,21 @@ func TestValidateSchema_MTURange(t *testing.T) {
 	}
 }
 
-// TestValidateSchema_SSHPortRange 覆盖 ssh_port 范围校验（D65）。
-// 0 表示使用默认端口 22，应通过；非零时必须落在 1–65535 内，越界应拒绝。
+// TestValidateSchema_SSHPortRange covers ssh_port range validation (D65).
+// 0 means use the default port 22 and should pass; when non-zero it must fall within 1-65535, and
+// out-of-range values should be rejected.
 func TestValidateSchema_SSHPortRange(t *testing.T) {
 	cases := []struct {
 		name        string
 		sshPort     int
 		expectError bool
 	}{
-		{name: "0 使用默认端口", sshPort: 0, expectError: false},
-		{name: "下限 1", sshPort: 1, expectError: false},
-		{name: "常用 22", sshPort: 22, expectError: false},
-		{name: "上限 65535", sshPort: 65535, expectError: false},
-		{name: "负值", sshPort: -1, expectError: true},
-		{name: "超过上限 65536", sshPort: 65536, expectError: true},
+		{name: "0 uses default port", sshPort: 0, expectError: false},
+		{name: "lower bound 1", sshPort: 1, expectError: false},
+		{name: "common 22", sshPort: 22, expectError: false},
+		{name: "upper bound 65535", sshPort: 65535, expectError: false},
+		{name: "negative", sshPort: -1, expectError: true},
+		{name: "above upper bound 65536", sshPort: 65536, expectError: true},
 	}
 
 	for _, tc := range cases {
@@ -139,23 +142,24 @@ func TestValidateSchema_SSHPortRange(t *testing.T) {
 	}
 }
 
-// TestValidateSchema_RouterIDFormat 覆盖 router_id 格式校验（D66）。
-// 留空由编译器自动生成，应通过；非空时必须为 MAC-48 形式或可解析为 IPv4 地址，二者皆非则拒绝。
+// TestValidateSchema_RouterIDFormat covers router_id format validation (D66).
+// Left empty, the compiler auto-generates it and it should pass; when non-empty it must be in MAC-48
+// form or parseable as an IPv4 address, and is rejected if neither.
 func TestValidateSchema_RouterIDFormat(t *testing.T) {
 	cases := []struct {
 		name        string
 		routerID    string
 		expectError bool
 	}{
-		{name: "留空自动生成", routerID: "", expectError: false},
-		{name: "合法 MAC-48 小写", routerID: "02:11:22:33:44:55", expectError: false},
-		{name: "合法 MAC-48 大写", routerID: "AA:BB:CC:DD:EE:FF", expectError: false},
-		{name: "合法 IPv4", routerID: "10.0.0.1", expectError: false},
-		{name: "MAC 段数不足", routerID: "02:11:22:33:44", expectError: true},
-		{name: "MAC 含非十六进制", routerID: "02:11:22:33:44:GG", expectError: true},
-		{name: "MAC 段位过长", routerID: "002:11:22:33:44:55", expectError: true},
-		{name: "IPv6 不接受", routerID: "fe80::1", expectError: true},
-		{name: "纯文本", routerID: "router-one", expectError: true},
+		{name: "empty auto-generated", routerID: "", expectError: false},
+		{name: "valid MAC-48 lowercase", routerID: "02:11:22:33:44:55", expectError: false},
+		{name: "valid MAC-48 uppercase", routerID: "AA:BB:CC:DD:EE:FF", expectError: false},
+		{name: "valid IPv4", routerID: "10.0.0.1", expectError: false},
+		{name: "MAC too few segments", routerID: "02:11:22:33:44", expectError: true},
+		{name: "MAC non-hex digit", routerID: "02:11:22:33:44:GG", expectError: true},
+		{name: "MAC segment too long", routerID: "002:11:22:33:44:55", expectError: true},
+		{name: "IPv6 not accepted", routerID: "fe80::1", expectError: true},
+		{name: "plain text", routerID: "router-one", expectError: true},
 	}
 
 	for _, tc := range cases {
@@ -172,21 +176,22 @@ func TestValidateSchema_RouterIDFormat(t *testing.T) {
 	}
 }
 
-// TestValidateSchema_ExtraPrefixesIPv4CIDR 覆盖 extra_prefixes IPv4 CIDR 校验（D67）。
-// 空数组应通过；每项必须可解析为 IPv4 CIDR，非 CIDR、IPv6 CIDR、裸 IP 均应拒绝。
+// TestValidateSchema_ExtraPrefixesIPv4CIDR covers extra_prefixes IPv4 CIDR validation (D67).
+// An empty array should pass; each item must be parseable as an IPv4 CIDR, and non-CIDR, IPv6 CIDR,
+// and bare IPs are all rejected.
 func TestValidateSchema_ExtraPrefixesIPv4CIDR(t *testing.T) {
 	cases := []struct {
 		name        string
 		prefixes    []string
 		expectError bool
 	}{
-		{name: "空数组通过", prefixes: nil, expectError: false},
-		{name: "单个合法 IPv4 CIDR", prefixes: []string{"192.168.0.0/24"}, expectError: false},
-		{name: "多个合法 IPv4 CIDR", prefixes: []string{"192.168.0.0/24", "10.0.0.0/8"}, expectError: false},
-		{name: "非 CIDR 文本", prefixes: []string{"not-a-cidr"}, expectError: true},
-		{name: "裸 IP 无前缀", prefixes: []string{"192.168.0.1"}, expectError: true},
-		{name: "IPv6 CIDR 被拒绝", prefixes: []string{"fd00::/8"}, expectError: true},
-		{name: "首项合法次项非法", prefixes: []string{"192.168.0.0/24", "bad"}, expectError: true},
+		{name: "empty array passes", prefixes: nil, expectError: false},
+		{name: "single valid IPv4 CIDR", prefixes: []string{"192.168.0.0/24"}, expectError: false},
+		{name: "multiple valid IPv4 CIDRs", prefixes: []string{"192.168.0.0/24", "10.0.0.0/8"}, expectError: false},
+		{name: "non-CIDR text", prefixes: []string{"not-a-cidr"}, expectError: true},
+		{name: "bare IP without prefix", prefixes: []string{"192.168.0.1"}, expectError: true},
+		{name: "IPv6 CIDR rejected", prefixes: []string{"fd00::/8"}, expectError: true},
+		{name: "first valid second invalid", prefixes: []string{"192.168.0.0/24", "bad"}, expectError: true},
 	}
 
 	for _, tc := range cases {

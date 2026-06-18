@@ -7,22 +7,26 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
-// 本文件是并行链路（primary + backup 故障切换）在编译器分区的门禁，覆盖
-// docs/spec/compiler/allocation-stability.md（Link identity with parallel edges）与
-// docs/spec/artifacts/{naming.md,babel.md} 的契约：
-//   - 一对节点的 primary + backup 编译成每侧两个 PeerInfo，接口名 / 监听端口 / transit IP 全部互异；
-//   - 接口名由唯一命名权威 internal/naming 给出：primary == WgInterfaceName(remote)，
-//     backup == WgInterfaceNameForEdge(remote, edgeID, true)；
-//   - backup 链路未设 priority/weight 时 LinkCost == 384（babeld wired 默认 96 的 4 倍）；
-//   - backup 上的显式 priority 覆盖 384；
-//   - 传统的「无 role 的 A->B + B->A」反向对仍折叠成一条链路（每侧恰一个 PeerInfo，
-//     接口名与改动前逐字节相同）。
+// This file is the gate for parallel links (primary + backup failover) in the compiler
+// partition, covering the contracts of docs/spec/compiler/allocation-stability.md (Link
+// identity with parallel edges) and docs/spec/artifacts/{naming.md,babel.md}:
+//   - a node pair's primary + backup compile to two PeerInfo per side, with interface name /
+//     listen port / transit IP all distinct;
+//   - interface names come from the single naming authority internal/naming: primary ==
+//     WgInterfaceName(remote), backup == WgInterfaceNameForEdge(remote, edgeID, true);
+//   - a backup link with no priority/weight set has LinkCost == 384 (4x the babeld wired
+//     default of 96);
+//   - an explicit priority on the backup overrides 384;
+//   - the legacy "role-less A->B + B->A" reverse pair still collapses into one link (exactly
+//     one PeerInfo per side, interface name byte-for-byte identical to before the change).
 //
-// 这些断言都通过公共面（compiler.Compile、PeerInfo、model 字段、naming 包）进行，不触碰内部实现。
+// All these assertions go through the public surface (compiler.Compile, PeerInfo, model
+// fields, the naming package) and do not touch internal implementation.
 
-// findPeerByIface 在 peers 中按 InterfaceName 精确定位 PeerInfo。
-// 并行链路下同一 NodeID 会出现多个 PeerInfo（primary 与各 backup），故不能再按 NodeID 查找，
-// 接口名才是每条链路的唯一判据。
+// findPeerByIface locates a PeerInfo within peers by exact InterfaceName match.
+// With parallel links, the same NodeID yields multiple PeerInfo (primary and each backup),
+// so lookup by NodeID is no longer valid — the interface name is the unique criterion for
+// each link.
 func findPeerByIface(peers []PeerInfo, iface string) *PeerInfo {
 	for i := range peers {
 		if peers[i].InterfaceName == iface {
@@ -32,7 +36,8 @@ func findPeerByIface(peers []PeerInfo, iface string) *PeerInfo {
 	return nil
 }
 
-// countPeersToRemote 统计 peers 中指向 remoteID 的 PeerInfo 数量（= 该节点对该对端的接口数）。
+// countPeersToRemote counts the number of PeerInfo in peers pointing at remoteID (= the
+// number of interfaces this node has toward that remote).
 func countPeersToRemote(peers []PeerInfo, remoteID string) int {
 	n := 0
 	for i := range peers {
@@ -43,9 +48,10 @@ func countPeersToRemote(peers []PeerInfo, remoteID string) int {
 	return n
 }
 
-// parallelPairTopology 构造一对节点 A<->B、外加一条 primary class 边与一条 backup 边。
-// backupID 用于让调用方拿到 backup 边的 ID 以重建其接口名；extraBackup 允许注入额外配置
-// （例如在 backup 上设置 Priority）以测试 cost 覆盖。
+// parallelPairTopology constructs a node pair A<->B plus one primary-class edge and one
+// backup edge. backupID lets the caller hold onto the backup edge's ID to reconstruct its
+// interface name; mutateBackup allows injecting extra config (e.g. setting Priority on the
+// backup) to test cost override.
 func parallelPairTopology(backupID string, mutateBackup func(*model.Edge)) *model.Topology {
 	primary := abEdge("e-ab", "node-a", "node-b", "beta.example.com")
 	backup := backupEdge(backupID, "node-a", "node-b", "beta.example.com")
@@ -63,8 +69,9 @@ func parallelPairTopology(backupID string, mutateBackup func(*model.Edge)) *mode
 	}
 }
 
-// TestParallelLinks_TwoDistinctInterfacesPerSide 验证 primary + backup 在每一侧都生成两个
-// PeerInfo，且接口名 / 监听端口 / transit IP 三者全部互异；接口名来自唯一命名权威。
+// TestParallelLinks_TwoDistinctInterfacesPerSide verifies that primary + backup produce two
+// PeerInfo on each side, with interface name / listen port / transit IP all distinct; the
+// interface names come from the single naming authority.
 func TestParallelLinks_TwoDistinctInterfacesPerSide(t *testing.T) {
 	c := NewCompiler()
 	keys := stableKeys()
@@ -73,68 +80,69 @@ func TestParallelLinks_TwoDistinctInterfacesPerSide(t *testing.T) {
 	topo := parallelPairTopology(backupID, nil)
 	res, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("primary + backup 拓扑应能编译，实际报错: %v", err)
+		t.Fatalf("primary + backup topology should compile, got error: %v", err)
 	}
 
-	// 期望接口名（由唯一命名权威给出，验证编译器确实通过 naming 包派生）。
-	primaryIfaceOnA := naming.WgInterfaceName("beta")                        // A 侧指向 beta 的 primary 接口
-	backupIfaceOnA := naming.WgInterfaceNameForEdge("beta", backupID, true)  // A 侧指向 beta 的 backup 接口
-	primaryIfaceOnB := naming.WgInterfaceName("alpha")                       // B 侧指向 alpha 的 primary 接口
-	backupIfaceOnB := naming.WgInterfaceNameForEdge("alpha", backupID, true) // B 侧指向 alpha 的 backup 接口
+	// Expected interface names (given by the single naming authority, verifying the compiler really derives them via the naming package).
+	primaryIfaceOnA := naming.WgInterfaceName("beta")                        // A-side primary interface toward beta
+	backupIfaceOnA := naming.WgInterfaceNameForEdge("beta", backupID, true)  // A-side backup interface toward beta
+	primaryIfaceOnB := naming.WgInterfaceName("alpha")                       // B-side primary interface toward alpha
+	backupIfaceOnB := naming.WgInterfaceNameForEdge("alpha", backupID, true) // B-side backup interface toward alpha
 
-	// primary 与 backup 的接口名必须不同，否则两条链路的配置会相互覆盖。
+	// The primary and backup interface names must differ, otherwise the two links' configs would overwrite each other.
 	if primaryIfaceOnA == backupIfaceOnA {
-		t.Fatalf("A 侧 primary 与 backup 接口名不应相同：%q", primaryIfaceOnA)
+		t.Fatalf("A-side primary and backup interface names should not be equal: %q", primaryIfaceOnA)
 	}
 
-	// ---- A 侧：恰两个指向 B 的 PeerInfo ----
+	// ---- A side: exactly two PeerInfo pointing at B ----
 	aPeers := res.PeerMap["node-a"]
 	if got := countPeersToRemote(aPeers, "node-b"); got != 2 {
-		t.Fatalf("A 侧应有 2 个指向 B 的 PeerInfo（primary + backup），实际 %d 个", got)
+		t.Fatalf("A side should have 2 PeerInfo pointing at B (primary + backup), got %d", got)
 	}
 	aPrimary := findPeerByIface(aPeers, primaryIfaceOnA)
 	aBackup := findPeerByIface(aPeers, backupIfaceOnA)
 	if aPrimary == nil {
-		t.Fatalf("A 侧应存在 primary 接口 %q，实际 peers: %+v", primaryIfaceOnA, aPeers)
+		t.Fatalf("A side should have primary interface %q, got peers: %+v", primaryIfaceOnA, aPeers)
 	}
 	if aBackup == nil {
-		t.Fatalf("A 侧应存在 backup 接口 %q，实际 peers: %+v", backupIfaceOnA, aPeers)
+		t.Fatalf("A side should have backup interface %q, got peers: %+v", backupIfaceOnA, aPeers)
 	}
 
-	// ---- B 侧：同样恰两个指向 A 的 PeerInfo ----
+	// ---- B side: likewise exactly two PeerInfo pointing at A ----
 	bPeers := res.PeerMap["node-b"]
 	if got := countPeersToRemote(bPeers, "node-a"); got != 2 {
-		t.Fatalf("B 侧应有 2 个指向 A 的 PeerInfo（primary + backup），实际 %d 个", got)
+		t.Fatalf("B side should have 2 PeerInfo pointing at A (primary + backup), got %d", got)
 	}
 	bPrimary := findPeerByIface(bPeers, primaryIfaceOnB)
 	bBackup := findPeerByIface(bPeers, backupIfaceOnB)
 	if bPrimary == nil {
-		t.Fatalf("B 侧应存在 primary 接口 %q，实际 peers: %+v", primaryIfaceOnB, bPeers)
+		t.Fatalf("B side should have primary interface %q, got peers: %+v", primaryIfaceOnB, bPeers)
 	}
 	if bBackup == nil {
-		t.Fatalf("B 侧应存在 backup 接口 %q，实际 peers: %+v", backupIfaceOnB, bPeers)
+		t.Fatalf("B side should have backup interface %q, got peers: %+v", backupIfaceOnB, bPeers)
 	}
 
-	// ---- 监听端口互异（同一节点上两条链路不得争用同一端口） ----
+	// ---- Listen ports distinct (two links on the same node must not contend for the same port) ----
 	if aPrimary.ListenPort == aBackup.ListenPort {
-		t.Errorf("A 侧 primary 与 backup 监听端口应互异，实际都为 %d", aPrimary.ListenPort)
+		t.Errorf("A-side primary and backup listen ports should be distinct, both are %d", aPrimary.ListenPort)
 	}
 	if bPrimary.ListenPort == bBackup.ListenPort {
-		t.Errorf("B 侧 primary 与 backup 监听端口应互异，实际都为 %d", bPrimary.ListenPort)
+		t.Errorf("B-side primary and backup listen ports should be distinct, both are %d", bPrimary.ListenPort)
 	}
 
-	// ---- transit IP 互异（两条链路是两套点对点地址） ----
+	// ---- transit IPs distinct (the two links are two sets of point-to-point addresses) ----
 	if aPrimary.LocalTransitIP == aBackup.LocalTransitIP {
-		t.Errorf("A 侧 primary 与 backup 本端 transit IP 应互异，实际都为 %s", aPrimary.LocalTransitIP)
+		t.Errorf("A-side primary and backup local transit IPs should be distinct, both are %s", aPrimary.LocalTransitIP)
 	}
 	if aPrimary.RemoteTransitIP == aBackup.RemoteTransitIP {
-		t.Errorf("A 侧 primary 与 backup 对端 transit IP 应互异，实际都为 %s", aPrimary.RemoteTransitIP)
+		t.Errorf("A-side primary and backup remote transit IPs should be distinct, both are %s", aPrimary.RemoteTransitIP)
 	}
 }
 
-// TestParallelLinks_BackupDefaultLinkCost 验证 backup 链路未设 priority/weight 时 LinkCost == 384
-// （docs/spec/artifacts/babel.md「Link cost resolution」第 2 条 backup preset），而同对的 primary
-// 链路 LinkCost == 0（走 babeld 内置默认，渲染时省略 rxcost）。
+// TestParallelLinks_BackupDefaultLinkCost verifies that a backup link with no priority/weight
+// set has LinkCost == 384 (docs/spec/artifacts/babel.md "Link cost resolution" rule 2, the
+// backup preset), while the same pair's primary link has LinkCost == 0 (uses babeld's built-in
+// default, omitting rxcost at render time).
 func TestParallelLinks_BackupDefaultLinkCost(t *testing.T) {
 	c := NewCompiler()
 	keys := stableKeys()
@@ -143,31 +151,31 @@ func TestParallelLinks_BackupDefaultLinkCost(t *testing.T) {
 	topo := parallelPairTopology(backupID, nil)
 	res, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("primary + backup 拓扑应能编译，实际报错: %v", err)
+		t.Fatalf("primary + backup topology should compile, got error: %v", err)
 	}
 
 	aPeers := res.PeerMap["node-a"]
 	aPrimary := findPeerByIface(aPeers, naming.WgInterfaceName("beta"))
 	aBackup := findPeerByIface(aPeers, naming.WgInterfaceNameForEdge("beta", backupID, true))
 	if aPrimary == nil || aBackup == nil {
-		t.Fatalf("应同时找到 primary 与 backup PeerInfo，实际 peers: %+v", aPeers)
+		t.Fatalf("should find both primary and backup PeerInfo, got peers: %+v", aPeers)
 	}
 
 	if aBackup.LinkCost != backupDefaultLinkCost {
-		t.Errorf("backup 链路未设 priority/weight 时 LinkCost 应为 %d，实际 %d", backupDefaultLinkCost, aBackup.LinkCost)
+		t.Errorf("a backup link with no priority/weight set should have LinkCost %d, got %d", backupDefaultLinkCost, aBackup.LinkCost)
 	}
 	if backupDefaultLinkCost != 384 {
-		t.Errorf("backupDefaultLinkCost 常量应为 384（babeld wired 默认 96 的 4 倍），实际 %d", backupDefaultLinkCost)
+		t.Errorf("backupDefaultLinkCost constant should be 384 (4x the babeld wired default of 96), got %d", backupDefaultLinkCost)
 	}
-	// primary（无显式 cost）应为 0，与 backup 的 384 形成故障切换所需的 cost 落差。
+	// primary (no explicit cost) should be 0, forming the cost gap needed for failover relative to backup's 384.
 	if aPrimary.LinkCost != 0 {
-		t.Errorf("primary 链路未设 priority/weight 时 LinkCost 应为 0（交由角色预设/babeld 默认），实际 %d", aPrimary.LinkCost)
+		t.Errorf("a primary link with no priority/weight set should have LinkCost 0 (deferred to role preset/babeld default), got %d", aPrimary.LinkCost)
 	}
 }
 
-// TestParallelLinks_ExplicitPriorityOverridesBackupDefault 验证 backup 上的显式 priority
-// 覆盖 384 的 backup 预设（docs/spec/artifacts/babel.md「Link cost resolution」第 1 条
-// explicit operator setting 优先级最高）。
+// TestParallelLinks_ExplicitPriorityOverridesBackupDefault verifies that an explicit priority
+// on the backup overrides the 384 backup preset (docs/spec/artifacts/babel.md "Link cost
+// resolution" rule 1: an explicit operator setting has the highest priority).
 func TestParallelLinks_ExplicitPriorityOverridesBackupDefault(t *testing.T) {
 	c := NewCompiler()
 	keys := stableKeys()
@@ -179,26 +187,27 @@ func TestParallelLinks_ExplicitPriorityOverridesBackupDefault(t *testing.T) {
 	})
 	res, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("带显式 priority 的 backup 拓扑应能编译，实际报错: %v", err)
+		t.Fatalf("a backup topology with explicit priority should compile, got error: %v", err)
 	}
 
 	aPeers := res.PeerMap["node-a"]
 	aBackup := findPeerByIface(aPeers, naming.WgInterfaceNameForEdge("beta", backupID, true))
 	if aBackup == nil {
-		t.Fatalf("应找到 backup PeerInfo，实际 peers: %+v", aPeers)
+		t.Fatalf("should find backup PeerInfo, got peers: %+v", aPeers)
 	}
 
 	if aBackup.LinkCost != explicitCost {
-		t.Errorf("backup 上的显式 priority 应覆盖 384 预设，期望 LinkCost == %d，实际 %d", explicitCost, aBackup.LinkCost)
+		t.Errorf("an explicit priority on the backup should override the 384 preset, want LinkCost == %d, got %d", explicitCost, aBackup.LinkCost)
 	}
 	if aBackup.LinkCost == backupDefaultLinkCost {
-		t.Errorf("显式 priority 存在时不应回退到 backup 预设 %d", backupDefaultLinkCost)
+		t.Errorf("should not fall back to the backup preset %d when an explicit priority is present", backupDefaultLinkCost)
 	}
 }
 
-// TestParallelLinks_LegacyReversePairOneLink 验证传统的「无 role 的 A->B + B->A」反向对
-// 仍折叠成一条链路（unify rule 保留 legacy 语义）：每侧恰一个 PeerInfo，接口名与改动前
-// 逐字节相同（== naming.WgInterfaceName(remote)，绝不走 backup 的 edge-aware 形态）。
+// TestParallelLinks_LegacyReversePairOneLink verifies that the legacy "role-less A->B + B->A"
+// reverse pair still collapses into one link (the unify rule preserves legacy semantics):
+// exactly one PeerInfo per side, with the interface name byte-for-byte identical to before
+// the change (== naming.WgInterfaceName(remote), never the backup's edge-aware form).
 func TestParallelLinks_LegacyReversePairOneLink(t *testing.T) {
 	c := NewCompiler()
 	keys := stableKeys()
@@ -210,7 +219,7 @@ func TestParallelLinks_LegacyReversePairOneLink(t *testing.T) {
 			stableRouterNode("node-a", "alpha", "10.50.0.1"),
 			stableRouterNode("node-b", "beta", "10.50.0.2"),
 		},
-		// 无 role 的正反两条边——同属 primary class，折叠为一条双向隧道。
+		// Role-less forward and reverse edges — both primary class, collapsed into one bidirectional tunnel.
 		Edges: []model.Edge{
 			abEdge("e-ab", "node-a", "node-b", "beta.example.com"),
 			abEdge("e-ba", "node-b", "node-a", "alpha.example.com"),
@@ -218,25 +227,25 @@ func TestParallelLinks_LegacyReversePairOneLink(t *testing.T) {
 	}
 	res, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("传统反向对拓扑应能编译，实际报错: %v", err)
+		t.Fatalf("legacy reverse-pair topology should compile, got error: %v", err)
 	}
 
-	// A 侧恰一个指向 B 的 PeerInfo（正反边折叠为一条链路）。
+	// A side has exactly one PeerInfo pointing at B (forward and reverse edges collapse into one link).
 	aPeers := res.PeerMap["node-a"]
 	if got := countPeersToRemote(aPeers, "node-b"); got != 1 {
-		t.Fatalf("传统反向对在 A 侧应恰有 1 个指向 B 的 PeerInfo，实际 %d 个: %+v", got, aPeers)
+		t.Fatalf("a legacy reverse pair should have exactly 1 PeerInfo pointing at B on the A side, got %d: %+v", got, aPeers)
 	}
-	// B 侧同样恰一个指向 A 的 PeerInfo。
+	// B side likewise has exactly one PeerInfo pointing at A.
 	bPeers := res.PeerMap["node-b"]
 	if got := countPeersToRemote(bPeers, "node-a"); got != 1 {
-		t.Fatalf("传统反向对在 B 侧应恰有 1 个指向 A 的 PeerInfo，实际 %d 个: %+v", got, bPeers)
+		t.Fatalf("a legacy reverse pair should have exactly 1 PeerInfo pointing at A on the B side, got %d: %+v", got, bPeers)
 	}
 
-	// 接口名必须与改动前逐字节相同（primary class 走 WgInterfaceName，不带 edge 区分）。
+	// Interface names must be byte-for-byte identical to before the change (primary class uses WgInterfaceName, without edge distinction).
 	if aPeers[0].InterfaceName != naming.WgInterfaceName("beta") {
-		t.Errorf("A 侧 primary class 接口名应为 %q，实际 %q", naming.WgInterfaceName("beta"), aPeers[0].InterfaceName)
+		t.Errorf("A-side primary class interface name should be %q, got %q", naming.WgInterfaceName("beta"), aPeers[0].InterfaceName)
 	}
 	if bPeers[0].InterfaceName != naming.WgInterfaceName("alpha") {
-		t.Errorf("B 侧 primary class 接口名应为 %q，实际 %q", naming.WgInterfaceName("alpha"), bPeers[0].InterfaceName)
+		t.Errorf("B-side primary class interface name should be %q, got %q", naming.WgInterfaceName("alpha"), bPeers[0].InterfaceName)
 	}
 }

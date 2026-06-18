@@ -6,24 +6,26 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// 分配 pin 校验测试（不变式 I7，规则见 docs/spec/compiler/allocation-stability.md「Pin validation」）。
+// Allocation-pin validation tests (invariant I7; rules in docs/spec/compiler/allocation-stability.md "Pin validation").
 //
-// 这些测试都聚焦在 validateAllocationPins 经由 ValidateSemantic 暴露的校验上。pin 按边存储，
-// 由该边自身的 from/to 定向：边 A->B 的 PinnedFromPort 是 A 侧端口，反向边 B->A 携带镜像后的同一对值。
+// These tests all focus on the validation that validateAllocationPins exposes via ValidateSemantic.
+// Pins are stored per edge and oriented by that edge's own from/to: edge A->B's PinnedFromPort is the
+// A-side port, and the reverse edge B->A carries the same pair mirrored.
 
-// pinnedTopology 在 validTopology 之上为唯一一条链路（node-1 <-> node-2）的正反两条边
-// 设置一组「干净的、成对镜像的」pin，作为合法基线供各测试在其上注入单点违例。
+// pinnedTopology, on top of validTopology, sets a "clean, paired, mirrored" set of pins on the forward
+// and reverse edges of the single link (node-1 <-> node-2), serving as a valid baseline on which each
+// test injects a single-point violation.
 //
-//	edge-1 (node-1 -> node-2): from=node-1 侧, to=node-2 侧
-//	edge-2 (node-2 -> node-1): from=node-2 侧, to=node-1 侧（与 edge-1 镜像）
+//	edge-1 (node-1 -> node-2): from=node-1 side, to=node-2 side
+//	edge-2 (node-2 -> node-1): from=node-2 side, to=node-1 side (mirror of edge-1)
 //
-// 约定：node-1 端口 51820 / transit 10.10.0.1 / link-local fe80::1；
+// Convention: node-1 port 51820 / transit 10.10.0.1 / link-local fe80::1;
 //
-//	node-2 端口 51820 / transit 10.10.0.2 / link-local fe80::2。
+//	node-2 port 51820 / transit 10.10.0.2 / link-local fe80::2.
 func pinnedTopology() *model.Topology {
 	topo := validTopology()
 
-	// node-1 端口可与 node-2 相同：它们是不同节点，各自绑定自身接口。
+	// node-1's port may match node-2's: they are different nodes, each binding its own interface.
 	const (
 		node1Port      = 51820
 		node2Port      = 51820
@@ -33,7 +35,7 @@ func pinnedTopology() *model.Topology {
 		node2LinkLocal = "fe80::2"
 	)
 
-	// edge-1: node-1 -> node-2。from = node-1，to = node-2。
+	// edge-1: node-1 -> node-2. from = node-1, to = node-2.
 	topo.Edges[0].PinnedFromPort = node1Port
 	topo.Edges[0].PinnedToPort = node2Port
 	topo.Edges[0].PinnedFromTransitIP = node1Transit
@@ -41,7 +43,7 @@ func pinnedTopology() *model.Topology {
 	topo.Edges[0].PinnedFromLinkLocal = node1LinkLocal
 	topo.Edges[0].PinnedToLinkLocal = node2LinkLocal
 
-	// edge-2: node-2 -> node-1。from = node-2，to = node-1（镜像）。
+	// edge-2: node-2 -> node-1. from = node-2, to = node-1 (mirror).
 	topo.Edges[1].PinnedFromPort = node2Port
 	topo.Edges[1].PinnedToPort = node1Port
 	topo.Edges[1].PinnedFromTransitIP = node2Transit
@@ -52,8 +54,8 @@ func pinnedTopology() *model.Topology {
 	return topo
 }
 
-// pinErrorCount 统计落在边 pin 字段或边索引前缀上的错误数量，用于在含有其它无关错误时
-// 仍能精确断言「pin 校验」是否触发。
+// pinErrorCount counts the errors that fall on an edge pin field or edge-index prefix, so that the
+// presence of "pin validation" errors can be asserted precisely even when other unrelated errors exist.
 func pinErrorCount(result *ValidationResult) int {
 	n := 0
 	for _, e := range result.Errors {
@@ -64,126 +66,129 @@ func pinErrorCount(result *ValidationResult) int {
 	return n
 }
 
-// --- 干净 pin 接受 ---
+// --- clean pins accepted ---
 
-// TestValidateAllocationPins_CleanPinsAccepted 一组完整、成对、镜像、落在池内的 pin 必须无任何错误。
+// TestValidateAllocationPins_CleanPinsAccepted asserts that a complete, paired, mirrored, in-pool set of pins produces no errors.
 func TestValidateAllocationPins_CleanPinsAccepted(t *testing.T) {
 	topo := pinnedTopology()
 	result := ValidateSemantic(topo)
 	if !result.IsValid() {
-		t.Errorf("干净的成对 pin 应当通过校验，却报了 %d 条错误：", len(result.Errors))
+		t.Errorf("clean paired pins should pass validation, but reported %d errors:", len(result.Errors))
 		for _, e := range result.Errors {
 			t.Errorf("  %s", e.Error())
 		}
 	}
 }
 
-// TestValidateAllocationPins_NoPinsAccepted 完全无 pin 的拓扑（未钉住，留待 gap-fill）必须通过校验。
+// TestValidateAllocationPins_NoPinsAccepted asserts that a topology with no pins at all (unpinned, left for gap-fill) must pass validation.
 func TestValidateAllocationPins_NoPinsAccepted(t *testing.T) {
 	topo := validTopology()
 	result := ValidateSemantic(topo)
 	if !result.IsValid() {
-		t.Errorf("无 pin 的拓扑应当通过校验，却报了 %d 条错误：", len(result.Errors))
+		t.Errorf("a topology with no pins should pass validation, but reported %d errors:", len(result.Errors))
 		for _, e := range result.Errors {
 			t.Errorf("  %s", e.Error())
 		}
 	}
 }
 
-// --- 部分 pin（成对完整性）---
+// --- partial pins (pair completeness) ---
 
-// TestValidateAllocationPins_PartialPortPair 仅钉住一端的端口应被拒绝。
+// TestValidateAllocationPins_PartialPortPair asserts that pinning only one end's port is rejected.
 func TestValidateAllocationPins_PartialPortPair(t *testing.T) {
 	topo := validTopology()
-	topo.Edges[0].PinnedFromPort = 51820 // 仅 from 侧，to 侧留空
+	topo.Edges[0].PinnedFromPort = 51820 // only the from side, to side left empty
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "edges[0]")
 }
 
-// TestValidateAllocationPins_PartialTransitPair 仅钉住一端的 transit IP 应被拒绝。
+// TestValidateAllocationPins_PartialTransitPair asserts that pinning only one end's transit IP is rejected.
 func TestValidateAllocationPins_PartialTransitPair(t *testing.T) {
 	topo := validTopology()
-	topo.Edges[0].PinnedFromTransitIP = "10.10.0.1" // 仅 from 侧，to 侧留空
+	topo.Edges[0].PinnedFromTransitIP = "10.10.0.1" // only the from side, to side left empty
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "edges[0]")
 }
 
-// TestValidateAllocationPins_PartialLinkLocalPair 仅钉住一端的 link-local 应被拒绝。
+// TestValidateAllocationPins_PartialLinkLocalPair asserts that pinning only one end's link-local is rejected.
 func TestValidateAllocationPins_PartialLinkLocalPair(t *testing.T) {
 	topo := validTopology()
-	topo.Edges[0].PinnedFromLinkLocal = "fe80::1" // 仅 from 侧，to 侧留空
+	topo.Edges[0].PinnedFromLinkLocal = "fe80::1" // only the from side, to side left empty
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "edges[0]")
 }
 
-// --- 端口越界 ---
+// --- port out of range ---
 
-// TestValidateAllocationPins_PortAboveMax 超过 65535 的端口 pin 应被拒绝。
+// TestValidateAllocationPins_PortAboveMax asserts that a port pin above 65535 is rejected.
 func TestValidateAllocationPins_PortAboveMax(t *testing.T) {
 	topo := pinnedTopology()
 	topo.Edges[0].PinnedFromPort = 70000
-	topo.Edges[1].PinnedToPort = 70000 // 反向边镜像，保持成对完整以隔离越界这一条违例
+	topo.Edges[1].PinnedToPort = 70000 // mirror on the reverse edge, keeping the pair complete to isolate the out-of-range violation
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "pinned_from_port")
 }
 
-// TestValidateAllocationPins_PortBelowMin 低于手填 pin 下界 minPinnedPort（1024，特权端口区）
-// 的端口 pin 应被拒绝。
+// TestValidateAllocationPins_PortBelowMin asserts that a port pin below the manual-pin lower bound
+// minPinnedPort (1024, the privileged-port range) is rejected.
 func TestValidateAllocationPins_PortBelowMin(t *testing.T) {
 	topo := pinnedTopology()
-	topo.Edges[0].PinnedFromPort = 500 // < 1024（特权端口区）
-	topo.Edges[1].PinnedToPort = 500   // 反向边镜像
+	topo.Edges[0].PinnedFromPort = 500 // < 1024 (privileged-port range)
+	topo.Edges[1].PinnedToPort = 500   // mirror on the reverse edge
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "pinned_from_port")
 }
 
-// TestValidateAllocationPins_NATRangePortAccepted 是 PR7 的回归守卫：自动分配从 51820 起，但
-// 端口受限的 NAT VPS 往往只转发一段低于 51820 的端口（如 30000-30100）。操作员手填一个该范围内
-// 的内部监听端口（>=1024）必须被接受——否则无法配合 NAT 转发规则（这正是放宽下界的目的）。
+// TestValidateAllocationPins_NATRangePortAccepted is PR7's regression guard: auto-allocation starts
+// at 51820, but a port-restricted NAT VPS often forwards only a band of ports below 51820 (e.g.
+// 30000-30100). An operator manually pinning an internal listen port within that range (>=1024) must
+// be accepted -- otherwise it cannot work with the NAT forwarding rule (which is exactly the point of
+// relaxing the lower bound).
 func TestValidateAllocationPins_NATRangePortAccepted(t *testing.T) {
 	topo := pinnedTopology()
-	topo.Edges[0].PinnedFromPort = 30050 // NAT 范围内、低于旧的 51820 下界、但 >=1024
-	topo.Edges[1].PinnedToPort = 30050   // 反向边镜像
+	topo.Edges[0].PinnedFromPort = 30050 // within the NAT range, below the old 51820 bound, but >=1024
+	topo.Edges[1].PinnedToPort = 30050   // mirror on the reverse edge
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
 		if contains(e.Field, "pinned_from_port") || contains(e.Field, "pinned_to_port") {
-			t.Errorf("NAT 范围端口 30050（>=1024）应被接受，却报错：%s", e.Error())
+			t.Errorf("NAT-range port 30050 (>=1024) should be accepted, but errored: %s", e.Error())
 		}
 	}
 }
 
-// --- transit IP 越池 ---
+// --- transit IP out of pool ---
 
-// TestValidateAllocationPins_TransitOutOfCIDR 不在该边解析出的 transit 池内的 transit IP pin 应被拒绝。
+// TestValidateAllocationPins_TransitOutOfCIDR asserts that a transit IP pin outside the transit pool resolved for that edge is rejected.
 func TestValidateAllocationPins_TransitOutOfCIDR(t *testing.T) {
 	topo := pinnedTopology()
-	// 域的 transit 池回退默认 10.10.0.0/24；钉一个池外地址。
+	// the domain transit pool falls back to the default 10.10.0.0/24; pin an out-of-pool address.
 	topo.Edges[0].PinnedFromTransitIP = "192.168.99.1"
-	topo.Edges[1].PinnedToTransitIP = "192.168.99.1" // 反向边镜像
+	topo.Edges[1].PinnedToTransitIP = "192.168.99.1" // mirror on the reverse edge
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "pinned_from_transit_ip")
 }
 
-// TestValidateAllocationPins_TransitNarrowedPoolStale 当 transit_cidr 被收窄后，原本合法的 pin 变为池外，应被拒绝。
+// TestValidateAllocationPins_TransitNarrowedPoolStale asserts that when transit_cidr is narrowed, a previously-legal pin becomes out-of-pool and is rejected.
 func TestValidateAllocationPins_TransitNarrowedPoolStale(t *testing.T) {
 	topo := pinnedTopology()
-	// 把域的 transit 池收窄到 10.10.0.0/30（可用主机 10.10.0.1、10.10.0.2）。
+	// narrow the domain transit pool to 10.10.0.0/30 (usable hosts 10.10.0.1, 10.10.0.2).
 	topo.Domains[0].TransitCIDR = "10.10.0.0/30"
-	// 把 node-1 侧 transit 钉到收窄后池外的 10.10.0.5。
+	// pin the node-1 side transit to 10.10.0.5, now outside the narrowed pool.
 	topo.Edges[0].PinnedFromTransitIP = "10.10.0.5"
-	topo.Edges[1].PinnedToTransitIP = "10.10.0.5" // 反向边镜像
+	topo.Edges[1].PinnedToTransitIP = "10.10.0.5" // mirror on the reverse edge
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "pinned_from_transit_ip")
 }
 
-// --- 跨链路重复占用 ---
+// --- cross-link duplicate occupancy ---
 
-// threeNodeTwoLinkTopology 构造 node-1 与 node-2、node-1 与 node-3 两条独立链路，
-// 共享 node-1，用于检测「同一节点端口」「同一 transit IP」「同一 link-local」被两条不同链路重复占用。
+// threeNodeTwoLinkTopology builds two independent links, node-1 with node-2 and node-1 with node-3,
+// sharing node-1, to detect the "same node port", "same transit IP", and "same link-local" being
+// occupied twice by two different links.
 func threeNodeTwoLinkTopology() *model.Topology {
-	topo := pinnedTopology() // node-1 <-> node-2 已是干净 pin 的链路
+	topo := pinnedTopology() // node-1 <-> node-2 is already a clean-pinned link
 
-	// 追加 node-3 并把 validTopology 中冗余的反向边替换为指向 node-3 的新链路。
+	// append node-3 and replace validTopology's redundant reverse edge with a new link toward node-3.
 	topo.Nodes = append(topo.Nodes, model.Node{
 		ID:       "node-3",
 		Name:     "node-gamma",
@@ -198,7 +203,7 @@ func threeNodeTwoLinkTopology() *model.Topology {
 		},
 	})
 
-	// node-1 -> node-3 的新链路（一条边即可，干净且与 node-1<->node-2 链路不冲突）。
+	// new link node-1 -> node-3 (a single edge is enough, clean and not conflicting with the node-1<->node-2 link).
 	topo.Edges = append(topo.Edges, model.Edge{
 		ID:                  "edge-3",
 		FromNodeID:          "node-1",
@@ -207,8 +212,8 @@ func threeNodeTwoLinkTopology() *model.Topology {
 		EndpointHost:        "203.0.113.3",
 		Transport:           "udp",
 		IsEnabled:           true,
-		PinnedFromPort:      51821, // node-1 在该链路上的另一个接口端口（与 51820 不同）
-		PinnedToPort:        51820, // node-3 的端口
+		PinnedFromPort:      51821, // node-1's other interface port on this link (different from 51820)
+		PinnedToPort:        51820, // node-3's port
 		PinnedFromTransitIP: "10.10.0.3",
 		PinnedToTransitIP:   "10.10.0.4",
 		PinnedFromLinkLocal: "fe80::3",
@@ -218,67 +223,67 @@ func threeNodeTwoLinkTopology() *model.Topology {
 	return topo
 }
 
-// TestValidateAllocationPins_ThreeNodeTwoLinkBaselineClean 两条独立链路、各自干净 pin 的基线必须通过校验。
+// TestValidateAllocationPins_ThreeNodeTwoLinkBaselineClean asserts that the baseline of two independent links, each cleanly pinned, must pass validation.
 func TestValidateAllocationPins_ThreeNodeTwoLinkBaselineClean(t *testing.T) {
 	topo := threeNodeTwoLinkTopology()
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) != 0 {
-		t.Errorf("两条独立链路的干净 pin 应当无 pin 错误，却报了 %d 条：%v", pinErrorCount(result), result.Errors)
+		t.Errorf("clean pins on two independent links should have no pin errors, but reported %d: %v", pinErrorCount(result), result.Errors)
 	}
 }
 
-// TestValidateAllocationPins_DuplicatePortOnNodeAcrossLinks node-1 在两条不同链路上钉住相同端口应被拒绝。
+// TestValidateAllocationPins_DuplicatePortOnNodeAcrossLinks asserts that node-1 pinning the same port on two different links is rejected.
 func TestValidateAllocationPins_DuplicatePortOnNodeAcrossLinks(t *testing.T) {
 	topo := threeNodeTwoLinkTopology()
-	// node-1<->node-2 链路里 node-1 端口为 51820；让 node-1<->node-3 链路里 node-1 端口也为 51820。
+	// node-1's port on the node-1<->node-2 link is 51820; make node-1's port on the node-1<->node-3 link also 51820.
 	topo.Edges[2].PinnedFromPort = 51820
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) == 0 {
-		t.Errorf("同一节点在两条不同链路上钉住相同端口应当报错，却无 pin 错误：%v", result.Errors)
+		t.Errorf("the same node pinning the same port on two different links should error, but there were no pin errors: %v", result.Errors)
 	}
 }
 
-// TestValidateAllocationPins_DuplicateTransitIPAcrossLinks 两条不同链路钉住相同 transit IP 应被拒绝。
+// TestValidateAllocationPins_DuplicateTransitIPAcrossLinks asserts that two different links pinning the same transit IP is rejected.
 func TestValidateAllocationPins_DuplicateTransitIPAcrossLinks(t *testing.T) {
 	topo := threeNodeTwoLinkTopology()
-	// node-1<->node-2 链路占用 10.10.0.1；让 node-1<->node-3 链路也占用 10.10.0.1。
+	// the node-1<->node-2 link occupies 10.10.0.1; make the node-1<->node-3 link also occupy 10.10.0.1.
 	topo.Edges[2].PinnedFromTransitIP = "10.10.0.1"
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) == 0 {
-		t.Errorf("两条不同链路钉住相同 transit IP 应当报错，却无 pin 错误：%v", result.Errors)
+		t.Errorf("two different links pinning the same transit IP should error, but there were no pin errors: %v", result.Errors)
 	}
 }
 
-// TestValidateAllocationPins_DuplicateLinkLocalAcrossLinks 两条不同链路钉住相同 link-local 应被拒绝。
+// TestValidateAllocationPins_DuplicateLinkLocalAcrossLinks asserts that two different links pinning the same link-local is rejected.
 func TestValidateAllocationPins_DuplicateLinkLocalAcrossLinks(t *testing.T) {
 	topo := threeNodeTwoLinkTopology()
-	// node-1<->node-2 链路占用 fe80::1；让 node-1<->node-3 链路也占用 fe80::1。
+	// the node-1<->node-2 link occupies fe80::1; make the node-1<->node-3 link also occupy fe80::1.
 	topo.Edges[2].PinnedFromLinkLocal = "fe80::1"
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) == 0 {
-		t.Errorf("两条不同链路钉住相同 link-local 应当报错，却无 pin 错误：%v", result.Errors)
+		t.Errorf("two different links pinning the same link-local should error, but there were no pin errors: %v", result.Errors)
 	}
 }
 
-// TestValidateAllocationPins_ReverseEdgeNotDuplicate 同一链路的正反两条边携带镜像 pin，不得被误判为重复占用。
+// TestValidateAllocationPins_ReverseEdgeNotDuplicate asserts that the forward and reverse edges of the same link carrying mirrored pins must not be misjudged as duplicate occupancy.
 func TestValidateAllocationPins_ReverseEdgeNotDuplicate(t *testing.T) {
-	// pinnedTopology 的 edge-1/edge-2 即同一链路的正反两条边，已镜像。
+	// pinnedTopology's edge-1/edge-2 are the forward and reverse edges of the same link, already mirrored.
 	topo := pinnedTopology()
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) != 0 {
-		t.Errorf("同一链路的正反边（镜像 pin）不应被判为重复占用，却报了 %d 条 pin 错误：%v", pinErrorCount(result), result.Errors)
+		t.Errorf("the forward/reverse edges of the same link (mirrored pins) should not be judged duplicate occupancy, but reported %d pin errors: %v", pinErrorCount(result), result.Errors)
 	}
 }
 
-// --- client 边的 pin ---
+// --- client edge pins ---
 
-// clientEdgeTopology 构造一个 client 节点经一条边连到 router，便于测试 client 边上的 pin 处理。
+// clientEdgeTopology builds a client node connected to a router via a single edge, to test pin handling on client edges.
 func clientEdgeTopology() *model.Topology {
 	topo := validTopology()
 
-	// 把 node-2 改为 client，并去掉以 client 为目标的反向边（client 不接受入站）。
+	// change node-2 to a client and drop the reverse edge targeting the client (a client accepts no inbound).
 	topo.Nodes[1].Role = "client"
-	// 仅保留 node-2(client) -> node-1(router) 这一条出站边，并补上 client 所需的 endpoint_host。
+	// keep only the node-2(client) -> node-1(router) outbound edge and add the endpoint_host the client needs.
 	topo.Edges = []model.Edge{
 		{
 			ID:           "edge-1",
@@ -293,27 +298,27 @@ func clientEdgeTopology() *model.Topology {
 	return topo
 }
 
-// TestValidateAllocationPins_ClientEdgePortPinRejected client 边携带端口 pin 应报错（client 用单一 wg0，无 per-peer 端口）。
+// TestValidateAllocationPins_ClientEdgePortPinRejected asserts that a client edge carrying a port pin errors (a client uses a single wg0 with no per-peer port).
 func TestValidateAllocationPins_ClientEdgePortPinRejected(t *testing.T) {
 	topo := clientEdgeTopology()
 	topo.Edges[0].PinnedFromPort = 51820
 	topo.Edges[0].PinnedToPort = 51820
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) == 0 {
-		t.Errorf("client 边携带端口 pin 应当报错，却无 pin 错误：%v", result.Errors)
+		t.Errorf("a client edge carrying a port pin should error, but there were no pin errors: %v", result.Errors)
 	}
 }
 
-// TestValidateAllocationPins_ClientEdgeResourcePinWarns client 边携带 transit/link-local pin 应告警（将被忽略），而非报错。
+// TestValidateAllocationPins_ClientEdgeResourcePinWarns asserts that a client edge carrying transit/link-local pins warns (they will be ignored) rather than errors.
 func TestValidateAllocationPins_ClientEdgeResourcePinWarns(t *testing.T) {
 	topo := clientEdgeTopology()
 	topo.Edges[0].PinnedFromTransitIP = "10.10.0.1"
 	topo.Edges[0].PinnedToTransitIP = "10.10.0.2"
 	result := ValidateSemantic(topo)
 
-	// 不应因 transit/link-local pin 在 client 边上而报 pin 错误。
+	// transit/link-local pins on a client edge must not produce a pin error.
 	if pinErrorCount(result) != 0 {
-		t.Errorf("client 边上的 transit/link-local pin 应当只告警不报错，却报了 pin 错误：%v", result.Errors)
+		t.Errorf("transit/link-local pins on a client edge should only warn, not error, but reported pin errors: %v", result.Errors)
 	}
 	assertHasWarning(t, result, "edges[0]")
 }

@@ -6,9 +6,9 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// portBoundsTopo 构建一个以 hub 为中心、向外连接 spokeCount 个 spoke 的星型拓扑。
-// 基准监听端口统一为 51820（per-node listen_port 已移除），hub 的每条 peer 接口在
-// 51820+offset 处监听，用于覆盖多接口分配的编译路径。
+// portBoundsTopo builds a star topology centered on a hub, connecting out to spokeCount spokes.
+// The base listen port is uniformly 51820 (per-node listen_port has been removed), and each of
+// the hub's peer interfaces listens at 51820+offset, to cover the compilation path for multi-interface allocation.
 func portBoundsTopo(spokeCount int) (*model.Topology, map[string]KeyPair) {
 	nodes := []model.Node{
 		{
@@ -44,7 +44,7 @@ func portBoundsTopo(spokeCount int) (*model.Topology, map[string]KeyPair) {
 		Nodes: nodes,
 		Edges: edges,
 	}
-	// 为节点分配 overlay IP（DerivePeers 直接消费 OverlayIP，不再经过 IP 分配器）。
+	// Assign overlay IPs to the nodes (DerivePeers consumes OverlayIP directly, no longer going through the IP allocator).
 	for i := range topo.Nodes {
 		topo.Nodes[i].OverlayIP = overlayIPForIndex(i)
 	}
@@ -56,7 +56,7 @@ func spokeName(i int) string {
 }
 
 func overlayIPForIndex(i int) string {
-	// 10.50.0.(i+1)；测试用例规模远小于 /24，无需边界处理。
+	// 10.50.0.(i+1); test cases are far smaller than a /24, so no boundary handling is needed.
 	return "10.50.0." + itoaTest(i+1)
 }
 
@@ -72,14 +72,17 @@ func itoaTest(n int) string {
 	return s
 }
 
-// TestCompile_ManyInterfacesCompileClean 验证：基准端口统一为 51820 后，一个 hub 连向 7 个
-// spoke（hub 获得 7 个 per-peer 接口，监听 51820..51826）能正常编译。越界规则（lowestFreePort
-// 在 port>65535 时返回 CodeListenPortExhausted）仍然保留，但在统一基准下需上万个接口才会触发，
-// 无法再经一个高基准人为构造，故不再单测越界报错路径（per-node listen_port 已移除）。
+// TestCompile_ManyInterfacesCompileClean verifies that, with the base port uniformly
+// 51820, a hub connecting to 7 spokes (the hub gets 7 per-peer interfaces, listening on
+// 51820..51826) compiles cleanly. The out-of-range rule (lowestFreePort returns
+// CodeListenPortExhausted when port>65535) is still kept, but under the uniform base it
+// would take tens of thousands of interfaces to trigger and can no longer be artificially
+// constructed via a high base, so the out-of-range error path is no longer unit-tested
+// (per-node listen_port has been removed).
 func TestCompile_ManyInterfacesCompileClean(t *testing.T) {
 	c := NewCompiler()
 	topo, keys := portBoundsTopo(7)
 	if _, err := c.Compile(topo, keys); err != nil {
-		t.Fatalf("基准端口 51820 下 hub 连 7 个 spoke 应正常编译，但失败: %v", err)
+		t.Fatalf("with base port 51820, a hub connecting to 7 spokes should compile cleanly, but failed: %v", err)
 	}
 }

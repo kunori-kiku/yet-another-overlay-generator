@@ -8,15 +8,17 @@ import (
 	"testing"
 )
 
-// TestRequestBodySizeCap_Returns413 验证超过 4 MiB 上限的 POST 请求体
-// 被 http.MaxBytesReader 拒绝，并由处理器映射为 413 Payload Too Large（D34）。
+// TestRequestBodySizeCap_Returns413 verifies that a POST request body exceeding the 4 MiB
+// cap is rejected by http.MaxBytesReader and mapped by the handler to 413 Payload Too
+// Large (D34).
 //
-// 请求体是合法 JSON 的前缀（以一个巨大的字符串字段填充至超限），确保触发的是
-// 大小上限而非 JSON 解析错误——读取阶段在解析之前就会因超限而失败。
+// The request body is the prefix of valid JSON (padded with one huge string field until it
+// exceeds the cap), ensuring the size limit is what triggers, not a JSON parse error -- the
+// read phase fails on the cap before parsing begins.
 func TestRequestBodySizeCap_Returns413(t *testing.T) {
 	server := NewServer()
 
-	// 构造一个略大于 maxRequestBodyBytes 的请求体。
+	// Build a request body slightly larger than maxRequestBodyBytes.
 	oversized := bytes.Repeat([]byte("a"), int(maxRequestBodyBytes)+1024)
 	req := httptest.NewRequest(http.MethodPost, "/api/validate", bytes.NewReader(oversized))
 	req.Header.Set("Content-Type", "application/json")
@@ -25,22 +27,23 @@ func TestRequestBodySizeCap_Returns413(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("期望 413，实际 %d，body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 413, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
-	// 错误响应必须是 {"error":{code,message,params}} 形式，供前端展示/本地化。
+	// The error response must be of the form {"error":{code,message,params}} for the
+	// frontend to display/localize.
 	var resp apiError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("解码错误响应失败: %v", err)
+		t.Fatalf("failed to decode error response: %v", err)
 	}
 	if resp.Error.Message == "" {
-		t.Errorf("413 响应应包含非空的 error.message 字段")
+		t.Errorf("413 response should contain a non-empty error.message field")
 	}
 }
 
-// TestRecoverPanics_Returns500JSON 直接测试 recoverPanics 中间件：
-// 一个故意 panic 的 http.HandlerFunc 经中间件包裹后，应返回 500 且响应体为
-// {"error": ...} JSON，而不是中断连接（D60）。
+// TestRecoverPanics_Returns500JSON tests the recoverPanics middleware directly: an
+// http.HandlerFunc that deliberately panics, once wrapped by the middleware, should return
+// 500 with a {"error": ...} JSON body rather than tearing the connection (D60).
 // TestRecovered_MuxPanicReturns500JSON pins B1: recovered() — the top-level wrapper applied
 // to BOTH the operator and agent muxes (not just the air-gap routes) — converts a handler
 // panic into a coded 500 JSON instead of a torn connection. The operator/agent routes had no
@@ -85,29 +88,30 @@ func TestRecoverPanics_Returns500JSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/compile", nil)
 	rec := httptest.NewRecorder()
 
-	// 不应向上抛出 panic；中间件须捕获并转换为 500。
+	// The panic should not propagate up; the middleware must catch it and convert it to 500.
 	wrapped(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("期望 500，实际 %d", rec.Code)
+		t.Fatalf("want 500, got %d", rec.Code)
 	}
 
 	ct := rec.Header().Get("Content-Type")
 	if ct != "application/json" {
-		t.Errorf("期望 Content-Type=application/json，实际 %q", ct)
+		t.Errorf("want Content-Type=application/json, got %q", ct)
 	}
 
 	var resp apiError
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("解码错误响应失败: %v", err)
+		t.Fatalf("failed to decode error response: %v", err)
 	}
 	if resp.Error.Message == "" {
-		t.Errorf("500 响应应包含非空的 error.message 字段")
+		t.Errorf("500 response should contain a non-empty error.message field")
 	}
 }
 
-// TestRecoverPanics_PassesThroughNonPanicking 验证非 panic 的处理器在被
-// recoverPanics 包裹后行为不变：状态码与响应体均原样透传。
+// TestRecoverPanics_PassesThroughNonPanicking verifies that a non-panicking handler
+// behaves unchanged once wrapped by recoverPanics: both the status code and the response
+// body pass through unmodified.
 func TestRecoverPanics_PassesThroughNonPanicking(t *testing.T) {
 	server := NewServer()
 
@@ -123,14 +127,14 @@ func TestRecoverPanics_PassesThroughNonPanicking(t *testing.T) {
 	wrapped(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("期望 200，实际 %d", rec.Code)
+		t.Fatalf("want 200, got %d", rec.Code)
 	}
 
 	var resp map[string]string
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("解码响应失败: %v", err)
+		t.Fatalf("failed to decode response: %v", err)
 	}
 	if resp["status"] != "ok" {
-		t.Errorf("期望 status=ok，实际 %q", resp["status"])
+		t.Errorf("want status=ok, got %q", resp["status"])
 	}
 }

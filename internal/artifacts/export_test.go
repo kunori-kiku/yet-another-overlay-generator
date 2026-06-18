@@ -12,7 +12,7 @@ import (
 )
 
 func TestExport_BasicStructure(t *testing.T) {
-	//
+	// Build a minimal compile result.
 	result := &compiler.CompileResult{
 		Topology: &model.Topology{
 			Project: model.Project{ID: "test-001", Name: "Test", Version: "0.1.0"},
@@ -52,23 +52,23 @@ func TestExport_BasicStructure(t *testing.T) {
 		},
 	}
 
-	//
+	// Export to a temp directory.
 	outputDir := t.TempDir()
 	exportResult, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("Export failed: %v", err)
 	}
 
-	//  2
+	// Expect 2 nodes.
 	if len(exportResult.Nodes) != 2 {
-		t.Errorf(" 2 ,  %d", len(exportResult.Nodes))
+		t.Errorf("want 2 nodes, got %d", len(exportResult.Nodes))
 	}
 
-	//
+	// Verify each node's exported files.
 	for _, nodeName := range []string{"alpha", "beta"} {
 		nodeDir := filepath.Join(outputDir, nodeName)
 
-		// per-peer 架构：每个节点的 wireguard 目录包含对应 peer 的接口配置
+		// per-peer architecture: each node's wireguard directory contains the interface config for its peer
 		var expectedFiles []string
 		if nodeName == "alpha" {
 			expectedFiles = []string{
@@ -93,7 +93,7 @@ func TestExport_BasicStructure(t *testing.T) {
 		for _, f := range expectedFiles {
 			path := filepath.Join(nodeDir, f)
 			if _, err := os.Stat(path); os.IsNotExist(err) {
-				t.Errorf(" %s : %s", nodeName, f)
+				t.Errorf("node %s missing expected file: %s", nodeName, f)
 			}
 		}
 	}
@@ -105,19 +105,19 @@ func TestExport_WireGuardPermissions(t *testing.T) {
 
 	_, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("Export failed: %v", err)
 	}
 
-	// WireGuard  0600
+	// WireGuard configs must be 0600.
 	wgPath := filepath.Join(outputDir, "alpha", "wireguard", "wg-beta.conf")
 	info, err := os.Stat(wgPath)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("failed to stat wireguard config: %v", err)
 	}
 
 	perm := info.Mode().Perm()
 	if perm != 0600 {
-		t.Errorf("WireGuard  0600,  %o", perm)
+		t.Errorf("WireGuard config should be 0600, got %o", perm)
 	}
 }
 
@@ -127,19 +127,19 @@ func TestExport_InstallScriptExecutable(t *testing.T) {
 
 	_, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("Export failed: %v", err)
 	}
 
-	//
+	// install.sh must be executable.
 	scriptPath := filepath.Join(outputDir, "alpha", "install.sh")
 	info, err := os.Stat(scriptPath)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("failed to stat install.sh: %v", err)
 	}
 
 	perm := info.Mode().Perm()
 	if perm&0100 == 0 {
-		t.Errorf(", : %o", perm)
+		t.Errorf("install.sh should be executable, got mode: %o", perm)
 	}
 }
 
@@ -149,29 +149,29 @@ func TestExport_ManifestContent(t *testing.T) {
 
 	_, err := Export(result, outputDir)
 	if err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("Export failed: %v", err)
 	}
 
-	//  manifest
+	// Read and parse the manifest.
 	manifestPath := filepath.Join(outputDir, "alpha", "manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Fatalf(" manifest : %v", err)
+		t.Fatalf("failed to read manifest: %v", err)
 	}
 
 	var manifest map[string]interface{}
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatalf(" manifest : %v", err)
+		t.Fatalf("failed to parse manifest: %v", err)
 	}
 
 	if manifest["node_id"] != "n1" {
-		t.Errorf("manifest node_id  n1,  %v", manifest["node_id"])
+		t.Errorf("manifest node_id want n1, got %v", manifest["node_id"])
 	}
 	if manifest["overlay_ip"] != "10.10.0.1" {
-		t.Errorf("manifest overlay_ip  10.10.0.1,  %v", manifest["overlay_ip"])
+		t.Errorf("manifest overlay_ip want 10.10.0.1, got %v", manifest["overlay_ip"])
 	}
 	if manifest["project_id"] != "test-001" {
-		t.Errorf("manifest project_id  test-001,  %v", manifest["project_id"])
+		t.Errorf("manifest project_id want test-001, got %v", manifest["project_id"])
 	}
 }
 

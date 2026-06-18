@@ -7,12 +7,12 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// 本文件覆盖 Phase A（per-CIDR transit pools）的三处修复：
-//   - D12：每个 transit 地址池按「解析后的 CIDR」独立计数，互不串号。
-//   - D48：分配绝不命中网络地址或广播地址，且越界时返回干净的耗尽错误。
-//   - D70：link-local 以十六进制渲染（fe80::b，而非把十进制 11 当地址）。
+// This file covers three fixes in Phase A (per-CIDR transit pools):
+//   - D12: each transit address pool counts independently by its "resolved CIDR", never sharing numbering.
+//   - D48: allocation never hits a network or broadcast address, and returns a clean exhaustion error when out of range.
+//   - D70: link-local is rendered in hex (fe80::b, rather than treating decimal 11 as the address).
 
-// transitPoolNode 是构造测试节点的小助手，统一填好 router 能力与 overlay IP。
+// transitPoolNode is a small helper for constructing test nodes, uniformly filling in router capabilities and overlay IP.
 func transitPoolNode(id, domainID, overlayIP string) model.Node {
 	return model.Node{
 		ID: id, Name: id, Hostname: id + ".example.com",
@@ -22,14 +22,16 @@ func transitPoolNode(id, domainID, overlayIP string) model.Node {
 	}
 }
 
-// TestPerCIDRTransitPools_IndependentAllocation 验证 D12：两个域使用不同的 transit_cidr 时，
-// 各自的地址池独立从 index 0 开始消费。即便域 A 已消耗 10 个 pair index，域 B 的 /30
-// 自定义池仍能容下它唯一的一对（10.20.0.1 / 10.20.0.2）。
+// TestPerCIDRTransitPools_IndependentAllocation verifies D12: when two domains use
+// different transit_cidr values, each address pool consumes independently from index 0.
+// Even though domain A has already consumed 10 pair indices, domain B's /30 custom pool
+// can still fit its sole pair (10.20.0.1 / 10.20.0.2).
 //
-// 在修复前的单一全局计数器下，域 B 的边会落到 >=10 的全局 index，对 /30 而言远超池容量
-// 而报「地址池已耗尽」——这正是本用例要防止的回归。
+// Under the single global counter before the fix, domain B's edge would land at a global
+// index >=10, which for a /30 far exceeds the pool capacity and reports "address pool
+// exhausted" -- exactly the regression this case is meant to prevent.
 func TestPerCIDRTransitPools_IndependentAllocation(t *testing.T) {
-	// 域 A：1 个 hub + 10 个 spoke 的星型，产生 10 条边 → 域 A 池消耗 index 0..9。
+	// Domain A: a star of 1 hub + 10 spokes, producing 10 edges -> domain A's pool consumes index 0..9.
 	const spokeCount = 10
 	nodes := []model.Node{
 		transitPoolNode("a-hub", "domain-a", "10.11.0.1"),
@@ -48,14 +50,14 @@ func TestPerCIDRTransitPools_IndependentAllocation(t *testing.T) {
 		})
 	}
 
-	// 域 B：单条边，from 节点在域 B，域 B 的 transit_cidr 是 /30（恰好一对可用主机）。
+	// Domain B: a single edge, the from node is in domain B, and domain B's transit_cidr is a /30 (exactly one pair of usable hosts).
 	nodes = append(nodes,
 		transitPoolNode("b-one", "domain-b", "10.12.0.1"),
 		transitPoolNode("b-two", "domain-b", "10.12.0.2"),
 	)
 	keys["b-one"] = KeyPair{PrivateKey: "privkey-b-one-fake", PublicKey: "pubkey-b-one-fake"}
 	keys["b-two"] = KeyPair{PrivateKey: "privkey-b-two-fake", PublicKey: "pubkey-b-two-fake"}
-	// 把域 B 的边排在所有域 A 边之后，确保「若仍是全局计数器」时它会拿到高位 index。
+	// Order domain B's edge after all of domain A's edges to ensure that, "if it were still a global counter", it would get a high index.
 	edges = append(edges, model.Edge{
 		ID: "e-b", FromNodeID: "b-one", ToNodeID: "b-two",
 		Type: "direct", Transport: "udp", IsEnabled: true,
@@ -65,7 +67,7 @@ func TestPerCIDRTransitPools_IndependentAllocation(t *testing.T) {
 		Project: model.Project{ID: "transit-pools-001", Name: "Transit Pools"},
 		Domains: []model.Domain{
 			{ID: "domain-a", Name: "alpha", CIDR: "10.11.0.0/24", AllocationMode: "auto", RoutingMode: "babel"},
-			// transit 留空 → 解析为默认 10.10.0.0/24（与域 B 的 /30 互不串号）。
+			// transit left empty -> resolves to default 10.10.0.0/24 (never shares numbering with domain B's /30).
 			{ID: "domain-b", Name: "beta", CIDR: "10.12.0.0/24", AllocationMode: "auto", RoutingMode: "babel",
 				TransitCIDR: "10.20.0.0/30"},
 		},
@@ -75,34 +77,35 @@ func TestPerCIDRTransitPools_IndependentAllocation(t *testing.T) {
 
 	_, allocations, err := DerivePeers(topo, keys)
 	if err != nil {
-		t.Fatalf("域 B 的 /30 池独立计数应能容下其唯一一对，但 DerivePeers 报错: %v", err)
+		t.Fatalf("domain B's /30 pool counting independently should fit its sole pair, but DerivePeers errored: %v", err)
 	}
 
 	bAlloc := allocations["b-one->b-two"]
 	if bAlloc == nil {
-		t.Fatalf("应为 b-one->b-two 生成 pairAllocation")
+		t.Fatalf("a pairAllocation should be generated for b-one->b-two")
 	}
-	// 域 B 池从 index 0 开始：/30 的可用主机恰是 .1 与 .2。
+	// Domain B's pool starts at index 0: the usable hosts of a /30 are exactly .1 and .2.
 	wantPair := map[string]bool{"10.20.0.1": true, "10.20.0.2": true}
 	if !wantPair[bAlloc.localTransit] || !wantPair[bAlloc.remoteTransit] || bAlloc.localTransit == bAlloc.remoteTransit {
-		t.Errorf("域 B（10.20.0.0/30）应分配 {10.20.0.1, 10.20.0.2}，实际 local=%s remote=%s",
+		t.Errorf("domain B (10.20.0.0/30) should allocate {10.20.0.1, 10.20.0.2}, got local=%s remote=%s",
 			bAlloc.localTransit, bAlloc.remoteTransit)
 	}
 
-	// 域 A 池也应从 index 0 开始（默认 10.10.0.0/24）：第一条边即 .1/.2，不受域 B 影响。
+	// Domain A's pool should also start at index 0 (default 10.10.0.0/24): the first edge is .1/.2, unaffected by domain B.
 	aAlloc := allocations["a-hub->a-spoke-a"]
 	if aAlloc == nil {
-		t.Fatalf("应为 a-hub->a-spoke-a 生成 pairAllocation")
+		t.Fatalf("a pairAllocation should be generated for a-hub->a-spoke-a")
 	}
 	wantAPair := map[string]bool{"10.10.0.1": true, "10.10.0.2": true}
 	if !wantAPair[aAlloc.localTransit] || !wantAPair[aAlloc.remoteTransit] {
-		t.Errorf("域 A（默认 10.10.0.0/24）首条边应分配 {10.10.0.1, 10.10.0.2}，实际 local=%s remote=%s",
+		t.Errorf("domain A (default 10.10.0.0/24) first edge should allocate {10.10.0.1, 10.10.0.2}, got local=%s remote=%s",
 			aAlloc.localTransit, aAlloc.remoteTransit)
 	}
 }
 
-// TestPerCIDRTransitPools_SmallPoolExhausts 验证 D48/D12：一个 /30 池只能容下一对，
-// 第二条同池链路必须以干净的耗尽错误失败（而非静默吐出广播地址 .3）。
+// TestPerCIDRTransitPools_SmallPoolExhausts verifies D48/D12: a /30 pool can hold only
+// one pair, so a second link in the same pool must fail with a clean exhaustion error
+// (rather than silently emitting the broadcast address .3).
 func TestPerCIDRTransitPools_SmallPoolExhausts(t *testing.T) {
 	nodes := []model.Node{
 		transitPoolNode("n1", "domain-x", "10.40.0.1"),
@@ -122,7 +125,7 @@ func TestPerCIDRTransitPools_SmallPoolExhausts(t *testing.T) {
 		},
 		Nodes: nodes,
 		Edges: []model.Edge{
-			// 两条不同链路都从 /30 池取地址：第一条占 index 0（.1/.2），第二条需 index 1 → 广播 .3。
+			// Two distinct links both draw from the /30 pool: the first takes index 0 (.1/.2), the second needs index 1 -> broadcast .3.
 			{ID: "e1", FromNodeID: "n1", ToNodeID: "n2", Type: "direct", Transport: "udp", IsEnabled: true},
 			{ID: "e2", FromNodeID: "n1", ToNodeID: "n3", Type: "direct", Transport: "udp", IsEnabled: true},
 		},
@@ -137,9 +140,11 @@ func TestPerCIDRTransitPools_SmallPoolExhausts(t *testing.T) {
 	}
 }
 
-// TestAllocateTransitPair_NeverNetworkOrBroadcast 验证 D48：对 /29 池逐一走完所有 index，
-// 任何成功分配的地址都不得是网络地址（.0）或广播地址（.7）；越界后返回耗尽错误。
-// /29（10.30.0.0/29）的可用主机是 .1..6，故应得到 3 对（index 0/1/2），index 3 起耗尽。
+// TestAllocateTransitPair_NeverNetworkOrBroadcast verifies D48: walking through every
+// index of a /29 pool, no successfully allocated address may be the network address
+// (.0) or the broadcast address (.7); out of range returns an exhaustion error.
+// A /29 (10.30.0.0/29) has usable hosts .1..6, so it should yield 3 pairs (index 0/1/2)
+// and be exhausted from index 3 onward.
 func TestAllocateTransitPair_NeverNetworkOrBroadcast(t *testing.T) {
 	const cidr = "10.30.0.0/29"
 	const networkAddr = "10.30.0.0"
@@ -147,7 +152,7 @@ func TestAllocateTransitPair_NeverNetworkOrBroadcast(t *testing.T) {
 
 	successCount := 0
 	exhausted := false
-	// 走比池容量更多的 index，确保覆盖到耗尽边界与（可能的）越界回绕。
+	// Walk more indices than the pool capacity to ensure coverage of the exhaustion boundary and (possible) out-of-range wraparound.
 	for index := 0; index < 16; index++ {
 		ip1, ip2, err := allocateTransitPair(index, cidr)
 		if err != nil {
@@ -157,55 +162,55 @@ func TestAllocateTransitPair_NeverNetworkOrBroadcast(t *testing.T) {
 		successCount++
 		for _, ip := range []string{ip1, ip2} {
 			if ip == networkAddr {
-				t.Errorf("index %d 分配出网络地址 %s，绝不允许", index, networkAddr)
+				t.Errorf("index %d allocated the network address %s, never allowed", index, networkAddr)
 			}
 			if ip == broadcastAddr {
-				t.Errorf("index %d 分配出广播地址 %s，绝不允许", index, broadcastAddr)
+				t.Errorf("index %d allocated the broadcast address %s, never allowed", index, broadcastAddr)
 			}
 		}
 		if ip1 == ip2 {
-			t.Errorf("index %d 的一对地址不应相同（%s）", index, ip1)
+			t.Errorf("index %d pair of addresses should not be identical (%s)", index, ip1)
 		}
 	}
 
 	if successCount != 3 {
-		t.Errorf("/29 池可用主机 .1..6，应恰好分配 3 对，实际 %d 对", successCount)
+		t.Errorf("/29 pool usable hosts .1..6, should allocate exactly 3 pairs, got %d pairs", successCount)
 	}
 	if !exhausted {
-		t.Errorf("超过池容量的 index 应返回耗尽错误，但从未观察到")
+		t.Errorf("indices beyond pool capacity should return an exhaustion error, but it was never observed")
 	}
 
-	// 显式断言 index 0 的具体地址，钉住「从 .1 起、跳过网络地址」的语义。
+	// Explicitly assert the concrete addresses of index 0, pinning the "start at .1, skip the network address" semantics.
 	ip1, ip2, err := allocateTransitPair(0, cidr)
 	if err != nil {
-		t.Fatalf("index 0 应成功，实际报错: %v", err)
+		t.Fatalf("index 0 should succeed, got error: %v", err)
 	}
 	if ip1 != "10.30.0.1" || ip2 != "10.30.0.2" {
-		t.Errorf("index 0 应为 {10.30.0.1, 10.30.0.2}，实际 {%s, %s}", ip1, ip2)
+		t.Errorf("index 0 should be {10.30.0.1, 10.30.0.2}, got {%s, %s}", ip1, ip2)
 	}
 }
 
-// TestAllocateLinkLocalPair_RendersHex 验证 D70：IPv6 link-local 以十六进制渲染。
-// index 5 → base = 2*5+1 = 11 → fe80::b / fe80::c（而非把十进制 11 写成 fe80::11，
-// 后者会被解析成 0x11 = 17，破坏文档承诺的连续编号）。
+// TestAllocateLinkLocalPair_RendersHex verifies D70: IPv6 link-local is rendered in hex.
+// index 5 -> base = 2*5+1 = 11 -> fe80::b / fe80::c (rather than writing decimal 11 as
+// fe80::11, which would be parsed as 0x11 = 17, breaking the contiguous numbering the docs promise).
 func TestAllocateLinkLocalPair_RendersHex(t *testing.T) {
 	local, remote := allocateLinkLocalPair(5)
 	if local != "fe80::b" {
-		t.Errorf("index 5 的本端 link-local 应为 fe80::b（十六进制），实际 %q", local)
+		t.Errorf("index 5 local link-local should be fe80::b (hex), got %q", local)
 	}
 	if remote != "fe80::c" {
-		t.Errorf("index 5 的对端 link-local 应为 fe80::c（十六进制），实际 %q", remote)
+		t.Errorf("index 5 remote link-local should be fe80::c (hex), got %q", remote)
 	}
-	// 反向保险：绝不能再出现十进制写法 fe80::11。
+	// Reverse safeguard: the decimal form fe80::11 must never appear again.
 	if local == "fe80::11" {
-		t.Errorf("index 5 不应渲染成十进制 fe80::11（会被解析成 fe80::17）")
+		t.Errorf("index 5 should not render as decimal fe80::11 (would be parsed as fe80::17)")
 	}
 
-	// 抽查低位 index，确认连续十六进制：index 0 → ::1/::2，index 7 → ::f/::10。
+	// Spot-check low indices to confirm contiguous hex: index 0 -> ::1/::2, index 7 -> ::f/::10.
 	if l0, r0 := allocateLinkLocalPair(0); l0 != "fe80::1" || r0 != "fe80::2" {
-		t.Errorf("index 0 应为 {fe80::1, fe80::2}，实际 {%s, %s}", l0, r0)
+		t.Errorf("index 0 should be {fe80::1, fe80::2}, got {%s, %s}", l0, r0)
 	}
 	if l7, r7 := allocateLinkLocalPair(7); l7 != "fe80::f" || r7 != "fe80::10" {
-		t.Errorf("index 7 应为 {fe80::f, fe80::10}（base=15 → 0xf, 0x10），实际 {%s, %s}", l7, r7)
+		t.Errorf("index 7 should be {fe80::f, fe80::10} (base=15 -> 0xf, 0x10), got {%s, %s}", l7, r7)
 	}
 }
