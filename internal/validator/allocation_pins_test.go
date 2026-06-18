@@ -130,7 +130,7 @@ func TestValidateAllocationPins_PortAboveMax(t *testing.T) {
 }
 
 // TestValidateAllocationPins_PortBelowMin asserts that a port pin below the manual-pin lower bound
-// minPinnedPort (1024, the privileged-port range) is rejected.
+// allocconst.MinPinnedPort (1024, the privileged-port range) is rejected.
 func TestValidateAllocationPins_PortBelowMin(t *testing.T) {
 	topo := pinnedTopology()
 	topo.Edges[0].PinnedFromPort = 500 // < 1024 (privileged-port range)

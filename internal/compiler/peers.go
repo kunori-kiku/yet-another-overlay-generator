@@ -8,19 +8,12 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
-
-// defaultTransitCIDR is the fallback transit address pool used when a domain
-// does not explicitly configure transit_cidr. Resolving empty values to this
-// constant at the allocation point lets the per-CIDR counters (audit item D12)
-// key on the "resolved CIDR", keeping them consistent with allocateTransitPair's
-// internal default resolution and with DeriveClientConfigs' AllowedIPs
-// resolution — the same pool is never counted twice.
-const defaultTransitCIDR = "10.10.0.0/24"
 
 // transitCIDRForNode resolves the transit CIDR ownership for a link (or for an
 // external edge awaiting reservation): it takes the TransitCIDR of the domain the
@@ -35,7 +28,7 @@ func transitCIDRForNode(from *model.Node, domainMap map[string]*model.Domain) st
 			return domain.TransitCIDR
 		}
 	}
-	return defaultTransitCIDR
+	return allocconst.DefaultTransitCIDR
 }
 
 // ReservedAllocations holds the allocation resources occupied by "edges outside
@@ -147,13 +140,6 @@ func (r *ReservedAllocations) reserveTransit(cidr, ip string) {
 	}
 	r.transitIPs[cidr][ip] = true
 }
-
-// backupDefaultLinkCost is the preset Babel rxcost a backup link adopts when it has
-// no explicit Priority/Weight: 384 = 4x babeld's wired default cost (96). This way
-// Babel never prefers a backup while the primary link is alive, yet multi-hop
-// alternative paths still participate in cost comparison normally. See
-// docs/spec/artifacts/babel.md (Link cost resolution).
-const backupDefaultLinkCost = 384
 
 // transportTCP is the literal for edge.Transport taking "tcp" (mimic shaping
 // transport). mimic has no key and no new field; transport=="tcp" is the only
@@ -919,7 +905,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 }
 
 // allocateTransitPair allocates a pair of transit IPv4 addresses by index and transitCIDR.
-// If transitCIDR is empty, the default defaultTransitCIDR (10.10.0.0/24) is used.
+// If transitCIDR is empty, the default allocconst.DefaultTransitCIDR (10.10.0.0/24) is used.
 // Each pair occupies 2 addresses: pair N → (network+2N+1, network+2N+2).
 // The address pool spans only the usable host range [network+1, broadcast-1]: the
 // network address and broadcast address are never allocated (audit item D48).
@@ -931,7 +917,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 // shape is kept unchanged.
 func allocateTransitPair(index int, transitCIDR string) (string, string, error) {
 	if transitCIDR == "" {
-		transitCIDR = defaultTransitCIDR
+		transitCIDR = allocconst.DefaultTransitCIDR
 	}
 
 	_, ipNet, err := net.ParseCIDR(transitCIDR)
@@ -990,7 +976,7 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 // /24 → 127 pairs, /29 → 3 pairs, /30 → 1 pair; hostBits < 2 (/31, /32) → 0 pairs.
 func transitPoolPairCount(transitCIDR string) (int, error) {
 	if transitCIDR == "" {
-		transitCIDR = defaultTransitCIDR
+		transitCIDR = allocconst.DefaultTransitCIDR
 	}
 	_, ipNet, err := net.ParseCIDR(transitCIDR)
 	if err != nil {
@@ -1087,7 +1073,7 @@ func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, e
 // deriveLinkCost derives a link's Babel rxcost override value.
 // Resolution order (spec docs/spec/artifacts/babel.md "Link cost resolution" / contract item 4):
 //  1. Explicit operator setting (D63): edge.Priority (>0) takes priority, otherwise edge.Weight (>0) — adopted verbatim;
-//  2. backup preset: the link is a backup (backup==true) and has no explicit setting → backupDefaultLinkCost (384);
+//  2. backup preset: the link is a backup (backup==true) and has no explicit setting → allocconst.BackupDefaultLinkCost (384);
 //  3. default: return 0 (left to the role preset's default cost; the renderer decides whether to omit the rxcost token).
 func deriveLinkCost(edge *model.Edge, backup bool) int {
 	if edge != nil {
@@ -1099,7 +1085,7 @@ func deriveLinkCost(edge *model.Edge, backup bool) int {
 		}
 	}
 	if backup {
-		return backupDefaultLinkCost
+		return allocconst.BackupDefaultLinkCost
 	}
 	return 0
 }
@@ -1296,7 +1282,7 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 		for i := range topo.Domains {
 			transitCIDR := topo.Domains[i].TransitCIDR
 			if transitCIDR == "" {
-				transitCIDR = defaultTransitCIDR
+				transitCIDR = allocconst.DefaultTransitCIDR
 			}
 			appendCIDR(transitCIDR)
 		}

@@ -246,6 +246,19 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	return result, nil
 }
 
+// computeChecksum is a DISPLAY-ONLY, NON-CANONICAL fingerprint of the compiled
+// topology, surfaced in CompileManifest.Checksum purely as a human-facing "did
+// anything change?" hint in the UI. It is NOT the bundle digest: the signed,
+// canonical per-node bundle digest is produced by internal/bundlesig
+// (Canonicalize over the sha256sum -c checksums string), and a signature is
+// NEVER taken over this value.
+//
+// It hashes fmt.Sprintf("%v", topo), whose output depends on Go's struct/map
+// formatting and map iteration order, so it is neither stable across Go
+// versions nor reproducible by a non-Go implementation. It is therefore
+// explicitly OUT OF SCOPE for plan-5's Go<->TS conformance harness — the
+// TypeScript local-mode compiler port cannot and should not attempt to
+// reproduce this value. Do not promote it to a security or equivalence anchor.
 func computeChecksum(topo *model.Topology) string {
 	h := sha256.New()
 	h.Write([]byte(fmt.Sprintf("%v", topo)))

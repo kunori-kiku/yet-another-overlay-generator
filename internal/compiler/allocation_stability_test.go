@@ -3,7 +3,9 @@ package compiler
 import (
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
 // This file is the I1/I2 property gate for Plan 7 (sticky pin allocation, the
@@ -140,6 +142,75 @@ func abEdge(id, from, to, endpointHost string) model.Edge {
 		ID: id, FromNodeID: from, ToNodeID: to,
 		Type: "direct", EndpointHost: endpointHost, EndpointPort: 0,
 		Transport: "udp", IsEnabled: true,
+	}
+}
+
+// TestSingleSourcedMinPinnedPortBoundary is the single-sourcing round-trip gate
+// for plan-8 Phase 6.1: the semantic validator's pinned-port lower bound and the
+// compiler's honor-the-pin path must agree on the SAME boundary value, now that
+// both read it from internal/allocconst.MinPinnedPort instead of two separate
+// private consts. Previously the agreement was a comment-only "must match"
+// contract; this test turns it into an executable assertion.
+//
+// A pin at exactly the boundary (allocconst.MinPinnedPort = 1024) must (a) pass
+// ValidateSemantic with NO port-out-of-range error AND (b) compile verbatim. A
+// pin one below the boundary (1023) must be rejected by the validator. If the
+// two sides ever read a different value, one of these two halves breaks.
+func TestSingleSourcedMinPinnedPortBoundary(t *testing.T) {
+	c := NewCompiler()
+	keys := stableKeys()
+
+	build := func(fromPort, toPort int) *model.Topology {
+		edge := abEdge("e-ab", "node-a", "node-b", "beta.example.com")
+		edge.PinnedFromPort = fromPort
+		edge.PinnedToPort = toPort
+		// A complete, valid, in-pool, non-colliding pin set so the ONLY thing
+		// the boundary controls is the port acceptance.
+		edge.PinnedFromTransitIP = "10.10.0.51"
+		edge.PinnedToTransitIP = "10.10.0.52"
+		edge.PinnedFromLinkLocal = "fe80::aa"
+		edge.PinnedToLinkLocal = "fe80::ab"
+		return &model.Topology{
+			Project: model.Project{ID: "stable-minport", Name: "MinPinnedPort Boundary"},
+			Domains: []model.Domain{stableDomain()},
+			Nodes: []model.Node{
+				stableRouterNode("node-a", "alpha", "10.50.0.1"),
+				stableRouterNode("node-b", "beta", "10.50.0.2"),
+			},
+			Edges: []model.Edge{edge},
+		}
+	}
+
+	hasPortOutOfRange := func(res *validator.ValidationResult) bool {
+		for _, e := range res.Errors {
+			if e.Code == string(validator.CodePinPortOutOfRange) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// At the boundary: validator accepts, compiler honors verbatim.
+	atBoundary := build(allocconst.MinPinnedPort, allocconst.MinPinnedPort+1)
+	if res := validator.ValidateSemantic(atBoundary); hasPortOutOfRange(res) {
+		t.Fatalf("port pin at the boundary (%d) must NOT be rejected by the validator; got a port-out-of-range error", allocconst.MinPinnedPort)
+	}
+	compiled, err := c.Compile(atBoundary, keys)
+	if err != nil {
+		t.Fatalf("a topology with a boundary-value port pin should compile, got error: %v", err)
+	}
+	got := capturePins(t, compiled.Topology, "e-ab")
+	if got.fromPort != allocconst.MinPinnedPort || got.toPort != allocconst.MinPinnedPort+1 {
+		t.Errorf("boundary port pins should be honored verbatim {%d, %d}, got {%d, %d}",
+			allocconst.MinPinnedPort, allocconst.MinPinnedPort+1, got.fromPort, got.toPort)
+	}
+
+	// One below the boundary: validator rejects (the compiler is never reached
+	// for an invalid pin in the real pipeline; here we only assert the validator
+	// side of the shared boundary).
+	belowBoundary := build(allocconst.MinPinnedPort-1, allocconst.MinPinnedPort)
+	if res := validator.ValidateSemantic(belowBoundary); !hasPortOutOfRange(res) {
+		t.Fatalf("port pin one below the boundary (%d) must be rejected by the validator with a port-out-of-range error", allocconst.MinPinnedPort-1)
 	}
 }
 

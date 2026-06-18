@@ -3,6 +3,7 @@ package renderer
 import (
 	"sort"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
@@ -803,9 +804,6 @@ if [ -n "$FAILED_INTERFACES" ]; then
 fi
 `
 
-// defaultTransitCIDR is the default value of the transit address pool, matching allocateTransitPair's fallback.
-const defaultTransitCIDR = "10.10.0.0/24"
-
 // RenderInstallScript renders the install script.
 //
 // transitCIDRs is the resolved list of transit address pools for the domain this node belongs to,
@@ -938,7 +936,7 @@ func collectMimicPorts(peers []compiler.PeerInfo) []int {
 // RenderInstallScript.
 func NodeTransitCIDRs(topo *model.Topology, node *model.Node) []string {
 	if topo == nil || node == nil {
-		return []string{defaultTransitCIDR}
+		return []string{allocconst.DefaultTransitCIDR}
 	}
 	for i := range topo.Domains {
 		if topo.Domains[i].ID != node.DomainID {
@@ -947,9 +945,9 @@ func NodeTransitCIDRs(topo *model.Topology, node *model.Node) []string {
 		if cidr := topo.Domains[i].TransitCIDR; cidr != "" {
 			return []string{cidr}
 		}
-		return []string{defaultTransitCIDR}
+		return []string{allocconst.DefaultTransitCIDR}
 	}
-	return []string{defaultTransitCIDR}
+	return []string{allocconst.DefaultTransitCIDR}
 }
 
 // resolveTransitCIDRs normalizes the caller-supplied transit address pools into a de-duplicated,
@@ -968,7 +966,7 @@ func resolveTransitCIDRs(transitCIDRs []string) []string {
 		resolved = append(resolved, cidr)
 	}
 	if len(resolved) == 0 {
-		return []string{defaultTransitCIDR}
+		return []string{allocconst.DefaultTransitCIDR}
 	}
 	return resolved
 }
