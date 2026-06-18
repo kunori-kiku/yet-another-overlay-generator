@@ -1,0 +1,78 @@
+{
+ "project": {
+  "id": "pinned-pins",
+  "name": "Pinned Pins Round-Trip"
+ },
+ "domains": [
+  {
+   "id": "domain-1",
+   "name": "mesh",
+   "cidr": "10.27.0.0/24",
+   "allocation_mode": "auto",
+   "routing_mode": "babel"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "node-alpha",
+   "name": "alpha",
+   "hostname": "alpha.example.com",
+   "platform": "debian",
+   "role": "router",
+   "domain_id": "domain-1",
+   "overlay_ip": "10.27.0.1",
+   "capabilities": {
+    "can_accept_inbound": true,
+    "can_forward": true,
+    "has_public_ip": true
+   },
+   "public_endpoints": [
+    {
+     "id": "alpha-ep",
+     "host": "alpha.example.com",
+     "port": 51850
+    }
+   ],
+   "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+  },
+  {
+   "id": "node-beta",
+   "name": "beta",
+   "hostname": "beta.example.com",
+   "platform": "ubuntu",
+   "role": "router",
+   "domain_id": "domain-1",
+   "overlay_ip": "10.27.0.2",
+   "capabilities": {
+    "can_accept_inbound": true,
+    "can_forward": true,
+    "has_public_ip": true
+   },
+   "public_endpoints": [
+    {
+     "id": "beta-ep",
+     "host": "beta.example.com",
+     "port": 51851
+    }
+   ],
+   "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "from_node_id": "node-alpha",
+   "to_node_id": "node-beta",
+   "type": "public-endpoint",
+   "endpoint_host": "beta.example.com",
+   "transport": "udp",
+   "is_enabled": true,
+   "pinned_from_port": 51850,
+   "pinned_to_port": 51851,
+   "pinned_from_transit_ip": "10.10.0.10",
+   "pinned_to_transit_ip": "10.10.0.11",
+   "pinned_from_link_local": "fe80::10",
+   "pinned_to_link_local": "fe80::11"
+  }
+ ]
+}

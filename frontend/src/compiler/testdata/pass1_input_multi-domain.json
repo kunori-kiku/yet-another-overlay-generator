@@ -1,0 +1,78 @@
+{
+ "project": {
+  "id": "multi-domain",
+  "name": "Multi Domain"
+ },
+ "domains": [
+  {
+   "id": "domain-a",
+   "name": "alpha-net",
+   "cidr": "10.25.0.0/24",
+   "allocation_mode": "auto",
+   "routing_mode": "babel"
+  },
+  {
+   "id": "domain-b",
+   "name": "beta-net",
+   "cidr": "10.26.0.0/24",
+   "allocation_mode": "auto",
+   "routing_mode": "babel",
+   "transit_cidr": "10.30.0.0/24"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "router-a",
+   "name": "router-a",
+   "hostname": "router-a.example.com",
+   "platform": "debian",
+   "role": "router",
+   "domain_id": "domain-a",
+   "capabilities": {
+    "can_accept_inbound": true,
+    "can_forward": true,
+    "has_public_ip": true
+   },
+   "public_endpoints": [
+    {
+     "id": "router-a-ep",
+     "host": "router-a.example.com",
+     "port": 51820
+    }
+   ],
+   "wireguard_private_key": "wFKYOOqtvK/YveTzNg98Eb4Prt6oHae1pOpD4FkdX1U="
+  },
+  {
+   "id": "router-b",
+   "name": "router-b",
+   "hostname": "router-b.example.com",
+   "platform": "ubuntu",
+   "role": "router",
+   "domain_id": "domain-b",
+   "capabilities": {
+    "can_accept_inbound": true,
+    "can_forward": true,
+    "has_public_ip": true
+   },
+   "public_endpoints": [
+    {
+     "id": "router-b-ep",
+     "host": "router-b.example.com",
+     "port": 51820
+    }
+   ],
+   "wireguard_private_key": "qCjN0IF2zbbisu0IW+GW26tjAwXoWI3sW0a5ANkZAEM="
+  }
+ ],
+ "edges": [
+  {
+   "id": "e-backbone",
+   "from_node_id": "router-a",
+   "to_node_id": "router-b",
+   "type": "public-endpoint",
+   "endpoint_host": "router-b.example.com",
+   "transport": "udp",
+   "is_enabled": true
+  }
+ ]
+}
