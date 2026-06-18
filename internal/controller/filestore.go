@@ -214,18 +214,48 @@ func (fs *FileStore) sessionPath(dir, tokenHash string) (string, error) {
 
 // writeJSONAtomic marshals v and writes it to path via a temp-file + rename so a
 // crash cannot leave a truncated file. The parent directory must already exist.
+//
+// Crash-consistency (B2): the temp file's bytes are fsync'd to stable storage BEFORE the
+// rename, and the parent directory is fsync'd AFTER the rename, so a power loss between the
+// two steps cannot leave the target naming a not-yet-durable inode. Without these syncs the
+// rename can be ordered ahead of the data write on some filesystems, exposing a zero-length
+// or stale file after a crash — for the identity/credential/trust-list store that backs the
+// keystone, a silently-corrupt record is worse than an error.
 func writeJSONAtomic(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("controller: marshal %s: %w", filepath.Base(path), err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
 		return fmt.Errorf("controller: write %s: %w", filepath.Base(path), err)
+	}
+	if _, werr := f.Write(data); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("controller: write %s: %w", filepath.Base(path), werr)
+	}
+	if serr := f.Sync(); serr != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("controller: sync %s: %w", filepath.Base(path), serr)
+	}
+	if cerr := f.Close(); cerr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("controller: close %s: %w", filepath.Base(path), cerr)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("controller: install %s: %w", filepath.Base(path), err)
+	}
+	// fsync the parent directory so the rename (a directory metadata change) is itself
+	// durable; otherwise a crash could lose the rename and leave the OLD file in place.
+	// Best-effort: a dir that cannot be opened/synced (e.g. some network FS) must not fail
+	// an otherwise-committed write — the rename already landed.
+	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 	return nil
 }
@@ -1972,6 +2002,14 @@ func (fs *FileStore) AppendAudit(ctx context.Context, t TenantID, e AuditEntry) 
 	if _, werr := f.Write(line); werr != nil {
 		_ = f.Close()
 		return AuditEntry{}, fmt.Errorf("controller: append %s: %w", auditFileName, werr)
+	}
+	// fsync before close so the appended line is durable on stable storage (B2): the rotate
+	// block below and the "durably appended" comment both assume the entry has actually hit
+	// disk, not merely the page cache. Without this a crash right after a best-effort append
+	// could silently drop the most recent audit row.
+	if serr := f.Sync(); serr != nil {
+		_ = f.Close()
+		return AuditEntry{}, fmt.Errorf("controller: sync %s: %w", auditFileName, serr)
 	}
 	if cerr := f.Close(); cerr != nil {
 		return AuditEntry{}, fmt.Errorf("controller: close %s: %w", auditFileName, cerr)

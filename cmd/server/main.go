@@ -171,6 +171,21 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 		}
 	}
 
+	// B3 (plan-8 Phase 7): NEW login passkeys now require a non-empty Origin (the verifier's
+	// advisory origin gate is authoritative for login pins). Existing pins saved BEFORE this
+	// requirement may have an empty Origin; we do NOT enforce on them (that would lock out an
+	// operator mid-upgrade), but we surface a one-line warning per such operator so the owner
+	// knows to re-register the passkey to gain origin binding. Best-effort; a list error is
+	// non-fatal here (the no-operator warning above already covers the read).
+	if ops, err := store.ListOperators(context.Background(), controller.TenantID(tenant)); err == nil {
+		for _, op := range ops {
+			if op.LoginCredential != nil && strings.TrimSpace(op.LoginCredential.Origin) == "" {
+				log.Printf("controller: WARNING: operator %q has a legacy login passkey with no Origin — origin binding is not enforced for it; re-register the passkey to gain origin binding",
+					op.Username)
+			}
+		}
+	}
+
 	ch := api.NewControllerHandler(store, controller.TenantID(tenant), opTokenHash, api.DefaultOperatorName)
 	ch.SetOperatorPathPrefix(os.Getenv(envOperatorPathPrefix))
 	ch.SetAgentPathPrefix(os.Getenv(envAgentPathPrefix))

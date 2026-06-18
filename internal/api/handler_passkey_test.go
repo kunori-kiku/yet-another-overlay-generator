@@ -278,6 +278,54 @@ func TestPasskeyLoginBeginRateLimited(t *testing.T) {
 	}
 }
 
+// TestPasskeyRegisterRequiresOrigin (B3, plan-8 Phase 7): a login passkey registration with
+// an EMPTY Origin is rejected at pin time with the coded req_field_required/field=origin,
+// mirroring the existing RPID required-check. This makes webauthn.go's `if pin.Origin != ""`
+// advisory origin gate authoritative for LOGIN pins (they always carry an Origin now) WITHOUT
+// touching the shared VerifyAssertion crypto (the node keystone path keeps an intentional
+// empty Origin). A whitespace-only Origin is likewise rejected (TrimSpace).
+func TestPasskeyRegisterRequiresOrigin(t *testing.T) {
+	srv, _ := newLoginEnv(t, "")
+	_, body := doLogin(t, srv, "admin", "correct-password")
+	tok := sessionFrom(t, body)
+
+	pubPEM, _ := edKeypair(t)
+
+	register := func(origin string) (int, string, string) {
+		t.Helper()
+		reqBody, _ := json.Marshal(passkeyRegisterRequestJSON{
+			Alg:          string(trustlist.AlgWebAuthnEdDSA),
+			CredentialID: "login-cred-origin",
+			PublicKeyPEM: pubPEM,
+			RPID:         testRPID,
+			Origin:       origin,
+		})
+		r := authedJSON(t, srv, http.MethodPost, "passkey/register", tok, string(reqBody))
+		defer r.Body.Close()
+		var env struct {
+			Error struct {
+				Code   string            `json:"code"`
+				Params map[string]string `json:"params"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&env)
+		return r.StatusCode, env.Error.Code, env.Error.Params["field"]
+	}
+
+	// Empty Origin -> rejected with the field-scoped coded error.
+	if code, errCode, field := register(""); code != http.StatusBadRequest || errCode != "req_field_required" || field != "origin" {
+		t.Fatalf("empty-origin register = (%d, %q, field=%q), want (400, req_field_required, origin)", code, errCode, field)
+	}
+	// Whitespace-only Origin -> also rejected (TrimSpace, like the RPID/credential_id checks).
+	if code, errCode, field := register("   "); code != http.StatusBadRequest || errCode != "req_field_required" || field != "origin" {
+		t.Fatalf("whitespace-origin register = (%d, %q, field=%q), want (400, req_field_required, origin)", code, errCode, field)
+	}
+	// A non-empty Origin still registers successfully (the existing happy path).
+	if code, _, _ := register(testOrigin); code != http.StatusOK {
+		t.Fatalf("non-empty-origin register = %d, want 200", code)
+	}
+}
+
 // TestPasskeyDisableRequiresAssertion: disable is two-phase — an empty body returns a
 // challenge, and only a valid assertion removes the credential.
 func TestPasskeyDisableRequiresAssertion(t *testing.T) {
