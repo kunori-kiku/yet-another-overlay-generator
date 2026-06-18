@@ -14,16 +14,21 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
-// defaultTransitCIDR 是域未显式配置 transit_cidr 时回退使用的默认 transit 地址池。
-// 在分配点把空值解析到这个常量，可让 per-CIDR 计数器（审计项 D12）以「解析后的 CIDR」
-// 为键，从而与 allocateTransitPair 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs
-// 解析保持一致——同一池绝不会被记成两份。
+// defaultTransitCIDR is the fallback transit address pool used when a domain
+// does not explicitly configure transit_cidr. Resolving empty values to this
+// constant at the allocation point lets the per-CIDR counters (audit item D12)
+// key on the "resolved CIDR", keeping them consistent with allocateTransitPair's
+// internal default resolution and with DeriveClientConfigs' AllowedIPs
+// resolution — the same pool is never counted twice.
 const defaultTransitCIDR = "10.10.0.0/24"
 
-// transitCIDRForNode 解析一条链路（或一条待预留的外部 edge）的 transit CIDR 归属：
-// 取 from 节点所属域的 TransitCIDR，空值（无域 / 未配置）回退默认池。这是「链路构建」
-// （derivePeersWithDomains）与「外部 pin 预留」（ReservedAllocations）共用的唯一归属逻辑，
-// 二者必须按同一 CIDR 键归并 transit IP，否则跨子图预留会错配池、漏掉真正的冲突。
+// transitCIDRForNode resolves the transit CIDR ownership for a link (or for an
+// external edge awaiting reservation): it takes the TransitCIDR of the domain the
+// from-node belongs to, falling back to the default pool on empty (no domain /
+// unconfigured). This is the single ownership logic shared by "link construction"
+// (derivePeersWithDomains) and "external pin reservation" (ReservedAllocations);
+// both must coalesce transit IPs under the same CIDR key, otherwise cross-subgraph
+// reservation would mismatch pools and miss a real collision.
 func transitCIDRForNode(from *model.Node, domainMap map[string]*model.Domain) string {
 	if from != nil {
 		if domain := domainMap[from.DomainID]; domain != nil && domain.TransitCIDR != "" {
@@ -33,31 +38,43 @@ func transitCIDRForNode(from *model.Node, domainMap map[string]*model.Domain) st
 	return defaultTransitCIDR
 }
 
-// ReservedAllocations 是「子图编译」时需要避让的、由「子图之外的 edge」占用的分配资源。
+// ReservedAllocations holds the allocation resources occupied by "edges outside
+// the subgraph" that a "subgraph compile" must avoid.
 //
-// 背景（跨子图冲突根因）：controller 增量纳管时只编译「已 enroll 子图」，远端尚未 enroll 的
-// edge 会被 enrolledSubgraph 丢弃；编译器看不到它们，gap-fill 便会从 .1 起重新分配，与那些
-// 被丢弃 edge 仍持有的 pin（持久化在全量拓扑里）撞车。把全量拓扑中「不在本次子图内」的 edge
-// 的 pin 预留进来，子图的 gap-fill 就会跳过它们，从而绝不再产生跨子图碰撞（既有健康分配零漂移，
-// 因为预留值本就是别的 edge 已占用、本就该避让的值）。
+// Background (cross-subgraph collision root cause): when the controller enrolls
+// incrementally it only compiles the "already-enrolled subgraph"; edges whose
+// remote end is not yet enrolled are dropped by enrolledSubgraph. The compiler
+// cannot see them, so gap-fill re-allocates from .1 and collides with the pins
+// those dropped edges still hold (persisted in the full topology). Reserving the
+// pins of the edges in the full topology that are "not in this subgraph" makes the
+// subgraph's gap-fill skip them, so cross-subgraph collisions never recur (zero
+// drift for existing healthy allocations, because the reserved values are exactly
+// what other edges already occupy and should be avoided anyway).
 //
-// 注意：它只「预留」（影响 gap-fill 的避让集合），不改动子图内 edge 自身的 sticky pin——既有
-// 碰撞数据的清理由 normalize 层的 heal 负责，二者职责分离（预留=防新增，heal=清存量）。
+// Note: it only "reserves" (affecting gap-fill's avoidance set); it does not alter
+// the sticky pins of the subgraph's own edges — cleanup of existing colliding data
+// is the job of the normalize layer's heal, with separated responsibilities
+// (reserve = prevent new, heal = clean existing).
 type ReservedAllocations struct {
-	ports      map[string]map[int]bool    // nodeID -> 端口集合
-	transitIPs map[string]map[string]bool // 解析后的 CIDR -> IP 字符串集合
-	linkLocals map[string]bool            // link-local 字符串集合
+	ports      map[string]map[int]bool    // nodeID -> set of ports
+	transitIPs map[string]map[string]bool // resolved CIDR -> set of IP strings
+	linkLocals map[string]bool            // set of link-local strings
 }
 
-// BuildReservedFromExcludedEdges 扫描全量拓扑，为「ID 不在 includedEdgeIDs 内」的每条
-// enabled、非 client 触及、且成对完整 pin 的 edge 预留其 port / transit IP / link-local。
-// 这正是子图编译时被丢弃、却仍在存储中持有 pin 的那些 edge——把它们预留下来，子图的新分配
-// 就不会撞上它们。CIDR 经 transitCIDRForNode 解析（与链路构建同源）。
+// BuildReservedFromExcludedEdges scans the full topology and, for every enabled,
+// non-client-touching edge with complete paired pins whose "ID is not in
+// includedEdgeIDs", reserves its port / transit IP / link-local. These are exactly
+// the edges dropped during subgraph compilation that still hold pins in storage —
+// reserving them keeps the subgraph's new allocations from colliding with them. The
+// CIDR is resolved via transitCIDRForNode (same source as link construction).
 //
-//   - 跳过 disabled edge：验证器与分配器都忽略它们，其 pin 不构成冲突，预留只会徒增避让。
-//   - 跳过 client 触及的 edge：client 用单一 wg0、无 per-peer 资源，其 port pin 本就是错误、
-//     transit/LL 被忽略（与预分配阶段的 client 处理一致）。
-//   - 仅预留「成对完整」的 pin（单端有值按未 pin 处理，与预分配阶段一致）。
+//   - Skip disabled edges: both the validator and the allocator ignore them, their
+//     pins do not form a collision, and reserving them only adds needless avoidance.
+//   - Skip client-touching edges: a client uses a single wg0 with no per-peer
+//     resources, so its port pin is already wrong and its transit/LL are ignored
+//     (consistent with client handling in the pre-allocation phase).
+//   - Only reserve "complete paired" pins (a single-sided value is treated as
+//     unpinned, consistent with the pre-allocation phase).
 func BuildReservedFromExcludedEdges(full *model.Topology, includedEdgeIDs map[string]bool) *ReservedAllocations {
 	r := &ReservedAllocations{
 		ports:      make(map[string]map[int]bool),
@@ -131,37 +148,45 @@ func (r *ReservedAllocations) reserveTransit(cidr, ip string) {
 	r.transitIPs[cidr][ip] = true
 }
 
-// backupDefaultLinkCost 是 backup 链路在没有显式 Priority/Weight 时采用的 Babel rxcost
-// 预设值：384 = 4× babeld 有线默认 cost（96）。这样 Babel 在主链路存活时绝不优先 backup，
-// 而多跳备选路径仍能正常参与 cost 比较。详见 docs/spec/artifacts/babel.md（Link cost resolution）。
+// backupDefaultLinkCost is the preset Babel rxcost a backup link adopts when it has
+// no explicit Priority/Weight: 384 = 4x babeld's wired default cost (96). This way
+// Babel never prefers a backup while the primary link is alive, yet multi-hop
+// alternative paths still participate in cost comparison normally. See
+// docs/spec/artifacts/babel.md (Link cost resolution).
 const backupDefaultLinkCost = 384
 
-// transportTCP 是 edge.Transport 取「tcp」（mimic 整形传输）的字面量。mimic 无密钥、无新字段，
-// transport=="tcp" 是链路被 mimic 包裹的唯一信号（docs/spec/data-model/edge.md §TCP transport）。
+// transportTCP is the literal for edge.Transport taking "tcp" (mimic shaping
+// transport). mimic has no key and no new field; transport=="tcp" is the only
+// signal that a link is wrapped by mimic (docs/spec/data-model/edge.md §TCP transport).
 const transportTCP = "tcp"
 
-// defaultMimicBaseMTU 是 mimic 链路在节点未显式设置 MTU 时的基准 WireGuard MTU。
-// node.MTU==0 通常意味着「用系统默认（约 1420）」；但 mimic 链路必须显式写出降低后的 MTU，
-// 因此对 mimic 链路把 0 解析成 1420 作为基准，再扣减 mimic 开销。详见
-// docs/spec/artifacts/mimic.md（MTU −12）。
+// defaultMimicBaseMTU is the base WireGuard MTU for a mimic link when the node has
+// no explicit MTU set. node.MTU==0 usually means "use the system default (~1420)";
+// but a mimic link must explicitly emit the reduced MTU, so for mimic links 0 is
+// resolved to 1420 as the base, then the mimic overhead is subtracted. See
+// docs/spec/artifacts/mimic.md (MTU −12).
 const defaultMimicBaseMTU = 1420
 
-// mimicMTUOverhead 是 mimic（UDP→伪 TCP）在每个 WireGuard 接口上引入的字节开销。
-// docs/spec/artifacts/mimic.md：「MTU −12 on each mimic WireGuard interface」。
+// mimicMTUOverhead is the byte overhead mimic (UDP->fake TCP) introduces on each
+// WireGuard interface. docs/spec/artifacts/mimic.md: "MTU −12 on each mimic
+// WireGuard interface".
 const mimicMTUOverhead = 12
 
-// isMimicEdge 判定一条 edge 是否启用 mimic（tcp 整形传输）。
-// 规范：链路是否 mimic 完全由其 primaryEdge 的 transport 决定（docs/spec/data-model/edge.md
-// §TCP transport）——primary class 链路的 mimic 性取决于其 primaryEdge，每条 backup 链路取它
-// 自己（其 primaryEdge 即该 backup edge 本身）。
+// isMimicEdge reports whether an edge has mimic (tcp shaping transport) enabled.
+// Spec: whether a link is mimic is determined entirely by its primaryEdge's
+// transport (docs/spec/data-model/edge.md §TCP transport) — a primary-class link's
+// mimic-ness depends on its primaryEdge, and each backup link takes its own (whose
+// primaryEdge is the backup edge itself).
 func isMimicEdge(edge *model.Edge) bool {
 	return edge != nil && edge.Transport == transportTCP
 }
 
-// effectiveMTU 计算一条链路上某个 WireGuard 接口应写出的有效 MTU。
-// 规范（docs/spec/artifacts/mimic.md「MTU −12」/ docs/spec/data-model/edge.md §TCP transport）：
-//   - 非 mimic：保持 node.MTU 原样（0 ⇒ 仍 0 ⇒ 渲染器省略 MTU 行，与改造前逐字节一致）；
-//   - mimic：((node.MTU>0 ? node.MTU : 1420) − 12)，把 mimic 的 12 字节开销显式扣出。
+// effectiveMTU computes the effective MTU a WireGuard interface on a link should emit.
+// Spec (docs/spec/artifacts/mimic.md "MTU −12" / docs/spec/data-model/edge.md §TCP transport):
+//   - non-mimic: keep node.MTU as is (0 ⇒ still 0 ⇒ renderer omits the MTU line,
+//     byte-identical to before the change);
+//   - mimic: ((node.MTU>0 ? node.MTU : 1420) − 12), subtracting mimic's 12-byte
+//     overhead explicitly.
 func effectiveMTU(nodeMTU int, mimic bool) int {
 	if !mimic {
 		return nodeMTU
@@ -173,90 +198,94 @@ func effectiveMTU(nodeMTU int, mimic bool) int {
 	return base - mimicMTUOverhead
 }
 
-// KeyPair WireGuard 密钥对
+// KeyPair is a WireGuard key pair.
 type KeyPair struct {
 	PrivateKey string
 	PublicKey  string
 }
 
-// PeerInfo 描述一个点对点 WireGuard 接口的完整配置
-// 新架构：每个 peer 一个 WireGuard 接口
+// PeerInfo describes the complete configuration of a point-to-point WireGuard interface.
+// New architecture: one WireGuard interface per peer.
 type PeerInfo struct {
-	// 远端节点 ID
+	// Remote node ID
 	NodeID string
 
-	// 远端节点名称
+	// Remote node name
 	NodeName string
 
-	// 远端节点公钥
+	// Remote node public key
 	PublicKey string
 
-	// 远端节点 Overlay IP
+	// Remote node overlay IP
 	OverlayIP string
 
-	// AllowedIPs（per-peer 模型中使用宽松策略：0.0.0.0/0, ::/0）
+	// AllowedIPs (the per-peer model uses a permissive policy: 0.0.0.0/0, ::/0)
 	AllowedIPs []string
 
-	// Endpoint（远端公网地址）
+	// Endpoint (remote public address)
 	Endpoint string
 
 	// PersistentKeepalive
 	PersistentKeepalive int
 
-	// WireGuard 接口名（如 wg-dmit，Linux 限 15 字符）
+	// WireGuard interface name (e.g. wg-dmit, capped at 15 chars on Linux)
 	InterfaceName string
 
-	// === 以下为 per-peer-interface 架构新增字段 ===
+	// === The fields below are added by the per-peer-interface architecture ===
 
-	// 该接口的独立监听端口
+	// Dedicated listen port for this interface
 	ListenPort int
 
-	// 本端 transit IP（点对点链路地址）
+	// Local transit IP (point-to-point link address)
 	LocalTransitIP string
 
-	// 对端 transit IP
+	// Remote transit IP
 	RemoteTransitIP string
 
-	// 本端 IPv6 link-local 地址（Babel 需要）
+	// Local IPv6 link-local address (required by Babel)
 	LocalLinkLocal string
 
-	// 对端 IPv6 link-local 地址
+	// Remote IPv6 link-local address
 	RemoteLinkLocal string
 
-	// 是否为连接 client 的 router 侧接口
+	// Whether this is the router-side interface connecting to a client
 	IsClientPeer bool
 
-	// Client 的 overlay IP（仅当 IsClientPeer=true 时有值，用于 PostUp 路由注入）
+	// Client overlay IP (set only when IsClientPeer=true, used for PostUp route injection)
 	ClientOverlayIP string
 
-	// 该链路的 Babel rxcost 覆盖值，由对应 edge 推导（D63）。
-	// 0 表示采用角色 preset 的默认 cost（由 Babel 渲染器决定）。
+	// This link's Babel rxcost override, derived from the corresponding edge (D63).
+	// 0 means adopt the role preset's default cost (decided by the Babel renderer).
 	LinkCost int
 
-	// 该链路是否启用 mimic（tcp 整形传输）：等价于 link.primaryEdge.Transport=="tcp"。
-	// mimic 无密钥、无新字段，transport=="tcp" 是唯一信号（docs/spec/data-model/edge.md
-	// §TCP transport）。渲染器据此（连同 ListenPort）推导本节点的 mimic 监听端口集合。
+	// Whether this link has mimic (tcp shaping transport) enabled: equivalent to
+	// link.primaryEdge.Transport=="tcp". mimic has no key and no new field;
+	// transport=="tcp" is the only signal (docs/spec/data-model/edge.md §TCP transport).
+	// The renderer uses this (together with ListenPort) to derive this node's set of
+	// mimic listen ports.
 	Mimic bool
 
-	// 该接口写出的有效 WireGuard MTU。
-	// 非 mimic：保持 node.MTU 原样（0 ⇒ 渲染器省略 MTU 行，逐字节不变）。
-	// mimic：((node.MTU>0 ? node.MTU : 1420) − 12)，扣出 mimic 的 12 字节开销
-	// （docs/spec/artifacts/mimic.md「MTU −12」）。
+	// The effective WireGuard MTU this interface emits.
+	// non-mimic: keep node.MTU as is (0 ⇒ renderer omits the MTU line, byte-unchanged).
+	// mimic: ((node.MTU>0 ? node.MTU : 1420) − 12), subtracting mimic's 12-byte overhead
+	// (docs/spec/artifacts/mimic.md "MTU −12").
 	MTU int
 }
 
-// DerivePeers 根据 Edge 拓扑推导每个节点的 WireGuard Peer 列表
-// 新架构：每个 peer 一个独立接口
-// 返回 map[nodeID][]PeerInfo
+// DerivePeers derives each node's WireGuard peer list from the edge topology.
+// New architecture: one dedicated interface per peer.
+// Returns map[nodeID][]PeerInfo.
 func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	return derivePeers(topo, keys, nil)
 }
 
-// derivePeers 是 DerivePeers 的内部变体，额外接收一组「子图之外的 edge」预留资源（reserved）。
-// 全量编译（air-gap CLI / API）传 nil——拓扑里没有被丢弃的 edge，行为与改造前逐字节一致；
-// 仅 controller 的子图编译会传入非 nil 的预留集合（见 CompileSubgraph）。
+// derivePeers is the internal variant of DerivePeers that additionally accepts a set
+// of "edges outside the subgraph" reserved resources (reserved). Full compiles
+// (air-gap CLI / API) pass nil — there are no dropped edges in the topology, so the
+// behavior is byte-identical to before the change; only the controller's subgraph
+// compile passes a non-nil reservation set (see CompileSubgraph).
 func derivePeers(topo *model.Topology, keys map[string]KeyPair, reserved *ReservedAllocations) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
-	// 构建 Domain 索引
+	// Build the domain index
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
 		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
@@ -265,39 +294,44 @@ func derivePeers(topo *model.Topology, keys map[string]KeyPair, reserved *Reserv
 	return derivePeersWithDomains(topo, keys, domainMap, reserved)
 }
 
-// pairAllocation 预分配的节点对资源（端口、transit IP、link-local）
+// pairAllocation holds the pre-allocated resources for a node pair (ports, transit
+// IP, link-local).
 type pairAllocation struct {
 	fromNodeID    string
 	toNodeID      string
-	fromPort      int // fromNode 接口的已分配监听端口
-	toPort        int // toNode 接口的已分配监听端口
+	fromPort      int // allocated listen port for the fromNode interface
+	toPort        int // allocated listen port for the toNode interface
 	localTransit  string
 	remoteTransit string
 	localLL       string
 	remoteLL      string
 }
 
-// derivePeersWithDomains 核心推导逻辑（两阶段算法）
-// Pass 1: 预分配所有节点对的端口和地址资源
-// Pass 2: 使用预分配的端口构建 PeerInfo（确保 endpoint 端口 = 对端接口监听端口）
+// derivePeersWithDomains is the core derivation logic (a two-pass algorithm).
+// Pass 1: pre-allocate the ports and address resources for all node pairs.
+// Pass 2: build PeerInfo using the pre-allocated ports (ensuring endpoint port =
+// remote interface listen port).
 func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain, reserved *ReservedAllocations) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	peerMap := make(map[string][]PeerInfo)
 
-	// 节点索引
+	// Node index
 	nodeMap := make(map[string]*model.Node)
 	for i := range topo.Nodes {
 		nodeMap[topo.Nodes[i].ID] = &topo.Nodes[i]
 	}
 
-	// 初始化每个节点的 peer 列表
+	// Initialize each node's peer list
 	for _, node := range topo.Nodes {
 		peerMap[node.ID] = []PeerInfo{}
 	}
 
-	// 预扫描所有启用的「primary class」edge 方向，用于 keepalive 判断。
-	// 仅统计非 backup edge（linkid.IsBackup==false）：反向可达性是统一 primary 链路的属性，
-	// backup edge 自成独立链路、绝不充当某对节点的「反向 primary」（规范 unify rule：反向解析
-	// 只考虑同对节点的对向 primary-class edge）。单 edge 对里该 edge 即 primary class，行为不变。
+	// Pre-scan all enabled "primary class" edge directions, used for the keepalive
+	// decision. Count only non-backup edges (linkid.IsBackup==false): reverse
+	// reachability is a property of the unified primary link, and a backup edge forms
+	// its own independent link and never acts as a node pair's "reverse primary"
+	// (unify rule: reverse resolution considers only the opposite-direction
+	// primary-class edge of the same node pair). In a single-edge pair that edge is
+	// the primary class, so the behavior is unchanged.
 	enabledEdgeDirections := make(map[string]bool)
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -306,10 +340,11 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// 构建 edge 反向查找索引：key="fromNodeID->toNodeID" -> Edge。
-	// 同样只收录 primary-class edge：统一 primary 链路的反向 endpoint 解析只能命中
-	// 对向的 primary-class edge，绝不命中 backup（规范：Reverse-edge resolution considers
-	// ONLY primary-class opposite-direction edges）。
+	// Build the edge reverse-lookup index: key="fromNodeID->toNodeID" -> Edge.
+	// Likewise record only primary-class edges: the unified primary link's reverse
+	// endpoint resolution may only hit the opposite-direction primary-class edge, never
+	// a backup (spec: Reverse-edge resolution considers ONLY primary-class
+	// opposite-direction edges).
 	edgeMap := make(map[string]*model.Edge)
 	for i := range topo.Edges {
 		e := &topo.Edges[i]
@@ -318,35 +353,46 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// ======== Pass 1: 预分配资源（reserve-then-gap-fill，Spec B） ========
+	// ======== Pass 1: pre-allocate resources (reserve-then-gap-fill, Spec B) ========
 	//
-	// 顺序无关性（I2）由构造保证：先把全拓扑所有 pin 预留进各资源池，再为未 pin 的链路
-	// gap-fill。因此新增链路绝不会拿到既有链路已占用的值，既有链路的值也永不移动（I1/I3/I4）。
-	// gap-fill 按 pinKey 排序遍历、池内取最低空闲槽位（Spec B 规范要求的 pinKey-deterministic 顺序）：
-	// 一条链路看到的预留集合只取决于全拓扑当前的 pin 与 pinKey 更小的未 pin 链路，与数组位置、
-	// 以及该链路自身的删除/重加历史无关，从而保证 delete/re-add 幂等（I9/G1）。
-	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge)（外加 primary 链路的双向 "from->to" 别名，见 Pass 1 阶段 4 末尾）
+	// Order-independence (I2) is guaranteed by construction: first reserve all pins in
+	// the topology into the resource pools, then gap-fill the unpinned links. As a
+	// result a new link never takes a value already occupied by an existing link, and
+	// existing links' values never move (I1/I3/I4). gap-fill iterates sorted by pinKey
+	// and picks the lowest free slot within a pool (the pinKey-deterministic order
+	// required by Spec B): the reservation set a link sees depends only on the
+	// topology's current pins and on unpinned links with a smaller pinKey, independent
+	// of array position and of the link's own delete/re-add history, which guarantees
+	// delete/re-add idempotence (I9/G1).
+	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge) (plus the primary link's bidirectional "from->to" alias, see end of Pass 1 phase 4)
 
-	// 把每个 enabled edge 按 unify rule 折叠成链路实体（规范：docs/spec/compiler/
-	// allocation-stability.md「Link identity with parallel edges」/「Reserve-all-pins-first」）：
-	//   - PRIMARY CLASS：同一对节点的全部「非 backup」edge（linkid.IsBackup==false）折叠为
-	//     唯一一条双向链路。primaryEdge = topo.Edges 顺序里首个 enabled primary-class edge
-	//     （沿用旧规则：决定 pairAllocation 的 from/to 定向）；同向多出来的 primary-class edge
-	//     是「意外重复」，仍映射到这条统一链路用于写回（历史行为，验证器另行告警）。
-	//   - 每条 role=="backup" 的 edge 各自成为一条独立链路：primaryEdge = 它自己，linkKey 带
-	//     "#edgeID" 后缀以与同对节点的 primary 链路区分。
-	// 链路身份 = linkid.LinkKey(primaryEdge)：primary 链路约简为 pinKey（单 edge 对里
-	// linkKey==pinKey，gap-fill 顺序与取值与并行链路改造前逐字节一致——既有机群的零漂移保证）。
+	// Fold each enabled edge into a link entity per the unify rule (spec:
+	// docs/spec/compiler/allocation-stability.md "Link identity with parallel edges" /
+	// "Reserve-all-pins-first"):
+	//   - PRIMARY CLASS: all "non-backup" edges (linkid.IsBackup==false) of the same
+	//     node pair fold into a single bidirectional link. primaryEdge = the first
+	//     enabled primary-class edge in topo.Edges order (keeping the old rule: it
+	//     decides the pairAllocation's from/to orientation); any extra same-direction
+	//     primary-class edge is an "accidental duplicate" that still maps to this
+	//     unified link for write-back (historical behavior; the validator warns
+	//     separately).
+	//   - Each role=="backup" edge becomes its own independent link: primaryEdge = it
+	//     itself, and its linkKey carries a "#edgeID" suffix to distinguish it from the
+	//     node pair's primary link.
+	// Link identity = linkid.LinkKey(primaryEdge): a primary link reduces to its pinKey
+	// (in a single-edge pair linkKey==pinKey, and the gap-fill order and values are
+	// byte-identical to before the parallel-link change — the zero-drift guarantee for
+	// existing fleets).
 	type linkEntity struct {
 		linkKey     string
 		backup      bool
-		primaryEdge *model.Edge // 决定 from/to 定向、interface 名后缀与 LinkCost
+		primaryEdge *model.Edge // decides from/to orientation, interface name suffix and LinkCost
 		fromNode    *model.Node
 		toNode      *model.Node
-		transitCIDR string // 解析后的 transit CIDR（per-pool 键）
+		transitCIDR string // resolved transit CIDR (per-pool key)
 	}
 	links := make([]*linkEntity, 0, len(topo.Edges))
-	linkByKey := make(map[string]*linkEntity) // linkKey -> 链路实体（Pass 2 / 写回按 LinkKey 反查）
+	linkByKey := make(map[string]*linkEntity) // linkKey -> link entity (Pass 2 / write-back look up by LinkKey)
 
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -360,16 +406,21 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 
 		lk := linkid.LinkKey(edge)
-		// primary class 的同对节点多条 edge 共享同一 linkKey：首次出现建实体，后续 edge
-		// （含反向与同向重复）折叠进同一实体、不重复建。backup edge 的 linkKey 带 "#edgeID"
-		// 后缀，天然唯一，因此每条 backup 各建一条实体。
+		// Multiple edges of the same node pair in the primary class share one linkKey:
+		// the first occurrence builds the entity, and subsequent edges (including the
+		// reverse and same-direction duplicates) fold into the same entity without
+		// rebuilding. A backup edge's linkKey carries a "#edgeID" suffix and is
+		// naturally unique, so each backup builds its own entity.
 		if _, seen := linkByKey[lk]; seen {
 			continue
 		}
 
-		// 解析该链路所属域的 transit CIDR（空值回退默认池）。必须与 allocateTransitPair
-		// 内部的默认解析、以及 DeriveClientConfigs 的 AllowedIPs 解析保持一致（审计项 D12）。
-		// 经 transitCIDRForNode 统一解析，使「链路构建」与「外部 pin 预留」走同一份 CIDR 归属逻辑。
+		// Resolve the transit CIDR of the domain this link belongs to (empty falls back
+		// to the default pool). It must stay consistent with allocateTransitPair's
+		// internal default resolution and with DeriveClientConfigs' AllowedIPs
+		// resolution (audit item D12). Unifying resolution through transitCIDRForNode
+		// makes "link construction" and "external pin reservation" use one CIDR
+		// ownership logic.
 		transitCIDR := transitCIDRForNode(fromNode, domainMap)
 
 		link := &linkEntity{
@@ -384,12 +435,12 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		linkByKey[lk] = link
 	}
 
-	// ---- 预留集合 ----
-	// 端口按节点定向；transit IP 按 CIDR 池逐字存 IP 字符串（不做 index 反查——见 Spec B 的稳健选择）；
-	// link-local 全局唯一。
-	usedPorts := make(map[string]map[int]bool)         // nodeID -> 端口集合
-	usedTransitIPs := make(map[string]map[string]bool) // cidr -> IP 字符串集合
-	usedLinkLocals := make(map[string]bool)            // link-local 字符串集合
+	// ---- Reservation sets ----
+	// Ports keyed by node; transit IPs stored verbatim as IP strings per CIDR pool (no
+	// index reverse-lookup — see Spec B's robust choice); link-locals globally unique.
+	usedPorts := make(map[string]map[int]bool)         // nodeID -> set of ports
+	usedTransitIPs := make(map[string]map[string]bool) // cidr -> set of IP strings
+	usedLinkLocals := make(map[string]bool)            // set of link-local strings
 
 	markPort := func(nodeID string, port int) {
 		if usedPorts[nodeID] == nil {
@@ -407,10 +458,13 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		return usedTransitIPs[cidr] != nil && usedTransitIPs[cidr][ip]
 	}
 
-	// ======== Pass 1 阶段 2.5：预留「子图之外」的 edge 所占资源 ========
-	// 在本子图自身的 pin 预留与 gap-fill 之前，先把 reserved（全量拓扑里不在本子图内、却仍持有
-	// pin 的 edge）的资源标记为已用。这样子图内任何「未 pin、需 gap-fill」的 edge 都会避开它们，
-	// 跨子图碰撞从源头消失。仅子图编译会传入 reserved；全量编译为 nil，此处空转、行为不变（I1）。
+	// ======== Pass 1 phase 2.5: reserve resources occupied by "outside-the-subgraph" edges ========
+	// Before this subgraph's own pin reservation and gap-fill, mark as used the
+	// resources in reserved (edges in the full topology that are not in this subgraph
+	// yet still hold pins). This way any "unpinned, needs gap-fill" edge inside the
+	// subgraph avoids them, and cross-subgraph collisions disappear at the source. Only
+	// a subgraph compile passes reserved; a full compile passes nil, making this a
+	// no-op with unchanged behavior (I1).
 	if reserved != nil {
 		for nodeID, ports := range reserved.ports {
 			for port := range ports {
@@ -427,13 +481,16 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// ======== Pass 1 阶段 3：预留所有 pin ========
-	// 在任何 gap-fill 之前，把每条链路携带的（成对完整的）pin 逐资源预留。partial pin
-	// （单端有值）在此一律按「该资源未 pin」处理并跳过——成对校验由验证器分区负责。
-	pinnedAllocations := make(map[string]*pairAllocation) // linkKey -> 直接由 pin 构造的分配
+	// ======== Pass 1 phase 3: reserve all pins ========
+	// Before any gap-fill, reserve each link's (complete paired) pins resource by
+	// resource. A partial pin (single-sided value) is uniformly treated here as "that
+	// resource is unpinned" and skipped — pairing validation is handled by the
+	// validator's partition.
+	pinnedAllocations := make(map[string]*pairAllocation) // linkKey -> allocation built directly from pins
 	for _, link := range links {
-		// pin 取自该链路的 primaryEdge：统一 primary 链路的 pin 钉在它的 primary edge 上，
-		// backup 链路的 pin 钉在 backup edge 自己身上（此时 primaryEdge 即该 backup edge）。
+		// Pins are taken from this link's primaryEdge: a unified primary link's pins are
+		// pinned on its primary edge, and a backup link's pins are pinned on the backup
+		// edge itself (where primaryEdge is that backup edge).
 		edge := link.primaryEdge
 		isFromClient := link.fromNode.Role == "client"
 		isToClient := link.toNode.Role == "client"
@@ -444,7 +501,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 		hasAnyPin := false
 
-		// 端口 pin（成对完整且非 client 侧才视为已 pin）。
+		// Port pin (treated as pinned only when complete-paired and neither side is a client).
 		if !isFromClient && !isToClient && edge.PinnedFromPort > 0 && edge.PinnedToPort > 0 {
 			alloc.fromPort = edge.PinnedFromPort
 			alloc.toPort = edge.PinnedToPort
@@ -453,7 +510,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			hasAnyPin = true
 		}
 
-		// transit IP pin（成对完整才视为已 pin）。
+		// transit IP pin (treated as pinned only when complete-paired).
 		if edge.PinnedFromTransitIP != "" && edge.PinnedToTransitIP != "" {
 			alloc.localTransit = edge.PinnedFromTransitIP
 			alloc.remoteTransit = edge.PinnedToTransitIP
@@ -462,7 +519,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			hasAnyPin = true
 		}
 
-		// link-local pin（成对完整才视为已 pin）。
+		// link-local pin (treated as pinned only when complete-paired).
 		if edge.PinnedFromLinkLocal != "" && edge.PinnedToLinkLocal != "" {
 			alloc.localLL = edge.PinnedFromLinkLocal
 			alloc.remoteLL = edge.PinnedToLinkLocal
@@ -476,11 +533,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// ======== Pass 1 阶段 4：gap-fill 未 pin 的资源 ========
-	// 按 linkKey 排序遍历，保证候选顺序与数组位置无关（规范要求的 identity-ordered gap-fill）。
-	// 单 edge 对里 linkKey==pinKey，排序顺序与每个取值因此与并行链路改造前逐字节一致。
-	// 每个资源在其池内取最低空闲槽位；因预留在前、遍历顺序仅由 linkKey 决定，删除再重加同一链路
-	// 身份会看到相同的预留集合从而重现同一值（I2/I9）。
+	// ======== Pass 1 phase 4: gap-fill the unpinned resources ========
+	// Iterate sorted by linkKey to keep candidate order independent of array position
+	// (the identity-ordered gap-fill required by the spec). In a single-edge pair
+	// linkKey==pinKey, so the sort order and each value are byte-identical to before the
+	// parallel-link change. Each resource takes the lowest free slot within its pool;
+	// because reservation comes first and the iteration order is decided only by
+	// linkKey, deleting and re-adding the same link identity sees the same reservation
+	// set and reproduces the same value (I2/I9).
 	sort.Slice(links, func(i, j int) bool { return links[i].linkKey < links[j].linkKey })
 
 	for _, link := range links {
@@ -489,17 +549,21 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		isFromClient := fromNode.Role == "client"
 		isToClient := toNode.Role == "client"
 
-		// 取该 linkKey 的（部分）pin 分配作为起点，未 pin 的资源在其上补齐。
+		// Take this linkKey's (partial) pin allocation as the starting point, filling in
+		// the unpinned resources on top of it.
 		alloc := pinnedAllocations[link.linkKey]
 		if alloc == nil {
 			alloc = &pairAllocation{fromNodeID: fromNode.ID, toNodeID: toNode.ID}
 		}
 
-		// ---- 端口：未 pin 则逐侧取「不低于节点 base 的最低空闲端口」 ----
-		// client 侧不参与 per-peer 端口分配（使用单一 wg0），端口保持 0、不预留；
-		// 但触及 client 的边其「非 client 侧」（router/relay/gateway）仍需分配监听端口，
-		// 否则 DeriveClientConfigs 无法得知 client 该拨哪个端口。因此逐侧独立判断。
-		// 端口 pin 是成对的（验证器保证），故只要任一侧已 pin 即视为整对已 pin、跳过分配。
+		// ---- Ports: if unpinned, take per side "the lowest free port not below the node base" ----
+		// The client side does not take part in per-peer port allocation (it uses a
+		// single wg0), so its port stays 0 and is not reserved; but the "non-client side"
+		// (router/relay/gateway) of an edge touching a client still needs a listen port
+		// allocated, otherwise DeriveClientConfigs cannot tell which port the client
+		// should dial. Hence each side is decided independently. Port pins are paired
+		// (guaranteed by the validator), so if either side is pinned the whole pair is
+		// treated as pinned and allocation is skipped.
 		portsPinned := alloc.fromPort > 0 || alloc.toPort > 0
 		if !portsPinned {
 			if !isFromClient {
@@ -520,7 +584,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			}
 		}
 
-		// ---- transit IP 对：未 pin 则在 per-CIDR 池里取最低空闲 pair ----
+		// ---- transit IP pair: if unpinned, take the lowest free pair in the per-CIDR pool ----
 		transitPinned := alloc.localTransit != "" && alloc.remoteTransit != ""
 		if !transitPinned {
 			localTransit, remoteTransit, err := gapFillTransitPair(link.transitCIDR, transitUsed)
@@ -535,7 +599,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			alloc.remoteTransit = remoteTransit
 		}
 
-		// ---- link-local 对：未 pin 则取最低空闲 pair ----
+		// ---- link-local pair: if unpinned, take the lowest free pair ----
 		llPinned := alloc.localLL != "" && alloc.remoteLL != ""
 		if !llPinned {
 			localLL, remoteLL := gapFillLinkLocalPair(usedLinkLocals)
@@ -545,27 +609,35 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			alloc.remoteLL = remoteLL
 		}
 
-		// 链路分配以 linkid.LinkKey 为规范键（规范 I3：per-peer 分配身份即 linkKey）。
-		// Pass 2 / 写回 / DeriveClientConfigs 一律按 linkid.LinkKey(edge) 反查。
+		// The link allocation uses linkid.LinkKey as its canonical key (spec I3: the
+		// per-peer allocation identity is the linkKey). Pass 2 / write-back /
+		// DeriveClientConfigs all look up by linkid.LinkKey(edge).
 		allocations[link.linkKey] = alloc
 
-		// 额外为 primary class 链路登记双向 "from->to" 别名（向后兼容：旧调用方与现有测试
-		// 仍按有向键查 allocations）。primary 链路的有向键无歧义且与改造前一致；backup 链路
-		// 各自独占 linkKey，不再登记有向别名（避免同向多 backup 互相覆盖）。
-		// linkKey（含 "|"/"#"）与有向键（含 "->"）字符集不相交，绝不冲突。
+		// Additionally register a bidirectional "from->to" alias for the primary-class
+		// link (backward compatibility: old callers and existing tests still query
+		// allocations by directed key). The primary link's directed key is unambiguous
+		// and matches behavior before the change; backup links each own their linkKey
+		// exclusively and register no directed alias (to avoid same-direction backups
+		// overwriting each other). The linkKey (containing "|"/"#") and the directed key
+		// (containing "->") have disjoint character sets and never collide.
 		if !link.backup {
 			allocations[fromNode.ID+"->"+toNode.ID] = alloc
 			allocations[toNode.ID+"->"+fromNode.ID] = alloc
 		}
 	}
 
-	// ======== Pass 2: 使用预分配的端口构建 PeerInfo ========
-	// 每条「链路」只产出一对 PeerInfo（正向 + 反向），以 linkid.LinkKey 去重：
-	//   - primary class 的同对节点全部 edge 共享同一 linkKey → 折叠为一对 PeerInfo（首个
-	//     primary-class edge 在 topo.Edges 顺序里驱动创建，沿用旧的「首边定向」语义）；
-	//   - 每条 backup edge 自带唯一 linkKey → 各自产出独立的一对 PeerInfo。
-	// 仍按 edge 遍历但用 linkKey 闸门（规范允许的等价实现），单 edge 对里行为与改造前一致。
-	addedLinks := make(map[string]bool) // linkKey -> 是否已为该链路产出 PeerInfo
+	// ======== Pass 2: build PeerInfo using the pre-allocated ports ========
+	// Each "link" produces exactly one pair of PeerInfo (forward + reverse),
+	// deduplicated by linkid.LinkKey:
+	//   - all edges of the same node pair in the primary class share one linkKey →
+	//     folded into one pair of PeerInfo (the first primary-class edge in topo.Edges
+	//     order drives creation, keeping the old "first-edge orientation" semantics);
+	//   - each backup edge carries a unique linkKey → each produces its own independent
+	//     pair of PeerInfo.
+	// We still iterate by edge but gate on linkKey (an equivalent implementation
+	// permitted by the spec); in a single-edge pair the behavior matches before the change.
+	addedLinks := make(map[string]bool) // linkKey -> whether PeerInfo has been produced for this link
 
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -579,7 +651,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
-		// 该 edge 所属链路身份。primary-class edge → pinKey；backup edge → pinKey#edgeID。
+		// The link identity this edge belongs to. primary-class edge → pinKey; backup edge → pinKey#edgeID.
 		lk := linkid.LinkKey(edge)
 		if addedLinks[lk] {
 			continue
@@ -594,12 +666,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
-		// Client 节点不在 peerMap 中创建 PeerInfo（client 使用单一 wg0，由 DeriveClientConfigs 处理）
+		// A client node creates no PeerInfo in peerMap (the client uses a single wg0,
+		// handled by DeriveClientConfigs).
 		if fromNode.Role == "client" {
-			// 只创建 router 侧的 PeerInfo（router -> client 方向）。client 边不会是 backup，
-			// 故 interface 名走非 backup 短路径（与改造前逐字节一致）。
-			// 本链路的 mimic 性取决于 primaryEdge.Transport（docs/spec/data-model/edge.md
-			// §TCP transport）；MTU 用 router（toNode）节点 MTU 按 mimic 公式推导。
+			// Create only the router-side PeerInfo (router -> client direction). A client
+			// edge is never a backup, so the interface name takes the non-backup short path
+			// (byte-identical to before the change). This link's mimic-ness depends on
+			// primaryEdge.Transport (docs/spec/data-model/edge.md §TCP transport); the MTU
+			// is derived from the router (toNode) node MTU via the mimic formula.
 			mimic := isMimicEdge(link.primaryEdge)
 			{
 				fromKey, _ := keys[fromNode.ID]
@@ -647,21 +721,21 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			continue
 		}
 
-		// 判断当前 edge 的方向与 alloc 的方向是否一致
+		// Determine whether the current edge's direction matches alloc's direction
 		isForward := alloc.fromNodeID == fromNode.ID
 
 		toKey, _ := keys[toNode.ID]
 		fromKey, _ := keys[fromNode.ID]
 
-		// === 计算 endpoint（用户指定端口优先，否则使用预分配的端口） ===
+		// === Compute the endpoint (a user-specified port takes priority, otherwise use the pre-allocated port) ===
 		endpoint := ""
 		if edge.EndpointHost != "" {
 			var portToUse int
 			if edge.EndpointPort > 0 {
-				// 用户指定了 NAT/端口转发覆盖端口
+				// The user specified a NAT/port-forwarding override port
 				portToUse = edge.EndpointPort
 			} else {
-				// 自动分配：使用对端接口的已分配监听端口
+				// Auto-allocate: use the remote interface's allocated listen port
 				if isForward {
 					portToUse = alloc.toPort
 				} else {
@@ -671,14 +745,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			endpoint = formatEndpoint(edge.EndpointHost, portToUse)
 		}
 
-		// === 计算 PersistentKeepalive ===
+		// === Compute PersistentKeepalive ===
 		keepalive := 0
 		hasReverseEdge := enabledEdgeDirections[toNode.ID+"->"+fromNode.ID]
 		if !fromNode.Capabilities.CanAcceptInbound || !hasReverseEdge {
 			keepalive = 25
 		}
 
-		// === 确定本端资源 ===
+		// === Determine the local resources ===
 		var fromListenPort int
 		var localTransit, remoteTransit, localLL, remoteLL string
 		if isForward {
@@ -695,23 +769,28 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			remoteLL = alloc.localLL
 		}
 
-		// 接口名按链路身份 + backup 标记生成（规范 naming.md「Edge-aware names」）：
-		// backup 链路用「primaryEdge.ID（即 backup edge 自身 ID）」哈希区分，与同对节点的
-		// primary 链路接口不同名；非 backup 链路 byte-identical 回退到 WgInterfaceName。
+		// The interface name is generated from the link identity + backup flag (spec
+		// naming.md "Edge-aware names"): a backup link is distinguished by hashing
+		// "primaryEdge.ID (i.e. the backup edge's own ID)" so it does not share a name
+		// with the node pair's primary link interface; a non-backup link falls back
+		// byte-identically to WgInterfaceName.
 		ifaceName := naming.WgInterfaceNameForEdge(toNode.Name, link.primaryEdge.ID, link.backup)
 		allowedIPs := []string{"0.0.0.0/0", "::/0"}
 
-		// 该链路的 rxcost 覆盖值：正向与反向 peer 同属一条链路，取同一值。
-		// 解析顺序（规范 babel.md「Link cost resolution」/ 契约 item 4）：
-		// 显式 Priority/Weight（D63）> backup 预设 384 > 默认 0。
+		// This link's rxcost override: the forward and reverse peers belong to one link
+		// and take the same value. Resolution order (spec babel.md "Link cost
+		// resolution" / contract item 4): explicit Priority/Weight (D63) > backup preset
+		// 384 > default 0.
 		linkCost := deriveLinkCost(link.primaryEdge, link.backup)
 
-		// 本链路是否 mimic：取决于 link.primaryEdge.Transport（docs/spec/data-model/edge.md
-		// §TCP transport）。正向与反向 peer 同属一条链路，取同一 mimic 标记；MTU 各按本端
-		// 节点 MTU 套 mimic 公式（docs/spec/artifacts/mimic.md「MTU −12」）。
+		// Whether this link is mimic: depends on link.primaryEdge.Transport
+		// (docs/spec/data-model/edge.md §TCP transport). The forward and reverse peers
+		// belong to one link and take the same mimic flag; the MTU is computed per side
+		// from the local node MTU via the mimic formula (docs/spec/artifacts/mimic.md
+		// "MTU −12").
 		mimic := isMimicEdge(link.primaryEdge)
 
-		// 如果 toNode 是 client，创建 router 侧的带 IsClientPeer 标记的 PeerInfo
+		// If toNode is a client, create the router-side PeerInfo with the IsClientPeer flag set
 		isToClient := toNode.Role == "client"
 
 		peer := PeerInfo{
@@ -732,7 +811,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			ClientOverlayIP:     "",
 			LinkCost:            linkCost,
 			Mimic:               mimic,
-			// 本端接口属于 fromNode，故按 fromNode.MTU 推导。
+			// The local interface belongs to fromNode, so derive from fromNode.MTU.
 			MTU: effectiveMTU(fromNode.MTU, mimic),
 		}
 		if isToClient {
@@ -742,14 +821,16 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 
 		peerMap[fromNode.ID] = append(peerMap[fromNode.ID], peer)
 
-		// === 自动生成反向 peer（跳过 client 的反向——client 侧使用 wg0） ===
+		// === Auto-generate the reverse peer (skip the client's reverse — the client side uses wg0) ===
 		if isToClient {
 			addedLinks[lk] = true
 			continue
 		}
 
-		// 本链路已产出 PeerInfo：以 linkKey 闸门，确保同对节点的 primary class 多条 edge
-		// （含反向、含同向重复）不再重复产出，每条 backup 独立产出（各自 linkKey）。
+		// PeerInfo has been produced for this link: gate on linkKey to ensure the node
+		// pair's multiple primary-class edges (including the reverse and same-direction
+		// duplicates) do not produce again, while each backup produces independently
+		// (each with its own linkKey).
 		addedLinks[lk] = true
 		{
 			reverseKeepalive := 0
@@ -757,35 +838,40 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				reverseKeepalive = 25
 			}
 
-			// 反向接口命名 fromNode 的隧道；同属一条链路，沿用同一 edgeID + backup 标记。
+			// The reverse interface names fromNode's tunnel; belonging to one link, it
+			// keeps the same edgeID + backup flag.
 			reverseIfaceName := naming.WgInterfaceNameForEdge(fromNode.Name, link.primaryEdge.ID, link.backup)
 
-			// fromNode 接口的已分配监听端口（反向 peer 回连 fromNode 时使用）
+			// fromNode interface's allocated listen port (used when the reverse peer dials back to fromNode)
 			fromSideListenPort := alloc.fromPort
 			if !isForward {
 				fromSideListenPort = alloc.toPort
 			}
 
-			// 解析反向 peer 的 endpoint：
-			//  1. 存在显式反向 edge 且带 host 时，按正向规则解析（用户指定端口优先，否则用 fromNode 已分配端口）；
-			//  2. 否则若 fromNode 具备公网可达能力且配置了 public endpoint，回退到 fromNode 的公网 host
-			//     + fromNode 已分配的监听端口（绝不使用 public_endpoints[0].Port——那是节点可达提示，
-			//     而非本链路的监听端口，误用会在服务端重现端口归属 bug）。
+			// Resolve the reverse peer's endpoint:
+			//  1. When an explicit reverse edge exists and carries a host, resolve by the
+			//     forward rule (a user-specified port takes priority, otherwise use fromNode's
+			//     allocated port);
+			//  2. Otherwise, if fromNode is publicly reachable and has a public endpoint
+			//     configured, fall back to fromNode's public host + fromNode's allocated listen
+			//     port (never use public_endpoints[0].Port — that is a node-reachability hint,
+			//     not this link's listen port, and misusing it reproduces the port-ownership bug
+			//     on the server).
 			reverseEndpoint := ""
 			if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok && reverseEdge.EndpointHost != "" {
 				if reverseEdge.EndpointPort > 0 {
-					// 用户指定了 NAT/端口转发覆盖端口
+					// The user specified a NAT/port-forwarding override port
 					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, reverseEdge.EndpointPort)
 				} else {
-					// 自动分配：使用 fromNode 接口的已分配监听端口
+					// Auto-allocate: use fromNode interface's allocated listen port
 					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, fromSideListenPort)
 				}
 			} else if fromNode.Capabilities.HasPublicIP && len(fromNode.PublicEndpoints) > 0 {
-				// 回退：无反向 edge（或其 host 为空）且 fromNode 公网可达
+				// Fallback: no reverse edge (or its host is empty) and fromNode is publicly reachable
 				reverseEndpoint = formatEndpoint(fromNode.PublicEndpoints[0].Host, fromSideListenPort)
 			}
 
-			// 反向 peer 的资源与正向互换
+			// The reverse peer's resources are swapped relative to the forward
 			var toListenPort int
 			var revLocalTransit, revRemoteTransit, revLocalLL, revRemoteLL string
 			if isForward {
@@ -816,10 +902,11 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				RemoteTransitIP:     revRemoteTransit,
 				LocalLinkLocal:      revLocalLL,
 				RemoteLinkLocal:     revRemoteLL,
-				// 反向 peer 与正向共用同一条 edge，沿用同一 rxcost 覆盖值（D63）。
+				// The reverse peer shares the same edge as the forward, keeping the same rxcost override value (D63).
 				LinkCost: linkCost,
-				// 反向 peer 同属一条链路 → 同一 mimic 标记；本端接口属于 toNode，
-				// 故按 toNode.MTU 推导（docs/spec/artifacts/mimic.md「MTU −12」）。
+				// The reverse peer belongs to one link → same mimic flag; the local
+				// interface belongs to toNode, so derive from toNode.MTU
+				// (docs/spec/artifacts/mimic.md "MTU −12").
 				Mimic: mimic,
 				MTU:   effectiveMTU(toNode.MTU, mimic),
 			}
@@ -831,14 +918,17 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 	return peerMap, allocations, nil
 }
 
-// allocateTransitPair 根据序号和 transitCIDR 分配一对 transit IPv4 地址
-// 如果 transitCIDR 为空，使用默认 defaultTransitCIDR（10.10.0.0/24）
-// 每对占 2 个地址：pair N → (network+2N+1, network+2N+2)
-// 地址池只跨可用主机区间 [network+1, broadcast-1]：网络地址与广播地址绝不分配（审计项 D48）。
-// 当任一地址需要落到网络地址、广播地址或子网范围之外时，返回地址池耗尽错误。
+// allocateTransitPair allocates a pair of transit IPv4 addresses by index and transitCIDR.
+// If transitCIDR is empty, the default defaultTransitCIDR (10.10.0.0/24) is used.
+// Each pair occupies 2 addresses: pair N → (network+2N+1, network+2N+2).
+// The address pool spans only the usable host range [network+1, broadcast-1]: the
+// network address and broadcast address are never allocated (audit item D48).
+// When either address would land on the network address, broadcast address, or
+// outside the subnet range, a pool-exhausted error is returned.
 //
-// 签名稳定：后续阶段会在此函数之上重写 pair 分配主循环以支持 pin，
-// 因此保持 (index, transitCIDR) -> (ip1, ip2, error) 的形态不变。
+// Stable signature: a later phase rewrites the pair-allocation main loop on top of
+// this function to support pins, so the (index, transitCIDR) -> (ip1, ip2, error)
+// shape is kept unchanged.
 func allocateTransitPair(index int, transitCIDR string) (string, string, error) {
 	if transitCIDR == "" {
 		transitCIDR = defaultTransitCIDR
@@ -854,11 +944,12 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 		return "", "", fmt.Errorf("transit CIDR must be IPv4: %q", transitCIDR)
 	}
 
-	// 从掩码通用地推导网络地址与广播地址（不针对 /24 硬编码）。
+	// Derive the network and broadcast addresses generically from the mask (not hardcoded for /24).
 	networkAddr := binary.BigEndian.Uint32(baseIP)
 	maskBits, _ := ipNet.Mask.Size()
-	// hostBits = 32 - maskBits；广播地址 = 网络地址 | (2^hostBits - 1)。
-	// 对 /31、/32 这类没有可用广播位的掩码做保守处理：直接判定地址池容不下任何一对。
+	// hostBits = 32 - maskBits; broadcast address = network address | (2^hostBits - 1).
+	// Handle masks without usable broadcast bits (e.g. /31, /32) conservatively: simply
+	// declare that the pool cannot hold any pair.
 	hostBits := 32 - maskBits
 	if hostBits < 2 {
 		return "", "", fmt.Errorf("transit address pool exhausted (CIDR: %s, index: %d)", transitCIDR, index)
@@ -870,8 +961,9 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 	addr1 := networkAddr + offset
 	addr2 := networkAddr + offset + 1
 
-	// 越界（包含整数回绕导致的 addr2 < addr1）、命中网络地址或广播地址，一律视为地址池耗尽。
-	// 可用主机区间是开区间 (networkAddr, broadcastAddr)，即 [networkAddr+1, broadcastAddr-1]。
+	// Out of range (including addr2 < addr1 from integer wraparound), or hitting the
+	// network or broadcast address, is all treated as pool exhaustion. The usable host
+	// range is the open interval (networkAddr, broadcastAddr), i.e. [networkAddr+1, broadcastAddr-1].
 	if addr2 < addr1 ||
 		addr1 <= networkAddr || addr1 >= broadcastAddr ||
 		addr2 <= networkAddr || addr2 >= broadcastAddr {
@@ -886,14 +978,16 @@ func allocateTransitPair(index int, transitCIDR string) (string, string, error) 
 	return ip1.String(), ip2.String(), nil
 }
 
-// 链路规范标识已上移至 internal/linkid（leaf 包，仅依赖 model + stdlib），
-// 由编译器与验证器共用同一套 PinKey/LinkKey/IsBackup 语义，消除重复字面量。
-// 详见 docs/spec/compiler/allocation-stability.md（Canonical link key / Link identity）。
+// The canonical link identity has been moved up to internal/linkid (a leaf package
+// depending only on model + stdlib), so the compiler and validator share one set of
+// PinKey/LinkKey/IsBackup semantics, eliminating duplicate literals. See
+// docs/spec/compiler/allocation-stability.md (Canonical link key / Link identity).
 
-// transitPoolPairCount 返回某个 transit CIDR 池可用的 pair 数量（pair index 上界）。
-// 与 allocateTransitPair 同一套掩码推导：可用主机区间为 (network, broadcast)，
-// 即 2^hostBits - 2 个主机地址，每对占两个 → (2^hostBits - 2) / 2 对。
-// /24 → 127 对，/29 → 3 对，/30 → 1 对；hostBits < 2（/31、/32）→ 0 对。
+// transitPoolPairCount returns the number of usable pairs in a transit CIDR pool
+// (the pair index upper bound). Uses the same mask derivation as allocateTransitPair:
+// the usable host range is (network, broadcast), i.e. 2^hostBits - 2 host addresses,
+// two per pair → (2^hostBits - 2) / 2 pairs.
+// /24 → 127 pairs, /29 → 3 pairs, /30 → 1 pair; hostBits < 2 (/31, /32) → 0 pairs.
 func transitPoolPairCount(transitCIDR string) (int, error) {
 	if transitCIDR == "" {
 		transitCIDR = defaultTransitCIDR
@@ -914,19 +1008,26 @@ func transitPoolPairCount(transitCIDR string) (int, error) {
 	return int(usableHosts / 2), nil
 }
 
-// gapFillTransitPair 为一条未 pin 的链路在 per-CIDR 池里分配一对 transit IP。
+// gapFillTransitPair allocates a pair of transit IPs in the per-CIDR pool for an
+// unpinned link.
 //
-// 取值策略：在 per-CIDR 池里从 index 0 起向上扫描，跳过任一地址已被预留（usedTransitIPs）的
-// pair，命中首个两端都空闲的 pair 即返回；整池都满则返回干净的耗尽错误。
+// Selection strategy: scan upward from index 0 in the per-CIDR pool, skip any pair
+// where either address is already reserved (usedTransitIPs), and return the first
+// pair where both ends are free; if the whole pool is full, return a clean
+// exhaustion error.
 //
-// 该函数本身是「池 + 预留集合」的纯函数；其 delete/re-add 幂等（Spec B G1）由调用侧保证：
-// Pass 1 阶段 4 先预留所有 pin、再按 pinKey 排序遍历未 pin 链路。因此一条链路看到的预留集合
-// 只取决于「全拓扑当前的 pin」与「pinKey 更小的未 pin 链路」，而与该链路自身的删除/重加历史、
-// 以及数组位置无关——删除再重加同一对节点会重现同一最低空闲 pair（满足 I2/I9）。
+// This function is itself a pure function of "pool + reservation set"; its
+// delete/re-add idempotence (Spec B G1) is guaranteed by the caller: Pass 1 phase 4
+// reserves all pins first, then iterates the unpinned links sorted by pinKey. As a
+// result the reservation set a link sees depends only on "the topology's current
+// pins" and "unpinned links with a smaller pinKey", independent of the link's own
+// delete/re-add history and of array position — deleting and re-adding the same node
+// pair reproduces the same lowest free pair (satisfying I2/I9).
 //
-// 这正是 docs/spec/compiler/allocation-stability.md「Hash-seeded gap-fill」一节的规范要求：
-// 「the order in which candidate links are assigned MUST be deterministic in pinKey
-// （iterate unpinned links sorted by pinKey, and within a pool pick the lowest free slot）」。
+// This is exactly the spec requirement in docs/spec/compiler/allocation-stability.md
+// "Hash-seeded gap-fill": "the order in which candidate links are assigned MUST be
+// deterministic in pinKey (iterate unpinned links sorted by pinKey, and within a
+// pool pick the lowest free slot)".
 func gapFillTransitPair(transitCIDR string, transitUsed func(cidr, ip string) bool) (string, string, error) {
 	poolPairs, err := transitPoolPairCount(transitCIDR)
 	if err != nil {
@@ -938,7 +1039,7 @@ func gapFillTransitPair(transitCIDR string, transitUsed func(cidr, ip string) bo
 	for index := 0; index < poolPairs; index++ {
 		ip1, ip2, err := allocateTransitPair(index, transitCIDR)
 		if err != nil {
-			// 池内 index 理应都可用；防御性跳过任何意外的越界 index。
+			// Every index within the pool should be usable; defensively skip any unexpected out-of-range index.
 			continue
 		}
 		if transitUsed(transitCIDR, ip1) || transitUsed(transitCIDR, ip2) {
@@ -949,10 +1050,12 @@ func gapFillTransitPair(transitCIDR string, transitUsed func(cidr, ip string) bo
 	return "", "", apierr.New(apierr.CodeTransitPoolExhausted).With("cidr", transitCIDR)
 }
 
-// gapFillLinkLocalPair 为一条未 pin 的链路分配一对 IPv6 link-local。
-// 与 transit 同构：从 index 0 起向上扫描，跳过任一端已被预留（usedLinkLocals）的 pair，
-// 命中首个两端都空闲的 pair 即返回。fe80::/10 对任何实际机群规模都「事实上无限」（I6），
-// 故扫描必然在有限步内成功。delete/re-add 幂等同样由调用侧的「先预留、再按 pinKey 遍历」保证。
+// gapFillLinkLocalPair allocates a pair of IPv6 link-locals for an unpinned link.
+// Isomorphic to transit: scan upward from index 0, skip any pair where either end is
+// already reserved (usedLinkLocals), and return the first pair where both ends are
+// free. fe80::/10 is "effectively unlimited" for any real fleet size (I6), so the
+// scan necessarily succeeds within finitely many steps. delete/re-add idempotence is
+// likewise guaranteed by the caller's "reserve first, then iterate by pinKey".
 func gapFillLinkLocalPair(usedLinkLocals map[string]bool) (string, string) {
 	for index := 0; ; index++ {
 		local, remote := allocateLinkLocalPair(index)
@@ -963,10 +1066,13 @@ func gapFillLinkLocalPair(usedLinkLocals map[string]bool) (string, string) {
 	}
 }
 
-// lowestFreePort 返回某节点不低于基准端口 51820 的最低空闲端口（在 usedPorts 中跳过已用值）。
-// 基准端口是固定的 51820——per-node listen_port 在 per-peer 接口模型下无意义，已移除。
-// 有效端口不得超过 65535（审计项 D11）：超过即返回干净的编译期错误，
-// 避免渲染出 wg-quick 在部署期才会拒绝的非法端口。node 仍需用于错误消息（node.Name）与按节点去重（node.ID）。
+// lowestFreePort returns a node's lowest free port not below the base port 51820
+// (skipping used values in usedPorts). The base port is the fixed 51820 — per-node
+// listen_port is meaningless under the per-peer interface model and has been removed.
+// A valid port must not exceed 65535 (audit item D11): exceeding it returns a clean
+// compile-time error, avoiding rendering an illegal port that wg-quick would reject
+// only at deploy time. node is still needed for the error message (node.Name) and for
+// per-node deduplication (node.ID).
 func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, error) {
 	const base = 51820
 	used := usedPorts[node.ID]
@@ -978,11 +1084,11 @@ func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, e
 	return 0, apierr.New(apierr.CodeListenPortExhausted).With("node", node.Name).With("base", strconv.Itoa(base))
 }
 
-// deriveLinkCost 推导一条链路的 Babel rxcost 覆盖值。
-// 解析顺序（规范 docs/spec/artifacts/babel.md「Link cost resolution」/ 契约 item 4）：
-//  1. 显式运营商设置（D63）：edge.Priority（>0）优先，否则 edge.Weight（>0）——逐字采用；
-//  2. backup 预设：链路为 backup（backup==true）且无显式设置 → backupDefaultLinkCost（384）；
-//  3. 默认：返回 0（交由角色 preset 的默认 cost 处理，渲染器据此决定是否省略 rxcost token）。
+// deriveLinkCost derives a link's Babel rxcost override value.
+// Resolution order (spec docs/spec/artifacts/babel.md "Link cost resolution" / contract item 4):
+//  1. Explicit operator setting (D63): edge.Priority (>0) takes priority, otherwise edge.Weight (>0) — adopted verbatim;
+//  2. backup preset: the link is a backup (backup==true) and has no explicit setting → backupDefaultLinkCost (384);
+//  3. default: return 0 (left to the role preset's default cost; the renderer decides whether to omit the rxcost token).
 func deriveLinkCost(edge *model.Edge, backup bool) int {
 	if edge != nil {
 		if edge.Priority > 0 {
@@ -998,9 +1104,10 @@ func deriveLinkCost(edge *model.Edge, backup bool) int {
 	return 0
 }
 
-// allocateLinkLocalPair 根据序号分配一对 IPv6 link-local 地址。
-// IPv6 文本是十六进制（审计项 D70）：必须用 %x 而非 %d，否则 fe80::11 会被解析成十进制 17——
-// 与文档承诺的「连续十六进制编号」相矛盾。link-local 序号沿用同一池的 pair index。
+// allocateLinkLocalPair allocates a pair of IPv6 link-local addresses by index.
+// IPv6 text is hexadecimal (audit item D70): must use %x not %d, otherwise fe80::11
+// would be parsed as decimal 17 — contradicting the documented promise of
+// "consecutive hexadecimal numbering". The link-local index uses the same pool's pair index.
 // pair 0: fe80::1, fe80::2
 // pair 1: fe80::3, fe80::4
 // pair 5: fe80::b, fe80::c
@@ -1009,7 +1116,7 @@ func allocateLinkLocalPair(index int) (string, string) {
 	return fmt.Sprintf("fe80::%x", base), fmt.Sprintf("fe80::%x", base+1)
 }
 
-// deriveAllowedIPs 计算 AllowedIPs（保留兼容函数）
+// deriveAllowedIPs computes AllowedIPs (a retained compatibility function).
 func deriveAllowedIPs(node *model.Node) []string {
 	if node.OverlayIP == "" {
 		return []string{}
@@ -1017,16 +1124,17 @@ func deriveAllowedIPs(node *model.Node) []string {
 	return []string{node.OverlayIP + "/32"}
 }
 
-// wgInterfaceName 生成 WireGuard 接口名（薄封装）。
-// 规范实现已上移至 internal/naming（Spec D，docs/spec/artifacts/naming.md），
-// 由 renderer、compiler、validator 三层共用，消除此前的重复实现并打破导入环。
-// 此处保留未导出名称仅为继续供包内调用方与既有测试使用，行为与
-// naming.WgInterfaceName 完全一致。
+// wgInterfaceName generates a WireGuard interface name (a thin wrapper).
+// The canonical implementation has been moved up to internal/naming (Spec D,
+// docs/spec/artifacts/naming.md), shared across the renderer, compiler, and validator
+// layers, eliminating the prior duplicate implementations and breaking the import
+// cycle. This unexported name is retained only so in-package callers and existing
+// tests can keep using it; its behavior is identical to naming.WgInterfaceName.
 func wgInterfaceName(remoteName string) string {
 	return naming.WgInterfaceName(remoteName)
 }
 
-// formatEndpoint 格式化 endpoint 地址
+// formatEndpoint formats an endpoint address.
 func formatEndpoint(host string, port int) string {
 	if isIPv6(host) {
 		return "[" + host + "]:" + itoa(port)
@@ -1055,14 +1163,14 @@ func itoa(n int) string {
 	return result
 }
 
-// GenerateRouterID 生成一个稳定的 Babel router-id（MAC-48 格式）
-// 基于节点 ID 的 SHA-256 hash 生成，确保稳定且唯一
+// GenerateRouterID generates a stable Babel router-id (MAC-48 format).
+// It is derived from the SHA-256 hash of the node ID, ensuring stability and uniqueness.
 func GenerateRouterID(nodeID string) string {
 	h := sha256.Sum256([]byte(nodeID))
 
-	// 取前 6 字节作为 MAC-48
+	// Take the first 6 bytes as the MAC-48
 	b0 := h[0]
-	b0 = (b0 | 0x02) & 0xFE // 设置 locally administered bit, 清除 multicast bit
+	b0 = (b0 | 0x02) & 0xFE // set the locally administered bit, clear the multicast bit
 	b1 := h[1]
 	b2 := h[2]
 	b3 := h[3]
@@ -1072,37 +1180,38 @@ func GenerateRouterID(nodeID string) string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b0, b1, b2, b3, b4, b5)
 }
 
-// ClientPeerInfo 描述 client 节点的 wg0 配置所需信息
+// ClientPeerInfo describes the information needed for a client node's wg0 configuration.
 type ClientPeerInfo struct {
-	// Client 节点信息
+	// Client node information
 	NodeID    string
 	NodeName  string
 	OverlayIP string
 
-	// wg0 接口的有效 MTU。
-	// 非 mimic：保持 node.MTU 原样（0 ⇒ 渲染器省略 MTU 行，逐字节不变）。
-	// mimic：((node.MTU>0 ? node.MTU : 1420) − 12)（docs/spec/artifacts/mimic.md「MTU −12」）。
+	// The effective MTU of the wg0 interface.
+	// non-mimic: keep node.MTU as is (0 ⇒ renderer omits the MTU line, byte-unchanged).
+	// mimic: ((node.MTU>0 ? node.MTU : 1420) − 12) (docs/spec/artifacts/mimic.md "MTU −12").
 	MTU int
 
-	// client 的唯一出站 edge 是否启用 mimic（transport=="tcp"）。
-	// 渲染器据此（连同 ListenPort）推导 client 节点的 mimic 监听端口集合。
+	// Whether the client's single outbound edge has mimic enabled (transport=="tcp").
+	// The renderer uses this (together with ListenPort) to derive the client node's
+	// set of mimic listen ports.
 	Mimic bool
 
-	// Client 的 WireGuard 私钥
+	// The client's WireGuard private key
 	PrivateKey string
 
-	// Router 侧信息
+	// Router-side information
 	RouterPublicKey string
 	RouterEndpoint  string // host:port
 
-	// 域 CIDR 列表（用作 AllowedIPs）
+	// List of domain CIDRs (used as AllowedIPs)
 	DomainCIDRs []string
 
-	// Client 的监听端口
+	// The client's listen port
 	ListenPort int
 }
 
-// DeriveClientConfigs 为所有 client 节点生成 wg0 配置信息
+// DeriveClientConfigs generates wg0 configuration info for all client nodes.
 func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocations map[string]*pairAllocation) map[string]*ClientPeerInfo {
 	configs := make(map[string]*ClientPeerInfo)
 
@@ -1116,7 +1225,7 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			continue
 		}
 
-		// 找到 client 的唯一出站 edge
+		// Find the client's single outbound edge
 		var clientEdge *model.Edge
 		for i := range topo.Edges {
 			e := &topo.Edges[i]
@@ -1137,8 +1246,9 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 		routerKey, _ := keys[routerNode.ID]
 		clientKey, _ := keys[node.ID]
 
-		// 获取 router 侧的监听端口：按 client 出站 edge 的 linkid.LinkKey 反查分配
-		// （client 边经验证保证恰一条、且不可为 backup，linkKey 即 pinKey）。
+		// Get the router-side listen port: look up the allocation by the client outbound
+		// edge's linkid.LinkKey (validation guarantees exactly one client edge that
+		// cannot be a backup, so linkKey is the pinKey).
 		alloc := allocations[linkid.LinkKey(clientEdge)]
 		var routerPort int
 		if alloc != nil {
@@ -1149,7 +1259,7 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			}
 		}
 
-		// 构建 endpoint（用户指定端口优先，否则使用自动分配的 router 端口）
+		// Build the endpoint (a user-specified port takes priority, otherwise use the auto-allocated router port)
 		routerEndpoint := ""
 		if clientEdge.EndpointHost != "" {
 			var portToUse int
@@ -1163,12 +1273,14 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			}
 		}
 
-		// AllowedIPs 前缀集合（D30，Decision 6）：
-		// client 的 wg0 是它通往整个 overlay 的唯一隧道，因此 AllowedIPs 不能只覆盖
-		// 自身所在域，否则跨域 overlay、router 的域外 /32、以及 transit 网段都会在 client
-		// 侧黑洞。这里取「所有域的 CIDR」并集「每个域解析后的 transit CIDR」（domain.TransitCIDR
-		// 为空时回退默认 10.10.0.0/24，与 allocateTransitPair 的解析规则一致）。
-		// 按 topo.Domains 的切片顺序遍历以保证确定性，并去重。
+		// AllowedIPs prefix set (D30, Decision 6):
+		// The client's wg0 is its only tunnel to the entire overlay, so AllowedIPs cannot
+		// cover only its own domain, otherwise cross-domain overlay, the router's
+		// out-of-domain /32, and the transit subnet would all be blackholed on the client
+		// side. Here we take the union of "the CIDRs of all domains" and "each domain's
+		// resolved transit CIDR" (when domain.TransitCIDR is empty, fall back to the
+		// default 10.10.0.0/24, consistent with allocateTransitPair's resolution rule).
+		// Iterate in topo.Domains slice order for determinism, and deduplicate.
 		var domainCIDRs []string
 		seenCIDR := make(map[string]bool)
 		appendCIDR := func(cidr string) {
@@ -1189,12 +1301,13 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			appendCIDR(transitCIDR)
 		}
 
-		// Client 监听端口（固定基准 51820；per-node listen_port 已移除）。
+		// Client listen port (fixed base 51820; per-node listen_port has been removed).
 		listenPort := 51820
 
-		// mimic 性取自 client 的唯一出站 edge 的 transport（docs/spec/data-model/edge.md
-		// §TCP transport）；MTU 用 client（node）MTU 按 mimic 公式推导
-		// （docs/spec/artifacts/mimic.md「MTU −12」）。非 mimic 时与改造前逐字节一致（node.MTU 原样）。
+		// mimic-ness is taken from the transport of the client's single outbound edge
+		// (docs/spec/data-model/edge.md §TCP transport); the MTU is derived from the
+		// client (node) MTU via the mimic formula (docs/spec/artifacts/mimic.md "MTU −12").
+		// When non-mimic it is byte-identical to before the change (node.MTU as is).
 		mimic := isMimicEdge(clientEdge)
 
 		configs[node.ID] = &ClientPeerInfo{

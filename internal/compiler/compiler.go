@@ -11,32 +11,35 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
-// AllocationSchemaVersion 是粘性 pin 分配方案的 schema 版本号（不变量 I10）。
-// 编译器把它写回到编译后拓扑的 AllocSchemaVersion 字段，使未来对 pin 格式的改动
-// 能够检测并迁移旧拓扑，而不是把旧格式当成新格式静默误读。
-// 规范来源是 model.CurrentAllocSchemaVersion（validator 据此 fail-closed 拒绝来自更新版本
-// 的拓扑，且 compiler→validator 的依赖方向使 validator 无法反向引用 compiler 常量）。
-// 详见 docs/spec/compiler/allocation-stability.md（不变量 I10）。
+// AllocationSchemaVersion is the schema version of the sticky-pin allocation scheme (invariant I10).
+// The compiler writes it back to the compiled topology's AllocSchemaVersion field so that future
+// changes to the pin format can be detected and old topologies migrated, instead of silently
+// misreading an old format as the new one.
+// The canonical source is model.CurrentAllocSchemaVersion (the validator uses it to fail-closed and
+// reject topologies from newer versions; the compiler->validator dependency direction means the
+// validator cannot reference compiler constants in reverse).
+// See docs/spec/compiler/allocation-stability.md (invariant I10).
 const AllocationSchemaVersion = model.CurrentAllocSchemaVersion
 
-// CompileResult
+// CompileResult holds the output of a full compilation: the resolved topology, per-node peer
+// maps, all rendered configs and scripts, and the manifest.
 type CompileResult struct {
-	// （ IP）
+	// Topology is the compiled topology (with allocated IPs).
 	Topology *model.Topology
 
-	//  Peer
+	// PeerMap maps each node ID to its derived peer entries.
 	PeerMap map[string][]PeerInfo
 
-	//  WireGuard
+	// WireGuardConfigs holds the rendered WireGuard config per node.
 	WireGuardConfigs map[string]string
 
-	//  Babel
+	// BabelConfigs holds the rendered Babel config per node.
 	BabelConfigs map[string]string
 
-	//  sysctl
+	// SysctlConfigs holds the rendered sysctl settings per node.
 	SysctlConfigs map[string]string
 
-	//
+	// InstallScripts holds the rendered install script per node.
 	InstallScripts map[string]string
 
 	// ArtifactsJSON holds the per-node, controller-signed artifacts.json content (nodeID ->
@@ -46,22 +49,23 @@ type CompileResult struct {
 	// It is a signed bundleFiles member — the install.sh reads its pins after integrity verify.
 	ArtifactsJSON map[string]string
 
-	// 自动部署脚本
+	// DeployScripts holds the auto-generated deploy script per node.
 	DeployScripts map[string]string
 
-	// Client 节点的 wg0 配置信息
+	// ClientConfigs holds the wg0 config info for client-role nodes.
 	ClientConfigs map[string]*ClientPeerInfo
 
-	// 非致命告警（schema + semantic 两个阶段产生的 warning），
-	// 供调用方（API/CLI）在编译成功后向用户展示，避免绿色编译掩盖
-	// NAT/无 endpoint 边等"哑链路"问题（审计阻断项 UX-1）。
+	// Warnings carries the non-fatal warnings produced by the schema and semantic stages,
+	// so callers (API/CLI) can surface them to the user after a successful compile. This
+	// prevents a green compile from masking "dumb link" issues such as NAT or edges without
+	// an endpoint (audit blocker UX-1).
 	Warnings []validator.ValidationError
 
-	//
+	// Manifest is the compile manifest summarizing this build.
 	Manifest CompileManifest
 }
 
-// CompileManifest
+// CompileManifest summarizes a compile: project identity, version, timestamp, node count, and checksum.
 type CompileManifest struct {
 	ProjectID   string    `json:"project_id"`
 	ProjectName string    `json:"project_name"`
@@ -71,56 +75,59 @@ type CompileManifest struct {
 	Checksum    string    `json:"checksum"`
 }
 
-// Compiler
+// Compiler holds the per-compile state: the IP allocator and, for subgraph compiles, the
+// reserved out-of-subgraph allocations.
 type Compiler struct {
 	ipAllocator *allocator.IPAllocator
-	// reserved 携带「子图之外的 edge」所占的分配资源（端口 / transit IP / link-local），
-	// 供子图编译时让 gap-fill 避让，避免跨子图 pin 碰撞。nil（默认）= 全量编译，行为不变。
+	// reserved carries the allocation resources (ports / transit IPs / link-locals) occupied
+	// by edges outside the subgraph, so subgraph compiles let gap-fill avoid them and prevent
+	// cross-subgraph pin collisions. nil (the default) = full compile, behavior unchanged.
 	reserved *ReservedAllocations
 }
 
-// NewCompiler
+// NewCompiler constructs a Compiler with a fresh IP allocator.
 func NewCompiler() *Compiler {
 	return &Compiler{
 		ipAllocator: allocator.NewIPAllocator(),
 	}
 }
 
-// WithReserved 设定一组「子图之外的 edge」预留资源，返回同一个 *Compiler 以便链式调用
-// （compiler.NewCompiler().WithReserved(r).Compile(...)）。仅 controller 子图编译需要；
-// 全量编译（air-gap CLI / API）不调用它，reserved 保持 nil。
+// WithReserved sets the reserved resources for edges outside the subgraph and returns the same
+// *Compiler for chaining (compiler.NewCompiler().WithReserved(r).Compile(...)). Only controller
+// subgraph compiles need it; full compiles (air-gap CLI / API) do not call it and reserved stays nil.
 func (c *Compiler) WithReserved(r *ReservedAllocations) *Compiler {
 	c.reserved = r
 	return c
 }
 
-// Compile
+// Compile runs the full compilation pipeline on topo and returns a CompileResult, or an error if
+// any validation stage fails.
 func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error) {
-	// Pass 1: Schema
+	// Pass 1: Schema validation.
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
 		return nil, fmt.Errorf("topology failed schema validation: %v", schemaResult.Errors)
 	}
 
-	// Pass 2:
+	// Pass 2: Semantic validation.
 	semanticResult := validator.ValidateSemantic(topo)
 	if !semanticResult.IsValid() {
 		return nil, fmt.Errorf("topology failed semantic validation: %v", semanticResult.Errors)
 	}
 
-	// 汇总两个验证阶段产生的非致命告警，随编译结果一并返回，
-	// 确保每个调用方（API 与 CLI）都能拿到这些告警。
+	// Collect the non-fatal warnings from both validation stages and return them with the compile
+	// result, ensuring every caller (API and CLI) receives these warnings.
 	warnings := make([]validator.ValidationError, 0, len(schemaResult.Warnings)+len(semanticResult.Warnings))
 	warnings = append(warnings, schemaResult.Warnings...)
 	warnings = append(warnings, semanticResult.Warnings...)
 
-	// Pass 3: IP
+	// Pass 3: IP allocation.
 	allocatedNodes, err := c.ipAllocator.AllocateIPs(topo)
 	if err != nil {
 		return nil, fmt.Errorf("IP allocation failed: %w", err)
 	}
 
-	// 复制 edges 以避免修改输入
+	// Copy edges to avoid mutating the input.
 	compiledEdges := make([]model.Edge, len(topo.Edges))
 	copy(compiledEdges, topo.Edges)
 
@@ -130,50 +137,57 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 		Nodes:         allocatedNodes,
 		Edges:         compiledEdges,
 		RoutePolicies: topo.RoutePolicies,
-		// 标记本次编译使用的分配方案版本（不变量 I10），使未来对 pin 格式的改动可检测并迁移。
+		// Stamp the allocation-scheme version used by this compile (invariant I10), so future
+		// changes to the pin format can be detected and migrated.
 		AllocSchemaVersion: AllocationSchemaVersion,
 	}
 
-	// Pass 3 :  capabilities
+	// Pass 3: infer capabilities.
 	for i := range compiledTopo.Nodes {
 		compiledTopo.Nodes[i].Capabilities = InferCapabilitiesFromRole(&compiledTopo.Nodes[i])
 	}
 
-	// Pass 3 :  Peer
-	// 子图编译时 c.reserved 非 nil，让 gap-fill 避开子图外 edge 占用的资源（跨子图碰撞根因修复）；
-	// 全量编译 c.reserved==nil，derivePeers 退化为原 DerivePeers 行为。
+	// Pass 3: derive peers.
+	// On a subgraph compile c.reserved is non-nil, letting gap-fill avoid the resources occupied by
+	// out-of-subgraph edges (the cross-subgraph collision root-cause fix); on a full compile
+	// c.reserved==nil, and derivePeers degrades to the original DerivePeers behavior.
 	peerMap, pairAllocations, err := derivePeers(compiledTopo, keys, c.reserved)
 	if err != nil {
 		return nil, fmt.Errorf("deriving WireGuard peer configuration failed: %w", err)
 	}
 
-	// Client 配置
+	// Client configs.
 	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations)
 
-	// 把每条 enabled edge 分配到的资源写回到其 pin 字段（六个 pinned_*），并按本 edge 的
-	// from/to 方向定向；同时写回只读的 CompiledPort 供 UI 显示。pin 经前端持久化往返后，
-	// 下次编译被 reserve-then-gap-fill 逐字沿用，从而让 superset 拓扑对既有 edge 重现
-	// 逐字节相同的分配值（不变量 I1/I8）。详见 docs/spec/compiler/allocation-stability.md。
+	// Write the resources allocated to each enabled edge back into its pin fields (the six
+	// pinned_*), oriented by this edge's from/to direction; also write back the read-only
+	// CompiledPort for UI display. After a pin round-trips through frontend persistence, the next
+	// compile reuses it verbatim via reserve-then-gap-fill, so a superset topology reproduces
+	// byte-identical allocation values for existing edges (invariants I1/I8). See
+	// docs/spec/compiler/allocation-stability.md.
 	//
-	// CompiledPort 必须等于渲染出的 Endpoint 中携带的端口：
-	//   - EndpointPort > 0（运营商显式 NAT/端口转发覆盖）时，逐字反映该覆盖值；
-	//   - 否则使用对端接口的已分配监听端口（编译器自动分配）。
+	// CompiledPort must equal the port carried in the rendered Endpoint:
+	//   - when EndpointPort > 0 (an explicit operator NAT/port-forward override), reflect that
+	//     override value verbatim;
+	//   - otherwise use the peer interface's allocated listen port (compiler-assigned).
 	for i := range compiledTopo.Edges {
 		edge := &compiledTopo.Edges[i]
 		if !edge.IsEnabled {
 			continue
 		}
 
-		// 查找该 edge 对应的 pairAllocation，键为 linkid.LinkKey(edge)（规范 I3：
-		// per-peer 分配身份即 linkKey）。primary class 的同对节点全部 edge 共享统一链路的
-		// alloc（定向按本 edge）；每条 backup edge 取它自己链路的 alloc。
+		// Look up the pairAllocation for this edge, keyed by linkid.LinkKey(edge) (invariant I3:
+		// the per-peer allocation identity is the linkKey). All edges of the primary class between
+		// the same node pair share one link's alloc (oriented per this edge); each backup edge
+		// takes the alloc of its own link.
 		alloc, ok := pairAllocations[linkid.LinkKey(edge)]
 		if !ok {
 			continue
 		}
 
-		// 按本 edge 的 from/to 方向定向 pin：alloc.fromNodeID 是分配 struct 的「规范 from」，
-		// 若与本 edge 的 FromNodeID 一致则正向取值，否则镜像。
+		// Orient the pin by this edge's from/to direction: alloc.fromNodeID is the allocation
+		// struct's "canonical from"; if it matches this edge's FromNodeID, take values forward,
+		// otherwise mirror them.
 		isForward := alloc.fromNodeID == edge.FromNodeID
 		if isForward {
 			edge.PinnedFromPort = alloc.fromPort
@@ -191,7 +205,8 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 			edge.PinnedToLinkLocal = alloc.localLL
 		}
 
-		// CompiledPort：仅对带 endpoint_host 的 edge 写回（与渲染出的 Endpoint 端口一致）。
+		// CompiledPort: written back only for edges with endpoint_host (matching the rendered
+		// Endpoint port).
 		if edge.EndpointHost == "" {
 			continue
 		}
@@ -199,7 +214,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 			edge.CompiledPort = edge.EndpointPort
 			continue
 		}
-		// 自动分配：对端（toNode）接口的已分配监听端口。
+		// Auto-assigned: the peer (toNode) interface's allocated listen port.
 		if isForward {
 			edge.CompiledPort = alloc.toPort
 		} else {

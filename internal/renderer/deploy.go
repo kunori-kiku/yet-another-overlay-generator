@@ -40,8 +40,8 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 		ProjectName: topo.Project.Name,
 	}
 
-	// Domain 索引：HasBabel 的回退判断需要按节点所属域的 routing_mode 决定，
-	// 与 shouldRunBabel 一致（见下方 D61 修复）。
+	// Domain index: the HasBabel fallback decision must be made from the routing_mode
+	// of the node's own domain, consistent with shouldRunBabel (see the D61 fix below).
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
 		domainMap[topo.Domains[i].ID] = &topo.Domains[i]

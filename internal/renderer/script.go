@@ -7,40 +7,42 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// InstallScriptConfig 安装脚本配置
+// InstallScriptConfig holds the data for rendering the per-peer install script.
 type InstallScriptConfig struct {
-	NodeName string // 原始节点名，仅用于脚本头部注释（注释在 bash 中不会被求值）
-	// NodeNameQuoted 是经 bashSingleQuote 转义后的节点名，作为单引号 shell token
-	// 拼接进 root 身份执行的 echo 行。模板里凡是把节点名放入 echo 的位置都必须用
-	// 这个字段而非 NodeName，否则形如 x$(touch /tmp/pwned) 的节点名会在 root 下
-	// 触发命令替换（审计 T4 / D15）。把转义放在数据装填阶段，使模板保持可读。
+	NodeName string // original node name, used only in the script header comment (comments are not evaluated in bash)
+	// NodeNameQuoted is the node name escaped by bashSingleQuote, used as a single-quoted shell token
+	// spliced into echo lines executed under the root identity. Every place in the template that puts
+	// the node name into an echo MUST use this field rather than NodeName; otherwise a node name like
+	// x$(touch /tmp/pwned) would trigger command substitution under root (audit T4 / D15). Escaping is
+	// done at the data-fill stage to keep the template readable.
 	NodeNameQuoted string
 	NodeRole       string
 	Platform       string
 	OverlayIP      string
 	DomainCIDR     string // domain CIDR for source routing rule
-	// TransitCIDRs 是该节点所属域解析后的 transit 地址池（domain.TransitCIDR，
-	// 留空时回退默认 10.10.0.0/24）。SNAT 源地址修复必须按这些池下发规则：把落在
-	// transit 池里的源地址改写为 overlay IP。硬编码 10.10.0.0/24 会让任何自定义
-	// transit_cidr 的节点静默失效——包到达后源地址仍是未改写的 transit 地址，
-	// 路由不可达（审计 D38/D39）。模板对每个 CIDR各下发一条规则；为空时由
-	// RenderInstallScript 兜底为默认池，保证旧调用方行为不变。
+	// TransitCIDRs is the resolved transit address pool of the domain this node belongs to
+	// (domain.TransitCIDR, falling back to the default 10.10.0.0/24 when empty). The SNAT source-address
+	// fix must emit rules per these pools: rewrite any source address that falls within a transit pool to
+	// the overlay IP. Hard-coding 10.10.0.0/24 would silently break any node with a custom transit_cidr —
+	// the source address after the packet arrives would still be the un-rewritten transit address, leaving
+	// the route unreachable (audit D38/D39). The template emits one rule per CIDR; when empty,
+	// RenderInstallScript falls back to the default pool so existing callers' behavior is unchanged.
 	TransitCIDRs []string
 	MTU          int
 	HasBabel     bool
 	HasForward   bool
-	// HasMimic 表示本节点有至少一条 transport=="tcp" 的链路，需要在安装/卸载脚本里
-	// 装配 mimic（eBPF UDP→伪 TCP 整形）。见 docs/spec/artifacts/mimic.md。
+	// HasMimic indicates this node has at least one transport=="tcp" link and therefore needs mimic
+	// (eBPF UDP->fake-TCP shaping) wired into the install/uninstall scripts. See docs/spec/artifacts/mimic.md.
 	HasMimic bool
-	// MimicPorts 是本节点所有 mimic 接口的监听端口（已排序、去重）。mimic 附着在
-	// egress NIC 上（运行时探测），每个监听端口下发一条 filter 行
-	// （local=<egress_ip>:<port>）。YAOG 只提供端口集合；egress if/ip 由 bash 在
-	// 安装时探测——见 docs/spec/artifacts/mimic.md「Attaches to the egress NIC」。
+	// MimicPorts is the listen-port set of all mimic interfaces on this node (sorted, de-duplicated). mimic
+	// attaches to the egress NIC (probed at runtime); each listen port emits one filter line
+	// (local=<egress_ip>:<port>). YAOG supplies only the port set; the egress if/ip are probed by bash at
+	// install time — see docs/spec/artifacts/mimic.md "Attaches to the egress NIC".
 	MimicPorts []int
-	// MimicXDPMode 是写入 mimic 配置的 xdp_mode（"skb" 或 "native"，已归一，绝不为空）。
-	// 默认 "skb"（通用 XDP，兼容不支持 native 的 VPS 网卡）；节点显式设 "native" 时为 "native"。
+	// MimicXDPMode is the xdp_mode written into the mimic config ("skb" or "native", already normalized, never empty).
+	// Defaults to "skb" (generic XDP, compatible with VPS NICs that lack native support); "native" when the node explicitly sets it.
 	MimicXDPMode string
-	// per-peer 接口列表
+	// per-peer interface list
 	WgInterfaces   []WgIfaceInfo
 	BabelConfName  string
 	SysctlConfName string
@@ -72,10 +74,10 @@ type InstallScriptConfig struct {
 	Fetch InstallFetch
 }
 
-// WgIfaceInfo 单个 WireGuard 接口信息
+// WgIfaceInfo describes a single WireGuard interface.
 type WgIfaceInfo struct {
-	Name     string // 接口名，如 wg-beta
-	ConfName string // 配置文件名，如 wg-beta.conf
+	Name     string // interface name, e.g. wg-beta
+	ConfName string // config file name, e.g. wg-beta.conf
 }
 
 const installScriptTemplate = `#!/usr/bin/env bash
@@ -801,16 +803,18 @@ if [ -n "$FAILED_INTERFACES" ]; then
 fi
 `
 
-// defaultTransitCIDR 是 transit 地址池的默认值，与 allocateTransitPair 的回退一致。
+// defaultTransitCIDR is the default value of the transit address pool, matching allocateTransitPair's fallback.
 const defaultTransitCIDR = "10.10.0.0/24"
 
-// RenderInstallScript 渲染安装脚本。
+// RenderInstallScript renders the install script.
 //
-// transitCIDRs 是该节点所属域解析后的 transit 地址池列表，用于参数化 SNAT 源地址
-// 修复规则（审计 D38/D39）。调用方应传入 node 所属 domain 的 transit_cidr（留空时
-// 回退默认 10.10.0.0/24）。该参数为可变参以保持对既有三参调用方的兼容：不传时
-// 兜底为默认池，行为与历史一致。空字符串项会被忽略并以默认池补位，重复项去重，
-// 以保证「每个 distinct CIDR 一条 SNAT 规则」。
+// transitCIDRs is the resolved list of transit address pools for the domain this node belongs to,
+// used to parameterize the SNAT source-address fix rule (audit D38/D39). Callers should pass the
+// transit_cidr of the node's domain (falling back to the default 10.10.0.0/24 when empty). The
+// parameter is variadic to preserve compatibility with existing three-argument callers: when omitted
+// it falls back to the default pool, matching historical behavior. Empty-string entries are dropped
+// and back-filled with the default pool, and duplicates are de-duplicated, so that there is one SNAT
+// rule per distinct CIDR.
 func RenderInstallScript(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, transitCIDRs ...string) (string, error) {
 	config := buildInstallScriptConfig(node, peers, hasBabel, transitCIDRs)
 	return renderTemplate("install.sh", installScriptTemplate, config)
@@ -852,7 +856,7 @@ func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasB
 // buildInstallScriptConfig assembles the per-peer InstallScriptConfig shared by the plain and
 // signed renderers. SigningPubkeyPEM is left empty here; signed callers set it after.
 func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, transitCIDRs []string) InstallScriptConfig {
-	// 构建 WireGuard 接口列表
+	// build the WireGuard interface list
 	var wgIfaces []WgIfaceInfo
 	for _, p := range peers {
 		wgIfaces = append(wgIfaces, WgIfaceInfo{
@@ -863,8 +867,9 @@ func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBa
 
 	resolvedTransitCIDRs := resolveTransitCIDRs(transitCIDRs)
 
-	// mimic 端口集合：扫描 peers 收集所有 mimic 接口（p.Mimic）的监听端口，去重并排序。
-	// renderer 据此为该节点的 egress NIC 下发每端口一条 filter 行（docs/spec/artifacts/mimic.md）。
+	// mimic port set: scan peers to collect the listen ports of all mimic interfaces (p.Mimic),
+	// de-duplicated and sorted. The renderer uses this to emit one filter line per port on the node's
+	// egress NIC (docs/spec/artifacts/mimic.md).
 	mimicPorts := collectMimicPorts(peers)
 
 	config := InstallScriptConfig{
@@ -892,10 +897,11 @@ func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBa
 	return config
 }
 
-// resolveMimicXDPMode 把节点的 XDPMode 归一为写入 mimic 配置的值。
-// 仅 "native" 透传；空、"skb" 及任何已被校验拒绝之外的值都回落到 "skb"（通用 XDP，
-// 兼容不支持 native 的网卡）——这是默认且对 VPS virtio 网卡最稳妥的模式。
-// 取值合法性由 validator 的 schema 阶段保证（""/"skb"/"native"）；这里仅做安全归一。
+// resolveMimicXDPMode normalizes a node's XDPMode into the value written to the mimic config.
+// Only "native" passes through; empty, "skb", and any value other than those already rejected by
+// validation fall back to "skb" (generic XDP, compatible with NICs that lack native support) — this
+// is the default and the safest mode for VPS virtio NICs. The validity of the value is guaranteed by
+// the validator's schema stage (""/"skb"/"native"); here we only perform a safe normalization.
 func resolveMimicXDPMode(mode string) string {
 	if mode == "native" {
 		return "native"
@@ -903,10 +909,11 @@ func resolveMimicXDPMode(mode string) string {
 	return "skb"
 }
 
-// collectMimicPorts 扫描一组 peer，收集所有 mimic 接口（p.Mimic==true）的监听端口，
-// 去重并升序排序。mimic 附着在节点的 egress NIC 上，每个 mimic 监听端口对应 egress
-// 配置里的一条 filter 行（local=<egress_ip>:<port>），见 docs/spec/artifacts/mimic.md。
-// 仅收集 ListenPort>0 的端口：0 表示该接口未绑定监听端口，无法成为 mimic filter。
+// collectMimicPorts scans a set of peers and collects the listen ports of all mimic interfaces
+// (p.Mimic==true), de-duplicated and sorted ascending. mimic attaches to the node's egress NIC, and
+// each mimic listen port corresponds to one filter line (local=<egress_ip>:<port>) in the egress
+// config; see docs/spec/artifacts/mimic.md. Only ports with ListenPort>0 are collected: 0 means the
+// interface has no bound listen port and cannot become a mimic filter.
 func collectMimicPorts(peers []compiler.PeerInfo) []int {
 	seen := make(map[int]bool)
 	var ports []int
@@ -921,12 +928,14 @@ func collectMimicPorts(peers []compiler.PeerInfo) []int {
 	return ports
 }
 
-// NodeTransitCIDRs 解析某节点 SNAT 修复应覆盖的 transit 地址池。
+// NodeTransitCIDRs resolves the transit address pools that a node's SNAT fix should cover.
 //
-// 节点的 per-peer transit 地址来自其所属 domain 的 transit 池（domain.TransitCIDR，
-// 留空时回退默认 10.10.0.0/24，与 allocator/compiler 的解析规则一致）。一个节点只属于
-// 一个 domain，因此通常返回单个 CIDR；返回切片是为了与 InstallScriptConfig.TransitCIDRs
-// 的契约一致，并在未来跨域链路出现时无需改签名。调用方应把结果传给 RenderInstallScript。
+// A node's per-peer transit addresses come from the transit pool of its domain (domain.TransitCIDR,
+// falling back to the default 10.10.0.0/24 when empty, matching the allocator/compiler resolution
+// rules). A node belongs to only one domain, so it usually returns a single CIDR; a slice is returned
+// to stay consistent with the InstallScriptConfig.TransitCIDRs contract and to avoid a signature
+// change should cross-domain links appear in the future. Callers should pass the result to
+// RenderInstallScript.
 func NodeTransitCIDRs(topo *model.Topology, node *model.Node) []string {
 	if topo == nil || node == nil {
 		return []string{defaultTransitCIDR}
@@ -943,9 +952,11 @@ func NodeTransitCIDRs(topo *model.Topology, node *model.Node) []string {
 	return []string{defaultTransitCIDR}
 }
 
-// resolveTransitCIDRs 把调用方传入的 transit 地址池规整为「去重、非空、稳定顺序」的列表。
-// 空字符串项被丢弃；整体为空时回退为默认池 [10.10.0.0/24]，保证 SNAT 规则始终有源池可写，
-// 同时让既有三参调用方（不传 transitCIDRs）的行为与历史完全一致。
+// resolveTransitCIDRs normalizes the caller-supplied transit address pools into a de-duplicated,
+// non-empty, stable-order list. Empty-string entries are dropped; when the whole list is empty it
+// falls back to the default pool [10.10.0.0/24], guaranteeing the SNAT rule always has a source pool
+// to write, while keeping existing three-argument callers (which pass no transitCIDRs) behaving
+// exactly as before.
 func resolveTransitCIDRs(transitCIDRs []string) []string {
 	seen := make(map[string]bool)
 	resolved := make([]string, 0, len(transitCIDRs))
@@ -962,23 +973,23 @@ func resolveTransitCIDRs(transitCIDRs []string) []string {
 	return resolved
 }
 
-// ClientInstallScriptConfig client 安装脚本配置
+// ClientInstallScriptConfig holds the data for rendering a client node's install script.
 type ClientInstallScriptConfig struct {
-	NodeName string // 原始节点名，仅用于脚本头部注释（注释在 bash 中不会被求值）
-	// NodeNameQuoted 同 InstallScriptConfig.NodeNameQuoted：经 bashSingleQuote
-	// 转义的节点名，用于 root 身份执行的 echo 行，防止命令替换注入（D15）。
+	NodeName string // original node name, used only in the script header comment (comments are not evaluated in bash)
+	// NodeNameQuoted is the same as InstallScriptConfig.NodeNameQuoted: the node name escaped by
+	// bashSingleQuote, used in echo lines executed under the root identity, to prevent command-substitution injection (D15).
 	NodeNameQuoted string
 	NodeRole       string
 	Platform       string
 	OverlayIP      string
 	MTU            int
 	SysctlConfName string
-	// HasMimic / MimicPorts 同 InstallScriptConfig：当 client 的唯一 wg0 链路
-	// transport=="tcp" 时为真，MimicPorts 即 client wg0 的监听端口（单端口）。
-	// 见 docs/spec/artifacts/mimic.md。
+	// HasMimic / MimicPorts are the same as in InstallScriptConfig: true when the client's sole wg0 link
+	// has transport=="tcp", and MimicPorts is the client wg0's listen port (a single port).
+	// See docs/spec/artifacts/mimic.md.
 	HasMimic     bool
 	MimicPorts   []int
-	MimicXDPMode string // 归一后的 xdp_mode（"skb"/"native"），见 InstallScriptConfig
+	MimicXDPMode string // normalized xdp_mode ("skb"/"native"), see InstallScriptConfig
 	// SigningPubkeyPEM is the pinned Ed25519 verifying public key (PEM) for bundle-signature
 	// verification; same semantics as InstallScriptConfig.SigningPubkeyPEM. Empty when signing is
 	// off (opt-in), keeping the client install.sh byte-identical to the pre-signing output.
@@ -1426,12 +1437,14 @@ echo "Installation complete!"
 echo "Note: If the router is not yet online, connection will establish once it comes up."
 `
 
-// RenderClientInstallScript 渲染 client 节点的安装脚本。
+// RenderClientInstallScript renders the install script for a client node.
 //
-// clientInfo 为可选变参，向后兼容既有的单参调用（不传时 mimic 字段保持零值，输出与旧实现
-// 逐字节一致）。当 client 的唯一 wg0 链路 transport=="tcp"（clientInfo.Mimic==true）时，
-// 取其 ListenPort 作为 mimic filter 端口，装配 mimic（见 docs/spec/artifacts/mimic.md）。
-// 调用方（internal/render）应传入该 client 的 ClientPeerInfo 以启用 mimic 支持。
+// clientInfo is an optional variadic argument, backward-compatible with the existing single-argument
+// calls (when omitted the mimic fields stay at their zero values and the output is byte-identical to
+// the old implementation). When the client's sole wg0 link has transport=="tcp"
+// (clientInfo.Mimic==true), its ListenPort is taken as the mimic filter port and mimic is wired in
+// (see docs/spec/artifacts/mimic.md). The caller (internal/render) should pass the client's
+// ClientPeerInfo to enable mimic support.
 func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
 	config := buildClientInstallScriptConfig(node, clientInfo)
 	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
@@ -1468,8 +1481,8 @@ func buildClientInstallScriptConfig(node *model.Node, clientInfo []*compiler.Cli
 		SysctlConfName: "99-overlay.conf",
 	}
 
-	// client wg0 是单一链路：若其 transport=="tcp"（Mimic==true）且监听端口有效，
-	// 装配 mimic，filter 端口即该 wg0 的监听端口。
+	// The client wg0 is a single link: if its transport=="tcp" (Mimic==true) and the listen port is
+	// valid, wire in mimic, with the filter port being that wg0's listen port.
 	if len(clientInfo) > 0 && clientInfo[0] != nil {
 		ci := clientInfo[0]
 		if ci.Mimic && ci.ListenPort > 0 {

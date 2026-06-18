@@ -4,40 +4,41 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// RoleSemantics
+// RoleSemantics captures the behavioral semantics a node's role implies: IP forwarding, inbound
+// acceptance, whether Babel runs, the Babel announce policy, and the AllowedIPs mode.
 type RoleSemantics struct {
-	//  IP
+	// EnableForwarding enables IP forwarding on the node.
 	EnableForwarding bool
 
-	//
+	// AcceptAllInbound accepts inbound connections from any peer.
 	AcceptAllInbound bool
 
-	//  Babel
+	// RunBabel reports whether the node runs Babel.
 	RunBabel bool
 
-	// Babel
+	// BabelAnnounce is the Babel announce policy for the node.
 	BabelAnnounce BabelAnnouncePolicy
 
-	// AllowedIPs
+	// AllowedIPsMode selects how AllowedIPs are derived for peers of this node.
 	AllowedIPsMode string // "point-to-point" | "relay-all" | "gateway"
 }
 
-// BabelAnnouncePolicy Babel
+// BabelAnnouncePolicy describes which prefixes a node announces over Babel.
 type BabelAnnouncePolicy struct {
-	//  /32
+	// AnnounceSelf announces the node's own /32 overlay address.
 	AnnounceSelf bool
 
-	//  Domain CIDR
+	// AnnounceDomainCIDR announces the node's domain CIDR.
 	AnnounceDomainCIDR bool
 
-	//
+	// AnnounceExtraPrefixes announces the node's configured extra prefixes.
 	AnnounceExtraPrefixes bool
 
-	//  0.0.0.0/0
+	// AnnounceDefault announces the default route 0.0.0.0/0.
 	AnnounceDefault bool
 }
 
-// DeriveRoleSemantics
+// DeriveRoleSemantics returns the RoleSemantics for the given node based on its role.
 func DeriveRoleSemantics(node *model.Node) RoleSemantics {
 	switch node.Role {
 	case "router":
@@ -102,17 +103,16 @@ func DeriveRoleSemantics(node *model.Node) RoleSemantics {
 	}
 }
 
-// InferCapabilitiesFromRole /
-//
-//	capabilities（）
+// InferCapabilitiesFromRole derives a node's capabilities from its role, starting from the node's
+// existing capabilities and overlaying the role-implied defaults.
 func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 	caps := node.Capabilities
 
 	switch node.Role {
 	case "router":
 		caps.CanForward = true
-		// router 在具备公网 IP 时接受入站连接，与 DeriveRoleSemantics 的
-		// AcceptAllInbound 保持一致（D49）。保留已显式置位的 true。
+		// A router accepts inbound connections when it has a public IP, consistent with
+		// DeriveRoleSemantics's AcceptAllInbound (D49). Preserve an already explicitly-set true.
 		caps.CanAcceptInbound = caps.CanAcceptInbound || node.Capabilities.HasPublicIP
 	case "relay":
 		caps.CanForward = true
@@ -120,10 +120,11 @@ func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 		caps.CanAcceptInbound = true
 	case "gateway":
 		caps.CanForward = true
-		// gateway 同样在具备公网 IP 时接受入站连接（D49），与 DeriveRoleSemantics 一致。
+		// A gateway likewise accepts inbound connections when it has a public IP (D49),
+		// consistent with DeriveRoleSemantics.
 		caps.CanAcceptInbound = caps.CanAcceptInbound || node.Capabilities.HasPublicIP
 	case "peer":
-		// peer ，
+		// peer: no capability overrides; keep the node's existing capabilities.
 	case "client":
 		caps.CanForward = false
 		caps.CanRelay = false
@@ -133,30 +134,31 @@ func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 	return caps
 }
 
-// DeriveAllowedIPsForPeer  AllowedIPs
+// DeriveAllowedIPsForPeer derives the WireGuard AllowedIPs entries for a peer pointing at
+// remoteNode, based on remoteNode's role semantics and domain.
 func DeriveAllowedIPsForPeer(remoteNode *model.Node, domain *model.Domain) []string {
 	semantics := DeriveRoleSemantics(remoteNode)
 	ips := []string{}
 
 	switch semantics.AllowedIPsMode {
 	case "relay-all":
-		// Relay  AllowedIPs
+		// Relay: AllowedIPs cover the domain CIDR plus extra prefixes.
 		if domain != nil && domain.CIDR != "" {
 			ips = append(ips, domain.CIDR)
 		}
-		//
+		// Extra prefixes.
 		ips = append(ips, remoteNode.ExtraPrefixes...)
 		if len(ips) == 0 && remoteNode.OverlayIP != "" {
 			ips = append(ips, remoteNode.OverlayIP+"/32")
 		}
 
 	case "gateway":
-		// Gateway  Domain CIDR +  +
+		// Gateway: domain CIDR + extra prefixes + the default route.
 		if domain != nil && domain.CIDR != "" {
 			ips = append(ips, domain.CIDR)
 		}
 		ips = append(ips, remoteNode.ExtraPrefixes...)
-		//
+		// Default route.
 		if semantics.BabelAnnounce.AnnounceDefault {
 			ips = append(ips, "0.0.0.0/0")
 		}

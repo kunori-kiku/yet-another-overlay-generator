@@ -53,17 +53,19 @@ func main() {
 	fmt.Printf("nodes: %d, edges: %d, domains: %d\n",
 		len(topo.Nodes), len(topo.Edges), len(topo.Domains))
 
-	// 为每个节点解析或生成真实 WireGuard 密钥对（与 API 入口共用同一持久化规则：
-	// 私钥往返复用、只持久化公钥时硬错误、全新节点生成并写回新密钥）。
-	// 取代旧的 generateFakeKeys——后者向每份配置塞入字面量 FAKE_PRIVKEY_*，
-	// 产物无法被 wg-quick 接受、不可部署（审计阻断项 D6）。
+	// Resolve or generate a real WireGuard key pair for every node, sharing the
+	// same persistence rules as the API entry point: round-trip and reuse private
+	// keys, hard-error when only a public key is persisted, and generate-then-write-back
+	// new keys for brand-new nodes. This replaces the old generateFakeKeys, which
+	// stuffed literal FAKE_PRIVKEY_* into each config — artifacts that wg-quick
+	// rejects and that cannot be deployed (audit blocker D6).
 	keys, err := render.GenerateKeys(&topo, render.AirGap)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to generate WireGuard keys: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 编译拓扑
+	// Compile the topology.
 	c := compiler.NewCompiler()
 	result, err := c.Compile(&topo, keys)
 	if err != nil {
@@ -71,8 +73,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 编译成功后仍需向用户展示的非致命告警（NAT 不可达、无 endpoint 的边、孤立节点等）。
-	// 这些告警与 API /api/compile 返回的 warnings 同源，确保 CLI 与 API 行为一致。
+	// Non-fatal warnings that still need to be surfaced to the user after a
+	// successful compile (unreachable NAT, edges without an endpoint, orphaned
+	// nodes, etc.). These warnings share the same source as the ones returned by
+	// the API /api/compile, keeping CLI and API behavior consistent.
 	if len(result.Warnings) > 0 {
 		fmt.Fprintf(os.Stderr, "\ncompile warnings (%d):\n", len(result.Warnings))
 		for _, w := range result.Warnings {
@@ -98,9 +102,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 渲染全部部署产物，走与 API 入口完全相同的共享路径（render.All）：per-peer WireGuard
-	// 配置、client 的单一 wg0 配置与 client 安装脚本（D27/D28/D29）、Babel 配置、sysctl 配置、
-	// 每节点安装脚本，以及 deploy-all.sh/.ps1（D59）。CLI 由此与 API 产物逐字一致。
+	// Render all deployment artifacts through the exact same shared path as the API
+	// entry point (render.All): per-peer WireGuard configs, the client's single wg0
+	// config and client install script (D27/D28/D29), Babel configs, sysctl configs,
+	// per-node install scripts, and deploy-all.sh/.ps1 (D59). This keeps the CLI
+	// artifacts byte-for-byte identical to the API's.
 	if err := render.All(result, keys, fetch); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to render deployment artifacts: %v\n", err)
 		os.Exit(1)

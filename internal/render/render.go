@@ -1,14 +1,20 @@
-// Package render 是 API 与 CLI 两个入口共享的「密钥准备 + 全量渲染」层。
+// Package render is the "key preparation + full rendering" layer shared by the
+// API and CLI entry points.
 //
-// 在此包出现之前，密钥生成与渲染逻辑只存在于 internal/api/handler.go 内（generateKeys /
-// renderAll），CLI（cmd/compiler）则各自维护一份退化实现——它向每份配置塞入字面量
-// FAKE_PRIVKEY_*，从不渲染 client 的 wg0.conf，也不生成 deploy-all 脚本（审计主题 T6：
-// D6 / D27–29 / D59）。把这两个函数抽到本共享包后，两个入口走完全相同的渲染路径，CLI
-// 自动获得真实密钥（遵守密钥持久化规则）、client wg0 配置与安装脚本、以及 deploy-all 脚本，
-// 整个 T6 主题被一次性消除。
+// Before this package existed, the key-generation and rendering logic lived only
+// inside internal/api/handler.go (generateKeys / renderAll), while the CLI
+// (cmd/compiler) maintained its own degraded reimplementation — it stuffed the
+// literal FAKE_PRIVKEY_* into every config, never rendered a client's wg0.conf,
+// and never generated a deploy-all script (audit theme T6: D6 / D27–29 / D59).
+// Hoisting those two functions into this shared package makes both entry points
+// follow the exact same rendering path, so the CLI automatically gets real keys
+// (obeying the key-persistence rules), client wg0 configs plus install scripts,
+// and a deploy-all script — eliminating the whole T6 theme in one stroke.
 //
-// 依赖方向：本包仅依赖 compiler / renderer / model / wgtypes，绝不反向依赖 api，
-// 以免形成 api → render → api 的导入环（render 必须可被 api 与 cmd/compiler 同时引用）。
+// Dependency direction: this package depends only on compiler / renderer / model
+// / wgtypes and never depends back on api, to avoid forming an
+// api → render → api import cycle (render must be importable by both api and
+// cmd/compiler).
 package render
 
 import (
@@ -49,19 +55,23 @@ const (
 // is spliced with the agent's locally-held private key before the config is used.
 const PrivateKeyPlaceholder = "PRIVATEKEY_PLACEHOLDER"
 
-// GenerateKeys 为每个节点解析或生成 WireGuard 密钥对，并把结果写回节点以便随拓扑 JSON
-// 持久化、在下次编译时被原样复用（不变式 I5：密钥稳定）。
+// GenerateKeys parses or generates a WireGuard key pair for each node and writes
+// the result back onto the node so it persists with the topology JSON and is
+// reused verbatim on the next compile (invariant I5: key stability).
 //
 // custody selects the custody model:
 //
 //   - AirGap (default for the air-gap CLI/API): private keys round-trip through
 //     the topology JSON. Key handling branches on the node's two key fields:
-//     (a) wireguard_private_key 非空：解析该私钥、由它派生公钥并复用；把派生出的公钥写回，
-//     修复缺失或陈旧的公钥。
-//     (b) wireguard_private_key 为空但 wireguard_public_key 非空：硬错误。无状态编译器无法
-//     重建其私钥。提示操作员从主机 /etc/wireguard 粘贴在用私钥，或同时清空两个密钥字段以
-//     显式轮换。
-//     (c) 两者皆空：生成全新密钥对并写回，使其持久化、可往返，此后复用同一对密钥。
+//     (a) wireguard_private_key non-empty: parse that private key, derive the
+//     public key from it, and reuse both; write the derived public key back,
+//     fixing a missing or stale public key.
+//     (b) wireguard_private_key empty but wireguard_public_key non-empty: hard
+//     error. The stateless compiler cannot reconstruct the private key. Prompt the
+//     operator to paste the in-use private key from the host's /etc/wireguard, or
+//     to clear both key fields to rotate explicitly.
+//     (c) both empty: generate a brand-new key pair and write it back so it
+//     persists and round-trips, reusing the same pair thereafter.
 //   - AgentHeld (controller, zero-knowledge custody): never emit a real private
 //     key. Use the node's registered public key (deriving it from a stray private
 //     key and discarding that private key if one is present; hard error if neither
@@ -104,8 +114,9 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 
 		switch {
 		case node.WireGuardPrivateKey != "":
-			// 情形 (a)：私钥在场。解析并由它派生公钥，复用整对密钥；把派生出的公钥写回，
-			// 借此修复节点上缺失或与私钥不一致（陈旧）的公钥。
+			// Case (a): the private key is present. Parse it, derive the public key from
+			// it, and reuse the whole pair; write the derived public key back to fix a
+			// public key on the node that was missing or inconsistent (stale) with it.
 			privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
 			if err != nil {
 				return nil, apierr.New(apierr.CodeKeygenPrivkeyParse).With("node", node.ID).With("detail", err.Error()).Wrap(err)
@@ -121,8 +132,10 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 			return nil, apierr.New(apierr.CodeKeygenPinnedNoPrivkey).With("node", node.ID)
 
 		default:
-			// 情形 (c)：两枚密钥字段皆空，是全新节点。生成新密钥对，并把私钥与公钥都写回
-			// 节点，使其随拓扑持久化、可往返，下次编译复用同一对密钥。
+			// Case (c): both key fields are empty — a brand-new node. Generate a new key
+			// pair and write both the private and public keys back to the node so they
+			// persist with the topology and round-trip, reusing the same pair on the
+			// next compile.
 			privateKey, err := wgtypes.GeneratePrivateKey()
 			if err != nil {
 				return nil, apierr.New(apierr.CodeKeygenGenerateFailed).With("node", node.ID).With("detail", err.Error()).Wrap(err)
@@ -175,12 +188,15 @@ type FetchSettings struct {
 	AgentRolloutNodeIDs map[string]bool
 }
 
-// All 把一份编译结果渲染成全部部署产物，并把结果写回 result 的各 map 字段：
-// per-peer WireGuard 配置、client 的单一 wg0 配置、Babel 配置、sysctl 配置、
-// 每节点安装脚本（含 client 角色分支与 transit-CIDR 解析），以及 deploy-all 脚本（bash + ps1）。
+// All renders a single compile result into all deployment artifacts and writes
+// the results back into result's map fields: per-peer WireGuard configs, a
+// client's single wg0 config, Babel configs, sysctl configs, per-node install
+// scripts (including the client-role branch and transit-CIDR resolution), and
+// the deploy-all scripts (bash + ps1).
 //
-// 这是 API 与 CLI 共享的唯一渲染入口——两个入口走完全相同的路径，
-// 从而保证产物一致性（入口等价性，见 equivalence_test.go）。
+// This is the single rendering entry point shared by the API and the CLI — both
+// entry points follow the exact same path, guaranteeing artifact consistency
+// (entry-point equivalence, see equivalence_test.go).
 func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs FetchSettings) error {
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
@@ -253,8 +269,9 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs Fe
 		custody := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
 		splice := renderer.CustodySplice{Enabled: custody, Token: PrivateKeyPlaceholder}
 		if node.Role == "client" {
-			// 传入该 client 的 ClientPeerInfo，使其单一 wg0 链路在 transport=="tcp" 时
-			// 也装配 mimic（决策 #5：client 也支持）。键缺失时为 nil，renderer 已做空值保护。
+			// Pass this client's ClientPeerInfo so its single wg0 link also installs
+			// mimic when transport=="tcp" (decision #5: clients are supported too).
+			// Nil when the key is absent — the renderer already guards against nil.
 			script, err := renderer.RenderClientInstallScriptSigned(&node, signingPubPEM, splice, installFetch, result.ClientConfigs[node.ID])
 			if err != nil {
 				return fmt.Errorf("rendering install script for client %s failed: %w", node.Name, err)

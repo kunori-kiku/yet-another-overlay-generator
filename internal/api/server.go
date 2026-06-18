@@ -13,7 +13,9 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 )
 
-// Server HTTP API
+// Server is the HTTP API server. It owns the operator/panel mux and the optional
+// agent mux, the controller-mode auth middleware, and the live *http.Server handles
+// for graceful shutdown.
 type Server struct {
 	handler *Handler
 	mux     *http.ServeMux
@@ -49,7 +51,8 @@ type Server struct {
 	baseCancel context.CancelFunc
 }
 
-// NewServer  API
+// NewServer constructs a Server with both muxes initialized and the air-gap routes
+// registered. The agent mux serves nothing until EnableController is called.
 func NewServer() *Server {
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	s := &Server{
@@ -99,9 +102,10 @@ func (s *Server) gateAirgap(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) registerRoutes() {
-	// 中间件链（外层先执行）：panic 恢复 -> CORS -> 业务处理。
-	// recoverPanics 包在最外层，确保 CORS 阶段或业务处理中的 panic 都会被捕获
-	// 并转换为 500 JSON 响应，而不是中断连接（D60）。
+	// Middleware chain (outermost runs first): panic recovery -> CORS -> business handler.
+	// recoverPanics wraps the outermost layer so a panic during either the CORS stage or the
+	// business handler is caught and converted into a 500 JSON response instead of tearing the
+	// connection down (D60).
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
 		return s.recoverPanics(s.cors(h))
 	}
@@ -120,7 +124,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/deploy-script", compute(s.handler.HandleDeployScript))
 }
 
-// cors CORS
+// cors wraps next with permissive CORS headers for the air-gap compute routes and
+// short-circuits preflight OPTIONS requests with 204 No Content.
 func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -136,9 +141,10 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// headerTrackingResponseWriter 包装 http.ResponseWriter，记录是否已经写出过响应头。
-// panic 恢复时据此避免在业务处理已写出响应头之后再次 WriteHeader（会触发
-// "superfluous WriteHeader call" 并破坏已有响应）。
+// headerTrackingResponseWriter wraps an http.ResponseWriter and records whether response
+// headers have already been written. Panic recovery uses this to avoid calling WriteHeader
+// again after the business handler has already written headers (which would trigger a
+// "superfluous WriteHeader call" and corrupt the existing response).
 type headerTrackingResponseWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
@@ -150,14 +156,16 @@ func (w *headerTrackingResponseWriter) WriteHeader(status int) {
 }
 
 func (w *headerTrackingResponseWriter) Write(b []byte) (int, error) {
-	// 隐式写出 200 时也视为已写头，与标准库 ResponseWriter 行为一致。
+	// An implicit 200 on first Write also counts as headers written, matching the standard
+	// library ResponseWriter behavior.
 	w.wroteHeader = true
 	return w.ResponseWriter.Write(b)
 }
 
-// recoverPanics 捕获被包裹处理器中的 panic，记录堆栈，并在尚未写出响应头时
-// 返回 500 JSON 错误体（{"error": ...}）。这样分配器等深层代码触发的 panic
-// （例如 IPv6 CIDR 进入仅支持 IPv4 的分配器）会变成干净的 5xx，而不是被中断的连接（D60）。
+// recoverPanics catches a panic in the wrapped handler, logs the stack trace, and — if no
+// response headers have been written yet — returns a 500 JSON error body ({"error": ...}).
+// This way a panic raised by deep code such as the allocator (e.g. an IPv6 CIDR reaching the
+// IPv4-only allocator) becomes a clean 5xx instead of a torn connection (D60).
 func (s *Server) recoverPanics(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tracked := &headerTrackingResponseWriter{ResponseWriter: w}
@@ -166,7 +174,8 @@ func (s *Server) recoverPanics(next http.HandlerFunc) http.HandlerFunc {
 			if rec := recover(); rec != nil {
 				log.Printf("panic recovered in %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
 
-				// 仅当尚未写出任何响应头时才写 500，避免重复 WriteHeader。
+				// Only write 500 if no response headers have been written yet, to avoid a
+				// duplicate WriteHeader call.
 				if !tracked.wroteHeader {
 					writeAPIError(tracked, apierr.New(apierr.CodeInternalPanic))
 				}
@@ -199,9 +208,9 @@ func (s *Server) AgentHandler() http.Handler {
 	return s.recovered(s.agentMux)
 }
 
-// ListenAndServe 启动 HTTP 服务。
-// 使用配置了读/写/空闲超时的 *http.Server，而非裸 http.ListenAndServe，
-// 以抵御 Slowloris / 慢速请求体类 DoS（D33）。
+// ListenAndServe starts the HTTP service. It uses an *http.Server configured with
+// read/write/idle timeouts rather than the bare http.ListenAndServe, to defend against
+// Slowloris / slow-request-body class DoS (D33).
 //
 // This serves s.mux: the air-gap routes plus, when controller mode is on, the
 // operator/panel controller routes. It is plain HTTP.
