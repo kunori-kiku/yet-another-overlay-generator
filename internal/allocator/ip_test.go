@@ -365,12 +365,13 @@ func TestAllocateIPs_ScanBudgetWithinBoundsStillAllocates(t *testing.T) {
 	}
 }
 
-// TestAllocateIPs_ContextCancelAborts pins the S1 ctx-cancel half (plan-8 Phase 2): an
-// already-cancelled context causes AllocateIPs to abort the scan with ctx.Err(), so a long-running
-// allocation on a behaving-but-large topology is abortable when the request goroutine is cancelled.
-// We use a CIDR within the scan budget (so the budget cap does NOT pre-empt) but force a fully
-// reserved pool so the scan would otherwise run to exhaustion — the cancel must win first.
-func TestAllocateIPs_ContextCancelAborts(t *testing.T) {
+// TestAllocateIPs_ContextCancelEntryGuard pins ONLY the S1 entry-guard half (plan-8 Phase 2): a
+// context that is ALREADY cancelled before the call is rejected up front by the entry guard in
+// AllocateIPs (ip.go ctx.Err() check at the top of the function), before any per-node scan begins.
+// NOTE: because the context is dead at entry, this test exercises the entry guard alone — the
+// load-bearing in-loop ctx.Err() poll (the actual DoS mitigation for a long IN-BUDGET scan) is
+// covered separately by TestAllocateIPs_ContextCancelInLoopAborts.
+func TestAllocateIPs_ContextCancelEntryGuard(t *testing.T) {
 	topo := &model.Topology{
 		Project: model.Project{ID: "test", Name: "Test"},
 		Domains: []model.Domain{{
@@ -396,5 +397,70 @@ func TestAllocateIPs_ContextCancelAborts(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the error to wrap context.Canceled, got: %v", err)
+	}
+}
+
+// liveThenCanceledCtx is a context that reports LIVE (Err() == nil) for the first whenever-checked
+// poll(s) and CANCELED thereafter. It lets a test prove the in-loop ctx.Err() poll is the source of
+// the abort: the entry guard (the first Err() call, made before any scan begins) sees a live context
+// and passes, so any returned context.Canceled MUST originate from a later in-loop poll. livePolls is
+// the number of Err() calls that return nil before the context flips to cancelled.
+type liveThenCanceledCtx struct {
+	context.Context
+	livePolls int
+	calls     int
+}
+
+func (c *liveThenCanceledCtx) Err() error {
+	c.calls++
+	if c.calls <= c.livePolls {
+		return nil
+	}
+	return context.Canceled
+}
+
+// TestAllocateIPs_ContextCancelInLoopAborts pins the S1 in-loop ctx-cancel half (plan-8 Phase 2) —
+// the load-bearing DoS mitigation. It exercises the in-loop ctx.Err() poll inside allocateFromCIDR
+// (NOT the entry guard): an IN-BUDGET CIDR (/16, ~65k candidates — under the scan-budget cap so it
+// is NOT pre-empted) whose ENTIRE usable host range is covered by ReservedRanges (10.10.0.0/16), so
+// the scan walks the full span without finding a free address and would otherwise run to exhaustion.
+// The context is LIVE at entry (so the entry guard passes) and flips to cancelled after the first
+// live poll, meaning the returned context.Canceled can ONLY come from an in-loop poll, not the entry
+// guard. This proves the loop honors cancellation mid-scan.
+func TestAllocateIPs_ContextCancelInLoopAborts(t *testing.T) {
+	topo := &model.Topology{
+		Project: model.Project{ID: "test", Name: "Test"},
+		Domains: []model.Domain{{
+			ID:             "domain-1",
+			Name:           "test",
+			CIDR:           "10.10.0.0/16", // ~65k candidates: in-budget (under maxOverlayScanBudget)
+			AllocationMode: "auto",
+			RoutingMode:    "babel",
+			// Reserve the entire usable host range so no candidate is ever free: the scan walks the
+			// full span, giving the in-loop ctx.Err() poll the chance to fire.
+			ReservedRanges: []string{"10.10.0.0/16"},
+		}},
+		Nodes: []model.Node{
+			{ID: "n1", Name: "node-1", Role: "router", DomainID: "domain-1"},
+		},
+		Edges: []model.Edge{},
+	}
+
+	// Live at entry (the entry guard's Err() call returns nil), cancelled on every poll after — so
+	// the in-loop poll is the only possible source of the returned context.Canceled.
+	ctx := &liveThenCanceledCtx{Context: context.Background(), livePolls: 1}
+
+	alloc := NewIPAllocator()
+	_, err := alloc.AllocateIPs(ctx, topo)
+	if err == nil {
+		t.Fatal("expected a mid-scan cancellation to abort allocation, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the error to wrap context.Canceled (from the in-loop poll), got: %v", err)
+	}
+	// The entry guard fired exactly one Err() call (returning nil); the abort therefore came from a
+	// later in-loop poll. More than one Err() call total confirms the loop's poll ran.
+	if ctx.calls <= ctx.livePolls {
+		t.Fatalf("expected the in-loop ctx.Err() poll to fire (>%d Err calls), got %d — the entry guard alone cannot be the source", ctx.livePolls, ctx.calls)
 	}
 }
