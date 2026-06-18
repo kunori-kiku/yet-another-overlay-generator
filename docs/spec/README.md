@@ -58,12 +58,15 @@ docs/spec/
 │   ├── agent.md                   # Node agent (keygen→pull→verify→apply via install.sh splice)
 │   ├── persistence.md             # Controller Store interface, MemStore/FileStore, tenant
 │   │                              #   chokepoint, generation/stage-promote, audit hash chain
-│   ├── enrollment.md              # Enrollment ceremony: single-use token, mTLS CSR PoP,
-│   │                              #   ephemeral dev controller-CA, per-node cert issuance
+│   ├── enrollment.md              # Enrollment ceremony: single-use token, per-node bearer
+│   │                              #   token (the mTLS CSR/DevCA model is retracted —
+│   │                              #   see controller-api.md's 2026-06-08 plain-HTTP+tokens note)
 │   ├── deploy.md                  # Compile/stage/promote model, render-what's-ready
 │   │                              #   subgraph filter, frozen-pipeline reuse via temp-dir
-│   └── controller-api.md          # Controller HTTP routes, TLS 1.3 + mTLS auth chokepoint
-│                                  #   (tenant:node from cert CN), env-gated controller mode
+│   └── controller-api.md          # Controller HTTP routes, plain HTTP + per-node bearer-token
+│                                  #   auth (TLS delegated to a reverse proxy; the TLS 1.3 + mTLS
+│                                  #   chokepoint model is retracted per its 2026-06-08 note),
+│                                  #   env-gated controller mode
 └── glossary.md                    # Terminology
 ```
 
