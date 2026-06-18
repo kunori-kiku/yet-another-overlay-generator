@@ -410,6 +410,15 @@ func TestControllerKeystone_PinRejectsUnsafeBinding(t *testing.T) {
 		}
 	}
 
+	// Pin the invariant the rejection exists to protect: an unsafe binding must be
+	// rejected BEFORE it reaches the store, so the server-authoritative status must
+	// still report no credential. (The later clean pin would otherwise mask a leak,
+	// since SameKeystoneCredential ignores RPID/Origin for ed25519 and would not
+	// overwrite a credential a rejected unsafe binding had already stored.)
+	if st := keystoneStatus(t, env); st.Pinned {
+		t.Fatalf("rejected unsafe binding leaked into the store: status reports pinned=true, want false")
+	}
+
 	// A clean binding pins normally (keystone ON).
 	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken,
 		operatorCredentialRequestJSON{Alg: string(trustlist.AlgEd25519), PublicKeyPEM: pem, RPID: "overlay.example.com", Origin: "https://overlay.example.com"}, nil); status != http.StatusOK {
