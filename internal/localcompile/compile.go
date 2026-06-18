@@ -25,10 +25,30 @@ import (
 // request yields a byte-identical result (proven by the run-twice-assert-equal golden
 // sub-test in plan-3 Phase 5).
 func Compile(req CompileRequest) (CompileArtifacts, error) {
+	result, err := CompileResult(req)
+	if err != nil {
+		return CompileArtifacts{}, err
+	}
+	return ArtifactsFromResult(result, req.SigningKey)
+}
+
+// CompileResult runs the local compile pipeline and returns the raw, fully-rendered
+// *compiler.CompileResult — the SINGLE place the GenerateKeys → CompileAt → AllWith
+// sequence lives (plan-3 Phase 6). Compile wraps it and re-shapes the result into the
+// canonical CompileArtifacts; the live callers that still consume the
+// *compiler.CompileResult shape directly — the air-gap HTTP handlers (CompileResponse /
+// the deploy-script teardown that needs result.PeerMap), artifacts.Export's disk write,
+// and the controller subgraph compile (preview + stage) — call this entry point instead
+// of re-running the sequence themselves, so the façade is the single compile authority
+// without forcing those callers to re-shape into CompileArtifacts.
+//
+// It is pure for the same reasons Compile is: every impurity (keygen, clock, signer,
+// fetch, reserved) comes from req, never from the process.
+func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 	// Work on a local copy of the topology so the caller's value is not mutated by the
 	// pipeline's write-backs (GenerateKeys, IP allocation, and the pin write-back all
-	// mutate the topology in place). The returned CompileArtifacts.Topology is the
-	// compiled (written-back) topology.
+	// mutate the topology in place). The returned result.Topology is the compiled
+	// (written-back) topology.
 	topo := req.Topology
 
 	// nil Keygen ⇒ the default wgtypesKeygen, keeping production byte-identical to the
@@ -40,7 +60,7 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 	}
 	keys, err := render.GenerateKeysWith(&topo, req.Custody, kg)
 	if err != nil {
-		return CompileArtifacts{}, err
+		return nil, err
 	}
 
 	c := compiler.NewCompiler()
@@ -52,27 +72,36 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 	// request context — the local compile path is not bounded by an HTTP deadline.
 	result, err := c.CompileAt(context.Background(), &topo, keys, req.CompiledAt)
 	if err != nil {
-		return CompileArtifacts{}, err
+		return nil, err
 	}
 
 	// AllWith injects the bundle signer (req.SigningKey) instead of reading it from the
 	// environment; a nil interface is the byte-identical no-signing path.
 	if err := render.AllWith(result, keys, req.Fetch, req.SigningKey); err != nil {
-		return CompileArtifacts{}, err
+		return nil, err
 	}
 
-	return reshape(result, req.SigningKey)
+	return result, nil
 }
 
-// reshape turns a fully-rendered *compiler.CompileResult into the canonical
-// CompileArtifacts. The per-node Files map, the per-node checksums, and the optional
-// detached signatures are built to mirror artifacts.Export's on-disk bundle exactly
-// (export.go) so the in-memory contract is byte-consistent with the real exporter.
+// ArtifactsFromResult turns a fully-rendered *compiler.CompileResult into the canonical
+// CompileArtifacts: the per-node Files map (the checksummed bundle byte set), the per-node
+// checksums, and the optional detached signatures. It is the contract-level reshape Compile
+// applies to expose the frozen artifacts-out shape (and the surface the golden corpus pins).
 //
-// signer is the injected req.SigningKey (the bundlesig.ConfigSigner interface): a nil
-// interface means "unsigned" — Signatures stays empty and SigningPubPEM nil, the
-// byte-identical no-signing path. No environment read happens here, keeping Compile pure.
-func reshape(result *compiler.CompileResult, signer bundlesig.ConfigSigner) (CompileArtifacts, error) {
+// It builds exactly the same bundle file set + bundlesig.Canonicalize checksums + detached
+// signatures that artifacts.Export lays out on disk. The two are SINGLE-SOURCED by the frozen
+// contract corpus (the localcompile golden test + the lossless-wrapper test pin them byte-
+// equal), not by a shared call: artifacts.Export builds the set straight from the result
+// because importing this package there would form a test-only import cycle (artifacts is a
+// transitive test dependency of render, which localcompile imports). The corpus is what keeps
+// the in-memory CompileArtifacts and the on-disk bundle from ever drifting.
+//
+// signer is the bundlesig.ConfigSigner interface (Compile passes req.SigningKey): a nil
+// interface means "unsigned" — Signatures stays empty and SigningPubPEM nil, the byte-
+// identical no-signing path. This function reads no environment, clock, or filesystem, so it
+// preserves Compile's purity.
+func ArtifactsFromResult(result *compiler.CompileResult, signer bundlesig.ConfigSigner) (CompileArtifacts, error) {
 	signEnabled := signer != nil
 
 	artifacts := CompileArtifacts{

@@ -47,6 +47,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
@@ -69,25 +70,29 @@ type StageResult struct {
 
 // CompileSubgraph runs the read-only compile half shared by CompileAndStage and the
 // operator compile-preview: build the enrolled subgraph of `topo` from the registry
-// `nodes`, then drive the frozen, zero-knowledge pipeline — render.GenerateKeys in
-// AgentHeld custody (private keys are PRIVATEKEY_PLACEHOLDER, never real material) →
-// compiler.Compile → render.All. It performs NO store writes, NO allocation persist, NO
-// export, and NO staging; the caller decides what to do with the rendered result.
+// `nodes`, then drive the frozen, zero-knowledge pipeline through the localcompile façade
+// (the single compile authority) in AgentHeld custody — private keys are
+// PRIVATEKEY_PLACEHOLDER, never real material. It performs NO store writes, NO allocation
+// persist, NO export, and NO staging; the caller decides what to do with the rendered result.
 //
 // Returns a NIL result when no node is enrolled (subgraph.Nodes empty) — the caller
 // handles that case (CompileAndStage purges + audits; a preview reports "nothing
 // enrolled"). `skipped` lists the node IDs present in the topology but dropped from the
-// render because they are not yet enrolled. Custody invariant: because GenerateKeys runs
+// render because they are not yet enrolled. Custody invariant: because the façade runs
 // AgentHeld, neither the returned result nor anything rendered from it contains a real
 // private key — making this safe to surface to an authenticated operator (PR6 preview).
+//
+// ctx is honored only as an early cancellation check before the compile: the façade
+// compiles under its own background context (the frozen contract carries no Go context,
+// so the TS port mirrors a context-free seam), and the allocator's per-node scan budget
+// remains the hard DoS bound for an over-large CIDR.
 func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
 	subgraph, skipped := enrolledSubgraph(topo, nodes)
 	if len(subgraph.Nodes) == 0 {
 		return nil, subgraph, skipped, nil
 	}
-	keys, err := render.GenerateKeys(&subgraph, render.AgentHeld)
-	if err != nil {
-		return nil, subgraph, skipped, fmt.Errorf("controller: preparing keys for stage: %w", err)
+	if err := ctx.Err(); err != nil {
+		return nil, subgraph, skipped, err
 	}
 	// Reserve the allocation pins held by edges in the FULL topology that are NOT in this
 	// subgraph (dropped because a far end is not yet enrolled). Without this, the subgraph's
@@ -102,12 +107,26 @@ func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs
 		included[subgraph.Edges[i].ID] = true
 	}
 	reserved := compiler.BuildReservedFromExcludedEdges(topo, included)
-	result, err := compiler.NewCompiler().WithReserved(reserved).Compile(ctx, &subgraph, keys)
+
+	// Drive the frozen pipeline through the single shared façade (the local compile
+	// authority), exactly as the air-gap callers do — keeping the controller's rendered
+	// bundles byte-identical (the keystone bundle digest + bundle.sig depend on it). The
+	// custody and subgraph semantics are preserved verbatim: Custody AgentHeld (private
+	// keys stay PRIVATEKEY_PLACEHOLDER, never real material), the default wgtypesKeygen,
+	// the WithReserved subgraph allocation path via req.Reserved, and the controller's
+	// FetchSettings. CompileResult returns the raw result so CompileAndStage / the operator
+	// preview keep their *compiler.CompileResult shape. CompiledAt feeds only
+	// manifest.json's compiled_at (out of the checksummed set), matching the prior
+	// time.Now() stamp.
+	result, err := localcompile.CompileResult(localcompile.CompileRequest{
+		Topology:   subgraph,
+		Custody:    render.AgentHeld,
+		Fetch:      fs,
+		Reserved:   reserved,
+		CompiledAt: time.Now(),
+	})
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
-	}
-	if err := render.All(result, keys, fs); err != nil {
-		return nil, subgraph, skipped, fmt.Errorf("controller: rendering enrolled subgraph: %w", err)
 	}
 	return result, subgraph, skipped, nil
 }

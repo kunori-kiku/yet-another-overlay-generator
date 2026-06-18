@@ -1,14 +1,15 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 )
@@ -54,22 +55,42 @@ func main() {
 	fmt.Printf("nodes: %d, edges: %d, domains: %d\n",
 		len(topo.Nodes), len(topo.Edges), len(topo.Domains))
 
-	// Resolve or generate a real WireGuard key pair for every node, sharing the
-	// same persistence rules as the API entry point: round-trip and reuse private
-	// keys, hard-error when only a public key is persisted, and generate-then-write-back
-	// new keys for brand-new nodes. This replaces the old generateFakeKeys, which
-	// stuffed literal FAKE_PRIVKEY_* into each config — artifacts that wg-quick
-	// rejects and that cannot be deployed (audit blocker D6).
-	keys, err := render.GenerateKeys(&topo, render.AirGap)
+	// Air-gap mimic catalog: flags override the env vars of the same purpose. All unset ⇒ zero
+	// FetchSettings ⇒ distro-only mimic install + no artifacts.json ⇒ byte-identical bundle (D4).
+	fetch, err := render.LoadFetchSettings(
+		firstNonEmpty(*artifactCatalog, os.Getenv(render.EnvArtifactCatalog)),
+		firstNonEmpty(*ghProxy, os.Getenv(render.EnvGithubProxy)),
+		firstNonEmpty(*mimicVersion, os.Getenv(render.EnvMimicVersion)),
+	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to generate WireGuard keys: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to load artifact catalog: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Compile the topology. The air-gap CLI has no request context; the allocator's scan budget
-	// still bounds an over-large CIDR, and there is nothing to cancel here.
-	c := compiler.NewCompiler()
-	result, err := c.Compile(context.Background(), &topo, keys)
+	// Bundle signing is opt-in via YAOG_BUNDLE_SIGNING_KEY (resolved through the shared
+	// seam so the env-var name + PEM handling stay in one place). Unset ⇒ nil signer ⇒
+	// hash-only bundles, byte-for-byte today's output. Resolved up front so a malformed
+	// key fails the run before any artifact is rendered.
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load the bundle signing key: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run the whole local compile path — resolve/generate WireGuard keys (round-trip and
+	// reuse private keys, hard-error when only a public key is persisted, generate-and-
+	// write-back for brand-new nodes; replacing the old generateFakeKeys, audit blocker
+	// D6), compile, and render every deployment artifact — through the single shared
+	// façade, so the CLI is byte-for-byte identical to the API/controller. The air-gap
+	// CLI has no request context and no off-host clock, so it passes time.Now() as the
+	// compile clock (it feeds only manifest.json's compiled_at, out of the byte set).
+	result, err := localcompile.CompileResult(localcompile.CompileRequest{
+		Topology:   topo,
+		Custody:    render.AirGap,
+		Fetch:      fetch,
+		SigningKey: signer,
+		CompiledAt: time.Now(),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile failed: %v\n", err)
 		os.Exit(1)
@@ -90,28 +111,6 @@ func main() {
 	fmt.Printf("IP allocation:\n")
 	for _, node := range result.Topology.Nodes {
 		fmt.Printf("  %s -> %s\n", node.Name, node.OverlayIP)
-	}
-
-	// Air-gap mimic catalog: flags override the env vars of the same purpose. All unset ⇒ zero
-	// FetchSettings ⇒ distro-only mimic install + no artifacts.json ⇒ byte-identical bundle (D4).
-	fetch, err := render.LoadFetchSettings(
-		firstNonEmpty(*artifactCatalog, os.Getenv(render.EnvArtifactCatalog)),
-		firstNonEmpty(*ghProxy, os.Getenv(render.EnvGithubProxy)),
-		firstNonEmpty(*mimicVersion, os.Getenv(render.EnvMimicVersion)),
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load artifact catalog: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Render all deployment artifacts through the exact same shared path as the API
-	// entry point (render.All): per-peer WireGuard configs, the client's single wg0
-	// config and client install script (D27/D28/D29), Babel configs, sysctl configs,
-	// per-node install scripts, and deploy-all.sh/.ps1 (D59). This keeps the CLI
-	// artifacts byte-for-byte identical to the API's.
-	if err := render.All(result, keys, fetch); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to render deployment artifacts: %v\n", err)
-		os.Exit(1)
 	}
 
 	exportResult, err := artifacts.Export(result, *outputDir)

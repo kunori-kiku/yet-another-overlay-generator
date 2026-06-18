@@ -21,24 +21,23 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
-// Handler holds the dependencies for the air-gap HTTP API routes (health, validate,
-// compile, export, deploy-script). It owns the compiler used to derive peer configs.
-type Handler struct {
-	compiler *compiler.Compiler
-}
+// Handler serves the air-gap HTTP API routes (health, validate, compile, export,
+// deploy-script). The compile path (generate keys → compile → render) lives behind the
+// localcompile façade, so the handler holds no per-request compile state of its own — it
+// builds a localcompile.CompileRequest per request and lets the façade own the pipeline.
+type Handler struct{}
 
-// NewHandler constructs a Handler backed by a fresh compiler.
+// NewHandler constructs a Handler. It is stateless: each request builds its own
+// localcompile.CompileRequest, so there is nothing to wire up here.
 func NewHandler() *Handler {
-	return &Handler{
-		compiler: compiler.NewCompiler(),
-	}
+	return &Handler{}
 }
 
 // apiError is the wire envelope for every error response: a single nested object
@@ -150,28 +149,20 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys, err := render.GenerateKeys(topo, render.AirGap)
+	req, err := h.airGapRequest(topo)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternal, err)
+		// airGapRequest returns coded errors for the env-resolved fetch catalog / signing key;
+		// writeCodedOr surfaces each at its own status via errors.As (CodeRenderFailed fallback).
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
-	//
-	result, err := h.compiler.Compile(r.Context(), topo, keys)
+	// Run the whole air-gap pipeline (generate keys → compile → render) through the shared
+	// façade, the single compile authority. CompileResult yields the raw result so the
+	// response keeps its per-map shape.
+	result, err := localcompile.CompileResult(req)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
-		return
-	}
-
-	// Local-mode mimic catalog (plan-7): resolved from env. Unset ⇒ zero FetchSettings ⇒
-	// byte-identical bundle (D4); a misconfigured catalog fails the request loud, not silently.
-	fetch, err := render.FetchSettingsFromEnv()
-	if err != nil {
-		writeCodedOr(w, apierr.CodeRenderFailed, err)
-		return
-	}
-	if err := render.All(result, keys, fetch); err != nil {
-		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
@@ -203,27 +194,20 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys, err := render.GenerateKeys(topo, render.AirGap)
+	req, err := h.airGapRequest(topo)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternal, err)
+		// airGapRequest returns coded errors for the env-resolved fetch catalog / signing key;
+		// writeCodedOr surfaces each at its own status via errors.As (CodeRenderFailed fallback).
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
-	result, err := h.compiler.Compile(r.Context(), topo, keys)
+	// Compile + render through the shared façade (the single compile authority), then hand
+	// the resulting *compiler.CompileResult to the unchanged artifacts.Export → tmpDir →
+	// createExportZip(tmpDir) flow below — the export path keeps its dir-based shape.
+	result, err := localcompile.CompileResult(req)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
-		return
-	}
-
-	// Local-mode mimic catalog (plan-7): resolved from env. Unset ⇒ zero FetchSettings ⇒
-	// byte-identical bundle (D4); a misconfigured catalog fails the request loud, not silently.
-	fetch, err := render.FetchSettingsFromEnv()
-	if err != nil {
-		writeCodedOr(w, apierr.CodeRenderFailed, err)
-		return
-	}
-	if err := render.All(result, keys, fetch); err != nil {
-		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
@@ -272,44 +256,32 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	// The deploy script's uninstall branch needs the interface name of every per-peer tunnel
 	// to tear them down one by one (wg-quick down / delete config), and those interface names
 	// only exist in the PeerMap after a full compile. This endpoint must therefore run the same
-	// pipeline as /api/compile (generate keys -> compile -> render Babel configs); otherwise the
-	// generated uninstall block is missing all per-peer teardown steps (audit blocker D36).
-	keys, err := render.GenerateKeys(topo, render.AirGap)
+	// pipeline as /api/compile; otherwise the generated uninstall block is missing all per-peer
+	// teardown steps (audit blocker D36). Routing through the façade — the single compile
+	// authority — renders the deploy scripts into result.DeployScripts (render.All calls the
+	// same renderer.RenderDeployScripts internally), so the two endpoints can never drift.
+	req, err := h.airGapRequest(topo)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternal, err)
+		// airGapRequest returns coded errors for the env-resolved fetch catalog / signing key;
+		// writeCodedOr surfaces each at its own status via errors.As (CodeRenderFailed fallback).
+		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
-	result, err := h.compiler.Compile(r.Context(), topo, keys)
+	result, err := localcompile.CompileResult(req)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
-		return
-	}
-
-	// The deploy script's HasBabel decision looks up BabelConfigs by node.ID (see
-	// renderer.RenderDeployScripts), so the Babel configs must be rendered via the compile path
-	// before rendering the deploy scripts.
-	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
-	if err != nil {
-		writeCodedOr(w, apierr.CodeRenderFailed, err)
-		return
-	}
-	result.BabelConfigs = babelConfigs
-
-	bashScript, ps1Script, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
-	if err != nil {
-		writeCodedOr(w, apierr.CodeRenderFailed, err)
 		return
 	}
 
 	format := r.URL.Query().Get("format")
 	var script, filename, contentType string
 	if format == "ps1" {
-		script = ps1Script
+		script = result.DeployScripts["deploy-all.ps1"]
 		filename = "deploy-all.ps1"
 		contentType = "text/plain; charset=utf-8"
 	} else {
-		script = bashScript
+		script = result.DeployScripts["deploy-all.sh"]
 		filename = "deploy-all.sh"
 		contentType = "text/x-shellscript; charset=utf-8"
 	}
@@ -321,6 +293,39 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- helpers ---
+
+// airGapRequest builds the localcompile.CompileRequest the three air-gap compute routes
+// (/api/compile, /api/export, /api/deploy-script) share. It resolves the two environment-
+// coupled inputs the façade no longer reads itself — the mimic/agent fetch catalog and the
+// optional tier-1 bundle signing key — into explicit request fields, then stamps Custody
+// AirGap and time.Now() as the compile clock.
+//
+//   - Fetch: FetchSettingsFromEnv (plan-7). Unset ⇒ the zero FetchSettings ⇒ a byte-
+//     identical bundle (D4); a misconfigured catalog fails the request loud, not silently.
+//   - SigningKey: LoadConfigSignerFromEnv. Unset ⇒ a nil signer ⇒ hash-only bundles
+//     (byte-identical); a malformed key fails closed here.
+//
+// Both resolvers return coded *apierr.Error values so writeCodedOr surfaces each at its own
+// status via errors.As. The façade compiles under context.Background() (the local compile
+// path carries no HTTP deadline); the allocator's per-node scan budget remains the DoS
+// bound for an over-large CIDR.
+func (h *Handler) airGapRequest(topo *model.Topology) (localcompile.CompileRequest, error) {
+	fetch, err := render.FetchSettingsFromEnv()
+	if err != nil {
+		return localcompile.CompileRequest{}, err
+	}
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		return localcompile.CompileRequest{}, err
+	}
+	return localcompile.CompileRequest{
+		Topology:   *topo,
+		Custody:    render.AirGap,
+		Fetch:      fetch,
+		SigningKey: signer,
+		CompiledAt: time.Now(),
+	}, nil
+}
 
 // maxRequestBodyBytes caps the maximum length of each POST request body (4 MiB). A body that
 // exceeds this limit is not buffered into memory; instead http.MaxBytesReader truncates it and

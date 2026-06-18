@@ -31,13 +31,32 @@ type ExportResult struct {
 
 // Export writes the rendered configuration artifacts for every node to outputDir.
 //
+// Export is the DISK-WRITE TAIL of the local compile pipeline (plan-3 Phase 6). The
+// compile authority — the GenerateKeys → Compile → render.All sequence — now lives solely
+// behind the localcompile façade: all three live callers (the air-gap CLI/API and the
+// controller subgraph compile) route their compile through it and hand Export the
+// resulting *compiler.CompileResult. Export's job is purely presentation: lay the rendered
+// bytes out on disk under the per-node directory shape (it owns no compile or render
+// step). It keeps its *compiler.CompileResult signature so those callers stay call-
+// compatible, and its output is byte-for-byte identical to the pre-façade exporter.
+//
+// The per-node checksummed bundle set Export writes (every per-peer wireguard/<iface>.conf,
+// babel/babeld.conf for non-client nodes, sysctl/99-overlay.conf, install.sh, and
+// artifacts.json when a catalog is configured) is exactly the set the contract's
+// localcompile.ArtifactsFromResult re-shapes in memory — the two are pinned byte-equal by
+// the localcompile golden corpus and the lossless-wrapper test, so the on-disk bundle and
+// the in-memory CompileArtifacts can never drift. (Export builds the set straight from the
+// result rather than importing the façade, because localcompile depends on render and
+// render's internal tests depend on this package — importing localcompile here would form
+// a test-only import cycle. The byte set is single-sourced by the frozen contract corpus,
+// not by a shared call.)
+//
 // The exported bundle's checksums.sha256 (and, when signing is on, bundle.sig) cover
-// ONLY the rendered artifacts — every per-peer wireguard/<iface>.conf, babel/babeld.conf
-// (non-client only), sysctl/99-overlay.conf, and install.sh. The keystone trust-list
-// files (trustlist.json / trustlist.sig) are deliberately NOT exported here: the
-// off-host-signed manifest binds each node's checksums.sha256 DIGEST, so those files
-// cannot live inside the very checksum set they bind. The controller appends them to the
-// SERVED file map at /config time instead (plan-5.1 CORRECTION, 2026-06-08).
+// ONLY those rendered artifacts. The keystone trust-list files (trustlist.json /
+// trustlist.sig) are deliberately NOT exported here: the off-host-signed manifest binds
+// each node's checksums.sha256 DIGEST, so those files cannot live inside the very checksum
+// set they bind. The controller appends them to the SERVED file map at /config time
+// instead (plan-5.1 CORRECTION, 2026-06-08).
 func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, error) {
 	exportResult := &ExportResult{
 		OutputDir: outputDir,
@@ -50,6 +69,11 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	// dir is touched — rather than mid-loop. When the env var is unset/empty, the
 	// signer is nil and the export remains hash-only: byte-for-byte today's output.
 	// A future KMS/HSM backend swaps in here with no change to the loop below.
+	//
+	// This env read is the one impurity Export retains on purpose: the controller's
+	// CompileAndStage relies on Export signing at the export boundary (the Phase-0 env
+	// path), and the air-gap CLI/API resolves the same signer when building its
+	// CompileRequest — so the bundle-signing key has a single resolution seam.
 	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
 		return nil, err
@@ -136,10 +160,12 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		}
 
 		// Build the canonical bundle file set as a path->content map and let
-		// bundlesig.Canonicalize emit the checksums.sha256 content. This replaces
-		// the previous ad-hoc, append-ordered checksum writing: the output is now
-		// SORTED by path and deterministic across runs. sha256sum -c is order
-		// insensitive, so sorting is safe and is precisely the determinism fix.
+		// bundlesig.Canonicalize emit the checksums.sha256 content. The output is SORTED
+		// by path and deterministic across runs; sha256sum -c is order insensitive, so
+		// sorting is safe. This is the same set + canonicalization the contract's
+		// localcompile.ArtifactsFromResult builds in memory (the two are pinned byte-equal
+		// by the localcompile golden corpus), so the on-disk checksums.sha256 and the
+		// in-memory CompileArtifacts.Checksums never diverge.
 		//
 		// The set must match the rest of the bundle exactly: every per-peer
 		// wireguard/<iface>.conf, babel/babeld.conf (non-client only), sysctl/
