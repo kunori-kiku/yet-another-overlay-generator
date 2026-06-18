@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // TestDefaultSettingsAndWithDefaults: defaults carry the release URL; WithDefaults
@@ -69,7 +69,7 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 				AgentReleaseBaseURL: "https://github.com/o/r/releases/latest/download",
 				MimicVersion:        "0.1.0",
 				MimicReleaseBase:    "https://github.com/hack3ric/mimic/releases/download/v0.1.0",
-				MimicDebs: map[string]renderer.Artifact{
+				MimicDebs: map[string]model.Artifact{
 					"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: strings.Repeat("a", 64)},
 				},
 			}
@@ -85,7 +85,7 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 			}
 			// Isolation: mutating the caller's MimicDebs map after Put must NOT change the stored
 			// value (the store deep-copies via Clone; the map is a shared reference otherwise).
-			cs.MimicDebs["bookworm-amd64"] = renderer.Artifact{Asset: "evil.deb", SHA256: "x"}
+			cs.MimicDebs["bookworm-amd64"] = model.Artifact{Asset: "evil.deb", SHA256: "x"}
 			got2, _ := s.GetSettings(ctx, tn)
 			if got2.MimicDebs["bookworm-amd64"].Asset != "mimic_0.1.0_amd64.deb" {
 				t.Fatalf("stored MimicDebs aliased the caller's map: got %+v", got2.MimicDebs)

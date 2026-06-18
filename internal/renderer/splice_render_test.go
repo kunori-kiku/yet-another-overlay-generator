@@ -3,6 +3,8 @@ package renderer
 import (
 	"strings"
 	"testing"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // spliceTestToken is the placeholder the AgentHeld splice replaces; it mirrors
@@ -18,7 +20,7 @@ func TestRenderInstallScriptSigned_SpliceBlockPresent(t *testing.T) {
 	script, err := RenderInstallScriptSigned(
 		sigTestRouterNode(), sigTestPeers(), true, "",
 		CustodySplice{Enabled: true, Token: spliceTestToken},
-		InstallFetch{},
+		model.InstallFetch{},
 	)
 	if err != nil {
 		t.Fatalf("render spliced install script: %v", err)
@@ -75,11 +77,11 @@ func TestRenderInstallScriptSigned_SpliceDisabledByteIdentical(t *testing.T) {
 	node := sigTestRouterNode()
 	peers := sigTestPeers()
 
-	zero, err := RenderInstallScriptSigned(node, peers, true, "", CustodySplice{}, InstallFetch{})
+	zero, err := RenderInstallScriptSigned(node, peers, true, "", CustodySplice{}, model.InstallFetch{})
 	if err != nil {
 		t.Fatalf("render zero-splice install script: %v", err)
 	}
-	explicitDisabled, err := RenderInstallScriptSigned(node, peers, true, "", CustodySplice{Enabled: false, Token: spliceTestToken}, InstallFetch{})
+	explicitDisabled, err := RenderInstallScriptSigned(node, peers, true, "", CustodySplice{Enabled: false, Token: spliceTestToken}, model.InstallFetch{})
 	if err != nil {
 		t.Fatalf("render explicit-disabled install script: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestRenderClientInstallScriptSigned_SpliceBlockPresent(t *testing.T) {
 	script, err := RenderClientInstallScriptSigned(
 		sigTestClientNode(), "",
 		CustodySplice{Enabled: true, Token: spliceTestToken},
-		InstallFetch{},
+		model.InstallFetch{},
 	)
 	if err != nil {
 		t.Fatalf("render spliced client install script: %v", err)
@@ -148,11 +150,11 @@ func TestRenderClientInstallScriptSigned_SpliceBlockPresent(t *testing.T) {
 func TestRenderClientInstallScriptSigned_SpliceDisabledByteIdentical(t *testing.T) {
 	node := sigTestClientNode()
 
-	zero, err := RenderClientInstallScriptSigned(node, "", CustodySplice{}, InstallFetch{})
+	zero, err := RenderClientInstallScriptSigned(node, "", CustodySplice{}, model.InstallFetch{})
 	if err != nil {
 		t.Fatalf("render zero-splice client install script: %v", err)
 	}
-	explicitDisabled, err := RenderClientInstallScriptSigned(node, "", CustodySplice{Enabled: false, Token: spliceTestToken}, InstallFetch{})
+	explicitDisabled, err := RenderClientInstallScriptSigned(node, "", CustodySplice{Enabled: false, Token: spliceTestToken}, model.InstallFetch{})
 	if err != nil {
 		t.Fatalf("render explicit-disabled client install script: %v", err)
 	}

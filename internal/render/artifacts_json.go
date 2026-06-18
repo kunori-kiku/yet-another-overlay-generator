@@ -3,7 +3,7 @@ package render
 import (
 	"encoding/json"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // artifactsFileSchema is the schema version stamped into every emitted artifacts.json.
@@ -28,9 +28,9 @@ type artifactsFile struct {
 // URL the .deb is fetched from (the GitHub proxy is prepended at install time, not stored here),
 // and the per-"<codename>-<arch>" asset + SHA-256 the installer verifies before dpkg.
 type artifactsMimic struct {
-	Version    string                       `json:"version,omitempty"`
-	ReleaseURL string                       `json:"release_url,omitempty"`
-	Debs       map[string]renderer.Artifact `json:"debs,omitempty"`
+	Version    string                    `json:"version,omitempty"`
+	ReleaseURL string                    `json:"release_url,omitempty"`
+	Debs       map[string]model.Artifact `json:"debs,omitempty"`
 }
 
 // artifactsAgent is the agent self-update block (plan-9): the version the node should run, the
@@ -41,10 +41,10 @@ type artifactsMimic struct {
 // reserved-empty block. The floor's JSON key is min_version UNDER agent (.agent.min_version),
 // never a bare top-level min_version, to avoid conflation with the bundle anti-rollback floor.
 type artifactsAgent struct {
-	Version    string                       `json:"version,omitempty"`
-	MinVersion string                       `json:"min_version,omitempty"`
-	ReleaseURL string                       `json:"release_url,omitempty"`
-	Bins       map[string]renderer.Artifact `json:"bins,omitempty"`
+	Version    string                    `json:"version,omitempty"`
+	MinVersion string                    `json:"min_version,omitempty"`
+	ReleaseURL string                    `json:"release_url,omitempty"`
+	Bins       map[string]model.Artifact `json:"bins,omitempty"`
 }
 
 // hasCatalog reports whether fs configures any external artifact at the FLEET level (mimic or

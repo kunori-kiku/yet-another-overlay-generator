@@ -23,7 +23,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // settingsJSON is the wire form of the operator-editable controller settings.
@@ -41,16 +41,16 @@ type settingsJSON struct {
 	// env-derived, not a stored setting — POST ignores any submitted value.
 	AgentPathPrefix string `json:"agent_path_prefix"`
 	// Mimic GitHub-.deb catalog (plan-3). All NON-SECRET pins. Empty = distro-only mimic.
-	MimicVersion     string                       `json:"mimic_version,omitempty"`
-	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
-	MimicDebs        map[string]renderer.Artifact `json:"mimic_debs,omitempty"`
+	MimicVersion     string                    `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
+	MimicDebs        map[string]model.Artifact `json:"mimic_debs,omitempty"`
 	// Signed agent self-update (plan-9, canary-then-fleet). All NON-SECRET pins; the agent
 	// release base is the existing AgentReleaseBaseURL above. Empty target ⇒ no self-update.
-	TargetAgentVersion    string                       `json:"target_agent_version,omitempty"`
-	MinAgentVersion       string                       `json:"min_agent_version,omitempty"`
-	AgentBins             map[string]renderer.Artifact `json:"agent_bins,omitempty"`
-	AgentCanaryNodeIDs    []string                     `json:"agent_canary_node_ids,omitempty"`
-	AgentRolloutFleetWide bool                         `json:"agent_rollout_fleet_wide,omitempty"`
+	TargetAgentVersion    string                    `json:"target_agent_version,omitempty"`
+	MinAgentVersion       string                    `json:"min_agent_version,omitempty"`
+	AgentBins             map[string]model.Artifact `json:"agent_bins,omitempty"`
+	AgentCanaryNodeIDs    []string                  `json:"agent_canary_node_ids,omitempty"`
+	AgentRolloutFleetWide bool                      `json:"agent_rollout_fleet_wide,omitempty"`
 }
 
 // settingsResponse builds the wire view of cs: the stored settings plus the

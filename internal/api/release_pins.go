@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 const (
@@ -172,12 +172,12 @@ type releasePinAssetJSON struct {
 // proxy_applied reports whether the gh-proxy prefixed the fetch. resolved carries the exact
 // fetched URL per key so a 404 cause is visible.
 type releasePinResponseJSON struct {
-	Pins           map[string]renderer.Artifact `json:"pins"`
-	Base           string                       `json:"base"`
-	Version        string                       `json:"version"`
-	VersionApplied bool                         `json:"version_applied"`
-	ProxyApplied   bool                         `json:"proxy_applied"`
-	Resolved       map[string]string            `json:"resolved"`
+	Pins           map[string]model.Artifact `json:"pins"`
+	Base           string                    `json:"base"`
+	Version        string                    `json:"version"`
+	VersionApplied bool                      `json:"version_applied"`
+	ProxyApplied   bool                      `json:"proxy_applied"`
+	Resolved       map[string]string         `json:"resolved"`
 }
 
 // defaultAgentAssets are the linux-<arch> agent assets self-update is certified for
@@ -305,7 +305,7 @@ func (h *ControllerHandler) HandleReleasePins(w http.ResponseWriter, r *http.Req
 	resolvedBase, versionApplied := resolveReleaseBase(base, version)
 	proxy := cs.GithubProxy
 
-	pins := make(map[string]renderer.Artifact, len(assets))
+	pins := make(map[string]model.Artifact, len(assets))
 	resolved := make(map[string]string, len(assets))
 	for _, a := range assets {
 		url := proxy + resolvedBase + "/" + a.Asset + ".sha256"
@@ -319,7 +319,7 @@ func (h *ControllerHandler) HandleReleasePins(w http.ResponseWriter, r *http.Req
 			writeAPIError(w, aerr)
 			return
 		}
-		pins[a.Key] = renderer.Artifact{Asset: a.Asset, SHA256: sum}
+		pins[a.Key] = model.Artifact{Asset: a.Asset, SHA256: sum}
 	}
 
 	writeJSON(w, http.StatusOK, releasePinResponseJSON{

@@ -21,7 +21,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // TenantID scopes every Store operation. It is the structural tenant-isolation
@@ -331,9 +331,9 @@ type ControllerSettings struct {
 	// release base URL, and per-"<codename>-<arch>" (e.g. "bookworm-amd64") asset names + SHA-256
 	// hashes the installer verifies before dpkg. The pins are emitted into the controller-signed
 	// artifacts.json. Empty ⇒ distro-only mimic, no GitHub fallback, no artifacts.json (D4).
-	MimicVersion     string                       `json:"mimic_version,omitempty"`
-	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
-	MimicDebs        map[string]renderer.Artifact `json:"mimic_debs,omitempty"`
+	MimicVersion     string                    `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
+	MimicDebs        map[string]model.Artifact `json:"mimic_debs,omitempty"`
 	// Signed agent self-update (plan-9, canary-then-fleet D2). All NON-SECRET. The agent
 	// release base URL is the EXISTING AgentReleaseBaseURL above (reused as the self-update
 	// download base — no duplicate field). The pins below are emitted into the per-node,
@@ -345,9 +345,9 @@ type ControllerSettings struct {
 	// the floor below which a node must self-update BEFORE applying a bundle (a bundle/wire
 	// break); empty ⇒ no forced update. AgentBins maps "linux-<arch>" (e.g. "linux-amd64") to
 	// the release asset + SHA-256 the agent verifies.
-	TargetAgentVersion string                       `json:"target_agent_version,omitempty"`
-	MinAgentVersion    string                       `json:"min_agent_version,omitempty"`
-	AgentBins          map[string]renderer.Artifact `json:"agent_bins,omitempty"`
+	TargetAgentVersion string                    `json:"target_agent_version,omitempty"`
+	MinAgentVersion    string                    `json:"min_agent_version,omitempty"`
+	AgentBins          map[string]model.Artifact `json:"agent_bins,omitempty"`
 	// Canary rollout (D2): during the canary phase only AgentCanaryNodeIDs receive the agent
 	// block (and thus self-update). AgentRolloutFleetWide is the operator's "promote canary →
 	// fleet" action: when true, EVERY enrolled node receives the agent block. Together they
@@ -372,14 +372,14 @@ type ControllerSettings struct {
 func (cs ControllerSettings) Clone() ControllerSettings {
 	out := cs
 	if cs.MimicDebs != nil {
-		m := make(map[string]renderer.Artifact, len(cs.MimicDebs))
+		m := make(map[string]model.Artifact, len(cs.MimicDebs))
 		for k, v := range cs.MimicDebs {
 			m[k] = v
 		}
 		out.MimicDebs = m
 	}
 	if cs.AgentBins != nil {
-		m := make(map[string]renderer.Artifact, len(cs.AgentBins))
+		m := make(map[string]model.Artifact, len(cs.AgentBins))
 		for k, v := range cs.AgentBins {
 			m[k] = v
 		}

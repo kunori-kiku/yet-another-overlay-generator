@@ -71,7 +71,7 @@ type InstallScriptConfig struct {
 	// catalog is configured, so the template emits no fetch branch and the install.sh stays
 	// byte-identical to the pre-FetchSettings output (air-gap byte-identity). Set by the
 	// signed renderer after buildInstallScriptConfig, mirroring SigningPubkeyPEM.
-	Fetch InstallFetch
+	Fetch model.InstallFetch
 }
 
 // WgIfaceInfo describes a single WireGuard interface.
@@ -844,7 +844,7 @@ type CustodySplice struct {
 // output is byte-identical to RenderInstallScript (opt-in back-compat). fetch carries the optional
 // GitHub-.deb mimic-fallback pins (plan-3); its zero value adds nothing, keeping output identical.
 // See docs/spec/controller/signing.md and docs/spec/controller/key-custody.md.
-func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, splice CustodySplice, fetch InstallFetch, transitCIDRs ...string) (string, error) {
+func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasBabel bool, signingPubkeyPEM string, splice CustodySplice, fetch model.InstallFetch, transitCIDRs ...string) (string, error) {
 	config := buildInstallScriptConfig(node, peers, hasBabel, transitCIDRs)
 	config.SigningPubkeyPEM = signingPubkeyPEM
 	config.SplicePlaceholder = splice.Enabled
@@ -1005,7 +1005,7 @@ type ClientInstallScriptConfig struct {
 	// Fetch carries the GitHub-.deb mimic-fallback pins (plan-3); same semantics as
 	// InstallScriptConfig.Fetch. Zero value = no catalog → no fetch branch → client install.sh
 	// byte-identical. Set by the signed renderer after buildClientInstallScriptConfig.
-	Fetch InstallFetch
+	Fetch model.InstallFetch
 }
 
 const clientInstallScriptTemplate = `#!/usr/bin/env bash
@@ -1458,7 +1458,7 @@ func RenderClientInstallScript(node *model.Node, clientInfo ...*compiler.ClientP
 // RenderClientInstallScript (opt-in). The export path calls this only when an operator signing key
 // is configured. fetch carries the optional GitHub-.deb mimic-fallback pins (plan-3); its zero value
 // adds nothing, keeping output identical. See docs/spec/controller/signing.md and key-custody.md.
-func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, splice CustodySplice, fetch InstallFetch, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
+func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, splice CustodySplice, fetch model.InstallFetch, clientInfo ...*compiler.ClientPeerInfo) (string, error) {
 	config := buildClientInstallScriptConfig(node, clientInfo)
 	config.SigningPubkeyPEM = signingPubkeyPEM
 	config.SplicePlaceholder = splice.Enabled

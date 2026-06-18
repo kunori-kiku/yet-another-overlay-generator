@@ -156,7 +156,7 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 // Artifact is one fetchable, integrity-pinned file (release asset + SHA-256). It is an alias for
 // renderer.Artifact: callers and plans 3/4/9 write render.Artifact, while the single underlying type
 // lives in renderer (the install.sh template consumes it), avoiding a render<->renderer import cycle.
-type Artifact = renderer.Artifact
+type Artifact = model.Artifact
 
 // FetchSettings is the typed channel of install-time fetch pins threaded through the single shared
 // render path (All). It is populated from ControllerSettings (controller mode; plan-3/4/9) or from
@@ -248,7 +248,7 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs Fe
 	// GitHub proxy is baked into install.sh; the mimic pins are read at install time from the
 	// integrity-verified artifacts.json. A zero FetchSettings yields a zero InstallFetch, so the
 	// template emits no fetch branch and install.sh stays byte-identical (air-gap byte-identity).
-	installFetch := renderer.InstallFetch{GithubProxy: fs.GithubProxy}
+	installFetch := model.InstallFetch{GithubProxy: fs.GithubProxy}
 
 	//
 	for _, node := range result.Topology.Nodes {
