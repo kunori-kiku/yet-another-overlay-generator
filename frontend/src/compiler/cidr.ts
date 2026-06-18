@@ -269,6 +269,79 @@ export function parseCIDRFamily(s: string): { ones: number; isIPv4: boolean } | 
   return { ones, isIPv4: isIPv4MappedV6(masked) };
 }
 
+// canonicalIP normalizes an address string into a comparable canonical form, mirroring the validator's
+// canonicalIP (semantic.go:758-763): net.ParseIP(value).String() when parseable, else the value
+// unchanged (so deduplication degrades to string equality, while the invalid-address rule owns the
+// finding). For IPv4 the canonical form is the plain dotted-quad; for IPv6 it is the lowercase
+// "::"-compressed form Go's net.IP.String() emits (e.g. "fe80:0:0:0:0:0:0:1" → "fe80::1"). An
+// IPv4-mapped IPv6 (::ffff:a.b.c.d) renders in the dotted-quad form Go uses for a To4()-non-nil address.
+export function canonicalIP(value: string): string {
+  const fam = parseIPFamily(value);
+  if (fam === null) {
+    return value; // unparseable: identity, matching net.ParseIP(value) == nil
+  }
+  if (fam.isIPv4) {
+    // An IPv4 (or IPv4-mapped IPv6) canonicalizes to dotted-quad — net.IP.String() prints To4() forms
+    // as a.b.c.d. Re-derive from the parsed bytes so a mapped form (::ffff:10.0.0.1) and the bare
+    // dotted-quad (10.0.0.1) collapse to the SAME key, exactly as Go's String() does.
+    if (value.indexOf(':') < 0) {
+      // Pure dotted-quad: ipv4ToUint32 already validated it; round-trip to drop any quirk.
+      const u = ipv4ToUint32(value);
+      return u === null ? value : uint32ToIPv4(u);
+    }
+    const v6 = parseIPv6(value);
+    if (v6 === null) return value;
+    return `${v6[12]}.${v6[13]}.${v6[14]}.${v6[15]}`;
+  }
+  // IPv6: emit Go net.IP.String()'s canonical lowercase, "::"-compressed form.
+  const v6 = parseIPv6(value);
+  if (v6 === null) return value;
+  return ipv6ToCanonical(v6);
+}
+
+// ipv6ToCanonical renders 16 IPv6 bytes in Go net.IP.String()'s canonical text form: lowercase hex,
+// each group minimal (no leading zeros), and the single LONGEST run of 2+ zero groups compressed to
+// "::" (the first such run on a tie), mirroring the RFC 5952 form Go produces.
+function ipv6ToCanonical(b: number[]): string {
+  const groups: number[] = [];
+  for (let i = 0; i < 16; i += 2) {
+    groups.push(((b[i] << 8) | b[i + 1]) >>> 0);
+  }
+  // Find the longest run of consecutive zero groups (length >= 2); earliest on a tie.
+  let bestStart = -1;
+  let bestLen = 0;
+  let curStart = -1;
+  let curLen = 0;
+  for (let i = 0; i < 8; i++) {
+    if (groups[i] === 0) {
+      if (curStart < 0) curStart = i;
+      curLen++;
+      if (curLen > bestLen) {
+        bestLen = curLen;
+        bestStart = curStart;
+      }
+    } else {
+      curStart = -1;
+      curLen = 0;
+    }
+  }
+  if (bestLen < 2) {
+    bestStart = -1;
+  }
+  let out = '';
+  for (let i = 0; i < 8; i++) {
+    if (bestStart >= 0 && i === bestStart) {
+      out += i === 0 ? '::' : ':';
+      i += bestLen - 1;
+      continue;
+    }
+    out += groups[i].toString(16);
+    if (i !== 7) out += ':';
+  }
+  // Trailing "::" leaves a dangling token handled by the loop (the last appended ':' before the run).
+  return out;
+}
+
 // isIPv4MappedV6 reports whether a 16-byte IPv6 address is the IPv4-mapped form (::ffff:a.b.c.d), whose
 // Go net.IP.To4() returns non-nil. Mirrors net.IP.To4's check for the 0:0:0:0:0:ffff prefix.
 function isIPv4MappedV6(b: number[]): boolean {
