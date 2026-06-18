@@ -46,3 +46,45 @@ jobs:
         run: npm run lint
       - name: Build
         run: npm run build
+
+  conformance:
+    name: Go↔TS conformance + coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # (a) Go oracle + golden + drift + KAT + the cross-package codes-catalog sync.
+      #     A plain `go test` (NOT -update) asserts every golden/drift snapshot against the
+      #     committed frozen oracle. TestCoverageFloor is excluded here (it has its own step,
+      #     below) so a coverage drop is reported distinctly from a golden/drift divergence.
+      - name: Go oracle + golden + drift + KAT + catalog-sync
+        run: |
+          go test ./internal/conformance/ \
+            -run 'TestGolden|TestGoldenFail|TestGoldenFail_SpansBothChannels|TestGolden_Deterministic|TestConformanceComparator_SelfCompare|TestDrift|TestKeygenKAT'
+          go test ./internal/ -run TestI18nCatalogSync
+          go test ./internal/ -run TestI18nCatalogParity
+      # (b) Per-package coverage FLOOR over the local-compile pipeline packages. The frozen
+      #     floors live in internal/conformance/coverage_floor.json; TestCoverageFloor shells
+      #     out to `go test -coverprofile` per package and reds if any drops below its floor.
+      #     Re-baseline by editing that JSON (see docs/spec/compiler/conformance-manifest-schema.md).
+      #     It is gated to this job via YAOG_CONFORMANCE_COVERAGE_FLOOR so the main `go` job's
+      #     `go test ./...` does not re-run every pipeline suite nested inside it.
+      - name: Per-package coverage floor
+        run: go test ./internal/conformance/ -run TestCoverageFloor -v
+        env:
+          YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
+      # (c) The vitest heal pin: the TS healCollidingPins (frontend/src/lib/normalizeEdges.ts)
+      #     must byte-equal the Go normalize.HealCollidingPins over the shared corpus. A
+      #     deliberate divergence of the TS linkKey/pinKey reds this step.
+      - name: Frontend conformance (vitest heal pin)
+        working-directory: frontend
+        run: |
+          npm ci --legacy-peer-deps
+          npm run conformance

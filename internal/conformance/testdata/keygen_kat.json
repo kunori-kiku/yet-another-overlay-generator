@@ -1,0 +1,58 @@
+{
+  "note": "X25519 known-answer test (KAT) vectors for the WireGuard key-derivation definition the conformance harness pins. public_b64 is the base64.StdEncoding form of X25519(private, basepoint) = the WireGuard public key, derived stdlib-side via crypto/ecdh X25519 — the SAME definition internal/localcompile.ecdhKeygen.DerivePublic wraps (proven byte-equal to the default wgtypesKeygen over 10k inputs in keygen_equivalence_test.go). plan-4 asserts @noble/curves against THIS file, so plans 3/4/5 all pin one X25519 derivation. keygen_kat_test.go is the Go anchor.",
+  "vectors": [
+    {
+      "name": "rfc7748_6.1_alice",
+      "doc": "RFC 7748 section 6.1 Alice's private key -> her public key (scalar * basepoint). Authoritative IETF test vector.",
+      "private_b64": "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=",
+      "public_b64": "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo="
+    },
+    {
+      "name": "rfc7748_6.1_bob",
+      "doc": "RFC 7748 section 6.1 Bob's private key -> his public key. Authoritative IETF test vector.",
+      "private_b64": "XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=",
+      "public_b64": "3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08="
+    },
+    {
+      "name": "clamp_low_byte_all_ones",
+      "doc": "private key = 32 bytes of 0x01. Exercises the low-byte clamp (key[0] &= 248 clears the 3 low bits). crypto/ecdh clamps internally during scalar mult, so the UNCLAMPED 0x01.. private derives the same public key as its clamped form (asserted in clamp_equivalence).",
+      "private_b64": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+      "public_b64": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+    },
+    {
+      "name": "clamp_high_byte_all_ff",
+      "doc": "private key = 32 bytes of 0xff. Exercises the high-byte clamp (key[31] &= 127 clears the top bit; key[31] |= 64 sets bit 6). The unclamped 0xff.. private derives the same public key as its clamped form.",
+      "private_b64": "//////////////////////////////////////////8=",
+      "public_b64": "hHwNLDdSNPNl5mCVUYejc1oPdhPRYJ06ak2MU66qWiI="
+    },
+    {
+      "name": "clamp_all_zero",
+      "doc": "private key = 32 zero bytes. After clamping, bit 6 of the last byte is set (key[31] |= 64), so this is NOT the identity scalar — it derives a well-defined non-zero public key. Boundary case for key[31] |= 64.",
+      "private_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "public_b64": "L+V9o0fNYkMVKNqsX7spBzD/9oSvxM/C7ZCZX1jLO3Q="
+    }
+  ],
+  "clamp_equivalence": [
+    {
+      "name": "all_ones_raw_vs_clamped",
+      "doc": "A raw private key and its X25519-clamped form (key[0] &= 248; key[31] &= 127; key[31] |= 64) MUST derive the IDENTICAL public key, because X25519 clamps the scalar internally. This is the property a TS @noble port must reproduce: do NOT pre-clamp before deriving, or do so identically.",
+      "raw_b64": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+      "clamped_b64": "AAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAUE=",
+      "public_b64": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+    },
+    {
+      "name": "all_ff_raw_vs_clamped",
+      "doc": "Same equivalence over the high-byte clamp boundary: 0xff.. and its clamped form 0xf8..0x7f derive the identical public key.",
+      "raw_b64": "//////////////////////////////////////////8=",
+      "clamped_b64": "+P///////////////////////////////////////38=",
+      "public_b64": "hHwNLDdSNPNl5mCVUYejc1oPdhPRYJ06ak2MU66qWiI="
+    },
+    {
+      "name": "all_zero_raw_vs_clamped",
+      "doc": "Zero scalar vs its clamped form (only bit 6 of the last byte set): identical public keys.",
+      "raw_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "clamped_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEA=",
+      "public_b64": "L+V9o0fNYkMVKNqsX7spBzD/9oSvxM/C7ZCZX1jLO3Q="
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "delete-readd-pinned-superset",
+  "doc": "Three-router mesh where two links (e-ab, e-bc) carry persisted allocation pins and the third (e-ca, the delete-then-re-added link) is UNPINNED. Invariants I2/I9: re-adding a previously-removed link re-derives the SAME lowest free transit pair under reserve-first gap-fill (the pinned links reserve .1/.2 and .5/.6 first, so the unpinned re-added link deterministically takes .3/.4 regardless of array position) — a superset recompile reproduces byte-identical allocations for the pinned incumbents and a stable gap-fill for the re-added link.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "delete-readd", "name": "Delete Re-add Pinned Superset" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.34.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1", "overlay_ip": "10.34.0.1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1", "overlay_ip": "10.34.0.2",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      },
+      {
+        "id": "node-gamma", "name": "gamma", "hostname": "gamma.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1", "overlay_ip": "10.34.0.3",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "gamma-ep", "host": "gamma.example.com", "port": 51820 } ],
+        "wireguard_private_key": "yNwuQ1ivYBtQOKAqFou1Wsb2pdQxnonFZtQWYqbTOlY="
+      }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51820, "pinned_to_port": 51820, "pinned_from_transit_ip": "10.10.0.1", "pinned_to_transit_ip": "10.10.0.2", "pinned_from_link_local": "fe80::1", "pinned_to_link_local": "fe80::2" },
+      { "id": "e-bc", "from_node_id": "node-beta", "to_node_id": "node-gamma", "type": "public-endpoint", "endpoint_host": "gamma.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51821, "pinned_to_port": 51820, "pinned_from_transit_ip": "10.10.0.5", "pinned_to_transit_ip": "10.10.0.6", "pinned_from_link_local": "fe80::5", "pinned_to_link_local": "fe80::6" },
+      { "id": "e-ca", "from_node_id": "node-gamma", "to_node_id": "node-alpha", "type": "public-endpoint", "endpoint_host": "alpha.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

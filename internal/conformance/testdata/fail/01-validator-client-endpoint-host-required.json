@@ -1,0 +1,30 @@
+{
+  "name": "validator-client-endpoint-host-required",
+  "doc": "VALIDATOR-channel fail fixture. A client node whose single outbound edge omits endpoint_host. Semantic validation fails with validation_client_endpoint_host_required; because the compiler rejects it at Pass-2 with a PLAIN validation wrap (NOT an *apierr.Error), the apierr channel stays EMPTY. This pins the validator failure channel: verdict.validator carries the code, verdict.apierr is []. (See semantic.go CodeClientEndpointHostRequired.)",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "fail-client-endpoint", "name": "Fail Client Endpoint Required" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.37.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "wFKYOOqtvK/YveTzNg98Eb4Prt6oHae1pOpD4FkdX1U="
+      },
+      {
+        "id": "client-a", "name": "client-a", "hostname": "client-a.local", "platform": "debian",
+        "role": "client", "domain_id": "domain-1",
+        "capabilities": {},
+        "wireguard_private_key": "CMsYv43SL92ua2uUiANLL7bTu+tLO90YB++SVwSulH8="
+      }
+    ],
+    "edges": [
+      { "id": "e-client", "from_node_id": "client-a", "to_node_id": "router-a", "type": "public-endpoint", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

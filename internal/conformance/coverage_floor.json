@@ -1,0 +1,17 @@
+{
+  "doc": "Per-package statement-coverage FLOOR for the local-compile pipeline (plan-5 step 8). Each value is the minimum acceptable `go test -coverprofile` total for that package; TestCoverageFloor reds if a package drops below its floor. Floors are frozen a couple points BELOW the measured coverage at authoring (2026-06-19) so the gate is real but not flaky from a single dropped line. internal/model has no executable statements (pure type/json-tag declarations), so its profile reports `[no statements]`; the runner treats a no-statement package as a vacuous pass and its floor is 0. RE-BASELINE: after an INTENTIONAL coverage change, measure `go test -cover ./internal/<pkg>/` for each package, set each floor a couple points below the new value, and commit this file with the diff. See docs/spec/compiler/conformance-manifest-schema.md (Coverage floor).",
+  "floors": {
+    "model": 0.0,
+    "allocator": 90.0,
+    "validator": 89.0,
+    "linkid": 98.0,
+    "naming": 95.0,
+    "normalize": 94.0,
+    "compiler": 85.0,
+    "renderer": 84.0,
+    "render": 78.0,
+    "artifacts": 74.0,
+    "bundlesig": 87.0,
+    "localcompile": 65.0
+  }
+}

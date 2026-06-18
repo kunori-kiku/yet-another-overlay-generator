@@ -15,8 +15,14 @@ import type { Edge, Node } from '../types/topology';
 //   - link identity = linkKey (primary class folds A->B / B->A and same-pair primaries into one
 //     link, so their legitimately-mirrored equal values are NOT a collision; each backup is its own
 //     link via the "#id" suffix);
-//   - the FIRST edge (in array order) to claim a value keeps it; a later, different-link edge that
-//     needs any already-claimed value is stripped as a whole (an allocation is a unit).
+//   - claims are processed in reserve-first (linkKey-SORTED) order, the same priority the Go
+//     allocator's gap-fill uses; the FIRST edge in THAT order to claim a value keeps it, so the kept
+//     claimant of a contested slot is the SMALLER-linkKey (reserve-first) owner — exactly what
+//     compiler allocation reproduces — NOT whichever edge happens to come first in array order. A
+//     later, different-link edge that needs any already-claimed value is stripped as a whole (an
+//     allocation is a unit). (Array order would wrongly keep a stale re-enabled pin and strip the
+//     live incumbent: disable A-B, add A-C into the freed slot, re-enable A-B — A-B sits EARLIER in
+//     the array. This mirrors the Go discriminator in internal/normalize/pins.go.)
 //
 // Pure and idempotent: returns the SAME array reference when nothing needs healing (no React/zustand
 // churn), otherwise a new array with the offending edges' pins cleared.
@@ -75,17 +81,35 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
   const isClientTouched = (e: Edge) =>
     roleByNode.get(e.from_node_id) === 'client' || roleByNode.get(e.to_node_id) === 'client';
 
-  // Claim tables: each maps a resource to the linkKey that first claimed it.
+  // Process enabled, non-client edges in reserve-first (linkKey-SORTED) order — the same priority
+  // the Go allocator's gap-fill uses — so the kept claimant of a contested slot is the smaller-linkKey
+  // (reserve-first) owner, not whichever edge comes first in array order. Disabled/client edges are
+  // skipped entirely (Go's bool zero treats a missing is_enabled as DISABLED, so require strictly
+  // true). We sort INDICES (ties broken by original index for determinism — a primary class's
+  // forward/reverse edges share a linkKey and never collide with each other) so the healed result
+  // stays in the caller's original edge order. Mirrors internal/normalize/pins.go.
+  const order: number[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i];
+    if (e.is_enabled !== true || isClientTouched(e)) continue;
+    order.push(i);
+  }
+  order.sort((a, b) => {
+    const la = linkKey(edges[a]);
+    const lb = linkKey(edges[b]);
+    if (la !== lb) return la < lb ? -1 : 1;
+    return a - b;
+  });
+
+  // Claim tables: each maps a resource to the linkKey that first claimed it (in linkKey-sorted order).
   const portOwner = new Map<string, string>(); // `${nodeId}:${port}` -> linkKey
   const transitOwner = new Map<string, string>(); // ip -> linkKey
   const llOwner = new Map<string, string>(); // ip -> linkKey
 
+  const healed = edges.slice(); // identity refs until a strip replaces one; discarded if unchanged
   let changed = false;
-  const healed = edges.map((e) => {
-    // Match Go's zero-value semantics: a missing is_enabled (undefined, e.g. in a hand-edited import)
-    // is DISABLED, like Go's bool zero — so skip unless strictly true. (=== false would wrongly treat
-    // undefined as enabled and could claim/strip on a logically-disabled edge.)
-    if (e.is_enabled !== true || isClientTouched(e)) return e;
+  for (const i of order) {
+    const e = edges[i];
     const link = linkKey(e);
 
     // The resources this edge would claim (only complete pin pairs, matching the allocator).
@@ -109,14 +133,14 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
       return owner !== undefined && owner !== link;
     });
     if (collides) {
+      healed[i] = stripPins(e); // claim nothing — the stripped edge holds no resources
       changed = true;
-      return stripPins(e); // claim nothing — the stripped edge holds no resources
+      continue;
     }
 
     // Phase 2: no collision — claim every resource for this link.
     for (const c of claims) c.table.set(c.key, link);
-    return e;
-  });
+  }
 
   return changed ? healed : edges;
 }

@@ -1,0 +1,39 @@
+{
+  "name": "heal-collision-reenable",
+  "doc": "VALIDATOR-channel fail fixture AND the step-D heal canary's REAL-repair input. The re-enable pin corruption (C2): two ENABLED edges of DIFFERENT links (bravo<->charlie and charlie<->delta) both carry the same .1/.2 transit pair (a stale pin re-enabled while another link legitimately claimed the slot). The UN-healed input fails semantic validation with validation_pin_{port,transit_ip,link_local}_duplicate_cross_link, so the compiler rejects it with a plain validation wrap (apierr channel stays empty) — a validator-channel fail. Its load-bearing value is healed_edges: normalize.HealCollidingPins strips the larger-linkKey claimant (charlie<->delta) and keeps the smaller-linkKey reserve-first owner (bravo<->charlie), so the manifest's healed_edges shows a REAL repair (not identity) for the plan-5 step-D TS healCollidingPins canary to byte-match. Mirrors internal/compiler/reenable_heal_test.go divergentIncumbentLargerLinkKeyTopology.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "heal-collision", "name": "Heal Collision Re-enable" },
+    "domains": [
+      { "id": "domain-1", "name": "net", "cidr": "10.36.0.0/16", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "10.10.0.0/24" }
+    ],
+    "nodes": [
+      {
+        "id": "bravo", "name": "bravo", "hostname": "bravo.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "bravo-ep", "host": "bravo.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "charlie", "name": "charlie", "hostname": "charlie.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "charlie-ep", "host": "charlie.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      },
+      {
+        "id": "delta", "name": "delta", "hostname": "delta.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "delta-ep", "host": "delta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "yNwuQ1ivYBtQOKAqFou1Wsb2pdQxnonFZtQWYqbTOlY="
+      }
+    ],
+    "edges": [
+      { "id": "charlie-delta", "from_node_id": "charlie", "to_node_id": "delta", "type": "public-endpoint", "endpoint_host": "delta.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51820, "pinned_to_port": 51820, "pinned_from_transit_ip": "10.10.0.1", "pinned_to_transit_ip": "10.10.0.2", "pinned_from_link_local": "fe80::1", "pinned_to_link_local": "fe80::2" },
+      { "id": "bravo-charlie", "from_node_id": "bravo", "to_node_id": "charlie", "type": "public-endpoint", "endpoint_host": "charlie.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51820, "pinned_to_port": 51820, "pinned_from_transit_ip": "10.10.0.1", "pinned_to_transit_ip": "10.10.0.2", "pinned_from_link_local": "fe80::1", "pinned_to_link_local": "fe80::2" }
+    ]
+  }
+}
