@@ -231,27 +231,6 @@ func divergentIncumbentLargerLinkKeyTopology() *model.Topology {
 	}
 }
 
-// pinSnapshot captures the six pins + CompiledPort of an edge so two heal runs can be compared
-// byte-for-byte for determinism.
-type pinSnapshot struct {
-	compiledPort               int
-	fromPort, toPort           int
-	fromTransit, toTransit     string
-	fromLinkLocal, toLinkLocal string
-}
-
-func snapshotPins(e *model.Edge) pinSnapshot {
-	return pinSnapshot{
-		compiledPort:  e.CompiledPort,
-		fromPort:      e.PinnedFromPort,
-		toPort:        e.PinnedToPort,
-		fromTransit:   e.PinnedFromTransitIP,
-		toTransit:     e.PinnedToTransitIP,
-		fromLinkLocal: e.PinnedFromLinkLocal,
-		toLinkLocal:   e.PinnedToLinkLocal,
-	}
-}
-
 // TestReenableHeal_DivergentIncumbentLargerLinkKey is the symmetric-ambiguity case: the historical
 // incumbent holds the LARGER linkKey. The heal does NOT (and cannot) preserve the incumbent here —
 // it preserves the smaller-linkKey reserve-first owner. The test asserts ONLY the guaranteed
@@ -297,9 +276,9 @@ func TestReenableHeal_DivergentIncumbentLargerLinkKey(t *testing.T) {
 	topo2 := divergentIncumbentLargerLinkKeyTopology()
 	normalize.HealCollidingPins(topo2)
 	for _, id := range []string{"bravo-charlie", "charlie-delta"} {
-		if snapshotPins(edgeByIDPtr(topo, id)) != snapshotPins(edgeByIDPtr(topo2, id)) {
+		if pinsOf(edgeByIDPtr(topo, id)) != pinsOf(edgeByIDPtr(topo2, id)) {
 			t.Errorf("heal is not deterministic for edge %s: run1=%+v run2=%+v",
-				id, snapshotPins(edgeByIDPtr(topo, id)), snapshotPins(edgeByIDPtr(topo2, id)))
+				id, pinsOf(edgeByIDPtr(topo, id)), pinsOf(edgeByIDPtr(topo2, id)))
 		}
 	}
 
@@ -337,15 +316,15 @@ func TestReenableHeal_DivergentIncumbentLargerLinkKey(t *testing.T) {
 
 	// Guaranteed: stable fixed point. Re-healing the COMPILED topology changes nothing, and the
 	// pins are unchanged by the second heal.
-	before := map[string]pinSnapshot{
-		"bravo-charlie": snapshotPins(keptOut),
-		"charlie-delta": snapshotPins(reallocOut),
+	before := map[string]abPins{
+		"bravo-charlie": pinsOf(keptOut),
+		"charlie-delta": pinsOf(reallocOut),
 	}
 	if normalize.HealCollidingPins(out) {
 		t.Errorf("re-healing the compiled topology reported a change; expected a stable fixed point")
 	}
 	for id, want := range before {
-		if got := snapshotPins(edgeByIDPtr(out, id)); got != want {
+		if got := pinsOf(edgeByIDPtr(out, id)); got != want {
 			t.Errorf("fixed-point violated for %s: before=%+v after second heal=%+v", id, want, got)
 		}
 	}

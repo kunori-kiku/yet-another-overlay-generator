@@ -135,7 +135,7 @@ the intended deployment posture. Each names the threat boundary that makes it ac
   (store the expected token alongside the session and compare), removing the reliance on same-origin
   cookie isolation entirely.
 
-- **A legacy-stored operator-credential binding is advisory-warned, not retroactively rejected (S11).**
+- **A legacy-stored operator-credential binding is advisory-warned, not retroactively rejected (S13).**
   The operator credential's `RPID`/`Origin` are emitted UNQUOTED into the root-executed bootstrap
   script's `OP_FLAGS` accumulator (the unquoted `${OP_FLAGS}` is intentional word-splitting — see
   `internal/api/handler_bootstrap.go`, `validateOperatorCredentialBinding`). A FORWARD-ONLY

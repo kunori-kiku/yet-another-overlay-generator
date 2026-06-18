@@ -400,8 +400,8 @@ func TestAllocateIPs_ContextCancelEntryGuard(t *testing.T) {
 	}
 }
 
-// liveThenCanceledCtx is a context that reports LIVE (Err() == nil) for the first whenever-checked
-// poll(s) and CANCELED thereafter. It lets a test prove the in-loop ctx.Err() poll is the source of
+// liveThenCanceledCtx is a context that reports LIVE (Err() == nil) for the first livePolls
+// Err() calls and CANCELED thereafter. It lets a test prove the in-loop ctx.Err() poll is the source of
 // the abort: the entry guard (the first Err() call, made before any scan begins) sees a live context
 // and passes, so any returned context.Canceled MUST originate from a later in-loop poll. livePolls is
 // the number of Err() calls that return nil before the context flips to cancelled.

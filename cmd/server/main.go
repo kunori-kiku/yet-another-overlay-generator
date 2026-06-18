@@ -194,7 +194,7 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	// operator. We surface it as an ADVISORY startup WARNING (mirroring the B3 legacy login-pin
 	// precedent above) so the owner re-pins the credential; we do NOT refuse to start or clear the
 	// pin, which would lock the operator's keystone out mid-upgrade. Documented as a residual in
-	// docs/spec/security/security.md (S11). Best-effort; a not-found/read error is non-fatal here.
+	// docs/spec/security/security.md (S13). Best-effort; a not-found/read error is non-fatal here.
 	if cred, err := store.GetOperatorCredential(context.Background(), controller.TenantID(tenant)); err == nil {
 		if field := api.UnsafeOperatorCredentialBindingField(cred); field != "" {
 			log.Printf("controller: WARNING: tenant %q has a legacy operator credential whose %s contains whitespace or a shell metacharacter — re-pin the operator credential to remove it; until then the bootstrap script's unquoted OP_FLAGS expansion of that field is a flag-injection risk for an authenticated operator",

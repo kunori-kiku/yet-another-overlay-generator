@@ -79,6 +79,20 @@ type abPins struct {
 	compiledPort  int
 }
 
+// pinsOf snapshots all of an edge's allocation outputs (the six pins + CompiledPort) so two
+// compiles or heal runs can be compared field-for-field.
+func pinsOf(e *model.Edge) abPins {
+	return abPins{
+		fromPort:      e.PinnedFromPort,
+		toPort:        e.PinnedToPort,
+		fromTransitIP: e.PinnedFromTransitIP,
+		toTransitIP:   e.PinnedToTransitIP,
+		fromLinkLocal: e.PinnedFromLinkLocal,
+		toLinkLocal:   e.PinnedToLinkLocal,
+		compiledPort:  e.CompiledPort,
+	}
+}
+
 // capturePins pulls all allocation values for a given edge id out of the compiled
 // topology.
 func capturePins(t *testing.T, topo *model.Topology, edgeID string) abPins {
@@ -87,15 +101,7 @@ func capturePins(t *testing.T, topo *model.Topology, edgeID string) abPins {
 	if edge == nil {
 		t.Fatalf("edge %q not found in compiled topology", edgeID)
 	}
-	return abPins{
-		fromPort:      edge.PinnedFromPort,
-		toPort:        edge.PinnedToPort,
-		fromTransitIP: edge.PinnedFromTransitIP,
-		toTransitIP:   edge.PinnedToTransitIP,
-		fromLinkLocal: edge.PinnedFromLinkLocal,
-		toLinkLocal:   edge.PinnedToLinkLocal,
-		compiledPort:  edge.CompiledPort,
-	}
+	return pinsOf(edge)
 }
 
 // assertPinsEqual asserts two captured allocation snapshots are field-for-field equal
