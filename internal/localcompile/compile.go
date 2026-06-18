@@ -15,11 +15,15 @@ import (
 // artifacts-out result. It is the seam the TypeScript reimplementation (plan-4) and the
 // conformance harness (plan-5) target.
 //
-// As of plan-3 Phase 2 the façade threads req.Keygen through the key seam (nil ⇒ the
-// default wgtypesKeygen, byte-identical to today). The explicit clock (req.CompiledAt)
-// and the injected signer (req.SigningKey) are still wired in plan-3 Phase 4; until then
-// the signer is read from the environment exactly as artifacts.Export does today
-// (LoadConfigSignerFromEnv), so this phase remains a byte-identical wrapper.
+// As of plan-3 Phase 4 the façade is a PURE function: every non-deterministic and
+// environment-coupled input is taken from the request, never read from the process —
+// the keygen seam (req.Keygen, nil ⇒ the default wgtypesKeygen), the compile clock
+// (req.CompiledAt, injected via compiler.CompileAt), the bundle signer (req.SigningKey,
+// injected via render.AllWith; nil ⇒ unsigned), the install-time fetch settings
+// (req.Fetch), and the controller subgraph's reserved allocations (req.Reserved). There
+// is no env read, no time.Now, no filesystem access, and no global state, so an identical
+// request yields a byte-identical result (proven by the run-twice-assert-equal golden
+// sub-test in plan-3 Phase 5).
 func Compile(req CompileRequest) (CompileArtifacts, error) {
 	// Work on a local copy of the topology so the caller's value is not mutated by the
 	// pipeline's write-backs (GenerateKeys, IP allocation, and the pin write-back all
@@ -43,30 +47,32 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 	if req.Reserved != nil {
 		c = c.WithReserved(req.Reserved)
 	}
-	result, err := c.Compile(context.Background(), &topo, keys)
+	// CompileAt injects the explicit clock (req.CompiledAt) instead of the compiler's
+	// internal time.Now(); context.Background() because the façade does not carry a
+	// request context — the local compile path is not bounded by an HTTP deadline.
+	result, err := c.CompileAt(context.Background(), &topo, keys, req.CompiledAt)
 	if err != nil {
 		return CompileArtifacts{}, err
 	}
 
-	if err := render.All(result, keys, req.Fetch); err != nil {
+	// AllWith injects the bundle signer (req.SigningKey) instead of reading it from the
+	// environment; a nil interface is the byte-identical no-signing path.
+	if err := render.AllWith(result, keys, req.Fetch, req.SigningKey); err != nil {
 		return CompileArtifacts{}, err
 	}
 
-	return reshape(result)
+	return reshape(result, req.SigningKey)
 }
 
 // reshape turns a fully-rendered *compiler.CompileResult into the canonical
 // CompileArtifacts. The per-node Files map, the per-node checksums, and the optional
 // detached signatures are built to mirror artifacts.Export's on-disk bundle exactly
 // (export.go) so the in-memory contract is byte-consistent with the real exporter.
-func reshape(result *compiler.CompileResult) (CompileArtifacts, error) {
-	// Signing is opt-in via bundlesig.EnvSigningKey, resolved once up front so a
-	// malformed key fails the whole compile early — identical to artifacts.Export.
-	// (plan-3 Phase 4 replaces this env read with the injected req.SigningKey.)
-	signer, err := bundlesig.LoadConfigSignerFromEnv()
-	if err != nil {
-		return CompileArtifacts{}, err
-	}
+//
+// signer is the injected req.SigningKey (the bundlesig.ConfigSigner interface): a nil
+// interface means "unsigned" — Signatures stays empty and SigningPubPEM nil, the
+// byte-identical no-signing path. No environment read happens here, keeping Compile pure.
+func reshape(result *compiler.CompileResult, signer bundlesig.ConfigSigner) (CompileArtifacts, error) {
 	signEnabled := signer != nil
 
 	artifacts := CompileArtifacts{

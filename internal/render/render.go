@@ -274,7 +274,35 @@ type FetchSettings struct {
 // This is the single rendering entry point shared by the API and the CLI — both
 // entry points follow the exact same path, guaranteeing artifact consistency
 // (entry-point equivalence, see equivalence_test.go).
+//
+// All is the byte-identical shim that resolves the bundle signer from the
+// environment (LoadConfigSignerFromEnv) and delegates to AllWith — the signer is
+// the only impurity it injects, so every existing caller stays unchanged.
 func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs FetchSettings) error {
+	// Optional bundle signing (opt-in via bundlesig.EnvSigningKey). The env read
+	// lives ONLY in this legacy shim; AllWith takes the resolved signer directly.
+	// LoadConfigSignerFromEnv returns an explicit nil INTERFACE when signing is off,
+	// so passing it straight through is the byte-identical no-signing path. A
+	// misconfigured key fails closed here.
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		return fmt.Errorf("loading the bundle signing key failed: %w", err)
+	}
+	return AllWith(result, keys, fs, signer)
+}
+
+// AllWith is All with the bundle signer made explicit: signer is injected by the
+// caller instead of being read from the environment mid-render. This is the seam
+// the localcompile façade (plan-3) uses so the local compile path is a pure
+// function — no env read inside the render pass.
+//
+// signer is the bundlesig.ConfigSigner INTERFACE (not a pointer): a nil interface
+// means "unsigned" — signingPubPEM stays empty and the *Signed renderers emit
+// output byte-identical to the plain renderers (see script_signature_test.go), so
+// the air-gap path is unchanged. Because LoadConfigSignerFromEnv returns a clean
+// nil interface (never a non-nil interface wrapping a nil *Signing), a plain
+// `signer == nil` test is safe (no typed-nil gotcha).
+func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs FetchSettings, signer bundlesig.ConfigSigner) error {
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
@@ -305,17 +333,14 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs Fe
 	}
 	result.SysctlConfigs = sysctlConfigs
 
-	// Optional bundle signing (opt-in via bundlesig.EnvSigningKey). When a signing
-	// key is configured, the install scripts embed the verifying public key and a
+	// Optional bundle signing (opt-in; the signer is injected by the caller — All
+	// resolves it from the environment, AllWith takes it directly). When a signer is
+	// present the install scripts embed the verifying public key and a
 	// signature-verify step that runs before the existing sha256sum -c; the export
 	// path signs the canonical checksums alongside (internal/artifacts/export.go).
-	// When signing is off, signingPubPEM stays empty and the *Signed renderers emit
+	// When signer is nil, signingPubPEM stays empty and the *Signed renderers emit
 	// byte-identical output to the plain renderers (see script_signature_test.go), so
-	// the air-gap path is unchanged. A misconfigured key fails closed here.
-	signer, err := bundlesig.LoadConfigSignerFromEnv()
-	if err != nil {
-		return fmt.Errorf("loading the bundle signing key failed: %w", err)
-	}
+	// the air-gap path is unchanged.
 	var signingPubPEM string
 	if signer != nil {
 		signingPubPEM = string(signer.PublicKeyPEM())
