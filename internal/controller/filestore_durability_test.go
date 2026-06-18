@@ -2,11 +2,13 @@ package controller
 
 // filestore_durability_test.go is the no-regression net for the B2 crash-consistency
 // hardening (plan-8 Phase 7): writeJSONAtomic now does OpenFile+Write+Sync+Close then
-// fsyncs the parent dir after the rename, and AppendAudit now f.Sync()s before f.Close().
-// Durability itself is verified by code-review + crash-reasoning (an fsync's effect is not
-// observable from a userspace round-trip); these tests pin that the added Sync/dir-fsync
-// code paths introduce NO behavioral regression — the happy path still round-trips and the
-// error paths (a missing parent dir) still surface a coded error and leave no orphan temp.
+// fsyncs the parent dir after the rename, AppendAudit now f.Sync()s before f.Close(), and
+// the audit-log rotation/migration rewrite (writeAuditJSONL, via the shared writeBytesDurable
+// primitive) is durable the same way (review #5). Durability itself is verified by
+// code-review + crash-reasoning (an fsync's effect is not observable from a userspace
+// round-trip); these tests pin that the added Sync/dir-fsync code paths introduce NO
+// behavioral regression — the happy path still round-trips and the error paths (a missing
+// parent dir) still surface a coded error and leave no orphan temp.
 
 import (
 	"context"
@@ -132,5 +134,124 @@ func TestAppendAuditDurableRoundTrip(t *testing.T) {
 	}
 	if entries[0].Hash != first.Hash || entries[1].Hash != second.Hash {
 		t.Fatal("listed hashes do not match the appended entries (durability/round-trip regression)")
+	}
+}
+
+// TestWriteAuditJSONLDurableRoundTrip: the rotation/migration rewrite primitive (now routed
+// through writeBytesDurable, review #5) lands all entries durably-readable as JSONL, in order,
+// and leaves no leftover .tmp sidecar. This is the no-regression net for moving writeAuditJSONL
+// off the pre-B2 non-durable os.WriteFile onto the shared OpenFile+Sync+Close+rename+dir-fsync
+// path — a regression that dropped or reordered an entry would surface here.
+func TestWriteAuditJSONLDurableRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, auditFileName)
+	in := []AuditEntry{
+		{Seq: 1, Actor: "operator:admin", Action: "node-approved", NodeID: "node-1"},
+		{Seq: 2, Actor: "operator:admin", Action: "node-revoked", NodeID: "node-2"},
+		{Seq: 3, Actor: "system", Action: "rotated", NodeID: ""},
+	}
+	if err := writeAuditJSONL(path, in); err != nil {
+		t.Fatalf("writeAuditJSONL: %v", err)
+	}
+	got, torn, err := readAuditJSONL(path)
+	if err != nil {
+		t.Fatalf("readAuditJSONL: %v", err)
+	}
+	if torn {
+		t.Fatal("readAuditJSONL reported a torn tail after a clean durable rewrite")
+	}
+	if len(got) != len(in) {
+		t.Fatalf("round-trip len = %d, want %d", len(got), len(in))
+	}
+	for i := range in {
+		if got[i].Seq != in[i].Seq || got[i].Action != in[i].Action || got[i].NodeID != in[i].NodeID {
+			t.Fatalf("entry %d round-trip = %+v, want %+v", i, got[i], in[i])
+		}
+	}
+	// The temp sidecar must be gone (rename consumed it).
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("leftover %s.tmp after a successful rewrite (stat err = %v)", path, err)
+	}
+}
+
+// TestWriteAuditJSONLMissingParentDir: with a parent dir that does NOT exist, the temp-file
+// OpenFile inside writeBytesDurable fails — writeAuditJSONL must surface that error (not
+// silently succeed) and not leak a temp file. This is the error-path no-regression net for
+// the rotation/migration rewrite after it was moved onto the durable primitive (review #5).
+func TestWriteAuditJSONLMissingParentDir(t *testing.T) {
+	dir := t.TempDir()
+	// "absent" is never created, so <absent>/audit.jsonl has no parent dir.
+	path := filepath.Join(dir, "absent", auditFileName)
+	if err := writeAuditJSONL(path, []AuditEntry{{Seq: 1, Action: "x"}}); err == nil {
+		t.Fatal("writeAuditJSONL into a missing parent dir = nil, want an error")
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("unexpected leftover temp file (stat err = %v)", err)
+	}
+}
+
+// TestRotateAuditDurableTrim: the rotation path (rotateAudit, which rewrites the log via the
+// now-durable writeAuditJSONL) trims an over-cap log down to the most-recent auditRetain
+// entries, durably, and updates the cached count. It seeds auditRotateAt+1 entries directly on
+// disk (bypassing the slow per-append cap so the test stays fast), then rotates and verifies
+// the trimmed window is the newest auditRetain entries and is durably re-readable with no torn
+// tail or orphan temp. This is the no-regression net for the rotation rewrite being durable
+// (review #5) — a rewrite that lost the trimmed prefix or left a torn file would surface here.
+func TestRotateAuditDurableTrim(t *testing.T) {
+	fs, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	const tn = TenantID("rotate-tenant")
+	dir, err := fs.ensureTenantDir(tn)
+	if err != nil {
+		t.Fatalf("ensureTenantDir: %v", err)
+	}
+
+	// Build a clean, chained over-cap log and write it directly (the per-append path would
+	// take auditRotateAt+1 AppendAudit calls — too slow for a unit test).
+	total := auditRotateAt + 1
+	entries := make([]AuditEntry, 0, total)
+	prevHash := ""
+	for i := 0; i < total; i++ {
+		e := AuditEntry{Seq: int64(i + 1), Actor: "system", Action: "seed", NodeID: ""}
+		e = chainAudit(e, prevHash)
+		prevHash = e.Hash
+		entries = append(entries, e)
+	}
+	path := filepath.Join(dir, auditFileName)
+	if err := writeAuditJSONL(path, entries); err != nil {
+		t.Fatalf("seed writeAuditJSONL: %v", err)
+	}
+
+	tail := &auditTail{count: total, seq: entries[total-1].Seq, hash: entries[total-1].Hash}
+	if err := fs.rotateAudit(dir, tail); err != nil {
+		t.Fatalf("rotateAudit: %v", err)
+	}
+	if tail.count != auditRetain {
+		t.Fatalf("rotated tail.count = %d, want %d", tail.count, auditRetain)
+	}
+
+	got, torn, err := readAuditJSONL(path)
+	if err != nil {
+		t.Fatalf("readAuditJSONL after rotate: %v", err)
+	}
+	if torn {
+		t.Fatal("readAuditJSONL reported a torn tail after a clean durable rotation rewrite")
+	}
+	if len(got) != auditRetain {
+		t.Fatalf("on-disk entry count after rotate = %d, want %d", len(got), auditRetain)
+	}
+	// The kept window must be the newest auditRetain entries: first kept Seq is (total-auditRetain+1),
+	// last kept Seq is total.
+	wantFirstSeq := int64(total - auditRetain + 1)
+	if got[0].Seq != wantFirstSeq {
+		t.Fatalf("first kept Seq = %d, want %d (newest %d retained)", got[0].Seq, wantFirstSeq, auditRetain)
+	}
+	if got[len(got)-1].Seq != int64(total) {
+		t.Fatalf("last kept Seq = %d, want %d", got[len(got)-1].Seq, total)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("leftover %s.tmp after rotation (stat err = %v)", path, err)
 	}
 }

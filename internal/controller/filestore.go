@@ -226,6 +226,18 @@ func writeJSONAtomic(path string, v any) error {
 	if err != nil {
 		return fmt.Errorf("controller: marshal %s: %w", filepath.Base(path), err)
 	}
+	return writeBytesDurable(path, data)
+}
+
+// writeBytesDurable writes data to path via a temp-file + rename so a crash cannot leave a
+// truncated file, with the same crash-consistency guarantee writeJSONAtomic documents: the
+// temp file's bytes are fsync'd to stable storage BEFORE the rename, and the parent directory
+// is fsync'd AFTER the rename, so a power loss between the two steps cannot leave the target
+// naming a not-yet-durable inode. The parent directory must already exist. This is the single
+// durable-write primitive shared by every rename-atomic writer in the store (writeJSONAtomic
+// for the per-record JSON files, writeAuditJSONL for the audit-log rotation/migration rewrite)
+// so the fsync dance lives in exactly one place (B2).
+func writeBytesDurable(path string, data []byte) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
@@ -383,8 +395,13 @@ func readAuditJSONL(path string) (entries []AuditEntry, tornTail bool, err error
 	return entries, false, nil
 }
 
-// writeAuditJSONL atomically rewrites the whole JSONL log (temp file + rename). Used only
-// by the legacy migration and by rotation — NOT by the steady-state append path.
+// writeAuditJSONL atomically AND durably rewrites the whole JSONL log via the shared
+// writeBytesDurable primitive (temp file + fsync + rename + parent-dir fsync). Used only by
+// the legacy migration and by rotation — NOT by the steady-state append path. It is durable
+// for the same reason the per-record writers are (B2): the rotation/migration rewrite must
+// not be lost or left torn by a crash any more than a credential write — otherwise a power
+// loss right after a rotation could resurrect the just-trimmed prefix or expose a zero-length
+// log. The steady-state append (AppendAudit) handles its own O_APPEND f.Sync separately.
 func writeAuditJSONL(path string, entries []AuditEntry) error {
 	var buf bytes.Buffer
 	for _, e := range entries {
@@ -395,13 +412,8 @@ func writeAuditJSONL(path string, entries []AuditEntry) error {
 		buf.Write(b)
 		buf.WriteByte('\n')
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0600); err != nil {
-		return fmt.Errorf("controller: write %s: %w", auditFileName, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("controller: install %s: %w", auditFileName, err)
+	if err := writeBytesDurable(path, buf.Bytes()); err != nil {
+		return fmt.Errorf("controller: rewrite %s: %w", auditFileName, err)
 	}
 	return nil
 }
