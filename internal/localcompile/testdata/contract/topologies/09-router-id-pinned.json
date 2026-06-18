@@ -1,0 +1,31 @@
+{
+  "name": "router-id-pinned",
+  "doc": "A two-router link where node-alpha carries an explicit Babel router_id (02:aa:bb:cc:dd:01) and node-beta leaves it empty (compiler auto-generates one). FREEZES the current router_id write-back ONLY — router_id semantics are plan-9's, this fixture just pins whatever the pipeline emits today (the explicit id is honored; the empty one is auto-filled and appears in babeld.conf).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "router-id-pinned", "name": "Router ID Pinned" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.29.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1", "router_id": "02:aa:bb:cc:dd:01",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

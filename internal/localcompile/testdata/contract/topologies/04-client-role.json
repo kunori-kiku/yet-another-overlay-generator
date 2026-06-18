@@ -1,0 +1,30 @@
+{
+  "name": "client-role",
+  "doc": "A client node attached to a router. The client role uses a single wg0 (wireguard/wg0.conf) and NO babeld.conf (the client-role exception to the per-peer-interface + Babel model). Pins the client bundle shape.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "client-role", "name": "Client Role" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.24.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "wFKYOOqtvK/YveTzNg98Eb4Prt6oHae1pOpD4FkdX1U="
+      },
+      {
+        "id": "client-a", "name": "client-a", "hostname": "client-a.local", "platform": "debian",
+        "role": "client", "domain_id": "domain-1",
+        "capabilities": {},
+        "wireguard_private_key": "CMsYv43SL92ua2uUiANLL7bTu+tLO90YB++SVwSulH8="
+      }
+    ],
+    "edges": [
+      { "id": "e-client", "from_node_id": "client-a", "to_node_id": "router-a", "type": "public-endpoint", "endpoint_host": "router-a.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

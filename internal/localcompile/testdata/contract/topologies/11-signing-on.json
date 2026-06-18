@@ -1,0 +1,31 @@
+{
+  "name": "signing-on",
+  "doc": "Two routers compiled with the THROWAWAY test Ed25519 signing key injected via CompileRequest.SigningKey (NOT read from env — the facade is pure). Exercises the bundle.sig / signing-pubkey.pem path the controller relies on: each node's Signatures entry signs its canonical checksums, and SigningPubPEM is the shared verifying anchor. AgentHeld custody (zero-knowledge): public keys are registered verbatim, no private key is ever in the bundle.",
+  "custody": "agentheld",
+  "signing": true,
+  "topology": {
+    "project": { "id": "signing-on", "name": "Signing On" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.32.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

@@ -248,6 +248,30 @@ plan-22 D-decisions, recommended FIX/DOCUMENT respectively); plan-18 netns Optio
 container execution mode; plan-21 npm-audit advisory-vs-required threshold; plan-13 frontend-e2e
 required-from-day-one vs advisory-until-20×-green.
 
+**Findings discovered during plan-3 execution (2026-06-18; recorded so they are not lost — none block
+plan-3, which is a no-byte-change freeze):**
+
+- **C5 — `install.sh` / `deploy-all.{sh,ps1}` / `checksums.sha256` are NOT edge-reorder-stable.** The
+  beta.8 C1 fix sorted ONLY the babel renderer's peer slice; the compiler-level edge-reorder golden
+  fixture (owner flag 1) proved `babeld.conf` / `sysctl` / every `wireguard/<iface>.conf` ARE byte-stable
+  under a benign edge reorder, but the install/deploy scripts still enumerate per-peer interfaces/nodes in
+  edge-array order, so a wholesale edge reversal churns those files + the per-node `checksums.sha256` that
+  covers `install.sh`. This is a C1-CLASS residual beyond the shipped babel fix. plan-3 freezes + documents
+  it as an explicit non-guarantee (`io-contract.md` §5; the golden assertion is scoped to the C1-covered
+  surface). **Disposition:** a NEW roadmap fix (sort the script/deploy renderers' interface enumeration by
+  `InterfaceName`, mirroring babel) — a fast-follow or a plan-7/plan-16 rider; NOT a plan-3 byte change.
+  Practical blast radius is small (normal incremental edits append; they do not reverse the edge array).
+- **Corpus role-coverage gap → plan-5.** The plan-3 golden corpus (12 fixtures) matches the plan's
+  fixture list but uses only `router` (+ one `client`) roles, no `gateway`/`relay`/`peer`, no
+  `extra_prefixes`, no IPv6 overlay CIDR, no edgeless node. Those carry distinct babel/capability byte
+  surfaces. **Disposition:** plan-5 owns the cross-language **coverage floor** — widen the corpus there
+  (or via a plan-5.5) before plan-4 ports the TS compiler.
+- **Signer double-resolution (latent, fast-follow).** On the air-gap export path the bundle signer is
+  resolved twice from the SAME `YAOG_BUNDLE_SIGNING_KEY` read (the façade's `req.SigningKey` for the
+  install.sh-embedded pubkey + `artifacts.Export` re-reading env for `bundle.sig`). They agree in
+  practice; collapsing Export to consume the façade's already-computed signatures is a fast-follow, out of
+  plan-3's no-byte-change scope.
+
 ---
 
 ## 7. Milestones (one bullet per plan; goal + the sequencing spine)
@@ -411,12 +435,12 @@ partial/parked/abandoned, per close-phase).
 |------|-----------|---------|--------|------------|
 | plan-1  | 1.1 | S1 | delivered (PR #137) | — (FIRST mover; before plan-2/8/9 on shared files) |
 | plan-2  | 1.2 | S1 | delivered (PR #139) | plan-1 |
-| plan-3  | 1.3 | S1 | pending | plan-1 (clean tree), plan-8 (freeze FIXED C2/C3 behavior) |
+| plan-3  | 1.3 | S1 | in-progress (review fixes applied; PR pending) | plan-1 (clean tree), plan-8 (freeze FIXED C2/C3 behavior) |
 | plan-4  | 1.4 | S1 | pending | plan-5 (green+required), plan-3, plan-9 |
 | plan-5  | 1.5 | S1 | pending | plan-3 |
 | plan-6  | 1.6 | S1 | pending | plan-4 |
 | plan-7  | 1.7 | S1 | pending | plan-6 (tail of S1; before Subject 4 re-audit) |
-| plan-8  | 1.8 | S1 | pending | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
+| plan-8  | 1.8 | S1 | delivered (PR #140) | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
 | plan-9  | 1.9 | S1 | delivered (PR #138) | plan-1 (EARLY off main; supports plan-4) |
 | plan-10 | 2.1 | S2 | pending | plan-11; SUBJECT 1 |
 | plan-11 | 2.2 | S2 | pending | SUBJECT 1 (FIRST in S2) |

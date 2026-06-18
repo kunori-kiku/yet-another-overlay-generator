@@ -1,0 +1,40 @@
+{
+  "name": "agentheld-mesh",
+  "doc": "Three-router full mesh under AgentHeld (controller) custody: each node registers only its public key, the rendered [Interface] PrivateKey is PRIVATEKEY_PLACEHOLDER (zero-knowledge custody, principle P2), and no private key reaches the bundle. Exercises the controller render path's placeholder/discard-private semantics across multiple peers per node.",
+  "custody": "agentheld",
+  "signing": false,
+  "topology": {
+    "project": { "id": "agentheld-mesh", "name": "AgentHeld Mesh" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.33.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw="
+      },
+      {
+        "id": "node-gamma", "name": "gamma", "hostname": "gamma.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "gamma-ep", "host": "gamma.example.com", "port": 51820 } ],
+        "wireguard_public_key": "lfejD3grf2/VowtlxQ0XkU9lMKAYMs/olCcmmIIrCU8="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e2", "from_node_id": "node-alpha", "to_node_id": "node-gamma", "type": "public-endpoint", "endpoint_host": "gamma.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e3", "from_node_id": "node-beta", "to_node_id": "node-gamma", "type": "public-endpoint", "endpoint_host": "gamma.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

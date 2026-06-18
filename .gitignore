@@ -12,3 +12,8 @@ CLAUDE.md
 *.pem
 *.key
 *.cred
+# Exception: the localcompile contract corpus ships ONE throwaway test-only Ed25519 signing
+# key (NOT any production key) so the signing-on golden fixture can byte-freeze the
+# bundle.sig / signing-pubkey.pem path. It is generated under testdata and bound only to the
+# test signer; see docs/spec/compiler/io-contract.md (the golden corpus).
+!internal/localcompile/testdata/contract/signing/test-signing-key.pem
