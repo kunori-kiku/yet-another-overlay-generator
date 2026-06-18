@@ -85,6 +85,12 @@ func (s *Server) EnableController(ch *ControllerHandler) {
 	// an unauthenticated compute/key-gen oracle on the operator port. Arm the operator-auth gate;
 	// gateAirgap (wrapping those routes since registerRoutes) reads it at request time.
 	s.operatorAuth = ch.operatorAuth
+	// plan-8 Phase 5.2 (TOFU-MITM DOCUMENT): surface a single startup warning when the controller
+	// is in the dev-only no-anchor posture (keystone OFF + no TLS hint), where a network MITM can
+	// substitute the fetched bootstrap/config. Advisory only — refusing the posture in code is
+	// deferred bootstrap-TOFU work (rc.2/GA); the rc.1 production requirement lives in the release
+	// notes + docs/spec/security.
+	ch.WarnInsecureControllerPosture(context.Background())
 }
 
 // gateAirgap wraps an air-gap compute handler so it requires operator auth IN CONTROLLER MODE

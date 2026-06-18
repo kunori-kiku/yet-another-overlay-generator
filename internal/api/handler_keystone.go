@@ -181,6 +181,16 @@ func (h *ControllerHandler) handleOperatorCredentialPin(w http.ResponseWriter, r
 		Origin:       req.Origin,
 	}
 
+	// RPID/Origin are baked UNQUOTED into the root-executed bootstrap script's OP_FLAGS
+	// accumulator (the unquoted ${OP_FLAGS} is intentional word-splitting — see
+	// validateOperatorCredentialBinding). Reject whitespace + shell metacharacters at pin
+	// time so that expansion is safe by construction; this mirrors the validate-at-pin
+	// discipline already applied to the mimic catalog (validateMimicCatalog).
+	if err := validateOperatorCredentialBinding(newCred); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
 	prior, perr := h.store.GetOperatorCredential(r.Context(), tenant)
 	switch {
 	case errors.Is(perr, controller.ErrNotFound):

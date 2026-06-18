@@ -78,3 +78,17 @@
 - **File Permissions**: WireGuard configs are written with `0600` permissions.
 - **Privilege Escalation**: Install scripts require root and verify with `id -u` check.
 - **Transport**: The API server has no built-in TLS — should be reverse-proxied in production.
+- **Controller bootstrap/config anchoring — rc.1 HARD REQUIREMENT (TOFU-MITM):** the agent fetches
+  its bootstrap script and `/config` bundle from the controller over the plain-HTTP transport (TLS is
+  delegated to a front proxy). What binds that fetched material to the real controller is **either**
+  transport confidentiality (a TLS-terminating or pinned-pubkey proxy in front) **or** the off-host
+  **keystone** signature (an operator-credential pin makes every served bundle carry an off-host
+  signature the agent verifies, anchoring it regardless of transport). The dev-only posture
+  **plain-HTTP + keystone-OFF + no pinned pubkey** has neither anchor, so a network MITM can substitute
+  the bootstrap script or the config the agent fetches.
+  > **rc.1 production requirement (hard):** running the controller in production **REQUIRES a pinned
+  > keystone OR a TLS-terminating / pinned-pubkey front.** `plain-HTTP + keystone-OFF + no-pubkey` is
+  > **dev-only**. This is enforced by **documentation + a startup WARNING** (the controller logs an
+  > insecure-posture warning at startup when keystone is OFF and `YAOG_SECURE_COOKIE=false`), **not**
+  > a code-level refusal — refusing the TOFU posture in code is deferred bootstrap-TOFU work
+  > (rc.2/GA), so existing keystone-OFF dev deployments are not broken.

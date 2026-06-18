@@ -1,6 +1,9 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -114,6 +117,36 @@ func (h *ControllerHandler) SetPanelOrigins(origins []string) {
 // keeps it true; set false only for local non-TLS development.
 func (h *ControllerHandler) SetSecureCookie(secure bool) {
 	h.secureCookie = secure
+}
+
+// WarnInsecureControllerPosture emits a single startup WARNING when the controller is
+// running in the dev-only TOFU posture: keystone OFF (no operator credential pinned, so a
+// fetched bootstrap/bundle is trust-on-first-use with no off-host signature anchoring it)
+// AND no TLS hint (secureCookie explicitly disabled via YAOG_SECURE_COOKIE=false, the
+// signal that the deployment is NOT fronted by a TLS-terminating proxy). In that combination
+// a network MITM can substitute the bootstrap/config the agent fetches, because nothing —
+// neither transport TLS nor an off-host keystone signature — binds it. This is a DOCUMENTed
+// rc.1 boundary, NOT a refusal: keystone-OFF + non-TLS is a supported dev mode and refusing
+// it in code is deferred bootstrap-TOFU work (rc.2/GA). The rc.1 release notes carry the hard
+// production requirement (keystone OR TLS-or-pinned-pubkey). Called from EnableController.
+//
+// keystone-OFF is determined by a single ErrNotFound from the store; any OTHER store error is
+// logged-and-skipped (the warning is advisory, never a startup blocker). secureCookie left at
+// its default (true) means the operator declared a TLS front, so no warning fires even with
+// keystone OFF.
+func (h *ControllerHandler) WarnInsecureControllerPosture(ctx context.Context) {
+	if h.secureCookie {
+		return // TLS hint present (the default / explicit production posture) — not the dev MITM window.
+	}
+	if _, err := h.store.GetOperatorCredential(ctx, h.tenant); err == nil {
+		return // keystone ON: the off-host signature anchors the bundle regardless of transport.
+	} else if !errors.Is(err, controller.ErrNotFound) {
+		return // a non-ErrNotFound store fault: skip the advisory warning, do not block startup.
+	}
+	log.Printf("controller: WARNING: insecure dev posture — keystone is OFF (no operator credential pinned) " +
+		"AND YAOG_SECURE_COOKIE=false (no TLS front). A network MITM can substitute the bootstrap script and " +
+		"config the agent fetches; nothing anchors them. This is DEV-ONLY. Production REQUIRES a pinned keystone " +
+		"OR a TLS-terminating/pinned-pubkey front (see the rc.1 release notes / docs/spec/security).")
 }
 
 // originAllowed reports whether origin is in the credentialed-CORS allowlist (exact
