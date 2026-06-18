@@ -5,13 +5,17 @@ import { t } from '../../i18n';
 import { localizeError } from '../../lib/localizeError';
 import type { TOTPEnrollment } from '../../api/controllerClient';
 
-// 两步验证（TOTP 2FA，plan-5.2）：让已用密码登录的 operator 自助开启/关闭一个时间口令第二因子。
-// 仅对密码 session 可用——break-glass token 无账户（后端 currentOperator 返回 403），此时
-// totpEnabled 保持 null，UI 提示「请用密码登录」。
+// Two-factor (TOTP 2FA, plan-5.2): lets an operator who is logged in with a password self-enable/
+// disable a time-based one-time-password second factor.
+// Available only for a password session — a break-glass token has no account (the backend's
+// currentOperator returns 403), in which case totpEnabled stays null and the UI prompts to "sign in
+// with a password".
 //
-// 录入方式（无二维码依赖、绝不外泄密钥）：展示 otpauth:// URI + 分组的 base32 setup key，
-// 操作员在验证器里「手动输入密钥」即可。二维码会引入额外依赖，且把密钥发往第三方 QR 服务
-// 是泄密——故有意不做。TOTP 仅用于登录，绝非签名机制（见 docs/spec/controller/operator-auth.md）。
+// Enrollment method (no QR-code dependency, never leaks the secret): show the otpauth:// URI + a
+// grouped base32 setup key, and the operator uses "enter the key manually" in the authenticator. A QR
+// code would pull in an extra dependency, and sending the secret to a third-party QR service is a
+// leak — so it is deliberately not done. TOTP is used for login only, never as a signing mechanism
+// (see docs/spec/controller/operator-auth.md).
 export function TwoFactorSettings() {
   const language = useTopologyStore((s) => s.language);
   const loggedIn = useControllerStore(selectLoggedIn);
@@ -21,23 +25,25 @@ export function TwoFactorSettings() {
   const confirmTOTP = useControllerStore((s) => s.confirmTOTP);
   const disableTOTP = useControllerStore((s) => s.disableTOTP);
 
-  // enroll ceremony 的本地状态：pending=刚 mint 的 secret+uri（确认前不持久化），code=验证码
-  // 输入（confirm 与 disable 共用），busy=请求中，localError=就地错误（不污染全局 banner）。
+  // Local state for the enroll ceremony: pending = the just-minted secret+uri (not persisted until
+  // confirmed), code = the verification-code input (shared by confirm and disable), busy = request in
+  // flight, localError = an in-place error (does not pollute the global banner).
   const [pending, setPending] = useState<TOTPEnrollment | null>(null);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [copied, setCopied] = useState<'' | 'secret' | 'uri'>('');
 
-  // 已登录但状态未知时拉取一次（loadTOTPStatus 是 store 动作，不是 useState setter——与
-  // BootstrapSettings 的 loadSettings 守卫 effect 同型，不触发 set-state-in-effect）。
+  // Fetch once when logged in but the status is unknown (loadTOTPStatus is a store action, not a
+  // useState setter — same shape as the loadSettings guard effect in BootstrapSettings, so it does not
+  // trigger set-state-in-effect).
   useEffect(() => {
     if (loggedIn && totpEnabled === null) {
       void loadTOTPStatus();
     }
   }, [loggedIn, totpEnabled, loadTOTPStatus]);
 
-  // 只保留数字、最多 6 位（TOTP 是 6 位十进制码）。
+  // Keep digits only, up to 6 (a TOTP is a 6-digit decimal code).
   const onCodeChange = (v: string) => setCode(v.replace(/\D/g, '').slice(0, 6));
 
   const handleEnroll = async () => {
@@ -60,7 +66,8 @@ export function TwoFactorSettings() {
     setLocalError(null);
     try {
       await confirmTOTP(pending.secret, code);
-      // 激活成功：丢弃 pending（密钥已落服务端），清空输入。totpEnabled 由 store 置 true。
+      // Activation succeeded: discard pending (the secret is now persisted server-side) and clear the
+      // input. totpEnabled is set to true by the store.
       setPending(null);
       setCode('');
     } catch (err) {
@@ -71,7 +78,8 @@ export function TwoFactorSettings() {
   };
 
   const handleCancelEnroll = () => {
-    // 放弃未确认的 enroll：服务端从未持久化该密钥，纯本地丢弃即可。
+    // Abandon an unconfirmed enroll: the server never persisted the secret, so a purely local discard
+    // suffices.
     setPending(null);
     setCode('');
     setLocalError(null);
@@ -98,12 +106,14 @@ export function TwoFactorSettings() {
       await navigator.clipboard.writeText(text);
       setCopied(which);
     } catch {
-      // 剪贴板不可用（非安全上下文等）：保持文本可手动选中，不报错。
+      // Clipboard unavailable (non-secure context, etc.): keep the text selectable for manual copy, do
+      // not raise an error.
       setCopied('');
     }
   };
 
-  // 把 base32 密钥每 4 字符分组，便于在验证器里手动誊录（不改变值，仅展示）。
+  // Group the base32 secret every 4 characters to ease manual transcription into the authenticator
+  // (does not change the value, display only).
   const groupedSecret = (s: string) => s.replace(/(.{4})/g, '$1 ').trim();
 
   return (
@@ -122,7 +132,7 @@ export function TwoFactorSettings() {
       ) : totpEnabled === null ? (
         <p className="text-xs text-gray-500">{t(language, 'twoFactorSettings.checkingStatus')}</p>
       ) : totpEnabled ? (
-        // 已启用：展示状态 + 需当前码才能关闭。
+        // Enabled: show the status + require a current code to disable.
         <div className="space-y-2">
           <p className="text-xs text-green-300 bg-green-900/20 px-2 py-1 rounded">
             {t(language, 'twoFactorSettings.twoFactorIsEnabled')}
@@ -150,7 +160,7 @@ export function TwoFactorSettings() {
           </div>
         </div>
       ) : pending === null ? (
-        // 未启用且未开始 enroll：一个开启按钮。
+        // Disabled and enroll not yet started: a single enable button.
         <button
           onClick={() => void handleEnroll()}
           disabled={busy}
@@ -159,7 +169,7 @@ export function TwoFactorSettings() {
           {busy ? t(language, 'twoFactorSettings.preparing') : t(language, 'twoFactorSettings.enableTwoFactor')}
         </button>
       ) : (
-        // enroll 进行中：展示 setup key + otpauth URI，收一个码完成激活。
+        // Enroll in progress: show the setup key + otpauth URI and take a code to complete activation.
         <div className="space-y-3 p-3 bg-gray-900 border border-gray-700 rounded">
           <p className="text-xs text-gray-300">
             {t(language, 'twoFactorSettings.1AddTheKey')}

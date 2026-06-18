@@ -1,9 +1,9 @@
-// crypto.randomUUID() 只在安全上下文（HTTPS 或 localhost）暴露 —— 通过
-// http://<局域网 IP> 访问面板时它是 undefined，会抛出
-// "crypto.randomUUID is not a function"。底层的 crypto.getRandomValues()
-// 没有这个限制，所以非安全上下文下用它手写 UUIDv4 兜底（RFC 4122：
-// 第 6 字节高 4 位置 version=4，第 8 字节高 2 位置 variant=10）。
-// 所有需要客户端随机 ID 的地方一律用这个函数，不要直接调 crypto.randomUUID。
+// crypto.randomUUID() is only exposed in a secure context (HTTPS or localhost) —— when the
+// panel is accessed via http://<LAN IP> it is undefined and throws
+// "crypto.randomUUID is not a function". The underlying crypto.getRandomValues()
+// has no such restriction, so in a non-secure context we hand-roll a UUIDv4 fallback (RFC 4122:
+// set version=4 in the high 4 bits of byte 6, set variant=10 in the high 2 bits of byte 8).
+// Always use this function wherever a client-side random ID is needed; never call crypto.randomUUID directly.
 export function uuid(): string {
   if (typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();

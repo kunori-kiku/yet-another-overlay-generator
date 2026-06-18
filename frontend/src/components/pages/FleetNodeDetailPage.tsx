@@ -5,7 +5,8 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 
-// last_seen / enrolled_at 是 RFC3339 字符串；零值（"0001-01-01T00:00:00Z"）显示为「—」。
+// last_seen / enrolled_at are RFC3339 strings; the zero value ("0001-01-01T00:00:00Z") is
+// displayed as "—".
 function fmtTime(iso: string): string {
   if (!iso || iso.startsWith('0001-01-01')) return '—';
   const d = new Date(iso);

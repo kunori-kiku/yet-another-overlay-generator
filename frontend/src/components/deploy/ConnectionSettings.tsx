@@ -2,9 +2,9 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
 import { t } from '../../i18n';
 
-// 控制器连接设置（/settings 的 Connection 区块）。plan-4 起登录/身份/break-glass 都
-// 移去了全屏 LoginPage（D2）与 UserMenu（登出）；这里只保留连接端点（持久化）与
-// 「连接 / 刷新」动作。
+// ConnectionSettings is the controller connection settings (the Connection section of /settings). As
+// of plan-4, login/identity/break-glass moved out of the full-screen LoginPage (D2) and the UserMenu
+// (logout); this keeps only the connection endpoints (persisted) and the "connect / refresh" action.
 export function ConnectionSettings() {
   const language = useTopologyStore((s) => s.language);
 

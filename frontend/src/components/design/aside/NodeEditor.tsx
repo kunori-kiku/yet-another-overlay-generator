@@ -4,8 +4,9 @@ import { t } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
 import { uuid } from '../../../lib/uuid';
 
-// 节点属性编辑器（从 RightPanel 的选中节点区块原样抽出，含公网地址 / 通告网段 / SSH 配置，
-// 以及对 reconcileEdgeEndpoints 的耦合）。供选择驱动的 Design 右侧 aside 使用。
+// Node property editor (extracted verbatim from RightPanel's selected-node block; covers public
+// addresses / advertised prefixes / SSH config, plus the coupling to reconcileEdgeEndpoints).
+// Used by the selection-driven Design right-side aside.
 export function NodeEditor() {
   const language = useTopologyStore((s) => s.language);
   const nodes = useTopologyStore((s) => s.nodes);
@@ -37,7 +38,7 @@ export function NodeEditor() {
         ep.id === endpointId ? { ...ep, ...updates } : ep,
       ),
     });
-    // 主机被改名时，同步指向该节点、且快照了旧主机的 edge，避免拨向陈旧目标
+    // When a host is renamed, reconcile edges that point at this node and snapshotted the old host, to avoid dialing a stale target
     if (updates.host !== undefined && previous?.host && updates.host !== previous.host) {
       reconcileEdgeEndpoints(nodeId, previous.host, updates.host);
     }
@@ -64,14 +65,14 @@ export function NodeEditor() {
     updateNode(nodeId, {
       public_endpoints: (node.public_endpoints || []).filter((ep) => ep.id !== endpointId),
     });
-    // 该主机被移除时，清空指向它的 edge 的 endpoint，让连接退回后端自动解析
+    // When this host is removed, clear the endpoint of edges that point at it so the connection falls back to backend auto-resolution
     if (removed?.host) {
       reconcileEdgeEndpoints(nodeId, removed.host, null);
     }
   };
 
-  // extra_prefixes 是纯字符串数组（无稳定 id），因此按下标增删改，
-  // 与上面的公网地址列表（对象数组、按 id 操作）形成对照。
+  // extra_prefixes is a plain string array (no stable id), so add/remove/edit happen by index --
+  // in contrast to the public-address list above (an object array operated on by id).
   const addExtraPrefix = (nodeId: string) => {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
@@ -134,9 +135,9 @@ export function NodeEditor() {
             value={selectedNode.role}
             onChange={(e) => {
               const newRole = e.target.value as NodeRole;
-              // 每次角色变更都重新推导 can_forward/can_relay/can_accept_inbound（D54），
-              // 与 NodeForm/roles.go 的推断保持一致；client 角色强制 has_public_ip=false，
-              // 其余角色保留操作员已设置的 has_public_ip。
+              // Re-derive can_forward/can_relay/can_accept_inbound on every role change (D54),
+              // matching the inference in NodeForm/roles.go; the client role forces
+              // has_public_ip=false, while other roles keep the operator's set has_public_ip.
               const operatorHasPublicIP =
                 newRole === 'client' ? false : selectedNode.capabilities.has_public_ip;
               updateNode(selectedNode.id, {
@@ -187,8 +188,9 @@ export function NodeEditor() {
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
-        {/* mimic XDP 模式：仅当该节点有 transport=tcp 的链路时才起作用。默认 skb（通用，
-            兼容不支持 native 的 VPS 网卡）；操作员确认网卡支持时可选 native 以提升性能。 */}
+        {/* mimic XDP mode: only takes effect when this node has a transport=tcp link. Defaults to
+            skb (generic, compatible with VPS NICs that do not support native); the operator can
+            pick native for better performance once they confirm the NIC supports it. */}
         <div>
           <label className="text-xs text-gray-400">{t(language, 'xdpModeLabel')}</label>
           <select
@@ -328,9 +330,9 @@ export function NodeEditor() {
             ))}
           </div>
         )}
-        {/* 对外通告的局域网网段（extra_prefixes）。角色门控严格对应 roles.go 的
-            BabelAnnounce.AnnounceExtraPrefixes：gateway 恒为 true（始终展示，无提示）；
-            router/relay 在设置后才通告（展示并附提示）；peer/client 为 no-op（不展示）。 */}
+        {/* Advertised LAN prefixes (extra_prefixes). The role gating maps strictly to roles.go's
+            BabelAnnounce.AnnounceExtraPrefixes: gateway is always true (always shown, no hint);
+            router/relay only advertise once set (shown with a hint); peer/client are a no-op (not shown). */}
         {(selectedNode.role === 'gateway' ||
           selectedNode.role === 'router' ||
           selectedNode.role === 'relay') && (

@@ -1,12 +1,15 @@
-// 控制器面板的 HTTP 客户端。每个函数针对 internal/api/handler_controller.go 暴露的
-// operator-facing 路由（operator 命名空间，与 agent 命名空间 /api/v1/agent/ 分开）：
+// HTTP client for the controller panel. Each function targets an operator-facing route
+// exposed by internal/api/handler_controller.go (the operator namespace, kept separate
+// from the agent namespace /api/v1/agent/):
 //   <baseURL><pathPrefix>/api/v1/operator/<route>
-// 鉴权统一是 Authorization: Bearer <operatorToken>。后端响应是 snake_case JSON，本层
-// 在边界处把它映射成 camelCase 的 controller 类型（见 ../types/controller）。
+// Auth is uniformly Authorization: Bearer <operatorToken>. The backend responds with
+// snake_case JSON, which this layer maps at the boundary into the camelCase controller
+// types (see ../types/controller).
 //
-// 错误约定：任何非 2xx 都抛出 ControllerError，它在 .body 上保留后端的 coded 错误信封
-// （{ error: { code, message, params } }，非 JSON 正文则包成 { error: "<text>" }）。store 在
-// catch 处用 tError 据当前语言本地化（绝不把原始 "<status> <JSON>" 直接呈现给 operator）。
+// Error convention: any non-2xx throws a ControllerError, which preserves the backend's
+// coded error envelope on .body ({ error: { code, message, params } }, or a non-JSON body
+// wrapped as { error: "<text>" }). The store localizes it via tError at the catch site
+// per the current language (it never surfaces the raw "<status> <JSON>" to the operator).
 
 import type {
   ControllerNode,
@@ -48,8 +51,9 @@ async function errorFromResponse(res: Response): Promise<ControllerError> {
   return controllerErrorFromText(res.status, await res.text());
 }
 
-// 控制器连接配置：operator base URL、可选的 secret path 前缀、operator bearer token。
-// 注意这是连接层配置，agentBaseURL 等面板偏好留在 store，不参与请求构造。
+// Controller connection config: operator base URL, optional secret path prefix, operator
+// bearer token. Note this is connection-layer config; panel preferences such as agentBaseURL
+// stay in the store and take no part in request construction.
 export interface ControllerConfig {
   baseURL: string;
   pathPrefix: string;
@@ -227,16 +231,19 @@ export function controllerErrorCode(err: unknown): string | null {
   return null;
 }
 
-// 把用户输入的 secret path 前缀规范化为 "" 或 "/<seg>"（单个前导斜杠、无尾随斜杠），
-// 与后端 SetPathPrefix 的归一化规则保持一致。
+// normalizePrefix normalizes the user-entered secret path prefix to "" or "/<seg>"
+// (single leading slash, no trailing slash), matching the backend SetPathPrefix
+// normalization rules.
 function normalizePrefix(prefix: string): string {
   const p = prefix.trim().replace(/^\/+/, '').replace(/\/+$/, '');
   return p === '' ? '' : '/' + p;
 }
 
-// 构造一条控制器路由的完整 URL。baseURL 去掉尾随斜杠，避免与 path 前缀拼出双斜杠。
-// baseURL 必须是绝对 http(s) URL：否则 fetch 会相对于面板自身的 origin 解析，把 operator
-// bearer token 发到错误的源（凭据泄露）。非法时直接抛错，由调用方写入 store.error。
+// ctlURL builds the full URL for a controller route. The baseURL trailing slash is
+// stripped to avoid a double slash where it joins the path prefix. baseURL MUST be an
+// absolute http(s) URL: otherwise fetch would resolve it relative to the panel's own
+// origin and send the operator bearer token to the wrong origin (credential leak). On an
+// invalid URL it throws so the caller can record it in store.error.
 export function ctlURL(cfg: ControllerConfig, route: string): string {
   const base = cfg.baseURL.trim().replace(/\/+$/, '');
   let parsed: URL;
@@ -251,7 +258,7 @@ export function ctlURL(cfg: ControllerConfig, route: string): string {
   return `${base}${normalizePrefix(cfg.pathPrefix)}/api/v1/operator/${route}`;
 }
 
-// --- 后端 snake_case 响应形状（仅本模块内部使用，映射后即丢弃）---
+// --- backend snake_case response shapes (used only inside this module, discarded after mapping) ---
 
 interface NodeJSON {
   node_id: string;
@@ -317,17 +324,20 @@ interface ClearRekeyResponseJSON {
   cleared: boolean;
 }
 
-// --- 共享 request 辅助 ---
+// --- shared request helpers ---
 
-// 判断 HTTP 方法是否会改写状态（用于决定 cookie 路径是否要带 CSRF 头）。
+// isStateChanging reports whether an HTTP method mutates state (used to decide whether the
+// cookie path must carry the CSRF header).
 function isStateChanging(method: string): boolean {
   const m = method.toUpperCase();
   return m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS';
 }
 
-// 发起一个请求：携带凭据（credentials:'include' 让 httpOnly session cookie 随行，刷新后
-// 仍登录）；持有 operatorToken（session/break-glass）时附 Bearer，否则仅靠 cookie；状态改写
-// 类请求在 cookie 路径上附带 X-CSRF-Token 双提交令牌。非 2xx 抛 Error(`${status} ${body}`)。
+// request issues a request with credentials (credentials:'include' so the httpOnly session
+// cookie travels, keeping the operator logged in across a refresh); it attaches a Bearer when
+// an operatorToken (session/break-glass) is held, otherwise relies on the cookie alone;
+// state-changing requests on the cookie path also carry the X-CSRF-Token double-submit token.
+// A non-2xx throws Error(`${status} ${body}`).
 async function request(
   cfg: ControllerConfig,
   route: string,
@@ -348,7 +358,7 @@ async function request(
   return res;
 }
 
-// 发起一个 JSON-body 的 POST（自动带上 Content-Type 与 Bearer）。
+// postJSON issues a JSON-body POST (automatically setting Content-Type and the Bearer).
 function postJSON(
   cfg: ControllerConfig,
   route: string,
@@ -626,7 +636,7 @@ export async function logout(cfg: ControllerConfig): Promise<void> {
   await res.text();
 }
 
-// --- snake_case → camelCase 映射 ---
+// --- snake_case → camelCase mapping ---
 
 function mapNode(n: NodeJSON): ControllerNode {
   return {
@@ -838,16 +848,17 @@ export async function fetchPins(cfg: ControllerConfig, body: AgentPinFetchReques
   };
 }
 
-// --- 公开 API（每个都接收 (cfg, ...)）---
+// --- public API (each takes (cfg, ...)) ---
 
-// 列出整个 fleet 注册表（operator-only）。
+// getNodes lists the entire fleet registry (operator-only).
 export async function getNodes(cfg: ControllerConfig): Promise<ControllerNode[]> {
   const res = await request(cfg, 'nodes', { method: 'GET' });
   const data = (await res.json()) as NodeJSON[] | null;
   return (data ?? []).map(mapNode);
 }
 
-// 拉取审计链以及它是否完整可校验（operator-only）。
+// getAudit fetches the audit chain together with whether it is complete and verifiable
+// (operator-only).
 export async function getAudit(
   cfg: ControllerConfig
 ): Promise<{ entries: ControllerAuditEntry[]; verified: boolean }> {
@@ -859,9 +870,11 @@ export async function getAudit(
   };
 }
 
-// 取回当前存储的拓扑 JSON（operator-only）。返回 unknown：存储的字节是 public-keys-only
-// 的拓扑，本层不强加结构（由调用方按需解释）。404（服务端尚无拓扑——首次部署前）返回
-// null，调用方据此保留本地画布；其余错误照常抛出。
+// getTopology retrieves the currently stored topology JSON (operator-only). It returns
+// unknown: the stored bytes are a public-keys-only topology, and this layer imposes no
+// structure (the caller interprets it as needed). A 404 (no topology stored yet on the
+// server — before the first deploy) returns null so the caller keeps the local canvas; any
+// other error throws as usual.
 export async function getTopology(cfg: ControllerConfig): Promise<unknown | null> {
   try {
     const res = await request(cfg, 'topology', { method: 'GET' });
@@ -876,7 +889,8 @@ export async function getTopology(cfg: ControllerConfig): Promise<unknown | null
   }
 }
 
-// 为某节点铸造一次性 enrollment token，返回明文 token（仅此一次可见）。
+// mintEnrollmentToken mints a one-time enrollment token for a node, returning the plaintext
+// token (shown only this once).
 export async function mintEnrollmentToken(
   cfg: ControllerConfig,
   nodeId: string,
@@ -891,8 +905,8 @@ export async function mintEnrollmentToken(
   return { token: data.token, warning: data.warning ?? '' };
 }
 
-// 上传一份新拓扑版本（operator-only）。topoJSON 是已序列化的 model.Topology JSON
-// 字符串，原样作为请求 body 提交。
+// updateTopology uploads a new topology version (operator-only). topoJSON is the serialized
+// model.Topology JSON string, submitted verbatim as the request body.
 export async function updateTopology(
   cfg: ControllerConfig,
   topoJSON: string
@@ -900,9 +914,11 @@ export async function updateTopology(
   await postJSON(cfg, 'update-topology', topoJSON);
 }
 
-// 只读、服务端权威的编译预览（operator-only）：POST 当前设计，服务端渲染已 enroll 的子图
-// （不 stage、不持久化、无副作用），返回配置 + 被跳过（未入网）的节点 ID。零知识——渲染出的
-// wg 配置只含占位私钥。响应是 air-gap CompileResponse 形状外加 skipped_unenrolled。
+// compilePreview is a read-only, server-authoritative compile preview (operator-only): it
+// POSTs the current design, the server renders the enrolled subgraph (no staging, no
+// persistence, no side effects), and returns the configs plus the IDs of skipped (not yet
+// enrolled) nodes. Zero-knowledge — the rendered wg configs contain only placeholder private
+// keys. The response is the air-gap CompileResponse shape plus skipped_unenrolled.
 export async function compilePreview(
   cfg: ControllerConfig,
   topoJSON: string
@@ -911,7 +927,7 @@ export async function compilePreview(
   return (await res.json()) as CompileResponse;
 }
 
-// 把已 enroll 的子图编译并暂存到下一代（operator-only）。
+// stage compiles the enrolled subgraph and stages it into the next generation (operator-only).
 export async function stage(cfg: ControllerConfig): Promise<StageResult> {
   const res = await postJSON(cfg, 'stage', '');
   const data = (await res.json()) as StageResponseJSON;
@@ -922,7 +938,8 @@ export async function stage(cfg: ControllerConfig): Promise<StageResult> {
   };
 }
 
-// 把暂存的 bundle 翻转为 current 并 bump 代号（operator-only），唤醒 /poll 等待者。
+// promote flips the staged bundle to current and bumps the generation (operator-only),
+// waking the /poll waiters.
 export async function promote(
   cfg: ControllerConfig
 ): Promise<{ generation: number }> {
@@ -931,26 +948,31 @@ export async function promote(
   return { generation: data.generation };
 }
 
-// 驱逐一个节点（operator-only），其 bearer 凭据立即失效。
+// revoke evicts a node (operator-only); its bearer credential is invalidated immediately.
 export async function revoke(cfg: ControllerConfig, nodeId: string): Promise<void> {
   const res = await postJSON(cfg, 'revoke', JSON.stringify({ node_id: nodeId }));
-  // 消费响应体以释放连接；revoked 标志在成功时恒为 true，调用方无需分支。
+  // Consume the response body to free the connection; the revoked flag is always true on
+  // success, so the caller needs no branch.
   await (res.json() as Promise<RevokeResponseJSON>);
 }
 
-// 为整个 fleet 请求一次 WG 密钥轮换（operator-only，plan-4.6 ROUTINE tier）：把每个已审批
-// 节点标记为 RekeyRequested。这是 zero-knowledge 流程的起点——控制器从不接触私钥，各 agent
-// 自行重生本地密钥并经 /rekey 注册新公钥。返回被标记的节点数。注意：标记后还需再 Deploy 一次，
-// 待节点重新注册新公钥，新一代配置才会携带全员新公钥使 fleet 收敛。
+// rekeyAll requests a WG key rotation for the whole fleet (operator-only, plan-4.6 ROUTINE
+// tier): it marks every approved node RekeyRequested. This is the start of the zero-knowledge
+// flow — the controller never touches private keys; each agent regenerates its own local key
+// and registers the new public key via /rekey. It returns the number of nodes marked. Note:
+// after marking, one more Deploy is required — only once the nodes re-register their new public
+// keys does the next generation carry everyone's new public keys and let the fleet converge.
 export async function rekeyAll(cfg: ControllerConfig): Promise<{ requested: number }> {
   const res = await postJSON(cfg, 'rekey-all', '');
   const data = (await res.json()) as RekeyAllResponseJSON;
   return { requested: data.requested };
 }
 
-// 清除单个节点的待轮换标记（operator-only），但不驱逐它——节点保留审批状态与 bearer 凭据（与
-// revoke 不同）。用于释放卡住的 "Roll keys" 散兵（已下线/dead 的节点，或误点的全量轮换），否则
-// 面板的 rekeying 门会一直禁用 Deploy。幂等：无待轮换标记时返回 cleared:false。
+// clearRekey clears a single node's pending rekey mark (operator-only) without evicting it —
+// the node keeps its approval status and bearer credential (unlike revoke). It is used to
+// release a stuck "Roll keys" straggler (an offline/dead node, or a mistakenly triggered
+// fleet-wide rotation); otherwise the panel's rekeying gate keeps Deploy disabled. Idempotent:
+// returns cleared:false when there is no pending rekey mark.
 export async function clearRekey(cfg: ControllerConfig, nodeId: string): Promise<{ cleared: boolean }> {
   const res = await postJSON(cfg, 'clear-rekey', JSON.stringify({ node_id: nodeId }));
   const data = (await res.json()) as ClearRekeyResponseJSON;

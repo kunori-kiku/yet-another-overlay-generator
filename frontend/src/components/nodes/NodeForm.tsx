@@ -8,11 +8,14 @@ import type { Node } from '../../types/topology';
 
 const DEFAULT_LISTEN_PORT = 51820;
 
-// UX-5：把顶层“公网地址”输入框（形如 IP:端口 或 域名:端口）解析为 host + port。
-// - 仅当字符串恰好包含一个冒号、且冒号后是纯数字时，才把它当作 :端口 后缀拆出，
-//   既支持 203.0.113.10:51820 / example.com:51820，又不会误伤裸 IPv6（多冒号）。
-// - 端口缺省/非法时回落到 51820。
-// - 入参为空（去空白后）时返回 null，表示该节点位于 NAT 之后（不写 public_endpoints）。
+// UX-5: parse the top-level "public address" input (of the form IP:port or domain:port) into
+// host + port.
+// - Only when the string contains exactly one colon and the part after it is all digits is it
+//   split out as a :port suffix; this supports 203.0.113.10:51820 / example.com:51820 while not
+//   mis-handling a bare IPv6 address (multiple colons).
+// - On a missing/invalid port it falls back to 51820.
+// - When the input is empty (after trimming) it returns null, meaning the node is behind NAT
+//   (no public_endpoints written).
 function parsePublicAddress(
   raw: string
 ): { host: string; port: number } | null {
@@ -29,7 +32,8 @@ function parsePublicAddress(
       }
     }
   }
-  // 没有可识别的端口后缀（裸 host / IPv6 / 非法端口）：整串作为 host，端口取默认。
+  // No recognizable port suffix (bare host / IPv6 / invalid port): the whole string is the
+  // host, and the port takes the default.
   return { host: trimmed, port: DEFAULT_LISTEN_PORT };
 }
 
@@ -45,9 +49,11 @@ export function NodeForm() {
   const [role, setRole] = useState<NodeRole>('peer');
   const [domainId, setDomainId] = useState('');
   const [hostname, setHostname] = useState('');
-  // UX-5：顶层“公网地址”输入（主入口）。非空即派生 has_public_ip=true 并生成 public_endpoints[0]。
+  // UX-5: the top-level "public address" input (the primary entry point). When non-empty it
+  // derives has_public_ip=true and generates public_endpoints[0].
   const [publicAddress, setPublicAddress] = useState('');
-  // 复选框现降为“高级”路径，揭示多端点（多组公网映射）编辑区；不再是公网可达的唯一开关。
+  // The checkbox is now demoted to an "advanced" path that reveals the multi-endpoint (multiple
+  // public mappings) editor; it is no longer the sole switch for public reachability.
   const [hasPublicIP, setHasPublicIP] = useState(false);
   const [mtu, setMtu] = useState(0);
   const [canForward, setCanForward] = useState(false);
@@ -69,20 +75,23 @@ export function NodeForm() {
 
     const id = `node-${uuid()}`;
 
-    // UX-5：顶层“公网地址”是公网可达的主入口。client 角色永不可达；其余角色只要
-    // 顶层地址非空或勾选了高级复选框，即视为有公网 IP。
+    // UX-5: the top-level "public address" is the primary entry point for public reachability.
+    // The client role is never reachable; any other role is treated as having a public IP as
+    // long as the top-level address is non-empty or the advanced checkbox is ticked.
     const parsedPublic = role !== 'client' ? parsePublicAddress(publicAddress) : null;
     const effectiveHasPublicIP = role !== 'client' && (parsedPublic !== null || hasPublicIP);
 
     const capabilities = deriveCapabilitiesFromRole(role, effectiveHasPublicIP);
-    // 保留操作员显式勾选的“可转发”（与后端保留显式置位 true 的行为一致）；
-    // client 角色不允许转发，因此不叠加。
+    // Preserve the operator's explicitly ticked "can forward" (matching the backend's behavior
+    // of preserving an explicitly set true); the client role is not allowed to forward, so it is
+    // not applied.
     if (canForward && role !== 'client') {
       capabilities.can_forward = true;
     }
 
-    // 组装 public_endpoints：顶层地址（若有）作为 public_endpoints[0]；
-    // 高级区（复选框揭示）作为附加的多端点编辑器 —— 仅在主机非空、且与顶层地址不重复时追加。
+    // Assemble public_endpoints: the top-level address (if any) becomes public_endpoints[0];
+    // the advanced section (revealed by the checkbox) acts as an additional multi-endpoint editor
+    // — appended only when the host is non-empty and does not duplicate the top-level address.
     const publicEndpoints: NonNullable<Node['public_endpoints']> = [];
     if (parsedPublic) {
       publicEndpoints.push({
@@ -151,7 +160,8 @@ export function NodeForm() {
         onChange={(e) => setName(e.target.value)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
       />
-      {/* UX-5：公网地址主入口。非空即派生 has_public_ip。client 角色无此概念，故隐藏。 */}
+      {/* UX-5: the public-address primary entry point. When non-empty it derives has_public_ip.
+          The client role has no such concept, so it is hidden. */}
       {role !== 'client' && (
         <div className="space-y-1">
           <label className="block text-xs text-gray-300">
@@ -209,9 +219,10 @@ export function NodeForm() {
         onChange={(e) => setMtu(parseInt(e.target.value) || 0)}
         className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
       />
-      {/* UX-5：复选框降级为高级路径，揭示多端点（多组公网映射）编辑器。
-          公网可达性本身已由上方“公网地址”输入派生，此处不再是唯一开关。
-          client 角色无公网端点概念，故隐藏。 */}
+      {/* UX-5: the checkbox is demoted to an advanced path that reveals the multi-endpoint
+          (multiple public mappings) editor. Public reachability itself is already derived from
+          the "public address" input above, so this is no longer the sole switch. The client role
+          has no public-endpoint concept, so it is hidden. */}
       {role !== 'client' && (
         <label className="flex items-center gap-2 text-sm">
           <input

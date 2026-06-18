@@ -9,11 +9,13 @@ import {
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
-// 部署条：把当前拓扑发布到 fleet。controllerStore.deploy() 串联
-// update-topology → stage →（KEYSTONE 签名）→ promote → refresh，整套 promote-to-fleet。
-// 这里负责触发、回显结果（staged / skippedUnenrolled / generation）+ 错误，并提供
-// off-host operator 签名密钥（passkey / YubiKey）的注册入口与「触碰安全密钥」提示。
-// KEYSTONE 签名钩子（plan-5.1d）在 store 内部、stage 之后 promote 之前（仅当节点要求签名）。
+// DeployBar publishes the current topology to the fleet. controllerStore.deploy() chains
+// update-topology → stage → (KEYSTONE signing) → promote → refresh, the whole promote-to-fleet flow.
+// It triggers the action, echoes the result (staged / skippedUnenrolled / generation) + errors, and
+// provides the enrollment entry point for the off-host operator signing key (passkey / YubiKey) plus
+// the "touch your security key" prompt.
+// The KEYSTONE signing hook (plan-5.1d) lives inside the store, after stage and before promote (only
+// when a node requires signing).
 export function DeployBar() {
   const language = useTopologyStore((s) => s.language);
 
@@ -40,30 +42,35 @@ export function DeployBar() {
   // an already-pinned keystone is gated behind an explicit acknowledgement.
   const pendingKeystoneRotate = useControllerStore((s) => s.pendingKeystoneRotate);
   const cancelKeystoneRotate = useControllerStore((s) => s.cancelKeystoneRotate);
-  // 部署后孤儿清单（plan-6）：仍在 fleet 注册表、但不在「刚刚发布的那一代」里的已审批节点。
+  // Post-deploy orphan list (plan-6): approved nodes still in the fleet registry but not in the
+  // generation that was just published.
   const ctlNodes = useControllerStore((s) => s.nodes);
   const revoke = useControllerStore((s) => s.revoke);
-  // 缩水部署确认（plan-5）与「已剥离 N 个私钥」提示。
+  // Shrink-deploy confirmation (plan-5) and the "stripped N private keys" notice.
   const pendingShrink = useControllerStore((s) => s.pendingShrink);
   const cancelShrinkConfirm = useControllerStore((s) => s.cancelShrinkConfirm);
   const lastStrippedKeys = useControllerStore((s) => s.lastStrippedKeys);
   const dismissStripNotice = useControllerStore((s) => s.dismissStripNotice);
   const [shrinkTyped, setShrinkTyped] = useState('');
-  // 仍处于 rekey_requested 的节点数：>0 时触发 Deploy 的建议性确认与提示（见下方说明）。
+  // Number of nodes still in rekey_requested: when >0 it drives Deploy's advisory confirm and notice
+  // (see the note below).
   const rekeyingCount = useControllerStore(selectRekeyingCount);
 
-  // 未登录且未填 break-glass token 时无法发起 operator 请求，禁用按钮并给出提示。
-  // 用 selectHasAuth（session || token），不能只看 operatorToken——否则登录后会被误拦。
+  // With no session and no break-glass token, no operator request can be issued — disable the buttons
+  // and explain. Use selectHasAuth (session || token); don't look at operatorToken alone, or a
+  // logged-in operator would be wrongly blocked.
   const noAuth = !useControllerStore(selectHasAuth);
 
-  // 仍有节点 rekey_requested 时，Deploy 不再被硬禁用（后端从不按此标志拦截）：anyRekeying 现在
-  // 只驱动「建议性」体验——按钮 title 提示 + onDeploy 里的 window.confirm 二次确认（见下方说明），
-  // 让单个掉队/离线节点无法卡住整个 fleet 的部署。
+  // While nodes are still rekey_requested, Deploy is no longer hard-disabled (the backend never gated
+  // on this flag): anyRekeying now only drives the "advisory" experience — the button title hint plus
+  // the window.confirm in onDeploy (see the note below) — so a single straggling/offline node cannot
+  // wedge the whole fleet's deploy.
   const anyRekeying = rekeyingCount > 0;
 
-  // 「Roll keys」是 plan-4.6 ROUTINE tier 的全 fleet 密钥轮换：标记每个已审批节点 rekey，
-  // 各 agent 会自行重生本地 WG 私钥并注册新公钥（控制器从不接触私钥）。操作不可一键完成
-  // ——节点重新注册后还需再 Deploy 一次才会收敛——故先 confirm 再触发。
+  // "Roll keys" is the fleet-wide key rotation of the plan-4.6 ROUTINE tier: it flags every approved
+  // node for rekey, and each agent regenerates its own local WG private key and registers the new
+  // public key (the controller never touches the private key). The operation is not single-click
+  // — convergence requires another Deploy after the nodes re-register — so confirm before firing.
   const onRollKeys = () => {
     const ok = window.confirm(
       t(language, 'deployBar.thisRequestsAWireGuard'),
@@ -140,9 +147,11 @@ export function DeployBar() {
         {t(language, 'deployBar.rollKeysAsksEach')}
       </p>
 
-      {/* KEYSTONE（plan-5.1d）：off-host operator 签名密钥（passkey / YubiKey）。状态来自服务端
-          权威（serverOperatorPinned），不再依赖浏览器本地缓存——清浏览器数据不会再误报「未注册」。
-          已注册时显示算法 + 指纹；轮换是会让全 fleet 失效的危险操作，故走显式确认。 */}
+      {/* KEYSTONE (plan-5.1d): the off-host operator signing key (passkey / YubiKey). The status is
+          server-authoritative (serverOperatorPinned) and no longer relies on the browser-local cache
+          — clearing browser data will not falsely report "not enrolled" anymore. When enrolled it
+          shows the algorithm + fingerprint; rotation is a fleet-invalidating dangerous action, so it
+          goes through an explicit confirm. */}
       <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-amber-300">
@@ -225,8 +234,9 @@ export function DeployBar() {
         </p>
       </div>
 
-      {/* WebAuthn 提示弹出、等待用户触碰安全密钥时的醒目提示。文案区分 enroll（注册签名
-          密钥，此时并无部署在进行）与 deploy 签名（授权本次部署）两种 ceremony。 */}
+      {/* A prominent prompt while the WebAuthn dialog is up, waiting for the user to touch the
+          security key. The copy distinguishes the two ceremonies: enroll (registering the signing
+          key, with no deploy in progress) versus deploy signing (authorizing this deploy). */}
       {(signing || enrolling) && (
         <p className="text-sm text-amber-200 bg-amber-900/30 border border-amber-700/50 px-3 py-2 rounded animate-pulse">
           {enrolling
@@ -253,7 +263,8 @@ export function DeployBar() {
         </p>
       )}
 
-      {/* 已剥离 N 个私钥提示（plan-5，D4）：控制器模式零知识，上传前剥离了私钥。可关闭。 */}
+      {/* "Stripped N private keys" notice (plan-5, D4): controller mode is zero-knowledge, so private
+          keys were stripped before upload. Dismissible. */}
       {lastStrippedKeys > 0 && (
         <div className="flex items-start justify-between gap-2 text-xs text-sky-300 bg-sky-900/20 px-2 py-1 rounded">
           <span>
@@ -301,8 +312,9 @@ export function DeployBar() {
               </p>
             </div>
           )}
-          {/* plan-6 身份对账：已入网但不在本次设计里的节点。它们没有被部署到，却仍持有令牌
-              并在轮询——逐行提供一键「驱逐」（仅手动，绝不自动，D10）。 */}
+          {/* plan-6 identity reconciliation: nodes that are enrolled but not in this design. They
+              were not deployed to, yet still hold a token and keep polling — offer a one-click
+              "revoke" per row (manual only, never automatic, D10). */}
           {orphans.length > 0 && (
             <div>
               <p className="text-xs text-orange-300">
@@ -328,9 +340,11 @@ export function DeployBar() {
         </div>
       )}
 
-      {/* 缩水/清空部署的键入确认（plan-5）：这次发布会把服务端设计大幅缩水（清空或丢弃过半
-          节点）。要求键入项目名以确认，防止一次误点把整套 fleet 设计覆盖成空（审计的「一键
-          销毁」场景）。版本历史（plan-2）是事后兜底，本守卫是事前预防。 */}
+      {/* Type-to-confirm guard for a shrinking/emptying deploy (plan-5): this publish would sharply
+          shrink the server-side design (empty it or drop more than half the nodes). It requires
+          typing the project name to confirm, preventing a single misclick from overwriting the whole
+          fleet design with an empty one (the audited "one-click destroy" scenario). Version history
+          (plan-2) is the after-the-fact backstop; this guard is the up-front prevention. */}
       {pendingShrink && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-md space-y-4 rounded-lg border border-red-700 bg-gray-800 p-5">

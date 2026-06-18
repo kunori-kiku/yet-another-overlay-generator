@@ -1,7 +1,7 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
 import { t } from '../../../i18n';
 
-// 网络域属性编辑器（从 RightPanel 的选中域区块原样抽出，供选择驱动的 Design 右侧 aside 使用）。
+// Domain property editor (extracted verbatim from RightPanel's selected-domain block; used by the selection-driven Design right-side aside).
 export function DomainEditor() {
   const language = useTopologyStore((s) => s.language);
   const domains = useTopologyStore((s) => s.domains);

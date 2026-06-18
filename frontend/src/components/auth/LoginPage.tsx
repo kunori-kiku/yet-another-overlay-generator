@@ -8,11 +8,13 @@ import { LanguageToggle } from '../shell/LanguageToggle';
 import { landingPathForMode } from '../shell/nav';
 import { FOCUS_RING } from '../shell/styles';
 
-// plan-4（D2）：持久化的 controller 模式下，进入面板首先落在这个全屏登录页——任何 shell
-// chrome（侧栏/顶栏/画布）渲染之前。登录表单逻辑从 ConnectionSettings 原样迁来（move,
-// not fork）：用户名/密码 + 条件 TOTP、无密码 passkey、折叠的 break-glass 入口。另含
-// 折叠的「连接」配置（Operator 基址 + secret 前缀）——没有它，跨源/全新浏览器部署在
-// 登录页就会被锁死（API 地址只能在登录后的设置页改，而设置页在门后）。
+// plan-4 (D2): in persisted controller mode, entering the panel lands first on this full-screen
+// login page — before any shell chrome (sidebar/topbar/canvas) renders. The login-form logic is
+// moved verbatim from ConnectionSettings (move, not fork): username/password + conditional TOTP,
+// passwordless passkey, and a collapsed break-glass entry. It also includes a collapsed
+// "Connection" config (operator base URL + secret prefix) — without it, a cross-origin / fresh-
+// browser deploy would be locked out at the login page (the API address can only be changed on
+// the post-login settings page, and that page lives behind the gate).
 export function LoginPage() {
   const language = useTopologyStore((s) => s.language);
   const navigate = useNavigate();
@@ -32,9 +34,10 @@ export function LoginPage() {
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginTotp, setLoginTotp] = useState('');
-  // Passkey 登录是「用户名定向」的（服务端按用户名取该账户的 credential 来挑战），所以需要先有
-  // 用户名。与其把按钮置灰（看起来像坏的），不如让它始终可点：空用户名时聚焦用户名框并给出提示，
-  // 把死按钮变成有引导的活按钮。
+  // Passkey login is username-directed (the server looks up that account's credential by
+  // username to issue the challenge), so a username must come first. Rather than graying the
+  // button out (which looks broken), keep it always clickable: on an empty username, focus the
+  // username field and show a hint — turning a dead button into a guided, live one.
   const usernameRef = useRef<HTMLInputElement>(null);
   const [passkeyHint, setPasskeyHint] = useState(false);
   const [showConnection, setShowConnection] = useState(false);
@@ -45,7 +48,7 @@ export function LoginPage() {
   // page after the first keystroke, making the token impossible to type (review).
   const [breakGlassInput, setBreakGlassInput] = useState('');
 
-  // 改动凭据对即丢弃任何待处理的二次验证步骤（迁自 ConnectionSettings）。
+  // Editing the credential pair discards any pending second-factor step (moved from ConnectionSettings).
   const onCredentialEdit = () => {
     if (totpRequired) {
       resetTOTPChallenge();
@@ -58,7 +61,7 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--surface)] text-[var(--content)]">
-      {/* 顶部右侧：登录前也可切换语言与主题（a11y / 多语操作员）。 */}
+      {/* Top right: language and theme can be toggled even before login (a11y / multilingual operators). */}
       <header className="flex items-center justify-end gap-2 p-3">
         <LanguageToggle />
         <ThemeToggle />
@@ -66,7 +69,7 @@ export function LoginPage() {
 
       <main className="flex flex-1 items-center justify-center px-4 pb-16">
         <div className="w-full max-w-sm space-y-6">
-          {/* 品牌区：与侧栏一致的 Y 方块 + 名称。 */}
+          {/* Brand block: the Y square + name, matching the sidebar. */}
           <div className="flex flex-col items-center gap-3">
             <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent)] text-xl font-semibold text-[var(--accent-fg)]">
               Y
@@ -127,7 +130,8 @@ export function LoginPage() {
                 className={inputClass}
               />
             </div>
-            {/* 二次因子：仅当后端返回 totp_required（密码已对、需验证码）时出现。 */}
+            {/* Second factor: appears only when the backend returns totp_required (password
+                correct, code needed). */}
             {totpRequired && (
               <div>
                 <label htmlFor="login-totp" className="mb-1 block text-xs text-[var(--content-muted)]">
@@ -166,7 +170,8 @@ export function LoginPage() {
             </button>
           </form>
 
-          {/* 无密码 passkey 登录（password+passkey 2FA 步骤由 store.login 自动完成）。 */}
+          {/* Passwordless passkey login (the password+passkey 2FA step is handled automatically
+              by store.login). */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <div className="flex-1 border-t border-[var(--hairline)]" />
@@ -176,7 +181,8 @@ export function LoginPage() {
             <button
               type="button"
               onClick={() => {
-                // 用户名为空时不静默失败、也不置灰：聚焦用户名框并提示「先填用户名」，再让用户点一次。
+                // On an empty username, neither fail silently nor gray out: focus the username
+                // field and prompt "fill in the username first", then let the user click again.
                 if (loginUser.trim() === '') {
                   setPasskeyHint(true);
                   usernameRef.current?.focus();
@@ -208,7 +214,8 @@ export function LoginPage() {
             </p>
           )}
 
-          {/* 折叠：连接配置。没有它，跨源部署/全新浏览器在门外无法指向正确的 API。 */}
+          {/* Collapsed: connection config. Without it, a cross-origin deploy / fresh browser
+              cannot point at the correct API while still outside the gate. */}
           <div className="space-y-2 text-sm">
             <button
               type="button"
@@ -252,8 +259,9 @@ export function LoginPage() {
               </div>
             )}
 
-            {/* 折叠：break-glass 恢复凭据。它不是登录（不建会话），但持有它即可进入面板
-                （恢复路径不能被登录门锁死）。 */}
+            {/* Collapsed: break-glass recovery credential. It is not a login (it mints no session),
+                but holding it is enough to enter the panel (the recovery path must not be locked
+                out by the login gate). */}
             <button
               type="button"
               onClick={() => setShowBreakGlass((v) => !v)}
@@ -299,17 +307,20 @@ export function LoginPage() {
               </form>
             )}
 
-            {/* 回到本地模式：登录门不该把只想用本地设计器的用户锁在外面。controller→local
-                是有损切换（plan-5，D6）：window.confirm 列出损失（与 SettingsPage 对话框一致的
-                语义），确认后清洗密钥/分配/历史，再切换并导航到本地落地页（避免停留在
-                controller-only 的深链路由如 /fleet 上渲染空白）。 */}
+            {/* Back to local mode: the login gate must not lock out a user who only wants the
+                local designer. controller→local is a lossy switch (plan-5, D6): window.confirm
+                lists the losses (same semantics as the SettingsPage dialog); on confirm it purges
+                keys/allocations/history, then switches and navigates to the local landing page
+                (avoiding rendering blank on a controller-only deep-link route such as /fleet). */}
             <button
               type="button"
               onClick={() => {
-                // 安全分叉的确认文案据 canvasFromServer 选择：服务端机密镜像 → 警告整画布清空
-                //（绝不让 fleet 的公网 IP/SSH 目标随切换泄漏）；本地原创工作 → D6 的「保图、清
-                // 密钥/分配/历史」。实际切换逻辑统一走 controllerStore.switchToLocal（与设置页共用，
-                // 杜绝两处发散——plan-10 / T1）。确认后导航到本地落地页。
+                // The safety-forked confirm copy is chosen by canvasFromServer: a server-held secret
+                // mirror → warn that the whole canvas is cleared (never let the fleet's public IPs /
+                // SSH targets leak across the switch); local-original work → D6's "keep the graph,
+                // purge keys/allocations/history". The actual switch logic goes through the shared
+                // controllerStore.switchToLocal (used by the settings page too, so the two never
+                // diverge — plan-10 / T1). On confirm it navigates to the local landing page.
                 const serverHeld = useTopologyStore.getState().canvasFromServer;
                 const ok = window.confirm(
                   serverHeld

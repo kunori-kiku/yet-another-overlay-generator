@@ -3,8 +3,9 @@ import { DomainList } from '../domains/DomainList';
 import { NodeList } from '../nodes/NodeList';
 import { t } from '../../i18n';
 
-// 域与节点列表（从原 LeftPanel 拆出的列表部分）。供 Design 工具栏的「域与节点」抽屉使用；
-// 创建入口（DomainForm/NodeForm）放在画布工具栏里。
+// Domain and node lists (the list portion split out of the former LeftPanel). Used by the
+// Design toolbar's "Domains & Nodes" drawer; the create entry points (DomainForm/NodeForm)
+// live in the canvas toolbar.
 export function ElementsLists() {
   const domains = useTopologyStore((s) => s.domains);
   const nodes = useTopologyStore((s) => s.nodes);

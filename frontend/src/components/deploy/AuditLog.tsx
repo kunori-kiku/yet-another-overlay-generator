@@ -2,8 +2,9 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
-// 审计日志：展示控制器审计链（操作员/agent 的关键动作）+ 哈希链是否完整的徽标。
-// 条目本身由后端按 Seq 顺序返回（最早在前）。verified=false 表示链被篡改或断裂。
+// AuditLog displays the controller audit chain (key operator/agent actions) + a badge for whether the
+// hash chain is intact. The entries themselves are returned by the backend in Seq order (earliest
+// first). verified=false means the chain was tampered with or broken.
 function fmtTime(iso: string): string {
   if (!iso) return '—';
   const d = new Date(iso);

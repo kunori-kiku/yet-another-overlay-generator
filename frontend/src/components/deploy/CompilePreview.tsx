@@ -10,9 +10,10 @@ function previewText(content: string | undefined, maxLines = 4, maxChars = 220):
   return lines;
 }
 
-// 编译结果预览（从 RightPanel 抽出，迁到 /deploy 作为稳定落点）。展示清单、编译告警、
-// 每节点的 WireGuard / babel / sysctl / install 配置预览，以及项目级自动部署脚本。
-// 仅在存在 compileResult 时渲染。
+// CompilePreview shows the compile result (extracted from RightPanel and moved to /deploy as a stable
+// home). It displays the manifest, compile warnings, the per-node WireGuard / babel / sysctl / install
+// config previews, and the project-wide auto-deploy scripts.
+// Rendered only when a compileResult exists.
 export function CompilePreview() {
   const language = useTopologyStore((s) => s.language);
   const compileResult = useTopologyStore((s) => s.compileResult);
@@ -29,8 +30,9 @@ export function CompilePreview() {
         <p>Checksum: {compileResult.manifest.checksum}</p>
         <p>{t(language, 'compilePreview.compiledAt')}: {compileResult.manifest.compiled_at}</p>
       </div>
-      {/* 编译告警：语义校验产生的非致命提示（双重 NAT、缺少端点的边、孤立节点等），
-          在编译成功后展示，避免操作员在一个“绿色”编译上发布事实上不可达的覆盖网络。 */}
+      {/* Compile warnings: non-fatal notices from semantic validation (double NAT, edges missing an
+          endpoint, isolated nodes, etc.), shown after a successful compile so the operator does not
+          publish an effectively unreachable overlay on a "green" compile. */}
       {compileResult.warnings && compileResult.warnings.length > 0 && (
         <div className="mt-2 space-y-1">
           <h3 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider">

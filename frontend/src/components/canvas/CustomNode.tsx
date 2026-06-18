@@ -11,14 +11,16 @@ const roleColors: Record<string, string> = {
   client: 'border-cyan-500 bg-cyan-900/50',
 };
 
-// 连接手柄：节点级、角色配色、永久存在（编译前后形态一致）。
-// 接口是编译产物而非绘图原语 —— onConnect 只用节点 ID（忽略 handle id），端口由
-// 后端在编译时分配；因此不再渲染「每接口一个手柄」（旧形态在编译后只剩被占用的
-// 接口手柄，看起来像"端口已饱和、无法再连线"，且暗示新连线会复用既有端口）。
+// Connection handles: node-level, role-colored, always present (same shape before and after
+// compile). Interfaces are a compile product, not a drawing primitive -- onConnect uses only the
+// node ID (ignoring handle id), and ports are allocated by the backend at compile time; so we no
+// longer render "one handle per interface" (the old shape left only occupied interface handles
+// after compile, which looked like "ports saturated, cannot connect anymore" and implied a new
+// connection would reuse an existing port).
 const handleClassBase =
   '!w-3.5 !h-3.5 !border-2 transition-all duration-150 hover:!w-4 hover:!h-4';
 
-// react-flow 的 `.react-flow__handle` 自带默认背景；用 `!` important 前缀让角色色生效。
+// react-flow's `.react-flow__handle` ships a default background; the `!` important prefix lets the role color win.
 const roleHandleColorClass: Record<string, string> = {
   peer: '!border-green-500 !bg-green-500',
   router: '!border-blue-500 !bg-blue-500',
@@ -35,7 +37,7 @@ const roleIcons: Record<string, string> = {
   client: '📱',
 };
 
-// 接口详情徽标的区分配色（展示用）
+// Distinguishing colors for interface-detail chips (display only)
 const ifaceChipColors = [
   { bg: '#f87171', border: '#dc2626' }, // red
   { bg: '#fb923c', border: '#ea580c' }, // orange
@@ -47,13 +49,14 @@ const ifaceChipColors = [
   { bg: '#fb7185', border: '#e11d48' }, // rose
 ];
 
-// 节点接口徽标的数据形态：由 TopologyCanvas 通过共享解析器 resolveNodeInterfaces
-// （edge-aware，Decisions #12）算好后传入。绝不在前端重算接口名 / 反推 peer 名。
+// Data shape for node interface chips: computed by TopologyCanvas via the shared resolver
+// resolveNodeInterfaces (edge-aware, Decisions #12) and passed in. Never recompute interface
+// names / back-derive peer names on the frontend.
 interface IfaceChip {
-  name: string;        // 真实接口名（tooltip 用，永不剥离 'wg-'）
-  listenPort: number;  // 后端分配的监听端口
-  peerName: string;    // 对端节点名（resolver 解析；'unknown' 时回退为接口名）
-  // 角色标记，与边扇形序号一致：'★' 主链路 / 'b1','b2',... 备份 / undefined 未知或单边。
+  name: string;        // real interface name (for the tooltip; never strips 'wg-')
+  listenPort: number;  // backend-allocated listen port
+  peerName: string;    // peer node name (resolved by the resolver; falls back to the interface name when 'unknown')
+  // Role marker, consistent with the edge fan ordinal: '★' primary / 'b1','b2',... backup / undefined unknown or single-edge.
   roleMarker?: string;
 }
 
@@ -63,14 +66,14 @@ interface CustomNodeData {
   overlayIp: string;
   domainName: string;
   interfaces?: IfaceChip[];
-  // 焦点透明度（Decisions #11）：被弱化的节点保持挂载、可见、可点击，仅淡出到 0.15。
+  // Focus opacity (Decisions #11): a deemphasized node stays mounted, visible, and clickable -- it only fades to 0.15.
   deemphasized?: boolean;
   [key: string]: unknown;
 }
 
 export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeData }) {
   const language = useTopologyStore((state) => state.language);
-  // 「显示接口详情」画布开关：接口/端口信息按需展开，默认收起。
+  // The "show interface details" canvas toggle: interface/port info expands on demand, collapsed by default.
   const showInterfaces = useTopologyStore((state) => state.showInterfaces);
   const role = data.role || 'peer';
   const colorClass = roleColors[role] || roleColors.peer;
@@ -81,8 +84,9 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
   const deemphasized = data.deemphasized === true;
 
   return (
-    // 根容器包裹焦点透明度：弱化时整张卡片淡出到 0.15，但手柄仍渲染且可点击
-    //（透明度不影响命中测试 → 点击透明节点照样把焦点切过去）。
+    // The root container wraps focus opacity: when deemphasized the whole card fades to 0.15, but
+    // the handles still render and stay clickable (opacity does not affect hit testing -> clicking
+    // a transparent node still switches focus to it).
     <div
       style={{
         opacity: deemphasized ? 0.15 : 1,
@@ -112,15 +116,17 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
         {data.domainName && (
           <div className="text-xs text-blue-300">{data.domainName}</div>
         )}
-        {/* 已编译接口详情（纯展示，开关控制）：wg-<peer> 接口名 + 监听端口。
-            手柄不再与接口绑定，这里是接口信息的唯一画布载体。 */}
+        {/* Compiled interface details (display only, toggle-gated): wg-<peer> interface name +
+            listen port. Handles are no longer bound to interfaces, so this is the only canvas
+            carrier of interface info. */}
         {showInterfaces && interfaces.length > 0 && (
           <div className="mt-1 flex flex-wrap justify-center gap-1">
             {interfaces.map((iface, i) => {
               const color = ifaceChipColors[i % ifaceChipColors.length];
-              // roleMarker 与边扇形序号一致（★ / bN）：可解析的链路显示角色标记；
-              // 'unknown' 由 TopologyCanvas 让 peerName 回退为接口名（永不剥离 'wg-'），
-              // 此时不带 roleMarker。tooltip 始终展示真实接口名 + 端口。
+              // roleMarker is consistent with the edge fan ordinal (★ / bN): resolvable links show
+              // the role marker; for 'unknown', TopologyCanvas falls peerName back to the interface
+              // name (never stripping 'wg-') and there is no roleMarker. The tooltip always shows
+              // the real interface name + port.
               const marker = iface.roleMarker;
               return (
                 <span

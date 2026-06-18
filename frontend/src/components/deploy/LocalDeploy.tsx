@@ -1,8 +1,10 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
-// 本地 / 手动部署：在浏览器内生成密钥与配置，下载安装产物包或部署脚本，手动在目标主机执行。
-// （从原 DeployPanel 的 Mode A 区块原样抽出，作为 /deploy 路由在 local 模式下的内容。）
+// LocalDeploy is local / manual deploy: generate keys and configs in the browser, download the install
+// artifact bundle or deploy scripts, and run them manually on the target hosts.
+// (Extracted verbatim from the Mode A section of the original DeployPanel, serving as the /deploy route
+// content in local mode.)
 export function LocalDeploy() {
   const language = useTopologyStore((s) => s.language);
   const nodes = useTopologyStore((s) => s.nodes);

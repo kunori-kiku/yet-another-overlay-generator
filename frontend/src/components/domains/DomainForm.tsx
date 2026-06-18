@@ -12,7 +12,7 @@ export function DomainForm() {
   const [routingMode, setRoutingMode] = useState<'babel' | 'static' | 'none'>('babel');
   const [error, setError] = useState('');
 
-  // 与 cidr 同款的简单 IPv4 CIDR 格式校验
+  // Simple IPv4 CIDR format check, same as for cidr
   const cidrRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
 
   const handleSubmit = () => {
@@ -24,12 +24,12 @@ export function DomainForm() {
       setError(t(language, 'domainForm.cidrIsRequired'));
       return;
     }
-    // 简单 CIDR 格式校验
+    // Simple CIDR format check
     if (!cidrRegex.test(cidr)) {
       setError(t(language, 'domainForm.invalidCIDRFormatE'));
       return;
     }
-    // transit_cidr 可选；填写时按同样的格式校验
+    // transit_cidr is optional; when filled in, validate it with the same format check
     if (transitCidr.trim() && !cidrRegex.test(transitCidr.trim())) {
       setError(t(language, 'domainForm.invalidTransitCIDRFormat'));
       return;

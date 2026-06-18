@@ -26,14 +26,14 @@ export function BottomBar() {
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-1">
-        {/* 全局错误 */}
+        {/* Global error */}
         {error && (
           <div className="text-sm text-red-400 bg-red-900/30 px-2 py-1 rounded">
             ❌ {error}
           </div>
         )}
 
-        {/* 校验结果 */}
+        {/* Validation result */}
         {validateResult && (
           <>
             {validateResult.valid && (

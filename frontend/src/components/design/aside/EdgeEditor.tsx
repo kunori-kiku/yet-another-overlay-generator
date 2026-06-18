@@ -38,8 +38,9 @@ function ipv4InCidr(ip: string, cidr: string): boolean {
   return (ipInt & mask) === (netInt & mask);
 }
 
-// 连接（边）属性编辑器（从 RightPanel 的选中边区块原样抽出，含目标端点选择 / 传输协议 /
-// 链路角色 / 优先级 / 权重 / 备份链路 / 已固定分配 / 编译后实际值）。供 Design 右侧 aside 使用。
+// Connection (edge) property editor (extracted verbatim from RightPanel's selected-edge block;
+// covers target-endpoint selection / transport / link role / priority / weight / backup link /
+// pinned allocation / post-compile actual values). Used by the Design right-side aside.
 export function EdgeEditor() {
   const language = useTopologyStore((s) => s.language);
   const nodes = useTopologyStore((s) => s.nodes);
@@ -74,19 +75,22 @@ export function EdgeEditor() {
     return compiledEdge?.compiled_port || undefined;
   })();
 
-  // 并行链路（edge.md）：备份链路从主链路派生。
-  // 选中边的源节点（client 角色门控备份按钮：后端拒绝 client 上的备份链路）。
+  // Parallel links (edge.md): a backup link is derived from the primary link.
+  // The selected edge's source node (the client role gates the backup button: the backend
+  // rejects backup links on a client).
   const selectedEdgeFrom = selectedEdge
     ? nodes.find((n) => n.id === selectedEdge.from_node_id)
     : undefined;
   const selectedEdgeIsBackup = selectedEdge?.role === 'backup';
   const selectedEdgeTouchesClient =
     selectedEdgeFrom?.role === 'client' || selectedEdgeTarget?.role === 'client';
-  // 备份按钮：源/目标任一为 client 时隐藏（后端拒绝），选中边本身已是 backup 时隐藏
-  //（备份从主链路添加，而非从备份再派生）。
+  // Backup button: hidden when either source/target is a client (the backend rejects it), and
+  // hidden when the selected edge is already a backup (a backup is added from the primary link,
+  // not derived from another backup).
   const showAddBackupButton = !!selectedEdge && !selectedEdgeIsBackup && !selectedEdgeTouchesClient;
-  // 路径分集提示：选中的备份链路与同一节点对的另一条边共用了同一公网地址，
-  // 说明备份未指向独立路径（addBackupEdge 复制了主链路的 endpoint_host），提示操作员另指地址。
+  // Path-diversity nudge: the selected backup link shares a public address with another edge of
+  // the same node pair, meaning the backup does not point at an independent path (addBackupEdge
+  // copied the primary link's endpoint_host); nudge the operator to point it elsewhere.
   const showBackupEndpointNudge =
     !!selectedEdge &&
     selectedEdgeIsBackup &&
@@ -178,7 +182,7 @@ export function EdgeEditor() {
             onChange={(e) =>
               updateEdge(selectedEdge.id, {
                 type: e.target.value as 'direct' | 'public-endpoint' | 'relay-path' | 'candidate',
-                // 清空陈旧的编译端口，画布标签随即反映最新意图（直到重新编译）
+                // Clear the stale compiled port so the canvas label immediately reflects the latest intent (until recompile)
                 compiled_port: undefined,
               })
             }
@@ -270,11 +274,14 @@ export function EdgeEditor() {
           )}
         </div>
         {compileResult && (() => {
-          // Spec（naming.md / Decisions #12）禁止前端重建接口名（>12 字符时后端走 hash
-          // 后缀分支，并行链路下 backup 还把 edge.ID 折进 hash，前端无从复现）。改用共享解析器
-          // resolveEdgeInterface 按 pin 的端口反查后端实际生成的接口（端口在单节点内唯一 ⇒
-          // 确定性匹配），再用解析出的接口名从 wireguard_configs（键格式 "<nodeID>:<接口名>"）
-          // 取出本端配置体读出 Endpoint 行。取本边的 from 侧接口（from_node_id + pinned_from_port）。
+          // Spec (naming.md / Decisions #12) forbids the frontend from rebuilding interface names
+          // (above 12 chars the backend takes a hash-suffix branch, and for parallel links a backup
+          // also folds edge.ID into the hash, which the frontend cannot reproduce). Instead the
+          // shared resolver resolveEdgeInterface looks the backend's actual generated interface up
+          // by the pinned port (ports are unique within a single node => deterministic match), then
+          // uses the resolved interface name to pull this end's config body from wireguard_configs
+          // (key format "<nodeID>:<interfaceName>") and read its Endpoint line. Takes this edge's
+          // from-side interface (from_node_id + pinned_from_port).
           const fromIface = resolveEdgeInterface(
             selectedEdge,
             true,
@@ -310,7 +317,7 @@ export function EdgeEditor() {
           />
           {t(language, 'edgeEditor.enabled')}
         </label>
-        {/* 传输协议 / 优先级 / 权重 / 备注（D68）。priority 与 weight 影响 Babel 的链路开销。 */}
+        {/* Transport / priority / weight / notes (D68). priority and weight affect Babel's link cost. */}
         <div>
           <label className="text-xs text-gray-400">{t(language, 'edgeEditor.transport')}</label>
           <select
@@ -331,11 +338,14 @@ export function EdgeEditor() {
             </p>
           )}
         </div>
-        {/* 链路角色（edge.md 并行链路）：空 = 主链路类；backup = 独立的备份链路。
-            角色变更会改变链路身份（重新 key：backup 的 LinkKey 带 #edgeID 后缀，与同对主链路不同），
-            因此所有与旧身份绑定的分配 pin（compiled_port + 六个 pinned_*）都已陈旧，必须一并清空 ——
-            否则一个由 primary 翻成 backup 的边会保留主链路的 .1/.2/51820，与仍在的同对 primary 撞 pin
-            （validator 报“two different links”，正是该 bug）。清空后该边在下次编译重新分配（如 .3/.4）。 */}
+        {/* Link role (edge.md parallel links): empty = primary class; backup = an independent
+            backup link. Changing the role changes the link identity (it re-keys: a backup's LinkKey
+            carries a #edgeID suffix, distinct from the same-pair primary), so all allocation pins
+            bound to the old identity (compiled_port + the six pinned_*) are now stale and must be
+            cleared together -- otherwise an edge flipped from primary to backup would keep the
+            primary link's .1/.2/51820 and collide on a pin with the still-present same-pair primary
+            (the validator reports "two different links", which is exactly that bug). Once cleared,
+            the edge is re-allocated on the next compile (e.g. .3/.4). */}
         <div>
           <label className="text-xs text-gray-400">{t(language, 'roleLabel')}</label>
           <select
@@ -424,10 +434,11 @@ export function EdgeEditor() {
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
-        {/* 添加备份链路（edge.md 并行链路）：从当前（主）链路派生一条 role=backup 的并行边，
-            由 store 的 addBackupEdge 复制 from/to/type/transport/endpoint_host（不复制端口与 pin）
-            并自动选中。源/目标任一为 client 时隐藏（后端拒绝 client 上的备份），
-            选中边本身已是备份时也隐藏（备份从主链路添加）。 */}
+        {/* Add backup link (edge.md parallel links): derive a parallel edge with role=backup from
+            the current (primary) link; the store's addBackupEdge copies from/to/type/transport/
+            endpoint_host (but not ports or pins) and auto-selects it. Hidden when either source/
+            target is a client (the backend rejects backups on a client), and hidden when the
+            selected edge is already a backup (a backup is added from the primary link). */}
         {showAddBackupButton && (
           <button
             onClick={() => addBackupEdge(selectedEdge.id)}
@@ -441,10 +452,12 @@ export function EdgeEditor() {
             {t(language, 'backupEndpointNudge')}
           </p>
         )}
-        {/* 已固定的分配（PR7）：编译器/服务端写回的 pin，现可由操作员手填——把内部监听端口与
-            transit IP 钉到端口受限 NAT VPS 允许的范围内；Save 后持久化、下次编译/部署粘性沿用。
-            link-local 仍只读（自动 fe80::）。下方校验为即时行内反馈，后端校验器（Validate/Compile/
-            Deploy）才是权威闸门。参见 docs/spec/compiler/allocation-stability.md。 */}
+        {/* Pinned allocation (PR7): the pins written back by the compiler/server, now operator-
+            editable -- nail the internal listen ports and transit IPs into the range a
+            port-restricted NAT VPS allows; persisted after Save and reused stickily on the next
+            compile/deploy. link-local stays read-only (auto fe80::). The checks below are immediate
+            inline feedback; the backend validator (Validate/Compile/Deploy) is the authoritative
+            gate. See docs/spec/compiler/allocation-stability.md. */}
         {hasAnyPin && (
           <div className="p-2 bg-gray-700/50 rounded space-y-2">
             <p className="text-xs text-gray-400 font-semibold">

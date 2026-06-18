@@ -4,15 +4,19 @@ import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore
 import { t } from '../../i18n';
 import { localizeError } from '../../lib/localizeError';
 
-// 登录 Passkey（plan-5.2）：让已用密码登录的 operator 注册/移除一个 WebAuthn 登录 passkey
-// ——phishing-resistant 的第二因子，且可用于无密码登录。它与 keystone 的签名 passkey 是不同
-// 的凭据（不同的钥匙、不同的用途：这个只用于登录）。仅对密码 session 可用——break-glass token
-// 无账户（后端返回 403），此时 passkeyRegistered 保持 null，UI 提示「请用密码登录」。
+// Login Passkey (plan-5.2): lets an operator who is logged in with a password register/remove a
+// WebAuthn login passkey — a phishing-resistant second factor that can also be used for passwordless
+// login. It is a different credential from the keystone signing passkey (a different key, a different
+// purpose: this one is for login only). Available only for a password session — a break-glass token
+// has no account (the backend returns 403), in which case passkeyRegistered stays null and the UI
+// prompts to "sign in with a password".
 //
-// 注册复用 navigator.credentials.create()（只有公钥离开 authenticator）；移除需要一次新鲜
-// 断言（防被劫持的 session 直接摘掉因子）。两者都会弹出 authenticator——loginCeremony 标志
-// 驱动「触碰你的安全密钥」提示（与 keystone 的 signing/enrolling 分开，不点亮 DeployBar 部署
-// 横幅）。错误就地展示（store 动作向此处抛出），与 TwoFactorSettings 的本地错误一致。
+// Registration reuses navigator.credentials.create() (only the public key leaves the authenticator);
+// removal requires a fresh assertion (so a hijacked session cannot simply strip the factor). Both pop
+// the authenticator — the loginCeremony flag drives the "touch your security key" prompt (separate
+// from keystone's signing/enrolling, and it does not light up the DeployBar deploy banner). Errors are
+// shown in place (the store action throws here), consistent with the local errors in
+// TwoFactorSettings.
 export function PasskeySettings() {
   const language = useTopologyStore((s) => s.language);
   const loggedIn = useControllerStore(selectLoggedIn);
@@ -24,7 +28,8 @@ export function PasskeySettings() {
 
   const [localError, setLocalError] = useState<string | null>(null);
 
-  // 已登录但状态未知时拉取一次（store 动作，非 setState——与 BootstrapSettings 同型）。
+  // Fetch once when logged in but the status is unknown (a store action, not a setState — same shape as
+  // BootstrapSettings).
   useEffect(() => {
     if (loggedIn && passkeyRegistered === null) {
       void loadPasskeyStatus();
