@@ -586,6 +586,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.compile_listen_port_exhausted': '节点 {node} 的有效监听端口无法在 [{base}, 65535] 区间内分配；请减少其连接数。',
   'error.compile_overlay_cidr_invalid': '覆盖网 CIDR {cidr} 无效。',
   'error.compile_overlay_pool_exhausted': 'CIDR {cidr} 的覆盖网地址池已耗尽；请扩大网络域 CIDR 或减少节点数。',
+  'error.compile_overlay_scan_budget_exceeded': '覆盖网 CIDR {cidr} 对本拓扑而言过大，无法从中分配（已超出扫描预算 {budget}）；请使用更小的网络域 CIDR（分配器会枚举主机地址，因此超大前缀叠加大量节点会被拒绝，以限制编译耗时）。',
   'error.compile_node_unknown_domain': '节点 {node} 引用了未知网络域 {domain}。',
   // Render + export layer (plan-3.5b).
   'error.render_failed': '渲染部署产物失败。',
@@ -603,6 +604,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.config_not_found': '该节点尚无可用配置。',
   'error.node_id_reserved': '该节点 ID 为保留 ID，不可使用。',
   'error.enrollment_token_invalid': '注册令牌无效或已过期；请重新申请。',
+  'error.enroll_node_revoked': '该节点 ID 已被吊销；请先删除后再重新注册。',
   'error.duplicate_wg_key': '该 WireGuard 公钥已在另一个节点下注册。',
   'error.no_staged_bundle': '没有为下一代暂存任何内容；请先暂存部署再提升。',
   'error.req_field_required': '字段 {field} 为必填项。',
@@ -729,6 +731,8 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_project_name_required': "项目名称不能为空",
   'error.validation_routepolicy_reserved': "route_policies 为保留特性，尚未实现：当前没有任何渲染器消费它，编译器仅原样透传，必须为空（检测到 {count} 条策略，请清空 route_policies；LAN 桥接 / 路由注入请改用 extra_prefixes）",
   'error.validation_topology_schema_version_unsupported': "拓扑分配方案版本 {version} 高于当前构建支持的版本（最高 {max}），它由更新版本的 YAOG 创建；请升级 YAOG 后再打开。",
+  'error.validation_topology_too_many_domains': "拓扑网络域过多：{count} 超过上限 {max}，请将部署拆分为多个拓扑。",
   'error.validation_topology_too_many_edges': "拓扑边数过多：{count} 超过上限 {max}，请将部署拆分为多个拓扑。",
   'error.validation_topology_too_many_nodes': "拓扑节点数过多：{count} 超过上限 {max}，请将部署拆分为多个拓扑。",
+  'error.validation_topology_too_many_reserved_ranges': "某网络域的保留地址段过多：{count} 超过上限 {max}，请合并保留地址段或拆分该网络域。",
 };

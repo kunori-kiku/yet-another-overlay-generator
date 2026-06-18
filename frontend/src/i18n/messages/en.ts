@@ -604,6 +604,7 @@ export const en = {
   'error.compile_listen_port_exhausted': "Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; reduce its connections.",
   'error.compile_overlay_cidr_invalid': 'The overlay CIDR {cidr} is invalid.',
   'error.compile_overlay_pool_exhausted': 'The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.',
+  'error.compile_overlay_scan_budget_exceeded': 'The overlay CIDR {cidr} is too large to allocate from for this topology (scan budget {budget} exceeded); use a smaller domain CIDR (the allocator enumerates host addresses, so a very large prefix combined with many nodes is rejected to bound compile time).',
   'error.compile_node_unknown_domain': 'Node {node} references unknown domain {domain}.',
   // Render + export layer (plan-3.5b) — en value mirrors the Go registry template verbatim.
   'error.render_failed': 'Rendering the deployment artifacts failed.',
@@ -621,6 +622,7 @@ export const en = {
   'error.config_not_found': 'No configuration is available for this node yet.',
   'error.node_id_reserved': 'That node id is reserved and cannot be used.',
   'error.enrollment_token_invalid': 'The enrollment token is invalid or has expired; request a new one.',
+  'error.enroll_node_revoked': 'That node id has been revoked; delete it before re-enrolling.',
   'error.duplicate_wg_key': 'That WireGuard public key is already enrolled under a different node.',
   'error.no_staged_bundle': 'Nothing is staged for the next generation; stage a deploy before promoting.',
   'error.req_field_required': 'The field {field} is required.',
@@ -747,6 +749,8 @@ export const en = {
   'error.validation_project_name_required': "Project name is required.",
   'error.validation_routepolicy_reserved': "route_policies is a reserved feature that is not yet implemented: no renderer consumes it, the compiler only passes it through verbatim, so it must be empty (detected {count} policies; please clear route_policies; for LAN bridging / route injection use extra_prefixes instead)",
   'error.validation_topology_schema_version_unsupported': "Topology allocation-schema version {version} is newer than this build supports (max {max}); it was created by a newer version of YAOG. Upgrade YAOG to open it.",
+  'error.validation_topology_too_many_domains': "Topology has too many domains: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
   'error.validation_topology_too_many_edges': "Topology has too many edges: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
   'error.validation_topology_too_many_nodes': "Topology has too many nodes: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
+  'error.validation_topology_too_many_reserved_ranges': "A domain has too many reserved ranges: {count} exceeds the maximum of {max}. Consolidate the reserved ranges or split the domain.",
 } as const;
