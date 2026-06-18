@@ -1,5 +1,5 @@
 # PRINCIPLES — YAOG (Yet Another Overlay Generator)
-<!-- updated: 2026-06-07 -->
+<!-- updated: 2026-06-18 -->
 
 Project-wide invariants. Every outline's Principles section inherits from these and may add
 subject-specific ones on top. The execute-implementation-plan skill loads this file during its
@@ -58,9 +58,10 @@ principle-risk assessment.
   (zero-knowledge custody). The controller stores public keys only. This downgrades I5's *mechanism*
   (private-key round-trip in JSON) to public-key-only for controller fleets while preserving I5's
   *guarantee* (stable key, identified by public key). The air-gap path's I5 behavior is unchanged.
-- **Local toolchain:** Go is NOT installed on the dev machine — all Go verification runs in CI
-  on PRs. npm/node (v20) ARE available locally as of 2026-06-07: run
-  `cd frontend && npm run lint && npm run build` before pushing frontend changes.
+- **Local toolchain:** Go IS installed locally (`$HOME/.local/go/bin`, go1.26.x) as of 2026-06-08 — run
+  `go build ./... && go vet ./... && go test ./...` before pushing; CI remains the authoritative gate.
+  npm/node (v20) are available too: run `cd frontend && npm run lint && npm run build` (the build uses
+  `tsc -b`, stricter than a bare `tsc --noEmit`) before pushing frontend changes.
 - **No `--no-verify`, no amends, no force-push.**
 
 ## Domain context
