@@ -1,0 +1,40 @@
+{
+  "name": "edge-reorder-forward",
+  "doc": "Three-router full mesh, edges in array order e1..e6. The forward half of the compiler-level C1 pin (owner flag 1): paired with edge-reorder-reversed (identical edge SET, reversed array) to prove rendered configs are byte-identical under a benign edge reorder, exercising the full pipeline (RenderAllBabelConfigs sorts the peer slice by InterfaceName).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "edge-reorder", "name": "Edge Reorder" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.28.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1", "overlay_ip": "10.28.0.1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1", "overlay_ip": "10.28.0.2",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      },
+      {
+        "id": "node-gamma", "name": "gamma", "hostname": "gamma.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1", "overlay_ip": "10.28.0.3",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "gamma-ep", "host": "gamma.example.com", "port": 51820 } ],
+        "wireguard_private_key": "yNwuQ1ivYBtQOKAqFou1Wsb2pdQxnonFZtQWYqbTOlY="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51820, "pinned_to_port": 51820, "pinned_from_transit_ip": "10.10.0.1", "pinned_to_transit_ip": "10.10.0.2", "pinned_from_link_local": "fe80::1", "pinned_to_link_local": "fe80::2" },
+      { "id": "e2", "from_node_id": "node-alpha", "to_node_id": "node-gamma", "type": "public-endpoint", "endpoint_host": "gamma.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51821, "pinned_to_port": 51820, "pinned_from_transit_ip": "10.10.0.3", "pinned_to_transit_ip": "10.10.0.4", "pinned_from_link_local": "fe80::3", "pinned_to_link_local": "fe80::4" },
+      { "id": "e3", "from_node_id": "node-beta", "to_node_id": "node-gamma", "type": "public-endpoint", "endpoint_host": "gamma.example.com", "transport": "udp", "is_enabled": true, "pinned_from_port": 51821, "pinned_to_port": 51821, "pinned_from_transit_ip": "10.10.0.5", "pinned_to_transit_ip": "10.10.0.6", "pinned_from_link_local": "fe80::5", "pinned_to_link_local": "fe80::6" }
+    ]
+  }
+}

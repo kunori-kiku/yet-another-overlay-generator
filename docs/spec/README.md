@@ -30,8 +30,12 @@ docs/spec/
 │   │                              #   ports, endpoint resolution contract, keepalive
 │   ├── routing-modes.md           # Routing-mode contract: babel default, route
 │   │                              #   installation prerequisites
-│   └── allocation-stability.md    # Allocation Stability & Growth: invariants I1–I10,
-│                                  #   sticky-pin mechanism, migration
+│   ├── allocation-stability.md    # Allocation Stability & Growth: invariants I1–I10,
+│   │                              #   sticky-pin mechanism, migration
+│   └── io-contract.md             # Frozen localcompile.Compile I/O contract: request/
+│                                  #   result schema, canonical serialization, the four
+│                                  #   cross-language authorities, babel sort-by-
+│                                  #   InterfaceName rule, IN/OUT conformance list, corpus
 ├── artifacts/
 │   ├── wireguard.md               # Per-peer + client wg0 config rendering
 │   ├── babel.md                   # babeld.conf rendering, router-id generation
@@ -75,7 +79,8 @@ docs/spec/
 1. `overview/` — what the system is and the one design decision everything follows from
 2. `data-model/` — the shapes the compiler consumes
 3. `roles/` — node role semantics
-4. `compiler/` — the compilation pipeline (the core of the system)
+4. `compiler/` — the compilation pipeline (the core of the system); `compiler/io-contract.md`
+   is the frozen `localcompile.Compile` input→output contract the TS port + conformance harness target
 5. `artifacts/` — what gets rendered and deployed
 6. `api/`, `frontend/` — the interfaces around the compiler
 7. `operations/`, `security/`, `glossary.md` — supporting material
