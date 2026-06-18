@@ -1,0 +1,40 @@
+{
+  "name": "apierr-transit-pool-exhausted",
+  "doc": "APIERR-channel fail fixture. Three routers fully meshed (three distinct links) on a domain whose transit_cidr is a /30 — exactly ONE usable transit pair. The topology passes schema (a /30 is >= the minimum) AND semantic validation cleanly, so the validator channel is empty; the compiler's peer-derivation gap-fill then exhausts the pool on the second/third link and returns apierr.CodeTransitPoolExhausted, which rides through the compile error as a wrapped *apierr.Error. This pins the apierr failure channel: verdict.validator is empty, verdict.apierr carries compile_transit_pool_exhausted. (See peers.go gapFillTransitPair.)",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "fail-transit-exhausted", "name": "Fail Transit Pool Exhausted" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.40.0.0/24", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "10.99.0.0/30" }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "wFKYOOqtvK/YveTzNg98Eb4Prt6oHae1pOpD4FkdX1U="
+      },
+      {
+        "id": "router-b", "name": "router-b", "hostname": "router-b.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-b-ep", "host": "router-b.example.com", "port": 51820 } ],
+        "wireguard_private_key": "qCjN0IF2zbbisu0IW+GW26tjAwXoWI3sW0a5ANkZAEM="
+      },
+      {
+        "id": "router-c", "name": "router-c", "hostname": "router-c.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-c-ep", "host": "router-c.example.com", "port": 51820 } ],
+        "wireguard_private_key": "yNwuQ1ivYBtQOKAqFou1Wsb2pdQxnonFZtQWYqbTOlY="
+      }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-bc", "from_node_id": "router-b", "to_node_id": "router-c", "type": "public-endpoint", "endpoint_host": "router-c.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-ca", "from_node_id": "router-c", "to_node_id": "router-a", "type": "public-endpoint", "endpoint_host": "router-a.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

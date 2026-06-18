@@ -1,0 +1,32 @@
+{
+  "name": "gateway-extra-prefixes",
+  "doc": "A gateway node (announces the default route 0.0.0.0/0 + its extra_prefixes) attached to an interior router. The gateway's babeld.conf carries the AnnounceDefault + AnnounceExtraPrefixes redistribute policy and the router's wireguard peer for the gateway gets the gateway AllowedIPs mode (domain CIDR + extra prefixes + 0.0.0.0/0). Pins the gateway-role + extra_prefixes byte surface (no other corpus fixture exercises role=gateway or a non-empty extra_prefixes).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "gateway-extra", "name": "Gateway Extra Prefixes" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.31.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "gw-edge", "name": "gw-edge", "hostname": "gw-edge.example.com", "platform": "debian",
+        "role": "gateway", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "extra_prefixes": [ "192.168.50.0/24", "172.16.8.0/22" ],
+        "public_endpoints": [ { "id": "gw-edge-ep", "host": "gw-edge.example.com", "port": 51820 } ],
+        "wireguard_private_key": "hQMW4zSJ8deeSQdDnksCuB0kLobFv7D5dX+nvrTpc0M="
+      },
+      {
+        "id": "router-int", "name": "router-int", "hostname": "router-int.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-int-ep", "host": "router-int.example.com", "port": 51820 } ],
+        "wireguard_private_key": "Ba1APgLkFb8UpvPtjecjZsl1PnsspE8zV9h+4LmZH/w="
+      }
+    ],
+    "edges": [
+      { "id": "e-gw", "from_node_id": "router-int", "to_node_id": "gw-edge", "type": "public-endpoint", "endpoint_host": "gw-edge.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

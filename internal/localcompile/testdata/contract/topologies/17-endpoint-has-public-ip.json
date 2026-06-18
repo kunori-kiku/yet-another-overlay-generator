@@ -1,0 +1,30 @@
+{
+  "name": "endpoint-has-public-ip",
+  "doc": "A router that declares a public_endpoint but LEAVES capabilities.has_public_ip UNSET. C3 (plan-8): InferCapabilitiesFromRole normalizes has_public_ip UP from the presence of a public endpoint, so this node accepts inbound and the reverse-Endpoint fallback fires — pinning the endpoint-derived HasPublicIP byte surface (no fixture else leaves has_public_ip unticked while carrying an endpoint). The peer node behind NAT (no endpoint, no public IP) reaches it.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "endpoint-haspub", "name": "Endpoint Derived HasPublicIP" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.35.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "router-ep", "name": "router-ep", "hostname": "router-ep.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": {},
+        "public_endpoints": [ { "id": "router-ep-ep", "host": "router-ep.example.com", "port": 51820 } ],
+        "wireguard_private_key": "Zwj3ssddBkwaaSNns0OOo01qoX0Nshgd5oECLCBa/lk="
+      },
+      {
+        "id": "router-nat", "name": "router-nat", "hostname": "router-nat.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_forward": true },
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      }
+    ],
+    "edges": [
+      { "id": "e-ep", "from_node_id": "router-nat", "to_node_id": "router-ep", "type": "public-endpoint", "endpoint_host": "router-ep.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

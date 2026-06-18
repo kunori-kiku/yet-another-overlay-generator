@@ -23,12 +23,23 @@ import (
 var updateGolden = flag.Bool("update", false, "regenerate the conformance golden manifests from the current Go oracle")
 
 const (
-	// corpusDir is plan-3's contract fixture directory, consumed DIRECTLY — there is ONE
-	// corpus, the conformance harness does not duplicate it. The relative path reaches across
-	// from internal/conformance/ to internal/localcompile/testdata/contract/.
+	// corpusTopologiesDir is plan-3's contract fixture directory, consumed DIRECTLY — there is
+	// ONE success corpus, the conformance harness does not duplicate it. The relative path
+	// reaches across from internal/conformance/ to internal/localcompile/testdata/contract/.
 	corpusTopologiesDir = "../localcompile/testdata/contract/topologies"
 	corpusSigningKeyPEM = "../localcompile/testdata/contract/signing/test-signing-key.pem"
 	goldenDir           = "testdata/golden"
+
+	// failCorpusDir holds the conformance-only FAIL fixtures: topologies that compile to an
+	// ERROR (so they cannot live in plan-3's success-golden corpus) and whose frozen value is
+	// the two-channel verdict. They span BOTH channels — a validator failure (the compiler
+	// rejects the topology with a plain validation wrap; verdict.validator carries the code,
+	// verdict.apierr is empty) and an apierr failure (a coded compile-resource error;
+	// verdict.apierr carries the code, verdict.validator is clean). The fail goldens
+	// additionally pin healed_edges, which is computed for every fixture independent of the
+	// verdict (the heal-collision fail fixture is the step-D canary's real-repair input).
+	failCorpusDir = "testdata/fail"
+	failGoldenDir = "testdata/golden/fail"
 )
 
 // onDiskFixture is the JSON shape of a plan-3 contract fixture — kept byte-identical to the
@@ -61,39 +72,75 @@ func loadCorpus(t *testing.T) []Fixture {
 
 	fixtures := make([]Fixture, 0, len(names))
 	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(corpusTopologiesDir, name))
-		if err != nil {
-			t.Fatalf("read fixture %s: %v", name, err)
-		}
-		var od onDiskFixture
-		if err := json.Unmarshal(raw, &od); err != nil {
-			t.Fatalf("parse fixture %s: %v", name, err)
-		}
-		if od.Name == "" {
-			od.Name = strings.TrimSuffix(name, ".json")
-		}
-
-		fx := Fixture{Name: od.Name}
-		if err := json.Unmarshal(od.Topology, &fx.Topology); err != nil {
-			t.Fatalf("fixture %s: parse topology: %v", od.Name, err)
-		}
-		switch od.Custody {
-		case "airgap", "":
-			fx.Custody = render.AirGap
-		case "agentheld":
-			fx.Custody = render.AgentHeld
-		default:
-			t.Fatalf("fixture %s: unknown custody %q", od.Name, od.Custody)
-		}
-		if od.Signing {
-			fx.Signer = loadTestSigner(t)
-		}
-		fixtures = append(fixtures, fx)
+		fixtures = append(fixtures, parseFixture(t, corpusTopologiesDir, name))
 	}
 	if len(fixtures) < 8 {
 		t.Fatalf("conformance corpus must hold >=8 fixtures, found %d", len(fixtures))
 	}
 	return fixtures
+}
+
+// loadFailCorpus reads every *.json FAIL fixture under failCorpusDir, sorted by file name. These
+// are the conformance-only fixtures that compile to an error; the harness freezes their
+// two-channel verdict + healed_edges rather than a full artifact projection. It requires >=2
+// fixtures so the corpus always spans both failure channels.
+func loadFailCorpus(t *testing.T) []Fixture {
+	t.Helper()
+	entries, err := os.ReadDir(failCorpusDir)
+	if err != nil {
+		t.Fatalf("read fail corpus dir %s: %v", failCorpusDir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	fixtures := make([]Fixture, 0, len(names))
+	for _, name := range names {
+		fixtures = append(fixtures, parseFixture(t, failCorpusDir, name))
+	}
+	if len(fixtures) < 2 {
+		t.Fatalf("conformance FAIL corpus must hold >=2 fixtures (one per channel), found %d", len(fixtures))
+	}
+	return fixtures
+}
+
+// parseFixture loads one on-disk fixture file from dir and resolves it into a Fixture (parsed
+// topology + resolved custody + the throwaway test signer when the fixture opts in). It is shared
+// by the success and fail loaders so the on-disk JSON shape is parsed in exactly one place.
+func parseFixture(t *testing.T, dir, name string) Fixture {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	var od onDiskFixture
+	if err := json.Unmarshal(raw, &od); err != nil {
+		t.Fatalf("parse fixture %s: %v", name, err)
+	}
+	if od.Name == "" {
+		od.Name = strings.TrimSuffix(name, ".json")
+	}
+
+	fx := Fixture{Name: od.Name}
+	if err := json.Unmarshal(od.Topology, &fx.Topology); err != nil {
+		t.Fatalf("fixture %s: parse topology: %v", od.Name, err)
+	}
+	switch od.Custody {
+	case "airgap", "":
+		fx.Custody = render.AirGap
+	case "agentheld":
+		fx.Custody = render.AgentHeld
+	default:
+		t.Fatalf("fixture %s: unknown custody %q", od.Name, od.Custody)
+	}
+	if od.Signing {
+		fx.Signer = loadTestSigner(t)
+	}
+	return fx
 }
 
 // loadTestSigner builds a bundlesig.ConfigSigner from plan-3's committed THROWAWAY test
@@ -147,13 +194,88 @@ func TestGolden(t *testing.T) {
 	}
 }
 
+// TestGoldenFail is golden mode over the FAIL corpus: each fail fixture's canonical manifest
+// (its two-channel verdict + healed_edges; nil topology/allocations/files/checksums because no
+// artifacts exist for a failing compile) must byte-equal the committed golden under
+// testdata/golden/fail/<fixture>.json. It exercises the apierr channel (a coded compile-resource
+// error) and the validator channel (a validation-wrap rejection) — the two-channel fail machinery
+// that the success corpus alone leaves uncovered (every success fixture has an empty apierr
+// channel). Run with -update to (re)freeze after an intentional pipeline change.
+func TestGoldenFail(t *testing.T) {
+	if err := os.MkdirAll(failGoldenDir, 0o755); err != nil {
+		t.Fatalf("ensure fail golden dir: %v", err)
+	}
+	for _, fx := range loadFailCorpus(t) {
+		fx := fx
+		t.Run(fx.Name, func(t *testing.T) {
+			got := mustManifestBytes(t, fx)
+
+			goldenPath := filepath.Join(failGoldenDir, fx.Name+".json")
+			if *updateGolden {
+				if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+					t.Fatalf("write fail golden %s: %v", goldenPath, err)
+				}
+				return
+			}
+
+			want, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatalf("read fail golden %s (run with -update to generate): %v", goldenPath, err)
+			}
+			if diff := FirstDivergence(want, got); diff != "" {
+				t.Errorf("fail fixture %s diverges from golden %s:\n%s", fx.Name, goldenPath, diff)
+			}
+		})
+	}
+}
+
+// TestGoldenFail_SpansBothChannels asserts the fail corpus is not degenerate: across the whole
+// fail corpus at least one fixture populates the apierr channel (a coded compile-resource error
+// with an empty validator-error set) and at least one populates ONLY the validator channel (a
+// validation-wrap rejection with an empty apierr channel). This guards against a future edit that
+// silently collapses both fail fixtures onto the same channel, which would leave one channel of
+// the two-channel verdict untested. It also confirms — on every run, not just at -update time —
+// that the verdict routing in BuildManifest sends each failure to the correct channel.
+func TestGoldenFail_SpansBothChannels(t *testing.T) {
+	var sawValidatorOnly, sawApierr bool
+	for _, fx := range loadFailCorpus(t) {
+		m, err := BuildManifest(fx)
+		if err != nil {
+			t.Fatalf("build manifest for fail fixture %s: %v", fx.Name, err)
+		}
+		// A failing compile produces no artifacts: the success projections must stay nil so the
+		// fail golden never accidentally freezes a half-built bundle.
+		if m.Topology != nil || m.Allocations != nil || m.Files != nil || m.Checksums != nil {
+			t.Errorf("fail fixture %s populated a success projection (topology/allocations/files/checksums must be nil on a failing compile)", fx.Name)
+		}
+		switch {
+		case len(m.Verdict.Apierr) > 0:
+			sawApierr = true
+			// An apierr-channel fail is a clean compile-resource failure: the topology passed
+			// validation, so the validator channel carries no ERROR-level codes (it may carry
+			// warnings, which is fine — but this corpus's apierr fixture is fully clean).
+		case len(m.Verdict.Validator) > 0:
+			sawValidatorOnly = true
+		default:
+			t.Errorf("fail fixture %s has an empty verdict on BOTH channels; a fail fixture must populate at least one", fx.Name)
+		}
+	}
+	if !sawApierr {
+		t.Error("fail corpus has no apierr-channel fixture; it must span BOTH channels (add a coded compile-resource failure, e.g. transit-pool exhaustion)")
+	}
+	if !sawValidatorOnly {
+		t.Error("fail corpus has no validator-only fixture; it must span BOTH channels (add a validation-wrap rejection, e.g. client missing endpoint_host)")
+	}
+}
+
 // TestGolden_Deterministic proves the oracle is pure: the SAME fixture built twice yields a
-// byte-identical manifest. It runs every fixture so the proof covers the signing-on,
-// AgentHeld, parallel-link, and fail paths, not just the simplest one. A non-deterministic
-// projection (e.g. an unsorted map leaking iteration order) reds here independently of the
-// golden freeze.
+// byte-identical manifest. It runs every fixture (success AND fail) so the proof covers the
+// signing-on, AgentHeld, parallel-link, and both failure paths, not just the simplest one. A
+// non-deterministic projection (e.g. an unsorted map leaking iteration order) reds here
+// independently of the golden freeze.
 func TestGolden_Deterministic(t *testing.T) {
-	for _, fx := range loadCorpus(t) {
+	all := append(loadCorpus(t), loadFailCorpus(t)...)
+	for _, fx := range all {
 		fx := fx
 		t.Run(fx.Name, func(t *testing.T) {
 			first := mustManifestBytes(t, fx)

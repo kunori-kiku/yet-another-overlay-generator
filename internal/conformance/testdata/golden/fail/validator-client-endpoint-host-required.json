@@ -1,0 +1,25 @@
+{
+  "fixture": "validator-client-endpoint-host-required",
+  "verdict": {
+    "validator": [
+      "validation_client_endpoint_host_required"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "healed_edges": [
+    {
+      "id": "e-client",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    }
+  ]
+}

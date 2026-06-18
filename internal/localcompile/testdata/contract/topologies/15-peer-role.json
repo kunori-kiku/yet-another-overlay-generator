@@ -1,0 +1,30 @@
+{
+  "name": "peer-role",
+  "doc": "A peer node (runs Babel, announces ONLY its own /32, does not forward) attached to a public router. The peer's babeld.conf has the announce-self-only redistribute policy (no domain CIDR, no default) — distinct from router/relay/gateway. Pins the peer-role byte surface (no other corpus fixture exercises role=peer; the default-role branch in DeriveRoleSemantics).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "peer-role", "name": "Peer Role" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.33.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "router-pub", "name": "router-pub", "hostname": "router-pub.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-pub-ep", "host": "router-pub.example.com", "port": 51820 } ],
+        "wireguard_private_key": "2gJWNfXhZ4I4QKU/haCH6FBFPF5i4j8y5ZLMjOun6P8="
+      },
+      {
+        "id": "peer-leaf", "name": "peer-leaf", "hostname": "peer-leaf.example.com", "platform": "ubuntu",
+        "role": "peer", "domain_id": "domain-1",
+        "capabilities": {},
+        "wireguard_private_key": "q8WXqb7bkAdTe3fsKUpbVlTUTgumt07Xl/9YceA5qLU="
+      }
+    ],
+    "edges": [
+      { "id": "e-peer", "from_node_id": "peer-leaf", "to_node_id": "router-pub", "type": "public-endpoint", "endpoint_host": "router-pub.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

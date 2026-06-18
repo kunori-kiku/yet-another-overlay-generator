@@ -57,9 +57,10 @@ type Fixture struct {
 //     compile path's topology untouched), so the step-D TS heal canary has its pin whether
 //     or not the fixture compiles.
 func BuildManifest(fx Fixture) (Manifest, error) {
+	validatorCodes, validatorHasErrors := validatorVerdict(fx.Topology)
 	m := Manifest{
 		Fixture:     fx.Name,
-		Verdict:     Verdict{Validator: validatorCodes(fx.Topology), Apierr: []string{}},
+		Verdict:     Verdict{Validator: validatorCodes, Apierr: []string{}},
 		HealedEdges: healedEdges(fx.Topology),
 	}
 
@@ -77,15 +78,35 @@ func BuildManifest(fx Fixture) (Manifest, error) {
 	// result into the canonical byte set EXACTLY as Compile would — single-sourcing the
 	// files/checksums with the on-disk exporter — so calling the two steps explicitly is
 	// byte-identical to Compile, it just also exposes the PeerMap. On a compile failure the
-	// error is coded at the source; unwrap it onto the apierr channel.
+	// error is routed to the channel that owns it (see the two-channel rationale below).
 	result, err := localcompile.CompileResult(req)
 	if err != nil {
-		// A compile failure rides the apierr channel: unwrap to the coded error and take its
-		// Code. Every compile error in the pipeline is coded at the source (apierr.go), so a
-		// bare/unwrappable error is a harness bug worth surfacing loudly rather than masking.
+		// Two-channel failure routing (matching the product's compile-time channel split):
+		//
+		//   1. apierr channel — a transport/compile-resource failure (e.g. an exhausted transit
+		//      or overlay pool) is coded at the source (apierr.go) and rides through the compile
+		//      error as a wrapped *apierr.Error. errors.As unwraps it; its Code is the sole
+		//      apierr-channel entry. The validator channel stays whatever the validator emitted
+		//      (clean — these topologies pass validation, they just over-subscribe a pool).
+		//
+		//   2. validator channel — a topology that FAILS validation is rejected by the compiler's
+		//      Pass-1/Pass-2 (compiler.go CompileAt) with a PLAIN fmt.Errorf wrap ("topology
+		//      failed {schema,semantic} validation: ..."), NOT an *apierr.Error. That is by design:
+		//      a validator finding is a different Go type on a different channel from the apierr
+		//      envelope (validator/code.go's design lock). So when the compile error is NOT an
+		//      apierr AND the validator channel already carries error-level findings, the failure
+		//      IS that validation rejection — the apierr channel correctly stays EMPTY and the
+		//      success projections stay nil. The validator codes (already collected above) are the
+		//      verdict.
+		//
+		// Any OTHER bare/unwrappable error (not apierr, and the validator passed) is a genuine
+		// harness or pipeline bug worth surfacing loudly rather than masking as a clean verdict.
 		var coded *apierr.Error
 		if errors.As(err, &coded) {
 			m.Verdict.Apierr = []string{string(coded.Code())}
+			return m, nil
+		}
+		if validatorHasErrors {
 			return m, nil
 		}
 		return Manifest{}, err
@@ -106,26 +127,35 @@ func BuildManifest(fx Fixture) (Manifest, error) {
 	return m, nil
 }
 
-// validatorCodes runs the schema + semantic passes directly (the /api/validate channel) and
-// returns the sorted, deduplicated set of finding Codes across BOTH errors and warnings of
-// BOTH passes. ValidateSchema/ValidateSemantic take a *model.Topology and never mutate it in
-// a way the compile path depends on, so a fresh copy keeps the channels independent.
-func validatorCodes(topo model.Topology) []string {
+// validatorVerdict runs the schema + semantic passes directly (the /api/validate channel) and
+// returns (a) the sorted, deduplicated set of finding Codes across BOTH errors and warnings of
+// BOTH passes — the verdict.validator channel — and (b) whether ANY error-level finding was
+// emitted. The boolean is what lets BuildManifest tell a deliberate validation-FAIL fixture (the
+// compile rejection is a plain validation wrap, not an apierr) apart from a genuine unwrappable
+// pipeline bug: a fixture that the compiler rejects for the same reason the validator flags has
+// validatorHasErrors == true, so the apierr channel correctly stays empty.
+//
+// ValidateSchema/ValidateSemantic take a *model.Topology and never mutate it in a way the compile
+// path depends on, so a fresh copy keeps the channels independent.
+func validatorVerdict(topo model.Topology) (codes []string, hasErrors bool) {
 	t := copyTopology(topo)
 	schema := validator.ValidateSchema(&t)
 	semantic := validator.ValidateSemantic(&t)
 
-	var codes []string
-	collect := func(findings []validator.ValidationError) {
+	var raw []string
+	collect := func(findings []validator.ValidationError, isError bool) {
 		for _, f := range findings {
-			codes = append(codes, f.Code)
+			raw = append(raw, f.Code)
+			if isError {
+				hasErrors = true
+			}
 		}
 	}
-	collect(schema.Errors)
-	collect(schema.Warnings)
-	collect(semantic.Errors)
-	collect(semantic.Warnings)
-	return sortedSet(codes)
+	collect(schema.Errors, true)
+	collect(schema.Warnings, false)
+	collect(semantic.Errors, true)
+	collect(semantic.Warnings, false)
+	return sortedSet(raw), hasErrors
 }
 
 // allocationsFrom projects a successful compile's write-backs into the keyed Allocations
