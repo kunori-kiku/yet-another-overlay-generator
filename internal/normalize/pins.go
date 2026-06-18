@@ -39,21 +39,37 @@ func isClientTouched(e *model.Edge, roleByNode map[string]string) bool {
 //
 // Which colliding edge keeps its pin — the discriminator (C2, plan-8 Phase 6.3).
 // model.Edge has no age/timestamp field (topology.go carries only IsEnabled + slice order), so
-// "keep the longer-lived edge" is UNCODEABLE and array order MUST NOT decide — a re-enabled edge
-// that predates the incumbent sits EARLIER in the slice, so a naive "first claimant in slice order
-// wins" would wrongly keep the stale re-enabled pin and strip the live incumbent (the exact
-// re-enable corruption: disable A-B, add A-C into the freed slot, re-enable A-B; A-B's stale pin
-// now collides with A-C's legitimate one).
+// "keep the longer-lived (historical incumbent) edge" is UNCODEABLE in the general case, and array
+// order MUST NOT decide either — a re-enabled edge that predates the incumbent sits EARLIER in the
+// slice, so a naive "first claimant in slice order wins" would wrongly keep the stale re-enabled
+// pin and strip the live incumbent (the re-enable corruption: disable A-B, add A-C into the freed
+// slot, re-enable A-B; A-B's stale pin now collides with A-C's legitimate one).
 //
-// Instead the discriminator is "which edge's pin value is reproduced by reserve-first allocation
-// of the OTHER edge": the colliding pin the incumbent legitimately owns wins, the other is
-// stripped. The compiler's Pass-1 (peers.go) assigns pins by reserve-first + linkKey-SORTED
-// gap-fill — within a pool the lowest free slot goes to the SMALLEST linkKey first. So we claim in
-// linkKey-sorted order (NOT slice order): the incumbent is the edge whose pin reserve-first
-// allocation reproduces, which is exactly the smaller-linkKey claimant of that slot; a
-// later-claimed (larger-linkKey) different-link edge that needs an already-claimed value is the one
-// with NO reserved backing (the re-enabled one) and is stripped as a whole. Pass-1's reserve-first
-// gap-fill then re-allocates the stripped edge into a free slot, byte-stable for everything else.
+// So instead of (uncodeable) age, the discriminator is purely structural: of the edges contesting a
+// slot, keep the one the compiler's reserve-first allocator would put there from scratch. Pass-1
+// (peers.go) assigns pins by reserve-first + linkKey-SORTED gap-fill — within a pool the lowest free
+// slot goes to the SMALLEST linkKey first — so we claim in linkKey-sorted order (NOT slice order):
+// the first edge (in that order) to claim a slot keeps it, every later different-link edge that
+// needs an already-claimed value is stripped as a whole. The kept edge is therefore the
+// SMALLER-linkKey (reserve-first) owner of each contested slot. Pass-1's reserve-first gap-fill then
+// re-allocates the stripped edge into the next free slot, byte-stable for everything else.
+//
+// Relationship to the historical incumbent — and its limit.
+// In the common re-enable case (the one C2 was reported for) the smaller-linkKey owner IS the
+// historical incumbent: the incumbent was the only enabled link when it was first compiled, so
+// reserve-first put it into that slot precisely because it was the smaller linkKey of whatever
+// contests the slot today. There, "keep smaller-linkKey" == "keep the incumbent", and the heal
+// preserves the live deployment. But this equivalence is NOT guaranteed: when two different-link
+// edges carry IDENTICAL pins at the same natural reserve-first slot, the historical owner is
+// genuinely unrecoverable (no timestamp on model.Edge — plan-8 ruled out adding one as uncodeable),
+// and if the incumbent happens to hold the LARGER linkKey the heal keeps the smaller-linkKey edge
+// and strips the incumbent (which then re-allocates a fresh slot on the next compile). This
+// symmetric ambiguity is an accepted limit, not a bug: the heal does NOT promise to always preserve
+// the incumbent. What it DOES guarantee is independent of which edge was deployed first — for any
+// colliding set the result is ALWAYS clean (collision-free), DETERMINISTIC (the linkKey sort has no
+// ties across distinct links, so a given topology always heals to the same outcome), and a stable
+// FIXED POINT (recompiling the healed topology does not churn the kept edges, because the kept edge
+// is exactly the one reserve-first allocation reproduces).
 //
 // It mirrors the validator's dedup precisely:
 //   - disabled edges and client-touched edges are skipped (neither checked nor claimed);
@@ -91,9 +107,10 @@ func HealCollidingPins(topo *model.Topology) bool {
 
 	// Process edges in reserve-first (linkKey-SORTED) order, the same priority the allocator's
 	// Pass-1 gap-fill uses, so the kept claimant of a slot is exactly the edge whose pin reserve-
-	// first allocation reproduces (the incumbent), not whichever edge happens to come first in slice
-	// order. Ties (the forward/reverse edges of one link share a linkKey, and slice order among them
-	// is irrelevant because same-link claims never collide) are broken by original slice index to
+	// first allocation reproduces (the smaller-linkKey owner — the historical incumbent in the common
+	// re-enable case, see the discriminator note above), not whichever edge happens to come first in
+	// slice order. Ties (the forward/reverse edges of one link share a linkKey, and slice order among
+	// them is irrelevant because same-link claims never collide) are broken by original slice index to
 	// keep the walk deterministic. We sort indices, not edges, so the in-place mutation still targets
 	// the original topo.Edges[i].
 	order := make([]int, 0, len(topo.Edges))
