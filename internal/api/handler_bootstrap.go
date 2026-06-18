@@ -322,6 +322,23 @@ func validateOperatorCredentialBinding(cred controller.OperatorCredential) *apie
 	return nil
 }
 
+// UnsafeOperatorCredentialBindingField reports the offending field ("rpid"/"origin") of a
+// stored operator credential whose binding would NOT pass the forward-only validate-at-pin
+// gate (validateOperatorCredentialBinding) — i.e. a credential pinned BEFORE that gate existed
+// whose RPID/Origin still carries whitespace or a shell metacharacter and would word-split via
+// the unquoted ${OP_FLAGS} in the rendered bootstrap script. Returns "" when the binding is safe.
+//
+// It is the EXPORTED, advisory-only counterpart of the pin-time gate: the byte-class logic is
+// single-sourced through validateOperatorCredentialBinding so the startup warning and the pin
+// rejection can never diverge. Callers (the controller startup path in cmd/server) use this to
+// log a WARNING — never to lock an already-authenticated operator out mid-upgrade.
+func UnsafeOperatorCredentialBindingField(cred controller.OperatorCredential) string {
+	if err := validateOperatorCredentialBinding(cred); err != nil {
+		return err.Params()["field"]
+	}
+	return ""
+}
+
 // validateAgentRollout enforces D8 on the signed agent self-update pins: semver target/min
 // versions, a "linux-<arch>" bin key, a safe asset filename, and a 64-hex SHA-256 per pin. These
 // flow into the controller-signed artifacts.json the agent verifies a fetched binary against

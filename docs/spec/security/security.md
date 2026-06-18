@@ -134,3 +134,21 @@ the intended deployment posture. Each names the threat boundary that makes it ac
   *Optional defense-in-depth stretch (NOT rc.1):* bind the CSRF token to the session server-side
   (store the expected token alongside the session and compare), removing the reliance on same-origin
   cookie isolation entirely.
+
+- **A legacy-stored operator-credential binding is advisory-warned, not retroactively rejected (S11).**
+  The operator credential's `RPID`/`Origin` are emitted UNQUOTED into the root-executed bootstrap
+  script's `OP_FLAGS` accumulator (the unquoted `${OP_FLAGS}` is intentional word-splitting — see
+  `internal/api/handler_bootstrap.go`, `validateOperatorCredentialBinding`). A FORWARD-ONLY
+  validate-at-pin gate rejects whitespace + shell metacharacters in those fields at pin time, so any
+  credential pinned AFTER the gate is safe by construction. The gate is forward-only by design:
+  retroactively clearing or refusing a credential that was pinned BEFORE the gate (and may carry a
+  legacy whitespace/metacharacter binding) would lock the operator's keystone out mid-upgrade. Instead
+  the controller runs the SAME byte-class check (`api.UnsafeOperatorCredentialBindingField`,
+  single-sourced through the pin-time gate) against the stored credential AT STARTUP and logs a
+  per-tenant **WARNING** naming the offending field (`cmd/server/main.go`, `serveController`), so the
+  owner re-pins to remove it. **Threat boundary:** the field is operator-controlled, not request input,
+  and the injection target is a script already running as root on the operator's own enrolling host —
+  exploiting it requires an already-authenticated operator to have pinned a self-crafted hostile
+  binding, so the residual is a self-inflicted footgun, not an external-attacker path. **Accepted as
+  rc.1.** *Optional defense-in-depth stretch (NOT rc.1):* on next successful operator re-pin, normalize
+  or hard-reject the legacy binding so the residual cannot persist indefinitely across upgrades.
