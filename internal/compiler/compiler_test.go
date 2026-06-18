@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -413,7 +414,7 @@ func TestCompile_SimpleMesh(t *testing.T) {
 	keys := testKeys()
 
 	c := NewCompiler()
-	result, err := c.Compile(topo, keys)
+	result, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}

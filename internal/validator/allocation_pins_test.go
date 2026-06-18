@@ -130,7 +130,7 @@ func TestValidateAllocationPins_PortAboveMax(t *testing.T) {
 }
 
 // TestValidateAllocationPins_PortBelowMin asserts that a port pin below the manual-pin lower bound
-// minPinnedPort (1024, the privileged-port range) is rejected.
+// allocconst.MinPinnedPort (1024, the privileged-port range) is rejected.
 func TestValidateAllocationPins_PortBelowMin(t *testing.T) {
 	topo := pinnedTopology()
 	topo.Edges[0].PinnedFromPort = 500 // < 1024 (privileged-port range)
@@ -272,6 +272,25 @@ func TestValidateAllocationPins_ReverseEdgeNotDuplicate(t *testing.T) {
 	result := ValidateSemantic(topo)
 	if pinErrorCount(result) != 0 {
 		t.Errorf("the forward/reverse edges of the same link (mirrored pins) should not be judged duplicate occupancy, but reported %d pin errors: %v", pinErrorCount(result), result.Errors)
+	}
+}
+
+// TestValidateAllocationPins_ReenableCollisionSafetyNet is the validator-side C2 counterpart
+// (plan-8 Phase 6.3). The compiler-side fix is normalize.HealCollidingPins, which strips the
+// re-enabled edge's stale pins before compile. This test pins the SAFETY NET: if a re-enable
+// collision ever reaches the validator UN-healed (any path the heal misses), the loud
+// CodePin*DuplicateCrossLink error MUST still fire — the heal is a convenience, not the only
+// guard. Two ENABLED edges of different links both pinning the same transit pair is exactly the
+// shape the heal repairs; here we assert the validator rejects it when the heal did not run.
+func TestValidateAllocationPins_ReenableCollisionSafetyNet(t *testing.T) {
+	topo := threeNodeTwoLinkTopology()
+	// Make the node-1<->node-3 link (edge-3) collide with the node-1<->node-2 link on the same
+	// transit pair (10.10.0.1/10.10.0.2) — the un-healed re-enable corruption shape.
+	topo.Edges[2].PinnedFromTransitIP = "10.10.0.1"
+	topo.Edges[2].PinnedToTransitIP = "10.10.0.2"
+	result := ValidateSemantic(topo)
+	if pinErrorCount(result) == 0 {
+		t.Errorf("an un-healed re-enable cross-link transit collision must still be flagged by the validator safety net, but no pin error fired: %v", result.Errors)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
@@ -516,24 +517,18 @@ func validateMimicTransport(topo *model.Topology, nodeMap map[string]*model.Node
 	}
 }
 
-// defaultTransitCIDR is the fallback transit address pool used when a domain does not explicitly
-// configure transit_cidr; it must match the same-named constant in compiler/peers.go -- a pin's
-// out-of-CIDR check must judge against the pool the compiler actually resolves, and if the two
-// diverge the check could pass a pin the compiler then rejects (or vice versa).
-const defaultTransitCIDR = "10.10.0.0/24"
-
 // edgeTransitCIDR resolves the transit address pool an edge actually uses.
 // Consistent with the resolution rule in compiler/peers.go Pass 1: take the transit_cidr of the
 // domain the from node belongs to, falling back to the default 10.10.0.0/24 when empty.
 func edgeTransitCIDR(edge model.Edge, domainMap map[string]*model.Domain, nodeMap map[string]*model.Node) string {
 	fromNode := nodeMap[edge.FromNodeID]
 	if fromNode == nil {
-		return defaultTransitCIDR
+		return allocconst.DefaultTransitCIDR
 	}
 	if domain := domainMap[fromNode.DomainID]; domain != nil && domain.TransitCIDR != "" {
 		return domain.TransitCIDR
 	}
-	return defaultTransitCIDR
+	return allocconst.DefaultTransitCIDR
 }
 
 // The link canonical key and link key are provided by internal/linkid (linkid.PinKey /
@@ -626,8 +621,8 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		// --- Rule: partial pin (one end pinned, the other empty). Checked per resource. ---
 		validatePinPairCompleteness(prefix, edge, result)
 
-		// --- Rule: port out of range (below minPinnedPort (1024, the manual lower bound after the PR7
-		// relaxation), or > 65535). ---
+		// --- Rule: port out of range (below allocconst.MinPinnedPort (1024, the manual lower bound after
+		// the PR7 relaxation), or > 65535). ---
 		validatePinnedPortRange(prefix, "pinned_from_port", edge.PinnedFromPort, fromNode, result)
 		validatePinnedPortRange(prefix, "pinned_to_port", edge.PinnedToPort, toNode, result)
 
@@ -664,24 +659,15 @@ func validatePinPairCompleteness(prefix string, edge model.Edge, result *Validat
 	}
 }
 
-// minPinnedPort is the lower bound for an OPERATOR-CHOSEN pinned listen port (PR7). Auto-
-// allocation still starts at defaultListenPort (51820), but a port-restricted NAT VPS often only
-// forwards a fixed range BELOW 51820 (e.g. 30000-30100), and the internal listen port must fall
-// inside that range for the external→internal forward to work — so a manual pin may legitimately
-// go lower than the auto base. 1024 keeps pins out of the privileged-port range (the agent runs
-// as root and could bind lower, but 1-1023 risks clashing with system services) while admitting
-// every realistic NAT-VPS range.
-const minPinnedPort = 1024
-
 // validatePinnedPortRange validates that a single pinned port falls within the legal range:
-// it must be >= minPinnedPort (1024, the manual lower bound after the PR7 relaxation) and <= 65535.
+// it must be >= allocconst.MinPinnedPort (1024, the manual lower bound after the PR7 relaxation) and <= 65535.
 // A port of 0 means unpinned and is skipped (pair completeness is handled by validatePinPairCompleteness).
 func validatePinnedPortRange(prefix, field string, port int, node *model.Node, result *ValidationResult) {
 	if port == 0 {
 		return
 	}
-	if port < minPinnedPort || port > 65535 {
-		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(minPinnedPort)})
+	if port < allocconst.MinPinnedPort || port > 65535 {
+		result.AddError(prefix+"."+field, CodePinPortOutOfRange, P{"node", node.Name}, P{"port", strconv.Itoa(port)}, P{"base", strconv.Itoa(allocconst.MinPinnedPort)})
 	}
 }
 
@@ -838,13 +824,6 @@ func detectDuplicateEnabledEdges(topo *model.Topology, result *ValidationResult)
 	}
 }
 
-// backupDefaultLinkCost is the default Babel rxcost for a backup link (4x babeld's wired default of
-// 96); it must match the same-named constant in compiler/peers.go -- the equal-cost warning must
-// compare against the cost the compiler actually resolves, and if the two diverge the check could
-// pass a config the compiler then treats as having a failover preference (or vice versa).
-// Spec: docs/spec/artifacts/babel.md (Link cost resolution).
-const backupDefaultLinkCost = 384
-
 // babeldWiredDefaultCost is babeld's built-in default rxcost for wired / tunnel interfaces.
 // The compiler resolves a link cost that is "not explicitly set and not backup" to 0 (omitting the
 // rxcost token and deferring to babeld's default); when comparing equal cost, 0 must be treated as
@@ -856,7 +835,7 @@ const babeldWiredDefaultCost = 96
 // babel.md):
 //  1. explicit priority/weight mapping takes precedence (D63: priority>0 takes priority, otherwise
 //     weight>0 takes weight);
-//  2. otherwise a backup link → backupDefaultLinkCost (384);
+//  2. otherwise a backup link → allocconst.BackupDefaultLinkCost (384);
 //  3. otherwise 0 (the compiler omits rxcost and babeld uses its built-in default of 96).
 //
 // The return value is the raw cost the compiler writes (0 means defer to babeld's default). For
@@ -874,7 +853,7 @@ func effectiveLinkCost(rep *model.Edge) int {
 		return rep.Weight
 	}
 	if linkid.IsBackup(rep) {
-		return backupDefaultLinkCost
+		return allocconst.BackupDefaultLinkCost
 	}
 	return 0
 }

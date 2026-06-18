@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -22,7 +23,7 @@ func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys(AirGap): %v", err)
 	}
-	air, err := compiler.NewCompiler().Compile(airTopo, airKeys)
+	air, err := compiler.NewCompiler().Compile(context.Background(), airTopo, airKeys)
 	if err != nil {
 		t.Fatalf("Compile(AirGap): %v", err)
 	}
@@ -35,7 +36,7 @@ func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys(AgentHeld): %v", err)
 	}
-	held, err := compiler.NewCompiler().Compile(heldTopo, heldKeys)
+	held, err := compiler.NewCompiler().Compile(context.Background(), heldTopo, heldKeys)
 	if err != nil {
 		t.Fatalf("Compile(AgentHeld): %v", err)
 	}

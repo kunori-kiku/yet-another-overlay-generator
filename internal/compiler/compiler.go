@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"time"
@@ -101,8 +102,12 @@ func (c *Compiler) WithReserved(r *ReservedAllocations) *Compiler {
 }
 
 // Compile runs the full compilation pipeline on topo and returns a CompileResult, or an error if
-// any validation stage fails.
-func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error) {
+// any validation stage fails. ctx bounds the IP-allocation pass (Pass 3): an over-large domain
+// CIDR is rejected fast (CodeOverlayScanBudgetExceeded) and a long scan is abortable on request
+// cancellation. The request context flows in from the HTTP boundary; the air-gap CLI passes
+// context.Background(). (The ctx signature on Compile is owned by plan-3's frozen-contract
+// extraction; plan-8 extends the remaining hop to the allocator and consumes ctx in the scan.)
+func (c *Compiler) Compile(ctx context.Context, topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error) {
 	// Pass 1: Schema validation.
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
@@ -122,7 +127,7 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	warnings = append(warnings, semanticResult.Warnings...)
 
 	// Pass 3: IP allocation.
-	allocatedNodes, err := c.ipAllocator.AllocateIPs(topo)
+	allocatedNodes, err := c.ipAllocator.AllocateIPs(ctx, topo)
 	if err != nil {
 		return nil, fmt.Errorf("IP allocation failed: %w", err)
 	}
@@ -246,6 +251,19 @@ func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*Comp
 	return result, nil
 }
 
+// computeChecksum is a DISPLAY-ONLY, NON-CANONICAL fingerprint of the compiled
+// topology, surfaced in CompileManifest.Checksum purely as a human-facing "did
+// anything change?" hint in the UI. It is NOT the bundle digest: the signed,
+// canonical per-node bundle digest is produced by internal/bundlesig
+// (Canonicalize over the sha256sum -c checksums string), and a signature is
+// NEVER taken over this value.
+//
+// It hashes fmt.Sprintf("%v", topo), whose output depends on Go's struct/map
+// formatting and map iteration order, so it is neither stable across Go
+// versions nor reproducible by a non-Go implementation. It is therefore
+// explicitly OUT OF SCOPE for plan-5's Go<->TS conformance harness — the
+// TypeScript local-mode compiler port cannot and should not attempt to
+// reproduce this value. Do not promote it to a security or equivalence anchor.
 func computeChecksum(topo *model.Topology) string {
 	h := sha256.New()
 	h.Write([]byte(fmt.Sprintf("%v", topo)))

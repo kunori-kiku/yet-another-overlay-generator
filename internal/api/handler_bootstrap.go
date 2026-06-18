@@ -267,7 +267,7 @@ func validateMimicCatalog(cs controller.ControllerSettings) *apierr.Error {
 		// Defense-in-depth: the base is emitted into artifacts.json and read into a root install.sh
 		// (used quoted, so this is not a live injection), but reject shell-dangerous bytes anyway so
 		// it is as strict as the sibling asset/key pins. A real release URL contains none of these.
-		if strings.ContainsAny(cs.MimicReleaseBase, "$`;|&<>(){}[]'\"\\*? ") {
+		if strings.ContainsAny(cs.MimicReleaseBase, shellDangerousBytes) {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_release_base")
 		}
 	}
@@ -286,6 +286,57 @@ func validateMimicCatalog(cs controller.ControllerSettings) *apierr.Error {
 		}
 	}
 	return nil
+}
+
+// shellDangerousBytes is the shell-metacharacter class rejected on operator-set fields that
+// are baked into the root-executed bootstrap script (see validateMimicCatalog at the release
+// base). It already includes a space; validateOperatorCredentialBinding adds the remaining
+// whitespace (tab/CR/LF/VT/FF) because the OP_FLAGS injection vector is word-splitting.
+const shellDangerousBytes = "$`;|&<>(){}[]'\"\\*? "
+
+// validateOperatorCredentialBinding rejects an operator credential whose RPID or Origin
+// carries shell-dangerous bytes OR whitespace. These two fields are emitted UNQUOTED into the
+// bootstrap script's OP_FLAGS accumulator (handler_bootstrap.go OP_FLAGS / ExecStart / --once:
+// the unquoted ${OP_FLAGS} is intentional — it is a multi-flag string that REQUIRES word-
+// splitting to expand into separate argv entries, hence the explicit `# shellcheck disable=SC2086`).
+// Quoting OP_FLAGS would collapse every flag into one argument and break enrollment, so the
+// load-bearing defense is validate-at-pin: once RPID/Origin contain no whitespace and no
+// metacharacter, the unquoted expansion is safe BY CONSTRUCTION. Whitespace is the primary
+// vector here (word-splitting), so it is rejected in addition to the shell metacharacter class
+// reused from validateMimicCatalog. Empty RPID/Origin are valid (a keystone binding need not
+// carry either). Returns a coded *apierr.Error (CodeReqFieldInvalid) naming the field, or nil.
+func validateOperatorCredentialBinding(cred controller.OperatorCredential) *apierr.Error {
+	const whitespaceBytes = " \t\r\n\v\f" // matches validateAbsoluteHTTPURL's reject class
+	check := func(field, val string) *apierr.Error {
+		if strings.ContainsAny(val, shellDangerousBytes) || strings.ContainsAny(val, whitespaceBytes) {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", field)
+		}
+		return nil
+	}
+	if err := check("rpid", cred.RPID); err != nil {
+		return err
+	}
+	if err := check("origin", cred.Origin); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UnsafeOperatorCredentialBindingField reports the offending field ("rpid"/"origin") of a
+// stored operator credential whose binding would NOT pass the forward-only validate-at-pin
+// gate (validateOperatorCredentialBinding) — i.e. a credential pinned BEFORE that gate existed
+// whose RPID/Origin still carries whitespace or a shell metacharacter and would word-split via
+// the unquoted ${OP_FLAGS} in the rendered bootstrap script. Returns "" when the binding is safe.
+//
+// It is the EXPORTED, advisory-only counterpart of the pin-time gate: the byte-class logic is
+// single-sourced through validateOperatorCredentialBinding so the startup warning and the pin
+// rejection can never diverge. Callers (the controller startup path in cmd/server) use this to
+// log a WARNING — never to lock an already-authenticated operator out mid-upgrade.
+func UnsafeOperatorCredentialBindingField(cred controller.OperatorCredential) string {
+	if err := validateOperatorCredentialBinding(cred); err != nil {
+		return err.Params()["field"]
+	}
+	return ""
 }
 
 // validateAgentRollout enforces D8 on the signed agent self-update pins: semver target/min
@@ -436,6 +487,15 @@ write_operator_cred() {
 
 # Build the keystone (off-host operator credential) flags when the controller baked a
 # credential into this script (keystone ON). The PEM is public; written 0600 anyway.
+#
+# OP_FLAGS is a multi-flag ACCUMULATOR: each [ -n ... ] && append builds one space-
+# separated string ("--operator-cred FILE --operator-cred-alg ALG --operator-rpid RPID ...").
+# It is expanded UNQUOTED at the ExecStart and --once sites below precisely so word-splitting
+# turns it back into separate argv entries; quoting it would pass the whole string as one
+# argument and break enrollment. That unquoted expansion is safe BY CONSTRUCTION because the
+# controller rejects whitespace + shell metacharacters in RPID/Origin at pin time
+# (validateOperatorCredentialBinding) and shQuotes the ALG, so no field can inject a flag or a
+# command. Do NOT "fix" the SC2086-disabled --once line: the unquoting is intentional.
 OP_FLAGS=""
 if [ -n "$OPERATOR_CRED_PEM" ]; then
   install -d -m 0700 /etc/wireguard
@@ -484,6 +544,9 @@ UNIT
   echo ">> agent installed + (re)started as a daemon; the current generation applies on the next poll"
 else
   echo ">> applying once"
+  # $OP_FLAGS MUST stay unquoted here: it is a word-split multi-flag accumulator (see the
+  # OP_FLAGS comment above). Safe by construction — RPID/Origin are whitespace/metachar-free
+  # by validate-at-pin (validateOperatorCredentialBinding) and the alg/cred are shQuoted.
   # shellcheck disable=SC2086
   /usr/local/bin/yaog-agent run --controller "$CONTROLLER" --node-id "$NODE_ID" $OP_FLAGS
 fi

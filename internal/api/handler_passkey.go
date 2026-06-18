@@ -233,6 +233,17 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "rpid"))
 		return
 	}
+	// B3 (plan-8 Phase 7): a LOGIN passkey MUST carry a non-empty Origin so that the verifier's
+	// advisory origin gate (webauthn.go: `if pin.Origin != ""`) is authoritative for the panel
+	// login path — a browser login can prove which origin issued the assertion, so binding it
+	// stops a credential phished/replayed from a different origin. This required-check, NOT a
+	// crypto change, is what makes the existing gate fire for login pins; the shared
+	// VerifyAssertion is left untouched (the node keystone path intentionally pins an empty
+	// Origin, because a node cannot prove which browser origin a user used months earlier).
+	if strings.TrimSpace(req.Origin) == "" {
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "origin"))
+		return
+	}
 	now := time.Now().UTC()
 	op.LoginCredential = &controller.LoginCredential{
 		Alg:          req.Alg,

@@ -73,6 +73,17 @@ const (
 const (
 	maxTopologyNodes = 2000
 	maxTopologyEdges = 10000
+	// maxTopologyDomains bounds the number of domains a topology may carry. Each domain drives a
+	// separate allocation pool (its own CIDR scan + reserved-range walk), so an unbounded domain
+	// count is the same DoS class as the nodes/edges bound — it is far above any realistic overlay
+	// (a handful of domains), so it stops "a million domains", not a power user.
+	maxTopologyDomains = 1000
+	// maxReservedRangesPerDomain bounds the reserved_ranges entries on a SINGLE domain. Every
+	// reserved range is parsed and then Contains-walked for every candidate address during
+	// allocation (an O(candidates × reserved) inner loop), so a domain stamped with thousands of
+	// reserved ranges is an amplification vector independent of node/edge/domain counts. The
+	// ceiling is far above any realistic carve-out list.
+	maxReservedRangesPerDomain = 1000
 )
 
 // topologyExceedsBounds reports whether a topology must be rejected at the root before any
@@ -82,9 +93,20 @@ const (
 // ValidateSchema and ValidateSemantic short-circuit on it so neither the per-entity loops
 // nor the O(n²) semantic checks touch abusive bulk or a future-format topology.
 func topologyExceedsBounds(topo *model.Topology) bool {
-	return topo.AllocSchemaVersion > model.CurrentAllocSchemaVersion ||
+	if topo.AllocSchemaVersion > model.CurrentAllocSchemaVersion ||
 		len(topo.Nodes) > maxTopologyNodes ||
-		len(topo.Edges) > maxTopologyEdges
+		len(topo.Edges) > maxTopologyEdges ||
+		len(topo.Domains) > maxTopologyDomains {
+		return true
+	}
+	// Reserved ranges are bounded PER domain (the amplification is the per-domain Contains walk),
+	// so a single over-cap domain trips the root guard.
+	for i := range topo.Domains {
+		if len(topo.Domains[i].ReservedRanges) > maxReservedRangesPerDomain {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidateSchema(topo *model.Topology) *ValidationResult {
@@ -106,6 +128,16 @@ func ValidateSchema(topo *model.Topology) *ValidationResult {
 		if len(topo.Edges) > maxTopologyEdges {
 			result.AddError("edges", CodeTopologyTooManyEdges,
 				P{"count", strconv.Itoa(len(topo.Edges))}, P{"max", strconv.Itoa(maxTopologyEdges)})
+		}
+		if len(topo.Domains) > maxTopologyDomains {
+			result.AddError("domains", CodeTopologyTooManyDomains,
+				P{"count", strconv.Itoa(len(topo.Domains))}, P{"max", strconv.Itoa(maxTopologyDomains)})
+		}
+		for i := range topo.Domains {
+			if n := len(topo.Domains[i].ReservedRanges); n > maxReservedRangesPerDomain {
+				result.AddError(fmt.Sprintf("domains[%d].reserved_ranges", i), CodeTopologyTooManyReservedRanges,
+					P{"count", strconv.Itoa(n)}, P{"max", strconv.Itoa(maxReservedRangesPerDomain)})
+			}
 		}
 		return result
 	}

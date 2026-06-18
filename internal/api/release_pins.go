@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -77,13 +78,23 @@ func isPublicUnicastIP(ip net.IP) bool {
 	}
 	if ip4 := ip.To4(); ip4 != nil {
 		// 100.64.0.0/10 (RFC6598 CGNAT) is not covered by IsPrivate but is not public either.
-		return !(ip4[0] == 100 && ip4[1]&0xc0 == 64)
+		if ip4[0] == 100 && ip4[1]&0xc0 == 64 {
+			return false
+		}
+		// 192.0.0.0/24 (RFC 6890 IETF protocol assignments) is not RFC1918/CGNAT but is NOT a
+		// public unicast destination — and it contains the OCI instance-metadata service at
+		// 192.0.0.192 (S11). Deny the whole /24 so the metadata endpoint cannot be reached.
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0 {
+			return false
+		}
+		return true
 	}
 	// A non-v4-mapped IPv6 (To4 already unwraps ::ffff:a.b.c.d) may still EMBED an internal
-	// IPv4 inside a special-purpose prefix (6to4 2002::/16, NAT64 64:ff9b::/96) that a host's
-	// 6to4 relay or DNS64/NAT64 gateway can translate onto the internal network. Go's net.IP
-	// predicates do not look through these, so unwrap and re-check the embedded IPv4 — else a
-	// 6to4/NAT64 form of 127.0.0.1 / 169.254.169.254 would slip past the guard.
+	// IPv4 inside a special-purpose prefix (6to4 2002::/16, NAT64 64:ff9b::/96, or the
+	// deprecated IPv4-compatible ::a.b.c.d form) that a host's 6to4 relay, DNS64/NAT64 gateway,
+	// or legacy stack can translate onto the internal network. Go's net.IP predicates and To4()
+	// do not look through these, so unwrap and re-check the embedded IPv4 — else a 6to4/NAT64
+	// or ::a.b.c.d form of 127.0.0.1 / 169.254.169.254 would slip past the guard.
 	if embedded := embeddedIPv4(ip); embedded != nil {
 		return isPublicUnicastIP(embedded)
 	}
@@ -94,8 +105,9 @@ func isPublicUnicastIP(ip net.IP) bool {
 // IPv4 is the trailing 4 bytes.
 var nat64WellKnownPrefix = []byte{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0}
 
-// embeddedIPv4 returns the IPv4 carried inside a 6to4 (2002::/16) or NAT64 well-known
-// (64:ff9b::/96) IPv6 address, or nil if ip is neither.
+// embeddedIPv4 returns the IPv4 carried inside a 6to4 (2002::/16), NAT64 well-known
+// (64:ff9b::/96), or IPv4-compatible (::a.b.c.d, the deprecated RFC 4291 form with a zero
+// high-96 and a non-trivial low-32) IPv6 address, or nil if ip is none of those.
 func embeddedIPv4(ip net.IP) net.IP {
 	ip = ip.To16()
 	if ip == nil {
@@ -107,7 +119,21 @@ func embeddedIPv4(ip net.IP) net.IP {
 	if bytes.Equal(ip[:12], nat64WellKnownPrefix) { // NAT64: IPv4 in the trailing 4 bytes
 		return net.IPv4(ip[12], ip[13], ip[14], ip[15])
 	}
-	return nil
+	// IPv4-compatible ::a.b.c.d: a zero high-96 with a non-trivial low-32. Go's To4() does NOT
+	// unwrap this form (only ::ffff:a.b.c.d), so without this branch ::127.0.0.1 (parsed to
+	// ::7f00:1) and ::169.254.169.254 would slip through as an "ordinary" public IPv6. Guard
+	// against the trivial low values that are NOT an embedded host: :: (unspecified — already
+	// caught upstream) and ::a.b.c.d where the low-32 is < 256 (e.g. ::1 loopback, ::255), which
+	// are reserved/degenerate and never a real translated v4 destination.
+	for i := 0; i < 12; i++ {
+		if ip[i] != 0 {
+			return nil // non-zero high-96 → not the ::a.b.c.d form
+		}
+	}
+	if ip[12] == 0 && ip[13] == 0 { // low-32 < 65536: :: , ::1 , ::a.b — degenerate, not an embedded v4
+		return nil
+	}
+	return net.IPv4(ip[12], ip[13], ip[14], ip[15])
 }
 
 // newReleasePinClient builds the egress-guarded HTTP client the release-pin handler fetches
@@ -332,11 +358,22 @@ func (h *ControllerHandler) HandleReleasePins(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// genericFetchDetail is the FIXED client-facing detail for a transport/dial/read failure. The
+// real err (which a dial refusal embeds the RESOLVED IP into — "...non-public address <IP>") is
+// kept ONLY in the wrapped cause for the server log, never in a serialized param: putting the
+// resolved IP on the wire would turn a 502 into a DNS-rebind oracle (S8 — confirm which internal
+// IP a hostname resolves to). The status-code branch keeps "HTTP <code>" (no IP).
+const genericFetchDetail = "fetch failed"
+
 // fetchSidecar GETs a release .sha256 sidecar through the egress-guarded client and returns the
 // lower-cased 64-hex digest it contains. The body is read through a small LimitReader and the
 // first whitespace-delimited token is validated against sha256HexPattern, so an HTML error page,
 // an oversize file, or a malformed sidecar is rejected rather than trusted. A transport/status
 // failure → CodeAgentReleaseFetchFailed (502); a non-SHA-256 body → CodeAgentReleaseSidecarInvalid.
+//
+// S8: transport/dial/read failures collapse to genericFetchDetail on the wire; the underlying err
+// (which may carry the resolved internal IP) is logged server-side and kept only as the wrapped
+// cause, never as a serialized "detail" param.
 func (h *ControllerHandler) fetchSidecar(ctx context.Context, url string) (string, *apierr.Error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -344,7 +381,8 @@ func (h *ControllerHandler) fetchSidecar(ctx context.Context, url string) (strin
 	}
 	resp, err := h.releaseClient.Do(req)
 	if err != nil {
-		return "", apierr.New(apierr.CodeAgentReleaseFetchFailed).With("url", url).With("detail", err.Error()).Wrap(err)
+		log.Printf("release-pin fetch %s: transport error: %v", url, err) // server log only; never serialized
+		return "", apierr.New(apierr.CodeAgentReleaseFetchFailed).With("url", url).With("detail", genericFetchDetail).Wrap(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -352,7 +390,8 @@ func (h *ControllerHandler) fetchSidecar(ctx context.Context, url string) (strin
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, releaseSidecarCap))
 	if err != nil {
-		return "", apierr.New(apierr.CodeAgentReleaseFetchFailed).With("url", url).With("detail", err.Error()).Wrap(err)
+		log.Printf("release-pin fetch %s: body read error: %v", url, err) // server log only; never serialized
+		return "", apierr.New(apierr.CodeAgentReleaseFetchFailed).With("url", url).With("detail", genericFetchDetail).Wrap(err)
 	}
 	fields := strings.Fields(string(body))
 	if len(fields) == 0 || !sha256HexPattern.MatchString(fields[0]) {

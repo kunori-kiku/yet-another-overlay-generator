@@ -67,6 +67,20 @@ func TestIsPublicUnicastIP(t *testing.T) {
 		{"64:ff9b::7f00:1", false},        // NAT64 of 127.0.0.1
 		{"64:ff9b::a9fe:a9fe", false},     // NAT64 of 169.254.169.254 (metadata)
 		{"64:ff9b::808:808", true},        // NAT64 of public 8.8.8.8 → still public
+		// S7: IPv4-compatible IPv6 (::a.b.c.d) — zero high-96, non-trivial low-32. Go's To4()
+		// does NOT unwrap this deprecated form (unlike ::ffff:a.b.c.d), so without an explicit
+		// embedded-v4 decode a 6to4/NAT64-style bypass exists for the OLDEST mapping too.
+		{"::127.0.0.1", false},       // ::a.b.c.d of loopback (parses to ::7f00:1)
+		{"::169.254.169.254", false}, // ::a.b.c.d of cloud-metadata link-local
+		{"::8.8.8.8", true},          // ::a.b.c.d of public 8.8.8.8 → still public (no over-block)
+		// S11: OCI instance-metadata service lives at 192.0.0.192 inside the IETF
+		// special-purpose 192.0.0.0/24 block (RFC 6890) — not RFC1918, not CGNAT, so the
+		// pre-fix To4 branch let it through. Deny the whole /24 (IETF protocol assignments,
+		// never a public unicast destination).
+		{"192.0.0.192", false}, // OCI metadata endpoint
+		{"192.0.0.1", false},   // 192.0.0.0/24 lower bound
+		{"192.0.0.255", false}, // 192.0.0.0/24 upper bound
+		{"192.0.1.1", true},    // just outside the /24 → public again
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.ip)
@@ -304,6 +318,47 @@ func TestReleasePins_SSRFRefusesLoopback(t *testing.T) {
 	}, nil)
 	if status != http.StatusBadGateway {
 		t.Fatalf("status %d, want 502 (the egress guard must refuse loopback)", status)
+	}
+}
+
+// TestFetchSidecar_ErrorBodyHidesResolvedIP is the S8 DNS-oracle regression: a dial refused by the
+// egress guard (or any transport failure) must NOT leak the resolved internal IP into the
+// client-facing error. The guard's refusal string embeds the IP ("...non-public address
+// 169.254.169.254"); if that string reaches .With("detail", err.Error()) it serializes into the
+// response (params["detail"] AND the interpolated Message), turning a 502 into a DNS-rebind oracle
+// that confirms which internal IP a hostname resolves to. The inner err stays in the server log
+// (the wrapped cause), never on the wire.
+func TestFetchSidecar_ErrorBodyHidesResolvedIP(t *testing.T) {
+	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch.releaseClient = newReleasePinClient() // PRODUCTION egress-guarded client
+
+	// A hostname (NOT a literal IP) so the resolved IP is a NEW fact the response would disclose:
+	// the operator typed the hostname, the guard learns the IP, and "detail" must not echo it back.
+	// Resolving to a fixed internal IP is the DNS-rebind oracle case; we assert the leak path is
+	// closed regardless of which internal address resolution produced.
+	_, aerr := ch.fetchSidecar(context.Background(), "http://localhost/yaog-agent-linux-amd64.sha256")
+	if aerr == nil {
+		t.Fatal("fetchSidecar to a loopback hostname should fail (egress guard)")
+	}
+
+	// The leak we forbid: the resolved internal IP reaching the serialized "detail" param. The
+	// production guard's refusal string is "...non-public address <IP>"; collapsing it to a fixed
+	// generic detail keeps that IP out of params[detail] (and out of the {detail} interpolation in
+	// Message). The "url" param echoes only the operator-supplied URL (a loopback HOSTNAME here, no
+	// IP), so it is not an oracle.
+	detail := aerr.Params()["detail"]
+	for _, leak := range []string{"127.0.0.1", "::1", "address", "refusing", "non-public"} {
+		if strings.Contains(detail, leak) {
+			t.Errorf("params[detail] = %q leaks the dial/guard internals (%q); must be a fixed generic detail", detail, leak)
+		}
+	}
+	if strings.Contains(aerr.Message(), "127.0.0.1") {
+		t.Errorf("Message leaks the resolved loopback IP: %q", aerr.Message())
+	}
+	// The inner cause (server-log only) is preserved for the log but never serialized:
+	// writeAPIError serializes Code/Message/Params, NOT Unwrap(). It MAY carry the IP.
+	if cause := aerr.Unwrap(); cause != nil {
+		t.Logf("note: wrapped cause = %q (kept for server log, never serialized)", cause.Error())
 	}
 }
 

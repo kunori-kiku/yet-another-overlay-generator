@@ -66,6 +66,7 @@ var allCodes = []Code{
 	CodeListenPortExhausted,
 	CodeOverlayCIDRInvalid,
 	CodeOverlayPoolExhausted,
+	CodeOverlayScanBudgetExceeded,
 	CodeNodeUnknownDomain,
 	CodeRenderFailed,
 	CodeExportUnsafeName,

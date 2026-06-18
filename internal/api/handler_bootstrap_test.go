@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
@@ -173,6 +174,47 @@ func TestValidateMimicCatalog(t *testing.T) {
 	for i, cs := range bad {
 		if err := validateMimicCatalog(cs); err == nil {
 			t.Errorf("bad[%d] validateMimicCatalog = nil, want error (cs=%+v)", i, cs)
+		}
+	}
+}
+
+// TestValidateOperatorCredentialBinding: the operator-credential RPID/Origin are baked
+// (unquoted, by design — OP_FLAGS is a word-split multi-flag accumulator) into the
+// bootstrap script. Validate-at-pin rejects whitespace (the word-splitting vector) and
+// the same shell-dangerous byte class the mimic-catalog base check uses, so the unquoted
+// ${OP_FLAGS} expansion stays safe by construction. Empty RPID/Origin are valid (keystone
+// may carry an alg-only binding). A clean RPID/Origin pair passes.
+func TestValidateOperatorCredentialBinding(t *testing.T) {
+	good := []controller.OperatorCredential{
+		{}, // empty binding is fine (no RPID/Origin to inject)
+		{RPID: "overlay.example.com", Origin: "https://overlay.example.com"},
+		{RPID: "overlay.example.com:9090"}, // a port colon is not in the dangerous class
+		{Origin: "https://overlay.example.com:9090"},
+	}
+	for i, c := range good {
+		if err := validateOperatorCredentialBinding(c); err != nil {
+			t.Errorf("good[%d] validateOperatorCredentialBinding = %v, want nil (cred=%+v)", i, err, c)
+		}
+	}
+
+	bad := []controller.OperatorCredential{
+		{RPID: "overlay.example.com --inject-flag"},      // whitespace (word-split vector) in RPID
+		{Origin: "https://overlay.example.com --daemon"}, // whitespace in Origin
+		{RPID: "rp\tid"},                 // tab whitespace
+		{Origin: "https://x\nhttps://y"}, // newline whitespace
+		{RPID: "rp$(reboot)id"},          // shell metachar in RPID
+		{Origin: "https://x;reboot"},     // shell metachar in Origin
+		{RPID: "rp`id`"},                 // backtick in RPID
+		{Origin: "https://x|y"},          // pipe in Origin
+	}
+	for i, c := range bad {
+		err := validateOperatorCredentialBinding(c)
+		if err == nil {
+			t.Errorf("bad[%d] validateOperatorCredentialBinding = nil, want coded error (cred=%+v)", i, c)
+			continue
+		}
+		if err.Code() != apierr.CodeReqFieldInvalid {
+			t.Errorf("bad[%d] code = %q, want %q", i, err.Code(), apierr.CodeReqFieldInvalid)
 		}
 	}
 }

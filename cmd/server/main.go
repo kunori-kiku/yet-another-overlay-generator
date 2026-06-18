@@ -171,6 +171,37 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 		}
 	}
 
+	// B3 (plan-8 Phase 7): NEW login passkeys now require a non-empty Origin (the verifier's
+	// advisory origin gate is authoritative for login pins). Existing pins saved BEFORE this
+	// requirement may have an empty Origin; we do NOT enforce on them (that would lock out an
+	// operator mid-upgrade), but we surface a one-line warning per such operator so the owner
+	// knows to re-register the passkey to gain origin binding. Best-effort; a list error is
+	// non-fatal here (the no-operator warning above already covers the read).
+	if ops, err := store.ListOperators(context.Background(), controller.TenantID(tenant)); err == nil {
+		for _, op := range ops {
+			if op.LoginCredential != nil && strings.TrimSpace(op.LoginCredential.Origin) == "" {
+				log.Printf("controller: WARNING: operator %q has a legacy login passkey with no Origin — origin binding is not enforced for it; re-register the passkey to gain origin binding",
+					op.Username)
+			}
+		}
+	}
+
+	// Legacy operator-credential binding (plan-8 review #2): the forward-only validate-at-pin
+	// gate (validateOperatorCredentialBinding) only covers credentials pinned AFTER it existed.
+	// An operator credential pinned BEFORE this fix may carry a legacy RPID/Origin containing
+	// whitespace or a shell metacharacter, which then word-splits through the unquoted ${OP_FLAGS}
+	// in the rendered bootstrap script — a flag-injection vector for an already-authenticated
+	// operator. We surface it as an ADVISORY startup WARNING (mirroring the B3 legacy login-pin
+	// precedent above) so the owner re-pins the credential; we do NOT refuse to start or clear the
+	// pin, which would lock the operator's keystone out mid-upgrade. Documented as a residual in
+	// docs/spec/security/security.md (S13). Best-effort; a not-found/read error is non-fatal here.
+	if cred, err := store.GetOperatorCredential(context.Background(), controller.TenantID(tenant)); err == nil {
+		if field := api.UnsafeOperatorCredentialBindingField(cred); field != "" {
+			log.Printf("controller: WARNING: tenant %q has a legacy operator credential whose %s contains whitespace or a shell metacharacter — re-pin the operator credential to remove it; until then the bootstrap script's unquoted OP_FLAGS expansion of that field is a flag-injection risk for an authenticated operator",
+				tenant, field)
+		}
+	}
+
 	ch := api.NewControllerHandler(store, controller.TenantID(tenant), opTokenHash, api.DefaultOperatorName)
 	ch.SetOperatorPathPrefix(os.Getenv(envOperatorPathPrefix))
 	ch.SetAgentPathPrefix(os.Getenv(envAgentPathPrefix))

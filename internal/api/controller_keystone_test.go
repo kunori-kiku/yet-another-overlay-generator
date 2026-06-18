@@ -23,6 +23,8 @@ package api
 // trustlist only.
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
@@ -31,11 +33,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -371,6 +376,98 @@ func TestControllerKeystone_ConfigFailsClosedWhenPinnedButNoSignedManifest(t *te
 	}
 	if len(files) != 0 {
 		t.Fatalf("fail-closed /config must serve NO files (no empty/partial trust-list leak), got %d files", len(files))
+	}
+}
+
+// TestControllerKeystone_PinRejectsUnsafeBinding drives the real handleOperatorCredentialPin
+// HTTP path: an operator credential whose RPID or Origin carries whitespace (the OP_FLAGS
+// word-split injection vector) or a shell metacharacter is rejected at pin time with a 400,
+// BEFORE the credential is stored — these fields are baked UNQUOTED into the root-executed
+// bootstrap script's OP_FLAGS accumulator, so the rejection is what keeps that expansion safe
+// by construction. A clean binding still pins (200).
+func TestControllerKeystone_PinRejectsUnsafeBinding(t *testing.T) {
+	env := newCtlTestEnv(t)
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	pem := ed25519PinPEM(t, pub)
+
+	unsafe := []struct {
+		name   string
+		rpid   string
+		origin string
+	}{
+		{"rpid-whitespace", "rp id --inject", ""},
+		{"origin-whitespace", "", "https://x --daemon"},
+		{"rpid-metachar", "rp$(reboot)", ""},
+		{"origin-metachar", "", "https://x;reboot"},
+	}
+	for _, c := range unsafe {
+		if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken,
+			operatorCredentialRequestJSON{Alg: string(trustlist.AlgEd25519), PublicKeyPEM: pem, RPID: c.rpid, Origin: c.origin}, nil); status != http.StatusBadRequest {
+			t.Fatalf("%s: pin status %d, want 400 (unsafe binding must be rejected at pin time)", c.name, status)
+		}
+	}
+
+	// Pin the invariant the rejection exists to protect: an unsafe binding must be
+	// rejected BEFORE it reaches the store, so the server-authoritative status must
+	// still report no credential. (The later clean pin would otherwise mask a leak,
+	// since SameKeystoneCredential ignores RPID/Origin for ed25519 and would not
+	// overwrite a credential a rejected unsafe binding had already stored.)
+	if st := keystoneStatus(t, env); st.Pinned {
+		t.Fatalf("rejected unsafe binding leaked into the store: status reports pinned=true, want false")
+	}
+
+	// A clean binding pins normally (keystone ON).
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken,
+		operatorCredentialRequestJSON{Alg: string(trustlist.AlgEd25519), PublicKeyPEM: pem, RPID: "overlay.example.com", Origin: "https://overlay.example.com"}, nil); status != http.StatusOK {
+		t.Fatalf("clean binding: pin status %d, want 200", status)
+	}
+}
+
+// TestWarnInsecureControllerPosture pins the TOFU-MITM startup warning (plan-8 Phase 5.2,
+// DOCUMENT): the warning fires ONLY in the dev-only no-anchor posture (keystone OFF AND
+// secureCookie=false), and stays silent when EITHER anchor is present (keystone ON, or the
+// default secureCookie=true that signals a TLS front). It never blocks startup.
+func TestWarnInsecureControllerPosture(t *testing.T) {
+	capture := func(configure func(*ControllerHandler)) string {
+		store := controller.NewMemStore()
+		ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+		if configure != nil {
+			configure(ch)
+		}
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		t.Cleanup(func() { log.SetOutput(os.Stderr) })
+		ch.WarnInsecureControllerPosture(context.Background())
+		return buf.String()
+	}
+
+	// keystone OFF + no TLS hint (secureCookie=false) -> warns.
+	if out := capture(func(ch *ControllerHandler) { ch.SetSecureCookie(false) }); !strings.Contains(out, "insecure dev posture") {
+		t.Fatalf("keystone-OFF + secureCookie=false: want warning, got %q", out)
+	}
+
+	// keystone OFF but secureCookie defaults true (TLS front declared) -> silent.
+	if out := capture(nil); strings.Contains(out, "insecure dev posture") {
+		t.Fatalf("keystone-OFF + default secureCookie=true: want NO warning, got %q", out)
+	}
+
+	// keystone ON (credential pinned) + secureCookie=false -> silent (off-host signature anchors it).
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	if out := capture(func(ch *ControllerHandler) {
+		ch.SetSecureCookie(false)
+		if err := ch.store.SetOperatorCredential(context.Background(), testTenant, controller.OperatorCredential{
+			Alg: string(trustlist.AlgEd25519), PublicKeyPEM: ed25519PinPEM(t, pub),
+		}); err != nil {
+			t.Fatalf("SetOperatorCredential: %v", err)
+		}
+	}); strings.Contains(out, "insecure dev posture") {
+		t.Fatalf("keystone-ON + secureCookie=false: want NO warning, got %q", out)
 	}
 }
 

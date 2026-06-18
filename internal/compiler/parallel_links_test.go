@@ -1,8 +1,10 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
@@ -78,7 +80,7 @@ func TestParallelLinks_TwoDistinctInterfacesPerSide(t *testing.T) {
 
 	const backupID = "e-ab-backup"
 	topo := parallelPairTopology(backupID, nil)
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("primary + backup topology should compile, got error: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestParallelLinks_BackupDefaultLinkCost(t *testing.T) {
 
 	const backupID = "e-ab-backup"
 	topo := parallelPairTopology(backupID, nil)
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("primary + backup topology should compile, got error: %v", err)
 	}
@@ -161,11 +163,11 @@ func TestParallelLinks_BackupDefaultLinkCost(t *testing.T) {
 		t.Fatalf("should find both primary and backup PeerInfo, got peers: %+v", aPeers)
 	}
 
-	if aBackup.LinkCost != backupDefaultLinkCost {
-		t.Errorf("a backup link with no priority/weight set should have LinkCost %d, got %d", backupDefaultLinkCost, aBackup.LinkCost)
+	if aBackup.LinkCost != allocconst.BackupDefaultLinkCost {
+		t.Errorf("a backup link with no priority/weight set should have LinkCost %d, got %d", allocconst.BackupDefaultLinkCost, aBackup.LinkCost)
 	}
-	if backupDefaultLinkCost != 384 {
-		t.Errorf("backupDefaultLinkCost constant should be 384 (4x the babeld wired default of 96), got %d", backupDefaultLinkCost)
+	if allocconst.BackupDefaultLinkCost != 384 {
+		t.Errorf("allocconst.BackupDefaultLinkCost constant should be 384 (4x the babeld wired default of 96), got %d", allocconst.BackupDefaultLinkCost)
 	}
 	// primary (no explicit cost) should be 0, forming the cost gap needed for failover relative to backup's 384.
 	if aPrimary.LinkCost != 0 {
@@ -185,7 +187,7 @@ func TestParallelLinks_ExplicitPriorityOverridesBackupDefault(t *testing.T) {
 	topo := parallelPairTopology(backupID, func(e *model.Edge) {
 		e.Priority = explicitCost
 	})
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("a backup topology with explicit priority should compile, got error: %v", err)
 	}
@@ -199,8 +201,8 @@ func TestParallelLinks_ExplicitPriorityOverridesBackupDefault(t *testing.T) {
 	if aBackup.LinkCost != explicitCost {
 		t.Errorf("an explicit priority on the backup should override the 384 preset, want LinkCost == %d, got %d", explicitCost, aBackup.LinkCost)
 	}
-	if aBackup.LinkCost == backupDefaultLinkCost {
-		t.Errorf("should not fall back to the backup preset %d when an explicit priority is present", backupDefaultLinkCost)
+	if aBackup.LinkCost == allocconst.BackupDefaultLinkCost {
+		t.Errorf("should not fall back to the backup preset %d when an explicit priority is present", allocconst.BackupDefaultLinkCost)
 	}
 }
 
@@ -225,7 +227,7 @@ func TestParallelLinks_LegacyReversePairOneLink(t *testing.T) {
 			abEdge("e-ba", "node-b", "node-a", "alpha.example.com"),
 		},
 	}
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("legacy reverse-pair topology should compile, got error: %v", err)
 	}

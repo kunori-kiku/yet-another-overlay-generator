@@ -80,7 +80,7 @@ type StageResult struct {
 // render because they are not yet enrolled. Custody invariant: because GenerateKeys runs
 // AgentHeld, neither the returned result nor anything rendered from it contains a real
 // private key — making this safe to surface to an authenticated operator (PR6 preview).
-func CompileSubgraph(topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
+func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
 	subgraph, skipped := enrolledSubgraph(topo, nodes)
 	if len(subgraph.Nodes) == 0 {
 		return nil, subgraph, skipped, nil
@@ -102,7 +102,7 @@ func CompileSubgraph(topo *model.Topology, nodes []Node, fs render.FetchSettings
 		included[subgraph.Edges[i].ID] = true
 	}
 	reserved := compiler.BuildReservedFromExcludedEdges(topo, included)
-	result, err := compiler.NewCompiler().WithReserved(reserved).Compile(&subgraph, keys)
+	result, err := compiler.NewCompiler().WithReserved(reserved).Compile(ctx, &subgraph, keys)
 	if err != nil {
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
 	}
@@ -224,7 +224,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	}
 	fs := BuildFetchSettings(cs.WithDefaults())
 	fs.AgentRolloutNodeIDs = AgentRolloutNodeIDs(cs, nodes)
-	result, subgraph, skipped, err := CompileSubgraph(&topo, nodes, fs)
+	result, subgraph, skipped, err := CompileSubgraph(ctx, &topo, nodes, fs)
 	if err != nil {
 		return StageResult{}, err
 	}

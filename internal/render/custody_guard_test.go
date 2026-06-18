@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestGenerateKeys_AgentHeld_NoPrivateKeyEmitted(t *testing.T) {
 		}
 	}
 
-	result, err := compiler.NewCompiler().Compile(topo, keys)
+	result, err := compiler.NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}

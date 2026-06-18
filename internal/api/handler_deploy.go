@@ -174,7 +174,7 @@ func (h *ControllerHandler) HandleCompilePreview(w http.ResponseWriter, r *http.
 	// side effects is exactly what distinguishes a preview from a deploy.
 	pfs := controller.BuildFetchSettings(cs.WithDefaults())
 	pfs.AgentRolloutNodeIDs = controller.AgentRolloutNodeIDs(cs, nodes)
-	result, _, skipped, err := controller.CompileSubgraph(topo, nodes, pfs)
+	result, _, skipped, err := controller.CompileSubgraph(r.Context(), topo, nodes, pfs)
 	if err != nil {
 		// CompileSubgraph wraps source-coded errors (%w); writeCodedOr surfaces each at its own
 		// status (compile constraints 422, keygen 400, etc.), CodeCompileFailed the fallback.

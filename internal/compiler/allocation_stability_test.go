@@ -1,9 +1,12 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
 // This file is the I1/I2 property gate for Plan 7 (sticky pin allocation, the
@@ -76,6 +79,20 @@ type abPins struct {
 	compiledPort  int
 }
 
+// pinsOf snapshots all of an edge's allocation outputs (the six pins + CompiledPort) so two
+// compiles or heal runs can be compared field-for-field.
+func pinsOf(e *model.Edge) abPins {
+	return abPins{
+		fromPort:      e.PinnedFromPort,
+		toPort:        e.PinnedToPort,
+		fromTransitIP: e.PinnedFromTransitIP,
+		toTransitIP:   e.PinnedToTransitIP,
+		fromLinkLocal: e.PinnedFromLinkLocal,
+		toLinkLocal:   e.PinnedToLinkLocal,
+		compiledPort:  e.CompiledPort,
+	}
+}
+
 // capturePins pulls all allocation values for a given edge id out of the compiled
 // topology.
 func capturePins(t *testing.T, topo *model.Topology, edgeID string) abPins {
@@ -84,15 +101,7 @@ func capturePins(t *testing.T, topo *model.Topology, edgeID string) abPins {
 	if edge == nil {
 		t.Fatalf("edge %q not found in compiled topology", edgeID)
 	}
-	return abPins{
-		fromPort:      edge.PinnedFromPort,
-		toPort:        edge.PinnedToPort,
-		fromTransitIP: edge.PinnedFromTransitIP,
-		toTransitIP:   edge.PinnedToTransitIP,
-		fromLinkLocal: edge.PinnedFromLinkLocal,
-		toLinkLocal:   edge.PinnedToLinkLocal,
-		compiledPort:  edge.CompiledPort,
-	}
+	return pinsOf(edge)
 }
 
 // assertPinsEqual asserts two captured allocation snapshots are field-for-field equal
@@ -143,6 +152,75 @@ func abEdge(id, from, to, endpointHost string) model.Edge {
 	}
 }
 
+// TestSingleSourcedMinPinnedPortBoundary is the single-sourcing round-trip gate
+// for plan-8 Phase 6.1: the semantic validator's pinned-port lower bound and the
+// compiler's honor-the-pin path must agree on the SAME boundary value, now that
+// both read it from internal/allocconst.MinPinnedPort instead of two separate
+// private consts. Previously the agreement was a comment-only "must match"
+// contract; this test turns it into an executable assertion.
+//
+// A pin at exactly the boundary (allocconst.MinPinnedPort = 1024) must (a) pass
+// ValidateSemantic with NO port-out-of-range error AND (b) compile verbatim. A
+// pin one below the boundary (1023) must be rejected by the validator. If the
+// two sides ever read a different value, one of these two halves breaks.
+func TestSingleSourcedMinPinnedPortBoundary(t *testing.T) {
+	c := NewCompiler()
+	keys := stableKeys()
+
+	build := func(fromPort, toPort int) *model.Topology {
+		edge := abEdge("e-ab", "node-a", "node-b", "beta.example.com")
+		edge.PinnedFromPort = fromPort
+		edge.PinnedToPort = toPort
+		// A complete, valid, in-pool, non-colliding pin set so the ONLY thing
+		// the boundary controls is the port acceptance.
+		edge.PinnedFromTransitIP = "10.10.0.51"
+		edge.PinnedToTransitIP = "10.10.0.52"
+		edge.PinnedFromLinkLocal = "fe80::aa"
+		edge.PinnedToLinkLocal = "fe80::ab"
+		return &model.Topology{
+			Project: model.Project{ID: "stable-minport", Name: "MinPinnedPort Boundary"},
+			Domains: []model.Domain{stableDomain()},
+			Nodes: []model.Node{
+				stableRouterNode("node-a", "alpha", "10.50.0.1"),
+				stableRouterNode("node-b", "beta", "10.50.0.2"),
+			},
+			Edges: []model.Edge{edge},
+		}
+	}
+
+	hasPortOutOfRange := func(res *validator.ValidationResult) bool {
+		for _, e := range res.Errors {
+			if e.Code == string(validator.CodePinPortOutOfRange) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// At the boundary: validator accepts, compiler honors verbatim.
+	atBoundary := build(allocconst.MinPinnedPort, allocconst.MinPinnedPort+1)
+	if res := validator.ValidateSemantic(atBoundary); hasPortOutOfRange(res) {
+		t.Fatalf("port pin at the boundary (%d) must NOT be rejected by the validator; got a port-out-of-range error", allocconst.MinPinnedPort)
+	}
+	compiled, err := c.Compile(context.Background(), atBoundary, keys)
+	if err != nil {
+		t.Fatalf("a topology with a boundary-value port pin should compile, got error: %v", err)
+	}
+	got := capturePins(t, compiled.Topology, "e-ab")
+	if got.fromPort != allocconst.MinPinnedPort || got.toPort != allocconst.MinPinnedPort+1 {
+		t.Errorf("boundary port pins should be honored verbatim {%d, %d}, got {%d, %d}",
+			allocconst.MinPinnedPort, allocconst.MinPinnedPort+1, got.fromPort, got.toPort)
+	}
+
+	// One below the boundary: validator rejects (the compiler is never reached
+	// for an invalid pin in the real pipeline; here we only assert the validator
+	// side of the shared boundary).
+	belowBoundary := build(allocconst.MinPinnedPort-1, allocconst.MinPinnedPort)
+	if res := validator.ValidateSemantic(belowBoundary); !hasPortOutOfRange(res) {
+		t.Fatalf("port pin one below the boundary (%d) must be rejected by the validator with a port-out-of-range error", allocconst.MinPinnedPort-1)
+	}
+}
+
 // TestSupersetCompileReproducesAllocations is the primary gate for I1 (superset
 // stability) + I2 (order independence).
 //
@@ -169,7 +247,7 @@ func TestSupersetCompileReproducesAllocations(t *testing.T) {
 			abEdge("e-ab", "node-a", "node-b", "beta.example.com"),
 		},
 	}
-	res1, err := c.Compile(topo1, keys)
+	res1, err := c.Compile(context.Background(), topo1, keys)
 	if err != nil {
 		t.Fatalf("compile 1 failed: %v", err)
 	}
@@ -199,7 +277,7 @@ func TestSupersetCompileReproducesAllocations(t *testing.T) {
 			abEdge("e-ac", "node-a", "node-c", "gamma.example.com"),
 		},
 	}
-	res2, err := c.Compile(topo2, keys)
+	res2, err := c.Compile(context.Background(), topo2, keys)
 	if err != nil {
 		t.Fatalf("compile 2 failed: %v", err)
 	}
@@ -222,7 +300,7 @@ func TestSupersetCompileReproducesAllocations(t *testing.T) {
 			pinnedAB,
 		},
 	}
-	res3, err := c.Compile(topo3, keys)
+	res3, err := c.Compile(context.Background(), topo3, keys)
 	if err != nil {
 		t.Fatalf("compile 3 failed: %v", err)
 	}
@@ -263,7 +341,7 @@ func TestDeleteReAddReclaimsValues(t *testing.T) {
 			abEdge("e-ac", "node-a", "node-c", "gamma.example.com"),
 		},
 	}
-	res1, err := c.Compile(topo1, keys)
+	res1, err := c.Compile(context.Background(), topo1, keys)
 	if err != nil {
 		t.Fatalf("compile 1 failed: %v", err)
 	}
@@ -286,7 +364,7 @@ func TestDeleteReAddReclaimsValues(t *testing.T) {
 			pinnedAB,
 		},
 	}
-	if _, err := c.Compile(topo2, keys); err != nil {
+	if _, err := c.Compile(context.Background(), topo2, keys); err != nil {
 		t.Fatalf("compile 2 (delete A-C) failed: %v", err)
 	}
 
@@ -300,7 +378,7 @@ func TestDeleteReAddReclaimsValues(t *testing.T) {
 			abEdge("e-ac-readded", "node-a", "node-c", "gamma.example.com"),
 		},
 	}
-	res3, err := c.Compile(topo3, keys)
+	res3, err := c.Compile(context.Background(), topo3, keys)
 	if err != nil {
 		t.Fatalf("compile 3 (re-add A-C) failed: %v", err)
 	}
@@ -344,7 +422,7 @@ func TestPinnedValuesHonoredVerbatim(t *testing.T) {
 		Edges: []model.Edge{edge},
 	}
 
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("a topology with valid pins should compile, got error: %v", err)
 	}
@@ -423,7 +501,7 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 			abEdge("e-ab", "node-a", "node-b", "beta.example.com"),
 		},
 	}
-	res1, err := c.Compile(topo1, keys)
+	res1, err := c.Compile(context.Background(), topo1, keys)
 	if err != nil {
 		t.Fatalf("compile 1 failed: %v", err)
 	}
@@ -449,7 +527,7 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 			backupEdge("e-ab-backup", "node-a", "node-b", "beta.example.com"),
 		},
 	}
-	res2, err := c.Compile(topo2, keys)
+	res2, err := c.Compile(context.Background(), topo2, keys)
 	if err != nil {
 		t.Fatalf("compile 2 (append backup) failed: %v", err)
 	}
@@ -479,7 +557,7 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 			pinnedPrimary,
 		},
 	}
-	res3, err := c.Compile(topo3, keys)
+	res3, err := c.Compile(context.Background(), topo3, keys)
 	if err != nil {
 		t.Fatalf("compile 3 (delete backup) failed: %v", err)
 	}
@@ -521,7 +599,7 @@ func TestParallelBackup_OrderIndependence(t *testing.T) {
 		Nodes:   nodes(),
 		Edges:   []model.Edge{primary, other, backup},
 	}
-	resAppend, err := c.Compile(topoAppend, keys)
+	resAppend, err := c.Compile(context.Background(), topoAppend, keys)
 	if err != nil {
 		t.Fatalf("compile (backup appended) failed: %v", err)
 	}
@@ -537,7 +615,7 @@ func TestParallelBackup_OrderIndependence(t *testing.T) {
 		Nodes:   nodes(),
 		Edges:   []model.Edge{backup, primary, other},
 	}
-	resPrepend, err := c.Compile(topoPrepend, keys)
+	resPrepend, err := c.Compile(context.Background(), topoPrepend, keys)
 	if err != nil {
 		t.Fatalf("compile (backup prepended) failed: %v", err)
 	}
@@ -576,7 +654,7 @@ func TestPrePinTopologyCompiles(t *testing.T) {
 		t.Fatalf("precondition: input topology's AllocSchemaVersion should be 0 (pre-pin shape)")
 	}
 
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("a pre-pin topology should compile cleanly, got error: %v", err)
 	}

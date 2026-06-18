@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -98,7 +99,7 @@ func TestEntrypointParity(t *testing.T) {
 	}
 
 	c := compiler.NewCompiler()
-	result, err := c.Compile(topo, keys)
+	result, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile failed: %v", err)
 	}
