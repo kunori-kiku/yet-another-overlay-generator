@@ -23,8 +23,11 @@ export function ipv4ToUint32(ip: string): number | null {
   if (parts.length !== 4) return null;
   let out = 0;
   for (const p of parts) {
-    // Reject empty, non-digit, or >255 octets. Go's net.ParseIP also rejects these.
+    // Reject empty, non-digit, or >255 octets. Go's net.ParseIP also rejects a leading-zero octet
+    // (e.g. "010", "04") — its dtoi parser stops at a non-canonical decimal — so reject any octet that
+    // has a redundant leading zero, matching ParseIP byte-for-byte.
     if (p.length === 0 || !/^[0-9]+$/.test(p)) return null;
+    if (p.length > 1 && p[0] === '0') return null;
     const n = Number(p);
     if (n > 255) return null;
     out = ((out << 8) | n) >>> 0; // coerce: << is signed-32, the high octet would go negative.
@@ -207,4 +210,180 @@ export function gapFillLinkLocalPair(usedLinkLocals: Set<string>): [string, stri
     }
     return [local, remote];
   }
+}
+
+// --- IP / CIDR family classification (the validator's three-way "invalid | not-IPv4 | IPv4" split) ---
+//
+// The schema validator (internal/validator/schema.go) leans on Go's net.ParseIP / net.ParseCIDR plus
+// .To4() to classify an address into exactly three outcomes: unparseable, parseable-but-not-IPv4, and
+// parseable IPv4. Go's net package accepts BOTH families (IPv4 + IPv6) where the validator does, so the
+// IPv4-only parsers above (ipv4ToUint32 / parseCIDR) are insufficient to reproduce the not-IPv4 branch.
+// These helpers add the family-aware classification, mirroring net.ParseIP / net.ParseCIDR + To4().
+
+// parseIPFamily reports the address family of an IP string, mirroring net.ParseIP + To4():
+//   - null              → net.ParseIP returns nil (unparseable: bad octet, >4 IPv4 fields, zone id,
+//                          multiple "::", >8 IPv6 groups, >4 hex digits per group, etc.)
+//   - { isIPv4: true }  → a parseable IPv4 address, OR an IPv4-mapped IPv6 (::ffff:a.b.c.d), whose
+//                          To4() is non-nil (matching Go)
+//   - { isIPv4: false } → a parseable IPv6 address whose To4() is nil
+export function parseIPFamily(s: string): { isIPv4: boolean } | null {
+  // IPv4 dotted-quad fast path: net.ParseIP treats a string containing a '.' before any ':' as IPv4.
+  if (s.indexOf('.') >= 0 && (s.indexOf(':') < 0 || s.indexOf('.') < s.indexOf(':'))) {
+    return ipv4ToUint32(s) !== null ? { isIPv4: true } : null;
+  }
+  const v6 = parseIPv6(s);
+  if (v6 === null) return null;
+  // Go's To4() returns non-nil for an IPv4-mapped IPv6 (::ffff:a.b.c.d), reported as IPv4 by the
+  // validator's .To4() != nil check.
+  return { isIPv4: isIPv4MappedV6(v6) };
+}
+
+// parseCIDRFamily reports the prefix length + address family of a CIDR string, mirroring
+// net.ParseCIDR + ipNet.Mask.Size() + ipNet.IP.To4():
+//   - null              → net.ParseCIDR returns an error (unparseable address or out-of-range prefix)
+//   - { ones, isIPv4 }  → a parseable CIDR; ones is the prefix length AS GO REPORTS IT (for an IPv6
+//                          mask that is the IPv6 ones count, e.g. ::ffff:10.0.0.0/120 → ones=120,
+//                          isIPv4=true), and isIPv4 mirrors ipNet.IP.To4() != nil.
+export function parseCIDRFamily(s: string): { ones: number; isIPv4: boolean } | null {
+  const slash = s.indexOf('/');
+  if (slash < 0) return null;
+  const addrStr = s.slice(0, slash);
+  const bitsStr = s.slice(slash + 1);
+  if (bitsStr.length === 0 || !/^[0-9]+$/.test(bitsStr)) return null;
+  const ones = Number(bitsStr);
+
+  // IPv4 CIDR: address is dotted-quad and prefix ∈ [0,32].
+  if (addrStr.indexOf('.') >= 0 && (addrStr.indexOf(':') < 0 || addrStr.indexOf('.') < addrStr.indexOf(':'))) {
+    if (ipv4ToUint32(addrStr) === null) return null;
+    if (ones < 0 || ones > 32) return null;
+    return { ones, isIPv4: true };
+  }
+  // IPv6 CIDR: address is a valid IPv6 and prefix ∈ [0,128].
+  const v6 = parseIPv6(addrStr);
+  if (v6 === null) return null;
+  if (ones < 0 || ones > 128) return null;
+  // Go's net.ParseCIDR returns the MASKED network address; ipNet.IP.To4() then classifies THAT, not the
+  // input. So apply the /ones IPv6 mask before the IPv4-mapped check — e.g. ::ffff:10.0.0.0/24 masks to
+  // ::, whose To4() is nil (isIPv4=false), whereas /120 retains the ::ffff: prefix (isIPv4=true).
+  const masked = maskV6(v6, ones);
+  return { ones, isIPv4: isIPv4MappedV6(masked) };
+}
+
+// isIPv4MappedV6 reports whether a 16-byte IPv6 address is the IPv4-mapped form (::ffff:a.b.c.d), whose
+// Go net.IP.To4() returns non-nil. Mirrors net.IP.To4's check for the 0:0:0:0:0:ffff prefix.
+function isIPv4MappedV6(b: number[]): boolean {
+  for (let i = 0; i < 10; i++) {
+    if (b[i] !== 0) return false;
+  }
+  return b[10] === 0xff && b[11] === 0xff;
+}
+
+// maskV6 applies a /ones IPv6 prefix mask to a 16-byte address, returning the masked network address
+// (mirroring net.ParseCIDR's ipNet.IP = ip.Mask(mask)). The top `ones` bits are kept, the rest zeroed.
+function maskV6(b: number[], ones: number): number[] {
+  const out = b.slice();
+  for (let i = 0; i < 16; i++) {
+    const bitStart = i * 8;
+    if (bitStart >= ones) {
+      out[i] = 0;
+    } else if (bitStart + 8 > ones) {
+      const keep = ones - bitStart; // number of high bits to keep in this byte
+      const mask = (0xff << (8 - keep)) & 0xff;
+      out[i] = b[i] & mask;
+    }
+  }
+  return out;
+}
+
+// parseIPv6 parses an IPv6 textual address into its 16 bytes, mirroring the subset of forms Go's
+// net.ParseIP accepts: exactly one "::" elision, 1-4 hex digits per group, at most 8 groups, an
+// optional trailing embedded IPv4 (a.b.c.d) consuming the last two groups, NO zone id. Returns null
+// for anything net.ParseIP rejects.
+function parseIPv6(s: string): number[] | null {
+  if (s.indexOf(':') < 0) return null;
+  if (s.indexOf('%') >= 0) return null; // Go's ParseIP rejects a zone id
+
+  const out = new Array<number>(16).fill(0);
+  let pos = 0; // byte offset into out
+  let ellipsis = -1; // byte offset where "::" was seen, or -1
+
+  let i = 0;
+  // Leading "::".
+  if (s.length >= 2 && s[0] === ':' && s[1] === ':') {
+    ellipsis = 0;
+    i = 2;
+    if (i === s.length) return out; // "::" alone
+  } else if (s[0] === ':') {
+    return null; // a single leading ':' that is not "::"
+  }
+
+  while (i < s.length) {
+    // Parse a hex group (1-4 hex digits).
+    let val = 0;
+    let digits = 0;
+    while (i < s.length && isHexDigit(s[i])) {
+      val = val * 16 + hexVal(s[i]);
+      digits++;
+      if (digits > 4) return null;
+      i++;
+    }
+    if (digits === 0) return null;
+
+    // Embedded trailing IPv4 (a.b.c.d) — only valid as the final 4 bytes. The run of hex digits just
+    // consumed is actually the leading decimal octet, so re-parse from its textual start.
+    if (i < s.length && s[i] === '.') {
+      const v4 = ipv4ToUint32(s.slice(i - digits));
+      if (v4 === null) return null;
+      if (pos + 4 > 16) return null;
+      out[pos] = (v4 >>> 24) & 0xff;
+      out[pos + 1] = (v4 >>> 16) & 0xff;
+      out[pos + 2] = (v4 >>> 8) & 0xff;
+      out[pos + 3] = v4 & 0xff;
+      pos += 4;
+      i = s.length; // the embedded IPv4 consumes the remainder of the string
+      break;
+    }
+
+    // Store the 16-bit group big-endian.
+    if (pos + 2 > 16) return null;
+    out[pos] = (val >> 8) & 0xff;
+    out[pos + 1] = val & 0xff;
+    pos += 2;
+
+    if (i === s.length) break;
+    if (s[i] !== ':') return null; // must be a separator
+    i++;
+    if (i === s.length) return null; // trailing single ':'
+    if (s[i] === ':') {
+      // "::" — at most one allowed.
+      if (ellipsis >= 0) return null;
+      ellipsis = pos;
+      i++;
+      if (i === s.length) break; // trailing "::"
+    }
+  }
+
+  // Expand "::" if present.
+  if (ellipsis >= 0) {
+    if (pos === 16) return null; // "::" with a full address is invalid
+    const n = pos - ellipsis;
+    for (let j = n - 1; j >= 0; j--) {
+      out[16 - n + j] = out[ellipsis + j];
+      out[ellipsis + j] = 0;
+    }
+    pos = 16;
+  } else if (pos !== 16) {
+    return null; // not enough groups and no "::"
+  }
+  return out;
+}
+
+function isHexDigit(c: string): boolean {
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+function hexVal(c: string): number {
+  if (c >= '0' && c <= '9') return c.charCodeAt(0) - 48;
+  if (c >= 'a' && c <= 'f') return c.charCodeAt(0) - 87;
+  return c.charCodeAt(0) - 55; // A-F
 }
