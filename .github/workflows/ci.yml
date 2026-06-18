@@ -74,8 +74,12 @@ jobs:
       #     floors live in internal/conformance/coverage_floor.json; TestCoverageFloor shells
       #     out to `go test -coverprofile` per package and reds if any drops below its floor.
       #     Re-baseline by editing that JSON (see docs/spec/compiler/conformance-manifest-schema.md).
+      #     It is gated to this job via YAOG_CONFORMANCE_COVERAGE_FLOOR so the main `go` job's
+      #     `go test ./...` does not re-run every pipeline suite nested inside it.
       - name: Per-package coverage floor
         run: go test ./internal/conformance/ -run TestCoverageFloor -v
+        env:
+          YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
       # (c) The vitest heal pin: the TS healCollidingPins (frontend/src/lib/normalizeEdges.ts)
       #     must byte-equal the Go normalize.HealCollidingPins over the shared corpus. A
       #     deliberate divergence of the TS linkKey/pinKey reds this step.

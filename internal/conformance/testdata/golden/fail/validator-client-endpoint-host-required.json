@@ -10,6 +10,9 @@
   "allocations": null,
   "files": null,
   "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
   "healed_edges": [
     {
       "id": "e-client",

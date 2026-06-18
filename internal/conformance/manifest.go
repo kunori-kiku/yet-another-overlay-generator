@@ -133,6 +133,22 @@ type Manifest struct {
 	// checksums.sha256 content); nil on a fail fixture.
 	Checksums map[string]string `json:"checksums"`
 
+	// Deploy is the project-level deploy script set (deploy-all.sh / deploy-all.ps1): name ->
+	// verbatim content; nil on a fail fixture. An io-contract §7 IN surface, pinned here so a
+	// deploy.go change (or the TS deploy.ts port, plan-4) cannot drift past the gate.
+	Deploy map[string]string `json:"deploy"`
+
+	// Signatures maps nodeID -> bundle.sig (the BARE base64 Ed25519 signature over the node's
+	// canonical checksums); an empty map when the fixture does not sign, nil on a fail fixture.
+	// An io-contract §7 IN surface (when signing is on). Ed25519 is deterministic, so the same
+	// fixed test key + same canonical bytes reproduce these byte-for-byte across languages.
+	Signatures map[string]string `json:"signatures"`
+
+	// SigningPubPEM is the signing-pubkey.pem content (the PKIX public-key PEM, identical per
+	// node); the empty string unless the fixture signs, and on a fail fixture. An io-contract
+	// §7 IN surface (when signing is on).
+	SigningPubPEM string `json:"signing_pub_pem"`
+
 	// HealedEdges is the corpus-input topology after normalize.HealCollidingPins, sorted
 	// by edge ID. It is computed for EVERY fixture (independent of the compile verdict)
 	// because the TS heal canary (step D) pins this layer regardless of whether the full

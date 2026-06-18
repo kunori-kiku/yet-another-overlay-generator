@@ -49,7 +49,8 @@ type Fixture struct {
 //     bytes localcompile.Compile produces, but exposing the PeerMap) with a nil Keygen (the
 //     default wgtypesKeygen, byte-identical to plan-3's ecdhKeygen golden by the proven X25519
 //     equivalence), the fixed clock, and the fixture's custody/signer. On SUCCESS the apierr
-//     channel is empty and the topology/allocations/files/checksums projections are populated.
+//     channel is empty and the topology/allocations + the full io-contract §7 IN byte set
+//     (files, checksums, deploy scripts, and signatures + signing pubkey when signing) project.
 //     On FAILURE the returned error is unwrapped via errors.As to *apierr.Error and its Code
 //     becomes the sole apierr-channel entry; the success-only projections stay nil.
 //   - healed_edges is computed for EVERY fixture from normalize.HealCollidingPins over a
@@ -117,13 +118,18 @@ func BuildManifest(fx Fixture) (Manifest, error) {
 		return Manifest{}, err
 	}
 
-	// Success: project the topology + allocations + files + checksums. The verdict's apierr
-	// channel stays empty (compile succeeded); the validator channel keeps whatever warnings
-	// the validator emitted for this (green) topology.
+	// Success: project the topology + allocations + the full io-contract §7 IN byte set (the
+	// per-node files + checksums, the project-level deploy scripts, and — when the fixture signs
+	// — the detached signatures + signing pubkey). The verdict's apierr channel stays empty
+	// (compile succeeded); the validator channel keeps whatever warnings the validator emitted
+	// for this (green) topology.
 	m.Topology = art.Topology
 	m.Allocations = allocationsFrom(result)
 	m.Files = art.Files
 	m.Checksums = art.Checksums
+	m.Deploy = art.Deploy
+	m.Signatures = art.Signatures
+	m.SigningPubPEM = string(art.SigningPubPEM)
 	return m, nil
 }
 

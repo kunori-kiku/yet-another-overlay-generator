@@ -19,7 +19,12 @@ the TS port is then obligated to match the new bytes.
 
 The exclusion set — what the byte assertion deliberately does NOT cover — is **not re-authored
 here**. It is owned upstream by [`io-contract.md`](./io-contract.md) §7 (the IN / OUT conformance
-list). This harness MIRRORS that list; the manifest below excludes exactly what §7 marks OUT.
+list). This harness MIRRORS that list: the manifest covers every §7-IN surface — the rendered
+per-node bundle files, the allocated pins/IPs/ports, the project-level deploy scripts, and the
+detached `bundle.sig` signatures + `signing-pubkey.pem` when signing is on — and excludes what §7
+marks OUT (`manifest.json`'s `compiled_at`, the display-only `computeChecksum`, and the
+self-extracting tar.gz wrapper bytes — bundle CONTENTS + checksums are compared, not the archive
+framing).
 
 ## The manifest
 
@@ -35,9 +40,18 @@ two-space indent, LF newlines, no trailing whitespace, and exactly one trailing 
   "allocations": { "node_overlay_ips": {...}, "peers": { "<linkKey>|<owner>": {...} } },
   "files":       { "<nodeID>": { "<relpath>": "<verbatim bytes>", ... }, ... },
   "checksums":   { "<nodeID>": "<bundlesig.Canonicalize output verbatim>", ... },
+  "deploy":      { "deploy-all.sh": "<verbatim>", "deploy-all.ps1": "<verbatim>" },
+  "signatures":  { "<nodeID>": "<bare base64 Ed25519 bundle.sig>", ... },
+  "signing_pub_pem": "<PKIX public-key PEM, or \"\" when not signing>",
   "healed_edges": [ { "id": "...", ...seven pin fields... }, ... ]
 }
 ```
+
+`deploy` is populated on every successful compile (and is `null` on a fail fixture, like the other
+success-only projections). `signatures` is the empty object `{}` and `signing_pub_pem` the empty
+string when the fixture does not sign; the signing-on fixture carries real per-node Ed25519
+signatures + the verifying PKIX PEM. Ed25519 is deterministic (RFC 8032), so the same fixed test
+key + same canonical bytes reproduce these byte-for-byte across runs and across the Go/TS boundary.
 
 ### `verdict` — the two-channel outcome
 

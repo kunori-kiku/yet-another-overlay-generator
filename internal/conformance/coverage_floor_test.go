@@ -147,12 +147,17 @@ func parseProfileTotal(t *testing.T, profile, pkg string) float64 {
 // `go test -coverprofile`) and fails if any package is below its frozen floor — the mechanical guard
 // against silently un-exercised Go branches and dropped fixtures.
 //
-// It is skipped under `go test -short` (e.g. a fast inner-loop run) because it re-runs the entire
-// pipeline test suite once per package; the CI conformance job runs it WITHOUT -short, so the gate
-// is always enforced there.
+// Because it re-runs the entire pipeline test suite once per package (shelling out to `go test
+// -coverprofile`), it would otherwise fire on every `go test ./...` — including the main `go` CI
+// job and local inner-loop runs — double-running every pipeline suite. So it is GATED to the
+// dedicated conformance job: it runs only when YAOG_CONFORMANCE_COVERAGE_FLOOR is set (the CI
+// conformance-job step sets it), and is skipped everywhere else. To run it locally:
+// `YAOG_CONFORMANCE_COVERAGE_FLOOR=1 go test ./internal/conformance/ -run TestCoverageFloor`.
+const envCoverageFloor = "YAOG_CONFORMANCE_COVERAGE_FLOOR"
+
 func TestCoverageFloor(t *testing.T) {
-	if testing.Short() {
-		t.Skip("coverage floor re-runs every pipeline package's tests; skipped under -short (CI runs it without -short)")
+	if os.Getenv(envCoverageFloor) == "" {
+		t.Skipf("coverage floor re-runs every pipeline package's tests; set %s=1 to run (the CI conformance job does)", envCoverageFloor)
 	}
 	cf := loadCoverageFloors(t)
 	root := repoRoot(t)
