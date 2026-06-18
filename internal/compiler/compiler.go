@@ -104,9 +104,10 @@ func (c *Compiler) WithReserved(r *ReservedAllocations) *Compiler {
 // Compile runs the full compilation pipeline on topo and returns a CompileResult, or an error if
 // any validation stage fails. ctx bounds the IP-allocation pass (Pass 3): an over-large domain
 // CIDR is rejected fast (CodeOverlayScanBudgetExceeded) and a long scan is abortable on request
-// cancellation. The request context flows in from the HTTP boundary; the air-gap CLI passes
-// context.Background(). (The ctx signature on Compile is owned by plan-3's frozen-contract
-// extraction; plan-8 extends the remaining hop to the allocator and consumes ctx in the scan.)
+// cancellation. The request context reaches here through localcompile.CompileResultCtx — the
+// air-gap HTTP handlers pass r.Context() and the controller subgraph compile passes its request
+// ctx; the air-gap CLI and the pure façade entry points pass context.Background(). (plan-8
+// consumes ctx in the allocator scan; plan-3's façade threads the live callers' ctx in.)
 //
 // Compile is the byte-identical shim that delegates to CompileAt with time.Now() — the clock
 // is the only impurity it injects, so every existing caller stays unchanged.

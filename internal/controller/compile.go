@@ -82,10 +82,11 @@ type StageResult struct {
 // AgentHeld, neither the returned result nor anything rendered from it contains a real
 // private key — making this safe to surface to an authenticated operator (PR6 preview).
 //
-// ctx is honored only as an early cancellation check before the compile: the façade
-// compiles under its own background context (the frozen contract carries no Go context,
-// so the TS port mirrors a context-free seam), and the allocator's per-node scan budget
-// remains the hard DoS bound for an over-large CIDR.
+// ctx bounds the compile: an early cancellation check short-circuits before the reserved-pin
+// scan, and it is then threaded into the façade (CompileResultCtx) so the allocator's per-node
+// scan is cancellable on a client disconnect — the per-node scan budget remains the hard DoS
+// bound for an over-large CIDR. The frozen contract itself stays context-free (the TS port
+// mirrors a context-free seam); ctx is the orthogonal Go-runtime param the live callers pass.
 func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
 	subgraph, skipped := enrolledSubgraph(topo, nodes)
 	if len(subgraph.Nodes) == 0 {
@@ -118,7 +119,7 @@ func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs
 	// preview keep their *compiler.CompileResult shape. CompiledAt feeds only
 	// manifest.json's compiled_at (out of the checksummed set), matching the prior
 	// time.Now() stamp.
-	result, err := localcompile.CompileResult(localcompile.CompileRequest{
+	result, err := localcompile.CompileResultCtx(ctx, localcompile.CompileRequest{
 		Topology:   subgraph,
 		Custody:    render.AgentHeld,
 		Fetch:      fs,

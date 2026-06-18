@@ -27,7 +27,18 @@ func localcompile.Compile(req CompileRequest) (CompileArtifacts, error)
 `Compile` is a **pure function**: no environment read, no `time.Now`, no filesystem access, no
 global state. Every non-deterministic and environment-coupled input is lifted into an explicit
 `CompileRequest` field, so an identical request always yields a byte-identical result. This purity
-is proven by `TestContractGolden_PureFunction` (run-twice-assert-equal over every fixture).
+is proven by `TestContractGolden_PureFunction` (run-twice-assert-equal over every fixture). It is
+also pure with respect to its **input**: it clones the topology's node/edge slices, so the
+pipeline's in-place write-backs never touch the caller's `req.Topology` — the written-back topology
+(keys + allocated pins/IPs) is the returned `CompileArtifacts.Topology`
+(`TestCompile_InputTopologyUnmutated`).
+
+**Context is orthogonal to the contract.** The frozen `CompileRequest` carries no Go `context`
+(the TS port mirrors a context-free seam), and the pure `Compile(req)` / `CompileResult(req)`
+entry points compile under `context.Background()`. The live Go callers that want a request-bounded,
+cancellable allocator scan (the air-gap HTTP handlers, the controller subgraph compile) use the
+`CompileResultCtx(ctx, req)` sibling — `ctx` affects neither the allocated values nor the rendered
+bytes, so it is deliberately not a request field.
 
 ### `CompileRequest` (topology-in)
 
@@ -49,7 +60,7 @@ is proven by `TestContractGolden_PureFunction` (run-twice-assert-equal over ever
 | `Files` | `map[string]map[string]string` | Per-node bundle set: `nodeID -> relpath -> content` (see §3). | **IN** |
 | `Deploy` | `map[string]string` | Project-level deploy scripts (`deploy-all.sh` / `deploy-all.ps1`). | **IN** |
 | `Checksums` | `map[string]string` | `nodeID -> checksums.sha256` content, via `bundlesig.Canonicalize` (see §2). | **IN** |
-| `Signatures` | `map[string]string` | `nodeID -> bundle.sig` (base64 of the Ed25519 signature over the node's canonical checksums). Present only when `SigningKey != nil`. | **IN** (when signing on) |
+| `Signatures` | `map[string]string` | `nodeID -> bundle.sig` (**bare** base64 of the Ed25519 signature over the node's canonical checksums). Present only when `SigningKey != nil`. The on-disk `bundle.sig` the exporter writes is this same base64 **plus a trailing newline** — a file-representation detail; the signed/digest-bound bytes (the node's `checksums.sha256`) are identical. | **IN** (when signing on) |
 | `SigningPubPEM` | `[]byte` | PKIX (`PUBLIC KEY`) PEM of the verifying key, identical per node. Present iff signing on. | **IN** (when signing on) |
 | `Warnings` | `[]validator.ValidationError` | Non-fatal schema/semantic findings. | informational |
 | `Manifest` | `compiler.CompileManifest` | The compile summary. `CompiledAt` (timestamp) and `Checksum` (display-only digest) are **OUT** (see §7). | mixed |
@@ -94,6 +105,14 @@ checksummed set — exactly the bytes `Checksums` and (when signing on) `Signatu
 `bundle.sig` / `signing-pubkey.pem` (when signing on) and `manifest.json` are **not** members of
 the checksummed set — they are the authenticity layer over it (and the display-only manifest),
 represented in `CompileArtifacts` as `Signatures` / `SigningPubPEM` / `Manifest`, not in `Files`.
+
+This per-node set is **single-sourced**: both the in-memory `CompileArtifacts.Files`
+(`localcompile.ArtifactsFromResult`) and the on-disk bundle (`artifacts.Export`) build it through
+the one `artifacts.BundleFiles(result, nodeID)` helper, so the relpath keys + set membership (incl.
+the `artifacts.json` D4 guard) can never drift between the two. (The helper lives in `artifacts`, a
+sink package — `apierr`/`bundlesig`/`compiler` only — which `localcompile` imports freely; the
+reverse direction would cycle, since `render`'s tests depend on `artifacts` and `localcompile`
+depends on `render`.)
 
 ---
 

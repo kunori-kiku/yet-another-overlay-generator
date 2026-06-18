@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"strings"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 )
 
@@ -43,13 +44,31 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 // without forcing those callers to re-shape into CompileArtifacts.
 //
 // It is pure for the same reasons Compile is: every impurity (keygen, clock, signer,
-// fetch, reserved) comes from req, never from the process.
+// fetch, reserved) comes from req, never from the process, and it compiles under
+// context.Background() (no caller deadline). The request-bearing live callers use
+// CompileResultCtx instead so a client disconnect cancels the allocator scan.
 func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
-	// Work on a local copy of the topology so the caller's value is not mutated by the
-	// pipeline's write-backs (GenerateKeys, IP allocation, and the pin write-back all
-	// mutate the topology in place). The returned result.Topology is the compiled
-	// (written-back) topology.
+	return CompileResultCtx(context.Background(), req)
+}
+
+// CompileResultCtx is CompileResult with an explicit context for the live Go callers. ctx
+// bounds the IP-allocation pass: the allocator polls ctx.Err() per candidate and aborts a
+// long scan on cancellation (plan-8 S1), so the air-gap HTTP handlers pass r.Context() and
+// the controller subgraph compile passes its request ctx — a client disconnect stops the
+// scan rather than running it to the budget cap. ctx affects NEITHER the allocated values
+// NOR the rendered bytes, so it is deliberately not a member of the frozen CompileRequest:
+// the TS-mirrored contract stays context-free, and the pure CompileResult(req)/Compile(req)
+// entry points pass context.Background(). cmd/compiler likewise has no request ctx.
+func CompileResultCtx(ctx context.Context, req CompileRequest) (*compiler.CompileResult, error) {
+	// Compile on a copy of the topology's Node/Edge slices so the façade never mutates the
+	// caller's input: render.GenerateKeysWith writes the derived WireGuard keys onto nodes in
+	// place, and we keep that write-back confined to our copy. (The compiler already allocates
+	// IPs and writes pins onto its own fresh copies — compiler.go CompileAt — so only the key
+	// write-back would otherwise alias the caller.) The canonical written-back topology, with
+	// keys + allocated pins/IPs, is the returned result.Topology.
 	topo := req.Topology
+	topo.Nodes = append([]model.Node(nil), req.Topology.Nodes...)
+	topo.Edges = append([]model.Edge(nil), req.Topology.Edges...)
 
 	// nil Keygen ⇒ the default wgtypesKeygen, keeping production byte-identical to the
 	// pre-seam pipeline. render consumes its own (structurally-identical) Keygen
@@ -68,9 +87,9 @@ func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 		c = c.WithReserved(req.Reserved)
 	}
 	// CompileAt injects the explicit clock (req.CompiledAt) instead of the compiler's
-	// internal time.Now(); context.Background() because the façade does not carry a
-	// request context — the local compile path is not bounded by an HTTP deadline.
-	result, err := c.CompileAt(context.Background(), &topo, keys, req.CompiledAt)
+	// internal time.Now(); ctx bounds the allocator scan (cancellable on the live paths,
+	// context.Background() on the pure entry points + the CLI).
+	result, err := c.CompileAt(ctx, &topo, keys, req.CompiledAt)
 	if err != nil {
 		return nil, err
 	}
@@ -89,13 +108,13 @@ func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 // checksums, and the optional detached signatures. It is the contract-level reshape Compile
 // applies to expose the frozen artifacts-out shape (and the surface the golden corpus pins).
 //
-// It builds exactly the same bundle file set + bundlesig.Canonicalize checksums + detached
-// signatures that artifacts.Export lays out on disk. The two are SINGLE-SOURCED by the frozen
-// contract corpus (the localcompile golden test + the lossless-wrapper test pin them byte-
-// equal), not by a shared call: artifacts.Export builds the set straight from the result
-// because importing this package there would form a test-only import cycle (artifacts is a
-// transitive test dependency of render, which localcompile imports). The corpus is what keeps
-// the in-memory CompileArtifacts and the on-disk bundle from ever drifting.
+// The per-node bundle file set is built by the SAME artifacts.BundleFiles helper the on-disk
+// exporter uses, so the in-memory CompileArtifacts and the on-disk bundle are single-sourced
+// by a shared call — not merely pinned byte-equal by the corpus. (localcompile importing
+// artifacts is cycle-free: artifacts is a sink package — apierr/bundlesig/compiler only — so
+// it imports neither render nor this package. The reverse, artifacts importing localcompile,
+// is what would cycle, since render's tests depend on artifacts.) Over that set bundlesig.
+// Canonicalize emits the checksums; the detached signatures cover the canonical bytes.
 //
 // signer is the bundlesig.ConfigSigner interface (Compile passes req.SigningKey): a nil
 // interface means "unsigned" — Signatures stays empty and SigningPubPEM nil, the byte-
@@ -104,7 +123,7 @@ func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 func ArtifactsFromResult(result *compiler.CompileResult, signer bundlesig.ConfigSigner) (CompileArtifacts, error) {
 	signEnabled := signer != nil
 
-	artifacts := CompileArtifacts{
+	out := CompileArtifacts{
 		Topology:   result.Topology,
 		Files:      make(map[string]map[string]string),
 		Deploy:     make(map[string]string),
@@ -115,61 +134,38 @@ func ArtifactsFromResult(result *compiler.CompileResult, signer bundlesig.Config
 	}
 
 	for _, node := range result.Topology.Nodes {
-		// The per-node bundle file set: this is the exact checksummed set
-		// artifacts.Export builds (export.go:155-175). The relpath keys are the
-		// contract's per-node shape.
-		bundleFiles := make(map[string]string)
-
-		// Per-peer WireGuard configs. WireGuardConfigs keys have the format
-		// "nodeID:interfaceName"; the client role's single wg0 is keyed "nodeID:wg0".
-		for configKey, wgConf := range result.WireGuardConfigs {
-			parts := strings.SplitN(configKey, ":", 2)
-			if len(parts) != 2 || parts[0] != node.ID {
-				continue
-			}
-			bundleFiles["wireguard/"+parts[1]+".conf"] = wgConf
-		}
-		if babelConf, ok := result.BabelConfigs[node.ID]; ok {
-			bundleFiles["babel/babeld.conf"] = babelConf
-		}
-		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
-			bundleFiles["sysctl/99-overlay.conf"] = sysctlConf
-		}
-		if script, ok := result.InstallScripts[node.ID]; ok {
-			bundleFiles["install.sh"] = script
-		}
-		// artifacts.json joins the set only when a catalog produced non-empty content,
-		// so a non-catalog bundle stays byte-identical (D4) — mirroring export's
-		// hasArtifacts guard.
-		if artifactsJSON, ok := result.ArtifactsJSON[node.ID]; ok && artifactsJSON != "" {
-			bundleFiles["artifacts.json"] = artifactsJSON
-		}
-
-		artifacts.Files[node.ID] = bundleFiles
+		// The per-node checksummed bundle file set — one source of truth (artifacts.BundleFiles)
+		// for the relpath keys and the set membership (incl. the artifacts.json D4 guard), shared
+		// with the on-disk exporter so the two can never drift.
+		bundleFiles := artifacts.BundleFiles(result, node.ID)
+		out.Files[node.ID] = bundleFiles
 
 		// The canonical checksums.sha256 content over this node's bundle (sorted by
 		// path, "%x  %s\n" lines).
 		canonical := bundlesig.Canonicalize(bundleFiles)
-		artifacts.Checksums[node.ID] = string(canonical)
+		out.Checksums[node.ID] = string(canonical)
 
-		// When signing is on, the detached signature covers the exact canonical bytes.
+		// When signing is on, the detached signature covers the exact canonical bytes. The
+		// in-memory Signatures value is the BARE base64; the on-disk bundle.sig the exporter
+		// writes is that same base64 plus a trailing newline (a file-representation detail — the
+		// signed/digest-bound bytes are identical).
 		if signEnabled {
 			sig, err := signer.Sign(canonical)
 			if err != nil {
 				return CompileArtifacts{}, fmt.Errorf("sign bundle for node %s: %w", node.ID, err)
 			}
-			artifacts.Signatures[node.ID] = base64.StdEncoding.EncodeToString(sig)
+			out.Signatures[node.ID] = base64.StdEncoding.EncodeToString(sig)
 		}
 	}
 
 	if signEnabled {
-		artifacts.SigningPubPEM = signer.PublicKeyPEM()
+		out.SigningPubPEM = signer.PublicKeyPEM()
 	}
 
 	// Project-level deploy scripts (deploy-all.sh / deploy-all.ps1).
 	for name, script := range result.DeployScripts {
-		artifacts.Deploy[name] = script
+		out.Deploy[name] = script
 	}
 
-	return artifacts, nil
+	return out, nil
 }

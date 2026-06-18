@@ -29,6 +29,43 @@ type ExportResult struct {
 	Nodes     []string
 }
 
+// BundleFiles builds a node's canonical, checksummed bundle file set as a path->content map:
+// every per-peer wireguard/<iface>.conf (WireGuardConfigs is keyed "nodeID:interfaceName"; a
+// client's single wg0 is "nodeID:wg0"), babel/babeld.conf (present for non-client nodes),
+// sysctl/99-overlay.conf, install.sh, and artifacts.json only when a catalog produced
+// non-empty content (the D4 guard — an empty catalog omits the file so the air-gap bundle
+// stays byte-identical).
+//
+// This is the SINGLE source for that set: Export writes these files plus their
+// checksums.sha256 to disk, and localcompile.ArtifactsFromResult reshapes the identical set in
+// memory for the frozen contract — both call here, so the on-disk bundle and the in-memory
+// CompileArtifacts can never drift. bundle.sig, signing-pubkey.pem and manifest.json are NOT
+// members (they are the authenticity/metadata layer over this set, not part of the checksummed
+// bytes).
+func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]string {
+	bundleFiles := make(map[string]string)
+	for configKey, wgConf := range result.WireGuardConfigs {
+		parts := strings.SplitN(configKey, ":", 2)
+		if len(parts) != 2 || parts[0] != nodeID {
+			continue
+		}
+		bundleFiles["wireguard/"+parts[1]+".conf"] = wgConf
+	}
+	if babelConf, ok := result.BabelConfigs[nodeID]; ok {
+		bundleFiles["babel/babeld.conf"] = babelConf
+	}
+	if sysctlConf, ok := result.SysctlConfigs[nodeID]; ok {
+		bundleFiles["sysctl/99-overlay.conf"] = sysctlConf
+	}
+	if script, ok := result.InstallScripts[nodeID]; ok {
+		bundleFiles["install.sh"] = script
+	}
+	if artifactsJSON, ok := result.ArtifactsJSON[nodeID]; ok && artifactsJSON != "" {
+		bundleFiles["artifacts.json"] = artifactsJSON
+	}
+	return bundleFiles
+}
+
 // Export writes the rendered configuration artifacts for every node to outputDir.
 //
 // Export is the DISK-WRITE TAIL of the local compile pipeline (plan-3 Phase 6). The
@@ -40,16 +77,13 @@ type ExportResult struct {
 // step). It keeps its *compiler.CompileResult signature so those callers stay call-
 // compatible, and its output is byte-for-byte identical to the pre-façade exporter.
 //
-// The per-node checksummed bundle set Export writes (every per-peer wireguard/<iface>.conf,
-// babel/babeld.conf for non-client nodes, sysctl/99-overlay.conf, install.sh, and
-// artifacts.json when a catalog is configured) is exactly the set the contract's
-// localcompile.ArtifactsFromResult re-shapes in memory — the two are pinned byte-equal by
-// the localcompile golden corpus and the lossless-wrapper test, so the on-disk bundle and
-// the in-memory CompileArtifacts can never drift. (Export builds the set straight from the
-// result rather than importing the façade, because localcompile depends on render and
-// render's internal tests depend on this package — importing localcompile here would form
-// a test-only import cycle. The byte set is single-sourced by the frozen contract corpus,
-// not by a shared call.)
+// The per-node checksummed bundle set Export writes is built by BundleFiles, the SAME helper
+// the contract's localcompile.ArtifactsFromResult calls to re-shape the set in memory — one
+// source of truth, so the on-disk bundle and the in-memory CompileArtifacts can never drift
+// (the localcompile golden corpus + lossless-wrapper test pin the result on top of that). The
+// shared helper lives here rather than in the façade because artifacts is a sink package
+// (apierr/bundlesig/compiler only): localcompile imports it freely, whereas the reverse would
+// cycle (render's tests depend on this package, and localcompile depends on render).
 //
 // The exported bundle's checksums.sha256 (and, when signing is on, bundle.sig) cover
 // ONLY those rendered artifacts. The keystone trust-list files (trustlist.json /
@@ -159,47 +193,26 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
-		// Build the canonical bundle file set as a path->content map and let
-		// bundlesig.Canonicalize emit the checksums.sha256 content. The output is SORTED
-		// by path and deterministic across runs; sha256sum -c is order insensitive, so
-		// sorting is safe. This is the same set + canonicalization the contract's
-		// localcompile.ArtifactsFromResult builds in memory (the two are pinned byte-equal
-		// by the localcompile golden corpus), so the on-disk checksums.sha256 and the
-		// in-memory CompileArtifacts.Checksums never diverge.
+		// The canonical bundle file set as a path->content map, then bundlesig.Canonicalize
+		// emits the checksums.sha256 content. The output is SORTED by path and deterministic
+		// across runs; sha256sum -c is order insensitive, so sorting is safe. BundleFiles is the
+		// single source for this set (shared with the contract's localcompile.ArtifactsFromResult),
+		// so the on-disk checksums.sha256 and the in-memory CompileArtifacts.Checksums never
+		// diverge.
 		//
-		// The set must match the rest of the bundle exactly: every per-peer
-		// wireguard/<iface>.conf, babel/babeld.conf (non-client only), sysctl/
-		// 99-overlay.conf, and install.sh — written above before this point so the
-		// hashes describe the same bytes that landed on disk. install.sh is the
-		// root-executed trust anchor and was historically the only artifact not
-		// covered by checksums.sha256 (audit item D24). manifest.json is still
-		// deliberately excluded: it carries compile-time timestamps (compiled_at,
-		// etc.) and is out of integrity-check scope (see docs/spec/security/security.md).
-		// bundle.sig and signing-pubkey.pem (when signing is enabled) are also
-		// excluded by construction: bundle.sig signs this very content and the
-		// pubkey is the verification anchor, so neither can self-reference.
-		bundleFiles := make(map[string]string)
-		for configKey, wgConf := range result.WireGuardConfigs {
-			parts := strings.SplitN(configKey, ":", 2)
-			if len(parts) != 2 || parts[0] != node.ID {
-				continue
-			}
-			bundleFiles["wireguard/"+parts[1]+".conf"] = wgConf
-		}
-		if babelConf, ok := result.BabelConfigs[node.ID]; ok {
-			bundleFiles["babel/babeld.conf"] = babelConf
-		}
-		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
-			bundleFiles["sysctl/99-overlay.conf"] = sysctlConf
-		}
-		if script, ok := result.InstallScripts[node.ID]; ok {
-			bundleFiles["install.sh"] = script
-		}
-		// artifacts.json joins the checksummed set so its pins inherit the bundle's Ed25519
-		// signature + keystone digest binding — no new trust primitive. Omitted when absent (D4).
-		if hasArtifacts {
-			bundleFiles["artifacts.json"] = artifactsJSON
-		}
+		// The set matches the rest of the bundle exactly: every per-peer wireguard/<iface>.conf,
+		// babel/babeld.conf (non-client only), sysctl/99-overlay.conf, and install.sh — written
+		// above before this point so the hashes describe the same bytes that landed on disk.
+		// install.sh is the root-executed trust anchor and was historically the only artifact not
+		// covered by checksums.sha256 (audit item D24). manifest.json is still deliberately
+		// excluded: it carries compile-time timestamps (compiled_at, etc.) and is out of
+		// integrity-check scope (see docs/spec/security/security.md). bundle.sig and
+		// signing-pubkey.pem (when signing is enabled) are also excluded by construction:
+		// bundle.sig signs this very content and the pubkey is the verification anchor, so neither
+		// can self-reference. (artifacts.json joins the set so its pins inherit the bundle's
+		// Ed25519 signature + keystone digest binding — no new trust primitive; omitted when
+		// absent, D4.)
+		bundleFiles := BundleFiles(result, node.ID)
 
 		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")

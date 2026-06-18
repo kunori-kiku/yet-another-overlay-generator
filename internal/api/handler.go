@@ -160,7 +160,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	// Run the whole air-gap pipeline (generate keys → compile → render) through the shared
 	// façade, the single compile authority. CompileResult yields the raw result so the
 	// response keeps its per-map shape.
-	result, err := localcompile.CompileResult(req)
+	result, err := localcompile.CompileResultCtx(r.Context(), req)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
 		return
@@ -205,7 +205,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	// Compile + render through the shared façade (the single compile authority), then hand
 	// the resulting *compiler.CompileResult to the unchanged artifacts.Export → tmpDir →
 	// createExportZip(tmpDir) flow below — the export path keeps its dir-based shape.
-	result, err := localcompile.CompileResult(req)
+	result, err := localcompile.CompileResultCtx(r.Context(), req)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
 		return
@@ -268,7 +268,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := localcompile.CompileResult(req)
+	result, err := localcompile.CompileResultCtx(r.Context(), req)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
 		return

@@ -170,6 +170,50 @@ func TestCompile_LosslessWrapper(t *testing.T) {
 	}
 }
 
+// TestCompile_InputTopologyUnmutated proves the façade is pure with respect to its INPUT:
+// CompileResult clones the topology's Node/Edge slices, so the pipeline's in-place write-backs
+// (GenerateKeysWith stamps the generated WireGuard keys onto nodes; the allocator stamps overlay
+// IPs/pins) never reach the caller's CompileRequest.Topology. The written-back topology is the
+// returned result.Topology instead. The fixture starts with EMPTY keys (case-c), so
+// GenerateKeysWith WOULD mutate the caller's nodes if the clone were missing.
+func TestCompile_InputTopologyUnmutated(t *testing.T) {
+	reqTopo := simpleMeshTopo() // empty WG keys + empty overlay IPs to start
+
+	art, err := Compile(CompileRequest{Topology: reqTopo, Custody: render.AirGap})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	// The caller's topology must be byte-for-byte untouched by the compile.
+	for i := range reqTopo.Nodes {
+		n := reqTopo.Nodes[i]
+		if n.WireGuardPrivateKey != "" || n.WireGuardPublicKey != "" {
+			t.Errorf("input node %s mutated: keys written back onto the caller's topology (priv=%q pub=%q)",
+				n.ID, n.WireGuardPrivateKey, n.WireGuardPublicKey)
+		}
+		if n.OverlayIP != "" {
+			t.Errorf("input node %s mutated: overlay IP %q written back onto the caller's topology", n.ID, n.OverlayIP)
+		}
+	}
+	for i := range reqTopo.Edges {
+		e := reqTopo.Edges[i]
+		if e.PinnedFromPort != 0 || e.PinnedFromTransitIP != "" || e.CompiledPort != 0 {
+			t.Errorf("input edge %s mutated: pins written back onto the caller's topology (%+v)", e.ID, e)
+		}
+	}
+
+	// Sanity: the write-back DID happen — on the returned topology, not the input.
+	wrote := false
+	for _, n := range art.Topology.Nodes {
+		if n.WireGuardPublicKey != "" && n.OverlayIP != "" {
+			wrote = true
+		}
+	}
+	if !wrote {
+		t.Fatal("expected the compiled result.Topology to carry the key + overlay-IP write-backs")
+	}
+}
+
 func keysOf(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

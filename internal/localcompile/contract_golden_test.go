@@ -3,7 +3,10 @@ package localcompile
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"os"
 	"path/filepath"
@@ -272,6 +275,67 @@ func TestContractGolden(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestContractGolden_SigningVerifies upgrades the signing-on fixtures from a presence freeze
+// to a CORRECTNESS freeze: for each signing fixture it parses the contract's SigningPubPEM back
+// to an ed25519 public key and cryptographically verifies every per-node detached signature
+// against that node's canonical checksum bytes. A signature that is present but does not verify
+// (or a SigningPubPEM that does not match the signer) passes the byte-golden yet fails here.
+func TestContractGolden_SigningVerifies(t *testing.T) {
+	ran := false
+	for _, fx := range loadFixtures(t) {
+		if !fx.Signing {
+			continue
+		}
+		fx := fx
+		t.Run(fx.Name, func(t *testing.T) {
+			ran = true
+			art, err := Compile(requestFor(t, fx))
+			if err != nil {
+				t.Fatalf("Compile %s: %v", fx.Name, err)
+			}
+			if len(art.SigningPubPEM) == 0 {
+				t.Fatalf("signing fixture %s produced no SigningPubPEM", fx.Name)
+			}
+			pub := parseEd25519PubPEM(t, art.SigningPubPEM)
+			if len(art.Signatures) == 0 {
+				t.Fatalf("signing fixture %s produced no signatures", fx.Name)
+			}
+			for nodeID, sigB64 := range art.Signatures {
+				sig, err := base64.StdEncoding.DecodeString(sigB64)
+				if err != nil {
+					t.Fatalf("node %s: decode signature: %v", nodeID, err)
+				}
+				// The signature covers the canonical checksum bytes over this node's bundle —
+				// the exact bytes ArtifactsFromResult signs (bundlesig.Canonicalize of art.Files).
+				canonical := bundlesig.Canonicalize(art.Files[nodeID])
+				if !bundlesig.Verify(canonical, sig, pub) {
+					t.Errorf("node %s: detached signature does not verify against the bundle checksum + SigningPubPEM", nodeID)
+				}
+			}
+		})
+	}
+	if !ran {
+		t.Fatal("no signing-on fixture in the corpus; owner flag 2 requires one (a signing-on bundle.sig fixture)")
+	}
+}
+
+func parseEd25519PubPEM(t *testing.T, pemBytes []byte) ed25519.PublicKey {
+	t.Helper()
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		t.Fatalf("SigningPubPEM is not valid PEM:\n%s", pemBytes)
+	}
+	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse PKIX public key: %v", err)
+	}
+	pub, ok := key.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("public key is %T, want ed25519.PublicKey", key)
+	}
+	return pub
 }
 
 // TestContractGolden_PureFunction proves Compile is a pure function (no env / clock /
