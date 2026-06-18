@@ -1,10 +1,20 @@
 # STATUS
-<!-- regenerated: 2026-06-17 -->
-<!-- by: edge-pin-collision-rootcause subject -->
+<!-- regenerated: 2026-06-18 -->
+<!-- by: pre-rc1 program draft + v2.0.0-beta.8 -->
 
 ## Active work
 
-- **Released:** **`v2.0.0-beta.7`** (GitHub *latest*) — edge-pin-collision root-cause fix (PR #135).
+- **Released:** **`v2.0.0-beta.8`** (GitHub *latest*) — pre-rc.1 blocker hotfix (PR #136). Fast-tracked six
+  investigation-confirmed blockers: fleet-mux panic recovery (B1), keystone-sign-on-refresh 401 (F1),
+  babeld.conf byte-stability under edge reorder (C1), and enrollment-lifecycle hardening (S4 revoked-
+  resurrection guard, S5 enrollment-token purge-on-revoke, S6 TTL cap). Independent review GO (0 findings)
+  → CI + Release + Docker green.
+- **Drafted (awaiting execution + owner sign-off on 3 pending decisions):** the **pre-rc.1 program** —
+  `implementation_plans/pre-rc1-2026_06_18/` (outline + 22 plan files across 4 subjects: refactor+security →
+  phone UX → full-stack simulation → security audit again → rc.1). Built via the `draft-implementation-plan`
+  skill from a 55-agent investigation → adversarial critique → coherence reconciliation. Pending owner
+  decisions: air-gap removal mechanism (build-tag vs delete), transit-CIDR const home, rc.1 `--prerelease`.
+- **Released:** **`v2.0.0-beta.7`** (superseded by beta.8) — edge-pin-collision root-cause fix (PR #135).
   Fixed the **"pin occupied by two different links"** corruption the operator hit on a live fleet
   (validate showed 10 errors while incremental deploys looked fine). Root cause: incremental
   enrollment compiles only the enrolled subgraph (dropping not-yet-enrolled edges), so the allocator's
@@ -96,9 +106,11 @@
 
 ## Next actions
 
-1. Owner: run the five owed smokes on real hardware/fleet when convenient.
-2. Owner: once the smokes pass + the beta soak is clean, cut `rc.1` (no new features; fixes only), then GA.
-3. No drafted subject is awaiting execution.
+1. Owner: review `implementation_plans/pre-rc1-2026_06_18/` and sign off on the 3 pending decisions
+   (air-gap mechanism, transit-CIDR const home, rc.1 `--prerelease`).
+2. Execute the pre-rc.1 program subject by subject (start with plan-1 hygiene; harness-first within Subject 1).
+3. Owner: run the owed manual smokes on real hardware/fleet (see Open questions / blockers).
+4. After Subjects 1–4 land + smokes pass, cut `rc.1` (gated on real-tunnel + conformance harness green; per plan-22).
 
 ## Recently closed subjects (last 3)
 
