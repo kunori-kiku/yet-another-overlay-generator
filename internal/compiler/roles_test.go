@@ -108,6 +108,76 @@ func TestInferCapabilitiesFromRole_Relay(t *testing.T) {
 	}
 }
 
+// TestInferCapabilitiesFromRole_EndpointImpliesPublicIP pins the C3 derive-up cascade: a
+// router/gateway node that carries a configured public endpoint but has has_public_ip=false
+// must have HasPublicIP normalized UP to true, which in turn flips CanAcceptInbound to true
+// (D49: a node with a real public endpoint SHOULD accept inbound). The pre-C3 code read
+// node.Capabilities.HasPublicIP directly (false here), so CanAcceptInbound stayed false.
+func TestInferCapabilitiesFromRole_EndpointImpliesPublicIP(t *testing.T) {
+	for _, role := range []string{"router", "gateway"} {
+		t.Run(role, func(t *testing.T) {
+			node := &model.Node{
+				ID:   "n1",
+				Role: role,
+				Capabilities: model.NodeCapabilities{
+					HasPublicIP:      false,
+					CanAcceptInbound: false,
+				},
+				PublicEndpoints: []model.PublicEndpoint{
+					{ID: "ep1", Host: "node.example", Port: 51820},
+				},
+			}
+			caps := InferCapabilitiesFromRole(node)
+
+			if !caps.HasPublicIP {
+				t.Errorf("%s with a public endpoint: HasPublicIP should normalize UP to true, got false", role)
+			}
+			if !caps.CanAcceptInbound {
+				t.Errorf("%s with a public endpoint: CanAcceptInbound should flip to true (D49), got false", role)
+			}
+		})
+	}
+}
+
+// TestInferCapabilitiesFromRole_NoEndpointNoPublicIP is the negative control for C3: with
+// neither has_public_ip nor any public endpoint, a router/gateway must NOT gain HasPublicIP
+// or CanAcceptInbound — the derive-up cascade only fires when there is real public reach.
+func TestInferCapabilitiesFromRole_NoEndpointNoPublicIP(t *testing.T) {
+	for _, role := range []string{"router", "gateway"} {
+		t.Run(role, func(t *testing.T) {
+			node := &model.Node{ID: "n1", Role: role, Capabilities: model.NodeCapabilities{}}
+			caps := InferCapabilitiesFromRole(node)
+
+			if caps.HasPublicIP {
+				t.Errorf("%s with no endpoint: HasPublicIP should stay false, got true", role)
+			}
+			if caps.CanAcceptInbound {
+				t.Errorf("%s with no endpoint: CanAcceptInbound should stay false, got true", role)
+			}
+		})
+	}
+}
+
+// TestInferCapabilitiesFromRole_ExplicitPublicIPPreserved guards the "normalize UP only"
+// invariant: an explicitly-set HasPublicIP=true is never stripped, even with no endpoint.
+func TestInferCapabilitiesFromRole_ExplicitPublicIPPreserved(t *testing.T) {
+	for _, role := range []string{"router", "gateway"} {
+		t.Run(role, func(t *testing.T) {
+			node := &model.Node{ID: "n1", Role: role, Capabilities: model.NodeCapabilities{
+				HasPublicIP: true,
+			}}
+			caps := InferCapabilitiesFromRole(node)
+
+			if !caps.HasPublicIP {
+				t.Errorf("%s: an explicit HasPublicIP=true must never be stripped", role)
+			}
+			if !caps.CanAcceptInbound {
+				t.Errorf("%s: explicit HasPublicIP=true should yield CanAcceptInbound=true", role)
+			}
+		})
+	}
+}
+
 func TestInferCapabilitiesFromRole_Peer(t *testing.T) {
 	// peer
 	node := &model.Node{ID: "n1", Role: "peer", Capabilities: model.NodeCapabilities{

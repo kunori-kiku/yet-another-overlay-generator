@@ -108,21 +108,30 @@ func DeriveRoleSemantics(node *model.Node) RoleSemantics {
 func InferCapabilitiesFromRole(node *model.Node) model.NodeCapabilities {
 	caps := node.Capabilities
 
+	// A configured public endpoint implies public reachability even when the operator did not
+	// also tick has_public_ip (C3 / D49). Normalize HasPublicIP UP only — an explicitly-set true
+	// is never stripped — and use hasPub (not the raw node flag) in the accept-inbound branches
+	// below so endpoint-bearing nodes correctly accept inbound. This single normalization also
+	// feeds the reverse-Endpoint fallback in derivePeers, which gates on
+	// fromNode.Capabilities.HasPublicIP.
+	hasPub := node.Capabilities.HasPublicIP || len(node.PublicEndpoints) > 0
+	caps.HasPublicIP = hasPub
+
 	switch node.Role {
 	case "router":
 		caps.CanForward = true
-		// A router accepts inbound connections when it has a public IP, consistent with
+		// A router accepts inbound connections when it is publicly reachable, consistent with
 		// DeriveRoleSemantics's AcceptAllInbound (D49). Preserve an already explicitly-set true.
-		caps.CanAcceptInbound = caps.CanAcceptInbound || node.Capabilities.HasPublicIP
+		caps.CanAcceptInbound = caps.CanAcceptInbound || hasPub
 	case "relay":
 		caps.CanForward = true
 		caps.CanRelay = true
 		caps.CanAcceptInbound = true
 	case "gateway":
 		caps.CanForward = true
-		// A gateway likewise accepts inbound connections when it has a public IP (D49),
+		// A gateway likewise accepts inbound connections when it is publicly reachable (D49),
 		// consistent with DeriveRoleSemantics.
-		caps.CanAcceptInbound = caps.CanAcceptInbound || node.Capabilities.HasPublicIP
+		caps.CanAcceptInbound = caps.CanAcceptInbound || hasPub
 	case "peer":
 		// peer: no capability overrides; keep the node's existing capabilities.
 	case "client":

@@ -28,6 +28,28 @@ func publicRouterNode(id, name, host string) model.Node {
 	}
 }
 
+// endpointRouterNoPublicIPFlag builds a router node that carries a configured public endpoint
+// but leaves has_public_ip=false (the common "I set an endpoint but forgot the flag" shape).
+// Used by the C3 cascade repro: only the full Compile path (which runs
+// InferCapabilitiesFromRole) normalizes HasPublicIP UP from the endpoint, so the reverse-peer
+// fallback at peers.go fires.
+func endpointRouterNoPublicIPFlag(id, name, host string) model.Node {
+	return model.Node{
+		ID:       id,
+		Name:     name,
+		Hostname: host,
+		Role:     "router",
+		DomainID: "domain-1",
+		Capabilities: model.NodeCapabilities{
+			// Intentionally NOT public: the endpoint alone must drive the cascade.
+			HasPublicIP: false,
+		},
+		PublicEndpoints: []model.PublicEndpoint{
+			{ID: id + "-ep", Host: host, Port: 51820},
+		},
+	}
+}
+
 // findPeer finds the PeerInfo pointing at remoteID within peers.
 func findPeer(peers []PeerInfo, remoteID string) *PeerInfo {
 	for i := range peers {
@@ -438,6 +460,65 @@ func TestCompiledPort_OverrideAware(t *testing.T) {
 			t.Errorf("no Endpoint should be generated when endpoint_host is empty, got %q", fwd.Endpoint)
 		}
 	})
+}
+
+// TestReverseEndpoint_EndpointImpliesPublicIP pins the C3 cascade end-to-end through the full
+// Compile pipeline: node-a declares a public endpoint but has has_public_ip=false. Before C3,
+// InferCapabilitiesFromRole read node.Capabilities.HasPublicIP directly (false), so the
+// reverse-peer fallback gate (fromNode.Capabilities.HasPublicIP && len(PublicEndpoints)>0)
+// never fired and B's reverse peer pointing at A got an empty Endpoint. After C3, HasPublicIP
+// is normalized UP from the endpoint, so B's reverse peer dials A's public host at A's
+// allocated listen port.
+//
+// This MUST use the full Compile path (not bare DerivePeers, which does not infer
+// capabilities) — that is exactly where InferCapabilitiesFromRole runs.
+func TestReverseEndpoint_EndpointImpliesPublicIP(t *testing.T) {
+	topo := &model.Topology{
+		Project: model.Project{ID: "ep-c3", Name: "Endpoint C3 cascade"},
+		Domains: []model.Domain{{
+			ID: "domain-1", Name: "c3-net", CIDR: "10.46.0.0/24",
+			AllocationMode: "auto", RoutingMode: "babel",
+		}},
+		Nodes: []model.Node{
+			// node-a: endpoint present, has_public_ip=false -> must cascade UP.
+			endpointRouterNoPublicIPFlag("node-a", "alpha", "a.example"),
+			// node-b: a plain (non-public) peer that dials A; no reverse edge exists.
+			{
+				ID: "node-b", Name: "beta", Hostname: "b.host", Role: "router", DomainID: "domain-1",
+			},
+		},
+		Edges: []model.Edge{
+			// Single A->B edge, no explicit reverse edge: B's reverse peer must use the fallback.
+			{ID: "e1", FromNodeID: "node-a", ToNodeID: "node-b", Type: "public-endpoint",
+				EndpointHost: "a.example", EndpointPort: 0, Transport: "udp", IsEnabled: true},
+		},
+	}
+
+	c := NewCompiler()
+	result, err := c.Compile(topo, testKeys2())
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// B's reverse peer dialing A.
+	rev := findPeer(result.PeerMap["node-b"], "node-a")
+	if rev == nil {
+		t.Fatalf("node-b should have a reverse peer pointing at node-a")
+	}
+	if rev.Endpoint == "" {
+		t.Fatalf("reverse Endpoint should be non-empty: node-a's public endpoint must cascade HasPublicIP UP (C3)")
+	}
+
+	// The fallback dials A's public host at A's allocated listen port (never the endpoint's
+	// own Port hint).
+	aPeer := findPeer(result.PeerMap["node-a"], "node-b")
+	if aPeer == nil {
+		t.Fatalf("node-a should have a peer pointing at node-b")
+	}
+	wantEndpoint := "a.example:" + itoa(aPeer.ListenPort)
+	if rev.Endpoint != wantEndpoint {
+		t.Errorf("reverse Endpoint = %q, want %q", rev.Endpoint, wantEndpoint)
+	}
 }
 
 // testKeys2 provides the keys needed for the two-node tests.
