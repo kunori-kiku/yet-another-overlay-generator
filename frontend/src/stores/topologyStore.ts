@@ -539,6 +539,13 @@ export const useTopologyStore = create<TopologyState>()(
         if (hasReservedRoutePolicies) {
           delete topo.route_policies;
         }
+        // Make the typed `is_enabled: boolean` honest for imports. Go's Edge.IsEnabled is the one
+        // intentionally NON-omitempty Edge bool (internal/model/topology.go:168), so a missing value
+        // is the Go bool zero = false (disabled). A hand-edited import lacking is_enabled would
+        // otherwise carry `undefined` past the type system; normalize to a concrete boolean here so
+        // every consumer agrees, mirroring normalizeEdges.ts's `!== true`. Inside this guard so a
+        // malformed import lacking `edges` falls through untouched.
+        topo.edges = topo.edges.map((e) => ({ ...e, is_enabled: e.is_enabled === true }));
         // Controller-mode import: the controller is server-authoritative for keys — each node's public
         // key comes from its agent's enrollment and is stamped at compile (enrolledSubgraph), and a
         // private key must never reach the server. So the imported design's key material is BOTH

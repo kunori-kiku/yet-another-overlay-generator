@@ -15,7 +15,7 @@ An Edge represents a unidirectional connection intent ("from actively connects t
 | `weight` | int | Connection weight |
 | `role` | `"primary" \| "backup" \| ""` | Link role for parallel links (see [Parallel links](#parallel-links-primary--backups)); empty = primary class |
 | `transport` | `"udp" \| "tcp"` | `udp` = plain WireGuard. `tcp` = the link is wrapped by **mimic** (eBPF UDP→fake-TCP) for UDP-hostile networks — see [TCP transport (mimic)](#tcp-transport-mimic). No new field: `tcp` is the whole signal (mimic is keyless) |
-| `is_enabled` | bool | Whether this edge is active |
+| `is_enabled` | bool | Whether this edge is active. The one intentionally non-omitempty Edge bool: a missing value is the Go zero (`false`/disabled); the panel normalizes it to a concrete boolean at the import boundary so a hand-edited file cannot smuggle `undefined` past the type system |
 | `notes` | string | Free-form notes |
 | `pinned_*` | int/string | Read-write allocation pins (see [Allocation pins](#allocation-pins)) |
 

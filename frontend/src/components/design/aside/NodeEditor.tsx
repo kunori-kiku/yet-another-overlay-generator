@@ -204,6 +204,20 @@ export function NodeEditor() {
           <p className="mt-1 text-xs text-gray-500">{t(language, 'xdpModeHint')}</p>
         </div>
         {selectedNode.role !== 'client' && (
+          <div>
+            <label className="text-xs text-gray-400">{t(language, 'nodeEditor.routerIdLabel')}</label>
+            <input
+              type="text"
+              value={selectedNode.router_id || ''}
+              onChange={(e) => updateNode(selectedNode.id, { router_id: e.target.value || undefined })}
+              placeholder={t(language, 'nodeEditor.routerIdPlaceholder')}
+              pattern="^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(\d{1,3}\.){3}\d{1,3})$"
+              title={t(language, 'nodeEditor.routerIdHint')}
+              className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            />
+          </div>
+        )}
+        {selectedNode.role !== 'client' && (
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
