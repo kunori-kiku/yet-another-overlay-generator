@@ -7,8 +7,11 @@
 // code enum — the canonical code strings live in the Go apierr/validator source and the FE i18n
 // catalog. These constants are the subset the leaf primitives raise; later phases add the rest.
 
-// Code strings raised by the leaf allocation primitives, mirroring internal/apierr/apierr.go:57-64.
+// Code strings raised by the allocation primitives + the compile orchestration, mirroring the Go
+// apierr Code constants (internal/apierr/apierr.go:46-64). The allocation/keygen codes ride the apierr
+// channel of the conformance harness and MUST equal the Go literals byte-for-byte.
 export const CompileCode = {
+  // Transit / overlay / port allocation (apierr.go:57-64).
   TransitPoolExhausted: 'compile_transit_pool_exhausted',
   TransitCIDRInvalid: 'compile_transit_cidr_invalid',
   TransitCIDRNotIPv4: 'compile_transit_cidr_not_ipv4',
@@ -17,6 +20,18 @@ export const CompileCode = {
   OverlayPoolExhausted: 'compile_overlay_pool_exhausted',
   OverlayScanBudgetExceeded: 'compile_overlay_scan_budget_exceeded',
   NodeUnknownDomain: 'compile_node_unknown_domain',
+  // Key derivation (apierr.go:46-49) — raised by the AirGap key pre-pass in index.ts.
+  KeygenMissingPubkey: 'keygen_missing_pubkey',
+  KeygenPrivkeyParse: 'keygen_privkey_parse_failed',
+  KeygenPinnedNoPrivkey: 'keygen_pinned_pubkey_no_privkey',
+  KeygenGenerateFailed: 'keygen_generate_failed',
+  // Validation-failure SENTINEL (NOT a Go apierr code): the Go compiler rejects an invalid topology
+  // with a plain fmt.Errorf wrap ("topology failed {schema,semantic} validation"), which is a DIFFERENT
+  // channel from the apierr envelope (validator/code.go's design lock). The conformance harness routes
+  // such a failure to the validator channel (it runs validate() directly), so this sentinel never
+  // appears in the apierr channel — it only lets a compile() caller distinguish a validation rejection
+  // from a coded allocation/key failure. Prefixed "ts_" so it can never collide with a real Go code.
+  TopologyValidationFailed: 'ts_topology_validation_failed',
 } as const;
 
 export type CompileCodeValue = (typeof CompileCode)[keyof typeof CompileCode];
