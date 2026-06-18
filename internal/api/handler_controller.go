@@ -629,6 +629,14 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 			writeAPIError(w, apierr.New(apierr.CodeEnrollmentTokenInvalid).Wrap(err))
 			return
 		}
+		// Revoked node-id re-enroll attempt (S4): a VALID token was burned (the guard runs
+		// post-consume), so refund the throttle slot (not a token guess) and surface a 409 —
+		// the operator must delete the node before its id can be reused.
+		if errors.Is(err, controller.ErrNodeRevoked) {
+			h.enrollLimiter.succeed(ipKey)
+			writeAPIError(w, apierr.New(apierr.CodeEnrollNodeRevoked).Wrap(err))
+			return
+		}
 		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
 		// must resolve (revoke the other node or reuse its id), not a malformed request.
 		if errors.Is(err, controller.ErrDuplicateWGKey) {
@@ -1146,6 +1154,13 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 		writeCodedOr(w, apierr.CodeInternalStorage, err)
 		return
 	}
+	// Invalidate any outstanding enrollment tokens for this node so a still-valid token
+	// cannot resurrect the revoked node (S5; defense in depth with the Enroll
+	// NodeRevoked guard). Idempotent: a node with no outstanding tokens purges zero.
+	if _, err := h.store.PurgeEnrollmentTokensForNode(r.Context(), tenant, req.NodeID); err != nil {
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
 	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
 		Actor:     "operator:" + operator,
@@ -1355,7 +1370,12 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 		writeAPIError(w, apierr.New(apierr.CodeNodeIDReserved))
 		return
 	}
-	if req.TTLSeconds <= 0 {
+	// Bound the TTL server-side: an enrollment token is a one-shot node bring-up
+	// credential, not a standing capability. Without an upper cap an operator could mint
+	// a year-long token that, combined with re-enroll, is a long-lived node-takeover /
+	// resurrection vector (S6).
+	const maxEnrollmentTokenTTLSeconds = 7 * 24 * 60 * 60 // 7 days
+	if req.TTLSeconds <= 0 || req.TTLSeconds > maxEnrollmentTokenTTLSeconds {
 		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "ttl_seconds"))
 		return
 	}

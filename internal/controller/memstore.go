@@ -517,6 +517,22 @@ func (s *MemStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, token
 	return nil
 }
 
+// PurgeEnrollmentTokensForNode deletes every token scoped to nodeID under the lock,
+// returning the count removed. Absent tokens yield (0, nil).
+func (s *MemStore) PurgeEnrollmentTokensForNode(ctx context.Context, t TenantID, nodeID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := s.tenant(t)
+	n := 0
+	for h, tok := range ts.tokens {
+		if tok.NodeID == nodeID {
+			delete(ts.tokens, h)
+			n++
+		}
+	}
+	return n, nil
+}
+
 // --- Passkey login challenges (plan-5.2) ---
 
 func (s *MemStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error {

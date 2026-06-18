@@ -57,6 +57,10 @@ var (
 	// pubkey ↔ one node-id — the duplicate-fleet-rows vector). Same-id re-enroll
 	// (reinstalled host, fresh token) is unaffected.
 	ErrDuplicateWGKey = errors.New("controller: WireGuard public key already enrolled under a different node id")
+	// ErrNodeRevoked is returned by Enroll when the claimed node-id exists and is
+	// revoked: a revoked node-id must not be silently resurrected by a still-valid
+	// enrollment token. The operator deletes the node to reuse the id.
+	ErrNodeRevoked = errors.New("controller: node id is revoked; delete it before re-enrolling")
 )
 
 // NodeStatus is the lifecycle state of a registry node.
@@ -506,6 +510,11 @@ type Store interface {
 	// marks the token consumed (ConsumedAt=now) and returns nil. Single-use is
 	// enforced atomically so two concurrent enrollments cannot both succeed.
 	ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error
+	// PurgeEnrollmentTokensForNode deletes every enrollment token scoped to nodeID
+	// within the tenant (consumed or not), returning the count removed. Called on
+	// revoke so a still-outstanding token cannot resurrect a revoked node. Absent
+	// tokens are not an error (returns 0, nil).
+	PurgeEnrollmentTokensForNode(ctx context.Context, t TenantID, nodeID string) (int, error)
 
 	// --- Passkey login challenges (plan-5.2) ---
 

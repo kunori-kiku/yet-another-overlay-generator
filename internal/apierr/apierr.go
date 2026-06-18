@@ -83,6 +83,7 @@ const (
 	CodeConfigNotFound           Code = "config_not_found"
 	CodeNodeIDReserved           Code = "node_id_reserved"
 	CodeEnrollmentTokenInvalid   Code = "enrollment_token_invalid"
+	CodeEnrollNodeRevoked        Code = "enroll_node_revoked"
 	CodeDuplicateWGKey           Code = "duplicate_wg_key"
 	CodeNoStagedBundle           Code = "no_staged_bundle"
 	CodeReqFieldRequired         Code = "req_field_required"
@@ -179,6 +180,7 @@ var registry = map[Code]def{
 	CodeConfigNotFound:           {"No configuration is available for this node yet.", http.StatusNotFound},
 	CodeNodeIDReserved:           {"That node id is reserved and cannot be used.", http.StatusForbidden},
 	CodeEnrollmentTokenInvalid:   {"The enrollment token is invalid or has expired; request a new one.", http.StatusUnauthorized},
+	CodeEnrollNodeRevoked:        {"That node id has been revoked; delete it before re-enrolling.", http.StatusConflict},
 	CodeDuplicateWGKey:           {"That WireGuard public key is already enrolled under a different node.", http.StatusConflict},
 	CodeNoStagedBundle:           {"Nothing is staged for the next generation; stage a deploy before promoting.", http.StatusConflict},
 	CodeReqFieldRequired:         {"The field {field} is required.", http.StatusBadRequest},

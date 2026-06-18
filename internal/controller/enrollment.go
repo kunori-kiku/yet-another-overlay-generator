@@ -27,6 +27,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -158,6 +159,32 @@ func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now
 		return EnrollResult{}, err
 	}
 
+	// (a1) Lifecycle guard: load the claimed node-id's current record (if any). A
+	// REVOKED node-id must NOT be silently resurrected by a still-valid token — refuse
+	// (the operator deletes the node to reuse the id; revoke also purges the node's
+	// tokens, so this is belt-and-braces against the resurrection vector). A re-enroll
+	// over an APPROVED node (a legitimate reinstall) is allowed, but recorded with a
+	// DISTINCT audit action below so the identity overwrite is never silent (S4).
+	reenrollApproved := false
+	if existing, gerr := store.GetNode(ctx, t, req.NodeID); gerr == nil {
+		if existing.Status == NodeRevoked {
+			if _, auditErr := store.AppendAudit(ctx, t, AuditEntry{
+				Timestamp: now,
+				Actor:     "agent:" + req.NodeID,
+				Action:    "enroll-rejected-revoked",
+				NodeID:    req.NodeID,
+			}); auditErr != nil {
+				return EnrollResult{}, fmt.Errorf("controller: appending revoked-enroll audit: %w", auditErr)
+			}
+			return EnrollResult{}, ErrNodeRevoked
+		}
+		if existing.Status == NodeApproved {
+			reenrollApproved = true
+		}
+	} else if !errors.Is(gerr, ErrNotFound) {
+		return EnrollResult{}, fmt.Errorf("controller: loading node for enroll guard: %w", gerr)
+	}
+
 	// (a2) Dedupe (plan-6): one approved WG public key ↔ one node-id. Refuse if the
 	// presented pubkey is already approved under a DIFFERENT node-id — the
 	// duplicate-fleet-rows vector. Same-id re-enroll (a reinstalled host with a fresh
@@ -204,11 +231,17 @@ func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now
 	}
 
 	// (e) Audit the enrollment. The actor is the agent itself (the enroll call is
-	// authorized by the burned token, not by an operator session).
+	// authorized by the burned token, not by an operator session). A re-enroll over an
+	// existing approved node records a DISTINCT action so the identity (key + bearer)
+	// overwrite is auditable, never silent (S4).
+	enrollAction := "enroll"
+	if reenrollApproved {
+		enrollAction = "enroll-reenroll-approved"
+	}
 	if _, err := store.AppendAudit(ctx, t, AuditEntry{
 		Timestamp: now,
 		Actor:     "agent:" + req.NodeID,
-		Action:    "enroll",
+		Action:    enrollAction,
 		NodeID:    req.NodeID,
 	}); err != nil {
 		return EnrollResult{}, fmt.Errorf("controller: appending enroll audit: %w", err)
