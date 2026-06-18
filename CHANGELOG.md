@@ -9,6 +9,35 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+### Security
+- **Enrollment-lifecycle hardening.** Three related node-enrollment weaknesses are closed:
+  - A **revoked node-id can no longer be resurrected** by a still-valid enrollment token: enroll now
+    refuses a revoked node-id (`enroll_node_revoked`, HTTP 409) and the refusal is audited.
+  - **Revoking a node purges its outstanding enrollment tokens**, so a leaked or unused token cannot
+    re-enroll it after eviction (defense in depth with the revoked-id guard above).
+  - A **re-enroll over an existing approved node** (a legitimate reinstall) stays allowed but now records
+    a distinct `enroll-reenroll-approved` audit action, so the WireGuard-key + bearer-token overwrite is
+    never silent.
+  - **Enrollment-token TTL is capped server-side** (7 days); an over-cap TTL is rejected, bounding the
+    window in which a minted token is a standing node-bring-up capability.
+
+### Fixed
+- **Panel could not keystone-sign on Deploy after a session refresh (keystone-ON tenants).** The
+  `getTrustlist` request was the one authenticated route bypassing the shared request helper, so it
+  carried no session cookie or CSRF token — a cookie-only operator (e.g. after a page refresh, with no
+  in-memory bearer) got a 401 and the off-host signing ceremony could not start. It now goes through the
+  shared helper like every other authenticated call.
+- **Panic recovery now covers the operator and agent (fleet) endpoints.** Top-level panic recovery was
+  wrapping only the air-gap compute routes; a panic in any operator- or agent-facing handler tore the
+  connection instead of returning a coded 500. Both controller muxes are now wrapped, so a handler panic
+  degrades to a clean 5xx in the fleet-bearing mode too.
+- **`babeld.conf` is now byte-stable under a benign edge reorder.** A node's Babel interface and
+  client-route lines were emitted in topology edge-array order, so merely reordering edges changed an
+  otherwise-unchanged node's config hash / bundle digest — eroding the incremental-deploy byte-stability
+  the pin/reserve/heal machinery exists to protect. The lines are now ordered by the stable per-link
+  interface name, depending only on link identity. (A one-time re-deploy may re-hash affected nodes as
+  they converge to the canonical order.)
+
 ## [2.0.0-beta.7] - 2026-06-17
 
 Fixes the cross-subgraph allocation-pin collision ("pin occupied by two different links") at its root

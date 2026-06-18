@@ -80,6 +80,7 @@ var allCodes = []Code{
 	CodeConfigNotFound,
 	CodeNodeIDReserved,
 	CodeEnrollmentTokenInvalid,
+	CodeEnrollNodeRevoked,
 	CodeDuplicateWGKey,
 	CodeNoStagedBundle,
 	CodeReqFieldRequired,

@@ -1,6 +1,8 @@
 package renderer
 
 import (
+	"sort"
+
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
@@ -111,11 +113,22 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		EnableForwarding: semantics.EnableForwarding,
 	}
 
+	// Render interface and client-/32 lines in a STABLE order: a node's peer slice is
+	// built in topology edge-array order (peers.go Pass 2), so a benign edge reorder
+	// would otherwise churn this node's babeld.conf bytes / bundle digest (C1 — it broke
+	// the incremental-deploy byte-stability the pin/reserve/heal apparatus protects).
+	// Sort by the unique per-peer InterfaceName so the output depends only on link
+	// identity, not edge-array position.
+	sortedPeers := append([]compiler.PeerInfo(nil), peers...)
+	sort.Slice(sortedPeers, func(i, j int) bool {
+		return sortedPeers[i].InterfaceName < sortedPeers[j].InterfaceName
+	})
+
 	// 每个 peer 对应一个 WireGuard tunnel 接口。
 	// D73：连接 client 的隧道（IsClientPeer）必须跳过——client 不跑 babeld，
 	// 把该隧道声明为 babel 接口会让 router 永远向其单播 hello/update。client 的
 	// 可达性改由下方 client-/32 重分发承载。
-	for _, p := range peers {
+	for _, p := range sortedPeers {
 		if p.IsClientPeer {
 			continue
 		}
@@ -164,7 +177,7 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 	// client-/32：router 侧通过隧道 PostUp 的 ip route replace 注入了 client overlay IP
 	// 的内核路由，因此走 `redistribute local`——这是 client 可达性的承载方式
 	// （client 自身不跑 babeld）。
-	for _, p := range peers {
+	for _, p := range sortedPeers {
 		if p.IsClientPeer && p.ClientOverlayIP != "" {
 			config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, p.ClientOverlayIP+"/32")
 		}

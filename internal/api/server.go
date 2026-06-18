@@ -177,16 +177,26 @@ func (s *Server) recoverPanics(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Handler returns the operator/panel mux (air-gap routes + operator controller
-// routes). Exposed for tests that drive it via httptest.
-func (s *Server) Handler() http.Handler {
-	return s.mux
+// recovered wraps a mux with TOP-LEVEL panic recovery so EVERY route on it — the
+// operator and agent controller routes included, not just the air-gap compute routes —
+// converts a handler panic into a coded 500 instead of a torn connection (B1). The
+// air-gap routes additionally wrap recoverPanics per-route; the inner recover fires
+// first, leaving this outer wrap as a harmless backstop for them.
+func (s *Server) recovered(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(s.recoverPanics(mux.ServeHTTP))
 }
 
-// AgentHandler returns the agent mux (agent controller routes). It serves nothing
-// until EnableController is called. Exposed for tests that drive it via httptest.
+// Handler returns the operator/panel mux (air-gap routes + operator controller routes),
+// wrapped in top-level panic recovery. Exposed for tests that drive it via httptest.
+func (s *Server) Handler() http.Handler {
+	return s.recovered(s.mux)
+}
+
+// AgentHandler returns the agent mux (agent controller routes), wrapped in top-level
+// panic recovery. It serves nothing until EnableController is called. Exposed for tests
+// that drive it via httptest.
 func (s *Server) AgentHandler() http.Handler {
-	return s.agentMux
+	return s.recovered(s.agentMux)
 }
 
 // ListenAndServe 启动 HTTP 服务。
@@ -206,7 +216,7 @@ func (s *Server) ListenAndServe(addr string) error {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           s.mux,
+		Handler:           s.recovered(s.mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -235,7 +245,7 @@ func (s *Server) ListenAndServeAgent(addr string) error {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           s.agentMux,
+		Handler:           s.recovered(s.agentMux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout must exceed the /poll long-poll deadline (~55s) so a waiting

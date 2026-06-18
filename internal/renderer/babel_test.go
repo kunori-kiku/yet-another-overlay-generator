@@ -8,6 +8,46 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
+// TestRenderBabelConfig_StableUnderPeerReorder pins C1: a node's babeld.conf must depend
+// only on link identity (InterfaceName), not on peer-slice / edge-array order. Rendering the
+// same peers in a different order produces byte-identical output, so a benign edge reorder
+// does not churn the config hash / bundle digest (the incremental-deploy byte-stability the
+// pin/reserve/heal apparatus protects), and the interfaces appear in InterfaceName order.
+func TestRenderBabelConfig_StableUnderPeerReorder(t *testing.T) {
+	node := &model.Node{
+		ID: "node-1", Name: "alpha", Role: "router", DomainID: "domain-1",
+		OverlayIP:    "10.11.0.1",
+		Capabilities: model.NodeCapabilities{CanForward: true},
+	}
+	domain := &model.Domain{ID: "domain-1", Name: "test", CIDR: "10.11.0.0/24", RoutingMode: "babel"}
+
+	beta := compiler.PeerInfo{NodeID: "node-2", NodeName: "beta", InterfaceName: "wg-beta",
+		LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1"}
+	gamma := compiler.PeerInfo{NodeID: "node-3", NodeName: "gamma", InterfaceName: "wg-gamma",
+		LocalTransitIP: "10.10.0.3", LocalLinkLocal: "fe80::3"}
+	delta := compiler.PeerInfo{NodeID: "node-4", NodeName: "delta", InterfaceName: "wg-delta",
+		LocalTransitIP: "10.10.0.5", LocalLinkLocal: "fe80::5"}
+
+	forward, err := RenderBabelConfig(node, []compiler.PeerInfo{beta, gamma, delta}, domain)
+	if err != nil {
+		t.Fatalf("render (forward order): %v", err)
+	}
+	reordered, err := RenderBabelConfig(node, []compiler.PeerInfo{delta, beta, gamma}, domain)
+	if err != nil {
+		t.Fatalf("render (reordered): %v", err)
+	}
+	if forward != reordered {
+		t.Errorf("babeld.conf differs under peer reorder (C1 regression):\n--- forward ---\n%s\n--- reordered ---\n%s", forward, reordered)
+	}
+	// Interfaces appear in InterfaceName order: wg-beta < wg-delta < wg-gamma.
+	ib := strings.Index(forward, "interface wg-beta")
+	id := strings.Index(forward, "interface wg-delta")
+	ig := strings.Index(forward, "interface wg-gamma")
+	if ib < 0 || id < 0 || ig < 0 || !(ib < id && id < ig) {
+		t.Errorf("interfaces not in InterfaceName order: beta=%d delta=%d gamma=%d", ib, id, ig)
+	}
+}
+
 func TestRenderBabelConfig_Router_PerPeer(t *testing.T) {
 	node := &model.Node{
 		ID:        "node-1",

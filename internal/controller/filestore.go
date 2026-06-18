@@ -1210,6 +1210,49 @@ func (fs *FileStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tok
 	return writeJSONAtomic(p, tok)
 }
 
+// PurgeEnrollmentTokensForNode removes every enrollment token scoped to nodeID under
+// the mutex, returning the count removed. It scans <tenant>/tokens/*.json, reads each
+// record, and deletes those whose NodeID matches. A missing tokens dir yields (0, nil);
+// a single unreadable/garbage file is skipped (best-effort GC), not fatal.
+func (fs *FileStore) PurgeEnrollmentTokensForNode(ctx context.Context, t TenantID, nodeID string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return 0, err
+	}
+	tokensDir := filepath.Join(dir, "tokens")
+	entries, err := os.ReadDir(tokensDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		p := filepath.Join(tokensDir, e.Name())
+		var tok EnrollmentToken
+		if err := readJSON(p, &tok); err != nil {
+			continue // skip unreadable/garbage; best-effort purge
+		}
+		if tok.NodeID == nodeID {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 // ====================== Passkey login challenges ===========================
 
 func (fs *FileStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error {

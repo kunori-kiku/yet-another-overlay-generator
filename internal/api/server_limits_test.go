@@ -41,6 +41,38 @@ func TestRequestBodySizeCap_Returns413(t *testing.T) {
 // TestRecoverPanics_Returns500JSON 直接测试 recoverPanics 中间件：
 // 一个故意 panic 的 http.HandlerFunc 经中间件包裹后，应返回 500 且响应体为
 // {"error": ...} JSON，而不是中断连接（D60）。
+// TestRecovered_MuxPanicReturns500JSON pins B1: recovered() — the top-level wrapper applied
+// to BOTH the operator and agent muxes (not just the air-gap routes) — converts a handler
+// panic into a coded 500 JSON instead of a torn connection. The operator/agent routes had no
+// per-route recovery before this, so a panic in a fleet/agent handler degraded the
+// controller in exactly the mode rc.1 gates on.
+func TestRecovered_MuxPanicReturns500JSON(t *testing.T) {
+	server := NewServer()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
+		panic("deliberate panic on a controller mux route")
+	})
+	h := server.recovered(mux)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("panic on a mux route: status %d, want 500", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var resp apiError
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if resp.Error.Message == "" {
+		t.Errorf("recovered 500 must carry a non-empty error.message")
+	}
+}
+
 func TestRecoverPanics_Returns500JSON(t *testing.T) {
 	server := NewServer()
 

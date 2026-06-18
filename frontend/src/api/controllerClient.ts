@@ -969,19 +969,21 @@ export async function clearRekey(cfg: ControllerConfig, nodeId: string): Promise
 // to null so deploy() can promote directly (today's behavior) when the keystone
 // is off, and only run the signing ceremony when a manifest comes back.
 export async function getTrustlist(cfg: ControllerConfig): Promise<TrustListToSign | null> {
-  const headers = new Headers();
-  headers.set('Authorization', `Bearer ${cfg.operatorToken}`);
-  const res = await fetch(ctlURL(cfg, 'trustlist'), { method: 'GET', headers });
-  if (res.status === 404) {
-    // Drain the body to release the connection; 404 = keystone OFF.
-    await res.text();
-    return null;
+  try {
+    const res = await request(cfg, 'trustlist', { method: 'GET' });
+    const data = (await res.json()) as TrustListResponseJSON;
+    return { trustlistJson: data.trustlist_json, epoch: data.epoch };
+  } catch (err) {
+    // request() throws ControllerError on non-2xx; 404 = keystone OFF (no operator
+    // credential pinned, or nothing staged) → null so deploy() promotes directly.
+    // Match on the typed status, not the message. (Previously this used a raw fetch
+    // WITHOUT credentials:'include', so a refreshed cookie-only operator session 401'd
+    // and could not keystone-sign on Deploy on a keystone-ON tenant — F1.)
+    if (err instanceof ControllerError && err.status === 404) {
+      return null;
+    }
+    throw err;
   }
-  if (!res.ok) {
-    throw await errorFromResponse(res);
-  }
-  const data = (await res.json()) as TrustListResponseJSON;
-  return { trustlistJson: data.trustlist_json, epoch: data.epoch };
 }
 
 // postTrustlistSignature submits the operator's off-host signature over the
