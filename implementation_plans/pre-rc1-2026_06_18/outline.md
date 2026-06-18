@@ -32,8 +32,8 @@ rc.1 blocker, not advisory.
 - The beta.8 blockers (B1/F1/C1/S4/S5/S6) stay closed and regression-locked.
 - The residual Go-side rc.1 security/correctness sweep (plan-8) lands: S1 FULL (cap + ctx), C2, C3, B2
   FIXED, B3 FIXED, S9/S10 DOCUMENTED.
-- rc.1 ships as a `--prerelease`, NON-latest tag (beta.8 stays GitHub `Latest`); plan-22 is the sole tag
-  authority.
+- rc.1 ships as a GitHub `--latest` tag (an OWNER OVERRIDE 2026-06-18 of `RELEASING.md`'s prerelease
+  default; beta.8 is demoted from `Latest`); plan-22 is the sole tag authority.
 
 ---
 
@@ -192,8 +192,10 @@ Decisions the owner has LOCKED (carry into execution unconditionally):
   on-disk "advisory" framing (coherence gap G2). LOCKED (owner directive 2026-06-18).
 - **D5 — Single combined plan folder + write-then-review.** All 22 plans live in this one
   `pre-rc1-2026_06_18/` folder; each is written then reviewed against the master index. LOCKED.
-- **D6 — rc.1 ships as `--prerelease`, NON-latest.** beta.8 stays GitHub `Latest`; plan-22 pre-creates the
-  prerelease (or post-tag `gh release edit --latest=false`). LOCKED default per `RELEASING.md`.
+- **D6 — rc.1 ships as GitHub `--latest` (PROMOTE rc.1; beta.8 demoted from `Latest`).** plan-22 cuts rc.1
+  as `--latest` (or post-tag `gh release edit v2.0.0-rc.1 --latest` + demote beta.8 with
+  `gh release edit v2.0.0-beta.8 --latest=false`). LOCKED 2026-06-18 as an explicit **OWNER OVERRIDE** of
+  `RELEASING.md`'s `--prerelease`/NON-latest default for release-candidate tags.
 - **D-coherence (G1, G3, G4 resolutions — LOCKED by the master index, reconcile the per-plan files):**
   - **D-air-gap (G1):** Air-gap removal MECHANISM = **keep the routes behind a `-tags airgap` build**, do
     NOT plain-DELETE. The default/controller build stops registering them (the security delta); the
@@ -217,21 +219,28 @@ Decisions the owner has LOCKED (carry into execution unconditionally):
     rc.1 blocker; only S3's cursor optimization rides with plan-7. Do NOT defer S1-ctx — that is the
     single owner-facing reclassification footgun.
 
-**OWNER-DECISIONS-PENDING** (flagged; each plan recommends a default but the owner has not signed off —
-do NOT bake a non-recommended choice in without asking):
+**Decisions resolved 2026-06-18** (the owner has now signed off on the three previously-flagged knobs;
+they are LOCKED into the LOCKED list above — no remaining "pending"/"recommended-but-unconfirmed" framing):
 
-- **[PENDING] Air-gap removal mechanism = DELETE vs build-tag.** Master index RESOLVES to the
-  `-tags airgap` build (recommended, since both downstream consumers need an air-gap build to survive);
-  plan-7's summary still says DELETE. **Recommended: keep the build-tag.** Owner to confirm before plan-7.
-- **[PENDING] Transit-CIDR constant home.** Master index RESOLVES to a NEW `internal/allocconst` leaf
-  (recommended over `internal/model`, which would pull alloc constants into the data model).
-  **Recommended: `internal/allocconst`, owned by plan-8.** Owner to confirm.
-- **[PENDING] F2 / `router_id` TS-field owner.** Master index RESOLVES to **plan-9 owns**, plan-4
-  consumes. **Recommended: plan-9.** Owner to confirm (closes the 1.4:22 "1.3 adds" + 1.6:30 "1.5 adds"
-  inconsistencies).
-- **[PENDING] rc.1 `--prerelease` / non-latest.** Default NO-promotion (rc.1 prerelease; beta.8 stays
-  Latest). **Recommended: ship `--prerelease`, non-latest.** Promotion to GitHub `Latest` is a separate
-  explicit owner call at tag time (plan-22 Task 4/4b).
+- **[RESOLVED → LOCKED] Air-gap removal mechanism = build-tag (NOT plain DELETE).** The four air-gap
+  compute routes (`/api/validate`, `/api/compile`, `/api/export`, `/api/deploy-script`) STAY in the
+  codebase behind `//go:build airgap`; the DEFAULT/controller build stops registering them (the security
+  delta — no unauthenticated compute oracle ships in the controller), while an `-tags airgap` build
+  RETAINS them as the local-design oracle + the boot target for plan-13's `--mode airgap` E2E and
+  plan-21's `-tags airgap` DAST. This was already the outline's lean; now LOCKED (see D-air-gap above).
+  plan-7's SUMMARY "plain DELETE" is overruled.
+- **[RESOLVED → LOCKED] Shared allocation-constant home = NEW `internal/allocconst` leaf, OWNED BY
+  plan-8.** `defaultTransitCIDR` + `backupDefaultLinkCost` + `minPinnedPort` single-source into the new
+  leaf package; plan-2 moves/owns NO shared allocation constant (its Phase 1.2 const move to
+  `internal/model` is STRUCK — plan-2 keeps only its god-file split + the type-only Artifact/InstallFetch
+  hoists into `internal/model`, which are unrelated value types). Already the outline's lean; now LOCKED
+  (see D-transit above).
+- **[RESOLVED → LOCKED] F2 / `router_id` TS-field owner = plan-9 owns, plan-4 consumes.** Closes the
+  1.4:22 "1.3 adds" + 1.6:30 "1.5 adds" inconsistencies (see D-routerid above). LOCKED.
+- **[RESOLVED → LOCKED] rc.1 release mechanics = GitHub `--latest` (PROMOTE rc.1).** OWNER OVERRIDE
+  2026-06-18 of `RELEASING.md`'s `--prerelease`/NON-latest default: plan-22 PROMOTES rc.1 to `--latest`
+  and DEMOTES beta.8 from `Latest`. Supersedes the outline's prior `--prerelease`/non-latest
+  recommendation (see D6 above).
 
 Other genuinely-open knobs flagged in the per-plan files (recommendations recorded there, not blocking
 the spine): B2 fsync fix-vs-document, B3 origin enforce-vs-accept, S9/S10 accept-vs-temper (all plan-8 /
@@ -380,8 +389,8 @@ checklist):
       hardware-only residue (authenticator firmware/UX + mimic eBPF/DKMS/XDP + one narrow real-NAT
       property); run-or-explicitly-accepted.
 - [ ] **D — acceptance decisions LANDED:** B2 FIXED, B3 FIXED, S9 DOCUMENTED, S10 DOCUMENTED.
-- [ ] **Release mechanics:** rc.1 cut as `--prerelease`, NON-latest; beta.8 stays `Latest` (plan-22 sole
-      tag authority).
+- [ ] **Release mechanics:** rc.1 cut as GitHub `--latest` (OWNER OVERRIDE 2026-06-18 of `RELEASING.md`'s
+      prerelease default); beta.8 demoted from `Latest` (plan-22 sole tag authority).
 
 ---
 
