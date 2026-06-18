@@ -22,8 +22,18 @@ import {
 } from './cidr';
 import { CompileCode, CompileError } from './errors';
 import { isBackup, linkKey } from './linkid';
-import type { Domain, Edge, Node, Topology } from './model';
-import { DefaultTransitCIDR } from './allocconst';
+import { wgInterfaceNameForEdge } from './naming';
+import { sha256 } from '@noble/hashes/sha2.js';
+import type {
+  ClientPeerInfo,
+  Domain,
+  Edge,
+  KeyPair,
+  Node,
+  PeerInfo,
+  Topology,
+} from './model';
+import { BackupDefaultLinkCost, DefaultTransitCIDR } from './allocconst';
 
 // PairAllocation holds the pre-allocated resources for a node pair / link (ports, transit IP pair,
 // link-local pair), oriented by the link's canonical from/to. Mirrors compiler.pairAllocation
@@ -380,4 +390,540 @@ export function derivePass1(
   }
 
   return { links, linkByKey, allocations };
+}
+
+// ============================================================================
+// Pass 2 — build forward + reverse PeerInfo from Pass 1's allocations
+// ============================================================================
+
+// transportTCP is the literal for edge.transport taking "tcp" (mimic shaping transport). mimic has no
+// key and no new field; transport=="tcp" is the only signal that a link is wrapped by mimic. Mirrors
+// compiler.transportTCP (peers.go:147).
+const transportTCP = 'tcp';
+
+// defaultMimicBaseMTU is the base WireGuard MTU for a mimic link when the node has no explicit MTU.
+// Mirrors compiler.defaultMimicBaseMTU (peers.go:154).
+const defaultMimicBaseMTU = 1420;
+
+// mimicMTUOverhead is the byte overhead mimic (UDP->fake TCP) introduces on each WireGuard interface
+// (docs/spec/artifacts/mimic.md: "MTU −12"). Mirrors compiler.mimicMTUOverhead (peers.go:159).
+const mimicMTUOverhead = 12;
+
+// isMimicEdge reports whether an edge has mimic (tcp shaping transport) enabled. Mirrors
+// compiler.isMimicEdge (peers.go:166-168).
+function isMimicEdge(edge: Edge | undefined): boolean {
+  return edge !== undefined && edge.transport === transportTCP;
+}
+
+// effectiveMTU computes the effective MTU a WireGuard interface on a link should emit. Mirrors
+// compiler.effectiveMTU (peers.go:176-185):
+//   - non-mimic: keep nodeMTU as is (0 => renderer omits the MTU line, byte-unchanged);
+//   - mimic: ((nodeMTU>0 ? nodeMTU : 1420) − 12).
+function effectiveMTU(nodeMTU: number, mimic: boolean): number {
+  if (!mimic) {
+    return nodeMTU;
+  }
+  let base = nodeMTU;
+  if (base <= 0) {
+    base = defaultMimicBaseMTU;
+  }
+  return base - mimicMTUOverhead;
+}
+
+// deriveLinkCost derives a link's Babel rxcost override. Resolution order (peers.go:1078-1091):
+//   1. explicit operator setting: edge.priority (>0) wins, else edge.weight (>0) — adopted verbatim;
+//   2. backup preset: backup link without an explicit setting => BackupDefaultLinkCost (384);
+//   3. default: 0 (left to the role preset's default; the renderer decides whether to emit rxcost).
+function deriveLinkCost(edge: Edge | undefined, backup: boolean): number {
+  if (edge !== undefined) {
+    if ((edge.priority ?? 0) > 0) {
+      return edge.priority as number;
+    }
+    if ((edge.weight ?? 0) > 0) {
+      return edge.weight as number;
+    }
+  }
+  if (backup) {
+    return BackupDefaultLinkCost;
+  }
+  return 0;
+}
+
+// isIPv6 reports whether a host string contains a ':' (a bracketed-IPv6 endpoint). Mirrors
+// compiler.isIPv6 (peers.go:1131-1138).
+function isIPv6(host: string): boolean {
+  return host.includes(':');
+}
+
+// formatEndpoint formats an endpoint address (host:port, bracketing an IPv6 host). Mirrors
+// compiler.formatEndpoint (peers.go:1124-1129). The port is rendered as a plain base-10 integer
+// (compiler.itoa), matching Go's positive-integer formatting for the always-positive port values here.
+function formatEndpoint(host: string, port: number): string {
+  if (isIPv6(host)) {
+    return `[${host}]:${port}`;
+  }
+  return `${host}:${port}`;
+}
+
+// derivePass2 builds the per-node PeerInfo map from Pass 1's link entities + allocations. Mirrors the
+// Pass-2 portion of compiler.derivePeersWithDomains (peers.go:616-902):
+//   - iterate topo.edges, gate de-dup on linkKey (the first primary-class edge of a node pair drives
+//     creation; each backup produces its own pair);
+//   - a client-from edge produces ONLY the router-side PeerInfo (the client uses a single wg0);
+//   - otherwise produce the forward PeerInfo (owned by fromNode, pointing at toNode) and — unless toNode
+//     is a client — the reverse PeerInfo (owned by toNode, pointing at fromNode);
+//   - endpoint resolution: explicit edge.endpoint_port > peer's allocated listen port > (reverse only)
+//     public-endpoint fallback; keepalive, mimic MTU, link cost, AllowedIPs, and interface names all per
+//     the Go branches.
+//
+// `keys` maps nodeID -> KeyPair (public key derived from the fixture private key via the keygen seam).
+// PURE — reads the topology + Pass-1 result, returns a fresh peerMap, mutates nothing.
+function derivePass2(
+  topo: Topology,
+  keys: Map<string, KeyPair>,
+  pass1: Pass1Result,
+): Record<string, PeerInfo[]> {
+  const { linkByKey, allocations } = pass1;
+
+  // Node index.
+  const nodeMap = new Map<string, Node>();
+  for (const n of topo.nodes) {
+    nodeMap.set(n.id, n);
+  }
+
+  // Initialize each node's peer list (so every node — even one with no edges — has an empty slice,
+  // mirroring peers.go:310-312).
+  const peerMap: Record<string, PeerInfo[]> = {};
+  for (const node of topo.nodes) {
+    peerMap[node.id] = [];
+  }
+
+  // Pre-scan enabled primary-class edge directions for the keepalive decision (peers.go:321-327): only
+  // non-backup edges count toward reverse reachability.
+  const enabledEdgeDirections = new Set<string>();
+  for (const edge of topo.edges) {
+    if (edge.is_enabled && !isBackup(edge)) {
+      enabledEdgeDirections.add(`${edge.from_node_id}->${edge.to_node_id}`);
+    }
+  }
+
+  // Edge reverse-lookup index keyed "from->to" -> Edge, recording ONLY primary-class edges
+  // (peers.go:334-340): reverse endpoint resolution may only hit an opposite-direction primary edge.
+  const edgeMap = new Map<string, Edge>();
+  for (const edge of topo.edges) {
+    if (edge.is_enabled && !isBackup(edge)) {
+      edgeMap.set(`${edge.from_node_id}->${edge.to_node_id}`, edge);
+    }
+  }
+
+  const keyOf = (nodeID: string): KeyPair =>
+    keys.get(nodeID) ?? { privateKey: '', publicKey: '' };
+
+  // PeerInfo produced for this link (gate on linkKey).
+  const addedLinks = new Set<string>();
+
+  for (const edge of topo.edges) {
+    if (!edge.is_enabled) {
+      continue;
+    }
+
+    const fromNode = nodeMap.get(edge.from_node_id);
+    const toNode = nodeMap.get(edge.to_node_id);
+    if (fromNode === undefined || toNode === undefined) {
+      continue;
+    }
+
+    const lk = linkKey(edge);
+    if (addedLinks.has(lk)) {
+      continue;
+    }
+
+    const link = linkByKey.get(lk);
+    if (link === undefined) {
+      continue;
+    }
+    const alloc = allocations.get(lk);
+    if (alloc === undefined) {
+      continue;
+    }
+
+    // ---- Client-from edge: produce ONLY the router-side PeerInfo (peers.go:657-708). ----
+    if (fromNode.role === 'client') {
+      const mimic = isMimicEdge(link.primaryEdge);
+      const fromKey = keyOf(fromNode.id);
+      const isForward = alloc.fromNodeID === fromNode.id;
+
+      let routerListenPort: number;
+      let routerLocalTransit: string;
+      let routerRemoteTransit: string;
+      let routerLocalLL: string;
+      let routerRemoteLL: string;
+      if (isForward) {
+        routerListenPort = alloc.toPort;
+        routerLocalTransit = alloc.remoteTransit;
+        routerRemoteTransit = alloc.localTransit;
+        routerLocalLL = alloc.remoteLL;
+        routerRemoteLL = alloc.localLL;
+      } else {
+        routerListenPort = alloc.fromPort;
+        routerLocalTransit = alloc.localTransit;
+        routerRemoteTransit = alloc.remoteTransit;
+        routerLocalLL = alloc.localLL;
+        routerRemoteLL = alloc.remoteLL;
+      }
+
+      const routerPeer: PeerInfo = {
+        nodeID: fromNode.id,
+        nodeName: fromNode.name,
+        publicKey: fromKey.publicKey,
+        overlayIP: fromNode.overlay_ip ?? '',
+        allowedIPs: [`${fromNode.overlay_ip ?? ''}/32`],
+        endpoint: '',
+        persistentKeepalive: 0,
+        interfaceName: wgInterfaceNameForEdge(
+          fromNode.name,
+          link.primaryEdge.id,
+          link.backup,
+        ),
+        listenPort: routerListenPort,
+        localTransitIP: routerLocalTransit,
+        remoteTransitIP: routerRemoteTransit,
+        localLinkLocal: routerLocalLL,
+        remoteLinkLocal: routerRemoteLL,
+        isClientPeer: true,
+        clientOverlayIP: fromNode.overlay_ip ?? '',
+        linkCost: 0,
+        mimic,
+        mtu: effectiveMTU(toNode.mtu ?? 0, mimic),
+      };
+
+      peerMap[toNode.id].push(routerPeer);
+      addedLinks.add(lk);
+      continue;
+    }
+
+    // Whether the current edge's direction matches alloc's canonical direction.
+    const isForward = alloc.fromNodeID === fromNode.id;
+
+    const toKey = keyOf(toNode.id);
+    const fromKey = keyOf(fromNode.id);
+
+    // ---- Endpoint: explicit edge.endpoint_port wins, else the peer's allocated listen port. ----
+    let endpoint = '';
+    if (edge.endpoint_host) {
+      let portToUse: number;
+      if ((edge.endpoint_port ?? 0) > 0) {
+        portToUse = edge.endpoint_port as number;
+      } else {
+        portToUse = isForward ? alloc.toPort : alloc.fromPort;
+      }
+      endpoint = formatEndpoint(edge.endpoint_host, portToUse);
+    }
+
+    // ---- PersistentKeepalive (peers.go:735-739). ----
+    let keepalive = 0;
+    const hasReverseEdge = enabledEdgeDirections.has(
+      `${toNode.id}->${fromNode.id}`,
+    );
+    if (!fromNode.capabilities.can_accept_inbound || !hasReverseEdge) {
+      keepalive = 25;
+    }
+
+    // ---- Local resources for the forward peer. ----
+    let fromListenPort: number;
+    let localTransit: string;
+    let remoteTransit: string;
+    let localLL: string;
+    let remoteLL: string;
+    if (isForward) {
+      fromListenPort = alloc.fromPort;
+      localTransit = alloc.localTransit;
+      remoteTransit = alloc.remoteTransit;
+      localLL = alloc.localLL;
+      remoteLL = alloc.remoteLL;
+    } else {
+      fromListenPort = alloc.toPort;
+      localTransit = alloc.remoteTransit;
+      remoteTransit = alloc.localTransit;
+      localLL = alloc.remoteLL;
+      remoteLL = alloc.localLL;
+    }
+
+    const ifaceName = wgInterfaceNameForEdge(
+      toNode.name,
+      link.primaryEdge.id,
+      link.backup,
+    );
+    const linkCost = deriveLinkCost(link.primaryEdge, link.backup);
+    const mimic = isMimicEdge(link.primaryEdge);
+    const isToClient = toNode.role === 'client';
+
+    const peer: PeerInfo = {
+      nodeID: toNode.id,
+      nodeName: toNode.name,
+      publicKey: toKey.publicKey,
+      overlayIP: toNode.overlay_ip ?? '',
+      allowedIPs: ['0.0.0.0/0', '::/0'],
+      endpoint,
+      persistentKeepalive: keepalive,
+      interfaceName: ifaceName,
+      listenPort: fromListenPort,
+      localTransitIP: localTransit,
+      remoteTransitIP: remoteTransit,
+      localLinkLocal: localLL,
+      remoteLinkLocal: remoteLL,
+      isClientPeer: isToClient,
+      clientOverlayIP: '',
+      linkCost,
+      mimic,
+      // The local interface belongs to fromNode, so derive MTU from fromNode.mtu.
+      mtu: effectiveMTU(fromNode.mtu ?? 0, mimic),
+    };
+    if (isToClient) {
+      peer.allowedIPs = [`${toNode.overlay_ip ?? ''}/32`];
+      peer.clientOverlayIP = toNode.overlay_ip ?? '';
+    }
+
+    peerMap[fromNode.id].push(peer);
+
+    // ---- Skip the reverse peer when toNode is a client (the client side uses wg0). ----
+    if (isToClient) {
+      addedLinks.add(lk);
+      continue;
+    }
+
+    addedLinks.add(lk);
+
+    // ---- Reverse peer (owned by toNode, pointing at fromNode). ----
+    let reverseKeepalive = 0;
+    if (!toNode.capabilities.can_accept_inbound) {
+      reverseKeepalive = 25;
+    }
+
+    const reverseIfaceName = wgInterfaceNameForEdge(
+      fromNode.name,
+      link.primaryEdge.id,
+      link.backup,
+    );
+
+    // fromNode interface's allocated listen port (used when the reverse peer dials back to fromNode).
+    let fromSideListenPort = alloc.fromPort;
+    if (!isForward) {
+      fromSideListenPort = alloc.toPort;
+    }
+
+    // Resolve the reverse peer's endpoint (peers.go:846-858).
+    let reverseEndpoint = '';
+    const reverseEdge = edgeMap.get(`${toNode.id}->${fromNode.id}`);
+    if (reverseEdge !== undefined && reverseEdge.endpoint_host) {
+      if ((reverseEdge.endpoint_port ?? 0) > 0) {
+        reverseEndpoint = formatEndpoint(
+          reverseEdge.endpoint_host,
+          reverseEdge.endpoint_port as number,
+        );
+      } else {
+        reverseEndpoint = formatEndpoint(
+          reverseEdge.endpoint_host,
+          fromSideListenPort,
+        );
+      }
+    } else if (
+      fromNode.capabilities.has_public_ip &&
+      (fromNode.public_endpoints?.length ?? 0) > 0
+    ) {
+      reverseEndpoint = formatEndpoint(
+        (fromNode.public_endpoints as NonNullable<Node['public_endpoints']>)[0]
+          .host,
+        fromSideListenPort,
+      );
+    }
+
+    // The reverse peer's resources are swapped relative to the forward.
+    let toListenPort: number;
+    let revLocalTransit: string;
+    let revRemoteTransit: string;
+    let revLocalLL: string;
+    let revRemoteLL: string;
+    if (isForward) {
+      toListenPort = alloc.toPort;
+      revLocalTransit = alloc.remoteTransit;
+      revRemoteTransit = alloc.localTransit;
+      revLocalLL = alloc.remoteLL;
+      revRemoteLL = alloc.localLL;
+    } else {
+      toListenPort = alloc.fromPort;
+      revLocalTransit = alloc.localTransit;
+      revRemoteTransit = alloc.remoteTransit;
+      revLocalLL = alloc.localLL;
+      revRemoteLL = alloc.remoteLL;
+    }
+
+    const reversePeer: PeerInfo = {
+      nodeID: fromNode.id,
+      nodeName: fromNode.name,
+      publicKey: fromKey.publicKey,
+      overlayIP: fromNode.overlay_ip ?? '',
+      allowedIPs: ['0.0.0.0/0', '::/0'],
+      endpoint: reverseEndpoint,
+      persistentKeepalive: reverseKeepalive,
+      interfaceName: reverseIfaceName,
+      listenPort: toListenPort,
+      localTransitIP: revLocalTransit,
+      remoteTransitIP: revRemoteTransit,
+      localLinkLocal: revLocalLL,
+      remoteLinkLocal: revRemoteLL,
+      isClientPeer: false,
+      clientOverlayIP: '',
+      linkCost,
+      mimic,
+      // The reverse peer's local interface belongs to toNode, so derive MTU from toNode.mtu.
+      mtu: effectiveMTU(toNode.mtu ?? 0, mimic),
+    };
+
+    peerMap[toNode.id].push(reversePeer);
+  }
+
+  return peerMap;
+}
+
+// derivePeers runs the full two-pass peer derivation: Pass 1 (reserve-then-gap-fill resource
+// pre-allocation) then Pass 2 (forward/reverse PeerInfo build). Mirrors compiler.derivePeers /
+// derivePeersWithDomains (peers.go:264-905). Returns the per-node peerMap AND the Pass-1 allocations
+// table (the latter consumed by DeriveClientConfigs + the compile write-back, which both look up by
+// linkKey). PURE — operates on the supplied topology copy, mutates nothing.
+//
+// `reserved` is the out-of-subgraph reservation set (subgraph compiles only); local-mode / full
+// compiles pass undefined, making the reservation phase a no-op with byte-identical behavior.
+export function derivePeers(
+  topo: Topology,
+  keys: Map<string, KeyPair>,
+  reserved?: ReservedAllocations,
+): { peerMap: Record<string, PeerInfo[]>; pass1: Pass1Result } {
+  const pass1 = derivePass1(topo, reserved);
+  const peerMap = derivePass2(topo, keys, pass1);
+  return { peerMap, pass1 };
+}
+
+// deriveClientConfigs generates wg0 configuration info for all client nodes. Mirrors
+// compiler.DeriveClientConfigs (peers.go:1201-1314): each client node's single outbound edge resolves
+// the router endpoint, and AllowedIPs is the union of every domain's CIDR and every domain's resolved
+// transit CIDR (default 10.10.0.0/24 on empty), in topo.domains order, deduplicated. Returns a record
+// keyed by client node ID. PURE — reads the topology + Pass-1 allocations, mutates nothing.
+export function deriveClientConfigs(
+  topo: Topology,
+  keys: Map<string, KeyPair>,
+  allocations: Map<string, PairAllocation>,
+): Record<string, ClientPeerInfo> {
+  const configs: Record<string, ClientPeerInfo> = {};
+
+  const nodeMap = new Map<string, Node>();
+  for (const n of topo.nodes) {
+    nodeMap.set(n.id, n);
+  }
+
+  const keyOf = (nodeID: string): KeyPair =>
+    keys.get(nodeID) ?? { privateKey: '', publicKey: '' };
+
+  for (const node of topo.nodes) {
+    if (node.role !== 'client') {
+      continue;
+    }
+
+    // Find the client's single outbound edge (first enabled edge whose from is this client).
+    let clientEdge: Edge | undefined;
+    for (const e of topo.edges) {
+      if (e.is_enabled && e.from_node_id === node.id) {
+        clientEdge = e;
+        break;
+      }
+    }
+    if (clientEdge === undefined) {
+      continue;
+    }
+
+    const routerNode = nodeMap.get(clientEdge.to_node_id);
+    if (routerNode === undefined) {
+      continue;
+    }
+
+    const routerKey = keyOf(routerNode.id);
+    const clientKey = keyOf(node.id);
+
+    // Router-side listen port: look up the allocation by the client edge's linkKey (validation
+    // guarantees exactly one client edge, which cannot be a backup, so linkKey === pinKey).
+    const alloc = allocations.get(linkKey(clientEdge));
+    let routerPort = 0;
+    if (alloc !== undefined) {
+      routerPort = alloc.fromNodeID === node.id ? alloc.toPort : alloc.fromPort;
+    }
+
+    // Endpoint: explicit endpoint_port wins, else the auto-allocated router port.
+    let routerEndpoint = '';
+    if (clientEdge.endpoint_host) {
+      let portToUse = 0;
+      if ((clientEdge.endpoint_port ?? 0) > 0) {
+        portToUse = clientEdge.endpoint_port as number;
+      } else if (routerPort > 0) {
+        portToUse = routerPort;
+      }
+      if (portToUse > 0) {
+        routerEndpoint = formatEndpoint(clientEdge.endpoint_host, portToUse);
+      }
+    }
+
+    // AllowedIPs prefix set: union of every domain CIDR and every domain's resolved transit CIDR
+    // (default 10.10.0.0/24 on empty), in topo.domains order, deduplicated (peers.go:1270-1288).
+    const domainCIDRs: string[] = [];
+    const seenCIDR = new Set<string>();
+    const appendCIDR = (cidr: string): void => {
+      if (cidr === '' || seenCIDR.has(cidr)) {
+        return;
+      }
+      seenCIDR.add(cidr);
+      domainCIDRs.push(cidr);
+    };
+    for (const d of topo.domains) {
+      appendCIDR(d.cidr);
+    }
+    for (const d of topo.domains) {
+      let transitCIDR = d.transit_cidr ?? '';
+      if (transitCIDR === '') {
+        transitCIDR = DefaultTransitCIDR;
+      }
+      appendCIDR(transitCIDR);
+    }
+
+    // Client listen port (fixed base 51820; per-node listen_port has been removed).
+    const listenPort = 51820;
+
+    const mimic = isMimicEdge(clientEdge);
+
+    configs[node.id] = {
+      nodeID: node.id,
+      nodeName: node.name,
+      overlayIP: node.overlay_ip ?? '',
+      mtu: effectiveMTU(node.mtu ?? 0, mimic),
+      mimic,
+      privateKey: clientKey.privateKey,
+      routerPublicKey: routerKey.publicKey,
+      routerEndpoint,
+      domainCIDRs,
+      listenPort,
+    };
+  }
+
+  return configs;
+}
+
+// generateRouterID generates a stable Babel router-id (MAC-48 form) from the SHA-256 hash of the node
+// ID. Mirrors compiler.GenerateRouterID (peers.go:1154-1167): take the first 6 hash bytes; set the
+// locally-administered bit and clear the multicast bit on the first byte; format as lowercase
+// colon-separated hex octets. Meaningless for client nodes (Babel does not run there), but produced
+// identically when needed.
+export function generateRouterID(nodeID: string): string {
+  const h = sha256(new TextEncoder().encode(nodeID));
+  let b0 = h[0];
+  b0 = (b0 | 0x02) & 0xfe;
+  const octets = [b0, h[1], h[2], h[3], h[4], h[5]];
+  return octets.map((b) => b.toString(16).padStart(2, '0')).join(':');
 }
