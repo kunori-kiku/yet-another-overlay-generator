@@ -275,6 +275,25 @@ func TestValidateAllocationPins_ReverseEdgeNotDuplicate(t *testing.T) {
 	}
 }
 
+// TestValidateAllocationPins_ReenableCollisionSafetyNet is the validator-side C2 counterpart
+// (plan-8 Phase 6.3). The compiler-side fix is normalize.HealCollidingPins, which strips the
+// re-enabled edge's stale pins before compile. This test pins the SAFETY NET: if a re-enable
+// collision ever reaches the validator UN-healed (any path the heal misses), the loud
+// CodePin*DuplicateCrossLink error MUST still fire — the heal is a convenience, not the only
+// guard. Two ENABLED edges of different links both pinning the same transit pair is exactly the
+// shape the heal repairs; here we assert the validator rejects it when the heal did not run.
+func TestValidateAllocationPins_ReenableCollisionSafetyNet(t *testing.T) {
+	topo := threeNodeTwoLinkTopology()
+	// Make the node-1<->node-3 link (edge-3) collide with the node-1<->node-2 link on the same
+	// transit pair (10.10.0.1/10.10.0.2) — the un-healed re-enable corruption shape.
+	topo.Edges[2].PinnedFromTransitIP = "10.10.0.1"
+	topo.Edges[2].PinnedToTransitIP = "10.10.0.2"
+	result := ValidateSemantic(topo)
+	if pinErrorCount(result) == 0 {
+		t.Errorf("an un-healed re-enable cross-link transit collision must still be flagged by the validator safety net, but no pin error fired: %v", result.Errors)
+	}
+}
+
 // --- client edge pins ---
 
 // clientEdgeTopology builds a client node connected to a router via a single edge, to test pin handling on client edges.

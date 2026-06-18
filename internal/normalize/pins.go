@@ -8,6 +8,7 @@ package normalize
 
 import (
 	"net"
+	"sort"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -30,18 +31,37 @@ func isClientTouched(e *model.Edge, roleByNode map[string]string) bool {
 }
 
 // HealCollidingPins strips the allocation pins (six pinned_* fields + CompiledPort) from any edge
-// whose pinned port / transit IP / link-local collides with an EARLIER edge of a DIFFERENT link
-// identity — exactly the conflict the semantic validator reports as "occupied by two different
+// whose pinned port / transit IP / link-local collides with another ENABLED edge of a DIFFERENT
+// link identity — exactly the conflict the semantic validator reports as "occupied by two different
 // links". The stripped edge re-allocates fresh on the next compile (the allocator's reserve-then-
 // gap-fill keeps every other edge's value stable, so only the colliding edge moves). It returns
 // whether anything changed, and mutates topo.Edges in place.
+//
+// Which colliding edge keeps its pin — the discriminator (C2, plan-8 Phase 6.3).
+// model.Edge has no age/timestamp field (topology.go carries only IsEnabled + slice order), so
+// "keep the longer-lived edge" is UNCODEABLE and array order MUST NOT decide — a re-enabled edge
+// that predates the incumbent sits EARLIER in the slice, so a naive "first claimant in slice order
+// wins" would wrongly keep the stale re-enabled pin and strip the live incumbent (the exact
+// re-enable corruption: disable A-B, add A-C into the freed slot, re-enable A-B; A-B's stale pin
+// now collides with A-C's legitimate one).
+//
+// Instead the discriminator is "which edge's pin value is reproduced by reserve-first allocation
+// of the OTHER edge": the colliding pin the incumbent legitimately owns wins, the other is
+// stripped. The compiler's Pass-1 (peers.go) assigns pins by reserve-first + linkKey-SORTED
+// gap-fill — within a pool the lowest free slot goes to the SMALLEST linkKey first. So we claim in
+// linkKey-sorted order (NOT slice order): the incumbent is the edge whose pin reserve-first
+// allocation reproduces, which is exactly the smaller-linkKey claimant of that slot; a
+// later-claimed (larger-linkKey) different-link edge that needs an already-claimed value is the one
+// with NO reserved backing (the re-enabled one) and is stripped as a whole. Pass-1's reserve-first
+// gap-fill then re-allocates the stripped edge into a free slot, byte-stable for everything else.
 //
 // It mirrors the validator's dedup precisely:
 //   - disabled edges and client-touched edges are skipped (neither checked nor claimed);
 //   - link identity is linkid.LinkKey (primary class folds A->B / B->A and same-pair primaries into
 //     one link, so their legitimately-mirrored equal values never count as a collision; each backup
 //     is its own link);
-//   - the FIRST edge (in slice order) to claim a value keeps it; a later, different-link edge that
+//   - claims are processed in linkKey-sorted order (mirroring the allocator's gap-fill priority);
+//     the first edge (in that order) to claim a value keeps it; a later, different-link edge that
 //     needs any already-claimed value is the colliding one and is stripped as a whole (an allocation
 //     is a unit — a half-kept pin set would still fail pair-completeness).
 //
@@ -69,12 +89,33 @@ func HealCollidingPins(topo *model.Topology) bool {
 	transitOwner := make(map[string]string) // canonical IP -> linkKey
 	llOwner := make(map[string]string)      // canonical IP -> linkKey
 
-	changed := false
+	// Process edges in reserve-first (linkKey-SORTED) order, the same priority the allocator's
+	// Pass-1 gap-fill uses, so the kept claimant of a slot is exactly the edge whose pin reserve-
+	// first allocation reproduces (the incumbent), not whichever edge happens to come first in slice
+	// order. Ties (the forward/reverse edges of one link share a linkKey, and slice order among them
+	// is irrelevant because same-link claims never collide) are broken by original slice index to
+	// keep the walk deterministic. We sort indices, not edges, so the in-place mutation still targets
+	// the original topo.Edges[i].
+	order := make([]int, 0, len(topo.Edges))
 	for i := range topo.Edges {
 		e := &topo.Edges[i]
 		if !e.IsEnabled || isClientTouched(e, roleByNode) {
 			continue
 		}
+		order = append(order, i)
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		la := linkid.LinkKey(&topo.Edges[order[a]])
+		lb := linkid.LinkKey(&topo.Edges[order[b]])
+		if la != lb {
+			return la < lb
+		}
+		return order[a] < order[b]
+	})
+
+	changed := false
+	for _, i := range order {
+		e := &topo.Edges[i]
 		link := linkid.LinkKey(e)
 
 		// claim describes one resource this edge would occupy.
