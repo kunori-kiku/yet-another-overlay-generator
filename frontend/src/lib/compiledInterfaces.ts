@@ -3,7 +3,7 @@
 //
 // Key constraint (never infer peerName by stripping the 'wg-' prefix):
 // backup-link interface names look like wg-<clean8><hash4> (e.g. wg-betaa3f2); stripping the prefix yields a garbage chip.
-// The correct approach is to match an interface back to its owning edge by "pinned port" —— each interface's ListenPort on a node is unique,
+// The correct approach is to match an interface back to its owning edge by "pinned port" — each interface's ListenPort on a node is unique,
 // so (pinned_from_port===P && from_node_id===N) or (pinned_to_port===P && to_node_id===N)
 // locates the edge deterministically; then take the "peer node name" as peerName and reuse edge.role to decide the ★/bN marker.
 // Interface naming authority lives in the backend (docs/spec/artifacts/naming.md); the frontend only consumes it and never recomputes interface names.

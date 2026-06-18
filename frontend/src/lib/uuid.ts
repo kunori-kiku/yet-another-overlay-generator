@@ -1,4 +1,4 @@
-// crypto.randomUUID() is only exposed in a secure context (HTTPS or localhost) —— when the
+// crypto.randomUUID() is only exposed in a secure context (HTTPS or localhost) — when the
 // panel is accessed via http://<LAN IP> it is undefined and throws
 // "crypto.randomUUID is not a function". The underlying crypto.getRandomValues()
 // has no such restriction, so in a non-secure context we hand-roll a UUIDv4 fallback (RFC 4122:
