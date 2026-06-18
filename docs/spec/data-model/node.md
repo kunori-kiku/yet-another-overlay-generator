@@ -14,7 +14,7 @@ A Node represents a physical or virtual host in the overlay.
 | `listen_port` | int | WireGuard base listen port (default: 51820) |
 | `mtu` | int | WireGuard MTU (0 = system default, typically 1420) |
 | `xdp_mode` | `"skb" \| "native" \| ""` | mimic XDP attach mode for `transport: "tcp"` links; empty = `skb` (generic XDP, compatible with NICs lacking native-XDP support, the default). `native` is faster but needs driver support. See [../artifacts/mimic.md](../artifacts/mimic.md) |
-| `router_id` | string | Babel router-id in MAC-48 format (auto-generated from SHA-256 of node ID) |
+| `router_id` | string | Babel router-id (MAC-48 or IPv4 form); operator-settable in the panel for non-client roles, else auto-generated from the SHA-256 of the node ID when empty (meaningless for `client`, which is warned). FE/Go field parity is guarded by the conformance drift manifest (milestone 1.5) |
 | `capabilities` | NodeCapabilities | Network capabilities |
 | `fixed_private_key` | bool | Operator-pasted private key opt-in (the paste affordance; see below). No behavior keys on the flag alone — its presence implies a private key is set |
 | `wireguard_private_key` | string | WG private key; **round-trips through the topology JSON by design** so a stateless compiler can re-render the node's own `Interface PrivateKey` (see below) |
