@@ -274,8 +274,11 @@ normal branch; the harness-FIRST TS migration on the isolated `feat/ts-compiler`
   validate/compile/exportArtifacts/downloadDeployScript to call plan-4's library; `VITE_YAOG_LOCAL_ENGINE`
   flag default OFF; canary; cutover. *AFTER plan-4; does NOT remove air-gap routes.*
 - **plan-7 (1.7)** `plan-7-2026_06_18.md` — Backend shrink + deployment split: stop registering anonymous
-  air-gap routes in the default build (keep behind `-tags airgap`, D-air-gap). *POST-rc.1 tail of S1;
-  AFTER plan-6 cutover soaks; carries only S3's cursor optimization.*
+  air-gap routes in the default build (keep behind `-tags airgap`, D-air-gap) + `VITE_LOCAL_ONLY` static
+  build. *IN-PROGRAM, pre-rc.1: the tail of Subject 1 — AFTER plan-6 (which need only have LANDED, not a
+  real-world beta soak; correctness is gated by plan-5 conformance being green+required), and BEFORE
+  Subject 4's re-audit, because the shrunken anonymous surface is an audit INPUT. plan-8's S3 cursor
+  optimization is timed to ride alongside this air-gap removal but is plan-8's code, not plan-7's.*
 - **plan-8 (1.8)** `plan-8-2026_06_18.md` — Remaining security + compiler-correctness fixes: S1 FULL
   (cap+ctx) NOW, C2 heal-on-reenable, C3 endpoint-derived HasPublicIP, B2 fsync FIX, B3 login-origin FIX,
   S9/S10 DOCUMENT, alloc-const single-sourcing → `internal/allocconst`. *Normal branch, in parallel;
@@ -284,8 +287,13 @@ normal branch; the harness-FIRST TS migration on the isolated `feat/ts-compiler`
   NodeEditor UI, `is_enabled` normalization, F3 drift-guard handoff to plan-5. *EARLY off main, outside
   the isolated TS stream, so plan-4 CONSUMES (not re-adds) `router_id`.*
 
-  *S1 spine:* normal branch `plan-1 → plan-2 → plan-8` (+ `plan-9` early off-stream); isolated branch
-  `plan-3 → plan-5 → plan-4 → plan-6 → plan-7`. **plan-5 green+required before any plan-4 TS merges.**
+  *S1 spine (execution order, ALL gating rc.1 — nothing parked):* `plan-1 → plan-9 → plan-2 → plan-8 →
+  plan-3 → plan-5 → plan-4 → plan-6 → plan-7`, then Subject-1 closure. **plan-8 lands BEFORE plan-3** so
+  plan-3 freezes the I/O contract + golden corpus (and plan-4 ports the TS compiler) against plan-8's
+  FIXED compiler behavior (C2 heal-on-reenable, C3 endpoint-derived HasPublicIP) rather than the pre-fix
+  bugs — avoiding a corpus re-freeze + TS re-port. **plan-5 green+required before any plan-4 TS merges**
+  (locked harness-first). plan-7 is the tail of Subject 1, BEFORE Subject 4's re-audit (the shrunken
+  anonymous surface is an audit input).
 
 **SUBJECT 2 — phone UX (S2).** Built on the shipped app-shell; no Go/compiler/model surface.
 
@@ -401,15 +409,15 @@ partial/parked/abandoned, per close-phase).
 
 | plan | milestone | subject | status | depends-on |
 |------|-----------|---------|--------|------------|
-| plan-1  | 1.1 | S1 | pending | — (FIRST mover; before plan-2/8/9 on shared files) |
-| plan-2  | 1.2 | S1 | pending | plan-1 |
-| plan-3  | 1.3 | S1 | pending | plan-1 (clean tree) |
+| plan-1  | 1.1 | S1 | delivered (PR #137) | — (FIRST mover; before plan-2/8/9 on shared files) |
+| plan-2  | 1.2 | S1 | delivered (PR #139) | plan-1 |
+| plan-3  | 1.3 | S1 | pending | plan-1 (clean tree), plan-8 (freeze FIXED C2/C3 behavior) |
 | plan-4  | 1.4 | S1 | pending | plan-5 (green+required), plan-3, plan-9 |
 | plan-5  | 1.5 | S1 | pending | plan-3 |
 | plan-6  | 1.6 | S1 | pending | plan-4 |
-| plan-7  | 1.7 | S1 | pending | plan-6 (POST-rc.1 tail) |
-| plan-8  | 1.8 | S1 | pending | plan-1 (comments), plan-2 (handler split) |
-| plan-9  | 1.9 | S1 | pending | plan-1 (EARLY off main; supports plan-4) |
+| plan-7  | 1.7 | S1 | pending | plan-6 (tail of S1; before Subject 4 re-audit) |
+| plan-8  | 1.8 | S1 | pending | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
+| plan-9  | 1.9 | S1 | delivered (PR #138) | plan-1 (EARLY off main; supports plan-4) |
 | plan-10 | 2.1 | S2 | pending | plan-11; SUBJECT 1 |
 | plan-11 | 2.2 | S2 | pending | SUBJECT 1 (FIRST in S2) |
 | plan-12 | 2.3 | S2 | pending | plan-11 |
