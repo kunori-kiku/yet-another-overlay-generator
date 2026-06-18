@@ -15,13 +15,11 @@ import (
 // artifacts-out result. It is the seam the TypeScript reimplementation (plan-4) and the
 // conformance harness (plan-5) target.
 //
-// This skeleton phase (plan-3 Phase 1) wraps — it does not yet de-impurify. It calls the
-// existing render.GenerateKeys / compiler.Compile / render.All path verbatim and only
-// re-shapes the resulting *compiler.CompileResult into a CompileArtifacts, so the output
-// is byte-identical to the legacy callers. The keygen seam (req.Keygen), the explicit
-// clock (req.CompiledAt), and the injected signer (req.SigningKey) are wired into the
-// pipeline in plan-3 Phase 2 and Phase 4; until then the signer is read from the
-// environment exactly as artifacts.Export does today (LoadConfigSignerFromEnv).
+// As of plan-3 Phase 2 the façade threads req.Keygen through the key seam (nil ⇒ the
+// default wgtypesKeygen, byte-identical to today). The explicit clock (req.CompiledAt)
+// and the injected signer (req.SigningKey) are still wired in plan-3 Phase 4; until then
+// the signer is read from the environment exactly as artifacts.Export does today
+// (LoadConfigSignerFromEnv), so this phase remains a byte-identical wrapper.
 func Compile(req CompileRequest) (CompileArtifacts, error) {
 	// Work on a local copy of the topology so the caller's value is not mutated by the
 	// pipeline's write-backs (GenerateKeys, IP allocation, and the pin write-back all
@@ -29,7 +27,14 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 	// compiled (written-back) topology.
 	topo := req.Topology
 
-	keys, err := render.GenerateKeys(&topo, req.Custody)
+	// nil Keygen ⇒ the default wgtypesKeygen, keeping production byte-identical to the
+	// pre-seam pipeline. render consumes its own (structurally-identical) Keygen
+	// interface, which both localcompile keygens satisfy.
+	kg := req.Keygen
+	if kg == nil {
+		kg = wgtypesKeygen{}
+	}
+	keys, err := render.GenerateKeysWith(&topo, req.Custody, kg)
 	if err != nil {
 		return CompileArtifacts{}, err
 	}

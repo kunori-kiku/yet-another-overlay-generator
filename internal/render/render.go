@@ -55,6 +55,64 @@ const (
 // is spliced with the agent's locally-held private key before the config is used.
 const PrivateKeyPlaceholder = "PRIVATEKEY_PLACEHOLDER"
 
+// Keygen is the WireGuard key-derivation seam consumed by GenerateKeysWith — the
+// one input that decouples key derivation from wgtypes/wgctrl (the browser/WASM
+// blocker). It is declared HERE, on the consumer side, because render must not
+// import the localcompile façade (localcompile imports render, so the reverse
+// edge would be a cycle); the localcompile.Keygen contract member has the same
+// method set, and localcompile's wgtypesKeygen/ecdhKeygen satisfy this interface
+// structurally. The conformance harness (plan-5) asserts public-key DERIVATION
+// only — never private-key material (zero-knowledge custody, principle P2).
+type Keygen interface {
+	// DerivePublic returns the base64 public key for a base64 X25519 private key.
+	// It covers the AgentHeld pub-from-private derivation and the air-gap
+	// case-a/case-c public derivation.
+	DerivePublic(privB64 string) (pubB64 string, err error)
+	// Generate returns a fresh (privB64, pubB64) X25519 key pair (air-gap case-c).
+	Generate() (privB64, pubB64 string, err error)
+	// ParseAndNormalize round-trips a private key to its canonical base64 form. It
+	// MUST reproduce wgtypes' privateKey.String() canonicalization byte-for-byte
+	// (the air-gap case-a re-write persists this back onto the node), not merely
+	// validate.
+	ParseAndNormalize(privB64 string) (canonicalPrivB64 string, err error)
+}
+
+// wgtypesKeygen is the default, byte-identical key seam: it wraps today's exact
+// wgtypes calls so the GenerateKeys shim produces output indistinguishable from
+// the pre-seam pipeline. It is the render-internal default the shim injects;
+// localcompile declares its own (structurally-identical) wgtypesKeygen as the
+// CompileRequest.Keygen nil-default, and the two are proven byte-equal to the
+// stdlib ecdhKeygen by the localcompile equivalence test.
+type wgtypesKeygen struct{}
+
+// DerivePublic reproduces wgtypes.ParseKey(privB64).PublicKey().String().
+func (wgtypesKeygen) DerivePublic(privB64 string) (string, error) {
+	priv, err := wgtypes.ParseKey(privB64)
+	if err != nil {
+		return "", err
+	}
+	return priv.PublicKey().String(), nil
+}
+
+// Generate reproduces wgtypes.GeneratePrivateKey() + .String() / .PublicKey().String().
+func (wgtypesKeygen) Generate() (string, string, error) {
+	priv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		return "", "", err
+	}
+	return priv.String(), priv.PublicKey().String(), nil
+}
+
+// ParseAndNormalize reproduces wgtypes.ParseKey(privB64).String() — the air-gap
+// case-a re-canonicalization that is persisted back onto the node.
+func (wgtypesKeygen) ParseAndNormalize(privB64 string) (string, error) {
+	priv, err := wgtypes.ParseKey(privB64)
+	if err != nil {
+		return "", err
+	}
+	return priv.String(), nil
+}
+
 // GenerateKeys parses or generates a WireGuard key pair for each node and writes
 // the result back onto the node so it persists with the topology JSON and is
 // reused verbatim on the next compile (invariant I5: key stability).
@@ -79,6 +137,21 @@ const PrivateKeyPlaceholder = "PRIVATEKEY_PLACEHOLDER"
 //     PrivateKeyPlaceholder for the private half, and clear any private key on the
 //     node so the controller's topology never carries one.
 func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler.KeyPair, error) {
+	// The shim injects the default wgtypesKeygen so every existing caller (the
+	// air-gap CLI/API and the controller) is byte-for-byte unchanged.
+	return GenerateKeysWith(topo, custody, wgtypesKeygen{})
+}
+
+// GenerateKeysWith is GenerateKeys with the WireGuard key-derivation seam made
+// explicit. Every key operation goes through kg instead of calling wgtypes
+// directly, so the localcompile façade can inject a stdlib-anchored, wgctrl-free
+// key generator. GenerateKeys is the shim that injects the default wgtypesKeygen
+// (byte-identical to the pre-seam pipeline).
+//
+// The custody semantics are unchanged from GenerateKeys; see its doc comment. In
+// particular the AgentHeld branch still emits PrivateKeyPlaceholder and clears the
+// node's private key — kg never returns a real private key to an AgentHeld caller.
+func GenerateKeysWith(topo *model.Topology, custody KeyCustody, kg Keygen) (map[string]compiler.KeyPair, error) {
 	keys := make(map[string]compiler.KeyPair)
 	for i := range topo.Nodes {
 		node := &topo.Nodes[i]
@@ -96,11 +169,11 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 				if node.WireGuardPrivateKey == "" {
 					return nil, apierr.New(apierr.CodeKeygenMissingPubkey).With("node", node.ID)
 				}
-				privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
+				derived, err := kg.DerivePublic(node.WireGuardPrivateKey)
 				if err != nil {
 					return nil, apierr.New(apierr.CodeKeygenPrivkeyParse).With("node", node.ID).With("detail", err.Error()).Wrap(err)
 				}
-				pub = privateKey.PublicKey().String()
+				pub = derived
 			}
 			// Persist only the public key; guarantee no private key lingers.
 			node.WireGuardPublicKey = pub
@@ -117,13 +190,17 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 			// Case (a): the private key is present. Parse it, derive the public key from
 			// it, and reuse the whole pair; write the derived public key back to fix a
 			// public key on the node that was missing or inconsistent (stale) with it.
-			privateKey, err := wgtypes.ParseKey(node.WireGuardPrivateKey)
+			normalized, err := kg.ParseAndNormalize(node.WireGuardPrivateKey)
+			if err != nil {
+				return nil, apierr.New(apierr.CodeKeygenPrivkeyParse).With("node", node.ID).With("detail", err.Error()).Wrap(err)
+			}
+			pub, err := kg.DerivePublic(node.WireGuardPrivateKey)
 			if err != nil {
 				return nil, apierr.New(apierr.CodeKeygenPrivkeyParse).With("node", node.ID).With("detail", err.Error()).Wrap(err)
 			}
 
-			node.WireGuardPrivateKey = privateKey.String()
-			node.WireGuardPublicKey = privateKey.PublicKey().String()
+			node.WireGuardPrivateKey = normalized
+			node.WireGuardPublicKey = pub
 
 		case node.WireGuardPublicKey != "":
 			// Case (b): the public key is present but the private key is missing. The stateless
@@ -136,13 +213,13 @@ func GenerateKeys(topo *model.Topology, custody KeyCustody) (map[string]compiler
 			// pair and write both the private and public keys back to the node so they
 			// persist with the topology and round-trip, reusing the same pair on the
 			// next compile.
-			privateKey, err := wgtypes.GeneratePrivateKey()
+			priv, pub, err := kg.Generate()
 			if err != nil {
 				return nil, apierr.New(apierr.CodeKeygenGenerateFailed).With("node", node.ID).With("detail", err.Error()).Wrap(err)
 			}
 
-			node.WireGuardPrivateKey = privateKey.String()
-			node.WireGuardPublicKey = privateKey.PublicKey().String()
+			node.WireGuardPrivateKey = priv
+			node.WireGuardPublicKey = pub
 		}
 
 		keys[node.ID] = compiler.KeyPair{
