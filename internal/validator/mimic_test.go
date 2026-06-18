@@ -6,12 +6,13 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// mimicTransportTopology 构造一个两节点单边拓扑，边 transport 与两端节点 platform
-// 由参数指定，用于覆盖 mimic（tcp 传输）的平台约束校验
-// （docs/spec/artifacts/mimic.md、compiler/validation.md、契约 item 4）。
+// mimicTransportTopology builds a two-node single-edge topology whose edge transport and both
+// endpoints' platforms are given by parameters, used to cover the platform-constraint validation
+// of mimic (tcp transport)
+// (docs/spec/artifacts/mimic.md, compiler/validation.md, contract item 4).
 //
-// 与 field_safety_test.go 的 transportTopology 类似，但额外参数化两端平台，
-// 以便构造「tcp 边连向非 Linux 平台」的报错用例。
+// Similar to transportTopology in field_safety_test.go, but additionally parameterizes both
+// endpoints' platforms so that the "tcp edge to a non-Linux platform" error case can be built.
 func mimicTransportTopology(transport, fromPlatform, toPlatform string) *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "mimic-validate", Name: "Mimic Validate"},
@@ -30,9 +31,10 @@ func mimicTransportTopology(transport, fromPlatform, toPlatform string) *model.T
 	}
 }
 
-// TestValidate_MimicTcpBetweenLinux_NoErrorNoWarning 覆盖契约 item 4 的正路径：
-// 两个 debian/ubuntu 节点之间一条 tcp 边 → schema 与 semantic 都不应报 transport 错误，
-// 且 v1.3.0 的「tcp 保留/未实现」告警必须已被移除（不再出现任何 transport 相关告警）。
+// TestValidate_MimicTcpBetweenLinux_NoErrorNoWarning covers the happy path of contract item 4:
+// a tcp edge between two debian/ubuntu nodes -> neither schema nor semantic should report a
+// transport error, and the v1.3.0 "tcp reserved/unimplemented" warning must already be removed
+// (no transport-related warning appears at all).
 func TestValidate_MimicTcpBetweenLinux_NoErrorNoWarning(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -40,7 +42,8 @@ func TestValidate_MimicTcpBetweenLinux_NoErrorNoWarning(t *testing.T) {
 	}{
 		{name: "debian <-> ubuntu", fromPF: "debian", toPF: "ubuntu"},
 		{name: "ubuntu <-> debian", fromPF: "ubuntu", toPF: "debian"},
-		// 空 platform 视为 Linux（放行），与其它平台校验对空值的处理一致。
+		// An empty platform is treated as Linux (allowed), consistent with how other platform
+		// validations handle empty values.
 		{name: "empty <-> debian (empty=Linux)", fromPF: "", toPF: "debian"},
 	}
 
@@ -48,38 +51,39 @@ func TestValidate_MimicTcpBetweenLinux_NoErrorNoWarning(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			topo := mimicTransportTopology("tcp", tc.fromPF, tc.toPF)
 
-			// Schema 阶段：tcp 是合法取值，不应报错；且不应再有 v1.3.0 的 transport 告警。
+			// Schema stage: tcp is a valid value, should not error; and there should no longer be the v1.3.0 transport warning.
 			schemaResult := ValidateSchema(topo)
 			for _, e := range schemaResult.Errors {
 				if containsSubstring(e.Field, "transport") {
-					t.Errorf("Linux↔Linux 的 tcp 边不应产生 schema transport 错误，实际: %v", schemaResult.Errors)
+					t.Errorf("a Linux<->Linux tcp edge should not produce a schema transport error, got: %v", schemaResult.Errors)
 				}
 			}
 			for _, w := range schemaResult.Warnings {
 				if containsSubstring(w.Field, "transport") {
-					t.Errorf("v1.3.0 的 tcp 保留告警应已移除，却仍产生 schema 告警: %v", schemaResult.Warnings)
+					t.Errorf("the v1.3.0 tcp reserved warning should already be removed, but a schema warning was still produced: %v", schemaResult.Warnings)
 				}
 			}
 
-			// Semantic 阶段：两端均为可部署 Linux，mimic 平台约束应放行。
+			// Semantic stage: both ends are deployable Linux, the mimic platform constraint should allow it.
 			semResult := ValidateSemantic(topo)
 			for _, e := range semResult.Errors {
 				if containsSubstring(e.Field, "transport") {
-					t.Errorf("Linux↔Linux 的 tcp 边不应产生 semantic transport 错误，实际: %v", semResult.Errors)
+					t.Errorf("a Linux<->Linux tcp edge should not produce a semantic transport error, got: %v", semResult.Errors)
 				}
 			}
 			for _, w := range semResult.Warnings {
 				if containsSubstring(w.Field, "transport") {
-					t.Errorf("Linux↔Linux 的 tcp 边不应产生 semantic transport 告警，实际: %v", semResult.Warnings)
+					t.Errorf("a Linux<->Linux tcp edge should not produce a semantic transport warning, got: %v", semResult.Warnings)
 				}
 			}
 		})
 	}
 }
 
-// TestValidate_MimicTcpToNonLinux_Errors 覆盖契约 item 4 的报错路径：
-// tcp 边的任一端点平台不是可部署 Linux（debian / ubuntu）时，semantic 校验必须报错，
-// 错误字段定位到该边的 transport，且错误消息点名该边 ID。
+// TestValidate_MimicTcpToNonLinux_Errors covers the error path of contract item 4:
+// when either endpoint platform of a tcp edge is not a deployable Linux (debian / ubuntu),
+// semantic validation must error, the error field locates to that edge's transport, and the
+// error message names that edge ID.
 func TestValidate_MimicTcpToNonLinux_Errors(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -95,10 +99,10 @@ func TestValidate_MimicTcpToNonLinux_Errors(t *testing.T) {
 			topo := mimicTransportTopology("tcp", tc.fromPF, tc.toPF)
 			result := ValidateSemantic(topo)
 
-			// 错误必须定位到 edge 的 transport 字段。
+			// The error must locate to the edge's transport field.
 			assertHasError(t, result, "edges[0].transport")
 
-			// 错误消息应点名该边（edge.ID="edge-1"），便于运营商定位。
+			// The error message should name that edge (edge.ID="edge-1") to help the operator locate it.
 			found := false
 			for _, e := range result.Errors {
 				if containsSubstring(e.Field, "edges[0].transport") && containsSubstring(e.Message, "edge-1") {
@@ -106,41 +110,43 @@ func TestValidate_MimicTcpToNonLinux_Errors(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Errorf("非 Linux 平台的 tcp 边报错消息应点名该边 ID（edge-1），实际错误: %v", result.Errors)
+				t.Errorf("the error message for a tcp edge to a non-Linux platform should name the edge ID (edge-1), got: %v", result.Errors)
 			}
 		})
 	}
 }
 
-// TestValidate_UdpEdge_UnaffectedByMimic 覆盖契约 item 4 的不变量：
-// udp 边完全不受 mimic 平台约束影响——即便端点是非 Linux 平台，udp 边也不应因 mimic
-// 规则报 transport 错误，且不产生任何 transport 告警。
+// TestValidate_UdpEdge_UnaffectedByMimic covers the invariant of contract item 4:
+// a udp edge is entirely unaffected by the mimic platform constraint -- even if an endpoint is a
+// non-Linux platform, a udp edge should not report a transport error due to the mimic rule, and
+// should not produce any transport warning.
 func TestValidate_UdpEdge_UnaffectedByMimic(t *testing.T) {
-	// 故意把一端设为非 Linux 平台：udp 边不应触发 mimic 平台约束。
+	// Deliberately set one end to a non-Linux platform: a udp edge should not trigger the mimic platform constraint.
 	topo := mimicTransportTopology("udp", "debian", "windows")
 
 	semResult := ValidateSemantic(topo)
 	for _, e := range semResult.Errors {
 		if containsSubstring(e.Field, "transport") {
-			t.Errorf("udp 边不应触发 mimic 平台约束（transport 错误），实际: %v", semResult.Errors)
+			t.Errorf("a udp edge should not trigger the mimic platform constraint (transport error), got: %v", semResult.Errors)
 		}
 	}
 
 	schemaResult := ValidateSchema(topo)
 	for _, w := range schemaResult.Warnings {
 		if containsSubstring(w.Field, "transport") {
-			t.Errorf("udp 边不应产生任何 transport 告警，实际: %v", schemaResult.Warnings)
+			t.Errorf("a udp edge should not produce any transport warning, got: %v", schemaResult.Warnings)
 		}
 	}
 	for _, e := range schemaResult.Errors {
 		if containsSubstring(e.Field, "transport") {
-			t.Errorf("udp 边不应产生 schema transport 错误，实际: %v", schemaResult.Errors)
+			t.Errorf("a udp edge should not produce a schema transport error, got: %v", schemaResult.Errors)
 		}
 	}
 }
 
-// TestValidate_XDPModeEnum 覆盖 per-node xdp_mode 枚举校验：
-// 空 / "skb" / "native" 合法（无 xdp_mode 错误）；其它值（含大小写错误）应在 schema 阶段报错。
+// TestValidate_XDPModeEnum covers per-node xdp_mode enum validation:
+// empty / "skb" / "native" are valid (no xdp_mode error); other values (including wrong casing)
+// should error at the schema stage.
 func TestValidate_XDPModeEnum(t *testing.T) {
 	hasXDPErr := func(r *ValidationResult) bool {
 		for _, e := range r.Errors {
@@ -155,7 +161,7 @@ func TestValidate_XDPModeEnum(t *testing.T) {
 		topo := mimicTransportTopology("tcp", "debian", "debian")
 		topo.Nodes[0].XDPMode = mode
 		if hasXDPErr(ValidateSchema(topo)) {
-			t.Errorf("xdp_mode=%q 合法，不应报错", mode)
+			t.Errorf("xdp_mode=%q is valid and should not error", mode)
 		}
 	}
 
@@ -163,7 +169,7 @@ func TestValidate_XDPModeEnum(t *testing.T) {
 		topo := mimicTransportTopology("tcp", "debian", "debian")
 		topo.Nodes[0].XDPMode = mode
 		if !hasXDPErr(ValidateSchema(topo)) {
-			t.Errorf("xdp_mode=%q 非法，应在 schema 报 xdp_mode 错误", mode)
+			t.Errorf("xdp_mode=%q is invalid and should produce an xdp_mode error at the schema stage", mode)
 		}
 	}
 }

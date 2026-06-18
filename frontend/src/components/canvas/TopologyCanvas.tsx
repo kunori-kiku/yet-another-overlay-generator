@@ -28,12 +28,13 @@ import { uuid } from '../../lib/uuid';
 const nodeTypes = { custom: CustomNode };
 const edgeTypes = { custom: CustomEdge };
 
-// 自动布局的节点尺寸缺省值（React Flow 尚未量测时使用）
+// Default node dimensions for auto-layout (used before React Flow has measured them).
 const DEFAULT_NODE_WIDTH = 180;
 const DEFAULT_NODE_HEIGHT = 110;
 
-// 边的渲染等价判定：keyed 同步用。只有渲染相关字段变化时才替换边对象，
-// 保持对象身份稳定 → React Flow 跳过未变边的重渲染（消除整层边闪烁）。
+// Edge render-equality check for keyed syncing. Only replace the edge object when a
+// render-relevant field changes, keeping object identity stable -> React Flow skips
+// re-rendering unchanged edges (eliminates whole-layer edge flicker).
 function edgeRenderEqual(a: FlowEdge, b: FlowEdge): boolean {
   if (a.source !== b.source || a.target !== b.target) return false;
   const da = (a.data ?? {}) as Record<string, unknown>;
@@ -72,35 +73,42 @@ export function TopologyCanvas() {
     selectedEdgeId,
   } = useTopologyStore();
 
-  // 焦点透明度（Decisions #11）：连线拖拽进行中标志。onConnectStart 置位、
-  // onConnectEnd 复位（含中途取消的拖拽）；拖拽期间所有边弱化、所有节点保持全不透明。
+  // Focus opacity (Decisions #11): connection-drag-in-progress flag. onConnectStart sets it,
+  // onConnectEnd clears it (including drags cancelled mid-way); during a drag all edges are
+  // deemphasized and all nodes stay fully opaque.
   const [connecting, setConnecting] = useState(false);
 
   // Persist node positions across re-renders so dragging is not lost
   const positionMap = useRef<Record<string, { x: number; y: number }>>({});
-  // onInit 捕获实例：自动布局完成后做带动画的 fitView（无需 ReactFlowProvider 包裹）。
+  // onInit captures the instance: run an animated fitView once auto-layout finishes (no
+  // ReactFlowProvider wrapper required).
   const rfInstance = useRef<ReactFlowInstance | null>(null);
-  // 自动布局动画帧句柄：重复点击/卸载时取消未完成的动画。
+  // Auto-layout animation-frame handle: cancel an unfinished animation on repeat click / unmount.
   const layoutAnimation = useRef<number | null>(null);
 
-  // 构建 domain 名称索引
+  // Build a domain-name index
   const domainMap = useMemo(() => {
     const m: Record<string, string> = {};
     domains.forEach((d) => (m[d.id] = d.name));
     return m;
   }, [domains]);
 
-  // 链路角色徽标（contract item 5 / Decisions #5）：按「无向节点对」分组所有 enabled 边，
-  // 单边对不设徽标（保持简洁观感）；多边对内：
-  //   - backup 边（role === 'backup'）→ 'b1','b2',...，按 topoEdges 出现顺序在本对备份中取序号；
-  //   - 同向多余的 roleless/primary 边（同 from->to，首条胜，镜像后端 D71）→ 'duplicate' 告警；
-  //   - 其余 primary class 边（代表边 + 反向 roleless 边，归并为同一主链路）→ 'primary'（★）。
-  // 同时产出 edgeId → 'b1'/'★' 的角色标记映射，供节点接口徽标复用以与边扇形序号一致。
-  // 注：声明在 nodeInterfaceMap 之前 —— 后者依赖 edgeRoleMarker 计算节点 chip 的 ★/bN 标记。
+  // Link-role chips (contract item 5 / Decisions #5): group all enabled edges by "undirected
+  // node pair". Single-edge pairs get no chip (keeps the look clean); within a multi-edge pair:
+  //   - backup edges (role === 'backup') -> 'b1','b2',..., numbered by appearance order in
+  //     topoEdges among this pair's backups;
+  //   - redundant same-direction roleless/primary edges (same from->to, first wins, mirrors
+  //     backend D71) -> 'duplicate' warning;
+  //   - all other primary-class edges (the representative edge + the reverse roleless edge,
+  //     merged into the same primary link) -> 'primary' (★).
+  // Also produces an edgeId -> 'b1'/'★' role-marker map, reused by node interface chips so they
+  // stay consistent with the edge fan ordinals.
+  // Note: declared before nodeInterfaceMap -- the latter depends on edgeRoleMarker to compute
+  // the node chip's ★/bN marker.
   const { edgeRoleChip, edgeRoleMarker } = useMemo(() => {
     const enabledEdges = topoEdges.filter((e) => e.is_enabled);
 
-    // 无向对分组（与 parallelEdgeInfo 的 pairKey 口径一致）
+    // Undirected-pair grouping (same pairKey convention as parallelEdgeInfo)
     const pairMap: Record<string, typeof enabledEdges> = {};
     for (const e of enabledEdges) {
       const pairKey = [e.from_node_id, e.to_node_id].sort().join('::');
@@ -111,7 +119,7 @@ export function TopologyCanvas() {
     const chip: Record<string, string> = {};
     const marker: Record<string, string> = {};
     for (const edges of Object.values(pairMap)) {
-      if (edges.length <= 1) continue; // 单边对：无徽标
+      if (edges.length <= 1) continue; // single-edge pair: no chip
       const firstPrimaryByDirection: Record<string, boolean> = {};
       let backupOrdinal = 0;
       for (const e of edges) {
@@ -122,10 +130,10 @@ export function TopologyCanvas() {
           marker[e.id] = tag;
           continue;
         }
-        // primary class（role 为空或 'primary'）。同向去重镜像 D71：首条胜。
+        // primary class (role empty or 'primary'). Same-direction dedup mirrors D71: first wins.
         const direction = `${e.from_node_id}->${e.to_node_id}`;
         if (firstPrimaryByDirection[direction]) {
-          chip[e.id] = 'duplicate'; // 同向多余 → 告警徽标（无节点接口角色标记）
+          chip[e.id] = 'duplicate'; // redundant same-direction -> warning chip (no node interface role marker)
           continue;
         }
         firstPrimaryByDirection[direction] = true;
@@ -136,20 +144,25 @@ export function TopologyCanvas() {
     return { edgeRoleChip: chip, edgeRoleMarker: marker };
   }, [topoEdges]);
 
-  // 构建每个节点的已编译接口详情（节点卡片上的展示徽标，受「显示接口详情」开关控制）。
-  // 注意：接口不再充当连接手柄 —— 连线手势是节点对节点，端口由后端编译时分配。
+  // Build each node's compiled interface details (the display chips on the node card, gated by
+  // the "show interface details" toggle).
+  // Note: interfaces no longer act as connection handles -- the connection gesture is
+  // node-to-node, and ports are allocated by the backend at compile time.
   //
-  // Decisions #12：改用共享的 edge-aware 解析器 resolveNodeInterfaces —— 通过 pinned 端口
-  // 把每个已编译接口匹配回它的边（端口在节点内唯一），避免旧版「从接口名剥离 wg- 反推
-  // peer 名」对 backup 接口（wg-<clean8><hash4>）渲染出垃圾 chip。RightPanel 复用同一解析器。
-  // 这里把解析结果（peerName / listenPort / role / edgeId / 真实接口名）映射成节点卡片 chip，
-  // 并据 role + edgeId 计算与边扇形一致的角色标记（★ / bN）；'unknown' 的 peerName 由解析器
-  // 回退为接口名原文（永不剥离 wg-），不带标记。
+  // Decisions #12: switched to the shared edge-aware resolver resolveNodeInterfaces -- it
+  // matches each compiled interface back to its edge via the pinned port (ports are unique
+  // within a node), avoiding the old approach of "strip wg- from the interface name to
+  // back-derive the peer name", which rendered garbage chips for backup interfaces
+  // (wg-<clean8><hash4>). RightPanel reuses the same resolver.
+  // Here the resolver output (peerName / listenPort / role / edgeId / real interface name) is
+  // mapped into node-card chips, and a role marker consistent with the edge fan (★ / bN) is
+  // computed from role + edgeId; an 'unknown' peerName is left by the resolver as the verbatim
+  // interface name (never stripping wg-) and carries no marker.
   interface IfaceChip {
-    name: string;        // 真实接口名（tooltip 用，永不剥离 wg-）
-    listenPort: number;  // 后端分配的监听端口
-    peerName: string;    // 对端节点名（'unknown' 时回退为接口名）
-    roleMarker?: string; // '★' / 'b1' / ... 或 undefined
+    name: string;        // real interface name (for the tooltip; never strips wg-)
+    listenPort: number;  // backend-allocated listen port
+    peerName: string;    // peer node name (falls back to the interface name when 'unknown')
+    roleMarker?: string; // '★' / 'b1' / ... or undefined
   }
   const nodeInterfaceMap = useMemo(() => {
     const m: Record<string, IfaceChip[]> = {};
@@ -167,10 +180,10 @@ export function TopologyCanvas() {
         if (info.role === 'primary') {
           roleMarker = '★';
         } else if (info.role === 'backup') {
-          // 与边扇形序号一致：从 edgeRoleMarker 取该 backup 边的 bN。
+          // Stay consistent with the edge fan ordinal: take this backup edge's bN from edgeRoleMarker.
           roleMarker = info.edgeId ? edgeRoleMarker[info.edgeId] : undefined;
         }
-        // role === 'unknown'：peerName 已是接口名原文，不带标记。
+        // role === 'unknown': peerName is already the verbatim interface name; no marker.
         return {
           name: info.interfaceName,
           listenPort: info.listenPort,
@@ -182,9 +195,10 @@ export function TopologyCanvas() {
     return m;
   }, [compileResult, topoNodes, topoEdges, edgeRoleMarker]);
 
-  // 将拓扑节点转为 React Flow 节点。
-  // 纯计算：渲染期间不读写 positionMap ref（react-hooks/refs 约束）。
-  // 这里只给出默认网格位置；已拖拽/持久化的位置在下方同步 effect 中合并。
+  // Convert topology nodes into React Flow nodes.
+  // Pure computation: do not read/write the positionMap ref during render (react-hooks/refs
+  // constraint). This only assigns default grid positions; dragged/persisted positions are
+  // merged in the sync effect below.
   const flowNodes: FlowNode[] = useMemo(
     () =>
       topoNodes.map((n, i) => ({
@@ -205,7 +219,7 @@ export function TopologyCanvas() {
     [topoNodes, domainMap, nodeInterfaceMap]
   );
 
-  // 计算平行边索引（同一对节点之间的多条边）
+  // Compute parallel-edge indices (multiple edges between the same node pair)
   const parallelEdgeInfo = useMemo(() => {
     const pairMap: Record<string, string[]> = {};
     const enabledEdges = topoEdges.filter((e) => e.is_enabled);
@@ -225,15 +239,17 @@ export function TopologyCanvas() {
     return info;
   }, [topoEdges]);
 
-  // 将拓扑边转为 React Flow 边（使用自定义 edge）。
-  // 边始终在节点级锚点之间渲染（不再路由到接口手柄）：边是节点对节点的逻辑链路，
-  // 接口/端口是它的编译产物。端口语义拆成结构化字段交给 CustomEdge 渲染徽标：
-  //   port    —— compiled_port（后端分配真值）或显式 endpoint_port 覆盖；
-  //   pending —— 「待编译」信号 → 虚线。注意 compiled_port 只对带 endpoint_host 的
-  //   边写回（compiler.go 的 CompiledPort 写回规则），无 endpoint_host 的被动边要用
-  //   pin 字段（每条 enabled 边编译后都有）判断是否已编译，否则会永远显示虚线。
-  //   带 endpoint_host 的边仍以 compiled_port 为准：拨号相关编辑会清掉它（D19），
-  //   虚线回退正是「需要重新编译」的可视反馈。
+  // Convert topology edges into React Flow edges (using the custom edge).
+  // Edges always render between node-level anchors (no longer routed to interface handles): an
+  // edge is a node-to-node logical link, and interfaces/ports are its compile products. The
+  // port semantics are split into structured fields handed to CustomEdge for chip rendering:
+  //   port    -- compiled_port (the backend-allocated truth) or an explicit endpoint_port override;
+  //   pending -- the "awaiting compile" signal -> dashed line. Note compiled_port is only written
+  //   back for edges with an endpoint_host (compiler.go's CompiledPort write-back rule); a passive
+  //   edge without endpoint_host must use the pin fields (present on every enabled edge after
+  //   compile) to decide whether it is compiled, otherwise it would stay dashed forever.
+  //   Edges with an endpoint_host still go by compiled_port: dial-related edits clear it (D19),
+  //   and the dashed fallback is exactly the "needs recompile" visual feedback.
   const flowEdges: FlowEdge[] = useMemo(
     () =>
       topoEdges
@@ -262,7 +278,7 @@ export function TopologyCanvas() {
               parallelCount: pInfo.count,
               sourceNodeName: sourceNode?.name || '',
               targetNodeName: targetNode?.name || '',
-              roleChip: edgeRoleChip[e.id], // ★ / bN / duplicate / undefined（单边对）
+              roleChip: edgeRoleChip[e.id], // ★ / bN / duplicate / undefined (single-edge pair)
             },
             markerEnd: { type: MarkerType.ArrowClosed },
           };
@@ -270,18 +286,21 @@ export function TopologyCanvas() {
     [topoEdges, parallelEdgeInfo, topoNodes, edgeRoleChip]
   );
 
-  // 焦点透明度判定（Decisions #11，逐字）：根据当前选中态 + 连线拖拽态算出
-  // 「弱化」谓词，注入节点/边的 data.deemphasized（在下方同步 effect 中应用）。
-  // 优先级：连线拖拽 > 选中边 > 选中节点 > 无（全亮）。
-  //   - 连线拖拽中：所有边弱化，所有节点全亮（节点是落点目标）；
-  //   - 选中节点：除该节点本身 + 与其相连的边外全部弱化（远端节点照样弱化，#11 字面）；
-  //   - 选中边：除该边本身 + 其两端节点外全部弱化；
-  //   - 背景点击清空选中 → 谓词回到「全不弱化」（onPaneClick 已清空，谓词自然恢复）。
+  // Focus-opacity computation (Decisions #11, verbatim): from the current selection + the
+  // connection-drag state, compute the "deemphasize" predicates injected into node/edge
+  // data.deemphasized (applied in the sync effect below).
+  // Priority: connection drag > selected edge > selected node > none (all bright).
+  //   - during a connection drag: all edges deemphasized, all nodes bright (nodes are the drop target);
+  //   - selected node: deemphasize everything except the node itself + its incident edges (the
+  //     far node stays deemphasized too, per the literal text of #11);
+  //   - selected edge: deemphasize everything except the edge itself + its two endpoint nodes;
+  //   - a background click clears the selection -> the predicate returns to "nothing
+  //     deemphasized" (onPaneClick already cleared it, so the predicate recovers naturally).
   const deemphasis = useMemo<{
     isNodeDeemphasized: (id: string) => boolean;
     isEdgeDeemphasized: (id: string) => boolean;
   }>(() => {
-    // 连线拖拽中：所有边弱化、所有节点全亮（节点是落点目标）。优先级最高。
+    // During a connection drag: all edges deemphasized, all nodes bright (nodes are the drop target). Highest priority.
     if (connecting) {
       return {
         isNodeDeemphasized: () => false,
@@ -289,7 +308,7 @@ export function TopologyCanvas() {
       };
     }
 
-    // 选中边：除该边本身 + 其两端节点外全部弱化。
+    // Selected edge: deemphasize everything except the edge itself + its two endpoint nodes.
     if (selectedEdgeId) {
       const sel = topoEdges.find((e) => e.id === selectedEdgeId);
       const endpoints = sel
@@ -301,7 +320,7 @@ export function TopologyCanvas() {
       };
     }
 
-    // 选中节点：除该节点本身 + 与其相连的边外全部弱化（远端节点照样弱化，#11 字面）。
+    // Selected node: deemphasize everything except the node itself + its incident edges (the far node stays deemphasized too, per the literal text of #11).
     if (selectedNodeId) {
       const incidentEdgeIds = new Set(
         topoEdges
@@ -317,7 +336,7 @@ export function TopologyCanvas() {
       };
     }
 
-    // 无选中、未拖拽：全亮（背景点击清空选中后自然回到这里）。
+    // Nothing selected, not dragging: all bright (a background click clears the selection and naturally lands here).
     return {
       isNodeDeemphasized: () => false,
       isEdgeDeemphasized: () => false,
@@ -356,23 +375,23 @@ export function TopologyCanvas() {
     [onEdgesChange, removeTopoEdge]
   );
 
-  // 数据变更（名称、角色、接口等）同步进 React Flow 状态，但不覆盖拖拽位置。
-  // setState 与 positionMap ref 的读写属于副作用，必须在 effect 中执行，
-  // 而不是渲染期间的 useMemo（修复审计发现 D18：渲染期副作用导致节点
-  // 在无关编辑后跳回旧坐标）。
+  // Sync data changes (name, role, interfaces, etc.) into React Flow state without overwriting
+  // dragged positions. setState and reading/writing the positionMap ref are side effects, so
+  // they must run in an effect, not in a render-time useMemo (fixes audit finding D18:
+  // render-time side effects caused nodes to jump back to old coordinates after an unrelated edit).
   useEffect(() => {
     setNodes((currentNodes) =>
       flowNodes.map((fn) => {
-        // 首次见到该节点时，把默认网格位置登记为持久化位置
+        // First time we see this node, register its default grid position as the persisted position
         if (!positionMap.current[fn.id]) {
           positionMap.current[fn.id] = fn.position;
         }
         const existing = currentNodes.find((n) => n.id === fn.id);
         return {
           ...fn,
-          // 焦点透明度（Decisions #11）：弱化谓词注入 data，CustomNode 据此淡出根容器。
+          // Focus opacity (Decisions #11): inject the deemphasize predicate into data; CustomNode fades the root container accordingly.
           data: { ...fn.data, deemphasized: deemphasis.isNodeDeemphasized(fn.id) },
-          // 保留 React Flow 标记的选中态，避免同步时选中描边闪断
+          // Preserve React Flow's selected flag to avoid the selection outline flickering during sync
           selected: existing?.selected,
           position: positionMap.current[fn.id] || existing?.position || fn.position,
         };
@@ -380,16 +399,17 @@ export function TopologyCanvas() {
     );
   }, [flowNodes, setNodes, deemphasis]);
 
-  // keyed 边同步：渲染字段未变的边保留原对象身份（含 selected 标记），
-  // 避免旧版整批 setEdges(flowEdges) 在任何 store 变更时重建全部边对象、
-  // 触发整层边重渲染的卡顿/闪烁。
+  // Keyed edge sync: edges whose render fields are unchanged keep their original object identity
+  // (including the selected flag), avoiding the old wholesale setEdges(flowEdges) that rebuilt
+  // every edge object on any store change and triggered the whole-layer re-render jank/flicker.
   useEffect(() => {
     setEdges((current) => {
       const prevById = new Map(current.map((e) => [e.id, e]));
       let changed = current.length !== flowEdges.length;
       const next = flowEdges.map((feBase) => {
-        // 焦点透明度（Decisions #11）：把弱化谓词注入 data 后再做 keyed 等价比较，
-        // 弱化态变化时（deemphasized ∈ edgeRenderEqual keys）边对象会被替换并重渲染。
+        // Focus opacity (Decisions #11): inject the deemphasize predicate into data before the
+        // keyed equality check, so when the deemphasize state changes (deemphasized is in
+        // edgeRenderEqual's keys) the edge object is replaced and re-rendered.
         const fe = {
           ...feBase,
           data: {
@@ -408,7 +428,7 @@ export function TopologyCanvas() {
     });
   }, [flowEdges, setEdges, deemphasis]);
 
-  // 卸载时取消未完成的布局动画帧
+  // Cancel any unfinished layout animation frame on unmount
   useEffect(
     () => () => {
       if (layoutAnimation.current !== null) {
@@ -418,10 +438,11 @@ export function TopologyCanvas() {
     []
   );
 
-  // 自动布局：dagre 分层布局算出目标坐标，再用 easeOutCubic 插值平滑过渡。
-  // 不用 CSS transform 过渡 —— React Flow 拖拽也走 transform，二者会互相打架；
-  // 逐帧更新 position 状态是官方推荐的动画方式。动画过程同步写 positionMap，
-  // 让布局结果像手动拖拽一样被持久化。
+  // Auto-layout: dagre's layered layout computes target coordinates, then easeOutCubic
+  // interpolation smooths the transition. We do not use CSS transform transitions -- React Flow
+  // dragging also uses transform, so the two would fight; updating position state frame-by-frame
+  // is the officially recommended animation approach. The animation writes positionMap as it
+  // goes, so the layout result is persisted just like a manual drag.
   const runAutoLayout = useCallback(() => {
     if (nodes.length === 0) return;
 
@@ -439,7 +460,7 @@ export function TopologyCanvas() {
     }
     dagre.layout(g);
 
-    // dagre 返回中心点坐标；React Flow position 是左上角。
+    // dagre returns center-point coordinates; React Flow's position is the top-left corner.
     const targets: Record<string, { x: number; y: number }> = {};
     const from: Record<string, { x: number; y: number }> = {};
     for (const n of nodes) {
@@ -487,14 +508,16 @@ export function TopologyCanvas() {
       setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', pending: true, parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
 
       if (params.source && params.target) {
-        // 用 uuid() 而非毫秒时间戳生成边 ID：两次快速连线会落在同一毫秒，
-        // 导致 ID 冲突，之后任何按 ID 进行的编辑/删除都会同时命中两条边（修复 D17）。
+        // Generate the edge ID with uuid() rather than a millisecond timestamp: two quick
+        // connections can land in the same millisecond, causing an ID collision so any later
+        // edit/delete by ID would hit both edges (fixes D17).
         const id = `edge-${uuid()}`;
         const targetNode = topoNodes.find((n) => n.id === params.target);
         const preferredEndpoint = targetNode?.public_endpoints?.[0];
 
-        // 只填充 endpoint_host（目标节点的可达性提示），endpoint_port 保持为空 →
-        // 由后端作为唯一端口权威自动分配监听端口。仅当运营商显式输入端口时才视为 NAT 覆盖。
+        // Fill only endpoint_host (the target node's reachability hint); leave endpoint_port empty
+        // -> the backend, as the sole port authority, auto-allocates the listen port. A port counts
+        // as a NAT override only when the operator types one explicitly.
         addTopoEdge({
           id,
           from_node_id: params.source,
@@ -510,13 +533,14 @@ export function TopologyCanvas() {
     [setEdges, addTopoEdge, topoNodes, selectEdge]
   );
 
-  // 焦点透明度（Decisions #11）：连线拖拽开始 → 置位 connecting（所有边弱化、节点全亮）。
+  // Focus opacity (Decisions #11): a connection drag starting -> set connecting (all edges deemphasized, nodes bright).
   const onConnectStart = useCallback(() => {
     setConnecting(true);
   }, []);
 
-  // onConnectEnd 始终复位 connecting —— 包括中途取消（落在空白处）的拖拽，
-  // 保证拖拽结束后焦点透明度恢复正常（成功连线时 onConnect 已先于此处理新边选中）。
+  // onConnectEnd always clears connecting -- including drags cancelled mid-way (dropped on empty
+  // space), so focus opacity returns to normal after the drag ends (on a successful connection,
+  // onConnect has already handled selecting the new edge before this runs).
   const onConnectEnd = useCallback(() => {
     setConnecting(false);
   }, []);
@@ -541,11 +565,13 @@ export function TopologyCanvas() {
     selectDomain(null);
   }, [selectNode, selectEdge, selectDomain]);
 
-  // 连线合法性校验（拖拽期间被高频调用，必须保持纯函数 + O(边数) 轻量）：
-  // 1) 拒绝自环（source === target）—— 一个节点连自己没有意义；
-  // 2) 拒绝与现有「已启用」边重复的节点对（任一方向）—— 平行边由 parallelEdgeInfo
-  //    可视化，但同一对节点的重复直连边只会产生混淆且无新增语义。
-  // 读取 topoEdges（拓扑真源），而非 React Flow 的 edges 派生状态。
+  // Connection-validity check (called at high frequency during a drag, so it must stay a pure
+  // function and O(edge count) lightweight):
+  // 1) reject self-loops (source === target) -- a node connecting to itself is meaningless;
+  // 2) reject node pairs that duplicate an existing "enabled" edge (either direction) -- parallel
+  //    edges are visualized by parallelEdgeInfo, but a duplicate direct edge between the same node
+  //    pair only adds confusion with no new semantics.
+  // Reads topoEdges (the topology source of truth), not React Flow's derived edges state.
   const isValidConnection = useCallback(
     (connection: Connection | FlowEdge) => {
       const { source, target } = connection;
@@ -585,7 +611,7 @@ export function TopologyCanvas() {
     >
       <Background color="#374151" gap={20} />
       <Controls className="!bg-gray-700 !border-gray-600 !text-gray-300" />
-      {/* 画布工具栏：自动布局 + 接口详情开关 */}
+      {/* Canvas toolbar: auto-layout + interface-detail toggle */}
       <Panel position="top-left" className="flex items-center gap-2">
         <button
           onClick={runAutoLayout}

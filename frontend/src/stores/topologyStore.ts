@@ -37,39 +37,42 @@ export const ALLOCATION_PIN_FIELDS = [
 ] as const;
 
 interface TopologyState {
-  // 数据
+  // Data
   project: Project;
   domains: Domain[];
   nodes: Node[];
   edges: Edge[];
-  // 分配方案版本号（Spec E 规则 R0）：由编译器写入并原样回传/持久化。
-  // 缺省 0 表示尚未编译；getTopology 仅在 >0 时回送，避免污染从未编译的拓扑。
+  // Allocation-scheme version number (Spec E rule R0): written by the compiler and
+  // round-tripped/persisted verbatim. Default 0 means not yet compiled; getTopology only
+  // echoes it when >0, to avoid polluting a never-compiled topology.
   allocSchemaVersion: number;
 
-  // 历史快照
+  // History snapshots
   history: CompileHistoryEntry[];
 
-  // 编译/校验结果
+  // Compile/validate results
   validateResult: ValidateResponse | null;
   compileResult: CompileResponse | null;
   isCompiling: boolean;
   isValidating: boolean;
   error: string | null;
 
-  // 画布 UI 偏好：是否在节点卡片上展开已编译接口详情（纯展示）。
-  // 接口是编译产物而非绘图原语 —— 连线手势始终是节点对节点，端口由后端分配；
-  // 因此接口详情默认收起，按需展开，避免误导用户「连线 = 选择某个接口/端口」。
+  // Canvas UI preference: whether to expand the compiled interface details on node cards
+  // (display only). Interfaces are a compile artifact, not a drawing primitive — the
+  // connect gesture is always node-to-node, and ports are allocated by the backend.
+  // So interface details are collapsed by default and expanded on demand, to avoid
+  // misleading the user into thinking "connecting a line = selecting an interface/port".
   showInterfaces: boolean;
   setShowInterfaces: (show: boolean) => void;
 
-  // 选中状态
+  // Selection state
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
   selectedDomainId: string | null;
   language: UILanguage;
   setLanguage: (lang: UILanguage) => void;
 
-  // Project 操作
+  // Project operations
   setProject: (project: Partial<Project>) => void;
 
   // Domain CRUD
@@ -86,10 +89,11 @@ interface TopologyState {
 
   // Edge CRUD
   addEdge: (edge: Edge) => void;
-  // 为指定主链路 edge 创建一条备份链路（role: 'backup'）：复制 from/to/type/transport/
-  // endpoint_host，但不复制端口与任何 pin（备份链路自有独立分配，由后端按 edge 重新 pin）。
-  // 追加后选中新边并返回其 id；primaryEdgeId 不存在时返回 null。
-  // 参见 docs/spec/data-model/edge.md（§Parallel links）。
+  // Creates a backup link (role: 'backup') for the given primary-link edge: copies
+  // from/to/type/transport/endpoint_host, but not the ports or any pin (a backup link has
+  // its own independent allocation, re-pinned per edge by the backend). After appending,
+  // selects the new edge and returns its id; returns null when primaryEdgeId does not exist.
+  // See docs/spec/data-model/edge.md (§Parallel links).
   addBackupEdge: (primaryEdgeId: string) => string | null;
   updateEdge: (id: string, updates: Partial<Edge>) => void;
   // mergeServerAllocations overlays the server's per-edge compiled allocation (the
@@ -106,19 +110,20 @@ interface TopologyState {
   //     save-time, so even a force-Save never drops a NAT pin the operator never saw.
   mergeServerAllocations: (serverEdges: Edge[], baseEdges?: Edge[]) => void;
   removeEdge: (id: string) => void;
-  // 当某节点的 public_endpoints 主机变更/移除时，同步指向它的 edge 上快照的 endpoint_host
+  // When a node's public_endpoints host changes/is removed, reconcile the endpoint_host
+  // snapshotted on the edges that point at it.
   reconcileEdgeEndpoints: (
     nodeId: string,
     oldHost: string,
     newHost: string | null
   ) => void;
 
-  // 选中
+  // Selection
   selectNode: (id: string | null) => void;
   selectEdge: (id: string | null) => void;
   selectDomain: (id: string | null) => void;
 
-  // API 操作
+  // API operations
   validate: () => Promise<void>;
   compile: () => Promise<void>;
   // setCompileResult overwrites the compile result directly (without running the local
@@ -129,29 +134,38 @@ interface TopologyState {
   exportArtifacts: () => Promise<void>;
   downloadDeployScript: (format: 'sh' | 'ps1') => Promise<void>;
 
-  // 工具
+  // Utilities
   getTopology: () => Topology;
-  // fromServer 标记本次加载是否来自控制器服务端 hydration（区别于本地导入/快照）：服务端
-  // 拉来的设计含机密 fleet 数据（公网 IP/SSH 目标），controller 模式下绝不能落盘或在登出后
-  // 残留。见 canvasFromServer 的安全不变量。
+  // fromServer marks whether this load came from a controller server-side hydration (as
+  // opposed to a local import/snapshot): a design pulled from the server contains
+  // confidential fleet data (public IPs / SSH targets) that must never be persisted to
+  // disk or left behind after logout in controller mode. See the canvasFromServer security
+  // invariant.
   loadTopology: (topo: Topology, fromServer?: boolean) => void;
-  // 画布来源（安全不变量）：true 表示当前画布内容是「服务端权威的机密数据」——它由一次服务端
-  // hydration 写入（loadTopology(topo,true)），或由一次 deploy() 写到服务端后标记（部署后本地画布
-  // 即等同服务端权威副本）；其后的本地编辑仍视为派生机密数据。controller 模式下为 true 时：
-  // ①不持久化到 localStorage（partialize 置空），②登出/会话失效时清空（controllerStore），
-  // ③未登录时从登录门「切回本地」是整画布重置而非保图。本地原创工作（导入/新建/reset）置 false，
-  // 正常持久化——那是用户自有数据。
-  // 已知边界（均为 minor，刻意取舍）：(a) 与服务端字节完全相同的「空对空」no-op hydration 提前
-  // 返回，不改来源标记——但此时本地与服务端无差异，无机密可泄漏；(b) 尚未部署、也非服务端来的
-  // 「controller 模式草稿」标记为 false 以便登出后保留未保存草稿（代价：本机登出态可见，敏感度低于
-  // 已部署的 fleet 数据）；一旦部署即转为 true 受保护。
+  // Canvas provenance (security invariant): true means the current canvas content is
+  // "server-authoritative confidential data" — written either by a server hydration
+  // (loadTopology(topo,true)) or marked after a deploy() pushes it to the server (post-deploy,
+  // the local canvas equals the server-authoritative copy); subsequent local edits are still
+  // treated as derived confidential data. When true in controller mode: (1) it is not
+  // persisted to localStorage (partialize blanks it out), (2) it is cleared on logout/session
+  // invalidation (controllerStore), (3) "switch back to local" from the login gate while
+  // logged out is a full canvas reset rather than a save. Original local work
+  // (import/new/reset) sets it false and persists normally — that is the user's own data.
+  // Known edge cases (all minor, deliberate trade-offs): (a) a byte-identical "empty to empty"
+  // no-op hydration returns early and does not change the provenance flag — but at that point
+  // local and server are identical, so no secret can leak; (b) a "controller-mode draft" that
+  // is neither deployed nor server-derived is marked false so an unsaved draft survives logout
+  // (cost: visible in the logged-out state on this machine, lower sensitivity than deployed
+  // fleet data); once deployed it flips to true and becomes protected.
   canvasFromServer: boolean;
   setCanvasFromServer: (v: boolean) => void;
   reset: () => void;
-  // 模式边界清洗（plan-5，D6）：controller→local 切换时调用。图（project/domains/节点身份/
-  // edges）保留，但清空一切密钥材料与编译产物——私钥/公钥、overlay_ip、edge 的 compiled_port
-  // 与 pinned_* 分配、alloc_schema_version、编译历史/结果。下次本地编译会重新生成一套干净的
-  // 密钥与分配。切换是有损操作，调用方须先经用户确认。
+  // Mode-boundary scrub (plan-5, D6): called on a controller→local switch. The graph
+  // (project/domains/node identity/edges) is kept, but all key material and compile artifacts
+  // are cleared — private/public keys, overlay_ip, the edge's compiled_port and pinned_*
+  // allocations, alloc_schema_version, and compile history/results. The next local compile
+  // regenerates a clean set of keys and allocations. The switch is lossy, so the caller must
+  // get user confirmation first.
   purgeModeBoundaryState: () => void;
   // clearStrandedKeys clears the key material of every node that has a WireGuard PUBLIC key but no
   // PRIVATE key — the "pinned pubkey, no privkey" state that the stateless air-gap compiler cannot
@@ -180,11 +194,14 @@ const defaultProject: Project = {
   version: '0.1.0',
 };
 
-// UX-3：新工作区预置一个默认网络域，使“连接两台公网服务器”的首位用户无需先理解
-// CIDR/分配模式就能立即添加节点（去掉了“先建域”的不透明前置门槛）。
-// CIDR 选用 10.20.0.0/24 —— 刻意避开 10.10.0.0/24（transit 地址池），否则会与
-// 每条链路的 transit IP 冲突。transit_cidr 留空，让后端沿用其 10.10.0.0/24 默认值。
-// 每次调用返回全新对象/数组，避免共享引用被后续状态变更原地改写。
+// UX-3: a new workspace is seeded with one default network domain so the first-time user
+// trying to "connect two public servers" can add nodes immediately without first having to
+// understand CIDR / allocation mode (removing the opaque "create a domain first" prerequisite).
+// The CIDR is 10.20.0.0/24 — deliberately avoiding 10.10.0.0/24 (the transit address pool),
+// which would otherwise collide with each link's transit IP. transit_cidr is left empty so the
+// backend keeps using its 10.10.0.0/24 default.
+// Each call returns a fresh object/array so a shared reference cannot be mutated in place by
+// later state changes.
 const defaultDomainId = 'domain-default';
 
 function makeDefaultDomains(): Domain[] {
@@ -231,10 +248,11 @@ async function readApiErrorMessage(res: Response, fallbackKey: MessageKey, lang:
 export const useTopologyStore = create<TopologyState>()(
   persist(
     (set, get) => ({
-      // 初始数据
-      // UX-3：种入默认网络域（见 makeDefaultDomains 注释）。已持久化的工作区在 rehydrate
-      // 时会用 localStorage 中的 domains 覆盖此初始值（persist 默认浅合并 + partialize 持久化
-      // domains），因此既有项目不受影响，只有全新工作区才会看到这个默认域。
+      // Initial data
+      // UX-3: seed the default network domain (see the makeDefaultDomains comment). An already
+      // persisted workspace overrides this initial value with the domains from localStorage on
+      // rehydrate (persist's default shallow merge + partialize persisting domains), so existing
+      // projects are unaffected; only a brand-new workspace sees this default domain.
       project: { ...defaultProject },
       domains: makeDefaultDomains(),
       nodes: [],
@@ -253,7 +271,8 @@ export const useTopologyStore = create<TopologyState>()(
         language: defaultLanguage,
       importKeysDropped: 0,
       importClearedKeys: 0,
-      // 默认 false：全新/本地工作区不是服务端机密数据。仅 hydrateFromServer 会置 true。
+      // Default false: a brand-new/local workspace is not server-side confidential data. Only
+      // hydrateFromServer sets it true.
       canvasFromServer: false,
 
       setCanvasFromServer: (v) => set({ canvasFromServer: v }),
@@ -280,10 +299,10 @@ export const useTopologyStore = create<TopologyState>()(
         return cleared;
       },
 
-  // UI
+  // UI preferences
   setShowInterfaces: (show) => set({ showInterfaces: show }),
 
-  // Project
+  // Project operations
   setProject: (updates) =>
     set((state) => ({ project: { ...state.project, ...updates } })),
 
@@ -306,9 +325,9 @@ export const useTopologyStore = create<TopologyState>()(
 
       return {
         domains: state.domains.filter((d) => d.id !== id),
-        // 同时移除归属此 domain 的节点
+        // Also remove the nodes belonging to this domain
         nodes: state.nodes.filter((n) => n.domain_id !== id),
-        // 同时移除与被删除节点关联的边，避免孤儿 edge
+        // Also remove the edges associated with the removed nodes, to avoid orphan edges
         edges: state.edges.filter(
           (e) => !removedNodeIDs.has(e.from_node_id) && !removedNodeIDs.has(e.to_node_id)
         ),
@@ -347,7 +366,7 @@ export const useTopologyStore = create<TopologyState>()(
   removeNode: (id) =>
     set((state) => ({
       nodes: state.nodes.filter((n) => n.id !== id),
-      // 同时移除关联的边
+      // Also remove the associated edges
       edges: state.edges.filter(
         (e) => e.from_node_id !== id && e.to_node_id !== id
       ),
@@ -371,11 +390,12 @@ export const useTopologyStore = create<TopologyState>()(
   addEdge: (edge) =>
     set((state) => ({ edges: [...state.edges, edge] })),
 
-  // 复制主链路 edge → 备份链路（role: 'backup'）。只复制逻辑链路意图字段
-  // （from/to/type/transport/endpoint_host），不复制 compiled_port/endpoint_port 与
-  // 任何 pin：备份链路必须拥有独立的端口 / transit IP / 链路本地地址，由后端按 edge 重新分配。
-  // 追加后通过 selectEdge 语义选中新边（清空 node/domain 选中），返回新边 id；找不到则返回 null。
-  // 参见 docs/spec/data-model/edge.md（§Parallel links）。
+  // Copies a primary-link edge → backup link (role: 'backup'). Only the logical-link intent
+  // fields are copied (from/to/type/transport/endpoint_host); compiled_port/endpoint_port and
+  // any pin are NOT — a backup link must own an independent port / transit IP / link-local
+  // address, re-allocated per edge by the backend. After appending, selects the new edge with
+  // selectEdge semantics (clears node/domain selection) and returns the new edge id; returns
+  // null if not found. See docs/spec/data-model/edge.md (§Parallel links).
   addBackupEdge: (primaryEdgeId) => {
     const primary = get().edges.find((e) => e.id === primaryEdgeId);
     if (!primary) return null;
@@ -446,10 +466,13 @@ export const useTopologyStore = create<TopologyState>()(
       selectedEdgeId: state.selectedEdgeId === id ? null : state.selectedEdgeId,
     })),
 
-  // 节点 public_endpoints 发生变更时，把指向该节点、且快照了旧主机的 edge 同步过来。
-  // newHost 为字符串：主机被改名 → 改写 endpoint_host 并清空陈旧的 compiled_port。
-  // newHost 为 null：该主机被移除 → 清空 endpoint_host / endpoint_port / compiled_port，
-  // 让连接退回“后端自动解析”状态，避免拨向已不存在的目标。
+  // When a node's public_endpoints change, reconcile the edges that point at that node and
+  // had snapshotted the old host.
+  // newHost is a string: the host was renamed → rewrite endpoint_host and clear the stale
+  // compiled_port.
+  // newHost is null: the host was removed → clear endpoint_host / endpoint_port / compiled_port,
+  // letting the connection fall back to "backend auto-resolves", to avoid dialing a target that
+  // no longer exists.
   reconcileEdgeEndpoints: (nodeId, oldHost, newHost) =>
     set((state) => {
       if (!oldHost) return { edges: state.edges };
@@ -472,24 +495,26 @@ export const useTopologyStore = create<TopologyState>()(
       return changed ? { edges } : { edges: state.edges };
     }),
 
-  // 选中
+  // Selection
   selectNode: (id) => set({ selectedNodeId: id, selectedEdgeId: null, selectedDomainId: null }),
   selectEdge: (id) => set({ selectedEdgeId: id, selectedNodeId: null, selectedDomainId: null }),
   selectDomain: (id) => set({ selectedDomainId: id, selectedNodeId: null, selectedEdgeId: null }),
 
-  // 获取完整拓扑
+  // Get the full topology
   getTopology: () => {
     const { project, domains, nodes, edges, allocSchemaVersion } = get();
     const topo: Topology = { project, domains, nodes, edges };
-    // Spec E 规则 R0：仅在已编译（>0）时回送版本号，让编译器写入的值原样往返。
+    // Spec E rule R0: echo the version number only when compiled (>0), so the value written
+    // by the compiler round-trips verbatim.
     if (allocSchemaVersion > 0) {
       topo.alloc_schema_version = allocSchemaVersion;
     }
     return topo;
   },
 
-  // 导出当前设计为 JSON 下载。filename 可选（默认 <project.id>.json）——hydration 的
-  // 一次性备份（plan-4，D9）用它命名 pre-hydration-backup-<date>.json。
+  // Exports the current design as a JSON download. filename is optional (defaults to
+  // <project.id>.json) — the one-time pre-hydration backup (plan-4, D9) uses it to name
+  // pre-hydration-backup-<date>.json.
   exportProject: (filename?: string) => {
     const topo = get().getTopology();
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(topo, null, 2));
@@ -506,8 +531,9 @@ export const useTopologyStore = create<TopologyState>()(
       const text = await file.text();
       let topo = JSON.parse(text) as Topology;
       if (topo.project && topo.domains && topo.nodes && topo.edges) {
-        // D45/D55：route_policies 为保留特性，校验会拒绝非空数组。导入时若文件携带了
-        // 非空 route_policies，则剥离它并通过 error 状态给出可见提示，避免静默丢弃。
+        // D45/D55: route_policies is a reserved feature, and validation rejects a non-empty
+        // array. On import, if the file carries a non-empty route_policies, strip it and surface
+        // a visible notice via the error state, to avoid silently dropping it.
         const hasReservedRoutePolicies =
           Array.isArray(topo.route_policies) && topo.route_policies.length > 0;
         if (hasReservedRoutePolicies) {
@@ -525,8 +551,8 @@ export const useTopologyStore = create<TopologyState>()(
           topo = result.topo;
           keysDropped = result.dropped;
         }
-        // loadTopology 只接收四个切片 + 版本号，这里先加载再补提示，
-        // 因为 loadTopology 会清空 error。
+        // loadTopology only accepts the four slices + the version number, so load first and add
+        // the notice afterward, because loadTopology clears error.
         get().loadTopology(topo);
         // Local-mode import of a pubkey-only file (e.g. a controller-exported design, which carries
         // no private keys) would otherwise strand every node in GenerateKeys case (b) — a per-node
@@ -537,8 +563,9 @@ export const useTopologyStore = create<TopologyState>()(
         if (useControllerStore.getState().mode === 'local') {
           clearedKeys = get().clearStrandedKeys();
         }
-        // 总是写入（含 0）：一次干净导入（0 个被占位）必须清掉上一次导入残留的「N 个被
-        // 占位」横幅，否则提示会粘滞（plan-5 review）。
+        // Always write (including 0): a clean import (0 placeholdered) must clear the "N
+        // placeholdered" banner left over from the previous import, otherwise the notice sticks
+        // (plan-5 review).
         set({ importKeysDropped: keysDropped, importClearedKeys: clearedKeys });
         if (hasReservedRoutePolicies) {
           const { language } = get();
@@ -554,9 +581,11 @@ export const useTopologyStore = create<TopologyState>()(
     }
   },
 
-  // 加载拓扑（导入项目 / 恢复快照）。保持四切片语义：只接收 project/domains/nodes/edges，
-  // 外加 Spec E 规则 R0 的 alloc_schema_version（文件中存在时读取，否则归零）。
-  // D75：清空历史与选中状态，避免导入的新项目与上一份项目的快照做无意义的 diff。
+  // Loads a topology (import a project / restore a snapshot). Preserves the four-slice
+  // semantics: only accepts project/domains/nodes/edges, plus Spec E rule R0's
+  // alloc_schema_version (read when present in the file, otherwise reset to zero).
+  // D75: clear history and selection state, to avoid a meaningless diff between the newly
+  // imported project and the previous project's snapshot.
   loadTopology: (topo, fromServer = false) =>
     set({
       project: topo.project,
@@ -574,17 +603,21 @@ export const useTopologyStore = create<TopologyState>()(
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,
-      // 本地导入/快照恢复默认 false；只有服务端 hydration 传 true。原子设置（与切片同一次 set），
-      // 避免「先 false 落盘服务端数据、再翻 true」的瞬态持久化窗口。
+      // Local import/snapshot restore defaults to false; only a server hydration passes true.
+      // Atomic set (in the same set() as the slices), to avoid a transient persistence window
+      // of "persist server data as false first, then flip to true".
       canvasFromServer: fromServer,
     }),
 
-  // 模式边界清洗（plan-5，D6）：controller→local 切换的有损动作。图保留（project/domains/
-  // 节点身份/edges/能力/endpoint/ssh 等），但每个节点的密钥材料（私钥/公钥/fixed 标志）与
-  // overlay_ip、每条 edge 的编译产物（compiled_port + 全部 pinned_* 分配）、拓扑级
-  // alloc_schema_version、以及编译历史/结果一并清空。这样下次本地编译会重新生成一套干净、
-  // 自洽的密钥与分配，绝不把舰队（fleet）用过的密钥残留在浏览器里。字段逐一显式枚举（而非
-  // 模式匹配），新增 secret/pin 字段时须同步更新这里（plan-5.5 插入点的清洗清单完整性风险）。
+  // Mode-boundary scrub (plan-5, D6): the lossy action on a controller→local switch. The graph
+  // is kept (project/domains/node identity/edges/capabilities/endpoint/ssh, etc.), but each
+  // node's key material (private/public keys/fixed flag) and overlay_ip, every edge's compile
+  // artifacts (compiled_port + all pinned_* allocations), the topology-level
+  // alloc_schema_version, and compile history/results are all cleared. This way the next local
+  // compile regenerates a clean, self-consistent set of keys and allocations, never leaving
+  // fleet-used keys behind in the browser. Fields are enumerated explicitly one by one (rather
+  // than by pattern match), so when a secret/pin field is added it must be updated here too
+  // (the scrub-list-completeness risk of the plan-5.5 insertion point).
   purgeModeBoundaryState: () =>
     set((state) => ({
       nodes: state.nodes.map((n) => ({
@@ -608,24 +641,28 @@ export const useTopologyStore = create<TopologyState>()(
       history: [],
       validateResult: null,
       compileResult: null,
-      // 切到本地模式后，控制器模式导入残留的「已占位」横幅也一并清掉（plan-5 review）。
+      // After switching to local mode, also clear the "placeholdered" banner left over from a
+      // controller-mode import (plan-5 review).
       importKeysDropped: 0,
       importClearedKeys: 0,
       error: null,
       selectedNodeId: null,
       selectedEdgeId: null,
       selectedDomainId: null,
-      // 切回本地后图归操作员本地所有，不再是服务端机密镜像：清除来源标记，恢复正常持久化。
+      // Once switched back to local, the graph belongs to the operator locally and is no longer
+      // a server confidential mirror: clear the provenance flag and restore normal persistence.
       canvasFromServer: false,
     })),
 
-  // 重置
-  // D75：与 loadTopology 一致，连同历史与版本号一并清空，避免残留快照在下一份项目里继续 diff。
+  // Reset
+  // D75: consistent with loadTopology, clear history and the version number too, to avoid a
+  // leftover snapshot continuing to diff against the next project.
   reset: () =>
     set({
       project: { ...defaultProject },
-      // UX-3：与初始状态保持一致 —— 重置后仍预置默认网络域，避免把用户重新丢回
-      // “没有域、添加节点按钮被禁用”的死胡同。
+      // UX-3: consistent with the initial state — after a reset the default network domain is
+      // still seeded, to avoid dropping the user back into the "no domain, add-node button
+      // disabled" dead end.
       domains: makeDefaultDomains(),
       nodes: [],
       edges: [],
@@ -643,7 +680,7 @@ export const useTopologyStore = create<TopologyState>()(
   flushWorkspace: () =>
     set((state) => ({
       project: { ...defaultProject },
-      // UX-3：与 reset / 初始状态保持一致，预置默认网络域。
+      // UX-3: consistent with reset / the initial state, seed the default network domain.
       domains: makeDefaultDomains(),
       nodes: [],
       edges: [],
@@ -661,15 +698,17 @@ export const useTopologyStore = create<TopologyState>()(
       canvasFromServer: false,
     })),
 
-  // API: 校验
+  // API: validate
   validate: async () => {
     set({ isValidating: true, error: null });
     try {
       const topo = get().getTopology();
-      // 控制器模式下 /api/validate 已置于 operator-auth 之后（plan-12 / T6）。该路由就在面板自身
-      // （operator）源上，httpOnly session cookie 会随同源请求自动带上；附上 operator 凭据让 POST 通过：
-      // 优先 Bearer（内存里的 session/break-glass token，免 CSRF），刷新后无内存 token 时回退到
-      // cookie + 双提交 CSRF 头（与 controllerClient 的 configOf 一致）。本地模式不加任何头（路由公开）。
+      // In controller mode /api/validate sits behind operator-auth (plan-12 / T6). The route is
+      // on the panel's own (operator) origin, so the httpOnly session cookie is sent automatically
+      // with the same-origin request; attach operator credentials so the POST passes: prefer
+      // Bearer (the in-memory session/break-glass token, CSRF-free), and after a refresh with no
+      // in-memory token, fall back to cookie + double-submit CSRF header (consistent with
+      // controllerClient's configOf). Local mode adds no headers (the route is public).
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const cs = useControllerStore.getState();
       if (cs.mode === 'controller') {
@@ -689,13 +728,13 @@ export const useTopologyStore = create<TopologyState>()(
       set({ validateResult: data, isValidating: false });
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : '校验请求失败',
+        error: err instanceof Error ? err.message : 'Validation request failed',
         isValidating: false,
       });
     }
   },
 
-  // API: 编译
+  // API: compile
   compile: async () => {
     // Defense-in-depth: /api/compile is the air-gap path — it generates/reconstructs WireGuard
     // keys client-side and needs private keys in the design. Controller mode is zero-knowledge
@@ -749,7 +788,8 @@ export const useTopologyStore = create<TopologyState>()(
         domains: data.topology.domains,
         nodes: data.topology.nodes,
         edges: data.topology.edges,
-        // Spec E 规则 R0：把编译器写入的分配方案版本号回吸到 store，保证下次编译与持久化都带上它。
+        // Spec E rule R0: pull the allocation-scheme version number written by the compiler back
+        // into the store, so the next compile and persistence both carry it.
         allocSchemaVersion: data.topology.alloc_schema_version ?? state.allocSchemaVersion,
         history: [newHistoryEntry, ...state.history].slice(0, 5), // keep last 5
       }));
@@ -761,7 +801,7 @@ export const useTopologyStore = create<TopologyState>()(
     }
   },
 
-  // API: 导出
+  // API: export
   exportArtifacts: async () => {
     // Defense-in-depth, parity with compile(): /api/export is an air-gap path that
     // generates WireGuard keys server-side from the design and bundles them into the
@@ -802,14 +842,14 @@ export const useTopologyStore = create<TopologyState>()(
       URL.revokeObjectURL(url);
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : '导出请求失败',
+        error: err instanceof Error ? err.message : 'Export request failed',
       });
     }
   },
 
   clearHistory: () => set({ history: [] }),
 
-  // API: 下载部署脚本
+  // API: download deploy script
   downloadDeployScript: async (format: 'sh' | 'ps1') => {
     // Defense-in-depth, parity with compile()/exportArtifacts(): /api/deploy-script is
     // an air-gap path that compiles the design (key generation included) server-side.
@@ -854,14 +894,18 @@ export const useTopologyStore = create<TopologyState>()(
       name: 'topology-storage',
       // We only persist these properties to avoid saving volatile UI state like isCompiling or errors
       partialize: (state) => {
-        // 安全不变量（controller server-authoritative）：服务端 hydrate 来的设计含机密 fleet
-        // 数据（公网 IP/SSH 目标）。controller 模式下绝不把它落盘——否则登出后任何拿到浏览器的
-        // 人都能从 localStorage 读出（或一键「切回本地」渲染出来）。D1 说画布是「可丢弃的镜像」：
-        // 登录会从服务端重新 hydrate，故无需持久化。本地模式、或本地原创工作（canvasFromServer
-        // =false）照常持久化——那是用户自己机器上的自有数据，不是机密镜像。mode 跨 store 惰性读取
-        // （与 importProject 同一手法，运行时取值规避模块级循环依赖）。init-safety：本 store 未配置
-        // persist version/migrate，故 partialize 不会在模块初始化期（hydrate 阶段）被调用——首次调用
-        // 发生在两个 store 都已就绪后的用户态 set()，此时 useControllerStore.getState() 必定可用。
+        // Security invariant (controller server-authoritative): a design hydrated from the
+        // server contains confidential fleet data (public IPs / SSH targets). In controller mode
+        // it must never be persisted to disk — otherwise anyone who gets the browser after logout
+        // could read it from localStorage (or render it by one-click "switch back to local"). D1
+        // says the canvas is a "disposable mirror": logging in re-hydrates from the server, so
+        // there is no need to persist. Local mode, or original local work (canvasFromServer=false),
+        // persists as usual — that is the user's own data on their own machine, not a confidential
+        // mirror. mode is read lazily across stores (same technique as importProject, a runtime
+        // lookup to avoid a module-level circular dependency). init-safety: this store configures
+        // no persist version/migrate, so partialize is not called during module init (the hydrate
+        // phase) — the first call happens on a user-driven set() after both stores are ready, at
+        // which point useControllerStore.getState() is guaranteed available.
         const serverHeld =
           state.canvasFromServer && useControllerStore.getState().mode === 'controller';
         return {
@@ -869,12 +913,15 @@ export const useTopologyStore = create<TopologyState>()(
           domains: serverHeld ? makeDefaultDomains() : state.domains,
           nodes: serverHeld ? [] : state.nodes,
           edges: serverHeld ? [] : state.edges,
-          // Spec E 规则 R0：版本号也要持久化，刷新页面后仍能往返编译器写入的分配方案。
+          // Spec E rule R0: persist the version number too, so the allocation scheme written by
+          // the compiler still round-trips after a page refresh.
           allocSchemaVersion: serverHeld ? 0 : state.allocSchemaVersion,
-          // 来源标记本身要持久化：刷新后若仍未登录，登录门据此知道画布是机密镜像而整体重置。
+          // The provenance flag itself must be persisted: after a refresh, if still logged out,
+          // the login gate uses it to know the canvas is a confidential mirror and reset it wholesale.
           canvasFromServer: state.canvasFromServer,
           language: state.language,
-          // 画布偏好与语言同级持久化：刷新后保持用户选择的接口详情展开状态。
+          // The canvas preference is persisted at the same level as language: keep the user's
+          // chosen interface-detail expansion state after a refresh.
           showInterfaces: state.showInterfaces,
         };
       },

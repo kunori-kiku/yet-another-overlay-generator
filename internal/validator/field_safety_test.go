@@ -6,23 +6,24 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// TestValidateSchema_NodeNameCharset 覆盖节点名称字符集校验（D15 纵深防御）。
-// 节点名称会被派生为 WireGuard 接口名并被插值进以 root 身份执行的安装脚本，
-// 因此含 shell 元字符（引号、反引号、$、; 等）的名称必须在 schema 阶段被拒绝，
-// 而仅含字母、数字、空格、点、下划线、连字符的名称应当通过。
+// TestValidateSchema_NodeNameCharset covers node-name charset validation (D15 defense in depth).
+// A node name is derived into a WireGuard interface name and interpolated into install scripts
+// executed as root, so names containing shell metacharacters (quotes, backticks, $, ;, etc.)
+// must be rejected at the schema stage, while names containing only letters, digits, spaces,
+// dots, underscores, and hyphens should pass.
 func TestValidateSchema_NodeNameCharset(t *testing.T) {
 	cases := []struct {
 		name        string
 		nodeName    string
 		expectError bool
 	}{
-		{name: "反引号命令注入", nodeName: "node`id`", expectError: true},
-		{name: "美元符号命令替换", nodeName: "node$(whoami)", expectError: true},
-		{name: "分号链式命令", nodeName: "node; rm -rf /", expectError: true},
-		{name: "双引号闭合", nodeName: `node"evil`, expectError: true},
-		{name: "单引号闭合", nodeName: "node'evil", expectError: true},
-		{name: "干净的连字符名称", nodeName: "node-alpha", expectError: false},
-		{name: "干净的带空格点下划线名称", nodeName: "Web 1.east_a", expectError: false},
+		{name: "backtick command injection", nodeName: "node`id`", expectError: true},
+		{name: "dollar-sign command substitution", nodeName: "node$(whoami)", expectError: true},
+		{name: "semicolon command chaining", nodeName: "node; rm -rf /", expectError: true},
+		{name: "double-quote break-out", nodeName: `node"evil`, expectError: true},
+		{name: "single-quote break-out", nodeName: "node'evil", expectError: true},
+		{name: "clean hyphenated name", nodeName: "node-alpha", expectError: false},
+		{name: "clean name with space, dot, underscore", nodeName: "Web 1.east_a", expectError: false},
 	}
 
 	for _, tc := range cases {
@@ -35,7 +36,7 @@ func TestValidateSchema_NodeNameCharset(t *testing.T) {
 			} else {
 				for _, e := range result.Errors {
 					if contains(e.Field, "nodes[0].name") {
-						t.Errorf("名称 %q 不应触发字符集错误，却得到：%s", tc.nodeName, e.Error())
+						t.Errorf("name %q should not trigger a charset error, but got: %s", tc.nodeName, e.Error())
 					}
 				}
 			}
@@ -43,9 +44,10 @@ func TestValidateSchema_NodeNameCharset(t *testing.T) {
 	}
 }
 
-// TestValidateSchema_SSHFieldCharset 覆盖 SSH 字段字符集校验（D44）。
-// ssh_host / ssh_alias / ssh_user 非空时会被插值进操作员本机执行的 bash 与
-// PowerShell 部署脚本，含空白或 shell 元字符的取值必须被拒绝，干净取值应通过。
+// TestValidateSchema_SSHFieldCharset covers SSH-field charset validation (D44).
+// When non-empty, ssh_host / ssh_alias / ssh_user are interpolated into the bash and
+// PowerShell deploy scripts executed on the operator's machine; values containing
+// whitespace or shell metacharacters must be rejected, and clean values should pass.
 func TestValidateSchema_SSHFieldCharset(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -54,49 +56,49 @@ func TestValidateSchema_SSHFieldCharset(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:        "ssh_host 命令替换",
+			name:        "ssh_host command substitution",
 			mutate:      func(n *model.Node) { n.SSHHost = "host$(reboot)" },
 			field:       "nodes[0].ssh_host",
 			expectError: true,
 		},
 		{
-			name:        "ssh_host 含空白",
+			name:        "ssh_host contains whitespace",
 			mutate:      func(n *model.Node) { n.SSHHost = "1.2.3.4 evil" },
 			field:       "nodes[0].ssh_host",
 			expectError: true,
 		},
 		{
-			name:        "ssh_alias 反引号",
+			name:        "ssh_alias backtick",
 			mutate:      func(n *model.Node) { n.SSHAlias = "alias`id`" },
 			field:       "nodes[0].ssh_alias",
 			expectError: true,
 		},
 		{
-			name:        "ssh_user 分号",
+			name:        "ssh_user semicolon",
 			mutate:      func(n *model.Node) { n.SSHUser = "root;reboot" },
 			field:       "nodes[0].ssh_user",
 			expectError: true,
 		},
 		{
-			name:        "干净的 ssh_host",
+			name:        "clean ssh_host",
 			mutate:      func(n *model.Node) { n.SSHHost = "203.0.113.5" },
 			field:       "nodes[0].ssh_host",
 			expectError: false,
 		},
 		{
-			name:        "干净的 ssh_host 含冒号与 at",
+			name:        "clean ssh_host with colon and at",
 			mutate:      func(n *model.Node) { n.SSHHost = "user@host.example.com:2222" },
 			field:       "nodes[0].ssh_host",
 			expectError: false,
 		},
 		{
-			name:        "干净的 ssh_user",
+			name:        "clean ssh_user",
 			mutate:      func(n *model.Node) { n.SSHUser = "deploy-user_1" },
 			field:       "nodes[0].ssh_user",
 			expectError: false,
 		},
 		{
-			name:        "空 SSH 字段不报错",
+			name:        "empty SSH fields do not error",
 			mutate:      func(n *model.Node) { n.SSHHost = ""; n.SSHAlias = ""; n.SSHUser = "" },
 			field:       "nodes[0].ssh_host",
 			expectError: false,
@@ -113,7 +115,7 @@ func TestValidateSchema_SSHFieldCharset(t *testing.T) {
 			} else {
 				for _, e := range result.Errors {
 					if contains(e.Field, tc.field) {
-						t.Errorf("字段 %s 不应触发字符集错误，却得到：%s", tc.field, e.Error())
+						t.Errorf("field %s should not trigger a charset error, but got: %s", tc.field, e.Error())
 					}
 				}
 			}
@@ -167,10 +169,11 @@ func TestValidateSchema_SSHKeyPathCharset(t *testing.T) {
 	}
 }
 
-// portRangeTopology 构造一个最小拓扑：单个 router 节点，给定 hostname，以及连向 peerCount
-// 个对端 peer 的启用边。每条边都是一个去重节点对，因此该 router 会获得 peerCount 个 per-peer
-// 接口，生效监听端口范围为 [51820, 51820+peerCount-1]（基准端口统一为 51820），用于覆盖
-// 生效端口范围校验（D11）。
+// portRangeTopology builds a minimal topology: a single router node with the given hostname,
+// plus enabled edges to peerCount peers. Each edge is a deduplicated node pair, so this router
+// gets peerCount per-peer interfaces, with an effective listen-port range of
+// [51820, 51820+peerCount-1] (the base port is uniformly 51820), used to cover effective
+// port-range validation (D11).
 func portRangeTopology(peerCount int, hostname string) *model.Topology {
 	topo := &model.Topology{
 		Project: model.Project{ID: "test-port", Name: "Port Range Test"},
@@ -225,8 +228,8 @@ func portRangeTopology(peerCount int, hostname string) *model.Topology {
 	return topo
 }
 
-// transportTopology 构造一个两节点单边拓扑，边的 transport 由参数指定，用于
-// 覆盖 tcp 保留值告警。
+// transportTopology builds a two-node single-edge topology whose edge transport is given by
+// the parameter, used to cover the tcp reserved-value warning.
 func transportTopology(transport string) *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "test-transport", Name: "Transport Test"},
@@ -245,27 +248,30 @@ func transportTopology(transport string) *model.Topology {
 	}
 }
 
-// TestValidateSchema_TcpTransportNoReservedWarning 覆盖 mimic-tcp-transport 落地后的新契约：
-// tcp 现在是已实现的合法值（链路由 mimic 包裹），schema 阶段既不报 transport 错误，也不再
-// 产生 v1.3.0 的"保留/未实现"告警（该告警已移除）。Linux 端点的语义校验由
-// validateMimicTransport 负责（见 mimic_test.go），不在 schema 层。udp 同样无告警。
+// TestValidateSchema_TcpTransportNoReservedWarning covers the new contract after
+// mimic-tcp-transport landed: tcp is now an implemented, valid value (the link is wrapped by
+// mimic), so the schema stage produces neither a transport error nor the v1.3.0
+// "reserved/unimplemented" warning (that warning has been removed). Semantic validation of the
+// Linux endpoints is handled by validateMimicTransport (see mimic_test.go), not in the schema
+// layer. udp likewise has no warning.
 func TestValidateSchema_TcpTransportNoReservedWarning(t *testing.T) {
 	for _, transport := range []string{"tcp", "udp"} {
 		result := ValidateSchema(transportTopology(transport))
 		for _, e := range result.Errors {
 			if containsSubstring(e.Field, "transport") {
-				t.Fatalf("%s 是合法传输值，不应产生 transport 错误，实际: %v", transport, result.Errors)
+				t.Fatalf("%s is a valid transport value and should not produce a transport error, got: %v", transport, result.Errors)
 			}
 		}
 		for _, w := range result.Warnings {
 			if containsSubstring(w.Field, "transport") {
-				t.Errorf("%s 传输不应再产生 transport 告警（保留告警已移除），实际: %v", transport, result.Warnings)
+				t.Errorf("%s transport should no longer produce a transport warning (the reserved warning was removed), got: %v", transport, result.Warnings)
 			}
 		}
 	}
 }
 
-// itoaTest 是测试内的小整数转字符串助手，避免引入标准库 strconv 以保持测试自包含。
+// itoaTest is a small in-test integer-to-string helper that avoids importing the standard
+// library strconv to keep the test self-contained.
 func itoaTest(n int) string {
 	if n == 0 {
 		return "0"
@@ -285,23 +291,28 @@ func itoaTest(n int) string {
 	return string(buf)
 }
 
-// TestValidateSemantic_EffectivePortRangeInBounds 验证统一基准端口 51820 的节点连向 8 个对端时
-// （端口 51820..51827）不会触发越界错误。基准端口移除后无法再人为构造越界基准——越界规则在
-// base=51820 下需上万个接口才会触发，已退化为防御性保留，故不再单测越界报错路径。
+// TestValidateSemantic_EffectivePortRangeInBounds verifies that a node with the uniform base
+// port 51820, connected to 8 peers (ports 51820..51827), does not trigger an out-of-bounds
+// error. After the base port was removed it is no longer possible to artificially construct an
+// out-of-bounds base -- under base=51820 the overflow rule would require tens of thousands of
+// interfaces to trigger, so it has degenerated into a defensive safeguard, and the overflow
+// error path is no longer unit-tested.
 func TestValidateSemantic_EffectivePortRangeInBounds(t *testing.T) {
 	topo := portRangeTopology(8, "")
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
 		if e.Code == string(CodeNodeEffectivePortRangeOverflow) {
-			t.Errorf("基准 51820 + 8 接口（51820-51827）不应越界，却得到：%s", e.Error())
+			t.Errorf("base 51820 + 8 interfaces (51820-51827) should not overflow, but got: %s", e.Error())
 		}
 	}
 }
 
-// sameHostTopology 构造两个共享同一非空 hostname 的 router 节点，各自连向独立的一组 peer
-// （接口数可独立设置）。基准端口统一为 51820 后，旧的「同主机生效范围重叠」规则已删除——
-// 否则任意两个共置节点都会被误判重叠，从而阻断所有「一机多节点」部署。本助手用于覆盖
-// 共置节点必须校验通过的回归。
+// sameHostTopology builds two router nodes sharing the same non-empty hostname, each connected
+// to an independent set of peers (interface counts settable independently). After the base port
+// became uniformly 51820, the old "same-host effective-range overlap" rule was removed --
+// otherwise any two co-located nodes would be falsely judged to overlap, blocking all
+// "multiple nodes on one machine" deployments. This helper is used to cover the regression that
+// co-located nodes must pass validation.
 func sameHostTopology(hostname string, ifacesA, ifacesB int) *model.Topology {
 	topo := &model.Topology{
 		Project: model.Project{ID: "test-samehost", Name: "Same Host Test"},
@@ -373,16 +384,19 @@ func sameHostTopology(hostname string, ifacesA, ifacesB int) *model.Topology {
 	return topo
 }
 
-// TestValidateSemantic_CoHostedNodesValidateClean 是 listen_port 移除的回归守卫：基准端口统一为
-// 51820 后，两个共享同一 hostname 的节点（各有 >=1 个 per-peer 接口）其生效端口范围必然重叠——
-// 旧的「同主机范围重叠」规则会因此误杀所有「一机多节点」部署，故该规则已删除。此处正是这种共置
-// 场景，断言不再产生生效端口范围越界错误（CodeNodeEffectivePortRangeOverflow）。
+// TestValidateSemantic_CoHostedNodesValidateClean is the regression guard for the listen_port
+// removal: after the base port became uniformly 51820, two nodes sharing the same hostname (each
+// with >=1 per-peer interface) necessarily have overlapping effective port ranges -- the old
+// "same-host range overlap" rule would therefore wrongly kill all "multiple nodes on one
+// machine" deployments, so that rule was removed. This is exactly such a co-located scenario;
+// it asserts no effective port-range overflow error (CodeNodeEffectivePortRangeOverflow) is
+// produced.
 func TestValidateSemantic_CoHostedNodesValidateClean(t *testing.T) {
 	topo := sameHostTopology("shared.example.com", 3, 3)
 	result := ValidateSemantic(topo)
 	for _, e := range result.Errors {
 		if e.Code == string(CodeNodeEffectivePortRangeOverflow) {
-			t.Errorf("共置节点（一机多节点）不应再产生生效端口范围越界错误，却得到：%s", e.Error())
+			t.Errorf("co-located nodes (multiple nodes on one machine) should no longer produce an effective port-range overflow error, but got: %s", e.Error())
 		}
 	}
 }

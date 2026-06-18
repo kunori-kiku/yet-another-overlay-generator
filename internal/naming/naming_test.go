@@ -12,36 +12,37 @@ func TestSafeInstallerFileName(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"简单小写", "alpha", "alpha.install.sh"},
-		{"大写转小写", "Alpha", "alpha.install.sh"},
-		{"空格转连字符", "Web 1", "web-1.install.sh"},
-		{"已是连字符形式", "web-1", "web-1.install.sh"},
-		{"特殊字符与折叠", "Edge Router", "edge-router.install.sh"},
-		{"全特殊字符回退为 node", "  ***  ", "node.install.sh"},
-		{"下划线保留", "my_server", "my_server.install.sh"},
+		{"simple lowercase", "alpha", "alpha.install.sh"},
+		{"uppercase to lowercase", "Alpha", "alpha.install.sh"},
+		{"spaces to hyphens", "Web 1", "web-1.install.sh"},
+		{"already hyphenated", "web-1", "web-1.install.sh"},
+		{"special chars and folding", "Edge Router", "edge-router.install.sh"},
+		{"all-special falls back to node", "  ***  ", "node.install.sh"},
+		{"underscores preserved", "my_server", "my_server.install.sh"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := SafeInstallerFileName(tt.input)
 			if got != tt.expected {
-				t.Errorf("SafeInstallerFileName(%q) = %q, 期望 %q", tt.input, got, tt.expected)
+				t.Errorf("SafeInstallerFileName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
 }
 
-// TestSafeInstallerFileNameCollision 验证 Spec D 中举例的两个不同原始名称
-// （"Web 1" 与 "web-1"）会归一化到同一个安装脚本文件名——这正是 N2 唯一性
-// 不变量需要语义校验拦截的碰撞情形。
+// TestSafeInstallerFileNameCollision verifies that the two distinct original
+// names cited in Spec D ("Web 1" and "web-1") normalize to the same installer
+// script filename -- precisely the collision case that the N2 uniqueness
+// invariant requires semantic validation to catch.
 func TestSafeInstallerFileNameCollision(t *testing.T) {
 	a := SafeInstallerFileName("Web 1")
 	b := SafeInstallerFileName("web-1")
 	if a != b {
-		t.Fatalf("期望 %q 与 %q 归一化到同一文件名，实际 %q != %q", "Web 1", "web-1", a, b)
+		t.Fatalf("expected %q and %q to normalize to the same filename, got %q != %q", "Web 1", "web-1", a, b)
 	}
 	if a != "web-1.install.sh" {
-		t.Fatalf("碰撞结果应为 %q，实际 %q", "web-1.install.sh", a)
+		t.Fatalf("collision result should be %q, got %q", "web-1.install.sh", a)
 	}
 }
 
@@ -51,122 +52,134 @@ func TestWgInterfaceName(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"短名称", "alpha", "wg-alpha"},
-		{"另一个短名称", "beta", "wg-beta"},
-		{"大写转小写", "Alpha", "wg-alpha"},
-		{"下划线转连字符", "my_server", "wg-my-server"},
-		{"点转连字符", "db.east", "wg-db-east"},
+		{"short name", "alpha", "wg-alpha"},
+		{"another short name", "beta", "wg-beta"},
+		{"uppercase to lowercase", "Alpha", "wg-alpha"},
+		{"underscores to hyphens", "my_server", "wg-my-server"},
+		{"dots to hyphens", "db.east", "wg-db-east"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := WgInterfaceName(tt.input)
 			if got != tt.expected {
-				t.Errorf("WgInterfaceName(%q) = %q, 期望 %q", tt.input, got, tt.expected)
+				t.Errorf("WgInterfaceName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 			if len(got) > 15 {
-				t.Errorf("WgInterfaceName(%q) = %q 超过 15 字符", tt.input, got)
+				t.Errorf("WgInterfaceName(%q) = %q exceeds 15 characters", tt.input, got)
 			}
 		})
 	}
 }
 
-// TestWgInterfaceNameLongHashBranch 验证超过 15 字符（清理后 >12 字符）的名称
-// 走哈希后缀分支，且输出与算法定义逐字节一致：wg- 前缀 + clean[:8] + sha256(name)[:4]。
-// 期望的哈希片段在测试中独立计算，以钉死实现行为。
+// TestWgInterfaceNameLongHashBranch verifies that a name exceeding 15 characters
+// (>12 characters after cleaning) takes the hash-suffix branch, and that the
+// output is byte-for-byte identical to the algorithm definition: the wg- prefix
+// + clean[:8] + sha256(name)[:4]. The expected hash fragment is computed
+// independently in the test to pin down the implementation behavior.
 func TestWgInterfaceNameLongHashBranch(t *testing.T) {
 	const input = "my-long-server-name"
 
-	// 独立复算期望值：清理后该名称全部为合法字符，长度 19，"wg-"+clean = 22 > 15，
-	// 因此走长路径：wg- + clean[:8] + sha256(input)[:4]。
+	// Recompute the expected value independently: after cleaning, every
+	// character of this name is valid, length 19, "wg-"+clean = 22 > 15, so it
+	// takes the long path: wg- + clean[:8] + sha256(input)[:4].
 	clean := "my-long-server-name"
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(input)))
 	expected := "wg-" + clean[:8] + hash[:4]
 
 	got := WgInterfaceName(input)
 	if got != expected {
-		t.Fatalf("WgInterfaceName(%q) = %q, 期望哈希分支输出 %q", input, got, expected)
+		t.Fatalf("WgInterfaceName(%q) = %q, want hash-branch output %q", input, got, expected)
 	}
 	if len(got) != 15 {
-		t.Fatalf("哈希分支输出应恰为 15 字符，实际 %q (len=%d)", got, len(got))
+		t.Fatalf("hash-branch output should be exactly 15 characters, got %q (len=%d)", got, len(got))
 	}
 }
 
-// TestWgInterfaceNamePinnedLongName 钉死历史实现中已固定的长名称用例，
-// 确保从 internal/compiler 迁移后行为完全不变。
+// TestWgInterfaceNamePinnedLongName pins a long-name case that was already
+// fixed in the historical implementation, ensuring behavior is completely
+// unchanged after the migration out of internal/compiler.
 func TestWgInterfaceNamePinnedLongName(t *testing.T) {
 	got := WgInterfaceName("abcdefghijklmnop")
 	const expected = "wg-abcdefghf39d"
 	if got != expected {
-		t.Fatalf("WgInterfaceName(%q) = %q, 期望 %q", "abcdefghijklmnop", got, expected)
+		t.Fatalf("WgInterfaceName(%q) = %q, want %q", "abcdefghijklmnop", got, expected)
 	}
 }
 
-// TestWgInterfaceNameForEdgePrimaryByteIdentical 验证 backup == false 时，
-// 边感知接口名与 WgInterfaceName(remoteName) 逐字节一致——包括短名称、需要清理的
-// 名称，以及走哈希长路径（清理后 >12 字符）的名称。部署中的集群因此零接口重命名。
+// TestWgInterfaceNameForEdgePrimaryByteIdentical verifies that when backup ==
+// false, the edge-aware interface name is byte-for-byte identical to
+// WgInterfaceName(remoteName) -- including short names, names that need
+// cleaning, and names that take the long hash path (>12 characters after
+// cleaning). Deployed clusters therefore see zero interface renames.
 func TestWgInterfaceNameForEdgePrimaryByteIdentical(t *testing.T) {
 	names := []string{
-		"alpha",               // 短路径
-		"my_server",           // 需清理（下划线 → 连字符）
-		"db.east",             // 需清理（点 → 连字符）
-		"my-long-server-name", // 长路径，走哈希后缀
-		"abcdefghijklmnop",    // 历史钉死长名称
+		"alpha",               // short path
+		"my_server",           // needs cleaning (underscore -> hyphen)
+		"db.east",             // needs cleaning (dot -> hyphen)
+		"my-long-server-name", // long path, takes hash suffix
+		"abcdefghijklmnop",    // historical pinned long name
 	}
 	for _, n := range names {
-		// edgeID 在 primary 路径上必须被忽略，故传入一个非空值以确认它不影响结果。
+		// edgeID must be ignored on the primary path, so pass a non-empty value
+		// to confirm it does not affect the result.
 		got := WgInterfaceNameForEdge(n, "some-edge-id", false)
 		want := WgInterfaceName(n)
 		if got != want {
-			t.Errorf("primary 路径应与 WgInterfaceName 逐字节一致：WgInterfaceNameForEdge(%q,_,false) = %q, 期望 %q", n, got, want)
+			t.Errorf("primary path should be byte-for-byte identical to WgInterfaceName: WgInterfaceNameForEdge(%q,_,false) = %q, want %q", n, got, want)
 		}
 		if len(got) > 15 {
-			t.Errorf("WgInterfaceNameForEdge(%q,_,false) = %q 超过 15 字符", n, got)
+			t.Errorf("WgInterfaceNameForEdge(%q,_,false) = %q exceeds 15 characters", n, got)
 		}
 	}
 }
 
-// TestWgInterfaceNameForEdgeBackupShape 验证 backup == true 时无条件走长路径形状：
-// wg- + clean[:8] + sha256(remoteName+"|"+edgeID)[:4]，且恰为 15 字符。
-// 即便 remoteName 很短（primary 路径本会走短路径），backup 路径也仍取哈希后缀。
+// TestWgInterfaceNameForEdgeBackupShape verifies that when backup == true the
+// long-path shape is taken unconditionally: wg- + clean[:8] +
+// sha256(remoteName+"|"+edgeID)[:4], and is exactly 15 characters. Even when
+// remoteName is short (the primary path would take the short path), the backup
+// path still takes the hash suffix.
 func TestWgInterfaceNameForEdgeBackupShape(t *testing.T) {
 	const remote = "alpha"
 	const edgeID = "edge-1"
 
 	clean := "alpha"
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(remote+"|"+edgeID)))
-	// clean 长度 5 < 8，故 clean[:8] 受实际长度约束，取全部 "alpha"。
+	// clean has length 5 < 8, so clean[:8] is bounded by the actual length and
+	// yields the whole of "alpha".
 	expected := "wg-" + clean + hash[:4]
 
 	got := WgInterfaceNameForEdge(remote, edgeID, true)
 	if got != expected {
-		t.Fatalf("WgInterfaceNameForEdge(%q,%q,true) = %q, 期望 %q", remote, edgeID, got, expected)
+		t.Fatalf("WgInterfaceNameForEdge(%q,%q,true) = %q, want %q", remote, edgeID, got, expected)
 	}
 }
 
-// TestWgInterfaceNameForEdgeBackupDistinct 验证朝向同一远端的两条 backup edge
-// 因 edge ID 不同而产生不同的接口名（4 位十六进制后缀分叉）。
+// TestWgInterfaceNameForEdgeBackupDistinct verifies that two backup edges
+// toward the same remote produce different interface names because their edge
+// IDs differ (the 4-hex-digit suffix diverges).
 func TestWgInterfaceNameForEdgeBackupDistinct(t *testing.T) {
 	const remote = "gateway-node"
 	a := WgInterfaceNameForEdge(remote, "edge-a", true)
 	b := WgInterfaceNameForEdge(remote, "edge-b", true)
 	if a == b {
-		t.Fatalf("同一远端、不同 edge ID 的两条 backup 接口名应不同，实际均为 %q", a)
+		t.Fatalf("two backup interface names with the same remote but different edge IDs should differ, both were %q", a)
 	}
-	// backup 接口名也必须区别于 primary 接口名。
+	// The backup interface name must also differ from the primary interface name.
 	if a == WgInterfaceName(remote) {
-		t.Fatalf("backup 接口名不应与 primary 接口名相同：均为 %q", a)
+		t.Fatalf("backup interface name should not equal the primary interface name: both were %q", a)
 	}
 }
 
-// TestWgInterfaceNameForEdgeLengthBound 验证 backup 路径对短名称与长名称都不超过
-// 15 字符（哈希形状的预算上界恰为 3 + 8 + 4 = 15）。
+// TestWgInterfaceNameForEdgeLengthBound verifies that the backup path stays
+// within 15 characters for both short and long names (the hash shape's budget
+// ceiling is exactly 3 + 8 + 4 = 15).
 func TestWgInterfaceNameForEdgeLengthBound(t *testing.T) {
 	cases := []struct {
 		remote string
 		edgeID string
 	}{
-		// 极短远端名、短远端名、长远端名各一例。
+		// One example each of a very short, a short, and a long remote name.
 		{"a", "e1"},
 		{"alpha", "edge-1"},
 		{"my-long-server-name-that-is-very-long", "edge-xyz-123"},
@@ -174,19 +187,20 @@ func TestWgInterfaceNameForEdgeLengthBound(t *testing.T) {
 	for _, c := range cases {
 		got := WgInterfaceNameForEdge(c.remote, c.edgeID, true)
 		if len(got) > 15 {
-			t.Errorf("WgInterfaceNameForEdge(%q,%q,true) = %q 超过 15 字符 (len=%d)", c.remote, c.edgeID, got, len(got))
+			t.Errorf("WgInterfaceNameForEdge(%q,%q,true) = %q exceeds 15 characters (len=%d)", c.remote, c.edgeID, got, len(got))
 		}
 	}
 }
 
-// TestWgInterfaceNameForEdgeDeterminism 验证相同输入恒产出相同输出（编译应可重现）。
+// TestWgInterfaceNameForEdgeDeterminism verifies that the same input always
+// produces the same output (compilation should be reproducible).
 func TestWgInterfaceNameForEdgeDeterminism(t *testing.T) {
 	const remote = "edge-router"
 	const edgeID = "edge-42"
 	first := WgInterfaceNameForEdge(remote, edgeID, true)
 	for i := 0; i < 5; i++ {
 		if got := WgInterfaceNameForEdge(remote, edgeID, true); got != first {
-			t.Fatalf("相同输入应确定性产出相同接口名：第 %d 次得到 %q, 首次为 %q", i, got, first)
+			t.Fatalf("the same input should deterministically produce the same interface name: iteration %d got %q, first was %q", i, got, first)
 		}
 	}
 }

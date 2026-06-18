@@ -6,20 +6,23 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// canBeDialed 判断一个节点在没有 endpoint 的情况下能否被对端主动拨入。
+// canBeDialed reports whether a node can be dialed into by a peer without having an endpoint.
 //
-// 该函数在语义校验阶段调用，此时角色能力尚未被 InferCapabilitiesFromRole 推导
-// （能力推导发生在 compiler.Compile 的能力推导 Pass，晚于本校验），因此除了已显式声明的
-// HasPublicIP / CanAcceptInbound 之外，还必须把 relay 角色当作可接受入站——
-// relay 在能力推导后必然得到 CanAcceptInbound=true。这与本文件下方
-// hasOutboundToPublic 判定以及目标可达性告警中的 relay 例外保持一致。
+// It is called during the semantic-validation phase, at which point role capabilities have not yet
+// been derived by InferCapabilitiesFromRole (capability inference happens in compiler.Compile's
+// capability-inference pass, which is later than this validation). So in addition to the explicitly
+// declared HasPublicIP / CanAcceptInbound, it must also treat the relay role as accepting inbound —
+// a relay is guaranteed to get CanAcceptInbound=true after capability inference. This is consistent
+// with the hasOutboundToPublic check below and with the relay exception in the target-reachability
+// warning.
 func canBeDialed(node *model.Node) bool {
 	return node.Capabilities.HasPublicIP || node.Capabilities.CanAcceptInbound || node.Role == "relay"
 }
 
-// hasEnabledEndpointEdge 判断 from->to 方向上是否存在一条启用且携带 endpoint_host 的边。
-// 只要某个方向带有 endpoint_host，WireGuard 对端即可主动拨号建立隧道；
-// 反之，没有任何 Endpoint 的 WireGuard 对端永远只能被动等待、不会主动发起握手。
+// hasEnabledEndpointEdge reports whether an enabled edge carrying an endpoint_host exists in the
+// from->to direction. As long as some direction carries an endpoint_host, the WireGuard peer can
+// actively dial out to establish the tunnel; conversely, a WireGuard peer with no Endpoint at all
+// can only ever wait passively and will never initiate a handshake.
 func hasEnabledEndpointEdge(topo *model.Topology, fromID, toID string) bool {
 	for _, edge := range topo.Edges {
 		if !edge.IsEnabled {
@@ -32,7 +35,10 @@ func hasEnabledEndpointEdge(topo *model.Topology, fromID, toID string) bool {
 	return false
 }
 
-// validateNATReachability NAT
+// validateNATReachability checks NAT reachability across the topology: it warns when an edge's
+// target cannot be reached, escalates a provably-undeliverable double-NAT direct link with no
+// endpoint to an error (D50 dead link), and warns when a node with no public IP and no inbound
+// acceptance has no outbound edge toward a publicly reachable peer.
 func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
 	for i, edge := range topo.Edges {
 		if !edge.IsEnabled {
@@ -47,21 +53,23 @@ func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Nod
 
 		prefix := fmt.Sprintf("edges[%d]", i)
 
-		// 目标不可达：目标节点既无公网 IP 也不接受入站连接，且不是 relay
+		// Target unreachable: the target node has no public IP, does not accept inbound connections, and is not a relay
 		if !toNode.Capabilities.HasPublicIP && !toNode.Capabilities.CanAcceptInbound && toNode.Role != "relay" {
 			result.AddWarning(prefix, CodeNATTargetUnreachable, P{"edge", edge.ID}, P{"node", toNode.Name})
 		}
 
-		// 双端 NAT：两端均无公网 IP 的 direct 链路，且未指定 endpoint。
+		// Double-ended NAT: a direct link where both ends lack a public IP and no endpoint is specified.
 		if !fromNode.Capabilities.HasPublicIP && !toNode.Capabilities.HasPublicIP {
 			if edge.Type == "direct" && edge.EndpointHost == "" {
-				// D50：判定这条边是否「确凿死链」。死链需同时满足两个条件，二者皆成立时
-				// 没有任何一方能发起握手，隧道在编译期即可证明无法建立——升级为 error。
-				//   1. 没有任何方向带 endpoint_host：本方向（from->to）无 endpoint_host
-				//      （进入此分支已保证），且反向（to->from）也不存在带 endpoint_host 的启用边；
-				//   2. 两端都无法被拨入：双方均不接受入站（含 relay 角色例外）。
-				// 任一条件不成立（例如反向边带 endpoint，或某一端是 relay / 可接受入站），
-				// 则仍可能建链，保持原有 warning。
+				// D50: decide whether this edge is a "definite dead link". A dead link requires both
+				// conditions to hold simultaneously; when both hold, neither side can initiate a
+				// handshake and the tunnel is provably unbuildable at compile time — escalate to an error.
+				//   1. No direction carries an endpoint_host: this direction (from->to) has no
+				//      endpoint_host (already guaranteed by entering this branch), and the reverse
+				//      direction (to->from) also has no enabled edge carrying an endpoint_host;
+				//   2. Neither end can be dialed: both sides reject inbound (including the relay-role exception).
+				// If either condition fails (e.g. a reverse edge carries an endpoint, or one end is a
+				// relay / accepts inbound), a link may still be established, so keep the original warning.
 				reverseHasEndpoint := hasEnabledEndpointEdge(topo, toNode.ID, fromNode.ID)
 				neitherCanBeDialed := !canBeDialed(fromNode) && !canBeDialed(toNode)
 
@@ -74,10 +82,12 @@ func validateNATReachability(topo *model.Topology, nodeMap map[string]*model.Nod
 		}
 	}
 
-	// ：/relay  Edge
+	// Per-node check: a node behind NAT (no public IP, no inbound acceptance) must have at least one
+	// outbound edge toward a publicly reachable peer (public IP / accepts inbound / relay), otherwise
+	// it has no way to reach the overlay.
 	for _, node := range topo.Nodes {
 		if node.Capabilities.HasPublicIP || node.Capabilities.CanAcceptInbound {
-			continue //
+			continue // The node is itself reachable; nothing to check.
 		}
 
 		hasOutboundToPublic := false

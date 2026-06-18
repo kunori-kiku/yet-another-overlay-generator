@@ -13,7 +13,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 )
 
-// NodeArtifact 节点产物
+// NodeArtifact holds the rendered configuration artifacts for a single node.
 type NodeArtifact struct {
 	NodeID        string
 	NodeName      string
@@ -23,13 +23,13 @@ type NodeArtifact struct {
 	InstallScript string
 }
 
-// ExportResult 导出结果
+// ExportResult reports the outcome of an export run.
 type ExportResult struct {
 	OutputDir string
 	Nodes     []string
 }
 
-// Export 导出所有节点的配置产物
+// Export writes the rendered configuration artifacts for every node to outputDir.
 //
 // The exported bundle's checksums.sha256 (and, when signing is on, bundle.sig) cover
 // ONLY the rendered artifacts — every per-peer wireguard/<iface>.conf, babel/babeld.conf
@@ -56,7 +56,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 	}
 	signEnabled := signer != nil
 
-	// 按节点导出
+	// Export per node.
 	for _, node := range result.Topology.Nodes {
 		// Validate node name to prevent path traversal
 		if err := validateSafeName(node.Name); err != nil {
@@ -65,7 +65,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		nodeDir := filepath.Join(outputDir, node.Name)
 		isClient := node.Role == "client"
 
-		// 创建目录
+		// Create directories.
 		dirs := []string{
 			filepath.Join(nodeDir, "wireguard"),
 			filepath.Join(nodeDir, "sysctl"),
@@ -79,11 +79,11 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
-		// 写入 per-peer WireGuard 配置
-		// WireGuardConfigs 的 key 格式为 "nodeID:interfaceName"
+		// Write the per-peer WireGuard configs.
+		// WireGuardConfigs keys have the format "nodeID:interfaceName".
 		var wgFiles []string
 		for configKey, wgConf := range result.WireGuardConfigs {
-			// 解析 key
+			// Parse the key.
 			parts := strings.SplitN(configKey, ":", 2)
 			if len(parts) != 2 || parts[0] != node.ID {
 				continue
@@ -97,7 +97,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			wgFiles = append(wgFiles, "wireguard/"+confFileName)
 		}
 
-		// 写入 Babel 配置
+		// Write the Babel config.
 		if babelConf, ok := result.BabelConfigs[node.ID]; ok {
 			path := filepath.Join(nodeDir, "babel", "babeld.conf")
 			if err := os.WriteFile(path, []byte(babelConf), 0644); err != nil {
@@ -105,7 +105,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
-		// 写入 sysctl 配置
+		// Write the sysctl config.
 		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
 			path := filepath.Join(nodeDir, "sysctl", "99-overlay.conf")
 			if err := os.WriteFile(path, []byte(sysctlConf), 0644); err != nil {
@@ -113,7 +113,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
-		// 写入安装脚本
+		// Write the install script.
 		if script, ok := result.InstallScripts[node.ID]; ok {
 			path := filepath.Join(nodeDir, "install.sh")
 			if err := os.WriteFile(path, []byte(script), 0755); err != nil {
@@ -121,10 +121,11 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			}
 		}
 
-		// 写入 artifacts.json（仅当配置了 mimic/agent catalog 时由 render.All 填充）。它是已签名
-		// 的 bundleFiles 成员，携带 mimic 的 GitHub-.deb pin（asset+sha256）；安装脚本在完成完整性
-		// 校验后才读取其中的 pin。未配置 catalog ⇒ 内容为空 ⇒ 整份省略，保持 air-gap bundle 逐字
-		// 不变（D4）。
+		// Write artifacts.json (populated by render.All only when a mimic/agent catalog is
+		// configured). It is a signed bundleFiles member that carries mimic's GitHub-.deb pin
+		// (asset+sha256); the install script reads the pin only after passing the integrity
+		// check. No catalog configured => empty content => the whole file is omitted, keeping
+		// the air-gap bundle byte-for-byte unchanged (D4).
 		artifactsJSON, hasArtifacts := result.ArtifactsJSON[node.ID]
 		hasArtifacts = hasArtifacts && artifactsJSON != ""
 		if hasArtifacts {
@@ -180,7 +181,7 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write checksums.sha256: %w", err))
 		}
 
-		// 构建文件列表
+		// Build the file list.
 		var allFiles []string
 		allFiles = append(allFiles, wgFiles...)
 		if !isClient {
@@ -244,11 +245,12 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write manifest: %w", err))
 		}
 
-		// 写入 README
+		// Write the README.
 		//
-		// D76: README 的 Architecture 行此前硬编码为 "per-peer WireGuard interfaces"，
-		// 即使是 client bundle（单接口 wg0）也照写，与同目录 manifest.json 的 architecture
-		// 字段自相矛盾。改为复用上面 manifest 用的同一个 architecture 值，保持二者一致。
+		// D76: the README's Architecture line was previously hardcoded to "per-peer WireGuard
+		// interfaces", written even for a client bundle (single wg0 interface), contradicting
+		// the architecture field of the manifest.json in the same directory. Reuse the same
+		// architecture value the manifest uses above so the two stay consistent.
 		readme := fmt.Sprintf("Node: %s\nOverlay IP: %s\nRole: %s\nArchitecture: %s\n\nUsage:\n  1. Copy this directory to the target host\n  2. Run: sudo bash install.sh\n",
 			node.Name, node.OverlayIP, node.Role, architecture)
 		readmePath := filepath.Join(nodeDir, "README.txt")

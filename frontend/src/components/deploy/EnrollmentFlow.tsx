@@ -4,9 +4,11 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 import { localizeError } from '../../lib/localizeError';
 
-// 注册流程：操作员从拓扑里选一个节点 + 一个 TTL，铸造一次性 enrollment token，
-// 然后把生成的 token 与可复制的 `agent enroll ...` 命令交给节点持有者执行。
-// token 仅此一次可见（控制器只存其哈希），因此展示后不再回显，刷新即丢失。
+// EnrollmentFlow: the operator picks a node from the topology + a TTL, mints a single-use enrollment
+// token, then hands the generated token and the copyable `agent enroll ...` command to the node
+// holder to run.
+// The token is visible only once (the controller stores only its hash), so it is not echoed again
+// after display and is lost on refresh.
 export function EnrollmentFlow() {
   const language = useTopologyStore((s) => s.language);
   const topoNodes = useTopologyStore((s) => s.nodes);
@@ -20,35 +22,41 @@ export function EnrollmentFlow() {
   const [token, setToken] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
   const [mintError, setMintError] = useState<string | null>(null);
-  // 服务端对「为不在设计里的 node-id 铸造令牌」给出的非阻塞警告（plan-6）。
+  // The server's non-blocking warning for "minting a token for a node-id not in the design" (plan-6).
   const [mintWarning, setMintWarning] = useState<string>('');
   const [copied, setCopied] = useState<'' | 'enroll' | 'bootstrap'>('');
 
-  // Agent 前缀是服务端在 GET /settings 里只读上报的（YAOG_AGENT_PATH_PREFIX，已归一化为
-  // '' 或 '/<seg>'）：面板不再让操作员手工镜像第二个环境变量（plan-1.5，server-authoritative）。
-  // 注意绝不能用操作员前缀（pathPrefix mirror）——那属于面板自己的 API base，两者拆分后不同。
-  // settings 为 null（未加载/拉取失败）时前缀未知——此时给出显式警告而非静默生成可能 404 的命令。
+  // The agent prefix is reported read-only by the server in GET /settings (YAOG_AGENT_PATH_PREFIX,
+  // already normalized to '' or '/<seg>'): the panel no longer makes the operator mirror a second
+  // environment variable by hand (plan-1.5, server-authoritative).
+  // Note: never use the operator prefix (the pathPrefix mirror) — that belongs to the panel's own API
+  // base, which differs once the two are split.
+  // When settings is null (not loaded / fetch failed) the prefix is unknown — surface an explicit
+  // warning rather than silently generating a command that may 404.
   const agentPrefixKnown = settings !== null;
   const agentPrefix = settings?.agentPathPrefix ?? '';
 
-  // 组合 agent 基址 + 前缀：若操作员历史上已把前缀手工写进了基址（旧版命令不补前缀，
-  // 这曾是唯一能用的写法），不再二次追加，避免升级后出现 /s3cr3t/s3cr3t 双前缀 404。
+  // Combine the agent base + prefix: if the operator historically wrote the prefix into the base by
+  // hand (older commands did not append the prefix, which was once the only way that worked), don't
+  // append it again, avoiding a /s3cr3t/s3cr3t double-prefix 404 after the upgrade.
   const withAgentPrefix = (base: string) => {
     const trimmed = base.replace(/\/+$/, '');
     if (!agentPrefix || trimmed.endsWith(agentPrefix)) return trimmed;
     return `${trimmed}${agentPrefix}`;
   };
 
-  // enroll 命令文案：节点持有者在目标机上手动执行它来加入控制器（需先装好 agent 二进制）。
-  // --controller 是 scheme://host[:port] + agent 前缀（agent 自己补 /api/v1/agent/）。
+  // The enroll command text: the node holder runs it manually on the target host to join the
+  // controller (the agent binary must be installed first).
+  // --controller is scheme://host[:port] + agent prefix (the agent appends /api/v1/agent/ itself).
   const enrollCommand =
     token && nodeId
       ? `agent enroll --controller ${withAgentPrefix(agentBaseURL)} --node-id ${nodeId} --token ${token}`
       : '';
 
-  // 一键 bootstrap 命令（plan-5.2）：节点持有者以 root 跑一次，自动下载 agent、入网、应用、
-  // 并装上 systemd 守护进程。curl 目标是服务端配置的 public agent URL（未配置则回退到
-  // agentBaseURL）+ 服务端上报的 agent secret 前缀 + /api/v1/agent/bootstrap。
+  // The one-shot bootstrap command (plan-5.2): the node holder runs it once as root to automatically
+  // download the agent, enroll, apply, and install the systemd daemon. The curl target is the
+  // server-configured public agent URL (falling back to agentBaseURL when unset) + the server-reported
+  // agent secret prefix + /api/v1/agent/bootstrap.
   const bootstrapURL = `${withAgentPrefix(settings?.publicAgentURL || agentBaseURL)}/api/v1/agent/bootstrap`;
   const bootstrapCommand =
     token && nodeId
@@ -79,7 +87,8 @@ export function EnrollmentFlow() {
       await navigator.clipboard.writeText(text);
       setCopied(which);
     } catch {
-      // 剪贴板不可用（非安全上下文等）：保持命令可手动选中复制，不报错。
+      // Clipboard unavailable (non-secure context, etc.): keep the command selectable for manual copy,
+      // do not raise an error.
       setCopied('');
     }
   };
@@ -144,9 +153,11 @@ export function EnrollmentFlow() {
         </p>
       )}
 
-      {/* 设计成员告警（plan-6，warn-not-block）：令牌已铸造可用，但该 node-id 不在当前设计里，
-          stage 时会被跳过——提示操作员把它加进设计（或确认是预先铸造）。mintWarning 只作为「是否
-          告警」的开关；文案在前端按语言渲染（服务端串是英文，不再原样拼接）。 */}
+      {/* Design-membership warning (plan-6, warn-not-block): the token was minted and is usable, but
+          this node-id is not in the current design and will be skipped at stage time — prompt the
+          operator to add it to the design (or confirm it was minted ahead of time). mintWarning is
+          only a "warn or not" switch; the copy is rendered on the frontend per language (the server
+          string is English and is no longer concatenated verbatim). */}
       {mintWarning && (
         <p className="text-xs text-amber-300 bg-amber-900/20 px-2 py-1 rounded break-all">
           ⚠️{' '}
@@ -172,7 +183,8 @@ export function EnrollmentFlow() {
               {token}
             </pre>
           </div>
-          {/* 推荐：一键 bootstrap（自动装 agent + 入网 + 应用 + systemd 守护）。 */}
+          {/* Recommended: one-shot bootstrap (auto-installs the agent + enrolls + applies + systemd
+              daemon). */}
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">
@@ -194,7 +206,7 @@ export function EnrollmentFlow() {
               </p>
             )}
           </div>
-          {/* 备选：手动 enroll（节点已自带 agent 二进制时）。 */}
+          {/* Alternative: manual enroll (when the node already ships with the agent binary). */}
           <div>
             <div className="flex items-center justify-between">
               <label className="text-[10px] text-gray-500 uppercase tracking-wider">

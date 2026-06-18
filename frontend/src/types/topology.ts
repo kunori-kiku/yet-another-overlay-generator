@@ -1,4 +1,4 @@
-// 前端数据模型 — 与 Go 后端 model 保持一致
+// Frontend data model — kept consistent with the Go backend model
 
 export interface Topology {
   project: Project;
@@ -6,8 +6,9 @@ export interface Topology {
   nodes: Node[];
   edges: Edge[];
   route_policies?: RoutePolicy[];
-  // 分配方案版本号：由编译器写入并原样回传，使将来 pin 格式变更可以检测/迁移旧分配。
-  // 参见 docs/spec/compiler/allocation-stability.md（不变量 I10）。
+  // Allocation-scheme version number: written by the compiler and echoed back verbatim, so that a future
+  // pin-format change can detect/migrate old allocations.
+  // See docs/spec/compiler/allocation-stability.md (invariant I10).
   alloc_schema_version?: number;
 }
 
@@ -26,8 +27,8 @@ export interface Domain {
   allocation_mode: 'auto' | 'manual';
   routing_mode: 'static' | 'babel' | 'none';
   reserved_ranges?: string[];
-  // 每个 domain 的 transit 地址池，缺省 10.10.0.0/24；transit IP 现按 CIDR 逐域分配。
-  // 对应 Go 模型的 Domain.TransitCIDR；参见 docs/spec/api/wire-contract.md（Domain 字段表）。
+  // Per-domain transit address pool, defaulting to 10.10.0.0/24; transit IPs are now allocated per domain from this CIDR.
+  // Corresponds to Domain.TransitCIDR in the Go model; see docs/spec/api/wire-contract.md (Domain field table).
   transit_cidr?: string;
 }
 
@@ -40,8 +41,8 @@ export interface Node {
   domain_id: string;
   overlay_ip?: string;
   mtu?: number;
-  // mimic（transport=tcp）的 XDP 附着模式：留空/'skb' = 通用 XDP（默认，兼容性最好）；
-  // 'native' = 驱动级 XDP（更快，需网卡支持）。详见 docs/spec/artifacts/mimic.md。
+  // XDP attach mode for mimic (transport=tcp): empty/'skb' = generic XDP (default, best compatibility);
+  // 'native' = driver-level XDP (faster, requires NIC support). See docs/spec/artifacts/mimic.md for details.
   xdp_mode?: 'skb' | 'native';
   capabilities: NodeCapabilities;
   fixed_private_key?: boolean;
@@ -81,16 +82,16 @@ export interface Edge {
   compiled_port?: number;  // read-only: actual port set by compiler
   priority?: number;
   weight?: number;
-  // 平行链路的链路角色：'backup' 自成一条独立链路（独立 WG 接口/端口/transit/链路本地地址），
-  // 无角色或 'primary' 归入「主链路类」（同一节点对的 A→B + B→A 仍合并为单条双向隧道）。
-  // 参见 docs/spec/data-model/edge.md（§Parallel links）。
+  // Link role for parallel links: 'backup' forms its own independent link (independent WG interface/port/transit/link-local address),
+  // while no role or 'primary' belongs to the "primary-link class" (A->B + B->A for the same node pair are still merged into a single bidirectional tunnel).
+  // See docs/spec/data-model/edge.md (§Parallel links).
   role?: 'primary' | 'backup';
   transport?: 'udp' | 'tcp';
   is_enabled: boolean;
   notes?: string;
-  // 分配 pin：由编译器写入，并原样回传，使重新编译时保留既有分配（端口 / transit IP /
-  // 链路本地地址），从而新增节点不会扰动既有链路。参见
-  // docs/spec/compiler/allocation-stability.md。
+  // Allocation pins: written by the compiler and echoed back verbatim, so that a recompile preserves existing
+  // allocations (port / transit IP / link-local address), so adding new nodes does not disturb existing links. See
+  // docs/spec/compiler/allocation-stability.md.
   pinned_from_port?: number;
   pinned_to_port?: number;
   pinned_from_transit_ip?: string;
@@ -99,9 +100,9 @@ export interface Edge {
   pinned_to_link_local?: string;
 }
 
-// 保留特性（RESERVED）：route_policies 目前未接入任何 renderer，语义校验会拒绝非空数组。
-// 该类型仅为线缆（wire）兼容保留——请勿基于它构建功能。
-// 参见 docs/spec/api/wire-contract.md（“route_policies is RESERVED”）。
+// RESERVED feature: route_policies is not wired into any renderer yet, and semantic validation rejects a non-empty array.
+// This type is kept only for wire compatibility — do not build features on top of it.
+// See docs/spec/api/wire-contract.md ("route_policies is RESERVED").
 export interface RoutePolicy {
   id: string;
   domain_id: string;
@@ -114,7 +115,7 @@ export interface RoutePolicy {
   apply_to_node_id?: string;
 }
 
-// API 响应类型
+// API response types
 export interface ValidationError {
   field: string;
   // code + params drive client localization via the 'error.<code>' catalog (tValidationError,
@@ -148,11 +149,12 @@ export interface CompileResponse {
   install_scripts: Record<string, string>;
   deploy_scripts: Record<string, string>;
   manifest: CompileManifest;
-  // 非致命提示（双重 NAT、缺少端点的边、孤立节点等）。
-  // 编译路径会运行语义校验并把这些 warning 一并返回，UI 在编译成功后展示。
+  // Non-fatal advisories (double NAT, edges missing an endpoint, orphan nodes, etc.).
+  // The compile path runs semantic validation and returns these warnings alongside; the UI shows them after a successful compile.
   warnings?: ValidationError[];
-  // 仅控制器编译预览（PR6）返回：拓扑中存在但因尚未 enroll 而被排除出本次渲染的节点 ID。
-  // 面板据此提示「N 个节点尚未入网（未编译到）」。air-gap /api/compile 不返回此字段。
+  // Returned only by the controller compile preview (PR6): IDs of nodes that exist in the topology but were excluded
+  // from this render because they are not yet enrolled.
+  // The panel uses this to warn "N nodes not yet enrolled (not compiled)". The air-gap /api/compile does not return this field.
   skipped_unenrolled?: string[];
 }
 

@@ -1,35 +1,37 @@
 package renderer
 
-// BabelRolePreset 描述某个角色的 Babel 链路调参默认值。
-// 这些字段是「每角色可调」的来源，渲染器必须从预设读取而非在模板里写死字面量，
-// 否则按角色调参的能力就不可达（dossier D78）。
+// BabelRolePreset describes the default Babel link-tuning values for a role.
+// These fields are the source of "per-role tunability"; the renderer must read them from
+// the preset rather than hard-coding literals in the template, otherwise the ability to tune
+// per role would be unreachable (dossier D78).
 type BabelRolePreset struct {
-	// 接口的默认 rxcost（0 = 省略 rxcost token，使用 babeld 内置默认；relay 用 96 偏置）。
-	// 边上的 LinkCost > 0 时覆盖本默认值。
+	// Default rxcost for the interface (0 = omit the rxcost token and use babeld's built-in
+	// default; relay uses a bias of 96). An edge's LinkCost > 0 overrides this default.
 	DefaultCost int
 
-	// hello-interval（秒，0 = 省略 token，使用 babeld 内置默认）。
+	// hello-interval (seconds; 0 = omit the token and use babeld's built-in default).
 	HelloInterval int
 
-	// update-interval（秒，0 = 省略 token，使用 babeld 内置默认）。
+	// update-interval (seconds; 0 = omit the token and use babeld's built-in default).
 	UpdateInterval int
 }
 
-// 角色预设的计时器默认值。历史上模板里硬编码为 hello-interval 4 / update-interval 16，
-// Spec（docs/spec/compiler/routing-modes.md「Role-preset timers and control port」）规定
-// 这两个当前默认值现在必须由预设承载，以便后续按角色调参。
+// Timer defaults for the role presets. Historically the template hard-coded
+// hello-interval 4 / update-interval 16; the spec
+// (docs/spec/compiler/routing-modes.md "Role-preset timers and control port") mandates
+// that these two current defaults now be carried by the preset, to allow per-role tuning later.
 const (
-	// defaultHelloInterval 是各角色 hello-interval 的当前默认值（秒）。
+	// defaultHelloInterval is the current default hello-interval for all roles (seconds).
 	defaultHelloInterval = 4
-	// defaultUpdateInterval 是各角色 update-interval 的当前默认值（秒）。
+	// defaultUpdateInterval is the current default update-interval for all roles (seconds).
 	defaultUpdateInterval = 16
 )
 
-// GetBabelRolePreset 返回指定角色的 Babel 预设。
+// GetBabelRolePreset returns the Babel preset for the given role.
 func GetBabelRolePreset(role string) BabelRolePreset {
 	switch role {
 	case "router":
-		// router：默认 cost 走 babeld 内置默认（省略 rxcost）。
+		// router: default cost uses babeld's built-in default (omit rxcost).
 		return BabelRolePreset{
 			DefaultCost:    0,
 			HelloInterval:  defaultHelloInterval,
@@ -37,7 +39,7 @@ func GetBabelRolePreset(role string) BabelRolePreset {
 		}
 
 	case "relay":
-		// relay：偏置较高的 wired-like cost，使路径优选避开中继。
+		// relay: a higher wired-like cost bias so path selection prefers to avoid the relay.
 		return BabelRolePreset{
 			DefaultCost:    96,
 			HelloInterval:  defaultHelloInterval,
@@ -45,7 +47,7 @@ func GetBabelRolePreset(role string) BabelRolePreset {
 		}
 
 	case "gateway":
-		// gateway：默认 cost 走 babeld 内置默认。
+		// gateway: default cost uses babeld's built-in default.
 		return BabelRolePreset{
 			DefaultCost:    0,
 			HelloInterval:  defaultHelloInterval,
@@ -53,7 +55,7 @@ func GetBabelRolePreset(role string) BabelRolePreset {
 		}
 
 	default: // "peer"
-		// peer：默认 cost 走 babeld 内置默认。
+		// peer: default cost uses babeld's built-in default.
 		return BabelRolePreset{
 			DefaultCost:    0,
 			HelloInterval:  defaultHelloInterval,

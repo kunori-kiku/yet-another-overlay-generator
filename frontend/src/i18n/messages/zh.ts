@@ -102,7 +102,7 @@ export const zh: Record<keyof typeof en, string> = {
   'bootstrapSettings.theNodeReachableAgent': "节点可达的 agent 端口地址（一键脚本从这里 curl，agent 也连到这里）。",
   'bootstrapSettings.theseArePersistedServer': "这些设置由服务端持久化，并烘焙进「一键安装」脚本的默认值。修改后保存即对后续注册生效。",
   'bootstrapSettings.whereThePerArch': "per-arch 的 yaog-agent 二进制下载基址。一般无需改。",
-  // Agent 自更新滚动配置卡（controller-panel-rollout-ui plan-3）。
+  // Agent self-update rollout configuration card (controller-panel-rollout-ui plan-3).
   'agentUpdate.heading': "Agent 自更新",
   'agentUpdate.description': "先把签名后的 agent 二进制下发到金丝雀节点，再整队提升。目标版本为空则完全禁用自更新。",
   'agentUpdate.signInToConfigure': "登录后即可配置 agent 滚动更新。",
@@ -145,7 +145,7 @@ export const zh: Record<keyof typeof en, string> = {
   'agentUpdate.fleetConfirmBody': "这会在下一次部署时把目标 agent 版本下发到整个 fleet，而不仅是金丝雀节点。",
   'agentUpdate.cancel': "取消",
   'agentUpdate.fleetConfirmAction': "整队提升",
-  // Mimic GitHub-.deb 目录配置卡（controller-panel-rollout-ui plan-4）。
+  // Mimic GitHub-.deb catalog configuration card (controller-panel-rollout-ui plan-4).
   'mimicCatalog.heading': "Mimic .deb 目录",
   'mimicCatalog.description': "为不自带 mimic 的发行版（Debian 12 / Ubuntu 24.04）从 GitHub 获取、经 SHA-256 固定的 mimic .deb 包。留空 = 仅用发行版自带，无 GitHub 回退。",
   'mimicCatalog.signInToConfigure': "登录后即可配置 mimic 目录。",
@@ -182,7 +182,7 @@ export const zh: Record<keyof typeof en, string> = {
   'mimicCatalog.invalidAsset': "包资产名必须是 .deb 文件名（字母、数字、点、加号、下划线、连字符）。",
   'mimicCatalog.invalidSha': "SHA-256 必须是 64 位十六进制字符。",
   'mimicCatalog.incompletePin': "每个包都需要 codename-arch、资产名和 SHA-256——否则请移除该行。",
-  // 每节点 agent 更新状态徽标 + 实时轮询（controller-panel-rollout-ui plan-5）。
+  // Per-node agent update-status badge + live polling (controller-panel-rollout-ui plan-5).
   'updateStatus.label': "更新",
   'updateStatus.notTargeted': "未纳入",
   'updateStatus.pending': "待更新",
@@ -563,7 +563,7 @@ export const zh: Record<keyof typeof en, string> = {
   'shell.importClearedKeys': "导入：已清除 {count} 个仅有公钥、缺少私钥的节点的密钥——编译时将重新生成。",
 
   'error.generic': '出错了，请重试。',
-  // 基础 apierr 设施码（plan-2/3/3.5b）——始终可本地化的传输层错误。
+  // Base apierr infrastructure codes (plan-2/3/3.5b) — always-localizable transport-layer errors.
   'error.internal': '服务器内部错误，请重试。',
   'error.internal_panic': '服务器发生意外错误。',
   'error.custody_private_key': '拓扑上传包含了 WireGuard 私钥，这违反密钥托管原则——面板必须在上传前于客户端剥离私钥。',
@@ -575,7 +575,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.keygen_privkey_parse_failed': "节点 {node} 的 WireGuard 私钥解析失败：{detail}",
   'error.keygen_pinned_pubkey_no_privkey': "节点 {node} 已固定 WireGuard 公钥，但缺少对应私钥：无状态编译器无法重建它。请从该主机的 /etc/wireguard/<接口>.conf 粘贴在用私钥，或清空两个密钥字段以显式轮换。",
   'error.keygen_generate_failed': "为节点 {node} 生成 WireGuard 密钥失败：{detail}",
-  // 编译期约束码（plan-3.5b）——/api/compile|export|deploy-script 返回的 422 失败。
+  // Compile-time constraint codes (plan-3.5b) — 422 failures returned by /api/compile|export|deploy-script.
   'error.compile_failed': '编译失败，请检查拓扑后重试。',
   'error.compile_transit_pool_exhausted': 'CIDR {cidr} 的 transit 地址池已耗尽；请扩大 transit CIDR 或减少这些节点之间的链路数。',
   'error.compile_transit_cidr_invalid': 'transit CIDR {cidr} 无效：{detail}',
@@ -584,16 +584,16 @@ export const zh: Record<keyof typeof en, string> = {
   'error.compile_overlay_cidr_invalid': '覆盖网 CIDR {cidr} 无效。',
   'error.compile_overlay_pool_exhausted': 'CIDR {cidr} 的覆盖网地址池已耗尽；请扩大网络域 CIDR 或减少节点数。',
   'error.compile_node_unknown_domain': '节点 {node} 引用了未知网络域 {domain}。',
-  // 渲染 + 导出层（plan-3.5b）。
+  // Render + export layer (plan-3.5b).
   'error.render_failed': '渲染部署产物失败。',
   'error.export_unsafe_name': '节点名称 {name} 不适合导出：名称不能为空，且不能为绝对路径或包含路径分隔符或 “..”。',
   'error.export_io_failed': '写入导出产物失败。',
-  // 请求信封（plan-3.5b）——所有接口共用的方法 + 请求体框架。
+  // Request envelope (plan-3.5b) — the method + request-body framing shared by all endpoints.
   'error.method_not_allowed': '该接口仅支持 {method} 请求。',
   'error.req_body_too_large': '请求体超出大小上限（最大 {limit} 字节）。',
   'error.req_body_empty': '请求体为空。',
   'error.req_invalid_body': '无法解析请求体。',
-  // 控制器 HTTP 接口（plan-3.5b）——操作员/代理端点。
+  // Controller HTTP endpoints (plan-3.5b) — operator/agent endpoints.
   'error.internal_identity_missing': '请求缺少已认证的身份。',
   'error.internal_storage': '存储操作失败，请重试。',
   'error.node_not_found': '未找到请求的节点。',
@@ -613,15 +613,15 @@ export const zh: Record<keyof typeof en, string> = {
   'error.staged_manifest_mismatch': '提交的清单与当前暂存清单不一致；请重新获取并重新签名。',
   'error.manifest_signature_invalid': '无法用已固定的凭据验证清单签名。',
   'error.stage_failed': '暂存或提升部署失败。',
-  // 辅助获取发布 pin（controller-panel-rollout-ui plan-1）——操作员 release-pins 接口。
+  // Assisted fetch of release pins (controller-panel-rollout-ui plan-1) — operator release-pins endpoint.
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
   'error.agent_release_fetch_failed': '无法从 {url} 获取发布校验和：{detail}',
   'error.agent_release_sidecar_invalid': '从 {url} 获取的发布校验和不是有效的 SHA-256。',
-  // 捆绑签名锚（persist-signing-anchor）：暂存时若签名密钥缺失/变更则明确报错。
+  // Bundle signing anchor (persist-signing-anchor): fail loudly at stage time if the signing key is missing/changed.
   'error.signing_key_missing': '本 fleet 的捆绑包是签名的，但当前未配置签名密钥（YAOG_BUNDLE_SIGNING_KEY 未设置或不可读）。拒绝暂存未签名的捆绑包——请恢复签名密钥。',
   'error.signing_key_mismatch': '当前配置的捆绑签名密钥与本 fleet 已固定的密钥不一致。请恢复原密钥，或在一次部署时设置 YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 以有意轮换。',
   'error.keystone_rotation_requires_ack': '已固定了一个不同的操作员签名凭据。轮换它会让每个已注册节点失效，直到逐台重新配置（yaog-agent reprovision-keystone）并在新密钥下重新签名部署。请确认轮换以继续。',
-  // 认证 + 会话接口（plan-3.5b）——登录 / passkey / TOTP / bootstrap / 节点 + 操作员认证。
+  // Auth + session endpoints (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator authentication.
   'error.req_bearer_required': '需要有效的 bearer 令牌。',
   'error.auth_credentials_invalid': '用户名或密码错误。',
   'error.req_csrf_invalid': 'CSRF 令牌缺失或无效。',

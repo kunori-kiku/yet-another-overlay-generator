@@ -10,15 +10,18 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// nodeNameCharset 约束节点名称的合法字符集（D15 的纵深防御）。
-// 节点名称会被派生为 WireGuard 接口名，并被插值进以 root 身份执行的安装脚本，
-// 因此必须排除引号、反引号、美元符、分号等 shell 元字符以杜绝命令注入。
-// 仅允许：字母、数字、空格、点、下划线、连字符。
+// nodeNameCharset constrains the legal character set for a node name (defence-in-depth for D15).
+// A node name is derived into a WireGuard interface name and is interpolated into the install
+// script that runs as root, so it must exclude quotes, backticks, dollar signs, semicolons and
+// other shell metacharacters to foreclose command injection.
+// Allowed only: letters, digits, spaces, dots, underscores, and hyphens.
 var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
 
-// sshFieldCharset 约束 SSH 连接字段（ssh_host / ssh_alias / ssh_user）的合法字符集（D44）。
-// 这些字段会被插值进操作员本机执行的 bash 与 PowerShell 部署脚本，
-// 因此必须排除空白字符与一切 shell 元字符。仅允许：字母、数字、点、下划线、冒号、@、连字符。
+// sshFieldCharset constrains the legal character set for the SSH connection fields
+// (ssh_host / ssh_alias / ssh_user) (D44).
+// These fields are interpolated into the bash and PowerShell deploy scripts that run on the
+// operator's own machine, so they must exclude whitespace and every shell metacharacter.
+// Allowed only: letters, digits, dots, underscores, colons, @, and hyphens.
 var sshFieldCharset = regexp.MustCompile(`^[A-Za-z0-9._:@-]+$`)
 
 // sshKeyPathCharset constrains ssh_key_path. Like ssh_host/alias/user it is
@@ -42,21 +45,26 @@ var sshKeyPathCharset = regexp.MustCompile(`^[A-Za-z0-9._:@/\\~ -]+$`)
 // the host never reaches the install script's shell; this is config-integrity defense-in-depth.)
 var endpointHostCharset = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
 
-// routerIDMAC48 约束 Babel router-id 的 MAC-48 形式（D66）：六组以冒号分隔的十六进制对，
-// 如 02:11:22:33:44:55。babeld 也接受 IPv4 形式的 router-id，因此 IPv4 形式由 net.ParseIP
-// 单独判定（见 validateNodesSchema），二者满足其一即合法。
+// routerIDMAC48 constrains the MAC-48 form of a Babel router-id (D66): six colon-separated
+// hexadecimal pairs, e.g. 02:11:22:33:44:55. babeld also accepts an IPv4-form router-id, so the
+// IPv4 form is checked separately by net.ParseIP (see validateNodesSchema); satisfying either
+// form is legal.
 var routerIDMAC48 = regexp.MustCompile(`^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$`)
 
 const (
-	// mtuMinimum 是 WireGuard 接口 MTU 的实用下限：576 为 IPv4 数据报必须支持的最小重组缓冲，
-	// 低于此值 wg-quick 会拒绝接口（生成无法部署的配置）。D64。
+	// mtuMinimum is the practical lower bound for a WireGuard interface MTU: 576 is the minimum
+	// reassembly buffer an IPv4 datagram must support; below this value wg-quick rejects the
+	// interface (producing an undeployable config). D64.
 	mtuMinimum = 576
-	// mtuMaximum 是 MTU 的理论上限（16 位无符号字段）。D64。
+	// mtuMaximum is the theoretical upper bound for the MTU (a 16-bit unsigned field). D64.
 	mtuMaximum = 65535
 )
 
-// ValidateSchema  Schema （ Pass 1）
-// 、、CIDR
+// ValidateSchema runs Pass 1 of validation: the structural schema checks over a topology's
+// project, domains, nodes, and edges (required fields, enum values, CIDR/charset/range
+// well-formedness). It normalizes a few fields in place (e.g. routing_mode, transport) and
+// returns a ValidationResult accumulating every schema error and warning.
+//
 // Topology size bounds (plan-6 item 6): a DoS guard DISTINCT from the HTTP body-size cap.
 // They reject obviously-abusive topologies before the per-entity loops and the O(n²)
 // semantic pass (IP-collision/NAT-reachability) ever run on attacker-controlled bulk. The
@@ -102,16 +110,16 @@ func ValidateSchema(topo *model.Topology) *ValidationResult {
 		return result
 	}
 
-	//  Project
+	// Project
 	validateProjectSchema(topo, result)
 
-	//  Domains
+	// Domains
 	validateDomainsSchema(topo, result)
 
-	//  Nodes
+	// Nodes
 	validateNodesSchema(topo, result)
 
-	//  Edges
+	// Edges
 	validateEdgesSchema(topo, result)
 
 	return result
@@ -133,8 +141,9 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 	}
 
 	for i := range topo.Domains {
-		// 通过下标取指针访问，确保对 RoutingMode 等字段的归一写回能持久化进拓扑对象
-		// （range 出的副本写回不会生效，见 Spec C 的 round-trip 要求）。
+		// Access via an index-derived pointer so that normalizing write-backs to fields such as
+		// RoutingMode persist into the topology object (writes to the copy yielded by range would
+		// not take effect; see the round-trip requirement of Spec C).
 		domain := &topo.Domains[i]
 		prefix := fmt.Sprintf("domains[%d]", i)
 
@@ -145,7 +154,7 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".name", CodeDomainNameRequired)
 		}
 
-		// CIDR 格式校验
+		// CIDR format validation
 		if domain.CIDR == "" {
 			result.AddError(prefix+".cidr", CodeDomainCIDREmpty)
 		} else {
@@ -153,10 +162,10 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			if err != nil {
 				result.AddError(prefix+".cidr", CodeDomainCIDRInvalid, P{"cidr", domain.CIDR})
 			} else if ipNet.IP.To4() == nil {
-				// IPv4-only：分配器仅支持 IPv4，IPv6/其他地址族会使分配器崩溃
+				// IPv4-only: the allocator only supports IPv4; IPv6 / other address families would crash it
 				result.AddError(prefix+".cidr", CodeDomainCIDRNotIPv4, P{"cidr", domain.CIDR})
 			} else {
-				// CIDR 大小下限：前缀短于 /8 的网段过大，无法枚举分配
+				// CIDR size lower bound: a prefix shorter than /8 is too large to enumerate for allocation
 				ones, _ := ipNet.Mask.Size()
 				if ones < 8 {
 					result.AddError(prefix+".cidr", CodeDomainCIDRTooLarge, P{"cidr", domain.CIDR})
@@ -170,36 +179,39 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".allocation_mode", CodeDomainAllocationModeInvalid, P{"mode", domain.AllocationMode})
 		}
 
-		// RoutingMode 归一化与校验（D2/D72，Spec C：docs/spec/compiler/routing-modes.md）。
-		// 先将空值归一为 babel 并写回拓扑对象，使其能 round-trip（编译结果与持久化拓扑都
-		// 显式携带 babel），消除「空 routing_mode 静默关闭路由守护进程却编译成功」的失败模式。
-		// 枚举校验必须在归一之后执行，空值才无法绕过它。
+		// RoutingMode normalization and validation (D2/D72, Spec C: docs/spec/compiler/routing-modes.md).
+		// First normalize the empty value to babel and write it back to the topology object so it can
+		// round-trip (both the compile result and the persisted topology explicitly carry babel),
+		// eliminating the "empty routing_mode silently disables the routing daemon yet compiles
+		// successfully" failure mode. The enum check must run after normalization so the empty value
+		// cannot bypass it.
 		if domain.RoutingMode == "" {
 			domain.RoutingMode = "babel"
 		}
-		// babel 是当前唯一实现的路由模式；static 与 none 为保留值，尚未实现路由安装器，
-		// 直接拒绝而非渲染出零路由的死 overlay。
+		// babel is the only currently implemented routing mode; static and none are reserved values
+		// whose routing installers are not yet implemented, so reject them outright rather than render
+		// a route-less dead overlay.
 		switch domain.RoutingMode {
 		case "babel":
-			// 唯一实现的模式，放行。
+			// The only implemented mode; allow it.
 		case "static", "none":
 			result.AddError(prefix+".routing_mode", CodeDomainRoutingModeUnimplemented, P{"mode", domain.RoutingMode})
 		default:
 			result.AddError(prefix+".routing_mode", CodeDomainRoutingModeInvalid, P{"mode", domain.RoutingMode})
 		}
 
-		// ReservedRanges 校验：每项需为可解析的 CIDR 或 IP，且必须为 IPv4
+		// ReservedRanges validation: each entry must be a parseable CIDR or IP, and must be IPv4
 		for j, rr := range domain.ReservedRanges {
 			rrPrefix := fmt.Sprintf("%s.reserved_ranges[%d]", prefix, j)
 			_, rNet, err := net.ParseCIDR(rr)
 			if err == nil {
-				// 解析为 CIDR：要求 IPv4 地址族
+				// Parsed as a CIDR: require the IPv4 address family
 				if rNet.IP.To4() == nil {
 					result.AddError(rrPrefix, CodeDomainReservedRangeNotIPv4, P{"cidr", rr})
 				}
 				continue
 			}
-			// 退化为单个 IP：要求可解析且为 IPv4
+			// Fall back to a single IP: require it to be parseable and IPv4
 			ip := net.ParseIP(rr)
 			if ip == nil {
 				result.AddError(rrPrefix, CodeDomainReservedRangeInvalid, P{"value", rr})
@@ -208,9 +220,10 @@ func validateDomainsSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// transit_cidr 校验（plan-6）：可解析、IPv4-only，且大小足以容纳 per-link transit 地址对
-		// （每条链路占用一对 transit IP）。镜像 domain CIDR 的 IPv4 + 大小守卫；空值由编译器回退
-		// 到默认 10.10.0.0/24，无需校验。
+		// transit_cidr validation (plan-6): parseable, IPv4-only, and large enough to hold the
+		// per-link transit address pairs (each link consumes a pair of transit IPs). Mirrors the
+		// domain CIDR's IPv4 + size guards; an empty value falls back in the compiler to the default
+		// 10.10.0.0/24 and needs no validation.
 		if domain.TransitCIDR != "" {
 			_, tNet, err := net.ParseCIDR(domain.TransitCIDR)
 			if err != nil {
@@ -239,8 +252,9 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		if node.Name == "" {
 			result.AddError(prefix+".name", CodeNodeNameRequired)
 		} else if !nodeNameCharset.MatchString(node.Name) {
-			// 节点名称字符集校验（D15 纵深防御）：名称会派生 WireGuard 接口名，
-			// 并被插值进以 root 身份执行的安装脚本，禁止引号、反引号、$、; 等 shell 元字符。
+			// Node name charset validation (D15 defence-in-depth): the name derives a WireGuard
+			// interface name and is interpolated into the install script that runs as root, so quotes,
+			// backticks, $, ; and other shell metacharacters are forbidden.
 			result.AddError(prefix+".name", CodeNodeNameIllegalChars, P{"name", fmt.Sprintf("%q", node.Name)})
 		}
 		if node.DomainID == "" {
@@ -255,7 +269,7 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".role", CodeNodeRoleInvalid, P{"role", node.Role})
 		}
 
-		// Platform （，）
+		// Platform (optional; unsupported values are a warning, not an error)
 		if node.Platform != "" {
 			validPlatforms := map[string]bool{"debian": true, "ubuntu": true}
 			if !validPlatforms[strings.ToLower(node.Platform)] {
@@ -263,9 +277,10 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// XDPMode：mimic（transport=="tcp"）的 XDP 附着模式。仅 skb/native 合法；
-		// 空等价于 skb（默认通用 XDP）。非法值会被渲染器静默回落到 skb，故在此显式拒绝，
-		// 避免 "Native"/"generic" 等拼写被悄悄当成 skb（docs/spec/artifacts/mimic.md）。
+		// XDPMode: the XDP attach mode for mimic (transport=="tcp"). Only skb/native are legal;
+		// empty is equivalent to skb (the default generic XDP). The renderer silently falls back to
+		// skb on an illegal value, so reject it explicitly here to avoid spellings like
+		// "Native"/"generic" being quietly treated as skb (docs/spec/artifacts/mimic.md).
 		if node.XDPMode != "" {
 			validXDPModes := map[string]bool{"skb": true, "native": true}
 			if !validXDPModes[node.XDPMode] {
@@ -273,37 +288,41 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// OverlayIP （）
+		// OverlayIP (optional; must be a parseable IP when set)
 		if node.OverlayIP != "" {
 			if net.ParseIP(node.OverlayIP) == nil {
 				result.AddError(prefix+".overlay_ip", CodeNodeOverlayIPInvalid, P{"ip", node.OverlayIP})
 			}
 		}
 
-		// MTU 校验（D64）：0 表示使用系统默认值（通常 1420），跳过。
-		// 非零时必须落在 [576, 65535] 内——低于 576（IPv4 数据报最小重组缓冲）
-		// 或高于 65535 的 MTU 会被 wg-quick 拒绝，生成无法部署的 WireGuard 配置。
+		// MTU validation (D64): 0 means use the system default (typically 1420) and is skipped.
+		// When non-zero it must fall within [576, 65535] — an MTU below 576 (the minimum IPv4
+		// datagram reassembly buffer) or above 65535 is rejected by wg-quick, producing an
+		// undeployable WireGuard config.
 		if node.MTU != 0 && (node.MTU < mtuMinimum || node.MTU > mtuMaximum) {
 			result.AddError(prefix+".mtu", CodeNodeMTUOutOfRange, P{"mtu", strconv.Itoa(node.MTU)}, P{"low", strconv.Itoa(mtuMinimum)}, P{"high", strconv.Itoa(mtuMaximum)})
 		}
 
-		// SSHPort 校验（D65）：0 表示使用默认端口 22，跳过。
-		// 非零时必须落在 1–65535 内，否则会被插值进无法连接的 SSH 部署命令。
+		// SSHPort validation (D65): 0 means use the default port 22 and is skipped.
+		// When non-zero it must fall within 1-65535, otherwise it would be interpolated into an
+		// unconnectable SSH deploy command.
 		if node.SSHPort != 0 && (node.SSHPort < 1 || node.SSHPort > 65535) {
 			result.AddError(prefix+".ssh_port", CodeNodeSSHPortOutOfRange, P{"port", strconv.Itoa(node.SSHPort)})
 		}
 
-		// RouterID 校验（D66）：留空时由编译器自动生成，跳过。
-		// 非空时必须为 MAC-48 形式（六组冒号分隔的十六进制对，如 02:11:22:33:44:55）
-		// 或可解析为 IPv4 地址——babeld 两种形式都接受；其它取值会被 babeld 拒绝。
+		// RouterID validation (D66): left empty, the compiler auto-generates it and the check is skipped.
+		// When non-empty it must be either the MAC-48 form (six colon-separated hexadecimal pairs,
+		// e.g. 02:11:22:33:44:55) or parseable as an IPv4 address — babeld accepts both forms; any
+		// other value is rejected by babeld.
 		if node.RouterID != "" {
 			if !routerIDMAC48.MatchString(node.RouterID) && net.ParseIP(node.RouterID).To4() == nil {
 				result.AddError(prefix+".router_id", CodeNodeRouterIDInvalid, P{"id", fmt.Sprintf("%q", node.RouterID)})
 			}
 		}
 
-		// ExtraPrefixes 校验（D67）：每项必须可解析为 IPv4 CIDR（镜像 reserved_ranges 的 IPv4 守卫风格）。
-		// 这些前缀会被宣告进 Babel 路由表；非 IPv4 或非 CIDR 的前缀会生成无法部署的 babeld 配置。
+		// ExtraPrefixes validation (D67): each entry must be parseable as an IPv4 CIDR (mirroring the
+		// IPv4-guard style of reserved_ranges). These prefixes are announced into the Babel routing
+		// table; a non-IPv4 or non-CIDR prefix would produce an undeployable babeld config.
 		for j, prefixCIDR := range node.ExtraPrefixes {
 			epPrefix := fmt.Sprintf("%s.extra_prefixes[%d]", prefix, j)
 			_, epNet, err := net.ParseCIDR(prefixCIDR)
@@ -314,8 +333,9 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			}
 		}
 
-		// SSH 字段字符集校验（D44）：非空时各字段都会被插值进操作员本机执行的
-		// bash 与 PowerShell 部署脚本，必须排除空白与一切 shell 元字符。
+		// SSH field charset validation (D44): when non-empty, each field is interpolated into the
+		// bash and PowerShell deploy scripts that run on the operator's own machine, so it must
+		// exclude whitespace and every shell metacharacter.
 		if node.SSHHost != "" && !sshFieldCharset.MatchString(node.SSHHost) {
 			result.AddError(prefix+".ssh_host", CodeNodeSSHHostIllegalChars, P{"host", fmt.Sprintf("%q", node.SSHHost)})
 		}
@@ -334,10 +354,12 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".ssh_key_path", CodeNodeSSHKeyPathIllegalChars, P{"path", fmt.Sprintf("%q", node.SSHKeyPath)})
 		}
 
-		// public_endpoints[].host 字符集校验（plan-6）：host 会被渲染进 root 的 wg-quick 解析的
-		// per-peer WireGuard 配置文件（Endpoint = 行），必须排除空白与控制/元字符以免破坏配置或
-		// 混淆解析器。PublicEndpoint.Port 不在此校验：它只是一个节点可达性提示，编译器从不渲染它
-		// （反向 endpoint 回退使用分配到的监听端口，见 peers.go），因此只需守 host。
+		// public_endpoints[].host charset validation (plan-6): host is rendered into the per-peer
+		// WireGuard config file parsed by root's wg-quick (the `Endpoint =` line), so it must exclude
+		// whitespace and control/metacharacters that would corrupt the config or confuse the parser.
+		// PublicEndpoint.Port is not validated here: it is only a node-reachability hint that the
+		// compiler never renders (the reverse-endpoint fallback uses the allocated listen port, see
+		// peers.go), so only host needs guarding.
 		for k := range node.PublicEndpoints {
 			ep := &node.PublicEndpoints[k]
 			if ep.Host != "" && !endpointHostCharset.MatchString(ep.Host) {
@@ -349,7 +371,8 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 
 func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 	for i := range topo.Edges {
-		// 通过下标取指针访问，确保对 Transport 等字段的归一写回能持久化进拓扑对象。
+		// Access via an index-derived pointer so that normalizing write-backs to fields such as
+		// Transport persist into the topology object.
 		edge := &topo.Edges[i]
 		prefix := fmt.Sprintf("edges[%d]", i)
 
@@ -371,9 +394,10 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".type", CodeEdgeTypeInvalid, P{"type", edge.Type})
 		}
 
-		// Transport 归一化与校验（D72，Spec C）。
-		// 先将空值归一为 udp 并写回拓扑对象，再做枚举校验——与 routing_mode 同样的归一模式，
-		// 使枚举校验在归一之后执行。
+		// Transport normalization and validation (D72, Spec C).
+		// First normalize the empty value to udp and write it back to the topology object, then run
+		// the enum check — the same normalization pattern as routing_mode, so the enum check runs
+		// after normalization.
 		if edge.Transport == "" {
 			edge.Transport = "udp"
 		}
@@ -381,29 +405,31 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		if !validTransports[edge.Transport] {
 			result.AddError(prefix+".transport", CodeEdgeTransportInvalid, P{"transport", edge.Transport})
 		}
-		// tcp 现已实现（mimic eBPF UDP→伪 TCP 封装），是合法取值、不再告警。
-		// 「两端必须为可部署 Linux」这一语义约束由 semantic.go 的 validateMimicTransport 负责。
+		// tcp is now implemented (mimic eBPF UDP->fake-TCP encapsulation), is a legal value, and no
+		// longer warns. The semantic constraint that "both ends must be deployable Linux" is handled
+		// by validateMimicTransport in semantic.go.
 
 		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {
 			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})
 		}
 
-		// endpoint_host 字符集校验（plan-6）：非空时会被渲染进 root 的 wg-quick 解析的 per-peer
-		// WireGuard 配置文件（Endpoint = 行），必须排除空白与控制/元字符以免破坏配置或混淆解析器。
+		// endpoint_host charset validation (plan-6): when non-empty it is rendered into the per-peer
+		// WireGuard config file parsed by root's wg-quick (the `Endpoint =` line), so it must exclude
+		// whitespace and control/metacharacters that would corrupt the config or confuse the parser.
 		if edge.EndpointHost != "" && !endpointHostCharset.MatchString(edge.EndpointHost) {
 			result.AddError(prefix+".endpoint_host", CodeEdgeEndpointHostIllegalChars, P{"host", fmt.Sprintf("%q", edge.EndpointHost)})
 		}
 
-		// Role 校验（并行链路 / 故障切换）：仅允许空值、"primary"、"backup"。
-		// 空值与 "primary" 同属 primary class（同一对节点折叠为一条主链路），
-		// "backup" 则每条 edge 各自成为一条独立备份链路。语义见
-		// docs/spec/compiler/allocation-stability.md（Link identity with parallel edges）。
+		// Role validation (parallel links / failover): only empty, "primary", and "backup" are allowed.
+		// Empty and "primary" belong to the same primary class (collapsing to one primary link per node
+		// pair), whereas each "backup" edge becomes its own independent backup link. Semantics in
+		// docs/spec/compiler/allocation-stability.md (Link identity with parallel edges).
 		if edge.Role != "" && edge.Role != model.EdgeRolePrimary && edge.Role != model.EdgeRoleBackup {
 			result.AddError(prefix+".role", CodeEdgeRoleInvalid, P{"role", edge.Role})
 		}
 
-		//
+		// Self-loop: an edge whose endpoints are the same node is invalid.
 		if edge.FromNodeID != "" && edge.FromNodeID == edge.ToNodeID {
 			result.AddError(prefix, CodeEdgeSelfLoop)
 		}

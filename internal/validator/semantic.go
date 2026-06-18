@@ -11,8 +11,8 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
-// ValidateSemantic （ Pass 2）
-// 、IP 、
+// ValidateSemantic runs the semantic validation pass (Pass 2): cross-reference
+// checks, IP collision detection, and reachability/topology rules.
 func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	result := &ValidationResult{}
 
@@ -25,73 +25,78 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 		return result
 	}
 
-	//
+	// Build lookup maps.
 	domainMap := buildDomainMap(topo)
 	nodeMap := buildNodeMap(topo)
 
-	//  Domain
+	// Node -> Domain references.
 	validateNodeDomainRefs(topo, domainMap, result)
 
-	//  Edge
+	// Edge -> Node references.
 	validateEdgeNodeRefs(topo, nodeMap, result)
 
-	//  IP
+	// Overlay IP semantics.
 	validateIPSemantics(topo, domainMap, result)
 
-	//  ID
+	// ID uniqueness.
 	validateIDUniqueness(topo, result)
 
-	// 节点名称冲突（原始名称、安装脚本文件名、WireGuard 接口名）
+	// Node name collisions (raw name, installer script filename, WireGuard interface name).
 	validateNodeNameCollisions(topo, result)
 
-	// 生效监听端口范围：每节点 base..base+(对端接口数-1) 是否越界
+	// Effective listen-port range: whether each node's base..base+(peer-interface-count-1) overflows.
 	validateEffectivePortRanges(topo, result)
 
-	//
+	// Isolated nodes.
 	detectIsolatedNodes(topo, result)
 
-	// NAT
+	// NAT reachability.
 	validateNATReachability(topo, nodeMap, result)
 
-	// Client 边验证
+	// Client edge validation.
 	validateClientEdges(topo, nodeMap, result)
 
-	// mimic（tcp 传输）：tcp 边两端必须均为可部署 Linux（eBPF/内核特性）
+	// mimic (tcp transport): both endpoints of a tcp edge must be deployable Linux (eBPF/kernel features).
 	validateMimicTransport(topo, nodeMap, result)
 
-	// Edge endpoint 与目标节点 public endpoints 一致性检查
+	// Edge endpoint vs target node public-endpoints consistency check.
 	validateEdgeEndpointConsistency(topo, nodeMap, result)
 
-	// 同一节点对的重复启用边检测（编译器只取首条，后续边的 endpoint 覆盖会被静默丢弃）
+	// Detect duplicate enabled edges on the same node pair (the compiler keeps only the first; later
+	// edges' endpoint overrides are silently dropped).
 	detectDuplicateEnabledEdges(topo, result)
 
-	// 并行链路：每节点 WireGuard 接口名唯一性（不变式 N4）
+	// Parallel links: per-node WireGuard interface-name uniqueness (invariant N4).
 	validateInterfaceNameUniqueness(topo, nodeMap, result)
 
-	// 并行链路：同一对节点至多一条显式 primary 边
+	// Parallel links: at most one explicit primary edge per node pair.
 	validateSinglePrimaryPerPair(topo, nodeMap, result)
 
-	// 并行链路：client 边不得为 backup（client 用单一 wg0，不参与并行链路）
+	// Parallel links: a client edge must not be backup (client uses a single wg0 and does not
+	// participate in parallel links).
 	validateBackupClientEdges(topo, nodeMap, result)
 
-	// 并行链路：多链路节点对的等代价告警、无 primary 告警
+	// Parallel links: equal-cost and no-primary warnings for multi-link node pairs.
 	validateParallelLinkCosts(topo, nodeMap, result)
 
-	// 分配 pin 校验：pin 在被预留之前必须先校验（不变式 I7）
+	// Allocation-pin validation: pins must be validated before any resource is reserved (invariant I7).
 	validateAllocationPins(topo, domainMap, nodeMap, result)
 
-	// route_policies 为保留特性：非空即拒绝（Decisions log #2，Spec E）
+	// route_policies is a reserved feature: reject any non-empty value (Decisions log #2, Spec E).
 	validateRoutePoliciesReserved(topo, result)
 
 	return result
 }
 
-// validateRoutePoliciesReserved 拒绝任何非空的 route_policies（D10/D37/D62，Spec E）。
-// route_policies 在 Go 与 TS 两侧均有声明，却没有任何 renderer 消费、也没有编辑器入口，
-// 编译器仅原样透传（compiler.go）。按绑定决策（Decisions log #2）它是「为未来主题保留」的
-// 特性，而非可用功能：携带非空 route_policies 的拓扑会编译出一份与用户意图不符、却看不出
-// 任何路由策略生效的死配置。因此语义校验在此直接报错，要求该数组必须为空。
-// LAN 桥接 / 路由注入这一用例由 extra_prefixes 与路由层承载，而非 route_policies。
+// validateRoutePoliciesReserved rejects any non-empty route_policies (D10/D37/D62, Spec E).
+// route_policies is declared on both the Go and TS sides, yet no renderer consumes it and there is
+// no editor entry point; the compiler merely passes it through unchanged (compiler.go). Per the
+// binding decision (Decisions log #2) it is a feature "reserved for a future subject", not a usable
+// capability: a topology carrying non-empty route_policies would compile into a dead config that
+// does not match user intent yet shows no routing policy taking effect. Semantic validation
+// therefore errors here, requiring the array to be empty.
+// The LAN-bridge / route-injection use case is served by extra_prefixes and the routing layer, not
+// by route_policies.
 func validateRoutePoliciesReserved(topo *model.Topology, result *ValidationResult) {
 	if len(topo.RoutePolicies) > 0 {
 		result.AddError("route_policies", CodeRoutePolicyReserved, P{"count", strconv.Itoa(len(topo.RoutePolicies))})
@@ -151,11 +156,11 @@ func validateIPSemantics(topo *model.Topology, domainMap map[string]*model.Domai
 
 		ip := net.ParseIP(node.OverlayIP)
 		if ip == nil {
-			//  schema ，
+			// Malformed IPs are reported by schema validation; skip here.
 			continue
 		}
 
-		//  IP  Domain CIDR
+		// Check the overlay IP falls within the domain CIDR.
 		domain, ok := domainMap[node.DomainID]
 		if ok && domain.CIDR != "" {
 			_, cidrNet, err := net.ParseCIDR(domain.CIDR)
@@ -164,7 +169,7 @@ func validateIPSemantics(topo *model.Topology, domainMap map[string]*model.Domai
 			}
 		}
 
-		//  IP
+		// Detect duplicate overlay IPs.
 		if existingNode, exists := ipUsage[node.OverlayIP]; exists {
 			result.AddError(prefix, CodeNodeOverlayIPConflict, P{"cidr", node.OverlayIP}, P{"other", existingNode}, P{"node", node.Name})
 		} else {
@@ -174,7 +179,7 @@ func validateIPSemantics(topo *model.Topology, domainMap map[string]*model.Domai
 }
 
 func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
-	// Domain ID
+	// Domain IDs.
 	domainIDs := make(map[string]bool)
 	for i, d := range topo.Domains {
 		if domainIDs[d.ID] {
@@ -183,7 +188,7 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 		domainIDs[d.ID] = true
 	}
 
-	// Node ID
+	// Node IDs.
 	nodeIDs := make(map[string]bool)
 	for i, n := range topo.Nodes {
 		if nodeIDs[n.ID] {
@@ -192,7 +197,7 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 		nodeIDs[n.ID] = true
 	}
 
-	// Edge ID
+	// Edge IDs.
 	edgeIDs := make(map[string]bool)
 	for i, e := range topo.Edges {
 		if edgeIDs[e.ID] {
@@ -202,35 +207,39 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 	}
 }
 
-// validateNodeNameCollisions 检查节点名称在三种规范化形式下的冲突（Spec D 的 N1–N3 不变式）。
-// 任意两个不同节点若在以下任一形式上相同，都会导致命名派生的产物相互覆盖或被静默跳过：
-//   - 原始名称（N1）：操作员与一切基于名称派生的产物都无法区分两个同名节点。
-//   - 安装脚本文件名 SafeInstallerFileName（N2）：相同的安装包文件名会造成静默跳过与身份错位的部署。
-//   - WireGuard 接口名 WgInterfaceName（N3）：相同的接口名会让一个 WireGuard 配置与一条 Babel 接口行覆盖另一个。
+// validateNodeNameCollisions checks node-name collisions across three normalized forms (the N1-N3
+// invariants of Spec D).
+// If any two distinct nodes collide in any one of these forms, the name-derived artifacts will
+// overwrite one another or be silently skipped:
+//   - Raw name (N1): operators and every name-derived artifact cannot tell two same-named nodes apart.
+//   - Installer script filename SafeInstallerFileName (N2): identical install-bundle filenames cause
+//     silent skips and identity-confused deployments.
+//   - WireGuard interface name WgInterfaceName (N3): identical interface names let one WireGuard config
+//     and one Babel interface line overwrite another.
 //
-// 对每种规范化形式各维护一张「规范化键 -> 首个使用该键的节点名称」映射，
-// 在遇到第二个落入同一键的节点时报错，并在错误消息中同时点出两个冲突节点的名称。
+// For each normalized form it keeps a "normalized key -> first node name that used that key" map,
+// errors when a second node falls into the same key, and names both conflicting nodes in the message.
 func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) {
-	// 各映射的键是一种规范化形式，值是首个使用该键的节点名称。
-	rawNames := make(map[string]string)       // 原始名称 -> 首个节点名称
-	installerNames := make(map[string]string) // 安装脚本文件名 -> 首个节点名称
-	interfaceNames := make(map[string]string) // WireGuard 接口名 -> 首个节点名称
+	// Each map's key is a normalized form; the value is the first node name that used that key.
+	rawNames := make(map[string]string)       // raw name -> first node name
+	installerNames := make(map[string]string) // installer script filename -> first node name
+	interfaceNames := make(map[string]string) // WireGuard interface name -> first node name
 
 	for i, node := range topo.Nodes {
 		if node.Name == "" {
-			//  schema 校验已覆盖空名称，这里跳过以免与空字符串归一冲突。
+			// Schema validation already covers empty names; skip here to avoid an empty-string collision.
 			continue
 		}
 		prefix := fmt.Sprintf("nodes[%d].name", i)
 
-		// N1：原始名称冲突。
+		// N1: raw-name collision.
 		if firstNode, exists := rawNames[node.Name]; exists {
 			result.AddError(prefix, CodeNodeNameDuplicate, P{"other", firstNode}, P{"node", node.Name}, P{"name", fmt.Sprintf("%q", node.Name)})
 		} else {
 			rawNames[node.Name] = node.Name
 		}
 
-		// N2：安装脚本文件名冲突（例如 "Web 1" 与 "web-1" 都归一为 web-1.install.sh）。
+		// N2: installer-filename collision (e.g. "Web 1" and "web-1" both normalize to web-1.install.sh).
 		installerName := naming.SafeInstallerFileName(node.Name)
 		if firstNode, exists := installerNames[installerName]; exists {
 			if firstNode != node.Name {
@@ -240,7 +249,7 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 			installerNames[installerName] = node.Name
 		}
 
-		// N3：WireGuard 接口名冲突（例如 "db.east" 与 "db-east" 都归一为 wg-db-east）。
+		// N3: WireGuard interface-name collision (e.g. "db.east" and "db-east" both normalize to wg-db-east).
 		interfaceName := naming.WgInterfaceName(node.Name)
 		if firstNode, exists := interfaceNames[interfaceName]; exists {
 			if firstNode != node.Name {
@@ -252,48 +261,55 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 	}
 }
 
-// defaultListenPort 是 per-peer 接口分配的唯一基准端口，必须与 peers.go lowestFreePort
-// 的基准（51820）保持一致。per-node listen_port 已移除——它在 per-peer 模型下无意义。
+// defaultListenPort is the single base port for per-peer interface allocation; it must match
+// peers.go's lowestFreePort base (51820). per-node listen_port has been removed -- it is meaningless
+// under the per-peer model.
 const defaultListenPort = 51820
 
-// effectivePortRange 描述一个节点在 per-peer 接口模型下实际占用的监听端口范围。
+// effectivePortRange describes the listen-port range a node actually occupies under the per-peer
+// interface model.
 //
 //	[base, base+count-1]
 //
-// 其中 base 统一为 defaultListenPort（51820，per-node listen_port 已移除），
-// count 为该节点作为「非 client 端点」参与的去重链路数量（并行链路下，同一对节点的
-// primary class 折叠为一条链路、每条 backup 各为一条链路）——
-// 这正是编译器为它分配的 WireGuard 接口个数。
+// base is uniformly defaultListenPort (51820; per-node listen_port has been removed), and count is
+// the number of deduplicated links in which the node participates as a "non-client endpoint" (under
+// parallel links, a node pair's primary class folds into one link while each backup is its own
+// link) -- which is exactly the number of WireGuard interfaces the compiler allocates for it.
 type effectivePortRange struct {
-	nodeIndex int    // 节点在 topo.Nodes 中的下标，用于定位错误字段
-	nodeName  string // 节点名称，用于错误消息
-	base      int    // 基准监听端口
-	count     int    // 该节点占用的接口数（= 去重链路数）
+	nodeIndex int    // node's index in topo.Nodes, used to locate the error field
+	nodeName  string // node name, used in error messages
+	base      int    // base listen port
+	count     int    // number of interfaces the node occupies (= number of deduplicated links)
 }
 
-// high 返回该节点占用的最高监听端口（base + count - 1）。
+// high returns the highest listen port the node occupies (base + count - 1).
 func (r effectivePortRange) high() int {
 	return r.base + r.count - 1
 }
 
-// validateEffectivePortRanges 校验 per-peer 接口模型下每个节点的「生效监听端口范围」（D11）。
+// validateEffectivePortRanges validates each node's "effective listen-port range" under the
+// per-peer interface model (D11).
 //
-// 编译器为每条链路的每个非 client 端点分配一个独立 WireGuard 接口，监听端口从
-// 节点基准端口起按 base+offset 递增（见 peers.go Pass 1 中 nodePortOffset 的逻辑）。
-// 接口数按「链路」而非「节点对」统计，与编译器的 unify 规则一致（并行链路）：
-//   - 仅统计启用且两端节点均存在的边；
-//   - 以 linkid.LinkKey 去重——同一对节点的 primary class（Role != backup）折叠为一条链路，
-//     每条 backup 边各自成为一条独立链路；
-//   - 因此一对节点若有 1 条 primary 链路 + 2 条 backup，会为其两端各贡献 3 个接口；
-//   - 每条链路为其两端中的「非 client」端点各 +1。
+// The compiler allocates one dedicated WireGuard interface per non-client endpoint of each link,
+// with listen ports incrementing as base+offset from the node base port (see the nodePortOffset
+// logic in peers.go Pass 1). Interfaces are counted by "link" rather than by "node pair",
+// consistent with the compiler's unify rule (parallel links):
+//   - only enabled edges whose both endpoint nodes exist are counted;
+//   - deduplicated by linkid.LinkKey -- a node pair's primary class (Role != backup) folds into one
+//     link, while each backup edge becomes its own independent link;
+//   - so a node pair with 1 primary link + 2 backups contributes 3 interfaces to each endpoint;
+//   - each link adds +1 to each of its "non-client" endpoints.
 //
-// 计算出每个节点的占用区间 [base, base+count-1] 后，当区间最高端口超过 65535 时报错
-// （D11：base+offset 越界会被原样渲染进 WireGuard 配置）。
+// After computing each node's occupied range [base, base+count-1], it errors when the range's
+// highest port exceeds 65535 (D11: an out-of-range base+offset would be rendered verbatim into the
+// WireGuard config).
 //
-// 注意：基准端口统一为 51820（per-node listen_port 已移除），故「共置节点范围重叠」规则已删除——
-// 在统一基准下，任意两个共置且各有 >=1 个接口的节点必然重叠，该规则会误杀所有「一机多节点」部署。
+// Note: the base port is uniformly 51820 (per-node listen_port has been removed), so the
+// "co-located node range overlap" rule has been deleted -- under a uniform base, any two co-located
+// nodes each with >=1 interface necessarily overlap, and that rule would wrongly fail every
+// "multiple nodes on one host" deployment.
 func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult) {
-	// 节点索引（与 peers.go 一致：以 ID 查找）。
+	// Node indices (consistent with peers.go: looked up by ID).
 	nodeMap := make(map[string]*model.Node)
 	nodeIndex := make(map[string]int)
 	for i := range topo.Nodes {
@@ -301,9 +317,10 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 		nodeIndex[topo.Nodes[i].ID] = i
 	}
 
-	// 镜像 peers.go Pass 1 的 unify 分组：以 linkKey 去重，为每个非 client 端点累计接口数。
+	// Mirror peers.go Pass 1's unify grouping: deduplicate by linkKey and accumulate interface
+	// counts for each non-client endpoint.
 	seenLinks := make(map[string]bool)
-	interfaceCount := make(map[string]int) // nodeID -> 接口数（去重链路数）
+	interfaceCount := make(map[string]int) // nodeID -> interface count (number of deduplicated links)
 
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -317,16 +334,17 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 			continue
 		}
 
-		// 链路键：primary class 的正反边与同向多余 primary 边共享同一 linkKey（折叠为一条链路）；
-		// 每条 backup 边携带自身 edge.ID，各自成为一条独立链路。
+		// Link key: a primary class's forward/reverse edges and same-direction redundant primary
+		// edges share one linkKey (folded into a single link); each backup edge carries its own
+		// edge.ID and becomes an independent link.
 		lk := linkid.LinkKey(edge)
 		if seenLinks[lk] {
 			continue
 		}
 		seenLinks[lk] = true
 
-		// client 节点使用单一 wg0，不参与 per-peer 端口分配（与 peers.go 的
-		// isFromClient / isToClient 守卫一致）。
+		// Client nodes use a single wg0 and do not participate in per-peer port allocation
+		// (consistent with peers.go's isFromClient / isToClient guards).
 		if fromNode.Role != "client" {
 			interfaceCount[fromNode.ID]++
 		}
@@ -335,14 +353,14 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 		}
 	}
 
-	// 为占用了至少一个接口的节点校验生效端口范围。
+	// Validate the effective port range for nodes that occupy at least one interface.
 	for _, node := range topo.Nodes {
 		count := interfaceCount[node.ID]
 		if count == 0 {
-			// 没有 per-peer 接口（无启用边，或为 client 节点）：无生效范围可校验。
+			// No per-peer interfaces (no enabled edges, or a client node): no effective range to validate.
 			continue
 		}
-		// 基准端口统一为 51820（per-node listen_port 已移除）。
+		// The base port is uniformly 51820 (per-node listen_port has been removed).
 		r := effectivePortRange{
 			nodeIndex: nodeIndex[node.ID],
 			nodeName:  node.Name,
@@ -350,7 +368,8 @@ func validateEffectivePortRanges(topo *model.Topology, result *ValidationResult)
 			count:     count,
 		}
 
-		// 规则：生效范围最高端口越界（base+count-1 > 65535 会被原样渲染进 WireGuard 配置）。
+		// Rule: the range's highest port overflows (base+count-1 > 65535 would be rendered verbatim
+		// into the WireGuard config).
 		if r.high() > 65535 {
 			result.AddError(fmt.Sprintf("nodes[%d]", r.nodeIndex), CodeNodeEffectivePortRangeOverflow, P{"node", r.nodeName}, P{"low", strconv.Itoa(r.base)}, P{"high", strconv.Itoa(r.high())}, P{"base", strconv.Itoa(r.base)}, P{"count", strconv.Itoa(r.count)})
 		}
@@ -362,7 +381,7 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 		return
 	}
 
-	//
+	// Collect nodes that have at least one enabled edge.
 	connectedNodes := make(map[string]bool)
 	for _, edge := range topo.Edges {
 		if edge.IsEnabled {
@@ -371,7 +390,7 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 		}
 	}
 
-	//
+	// Warn about any node with no enabled edges.
 	for _, node := range topo.Nodes {
 		if !connectedNodes[node.ID] {
 			result.AddWarning("topology", CodeNodeIsolated, P{"node", node.Name}, P{"id", node.ID})
@@ -379,9 +398,9 @@ func detectIsolatedNodes(topo *model.Topology, result *ValidationResult) {
 	}
 }
 
-// validateClientEdges 验证 client 节点的边约束
+// validateClientEdges validates the edge constraints for client nodes.
 func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
-	// 收集每个 client 的出站和入站 edge 数量
+	// Collect each client's outbound and inbound edge counts.
 	clientOutbound := make(map[string]int)        // nodeID -> count of enabled outbound edges
 	clientOutboundEdges := make(map[string][]int) // nodeID -> edge indices
 
@@ -393,17 +412,17 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 		fromNode := nodeMap[edge.FromNodeID]
 		toNode := nodeMap[edge.ToNodeID]
 
-		// 拒绝以 client 为目标的入站边
+		// Reject inbound edges that target a client.
 		if toNode != nil && toNode.Role == "client" {
 			result.AddError(fmt.Sprintf("edges[%d]", i), CodeClientInboundRejected, P{"node", toNode.Name})
 		}
 
-		// 统计 client 出站边
+		// Count client outbound edges.
 		if fromNode != nil && fromNode.Role == "client" {
 			clientOutbound[fromNode.ID]++
 			clientOutboundEdges[fromNode.ID] = append(clientOutboundEdges[fromNode.ID], i)
 
-			// Client 的目标必须是 router/relay/gateway（不能是 peer 或 client）
+			// A client's target must be router/relay/gateway (not peer or client).
 			if toNode != nil {
 				if toNode.Role == "peer" {
 					result.AddError(fmt.Sprintf("edges[%d]", i), CodeClientTargetPeer, P{"node", fromNode.Name}, P{"other", toNode.Name})
@@ -413,14 +432,14 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 				}
 			}
 
-			// Client 边必须有 endpoint_host
+			// A client edge must have an endpoint_host.
 			if edge.EndpointHost == "" {
 				result.AddError(fmt.Sprintf("edges[%d].endpoint_host", i), CodeClientEndpointHostRequired, P{"node", fromNode.Name})
 			}
 		}
 	}
 
-	// Client 必须恰好有一条启用的出站边
+	// A client must have exactly one enabled outbound edge.
 	for _, node := range topo.Nodes {
 		if node.Role != "client" {
 			continue
@@ -432,7 +451,7 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 			result.AddError("topology", CodeClientMultipleOutboundEdges, P{"node", node.Name}, P{"count", strconv.Itoa(count)})
 		}
 
-		// 警告：client 设置了无意义的字段
+		// Warning: the client set fields that are meaningless for it.
 		if node.RouterID != "" {
 			result.AddWarning(fmt.Sprintf("node.%s.router_id", node.ID), CodeClientRouterIDMeaningless, P{"node", node.Name})
 		}
@@ -442,13 +461,14 @@ func validateClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, r
 	}
 }
 
-// mimicLinuxDeployable 判定某节点的平台是否可部署 mimic（eBPF/内核特性）。
-// mimic 仅在 Linux 上可用，YAOG 当前支持的 Linux 发行版为 debian / ubuntu。
-// 空 platform 视为 Linux（放行）：与 schema.go validateNodesSchema 中「空 platform 跳过校验」
-// 的处理一致，避免对未设置 platform 的节点产生误报。
+// mimicLinuxDeployable reports whether a node's platform can deploy mimic (eBPF/kernel features).
+// mimic is only available on Linux, and the Linux distributions YAOG currently supports are
+// debian / ubuntu. An empty platform is treated as Linux (allowed): consistent with the "empty
+// platform skips validation" handling in schema.go validateNodesSchema, avoiding false positives for
+// nodes with no platform set.
 func mimicLinuxDeployable(node *model.Node) bool {
 	if node == nil {
-		// 节点缺失由 validateEdgeNodeRefs 报错，这里不重复，按放行处理。
+		// A missing node is reported by validateEdgeNodeRefs; do not duplicate that here and allow it.
 		return true
 	}
 	if node.Platform == "" {
@@ -462,15 +482,18 @@ func mimicLinuxDeployable(node *model.Node) bool {
 	}
 }
 
-// validateMimicTransport 校验 transport=="tcp"（mimic）边的平台约束（Spec：docs/spec/artifacts/mimic.md、
-// docs/spec/data-model/edge.md §TCP transport、docs/spec/compiler/validation.md mimic 规则）。
+// validateMimicTransport validates the platform constraint on transport=="tcp" (mimic) edges (Spec:
+// docs/spec/artifacts/mimic.md, docs/spec/data-model/edge.md §TCP transport, docs/spec/compiler/validation.md
+// mimic rules).
 //
-// mimic 是 eBPF/内核特性，仅能在可部署的 Linux（debian / ubuntu）上运行；因此一条 tcp 边的
-// 两个端点节点都必须是可部署 Linux，否则编译出的配置在该端点上无法部署。任一端点平台不被支持
-// 即报错，并在错误消息中点名该边与违规节点。
+// mimic is an eBPF/kernel feature and can only run on deployable Linux (debian / ubuntu); therefore
+// both endpoint nodes of a tcp edge must be deployable Linux, otherwise the compiled config cannot
+// be deployed on that endpoint. If either endpoint's platform is unsupported it errors, naming the
+// edge and the offending node in the message.
 //
-// 内核/eBPF 的实际可用性是安装期检查（见 mimic.md），不在编译期报错；mimic 无密钥，无需做任何
-// 密钥校验。空 platform 视为 Linux（放行），与其它平台校验对空值的处理一致。
+// Actual kernel/eBPF availability is an install-time check (see mimic.md), not a compile-time error;
+// mimic has no keys, so no key validation is needed. An empty platform is treated as Linux
+// (allowed), consistent with how other platform checks handle empty values.
 func validateMimicTransport(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -493,14 +516,15 @@ func validateMimicTransport(topo *model.Topology, nodeMap map[string]*model.Node
 	}
 }
 
-// defaultTransitCIDR 是域未显式配置 transit_cidr 时回退使用的默认 transit 地址池，
-// 必须与 compiler/peers.go 的同名常量保持一致——pin 的 out-of-CIDR 校验要用编译器实际
-// 解析出的池来判定，二者若不一致会让校验放行编译器随后拒绝（或反之）的 pin。
+// defaultTransitCIDR is the fallback transit address pool used when a domain does not explicitly
+// configure transit_cidr; it must match the same-named constant in compiler/peers.go -- a pin's
+// out-of-CIDR check must judge against the pool the compiler actually resolves, and if the two
+// diverge the check could pass a pin the compiler then rejects (or vice versa).
 const defaultTransitCIDR = "10.10.0.0/24"
 
-// edgeTransitCIDR 解析一条边实际使用的 transit 地址池。
-// 与 compiler/peers.go Pass 1 的解析规则一致：取 from 节点所属 domain 的 transit_cidr，
-// 留空时回退默认 10.10.0.0/24。
+// edgeTransitCIDR resolves the transit address pool an edge actually uses.
+// Consistent with the resolution rule in compiler/peers.go Pass 1: take the transit_cidr of the
+// domain the from node belongs to, falling back to the default 10.10.0.0/24 when empty.
 func edgeTransitCIDR(edge model.Edge, domainMap map[string]*model.Domain, nodeMap map[string]*model.Node) string {
 	fromNode := nodeMap[edge.FromNodeID]
 	if fromNode == nil {
@@ -512,45 +536,53 @@ func edgeTransitCIDR(edge model.Edge, domainMap map[string]*model.Domain, nodeMa
 	return defaultTransitCIDR
 }
 
-// 链路规范键与链路键由 internal/linkid 提供（linkid.PinKey / linkid.LinkKey），
-// 编译器与验证器共用同一份语义，避免重复字面量。
-//   - linkid.PinKey(a,b)：两端节点 ID 的无序对（字符串 min|max），方向无关；
-//     一条边与其反向边、同一对节点的所有 primary class 边都落在同一个 PinKey 上。
-//   - linkid.LinkKey(edge)：primary class 边等于 PinKey（正反边、同向多余 primary 边共享一个键）；
-//     backup 边为 PinKey + "#" + edge.ID，每条 backup 各自成为一条独立链路。
+// The link canonical key and link key are provided by internal/linkid (linkid.PinKey /
+// linkid.LinkKey); the compiler and validator share the same semantics, avoiding duplicated literals.
+//   - linkid.PinKey(a,b): an unordered pair of the two endpoint node IDs (string min|max),
+//     direction-independent; an edge, its reverse edge, and all primary class edges of the same node
+//     pair all map to the same PinKey.
+//   - linkid.LinkKey(edge): a primary class edge equals PinKey (forward/reverse and same-direction
+//     redundant primary edges share one key); a backup edge is PinKey + "#" + edge.ID, so each
+//     backup becomes its own independent link.
 
-// nodePortPin 描述某个节点在某条链路上被钉住的监听端口，用于跨链路去重时定位冲突。
+// nodePortPin describes a listen port pinned on a node for a particular link, used to locate
+// conflicts during cross-link deduplication.
 type nodePortPin struct {
 	port   int
-	linkID string // 首个声明该 (节点, 端口) 的链路键 linkKey
-	edge   string // 首个声明该 (节点, 端口) 的边 ID，用于错误消息
+	linkID string // linkKey of the link that first declared this (node, port)
+	edge   string // edge ID that first declared this (node, port), used in error messages
 }
 
-// pinOwner 记录某个被钉住的地址（transit IP 或 link-local）的首个占用者：
-// linkID 用于让同一链路的正反边互不冲突，edge 用于在错误消息中点名首个占用边。
+// pinOwner records the first occupant of a pinned address (transit IP or link-local):
+// linkID lets the forward/reverse edges of the same link not conflict, and edge names the first
+// occupying edge in error messages.
 type pinOwner struct {
 	linkID string
 	edge   string
 }
 
-// validateAllocationPins 校验边上的分配 pin（不变式 I7，pin 校验规则见
-// docs/spec/compiler/allocation-stability.md「Pin validation」表）。
-// 每条规则的违例都是阻断编译的错误（而非告警），且必须在任何资源被预留之前完成。
+// validateAllocationPins validates the allocation pins on edges (invariant I7; pin validation rules
+// in the "Pin validation" table of docs/spec/compiler/allocation-stability.md).
+// A violation of any rule is a compile-blocking error (not a warning), and must complete before any
+// resource is reserved.
 //
-// pin 按边存储，并由「该边自身的 from/to」定向：边 A->B 的 PinnedFromPort 是 A 侧端口，
-// PinnedToPort 是 B 侧端口；反向边 B->A 携带同一对值的镜像（其 PinnedFromPort 即 B 侧端口）。
-// 因此本函数：
-//   - 结构性规则（部分 pin、端口越界、transit 越池、client 边端口 pin）逐边校验，作用于该边自身；
-//   - 去重规则（同一节点端口、同一 transit IP、同一 link-local 被两条不同链路占用）按 linkKey
-//     归并后跨链路比较：primary class 的正反边共享同一 linkKey 不算冲突，
-//     而 backup 边各有独立 linkKey，与 primary 链路的 pin 碰撞会被如实标记。
+// Pins are stored per edge and oriented by "that edge's own from/to": for edge A->B, PinnedFromPort
+// is the A-side port and PinnedToPort is the B-side port; the reverse edge B->A carries the mirror
+// of the same pair (its PinnedFromPort is the B-side port). Therefore this function:
+//   - validates structural rules (partial pin, port out of range, transit out of pool, client-edge
+//     port pin) per edge, acting on the edge itself;
+//   - validates deduplication rules (the same node port, the same transit IP, or the same link-local
+//     occupied by two distinct links) by grouping on linkKey and comparing across links: a primary
+//     class's forward/reverse edges share one linkKey and do not count as a conflict, while each
+//     backup edge has its own linkKey, so a pin collision with a primary link is faithfully flagged.
 func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Domain, nodeMap map[string]*model.Node, result *ValidationResult) {
-	// 去重表：跨「不同链路」检测同一资源被重复钉住。
-	//   - 节点端口：键为 nodeID，值记录首个占用该端口的 (端口, 链路, 边)。
-	//   - transit IP / link-local：键为规范化后的地址字符串，值记录首个占用者 (链路, 边)。
+	// Deduplication tables: detect the same resource pinned more than once across "distinct links".
+	//   - Node port: key is nodeID, value records the first (port, link, edge) that occupied the port.
+	//   - transit IP / link-local: key is the canonicalized address string, value records the first
+	//     occupant (link, edge).
 	portsByNode := make(map[string][]nodePortPin)
-	transitByValue := make(map[string]pinOwner)   // 规范化 transit IP -> 首个占用者
-	linkLocalByValue := make(map[string]pinOwner) // 规范化 link-local -> 首个占用者
+	transitByValue := make(map[string]pinOwner)   // canonicalized transit IP -> first occupant
+	linkLocalByValue := make(map[string]pinOwner) // canonicalized link-local -> first occupant
 
 	for i := range topo.Edges {
 		edge := topo.Edges[i]
@@ -561,20 +593,24 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 		prefix := fmt.Sprintf("edges[%d]", i)
 		fromNode := nodeMap[edge.FromNodeID]
 		toNode := nodeMap[edge.ToNodeID]
-		// 两端节点缺失的边由 validateEdgeNodeRefs 报错，这里不重复，跳过 pin 校验。
+		// Edges with a missing endpoint node are reported by validateEdgeNodeRefs; do not duplicate
+		// that here, and skip pin validation.
 		if fromNode == nil || toNode == nil {
 			continue
 		}
 
-		// 链路键用于跨链路去重：primary class 的正反边与同向多余 primary 边共享同一 linkKey
-		// （它们合并为同一条物理链路，pin 值合法地相同）；backup 边的 linkKey 携带自身 edge.ID，
-		// 因此与 primary 链路的 pin 碰撞会被如实标记为跨链路冲突。
+		// The link key is used for cross-link deduplication: a primary class's forward/reverse edges
+		// and same-direction redundant primary edges share one linkKey (they merge into the same
+		// physical link and their pin values are legitimately identical); a backup edge's linkKey
+		// carries its own edge.ID, so a pin collision with a primary link is faithfully flagged as a
+		// cross-link conflict.
 		link := linkid.LinkKey(&edge)
 
-		// --- 规则：client 边携带 pin（client 用单一 wg0，无 per-peer 资源）。 ---
-		// 先于其它规则处理：client 边的所有 per-peer pin 都会被忽略，因此端口 pin 报错、
-		// 其余 pin（transit / link-local）告警「将被忽略」，并跳过其余只对 per-peer 链路
-		// 有意义的检查（成对完整性、范围、越池、去重）。
+		// --- Rule: a client edge carries pins (client uses a single wg0, no per-peer resources). ---
+		// Handled before the other rules: all per-peer pins on a client edge are ignored, so a port
+		// pin errors, the remaining pins (transit / link-local) warn "will be ignored", and the rest
+		// of the checks that only make sense for per-peer links (pair completeness, range, out of
+		// pool, deduplication) are skipped.
 		clientTouched := fromNode.Role == "client" || toNode.Role == "client"
 		if clientTouched {
 			if edge.PinnedFromPort != 0 || edge.PinnedToPort != 0 {
@@ -587,24 +623,25 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 			continue
 		}
 
-		// --- 规则：部分 pin（一端钉住、另一端为空）。逐资源检查。 ---
+		// --- Rule: partial pin (one end pinned, the other empty). Checked per resource. ---
 		validatePinPairCompleteness(prefix, edge, result)
 
-		// --- 规则：端口越界（低于 minPinnedPort（1024，PR7 放宽后的手填下界），或 > 65535）。 ---
+		// --- Rule: port out of range (below minPinnedPort (1024, the manual lower bound after the PR7
+		// relaxation), or > 65535). ---
 		validatePinnedPortRange(prefix, "pinned_from_port", edge.PinnedFromPort, fromNode, result)
 		validatePinnedPortRange(prefix, "pinned_to_port", edge.PinnedToPort, toNode, result)
 
-		// --- 规则：transit IP 越池（不在该边解析出的 domain transit CIDR 内）。 ---
+		// --- Rule: transit IP out of pool (not within the domain transit CIDR resolved for this edge). ---
 		transitCIDR := edgeTransitCIDR(edge, domainMap, nodeMap)
 		validatePinnedTransitInCIDR(prefix, "pinned_from_transit_ip", edge.PinnedFromTransitIP, transitCIDR, result)
 		validatePinnedTransitInCIDR(prefix, "pinned_to_transit_ip", edge.PinnedToTransitIP, transitCIDR, result)
 
-		// --- 规则：跨链路去重。 ---
-		// 节点端口：from 侧端口归 from 节点，to 侧端口归 to 节点。
+		// --- Rule: cross-link deduplication. ---
+		// Node port: the from-side port belongs to the from node, the to-side port to the to node.
 		checkDuplicatePortOnNode(prefix, edge.FromNodeID, edge.PinnedFromPort, link, edge.ID, portsByNode, result)
 		checkDuplicatePortOnNode(prefix, edge.ToNodeID, edge.PinnedToPort, link, edge.ID, portsByNode, result)
 
-		// transit IP 与 link-local：按规范化后的地址值跨链路去重。
+		// transit IP and link-local: deduplicated across links by canonicalized address value.
 		checkDuplicateTransitIP(prefix, edge.PinnedFromTransitIP, link, edge.ID, transitByValue, result)
 		checkDuplicateTransitIP(prefix, edge.PinnedToTransitIP, link, edge.ID, transitByValue, result)
 		checkDuplicateLinkLocal(prefix, edge.PinnedFromLinkLocal, link, edge.ID, linkLocalByValue, result)
@@ -612,8 +649,9 @@ func validateAllocationPins(topo *model.Topology, domainMap map[string]*model.Do
 	}
 }
 
-// validatePinPairCompleteness 校验「成对 pin」：对每一种资源，一端钉住而另一端为空都非法。
-// pin 必须以完整成对的形式出现，否则编译器无法构造一条链路的双端配置。
+// validatePinPairCompleteness validates "paired pins": for each resource, having one end pinned and
+// the other empty is illegal. Pins must appear as complete pairs, otherwise the compiler cannot
+// construct both-end configs for a link.
 func validatePinPairCompleteness(prefix string, edge model.Edge, result *ValidationResult) {
 	if (edge.PinnedFromPort != 0) != (edge.PinnedToPort != 0) {
 		result.AddError(prefix, CodePinPortIncomplete, P{"id", edge.ID})
@@ -635,9 +673,9 @@ func validatePinPairCompleteness(prefix string, edge model.Edge, result *Validat
 // every realistic NAT-VPS range.
 const minPinnedPort = 1024
 
-// validatePinnedPortRange 校验单个被钉住的端口是否落在合法区间内：
-// 必须 >= minPinnedPort（1024，PR7 放宽后的手填下界），且 <= 65535。
-// 端口为 0 表示未钉住，跳过（成对完整性由 validatePinPairCompleteness 负责）。
+// validatePinnedPortRange validates that a single pinned port falls within the legal range:
+// it must be >= minPinnedPort (1024, the manual lower bound after the PR7 relaxation) and <= 65535.
+// A port of 0 means unpinned and is skipped (pair completeness is handled by validatePinPairCompleteness).
 func validatePinnedPortRange(prefix, field string, port int, node *model.Node, result *ValidationResult) {
 	if port == 0 {
 		return
@@ -647,8 +685,9 @@ func validatePinnedPortRange(prefix, field string, port int, node *model.Node, r
 	}
 }
 
-// validatePinnedTransitInCIDR 校验单个被钉住的 transit IP 是否落在该边解析出的 transit 池内。
-// 空字符串表示未钉住，跳过。无法解析的地址同样报错（陈旧或手误的 pin）。
+// validatePinnedTransitInCIDR validates that a single pinned transit IP falls within the transit
+// pool resolved for that edge. An empty string means unpinned and is skipped. An unparseable address
+// also errors (a stale or mistyped pin).
 func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, result *ValidationResult) {
 	if value == "" {
 		return
@@ -660,7 +699,8 @@ func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, resul
 	}
 	_, cidrNet, err := net.ParseCIDR(transitCIDR)
 	if err != nil {
-		// transit CIDR 本身非法由 schema/编译器报错，这里不重复判定越池。
+		// An illegal transit CIDR itself is reported by schema/compiler; do not duplicate the
+		// out-of-pool judgment here.
 		return
 	}
 	if !cidrNet.Contains(ip) {
@@ -668,8 +708,9 @@ func validatePinnedTransitInCIDR(prefix, field, value, transitCIDR string, resul
 	}
 }
 
-// checkDuplicatePortOnNode 跨「不同链路」检测同一节点上被重复钉住的监听端口。
-// 同一链路（同一 linkKey）的正反两条边携带镜像后的同一端口，不视为冲突。
+// checkDuplicatePortOnNode detects a listen port pinned more than once on the same node across
+// "distinct links". The forward/reverse edges of the same link (same linkKey) carry the mirrored
+// same port and are not considered a conflict.
 func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID string, portsByNode map[string][]nodePortPin, result *ValidationResult) {
 	if port == 0 {
 		return
@@ -679,7 +720,7 @@ func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID stri
 			continue
 		}
 		if existing.linkID == link {
-			// 同一链路（正反边），不是跨链路冲突。
+			// Same link (forward/reverse edges), not a cross-link conflict.
 			return
 		}
 		result.AddError(prefix, CodePinPortDuplicateCrossLink, P{"port", strconv.Itoa(port)}, P{"other", existing.edge}, P{"id", edgeID})
@@ -688,9 +729,10 @@ func checkDuplicatePortOnNode(prefix, nodeID string, port int, link, edgeID stri
 	portsByNode[nodeID] = append(portsByNode[nodeID], nodePortPin{port: port, linkID: link, edge: edgeID})
 }
 
-// checkDuplicateTransitIP 跨「不同链路」检测被重复钉住的 transit IP。
-// 地址按解析后的规范形式比较，避免 "10.10.0.1" 与等价写法逃过去重。
-// 同一链路（同一 linkKey）的正反两条边携带镜像后的同一地址，不视为冲突。
+// checkDuplicateTransitIP detects a transit IP pinned more than once across "distinct links".
+// Addresses are compared by their parsed canonical form, so that "10.10.0.1" and equivalent spellings
+// cannot escape deduplication. The forward/reverse edges of the same link (same linkKey) carry the
+// mirrored same address and are not considered a conflict.
 func checkDuplicateTransitIP(prefix, value, link, edgeID string, transitByValue map[string]pinOwner, result *ValidationResult) {
 	if value == "" {
 		return
@@ -706,8 +748,9 @@ func checkDuplicateTransitIP(prefix, value, link, edgeID string, transitByValue 
 	transitByValue[key] = pinOwner{linkID: link, edge: edgeID}
 }
 
-// checkDuplicateLinkLocal 跨「不同链路」检测被重复钉住的 IPv6 link-local 地址。
-// 同一链路（同一 linkKey）的正反两条边携带镜像后的同一地址，不视为冲突。
+// checkDuplicateLinkLocal detects an IPv6 link-local address pinned more than once across "distinct
+// links". The forward/reverse edges of the same link (same linkKey) carry the mirrored same address
+// and are not considered a conflict.
 func checkDuplicateLinkLocal(prefix, value, link, edgeID string, linkLocalByValue map[string]pinOwner, result *ValidationResult) {
 	if value == "" {
 		return
@@ -723,8 +766,9 @@ func checkDuplicateLinkLocal(prefix, value, link, edgeID string, linkLocalByValu
 	linkLocalByValue[key] = pinOwner{linkID: link, edge: edgeID}
 }
 
-// canonicalIP 把地址字符串归一为可比较的规范形式；不可解析时原样返回，
-// 让去重退化为字符串相等（不可解析地址的合法性由其它规则报错）。
+// canonicalIP normalizes an address string into a comparable canonical form; when unparseable it
+// returns the value unchanged, letting deduplication degrade to string equality (the validity of an
+// unparseable address is reported by other rules).
 func canonicalIP(value string) string {
 	if ip := net.ParseIP(value); ip != nil {
 		return ip.String()
@@ -732,11 +776,13 @@ func canonicalIP(value string) string {
 	return value
 }
 
-// validateEdgeEndpointConsistency 检查 edge 的 endpoint_host 是否与目标节点的 public endpoints 一致。
-// 当一个启用的 edge 设置了 endpoint_host，目标节点也声明了至少一个 public endpoint，
-// 但目标节点的所有 public_endpoints[].host 都不等于该 endpoint_host 时，发出警告——
-// 这通常意味着 edge 上的快照在节点 endpoint 被编辑后变得陈旧。
-// 仅警告而非报错：在 NAT/端口转发或 hairpin 场景下，dial 的 host 与节点自身声明的 host 可以合法地不同。
+// validateEdgeEndpointConsistency checks whether an edge's endpoint_host is consistent with the
+// target node's public endpoints.
+// When an enabled edge sets endpoint_host, the target node also declares at least one public
+// endpoint, but none of the target node's public_endpoints[].host equals that endpoint_host, it
+// warns -- this usually means the snapshot on the edge went stale after the node endpoint was edited.
+// Warning only, not an error: under NAT/port-forwarding or hairpin scenarios, the dial host can
+// legitimately differ from the host the node declares for itself.
 func validateEdgeEndpointConsistency(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
 	for i, edge := range topo.Edges {
 		if !edge.IsEnabled || edge.EndpointHost == "" {
@@ -762,23 +808,24 @@ func validateEdgeEndpointConsistency(topo *model.Topology, nodeMap map[string]*m
 	}
 }
 
-// detectDuplicateEnabledEdges 对同一对节点（同方向）存在多条 primary class 启用边的情况
-// 发出警告（D71，并行链路重定范围）。
-// 同向多余的 primary class 边（Role 为空或 "primary"）会被编译器折叠进同一条链路：
-// 只有首条生效，后续边携带的 endpoint_host/endpoint_port 覆盖会被静默忽略，
-// 操作员看见两条边却只有一条起作用。
-// backup 边（Role == "backup"）各自成为一条独立链路，是有意的并行链路而非意外重复，
-// 因此从不触发本告警。
-// 仅警告而非报错：拓扑仍可编译，但操作员应删除或禁用多余的边——
-// 若本意是冗余备份，应将多余的边设为 role "backup" 使其成为独立的备份链路。
+// detectDuplicateEnabledEdges warns when the same node pair (same direction) has multiple primary
+// class enabled edges (D71, parallel-links rescope).
+// Same-direction redundant primary class edges (Role empty or "primary") are folded by the compiler
+// into one link: only the first takes effect, and the endpoint_host/endpoint_port overrides carried
+// by later edges are silently ignored, so the operator sees two edges but only one has any effect.
+// backup edges (Role == "backup") each become an independent link -- intentional parallel links
+// rather than accidental duplicates -- so they never trigger this warning.
+// Warning only, not an error: the topology still compiles, but the operator should delete or disable
+// the redundant edge -- if redundancy was intended, the redundant edge should be set to role
+// "backup" to make it an independent backup link.
 func detectDuplicateEnabledEdges(topo *model.Topology, result *ValidationResult) {
-	firstEdgeByDirection := make(map[string]string) // "from->to" -> 首条 primary class 边 ID
+	firstEdgeByDirection := make(map[string]string) // "from->to" -> first primary class edge ID
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
 		if !edge.IsEnabled {
 			continue
 		}
-		// backup 边是独立链路，不参与同向去重告警。
+		// A backup edge is an independent link and does not participate in same-direction dedup warnings.
 		if linkid.IsBackup(edge) {
 			continue
 		}
@@ -791,25 +838,31 @@ func detectDuplicateEnabledEdges(topo *model.Topology, result *ValidationResult)
 	}
 }
 
-// backupDefaultLinkCost 是 backup 链路的默认 Babel rxcost（4× babeld 有线默认 96），
-// 必须与 compiler/peers.go 的同名常量保持一致——等代价告警要用编译器实际解析出的代价
-// 来比较，二者若不一致会让校验放行编译器随后视为有故障切换偏好（或反之）的配置。
-// 规范见 docs/spec/artifacts/babel.md（Link cost resolution）。
+// backupDefaultLinkCost is the default Babel rxcost for a backup link (4x babeld's wired default of
+// 96); it must match the same-named constant in compiler/peers.go -- the equal-cost warning must
+// compare against the cost the compiler actually resolves, and if the two diverge the check could
+// pass a config the compiler then treats as having a failover preference (or vice versa).
+// Spec: docs/spec/artifacts/babel.md (Link cost resolution).
 const backupDefaultLinkCost = 384
 
-// babeldWiredDefaultCost 是 babeld 对有线 / tunnel 接口的内建默认 rxcost。
-// 编译器把「未显式设置且非 backup」的链路代价解析为 0（省略 rxcost token，交由 babeld 默认），
-// 比较等代价时必须把 0 视为该内建默认值，否则两条都未设代价的链路会被误判为不等代价。
+// babeldWiredDefaultCost is babeld's built-in default rxcost for wired / tunnel interfaces.
+// The compiler resolves a link cost that is "not explicitly set and not backup" to 0 (omitting the
+// rxcost token and deferring to babeld's default); when comparing equal cost, 0 must be treated as
+// this built-in default, otherwise two links both with no cost set would be wrongly judged as
+// unequal cost.
 const babeldWiredDefaultCost = 96
 
-// effectiveLinkCost 完全镜像编译器的链路代价解析顺序（contract item 4 / babel.md）：
-//  1. 显式 priority/weight 映射（D63：priority>0 取 priority，否则 weight>0 取 weight）优先；
-//  2. 否则 backup 链路 → backupDefaultLinkCost（384）；
-//  3. 否则 0（编译器省略 rxcost，babeld 采用内建默认 96）。
+// effectiveLinkCost exactly mirrors the compiler's link-cost resolution order (contract item 4 /
+// babel.md):
+//  1. explicit priority/weight mapping takes precedence (D63: priority>0 takes priority, otherwise
+//     weight>0 takes weight);
+//  2. otherwise a backup link → backupDefaultLinkCost (384);
+//  3. otherwise 0 (the compiler omits rxcost and babeld uses its built-in default of 96).
 //
-// 返回值为编译器写入的原始代价（0 表示交由 babeld 默认）。等代价比较时由调用方
-// 通过 comparableCost 把 0 归一为 96。rep 为该链路的代表边：unify 后的 primary 链路取首条
-// primary class 边，backup 链路取该 backup 边自身。
+// The return value is the raw cost the compiler writes (0 means defer to babeld's default). For
+// equal-cost comparison the caller normalizes 0 to 96 via comparableCost. rep is the link's
+// representative edge: a unified primary link takes the first primary class edge, a backup link takes
+// the backup edge itself.
 func effectiveLinkCost(rep *model.Edge) int {
 	if rep == nil {
 		return 0
@@ -826,7 +879,8 @@ func effectiveLinkCost(rep *model.Edge) int {
 	return 0
 }
 
-// comparableCost 把链路代价归一为可比较值：0（未设、交由 babeld 默认）视为内建默认 96。
+// comparableCost normalizes a link cost into a comparable value: 0 (unset, deferred to babeld's
+// default) is treated as the built-in default of 96.
 func comparableCost(cost int) int {
 	if cost == 0 {
 		return babeldWiredDefaultCost
@@ -834,24 +888,28 @@ func comparableCost(cost int) int {
 	return cost
 }
 
-// validateInterfaceNameUniqueness 校验不变式 N4：同一节点上所有 per-peer WireGuard 接口名
-// （含 primary 与 backup、面向任意对端）必须互不相同。
+// validateInterfaceNameUniqueness validates invariant N4: all per-peer WireGuard interface names on
+// the same node (including primary and backup, toward any peer) must be distinct.
 //
-// 一个节点可能朝同一对端持有多条接口（primary 链路 + 若干 backup），接口名由对端名称
-// （primary）或对端名称叠加 backup 边 ID 的 4 位 hash（backup）派生。两条接口名相撞会让
-// 一份 WireGuard 配置与一条 Babel 接口行覆盖另一条——16 位 hash 碰撞的确定性答案是「重命名其一」，
-// 因此这里报错并点名两条相撞的链路（命名规范见 docs/spec/artifacts/naming.md §Edge-aware names）。
+// A node may hold multiple interfaces toward the same peer (a primary link + several backups); the
+// interface name is derived from the peer name (primary) or the peer name plus a 4-character hash of
+// the backup edge ID (backup). Two colliding interface names would let one WireGuard config and one
+// Babel interface line overwrite another -- the deterministic answer to a 16-bit hash collision is
+// "rename one of them", so it errors here and names both colliding links (naming spec in
+// docs/spec/artifacts/naming.md §Edge-aware names).
 //
-// 接口名按编译器的口径计算：
-//   - primary 链路朝对端 R → naming.WgInterfaceName(R.Name)；
-//   - backup 边 e 朝对端 R → naming.WgInterfaceNameForEdge(R.Name, e.ID, true)。
+// Interface names are computed the same way the compiler does:
+//   - a primary link toward peer R → naming.WgInterfaceName(R.Name);
+//   - a backup edge e toward peer R → naming.WgInterfaceNameForEdge(R.Name, e.ID, true).
 //
-// client 节点使用单一 wg0、不参与 per-peer 接口分配，故跳过 client 端点侧。
+// Client nodes use a single wg0 and do not participate in per-peer interface allocation, so the
+// client endpoint side is skipped.
 func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
-	// nodeID -> (接口名 -> 首个占用该接口名的链路描述)，用于跨链路检测同名。
+	// nodeID -> (interface name -> description of the link that first occupied that interface name),
+	// used to detect name collisions across links.
 	ifaceByNode := make(map[string]map[string]string)
 
-	// register 在某节点上登记一个接口名；若已存在则报错并点名两条链路。
+	// register records an interface name on a node; if it already exists it errors and names both links.
 	register := func(nodeIndex int, nodeID, ifaceName, linkDesc string) {
 		if ifaceByNode[nodeID] == nil {
 			ifaceByNode[nodeID] = make(map[string]string)
@@ -868,14 +926,14 @@ func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*m
 		ifaceByNode[nodeID][ifaceName] = linkDesc
 	}
 
-	// 节点下标查找，用于错误字段定位。
+	// Node-index lookup, used to locate the error field.
 	nodeIndex := make(map[string]int)
 	for i := range topo.Nodes {
 		nodeIndex[topo.Nodes[i].ID] = i
 	}
 
-	// 以 linkKey 去重链路：primary class 折叠为一条链路（用首条 primary class 边作代表），
-	// 每条 backup 边各为一条独立链路。
+	// Deduplicate links by linkKey: a primary class folds into one link (the first primary class edge
+	// is its representative), and each backup edge is an independent link.
 	seenLinks := make(map[string]bool)
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -895,8 +953,9 @@ func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*m
 
 		backup := linkid.IsBackup(edge)
 
-		// from 端点的接口朝 to（对端 = to），to 端点的接口朝 from（对端 = from）。
-		// 接口名以对端名称派生；client 端点不分配 per-peer 接口，跳过。
+		// The from endpoint's interface faces to (peer = to); the to endpoint's interface faces from
+		// (peer = from). The interface name is derived from the peer name; a client endpoint is not
+		// allocated a per-peer interface and is skipped.
 		if fromNode.Role != "client" {
 			var ifaceName string
 			if backup {
@@ -918,8 +977,9 @@ func validateInterfaceNameUniqueness(topo *model.Topology, nodeMap map[string]*m
 	}
 }
 
-// linkDescription 为错误消息构造一条链路的可读描述：标明朝向的对端、链路类别（primary/backup）
-// 与代表边 ID，便于操作员定位需重命名的链路。
+// linkDescription builds a readable description of a link for error messages: it names the peer it
+// faces, the link class (primary/backup), and the representative edge ID, so the operator can locate
+// the link to rename.
 // linkDescription builds a LANGUAGE-NEUTRAL locator for a colliding link from DATA only — the
 // role enum value (primary|backup), the remote node name, and the representative edge ID for a
 // backup — with NO translatable prose. It is interpolated as the {prefix}/{other} params of
@@ -933,12 +993,16 @@ func linkDescription(edge *model.Edge, remoteName string, backup bool) string {
 	return fmt.Sprintf("primary→%s", remoteName)
 }
 
-// validateSinglePrimaryPerPair 校验：同一对节点至多有一条显式标记 role=="primary" 的边。
-// 空 role 与 "primary" 同属 primary class，但显式写两条 "primary" 通常是操作员误解
-// （以为可借此表达双主），编译器只会折叠为一条主链路并静默忽略其余——故直接报错要求澄清。
-// 注意：只统计显式 "primary"，不含空 role（空 role 的同向重复由 detectDuplicateEnabledEdges 告警）。
+// validateSinglePrimaryPerPair validates that a node pair has at most one edge explicitly marked
+// role=="primary".
+// An empty role and "primary" both belong to the primary class, but explicitly writing two
+// "primary" edges is usually an operator misunderstanding (thinking it expresses dual-primary); the
+// compiler only folds them into one primary link and silently ignores the rest -- so it errors
+// directly and asks for clarification.
+// Note: only explicit "primary" is counted, not an empty role (same-direction duplicates with an
+// empty role are warned by detectDuplicateEnabledEdges).
 func validateSinglePrimaryPerPair(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
-	// pinKey -> 首条显式 primary 边 ID。
+	// pinKey -> first explicit primary edge ID.
 	firstPrimary := make(map[string]string)
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -960,9 +1024,10 @@ func validateSinglePrimaryPerPair(topo *model.Topology, nodeMap map[string]*mode
 	}
 }
 
-// validateBackupClientEdges 校验：role=="backup" 的边不得触及 client 节点。
-// client 使用单一 wg0、不运行 Babel，也就没有 per-peer 接口与基于代价的故障切换语义，
-// 备份链路对其毫无意义（与 validateClientEdges 中「client 恰好一条出站边、单一 wg0」的约束一致）。
+// validateBackupClientEdges validates that a role=="backup" edge must not touch a client node.
+// A client uses a single wg0 and does not run Babel, so it has no per-peer interfaces and no
+// cost-based failover semantics; a backup link is meaningless for it (consistent with the "client
+// has exactly one outbound edge, single wg0" constraint in validateClientEdges).
 func validateBackupClientEdges(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
@@ -980,30 +1045,36 @@ func validateBackupClientEdges(topo *model.Topology, nodeMap map[string]*model.N
 	}
 }
 
-// pairLinkSummary 汇总一对节点的全部链路，用于等代价 / 无 primary 告警。
+// pairLinkSummary summarizes all links of a node pair, used for equal-cost / no-primary warnings.
 type pairLinkSummary struct {
-	edgeIndex  int    // 触发告警时定位用的代表边下标（取该对节点首条启用边）
-	hasPrimary bool   // 是否存在 primary class 链路
-	costs      []int  // 各链路的可比较代价（已把 0 归一为 96）
-	fromName   string // 用于错误消息
+	edgeIndex  int    // representative edge index for locating a triggered warning (the pair's first enabled edge)
+	hasPrimary bool   // whether a primary class link exists
+	costs      []int  // each link's comparable cost (with 0 already normalized to 96)
+	fromName   string // used in error messages
 	toName     string
 }
 
-// validateParallelLinkCosts 对多链路节点对发出两类告警（并行链路 / 故障切换）：
-//   - 等代价告警：一对节点有 >=2 条链路、但所有链路解析出的可比较代价都相同——
-//     Babel 无从偏好任何一条，配置表达不出故障切换意图（规范见 docs/spec/artifacts/babel.md）。
-//   - 无 primary 告警：一对节点的所有链路都是 backup（例如某次 role 翻转后遗漏了 primary）。
+// validateParallelLinkCosts emits two kinds of warnings for multi-link node pairs (parallel links /
+// failover):
+//   - Equal-cost warning: a node pair has >=2 links, but all links resolve to the same comparable
+//     cost -- Babel cannot prefer any one of them, and the config fails to express failover intent
+//     (spec: docs/spec/artifacts/babel.md).
+//   - No-primary warning: all of a node pair's links are backup (e.g. a role flip that left out the
+//     primary).
 //
-// 链路按 unify 规则分组：primary class 折叠为一条链路（代表边 = 首条 primary class 边），
-// 每条 backup 边各为一条链路。代价解析完全镜像编译器（effectiveLinkCost），
-// 比较前由 comparableCost 把 0 归一为 babeld 内建默认 96。
+// Links are grouped by the unify rule: a primary class folds into one link (representative edge =
+// first primary class edge), and each backup edge is its own link. Cost resolution exactly mirrors
+// the compiler (effectiveLinkCost), and before comparison comparableCost normalizes 0 to babeld's
+// built-in default of 96.
 func validateParallelLinkCosts(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
-	// pinKey -> 该对节点的链路汇总。pinKey 方向无关，保证正反边落在同一对。
+	// pinKey -> the node pair's link summary. pinKey is direction-independent, ensuring forward/reverse
+	// edges fall into the same pair.
 	summaries := make(map[string]*pairLinkSummary)
-	order := make([]string, 0) // 保持首次出现顺序，使告警稳定可测
+	order := make([]string, 0) // preserve first-appearance order so warnings are stable and testable
 
-	// primaryCounted 记录每对节点的 primary class 是否已计入代价：primary class 折叠为一条链路，
-	// 其代价取首条 primary class 边（代表边），只计一次。
+	// primaryCounted records whether each node pair's primary class has been counted toward cost: a
+	// primary class folds into one link, and its cost is taken from the first primary class edge (the
+	// representative) and counted only once.
 	primaryCounted := make(map[string]bool)
 
 	for i := range topo.Edges {
@@ -1029,12 +1100,13 @@ func validateParallelLinkCosts(topo *model.Topology, nodeMap map[string]*model.N
 		}
 
 		if linkid.IsBackup(edge) {
-			// 每条 backup 边各为一条链路。
+			// Each backup edge is its own link.
 			s.costs = append(s.costs, comparableCost(effectiveLinkCost(edge)))
 			continue
 		}
 
-		// primary class：所有非 backup 边折叠为一条链路，仅计代表边（首条）的代价一次。
+		// primary class: all non-backup edges fold into one link; count the representative (first)
+		// edge's cost only once.
 		s.hasPrimary = true
 		if !primaryCounted[pk] {
 			primaryCounted[pk] = true
@@ -1045,12 +1117,12 @@ func validateParallelLinkCosts(topo *model.Topology, nodeMap map[string]*model.N
 	for _, pk := range order {
 		s := summaries[pk]
 
-		// 无 primary 告警：该对节点存在链路但无 primary class 链路（全是 backup）。
+		// No-primary warning: the node pair has links but no primary class link (all are backup).
 		if len(s.costs) > 0 && !s.hasPrimary {
 			result.AddWarning(fmt.Sprintf("edges[%d]", s.edgeIndex), CodeLinkNoPrimary, P{"node", s.fromName}, P{"other", s.toName})
 		}
 
-		// 等代价告警：>=2 条链路且可比较代价全相同。
+		// Equal-cost warning: >=2 links and all comparable costs are identical.
 		if len(s.costs) >= 2 {
 			allEqual := true
 			for _, c := range s.costs[1:] {

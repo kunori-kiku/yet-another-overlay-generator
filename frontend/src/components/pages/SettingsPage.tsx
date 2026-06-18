@@ -98,7 +98,8 @@ export function SettingsPage() {
         </div>
       </section>
 
-      {/* controller→local 有损切换确认（plan-5，D6）：具体列出保留什么、清空什么。 */}
+      {/* controller→local lossy-switch confirmation (plan-5, D6): spells out exactly what is kept
+          and what is cleared. */}
       {showSwitchToLocal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
           <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-5">

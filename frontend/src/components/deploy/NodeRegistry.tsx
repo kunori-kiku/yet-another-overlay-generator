@@ -5,13 +5,13 @@ import { t } from '../../i18n';
 import type { ControllerNodeStatus } from '../../types/controller';
 import { UpdateStatusChip } from './UpdateStatusChip';
 
-// 注册表里某节点的 applied-vs-desired 代号是否漂移（已审批节点的 applied 落后于 desired
-// ⇒ 该节点尚未拉取/应用最新一代配置）。
+// isDrifting reports whether a node's applied-vs-desired generation has drifted (an approved node
+// whose applied lags desired ⇒ it has not yet fetched/applied the latest generation of config).
 function isDrifting(applied: number, desired: number): boolean {
   return applied < desired;
 }
 
-// 状态徽标配色：approved 绿、pending 黄、revoked 红。
+// statusClass returns the status-badge color: approved green, pending yellow, revoked red.
 function statusClass(status: ControllerNodeStatus): string {
   switch (status) {
     case 'approved':
@@ -23,7 +23,8 @@ function statusClass(status: ControllerNodeStatus): string {
   }
 }
 
-// last_seen / enrolled_at 是 RFC3339 字符串；零值（"0001-01-01T00:00:00Z"）显示为「—」。
+// fmtTime formats an RFC3339 string (last_seen / enrolled_at); the zero value
+// ("0001-01-01T00:00:00Z") renders as "—".
 function fmtTime(iso: string): string {
   if (!iso || iso.startsWith('0001-01-01')) return '—';
   const d = new Date(iso);
@@ -43,22 +44,26 @@ export function NodeRegistry() {
   // loaded) ⇒ deriveUpdateState returns 'off' ⇒ a muted dash, never a misleading chip.
   const settings = useControllerStore((s) => s.settings);
 
-  // controller 注册表按 nodeId 索引（agent enroll 时用的 --node-id 即拓扑节点 id）。
+  // The controller registry is indexed by nodeId (the --node-id used at agent enroll is the topology
+  // node id).
   const statusByNodeId = new Map<string, ControllerNodeStatus>(
     ctlNodes.map((n) => [n.nodeId, n.status]),
   );
-  // 拓扑节点名查找（边的就绪状态用名字展示，便于操作员对应）。
+  // Topology node-name lookup (edge readiness shows names so the operator can match them up).
   const nameByNodeId = new Map<string, string>(topoNodes.map((n) => [n.id, n.name]));
-  // 当前设计里的节点 id 集合：注册表里出现、但设计里没有的 node-id 是「孤儿」——它仍在
-  // fleet 里（持有有效令牌、会拉取配置），但已不属于当前设计（plan-6，身份对账）。
-  // 仅当本地确有设计时（topoNodes 非空）才判定孤儿：先入网后设计的流程里画布可能为空
-  //（hydration 在服务端无设计时保留空画布），此时不能把每个节点都误标为「不在设计中」
-  //（后端对「无设计时铸造令牌」刻意不告警，前端不能自相矛盾地报警）——plan-6 review。
+  // The set of node ids in the current design: a node-id present in the registry but absent from the
+  // design is an "orphan" — it is still in the fleet (holds a valid token, fetches config) but no
+  // longer belongs to the current design (plan-6, identity reconciliation).
+  // Only judge orphans when a design actually exists locally (topoNodes non-empty): in the
+  // enroll-first-then-design flow the canvas may be empty (hydration keeps an empty canvas when the
+  // server has no design), and we must not then mislabel every node as "not in design" (the backend
+  // deliberately does not warn on "minting a token with no design", so the frontend must not
+  // contradict it) — plan-6 review.
   const designNodeIds = new Set<string>(topoNodes.map((n) => n.id));
   const designLoaded = topoNodes.length > 0;
   const isOrphan = (nodeId: string): boolean => designLoaded && !designNodeIds.has(nodeId);
 
-  // 边就绪：当且仅当两个端点节点在控制器注册表中都是 approved。
+  // Edge readiness: ready iff both endpoint nodes are approved in the controller registry.
   const edgeReady = (fromId: string, toId: string): boolean =>
     statusByNodeId.get(fromId) === 'approved' && statusByNodeId.get(toId) === 'approved';
 
@@ -104,14 +109,16 @@ export function NodeRegistry() {
                       <span className={`px-2 py-0.5 rounded text-xs border ${statusClass(n.status)}`}>
                         {n.status}
                       </span>
-                      {/* plan-4.6：operator 已请求该节点轮换 WG 密钥，等待 agent 重生并注册新公钥。 */}
+                      {/* plan-4.6: the operator has requested this node rotate its WG key; waiting for
+                          the agent to regenerate and register a new public key. */}
                       {n.rekeyRequested && (
                         <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
                           {t(language, 'nodeRegistry.rekeying')}
                         </span>
                       )}
-                      {/* plan-6：该节点在 fleet 注册表里，但不在当前设计中——身份对账标记，
-                          提示操作员它已脱离设计（可在右侧「驱逐」以从 fleet 移除）。 */}
+                      {/* plan-6: this node is in the fleet registry but not in the current design — an
+                          identity-reconciliation marker telling the operator it has left the design
+                          (revoke it on the right to remove it from the fleet). */}
                       {isOrphan(n.nodeId) && n.status !== 'revoked' && (
                         <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-900/40 text-orange-300 border-orange-700">
                           {t(language, 'nodeRegistry.notInDesign')}
@@ -171,7 +178,8 @@ export function NodeRegistry() {
         </div>
       )}
 
-      {/* 每条边的就绪状态：两端节点均 approved 才算「就绪」（其链路可被编译进 fleet）。 */}
+      {/* Per-edge readiness: an edge is "ready" only when both endpoint nodes are approved (its link
+          can then be compiled into the fleet). */}
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-gray-400">
           {t(language, 'nodeRegistry.edgeReadiness')}

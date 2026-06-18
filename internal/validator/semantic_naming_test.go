@@ -6,9 +6,10 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// nameCollisionTopology 构造一个仅含两个节点的最小拓扑，
-// 两节点分属同一 Domain 并互相连边，使其除节点名称外都通过语义校验，
-// 从而把断言聚焦在节点名称冲突规则（Spec D 的 N1–N3）上。
+// nameCollisionTopology builds a minimal topology with only two nodes that both belong to the
+// same Domain and are connected to each other, so that it passes semantic validation in every
+// respect except node names, thereby focusing the assertions on the node-name collision rules
+// (N1-N3 of Spec D).
 func nameCollisionTopology(firstName, secondName string) *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "test-001", Name: "Test Project"},
@@ -74,11 +75,12 @@ func nameCollisionTopology(firstName, secondName string) *model.Topology {
 	}
 }
 
-// TestValidateSemantic_NodeNameCollisions 以表驱动方式覆盖 Spec D 的三条命名唯一性不变式：
-//   - 安装脚本文件名冲突（N2）："Web 1" 与 "web-1" 都归一为 web-1.install.sh。
-//   - 原始名称冲突（N1）：两个 "Alpha" 完全相同。
-//   - WireGuard 接口名冲突（N3）："db.east" 与 "db-east" 都归一为 wg-db-east。
-//   - 互不冲突的两个名称（"alpha" 与 "beta"）应当通过校验。
+// TestValidateSemantic_NodeNameCollisions covers, table-driven, the three naming-uniqueness
+// invariants of Spec D:
+//   - install-script filename collision (N2): "Web 1" and "web-1" both normalize to web-1.install.sh.
+//   - raw-name collision (N1): two "Alpha" are exactly identical.
+//   - WireGuard interface-name collision (N3): "db.east" and "db-east" both normalize to wg-db-east.
+//   - two non-colliding names ("alpha" and "beta") should pass validation.
 func TestValidateSemantic_NodeNameCollisions(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -87,25 +89,25 @@ func TestValidateSemantic_NodeNameCollisions(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:        "安装脚本文件名冲突",
+			name:        "install-script filename collision",
 			firstName:   "Web 1",
 			secondName:  "web-1",
 			expectError: true,
 		},
 		{
-			name:        "原始名称冲突",
+			name:        "raw-name collision",
 			firstName:   "Alpha",
 			secondName:  "Alpha",
 			expectError: true,
 		},
 		{
-			name:        "WireGuard 接口名冲突",
+			name:        "WireGuard interface-name collision",
 			firstName:   "db.east",
 			secondName:  "db-east",
 			expectError: true,
 		},
 		{
-			name:        "互不冲突的名称",
+			name:        "non-colliding names",
 			firstName:   "alpha",
 			secondName:  "beta",
 			expectError: false,
@@ -117,13 +119,13 @@ func TestValidateSemantic_NodeNameCollisions(t *testing.T) {
 			topo := nameCollisionTopology(tc.firstName, tc.secondName)
 			result := ValidateSemantic(topo)
 			if tc.expectError {
-				// 冲突应当在第二个节点的 name 字段上报错。
+				// A collision should be reported on the second node's name field.
 				assertHasError(t, result, "nodes[1].name")
 			} else {
-				// 互不冲突的名称不应触发任何 name 字段错误。
+				// Non-colliding names should not trigger any name-field error.
 				for _, e := range result.Errors {
 					if contains(e.Field, "nodes[1].name") {
-						t.Errorf("名称 %q 与 %q 不应产生冲突错误，却得到：%s",
+						t.Errorf("names %q and %q should not produce a collision error, but got: %s",
 							tc.firstName, tc.secondName, e.Error())
 					}
 				}

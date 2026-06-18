@@ -29,55 +29,55 @@ func TestRenderInstallScript_RouterWithBabel_PerPeer(t *testing.T) {
 
 	script, err := RenderInstallScript(node, peers, true)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	// shebang
 	if !strings.HasPrefix(script, "#!/usr/bin/env bash") {
-		t.Errorf("缺少 shebang")
+		t.Errorf("missing shebang")
 	}
 
-	// Phase 0 清理
+	// Phase 0 cleanup
 	if !strings.Contains(script, "Phase 0") {
-		t.Errorf("缺少 Phase 0 清理阶段")
+		t.Errorf("missing Phase 0 cleanup stage")
 	}
 
-	// 应包含所有阶段
+	// should contain all phases
 	for _, phase := range []string{"Phase 0", "Phase 1", "Phase 2", "Phase 3"} {
 		if !strings.Contains(script, phase) {
-			t.Errorf("缺少 %s", phase)
+			t.Errorf("missing %s", phase)
 		}
 	}
 
-	// 应包含 per-peer 接口名
+	// should contain the per-peer interface names
 	if !strings.Contains(script, "wg-beta") {
-		t.Errorf("应包含 wg-beta 接口")
+		t.Errorf("should contain the wg-beta interface")
 	}
 	if !strings.Contains(script, "wg-gamma") {
-		t.Errorf("应包含 wg-gamma 接口")
+		t.Errorf("should contain the wg-gamma interface")
 	}
 
-	// 应包含 dummy0 创建（overlay 地址）
+	// should contain dummy0 creation (overlay address)
 	if !strings.Contains(script, "dummy0") {
-		t.Errorf("应包含 dummy0 接口创建")
+		t.Errorf("should contain dummy0 interface creation")
 	}
 	if !strings.Contains(script, "10.11.0.1/32") {
-		t.Errorf("应包含 overlay 地址分配到 dummy0")
+		t.Errorf("should contain the overlay address assigned to dummy0")
 	}
 
-	// 应包含 babeld systemd override
+	// should contain the babeld systemd override
 	if !strings.Contains(script, "babeld.service.d/override.conf") {
-		t.Errorf("应包含 babeld systemd override")
+		t.Errorf("should contain the babeld systemd override")
 	}
 
-	// 应清理遗留的单接口 wg0
+	// should clean up the legacy single-interface wg0
 	if !strings.Contains(script, "wg0") {
-		t.Errorf("应清理遗留的 wg0 配置")
+		t.Errorf("should clean up the legacy wg0 config")
 	}
 
-	// 应包含 ip_forward
+	// should contain ip_forward
 	if !strings.Contains(script, "ip_forward") {
-		t.Errorf("应包含 ip_forward")
+		t.Errorf("should contain ip_forward")
 	}
 }
 
@@ -97,17 +97,17 @@ func TestRenderInstallScript_PeerWithoutBabel(t *testing.T) {
 
 	script, err := RenderInstallScript(node, peers, false)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
-	// 无 babel 时不应安装 babeld
+	// without babel, babeld should not be installed
 	if strings.Contains(script, "ensure_cmd babeld babeld") {
-		t.Errorf("无 Babel 时不应安装 babeld")
+		t.Errorf("without Babel, babeld should not be installed")
 	}
 
-	// 无 babel 时不应创建 babel 目录
+	// without babel, the babel directory should not be created
 	if strings.Contains(script, "mkdir -p /etc/babel") {
-		t.Errorf("无 Babel 时不应创建 babel 目录")
+		t.Errorf("without Babel, the babel directory should not be created")
 	}
 }
 
@@ -126,11 +126,11 @@ func TestRenderInstallScript_DefaultPlatform(t *testing.T) {
 
 	script, err := RenderInstallScript(node, peers, false)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	if !strings.Contains(script, "Platform: debian") {
-		t.Errorf("默认平台应为 debian")
+		t.Errorf("the default platform should be debian")
 	}
 }
 
@@ -153,23 +153,24 @@ func TestRenderInstallScript_PerPeerCleanupOrder(t *testing.T) {
 
 	script, err := RenderInstallScript(node, peers, true)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
-	// Phase 顺序检查——锚定无歧义的阶段标题标记（裸 "Phase N" 子串会被
-	// 模板里的说明性注释抢先匹配，例如卸载段引用 Phase 1 清理函数的注释）。
+	// Phase ordering check — anchor on the unambiguous phase-title markers (a bare "Phase N"
+	// substring would be matched first by an explanatory comment in the template, e.g. the
+	// uninstall section's comment referencing the Phase 1 cleanup function).
 	phase0Idx := strings.Index(script, "=== Phase 0:")
 	phase1Idx := strings.Index(script, "=== Phase 1:")
 	phase2Idx := strings.Index(script, "=== Phase 2:")
 	phase3Idx := strings.Index(script, "=== Phase 3:")
 
 	if phase0Idx >= phase1Idx {
-		t.Errorf("Phase 0 应在 Phase 1 之前")
+		t.Errorf("Phase 0 should come before Phase 1")
 	}
 	if phase1Idx >= phase2Idx {
-		t.Errorf("Phase 1 应在 Phase 2 之前")
+		t.Errorf("Phase 1 should come before Phase 2")
 	}
 	if phase2Idx >= phase3Idx {
-		t.Errorf("Phase 2 应在 Phase 3 之前")
+		t.Errorf("Phase 2 should come before Phase 3")
 	}
 }

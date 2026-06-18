@@ -4,8 +4,9 @@ import { t } from '../../i18n';
 import * as diff from 'diff';
 import type { CompileResponse, Node as TopologyNode } from '../../types/topology';
 
-// 文件选择器编码：把 nodeId / fileType / interfaceName 三段分别 encodeURIComponent 后用 '|'
-// 连接。早先实现用 ':' 直接拼接并按 ':' 切分，含 ':' 的 ID 会破坏所有查找（修复 D58）。
+// File-selector encoding: each of the three segments (nodeId / fileType / interfaceName) is
+// encodeURIComponent'd and then joined with '|'. An earlier implementation concatenated with ':'
+// and split on ':', so an ID containing ':' would break every lookup (fixes D58).
 const FILE_SELECTOR_DELIMITER = '|';
 
 function encodeFileSelector(...segments: string[]): string {
@@ -30,18 +31,21 @@ export function AuditView() {
 
   const selectedHistory = history.find((h) => h.id === selectedHistoryId);
 
-  // 折叠未变更区块时保留首尾各 3 行上下文，中间用计数标记折叠，便于审阅者定位改动位置
-  // （修复 D77：原实现整段丢弃上下文，无法判断改动落在文件何处）。
+  // When collapsing an unchanged block, keep 3 lines of context at the head and tail, marking the
+  // collapsed middle with a count, so reviewers can locate where the change falls (fixes D77: the
+  // original implementation dropped the whole context, making it impossible to tell where in the
+  // file the change landed).
   const DIFF_CONTEXT_LINES = 3;
 
   const renderDiff = (oldText: string, newText: string) => {
     const changes = diff.diffLines(oldText || '', newText || '');
 
-    // 把一段未变更文本拆成「首部上下文 + 折叠标记 + 尾部上下文」，仅当行数超过
-    // 2*上下文+1 时才折叠，否则原样显示。
+    // Split a span of unchanged text into "head context + collapse marker + tail context",
+    // collapsing only when the line count exceeds 2*context+1; otherwise show it as is.
     const renderUnchangedPart = (value: string, key: number) => {
       const lines = value.split('\n');
-      // diff.diffLines 的块通常以换行结尾，产生末尾空串；剔除它再计数。
+      // diff.diffLines blocks usually end with a newline, producing a trailing empty string;
+      // strip it before counting.
       const hasTrailingEmpty = lines.length > 0 && lines[lines.length - 1] === '';
       const contentLines = hasTrailingEmpty ? lines.slice(0, -1) : lines;
 
@@ -93,13 +97,13 @@ export function AuditView() {
 
   const getFileContent = (result: CompileResponse | null | undefined) => {
     if (!result || !selectedNodeFileId) return '';
-    // 编码格式（'|' 分隔，每段 encodeURIComponent）：
-    //   "nodeId|fileType"  或  "nodeId|wg|interfaceName"
+    // Encoding format ('|'-separated, each segment encodeURIComponent'd):
+    //   "nodeId|fileType"  or  "nodeId|wg|interfaceName"
     const parts = decodeFileSelector(selectedNodeFileId);
     const nodeId = parts[0];
     const fileType = parts[1];
     if (fileType === 'wg' && result.wireguard_configs) {
-      // wireguard_configs 的 key 仍是后端约定的 "nodeId:interfaceName" 形式
+      // The wireguard_configs key is still the backend-agreed "nodeId:interfaceName" form
       const interfaceName = parts.slice(2).join(':');
       return result.wireguard_configs[nodeId + ':' + interfaceName] || '';
     }
@@ -112,10 +116,12 @@ export function AuditView() {
   const currentText = getFileContent(currentResult);
   const oldText = getFileContent(selectedHistory?.compileResult);
 
-  // 安全审计的暴露节点列表必须基于后端推断的能力（capabilities）。角色一改，前端本地
-  // store 里的能力立刻过时（后端要等到重新编译才会重新推断），直接读 store 会漏报暴露的
-  // relay/inbound 节点（修复 D26）。有编译结果时以 compileResult.topology.nodes 为准，并提示
-  // 「反映上次编译，重新编译刷新」；无编译结果时回退到 store 节点，并标注为编译前估计值。
+  // The security-audit exposed-nodes list must be based on the backend-inferred capabilities.
+  // The instant a role changes, the capabilities in the frontend's local store go stale (the
+  // backend only re-infers on a recompile), so reading the store directly would under-report
+  // exposed relay/inbound nodes (fixes D26). When a compile result exists, use
+  // compileResult.topology.nodes and note "reflects the last compile, recompile to refresh";
+  // with no compile result, fall back to the store nodes and label them as a pre-compile estimate.
   const auditNodes: TopologyNode[] = currentResult ? currentResult.topology.nodes : nodes;
   const auditNodesAreBackendInferred = currentResult !== null;
   // Security Audit list: Nodes that accept inbound or relay
@@ -209,8 +215,9 @@ export function AuditView() {
             >
               <option value="">{t(language, 'chSelectFileToDiff')}</option>
               {nodes.map(n => {
-                // \u4ECE\u7F16\u8BD1\u7ED3\u679C\u6536\u96C6\u6BCF\u4E2A peer \u7684 WireGuard \u63A5\u53E3\u540D\u3002wireguard_configs \u7684 key \u662F
-                // \u540E\u7AEF\u7EA6\u5B9A\u7684 "nodeId:interfaceName"\uFF0C\u8FD9\u91CC\u4EE5 nodeId \u524D\u7F00\u5207\u51FA\u63A5\u53E3\u540D\u90E8\u5206\u3002
+                // Collect each peer's WireGuard interface name from the compile result. The
+                // wireguard_configs key is the backend-agreed "nodeId:interfaceName"; here we
+                // slice off the interface-name part using the nodeId prefix.
                 const wgKeys = currentResult
                   ? Object.keys(currentResult.wireguard_configs)
                       .filter((key) => key.startsWith(n.id + ':'))

@@ -9,24 +9,33 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-// TestEntrypointParity 是「共享渲染入口」的等价性闸门。
+// TestEntrypointParity is the equivalence gate for the "shared render entrypoint".
 //
-// 在此 PR 之前，API（internal/api/handler.go）与 CLI（cmd/compiler）各自维护一份渲染逻辑，
-// CLI 那份是退化实现：塞入字面量 FAKE_PRIVKEY_*、从不渲染 client 的 wg0.conf、不生成
-// client 安装脚本、也不生成 deploy-all 脚本（审计主题 T6：D6 / D27–29 / D59）。本 PR 把
-// GenerateKeys + All 抽到本共享包，两个入口现在都走 render.GenerateKeys → compiler.Compile →
-// render.All 这一条完全相同的路径。本测试就锁定该路径必须产出的关键产物，任何回归到分叉
-// 行为（漏渲 client、漏渲 deploy、再次出现 FAKE_）都会让它失败。
+// Before this PR, the API (internal/api/handler.go) and the CLI (cmd/compiler)
+// each maintained their own copy of the render logic; the CLI's was a degenerate
+// implementation: it stuffed in literal FAKE_PRIVKEY_*, never rendered the
+// client's wg0.conf, generated no client install script, and generated no
+// deploy-all script (audit theme T6: D6 / D27-29 / D59). This PR extracts
+// GenerateKeys + All into this shared package, so both entrypoints now follow
+// the exact same path: render.GenerateKeys -> compiler.Compile -> render.All.
+// This test locks in the key artifacts that path must produce; any regression
+// back to forked behavior (missing client render, missing deploy render, FAKE_
+// reappearing) makes it fail.
 //
-// 拓扑刻意同时含 router、peer、client 三种角色，确保覆盖到 render.All 内三条分支：
-// per-peer WireGuard、client 单一 wg0、以及 client 与 per-peer 两种安装脚本模板。
+// The topology deliberately contains all three of the router, peer, and client
+// roles to ensure coverage of the three branches inside render.All: per-peer
+// WireGuard, the client's single wg0, and both the client and per-peer install
+// script templates.
 //
-// 三枚私钥在测试中一次性用 wgtypes.GeneratePrivateKey 生成并写到节点的 WireGuardPrivateKey
-// 上（落入 GenerateKeys 情形 (a)：私钥在场则复用），从而让本次运行内的密钥确定且为真实
-// WireGuard 私钥，渲染出的配置不含任何占位串。
+// The three private keys are generated once in the test with
+// wgtypes.GeneratePrivateKey and written onto the nodes' WireGuardPrivateKey
+// (falling into GenerateKeys case (a): reuse the private key when present), so
+// that the keys within this run are deterministic and are real WireGuard
+// private keys, and the rendered config contains no placeholder strings.
 func TestEntrypointParity(t *testing.T) {
-	// 一次性生成三枚真实 WireGuard 私钥，分别钉到三个节点上，使 GenerateKeys 走「私钥在场
-	// 则复用」分支（情形 a），渲染结果在本次运行内确定。
+	// Generate three real WireGuard private keys once and pin them onto the
+	// three nodes so GenerateKeys takes the "reuse the private key when present"
+	// branch (case a), making the render result deterministic within this run.
 	routerKey := mustGenerateKey(t)
 	peerKey := mustGenerateKey(t)
 	clientKey := mustGenerateKey(t)
@@ -64,67 +73,68 @@ func TestEntrypointParity(t *testing.T) {
 			},
 		},
 		Edges: []model.Edge{
-			// peer-1 -> router-1：peer 主动连公网 router（必须带 endpoint_host）。
+			// peer-1 -> router-1: peer actively connects to the public router (must carry endpoint_host).
 			{ID: "e-peer", FromNodeID: "peer-1", ToNodeID: "router-1", Type: "public-endpoint",
 				EndpointHost: "router-1.example", Transport: "udp", IsEnabled: true},
-			// client-1 -> router-1：client 的唯一出站边（必须带 endpoint_host）。
+			// client-1 -> router-1: the client's sole outbound edge (must carry endpoint_host).
 			{ID: "e-client", FromNodeID: "client-1", ToNodeID: "router-1", Type: "public-endpoint",
 				EndpointHost: "router-1.example", Transport: "udp", IsEnabled: true},
 		},
 	}
 
-	// 走与 API/CLI 完全相同的共享路径。
+	// Follow the exact same shared path as the API/CLI.
 	keys, err := GenerateKeys(topo, AirGap)
 	if err != nil {
-		t.Fatalf("GenerateKeys 失败: %v", err)
+		t.Fatalf("GenerateKeys failed: %v", err)
 	}
 
-	// GenerateKeys 应复用钉好的私钥（情形 a），且由私钥派生公钥写回。
+	// GenerateKeys should reuse the pinned private key (case a) and write back a
+	// public key derived from the private key.
 	if got := keys["router-1"].PrivateKey; got != routerKey.String() {
-		t.Errorf("router-1 私钥应被原样复用，期望 %q，实际 %q", routerKey.String(), got)
+		t.Errorf("router-1 private key should be reused verbatim, want %q, got %q", routerKey.String(), got)
 	}
 	if got := keys["router-1"].PublicKey; got != routerKey.PublicKey().String() {
-		t.Errorf("router-1 公钥应由私钥派生，期望 %q，实际 %q", routerKey.PublicKey().String(), got)
+		t.Errorf("router-1 public key should be derived from the private key, want %q, got %q", routerKey.PublicKey().String(), got)
 	}
 
 	c := compiler.NewCompiler()
 	result, err := c.Compile(topo, keys)
 	if err != nil {
-		t.Fatalf("Compile 失败: %v", err)
+		t.Fatalf("Compile failed: %v", err)
 	}
 
 	if err := All(result, keys, FetchSettings{}); err != nil {
-		t.Fatalf("render.All 失败: %v", err)
+		t.Fatalf("render.All failed: %v", err)
 	}
 
-	// 断言 1：client 节点有 "client-1:wg0" 的 WireGuard 配置（client 模板，D27）。
+	// Assertion 1: the client node has a "client-1:wg0" WireGuard config (client template, D27).
 	clientWG, ok := result.WireGuardConfigs["client-1:wg0"]
 	if !ok {
-		t.Fatalf("client 节点应有 %q 的 WireGuard 配置（client wg0 模板）；现有键：%v",
+		t.Fatalf("client node should have a %q WireGuard config (client wg0 template); existing keys: %v",
 			"client-1:wg0", keysOf(result.WireGuardConfigs))
 	}
 	if !strings.Contains(clientWG, "wg0") {
-		t.Errorf("client wg0 配置应提及接口名 wg0，实际内容：\n%s", clientWG)
+		t.Errorf("client wg0 config should mention the interface name wg0, actual content:\n%s", clientWG)
 	}
 
-	// 断言 2：client 节点有安装脚本，且为 client 模板（含 wg0，D28/D29）。
+	// Assertion 2: the client node has an install script, and it is the client template (contains wg0, D28/D29).
 	clientInstall, ok := result.InstallScripts["client-1"]
 	if !ok {
-		t.Fatalf("client 节点应有安装脚本；现有键：%v", keysOf(result.InstallScripts))
+		t.Fatalf("client node should have an install script; existing keys: %v", keysOf(result.InstallScripts))
 	}
 	if !strings.Contains(clientInstall, "wg0") {
-		t.Errorf("client 安装脚本应使用 client 模板（含 wg0），实际未出现 wg0")
+		t.Errorf("client install script should use the client template (contains wg0), but wg0 did not appear")
 	}
 
-	// 断言 3：deploy 脚本出现在 deploy-all.sh / deploy-all.ps1 键下（D59）。
+	// Assertion 3: the deploy scripts appear under the deploy-all.sh / deploy-all.ps1 keys (D59).
 	if _, ok := result.DeployScripts["deploy-all.sh"]; !ok {
-		t.Errorf("应生成 deploy-all.sh；现有键：%v", keysOf(result.DeployScripts))
+		t.Errorf("deploy-all.sh should be generated; existing keys: %v", keysOf(result.DeployScripts))
 	}
 	if _, ok := result.DeployScripts["deploy-all.ps1"]; !ok {
-		t.Errorf("应生成 deploy-all.ps1；现有键：%v", keysOf(result.DeployScripts))
+		t.Errorf("deploy-all.ps1 should be generated; existing keys: %v", keysOf(result.DeployScripts))
 	}
 
-	// 断言 4：任何渲染产物都不得包含 FAKE_（CLI 旧的占位密钥彻底消失，D6）。
+	// Assertion 4: no rendered artifact may contain FAKE_ (the CLI's old placeholder keys are gone entirely, D6).
 	assertNoFake(t, "WireGuardConfigs", result.WireGuardConfigs)
 	assertNoFake(t, "BabelConfigs", result.BabelConfigs)
 	assertNoFake(t, "SysctlConfigs", result.SysctlConfigs)
@@ -132,27 +142,27 @@ func TestEntrypointParity(t *testing.T) {
 	assertNoFake(t, "DeployScripts", result.DeployScripts)
 }
 
-// mustGenerateKey 生成一枚真实 WireGuard 私钥，失败即终止测试。
+// mustGenerateKey generates one real WireGuard private key, terminating the test on failure.
 func mustGenerateKey(t *testing.T) wgtypes.Key {
 	t.Helper()
 	key, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
-		t.Fatalf("生成 WireGuard 私钥失败: %v", err)
+		t.Fatalf("failed to generate WireGuard private key: %v", err)
 	}
 	return key
 }
 
-// assertNoFake 断言 map 中没有任何值包含字面量 FAKE_（旧 CLI 占位密钥的标志，D6）。
+// assertNoFake asserts that no value in the map contains the literal FAKE_ (the marker of the old CLI placeholder keys, D6).
 func assertNoFake(t *testing.T, label string, m map[string]string) {
 	t.Helper()
 	for key, value := range m {
 		if strings.Contains(value, "FAKE_") {
-			t.Errorf("%s[%q] 不应包含占位串 FAKE_（D6 回归）", label, key)
+			t.Errorf("%s[%q] should not contain the placeholder string FAKE_ (D6 regression)", label, key)
 		}
 	}
 }
 
-// keysOf 返回 map 的键集合，仅用于断言失败时的诊断输出。
+// keysOf returns the set of keys of the map, used only for diagnostic output on assertion failure.
 func keysOf(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

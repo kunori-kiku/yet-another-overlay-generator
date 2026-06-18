@@ -23,16 +23,16 @@ func TestHandleHealth(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf(" 200,  %d", rec.Code)
+		t.Errorf("want 200, got %d", rec.Code)
 	}
 
 	var resp HealthResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	if resp.Status != "ok" {
-		t.Errorf(" status=ok,  %s", resp.Status)
+		t.Errorf("want status=ok, got %s", resp.Status)
 	}
 }
 
@@ -45,7 +45,7 @@ func TestHandleHealth_WrongMethod(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf(" 405,  %d", rec.Code)
+		t.Errorf("want 405, got %d", rec.Code)
 	}
 }
 
@@ -60,16 +60,16 @@ func TestHandleValidate_ValidTopology(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf(" 200,  %d, body: %s", rec.Code, rec.Body.String())
+		t.Errorf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	var resp ValidateResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	if !resp.Valid {
-		t.Errorf(", errors: %v", resp.Errors)
+		t.Errorf("expected topology to be valid, errors: %v", resp.Errors)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestHandleValidate_InvalidTopology(t *testing.T) {
 
 	topo := map[string]interface{}{
 		"project": map[string]interface{}{
-			"id":   "", //  ID
+			"id":   "", // missing project ID
 			"name": "Test",
 		},
 		"domains": []interface{}{},
@@ -94,20 +94,20 @@ func TestHandleValidate_InvalidTopology(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf(" 200,  %d", rec.Code)
+		t.Errorf("want 200, got %d", rec.Code)
 	}
 
 	var resp ValidateResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	if resp.Valid {
-		t.Errorf("")
+		t.Errorf("expected topology to be invalid")
 	}
 
 	if len(resp.Errors) == 0 {
-		t.Errorf("")
+		t.Errorf("expected non-empty validation errors")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestHandleValidate_EmptyBody(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf(" 400,  %d", rec.Code)
+		t.Errorf("want 400, got %d", rec.Code)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestHandleValidate_InvalidJSON(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf(" 400,  %d", rec.Code)
+		t.Errorf("want 400, got %d", rec.Code)
 	}
 }
 
@@ -148,34 +148,34 @@ func TestHandleCompile_ValidTopology(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf(" 200,  %d, body: %s", rec.Code, rec.Body.String())
+		t.Errorf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
 	var resp CompileResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf(": %v", err)
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	//  IP
+	// Every node should have an allocated overlay IP.
 	for _, node := range resp.Topology.Nodes {
 		if node.OverlayIP == "" {
-			t.Errorf(" %s  IP", node.Name)
+			t.Errorf("node %s has no overlay IP", node.Name)
 		}
 	}
 
-	//  WireGuard
+	// Should produce WireGuard configs.
 	if len(resp.WireGuardConfigs) == 0 {
-		t.Errorf(" WireGuard ")
+		t.Errorf("expected non-empty WireGuard configs")
 	}
 
-	//  Babel
+	// Should produce Babel configs.
 	if len(resp.BabelConfigs) == 0 {
-		t.Errorf(" Babel ")
+		t.Errorf("expected non-empty Babel configs")
 	}
 
-	//
+	// Should produce install scripts.
 	if len(resp.InstallScripts) == 0 {
-		t.Errorf("")
+		t.Errorf("expected non-empty install scripts")
 	}
 }
 
@@ -197,7 +197,7 @@ func TestHandleCompile_InvalidTopology(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf(" 422,  %d", rec.Code)
+		t.Errorf("want 422, got %d", rec.Code)
 	}
 }
 
@@ -212,19 +212,19 @@ func TestHandleExport_ReturnsZipWithNodeInstallers(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf(" 200,  %d, body: %s", rec.Code, rec.Body.String())
+		t.Errorf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 
-	//  Content-Type
+	// Check the Content-Type header.
 	ct := rec.Header().Get("Content-Type")
 	if ct != "application/zip" {
-		t.Errorf(" Content-Type=application/zip,  %s", ct)
+		t.Errorf("want Content-Type=application/zip, got %s", ct)
 	}
 
-	//  Content-Disposition
+	// Check the Content-Disposition header.
 	cd := rec.Header().Get("Content-Disposition")
 	if cd == "" {
-		t.Errorf(" Content-Disposition header")
+		t.Errorf("missing Content-Disposition header")
 	}
 
 	zipReader, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
@@ -286,7 +286,7 @@ func TestHandleExport_ReturnsZipWithNodeInstallers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read tar entry from node-alpha.tar.gz: %v", err)
 		}
-		// per-peer 架构：接口名为 wg-<peername>，node-alpha 的 peer 是 node-beta
+		// per-peer architecture: the interface name is wg-<peername>; node-alpha's peer is node-beta
 		if strings.HasPrefix(hdr.Name, "wireguard/wg-") && strings.HasSuffix(hdr.Name, ".conf") {
 			hasWgConf = true
 			break
@@ -307,11 +307,11 @@ func TestCORS_Preflight(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
-		t.Errorf("CORS preflight  204,  %d", rec.Code)
+		t.Errorf("CORS preflight want 204, got %d", rec.Code)
 	}
 
 	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Errorf(" Access-Control-Allow-Origin: *")
+		t.Errorf("expected Access-Control-Allow-Origin: *")
 	}
 }
 
@@ -324,11 +324,11 @@ func TestCORS_Headers(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 
 	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Errorf(" CORS header")
+		t.Errorf("missing CORS header")
 	}
 }
 
-// ---  ---
+// --- test helpers ---
 
 func validTopologyJSON() []byte {
 	topo := map[string]interface{}{

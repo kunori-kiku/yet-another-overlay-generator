@@ -1,23 +1,23 @@
-// 共享的「每条 edge ↔ 已编译 WG 接口」解析器（Decisions #12），供 RightPanel 与 CustomNode 共用，
-// 避免两处各自实现而漂移。纯函数，不读 store；类型从 ../types/topology 引入。
+// Shared "per-edge <-> compiled WG interface" resolver (Decisions #12), used by both RightPanel and CustomNode,
+// to avoid two divergent implementations. Pure function, does not read the store; types are imported from ../types/topology.
 //
-// 关键约束（绝不通过剥离 'wg-' 前缀来反推 peerName）：
-// 备份链路接口名形如 wg-<clean8><hash4>（如 wg-betaa3f2），剥前缀只会得到垃圾 chip。
-// 正确做法是按「pinned 端口」把接口匹配回它所属的 edge —— 每个节点上接口的 ListenPort 唯一，
-// 因此 (pinned_from_port===P && from_node_id===N) 或 (pinned_to_port===P && to_node_id===N)
-// 能确定性地定位到 edge，再取「对端节点名」作为 peerName，并复用 edge.role 决定 ★/bN 标记。
-// 接口命名权威在后端（docs/spec/artifacts/naming.md）；前端只消费，不重算接口名。
+// Key constraint (never infer peerName by stripping the 'wg-' prefix):
+// backup-link interface names look like wg-<clean8><hash4> (e.g. wg-betaa3f2); stripping the prefix yields a garbage chip.
+// The correct approach is to match an interface back to its owning edge by "pinned port" — each interface's ListenPort on a node is unique,
+// so (pinned_from_port===P && from_node_id===N) or (pinned_to_port===P && to_node_id===N)
+// locates the edge deterministically; then take the "peer node name" as peerName and reuse edge.role to decide the ★/bN marker.
+// Interface naming authority lives in the backend (docs/spec/artifacts/naming.md); the frontend only consumes it and never recomputes interface names.
 import type { Node, Edge } from '../types/topology';
 
 export interface CompiledInterfaceInfo {
-  interfaceName: string; // 真实接口名（如 "wg-beta" / "wg-betaa3f2"），用于 tooltip，绝不剥 'wg-'
-  listenPort: number;    // 从配置正文解析出的 ListenPort
-  peerName: string;      // 对端节点名（匹配到 edge 时）；未匹配时回退为接口名本身
-  edgeId?: string;       // 匹配到的 edge id（未匹配则缺省）
-  role: 'primary' | 'backup' | 'unknown'; // backup→'backup'；匹配到非 backup→'primary'；未匹配→'unknown'
+  interfaceName: string; // real interface name (e.g. "wg-beta" / "wg-betaa3f2"), used in the tooltip; never strip 'wg-'
+  listenPort: number;    // ListenPort parsed from the config body
+  peerName: string;      // peer node name (when matched to an edge); falls back to the interface name itself when unmatched
+  edgeId?: string;       // matched edge id (omitted when unmatched)
+  role: 'primary' | 'backup' | 'unknown'; // backup->'backup'; matched non-backup->'primary'; unmatched->'unknown'
 }
 
-// 从 WG 配置正文解析 ListenPort（端口分配权威在后端）。无法解析时返回 null（上层据此跳过该条目）。
+// Parse ListenPort from the WG config body (port-allocation authority lives in the backend). Returns null when it cannot be parsed (callers skip the entry accordingly).
 function parseListenPort(config: string | undefined): number | null {
   if (!config) return null;
   const m = config.match(/ListenPort\s*=\s*(\d+)/);
@@ -26,9 +26,9 @@ function parseListenPort(config: string | undefined): number | null {
   return Number.isFinite(port) ? port : null;
 }
 
-// 按 pinned 端口把「节点 N 上监听端口 P 的接口」匹配回它所属的 edge：
-//   (pinned_from_port===P && from_node_id===N) 或 (pinned_to_port===P && to_node_id===N)。
-// 节点内端口唯一，因此匹配是确定性的。返回 undefined 表示该接口尚未编译 / 缺 pin / 无对应 edge。
+// Match "the interface listening on port P on node N" back to its owning edge by pinned port:
+//   (pinned_from_port===P && from_node_id===N) or (pinned_to_port===P && to_node_id===N).
+// Ports are unique within a node, so the match is deterministic. Returns undefined when the interface is not yet compiled / missing a pin / has no corresponding edge.
 function matchEdgeByPinnedPort(
   nodeId: string,
   listenPort: number,
@@ -41,10 +41,10 @@ function matchEdgeByPinnedPort(
   );
 }
 
-// 解析某个节点上全部已编译接口为带角色的展示信息。
-// 配置 key 形如 "<nodeID>:<interfaceName>"；只处理属于 nodeId 的条目。
-// 优雅降级：无 ListenPort（无法解析）→ 跳过该条目；缺 pin / 无对应 edge → role:'unknown'，
-// peerName 原样回退为接口名（绝不剥 'wg-'）。
+// Resolve all compiled interfaces on a given node into role-annotated display info.
+// Config keys look like "<nodeID>:<interfaceName>"; only entries belonging to nodeId are processed.
+// Graceful degradation: no ListenPort (cannot parse) -> skip the entry; missing pin / no corresponding edge -> role:'unknown',
+// peerName falls back verbatim to the interface name (never strip 'wg-').
 export function resolveNodeInterfaces(
   nodeId: string,
   wireguardConfigs: Record<string, string>,
@@ -62,11 +62,11 @@ export function resolveNodeInterfaces(
     const interfaceName = key.slice(colonIdx + 1);
 
     const listenPort = parseListenPort(config);
-    if (listenPort === null) continue; // 无法解析端口 → 跳过
+    if (listenPort === null) continue; // cannot parse the port -> skip
 
     const edge = matchEdgeByPinnedPort(nodeId, listenPort, edges);
     if (!edge) {
-      // 未匹配到 edge（缺 pin / 尚未编译 / 无对应 edge）：role 未知，peerName 回退为接口名。
+      // No edge matched (missing pin / not yet compiled / no corresponding edge): role unknown, peerName falls back to the interface name.
       out.push({
         interfaceName,
         listenPort,
@@ -76,7 +76,7 @@ export function resolveNodeInterfaces(
       continue;
     }
 
-    // 对端节点 = edge 的另一端（接口所在节点的对侧）。
+    // Peer node = the other end of the edge (the side opposite the node the interface is on).
     const otherNodeId =
       edge.from_node_id === nodeId ? edge.to_node_id : edge.from_node_id;
     const otherNode = nodes.find((n) => n.id === otherNodeId);
@@ -96,10 +96,10 @@ export function resolveNodeInterfaces(
   return out;
 }
 
-// 解析单条 edge 某一侧的已编译接口（RightPanel 的「每条边已编译值」面板用）。
-// fromSide=true → 在 from_node_id 上找监听 pinned_from_port 的接口；
-// fromSide=false → 在 to_node_id 上找监听 pinned_to_port 的接口。
-// 缺 pin（尚未编译）/ 无法解析 ListenPort / 找不到对应接口 → 返回 null。
+// Resolve the compiled interface on one side of a single edge (used by RightPanel's "per-edge compiled values" panel).
+// fromSide=true -> on from_node_id, find the interface listening on pinned_from_port;
+// fromSide=false -> on to_node_id, find the interface listening on pinned_to_port.
+// Missing pin (not yet compiled) / cannot parse ListenPort / no matching interface found -> return null.
 export function resolveEdgeInterface(
   edge: Edge,
   fromSide: boolean,

@@ -76,76 +76,76 @@ func TestRenderBabelConfig_Router_PerPeer(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染 Babel 配置失败: %v", err)
+		t.Fatalf("failed to render Babel config: %v", err)
 	}
 
 	if config == "" {
-		t.Fatalf("Router 应该生成 Babel 配置")
+		t.Fatalf("router should generate a Babel config")
 	}
 
-	// 应包含 router-id（MAC-48 格式）
+	// Should contain router-id (MAC-48 format).
 	if !strings.Contains(config, "router-id") {
-		t.Errorf("应包含 router-id")
+		t.Errorf("should contain router-id")
 	}
 
-	// router-id 应包含冒号（MAC-48 格式）
+	// router-id should contain a colon (MAC-48 format).
 	lines := strings.Split(config, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "router-id ") {
 			rid := strings.TrimPrefix(line, "router-id ")
 			if !strings.Contains(rid, ":") {
-				t.Errorf("router-id 应为 MAC-48 格式，实际: %s", rid)
+				t.Errorf("router-id should be in MAC-48 format, actual: %s", rid)
 			}
 		}
 	}
 
-	// 应包含 per-peer 接口声明
+	// Should contain per-peer interface declarations.
 	if !strings.Contains(config, "interface wg-beta") {
-		t.Errorf("应包含 wg-beta 接口声明")
+		t.Errorf("should contain wg-beta interface declaration")
 	}
 	if !strings.Contains(config, "interface wg-gamma") {
-		t.Errorf("应包含 wg-gamma 接口声明")
+		t.Errorf("should contain wg-gamma interface declaration")
 	}
 
-	// 接口类型应为 tunnel（不是 wired）
+	// Interface type should be tunnel (not wired).
 	if !strings.Contains(config, "type tunnel") {
-		t.Errorf("WireGuard 接口类型应为 tunnel")
+		t.Errorf("WireGuard interface type should be tunnel")
 	}
 	if strings.Contains(config, "type wired") {
-		t.Errorf("不应使用 type wired，应使用 type tunnel")
+		t.Errorf("should not use type wired, should use type tunnel")
 	}
 
-	// 应包含 hello-interval 和 update-interval
+	// Should contain hello-interval and update-interval.
 	if !strings.Contains(config, "hello-interval 4") {
-		t.Errorf("应包含 hello-interval 4")
+		t.Errorf("should contain hello-interval 4")
 	}
 	if !strings.Contains(config, "update-interval 16") {
-		t.Errorf("应包含 update-interval 16")
+		t.Errorf("should contain update-interval 16")
 	}
 
-	// 应包含 local-port
+	// Should contain local-port.
 	if !strings.Contains(config, "local-port 33123") {
-		t.Errorf("应包含 local-port 33123")
+		t.Errorf("should contain local-port 33123")
 	}
 
-	// 应包含 skip-kernel-setup
+	// Should contain skip-kernel-setup.
 	if !strings.Contains(config, "skip-kernel-setup false") {
-		t.Errorf("应包含 skip-kernel-setup false")
+		t.Errorf("should contain skip-kernel-setup false")
 	}
 
-	// 应包含 overlay IP /32 重分发
+	// Should contain the overlay IP /32 redistribution.
 	if !strings.Contains(config, "10.11.0.1/32") {
-		t.Errorf("应包含 overlay IP /32 重分发")
+		t.Errorf("should contain the overlay IP /32 redistribution")
 	}
 
-	// 应包含 redistribute deny
+	// Should contain redistribute deny.
 	if !strings.Contains(config, "redistribute local deny") {
-		t.Errorf("应包含 redistribute local deny")
+		t.Errorf("should contain redistribute local deny")
 	}
 
-	// 不应包含 default-metric
+	// Should not contain default-metric.
 	if strings.Contains(config, "default-metric") {
-		t.Errorf("不应包含 default-metric")
+		t.Errorf("should not contain default-metric")
 	}
 }
 
@@ -169,11 +169,11 @@ func TestRenderBabelConfig_CustomRouterID(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	if !strings.Contains(config, "router-id 02:aa:bb:cc:dd:ee") {
-		t.Errorf("应使用用户自定义的 router-id")
+		t.Errorf("should use the user-supplied router-id")
 	}
 }
 
@@ -196,15 +196,15 @@ func TestRenderBabelConfig_Peer(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	if config == "" {
-		t.Fatalf("Peer 在 babel 域下应生成 Babel 配置")
+		t.Fatalf("peer should generate a Babel config in a babel domain")
 	}
 
 	if !strings.Contains(config, "interface wg-hub") {
-		t.Errorf("应包含 wg-hub 接口声明")
+		t.Errorf("should contain wg-hub interface declaration")
 	}
 }
 
@@ -223,11 +223,11 @@ func TestRenderBabelConfig_NonBabelDomain(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	if config != "" {
-		t.Errorf("非 babel 域不应生成 Babel 配置")
+		t.Errorf("a non-babel domain should not generate a Babel config")
 	}
 }
 
@@ -244,16 +244,16 @@ func TestRenderBabelConfig_NoPeers(t *testing.T) {
 
 	config, err := RenderBabelConfig(node, peers, domain)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	if config == "" {
-		t.Fatalf("无 peer 时也应生成 Babel 配置（但无接口）")
+		t.Fatalf("a Babel config should be generated even with no peers (but with no interfaces)")
 	}
 
-	// 不应包含 interface 行
+	// Should not contain any interface lines.
 	if strings.Contains(config, "interface wg-") {
-		t.Errorf("无 peer 时不应有接口声明")
+		t.Errorf("there should be no interface declarations when there are no peers")
 	}
 }
 
@@ -277,16 +277,16 @@ func TestRenderAllBabelConfigs_PerPeer(t *testing.T) {
 
 	configs, err := RenderAllBabelConfigs(topo, peerMap)
 	if err != nil {
-		t.Fatalf("渲染失败: %v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 
 	if len(configs) != 2 {
-		t.Errorf("应有 2 个 Babel 配置，实际 %d", len(configs))
+		t.Errorf("should have 2 Babel configs, actual %d", len(configs))
 	}
 
 	for nodeID, config := range configs {
 		if config == "" {
-			t.Errorf("节点 %s 的 Babel 配置为空", nodeID)
+			t.Errorf("Babel config for node %s is empty", nodeID)
 		}
 	}
 }
@@ -302,15 +302,15 @@ func TestRenderSysctlConfig_Forwarding(t *testing.T) {
 
 	config, err := RenderSysctlConfig(node)
 	if err != nil {
-		t.Fatalf("渲染 sysctl 配置失败: %v", err)
+		t.Fatalf("failed to render sysctl config: %v", err)
 	}
 
 	if !strings.Contains(config, "net.ipv4.ip_forward = 1") {
-		t.Errorf("应包含 ip_forward")
+		t.Errorf("should contain ip_forward")
 	}
 
 	if !strings.Contains(config, "net.ipv4.conf.all.rp_filter = 0") {
-		t.Errorf("应包含 rp_filter")
+		t.Errorf("should contain rp_filter")
 	}
 }
 
@@ -325,14 +325,14 @@ func TestRenderSysctlConfig_NoForwarding(t *testing.T) {
 
 	config, err := RenderSysctlConfig(node)
 	if err != nil {
-		t.Fatalf("渲染 sysctl 配置失败: %v", err)
+		t.Fatalf("failed to render sysctl config: %v", err)
 	}
 
 	if strings.Contains(config, "net.ipv4.ip_forward = 1") {
-		t.Errorf("不应包含 ip_forward")
+		t.Errorf("should not contain ip_forward")
 	}
 
 	if !strings.Contains(config, "net.ipv4.conf.all.rp_filter = 2") {
-		t.Errorf("应包含 rp_filter (=2)")
+		t.Errorf("should contain rp_filter (=2)")
 	}
 }

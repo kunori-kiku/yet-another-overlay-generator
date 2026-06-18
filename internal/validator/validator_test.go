@@ -6,13 +6,13 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// --- Schema  ---
+// --- Schema validation ---
 
 func TestValidateSchema_ValidTopology(t *testing.T) {
 	topo := validTopology()
 	result := ValidateSchema(topo)
 	if !result.IsValid() {
-		t.Errorf(" Schema ,  %d :", len(result.Errors))
+		t.Errorf("a valid topology should pass schema validation, got %d errors:", len(result.Errors))
 		for _, e := range result.Errors {
 			t.Errorf("  %s", e.Error())
 		}
@@ -104,13 +104,13 @@ func TestValidateSchema_SelfReferenceEdge(t *testing.T) {
 	assertHasError(t, result, "edges[0]")
 }
 
-// ---  ---
+// --- Semantic validation ---
 
 func TestValidateSemantic_ValidTopology(t *testing.T) {
 	topo := validTopology()
 	result := ValidateSemantic(topo)
 	if !result.IsValid() {
-		t.Errorf(",  %d :", len(result.Errors))
+		t.Errorf("a valid topology should pass semantic validation, got %d errors:", len(result.Errors))
 		for _, e := range result.Errors {
 			t.Errorf("  %s", e.Error())
 		}
@@ -141,7 +141,7 @@ func TestValidateSemantic_DuplicateIP(t *testing.T) {
 
 func TestValidateSemantic_IPOutsideDomainCIDR(t *testing.T) {
 	topo := validTopology()
-	topo.Nodes[0].OverlayIP = "192.168.1.1" //  10.10.0.0/24
+	topo.Nodes[0].OverlayIP = "192.168.1.1" // outside the domain CIDR 10.10.0.0/24
 	result := ValidateSemantic(topo)
 	assertHasError(t, result, "nodes[0].overlay_ip")
 }
@@ -149,7 +149,7 @@ func TestValidateSemantic_IPOutsideDomainCIDR(t *testing.T) {
 func TestValidateSemantic_DuplicateDomainID(t *testing.T) {
 	topo := validTopology()
 	topo.Domains = append(topo.Domains, model.Domain{
-		ID:             "domain-1", //
+		ID:             "domain-1", // duplicate domain ID
 		Name:           "duplicate",
 		CIDR:           "10.20.0.0/24",
 		AllocationMode: "auto",
@@ -162,7 +162,7 @@ func TestValidateSemantic_DuplicateDomainID(t *testing.T) {
 func TestValidateSemantic_DuplicateNodeID(t *testing.T) {
 	topo := validTopology()
 	topo.Nodes = append(topo.Nodes, model.Node{
-		ID:       "node-1", //
+		ID:       "node-1", // duplicate node ID
 		Name:     "duplicate-node",
 		Role:     "peer",
 		DomainID: "domain-1",
@@ -173,7 +173,7 @@ func TestValidateSemantic_DuplicateNodeID(t *testing.T) {
 
 func TestValidateSemantic_IsolatedNode(t *testing.T) {
 	topo := validTopology()
-	//
+	// Add a node with no edges -- an isolated node.
 	topo.Nodes = append(topo.Nodes, model.Node{
 		ID:       "node-isolated",
 		Name:     "isolated-node",
@@ -186,22 +186,22 @@ func TestValidateSemantic_IsolatedNode(t *testing.T) {
 
 func TestValidateSemantic_NATDirectConnect(t *testing.T) {
 	topo := validTopology()
-	//  NAT
+	// Put both ends behind NAT (no public IP, no inbound acceptance).
 	topo.Nodes[0].Capabilities.HasPublicIP = false
 	topo.Nodes[0].Capabilities.CanAcceptInbound = false
 	topo.Nodes[1].Capabilities.HasPublicIP = false
 	topo.Nodes[1].Capabilities.CanAcceptInbound = false
 	result := ValidateSemantic(topo)
-	//  NAT
+	// Expect a NAT-related warning.
 	found := false
 	for _, w := range result.Warnings {
-		if containsSubstring(w.Message, "NAT") || containsSubstring(w.Message, "") {
+		if containsSubstring(w.Message, "NAT") || containsSubstring(w.Message, "tunnel") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf(" NAT ")
+		t.Errorf("expected a NAT-related warning for a direct connection between two NAT'd nodes")
 	}
 }
 
@@ -222,14 +222,14 @@ func TestValidateSemantic_NATNodeNoOutbound(t *testing.T) {
 				Capabilities: model.NodeCapabilities{HasPublicIP: true, CanAcceptInbound: true},
 			},
 		},
-		// NAT
+		// The NAT node has no outbound edge.
 		Edges: []model.Edge{},
 	}
 	result := ValidateSemantic(topo)
-	// NAT（）
-	//
+	// A NAT node with no outbound connection to a public peer should produce at least one warning
+	// (it will not be able to join the overlay).
 	if len(result.Warnings) == 0 {
-		t.Errorf("")
+		t.Errorf("expected a warning for a NAT node with no outbound connection to a public peer")
 	}
 }
 
@@ -255,10 +255,10 @@ func TestValidateSemantic_NATViaRelay(t *testing.T) {
 		},
 	}
 	result := ValidateSemantic(topo)
-	// NAT  relay ，""
+	// With the NAT peer reaching the overlay through a relay, no unreachability warning should be raised for it.
 	for _, w := range result.Warnings {
 		if containsSubstring(w.Field, "nat_reachability") && containsSubstring(w.Message, "nat-peer-1") {
-			t.Errorf("NAT  relay , : %s", w.Message)
+			t.Errorf("a NAT peer reachable via a relay should not get an unreachability warning, got: %s", w.Message)
 		}
 	}
 }
@@ -283,11 +283,11 @@ func TestValidateSemantic_NoIsolatedWarningForSingleNode(t *testing.T) {
 	}
 	result := ValidateSemantic(topo)
 	if len(result.Warnings) > 0 {
-		t.Errorf("")
+		t.Errorf("a single-node topology should not produce an isolated-node warning, got: %v", result.Warnings)
 	}
 }
 
-// ---  ---
+// --- test helpers ---
 
 func validTopology() *model.Topology {
 	return &model.Topology{
@@ -364,7 +364,7 @@ func assertHasError(t *testing.T, result *ValidationResult, fieldSubstring strin
 			return
 		}
 	}
-	t.Errorf(" %q , 。: %v", fieldSubstring, result.Errors)
+	t.Errorf("expected an error on a field containing %q, but found none. Errors: %v", fieldSubstring, result.Errors)
 }
 
 func assertHasWarning(t *testing.T, result *ValidationResult, fieldSubstring string) {
@@ -374,7 +374,7 @@ func assertHasWarning(t *testing.T, result *ValidationResult, fieldSubstring str
 			return
 		}
 	}
-	t.Errorf(" %q , 。: %v", fieldSubstring, result.Warnings)
+	t.Errorf("expected a warning on a field containing %q, but found none. Warnings: %v", fieldSubstring, result.Warnings)
 }
 
 func contains(s, substr string) bool {

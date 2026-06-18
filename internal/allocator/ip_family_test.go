@@ -7,35 +7,38 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// TestAllocateIPs_AddressFamilyAndSizeBounds 验证分配器的地址族与 CIDR 大小的深度防御行为。
+// TestAllocateIPs_AddressFamilyAndSizeBounds verifies the allocator's
+// defense-in-depth behavior around address family and CIDR size.
 //
-// schema 校验是拒绝 IPv6 的第一道防线（在 validator 包中），本测试直接驱动分配器，
-// 证明即便非 IPv4 的 CIDR 绕过 schema 到达分配器，也只会得到干净的错误而非 panic
-// ——这是针对历史上 ip[12:16] 越界切片 panic 的回归门禁。
+// Schema validation is the first line of defense that rejects IPv6 (in the
+// validator package); this test drives the allocator directly to prove that
+// even if a non-IPv4 CIDR bypasses the schema and reaches the allocator, the
+// result is only a clean error rather than a panic -- this is the regression
+// gate against the historical ip[12:16] out-of-bounds slice panic.
 func TestAllocateIPs_AddressFamilyAndSizeBounds(t *testing.T) {
 	tests := []struct {
 		name    string
 		cidr    string
 		wantErr bool
-		wantIP  string // 仅当 wantErr 为 false 时校验
+		wantIP  string // checked only when wantErr is false
 	}{
 		{
-			// 回归门禁：IPv6 域 CIDR 必须返回干净错误，绝不 panic。
-			// fd00::/64 的主机位为 64（>=32），会在主机位溢出防御处被拦截。
-			name:    "IPv6 域 CIDR 返回干净错误且不 panic",
+			// Regression gate: an IPv6 domain CIDR must return a clean error, never panic.
+			// fd00::/64 has 64 host bits (>=32), so it is caught at the host-bit overflow guard.
+			name:    "IPv6 domain CIDR returns a clean error and does not panic",
 			cidr:    "fd00::/64",
 			wantErr: true,
 		},
 		{
-			// 即使 IPv6 前缀较长（主机位 < 32）绕过溢出防御，
-			// ipToUint32 的 To4() 守卫仍会返回错误而非 panic。
-			name:    "长前缀 IPv6 CIDR 也返回干净错误",
+			// Even if a longer IPv6 prefix (host bits < 32) bypasses the overflow guard,
+			// the To4() guard in ipToUint32 still returns an error rather than panicking.
+			name:    "long-prefix IPv6 CIDR also returns a clean error",
 			cidr:    "fd00::/120",
 			wantErr: true,
 		},
 		{
-			// /8 IPv4 CIDR 是允许的最大网段，分配器数学不应溢出，可正常分配。
-			name:    "/8 IPv4 CIDR 被接受并分配出一个地址",
+			// A /8 IPv4 CIDR is the largest allowed network; the allocator math should not overflow and allocation should succeed.
+			name:    "/8 IPv4 CIDR is accepted and allocates one address",
 			cidr:    "10.0.0.0/8",
 			wantErr: false,
 			wantIP:  "10.0.0.1",
@@ -64,25 +67,25 @@ func TestAllocateIPs_AddressFamilyAndSizeBounds(t *testing.T) {
 
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("CIDR %s 应返回错误，但分配成功", tt.cidr)
+					t.Fatalf("CIDR %s should return an error, but allocation succeeded", tt.cidr)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("CIDR %s 应分配成功，但返回错误: %v", tt.cidr, err)
+				t.Fatalf("CIDR %s should allocate successfully, but returned an error: %v", tt.cidr, err)
 			}
 			if len(nodes) != 1 {
-				t.Fatalf("应返回 1 个节点，实际返回 %d", len(nodes))
+				t.Fatalf("should return 1 node, actually returned %d", len(nodes))
 			}
 			if nodes[0].OverlayIP != tt.wantIP {
-				t.Errorf("CIDR %s 分配结果应为 %s，实际为 %s", tt.cidr, tt.wantIP, nodes[0].OverlayIP)
+				t.Errorf("CIDR %s allocation result should be %s, actually %s", tt.cidr, tt.wantIP, nodes[0].OverlayIP)
 			}
 		})
 	}
 }
 
-// TestIPToUint32_Errors 验证 ipToUint32 对 nil 及 16 字节非 v4-mappable 输入返回错误。
+// TestIPToUint32_Errors verifies that ipToUint32 returns an error for nil and for 16-byte non-v4-mappable input.
 func TestIPToUint32_Errors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -90,19 +93,19 @@ func TestIPToUint32_Errors(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "nil 地址返回错误",
+			name:    "nil address returns an error",
 			ip:      nil,
 			wantErr: true,
 		},
 		{
-			// 16 字节的纯 IPv6 地址（非 v4-mappable），To4() 返回 nil。
-			name:    "16 字节 IPv6 地址返回错误",
+			// A 16-byte pure IPv6 address (non-v4-mappable); To4() returns nil.
+			name:    "16-byte IPv6 address returns an error",
 			ip:      net.ParseIP("fd00::1"),
 			wantErr: true,
 		},
 		{
-			// 正常 IPv4 用例作为对照：必须成功并转换正确。
-			name:    "IPv4 地址正常转换",
+			// A normal IPv4 case as a control: must succeed and convert correctly.
+			name:    "IPv4 address converts normally",
 			ip:      net.ParseIP("10.0.0.1"),
 			wantErr: false,
 		},
@@ -113,17 +116,17 @@ func TestIPToUint32_Errors(t *testing.T) {
 			got, err := ipToUint32(tt.ip)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("地址 %v 应返回错误，但成功转换为 %d", tt.ip, got)
+					t.Fatalf("address %v should return an error, but converted successfully to %d", tt.ip, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("地址 %v 应转换成功，但返回错误: %v", tt.ip, err)
+				t.Fatalf("address %v should convert successfully, but returned an error: %v", tt.ip, err)
 			}
 			// 10.0.0.1 = 0x0A000001
 			const want = uint32(0x0A000001)
 			if got != want {
-				t.Errorf("地址 %v 转换结果应为 %d，实际为 %d", tt.ip, want, got)
+				t.Errorf("address %v conversion result should be %d, actually %d", tt.ip, want, got)
 			}
 		})
 	}

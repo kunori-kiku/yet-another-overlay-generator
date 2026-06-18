@@ -7,59 +7,67 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// babelLocalPort 是 babeld 控制套接字（local-port）的默认端口。
-// Spec（docs/spec/compiler/routing-modes.md「Role-preset timers and control port」）要求
-// 它来自一个带文档说明的命名常量，而不是模板里的字面量，以便统一调整（dossier D78）。
+// babelLocalPort is the default port for the babeld control socket (local-port).
+// The spec (docs/spec/compiler/routing-modes.md "Role-preset timers and control port")
+// requires that it come from a documented named constant rather than a literal in the
+// template, so it can be adjusted in one place (dossier D78).
 const babelLocalPort = 33123
 
-// BabelConfig Babel 配置
+// BabelConfig holds the data for rendering a single node's Babel configuration.
 type BabelConfig struct {
-	// 节点信息
+	// Node information.
 	NodeName string
 	NodeRole string
 
-	// Babel router-id（MAC-48 格式）
+	// Babel router-id (MAC-48 format).
 	RouterID string
 
-	// babeld 控制套接字端口（来自 babelLocalPort 常量）
+	// babeld control socket port (from the babelLocalPort constant).
 	LocalPort int
 
-	// 接口计时器（来自角色预设；0 = 省略对应 token，使用 babeld 内置默认）。
+	// Interface timers (from the role preset; 0 = omit the corresponding token and
+	// use babeld's built-in default).
 	HelloInterval  int
 	UpdateInterval int
 
-	// Babel 绑定的 WireGuard 接口列表
+	// List of WireGuard interfaces that Babel binds to.
 	Interfaces []BabelInterface
 
-	// LocalRedistributePrefixes：走 `redistribute local ip <prefix> allow` 的前缀。
-	// `redistribute local` 只匹配内核 local/connected 路由，因此这里只放当前
-	// 在节点上确有对应内核路由（或属于已知延期项）的类别：
-	//   - self-/32      ：dummy0 上的 overlay IP（已部署集群上唯一真正生效的路径，受保护不变量）
-	//   - client-/32    ：router 侧通过 PostUp 的 ip route replace 注入的 client overlay IP
-	//   - domain-CIDR   ：聚合路由在任何节点上都没有对应内核路由，属 plan-6.5 延期项，
-	//                     按延期决策保持当前无操作 local 行不变（见下方写入处的注释）
+	// LocalRedistributePrefixes are the prefixes redistributed via
+	// `redistribute local ip <prefix> allow`. `redistribute local` only matches kernel
+	// local/connected routes, so this holds only the categories that currently do have a
+	// corresponding kernel route on the node (or are a known deferred item):
+	//   - self-/32      : the overlay IP on dummy0 (the only path that actually takes effect
+	//                     on deployed clusters, a protected invariant)
+	//   - client-/32    : the client overlay IP injected on the router side via the PostUp
+	//                     ip route replace
+	//   - domain-CIDR   : the aggregate route has no corresponding kernel route on any node;
+	//                     this is a plan-6.5 deferred item and, per the deferral decision, its
+	//                     current no-op local line is kept unchanged (see the comment at the
+	//                     write site below)
 	LocalRedistributePrefixes []string
 
-	// KernelRedistributePrefixes：走 `redistribute ip <prefix> allow`（不带 local 关键字）的前缀。
-	// 这些前缀在节点上有真实的内核路由，但不是 dummy0 的连接路由，因此必须用非 local 形式
-	// 让 babeld 匹配真实内核路由（dossier D40/D41）：
-	//   - 默认路由 0.0.0.0/0 ：网关上真实的 WAN 默认路由
-	//   - extra_prefixes     ：节点真实 LAN 网段的连接路由
+	// KernelRedistributePrefixes are the prefixes redistributed via
+	// `redistribute ip <prefix> allow` (without the local keyword). These prefixes have a
+	// real kernel route on the node, but it is not a dummy0 connected route, so they must use
+	// the non-local form to make babeld match the real kernel route (dossier D40/D41):
+	//   - default route 0.0.0.0/0 : the real WAN default route on a gateway
+	//   - extra_prefixes          : connected routes for the node's real LAN segments
 	KernelRedistributePrefixes []string
 
-	// 是否启用 IP 转发
+	// Whether IP forwarding is enabled.
 	EnableForwarding bool
 }
 
-// BabelInterface Babel 接口配置
+// BabelInterface describes the configuration for a single Babel interface.
 type BabelInterface struct {
-	// 接口名（如 wg-dmit）
+	// Interface name (e.g. wg-dmit).
 	Name string
 
-	// 类型：tunnel（WireGuard 点对点接口应该用 tunnel）
+	// Type: tunnel (WireGuard point-to-point interfaces should use tunnel).
 	Type string
 
-	// rxcost（可选，0 表示省略 rxcost token，使用 babeld 内置默认值）
+	// rxcost (optional; 0 means omit the rxcost token and use babeld's built-in default).
 	Cost int
 }
 
@@ -86,18 +94,18 @@ redistribute local deny
 interface {{ .Name }} type {{ .Type }}{{ if gt $.HelloInterval 0 }} hello-interval {{ $.HelloInterval }}{{ end }}{{ if gt $.UpdateInterval 0 }} update-interval {{ $.UpdateInterval }}{{ end }}{{ if gt .Cost 0 }} rxcost {{ .Cost }}{{ end }}
 {{ end }}`
 
-// RenderBabelConfig 渲染单个节点的 Babel 配置
+// RenderBabelConfig renders the Babel configuration for a single node.
 func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *model.Domain) (string, error) {
-	// 判断是否需要 Babel
+	// Decide whether Babel is needed.
 	if !shouldRunBabel(node, domain) {
 		return "", nil
 	}
 
-	// 角色语义
+	// Role semantics.
 	semantics := compiler.DeriveRoleSemantics(node)
 	preset := GetBabelRolePreset(node.Role)
 
-	// 生成 router-id
+	// Generate the router-id.
 	routerID := node.RouterID
 	if routerID == "" {
 		routerID = compiler.GenerateRouterID(node.ID)
@@ -124,16 +132,17 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		return sortedPeers[i].InterfaceName < sortedPeers[j].InterfaceName
 	})
 
-	// 每个 peer 对应一个 WireGuard tunnel 接口。
-	// D73：连接 client 的隧道（IsClientPeer）必须跳过——client 不跑 babeld，
-	// 把该隧道声明为 babel 接口会让 router 永远向其单播 hello/update。client 的
-	// 可达性改由下方 client-/32 重分发承载。
+	// Each peer corresponds to one WireGuard tunnel interface.
+	// D73: tunnels that connect to a client (IsClientPeer) must be skipped — the client
+	// does not run babeld, and declaring that tunnel as a babel interface would make the
+	// router unicast hello/update to it forever. Client reachability is instead carried by
+	// the client-/32 redistribution below.
 	for _, p := range sortedPeers {
 		if p.IsClientPeer {
 			continue
 		}
-		// D63：rxcost 优先取边上的 LinkCost（> 0 表示操作员显式设置了优先级/权重），
-		// 未设置（0）时回退到角色预设的 DefaultCost。
+		// D63: rxcost prefers the edge's LinkCost (> 0 means the operator explicitly set a
+		// priority/weight); when unset (0) it falls back to the role preset's DefaultCost.
 		cost := preset.DefaultCost
 		if p.LinkCost > 0 {
 			cost = p.LinkCost
@@ -146,37 +155,41 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 		config.Interfaces = append(config.Interfaces, iface)
 	}
 
-	// ===== 重分发规则 =====
+	// ===== Redistribution rules =====
 	//
-	// self-/32：走 `redistribute local`——dummy0 携带 OverlayIP/32 的连接路由，
-	// 是当前在已部署集群上唯一真正生效的宣告路径，必须逐字节保持不变（受保护不变量）。
+	// self-/32: uses `redistribute local` — dummy0 carries the OverlayIP/32 connected route,
+	// which is currently the only announcement path that actually takes effect on deployed
+	// clusters and must be kept byte-for-byte unchanged (a protected invariant).
 	if semantics.BabelAnnounce.AnnounceSelf && node.OverlayIP != "" {
 		config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, node.OverlayIP+"/32")
 	}
 
-	// domain-CIDR 聚合：任何节点上都没有对应内核路由（没有节点拥有该聚合）。
-	// 修复其匹配问题需要在安装脚本里锚定一条聚合本地路由，属于 plan-6.5 延期项
-	// （见 docs/spec/compiler/routing-modes.md 的 stop-loss 说明）。在此之前，
-	// 保持其当前的 `redistribute local` 无操作行不变，不改成非 local 形式。
+	// domain-CIDR aggregate: no node has a corresponding kernel route (no node owns the
+	// aggregate). Fixing its matching would require anchoring an aggregate local route in
+	// the install script, which is a plan-6.5 deferred item (see the stop-loss note in
+	// docs/spec/compiler/routing-modes.md). Until then, keep its current no-op
+	// `redistribute local` line unchanged and do not switch it to the non-local form.
 	if semantics.BabelAnnounce.AnnounceDomainCIDR && domain != nil && domain.CIDR != "" {
 		config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, domain.CIDR)
 	}
 
-	// extra_prefixes：对应节点真实 LAN 网段的内核连接路由，因此走非 local 形式
-	// `redistribute ip <prefix> allow`，让 babeld 匹配真实内核路由（D41）。
+	// extra_prefixes: kernel connected routes for the node's real LAN segments, so they use
+	// the non-local form `redistribute ip <prefix> allow` to make babeld match the real
+	// kernel route (D41).
 	if semantics.BabelAnnounce.AnnounceExtraPrefixes {
 		config.KernelRedistributePrefixes = append(config.KernelRedistributePrefixes, node.ExtraPrefixes...)
 	}
 
-	// 默认路由 0.0.0.0/0：网关上真实的 WAN 默认路由，走非 local 形式让 babeld
-	// 匹配该真实内核路由，从而把出口宣告进 overlay（D40）。
+	// default route 0.0.0.0/0: the real WAN default route on a gateway; uses the non-local
+	// form so babeld matches that real kernel route and announces the exit into the overlay
+	// (D40).
 	if semantics.BabelAnnounce.AnnounceDefault {
 		config.KernelRedistributePrefixes = append(config.KernelRedistributePrefixes, "0.0.0.0/0")
 	}
 
-	// client-/32：router 侧通过隧道 PostUp 的 ip route replace 注入了 client overlay IP
-	// 的内核路由，因此走 `redistribute local`——这是 client 可达性的承载方式
-	// （client 自身不跑 babeld）。
+	// client-/32: the router side injects the kernel route for the client overlay IP via the
+	// tunnel's PostUp ip route replace, so it uses `redistribute local` — this is how client
+	// reachability is carried (the client itself does not run babeld).
 	for _, p := range sortedPeers {
 		if p.IsClientPeer && p.ClientOverlayIP != "" {
 			config.LocalRedistributePrefixes = append(config.LocalRedistributePrefixes, p.ClientOverlayIP+"/32")
@@ -186,17 +199,17 @@ func RenderBabelConfig(node *model.Node, peers []compiler.PeerInfo, domain *mode
 	return renderTemplate("babeld.conf", babelConfigTemplate, config)
 }
 
-// RenderAllBabelConfigs 渲染所有节点的 Babel 配置
+// RenderAllBabelConfigs renders the Babel configuration for every node.
 func RenderAllBabelConfigs(topo *model.Topology, peerMap map[string][]compiler.PeerInfo) (map[string]string, error) {
 	configs := make(map[string]string)
 
-	// Domain 索引
+	// Domain index.
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
 		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
 	}
 
-	// 节点索引
+	// Node index.
 	nodeMap := make(map[string]*model.Node)
 	for i := range topo.Nodes {
 		nodeMap[topo.Nodes[i].ID] = &topo.Nodes[i]
@@ -215,7 +228,7 @@ func RenderAllBabelConfigs(topo *model.Topology, peerMap map[string][]compiler.P
 			return nil, err
 		}
 
-		// 有 Babel 配置时才加入
+		// Only include nodes that have a Babel configuration.
 		if config != "" {
 			configs[nodeID] = config
 		}
@@ -224,13 +237,13 @@ func RenderAllBabelConfigs(topo *model.Topology, peerMap map[string][]compiler.P
 	return configs, nil
 }
 
-// shouldRunBabel 判断节点是否需要运行 Babel
+// shouldRunBabel reports whether the node needs to run Babel.
 func shouldRunBabel(node *model.Node, domain *model.Domain) bool {
-	// Client 节点不运行 Babel
+	// Client nodes do not run Babel.
 	if node.Role == "client" {
 		return false
 	}
-	// 非 babel 路由模式不启动
+	// Do not start Babel in a non-babel routing mode.
 	if domain != nil && domain.RoutingMode != "babel" {
 		return false
 	}

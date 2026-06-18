@@ -6,8 +6,9 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// publicRouterNode 构建一个公网可达的 router 节点（带一个 public endpoint）。
-// HasPublicIP 直接置位，使 DerivePeers 的反向回退逻辑生效（DerivePeers 不会自行推导 capabilities）。
+// publicRouterNode builds a publicly reachable router node (with one public endpoint).
+// HasPublicIP is set directly so DerivePeers' reverse-fallback logic kicks in (DerivePeers
+// does not infer capabilities on its own).
 func publicRouterNode(id, name, host string) model.Node {
 	return model.Node{
 		ID:       id,
@@ -21,13 +22,13 @@ func publicRouterNode(id, name, host string) model.Node {
 			HasPublicIP:      true,
 		},
 		PublicEndpoints: []model.PublicEndpoint{
-			// Port 是节点可达提示，而非链路监听端口；反向回退绝不应使用它。
+			// Port is a node-reachability hint, not a link listen port; reverse fallback must never use it.
 			{ID: id + "-ep", Host: host, Port: 51820},
 		},
 	}
 }
 
-// findPeer 在 peers 中找到指向 remoteID 的 PeerInfo。
+// findPeer finds the PeerInfo pointing at remoteID within peers.
 func findPeer(peers []PeerInfo, remoteID string) *PeerInfo {
 	for i := range peers {
 		if peers[i].NodeID == remoteID {
@@ -37,7 +38,7 @@ func findPeer(peers []PeerInfo, remoteID string) *PeerInfo {
 	return nil
 }
 
-// findEdge 在 edges 中按 id 找到 Edge。
+// findEdge finds an Edge by id within edges.
 func findEdge(edges []model.Edge, id string) *model.Edge {
 	for i := range edges {
 		if edges[i].ID == id {
@@ -47,20 +48,21 @@ func findEdge(edges []model.Edge, id string) *model.Edge {
 	return nil
 }
 
-// TestEndpointResolution_Forward 覆盖正向 endpoint 解析矩阵（Spec A）。
-// 表驱动：每个用例描述一条 from->to 的 edge，断言 from 侧拨号的 endpoint。
+// TestEndpointResolution_Forward covers the forward endpoint-resolution matrix (Spec A).
+// Table-driven: each case describes one from->to edge and asserts the endpoint dialed from
+// the from side.
 func TestEndpointResolution_Forward(t *testing.T) {
 	tests := []struct {
 		name         string
 		endpointHost string
 		endpointPort int
-		// wantEndpoint 为空字符串表示不应生成 Endpoint 行
+		// wantEndpoint empty string means no Endpoint line should be generated
 		wantEndpoint string
-		// wantPort 为 0 表示不校验端口（仅当 wantEndpoint 非空时校验）
+		// wantPort 0 means do not check the port (only checked when wantEndpoint is non-empty)
 		wantPort int
 	}{
 		{
-			// (a) 仅 endpoint_host：from 侧拨对端已分配的监听端口（51820）
+			// (a) endpoint_host only: the from side dials the remote's allocated listen port (51820)
 			name:         "endpoint_host only dials allocated port",
 			endpointHost: "b.example",
 			endpointPort: 0,
@@ -68,7 +70,7 @@ func TestEndpointResolution_Forward(t *testing.T) {
 			wantPort:     51820,
 		},
 		{
-			// (b) 显式 endpoint_port 覆盖：逐字拨号
+			// (b) explicit endpoint_port override: dialed verbatim
 			name:         "explicit endpoint_port override dialed verbatim",
 			endpointHost: "b.example",
 			endpointPort: 51900,
@@ -76,7 +78,7 @@ func TestEndpointResolution_Forward(t *testing.T) {
 			wantPort:     51900,
 		},
 		{
-			// (d) endpoint_host 为空：不生成 Endpoint 行
+			// (d) endpoint_host empty: no Endpoint line generated
 			name:         "empty endpoint_host produces no Endpoint",
 			endpointHost: "",
 			endpointPort: 0,
@@ -106,47 +108,49 @@ func TestEndpointResolution_Forward(t *testing.T) {
 
 			peerMap, _, err := DerivePeers(topo, testKeys2())
 			if err != nil {
-				t.Fatalf("DerivePeers 失败: %v", err)
+				t.Fatalf("DerivePeers failed: %v", err)
 			}
 
 			fwd := findPeer(peerMap["node-a"], "node-b")
 			if fwd == nil {
-				t.Fatalf("node-a 应有指向 node-b 的 peer")
+				t.Fatalf("node-a should have a peer pointing at node-b")
 			}
 			if fwd.Endpoint != tt.wantEndpoint {
-				t.Errorf("正向 endpoint = %q, 期望 %q", fwd.Endpoint, tt.wantEndpoint)
+				t.Errorf("forward endpoint = %q, want %q", fwd.Endpoint, tt.wantEndpoint)
 			}
 			if tt.wantEndpoint != "" && tt.wantPort != 0 {
 				if got := extractPortFromEndpoint(fwd.Endpoint); got != tt.wantPort {
-					t.Errorf("正向拨号端口 = %d, 期望 %d", got, tt.wantPort)
+					t.Errorf("forward dialed port = %d, want %d", got, tt.wantPort)
 				}
 			}
 		})
 	}
 }
 
-// TestEndpointResolution_ReverseFallback 覆盖反向 peer 的 endpoint 回退矩阵（Spec A）。
-// (a) 单条 A->B edge + 两端公网可达：B 的反向 peer 应回退拨 A 的 public host + A 侧已分配端口。
-// (e) 显式反向 edge（自带 endpoint_host）优先于回退。
+// TestEndpointResolution_ReverseFallback covers the reverse-peer endpoint fallback matrix
+// (Spec A).
+// (a) a single A->B edge + both ends publicly reachable: B's reverse peer should fall back
+// to dialing A's public host + A's allocated port.
+// (e) an explicit reverse edge (carrying its own endpoint_host) wins over the fallback.
 func TestEndpointResolution_ReverseFallback(t *testing.T) {
 	tests := []struct {
 		name string
-		// reverseEdge 为 true 时额外添加一条 B->A 的显式反向 edge
+		// reverseEdge true adds an extra explicit B->A reverse edge
 		reverseEdge     bool
 		reverseHost     string
 		fromHasPublicIP bool
-		// wantReverseEndpoint 为 B 反向拨 A 时期望的 endpoint
+		// wantReverseEndpoint is the expected endpoint when B dials A in reverse
 		wantReverseEndpoint string
 	}{
 		{
-			// (a) 无反向 edge，A 公网可达 → 回退拨 A 的 public host + A 侧端口（51820），不使用 public endpoint 的 Port
+			// (a) no reverse edge, A publicly reachable -> fall back to dialing A's public host + A's port (51820), not the public endpoint's Port
 			name:                "fallback dials from-node public host at allocated port",
 			reverseEdge:         false,
 			fromHasPublicIP:     true,
 			wantReverseEndpoint: "a.example:51820",
 		},
 		{
-			// (e) 显式反向 edge 自带 host，优先于回退；A 仍声明了 public endpoint 以证明显式优先
+			// (e) explicit reverse edge carries its own host, wins over fallback; A still declares a public endpoint to prove explicit takes priority
 			name:                "explicit reverse edge wins over fallback",
 			reverseEdge:         true,
 			reverseHost:         "a-nat.example",
@@ -154,7 +158,7 @@ func TestEndpointResolution_ReverseFallback(t *testing.T) {
 			wantReverseEndpoint: "a-nat.example:51820",
 		},
 		{
-			// 无反向 edge 且 A 不公网可达 → 反向 peer 无 endpoint
+			// no reverse edge and A not publicly reachable -> reverse peer has no endpoint
 			name:                "no reverse edge and no public IP produces no Endpoint",
 			reverseEdge:         false,
 			fromHasPublicIP:     false,
@@ -196,36 +200,37 @@ func TestEndpointResolution_ReverseFallback(t *testing.T) {
 
 			peerMap, _, err := DerivePeers(topo, testKeys2())
 			if err != nil {
-				t.Fatalf("DerivePeers 失败: %v", err)
+				t.Fatalf("DerivePeers failed: %v", err)
 			}
 
-			// B 反向拨 A 的 peer：在 peerMap["node-b"] 中 NodeID == node-a
+			// B's reverse peer dialing A: in peerMap["node-b"] where NodeID == node-a
 			rev := findPeer(peerMap["node-b"], "node-a")
 			if rev == nil {
-				t.Fatalf("node-b 应有指向 node-a 的反向 peer")
+				t.Fatalf("node-b should have a reverse peer pointing at node-a")
 			}
 			if rev.Endpoint != tt.wantReverseEndpoint {
-				t.Errorf("反向 endpoint = %q, 期望 %q", rev.Endpoint, tt.wantReverseEndpoint)
+				t.Errorf("reverse endpoint = %q, want %q", rev.Endpoint, tt.wantReverseEndpoint)
 			}
 
-			// 关键不变量：回退绝不能使用 public_endpoints[0].Port（此处也是 51820，但应来自 A 侧已分配端口）。
-			// 用正向端口对称性间接验证：A 反向被拨的端口 == A 自身接口的 ListenPort。
+			// Key invariant: the fallback must never use public_endpoints[0].Port (which is also 51820 here, but should come from A's allocated port).
+			// Verify indirectly via forward-port symmetry: the port at which A is dialed in reverse == A's own interface ListenPort.
 			if tt.wantReverseEndpoint != "" {
 				aPeer := findPeer(peerMap["node-a"], "node-b")
 				if aPeer == nil {
-					t.Fatalf("node-a 应有指向 node-b 的 peer")
+					t.Fatalf("node-a should have a peer pointing at node-b")
 				}
 				dialedPort := extractPortFromEndpoint(rev.Endpoint)
 				if dialedPort != aPeer.ListenPort {
-					t.Errorf("反向拨 A 的端口 = %d, 应等于 A 接口的 ListenPort = %d", dialedPort, aPeer.ListenPort)
+					t.Errorf("port for reverse-dialing A = %d, should equal A interface's ListenPort = %d", dialedPort, aPeer.ListenPort)
 				}
 			}
 		})
 	}
 }
 
-// TestEndpointResolution_SymmetricSingleEdge 验证 (a) 的端到端对称性：
-// 一条 A->B edge 即产生双向可拨的隧道——A 拨 B 的已分配端口，B 回退拨 A 的已分配端口。
+// TestEndpointResolution_SymmetricSingleEdge verifies the end-to-end symmetry of (a):
+// a single A->B edge yields a bidirectionally dialable tunnel — A dials B's allocated port,
+// B falls back to dialing A's allocated port.
 func TestEndpointResolution_SymmetricSingleEdge(t *testing.T) {
 	topo := &model.Topology{
 		Project: model.Project{ID: "ep-sym", Name: "Endpoint Symmetric"},
@@ -247,34 +252,34 @@ func TestEndpointResolution_SymmetricSingleEdge(t *testing.T) {
 
 	peerMap, _, err := DerivePeers(topo, testKeys2())
 	if err != nil {
-		t.Fatalf("DerivePeers 失败: %v", err)
+		t.Fatalf("DerivePeers failed: %v", err)
 	}
 
 	aToB := findPeer(peerMap["node-a"], "node-b")
 	bToA := findPeer(peerMap["node-b"], "node-a")
 	if aToB == nil || bToA == nil {
-		t.Fatalf("应有双向 peer: aToB=%v bToA=%v", aToB, bToA)
+		t.Fatalf("should have bidirectional peers: aToB=%v bToA=%v", aToB, bToA)
 	}
 
-	// A 拨 B 的 endpoint 端口 == B 接口的 ListenPort
+	// A->B endpoint port == B interface's ListenPort
 	if got := extractPortFromEndpoint(aToB.Endpoint); got != bToA.ListenPort {
-		t.Errorf("A 拨 B 的端口 = %d, 应等于 B 接口 ListenPort = %d", got, bToA.ListenPort)
+		t.Errorf("port for A dialing B = %d, should equal B interface's ListenPort = %d", got, bToA.ListenPort)
 	}
-	// B 回退拨 A 的 endpoint 端口 == A 接口的 ListenPort
+	// B->A fallback endpoint port == A interface's ListenPort
 	if got := extractPortFromEndpoint(bToA.Endpoint); got != aToB.ListenPort {
-		t.Errorf("B 拨 A 的端口 = %d, 应等于 A 接口 ListenPort = %d", got, aToB.ListenPort)
+		t.Errorf("port for B dialing A = %d, should equal A interface's ListenPort = %d", got, aToB.ListenPort)
 	}
-	// 双向都应拨各自的 public host
+	// Both directions should dial their respective public host
 	if aToB.Endpoint != "b.example:"+itoa(bToA.ListenPort) {
-		t.Errorf("A->B endpoint = %q, 期望 b.example:%d", aToB.Endpoint, bToA.ListenPort)
+		t.Errorf("A->B endpoint = %q, want b.example:%d", aToB.Endpoint, bToA.ListenPort)
 	}
 	if bToA.Endpoint != "a.example:"+itoa(aToB.ListenPort) {
-		t.Errorf("B->A endpoint = %q, 期望 a.example:%d", bToA.Endpoint, aToB.ListenPort)
+		t.Errorf("B->A endpoint = %q, want a.example:%d", bToA.Endpoint, aToB.ListenPort)
 	}
 }
 
-// TestEndpointResolution_HubDistinctPorts 覆盖 (c)：三条 edge 汇入同一 hub，
-// 每条各拨 hub 上一个独立的已分配端口（base, base+1, base+2）。
+// TestEndpointResolution_HubDistinctPorts covers (c): three edges converge on the same hub,
+// each dialing a distinct allocated port on the hub (base, base+1, base+2).
 func TestEndpointResolution_HubDistinctPorts(t *testing.T) {
 	topo := &model.Topology{
 		Project: model.Project{ID: "ep-hub", Name: "Endpoint Hub"},
@@ -288,7 +293,7 @@ func TestEndpointResolution_HubDistinctPorts(t *testing.T) {
 			publicRouterNode("node-b", "beta", "b.example"),
 			publicRouterNode("node-c", "gamma", "c.example"),
 		},
-		// 处理顺序决定 hub 侧端口分配：A 链路 51820，B 链路 51821，C 链路 51822
+		// Processing order determines hub-side port allocation: A link 51820, B link 51821, C link 51822
 		Edges: []model.Edge{
 			{ID: "e1", FromNodeID: "node-a", ToNodeID: "node-h", Type: "public-endpoint",
 				EndpointHost: "h.example", EndpointPort: 0, Transport: "udp", IsEnabled: true},
@@ -305,7 +310,7 @@ func TestEndpointResolution_HubDistinctPorts(t *testing.T) {
 
 	peerMap, _, err := DerivePeers(topo, testKeys4())
 	if err != nil {
-		t.Fatalf("DerivePeers 失败: %v", err)
+		t.Fatalf("DerivePeers failed: %v", err)
 	}
 
 	wantPorts := map[string]int{
@@ -318,38 +323,39 @@ func TestEndpointResolution_HubDistinctPorts(t *testing.T) {
 	for spoke, want := range wantPorts {
 		p := findPeer(peerMap[spoke], "node-h")
 		if p == nil {
-			t.Fatalf("%s 应有指向 hub 的 peer", spoke)
+			t.Fatalf("%s should have a peer pointing at the hub", spoke)
 		}
 		got := extractPortFromEndpoint(p.Endpoint)
 		if got != want {
-			t.Errorf("%s 拨 hub 的端口 = %d, 期望 %d", spoke, got, want)
+			t.Errorf("port for %s dialing hub = %d, want %d", spoke, got, want)
 		}
 		if p.Endpoint != "h.example:"+itoa(want) {
-			t.Errorf("%s endpoint = %q, 期望 h.example:%d", spoke, p.Endpoint, want)
+			t.Errorf("%s endpoint = %q, want h.example:%d", spoke, p.Endpoint, want)
 		}
 		if seen[got] {
-			t.Errorf("hub 侧端口 %d 被多条链路复用，应各不相同", got)
+			t.Errorf("hub-side port %d reused by multiple links, should all be distinct", got)
 		}
 		seen[got] = true
 	}
 
-	// hub 应有 3 个独立 peer 接口，端口各不相同
+	// The hub should have 3 distinct peer interfaces, each with a different port
 	hubPeers := peerMap["node-h"]
 	if len(hubPeers) != 3 {
-		t.Fatalf("hub 应有 3 个 peer 接口，实际 %d", len(hubPeers))
+		t.Fatalf("hub should have 3 peer interfaces, got %d", len(hubPeers))
 	}
 	hubPorts := make(map[int]bool)
 	for _, hp := range hubPeers {
 		if hubPorts[hp.ListenPort] {
-			t.Errorf("hub 接口 ListenPort %d 重复", hp.ListenPort)
+			t.Errorf("hub interface ListenPort %d duplicated", hp.ListenPort)
 		}
 		hubPorts[hp.ListenPort] = true
 	}
 }
 
-// TestCompiledPort_OverrideAware 覆盖 (b) 与 (d) 的 CompiledPort 写回（D51）：
-// (b) 显式 endpoint_port=51900 → CompiledPort 等于 51900，且等于渲染 endpoint 中的端口；
-// (d) endpoint_host 为空 → 不写回 CompiledPort（保持 0）。
+// TestCompiledPort_OverrideAware covers CompiledPort write-back for (b) and (d) (D51):
+// (b) explicit endpoint_port=51900 -> CompiledPort equals 51900 and equals the port in the
+// rendered endpoint;
+// (d) endpoint_host empty -> CompiledPort is not written back (stays 0).
 func TestCompiledPort_OverrideAware(t *testing.T) {
 	t.Run("override reflected in CompiledPort and Endpoint", func(t *testing.T) {
 		topo := &model.Topology{
@@ -371,24 +377,24 @@ func TestCompiledPort_OverrideAware(t *testing.T) {
 		c := NewCompiler()
 		result, err := c.Compile(topo, testKeys2())
 		if err != nil {
-			t.Fatalf("Compile 失败: %v", err)
+			t.Fatalf("Compile failed: %v", err)
 		}
 
 		edge := findEdge(result.Topology.Edges, "e1")
 		if edge == nil {
-			t.Fatalf("结果中应有 edge e1")
+			t.Fatalf("result should contain edge e1")
 		}
 		if edge.CompiledPort != 51900 {
-			t.Errorf("CompiledPort = %d, 期望 51900（覆盖值）", edge.CompiledPort)
+			t.Errorf("CompiledPort = %d, want 51900 (override value)", edge.CompiledPort)
 		}
 
-		// CompiledPort 必须等于渲染 endpoint 中携带的端口
+		// CompiledPort must equal the port carried in the rendered endpoint
 		fwd := findPeer(result.PeerMap["node-a"], "node-b")
 		if fwd == nil {
-			t.Fatalf("node-a 应有指向 node-b 的 peer")
+			t.Fatalf("node-a should have a peer pointing at node-b")
 		}
 		if got := extractPortFromEndpoint(fwd.Endpoint); got != edge.CompiledPort {
-			t.Errorf("渲染 endpoint 端口 = %d, CompiledPort = %d, 两者必须一致", got, edge.CompiledPort)
+			t.Errorf("rendered endpoint port = %d, CompiledPort = %d, the two must match", got, edge.CompiledPort)
 		}
 	})
 
@@ -412,29 +418,29 @@ func TestCompiledPort_OverrideAware(t *testing.T) {
 		c := NewCompiler()
 		result, err := c.Compile(topo, testKeys2())
 		if err != nil {
-			t.Fatalf("Compile 失败: %v", err)
+			t.Fatalf("Compile failed: %v", err)
 		}
 
 		edge := findEdge(result.Topology.Edges, "e1")
 		if edge == nil {
-			t.Fatalf("结果中应有 edge e1")
+			t.Fatalf("result should contain edge e1")
 		}
 		if edge.CompiledPort != 0 {
-			t.Errorf("endpoint_host 为空时不应写回 CompiledPort，实际 %d", edge.CompiledPort)
+			t.Errorf("CompiledPort should not be written back when endpoint_host is empty, got %d", edge.CompiledPort)
 		}
 
-		// 正向 peer 也不应有 Endpoint 行
+		// The forward peer should likewise have no Endpoint line
 		fwd := findPeer(result.PeerMap["node-a"], "node-b")
 		if fwd == nil {
-			t.Fatalf("node-a 应有指向 node-b 的 peer")
+			t.Fatalf("node-a should have a peer pointing at node-b")
 		}
 		if fwd.Endpoint != "" {
-			t.Errorf("endpoint_host 为空时不应生成 Endpoint，实际 %q", fwd.Endpoint)
+			t.Errorf("no Endpoint should be generated when endpoint_host is empty, got %q", fwd.Endpoint)
 		}
 	})
 }
 
-// testKeys2 提供两节点测试所需的密钥。
+// testKeys2 provides the keys needed for the two-node tests.
 func testKeys2() map[string]KeyPair {
 	return map[string]KeyPair{
 		"node-a": {PrivateKey: "privkey-a-fake", PublicKey: "pubkey-a-fake"},
@@ -442,7 +448,7 @@ func testKeys2() map[string]KeyPair {
 	}
 }
 
-// testKeys4 提供 hub + 三 spoke 测试所需的密钥。
+// testKeys4 provides the keys needed for the hub + three-spoke tests.
 func testKeys4() map[string]KeyPair {
 	return map[string]KeyPair{
 		"node-h": {PrivateKey: "privkey-h-fake", PublicKey: "pubkey-h-fake"},

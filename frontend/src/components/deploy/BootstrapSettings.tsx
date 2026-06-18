@@ -4,12 +4,14 @@ import { useControllerStore, selectHasAuth } from '../../stores/controllerStore'
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type UILanguage } from '../../i18n';
 
-// Bootstrap 设置（plan-5.2）：服务端持久化的 public agent URL / GitHub 代理 / agent 发布
-// 基址。它们被烘焙进 GET /bootstrap 返回的一键安装脚本的默认值里。仅操作员可改。
+// Bootstrap settings (plan-5.2): the server-persisted public agent URL / GitHub proxy / agent release
+// base URL. They are baked into the defaults of the one-shot install script returned by GET
+// /bootstrap. Operator-editable only.
 //
-// 设计：父组件负责加载/保存（store 动作），用 settings 作为 key 渲染一个受控表单子组件，
-// 子组件用 props 惰性初始化本地输入——这样无需在 effect 里 setState 同步服务端值
-// （settings 变化时子组件 remount 并从新值重新初始化）。
+// Design: the parent component handles loading/saving (store actions) and renders a controlled form
+// child keyed on settings, with the child lazily initializing its local inputs from props — so there
+// is no need to setState in an effect to sync server values (when settings changes the child remounts
+// and reinitializes from the new value).
 export function BootstrapSettings() {
   const language = useTopologyStore((s) => s.language);
   const settings = useControllerStore((s) => s.settings);
@@ -18,7 +20,8 @@ export function BootstrapSettings() {
   const loading = useControllerStore((s) => s.loading);
   const hasAuth = useControllerStore(selectHasAuth);
 
-  // 首次有鉴权且尚未加载时拉取一次（loadSettings 是 store 动作，不是 useState setter）。
+  // Fetch once on first having auth and not yet loaded (loadSettings is a store action, not a useState
+  // setter).
   useEffect(() => {
     if (hasAuth && settings === null) {
       void loadSettings();

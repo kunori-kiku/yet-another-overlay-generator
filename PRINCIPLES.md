@@ -64,6 +64,27 @@ principle-risk assessment.
   `tsc -b`, stricter than a bare `tsc --noEmit`) before pushing frontend changes.
 - **No `--no-verify`, no amends, no force-push.**
 
+## Execution discipline (process invariants — HIGH risk to outcomes)
+
+Owner directive (2026-06-18). These govern HOW work is executed, not just what ships.
+
+- **No shims, monkey-patches, or ugly workarounds.** A fix lands at its structural root, never as a
+  band-aid that defers the real problem. If the clean fix is large, it is still the fix — surface the
+  cost, do not paper over it. A workaround that buys a green check now in exchange for hidden debt and a
+  dirtier structure is a violation.
+- **Structure-aware, hygienic code in every block.** Each change matches the surrounding code's idiom,
+  naming, comment density, and package boundaries, and leaves the structure more logical, not less. Code
+  hygiene (no CJK/English comment mixing, no truncated stubs, no dead code) is a first-class acceptance
+  criterion, not a deferred follow-up.
+- **No scope compromise to "close" work.** A plan or subject is closed only when its full
+  Definition-of-done is met — comprehensive in scope and depth. Never narrow scope, skip a sub-item, or
+  downgrade a deliverable merely to reach a stopping point. If scope genuinely cannot be met, STOP and
+  surface it (authorize an insertion-point plan-N.5); do not silently shrink it.
+- **Every PR is independently reviewed before merge, then re-reviewed after fixes.** Run an independent
+  review (a review workflow) per PR; the review scope is four lenses — correctness, completeness
+  (adherence to the plan/subject), code hygiene, and code structure. Fix all findings, then re-review
+  until clean. Finish the whole subject before stopping. (MEMORY: review-each-pr-before-merge.)
+
 ## Domain context
 
 YAOG is a declarative control plane and code generator for WireGuard+Babel overlay networks:

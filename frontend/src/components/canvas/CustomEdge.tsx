@@ -7,7 +7,7 @@ import {
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
-// 每种 edge type 的颜色方案
+// Color scheme per edge type
 const edgeColors: Record<string, { stroke: string; label: string; bg: string }> = {
   'direct':           { stroke: '#22d3ee', label: '#cffafe', bg: '#164e63' },    // cyan
   'public-endpoint':  { stroke: '#f59e0b', label: '#fef3c7', bg: '#78350f' },    // amber
@@ -20,22 +20,24 @@ const defaultColor = { stroke: '#6b7280', label: '#e5e7eb', bg: '#374151' };
 interface CustomEdgeData {
   edgeType?: string;
   label?: string;
-  // 编译状态语义：pending = 已绘制但尚未编译（compiled_port 为空），端口由后端
-  // 在下次编译时分配 → 虚线 + 「待分配」端口徽标；编译后实线 + 实际端口徽标。
+  // Compile-state semantics: pending = drawn but not yet compiled (compiled_port empty); the port
+  // is allocated by the backend on the next compile -> dashed line + a "pending" port chip; after
+  // compile, a solid line + the actual port chip.
   pending?: boolean;
   port?: number;
   parallelIndex?: number;
   parallelCount?: number;
   sourceNodeName?: string;
   targetNodeName?: string;
-  // 链路角色徽标（并行链路语义，contract item 5 / Decisions #5）：
-  //   'primary'             → ★（主链路代表边）
-  //   'b1' | 'b2' | ...     → 备份链路在本节点对内的序号（按出现顺序）
-  //   'duplicate'           → 同向多余的 roleless/primary 边（镜像后端 D71 告警）
-  //   undefined             → 单边节点对，不显示徽标（保持简洁观感）
+  // Link-role chip (parallel-link semantics, contract item 5 / Decisions #5):
+  //   'primary'             -> ★ (the primary link's representative edge)
+  //   'b1' | 'b2' | ...     -> the backup link's ordinal within this node pair (by appearance order)
+  //   'duplicate'           -> a redundant same-direction roleless/primary edge (mirrors backend D71 warning)
+  //   undefined             -> single-edge node pair, no chip shown (keeps the look clean)
   roleChip?: 'primary' | 'duplicate' | string;
-  // 焦点透明度（Decisions #11，逐字实现）：被弱化的元素保持挂载、可见、可点击，
-  // 仅以 0.15 不透明度淡出，配合既有 150ms 过渡。绝不 display:none / 卸载 / 屏蔽点击。
+  // Focus opacity (Decisions #11, literal implementation): a deemphasized element stays mounted,
+  // visible, and clickable -- it only fades to 0.15 opacity with the existing 150ms transition.
+  // Never display:none / unmount / block clicks.
   deemphasized?: boolean;
   [key: string]: unknown;
 }
@@ -64,13 +66,13 @@ export function CustomEdge({
   const roleChip = data?.roleChip;
   const deemphasized = data?.deemphasized === true;
 
-  // 平行边偏移：根据 parallelIndex 和 parallelCount 计算偏移量
+  // Parallel-edge offset: compute the offset from parallelIndex and parallelCount
   const parallelIndex = data?.parallelIndex ?? 0;
   const parallelCount = data?.parallelCount ?? 1;
-  const offsetStep = 48; // 每条平行边偏移 48px（30px 弧间距读起来像渲染故障，加宽到 48px）
+  const offsetStep = 48; // 48px offset per parallel edge (30px arc spacing reads like a render glitch, widened to 48px)
   const totalOffset = (parallelIndex - (parallelCount - 1) / 2) * offsetStep;
 
-  // 通过调整 curvature 实现偏移效果 (弹性效果)
+  // Achieve the offset effect by adjusting curvature (springy look)
   const curvature = 0.25 + totalOffset * 0.005;
 
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -83,13 +85,13 @@ export function CustomEdge({
     curvature: Math.abs(curvature) > 0.01 ? curvature : undefined,
   });
 
-  // 标签偏移：在垂直方向上偏移，避免重叠
+  // Label offset: shift vertically to avoid overlap
   const labelOffsetY = totalOffset * 0.6;
 
   const strokeWidth = selected ? 3.5 : 2.5;
   const animated = edgeType === 'relay-path';
 
-  // 焦点弱化压倒一切：被弱化时一律 0.15，无论 selected / pending。
+  // Focus deemphasis overrides everything: when deemphasized, always 0.15, regardless of selected / pending.
   const baseEdgeOpacity = selected ? 1 : pending ? 0.65 : 0.8;
   const edgeOpacity = deemphasized ? 0.15 : baseEdgeOpacity;
 
@@ -102,7 +104,7 @@ export function CustomEdge({
           stroke: colors.stroke,
           strokeWidth,
           opacity: edgeOpacity,
-          // pending（未编译）边用虚线区分「端口尚未分配」状态
+          // pending (uncompiled) edges use a dashed line to distinguish the "port not yet allocated" state
           strokeDasharray: pending ? '7 5' : undefined,
           filter: selected ? `drop-shadow(0 0 4px ${colors.stroke})` : undefined,
           transition: 'stroke 150ms, stroke-width 150ms, opacity 150ms',
@@ -119,7 +121,7 @@ export function CustomEdge({
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
             pointerEvents: 'all',
             cursor: 'pointer',
-            // 弱化时淡出标签（与 BaseEdge 同步），保持挂载与可点击。
+            // When deemphasized, fade the label out (in sync with BaseEdge) while keeping it mounted and clickable.
             opacity: deemphasized ? 0.15 : 1,
             transition: 'opacity 150ms',
           }}
@@ -143,8 +145,8 @@ export function CustomEdge({
               transition: 'box-shadow 150ms',
             }}
           >
-            {/* 链路角色徽标（contract item 5）：★ 主链路 / bN 备份 / ⚠ 同向重复。
-                单边节点对不设 roleChip → 不渲染，保持简洁。 */}
+            {/* Link-role chip (contract item 5): ★ primary / bN backup / ⚠ same-direction duplicate.
+                A single-edge node pair has no roleChip -> nothing renders, keeping it clean. */}
             {roleChip === 'primary' && (
               <span
                 title="primary"
@@ -195,8 +197,8 @@ export function CustomEdge({
                 </span>
               )}
             <span>{label}</span>
-            {/* 端口徽标：已编译 → 实际监听端口（后端分配的真值）；
-                未编译 → 「待分配」占位，避免旧版 "host:" 悬空冒号式的误导。 */}
+            {/* Port chip: compiled -> the actual listen port (the backend-allocated truth);
+                uncompiled -> a "pending" placeholder, avoiding the old misleading dangling-colon "host:" form. */}
             {(port !== undefined || pending) && (
               <span
                 style={{
@@ -216,7 +218,7 @@ export function CustomEdge({
         </div>
       </EdgeLabelRenderer>
 
-      {/* 自定义箭头 marker */}
+      {/* Custom arrow marker */}
       <svg style={{ position: 'absolute', width: 0, height: 0 }}>
         <defs>
           <marker

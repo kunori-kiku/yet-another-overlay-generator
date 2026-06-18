@@ -28,12 +28,13 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
-// Handler HTTP API
+// Handler holds the dependencies for the air-gap HTTP API routes (health, validate,
+// compile, export, deploy-script). It owns the compiler used to derive peer configs.
 type Handler struct {
 	compiler *compiler.Compiler
 }
 
-// NewHandler  API
+// NewHandler constructs a Handler backed by a fresh compiler.
 func NewHandler() *Handler {
 	return &Handler{
 		compiler: compiler.NewCompiler(),
@@ -55,20 +56,22 @@ type errorBody struct {
 	Params  map[string]string `json:"params,omitempty"`
 }
 
-// HealthResponse
+// HealthResponse is the JSON body returned by the /api/health endpoint.
 type HealthResponse struct {
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp"`
 }
 
-// ValidateResponse
+// ValidateResponse is the JSON body returned by /api/validate: overall validity plus the
+// schema and semantic errors and warnings.
 type ValidateResponse struct {
 	Valid    bool                        `json:"valid"`
 	Errors   []validator.ValidationError `json:"errors,omitempty"`
 	Warnings []validator.ValidationError `json:"warnings,omitempty"`
 }
 
-// CompileResponse
+// CompileResponse is the JSON body returned by /api/compile: the compiled topology, the
+// rendered per-node configs and scripts, any non-fatal warnings, and the compile manifest.
 type CompileResponse struct {
 	Topology         *model.Topology   `json:"topology"`
 	WireGuardConfigs map[string]string `json:"wireguard_configs"`
@@ -76,14 +79,16 @@ type CompileResponse struct {
 	SysctlConfigs    map[string]string `json:"sysctl_configs"`
 	InstallScripts   map[string]string `json:"install_scripts"`
 	DeployScripts    map[string]string `json:"deploy_scripts"`
-	// 编译成功后仍需向用户展示的非致命告警（NAT 不可达、无 endpoint 的边、孤立节点等）。
-	// 这些告警在编译期由语义校验产生，必须随成功响应返回，否则操作员会在绿色编译上
-	// 部署一条注定不通的隧道（审计阻断项 UX-1）。
+	// Non-fatal warnings that must still be surfaced to the user after a successful compile
+	// (unreachable NAT, edges with no endpoint, isolated nodes, etc.). These warnings are
+	// produced by semantic validation during compilation and must be returned with the success
+	// response; otherwise an operator would deploy a doomed tunnel on top of a green compile
+	// (audit blocker UX-1).
 	Warnings []validator.ValidationError `json:"warnings,omitempty"`
 	Manifest compiler.CompileManifest    `json:"manifest"`
 }
 
-// HandleHealth
+// HandleHealth serves GET /api/health, returning an "ok" status with the current timestamp.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
@@ -96,7 +101,8 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleValidate
+// HandleValidate serves POST /api/validate, running schema and semantic validation on the
+// posted topology and returning the combined errors and warnings.
 func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
@@ -127,7 +133,9 @@ func (h *Handler) HandleValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleCompile
+// HandleCompile serves POST /api/compile, running the full pipeline (generate keys ->
+// compile -> render) on the posted topology and returning the compiled configs, scripts,
+// warnings, and manifest.
 func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
@@ -179,7 +187,8 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleExport
+// HandleExport serves POST /api/export, compiling and rendering the posted topology and
+// returning a ZIP archive of per-node self-extracting installer bundles.
 func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
@@ -218,7 +227,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 创建临时目录用于写出导出产物
+	// Create a temporary directory to write the export artifacts into.
 	tmpDir, err := os.MkdirTemp("", "overlay-export-*")
 	if err != nil {
 		writeCodedOr(w, apierr.CodeExportIOFailed, err)
@@ -260,10 +269,11 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 部署脚本的卸载分支需要每条 per-peer 隧道的接口名才能逐一拆除（wg-quick down / 删除
-	// 配置），而接口名只有在完整编译后才存在于 PeerMap 中。因此本端点必须运行与 /api/compile
-	// 相同的流水线（生成密钥 → 编译 → 渲染 Babel 配置），否则生成的卸载块缺失全部 per-peer
-	// 拆除步骤（审计阻断项 D36）。
+	// The deploy script's uninstall branch needs the interface name of every per-peer tunnel
+	// to tear them down one by one (wg-quick down / delete config), and those interface names
+	// only exist in the PeerMap after a full compile. This endpoint must therefore run the same
+	// pipeline as /api/compile (generate keys -> compile -> render Babel configs); otherwise the
+	// generated uninstall block is missing all per-peer teardown steps (audit blocker D36).
 	keys, err := render.GenerateKeys(topo, render.AirGap)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeInternal, err)
@@ -276,8 +286,9 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 部署脚本的 HasBabel 判定按 node.ID 查 BabelConfigs（见 renderer.RenderDeployScripts），
-	// 因此必须先按编译路径渲染出 Babel 配置，再渲染部署脚本。
+	// The deploy script's HasBabel decision looks up BabelConfigs by node.ID (see
+	// renderer.RenderDeployScripts), so the Babel configs must be rendered via the compile path
+	// before rendering the deploy scripts.
 	babelConfigs, err := renderer.RenderAllBabelConfigs(result.Topology, result.PeerMap)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeRenderFailed, err)
@@ -309,11 +320,12 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(script))
 }
 
-// ---  ---
+// --- helpers ---
 
-// maxRequestBodyBytes 限制每个 POST 请求体的最大长度（4 MiB）。
-// 超过该上限的请求体不会被缓冲到内存，而是被 http.MaxBytesReader 截断并报错，
-// 由调用方映射为 413 Payload Too Large，防止无上限的 io.ReadAll 造成 OOM DoS（D34）。
+// maxRequestBodyBytes caps the maximum length of each POST request body (4 MiB). A body that
+// exceeds this limit is not buffered into memory; instead http.MaxBytesReader truncates it and
+// returns an error, which the caller maps to 413 Payload Too Large, preventing an unbounded
+// io.ReadAll from causing an OOM DoS (D34).
 const maxRequestBodyBytes int64 = 4 << 20 // 4 MiB
 
 // errBodyTooLarge is the body-too-large sentinel returned by readTopology and the controller's
@@ -386,9 +398,11 @@ func createExportZip(dir string) (*bytes.Buffer, error) {
 			return nil, err
 		}
 
-		// 安装器 ZIP 条目名必须使用与部署脚本相同的规范化文件名（naming.SafeInstallerFileName），
-		// 而非原始目录名。两侧若使用不同的名称推导规则，凡是含大写、空格或特殊字符的节点
-		// 都会被写成一个名字、被部署脚本按另一个名字查找，从而被静默跳过（审计阻断项 D3/D32）。
+		// The installer ZIP entry name must use the same canonicalized filename as the deploy
+		// script (naming.SafeInstallerFileName), not the raw directory name. If the two sides used
+		// different name-derivation rules, any node containing uppercase letters, spaces, or special
+		// characters would be written under one name and looked up by the deploy script under
+		// another, and thus silently skipped (audit blocker D3/D32).
 		installHeader := &zip.FileHeader{Name: naming.SafeInstallerFileName(nodeName), Method: zip.Deflate}
 		installHeader.SetMode(0755)
 		installWriter, err := zw.CreateHeader(installHeader)
@@ -470,11 +484,13 @@ func tarGzDirectory(dir string) (*bytes.Buffer, error) {
 func makeSelfExtractingInstaller(nodeName string, payload []byte, signer bundlesig.ConfigSigner) ([]byte, error) {
 	encoded := base64.StdEncoding.EncodeToString(payload)
 
-	// 自解包装脚本此前直接 base64 解码并以 root 执行 payload，对 payload 没有任何完整性锚定
-	// （审计项 D25）。这里在 Go 侧对 tar.gz payload 计算 SHA-256，并作为字面量嵌入脚本；
-	// 脚本在 base64 解码之后、tar 解包/执行之前，用 sha256sum -c 风格的比对来验证解码出的
-	// 归档与该期望哈希一致，不一致则带中文错误中止。期望哈希对应的正是写入 ARCHIVE_PATH 的
-	// 那份字节（即 decode(encoded) == payload），因此对 payload 求哈希即可。
+	// The self-extracting wrapper script previously base64-decoded and executed the payload as
+	// root directly, with no integrity anchoring of the payload at all (audit item D25). Here we
+	// compute the SHA-256 of the tar.gz payload on the Go side and embed it as a literal in the
+	// script; after base64-decoding and before unpacking/executing, the script uses a sha256sum -c
+	// style comparison to verify the decoded archive matches this expected hash, aborting with an
+	// error on mismatch. The expected hash corresponds exactly to the bytes written to
+	// ARCHIVE_PATH (i.e. decode(encoded) == payload), so hashing the payload is sufficient.
 	expectedPayloadSHA256 := fmt.Sprintf("%x", sha256.Sum256(payload))
 
 	// Build the optional signature-verification block. When signing is off it is empty, so the

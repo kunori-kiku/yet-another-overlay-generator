@@ -209,74 +209,88 @@ export function isDesignDirty(t: Topology, lastSyncedSnapshot: string | null): b
   return canonicalDesign(t) !== lastSyncedSnapshot;
 }
 
-// 控制器面板（Mode B）状态。它是 controller 连接 + fleet 视图的单一来源，独立于
-// topologyStore（后者仍是拓扑数据的唯一来源）。deploy() 时从 topologyStore 读取当前
-// 拓扑并复用 compile() 发送的同一 model.Topology JSON 形状。
+// Controller panel (Mode B) state. It is the single source of truth for the controller
+// connection + fleet view, independent of topologyStore (which remains the sole source of
+// truth for topology data). On deploy() it reads the current topology from topologyStore and
+// reuses the same model.Topology JSON shape that compile() sends.
 interface ControllerState {
-  // 连接配置（baseURL/pathPrefix/operatorToken 组成 ControllerConfig；agentBaseURL 是
-  // EnrollmentFlow 给节点用的 agent 端口地址，仅作展示，不参与 operator 请求构造）。
+  // Connection config (baseURL/pathPrefix/operatorToken make up the ControllerConfig;
+  // agentBaseURL is the agent-port address EnrollmentFlow hands to nodes — display-only, not
+  // part of operator request construction).
   baseURL: string;
   pathPrefix: string;
   agentBaseURL: string;
-  // operatorToken 是可选的 BREAK-GLASS 令牌（恢复用），仅在内存中。日常鉴权用密码登录
-  // 换来的 session（sessionToken）。两者都不持久化（密钥不落 localStorage）。
+  // operatorToken is the optional BREAK-GLASS token (for recovery), held in memory only.
+  // Day-to-day auth uses the session (sessionToken) obtained via password login. Neither is
+  // persisted (no secret material in localStorage).
   operatorToken: string;
 
-  // 工作流模式：local（本地/手动）或 controller（控制器机群）。P2 把它从 DeployPanel 的
-  // useState 提升到 store，供各路由页读取（导航可见性 / 落地页 / 部署区分流）。P2 仅存内存
-  // （刷新回到 local，与原 useState 行为一致）；P4 把它加入 partialize 实现持久化。
+  // Workflow mode: local (local/manual) or controller (controller fleet). P2 lifted it out of
+  // DeployPanel's useState into the store so the route pages can read it (nav visibility /
+  // landing page / deploy split). P2 kept it in memory only (a refresh returns to local,
+  // matching the original useState behavior); P4 added it to partialize to persist it.
   mode: 'local' | 'controller';
   setMode: (mode: 'local' | 'controller') => void;
 
-  // 登录会话（plan-5.2 + appshell-P5）：密码登录后服务端签发的 bearer session token，仅在
-  // 内存中保存，绝不落 localStorage。P5 起 session 同时写入 httpOnly cookie，刷新后由
-  // checkSession() 经 GET /session 探测恢复登录态（loggedIn），无需在 JS 里读 token。
-  // operatorName/sessionExpiresAt 仅用于回显「已登录为 X，到期时间」。
+  // Login session (plan-5.2 + appshell-P5): the bearer session token the server issues after
+  // password login, held in memory only, never written to localStorage. From P5 the session is
+  // also written to an httpOnly cookie, so after a refresh checkSession() probes GET /session to
+  // restore the logged-in state (loggedIn) without reading the token in JS.
+  // operatorName/sessionExpiresAt are used only to echo "logged in as X, expires at ...".
   sessionToken: string;
   operatorName: string | null;
   sessionExpiresAt: string | null;
-  // csrfToken 是双提交 CSRF 令牌（来自 login / GET /session 响应），仅内存，绝不持久化。
-  // 在 cookie 鉴权的状态改写请求上作为 X-CSRF-Token 头回显（见 configOf）。
+  // csrfToken is the double-submit CSRF token (from the login / GET /session response), in
+  // memory only, never persisted. It is echoed as the X-CSRF-Token header on cookie-authed
+  // state-mutating requests (see configOf).
   csrfToken: string;
-  // loggedIn 由 GET /session 探测派生：cookie 会话在刷新后仍有效时为真（此时 sessionToken
-  // 已随内存丢失）。selectLoggedIn = sessionToken !== '' || loggedIn。
+  // loggedIn is derived from the GET /session probe: true when the cookie session is still
+  // valid after a refresh (at which point sessionToken has been lost with memory).
+  // selectLoggedIn = sessionToken !== '' || loggedIn.
   loggedIn: boolean;
 
-  // TOTP 2FA（plan-5.2）：totpRequired 表示上次登录密码正确但缺/错二次码（后端 401
-  // totp_required），登录表单据此显示验证码输入框。totpEnabled 是当前已登录 operator 账户
-  // 是否启用了 2FA（null=未知/未拉取；break-glass token 无账户 → 状态保持 null）。两者均仅
-  // 内存，绝不持久化。
+  // TOTP 2FA (plan-5.2): totpRequired means the last login had the correct password but a
+  // missing/wrong second-factor code (backend 401 totp_required); the login form shows the code
+  // input accordingly. totpEnabled is whether the currently logged-in operator account has 2FA
+  // enabled (null=unknown/not fetched; a break-glass token has no account, so the status stays
+  // null). Both are in memory only, never persisted.
   totpRequired: boolean;
   totpEnabled: boolean | null;
 
-  // 登录 passkey（plan-5.2）：当前已登录 operator 是否注册了登录 passkey（null=未知/未拉取；
-  // break-glass token 无账户 → 保持 null）。passkey 2FA 步骤不需要单独的 *Required 标志：
-  // login() 收到 passkey_required 后会就地弹出 authenticator 并重提交（signing 标志驱动 UI）。
+  // Login passkey (plan-5.2): whether the currently logged-in operator has registered a login
+  // passkey (null=unknown/not fetched; a break-glass token has no account, so it stays null).
+  // The passkey 2FA step needs no separate *Required flag: on receiving passkey_required,
+  // login() pops the authenticator in place and resubmits (the signing flag drives the UI).
   passkeyRegistered: boolean | null;
 
-  // fleet 视图
+  // fleet view
   nodes: ControllerNode[];
   audit: ControllerAuditEntry[];
   auditVerified: boolean;
   lastDeploy: StageResult | null;
 
-  // bootstrap 设置（plan-5.2，服务端持久化）：public agent URL / GitHub 代理 / agent 发布
-  // 基址。null 表示尚未从服务端加载（refresh 时拉取）。
+  // bootstrap settings (plan-5.2, server-persisted): public agent URL / GitHub proxy / agent
+  // release base. null means not yet loaded from the server (fetched on refresh).
   settings: ControllerSettings | null;
 
-  // 服务端权威 hydration（plan-4，D1）：每次登录/会话恢复后用 GET /topology 覆盖本地画布。
-  // 当一次覆盖会丢弃「非空且与服务端不同」的本地设计时，先下载 pre-hydration-backup-<date>
-  // .json 作为保险（D9，review 修正：每次分歧覆盖都备份，而非每浏览器一次——后者会静默丢弃
-  // 未部署的本地编辑）。hydrationNotice 为真时 Shell 显示一条可关闭提示（用 txt() 实时本地化，
-  // 不冻结语言）。
+  // Server-authoritative hydration (plan-4, D1): after each login/session restore, GET
+  // /topology overwrites the local canvas. When an overwrite would discard a local design that
+  // is "non-empty and differs from the server", first download pre-hydration-backup-<date>.json
+  // as insurance (D9, review fix: back up on EVERY divergent overwrite, not once per browser —
+  // the latter would silently drop undeployed local edits). When hydrationNotice is true the
+  // Shell shows a dismissible notice (localized live via txt(), language not frozen).
   hydrationNotice: boolean;
 
-  // 部署 custody 与防缩水（plan-5，D4 + 审计「一键销毁」场景）：
-  // - lastStrippedKeys：上次 deploy 上传前从画布剥离的私钥数量（0=无提示）。控制器模式零
-  //   知识——私钥绝不上送（服务端 plan-1 的 400 在客户端的镜像），剥离后给一条信息提示。
-  // - pendingShrink：当一次 deploy 会让服务端设计大幅缩水（清空，或丢弃过半已存在节点）时，
-  //   先把待确认信息存这里、暂不部署；DeployBar 弹出「键入项目名确认」对话框，确认后以
-  //   confirmedShrink 重新调用 deploy。版本历史（plan-2）是事后兜底，本守卫是事前预防。
+  // Deploy custody and shrink guard (plan-5, D4 + the audit's "one-click destruction" scenario):
+  // - lastStrippedKeys: how many private keys were stripped from the canvas before the last
+  //   deploy upload (0=no notice). Controller mode is zero-knowledge — private keys are never
+  //   uploaded (the client mirror of the server's plan-1 400) — and an info notice is shown
+  //   after stripping.
+  // - pendingShrink: when a deploy would shrink the server design substantially (emptying it,
+  //   or dropping over half the existing nodes), the to-be-confirmed info is stored here and the
+  //   deploy is held; DeployBar pops a "type the project name to confirm" dialog, and on confirm
+  //   deploy is re-invoked with confirmedShrink. Version history (plan-2) is the after-the-fact
+  //   backstop; this guard is the up-front prevention.
   lastStrippedKeys: number;
   // pendingShrink carries the typed-confirm phrase (project name, or a non-empty
   // sentinel when the project is unnamed — an empty phrase would let an empty input
@@ -292,16 +306,19 @@ interface ControllerState {
     stripped: number;
   } | null;
 
-  // KEYSTONE（plan-5.1d）：已 pin 的 off-host operator 签名凭据（passkey / YubiKey）。
-  // 仅持久化非密信息——credential_id（base64url(rawId)）、alg、rpId——它们不是密钥材料
-  // （私钥从不离开 authenticator），但记住它们让面板能跨刷新驱动后续签名（allowCredentials）
-  // 并回显「已注册签名密钥」。未注册时三者为 null。pinned PEM 不在浏览器持久化：签名时
-  // public_key 字段是 audit-only，且节点只信任服务端 pin 的 PEM——故无需在前端保留它。
+  // KEYSTONE (plan-5.1d): the pinned off-host operator signing credential (passkey / YubiKey).
+  // Only non-secret info is persisted — credential_id (base64url(rawId)), alg, rpId — none of it
+  // is key material (the private key never leaves the authenticator), but remembering it lets the
+  // panel drive later signatures across a refresh (allowCredentials) and echo "signing key
+  // registered". All three are null when not enrolled. The pinned PEM is NOT persisted in the
+  // browser: at signing time the public_key field is audit-only, and nodes trust only the
+  // server-pinned PEM — so there is no need to keep it on the frontend.
   operatorCredentialId: string | null;
   operatorCredentialAlg: WebAuthnAlg | null;
   operatorRpId: string | null;
-  // pinned 公钥 PEM：非密（公钥），持久化它只为把签名 artifact 的 audit-only public_key
-  // 字段填成自描述的实际公钥；节点永远只信任服务端 pin 的 PEM，从不信任此字段。
+  // pinned public-key PEM: non-secret (a public key); it is persisted only to fill the signing
+  // artifact's audit-only public_key field with the actual self-describing public key; nodes
+  // always trust only the server-pinned PEM, never this field.
   operatorPublicKeyPEM: string | null;
 
   // SERVER-authoritative keystone status (NOT persisted): the panel derives "enrolled" from THIS,
@@ -322,40 +339,52 @@ interface ControllerState {
   // enrolled chip); only enrollOperator({rotate:true}) proceeds. (Mirrors pendingShrink as a gate.)
   pendingKeystoneRotate: boolean;
 
-  // 易失 UI 状态
+  // volatile UI state
   loading: boolean;
   error: string | null;
   lastSyncedAt: number | null;
-  // 上次与服务端同步（hydrate / save）后记下的「服务端权威设计」规范化快照（canonicalDesign）。
-  // 用于：(1) dirty 指示——当前画布与它不同即有未保存改动；(2) save 前的冲突检测基线——save 时
-  // 重新 GET 服务端设计与它比对，若服务端已被改动则不盲目覆盖（plan-10 / T2，D13）。null=尚未
-  // 同步过任何服务端设计（服务端为空 / 首次部署前）。不持久化（刷新后由 hydrate 重新建立）。
+  // The normalized snapshot (canonicalDesign) of the "server-authoritative design" recorded
+  // after the last sync with the server (hydrate / save). Used for: (1) the dirty indicator —
+  // the current canvas differing from it means unsaved changes; (2) the conflict-detection
+  // baseline before save — at save time the server design is re-GET'd and compared against it,
+  // so a server that has been changed is not blindly overwritten (plan-10 / T2, D13). null=no
+  // server design has been synced yet (server empty / before the first deploy). Not persisted
+  // (rebuilt by hydrate after a refresh).
   lastSyncedSnapshot: string | null;
-  // lastSyncedTopology 是与 lastSyncedSnapshot 同一时刻记录的「服务端权威设计」Topology 对象（而非
-  // 规范化字符串）。saveDesign 用它做三方比较的 base：区分「服务端新增了 pin」（良性 → 吸纳到画布，
-  // 不报冲突 / 不被 force 覆盖丢弃）与「操作员清了 pin / 改了别处」（保留操作员意图）。null=尚未同步。
-  // 不持久化（不在 partialize allowlist 中——刷新后由 hydrate 重建，且绝不让 fleet 公网 IP 落盘）。
+  // lastSyncedTopology is the "server-authoritative design" Topology object (rather than the
+  // normalized string) recorded at the same moment as lastSyncedSnapshot. saveDesign uses it as
+  // the base of a 3-way comparison: distinguishing "the server added pins" (benign → adopt onto
+  // the canvas, no conflict / not discarded by a force overwrite) from "the operator cleared a
+  // pin / changed something else" (preserve operator intent). null=not yet synced. Not persisted
+  // (not in the partialize allowlist — rebuilt by hydrate after a refresh, and never let a
+  // fleet's public IPs hit disk).
   lastSyncedTopology: Topology | null;
-  // save 冲突标志（plan-10 / T2）：saveDesign 检测到服务端设计自上次同步以来已变化时置真，UI
-  // 据此弹出「服务端已变更：从服务端重新同步（自动备份）/ 仍然覆盖 / 取消」对话框。
+  // save conflict flag (plan-10 / T2): set true when saveDesign detects the server design has
+  // changed since the last sync; the UI then pops a "server changed: re-sync from server (auto
+  // backup) / overwrite anyway / cancel" dialog.
   saveConflict: boolean;
-  // save 进行中（plan-11 review #1）：saveDesign 专用，区别于全局 loading。Save 按钮 / 冲突对话框
-  // 据此显示「保存中 / 禁用」，避免被无关的 controller 操作（refresh/deploy/saveSettings 等）误置的
-  // 全局 loading 错误点亮成「保存中」。
+  // save in progress (plan-11 review #1): specific to saveDesign, distinct from the global
+  // loading. The Save button / conflict dialog show "saving / disabled" off it, so an unrelated
+  // controller op (refresh/deploy/saveSettings, etc.) that sets the global loading does not
+  // wrongly light up "saving".
   saving: boolean;
-  // previewing 进行中（PR6）：compilePreview 专用，区别于全局 loading（同 saving 的理由）。
-  // Compile 按钮据此显示「编译中 / 禁用」，避免被无关 controller 操作误置的全局 loading 点亮。
+  // previewing in progress (PR6): specific to compilePreview, distinct from the global loading
+  // (same rationale as saving). The Compile button shows "compiling / disabled" off it, so the
+  // global loading set by an unrelated controller op does not light it up.
   previewing: boolean;
-  // signing 为真表示 WebAuthn 提示已弹出、正在等待用户触碰安全密钥（enroll 或 deploy 期间）。
-  // UI 用它显示「触碰你的安全密钥」提示。enrolling 区分 enroll 与 deploy-sign 两种 ceremony。
-  // 注意：signing/enrolling 专属 KEYSTONE 流程（deploy 签名 / 签名密钥注册），DeployBar 的
-  // 「授权本次部署」横幅据此显示。登录 passkey 的 ceremony 用下面独立的 loginCeremony 标志，
-  // 以免在登录/注册/移除登录 passkey 时错误点亮「授权部署」横幅。
+  // signing true means the WebAuthn prompt is up, waiting for the user to touch the security key
+  // (during enroll or deploy). The UI shows the "touch your security key" prompt off it.
+  // enrolling distinguishes the enroll ceremony from the deploy-sign ceremony. Note:
+  // signing/enrolling are exclusive to the KEYSTONE flow (deploy signing / signing-key
+  // registration), and DeployBar's "authorize this deploy" banner shows off them. The login
+  // passkey ceremony uses the separate loginCeremony flag below, so login/registering/removing a
+  // login passkey does not wrongly light up the "authorize deploy" banner.
   signing: boolean;
   enrolling: boolean;
-  // loginCeremony 为真表示一次「登录 passkey」WebAuthn 提示进行中（password+passkey 2FA、
-  // 无密码登录、注册或移除登录 passkey）。与 keystone 的 signing/enrolling 分开，驱动登录区/
-  // 账户安全区的「触碰你的安全密钥」提示，但不触发 DeployBar 的部署横幅。
+  // loginCeremony true means a "login passkey" WebAuthn prompt is in progress (password+passkey
+  // 2FA, passwordless login, or registering/removing a login passkey). Kept separate from
+  // keystone's signing/enrolling, it drives the "touch your security key" prompt in the login /
+  // account-security areas without triggering DeployBar's deploy banner.
   loginCeremony: boolean;
 
   // actions
@@ -378,21 +407,25 @@ interface ControllerState {
   // checkSession probes GET /session to restore login state from the httpOnly cookie
   // after a refresh (P5). Sets loggedIn + operator + expiry + csrfToken, or clears them.
   checkSession: () => Promise<void>;
-  // 服务端权威 hydration（plan-4，D1）：GET /topology → loadTopology 覆盖本地画布。404
-  //（尚无服务端拓扑——首次部署前）保留本地画布。login/loginWithPasskey/checkSession 的
-  // 成功路径都会调用它。覆盖前若本地有「非空且与服务端不同」的设计，先导出一次备份（D9）。
+  // Server-authoritative hydration (plan-4, D1): GET /topology → loadTopology overwrites the
+  // local canvas. A 404 (no server topology yet — before the first deploy) keeps the local
+  // canvas. The success path of login/loginWithPasskey/checkSession all call it. Before
+  // overwriting, if the local design is "non-empty and differs from the server", export a backup
+  // first (D9).
   hydrateFromServer: () => Promise<void>;
   dismissHydrationNotice: () => void;
-  // 无密码 passkey 登录（plan-5.2）：begin → assertLogin → finish。
+  // Passwordless passkey login (plan-5.2): begin → assertLogin → finish.
   loginWithPasskey: (username: string) => Promise<void>;
-  // 登录 passkey 自助管理（仅密码 session 有效）。
+  // Login-passkey self-service management (valid only for a password session).
   loadPasskeyStatus: () => Promise<void>;
   registerPasskey: () => Promise<void>;
   disablePasskey: () => Promise<void>;
-  // 复位待处理的二次验证步骤：当操作员改动了凭据对（或一次硬失败之后），让验证码框只对
-  // 后端实际标记的那一对 username+password 出现，而非粘滞到换了账号/改了密码之后。
+  // Reset the pending second-factor step: when the operator changes the credential pair (or
+  // after a hard failure), make the code box appear only for the username+password pair the
+  // backend actually flagged, rather than sticking around after the account/password changed.
   resetTOTPChallenge: () => void;
-  // TOTP 2FA 自助管理（plan-5.2）：仅对密码 session 有效（break-glass token 无账户）。
+  // TOTP 2FA self-service management (plan-5.2): valid only for a password session (a
+  // break-glass token has no account).
   loadTOTPStatus: () => Promise<void>;
   enrollTOTP: () => Promise<TOTPEnrollment>;
   confirmTOTP: (secret: string, code: string) => Promise<void>;
@@ -409,37 +442,48 @@ interface ControllerState {
   hydrateKeystoneStatus: () => Promise<void>;
   // cancelKeystoneRotate clears a pending rotate confirmation (the operator declined the rotation).
   cancelKeystoneRotate: () => void;
-  // compilePreview（PR6）：服务端权威的只读编译。POST 当前画布（先剥离私钥）→ 服务端编译已
-  // enroll 的子图（不 stage、不持久化）→ 把编译结果设为 compileResult（供 CompilePreview /
-  // EdgeEditor 展示），并把服务端算出的分配（compiled_port + pinned_*）合并回画布，让操作员
-  // 看到并据此调整 NAT ip:port，随后 Save 持久化、Deploy 时粘性沿用。
+  // compilePreview (PR6): a server-authoritative read-only compile. POST the current canvas
+  // (private keys stripped first) → the server compiles the enrolled subgraph (no stage, no
+  // persist) → set the result as compileResult (for CompilePreview / EdgeEditor to display), and
+  // merge the server-computed allocations (compiled_port + pinned_*) back onto the canvas so the
+  // operator can see them and adjust the NAT ip:port accordingly, then Save persists and Deploy
+  // reuses them stickily.
   compilePreview: () => Promise<void>;
-  // deploy 上传当前画布（先剥离私钥）→ stage → (keystone 签名) → promote。当一次部署会让
-  // 服务端设计大幅缩水时，除非 confirmedShrink，否则设置 pendingShrink 并暂不部署（等键入
-  // 项目名确认）。
+  // deploy uploads the current canvas (private keys stripped first) → stage → (keystone
+  // signing) → promote. When a deploy would shrink the server design substantially, unless
+  // confirmedShrink it sets pendingShrink and holds the deploy (awaiting the typed project-name
+  // confirmation).
   deploy: (opts?: { confirmedShrink?: boolean }) => Promise<void>;
-  // 取消待确认的缩水部署（用户在确认框点了取消）。
+  // Cancel a pending shrink-confirm deploy (the user clicked cancel in the confirm dialog).
   cancelShrinkConfirm: () => void;
-  // 控制器模式的轻量「保存」（plan-10 / T2）：剥离私钥 → update-topology（仅持久化权威副本 +
-  // 版本历史，绝不 stage/promote 触达在线 fleet）→ 标记 canvasFromServer → 刷新同步快照。save
-  // 前做客户端冲突检测（重新 GET 与 lastSyncedSnapshot 比对）；force=true 跳过检测强制覆盖。
+  // Controller-mode lightweight "save" (plan-10 / T2): strip private keys → update-topology
+  // (persist the authoritative copy + version history only, never stage/promote to reach the
+  // live fleet) → mark canvasFromServer → refresh the sync snapshot. Before saving it runs a
+  // client-side conflict check (re-GET and compare against lastSyncedSnapshot); force=true skips
+  // the check and overwrites.
   saveDesign: (opts?: { force?: boolean }) => Promise<void>;
-  // 控制器模式的「导入设计」（server-authoritative）：解析 JSON 文件 → 剥离全部密钥材料（控制器
-  // 为密钥权威）→ update-topology 写到服务端（落一条版本历史，服务端会顺手 heal 冲突 pin）→
-  // hydrateFromServer 用服务端权威副本刷新画布。绝不把 fleet 设计落到 localStorage，也绝不直接触达
-  // 在线 fleet（部署仍是独立的 stage/sign/promote）。与 local 模式的 importProject 区分：后者把文件
-  // 当作可丢弃的本地草稿载入画布，会让机密镜像落盘——controller 模式不可。
+  // Controller-mode "import design" (server-authoritative): parse the JSON file → strip all key
+  // material (the controller is the key authority) → update-topology writes to the server (lands
+  // a version history entry; the server heals colliding pins along the way) → hydrateFromServer
+  // refreshes the canvas from the authoritative copy. Never lands a fleet design in localStorage,
+  // and never reaches the live fleet directly (deploy is still the separate stage/sign/promote).
+  // Distinguished from local mode's importProject: the latter loads the file into the canvas as a
+  // discardable local draft, which lands a secret mirror on disk — not allowed in controller mode.
   importDesignToServer: (file: File) => Promise<void>;
-  // 关闭 save 冲突提示（用户取消，或已通过重新同步 / 强制覆盖解决）。
+  // Dismiss the save conflict notice (the user cancelled, or it was resolved by re-syncing /
+  // force-overwriting).
   dismissSaveConflict: () => void;
-  // 关闭「已剥离 N 个私钥」提示。
+  // Dismiss the "stripped N private keys" notice.
   dismissStripNotice: () => void;
-  // 清掉 controller 模式相关的临时提示（hydration / 剥离 / 待确认缩水）。controller→local
-  // 切换时调用，避免本地模式下还残留控制器模式的横幅（plan-5 review）。
+  // Clear the controller-mode transient notices (hydration / stripping / pending shrink). Called
+  // on a controller→local switch so no controller-mode banner lingers in local mode (plan-5
+  // review).
   clearModeNotices: () => void;
-  // controller→local 的统一切换（plan-10 / T1）：把「服务端镜像→整画布清空 / 本地原创→保图清密钥」
-  // 这一安全分叉收敛到一处，供登录门与设置页共用，杜绝两处实现发散导致的 fleet 机密泄漏。
-  // 同时清提示、还原本地 translucency 偏好（A3）、置 mode=local。调用方负责确认对话框与导航。
+  // The unified controller→local switch (plan-10 / T1): converges the security fork ("server
+  // mirror → wipe the whole canvas / local original → keep the design, drop keys") into one
+  // place, shared by the login gate and the settings page, so two diverging implementations can
+  // never leak fleet secrets. It also clears notices, restores the local translucency preference
+  // (A3), and sets mode=local. The caller is responsible for the confirm dialog and navigation.
   switchToLocal: () => void;
   switchToController: () => void;
   revoke: (nodeId: string) => Promise<void>;
@@ -447,9 +491,10 @@ interface ControllerState {
   clearRekey: (nodeId: string) => Promise<void>;
 }
 
-// 从连接字段切出 controllerClient 需要的 ControllerConfig（不含 agentBaseURL）。
-// EFFECTIVE bearer = 登录 session 优先，否则 break-glass operatorToken。这样客户端层
-// 无需感知会话/令牌的区别——它只附上 operatorToken 字段作为 Bearer。
+// configOf slices the ControllerConfig the controllerClient needs out of the connection fields
+// (without agentBaseURL). The EFFECTIVE bearer = the login session if present, else the
+// break-glass operatorToken. This way the client layer need not know session vs. token apart —
+// it just attaches the operatorToken field as the Bearer.
 function configOf(state: ControllerState): ControllerConfig {
   return {
     baseURL: state.baseURL,
@@ -459,13 +504,17 @@ function configOf(state: ControllerState): ControllerConfig {
   };
 }
 
-// 安全（controller server-authoritative）：当会话探测失败、即将退回登录门时，若画布是服务端
-// 机密镜像（canvasFromServer），清空它——否则登出态下任何拿到浏览器的人都能从画布/localStorage
-// 读出 fleet 的公网 IP 与 SSH 目标。仅 controller 模式生效；本地原创工作不动（那是用户自有数据）。
+// Security (controller server-authoritative): when the session probe fails and we are about to
+// fall back to the login gate, if the canvas is a server secret mirror (canvasFromServer), wipe
+// it — otherwise, while logged out, anyone with the browser could read the fleet's public IPs
+// and SSH targets out of the canvas/localStorage. Only effective in controller mode; local
+// original work is untouched (that is the user's own data).
 //
-// plan-10 / T2：冲刷前若镜像有未保存改动（dirty——与上次同步快照不同），先导出一次备份，否则
-// 登出 / 会话失效 / 切回本地会静默丢弃这些未部署的编辑。稳态（已 Save 或未改动）下 dirty=false，
-// 不触发下载。只接收所需的两个原语（mode + 同步快照基线），不耦合整个 ControllerState 类型。
+// plan-10 / T2: before flushing, if the mirror has unsaved changes (dirty — differs from the
+// last sync snapshot), export a backup first, otherwise logout / session loss / switching back
+// to local would silently drop those undeployed edits. In steady state (already Saved or
+// unchanged) dirty=false and no download fires. It takes only the two primitives it needs (mode
+// + the sync-snapshot baseline), not the whole ControllerState type.
 function clearServerCanvasAtGate(mode: 'local' | 'controller', lastSyncedSnapshot: string | null): void {
   if (mode !== 'controller') return;
   const topo = useTopologyStore.getState();
@@ -477,26 +526,29 @@ function clearServerCanvasAtGate(mode: 'local' | 'controller', lastSyncedSnapsho
   topo.flushWorkspace();
 }
 
-// 派生选择器：是否已通过密码登录（持有有效 session）。DeployPanel 用它在登录区切换
-// 「登录表单 / 已登录为 X」。break-glass operatorToken 不算「已登录」（它是恢复路径）。
+// Derived selector: whether the user is logged in via password (holds a valid session).
+// DeployPanel uses it to switch the login area between "login form / logged in as X". A
+// break-glass operatorToken does not count as "logged in" (it is a recovery path).
 export function selectLoggedIn(state: ControllerState): boolean {
   // sessionToken is the in-memory bearer (this tab's login); loggedIn is derived from the
   // GET /session cookie probe (survives a refresh that drops the in-memory token).
   return state.sessionToken !== '' || state.loggedIn;
 }
 
-// 派生选择器：是否持有任一可用的 operator 凭据（登录 session 或 break-glass token）。
-// configOf 的 EFFECTIVE bearer 正是 sessionToken || operatorToken，所以任一非空即可发起
-// operator 请求。DeployBar 用它决定是否禁用 Deploy/Roll-keys（不能再只看 operatorToken，
-// 否则登录后的操作员会被错误地拦住）。
+// Derived selector: whether any usable operator credential is held (a login session or a
+// break-glass token). configOf's EFFECTIVE bearer is exactly sessionToken || operatorToken, so
+// either being non-empty allows issuing operator requests. DeployBar uses it to decide whether
+// to disable Deploy/Roll-keys (it can no longer look at operatorToken alone, or a logged-in
+// operator would be wrongly blocked).
 export function selectHasAuth(state: ControllerState): boolean {
   // A cookie-restored session (loggedIn) can make operator requests too — the cookie is
   // attached automatically — so it counts as auth even when the in-memory token is empty.
   return state.sessionToken !== '' || state.loggedIn || state.operatorToken.trim() !== '';
 }
 
-// 把标准 base64（带 padding，GET /trustlist 的 trustlist_json 编码）解码回原始字节。
-// 这些字节就是 canonical manifest 字节，其 SHA-256 即 WebAuthn challenge。
+// base64StdToBytes decodes STANDARD base64 (padded — the encoding of GET /trustlist's
+// trustlist_json) back to raw bytes. Those bytes are the canonical manifest bytes, whose SHA-256
+// is the WebAuthn challenge.
 //
 // FOOTGUN: the input MUST be STANDARD (padded) base64 because it pairs with Go's
 // base64.StdEncoding on trustlist_json (handler_controller.go ~:1103) — this is a
@@ -513,9 +565,11 @@ function base64StdToBytes(s: string): Uint8Array {
   return out;
 }
 
-// 派生选择器：fleet 中仍处于 rekey_requested（已请求轮换、尚未重新注册新公钥）的节点数。
-// 驱动「建议性」轮换体验——DeployBar 的 Deploy 二次确认 + title 提示，以及 NodeRegistry 里
-// 每个节点的「Cancel rekey」入口的显隐；不再硬禁用 Deploy。便于回显「N 个节点仍在轮换密钥」。
+// Derived selector: the number of fleet nodes still in rekey_requested (rotation requested, new
+// public key not yet re-registered). Drives the "advisory" rotation experience — DeployBar's
+// Deploy confirm + title hint, and the visibility of each node's "Cancel rekey" entry in
+// NodeRegistry; it no longer hard-disables Deploy. Handy for echoing "N nodes still rotating
+// keys".
 export function selectRekeyingCount(state: ControllerState): number {
   // Only APPROVED nodes can re-register (a revoked node never clears its flag), so
   // exclude non-approved to avoid permanently gating Deploy on a stale flag.
@@ -559,7 +613,7 @@ const serverKeystoneReset = {
 export const useControllerStore = create<ControllerState>()(
   persist(
     (set, get) => ({
-      // 默认连接配置（见 DESIGN：operator 默认 :8080，agent 默认 :9090）。
+      // Default connection config (see DESIGN: operator defaults to :8080, agent to :9090).
       baseURL: 'http://localhost:8080',
       pathPrefix: '',
       agentBaseURL: 'http://localhost:9090',
@@ -611,8 +665,9 @@ export const useControllerStore = create<ControllerState>()(
 
       setMode: (mode) => set({ mode }),
 
-      // 刷新 fleet 视图：并行拉取 nodes + audit + bootstrap 设置。任一失败则记录 error，
-      // 并保持已有视图不变。settings 拉取失败不影响 nodes/audit（best-effort，单独 catch）。
+      // Refresh the fleet view: fetch nodes + audit + bootstrap settings in parallel. If any
+      // fails, record the error and leave the existing view unchanged. A settings-fetch failure
+      // does not affect nodes/audit (best-effort, caught separately).
       refresh: async () => {
         set({ loading: true, error: null });
         try {
@@ -625,9 +680,10 @@ export const useControllerStore = create<ControllerState>()(
             loading: false,
             lastSyncedAt: Date.now(),
           });
-          // 顺带刷新 bootstrap 设置（不阻塞 fleet 视图；失败保留旧值）。controller 模式下
-          // 服务端是 translucency 的权威，拉到后同步到外观 store（与 loadSettings 一致），
-          // 避免设置页复选框与服务端值发散。
+          // Also refresh the bootstrap settings (does not block the fleet view; keep the old
+          // value on failure). In controller mode the server is the authority for translucency,
+          // so once fetched sync it to the appearance store (same as loadSettings), keeping the
+          // settings-page checkbox from diverging from the server value.
           try {
             const settings = await getSettings(cfg);
             set({ settings });
@@ -635,7 +691,7 @@ export const useControllerStore = create<ControllerState>()(
               useUiStore.getState().applyServerTranslucency(settings.translucency);
             }
           } catch {
-            /* 设置拉取失败：保留已有 settings，不覆盖 fleet 视图的成功状态。 */
+            /* Settings fetch failed: keep the existing settings, do not overwrite the fleet view's success state. */
           }
           // Keystone status is server-authoritative (the panel's "enrolled" source); refresh it
           // alongside the fleet so the display + the rotated-but-not-redeployed banner stay current.
@@ -649,7 +705,8 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 加载 bootstrap 设置（独立入口，供设置区首次渲染时用）。
+      // Load the bootstrap settings (a standalone entry point, used on the settings area's first
+      // render).
       loadSettings: async () => {
         try {
           const settings = await getSettings(configOf(get()));
@@ -667,7 +724,7 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 保存 bootstrap 设置：POST /settings，回写服务端归一化后的值。
+      // Save the bootstrap settings: POST /settings, then write back the server-normalized value.
       saveSettings: async (s) => {
         set({ loading: true, error: null });
         try {
@@ -685,17 +742,20 @@ export const useControllerStore = create<ControllerState>()(
       // auth config and rethrows so the card localizes its own error. No global state side effects.
       fetchReleasePins: (body) => ctlFetchPins(configOf(get()), body),
 
-      // 操作员密码登录（plan-5.2）：POST /login 换取 session token，仅存内存。成功后立即
-      // refresh 拉取 fleet 视图。session 优先于 break-glass token（见 configOf）。失败把
-      // 控制器原始报错（401 invalid username or password / 429 too many attempts）回显。
+      // Operator password login (plan-5.2): POST /login to obtain a session token, held in memory
+      // only. On success, immediately refresh the fleet view. The session takes precedence over a
+      // break-glass token (see configOf). On failure, echo the controller's raw error (401
+      // invalid username or password / 429 too many attempts).
       login: async (username, password, totp) => {
         set({ loading: true, error: null });
         try {
           const outcome = await ctlLogin(configOf(get()), username, password, totp);
           if (outcome.kind === 'passkey_required') {
-            // 密码正确但需要 passkey：就地弹出 authenticator 并用断言重提交（password 仍在闭包
-            // 里）。signing 标志驱动「触碰你的安全密钥」提示。整个 2FA passkey 步骤对 UI 透明
-            // ——登录表单无需 passkey 输入框，store 自动完成 ceremony。
+            // Password correct but a passkey is required: pop the authenticator in place and
+            // resubmit with the assertion (the password is still in the closure). The signing
+            // flag drives the "touch your security key" prompt. The whole 2FA passkey step is
+            // transparent to the UI — the login form needs no passkey input, the store completes
+            // the ceremony automatically.
             const ch = outcome.challenge;
             if (!ch.credentialId || !ch.alg) {
               set({ error: tLocal('controllerStore.passkeyRequiredNoneRegistered'), loading: false });
@@ -739,10 +799,12 @@ export const useControllerStore = create<ControllerState>()(
             return;
           }
           if (outcome.kind === 'totp_required') {
-            // 密码正确但需要二次码：让登录表单收集 TOTP 码后重试。后端对「缺码」与「码错」
-            // 返回同一个 totp_required（不开 oracle）；但我们本地知道是否带了码——若带了码仍被
-            // 要求，就是码错/过期，给个温和提示（用户已在 2FA 步，不算信息泄露）。首次（未带码）
-            // 不写 error，仅展开验证码框。
+            // Password correct but a second-factor code is required: let the login form collect a
+            // TOTP code and retry. The backend returns the same totp_required for both "missing
+            // code" and "wrong code" (no oracle); but locally we know whether a code was
+            // submitted — if a code was sent and is still required, it was wrong/expired, so show
+            // a gentle hint (the user is already in the 2FA step, so this is not info disclosure).
+            // The first time (no code) writes no error, just expands the code box.
             const submittedCode = !!(totp && totp.trim() !== '');
             set({
               totpRequired: true,
@@ -764,13 +826,16 @@ export const useControllerStore = create<ControllerState>()(
           });
           await get().hydrateFromServer();
           await get().refresh();
-          // 拉取本账户的 2FA / passkey 状态（供「账户安全」区回显）。失败不阻塞登录。
+          // Fetch this account's 2FA / passkey status (for the "account security" area to echo).
+          // A failure does not block login.
           await get().loadTOTPStatus();
           await get().loadPasskeyStatus();
         } catch (err) {
-          // 硬失败（密码错 / 429 锁定 / 网络 / 500，均在到达「需二次码」之前抛出）：复位
-          // totpRequired，回到纯密码表单——避免「输入用户名或密码错误」却仍显示验证码框的
-          // 错位提示。真正需要二次码的下一次（密码正确）会重新干净地触发 totp_required。
+          // Hard failure (wrong password / 429 lockout / network / 500, all thrown before
+          // reaching "second-factor required"): reset totpRequired, back to a pure password form
+          // — avoiding the mismatched prompt of "wrong username or password" while still showing
+          // the code box. The next attempt that genuinely needs a second factor (correct
+          // password) will cleanly re-trigger totp_required.
           set({
             error: localizeError(err, 'error.generic'),
             totpRequired: false,
@@ -779,68 +844,82 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 复位二次验证步骤（见接口注释）：仅清 totpRequired；验证码输入框的本地值由组件清空。
+      // Reset the second-factor step (see the interface comment): clear totpRequired only; the
+      // code input's local value is cleared by the component.
       resetTOTPChallenge: () => set({ totpRequired: false }),
 
-      // 服务端权威 hydration（plan-4，D1）：服务端的拓扑是唯一权威，本地缓存只是可弃置的
-      // 镜像——每次登录/会话恢复后覆盖。失败（网络/解析）保留本地画布并安静返回：hydration
-      // 是登录的附属动作，不能让一次拉取失败挡住登录本身；下次登录/刷新会再试。
+      // Server-authoritative hydration (plan-4, D1): the server's topology is the sole authority,
+      // and the local cache is just a discardable mirror — overwritten after each login/session
+      // restore. On failure (network/parse) it keeps the local canvas and returns quietly:
+      // hydration is a side action of login and a single fetch failure must not block login
+      // itself; the next login/refresh retries.
       hydrateFromServer: async () => {
         try {
           const raw = await ctlGetTopology(configOf(get()));
           if (raw === null) {
-            return; // 服务端尚无拓扑（首次部署前）：保留本地画布。
+            return; // Server has no topology yet (before the first deploy): keep the local canvas.
           }
           const topo = raw as Topology;
           if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
-            return; // 形状不符：不覆盖（服务端字节由 update-topology 的 custody 门保证，这只是防御）。
+            return; // Shape mismatch: do not overwrite (the server bytes are guaranteed by update-topology's custody gate; this is just defensive).
           }
-          // 记下服务端权威设计的规范化快照——dirty 指示 + save 冲突检测的基线（plan-10 / T2）。
-          // 不论下面是否真的覆盖本地画布（differs/!differs）都更新，保证基线始终等于服务端现状。
+          // Record the server-authoritative design's normalized snapshot — the baseline for the
+          // dirty indicator + save conflict check (plan-10 / T2). Update it whether or not the
+          // local canvas is actually overwritten below (differs/!differs), so the baseline always
+          // equals the current server state.
           set({ lastSyncedSnapshot: canonicalDesign(topo), lastSyncedTopology: topo });
           const topoStore = useTopologyStore.getState();
           const local = topoStore.getTopology();
-          // 语义比较（plan-4 review）：只比 loadTopology 实际消费的四个切片 + 版本号，且对
-          // 对象键排序后再比，避免「服务端 canonical 键序」与「前端 getTopology 键序」不同
-          // 造成的假性差异（数组顺序保留=保守，宁可多备份也不漏）。
+          // Semantic comparison (plan-4 review): compare only the four slices loadTopology
+          // actually consumes + the version, and sort object keys before comparing, to avoid
+          // false differences from the "server canonical key order" differing from the "frontend
+          // getTopology key order" (preserving array order = conservative, prefer over-backup to
+          // a miss).
           const differs = stableStringify(loadSlices(local)) !== stableStringify(loadSlices(topo));
           if (!differs) {
-            return; // 与本地完全一致：跳过覆盖（不无谓清空历史/选中）。
+            return; // Identical to the local copy: skip the overwrite (do not needlessly clear history/selection).
           }
-          // 备份保险（D9，review 修正）：每当一次覆盖会丢弃「非空且与服务端不同」的本地设计
-          // 时都先导出备份——不再是「每浏览器一次」（那会在第二次起静默丢弃未部署的本地编辑）。
-          // 稳态下 differs=false，本分支根本不触发，故不会刷屏下载；只有真有分歧的未部署改动
-          // 才会备份，正是该保护的场景。控制器模式下「持久化=部署」，未部署的本地改动是易失的。
+          // Backup insurance (D9, review fix): whenever an overwrite would discard a local design
+          // that is "non-empty and differs from the server", export a backup first — no longer
+          // "once per browser" (which would silently drop undeployed local edits from the second
+          // time on). In steady state differs=false, so this branch never fires and downloads do
+          // not flood; only genuinely divergent undeployed changes are backed up, exactly the
+          // scenario to protect. In controller mode "persist=deploy", so undeployed local changes
+          // are volatile.
           const localHasWork = local.nodes.length > 0 || local.edges.length > 0;
           if (localHasWork) {
             const stamp = new Date().toISOString().slice(0, 10);
             topoStore.exportProject(`pre-hydration-backup-${stamp}.json`);
             set({ hydrationNotice: true });
           }
-          // fromServer=true：这份画布是服务端机密镜像，禁止落盘 / 登出后须清空（见
-          // topologyStore.canvasFromServer 的安全不变量）。
+          // fromServer=true: this canvas is a server secret mirror, forbidden from hitting disk /
+          // must be wiped after logout (see topologyStore.canvasFromServer's security invariant).
           topoStore.loadTopology(topo, true);
         } catch {
-          // 拉取失败：保留本地画布，不阻塞登录（见函数注释）。
+          // Fetch failed: keep the local canvas, do not block login (see the function comment).
         }
       },
 
       dismissHydrationNotice: () => set({ hydrationNotice: false }),
 
-      // 登出：best-effort 调 POST /logout 撤销服务端 session，然后无论成败都清空本地
-      // session + fleet 视图（本地登出必须生效，即使网络/服务端撤销失败）。
+      // Logout: best-effort POST /logout to revoke the server session, then clear the local
+      // session + fleet view regardless of success (local logout must take effect even if the
+      // network/server revocation fails).
       logout: async () => {
         try {
-          // 有内存 session 或 cookie 会话（loggedIn）时都要调服务端撤销 + 清 cookie。
+          // Whether there is an in-memory session or a cookie session (loggedIn), call the server
+          // revocation + clear the cookie.
           if (get().sessionToken || get().loggedIn) {
             await ctlLogout(configOf(get()));
           }
         } catch {
-          // 撤销失败不阻塞本地登出（session 仍会在服务端按 TTL 过期）。
+          // A revocation failure does not block local logout (the session still expires on the
+          // server by its TTL).
         }
-        // 在清空前捕获同步快照：下面的 set() 会把 lastSyncedSnapshot 置 null，而 set 是同步的，
-        // 若之后再 get().lastSyncedSnapshot 取到的就是 null —— gate 的 dirty 判定会把任何非空
-        // 服务端画布都当作 dirty，于是每次登出都误触一次备份下载（plan-10 review）。先存基线。
+        // Capture the sync snapshot before clearing: the set() below sets lastSyncedSnapshot to
+        // null, and set is synchronous, so a later get().lastSyncedSnapshot would read null —
+        // then the gate's dirty check would treat any non-empty server canvas as dirty, so each
+        // logout would wrongly trigger a backup download (plan-10 review). Save the baseline first.
         const snap = get().lastSyncedSnapshot;
         set({
           sessionToken: '',
@@ -848,8 +927,9 @@ export const useControllerStore = create<ControllerState>()(
           loggedIn: false,
           operatorName: null,
           sessionExpiresAt: null,
-          // 清掉 2FA 会话态：totpRequired 复位，totpEnabled 回到「未知」，下一位用密码登录的
-          // 操作员会重新拉取自己账户的状态（TwoFactorSettings 的守卫 effect 在 null 时再触发）。
+          // Clear the 2FA session state: reset totpRequired, return totpEnabled to "unknown", so
+          // the next operator who logs in with a password re-fetches their own account's status
+          // (TwoFactorSettings's guarded effect re-fires when it is null).
           totpRequired: false,
           totpEnabled: null,
           passkeyRegistered: null,
@@ -860,7 +940,8 @@ export const useControllerStore = create<ControllerState>()(
           // (the guarded loadSettings effect re-fires on settings===null).
           settings: null,
           error: null,
-          // 同步快照与冲突标志是当前会话/服务端设计的派生态：登出一并清掉，下次登录 hydrate 重建。
+          // The sync snapshot and conflict flag are derived from the current session/server
+          // design: clear them on logout too; the next login's hydrate rebuilds them.
           lastSyncedSnapshot: null,
           lastSyncedTopology: null,
           saveConflict: false,
@@ -868,20 +949,26 @@ export const useControllerStore = create<ControllerState>()(
           // so the next operator re-probes (never inherits a stale "enrolled" / redeploy banner).
           ...serverKeystoneReset,
         });
-        // 安全：登出后画布若是服务端机密镜像，立即清空（内存 + 由 persist 连带清掉 localStorage）。
-        // 否则登出态下任何人都能从画布/localStorage 读出 fleet 的公网 IP 与 SSH 目标。本地原创
-        // 工作（canvasFromServer=false）不动——那是用户自有数据。复用 clearServerCanvasAtGate
-        // 让三处冲刷点（logout / 会话失效 / partialize）用同一个谓词，而非各自展开。传入登出前
-        // 捕获的 snap（而非已被置 null 的 get().lastSyncedSnapshot），dirty 判定才准确。
+        // Security: if the post-logout canvas is a server secret mirror, wipe it immediately
+        // (memory + persist also clears localStorage). Otherwise, while logged out, anyone could
+        // read the fleet's public IPs and SSH targets out of the canvas/localStorage. Local
+        // original work (canvasFromServer=false) is untouched — that is the user's own data.
+        // Reuse clearServerCanvasAtGate so the three flush points (logout / session loss /
+        // partialize) use the same predicate rather than each expanding it. Pass the snap captured
+        // before logout (not the already-nulled get().lastSyncedSnapshot) so the dirty check is
+        // accurate.
         clearServerCanvasAtGate(get().mode, snap);
-        // A3：会话结束，外观回到本地偏好——服务端推送的舰队 translucency 不应在登出/登录门残留。
+        // A3: the session ended, so the appearance returns to the local preference — the
+        // server-pushed fleet translucency should not linger at the logout/login gate.
         useUiStore.getState().restoreLocalTranslucency();
       },
 
-      // 刷新后恢复登录态（P5）：GET /session 用 httpOnly cookie 探测当前会话。命中则置
-      // loggedIn + 身份 + 到期 + csrfToken（后续状态改写请求据此带 X-CSRF-Token）；未命中
-      // （401/403）则清空登录态。探测失败（网络/未配置）也清 loggedIn。仅恢复登录态——不主动
-      // 拉 fleet（由持久化缓存即时上色，用户按「连接 / 刷新」取实时态）。
+      // Restore the logged-in state after a refresh (P5): GET /session probes the current session
+      // via the httpOnly cookie. On a hit set loggedIn + identity + expiry + csrfToken
+      // (subsequent state-mutating requests carry X-CSRF-Token off it); on a miss (401/403) clear
+      // the logged-in state. A probe failure (network/not configured) also clears loggedIn.
+      // Restores only the logged-in state — does not proactively fetch the fleet (the persisted
+      // cache colors it instantly; the user presses "connect / refresh" for live state).
       checkSession: async () => {
         try {
           const info = await getSession(configOf(get()));
@@ -905,24 +992,30 @@ export const useControllerStore = create<ControllerState>()(
               sessionExpiresAt: info.expiresAt || null,
               csrfToken: info.csrfToken,
             });
-            // 服务端权威 hydration（D1）：会话恢复覆盖本地画布。两种触发：
-            //   (1) 登录态由假变真（mount / 刷新恢复）——首次进入必拉取；
-            //   (2) 已登录但画布不是服务端镜像（!canvasFromServer）——这正是「已登录时
-            //       local→controller 再切回」的场景（plan-10 / A2）：Shell 的 mode 翻转 effect
-            //       会再调 checkSession，此时 wasLoggedIn 仍为真，旧逻辑不会重拉，于是陈旧的本地
-            //       状态冒充服务端设计。补这条件后，重新进入 controller 必从服务端权威重拉。
-            // 稳态（已登录 + 画布已是服务端镜像）下两条件皆假，不会无谓重复覆盖。
+            // Server-authoritative hydration (D1): session restore overwrites the local canvas.
+            // Two triggers:
+            //   (1) the logged-in state goes false→true (mount / refresh restore) — a first entry
+            //       always fetches;
+            //   (2) logged in but the canvas is not a server mirror (!canvasFromServer) — this is
+            //       exactly the "while logged in, local→controller and back" scenario (plan-10 /
+            //       A2): the Shell's mode-flip effect calls checkSession again, at which point
+            //       wasLoggedIn is still true, so the old logic would not re-fetch and stale local
+            //       state would masquerade as the server design. With this condition added,
+            //       re-entering controller always re-fetches from the server authority.
+            // In steady state (logged in + canvas already a server mirror) both conditions are
+            // false, so no needless repeat overwrite.
             if (!wasLoggedIn || !useTopologyStore.getState().canvasFromServer) {
               await get().hydrateFromServer();
             }
           } else {
-            // 会话失效：先捕获基线再清（同 logout 的顺序修复），gate 用 live 基线判 dirty 才准。
+            // Session lost: capture the baseline before clearing (same ordering fix as logout) so
+            // the gate uses the live baseline to judge dirty accurately.
             // Also flush the server-authoritative keystone status (lockstep with logout) so a stale
             // enrolled/redeploy status can't render before the next probe.
             const lostSnap = get().lastSyncedSnapshot;
             set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
             clearServerCanvasAtGate(get().mode, lostSnap);
-            useUiStore.getState().restoreLocalTranslucency(); // A3：回登录门用本地外观偏好
+            useUiStore.getState().restoreLocalTranslucency(); // A3: back at the login gate, use the local appearance preference
           }
         } catch {
           const lostSnap = get().lastSyncedSnapshot;
@@ -932,8 +1025,9 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 拉取本账户的 TOTP 状态。403（break-glass token 无账户）或网络错误时保持 totpEnabled=null
-      // （UI 据此提示「请用密码登录以管理 2FA」），不污染全局 error。
+      // Fetch this account's TOTP status. On a 403 (a break-glass token has no account) or a
+      // network error, keep totpEnabled=null (the UI prompts "log in with a password to manage
+      // 2FA" off it) without polluting the global error.
       loadTOTPStatus: async () => {
         try {
           set({ totpEnabled: await getTOTPStatus(configOf(get())) });
@@ -942,34 +1036,40 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 开始 enroll：mint 一个尚未激活的 secret + otpauth URI，返回给组件展示（确认前不持久化，
-      // 也不改全局状态）。错误向调用方抛出，由 TwoFactorSettings 就地展示。
+      // Begin enroll: mint a not-yet-activated secret + otpauth URI and return it for the
+      // component to display (not persisted before confirmation, and the global state is
+      // unchanged). Errors are thrown to the caller, displayed in place by TwoFactorSettings.
       enrollTOTP: async () => {
         return ctlEnrollTOTP(configOf(get()));
       },
 
-      // 确认 enroll：用 enroll 拿到的 secret + 一个当前码激活 2FA。成功后 totpEnabled=true。
-      // 失败（如码错）向调用方抛出，由组件就地展示。
+      // Confirm enroll: activate 2FA with the secret from enroll + a current code. On success
+      // totpEnabled=true. On failure (e.g. wrong code) the error is thrown to the caller and
+      // displayed in place by the component.
       confirmTOTP: async (secret, code) => {
         await ctlConfirmTOTP(configOf(get()), secret, code);
         set({ totpEnabled: true });
       },
 
-      // 关闭 2FA：需当前码（防被劫持的 session 直接摘掉二次因子）。成功后 totpEnabled=false。
+      // Disable 2FA: requires the current code (to stop a hijacked session from removing the
+      // second factor outright). On success totpEnabled=false.
       disableTOTP: async (code) => {
         await ctlDisableTOTP(configOf(get()), code);
         set({ totpEnabled: false });
       },
 
-      // 无密码 passkey 登录：begin 取挑战 → assertLogin 弹 authenticator → finish 换 session。
-      // 失败（无 passkey / 断言失败 / 取消）就地展示。成功后刷新视图 + 拉取账户安全状态。
+      // Passwordless passkey login: begin gets the challenge → assertLogin pops the authenticator
+      // → finish exchanges it for a session. On failure (no passkey / assertion failed /
+      // cancelled) it is displayed in place. On success, refresh the view + fetch the
+      // account-security status.
       loginWithPasskey: async (username) => {
         set({ loading: true, error: null });
         try {
           const cfg = configOf(get());
           const ch = await passkeyLoginBegin(cfg, username);
           if (!ch.credentialId || !ch.alg) {
-            // 空 allow_credentials = 该用户名没有注册 passkey（后端返回 decoy）。
+            // Empty allow_credentials = this username has no registered passkey (the backend
+            // returns a decoy).
             set({ error: tLocal('controllerStore.noPasskeyRegistered'), loading: false });
             return;
           }
@@ -1007,7 +1107,8 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 拉取本账户的登录 passkey 状态。403（break-glass token 无账户）或错误时保持 null。
+      // Fetch this account's login-passkey status. On a 403 (a break-glass token has no account)
+      // or any error, keep it null.
       loadPasskeyStatus: async () => {
         try {
           set({ passkeyRegistered: await getPasskeyStatus(configOf(get())) });
@@ -1016,10 +1117,12 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 注册登录 passkey：复用 keystone 的 create() ceremony（enrollOperatorCredential 取
-      // SPKI + alg），POST /passkey/register 存公钥。仅公钥离开 authenticator。loginCeremony
-      // 驱动「触碰你的安全密钥」提示（不触发 DeployBar 部署横幅）。错误向调用方抛出，由
-      // PasskeySettings 就地展示（与 TwoFactorSettings 的本地错误一致）。
+      // Register a login passkey: reuse the keystone's create() ceremony
+      // (enrollOperatorCredential gets the SPKI + alg), then POST /passkey/register to store the
+      // public key. Only the public key leaves the authenticator. loginCeremony drives the "touch
+      // your security key" prompt (does not trigger DeployBar's deploy banner). Errors are thrown
+      // to the caller, displayed in place by PasskeySettings (consistent with TwoFactorSettings's
+      // local errors).
       registerPasskey: async () => {
         const rpId = window.location.hostname;
         const origin = window.location.origin;
@@ -1040,9 +1143,11 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 关闭登录 passkey（两段式）：begin 取再认证挑战 → assertLogin → finish 删除凭据。需新鲜
-      // 断言，防被劫持的 session 直接摘掉因子。begin 返回 done 表示本就没有 passkey（幂等）。
-      // 错误向调用方抛出，由 PasskeySettings 就地展示。
+      // Disable the login passkey (two-stage): begin gets a re-authentication challenge →
+      // assertLogin → finish deletes the credential. A fresh assertion is required to stop a
+      // hijacked session from removing the factor outright. begin returning done means there was
+      // no passkey to begin with (idempotent). Errors are thrown to the caller, displayed in place
+      // by PasskeySettings.
       disablePasskey: async () => {
         set({ loginCeremony: true });
         try {
@@ -1071,17 +1176,20 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 为某节点铸造一次性 enrollment token，返回明文 token（仅此一次可见）。
+      // Mint a one-time enrollment token for a node, returning the plaintext token (visible this
+      // once only).
       mintToken: async (nodeId, ttl) => {
         return mintEnrollmentToken(configOf(get()), nodeId, ttl);
       },
 
-      // KEYSTONE enroll（plan-5.1d）：pin off-host operator 签名凭据（passkey / YubiKey），
-      // 把 keystone 打开。流程：navigator.credentials.create()（getPublicKey/getPublicKeyAlgorithm
-      // 取 SPKI + COSE alg，避免 CBOR）→ POST /operator-credential 把 PKIX PEM + credential_id +
-      // rpid(=location.hostname) + origin pin 到控制器。rpid 必须等于 create() 的 rp.id——节点
-      // 校验 SHA256(rpid)==assertion 的 rpIdHash。成功后只在 localStorage 留下非密的
-      // credential_id/alg/rpId，供后续签名设置 allowCredentials。
+      // KEYSTONE enroll (plan-5.1d): pin the off-host operator signing credential (passkey /
+      // YubiKey), turning the keystone on. Flow: navigator.credentials.create()
+      // (getPublicKey/getPublicKeyAlgorithm get the SPKI + COSE alg, avoiding CBOR) → POST
+      // /operator-credential to pin the PKIX PEM + credential_id + rpid(=location.hostname) +
+      // origin to the controller. rpid must equal create()'s rp.id — nodes verify
+      // SHA256(rpid)==the assertion's rpIdHash. On success only the non-secret
+      // credential_id/alg/rpId is left in localStorage, to set allowCredentials for later
+      // signatures.
       enrollOperator: async (opts) => {
         const rotate = opts?.rotate === true;
         // Guard the fleet-stranding re-pin: when a credential is ALREADY pinned on the server and
@@ -1092,7 +1200,8 @@ export const useControllerStore = create<ControllerState>()(
           set({ pendingKeystoneRotate: true, error: null });
           return;
         }
-        // rp.id 必须是注册域（location.hostname）；WebAuthn 在非安全上下文不可用。
+        // rp.id must be the registrable domain (location.hostname); WebAuthn is unavailable in a
+        // non-secure context.
         const rpId = window.location.hostname;
         const origin = window.location.origin;
         set({ enrolling: true, error: null });
@@ -1154,16 +1263,19 @@ export const useControllerStore = create<ControllerState>()(
 
       cancelKeystoneRotate: () => set({ pendingKeystoneRotate: false }),
 
-      // compilePreview（PR6）：服务端权威只读编译。见接口注释。previewing 专用标志（非全局 loading）。
+      // compilePreview (PR6): a server-authoritative read-only compile. See the interface comment.
+      // previewing is its dedicated flag (not the global loading).
       compilePreview: async () => {
         set({ previewing: true, error: null });
         try {
           const cfg = configOf(get());
-          // POST 当前画布（零知识 fail-safe：剥离私钥；控制器画布本就无私钥）。
+          // POST the current canvas (zero-knowledge fail-safe: strip private keys; the controller
+          // canvas has none anyway).
           const current = useTopologyStore.getState().getTopology();
           const { topo: clean } = stripPrivateKeys(current);
           const resp = await ctlCompilePreview(cfg, JSON.stringify(clean));
-          // 没有已 enroll 的节点 → 无渲染配置：清空预览并给出可执行提示，不动画布。
+          // No enrolled nodes → no rendered configs: clear the preview and give an actionable
+          // hint, leaving the canvas alone.
           if (!resp.topology || !resp.wireguard_configs || Object.keys(resp.wireguard_configs).length === 0) {
             useTopologyStore.getState().setCompileResult(null);
             set({
@@ -1172,10 +1284,13 @@ export const useControllerStore = create<ControllerState>()(
             });
             return;
           }
-          // 展示服务端权威编译结果（CompilePreview / EdgeEditor 的「编译后实际值」）。
+          // Display the server-authoritative compile result (CompilePreview / EdgeEditor's
+          // "actual post-compile values").
           useTopologyStore.getState().setCompileResult(resp);
-          // 把服务端算出的分配（compiled_port + 全部 pinned_*）无条件合并回画布（服务端权威），
-          // 让操作员立即看到内部监听端口/IP 并据此配置 NAT；随后 Save 持久化、Deploy 粘性沿用。
+          // Merge the server-computed allocations (compiled_port + all pinned_*) back onto the
+          // canvas unconditionally (server-authoritative), so the operator immediately sees the
+          // internal listen port/IP and configures NAT off it; then Save persists and Deploy
+          // reuses them stickily.
           if (resp.topology.edges) {
             useTopologyStore.getState().mergeServerAllocations(resp.topology.edges);
           }
@@ -1185,17 +1300,22 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 部署当前拓扑到 fleet：复用 topologyStore.compile() 发往 /api/compile 的同一
-      // model.Topology JSON 形状（getTopology() → {project,domains,nodes,edges,...}），
-      // 经 update-topology → stage →（KEYSTONE 签名）→ promote → refresh。
+      // Deploy the current topology to the fleet: reuse the same model.Topology JSON shape that
+      // topologyStore.compile() sends to /api/compile (getTopology() →
+      // {project,domains,nodes,edges,...}), through update-topology → stage → (KEYSTONE signing) →
+      // promote → refresh.
       //
-      // KEYSTONE 分支（plan-5.1d，替代旧的 requireUserKey() seam）：stage 之后 GET /trustlist。
-      //   - 返回 manifest（keystone ON）：base64-decode 标准 base64 的 trustlist_json 取回
-      //     canonical 字节 → signManifest()（challenge = SHA256(那些字节)，rpid 绑定 = 节点
-      //     校验 SHA256(rpid)==rpIdHash）→ POST /trustlist-signature → promote。promote 的
-      //     keystone gate 要求一个有效 off-host 签名，否则 422——所以必须先签后 promote。
-      //   - 返回 null（keystone OFF / 404）：直接 promote（今日行为，无需签名）。
-      // 若 keystone ON 但本地尚未 enroll operator 凭据，给出可执行报错（先注册签名密钥）。
+      // KEYSTONE branch (plan-5.1d, replacing the old requireUserKey() seam): after stage, GET
+      // /trustlist.
+      //   - Returns a manifest (keystone ON): base64-decode the standard-base64 trustlist_json to
+      //     recover the canonical bytes → signManifest() (challenge = SHA256(those bytes); rpid
+      //     binding = nodes verify SHA256(rpid)==rpIdHash) → POST /trustlist-signature → promote.
+      //     promote's keystone gate requires a valid off-host signature, else 422 — so it must be
+      //     sign-then-promote.
+      //   - Returns null (keystone OFF / 404): promote directly (today's behavior, no signature
+      //     needed).
+      // If keystone is ON but no operator credential is enrolled locally yet, give an actionable
+      // error (enroll the signing key first).
       deploy: async (opts) => {
         set({ loading: true, error: null });
         try {
@@ -1290,28 +1410,31 @@ export const useControllerStore = create<ControllerState>()(
           // if that read fails).
           set({ lastSyncedSnapshot: canonicalDesign(cleanTopo), lastSyncedTopology: cleanTopo });
           const result = await stage(cfg);
-          // 当没有已注册节点时 stage 不产生任何 bundle（staged 为空），此时 promote 会
-          // 返回 409 ErrNoStagedBundle —— 那不是错误，而是「还没有节点入网」。直接展示
-          // skippedUnenrolled，跳过 promote（也跳过签名），避免把正常情况渲染成报错。
+          // When there are no enrolled nodes, stage produces no bundle (staged is empty), and
+          // promote would then return 409 ErrNoStagedBundle — that is not an error but "no node
+          // has joined the network yet". Just show skippedUnenrolled and skip promote (and
+          // signing too), so a normal situation is not rendered as an error.
           if (result.staged.length > 0) {
-            // KEYSTONE：取回待签 manifest。null = keystone OFF，直接 promote。
+            // KEYSTONE: retrieve the manifest to sign. null = keystone OFF, promote directly.
             const toSign = await getTrustlist(cfg);
             if (toSign !== null) {
               const credentialId = get().operatorCredentialId;
               const alg = get().operatorCredentialAlg;
               const pem = get().operatorPublicKeyPEM;
               if (credentialId === null || alg === null || !pem) {
-                // keystone 已开启（节点需要签名）但本地没有 pin 的完整签名凭据
-                // （credential_id + alg + PEM）：这是可执行的前置条件失败，而非内部错误。
+                // keystone is on (nodes require a signature) but the complete pinned signing
+                // credential (credential_id + alg + PEM) is not held locally: this is an
+                // actionable precondition failure, not an internal error.
                 throw new Error(
                   'This deploy requires an off-host signature, but no operator signing key is enrolled — enroll your signing key first.',
                 );
               }
-              // rpId 必须等于 enroll 时 pin 的值（节点校验 SHA256(rpid)==assertion 的
-              // rpIdHash）；老记录可能缺 rpId，回退到当前 hostname（enroll 时即用它）。
+              // rpId must equal the value pinned at enroll time (nodes verify SHA256(rpid)==the
+              // assertion's rpIdHash); an old record may lack rpId, so fall back to the current
+              // hostname (which is what enroll used).
               const rpId = get().operatorRpId ?? window.location.hostname;
-              // 把标准 base64 的 canonical bytes 解码回原始字节：它们的 SHA-256 就是
-              // WebAuthn challenge（节点比对 base64url(SHA256(Canonical(manifest)))）。
+              // Decode the standard-base64 canonical bytes back to raw bytes: their SHA-256 is the
+              // WebAuthn challenge (nodes compare base64url(SHA256(Canonical(manifest)))).
               const manifestBytes = base64StdToBytes(toSign.trustlistJson);
               set({ signing: true });
               let signed;
@@ -1320,8 +1443,8 @@ export const useControllerStore = create<ControllerState>()(
               } finally {
                 set({ signing: false });
               }
-              // 提交签名前用服务端 substitution guard 再核对一遍 trustlist_json
-              // （原样回传我们刚签的标准 base64 字节）。
+              // Before submitting the signature, re-check trustlist_json with the server's
+              // substitution guard (echo back the exact standard-base64 bytes we just signed).
               await postTrustlistSignature(cfg, {
                 trustlistJson: toSign.trustlistJson,
                 signed,
@@ -1382,29 +1505,40 @@ export const useControllerStore = create<ControllerState>()(
       dismissStripNotice: () => set({ lastStrippedKeys: 0 }),
       clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null }),
 
-      // controller→local 的单一切换路径（plan-10 / T1）。安全分叉与登录门 LoginPage 完全一致：
-      //   - 画布是服务端机密镜像（canvasFromServer）→ flushWorkspace 整体清空（绝不让 fleet 的
-      //     公网 IP / SSH 目标随切换残留在本地 / localStorage）；
-      //   - 画布是本地原创工作 → purgeModeBoundaryState 保图、清密钥/分配/编译历史（D6 有损切换）。
-      // 之前 SettingsPage 只调 purgeModeBoundaryState（无 serverHeld 分叉），会把机密镜像降级为
-      // 可持久化的本地数据 → fleet 机密落 localStorage（审计 T1）。收敛到这里后两处不可能再发散。
-      // 另：还原本地 translucency 偏好（A3，服务端推送值不得带入本地模式）+ 清控制器横幅。
+      // The single controller→local switch path (plan-10 / T1). The security fork is identical to
+      // the login gate LoginPage's:
+      //   - canvas is a server secret mirror (canvasFromServer) → flushWorkspace wipes it whole
+      //     (never let the fleet's public IPs / SSH targets linger in local / localStorage across
+      //     the switch);
+      //   - canvas is local original work → purgeModeBoundaryState keeps the design, drops
+      //     keys/allocations/compile history (the D6 lossy switch).
+      // SettingsPage previously called purgeModeBoundaryState only (no serverHeld fork), which
+      // downgraded a secret mirror to persistable local data → fleet secrets in localStorage
+      // (audit T1). Converged here, the two can no longer diverge. Also: restore the local
+      // translucency preference (A3, the server-pushed value must not carry into local mode) +
+      // clear the controller banners.
       switchToLocal: () => {
         const topo = useTopologyStore.getState();
-        // 服务端镜像走 clearServerCanvasAtGate（mode 此刻仍为 controller）：它会在镜像 dirty 时
-        // 先导出备份再 flush，与登出/会话失效路径共用同一「冲刷前备份未保存改动」逻辑（plan-10
-        // / T2）。本地原创工作走 D6 有损 purge（保图、清密钥/分配/历史）。
+        // A server mirror goes through clearServerCanvasAtGate (mode is still controller at this
+        // moment): it exports a backup before flushing when the mirror is dirty, sharing the same
+        // "back up unsaved changes before flushing" logic as the logout/session-loss paths
+        // (plan-10 / T2). Local original work goes through the D6 lossy purge (keep the design,
+        // drop keys/allocations/history).
         if (topo.canvasFromServer) clearServerCanvasAtGate(get().mode, get().lastSyncedSnapshot);
         else topo.purgeModeBoundaryState();
         get().clearModeNotices();
         useUiStore.getState().restoreLocalTranslucency();
-        // 切回本地：清掉控制器模式的同步快照与冲突标志（服务端权威概念）。
-        // 关于 fleet 视图缓存（nodes/audit/lastDeploy/lastSyncedAt）：故意「不」在这里清。它是
-        // 非密的 advisory 缓存（仅 nodeId/状态/代号/时间戳，无密钥、无设计级公网 IP/SSH），且
-        // 本地模式下 fleet/overview 路由已被 RequireControllerMode 守卫重定向、不会展示它（plan-11
-        // / T5 的 render-gate 才是真正的修复）。清掉它反而会破坏 partialize 设计的「再进控制器即时
-        // 上色」：session 保留的 controller→local→controller 往返不会触发 refresh（checkSession 只
-        // hydrate 不拉 fleet），届时会看到空 fleet 直到手动刷新（plan-11 review #2/#3）。故保留缓存。
+        // Switching back to local: clear the controller-mode sync snapshot and conflict flag
+        // (server-authoritative concepts).
+        // About the fleet-view cache (nodes/audit/lastDeploy/lastSyncedAt): deliberately NOT
+        // cleared here. It is a non-secret advisory cache (only nodeId/status/codename/timestamps,
+        // no keys, no design-level public IP/SSH), and in local mode the fleet/overview routes are
+        // already redirected by the RequireControllerMode guard and will not display it (plan-11 /
+        // T5's render-gate is the real fix). Clearing it would instead break the partialize-design
+        // "instant coloring on re-entering controller": a session-preserved
+        // controller→local→controller round-trip does not trigger refresh (checkSession only
+        // hydrates, does not fetch the fleet), so an empty fleet would show until a manual refresh
+        // (plan-11 review #2/#3). So the cache is preserved.
         set({ mode: 'local', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
       },
 
@@ -1430,21 +1564,27 @@ export const useControllerStore = create<ControllerState>()(
         set({ mode: 'controller' });
       },
 
-      // 控制器模式「保存」（plan-10 / T2）：把当前画布持久化为服务端权威副本（+ 版本历史），
-      // 但绝不 stage/promote——在线 fleet 不受影响。这是 deploy() 之外缺失的轻量持久化原语，
-      // 让未部署的进行中工作不再只活在可弃置的镜像里（刷新 / 登出即丢）。
+      // Controller-mode "save" (plan-10 / T2): persist the current canvas as the
+      // server-authoritative copy (+ version history), but never stage/promote — the live fleet is
+      // untouched. This is the lightweight persistence primitive missing beyond deploy(), so
+      // undeployed in-progress work no longer lives only in a discardable mirror (lost on refresh
+      // / logout).
       saveDesign: async (opts) => {
-        // loading = 全局忙标志（与其他动作一致）；saving = 本次 save 专用，驱动 Save 按钮 / 冲突
-        // 对话框，避免被无关操作误置的全局 loading 点亮（plan-11 review #1）。两者都要在每个出口清。
+        // loading = the global busy flag (consistent with other actions); saving = specific to
+        // this save, driving the Save button / conflict dialog, so the global loading set by an
+        // unrelated op does not light it up (plan-11 review #1). Both must be cleared at every exit.
         set({ loading: true, saving: true, error: null });
         try {
           const cfg = configOf(get());
-          // 零知识 fail-safe：与 deploy() 一致，上送前剥离私钥（控制器画布本就无私钥，这是兜底）。
+          // Zero-knowledge fail-safe: as in deploy(), strip private keys before upload (the
+          // controller canvas has none anyway; this is the backstop).
           const current = useTopologyStore.getState().getTopology();
           let { topo: clean, stripped } = stripPrivateKeys(current);
-          // no-op 守卫：设计与上次同步基线一致就直接返回——既不发网络请求，也不在服务端徒增一条
-          // 相同内容的版本历史（后端不做内容去重，徒增的版本还会挤掉真正的旧版本）。force 跳过它。
-          // 用 isDesignDirty：基线为 null 且画布为空（首次、无可保存内容）也正确判为「非 dirty」。
+          // no-op guard: if the design equals the last sync baseline, return immediately — neither
+          // sending a network request nor needlessly adding a same-content version history entry on
+          // the server (the backend does no content dedup, and the extra version would also push
+          // out a genuinely old one). force skips it. Use isDesignDirty: a null baseline with an
+          // empty canvas (first time, nothing to save) is also correctly judged "not dirty".
           if (!opts?.force && !isDesignDirty(current, get().lastSyncedSnapshot)) {
             set({ loading: false, saving: false });
             return;
@@ -1460,13 +1600,17 @@ export const useControllerStore = create<ControllerState>()(
           } catch {
             readOk = false;
           }
-          // 客户端冲突检测（D13）：除非 force，比较「服务端现状 vs 上次同步基线」时忽略 pin 字段。
-          // 这样「另一处 deploy 仅新增了 pin」（仅 pin 差异，会被下面的非破坏性合并吸纳）不会误报
-          // 冲突，而真正的并发改动（节点/边/非 pin 字段变化）仍触发「重新同步 / 覆盖 / 取消」。
-          // 必须在下面的合并之前判定：冲突即提前返回且不触碰画布——否则一次被「取消」的 Save 也会把
-          // 服务端 pin 静默叠加到画布上，留下用户没要求的第三种状态。best-effort：守卫读失败则跳过
-          // 冲突检测照常保存（与 deploy 缩水守卫一致），避免瞬时网络错误误报；此时本次保存会盲写覆盖
-          //（update-topology 无后端乐观并发，见 D13）。
+          // Client-side conflict detection (D13): unless force, ignore pin fields when comparing
+          // "current server state vs. the last sync baseline". This way "a deploy elsewhere only
+          // added pins" (pin-only difference, adopted by the non-clobber merge below) does not
+          // falsely report a conflict, while a genuine concurrent change (nodes/edges/non-pin
+          // fields) still triggers "re-sync / overwrite / cancel". It must be decided before the
+          // merge below: a conflict returns early and does not touch the canvas — otherwise a
+          // cancelled Save would still silently overlay the server pins onto the canvas, leaving a
+          // third state the user did not ask for. best-effort: a failed guard read skips conflict
+          // detection and saves as usual (consistent with the deploy shrink guard), avoiding false
+          // reports on a transient network error; this save then blind-writes the overwrite
+          // (update-topology has no backend optimistic concurrency, see D13).
           if (!opts?.force && readOk) {
             const baseTopo = get().lastSyncedTopology;
             const baseNoPins = baseTopo ? canonicalDesignIgnoringPins(baseTopo) : null;
@@ -1493,8 +1637,9 @@ export const useControllerStore = create<ControllerState>()(
             stripped = reread.stripped;
           }
           await updateTopology(cfg, JSON.stringify(clean));
-          // 现在画布即服务端权威副本：标记 server-held（停止落盘、登出/gate 时清空），刷新同步
-          // 快照（dirty 复位）+ 时间戳，记录剥离的私钥数（0=无提示）。
+          // The canvas is now the server-authoritative copy: mark it server-held (stop hitting
+          // disk, wipe on logout/gate), refresh the sync snapshot (reset dirty) + the timestamp,
+          // and record the stripped private-key count (0=no notice).
           useTopologyStore.getState().setCanvasFromServer(true);
           set({
             loading: false,
@@ -1523,9 +1668,10 @@ export const useControllerStore = create<ControllerState>()(
             set({ error: t(useTopologyStore.getState().language, 'topbar.importParseError'), loading: false });
             return;
           }
-          // 形状校验：必须是一份完整设计（与 importProject 同口径）。domains/nodes/edges 必须是数组——
-          // 用 Array.isArray 而非真值判断，否则一个 {} 或数字会逃过校验、在 dropAllKeys 的 .map 处抛通用
-          // 错误，而非给出精确的「不是合法设计」提示。
+          // Shape validation: must be a complete design (same criteria as importProject).
+          // domains/nodes/edges must be arrays — use Array.isArray rather than a truthiness check,
+          // or a {} or a number would slip past validation and throw a generic error at
+          // dropAllKeys's .map rather than giving the precise "not a valid design" hint.
           if (
             !topo ||
             typeof topo !== 'object' ||
@@ -1537,20 +1683,27 @@ export const useControllerStore = create<ControllerState>()(
             set({ error: t(useTopologyStore.getState().language, 'topbar.importShapeError'), loading: false });
             return;
           }
-          // 保留特性 route_policies：非空则剥离（与 importProject 一致；语义校验会拒绝非空数组）。
+          // Reserved feature route_policies: strip it if non-empty (consistent with
+          // importProject; semantic validation rejects a non-empty array).
           if (Array.isArray(topo.route_policies) && topo.route_policies.length > 0) {
             delete topo.route_policies;
           }
-          // 控制器为密钥权威：丢弃文件里的全部密钥材料（私钥绝不上送、公钥来自各 agent enrollment），
-          // 在写到服务端之前就清空，确保私钥连一瞬都不进入请求体。
+          // The controller is the key authority: drop all key material from the file (private keys
+          // are never uploaded; public keys come from each agent enrollment), clearing it before
+          // writing to the server so a private key never enters the request body even for an
+          // instant.
           const { topo: cleaned } = dropAllKeys(topo);
-          // 写到服务端：update-topology 落一条版本历史，并在写入边界 heal 冲突 pin + 规范化。绝不
-          // stage/promote——导入只更新权威设计，触达 fleet 仍需独立 Deploy。
+          // Write to the server: update-topology lands a version history entry and heals colliding
+          // pins + normalizes at the write boundary. Never stage/promote — an import only updates
+          // the authoritative design; reaching the fleet still needs a separate Deploy.
           await updateTopology(configOf(get()), JSON.stringify(cleaned));
-          // 乐观载入（已 heal 的导入设计，fromServer=true 不落盘）：即便随后的 hydrateFromServer
-          // 因瞬时网络错误失败，画布也已反映这次导入，而非停留在导入前的陈旧设计（POST 已成功提交）。
+          // Optimistic load (the already-healed imported design, fromServer=true so it does not
+          // hit disk): even if the subsequent hydrateFromServer fails on a transient network
+          // error, the canvas already reflects this import rather than staying on the pre-import
+          // stale design (the POST already succeeded).
           useTopologyStore.getState().loadTopology(cleaned, true);
-          // 再用服务端权威副本（已 heal + 规范化）对齐画布与同步基线；成功则覆盖上面的乐观值。
+          // Then align the canvas and the sync baseline with the server-authoritative copy
+          // (already healed + normalized); on success this overwrites the optimistic value above.
           await get().hydrateFromServer();
           set({ loading: false });
         } catch (err) {
@@ -1558,7 +1711,7 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 驱逐一个节点后刷新视图。
+      // Refresh the view after evicting a node.
       revoke: async (nodeId) => {
         set({ loading: true, error: null });
         try {
@@ -1573,10 +1726,12 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 为整个 fleet 请求 WG 密钥轮换（plan-4.6 ROUTINE tier）：把每个已审批节点标记为
-      // rekey_requested，随后刷新视图（注册表里会显示 rekeying 徽标）。这只是 zero-knowledge
-      // 轮换流程的第一步——各 agent 会自行重生密钥并经 /rekey 注册新公钥；待节点重新注册后，
-      // operator 需再 Deploy 一次，新一代配置携带全员新公钥使 fleet 收敛。
+      // Request a WG key rotation for the whole fleet (plan-4.6 ROUTINE tier): mark every approved
+      // node rekey_requested, then refresh the view (the registry shows a rekeying badge). This is
+      // only the first step of the zero-knowledge rotation flow — each agent regenerates its own
+      // key and registers the new public key via /rekey; once the nodes have re-registered, the
+      // operator must Deploy again, and the new generation of configs carrying everyone's new
+      // public keys converges the fleet.
       rollKeys: async () => {
         set({ loading: true, error: null });
         try {
@@ -1591,9 +1746,10 @@ export const useControllerStore = create<ControllerState>()(
         }
       },
 
-      // 清除单个节点的待轮换标记但不驱逐它（与 revoke 不同：保留审批状态与 bearer token），随后刷新
-      // 视图使 rekeying 徽标/计数收敛。用于释放卡住的 "Roll keys" 散兵（dead/离线节点或误点全量轮换），
-      // 否则该节点会一直把面板的 Deploy 门钉住。
+      // Clear a single node's pending-rotation flag without evicting it (unlike revoke: it
+      // preserves the approval status and bearer token), then refresh the view so the rekeying
+      // badge/count converges. Used to release a stuck "Roll keys" straggler (a dead/offline node,
+      // or a mis-clicked full rotation) that would otherwise keep pinning the panel's Deploy gate.
       clearRekey: async (nodeId) => {
         set({ loading: true, error: null });
         try {
@@ -1610,15 +1766,19 @@ export const useControllerStore = create<ControllerState>()(
     }),
     {
       name: 'controller-storage',
-      // 仅持久化连接端点 + 已 pin 的 operator 签名凭据的非密标识（credential_id/alg/rpId/
-      // 公钥 PEM 都不是密钥材料——私钥从不离开 authenticator）。绝不持久化 operatorToken /
-      // sessionToken / CSRF（密钥不落 localStorage），也不持久化 loading / error / signing。
+      // Persist only the connection endpoints + the non-secret identifiers of the pinned operator
+      // signing credential (credential_id/alg/rpId/public-key PEM are none of them key material —
+      // the private key never leaves the authenticator). Never persist operatorToken /
+      // sessionToken / CSRF (no secrets in localStorage), nor loading / error / signing.
       //
-      // P4 新增的非密缓存（mode / nodes / settings / lastSyncedAt）仅供刷新后「即时上色」。
-      // nodes 只含 nodeId/状态/代号/时间戳等非密字段，不含任何密钥材料。缓存是 advisory：
-      // 唯一一处 nodes 参与门控的地方（selectRekeyingCount → DeployBar 在有节点轮换时禁用
-      // Deploy）是 fail-closed —— 重载后陈旧缓存至多「禁用」Deploy，绝不会「放行」实时状态本应
-      // 拦下的部署；refresh() 拉到实时状态后即收敛。控制器后端在 stage/promote 仍是最终权威。
+      // The non-secret cache P4 added (mode / nodes / settings / lastSyncedAt) is only for
+      // "instant coloring" after a refresh. nodes carries only non-secret fields like
+      // nodeId/status/codename/timestamps, no key material. The cache is advisory: the one place
+      // nodes participates in gating (selectRekeyingCount → DeployBar disables Deploy while nodes
+      // are rotating) is fail-closed — after a reload a stale cache at most "disables" Deploy,
+      // never "lets through" a deploy that live state should have blocked; refresh() converges once
+      // it has the live state. The controller backend is still the final authority at
+      // stage/promote.
       partialize: (state) => ({
         baseURL: state.baseURL,
         pathPrefix: state.pathPrefix,
