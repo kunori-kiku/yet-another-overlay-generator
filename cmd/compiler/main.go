@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -65,9 +66,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Compile the topology.
+	// Compile the topology. The air-gap CLI has no request context; the allocator's scan budget
+	// still bounds an over-large CIDR, and there is nothing to cancel here.
 	c := compiler.NewCompiler()
-	result, err := c.Compile(&topo, keys)
+	result, err := c.Compile(context.Background(), &topo, keys)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile failed: %v\n", err)
 		os.Exit(1)

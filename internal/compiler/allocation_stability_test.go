@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
@@ -195,7 +196,7 @@ func TestSingleSourcedMinPinnedPortBoundary(t *testing.T) {
 	if res := validator.ValidateSemantic(atBoundary); hasPortOutOfRange(res) {
 		t.Fatalf("port pin at the boundary (%d) must NOT be rejected by the validator; got a port-out-of-range error", allocconst.MinPinnedPort)
 	}
-	compiled, err := c.Compile(atBoundary, keys)
+	compiled, err := c.Compile(context.Background(), atBoundary, keys)
 	if err != nil {
 		t.Fatalf("a topology with a boundary-value port pin should compile, got error: %v", err)
 	}
@@ -240,7 +241,7 @@ func TestSupersetCompileReproducesAllocations(t *testing.T) {
 			abEdge("e-ab", "node-a", "node-b", "beta.example.com"),
 		},
 	}
-	res1, err := c.Compile(topo1, keys)
+	res1, err := c.Compile(context.Background(), topo1, keys)
 	if err != nil {
 		t.Fatalf("compile 1 failed: %v", err)
 	}
@@ -270,7 +271,7 @@ func TestSupersetCompileReproducesAllocations(t *testing.T) {
 			abEdge("e-ac", "node-a", "node-c", "gamma.example.com"),
 		},
 	}
-	res2, err := c.Compile(topo2, keys)
+	res2, err := c.Compile(context.Background(), topo2, keys)
 	if err != nil {
 		t.Fatalf("compile 2 failed: %v", err)
 	}
@@ -293,7 +294,7 @@ func TestSupersetCompileReproducesAllocations(t *testing.T) {
 			pinnedAB,
 		},
 	}
-	res3, err := c.Compile(topo3, keys)
+	res3, err := c.Compile(context.Background(), topo3, keys)
 	if err != nil {
 		t.Fatalf("compile 3 failed: %v", err)
 	}
@@ -334,7 +335,7 @@ func TestDeleteReAddReclaimsValues(t *testing.T) {
 			abEdge("e-ac", "node-a", "node-c", "gamma.example.com"),
 		},
 	}
-	res1, err := c.Compile(topo1, keys)
+	res1, err := c.Compile(context.Background(), topo1, keys)
 	if err != nil {
 		t.Fatalf("compile 1 failed: %v", err)
 	}
@@ -357,7 +358,7 @@ func TestDeleteReAddReclaimsValues(t *testing.T) {
 			pinnedAB,
 		},
 	}
-	if _, err := c.Compile(topo2, keys); err != nil {
+	if _, err := c.Compile(context.Background(), topo2, keys); err != nil {
 		t.Fatalf("compile 2 (delete A-C) failed: %v", err)
 	}
 
@@ -371,7 +372,7 @@ func TestDeleteReAddReclaimsValues(t *testing.T) {
 			abEdge("e-ac-readded", "node-a", "node-c", "gamma.example.com"),
 		},
 	}
-	res3, err := c.Compile(topo3, keys)
+	res3, err := c.Compile(context.Background(), topo3, keys)
 	if err != nil {
 		t.Fatalf("compile 3 (re-add A-C) failed: %v", err)
 	}
@@ -415,7 +416,7 @@ func TestPinnedValuesHonoredVerbatim(t *testing.T) {
 		Edges: []model.Edge{edge},
 	}
 
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("a topology with valid pins should compile, got error: %v", err)
 	}
@@ -494,7 +495,7 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 			abEdge("e-ab", "node-a", "node-b", "beta.example.com"),
 		},
 	}
-	res1, err := c.Compile(topo1, keys)
+	res1, err := c.Compile(context.Background(), topo1, keys)
 	if err != nil {
 		t.Fatalf("compile 1 failed: %v", err)
 	}
@@ -520,7 +521,7 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 			backupEdge("e-ab-backup", "node-a", "node-b", "beta.example.com"),
 		},
 	}
-	res2, err := c.Compile(topo2, keys)
+	res2, err := c.Compile(context.Background(), topo2, keys)
 	if err != nil {
 		t.Fatalf("compile 2 (append backup) failed: %v", err)
 	}
@@ -550,7 +551,7 @@ func TestParallelBackup_PrimaryStableBackupDistinct(t *testing.T) {
 			pinnedPrimary,
 		},
 	}
-	res3, err := c.Compile(topo3, keys)
+	res3, err := c.Compile(context.Background(), topo3, keys)
 	if err != nil {
 		t.Fatalf("compile 3 (delete backup) failed: %v", err)
 	}
@@ -592,7 +593,7 @@ func TestParallelBackup_OrderIndependence(t *testing.T) {
 		Nodes:   nodes(),
 		Edges:   []model.Edge{primary, other, backup},
 	}
-	resAppend, err := c.Compile(topoAppend, keys)
+	resAppend, err := c.Compile(context.Background(), topoAppend, keys)
 	if err != nil {
 		t.Fatalf("compile (backup appended) failed: %v", err)
 	}
@@ -608,7 +609,7 @@ func TestParallelBackup_OrderIndependence(t *testing.T) {
 		Nodes:   nodes(),
 		Edges:   []model.Edge{backup, primary, other},
 	}
-	resPrepend, err := c.Compile(topoPrepend, keys)
+	resPrepend, err := c.Compile(context.Background(), topoPrepend, keys)
 	if err != nil {
 		t.Fatalf("compile (backup prepended) failed: %v", err)
 	}
@@ -647,7 +648,7 @@ func TestPrePinTopologyCompiles(t *testing.T) {
 		t.Fatalf("precondition: input topology's AllocSchemaVersion should be 0 (pre-pin shape)")
 	}
 
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("a pre-pin topology should compile cleanly, got error: %v", err)
 	}

@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -64,7 +65,7 @@ func TestExampleTopologiesDialCorrectPorts(t *testing.T) {
 			keys := exampleKeys(topo)
 
 			c := NewCompiler()
-			result, err := c.Compile(topo, keys)
+			result, err := c.Compile(context.Background(), topo, keys)
 			if err != nil {
 				t.Fatalf("example %s failed to compile: %v", relPath, err)
 			}

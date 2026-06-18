@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -82,7 +83,7 @@ func itoaTest(n int) string {
 func TestCompile_ManyInterfacesCompileClean(t *testing.T) {
 	c := NewCompiler()
 	topo, keys := portBoundsTopo(7)
-	if _, err := c.Compile(topo, keys); err != nil {
+	if _, err := c.Compile(context.Background(), topo, keys); err != nil {
 		t.Fatalf("with base port 51820, a hub connecting to 7 spokes should compile cleanly, but failed: %v", err)
 	}
 }

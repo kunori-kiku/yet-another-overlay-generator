@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -128,7 +129,7 @@ func TestReenableHeal_CleanCompileFreshPin(t *testing.T) {
 		"bravo":   {PrivateKey: "privkey-bravo-fake", PublicKey: "pubkey-bravo-fake"},
 		"charlie": {PrivateKey: "privkey-charlie-fake", PublicKey: "pubkey-charlie-fake"},
 	}
-	result, err := NewCompiler().Compile(topo, keys)
+	result, err := NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("compile after heal should succeed cleanly, got: %v", err)
 	}

@@ -1,6 +1,7 @@
 package allocator
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -8,6 +9,25 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
+
+// maxOverlayScanBudget caps the number of host candidates the allocator will enumerate for a
+// SINGLE node within one domain CIDR. The allocator finds a free address by walking the CIDR's
+// host range linearly; a maliciously (or accidentally) large prefix — a /8 is ~16.7M candidates,
+// already valid per the validator's /8 lower bound — would tie up a request goroutine in a
+// multi-million-iteration scan per node. This ceiling is the allocator-side analogue of the
+// schema-layer nodes/edges count bound (validator/schema.go): generous enough that no realistic
+// overlay ever trips it (a /16 is 65k candidates, comfortably under), strict enough that "a
+// /8 × a node" is rejected fast with a coded error rather than running to completion. It bounds
+// the PER-NODE scan; because the allocator runs this scan once per node, the total work is
+// bounded by nodes × maxOverlayScanBudget. OWNER-FACING (plan-8 owner flag R6): a generous
+// documented value whose only job is to stop "millions".
+const maxOverlayScanBudget = 1 << 20 // 1,048,576 candidates per node — well above a /12 (~1M)
+
+// ctxCheckInterval is how often the linear scan polls the request context for cancellation. A
+// per-iteration check would add measurable overhead to the hot path; checking every N candidates
+// keeps the abort latency bounded (at most N iterations after cancel) while leaving the common
+// small-CIDR case effectively free.
+const ctxCheckInterval = 4096
 
 // IPAllocator assigns overlay IP addresses to topology nodes.
 type IPAllocator struct{}
@@ -21,7 +41,16 @@ func NewIPAllocator() *IPAllocator {
 // sequentially from the node's domain CIDR (skipping reserved ranges and
 // already-used addresses). Nodes that already hold a valid in-CIDR address
 // are left untouched.
-func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
+//
+// ctx bounds the work: a very large domain CIDR is rejected up front via the
+// per-node scan budget (CodeOverlayScanBudgetExceeded), and a long-running scan
+// is abortable on request cancellation (the loop polls ctx.Err() periodically).
+// The request context flows in from the HTTP boundary (handler.go) through
+// compiler.Compile; the air-gap CLI / direct callers pass context.Background().
+func (a *IPAllocator) AllocateIPs(ctx context.Context, topo *model.Topology) ([]model.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Index domains by ID for quick lookup.
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
@@ -74,7 +103,7 @@ func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
 			return nil, apierr.New(apierr.CodeNodeUnknownDomain).With("node", result[i].Name).With("domain", result[i].DomainID)
 		}
 
-		ip, err := a.allocateFromCIDR(domain.CIDR, domain.ReservedRanges, usedIPs)
+		ip, err := a.allocateFromCIDR(ctx, domain.CIDR, domain.ReservedRanges, usedIPs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to allocate an IP for node %s: %w", result[i].Name, err)
 		}
@@ -87,8 +116,10 @@ func (a *IPAllocator) AllocateIPs(topo *model.Topology) ([]model.Node, error) {
 }
 
 // allocateFromCIDR returns the first free host IP within cidr, skipping the
-// supplied reserved ranges and already-used addresses.
-func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, usedIPs map[string]bool) (string, error) {
+// supplied reserved ranges and already-used addresses. The scan is bounded by
+// the per-node scan budget (rejected up front for an over-large CIDR) and is
+// abortable via ctx.
+func (a *IPAllocator) allocateFromCIDR(ctx context.Context, cidr string, reservedRanges []string, usedIPs map[string]bool) (string, error) {
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return "", apierr.New(apierr.CodeOverlayCIDRInvalid).With("cidr", cidr).Wrap(err)
@@ -139,12 +170,32 @@ func (a *IPAllocator) allocateFromCIDR(cidr string, reservedRanges []string, use
 		endHost = totalHosts
 	}
 
+	// Scan-budget cap (S1, plan-8): the loop below walks [startHost, endHost) linearly to find a
+	// free address. A very large prefix makes that span enormous (a /8 is ~16.7M candidates), so a
+	// big CIDR combined with many nodes would tie up the request goroutine. Reject up front when
+	// the per-node scan span exceeds the budget — fast and coded, never a multi-million-iteration
+	// run. This is checked BEFORE the loop so the rejection is immediate. (The hostBits>=32 guard
+	// above already excludes the overflow case; this caps the merely-very-large valid range.)
+	if endHost-startHost > maxOverlayScanBudget {
+		return "", apierr.New(apierr.CodeOverlayScanBudgetExceeded).
+			With("cidr", cidr).With("budget", fmt.Sprintf("%d", maxOverlayScanBudget))
+	}
+
 	networkIP, err := ipToUint32(ipNet.IP)
 	if err != nil {
 		return "", fmt.Errorf("CIDR %s is not a valid IPv4 network address: %w", cidr, err)
 	}
 
 	for h := startHost; h < endHost; h++ {
+		// Honor request cancellation periodically so a large in-budget scan is abortable when the
+		// caller's context is cancelled (S1, plan-8). Checked every ctxCheckInterval candidates to
+		// keep the abort latency bounded without paying ctx.Err() on every iteration of the hot path.
+		if (h-startHost)%ctxCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
+
 		candidateUint := networkIP + h
 		candidateIP := uint32ToIP(candidateUint).String()
 

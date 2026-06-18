@@ -53,14 +53,15 @@ const (
 	// coded at the SOURCE in internal/compiler + internal/allocator and flow through the
 	// writeCodedOr relay; CodeCompileFailed is the relay's 422 fallback for any compile error
 	// not coded at the source (e.g. a schema/semantic validation failure reaching compile).
-	CodeCompileFailed        Code = "compile_failed"
-	CodeTransitPoolExhausted Code = "compile_transit_pool_exhausted"
-	CodeTransitCIDRInvalid   Code = "compile_transit_cidr_invalid"
-	CodeTransitCIDRNotIPv4   Code = "compile_transit_cidr_not_ipv4"
-	CodeListenPortExhausted  Code = "compile_listen_port_exhausted"
-	CodeOverlayCIDRInvalid   Code = "compile_overlay_cidr_invalid"
-	CodeOverlayPoolExhausted Code = "compile_overlay_pool_exhausted"
-	CodeNodeUnknownDomain    Code = "compile_node_unknown_domain"
+	CodeCompileFailed             Code = "compile_failed"
+	CodeTransitPoolExhausted      Code = "compile_transit_pool_exhausted"
+	CodeTransitCIDRInvalid        Code = "compile_transit_cidr_invalid"
+	CodeTransitCIDRNotIPv4        Code = "compile_transit_cidr_not_ipv4"
+	CodeListenPortExhausted       Code = "compile_listen_port_exhausted"
+	CodeOverlayCIDRInvalid        Code = "compile_overlay_cidr_invalid"
+	CodeOverlayPoolExhausted      Code = "compile_overlay_pool_exhausted"
+	CodeOverlayScanBudgetExceeded Code = "compile_overlay_scan_budget_exceeded"
+	CodeNodeUnknownDomain         Code = "compile_node_unknown_domain"
 
 	// Render + export (plan-3.5b) — the template/IO layer. CodeRenderFailed is a 500 bucket the
 	// handler assigns when render.All fails (internal template/plumbing, not operator-fixable).
@@ -156,14 +157,15 @@ var registry = map[Code]def{
 	CodeKeygenPinnedNoPrivkey: {"Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.", http.StatusBadRequest},
 	CodeKeygenGenerateFailed:  {"Failed to generate a WireGuard key for node {node}: {detail}", http.StatusInternalServerError},
 
-	CodeCompileFailed:        {"Compilation failed. Check the topology and try again.", http.StatusUnprocessableEntity},
-	CodeTransitPoolExhausted: {"The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.", http.StatusUnprocessableEntity},
-	CodeTransitCIDRInvalid:   {"The transit CIDR {cidr} is invalid: {detail}", http.StatusUnprocessableEntity},
-	CodeTransitCIDRNotIPv4:   {"The transit CIDR {cidr} must be IPv4.", http.StatusUnprocessableEntity},
-	CodeListenPortExhausted:  {"Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; reduce its connections.", http.StatusUnprocessableEntity},
-	CodeOverlayCIDRInvalid:   {"The overlay CIDR {cidr} is invalid.", http.StatusUnprocessableEntity},
-	CodeOverlayPoolExhausted: {"The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.", http.StatusUnprocessableEntity},
-	CodeNodeUnknownDomain:    {"Node {node} references unknown domain {domain}.", http.StatusUnprocessableEntity},
+	CodeCompileFailed:             {"Compilation failed. Check the topology and try again.", http.StatusUnprocessableEntity},
+	CodeTransitPoolExhausted:      {"The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.", http.StatusUnprocessableEntity},
+	CodeTransitCIDRInvalid:        {"The transit CIDR {cidr} is invalid: {detail}", http.StatusUnprocessableEntity},
+	CodeTransitCIDRNotIPv4:        {"The transit CIDR {cidr} must be IPv4.", http.StatusUnprocessableEntity},
+	CodeListenPortExhausted:       {"Node {node}'s effective listen port cannot be allocated within [{base}, 65535]; reduce its connections.", http.StatusUnprocessableEntity},
+	CodeOverlayCIDRInvalid:        {"The overlay CIDR {cidr} is invalid.", http.StatusUnprocessableEntity},
+	CodeOverlayPoolExhausted:      {"The overlay address pool for CIDR {cidr} is exhausted; widen the domain CIDR or reduce the number of nodes.", http.StatusUnprocessableEntity},
+	CodeOverlayScanBudgetExceeded: {"The overlay CIDR {cidr} is too large to allocate from for this topology (scan budget {budget} exceeded); use a smaller domain CIDR (the allocator enumerates host addresses, so a very large prefix combined with many nodes is rejected to bound compile time).", http.StatusUnprocessableEntity},
+	CodeNodeUnknownDomain:         {"Node {node} references unknown domain {domain}.", http.StatusUnprocessableEntity},
 
 	CodeRenderFailed:     {"Rendering the deployment artifacts failed.", http.StatusInternalServerError},
 	CodeExportUnsafeName: {"Node name {name} is unsafe for export: it must be non-empty and must not be an absolute path or contain a path separator or \"..\".", http.StatusBadRequest},

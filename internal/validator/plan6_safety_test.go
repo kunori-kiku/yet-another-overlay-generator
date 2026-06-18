@@ -165,6 +165,59 @@ func TestValidateSchema_TopologyCountBound(t *testing.T) {
 	})
 }
 
+// TestValidateSchema_DomainAndReservedRangeCountBound pins the S2 DoS count bounds (plan-8
+// Phase 2): an over-cap domain count OR an over-cap reserved-range count on a single domain is
+// rejected with the coded error AND short-circuits (the per-entity passes never run on the
+// abusive bulk), exactly mirroring the existing nodes/edges count bound. Without these bounds a
+// payload with thousands of domains (or one domain with thousands of reserved ranges) forces the
+// O(domains) and O(reserved×candidates) work in the allocator/semantic passes before any cap
+// applies — the same DoS class the nodes/edges bound already closes.
+func TestValidateSchema_DomainAndReservedRangeCountBound(t *testing.T) {
+	t.Run("too many domains short-circuits", func(t *testing.T) {
+		topo := validTopology()
+		// Blow past the domain ceiling with placeholder domains (intentionally invalid otherwise,
+		// to prove the bound short-circuits before per-domain validation runs).
+		topo.Domains = make([]model.Domain, maxTopologyDomains+1)
+		result := ValidateSchema(topo)
+		assertHasError(t, result, "domains")
+		if !hasCode(result, CodeTopologyTooManyDomains) {
+			t.Fatalf("expected CodeTopologyTooManyDomains, got: %v", result.Errors)
+		}
+		// Short-circuit: no per-entity errors (e.g. per-domain id) accompany it.
+		if hasCode(result, CodeDomainIDRequired) {
+			t.Errorf("count bound must short-circuit before per-domain validation; got: %v", result.Errors)
+		}
+	})
+
+	t.Run("too many reserved ranges on one domain rejected", func(t *testing.T) {
+		topo := validTopology()
+		topo.Domains[0].ReservedRanges = make([]string, maxReservedRangesPerDomain+1)
+		result := ValidateSchema(topo)
+		if !hasCode(result, CodeTopologyTooManyReservedRanges) {
+			t.Fatalf("expected CodeTopologyTooManyReservedRanges, got: %v", result.Errors)
+		}
+	})
+
+	t.Run("within bounds accepted", func(t *testing.T) {
+		topo := validTopology()
+		result := ValidateSchema(topo)
+		if hasCode(result, CodeTopologyTooManyDomains) || hasCode(result, CodeTopologyTooManyReservedRanges) {
+			t.Errorf("a 1-domain topology must not trip the count bound; got: %v", result.Errors)
+		}
+	})
+
+	t.Run("semantic pass guards silently on over-cap domains", func(t *testing.T) {
+		topo := validTopology()
+		topo.Domains = make([]model.Domain, maxTopologyDomains+1)
+		// ValidateSemantic short-circuits on the bound WITHOUT re-reporting (schema is the
+		// canonical reporter), so it must return cleanly and never run the expensive passes.
+		result := ValidateSemantic(topo)
+		if len(result.Errors) != 0 {
+			t.Errorf("semantic guard must short-circuit silently on an over-cap topology; got: %v", result.Errors)
+		}
+	})
+}
+
 // TestValidateSchema_SchemaVersionForwardCompat pins the forward-compat fail-closed guard
 // (plan-6 item 7): a topology stamped with an alloc-schema version newer than this build is
 // rejected; the current version and absent/0 are accepted.

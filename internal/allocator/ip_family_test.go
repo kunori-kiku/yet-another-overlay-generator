@@ -1,6 +1,7 @@
 package allocator
 
 import (
+	"context"
 	"net"
 	"testing"
 
@@ -15,6 +16,14 @@ import (
 // even if a non-IPv4 CIDR bypasses the schema and reaches the allocator, the
 // result is only a clean error rather than a panic -- this is the regression
 // gate against the historical ip[12:16] out-of-bounds slice panic.
+//
+// S1 (plan-8 Phase 2) intentionally changed one case here: a /8 IPv4 CIDR is no
+// longer allocated — it is ~16.7M host candidates, the DoS scan-vector the new
+// per-node scan budget exists to stop, so it is now rejected FAST with a clean
+// coded error (CodeOverlayScanBudgetExceeded) rather than entering a multi-million
+// iteration linear scan. The "large CIDR math must not overflow / panic" regression
+// intent is preserved by the /12 case below (the largest network still within the
+// scan budget), which both exercises the large-host-count math and allocates.
 func TestAllocateIPs_AddressFamilyAndSizeBounds(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -37,9 +46,18 @@ func TestAllocateIPs_AddressFamilyAndSizeBounds(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			// A /8 IPv4 CIDR is the largest allowed network; the allocator math should not overflow and allocation should succeed.
-			name:    "/8 IPv4 CIDR is accepted and allocates one address",
+			// S1: a /8 IPv4 CIDR (~16.7M candidates) now exceeds the per-node scan budget and is
+			// rejected up front with a clean coded error — the DoS guard, not an overflow/panic.
+			name:    "/8 IPv4 CIDR exceeds the scan budget and is rejected (S1 DoS guard)",
 			cidr:    "10.0.0.0/8",
+			wantErr: true,
+		},
+		{
+			// A /12 IPv4 CIDR (~1.05M candidates) is the largest network still within the scan
+			// budget; it exercises the large-host-count allocator math (the overflow regression
+			// gate) AND allocates successfully, proving the math is sound right up to the cap.
+			name:    "/12 IPv4 CIDR allocates (large-but-in-budget; overflow regression gate)",
+			cidr:    "10.0.0.0/12",
 			wantErr: false,
 			wantIP:  "10.0.0.1",
 		},
@@ -63,7 +81,7 @@ func TestAllocateIPs_AddressFamilyAndSizeBounds(t *testing.T) {
 			}
 
 			alloc := NewIPAllocator()
-			nodes, err := alloc.AllocateIPs(topo)
+			nodes, err := alloc.AllocateIPs(context.Background(), topo)
 
 			if tt.wantErr {
 				if err == nil {

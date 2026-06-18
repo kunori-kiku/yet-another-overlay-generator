@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -63,7 +64,7 @@ func renderAll(t *testing.T, topo *model.Topology) *compiler.CompileResult {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	result, err := compiler.NewCompiler().Compile(topo, keys)
+	result, err := compiler.NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestAll_BadSigningKeyFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	result, err := compiler.NewCompiler().Compile(topo, keys)
+	result, err := compiler.NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -272,7 +273,7 @@ func TestAll_ZeroFetchSettings_OmitsArtifactsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	result, err := compiler.NewCompiler().Compile(topo, keys)
+	result, err := compiler.NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -327,7 +328,7 @@ func TestAll_MimicCatalog_ArtifactsJSONSignedMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	result, err := compiler.NewCompiler().Compile(topo, keys)
+	result, err := compiler.NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -391,7 +392,7 @@ func TestAll_MimicNode_ZeroCatalog_FailsClosedNoArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	result, err := compiler.NewCompiler().Compile(topo, keys)
+	result, err := compiler.NewCompiler().Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}

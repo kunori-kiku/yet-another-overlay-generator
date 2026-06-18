@@ -90,7 +90,7 @@ func TestCompileSubgraph_ReservesOutOfSubgraphPins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	plain, err := compiler.NewCompiler().Compile(&sub, keys)
+	plain, err := compiler.NewCompiler().Compile(context.Background(), &sub, keys)
 	if err != nil {
 		t.Fatalf("plain Compile: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestCompileSubgraph_ReservesOutOfSubgraphPins(t *testing.T) {
 	}
 
 	// --- The fix: WITH reservation (via CompileSubgraph), e-bd avoids ALL of e-ab's resources. ---
-	res, _, skipped2, err := CompileSubgraph(full, nodes, render.FetchSettings{})
+	res, _, skipped2, err := CompileSubgraph(context.Background(), full, nodes, render.FetchSettings{})
 	if err != nil {
 		t.Fatalf("CompileSubgraph: %v", err)
 	}

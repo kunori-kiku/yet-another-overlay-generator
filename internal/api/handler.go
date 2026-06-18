@@ -157,7 +157,7 @@ func (h *Handler) HandleCompile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//
-	result, err := h.compiler.Compile(topo, keys)
+	result, err := h.compiler.Compile(r.Context(), topo, keys)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
 		return
@@ -209,7 +209,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.compiler.Compile(topo, keys)
+	result, err := h.compiler.Compile(r.Context(), topo, keys)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
 		return
@@ -280,7 +280,7 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.compiler.Compile(topo, keys)
+	result, err := h.compiler.Compile(r.Context(), topo, keys)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeCompileFailed, err)
 		return

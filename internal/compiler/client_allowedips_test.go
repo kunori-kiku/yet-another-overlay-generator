@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -78,7 +79,7 @@ func TestClientAllowedIPs_MultiDomainUnion(t *testing.T) {
 	}
 
 	c := NewCompiler()
-	result, err := c.Compile(topo, keys)
+	result, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile failed: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestClientAllowedIPs_SingleDomain(t *testing.T) {
 	}
 
 	c := NewCompiler()
-	result, err := c.Compile(topo, keys)
+	result, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("Compile failed: %v", err)
 	}

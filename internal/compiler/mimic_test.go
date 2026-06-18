@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -258,7 +259,7 @@ func TestDeriveClientConfigs_MimicTcpEdge(t *testing.T) {
 			topo := mimicClientTopo(tc.transport, tc.clientMTU)
 
 			c := NewCompiler()
-			result, err := c.Compile(topo, clientKeys())
+			result, err := c.Compile(context.Background(), topo, clientKeys())
 			if err != nil {
 				t.Fatalf("Compile failed: %v", err)
 			}

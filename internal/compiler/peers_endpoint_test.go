@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -397,7 +398,7 @@ func TestCompiledPort_OverrideAware(t *testing.T) {
 		}
 
 		c := NewCompiler()
-		result, err := c.Compile(topo, testKeys2())
+		result, err := c.Compile(context.Background(), topo, testKeys2())
 		if err != nil {
 			t.Fatalf("Compile failed: %v", err)
 		}
@@ -438,7 +439,7 @@ func TestCompiledPort_OverrideAware(t *testing.T) {
 		}
 
 		c := NewCompiler()
-		result, err := c.Compile(topo, testKeys2())
+		result, err := c.Compile(context.Background(), topo, testKeys2())
 		if err != nil {
 			t.Fatalf("Compile failed: %v", err)
 		}
@@ -495,7 +496,7 @@ func TestReverseEndpoint_EndpointImpliesPublicIP(t *testing.T) {
 	}
 
 	c := NewCompiler()
-	result, err := c.Compile(topo, testKeys2())
+	result, err := c.Compile(context.Background(), topo, testKeys2())
 	if err != nil {
 		t.Fatalf("Compile failed: %v", err)
 	}

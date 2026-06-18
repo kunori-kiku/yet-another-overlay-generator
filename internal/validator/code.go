@@ -73,6 +73,8 @@ const (
 	CodeRoutePolicyReserved                Code = "validation_routepolicy_reserved"
 	CodeTopologyTooManyNodes               Code = "validation_topology_too_many_nodes"
 	CodeTopologyTooManyEdges               Code = "validation_topology_too_many_edges"
+	CodeTopologyTooManyDomains             Code = "validation_topology_too_many_domains"
+	CodeTopologyTooManyReservedRanges      Code = "validation_topology_too_many_reserved_ranges"
 	CodeTopologySchemaVersionUnsupported   Code = "validation_topology_schema_version_unsupported"
 	CodeNodeDomainRefMissing               Code = "validation_node_domain_ref_missing"
 	CodeEdgeNodeRefMissing                 Code = "validation_edge_node_ref_missing"
@@ -175,6 +177,8 @@ var registry = map[Code]string{
 	CodeRoutePolicyReserved:                "route_policies is a reserved feature that is not yet implemented: no renderer consumes it, the compiler only passes it through verbatim, so it must be empty (detected {count} policies; please clear route_policies; for LAN bridging / route injection use extra_prefixes instead)",
 	CodeTopologyTooManyNodes:               "Topology has too many nodes: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
 	CodeTopologyTooManyEdges:               "Topology has too many edges: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
+	CodeTopologyTooManyDomains:             "Topology has too many domains: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
+	CodeTopologyTooManyReservedRanges:      "A domain has too many reserved ranges: {count} exceeds the maximum of {max}. Consolidate the reserved ranges or split the domain.",
 	CodeTopologySchemaVersionUnsupported:   "Topology allocation-schema version {version} is newer than this build supports (max {max}); it was created by a newer version of YAOG. Upgrade YAOG to open it.",
 	CodeNodeDomainRefMissing:               "Node {node} references a non-existent Domain {id}",
 	CodeEdgeNodeRefMissing:                 "Edge {id} references a non-existent node {other}",

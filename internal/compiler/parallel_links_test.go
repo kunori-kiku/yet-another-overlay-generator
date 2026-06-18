@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
@@ -79,7 +80,7 @@ func TestParallelLinks_TwoDistinctInterfacesPerSide(t *testing.T) {
 
 	const backupID = "e-ab-backup"
 	topo := parallelPairTopology(backupID, nil)
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("primary + backup topology should compile, got error: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestParallelLinks_BackupDefaultLinkCost(t *testing.T) {
 
 	const backupID = "e-ab-backup"
 	topo := parallelPairTopology(backupID, nil)
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("primary + backup topology should compile, got error: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestParallelLinks_ExplicitPriorityOverridesBackupDefault(t *testing.T) {
 	topo := parallelPairTopology(backupID, func(e *model.Edge) {
 		e.Priority = explicitCost
 	})
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("a backup topology with explicit priority should compile, got error: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestParallelLinks_LegacyReversePairOneLink(t *testing.T) {
 			abEdge("e-ba", "node-b", "node-a", "alpha.example.com"),
 		},
 	}
-	res, err := c.Compile(topo, keys)
+	res, err := c.Compile(context.Background(), topo, keys)
 	if err != nil {
 		t.Fatalf("legacy reverse-pair topology should compile, got error: %v", err)
 	}
