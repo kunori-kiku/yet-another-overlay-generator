@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // sampleCatalogJSON is an artifacts.json-shaped catalog an operator would hand to air-gap mode
@@ -55,7 +55,7 @@ func TestLoadFetchSettings_Catalog(t *testing.T) {
 	if fs.MimicReleaseBase != "https://github.com/example/mimic/releases/download/v1.4.0" {
 		t.Errorf("MimicReleaseBase = %q", fs.MimicReleaseBase)
 	}
-	if got := fs.MimicDebs["bookworm-amd64"]; got != (renderer.Artifact{Asset: "mimic_1.4.0_amd64.deb", SHA256: "aa11"}) {
+	if got := fs.MimicDebs["bookworm-amd64"]; got != (model.Artifact{Asset: "mimic_1.4.0_amd64.deb", SHA256: "aa11"}) {
 		t.Errorf("bookworm-amd64 deb = %+v", got)
 	}
 	if len(fs.MimicDebs) != 2 {

@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // TestShQuote: values are single-quoted; embedded single quotes are escaped as '\”;
@@ -146,7 +146,7 @@ func TestValidateAbsoluteHTTPURL(t *testing.T) {
 func TestValidateMimicCatalog(t *testing.T) {
 	sha := strings.Repeat("a", 64)
 	base := "https://github.com/hack3ric/mimic/releases/download/v0.1.0"
-	goodDebs := map[string]renderer.Artifact{"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: sha}}
+	goodDebs := map[string]model.Artifact{"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: sha}}
 
 	good := []controller.ControllerSettings{
 		{}, // empty = no catalog
@@ -161,13 +161,13 @@ func TestValidateMimicCatalog(t *testing.T) {
 	}
 
 	bad := []controller.ControllerSettings{
-		{MimicVersion: "not.semver", MimicReleaseBase: base, MimicDebs: goodDebs},                                                   // bad semver
-		{MimicReleaseBase: "ftp://x", MimicDebs: goodDebs},                                                                          // non-http base
-		{MimicReleaseBase: "https://ok/ p", MimicDebs: goodDebs},                                                                    // whitespace in base
-		{MimicReleaseBase: "https://ok/p$(reboot)", MimicDebs: goodDebs},                                                            // shell metachars (valid URL, caught by the charset guard)
-		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bookworm-amd64": {Asset: "mimic.deb", SHA256: "short"}}},  // bad sha
-		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bookworm-amd64": {Asset: "m$(reboot).deb", SHA256: sha}}}, // unsafe asset
-		{MimicReleaseBase: base, MimicDebs: map[string]renderer.Artifact{"bad key": {Asset: "mimic.deb", SHA256: sha}}},             // bad key
+		{MimicVersion: "not.semver", MimicReleaseBase: base, MimicDebs: goodDebs},                                                // bad semver
+		{MimicReleaseBase: "ftp://x", MimicDebs: goodDebs},                                                                       // non-http base
+		{MimicReleaseBase: "https://ok/ p", MimicDebs: goodDebs},                                                                 // whitespace in base
+		{MimicReleaseBase: "https://ok/p$(reboot)", MimicDebs: goodDebs},                                                         // shell metachars (valid URL, caught by the charset guard)
+		{MimicReleaseBase: base, MimicDebs: map[string]model.Artifact{"bookworm-amd64": {Asset: "mimic.deb", SHA256: "short"}}},  // bad sha
+		{MimicReleaseBase: base, MimicDebs: map[string]model.Artifact{"bookworm-amd64": {Asset: "m$(reboot).deb", SHA256: sha}}}, // unsafe asset
+		{MimicReleaseBase: base, MimicDebs: map[string]model.Artifact{"bad key": {Asset: "mimic.deb", SHA256: sha}}},             // bad key
 		{MimicDebs: goodDebs}, // debs without a release base
 	}
 	for i, cs := range bad {
