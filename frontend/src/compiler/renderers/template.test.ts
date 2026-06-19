@@ -39,6 +39,16 @@ describe('template chomp ({{- -}}) semantics', () => {
     expect(r(s, { E: true })).toBe('# Sysctl\n\nfoo\n');
     expect(r(s, { E: false })).toBe('# Sysctl\n\nbar\n');
   });
+
+  // Go's lexer trim set is spaceChars = " \t\r\n" — it does NOT include vertical tab ('\v') or form
+  // feed ('\f'). So a {{- next to a '\v' (or '\f') leaves that byte intact; only space/tab/CR/LF are
+  // chomped. Both expected values were produced by the real Go text/template engine.
+  it('left-trim does NOT consume a preceding vertical tab', () => {
+    expect(r('A\v{{- 1 }}', null)).toBe('A\v1');
+  });
+  it('right-trim does NOT consume a following vertical tab', () => {
+    expect(r('{{ 1 -}}\vB', null)).toBe('1\vB');
+  });
 });
 
 describe('comparison operators (gt) on int fields', () => {

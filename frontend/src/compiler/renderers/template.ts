@@ -22,10 +22,10 @@
 //     and the single custom func "shq" (= escape.bashSingleQuote);
 //   - the {{- (trim preceding whitespace incl. newlines) and -}} (trim following whitespace) markers.
 //
-// Trimming rule (Go's exact behavior): a {{- consumes ALL trailing unicode-whitespace of the text
-// immediately before the action; a -}} consumes ALL leading unicode-whitespace of the text immediately
-// after the action. Go uses unicode.IsSpace; for the YAOG templates the relevant whitespace is space,
-// tab, \n, \r, \v, \f.
+// Trimming rule (Go's exact behavior): a {{- consumes ALL trailing whitespace of the text immediately
+// before the action; a -}} consumes ALL leading whitespace of the text immediately after the action.
+// The relevant whitespace is exactly Go's LEXER set spaceChars = " \t\r\n" (text/template/parse/lex.go) —
+// space, tab, carriage return, newline — NOT unicode.IsSpace; '\v' and '\f' are NOT trimmed.
 
 import { bashSingleQuote } from '../escape';
 
@@ -58,17 +58,12 @@ interface ActionToken {
 }
 type Token = TextToken | ActionToken;
 
-// isGoSpace mirrors unicode.IsSpace for the ASCII whitespace that appears in the YAOG templates:
-// space, tab, newline, carriage return, vertical tab, form feed.
+// isGoSpace mirrors the whitespace set Go's text/template LEXER actually uses for the {{- / -}} trim
+// markers and inter-token splitting: spaceChars = " \t\r\n" (text/template/parse/lex.go), i.e. space,
+// tab, carriage return, newline — NOT unicode.IsSpace. In particular '\v' and '\f' are NOT trimmed by
+// Go's chomp markers, so this set must EXCLUDE them: a '{{- ' next to a '\v' leaves the '\v' intact.
 function isGoSpace(ch: string): boolean {
-  return (
-    ch === ' ' ||
-    ch === '\t' ||
-    ch === '\n' ||
-    ch === '\r' ||
-    ch === '\v' ||
-    ch === '\f'
-  );
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
 }
 
 function trimGoSpaceRight(s: string): string {
