@@ -1,0 +1,19 @@
+{
+  // Editor-only tsconfig for the Playwright E2E sources (plan-13). It is NOT referenced by
+  // the app build's tsconfig.json (references app + node only), so `tsc -b` / `vite build`
+  // never compile e2e/. Playwright transpiles the specs itself at run time; this file just
+  // gives editors the right lib/types (Node) for the harness sources.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["**/*.ts"]
+}

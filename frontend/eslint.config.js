@@ -20,4 +20,17 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  // Playwright E2E harness (plan-13): globalSetup/teardown, fixtures, and specs run in
+  // NODE (the Playwright runner), not the browser — they use child_process/fs/process. Add
+  // Node globals so `eslint .` lints them without no-undef noise, and disable the
+  // React-Fast-Refresh component-export rule (these are test modules, not components).
+  {
+    files: ['e2e/**/*.ts', 'playwright.config.ts'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

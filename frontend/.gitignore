@@ -13,6 +13,13 @@ dist-local
 dist-ssr
 *.local
 
+# Playwright E2E (plan-13): generated report, traces, and the globalSetup-written
+# harness handoff JSON (resolved :0 ports + enrollment token). None are committed.
+playwright-report
+test-results
+.playwright
+e2e/.harness
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
