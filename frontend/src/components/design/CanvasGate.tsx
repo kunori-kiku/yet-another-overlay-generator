@@ -48,7 +48,14 @@ export function CanvasGate() {
         <div className="flex flex-wrap justify-end gap-2">
           <button
             type="button"
-            onClick={() => setMobileNavOpen(true)}
+            onClick={() => {
+              // Drop the gate scrim as we open the drawer: the z-50 gate would
+              // otherwise occlude the z-40 off-canvas nav. Dismissing reveals the
+              // read-only canvas (with its badge) under the sliding-in drawer —
+              // the intended flow. Edit interactions stay disabled (editable=false).
+              setDismissed(true);
+              setMobileNavOpen(true);
+            }}
             className="min-h-11 rounded border border-gray-600 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
           >
             {t(language, 'canvasGate.openMenu')}

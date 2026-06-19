@@ -537,7 +537,7 @@ export const en = {
   'shell.closeDrawer': "Close",
   'shell.dialogBackdrop': "Close",
   'shell.openNav': "Open navigation",
-  'shell.closeNav': "Navigation",
+  'shell.navDrawerLabel': "Navigation",
   'topbar.export': "Export",
   'topbar.flush': "Flush",
   'topbar.import': "Import",

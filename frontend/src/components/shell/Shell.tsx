@@ -99,7 +99,7 @@ export function Shell() {
         open={mobileNavOpen}
         onClose={closeMobileNav}
         side="left"
-        ariaLabel={t(language, 'shell.closeNav')}
+        ariaLabel={t(language, 'shell.navDrawerLabel')}
         id="mobile-nav-drawer"
       >
         <Sidebar variant="drawer" />

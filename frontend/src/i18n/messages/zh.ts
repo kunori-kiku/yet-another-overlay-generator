@@ -527,7 +527,7 @@ export const zh: Record<keyof typeof en, string> = {
   'shell.closeDrawer': "关闭",
   'shell.dialogBackdrop': "关闭",
   'shell.openNav': "打开导航",
-  'shell.closeNav': "导航",
+  'shell.navDrawerLabel': "导航",
   'topbar.export': "导出项目",
   'topbar.flush': "清空",
   'topbar.import': "导入项目",
