@@ -28,6 +28,10 @@ export default defineConfig({
   globalSetup: './e2e/globalSetup.ts',
   globalTeardown: './e2e/globalTeardown.ts',
   use: {
+    // Pin the locale so the panel's detectSystemLanguage() resolves to English
+    // deterministically (it returns 'zh' only for a zh navigator.language) — specs assert
+    // against English UI strings.
+    locale: 'en-US',
     // Capture a trace + screenshot only when a test fails, for the CI failure artifact.
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
