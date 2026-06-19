@@ -1,9 +1,27 @@
-// Compile orchestration — the TypeScript mirror of internal/compiler/compiler.go CompileAt (the
-// air-gap / local-mode compile pipeline) plus the key-derivation pre-pass of internal/render/render.go
-// GenerateKeysWith (AirGap custody). This is the PURE library entry the conformance harness (plan-5)
-// and the store rewire (plan-6) consume: it takes a Topology and returns a CompileResult (the compiled
-// topology + per-node PeerMap + client configs) WITHOUT mutating the caller's input and WITHOUT touching
-// any store, flag, or clock.
+// index.ts — the PURE public library surface of the TypeScript local/air-gap compiler. This is the ONLY
+// module plan-6 (the store rewire) imports from; everything else under frontend/src/compiler/ is
+// internal. The four entry points mirror the four backend air-gap routes byte-for-byte in BEHAVIOUR and
+// in RESPONSE SHAPE, so plan-6 wires them with NO shape translation:
+//
+//   - compile(topo, custody?): CompileResult — the full local/air-gap pipeline (the oracle output the
+//     conformance harness and the export builders consume). `toCompileResponse(result)` projects it into
+//     the snake_case CompileResponse the store assigns into `compileResult` (/api/compile shape).
+//   - validate(topo): ValidateResponse — schema-then-semantic, returning { valid, errors, warnings }
+//     exactly as /api/validate (HandleValidate). Assignable straight into the store's `validateResult`.
+//   - exportArtifacts(topo): Promise<Blob> — the per-node bundle ZIP (re-exported from ./export),
+//     matching the Blob the store gets from /api/export.
+//   - deployScript(topo, format): string — one project-level deploy script (bash | PowerShell), matching
+//     the single-script body /api/deploy-script?format=sh|ps1 returns.
+//
+// PURE: every entry operates on a deep-enough COPY of its input (the caller's topology is never mutated)
+// and injects no store, flag, clock, or network. Store wiring, the VITE_YAOG_LOCAL_ENGINE flag, the dev
+// canary, and the production cutover are plan-6 — NONE of them live here.
+//
+// ── The compile pipeline ──
+// compile() is the TypeScript mirror of internal/compiler/compiler.go CompileAt (the air-gap / local-mode
+// compile pipeline) plus the key-derivation pre-pass of internal/render/render.go GenerateKeysWith
+// (AirGap custody). It takes a Topology and returns a CompileResult (the compiled topology + per-node
+// PeerMap + client configs + every rendered config/script) WITHOUT touching any store, flag, or clock.
 //
 // Go is the authoritative oracle. compile() reproduces CompileAt's orchestration exactly:
 //   validate (schema THEN semantic, MUTATING the topology copy's routing_mode/transport defaults)
@@ -16,8 +34,9 @@
 // Every allocated value (ports / transit IPs / link-locals / overlay IPs / derived public keys) is
 // byte/value-identical to the Go side — a wrong value silently disagrees with the controller.
 //
-// Renderers (WireGuard / Babel / sysctl / script / deploy configs) are Phase 4: compile() returns the
-// compiled topology + peer map with EMPTY rendered-file maps for now, matching the CompileResult shape.
+// The renderers (WireGuard / Babel / sysctl / install scripts / deploy scripts) and the export bundle
+// are fully wired into compile() / exportArtifacts(): every rendered file is pinned byte-for-byte against
+// the Go golden by the conformance harness (plan-5).
 
 import { allocateIPs } from './allocator';
 import { inferCapabilitiesFromRole } from './capabilities';
@@ -44,6 +63,7 @@ import {
 } from './renderers/wireguard';
 import { validateSchema, validateSemantic } from './validator';
 import type { ValidationError } from './validator';
+import type { CompileResponse, ValidateResponse } from '../types/topology';
 
 // AllocationSchemaVersion is the sticky-pin allocation-scheme version this build stamps onto the
 // compiled topology's alloc_schema_version (invariant I10). Mirrors compiler.AllocationSchemaVersion
@@ -339,8 +359,10 @@ export function compile(
     checksum: '',
   };
 
-  // The WireGuard / Babel / sysctl maps are now populated by the Phase-4 renderers above; install.sh,
-  // artifacts.json, and the deploy scripts are later substeps and stay empty until then.
+  // All rendered surfaces are populated: per-peer WireGuard configs + client wg0, Babel, sysctl, the
+  // per-node install scripts, and the project-level deploy scripts. artifactsJSON stays empty in local
+  // mode (no mimic catalog → the D4 guard omits artifacts.json, keeping the bundle byte-identical to the
+  // Go air-gap export).
   return {
     topology: compiledTopo,
     peerMap,
@@ -357,27 +379,73 @@ export function compile(
 }
 
 // validate runs the schema + semantic passes (in /api/validate order) over a COPY of the topology and
-// returns the combined findings. PURE — the caller's topology is never mutated (the in-place
-// normalization happens on the copy, matching the conformance validator gate). Re-exported here so the
-// public library surface mirrors the topologyStore /api/validate response shape (plan-6 wires it).
-export function validate(topo: Topology): {
-  errors: ValidationError[];
-  warnings: ValidationError[];
-} {
+// returns the combined findings in the EXACT shape /api/validate returns (handler.go HandleValidate /
+// ValidateResponse: { valid, errors, warnings }). PURE — the caller's topology is never mutated (the
+// in-place normalization happens on the copy, matching the conformance validator gate). This IS the
+// public library entry the store rewire (plan-6) assigns straight into `validateResult: ValidateResponse`
+// with NO shape translation: `valid` is `len(allErrors) == 0` exactly as the Go handler computes it
+// (handler.go:129), and `errors` / `warnings` carry the same validator.ValidationError shape. (The
+// internal schema-then-semantic primitive lives in ./validator; this is the store-shaped wrapper.)
+export function validate(topo: Topology): ValidateResponse {
   const copy = copyTopology(topo);
   const schema = validateSchema(copy);
   const semantic = validateSemantic(copy);
+  const errors: ValidationError[] = [...schema.errors, ...semantic.errors];
+  const warnings: ValidationError[] = [...schema.warnings, ...semantic.warnings];
   return {
-    errors: [...schema.errors, ...semantic.errors],
-    warnings: [...schema.warnings, ...semantic.warnings],
+    valid: errors.length === 0,
+    errors,
+    warnings,
   };
+}
+
+// toCompileResponse projects a rich CompileResult (the oracle output compile() returns, which the
+// conformance harness and the export builders consume) into the snake_case CompileResponse shape that
+// /api/compile returns and that the store assigns into `compileResult: CompileResponse`
+// (handler.go:169-178). The projection is a pure key-rename: the library-internal fields the wire
+// response never carried (peerMap, clientConfigs, artifactsJSON) are dropped, and the camelCase
+// config/script maps become their snake_case wire keys. `manifest` and `warnings` are re-exported types
+// shared with ../types/topology, so they pass through unchanged. plan-6 wires
+// `compile(topo)` → `toCompileResponse(...)` and assigns the result with NO further translation; the
+// rich CompileResult stays available (compile() returns it) for the export path and the harness.
+export function toCompileResponse(result: CompileResult): CompileResponse {
+  return {
+    topology: result.topology,
+    wireguard_configs: result.wireGuardConfigs,
+    babel_configs: result.babelConfigs,
+    sysctl_configs: result.sysctlConfigs,
+    install_scripts: result.installScripts,
+    deploy_scripts: result.deployScripts,
+    manifest: result.manifest,
+    warnings: result.warnings,
+  };
+}
+
+// deployScript renders ONE project-level deploy script (bash or PowerShell) for a topology, matching the
+// single-script body /api/deploy-script?format=sh|ps1 returns (handler.go HandleDeployScript:277-292
+// selects result.DeployScripts["deploy-all.{sh,ps1}"] by the format query). It runs the full pure
+// compile() (the deploy renderer needs the derived peer map) and returns the selected script as a string;
+// the store's downloadDeployScript (topologyStore.ts:874-892) wraps the fetched body in a Blob for the
+// download, so plan-6 wires `new Blob([deployScript(topo, format)])` with no shape translation. PURE: no
+// store, no clock, no network. `format` mirrors the query parameter exactly ('sh' → deploy-all.sh, 'ps1'
+// → deploy-all.ps1).
+export function deployScript(
+  topo: Topology,
+  format: 'sh' | 'ps1',
+  custody: KeyCustody = 'airgap',
+): string {
+  const result = compile(topo, custody);
+  return format === 'ps1'
+    ? (result.deployScripts['deploy-all.ps1'] ?? '')
+    : (result.deployScripts['deploy-all.sh'] ?? '');
 }
 
 export { generateRouterID } from './peers';
 
 // Re-export the export-bundle surface so the public library exposes the per-node ZIP builder
-// (exportArtifacts, mirroring /api/export) plus the in-memory files/checksums builders the conformance
-// harness compares byte-for-byte against the Go golden.
+// (exportArtifacts, mirroring /api/export — the store does res.blob() on the response, so plan-6 assigns
+// the returned Blob with no shape translation) plus the in-memory files/checksums builders the
+// conformance harness compares byte-for-byte against the Go golden.
 export {
   exportArtifacts,
   buildFiles,
