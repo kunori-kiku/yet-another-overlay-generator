@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// The responsive device matrix (plan-17 / 3.5) runs only e2e/responsive/**; everything else is
+// desktop-only. One regex, used by both the ignore (functional project) and match (device projects).
+const RESPONSIVE_MATCH = /responsive\/.*\.spec\.ts$/
+
 // Playwright config for the YAOG browser E2E layer (plan-13 / milestone 3.1) — the first
 // browser end-to-end tests the project has had. It runs the REAL built panel (served by a
 // test-mode Go controller, EnableStatic) against a live controller + a real agent fixture.
@@ -36,5 +40,25 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Visual-regression defaults (plan-17 / 3.5): a small non-zero pixel-ratio tolerance absorbs
+  // sub-pixel AA noise without masking a real layout break; animations/caret are killed so a
+  // snapshot is deterministic. Baselines are authoritative on Linux CI (see e2e/README.md).
+  expect: {
+    toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled', caret: 'hide' },
+  },
+  projects: [
+    // The functional + adversarial suites (plan-13/14/15/16) stay DESKTOP-ONLY: one pass, no device
+    // fan-out. testIgnore keeps the responsive matrix below from re-running them three times.
+    { name: 'chromium', testIgnore: RESPONSIVE_MATCH, use: { ...devices['Desktop Chrome'] } },
+    // The responsive matrix (plan-17): the lg=1024 pivot. e2e/responsive/** fans out across all
+    // three. Specs branch on testInfo.project.name (>= lg = 'desktop'; < lg = 'phone'/'tablet').
+    { name: 'desktop', testMatch: RESPONSIVE_MATCH, use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 }, hasTouch: false } },
+    // Pixel-7-class mobile emulation (touch + mobile UA) pinned to the 360-wide narrow edge — the
+    // worst case for the no-horizontal-overflow invariant.
+    { name: 'phone', testMatch: RESPONSIVE_MATCH, use: { ...devices['Pixel 7'], viewport: { width: 360, height: 800 } } },
+    // iPad-Mini-class (~768 < 1024 → on the MOBILE side of the crossover, not between). Snapshot
+    // breadth. Chromium engine (not iPad Mini's default WebKit — CI installs only Chromium) at a
+    // 768-wide touch viewport; the layout crossover, not the rendering engine, is what this asserts.
+    { name: 'tablet', testMatch: RESPONSIVE_MATCH, use: { ...devices['Desktop Chrome'], viewport: { width: 768, height: 1024 }, hasTouch: true, isMobile: true } },
+  ],
 })
