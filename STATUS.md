@@ -22,10 +22,14 @@
   no backend/contract change. Independent 3-lens review (correctness/no-desktop-regression ·
   completeness/Contingency-B-scope · hygiene/adversarial) → GO/0-blockers → 3 non-blocking findings
   fixed at root (gate-scrim-before-drawer; aria-label key rename) → CI green → merged.
-- **NEXT: SUBJECT 3 (full-stack E2E simulation / pitfall-hunt, plans 13–19).** plan-13 (Playwright +
-  virtual-WebAuthn + device-emulation harness) FIRST; real-tunnel integration plan-18 (3.6) is
-  MANDATORY before rc.1; plan-19 LAST. Then Subject 4 (security re-audit, plans 20–21 + plan-22 cuts
-  rc.1). rc.1 is NOT cut until all four subjects are done.
+- **IN PROGRESS: SUBJECT 3 (full-stack E2E simulation / pitfall-hunt, plans 13–19).** Delivered to
+  main: plan-13 (harness, PR #149), plan-14 (operator flow, #150), plan-15 (adversarial/edge, #152),
+  plan-16 (edge-case & adversarial hunt — Go fuzz/DoS corpus + browser fault-injection, #153). plan-17
+  (phone-UX device-emulation — the **responsive verification layer**: `frontend/e2e/responsive/` device
+  matrix + 8 behavior smokes + a visual-regression corpus; verifies Subject 2) IN PROGRESS. Remaining:
+  plan-18 (3.6 real-tunnel netns/containers — MANDATORY before rc.1; likely needs a privileged host),
+  plan-19 (3.7 closure). Then Subject 4 (security re-audit, plans 20–21 + plan-22 cuts rc.1). rc.1 is
+  NOT cut until all four subjects are done.
 - Decision (2026-06-19, in the outline decisions log): local-engine **default-ON** folded into plan-7
   (the real-world soak gate is waived — replaced by the green conformance harness); the
   `VITE_YAOG_LOCAL_ENGINE=backend` escape hatch is retained (works against a `-tags airgap` server).

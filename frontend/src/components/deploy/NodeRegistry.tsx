@@ -164,7 +164,10 @@ export function NodeRegistry() {
   // below-lg mobile card so the two presentations stay behaviorally identical. `fullWidth` makes the
   // buttons stretch in the narrow card (easier phone tap targets) while staying inline in the table.
   const actions = (n: ControllerNode, fullWidth: boolean): ReactNode => {
-    const btn = fullWidth ? 'flex-1 text-center' : '';
+    // In the below-lg mobile card, stretch the buttons AND give them a >=44px tap height (min-h-11)
+    // so Revoke / Cancel-rekey meet the phone tap-target minimum (plan-17 / 3.5 verifies this). The
+    // desktop table keeps the compact inline height (fullWidth=false).
+    const btn = fullWidth ? 'flex-1 text-center min-h-11' : '';
     return (
       <>
         {/* Cancel rekey: release a stuck "Roll keys" straggler WITHOUT evicting it (clears the flag;
