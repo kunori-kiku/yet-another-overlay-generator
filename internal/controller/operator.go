@@ -5,6 +5,7 @@ package controller
 // the other persisted records; the password primitive is in password.go.
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -75,6 +76,25 @@ func NewOperator(username, password string, now time.Time) (Operator, error) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
+}
+
+// SeedOperator is the shared write path behind `yaog-server create-operator` and the
+// e2e harness's operator seed: it builds the argon2id-hashed account (NewOperator,
+// which validates the username + password floor) and writes it to the store for tenant
+// t. Both call sites therefore produce a byte-identical account, so the harness logs in
+// against exactly the credential the production bootstrap would create.
+//
+// PutOperator is a blind upsert, so SeedOperator OVERWRITES any existing account for
+// username (the ephemeral e2e store wants idempotent re-seeding). A caller that must NOT
+// clobber an existing account — `create-operator` without --force — guards with
+// GetOperator before calling this (the guard, the password prompt, and the --force flag
+// are CLI-specific and stay in runCreateOperator).
+func SeedOperator(ctx context.Context, store Store, t TenantID, username, password string, now time.Time) error {
+	op, err := NewOperator(username, password, now)
+	if err != nil {
+		return err
+	}
+	return store.PutOperator(ctx, t, op)
 }
 
 // NewSession mints a fresh operator session for operator. It returns the plaintext
