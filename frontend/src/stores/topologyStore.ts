@@ -14,6 +14,17 @@ import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } fro
 import { uuid } from '../lib/uuid';
 import { healCollidingPins } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
+// The local-engine seam (plan-6, milestone 1.6). localEngineEnabled() is the SINGLE decision
+// point this store consults; the four adapters bridge the air-gap action shapes onto the
+// plan-4 TS compiler (drift-pinned by the plan-5 conformance harness). See the seam docstring
+// below ALLOCATION_PIN_FIELDS.
+import {
+  localEngineEnabled,
+  localValidate,
+  localCompile,
+  localExport,
+  localDeployScripts,
+} from '../compiler/localEngine';
 // useControllerStore is read LAZILY (getState() inside actions, never at module
 // init) so the controller↔topology store cycle stays runtime-only — symmetric to how
 // controllerStore reads useTopologyStore.getState(). Needed for mode-aware import
@@ -35,6 +46,27 @@ export const ALLOCATION_PIN_FIELDS = [
   'pinned_from_link_local',
   'pinned_to_link_local',
 ] as const;
+
+// ── The local-engine seam (plan-6, milestone 1.6) ──
+//
+// The four compute actions below — validate(), compile(), exportArtifacts(),
+// downloadDeployScript() — share ONE decision shape, deliberately NOT four scattered
+// branches (which is how F3-class drift creeps in). Each action is:
+//
+//   1. controller-mode branch FIRST (the authenticated same-origin validate fetch, or the
+//      compile/export/deploy refusal guard) — verbatim, untouched by 1.6;
+//   2. else, the single local-engine seam: `mode === 'local' && localEngineEnabled()` ⇒
+//      call the corresponding localEngine adapter (localValidate / localCompile /
+//      localExport / localDeployScripts), running the plan-4 TS compiler in the browser;
+//   3. else (local mode, flag OFF) ⇒ fall through to the existing, proven backend air-gap
+//      fetch — the default path, unchanged.
+//
+// localEngineEnabled() is default-OFF (it reads the typed VITE_YAOG_LOCAL_ENGINE flag —
+// see compiler/localEngine.ts + vite-env.d.ts), so merging 1.6 changes no default behaviour:
+// the server path stays the proven default and the migration-isolation invariant holds. The
+// controller-mode branches (refusal guards, the authenticated same-origin validate fetch, and
+// compile()'s in-flight mode-flip key-custody guard) are kept byte-for-byte regardless of the
+// flag — the seam only ever replaces the LOCAL-mode arm.
 
 interface TopologyState {
   // Data
@@ -243,6 +275,26 @@ async function readApiErrorMessage(res: Response, fallbackKey: MessageKey, lang:
   const status = res.status ? `${res.status}${res.statusText ? ' ' + res.statusText : ''}` : '';
   const base = t(lang, fallbackKey);
   return status ? `${base} (${status})` : base;
+}
+
+// localEngineErrorMessage produces a LOCALIZED message for an error surfaced by a compute
+// action (plan-6, R6), so the LOCAL-engine message is identical to the server path for the
+// same failure. The TS compiler throws a CompileError whose `code`/`params` mirror the Go
+// apierr codes byte-for-byte; wrapping it in the coded `{ error: { code, message, params } }`
+// envelope routes it through the SAME tError → 'error.<code>' catalog the server response
+// would have hit (so e.g. a transit-pool-exhausted local compile reads identically to the
+// server's). An error WITHOUT a string `code` (notably the Error thrown on the backend-fetch
+// path, whose message is already the localized readApiErrorMessage output) is passed through
+// verbatim, leaving the proven server path byte-unchanged; a code-less, message-less error
+// falls back to the keyed per-action message.
+function localEngineErrorMessage(err: unknown, fallbackKey: MessageKey, lang: UILanguage): string {
+  const code = (err as { code?: unknown } | null | undefined)?.code;
+  if (typeof code === 'string' && code) {
+    const params = (err as { params?: Record<string, string> }).params;
+    const message = err instanceof Error ? err.message : undefined;
+    return tError({ error: { code, message, params } }, lang);
+  }
+  return err instanceof Error && err.message ? err.message : t(lang, fallbackKey);
 }
 
 export const useTopologyStore = create<TopologyState>()(
@@ -710,6 +762,16 @@ export const useTopologyStore = create<TopologyState>()(
     set({ isValidating: true, error: null });
     try {
       const topo = get().getTopology();
+      const cs = useControllerStore.getState();
+      // Local-engine seam: in LOCAL mode with the flag on, validate in the browser via the
+      // plan-4 TS compiler — no fetch. Controller mode never enters this branch (it keeps its
+      // authenticated same-origin fetch below); with the flag off, local mode falls through to
+      // the existing public /api/validate fetch (default-OFF, unchanged).
+      if (cs.mode === 'local' && localEngineEnabled()) {
+        const data = await localValidate(topo);
+        set({ validateResult: data, isValidating: false });
+        return;
+      }
       // In controller mode /api/validate sits behind operator-auth (plan-12 / T6). The route is
       // on the panel's own (operator) origin, so the httpOnly session cookie is sent automatically
       // with the same-origin request; attach operator credentials so the POST passes: prefer
@@ -717,7 +779,6 @@ export const useTopologyStore = create<TopologyState>()(
       // in-memory token, fall back to cookie + double-submit CSRF header (consistent with
       // controllerClient's configOf). Local mode adds no headers (the route is public).
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const cs = useControllerStore.getState();
       if (cs.mode === 'controller') {
         const bearer = cs.sessionToken || cs.operatorToken;
         if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
@@ -735,7 +796,7 @@ export const useTopologyStore = create<TopologyState>()(
       set({ validateResult: data, isValidating: false });
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : 'Validation request failed',
+        error: localEngineErrorMessage(err, 'error.validateFailed', get().language),
         isValidating: false,
       });
     }
@@ -760,22 +821,36 @@ export const useTopologyStore = create<TopologyState>()(
     set({ isCompiling: true, error: null });
     try {
       const topo = get().getTopology();
-      const res = await fetch('/api/compile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(topo),
-      });
-      if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, 'error.compileFailed', get().language));
+      let data: CompileResponse;
+      // Local-engine seam: in LOCAL mode with the flag on, compile in the browser via the
+      // plan-4 TS compiler. localCompile runs the full AirGap pipeline, so data.topology.nodes
+      // carries reconstructed private keys (local export/deploy bundles need them) and
+      // data.skipped_unenrolled is UNDEFINED (air-gap shape) — exactly the /api/compile shape
+      // the post-compile reconciliation below consumes. With the flag off, local mode falls
+      // through to the existing /api/compile fetch (default-OFF, unchanged).
+      if (localEngineEnabled()) {
+        data = await localCompile(topo);
+      } else {
+        const res = await fetch('/api/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(topo),
+        });
+        if (!res.ok) {
+          throw new Error(await readApiErrorMessage(res, 'error.compileFailed', get().language));
+        }
+        data = await res.json();
       }
-      const data: CompileResponse = await res.json();
 
       // In-flight mode-flip guard: the front-door check above only rejects FRESH
-      // invocations. If the operator switched to controller mode while this air-gap
-      // compile was in flight, the response carries reconstructed private keys
-      // (data.topology.nodes). Persisting them now would write fleet private keys into
-      // the controller-mode store and its localStorage mirror — exactly the boundary
-      // the zero-knowledge custody model forbids. Drop the result instead.
+      // invocations. If the operator switched to controller mode while this compile was in
+      // flight (whether the air-gap fetch OR the local-engine compile), `data` carries
+      // reconstructed private keys (data.topology.nodes). Persisting them now would write
+      // fleet private keys into the controller-mode store and its localStorage mirror —
+      // exactly the boundary the zero-knowledge custody model forbids. Drop the result
+      // instead. The local-engine path makes the in-flight window near-zero (the compile is
+      // effectively synchronous), but the guard is kept verbatim as defense-in-depth and to
+      // preserve the documented custody contract (plan-6, R2 / Phase 3.3).
       if (useControllerStore.getState().mode === 'controller') {
         set({ isCompiling: false });
         return;
@@ -802,7 +877,7 @@ export const useTopologyStore = create<TopologyState>()(
       }));
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : 'Compile request failed',
+        error: localEngineErrorMessage(err, 'error.compileFailed', get().language),
         isCompiling: false,
       });
     }
@@ -825,31 +900,46 @@ export const useTopologyStore = create<TopologyState>()(
     }
     try {
       const topo = get().getTopology();
-      const res = await fetch('/api/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(topo),
-      });
-      if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, 'error.exportFailed', get().language));
-      }
+      let blob: Blob;
+      let filename: string;
+      // Local-engine seam: in LOCAL mode with the flag on, build the per-node bundle ZIP in
+      // the browser via the plan-4 TS compiler — no fetch — and name the download locally,
+      // VERBATIM mirroring handler.go:240's `fmt.Sprintf("%s-artifacts.zip", topo.Project.ID)`
+      // with NO `|| 'project'` fallback: an empty project.id yields `-artifacts.zip` on BOTH
+      // paths (a fallback here would be a silent F3-class divergence; defaultProject.id is
+      // 'project-1' so the empty case is unreachable today, but parity holds unconditionally).
+      // With the flag off, local mode falls through to the existing /api/export fetch, which
+      // carries the server's Content-Disposition filename (default-OFF, unchanged).
+      if (localEngineEnabled()) {
+        blob = await localExport(topo);
+        filename = `${topo.project.id}-artifacts.zip`;
+      } else {
+        const res = await fetch('/api/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(topo),
+        });
+        if (!res.ok) {
+          throw new Error(await readApiErrorMessage(res, 'error.exportFailed', get().language));
+        }
 
-      const blob = await res.blob();
-      const disposition = res.headers.get('Content-Disposition') || '';
-      const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
-      const inferredName = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || 'artifacts.zip');
+        blob = await res.blob();
+        const disposition = res.headers.get('Content-Disposition') || '';
+        const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+        filename = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || 'artifacts.zip');
+      }
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = inferredName;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : 'Export request failed',
+        error: localEngineErrorMessage(err, 'error.exportFailed', get().language),
       });
     }
   },
@@ -871,16 +961,29 @@ export const useTopologyStore = create<TopologyState>()(
     }
     try {
       const topo = get().getTopology();
-      const res = await fetch(`/api/deploy-script?format=${format}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(topo),
-      });
-      if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, 'error.deployScriptFailed', get().language));
+      let blob: Blob;
+      // Local-engine seam: in LOCAL mode with the flag on, render the project-level deploy
+      // script in the browser via the plan-4 TS compiler — no fetch — and wrap it in a Blob to
+      // reuse the same object-URL download below. localDeployScripts returns both formats; pick
+      // by `format`. With the flag off, local mode falls through to the existing
+      // /api/deploy-script fetch (default-OFF, unchanged).
+      if (localEngineEnabled()) {
+        const { sh, ps1 } = await localDeployScripts(topo);
+        const script = format === 'ps1' ? ps1 : sh;
+        blob = new Blob([script], { type: 'text/plain' });
+      } else {
+        const res = await fetch(`/api/deploy-script?format=${format}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(topo),
+        });
+        if (!res.ok) {
+          throw new Error(await readApiErrorMessage(res, 'error.deployScriptFailed', get().language));
+        }
+        blob = await res.blob();
       }
 
-      const blob = await res.blob();
+      // Filenames match handler.go:298/:302 (deploy-all.ps1 / deploy-all.sh) on both paths.
       const filename = format === 'ps1' ? 'deploy-all.ps1' : 'deploy-all.sh';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -892,7 +995,7 @@ export const useTopologyStore = create<TopologyState>()(
       URL.revokeObjectURL(url);
     } catch (err) {
       set({
-        error: err instanceof Error ? err.message : 'Deploy script download failed',
+        error: localEngineErrorMessage(err, 'error.deployScriptFailed', get().language),
       });
     }
   },
