@@ -1,0 +1,15 @@
+{
+  "name": "schema-no-domains-defined",
+  "doc": "schema cluster: a topology with zero domains trips validation_domain_none_defined.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": {
+      "id": "p",
+      "name": "P"
+    },
+    "domains": [],
+    "nodes": [],
+    "edges": []
+  }
+}

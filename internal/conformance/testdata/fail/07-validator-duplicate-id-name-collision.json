@@ -1,0 +1,43 @@
+{
+  "name": "validator-duplicate-id-name-collision",
+  "doc": "duplicate-identity cluster: a duplicate domain ID, a duplicate node ID, a duplicate edge ID, a duplicate raw node name, an installer-filename collision (\"Web 1\" vs \"web-1\" both normalize to web-1.install.sh), and an interface-name collision (\"db.east\" vs \"db-east\" both clean to wg-db-east). The two same-named \"alpha\" nodes connecting to the hub additionally collide on the hub's per-node interface name (node_interface_name_collision).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.52.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "d1", "name": "dup-domain", "cidr": "10.53.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "n-hub", "name": "n-hub", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "hub-ep", "host": "hub.example.com", "port": 51820 } ] },
+      { "id": "n-dup", "name": "alpha", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "a-ep", "host": "a.example.com", "port": 51820 } ] },
+      { "id": "n-dup", "name": "alpha", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "a2-ep", "host": "a2.example.com", "port": 51820 } ] },
+      { "id": "n-web1", "name": "Web 1", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "w1-ep", "host": "w1.example.com", "port": 51820 } ] },
+      { "id": "n-web1b", "name": "web-1", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "w1b-ep", "host": "w1b.example.com", "port": 51820 } ] },
+      { "id": "n-dbe", "name": "db.east", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "dbe-ep", "host": "dbe.example.com", "port": 51820 } ] },
+      { "id": "n-dbeb", "name": "db-east", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "dbeb-ep", "host": "dbeb.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-dup", "from_node_id": "n-hub", "to_node_id": "n-dup", "type": "public-endpoint", "transport": "udp", "is_enabled": true },
+      { "id": "e-dup", "from_node_id": "n-hub", "to_node_id": "n-web1", "type": "public-endpoint", "transport": "udp", "is_enabled": true },
+      { "id": "e-w1b", "from_node_id": "n-hub", "to_node_id": "n-web1b", "type": "public-endpoint", "transport": "udp", "is_enabled": true },
+      { "id": "e-dbe", "from_node_id": "n-hub", "to_node_id": "n-dbe", "type": "public-endpoint", "transport": "udp", "is_enabled": true },
+      { "id": "e-dbeb", "from_node_id": "n-hub", "to_node_id": "n-dbeb", "type": "public-endpoint", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

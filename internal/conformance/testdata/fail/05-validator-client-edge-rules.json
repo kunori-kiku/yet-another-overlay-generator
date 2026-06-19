@@ -1,0 +1,29 @@
+{
+  "name": "validator-client-edge-rules",
+  "doc": "client-rule cluster: a client dialing a peer (target-peer) and another client (target-client + inbound-rejected on the target), a client with two outbound edges (multiple-outbound) and a client with no outbound edge (no-outbound), plus client router_id/extra_prefixes set (the two client-meaningless warnings). Co-emits the nat target/outbound warnings the disconnected NAT-only nodes produce.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.50.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "peer-a", "name": "peer-a", "platform": "debian", "role": "peer", "domain_id": "d1",
+        "capabilities": {} },
+      { "id": "client-a", "name": "client-a", "platform": "debian", "role": "client", "domain_id": "d1",
+        "router_id": "02:11:22:33:44:55", "extra_prefixes": [ "192.168.5.0/24" ],
+        "capabilities": {} },
+      { "id": "client-b", "name": "client-b", "platform": "debian", "role": "client", "domain_id": "d1",
+        "capabilities": {} }
+    ],
+    "edges": [
+      { "id": "e-c2p", "from_node_id": "client-a", "to_node_id": "peer-a", "type": "public-endpoint", "endpoint_host": "peer-a.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-c2c", "from_node_id": "client-a", "to_node_id": "client-b", "type": "public-endpoint", "endpoint_host": "client-b.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-inbound", "from_node_id": "router-a", "to_node_id": "client-a", "type": "public-endpoint", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

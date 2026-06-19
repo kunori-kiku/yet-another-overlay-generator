@@ -1,0 +1,37 @@
+{
+  "name": "schema-domain-field-rejects",
+  "doc": "schema cluster: domain CIDR / transit_cidr / allocation_mode / routing_mode / reserved_ranges structural + range + enum rejects (no root short-circuit).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d-valid", "name": "valid", "cidr": "10.64.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "", "name": "", "cidr": "10.65.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "d-cidr-empty", "name": "cidr-empty", "cidr": "", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "d-cidr-invalid", "name": "cidr-invalid", "cidr": "not-a-cidr", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "d-cidr-v6", "name": "cidr-v6", "cidr": "2001:db8::/32", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "d-cidr-large", "name": "cidr-large", "cidr": "10.0.0.0/7", "allocation_mode": "auto", "routing_mode": "babel" },
+      { "id": "d-alloc", "name": "alloc", "cidr": "10.66.0.0/24", "allocation_mode": "weird", "routing_mode": "babel" },
+      { "id": "d-routing-invalid", "name": "routing-invalid", "cidr": "10.67.0.0/24", "allocation_mode": "auto", "routing_mode": "quagga" },
+      { "id": "d-routing-unimpl", "name": "routing-unimpl", "cidr": "10.68.0.0/24", "allocation_mode": "auto", "routing_mode": "static" },
+      { "id": "d-transit-invalid", "name": "transit-invalid", "cidr": "10.69.0.0/24", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "bad" },
+      { "id": "d-transit-v6", "name": "transit-v6", "cidr": "10.70.0.0/24", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "2001:db8::/32" },
+      { "id": "d-transit-large", "name": "transit-large", "cidr": "10.71.0.0/24", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "10.0.0.0/7" },
+      { "id": "d-transit-small", "name": "transit-small", "cidr": "10.72.0.0/24", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "10.10.0.0/31" },
+      { "id": "d-rr", "name": "rr", "cidr": "10.73.0.0/24", "allocation_mode": "auto", "routing_mode": "babel",
+        "reserved_ranges": [ "2001:db8::/48", "garbage-range", "2001:db8::1" ] }
+    ],
+    "nodes": [
+      { "id": "ra", "name": "ra", "platform": "debian", "role": "router", "domain_id": "d-valid",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "ra.example.com", "port": 51820 } ] },
+      { "id": "rb", "name": "rb", "platform": "debian", "role": "router", "domain_id": "d-valid",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "rb.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "ra", "to_node_id": "rb", "type": "public-endpoint", "endpoint_host": "rb.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

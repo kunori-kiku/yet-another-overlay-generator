@@ -1,0 +1,26 @@
+{
+  "name": "validator-nat-deep-reachability",
+  "doc": "NAT reachability cluster: a double-NAT direct link with no endpoint where neither end can be dialed (dead-link error) and a double-NAT direct link where the target still accepts inbound (double-NAT-no-endpoint warning).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.76.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "nat-a", "name": "nat-a", "platform": "debian", "role": "peer", "domain_id": "d1",
+        "capabilities": {} },
+      { "id": "nat-b", "name": "nat-b", "platform": "debian", "role": "peer", "domain_id": "d1",
+        "capabilities": {} },
+      { "id": "nat-c", "name": "nat-c", "platform": "debian", "role": "peer", "domain_id": "d1",
+        "capabilities": {} },
+      { "id": "inbound-d", "name": "inbound-d", "platform": "debian", "role": "peer", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true } }
+    ],
+    "edges": [
+      { "id": "e-dead", "from_node_id": "nat-a", "to_node_id": "nat-b", "type": "direct", "transport": "udp", "is_enabled": true },
+      { "id": "e-double", "from_node_id": "nat-c", "to_node_id": "inbound-d", "type": "direct", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

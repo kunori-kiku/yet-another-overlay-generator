@@ -1,0 +1,27 @@
+{
+  "name": "validator-parallel-link-route-policies",
+  "doc": "parallel-link cluster: a node pair whose only links are two equal-cost backups (no primary) emits the equal-cost + no-primary warnings; the non-empty route_policies makes the topology a genuine validator-FAIL (reserved feature), so the manifest projections stay nil. Pins the parallel-link warning channel AND validation_routepolicy_reserved.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.59.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "ra", "name": "ra", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "ra.example.com", "port": 51820 } ] },
+      { "id": "rb", "name": "rb", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "rb.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-bak1", "from_node_id": "ra", "to_node_id": "rb", "type": "public-endpoint", "endpoint_host": "rb.example.com", "role": "backup", "transport": "udp", "is_enabled": true },
+      { "id": "e-bak2", "from_node_id": "ra", "to_node_id": "rb", "type": "public-endpoint", "endpoint_host": "rb.example.com", "role": "backup", "transport": "udp", "is_enabled": true }
+    ],
+    "route_policies": [
+      { "id": "rp1", "domain_id": "d1", "destination_cidr": "192.168.0.0/24" }
+    ]
+  }
+}

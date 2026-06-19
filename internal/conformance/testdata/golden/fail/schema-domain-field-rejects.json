@@ -1,0 +1,43 @@
+{
+  "fixture": "schema-domain-field-rejects",
+  "verdict": {
+    "validator": [
+      "validation_domain_allocation_mode_invalid",
+      "validation_domain_cidr_empty",
+      "validation_domain_cidr_invalid",
+      "validation_domain_cidr_not_ipv4",
+      "validation_domain_cidr_too_large",
+      "validation_domain_id_required",
+      "validation_domain_name_required",
+      "validation_domain_reserved_address_not_ipv4",
+      "validation_domain_reserved_range_invalid",
+      "validation_domain_reserved_range_not_ipv4",
+      "validation_domain_routing_mode_invalid",
+      "validation_domain_routing_mode_unimplemented",
+      "validation_domain_transit_cidr_invalid",
+      "validation_domain_transit_cidr_not_ipv4",
+      "validation_domain_transit_cidr_too_large",
+      "validation_domain_transit_cidr_too_small"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
+  "healed_edges": [
+    {
+      "id": "e-ab",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    }
+  ]
+}

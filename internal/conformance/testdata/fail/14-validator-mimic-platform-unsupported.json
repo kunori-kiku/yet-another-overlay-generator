@@ -1,0 +1,23 @@
+{
+  "name": "validator-mimic-platform-unsupported",
+  "doc": "mimic cluster: a transport=tcp edge whose target endpoint is platform=windows, which is not a deployable Linux for the eBPF/kernel mimic feature (edge_mimic_platform_unsupported). The non-debian/ubuntu platform also rides the node_platform_unsupported schema warning.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.61.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "ra", "name": "ra", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "ra.example.com", "port": 51820 } ] },
+      { "id": "rb", "name": "rb", "platform": "windows", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "rb.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-tcp", "from_node_id": "ra", "to_node_id": "rb", "type": "public-endpoint", "endpoint_host": "rb.example.com", "transport": "tcp", "is_enabled": true }
+    ]
+  }
+}

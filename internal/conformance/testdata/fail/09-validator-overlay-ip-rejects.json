@@ -1,0 +1,35 @@
+{
+  "name": "validator-overlay-ip-rejects",
+  "doc": "overlay-IP cluster: a duplicate overlay IP (conflict), an overlay IP outside the domain CIDR (out-of-cidr), and a malformed overlay IP (schema invalid).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.55.0.0/24", "allocation_mode": "manual", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.55.0.10",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "router-b", "name": "router-b", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.55.0.10",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "router-b.example.com", "port": 51820 } ] },
+      { "id": "router-c", "name": "router-c", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "192.168.99.5",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rc-ep", "host": "router-c.example.com", "port": 51820 } ] },
+      { "id": "router-d", "name": "router-d", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "not.an.ip",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rd-ep", "host": "router-d.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-bc", "from_node_id": "router-b", "to_node_id": "router-c", "type": "public-endpoint", "endpoint_host": "router-c.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-cd", "from_node_id": "router-c", "to_node_id": "router-d", "type": "public-endpoint", "endpoint_host": "router-d.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}
