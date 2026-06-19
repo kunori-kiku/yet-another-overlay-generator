@@ -1,0 +1,31 @@
+{
+  "name": "apierr-keygen-privkey-parse-whitespace",
+  "doc": "APIERR-channel fail fixture. Two routers joined by one primary link — structurally identical to the single-primary-link SUCCESS fixture, so it passes schema AND semantic validation cleanly (the validator never inspects key MATERIAL, only the topology shape; the apierr channel below carries the sole code, verdict.validator is empty). node-alpha's wireguard_private_key carries an embedded SPACE, which is NOT valid base64.StdEncoding: Go's wgtypes.ParseKey (via render.GenerateKeys case-a ParseAndNormalize) rejects it with 'illegal base64 data' and the compile error rides through as apierr.CodeKeygenPrivkeyParse (keygen_privkey_parse_failed). A SPACE is used deliberately (NOT a newline): Go's StdEncoding decoder IGNORES embedded '\\n'/'\\r' and would accept those, but rejects space/tab/other non-alphabet bytes — so a space is a byte BOTH Go and the TS keygen seam reject, pinning the faithful base64 decoder. This pins the apierr failure channel through the key pre-pass (NOT the allocator), complementing the transit-pool fixture.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "fail-keygen-privkey-parse", "name": "Fail Keygen Privkey Parse" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.21.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7h m+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

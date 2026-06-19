@@ -30,12 +30,30 @@ import { x25519 } from '@noble/curves/ed25519.js';
 // and public X25519 keys are exactly this many raw bytes.
 const KEY_LEN = 32;
 
-// base64StdDecode decodes a standard-base64 string (with padding) to raw bytes, mirroring Go's
-// base64.StdEncoding.DecodeString. atob handles the standard alphabet (+/ and = padding); we widen each
-// latin1 char code back to a byte. Throws on a malformed base64 string (atob raises), matching
-// wgtypes.ParseKey's "failed to parse base64-encoded key" error path (wgtypes/types.go:128).
+// base64StdDecode decodes a standard-base64 string to raw bytes, FAITHFULLY to Go's
+// base64.StdEncoding.DecodeString — NOT just "atob, which raises on malformed input". atob is too
+// lenient on two axes where it would silently accept a key Go REJECTS: it tolerates unpadded base64
+// and (in some engines) embedded whitespace such as space/tab. Go's StdEncoding decoder, by contrast,
+// IGNORES embedded '\n' and '\r' (the only whitespace it skips) but REJECTS space, tab, and every other
+// non-alphabet byte, and REQUIRES correct '=' padding so the encoded length is a multiple of 4. Verified
+// against base64.StdEncoding directly: a space, a tab, and an unpadded 32-byte key are all rejected;
+// embedded '\n'/'\r' are accepted.
+//
+// So we reproduce that grammar exactly: strip ONLY '\n' and '\r' (the bytes Go's decoder skips), then
+// require the remainder to be standard-alphabet chars with 0–2 trailing '=' and a length that is a
+// multiple of 4 — rejecting anything else (space, tab, unpadded, mid-string padding) BEFORE handing the
+// cleaned string to atob. That makes this byte-exact to Go in BOTH directions (no TS-accepts/Go-rejects
+// and no TS-rejects/Go-accepts divergence). It throws on a malformed string, matching wgtypes.ParseKey's
+// "failed to parse base64-encoded key" error path (wgtypes/types.go:128).
+const STD_BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
 function base64StdDecode(s: string): Uint8Array {
-  const bin = atob(s);
+  // Go's StdEncoding decoder skips embedded '\n' and '\r' (and ONLY those); strip them first.
+  const cleaned = s.replace(/[\n\r]/g, '');
+  if (cleaned.length % 4 !== 0 || !STD_BASE64_RE.test(cleaned)) {
+    throw new Error('illegal base64 data');
+  }
+  const bin = atob(cleaned);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) {
     out[i] = bin.charCodeAt(i);
@@ -91,9 +109,12 @@ export function generate(): { priv: string; pub: string } {
 // parseAndNormalize round-trips a base64-std private key to its canonical base64-std form. Mirrors
 // wgtypesKeygen.ParseAndNormalize = wgtypes.ParseKey(priv).String() (render.go:106-113): decode +
 // validate 32 bytes, then re-encode the SAME raw bytes with standard base64. This re-canonicalizes a
-// non-canonical-but-valid encoding (e.g. an unpadded or whitespace-laden variant that still decodes to
-// 32 bytes) to wgtypes' exact String() form, which the air-gap case-a write-back persists onto the node.
-// It is a pure encoding round-trip — it does NOT clamp or otherwise mutate the key bytes.
+// non-canonical-but-valid encoding to wgtypes' exact String() form, which the air-gap case-a write-back
+// persists onto the node. The ONLY non-canonical input Go's StdEncoding (and hence this decoder) accepts
+// is one carrying embedded '\n'/'\r', which the decoder skips before re-encoding to the newline-free
+// canonical form; an unpadded or space/tab-laden variant is REJECTED (it is not valid StdEncoding), so it
+// never reaches this round-trip. It is a pure encoding round-trip — it does NOT clamp or otherwise mutate
+// the key bytes.
 export function parseAndNormalize(privB64: string): string {
   const raw = parsePrivateKey(privB64);
   return base64StdEncode(raw);

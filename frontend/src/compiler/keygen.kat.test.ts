@@ -78,18 +78,37 @@ describe('keygen X25519 KAT (Go-authored RFC 7748 + clamp-boundary vectors)', ()
 });
 
 describe('keygen parseAndNormalize round-trip', () => {
-  // A non-canonical 32-byte private key encoding re-encodes to the canonical base64-std form. The
-  // clamp_equivalence raw_b64 vectors are canonical std-base64 already; to exercise the canonicalizing
-  // round-trip we feed a base64 STRING that decodes to 32 bytes but is NOT in wgtypes' String() form.
-  //
-  // base64.StdEncoding of 32 bytes is 44 chars ending in '='. atob also accepts the same bytes encoded
-  // WITHOUT the trailing pad ('=' stripped) — a non-canonical-but-decodable variant. parseAndNormalize
-  // must re-emit the padded canonical form, identical to wgtypes.ParseKey(priv).String().
-  it('re-encodes an unpadded 32-byte key to the canonical padded base64-std form', () => {
+  // FAITHFULNESS to Go's StdEncoding: an UNPADDED 32-byte key is NOT valid base64.StdEncoding — Go's
+  // base64.StdEncoding.DecodeString rejects it ("illegal base64 data") because the encoded length is not
+  // a multiple of 4. A lenient atob would silently decode it, so parseAndNormalize MUST throw to stay
+  // byte-exact to wgtypes.ParseKey (no TS-accepts-where-Go-rejects). This is the flipped assertion: the
+  // unpadded variant is a REJECTION, not a canonicalizable input.
+  it('throws on an unpadded 32-byte key (Go StdEncoding rejects it)', () => {
     const canonical = kat.vectors[0].private_b64; // 44-char padded base64-std of 32 bytes
-    const unpadded = canonical.replace(/=+$/, ''); // strip the trailing '=' pad: still decodes to 32 B
+    const unpadded = canonical.replace(/=+$/, ''); // strip the trailing '=' pad: NOT valid StdEncoding
     expect(unpadded).not.toBe(canonical);
-    expect(parseAndNormalize(unpadded)).toBe(canonical);
+    expect(() => parseAndNormalize(unpadded)).toThrow();
+  });
+
+  // The ONE non-canonical encoding Go's StdEncoding DOES accept is one carrying embedded '\n' / '\r':
+  // the decoder skips those bytes. parseAndNormalize must decode such a variant and re-emit the
+  // newline-free canonical form, identical to wgtypes.ParseKey(priv).String() — proving the seam matches
+  // Go's newline tolerance (no TS-rejects-where-Go-accepts).
+  it('re-encodes a newline-laden key to the canonical newline-free base64-std form', () => {
+    const canonical = kat.vectors[0].private_b64;
+    // Splice a '\n' and a '\r' into the middle — Go ignores both; the canonical output carries neither.
+    const withNewlines =
+      canonical.slice(0, 16) + '\n' + canonical.slice(16, 32) + '\r' + canonical.slice(32);
+    expect(withNewlines).not.toBe(canonical);
+    expect(parseAndNormalize(withNewlines)).toBe(canonical);
+  });
+
+  // A space-laden key is REJECTED: Go's StdEncoding skips ONLY '\n'/'\r', never a space (or tab). This
+  // pins the asymmetry that the BLOCKER fix introduced — space is not whitespace the decoder tolerates.
+  it('throws on a space-laden key (Go StdEncoding rejects space)', () => {
+    const canonical = kat.vectors[0].private_b64;
+    const withSpace = canonical.slice(0, 16) + ' ' + canonical.slice(16);
+    expect(() => parseAndNormalize(withSpace)).toThrow();
   });
 
   // An already-canonical key round-trips to itself (idempotence), and the normalized output still derives
