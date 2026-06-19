@@ -443,6 +443,12 @@ checklist):
 All 22 rows initialized `pending`. Update `status` as each plan lands (pending → in-progress → delivered/
 partial/parked/abandoned, per close-phase).
 
+> **SUBJECT 1 (S1 / plans 1–9) COMPLETE — all delivered to `main` 2026-06-19** (PRs #137–#145). The
+> local-mode→browser migration shipped end-to-end: the TS compiler is byte-exact vs the Go oracle
+> (conformance harness = required CI gate, both build profiles gated), local mode is browser-resident
+> by default, and the controller backend is shrunk to controller-only with the air-gap compute oracle
+> retained behind `//go:build airgap`. NEXT: Subject 2 (phone UX, plans 10–12).
+
 | plan | milestone | subject | status | depends-on |
 |------|-----------|---------|--------|------------|
 | plan-1  | 1.1 | S1 | delivered (PR #137) | — (FIRST mover; before plan-2/8/9 on shared files) |
@@ -451,7 +457,7 @@ partial/parked/abandoned, per close-phase).
 | plan-4  | 1.4 | S1 | delivered (PR #143) | plan-5 (green+required), plan-3, plan-9 |
 | plan-5  | 1.5 | S1 | delivered (PR #142) | plan-3 |
 | plan-6  | 1.6 | S1 | delivered (PR #144) | plan-4 |
-| plan-7  | 1.7 | S1 | in-progress (branch feat/backend-shrink-airgap) | plan-6 (tail of S1; before Subject 4 re-audit) |
+| plan-7  | 1.7 | S1 | delivered (PR #145) | plan-6 (tail of S1; before Subject 4 re-audit) |
 | plan-8  | 1.8 | S1 | delivered (PR #140) | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
 | plan-9  | 1.9 | S1 | delivered (PR #138) | plan-1 (EARLY off main; supports plan-4) |
 | plan-10 | 2.1 | S2 | pending | plan-11; SUBJECT 1 |
