@@ -62,7 +62,16 @@ function spawnBoot(
 
     proc.stdout.on('data', (chunk: Buffer) => {
       outBuf += chunk.toString()
-      const line = outBuf.split('\n').find((l) => l.startsWith('E2E_READY'))
+      // Only scan COMPLETE (newline-terminated) lines so a partial stdout chunk carrying the
+      // READY prefix without its trailing '\n' can never misparse (dropping agent=/enroll=).
+      // The Go side emits the whole line in one sub-PIPE_BUF fmt.Printf today, but this keeps
+      // the required gate robust to any future chunking.
+      const nl = outBuf.lastIndexOf('\n')
+      if (nl < 0) return
+      const line = outBuf
+        .slice(0, nl)
+        .split('\n')
+        .find((l) => l.startsWith('E2E_READY'))
       if (line && !settled) {
         settled = true
         clearTimeout(timer)
@@ -110,8 +119,11 @@ async function globalSetup(): Promise<void> {
 
   // Boot both servers. The controller boot owns the temp state dir, the seeded operator, the
   // pre-minted enrollment token, and the agent port; the air-gap boot only serves the panel
-  // + the unauthenticated compute routes.
-  const [controller, airgap] = await Promise.all([
+  // + the unauthenticated compute routes. allSettled (not Promise.all) so that if ONE boot
+  // fails, the OTHER's resolved child is still reachable for cleanup — Playwright does NOT run
+  // globalTeardown when globalSetup throws, so this function must clean up after itself or it
+  // leaks an orphan process + temp dir (DoD #2 / hermeticity).
+  const settled = await Promise.allSettled([
     spawnBoot(
       serverBin,
       [
@@ -135,30 +147,60 @@ async function globalSetup(): Promise<void> {
     ),
   ])
 
-  // Assert exactly the expected modes so a flag regression (two controllers, a typo) fails
-  // loudly here rather than as a confusing spec failure downstream.
-  if (controller.ready.mode !== 'controller') {
-    throw new Error(`controller boot reported mode=${controller.ready.mode}, want controller`)
-  }
-  if (airgap.ready.mode !== 'airgap') {
-    throw new Error(`airgap boot reported mode=${airgap.ready.mode}, want airgap`)
-  }
-  if (!controller.ready.agent || !controller.ready.enroll) {
-    throw new Error('controller boot READY missing agent port or enrollment token')
+  // Kill every successfully-spawned child and remove the temp dir — the failure-path cleanup.
+  const spawned = settled
+    .filter((s): s is PromiseFulfilledResult<{ proc: ChildProcess; ready: Ready }> => s.status === 'fulfilled')
+    .map((s) => s.value)
+  const cleanup = (): void => {
+    for (const { proc } of spawned) {
+      try {
+        proc.kill('SIGKILL')
+      } catch {
+        // already exited
+      }
+    }
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    } catch {
+      // best-effort
+    }
   }
 
-  const state: HarnessState = {
-    controller: {
-      panel: controller.ready.panel,
-      agent: controller.ready.agent,
-      enrollToken: controller.ready.enroll,
-    },
-    airgap: { panel: airgap.ready.panel },
-    agentBin,
-    pids: [controller.proc.pid, airgap.proc.pid].filter((p): p is number => typeof p === 'number'),
-    tmpDir,
+  try {
+    // Re-raise the first boot failure (with its diagnostic) after cleaning up the survivor.
+    const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
+    if (failed) throw failed.reason
+    // Both fulfilled; allSettled preserves input order, so [controller, airgap].
+    const [controller, airgap] = spawned
+
+    // Assert exactly the expected modes so a flag regression (two controllers, a typo, a
+    // missing token) fails loudly here rather than as a confusing spec failure downstream.
+    if (controller.ready.mode !== 'controller') {
+      throw new Error(`controller boot reported mode=${controller.ready.mode}, want controller`)
+    }
+    if (airgap.ready.mode !== 'airgap') {
+      throw new Error(`airgap boot reported mode=${airgap.ready.mode}, want airgap`)
+    }
+    if (!controller.ready.agent || !controller.ready.enroll) {
+      throw new Error('controller boot READY missing agent port or enrollment token')
+    }
+
+    const state: HarnessState = {
+      controller: {
+        panel: controller.ready.panel,
+        agent: controller.ready.agent,
+        enrollToken: controller.ready.enroll,
+      },
+      airgap: { panel: airgap.ready.panel },
+      agentBin,
+      pids: [controller.proc.pid, airgap.proc.pid].filter((p): p is number => typeof p === 'number'),
+      tmpDir,
+    }
+    writeHarness(state)
+  } catch (err) {
+    cleanup()
+    throw err
   }
-  writeHarness(state)
 }
 
 // binName appends .exe on Windows so a local Windows dev run finds the binary; CI is Linux.

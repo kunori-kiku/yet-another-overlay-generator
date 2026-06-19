@@ -34,7 +34,11 @@ overridable via `E2E_SERVER_BIN`, `E2E_AGENT_BIN`, `E2E_WEB_DIR`; the defaults
 Two boots are required, not one env-tweaked `cmd/server`: `EnableController` arms
 `operatorAuth` **unconditionally** (`internal/api/server.go`), so a single controller boot
 cannot also serve the *unauthenticated* `/api/compile` the air-gap oracle exposes. The two
-boots make that auth split observable (a canary asserts the air-gap `/api/compile` is open).
+boots make that auth split observable at the HTTP layer: `airgap-design.spec.ts` asserts the
+air-gap `/api/compile` is **open (200)** and `controller-fleet.spec.ts` asserts the controller
+boot's is **gated (401)**. The authoritative server-level assertion lives in the required Go
+gate test `internal/api/airgap_auth_gate_test.go` (`TestAirgapRoutes_GatedInControllerMode`,
+run by CI's `go test -tags airgap ./...`); the Playwright assertions are the cross-stack echo.
 
 `cmd/e2eserver` MUST be built `-tags airgap`: the four air-gap routes live behind
 `//go:build airgap` (plan-7), so a default build's air-gap boot would 404 `/api/compile`.

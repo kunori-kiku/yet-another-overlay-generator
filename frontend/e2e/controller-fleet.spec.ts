@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import os from 'node:os'
+import fs from 'node:fs'
 import path from 'node:path'
-import { readHarness, httpURL } from './fixtures/harness'
+import { readHarness, httpURL, e2eDir } from './fixtures/harness'
 import { seedControllerMode } from './fixtures/seedStore'
 import { OPERATOR_USER, OPERATOR_PASS, ENROLL_NODE } from './fixtures/config'
 
@@ -11,13 +11,22 @@ import { OPERATOR_USER, OPERATOR_PASS, ENROLL_NODE } from './fixtures/config'
 // the agent enroll/report wire (the REAL internal/agent client via cmd/e2eagent) + the
 // server-truth panel refresh. A node checks in and the Fleet page shows it. Depth (deploy /
 // rekey / revoke) is plan-14's job; this keeps assertions minimal.
+//
+// It also pins the NEGATIVE half of DoD #5's two-boot split at the HTTP layer: the controller
+// boot GATES /api/compile (401 without auth), complementing airgap-design.spec.ts's positive
+// 200 half. (The authoritative server-level assertion is the required Go gate test
+// internal/api/airgap_auth_gate_test.go; this makes the split E2E-observable in both directions.)
 
 const execFileP = promisify(execFile)
 
-test('controller boot: operator login + agent check-in makes the node appear in Fleet', async ({
-  page,
-  context,
-}) => {
+const seedTopology = JSON.parse(
+  fs.readFileSync(path.join(e2eDir, 'fixtures', 'seed-topology.json'), 'utf8'),
+)
+
+test('controller boot: operator login + agent check-in makes the node appear in Fleet', async (
+  { page, context },
+  testInfo,
+) => {
   const h = readHarness()
   const panel = httpURL(h.controller.panel)
 
@@ -29,6 +38,13 @@ test('controller boot: operator login + agent check-in makes the node appear in 
 
   // (1) The controller-mode panel gates on login. Sign in with the seeded operator account.
   await page.goto(`${panel}/`)
+
+  // Two-boot split, negative half: on the controller boot, /api/compile is operator-gated.
+  // Before login there is no session cookie, so an unauthenticated POST is rejected (401) —
+  // the inverse of the air-gap boot's open 200 (airgap-design.spec.ts).
+  const gated = await page.request.post(`${panel}/api/compile`, { data: seedTopology })
+  expect(gated.status()).toBe(401)
+
   await page.locator('#login-username').fill(OPERATOR_USER)
   await page.locator('#login-password').fill(OPERATOR_PASS)
   await page.locator('form button[type="submit"]').click()
@@ -38,12 +54,14 @@ test('controller boot: operator login + agent check-in makes the node appear in 
   // (2) A node enrolls + checks in via the REAL agent client (cmd/e2eagent --mock: enroll +
   // report, the fast deterministic check-in). The single-use enrollment token came from the
   // controller boot's READY line.
+  // Write the throwaway WG key into Playwright's per-test output dir (under test-results/,
+  // gitignored + wiped at the start of every run) so it never accumulates in /tmp.
   const { stdout } = await execFileP(h.agentBin, [
     '--controller', httpURL(h.controller.agent),
     '--node-id', ENROLL_NODE,
     '--token', h.controller.enrollToken,
     '--mock',
-    '--key', path.join(os.tmpdir(), `yaog-e2e-${ENROLL_NODE}-${process.pid}.key`),
+    '--key', testInfo.outputPath('agent.key'),
   ])
   expect(stdout).toContain('E2E_AGENT')
 
