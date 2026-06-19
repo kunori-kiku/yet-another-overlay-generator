@@ -275,6 +275,30 @@ plan's own retirement-note prediction. The reserved `test:unit` is an echo stub 
 `conformance` script). Validated locally: two-boot auth split (airgap `/api/compile` 200 unauth, controller 401),
 full enroll→login→fleet integration, and 5/5 headless green + negative proof.
 
+**Decision (2026-06-19) — plan-14 execution reconciliations (operator-flow E2E suite).** Built on plan-13's
+harness; specs assert via DOM + network + localStorage only (no spec imports controllerClient). Key
+reconciliations, all forced by real constraints discovered while running against Chromium:
+- **Three-boot harness.** plan-13 shipped one controller boot; plan-14 needs a keystone-OFF tenant (no
+  operator credential ever pinned → the `selectServerOperatorPinned()===false` branch) AND a keystone-ON
+  tenant (a pinned signing credential). globalSetup now boots BOTH (own state dirs) + airgap. The keystone
+  spec runs first (alphabetical) and pins only a SIGNING credential on the ON tenant; the WebAuthn/TOTP
+  login legs reuse that tenant and self-clean.
+- **The CDP virtual authenticator does NOT survive a full-page navigation.** So the keystone deploy does the
+  design import + node enrolls (which navigate /design) FIRST, then enrolls the credential and signs the
+  deploy on /deploy with no navigation between. Login passkeys are resident/discoverable and survive a
+  same-document logout (a React re-render), so passwordless + 2FA legs work.
+- **F1 "after a refresh" reconciliation.** The literal reload-then-sign combo is infeasible (the reload kills
+  the authenticator credential). The F1 fix (getTrustlist through `request()` with credentials, no 401) is
+  instead gated by: the keystone deploy's getTrustlist=200 leg (proves request()-path), session.spec's
+  refresh-survival test, AND the required Go gate test. Defensible equivalent coverage, not a scope drop.
+- **TOTP replay watermark** → the login leg waits for the next 30s window so its code is not a replayed step.
+- **Per-spec isolation without a FileStore reset:** specs use UNIQUE node ids per run + freshly-minted
+  enrollment tokens (operator API + CSRF), so the shared keystone-OFF FileStore stays collision-free across
+  specs/runs. WebAuthn RP-IDs require **localhost** (not 127.0.0.1) — a `localhostURL()` helper keeps the port.
+- **Release gate mirrors CI** (5.3): release.yml gate-go now runs the -tags airgap profile + a new gate-e2e
+  runs the Playwright suite. The leakOracle is the runner-level custody gate (structural blank + value
+  sentinels + persist allowlist + ControllerNode-only node cache), run post-deploy/refresh/logout.
+
 **Findings discovered during plan-3 execution (2026-06-18; recorded so they are not lost — none block
 plan-3, which is a no-byte-change freeze):**
 
