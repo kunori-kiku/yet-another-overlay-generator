@@ -2,10 +2,12 @@ import { useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
+import { useUiStore } from '../../stores/uiStore';
 import { t } from '../../i18n';
 import { ThemeToggle } from './ThemeToggle';
 import { LanguageToggle } from './LanguageToggle';
 import { UserMenu } from './UserMenu';
+import { MenuIcon } from './icons';
 import { activeNavItem } from './nav';
 import { FOCUS_RING } from './styles';
 
@@ -21,6 +23,8 @@ export function Topbar() {
   const flushWorkspace = useTopologyStore((s) => s.flushWorkspace);
   const mode = useControllerStore((s) => s.mode);
   const importDesignToServer = useControllerStore((s) => s.importDesignToServer);
+  const mobileNavOpen = useUiStore((s) => s.mobileNavOpen);
+  const setMobileNavOpen = useUiStore((s) => s.setMobileNavOpen);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const active = activeNavItem(location.pathname);
@@ -67,6 +71,18 @@ export function Topbar() {
 
   return (
     <header className="app-chrome flex h-14 shrink-0 items-center gap-3 border-b border-[var(--hairline)] px-4">
+      {/* Hamburger: opens the off-canvas sidebar drawer below lg. The docked
+          sidebar takes over at lg+, so this is hidden there. ≥44px tap target. */}
+      <button
+        type="button"
+        onClick={() => setMobileNavOpen(true)}
+        aria-label={t(language, 'shell.openNav')}
+        aria-controls="mobile-nav-drawer"
+        aria-expanded={mobileNavOpen}
+        className={`-ml-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[var(--content-muted)] transition-colors hover:bg-[var(--surface-sunken)] hover:text-[var(--content)] lg:hidden ${FOCUS_RING}`}
+      >
+        <MenuIcon />
+      </button>
       <span className="text-sm font-medium text-[var(--content)]">
         {active ? t(language, active.labelKey) : ''}
       </span>
