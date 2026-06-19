@@ -26,11 +26,11 @@ export function OverviewPage() {
   const heading = 'mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--content-muted)]';
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="h-full overflow-y-auto p-3 sm:p-6">
       <div className="mx-auto max-w-4xl space-y-8">
         <section>
           <h2 className={heading}>{t(language, 'overviewTopologyHeading')}</h2>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Stat label={t(language, 'overviewDomains')} value={domains.length} />
             <Stat label={t(language, 'overviewNodes')} value={nodes.length} />
             <Stat label={t(language, 'overviewEdges')} value={edges.length} />
@@ -39,7 +39,7 @@ export function OverviewPage() {
 
         <section>
           <h2 className={heading}>{t(language, 'overviewControllerHeading')}</h2>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Stat label={t(language, 'overviewFleetNodes')} value={fleetNodes.length} />
             <Stat
               label={t(language, 'overviewLastDeploy')}

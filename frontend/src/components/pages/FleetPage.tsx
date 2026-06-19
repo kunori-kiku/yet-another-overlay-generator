@@ -46,7 +46,7 @@ export function FleetPage() {
   }, [live, loggedIn, refresh]);
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
+    <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-6">
       <ControllerErrorBanner />
       <div className="flex justify-end">
         <label className="flex items-center gap-2 text-xs text-gray-400">

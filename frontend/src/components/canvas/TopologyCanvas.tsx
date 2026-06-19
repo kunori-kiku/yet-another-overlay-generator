@@ -54,7 +54,15 @@ function edgeRenderEqual(a: FlowEdge, b: FlowEdge): boolean {
   return keys.every((k) => da[k] === db[k]);
 }
 
-export function TopologyCanvas() {
+// `editable` defaults to true so any caller omitting it keeps the full desktop
+// edit behavior (the desktop regression guard). DesignPage owns the breakpoint and
+// passes editable={false} for the below-lg read-only preview; the canvas itself
+// stays presentational and never calls useIsDesktop().
+interface TopologyCanvasProps {
+  editable?: boolean;
+}
+
+export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
   const {
     nodes: topoNodes,
     edges: topoEdges,
@@ -351,6 +359,9 @@ export function TopologyCanvas() {
       onNodesChange(changes);
       for (const change of changes) {
         if (change.type === 'remove') {
+          // Belt-and-braces: even with elementsSelectable={false} the read-only
+          // view must never mutate the store. Skip the removal write when not editable.
+          if (!editable) continue;
           delete positionMap.current[change.id];
           removeTopoNode(change.id);
         }
@@ -360,7 +371,7 @@ export function TopologyCanvas() {
         }
       }
     },
-    [onNodesChange, removeTopoNode]
+    [onNodesChange, removeTopoNode, editable]
   );
 
   const handleEdgesChange = useCallback(
@@ -368,11 +379,13 @@ export function TopologyCanvas() {
       onEdgesChange(changes);
       for (const change of changes) {
         if (change.type === 'remove') {
+          // Belt-and-braces: never let a read-only view delete an edge from the store.
+          if (!editable) continue;
           removeTopoEdge(change.id);
         }
       }
     },
-    [onEdgesChange, removeTopoEdge]
+    [onEdgesChange, removeTopoEdge, editable]
   );
 
   // Sync data changes (name, role, interfaces, etc.) into React Flow state without overwriting
@@ -505,6 +518,9 @@ export function TopologyCanvas() {
 
   const onConnect = useCallback(
     (params: Connection) => {
+      // Inert in the read-only preview (nodesConnectable={false} already prevents the
+      // gesture; this guard makes it impossible for a stray connection to add an edge).
+      if (!editable) return;
       setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', pending: true, parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
 
       if (params.source && params.target) {
@@ -530,20 +546,23 @@ export function TopologyCanvas() {
         selectEdge(id);
       }
     },
-    [setEdges, addTopoEdge, topoNodes, selectEdge]
+    [setEdges, addTopoEdge, topoNodes, selectEdge, editable]
   );
 
   // Focus opacity (Decisions #11): a connection drag starting -> set connecting (all edges deemphasized, nodes bright).
+  // Inert when not editable — no connection can start in the read-only preview.
   const onConnectStart = useCallback(() => {
+    if (!editable) return;
     setConnecting(true);
-  }, []);
+  }, [editable]);
 
   // onConnectEnd always clears connecting -- including drags cancelled mid-way (dropped on empty
   // space), so focus opacity returns to normal after the drag ends (on a successful connection,
   // onConnect has already handled selecting the new edge before this runs).
   const onConnectEnd = useCallback(() => {
+    if (!editable) return;
     setConnecting(false);
-  }, []);
+  }, [editable]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: FlowNode) => {
@@ -605,13 +624,23 @@ export function TopologyCanvas() {
       onPaneClick={onPaneClick}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
+      // Read-only preview (below lg): turn off all edit interactions while leaving
+      // pan/zoom at their defaults (touch pan/pinch still work). When editable all
+      // three are true — identical to React Flow's editing defaults, so desktop is
+      // behaviorally unchanged.
+      nodesDraggable={editable}
+      nodesConnectable={editable}
+      elementsSelectable={editable}
       fitView
       fitViewOptions={{ padding: 0.2, duration: 400 }}
       className="bg-gray-900"
     >
       <Background color="#374151" gap={20} />
       <Controls className="!bg-gray-700 !border-gray-600 !text-gray-300" />
-      {/* Canvas toolbar: auto-layout + interface-detail toggle */}
+      {/* Canvas toolbar: auto-layout + interface-detail toggle. Hidden in the
+          read-only preview — auto-layout mutates node positions and the controls are
+          fiddly on a phone; Controls (pan/zoom) and MiniMap stay for read-only use. */}
+      {editable && (
       <Panel position="top-left" className="flex items-center gap-2">
         <button
           onClick={runAutoLayout}
@@ -629,6 +658,7 @@ export function TopologyCanvas() {
           {t(language, 'showInterfacesLabel')}
         </label>
       </Panel>
+      )}
       <MiniMap
         nodeColor={(n) => {
           const role = (n.data as Record<string, unknown>)?.role as string;

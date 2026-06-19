@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
+import { Drawer } from './Drawer';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useUiStore } from '../../stores/uiStore';
 import { LoginPage } from '../auth/LoginPage';
 import { NoticeBanner } from './NoticeBanner';
 import { t } from '../../i18n';
@@ -31,6 +33,8 @@ export function Shell() {
   const importClearedKeys = useTopologyStore((s) => s.importClearedKeys);
   const dismissImportNotice = useTopologyStore((s) => s.dismissImportNotice);
   const language = useTopologyStore((s) => s.language);
+  const mobileNavOpen = useUiStore((s) => s.mobileNavOpen);
+  const closeMobileNav = useUiStore((s) => s.closeMobileNav);
 
   // The gate must not flash: until the session probe for the CURRENT controller-mode
   // entry resolves, show neither the canvas (cookie may be valid) nor the login page
@@ -86,7 +90,20 @@ export function Shell() {
       >
         {t(language, 'skipToContent')}
       </a>
-      <Sidebar />
+      {/* Desktop (lg+): docked sidebar. Below lg it is hidden in favor of the
+          off-canvas Drawer below, opened by the Topbar hamburger. */}
+      <Sidebar className="hidden lg:flex" />
+      {/* Off-canvas mobile nav. Strictly in the post-gate tree (never the login
+          /splash branches) so a logged-out 360px viewport leaks no chrome. */}
+      <Drawer
+        open={mobileNavOpen}
+        onClose={closeMobileNav}
+        side="left"
+        ariaLabel={t(language, 'shell.navDrawerLabel')}
+        id="mobile-nav-drawer"
+      >
+        <Sidebar variant="drawer" />
+      </Drawer>
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar />
         {/* plan-4 (D9): the local design was replaced by the server copy + a backup

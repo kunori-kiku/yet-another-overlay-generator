@@ -130,7 +130,7 @@ export function AuditView() {
   return (
     // Self-sizing section (was a full-screen h-full view): now stacks inside the
     // /security page, which owns the scroll.
-    <div className="flex flex-col p-6 space-y-6">
+    <div className="flex flex-col p-3 sm:p-6 space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-white">{t(language, 'compileHistoryTitle')}</h2>
         <button onClick={clearHistory} className="px-3 py-1.5 bg-red-800 hover:bg-red-700 text-sm rounded">{t(language, 'chClearHistory')}</button>

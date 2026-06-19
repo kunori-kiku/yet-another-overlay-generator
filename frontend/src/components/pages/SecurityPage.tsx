@@ -15,7 +15,7 @@ export function SecurityPage() {
   const mode = useControllerStore((s) => s.mode);
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
+    <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-6">
       {mode === 'controller' ? (
         <>
           <ControllerErrorBanner />

@@ -108,7 +108,7 @@ export function EnrollmentFlow() {
           <select
             value={nodeId}
             onChange={(e) => setNodeId(e.target.value)}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-2 bg-gray-600 rounded text-sm border border-gray-500"
           >
             <option value="">{t(language, 'enrollmentFlow.selectANode')}</option>
             {topoNodes.map((n) => (
@@ -125,14 +125,14 @@ export function EnrollmentFlow() {
             min={1}
             value={ttlSeconds}
             onChange={(e) => setTtlSeconds(parseInt(e.target.value, 10) || 0)}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-2 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
           />
         </div>
         <div className="md:col-span-1">
           <button
             onClick={handleMint}
             disabled={minting || !nodeId || ttlSeconds <= 0}
-            className="w-full py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            className="w-full py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
           >
             {minting
               ? t(language, 'enrollmentFlow.minting')
@@ -192,7 +192,7 @@ export function EnrollmentFlow() {
               </label>
               <button
                 onClick={() => copyText(bootstrapCommand, 'bootstrap')}
-                className="px-2 py-0.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded text-gray-100"
+                className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded text-gray-100"
               >
                 {copied === 'bootstrap' ? t(language, 'enrollmentFlow.copied') : t(language, 'enrollmentFlow.copy')}
               </button>
@@ -214,7 +214,7 @@ export function EnrollmentFlow() {
               </label>
               <button
                 onClick={() => copyText(enrollCommand, 'enroll')}
-                className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
               >
                 {copied === 'enroll' ? t(language, 'enrollmentFlow.copied_2') : t(language, 'enrollmentFlow.copy_2')}
               </button>
