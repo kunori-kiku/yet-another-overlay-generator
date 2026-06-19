@@ -35,6 +35,8 @@ import type {
 import { deriveClientConfigs, derivePeers } from './peers';
 import type { PairAllocation } from './peers';
 import { renderAllBabelConfigs } from './renderers/babel';
+import { renderDeployScripts } from './renderers/deploy';
+import { renderAllInstallScripts } from './renderers/script';
 import { renderAllSysctlConfigs } from './renderers/sysctl';
 import {
   renderAllWireGuardConfigs,
@@ -305,6 +307,27 @@ export function compile(
   const babelConfigs = renderAllBabelConfigs(compiledTopo, peerMap);
   const sysctlConfigs = renderAllSysctlConfigs(compiledTopo);
 
+  // Install scripts (per-node) + deploy scripts (project-level bash + ps1). Mirrors render.AllWith's
+  // tail (render.go:356-401): the install-script loop (signing is a NO-OP in local mode; the AgentHeld
+  // splice is detected per-node from the keys map's placeholder private key) and RenderDeployScripts.
+  // artifacts.json stays empty in local mode (no catalog → the D4 guard omits the file).
+  const installScripts = renderAllInstallScripts(
+    compiledTopo,
+    peerMap,
+    babelConfigs,
+    clientConfigs,
+    keys,
+  );
+  const { bash: deployBash, ps1: deployPS1 } = renderDeployScripts(
+    compiledTopo,
+    peerMap,
+    babelConfigs,
+  );
+  const deployScripts: Record<string, string> = {
+    'deploy-all.sh': deployBash,
+    'deploy-all.ps1': deployPS1,
+  };
+
   // The compile manifest. compiled_at + checksum are display-only and OUT of the conformance byte set
   // (the harness excludes them); they are filled by the Phase-4 / plan-6 caller that owns the clock.
   const manifest: CompileManifest = {
@@ -324,9 +347,9 @@ export function compile(
     wireGuardConfigs,
     babelConfigs,
     sysctlConfigs,
-    installScripts: {},
+    installScripts,
     artifactsJSON: {},
-    deployScripts: {},
+    deployScripts,
     clientConfigs,
     warnings,
     manifest,

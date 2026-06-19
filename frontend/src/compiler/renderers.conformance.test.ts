@@ -43,6 +43,13 @@ interface OnDiskFixture {
 interface GoldenManifest {
   verdict: { validator: string[]; apierr: string[] };
   files: Record<string, Record<string, string>> | null;
+  // deploy carries the project-level deploy scripts (deploy-all.sh / deploy-all.ps1) — name->content.
+  deploy: Record<string, string> | null;
+  // signatures is populated only when the fixture opts into bundle signing (signing-on). A signed
+  // bundle's install.sh embeds the SigningPubkeyPEM verify block, which local-mode (no signer) does NOT
+  // reproduce — so install.sh byte-equality is SKIPPED for those fixtures (the splice block IS
+  // reproduced via custody, but the signing block is plan-4 out-of-scope per the io-contract).
+  signatures: Record<string, string> | null;
 }
 
 // resolveCustody mirrors golden_test.go:132-138 ("airgap"|""->airgap, "agentheld"->agentheld).
@@ -104,13 +111,19 @@ function renderBundleFilesFrom(
   for (const nodeID of Object.keys(result.sysctlConfigs)) {
     ensure(nodeID)['sysctl/99-overlay.conf'] = result.sysctlConfigs[nodeID];
   }
+  for (const nodeID of Object.keys(result.installScripts)) {
+    ensure(nodeID)['install.sh'] = result.installScripts[nodeID];
+  }
   return out;
 }
 
-// The relpaths THIS step renders (the others — install.sh, artifacts.json — are later substeps).
+// The relpaths the renderers produce: wireguard/<iface>.conf (incl. wg0), babel/babeld.conf,
+// sysctl/99-overlay.conf, and install.sh (substep 22). artifacts.json is excluded — it is omitted in
+// local mode (no catalog → D4) and is the export substep's concern, never rendered here.
 const RENDERED_RELPATHS = new Set([
   'babel/babeld.conf',
   'sysctl/99-overlay.conf',
+  'install.sh',
 ]);
 const isRenderedRelpath = (relpath: string): boolean =>
   RENDERED_RELPATHS.has(relpath) || relpath.startsWith('wireguard/');
@@ -130,6 +143,15 @@ describe('renderer gate: TS renderers == Go golden files (wireguard + babel + sy
       continue;
     }
 
+    // A bundle-signing fixture (signatures present) embeds the SigningPubkeyPEM verify block in its
+    // golden install.sh — local mode has no signer, so install.sh CANNOT match byte-for-byte (signing is
+    // a plan-4-scoped NO-OP). Drop install.sh from the comparison for those fixtures; every other
+    // rendered file (incl. the AgentHeld splice, which local mode DOES reproduce) is still pinned.
+    const skipInstallSh =
+      golden.signatures !== null && Object.keys(golden.signatures).length > 0;
+    const compareRelpath = (relpath: string): boolean =>
+      isRenderedRelpath(relpath) && !(skipInstallSh && relpath === 'install.sh');
+
     it(`${name}`, () => {
       const result = compile(fixture.topology, resolveCustody(fixture.custody));
       const rendered = renderBundleFilesFrom(result);
@@ -138,18 +160,18 @@ describe('renderer gate: TS renderers == Go golden files (wireguard + babel + sy
         Record<string, string>
       >;
 
-      // For every golden node, assert every rendered relpath (wg/babel/sysctl) matches byte-for-byte,
-      // AND that the TS produced exactly the same SET of rendered relpaths the golden carries for that
-      // node (no missing / extra wg interface).
+      // For every golden node, assert every rendered relpath (wg/babel/sysctl/install.sh) matches
+      // byte-for-byte, AND that the TS produced exactly the same SET of rendered relpaths the golden
+      // carries for that node (no missing / extra wg interface).
       for (const nodeID of Object.keys(goldenFiles)) {
         const goldenNode = goldenFiles[nodeID];
         const renderedNode = rendered[nodeID] ?? {};
 
         const goldenRendered = Object.keys(goldenNode)
-          .filter(isRenderedRelpath)
+          .filter(compareRelpath)
           .sort();
         const tsRendered = Object.keys(renderedNode)
-          .filter(isRenderedRelpath)
+          .filter(compareRelpath)
           .sort();
         expect(tsRendered, `node ${nodeID} rendered relpath set`).toEqual(
           goldenRendered,
@@ -160,6 +182,17 @@ describe('renderer gate: TS renderers == Go golden files (wireguard + babel + sy
             renderedNode[relpath],
             `node ${nodeID} file ${relpath}`,
           ).toBe(goldenNode[relpath]);
+        }
+      }
+
+      // Project-level deploy scripts (deploy-all.sh / deploy-all.ps1) — byte-equal for ALL success
+      // fixtures (deploy is signing-independent, so signed fixtures are included here).
+      if (golden.deploy !== null) {
+        for (const name of Object.keys(golden.deploy)) {
+          expect(
+            result.deployScripts[name],
+            `deploy ${name}`,
+          ).toBe(golden.deploy[name]);
         }
       }
     });

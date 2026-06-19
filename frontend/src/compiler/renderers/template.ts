@@ -174,6 +174,13 @@ type Node =
       pipeline: PipelineExpr;
       body: Node[];
       elseBody: Node[] | null;
+      // Optional loop variables for the `{{ range $i, $v := PIPELINE }}` (index + value) and
+      // `{{ range $v := PIPELINE }}` (value-only) forms. null when the range binds no variables
+      // (`{{ range PIPELINE }}` — the dot is the only iteration binding). Mirrors Go's range var
+      // assignment: with one var $v binds the element (same as dot), with two ($i, $v) $i binds the
+      // 0-based index and $v the element.
+      indexVar: string | null;
+      valueVar: string | null;
     }
   | {
       kind: 'with';
@@ -198,6 +205,7 @@ type Term =
   | { kind: 'root' } // $
   | { kind: 'rootField'; path: string[] } // $.A.B
   | { kind: 'var'; name: string } // $x
+  | { kind: 'varField'; name: string; path: string[] } // $x.A.B
   | { kind: 'number'; value: number } // 0, 25, ...
   | { kind: 'string'; value: string } // "..."
   | { kind: 'bool'; value: boolean }; // true / false
@@ -223,6 +231,16 @@ function parseTerm(tok: string): Term {
     return { kind: 'rootField', path: tok.slice(2).split('.') };
   }
   if (tok.startsWith('$')) {
+    // $x or $x.A.B — a variable reference, optionally with a trailing field path. Split on the FIRST
+    // '.' so a bare $x has an empty path and $iface.Name yields name="iface", path=["Name"].
+    const dot = tok.indexOf('.');
+    if (dot !== -1) {
+      return {
+        kind: 'varField',
+        name: tok.slice(1, dot),
+        path: tok.slice(dot + 1).split('.'),
+      };
+    }
     return { kind: 'var', name: tok.slice(1) };
   }
   if (tok.startsWith('.')) {
@@ -348,7 +366,22 @@ function parseNodes(
       case 'if':
       case 'range':
       case 'with': {
-        const pipeline = parsePipeline(inner.slice(word.length).trim());
+        const rest = inner.slice(word.length).trim();
+        // range supports loop-variable binding: `range $i, $v := PIPELINE` (index + value) and
+        // `range $v := PIPELINE` (value-only). Strip the binding before parsing the pipeline; if/with
+        // never bind variables in the YAOG templates, so they parse the rest directly.
+        let indexVar: string | null = null;
+        let valueVar: string | null = null;
+        let pipelineSrc = rest;
+        if (word === 'range') {
+          const binding = parseRangeBinding(rest);
+          if (binding !== null) {
+            indexVar = binding.indexVar;
+            valueVar = binding.valueVar;
+            pipelineSrc = binding.pipelineSrc;
+          }
+        }
+        const pipeline = parsePipeline(pipelineSrc);
         const body = parseNodes(cur, new Set(['else', 'end']));
         let elseBody: Node[] | null = null;
         let terminator = body.terminator;
@@ -360,7 +393,18 @@ function parseNodes(
         if (terminator !== 'end') {
           throw new Error(`template: unterminated {{ ${word} }}`);
         }
-        nodes.push({ kind: word, pipeline, body: body.nodes, elseBody });
+        if (word === 'range') {
+          nodes.push({
+            kind: 'range',
+            pipeline,
+            body: body.nodes,
+            elseBody,
+            indexVar,
+            valueVar,
+          });
+        } else {
+          nodes.push({ kind: word, pipeline, body: body.nodes, elseBody });
+        }
         break;
       }
       default: {
@@ -375,6 +419,28 @@ function parseNodes(
       }
     }
   }
+}
+
+// parseRangeBinding recognizes a range loop-variable assignment: `$i, $v := PIPELINE` (index + value)
+// or `$v := PIPELINE` (value-only), returning the bound variable names plus the remaining pipeline
+// source. Returns null when the range has no `:=` binding (the `range PIPELINE` form). Mirrors Go's
+// template range syntax. Variable names are the bare identifiers (no leading '$').
+function parseRangeBinding(
+  src: string,
+): { indexVar: string | null; valueVar: string; pipelineSrc: string } | null {
+  // Two-variable form: $i, $v := PIPELINE
+  const two = src.match(
+    /^\$([A-Za-z_][A-Za-z0-9_]*)\s*,\s*\$([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(.+)$/s,
+  );
+  if (two !== null) {
+    return { indexVar: two[1], valueVar: two[2], pipelineSrc: two[3].trim() };
+  }
+  // One-variable form: $v := PIPELINE
+  const one = src.match(/^\$([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(.+)$/s);
+  if (one !== null) {
+    return { indexVar: null, valueVar: one[1], pipelineSrc: one[2].trim() };
+  }
+  return null;
 }
 
 // parseAssignment recognizes {{ $name := pipeline }} and returns an assign node, or null if the action
@@ -446,6 +512,12 @@ function evalTerm(term: Term, ctx: EvalContext): unknown {
         throw new Error(`template: undefined variable $${term.name}`);
       }
       return ctx.vars.get(term.name);
+    }
+    case 'varField': {
+      if (!ctx.vars.has(term.name)) {
+        throw new Error(`template: undefined variable $${term.name}`);
+      }
+      return resolveField(ctx.vars.get(term.name), term.path);
     }
     case 'number':
       return term.value;
@@ -604,10 +676,19 @@ function renderNodes(nodes: Node[], ctx: EvalContext, out: string[]): void {
           }
           break;
         }
-        for (const item of items) {
+        for (let idx = 0; idx < items.length; idx++) {
+          const item = items[idx];
           // Go's range gives each iteration a fresh variable scope but a SHARED outer scope; reusing
           // the same vars map is faithful for the YAOG templates (no per-iteration $x:= shadowing that
-          // must reset). The dot becomes the element; $ stays the root.
+          // must reset). The dot becomes the element; $ stays the root. When the range binds loop
+          // variables (`range $i, $v := ...` / `range $v := ...`), set them per iteration: $v = element,
+          // $i = 0-based index — matching Go's two-variable range.
+          if (node.valueVar !== null) {
+            ctx.vars.set(node.valueVar, item);
+          }
+          if (node.indexVar !== null) {
+            ctx.vars.set(node.indexVar, idx);
+          }
           renderNodes(node.body, { ...ctx, dot: item }, out);
         }
         break;
