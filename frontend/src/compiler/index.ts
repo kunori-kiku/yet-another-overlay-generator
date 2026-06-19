@@ -374,3 +374,14 @@ export function validate(topo: Topology): {
 }
 
 export { generateRouterID } from './peers';
+
+// Re-export the export-bundle surface so the public library exposes the per-node ZIP builder
+// (exportArtifacts, mirroring /api/export) plus the in-memory files/checksums builders the conformance
+// harness compares byte-for-byte against the Go golden.
+export {
+  exportArtifacts,
+  buildFiles,
+  buildChecksums,
+  canonicalize,
+  bundleFiles,
+} from './export';
