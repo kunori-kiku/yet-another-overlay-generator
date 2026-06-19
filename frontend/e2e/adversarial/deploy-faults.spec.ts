@@ -123,3 +123,11 @@ test('fault at post-deploy reconcile (topology GET after promote): deploy STILL 
   // No error banner: the reconcile is best-effort, so its failure is swallowed.
   await expect(errorBanner(page)).toBeHidden()
 })
+
+// NOTE on the keystone-ON trustlist-signature step: a fault there drives the SAME deploy() catch as
+// the getTrustlist-500 leg above (abort BEFORE promote, coherent error, Deploy re-enabled) — `signing`
+// is already cleared by the inner finally before the signature POST, so there is no signing-flag-
+// specific contract beyond that shared catch. A dedicated keystone-ON signature-FAULT spec is
+// deliberately NOT added here: it would require a THIRD operator-signing-credential enrollment on the
+// SHARED single-credential controllerOn boot, stranding deploy-keystone.spec (which owns the
+// signature-ACCEPTED happy path and assumes it is the first/only enroller). See docs/spec/rc1/3.4-findings.md.

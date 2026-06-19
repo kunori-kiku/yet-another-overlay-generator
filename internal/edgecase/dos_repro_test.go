@@ -50,21 +50,44 @@ func codeOf(err error) apierr.Code {
 }
 
 // measureBoundedCompile compiles topo under dosDeadline and returns (elapsed, err). It FAILS the
-// test if the compile does not return before the deadline (the hang tripwire) — that is the single
-// invariant every DoS repro shares: bounded cost. Per-repro assertions on top (e.g. S1's specific
-// coded error) are layered by the caller. This is the helper plan-8/1.8 already flipped for S1 and
-// that the post-rc.1 S2/S3 work flips next.
+// test if the compile does not return before the deadline (the hang tripwire) — the single invariant
+// every DoS repro shares: bounded cost. Per-repro assertions on top (e.g. S1's specific coded error)
+// are layered by the caller. This is the helper plan-8/1.8 already flipped for S1 and that the
+// post-rc.1 S2/S3 work flips next.
+//
+// The deadline is a real WALL-CLOCK tripwire: the compile runs in a goroutine and we select on its
+// completion vs time.After(dosDeadline). context.WithTimeout alone is NOT enough — it cannot preempt
+// a CPU-bound path that does not poll ctx (the S2/S3 gap-fill is exactly that), so a true
+// unbounded/quadratic regression would otherwise block here until the package `go test` 10m timeout
+// panic-dumps instead of failing fast at dosDeadline. (Same preemptive pattern as the HTTP tier's
+// postCompile.) ctx is still passed so the S1 allocator path can honor it; errors.Is(DeadlineExceeded)
+// stays as the secondary signal for a ctx-honoring path.
 func measureBoundedCompile(t *testing.T, topo model.Topology) (time.Duration, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), dosDeadline)
 	defer cancel()
+
+	type outcome struct{ err error }
+	done := make(chan outcome, 1) // buffered so the goroutine never leaks-block on a tripwire failure
 	start := time.Now()
-	_, err := Compile(ctx, topo)
-	elapsed := time.Since(start)
-	if errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("compile did not return within %s — unbounded-cost regression", dosDeadline)
+	go func() {
+		_, err := Compile(ctx, topo)
+		done <- outcome{err}
+	}()
+
+	select {
+	case o := <-done:
+		elapsed := time.Since(start)
+		if errors.Is(o.err, context.DeadlineExceeded) {
+			t.Fatalf("compile did not return within %s — unbounded-cost regression (ctx deadline)", dosDeadline)
+		}
+		return elapsed, o.err
+	case <-time.After(dosDeadline):
+		// Still running past the wall clock: a CPU-bound path that does not poll ctx. Fail fast and
+		// loud (the goroutine is abandoned; the test binary exits) rather than hanging to the 10m cap.
+		t.Fatalf("compile did not return within %s — unbounded-cost regression (wall-clock tripwire)", dosDeadline)
+		return 0, nil // unreachable: t.Fatalf calls runtime.Goexit
 	}
-	return elapsed, err
 }
 
 // TestDoSAllocatorScanBudget (S1) — REGRESSION LOCK on plan-8's landed scan-budget cap. A /8 domain
@@ -87,7 +110,7 @@ func TestDoSAllocatorScanBudget(t *testing.T) {
 // (the in-loop periodic poll is unit-tested in internal/allocator). The /12 domain is fully
 // reserved, so without ctx the allocator would scan its whole ~1M host range to pool-exhaustion.
 func TestDoSAllocatorContextHonored(t *testing.T) {
-	d := dom("d1", "10.0.0.0/12")           // ~1M hosts: in-budget, so the scan loop would actually run
+	d := dom("d1", "10.0.0.0/12")              // ~1M hosts: in-budget, so the scan loop would actually run
 	d.ReservedRanges = []string{"10.0.0.0/12"} // every candidate reserved → full scan to exhaustion
 	topo := model.Topology{Project: proj("dos-ctx"), Domains: []model.Domain{d}, Nodes: []model.Node{router("r1")}}
 

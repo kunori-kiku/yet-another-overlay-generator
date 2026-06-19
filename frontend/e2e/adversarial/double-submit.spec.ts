@@ -6,7 +6,11 @@ import {
   keystoneOffTarget,
   prepareUniqueDesign,
   selectNodeAndRename,
+  mintEnrollToken,
+  enrollNodeViaAgent,
 } from '../fixtures/panel'
+import { runId } from '../fixtures/designs'
+import { OPERATOR_USER, OPERATOR_PASS } from '../fixtures/config'
 import { installFaults } from './faults'
 
 // double-submit.spec.ts (plan-16 / 3.4, Phase 7) — re-entrancy / idempotency of the deploy() and
@@ -92,4 +96,79 @@ test('a re-entrant Save during an in-flight save produces a single update-topolo
     faults.count('update-topology', 'POST'),
     'a re-entrant Save must not double-POST update-topology (saving guard)',
   ).toBe(1)
+})
+
+// The remaining three actions plan-16 Phase 7 step 11 names — login / Roll-keys / revoke — share the
+// same in-flight-`loading` + disabled-button pattern proven double-POSTable for Deploy, so each got
+// the same idempotency early-return guard; these probes pin that a synthetic re-click issues one POST.
+
+test('a re-entrant login submit produces a single login POST', async ({ page, context }) => {
+  const target = keystoneOffTarget(readHarness())
+  await seedAndGotoController(page, context, target) // lands on the LoginPage
+
+  const faults = await installFaults(page, [{ route: 'login', method: 'POST', delayMs: 1500 }])
+  await page.locator('#login-username').fill(OPERATOR_USER)
+  await page.locator('#login-password').fill(OPERATOR_PASS)
+  const submit = page.locator('form button[type="submit"]')
+  await submit.click() // login() fires; loading:true; the login POST is held ~1.5s
+  await submit.dispatchEvent('click') // re-entrant submit during the in-flight login
+  await submit.dispatchEvent('click')
+
+  // The login completes and the form detaches; exactly one login POST was issued (no extra
+  // rate-limit attempt burned).
+  await expect(page.locator('#login-username')).toBeHidden({ timeout: 20_000 })
+  expect(faults.count('login', 'POST'), 'a re-entrant login must not double-POST').toBe(1)
+})
+
+test('a re-entrant Roll-keys produces a single rekey-all POST', async ({ page, context }, testInfo) => {
+  const h = readHarness()
+  const target = keystoneOffTarget(h)
+  page.on('dialog', (d) => void d.accept()) // accept the import confirm AND each Roll-keys confirm
+  await seedAndGotoController(page, context, target)
+  await loginAsOperator(page)
+  await prepareUniqueDesign(page, context, h, target, testInfo)
+  await page.goto(`${target.panel}/deploy`)
+
+  const faults = await installFaults(page, [{ route: 'rekey-all', method: 'POST', delayMs: 1500 }])
+  const rollKeys = page.locator('button.bg-purple-700') // Roll-keys; stable base class
+  const rekeyP = page.waitForResponse(
+    (r) => r.url().includes('/operator/rekey-all') && r.request().method() === 'POST',
+    { timeout: 20_000 },
+  )
+  await rollKeys.click() // confirm accepted → rollKeys(); loading:true; rekey-all held
+  await expect(rollKeys).toBeDisabled()
+  await rollKeys.dispatchEvent('click') // each re-click re-confirms → rollKeys() → guard drops it
+  await rollKeys.dispatchEvent('click')
+
+  await rekeyP
+  expect(faults.count('rekey-all', 'POST'), 'a re-entrant Roll-keys must not double-POST rekey-all').toBe(1)
+})
+
+test('a re-entrant Revoke produces a single revoke POST', async ({ page, context }, testInfo) => {
+  const h = readHarness()
+  const target = keystoneOffTarget(h)
+  page.on('dialog', (d) => void d.accept()) // accept each Revoke confirm
+  await seedAndGotoController(page, context, target)
+  await loginAsOperator(page)
+
+  // Enroll a uniquely-named node so its registry row is unambiguous, then drive its Revoke.
+  const node = `ds-rev-${runId(process.pid, testInfo.workerIndex, Date.now())}`
+  const tok = await mintEnrollToken(page, context, target.panel, node)
+  await enrollNodeViaAgent(h, target.agent, node, tok, testInfo.outputPath('dsrev.key'))
+  await page.goto(`${target.panel}/fleet`)
+  const row = page.locator('table tr').filter({ hasText: node })
+  const revoke = row.getByRole('button', { name: 'Revoke' })
+  await expect(revoke).toBeVisible({ timeout: 15_000 })
+
+  const faults = await installFaults(page, [{ route: 'revoke', method: 'POST', delayMs: 1500 }])
+  const revokeP = page.waitForResponse(
+    (r) => r.url().includes('/operator/revoke') && r.request().method() === 'POST',
+    { timeout: 20_000 },
+  )
+  await revoke.click() // confirm accepted → revoke(); loading:true; revoke held
+  await revoke.dispatchEvent('click') // re-confirm → revoke() → guard drops it
+  await revoke.dispatchEvent('click')
+
+  await revokeP
+  expect(faults.count('revoke', 'POST'), 'a re-entrant Revoke must not double-POST').toBe(1)
 })

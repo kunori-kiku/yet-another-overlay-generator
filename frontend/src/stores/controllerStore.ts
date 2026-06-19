@@ -763,6 +763,10 @@ export const useControllerStore = create<ControllerState>()(
       // break-glass token (see configOf). On failure, echo the controller's raw error (401
       // invalid username or password / 429 too many attempts).
       login: async (username, password, totp) => {
+        // Idempotency guard (plan-16 / 3.4): drop a re-entrant submit while a login is in flight
+        // (the submit button disables on `loading`, but a synthetic re-click bubbles past it). A
+        // duplicate login POST would otherwise burn a second rate-limit attempt.
+        if (get().loading) return;
         set({ loading: true, error: null });
         try {
           const outcome = await ctlLogin(configOf(get()), username, password, totp);
@@ -1744,6 +1748,9 @@ export const useControllerStore = create<ControllerState>()(
 
       // Refresh the view after evicting a node.
       revoke: async (nodeId) => {
+        // Idempotency guard (plan-16 / 3.4): drop a re-entrant revoke while one is in flight (the
+        // Revoke button disables on `loading`, but a synthetic re-click bubbles past it).
+        if (get().loading) return;
         set({ loading: true, error: null });
         try {
           await revoke(configOf(get()), nodeId);
@@ -1764,6 +1771,10 @@ export const useControllerStore = create<ControllerState>()(
       // operator must Deploy again, and the new generation of configs carrying everyone's new
       // public keys converges the fleet.
       rollKeys: async () => {
+        // Idempotency guard (plan-16 / 3.4): drop a re-entrant Roll-keys while one is in flight. The
+        // Roll-keys button shares the SAME `loading`/disabled guard as Deploy, so the proven
+        // synthetic-re-click-bubbles-past-disabled double-POST applies identically here.
+        if (get().loading) return;
         set({ loading: true, error: null });
         try {
           await rekeyAll(configOf(get()));
