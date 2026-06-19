@@ -115,31 +115,31 @@ async function globalSetup(): Promise<void> {
   }
 
   fs.mkdirSync(harnessDir, { recursive: true })
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yaog-e2e-'))
+  const offDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yaog-e2e-off-'))
+  const onDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yaog-e2e-on-'))
+  const tmpDirs = [offDir, onDir]
 
-  // Boot both servers. The controller boot owns the temp state dir, the seeded operator, the
-  // pre-minted enrollment token, and the agent port; the air-gap boot only serves the panel
-  // + the unauthenticated compute routes. allSettled (not Promise.all) so that if ONE boot
-  // fails, the OTHER's resolved child is still reachable for cleanup — Playwright does NOT run
-  // globalTeardown when globalSetup throws, so this function must clean up after itself or it
-  // leaks an orphan process + temp dir (DoD #2 / hermeticity).
+  const controllerArgs = (stateDir: string): string[] => [
+    '--mode', 'controller',
+    '--state-dir', stateDir,
+    '--tenant', TENANT,
+    '--operator-user', OPERATOR_USER,
+    '--operator-pass', OPERATOR_PASS,
+    '--enroll-node', ENROLL_NODE,
+    '--web-dir', webDir,
+    '--addr', '127.0.0.1:0',
+    '--agent-addr', '127.0.0.1:0',
+    '--secure-cookie=false',
+  ]
+
+  // Boot three servers: the keystone-OFF controller (no credential ever pinned), the keystone-ON
+  // controller (its own state dir — keystone specs pin a signing credential here), and the
+  // air-gap compute boot. allSettled (not Promise.all) so a single boot failure still leaves the
+  // others reachable for cleanup — Playwright does NOT run globalTeardown when globalSetup throws,
+  // so this function must clean up after itself (DoD #2 / hermeticity).
   const settled = await Promise.allSettled([
-    spawnBoot(
-      serverBin,
-      [
-        '--mode', 'controller',
-        '--state-dir', tmpDir,
-        '--tenant', TENANT,
-        '--operator-user', OPERATOR_USER,
-        '--operator-pass', OPERATOR_PASS,
-        '--enroll-node', ENROLL_NODE,
-        '--web-dir', webDir,
-        '--addr', '127.0.0.1:0',
-        '--agent-addr', '127.0.0.1:0',
-        '--secure-cookie=false',
-      ],
-      'controller boot',
-    ),
+    spawnBoot(serverBin, controllerArgs(offDir), 'controller-OFF boot'),
+    spawnBoot(serverBin, controllerArgs(onDir), 'controller-ON boot'),
     spawnBoot(
       serverBin,
       ['--mode', 'airgap', '--web-dir', webDir, '--addr', '127.0.0.1:0'],
@@ -147,7 +147,7 @@ async function globalSetup(): Promise<void> {
     ),
   ])
 
-  // Kill every successfully-spawned child and remove the temp dir — the failure-path cleanup.
+  // Kill every successfully-spawned child and remove the temp dirs — the failure-path cleanup.
   const spawned = settled
     .filter((s): s is PromiseFulfilledResult<{ proc: ChildProcess; ready: Ready }> => s.status === 'fulfilled')
     .map((s) => s.value)
@@ -159,42 +159,56 @@ async function globalSetup(): Promise<void> {
         // already exited
       }
     }
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
-    } catch {
-      // best-effort
+    for (const dir of tmpDirs) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true })
+      } catch {
+        // best-effort
+      }
     }
   }
 
   try {
-    // Re-raise the first boot failure (with its diagnostic) after cleaning up the survivor.
+    // Re-raise the first boot failure (with its diagnostic) after cleaning up the survivors.
     const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
     if (failed) throw failed.reason
-    // Both fulfilled; allSettled preserves input order, so [controller, airgap].
-    const [controller, airgap] = spawned
+    // All fulfilled; allSettled preserves input order: [controllerOff, controllerOn, airgap].
+    const [controllerOff, controllerOn, airgap] = spawned
 
-    // Assert exactly the expected modes so a flag regression (two controllers, a typo, a
-    // missing token) fails loudly here rather than as a confusing spec failure downstream.
-    if (controller.ready.mode !== 'controller') {
-      throw new Error(`controller boot reported mode=${controller.ready.mode}, want controller`)
+    // Assert exactly the expected modes so a flag regression fails loudly here, not downstream.
+    for (const [label, boot, mode] of [
+      ['controller-OFF', controllerOff, 'controller'],
+      ['controller-ON', controllerOn, 'controller'],
+      ['airgap', airgap, 'airgap'],
+    ] as const) {
+      if (boot.ready.mode !== mode) {
+        throw new Error(`${label} boot reported mode=${boot.ready.mode}, want ${mode}`)
+      }
     }
-    if (airgap.ready.mode !== 'airgap') {
-      throw new Error(`airgap boot reported mode=${airgap.ready.mode}, want airgap`)
-    }
-    if (!controller.ready.agent || !controller.ready.enroll) {
-      throw new Error('controller boot READY missing agent port or enrollment token')
+    for (const [label, boot] of [
+      ['controller-OFF', controllerOff],
+      ['controller-ON', controllerOn],
+    ] as const) {
+      if (!boot.ready.agent || !boot.ready.enroll) {
+        throw new Error(`${label} boot READY missing agent port or enrollment token`)
+      }
     }
 
     const state: HarnessState = {
       controller: {
-        panel: controller.ready.panel,
-        agent: controller.ready.agent,
-        enrollToken: controller.ready.enroll,
+        panel: controllerOff.ready.panel,
+        agent: controllerOff.ready.agent!,
+        enrollToken: controllerOff.ready.enroll!,
+      },
+      controllerOn: {
+        panel: controllerOn.ready.panel,
+        agent: controllerOn.ready.agent!,
+        enrollToken: controllerOn.ready.enroll!,
       },
       airgap: { panel: airgap.ready.panel },
       agentBin,
-      pids: [controller.proc.pid, airgap.proc.pid].filter((p): p is number => typeof p === 'number'),
-      tmpDir,
+      pids: spawned.map((s) => s.proc.pid).filter((p): p is number => typeof p === 'number'),
+      tmpDirs,
     }
     writeHarness(state)
   } catch (err) {

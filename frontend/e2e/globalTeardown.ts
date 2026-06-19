@@ -22,10 +22,12 @@ async function globalTeardown(): Promise<void> {
     }
   }
 
-  try {
-    fs.rmSync(state.tmpDir, { recursive: true, force: true })
-  } catch {
-    // Best-effort cleanup of the temp state dir.
+  for (const dir of state.tmpDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Best-effort cleanup of the temp state dirs.
+    }
   }
   try {
     fs.rmSync(stateFile, { force: true })
