@@ -68,6 +68,12 @@ npm run dev
 
 Visit `http://localhost:5173` in your browser.
 
+#### Browser E2E tests
+
+The panel has a full-stack Playwright E2E layer (built panel + a live Go controller + a
+real agent fixture). See [`frontend/e2e/README.md`](frontend/e2e/README.md) to run it and
+to add a scenario. It also runs as the `frontend-e2e` CI check.
+
 ## Basic Usage Guide
 
 All topology editing happens on the **Design** page (the default landing in local mode):
