@@ -63,7 +63,7 @@ test('keystone-ON: enroll signing key, deploy signs the manifest, Go verifier ac
   )
   await page.getByRole('button', { name: /Enroll signing key/ }).click()
   expect((await enrollRespP).status(), 'POST /operator-credential should pin the signing key').toBe(200)
-  await expect(page.getByText(/^Enrolled/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/^Enrolled \(/)).toBeVisible({ timeout: 20_000 })
 
   // (3.3) Deploy on the SAME /deploy page (no navigation since enroll, so the authenticator is
   // alive for signManifest). Capture the keystone HTTP legs to assert them precisely.

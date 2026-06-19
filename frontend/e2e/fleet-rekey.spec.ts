@@ -46,8 +46,15 @@ test('Roll-keys + agent rekey clears the actor; Cancel-rekey releases a straggle
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
 
-  // (a) Roll-keys: flags every approved node for rotation + bumps the generation.
+  // (a) Roll-keys: flags every approved node for rotation + bumps the generation. Await the
+  // /rekey-all response before driving the agent — otherwise the agent's rekey Fetch can race the
+  // POST and see rekey_requested=false.
+  const rekeyAllP = page.waitForResponse(
+    (r) => r.url().includes('/operator/rekey-all') && r.request().method() === 'POST',
+    { timeout: 15_000 },
+  )
   await page.getByRole('button', { name: /Roll keys/ }).click()
+  expect((await rekeyAllP).status(), 'rekey-all should be 200').toBe(200)
 
   // The router rotates via the real agent wire (reusing its bearer) → its rekey flag clears.
   const stdout = await runE2eAgent(h, [

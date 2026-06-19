@@ -68,16 +68,27 @@ test('keystone rotation: OLD-sign → acked rotate to NEW → node refuses-then-
 
   await page.goto(`${target.panel}/deploy`)
 
-  // (a) Pin OLD (TOFU) + deploy-sign under OLD.
-  await expect(page.getByText('Not enrolled')).toBeVisible({ timeout: 15_000 })
-  await page.getByRole('button', { name: /Enroll signing key/ }).click()
-  await expect(page.getByText(/^Enrolled/)).toBeVisible({ timeout: 20_000 })
+  // (a) Establish THIS spec's OWN OLD signing credential, then deploy-sign under it. Tolerant of a
+  // prior pin on the shared keystone-ON tenant (e.g. plan-14's deploy-keystone): if nothing is
+  // pinned, first-pin OLD; if a credential is already pinned, rotate (with ack) to a fresh OLD.
+  // Either way the captured POST body (credBodies[0]) is THIS spec's OLD, whose private half lives
+  // in this test's authenticator — so the OLD-signed deploy + the node's OLD pin are self-consistent.
+  const enrollBtn = page.getByRole('button', { name: /Enroll signing key/ })
+  const rotateBtn = page.getByRole('button', { name: /Rotate signing key/ })
+  await expect(enrollBtn.or(rotateBtn)).toBeVisible({ timeout: 15_000 })
+  if (await enrollBtn.isVisible()) {
+    await enrollBtn.click()
+  } else {
+    await rotateBtn.click()
+    await page.getByRole('button', { name: /Rotate now/ }).click()
+  }
+  await expect(page.getByText(/^Enrolled \(/)).toBeVisible({ timeout: 20_000 })
   await deploySigned(page)
 
   // (c) Rotate WITH ack to NEW (create a second credential) + deploy-sign under NEW.
   await page.getByRole('button', { name: /Rotate signing key/ }).click()
   await page.getByRole('button', { name: /Rotate now/ }).click()
-  await expect(page.getByText(/^Enrolled/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/^Enrolled \(/)).toBeVisible({ timeout: 20_000 })
   await deploySigned(page)
 
   expect(credBodies.length, 'captured the OLD pin + the NEW rotate credential bodies').toBeGreaterThanOrEqual(2)
