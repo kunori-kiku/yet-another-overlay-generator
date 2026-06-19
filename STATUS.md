@@ -1,8 +1,27 @@
 # STATUS
-<!-- regenerated: 2026-06-18 -->
-<!-- by: pre-rc1 program draft + v2.0.0-beta.8 -->
+<!-- regenerated: 2026-06-19 -->
+<!-- by: pre-rc1 program — Subject 1 closed -->
 
 ## Active work
+
+- **SUBJECT 1 (refactor + security) COMPLETE — all 9 plans merged to `main` (2026-06-19).** The
+  local-mode→browser migration shipped: plan-1 CJK→English hygiene (#137), plan-2 god-file splits
+  (#139), plan-9 FE↔Go drift (#138), plan-8 residual security + compiler-correctness (#140), plan-3
+  `internal/localcompile` façade + frozen I/O contract + golden corpus (#141), plan-5 Go↔TS
+  conformance harness + required CI gate (#142 — caught + fixed a real F3 heal drift on its first
+  run), plan-4 the full **TypeScript compiler** byte-exact vs the Go oracle (#143), plan-6 store rewire
+  to the in-browser compiler (#144), plan-7 backend shrink — air-gap compute behind `//go:build airgap`,
+  controller-only default, local mode **default-ON** (#145). Each: independent multi-lens workflow review
+  → fix at root (no shims) → re-review GO → CI green → merge. Both Go build profiles (default +
+  `-tags airgap`) are CI-gated; the conformance harness pins TS==Go byte-for-byte.
+- **NEXT: SUBJECT 2 (phone UX, plans 10–12).** Then Subject 3 (full-stack E2E simulation/pitfall-hunt,
+  plans 13–19, with the MANDATORY real-tunnel integration 3.6), Subject 4 (security re-audit, plans
+  20–21 + plan-22 cuts rc.1). rc.1 is NOT cut until all four subjects are done.
+- Decision (2026-06-19, in the outline decisions log): local-engine **default-ON** folded into plan-7
+  (the real-world soak gate is waived — replaced by the green conformance harness); the
+  `VITE_YAOG_LOCAL_ENGINE=backend` escape hatch is retained (works against a `-tags airgap` server).
+
+### Prior release history
 
 - **Released:** **`v2.0.0-beta.8`** (GitHub *latest*) — pre-rc.1 blocker hotfix (PR #136). Fast-tracked six
   investigation-confirmed blockers: fleet-mux panic recovery (B1), keystone-sign-on-refresh 401 (F1),
