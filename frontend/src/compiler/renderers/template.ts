@@ -9,18 +9,25 @@
 // and make only THIS interpreter responsible for correctness. The conformance harness (every rendered
 // file === the Go golden, byte-for-byte) arbitrates.
 //
-// Supported Go text/template grammar (exactly what the YAOG templates use — nothing more):
+// Supported Go text/template grammar (exactly what the YAOG templates use — nothing more; the
+// byte-critical surface is kept as small as the actual renderers require, verified against the full
+// renderer/export conformance corpus):
 //   - text runs (verbatim, subject to {{- / -}} trimming of adjacent whitespace);
 //   - {{ .Field }}, {{ .A.B }} (chained field access), {{ . }} (the current dot);
-//   - {{ $ }} / {{ $.Field }} (the root data, even inside range/with);
+//   - {{ $ }} / {{ $.Field }} (the root data, even inside a range);
 //   - {{ if PIPELINE }} ... {{ else }} ... {{ end }} (truthiness == Go's template "true" rule);
 //   - {{ range PIPELINE }} ... {{ else }} ... {{ end }} (over a slice/array; dot becomes each element;
-//     the else branch runs when the slice is empty — matching Go);
-//   - {{ with PIPELINE }} ... {{ else }} ... {{ end }} (dot becomes the value when truthy);
-//   - {{ $var := PIPELINE }} (variable declaration) and {{ $var }} (variable reference);
-//   - function/operator calls in a pipeline: gt / lt / ge / le / eq / ne (Go's builtin comparisons)
-//     and the single custom func "shq" (= escape.bashSingleQuote);
+//     the else branch runs when the slice is empty — matching Go), including the loop-variable forms
+//     {{ range $i, $v := PIPELINE }} (index + value) and {{ range $v := PIPELINE }} (value-only);
+//   - {{ $var }} (reference to a range-bound loop variable);
+//   - the single comparison operator the templates use, gt (Go's builtin), and the single custom func
+//     "shq" (= escape.bashSingleQuote);
 //   - the {{- (trim preceding whitespace incl. newlines) and -}} (trim following whitespace) markers.
+//
+// Deliberately NOT implemented (no YAOG template uses them — leaving them out shrinks the surface the
+// conformance harness must trust): the {{ with }} action, a standalone {{ $var := PIPELINE }} assignment
+// (range-var binding is the only `:=` form used), and the comparison/logic ops other than gt
+// (eq/ne/lt/le/ge/and/or/not). A future template that needs one must re-add it WITH a Go-pinned test.
 //
 // Trimming rule (Go's exact behavior): a {{- consumes ALL trailing whitespace of the text immediately
 // before the action; a -}} consumes ALL leading whitespace of the text immediately after the action.
@@ -152,12 +159,11 @@ function lex(src: string): Token[] {
 
 // ---- Parser ---------------------------------------------------------------------------------------
 
-// The node tree the lexer's tokens parse into. Control nodes (if/range/with) own their branch node
-// lists; text and pipeline nodes are leaves.
+// The node tree the lexer's tokens parse into. Control nodes (if/range) own their branch node lists;
+// text and pipeline nodes are leaves.
 type Node =
   | { kind: 'text'; value: string }
   | { kind: 'pipeline'; pipeline: PipelineExpr }
-  | { kind: 'assign'; name: string; pipeline: PipelineExpr }
   | {
       kind: 'if';
       pipeline: PipelineExpr;
@@ -176,12 +182,6 @@ type Node =
       // 0-based index and $v the element.
       indexVar: string | null;
       valueVar: string | null;
-    }
-  | {
-      kind: 'with';
-      pipeline: PipelineExpr;
-      body: Node[];
-      elseBody: Node[] | null;
     };
 
 // A pipeline is a single command for the YAOG templates (no chained "| func" forms are used). It is a
@@ -205,10 +205,12 @@ type Term =
   | { kind: 'string'; value: string } // "..."
   | { kind: 'bool'; value: boolean }; // true / false
 
-// KNOWN_FUNCS are the leading-word forms a pipeline command can take: Go's builtin comparison operators
-// plus the registered custom funcs. A leading word not in this set is treated as a bare term (e.g. a
-// field path) rather than a call.
-const COMPARISON_OPS = new Set(['gt', 'lt', 'ge', 'le', 'eq', 'ne', 'and', 'or', 'not']);
+// COMPARISON_OPS are the builtin operator words a pipeline command can lead with. The YAOG templates use
+// ONLY gt (the optional-line `{{ if gt .Field 0 }}` guard), so the set is just that — the other Go
+// comparison/logic ops (eq/ne/lt/le/ge/and/or/not) are intentionally absent (no template uses them; see
+// the grammar note at the top). A leading word not in this set (and not a registered func) is treated as
+// a bare term (e.g. a field path) rather than a call.
+const COMPARISON_OPS = new Set(['gt']);
 
 function isComparisonOp(word: string): boolean {
   return COMPARISON_OPS.has(word);
@@ -359,12 +361,11 @@ function parseNodes(
 
     switch (word) {
       case 'if':
-      case 'range':
-      case 'with': {
+      case 'range': {
         const rest = inner.slice(word.length).trim();
         // range supports loop-variable binding: `range $i, $v := PIPELINE` (index + value) and
-        // `range $v := PIPELINE` (value-only). Strip the binding before parsing the pipeline; if/with
-        // never bind variables in the YAOG templates, so they parse the rest directly.
+        // `range $v := PIPELINE` (value-only). Strip the binding before parsing the pipeline; if never
+        // binds variables in the YAOG templates, so it parses the rest directly.
         let indexVar: string | null = null;
         let valueVar: string | null = null;
         let pipelineSrc = rest;
@@ -398,18 +399,15 @@ function parseNodes(
             valueVar,
           });
         } else {
-          nodes.push({ kind: word, pipeline, body: body.nodes, elseBody });
+          nodes.push({ kind: 'if', pipeline, body: body.nodes, elseBody });
         }
         break;
       }
       default: {
-        // A {{ $x := pipeline }} assignment or a bare {{ pipeline }} output.
-        const assign = parseAssignment(inner);
-        if (assign !== null) {
-          nodes.push(assign);
-        } else {
-          nodes.push({ kind: 'pipeline', pipeline: parsePipeline(inner) });
-        }
+        // A bare {{ pipeline }} output (a field/var/dot access or a gt guard). A standalone
+        // {{ $var := ... }} assignment is not supported (no YAOG template uses one); range-var binding
+        // is the only `:=` form and is handled in the range arm above.
+        nodes.push({ kind: 'pipeline', pipeline: parsePipeline(inner) });
         break;
       }
     }
@@ -436,16 +434,6 @@ function parseRangeBinding(
     return { indexVar: null, valueVar: one[1], pipelineSrc: one[2].trim() };
   }
   return null;
-}
-
-// parseAssignment recognizes {{ $name := pipeline }} and returns an assign node, or null if the action
-// is not an assignment.
-function parseAssignment(inner: string): Node | null {
-  const m = inner.match(/^\$([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(.+)$/s);
-  if (m === null) {
-    return null;
-  }
-  return { kind: 'assign', name: m[1], pipeline: parsePipeline(m[2].trim()) };
 }
 
 function firstWord(s: string): string {
@@ -534,8 +522,9 @@ function asNumber(v: unknown): number {
   throw new Error(`template: cannot compare non-number ${JSON.stringify(v)}`);
 }
 
-// evalPipeline evaluates a pipeline to its value. A func-less pipeline returns its single term; a
-// comparison op returns a boolean; the shq func returns the escaped string.
+// evalPipeline evaluates a pipeline to its value. A func-less pipeline returns its single term; the gt
+// operator returns a boolean; the shq func returns the escaped string. Only gt and shq are reachable —
+// the parser admits no other operator (see COMPARISON_OPS).
 function evalPipeline(p: PipelineExpr, ctx: EvalContext): unknown {
   if (p.func === '') {
     return evalTerm(p.args[0], ctx);
@@ -550,45 +539,13 @@ function evalPipeline(p: PipelineExpr, ctx: EvalContext): unknown {
   switch (p.func) {
     case 'gt':
       return asNumber(vals[0]) > asNumber(vals[1]);
-    case 'lt':
-      return asNumber(vals[0]) < asNumber(vals[1]);
-    case 'ge':
-      return asNumber(vals[0]) >= asNumber(vals[1]);
-    case 'le':
-      return asNumber(vals[0]) <= asNumber(vals[1]);
-    case 'eq':
-      return goEquals(vals[0], vals[1]);
-    case 'ne':
-      return !goEquals(vals[0], vals[1]);
-    case 'not':
-      return !isTruthy(vals[0]);
-    case 'and':
-      return vals.every(isTruthy) ? vals[vals.length - 1] : firstFalsy(vals);
-    case 'or':
-      return vals.find(isTruthy) ?? vals[vals.length - 1];
     default:
       throw new Error(`template: unknown func ${p.func}`);
   }
 }
 
-function firstFalsy(vals: unknown[]): unknown {
-  for (const v of vals) {
-    if (!isTruthy(v)) {
-      return v;
-    }
-  }
-  return vals[vals.length - 1];
-}
-
-function goEquals(a: unknown, b: unknown): boolean {
-  if (typeof a === 'number' || typeof b === 'number') {
-    return asNumber(a) === asNumber(b);
-  }
-  return a === b;
-}
-
-// isTruthy mirrors Go's template "is true" rule for if/with: false, 0, "", nil, and an empty
-// array/slice/map are false; everything else is true.
+// isTruthy mirrors Go's template "is true" rule for if: false, 0, "", nil, and an empty array/slice/map
+// are false; everything else is true.
 function isTruthy(v: unknown): boolean {
   if (v === null || v === undefined) {
     return false;
@@ -641,22 +598,10 @@ function renderNodes(nodes: Node[], ctx: EvalContext, out: string[]): void {
       case 'pipeline':
         out.push(formatValue(evalPipeline(node.pipeline, ctx)));
         break;
-      case 'assign':
-        ctx.vars.set(node.name, evalPipeline(node.pipeline, ctx));
-        break;
       case 'if': {
         const v = evalPipeline(node.pipeline, ctx);
         if (isTruthy(v)) {
           renderNodes(node.body, ctx, out);
-        } else if (node.elseBody !== null) {
-          renderNodes(node.elseBody, ctx, out);
-        }
-        break;
-      }
-      case 'with': {
-        const v = evalPipeline(node.pipeline, ctx);
-        if (isTruthy(v)) {
-          renderNodes(node.body, { ...ctx, dot: v }, out);
         } else if (node.elseBody !== null) {
           renderNodes(node.elseBody, ctx, out);
         }

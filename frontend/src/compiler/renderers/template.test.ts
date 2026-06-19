@@ -124,8 +124,24 @@ describe('the shq custom func (bashSingleQuote)', () => {
   });
 });
 
-describe('$var := assignment and reference', () => {
-  it('declares and uses a variable', () => {
-    expect(r('{{ $n := .N }}value={{ $n }}', { N: 42 })).toBe('value=42');
+describe('range loop-variable binding ($i, $v) and $var reference (the systemd Wants= shape)', () => {
+  // Mirrors script.ts's `Wants={{ range $i, $iface := .WgInterfaces }}{{ if $i }} {{ end }}...{{ end }}`:
+  // $i is the 0-based index (used as a separator guard) and $iface.Name is the bound element field.
+  // Expected values produced by the real Go text/template engine. (A standalone {{ $x := }} assignment is
+  // NOT supported — range binding is the only `:=` form the YAOG templates use.)
+  const w =
+    'Wants={{ range $i, $iface := .WgInterfaces }}{{ if $i }} {{ end }}wg-quick@{{ $iface.Name }}.service{{ end }}';
+  it('two interfaces: $i guards the separator, $iface.Name fills each entry', () => {
+    expect(
+      r(w, { WgInterfaces: [{ Name: 'wg-a' }, { Name: 'wg-b' }] }),
+    ).toBe('Wants=wg-quick@wg-a.service wg-quick@wg-b.service');
+  });
+  it('one interface: no separator', () => {
+    expect(r(w, { WgInterfaces: [{ Name: 'wg-a' }] })).toBe(
+      'Wants=wg-quick@wg-a.service',
+    );
+  });
+  it('empty list: only the prefix', () => {
+    expect(r(w, { WgInterfaces: [] })).toBe('Wants=');
   });
 });
