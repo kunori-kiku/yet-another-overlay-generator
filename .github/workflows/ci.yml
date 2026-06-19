@@ -132,13 +132,26 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+      # Required: functional/adversarial (chromium) + the deterministic responsive BEHAVIOR matrix
+      # (desktop/phone/tablet). Excludes the pixel snapshots ("visual corpus") — those are a separate
+      # non-blocking step until their baselines are CI-stable (plan-17 / 3.5).
       - name: Run E2E canaries
         working-directory: frontend
-        run: npm run test:e2e
-      # Report + traces for a failed run (trace: retain-on-failure). Always-collected on
-      # failure so a flake is diagnosable from the CI artifact, never re-run blind.
+        run: npm run test:e2e -- --grep-invert "visual corpus"
+      # Non-blocking visual-regression gate (plan-17 / 3.5): runs the toHaveScreenshot corpus on
+      # desktop+phone against the committed Linux baselines. continue-on-error keeps it OFF the
+      # required path until the baselines pass a determinism run in CI and the gate is promoted to
+      # required (see e2e/README.md — regenerate with --update-snapshots + PR-review the diff).
+      - name: Visual-regression corpus (non-blocking until baselines CI-stable)
+        id: visual
+        continue-on-error: true
+        working-directory: frontend
+        run: npx playwright test e2e/responsive/snapshots.spec.ts --project=desktop --project=phone
+      # Report + traces for a failed run (trace: retain-on-failure). Collected on a real failure OR a
+      # visual diff (the continue-on-error visual step does not fail the job, so check its outcome) so
+      # a flake / diff is diagnosable from the CI artifact, never re-run blind.
       - name: Upload Playwright report
-        if: failure()
+        if: failure() || steps.visual.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report

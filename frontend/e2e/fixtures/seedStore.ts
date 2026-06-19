@@ -33,6 +33,20 @@ export async function seedControllerMode(
   )
 }
 
+// seedTheme writes the `ui-storage` persist entry BEFORE navigation so the inline anti-FOUC script
+// (index.html) adds the `dark` class on first paint and a snapshot does NOT race ThemeProvider's
+// post-mount class application. The shape is `{ state: { theme }, version: 1 }` (uiStore's nested
+// `.state.theme`, persist version 1 — distinct from controller-storage's version 0). Used by the
+// visual-regression corpus (plan-17 / 3.5) to pin both light and dark surfaces deterministically.
+export async function seedTheme(context: BrowserContext, theme: 'light' | 'dark'): Promise<void> {
+  await context.addInitScript(
+    ([key, t]) => {
+      localStorage.setItem(key, JSON.stringify({ state: { theme: t }, version: 1 }))
+    },
+    ['ui-storage', theme] as const,
+  )
+}
+
 // seedLocalMode forces local (no-controller) mode so the panel renders without the login
 // gate — used by the air-gap design canary for order-independence (it must not depend on a
 // prior spec having left local mode in storage).

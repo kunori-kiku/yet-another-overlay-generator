@@ -31,6 +31,10 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   globalSetup: './e2e/globalSetup.ts',
   globalTeardown: './e2e/globalTeardown.ts',
+  // Visual-regression baselines (plan-17 / 3.5) live under e2e/responsive/__screenshots__/, keyed by
+  // project (viewport) + platform so a phone baseline never compares against a desktop one. The
+  // `.gitignore` KEEPS this dir while ignoring playwright-report/ + test-results/.
+  snapshotPathTemplate: 'e2e/responsive/__screenshots__/{projectName}-{platform}/{arg}{ext}',
   use: {
     // Pin the locale so the panel's detectSystemLanguage() resolves to English
     // deterministically (it returns 'zh' only for a zh navigator.language) — specs assert

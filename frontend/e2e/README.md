@@ -172,3 +172,54 @@ The two existing specs are canaries only (smoke proof); scenario depth belongs i
 14–18. The air-gap design canary's `/api/compile` round-trip pins the retained air-gap
 compute oracle; post-Subject-1 local mode compiles in-browser, so the panel UI no longer
 hits that route (see `airgap-design.spec.ts`).
+
+## Responsive / phone device-emulation layer (plan-17 / 3.5)
+
+`e2e/responsive/**` verifies Subject 2's responsive operator surfaces at the **`lg` = 1024px**
+crossover and pins them against regression. It rides this same harness (one `npm run test:e2e` at a
+time) and adds a **device-projects matrix** in `playwright.config.ts`:
+
+| Project   | Viewport     | Touch | Side of `lg` |
+|-----------|--------------|-------|--------------|
+| `desktop` | 1280×800     | no    | **>= lg** (docked layout) |
+| `phone`   | 360×800      | yes   | < lg (narrow-edge worst case) |
+| `tablet`  | 768×1024     | yes   | < lg (768 < 1024 → MOBILE side, **not** "between") |
+
+`e2e/responsive/**` fans out across all three; the functional/adversarial specs
+(`e2e/*.spec.ts`, `e2e/adversarial/**`) stay **chromium-only** (`testIgnore`), one pass. Behavior
+specs branch on `testInfo.project.name` (`isDesktopProject` / `isPhoneProject` in
+`e2e/responsive/responsive.ts`) — the lg-boundary PAIR is the desktop-project result **plus** the
+phone/tablet result.
+
+**Selector contract (ARIA-first — no parallel `data-testid` taxonomy):** bind to the accessible
+affordances Subject 2 emits — the hamburger by `getByRole('button', { name: 'Open navigation' })`,
+the off-canvas overlays by `role="dialog"`, the `CanvasGate` by its `canvasGate.title` text, fleet
+rows/cards by the node's `getByRole('link', { name: <nodeId> })` + the `<table>` element. No
+`data-testid` was needed.
+
+**Blocker → spec map:** sidebar drawer → `sidebar-drawer`; Overview grid (the one `sm`=640 pair) →
+`overview-grid`; fleet-table→cards → `fleet-table-reflow`; design-route gate (Subject 2's
+fully-hidden-below-lg branch) → `design-route`; page padding + no-overflow → `page-padding-overflow`;
+tap targets → `tap-targets`; clean login gate → `login-mobile-clean`; read-only touch pan →
+`canvas-touch`. Findings: `docs/spec/rc1/3.5-findings.md`.
+
+**Add a responsive smoke:** drop a `*.spec.ts` in `e2e/responsive/`, branch on `isDesktopProject` /
+`isPhoneProject`, assert via DOM/ARIA/`localStorage` only (never import controllerStore/
+controllerClient), and reuse `expectNoHorizontalPageOverflow` / `gridTrackCount` from `responsive.ts`.
+
+### Visual-regression corpus (`snapshots.spec.ts` + `__screenshots__/`)
+
+`toHaveScreenshot` baselines pin each surface (Login/Overview/Fleet/Deploy/Security/Settings/Design)
+× {phone, desktop} × {light, dark}, captured in the deterministic no-enrolled-node state with the
+non-deterministic canvas region masked. Theme + controller-mode are seeded via `addInitScript`
+**before navigation** (`seedTheme` / `seedControllerMode`) so the anti-FOUC paint is correct (no
+`ThemeProvider` race). Baselines live under `e2e/responsive/__screenshots__/{project}-{platform}/`
+(kept in git; `playwright-report/` + `test-results/` stay ignored).
+
+- **Regenerate (Linux is authoritative):** `npx playwright test e2e/responsive/snapshots.spec.ts
+  --project=desktop --project=phone --update-snapshots`, then PR-review the diff.
+- **CI:** the visual corpus runs as a **non-blocking** (`continue-on-error`) step in the
+  `frontend-e2e` job — it uploads diff images on a mismatch but does NOT fail the required gate. The
+  committed baselines are Ubuntu-24.04-generated (matching `ubuntu-latest`); if CI shows a stable
+  zero-diff over a determinism run, promote the gate to required (branch protection) and drop
+  `continue-on-error`. Until then, a diff is advisory — re-baseline from the CI artifact + review.
