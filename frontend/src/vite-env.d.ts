@@ -14,6 +14,14 @@ interface ImportMetaEnv {
   // `-tags airgap` server, since plan-7 gates those routes off the default controller build).
   // See localEngine.ts (localEngineEnabled) and topologyStore.ts's local-engine seam.
   readonly VITE_YAOG_LOCAL_ENGINE?: 'local' | 'backend';
+
+  // Static-local-design build pin (plan-7 Phase 3). When set (any truthy literal, e.g. '1'),
+  // the panel ships as a backend-free LOCAL-design SPA: mode is forced to 'local', the mode
+  // toggle + the "connect to controller" affordances are hidden, and setMode/switchToController
+  // become guarded no-ops so the user cannot reach controller mode (which depends on a
+  // controller backend the static site does not have). Unset/'' ⇒ the default all-in-one
+  // controller panel (unchanged). Read via lib/localOnly.ts's localOnly().
+  readonly VITE_LOCAL_ONLY?: string;
 }
 
 interface ImportMeta {

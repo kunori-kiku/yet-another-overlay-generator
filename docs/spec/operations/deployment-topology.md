@@ -35,14 +35,33 @@ removes them from the shipped controller.
 
 ### 1. Standalone static-local-design site (no backend)
 
-A pure-frontend bundle (`VITE_LOCAL_ONLY=1 npm run build`) where the panel runs entirely in the
-browser: the in-browser TypeScript compiler (`frontend/src/compiler/`, plan-4) performs validate /
-compile / export, and the app is **mode-locked to `local`** (the controller toggle and the
-controller-only nav are hidden). It POSTs to **no** Go backend — there is no listener at all.
-Host it on any static file server / CDN.
+A pure-frontend bundle where the panel runs entirely in the browser: the in-browser TypeScript
+compiler (`frontend/src/compiler/`, plan-4) performs validate / compile / export, and the app is
+**mode-locked to `local`** (the controller toggle and the controller-only nav are hidden). It POSTs
+to **no** Go backend — there is no listener at all. Host it on any static file server / CDN.
 
 - **Compute:** in-browser (TS compiler). No network compute path exists.
 - **Anonymous attack surface:** none (no backend process).
+
+**Build it:** `cd frontend && npm run build:local` (= `tsc -b && VITE_LOCAL_ONLY=1 vite build
+--outDir dist-local`). Output is `frontend/dist-local/` — a self-contained directory of static
+assets; copy it to any web root.
+
+**The mode-lock mechanism (`VITE_LOCAL_ONLY`):** the flag is read in **one** place,
+`frontend/src/lib/localOnly.ts` (`localOnly()`), typed in `frontend/src/vite-env.d.ts`. When set:
+
+- `controllerStore`'s initial `mode` is forced to `local`, and a persisted `controller` mode is
+  coerced back to `local` on rehydrate (the `merge` hook) — a localStorage value written by the
+  all-in-one build cannot resurface controller mode on the static site.
+- `setMode('controller')` and `switchToController()` are **guarded no-ops** — the load-bearing lock
+  (a deep link / programmatic call cannot escape local mode), pinned by
+  `frontend/src/stores/controllerStore.local-only.test.ts`.
+- The mode toggle (Settings) and the controller-only nav (Overview / Fleet) are **hidden** — no
+  "connect to controller" affordance is offered (the cosmetic half of the lock).
+
+**Release asset:** the Release workflow publishes this as a separate, cross-platform
+`yaog-local-design-<version>.zip` (the `package-local-design` job, built from `build:local`),
+distinct from the platform bundles (which carry the all-in-one `frontend/` for the controller).
 
 ### 2. Controller server (the default binary)
 
@@ -66,6 +85,14 @@ four routes 404 and `/api/health` stays 200.
 back to, so it names the fix (set the controller env, or use the `-tags airgap` build / the
 static-local-design site / `cmd/compiler`) instead of standing up a do-nothing listener.
 
+**Docker image:** the `Dockerfile` builds the **default** (no `-tags airgap`) `cmd/server`, so the
+four anonymous routes are absent at link time. It copies the all-in-one `frontend/dist` →
+`/app/web`, sets `YAOG_WEB_DIR=/app/web`, and the `HEALTHCHECK` hits `/api/health`. **Do not add
+`-tags airgap` to the controller image** — the local-design oracle is a separate artifact (§3).
+
+**Release asset:** the platform bundles (`yaog-bundle-<os>-<arch>.{tar.gz,zip}`) carry the default
+controller `yaog-server`, `yaog-compiler`, `yaog-agent`, and the all-in-one `frontend/`.
+
 ### 3. `-tags airgap` local-design oracle (dev / E2E / DAST only)
 
 `go build -tags airgap ./...` → a server that **retains** the four anonymous compute routes. When
@@ -75,6 +102,10 @@ the controller env is unset it boots the air-gap server (`cmd/server/boot_airgap
 default banner advertises only `GET /api/health`). This build is the **local-design oracle** and the
 boot target for plan-13's `--mode airgap` E2E and plan-21's `-tags airgap` DAST. **It is not the
 shipped controller artifact** — do not add `-tags airgap` to the controller Docker image.
+
+**Release asset:** published per-arch as a standalone, opt-in `yaog-server-airgap-<os>-<arch>`
+binary (NOT inside the platform bundle and NOT the controller image), clearly named so it cannot be
+mistaken for the controller server.
 
 ### 4. `cmd/compiler` CLI (offline reference)
 

@@ -74,13 +74,26 @@ jobs:
         working-directory: ./frontend
         run: |
           npm ci --legacy-peer-deps
+          # The all-in-one controller panel (default build → frontend/dist), shipped inside
+          # every platform bundle + the controller image.
           npm run build
+          # The static-local-design SPA (VITE_LOCAL_ONLY → frontend/dist-local, plan-7 / 1.7):
+          # mode locked to local, controller affordances hidden, no backend dependency — packaged
+          # as a SEPARATE standalone release asset (yaog-local-design-<version>.zip) below.
+          npm run build:local
 
       - name: Upload Frontend Dist Artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
+          if-no-files-found: error
+
+      - name: Upload Static-Local-Design Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-local
+          path: frontend/dist-local
           if-no-files-found: error
 
   build-bundles:
@@ -181,15 +194,28 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/.tmp/bin"
           # EXTEND the existing "-s -w" ldflags with the build-version stamp; do not replace it.
           LDFLAGS="-s -w -X main.BuildVersion=${BUILD_VERSION}"
+          # DEFAULT (controller-only) server — NO `-tags airgap` (plan-7 / 1.7): the four
+          # anonymous air-gap compute routes are gated off this binary at link time. This is
+          # the PRIMARY server artifact shipped in the bundle + the controller image.
           go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
           go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
           # yaog-agent is the node-side binary the one-shot bootstrap downloads (plan-5.2).
           go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" ./cmd/agent
+          # `-tags airgap` server — the local-design ORACLE + the boot target for plan-13's
+          # --mode airgap E2E and plan-21's DAST (plan-7 / 1.7). It RETAINS the four air-gap
+          # compute routes; published as a SEPARATE standalone asset (yaog-server-airgap-*),
+          # never the bundle's primary server, so it is opt-in for local/E2E use only.
+          go build -trimpath -tags airgap -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server-airgap${{ matrix.target.exe_ext }}" ./cmd/server
 
       - name: Assemble Bundle Directory
         run: |
+          set -euo pipefail
           mkdir -p .tmp/bundle/bin .tmp/bundle/frontend
-          cp .tmp/bin/* .tmp/bundle/bin/
+          # Ship the DEFAULT controller-only server + compiler + agent in the bundle. The
+          # `-tags airgap` server (yaog-server-airgap*) is DELIBERATELY excluded — it is a
+          # separate opt-in asset (staged below), never the bundle's primary server, so the
+          # all-in-one bundle stays controller-only (plan-7 / 1.7).
+          find .tmp/bin -maxdepth 1 -type f ! -name 'yaog-server-airgap*' -exec cp {} .tmp/bundle/bin/ \;
           cp -R .tmp/frontend-dist/. .tmp/bundle/frontend/
 
       - name: Create Bundle Archive
@@ -231,9 +257,53 @@ jobs:
             yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}.sha256
           if-no-files-found: error
 
+      # Publish the `-tags airgap` server as a STANDALONE per-arch asset (plan-7 / 1.7): the
+      # local-design oracle + plan-13/plan-21 boot target. It RE-EXPOSES the four air-gap compute
+      # routes, so it is opt-in (NOT in the bundle, NOT the controller image) and clearly named.
+      - name: Stage Standalone Air-Gap Server Binary
+        run: |
+          set -euo pipefail
+          SRV="yaog-server-airgap-${{ matrix.target.id }}${{ matrix.target.exe_ext }}"
+          cp ".tmp/bin/yaog-server-airgap${{ matrix.target.exe_ext }}" "$SRV"
+
+      - name: Upload Standalone Air-Gap Server Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaog-server-airgap-${{ matrix.target.id }}
+          path: yaog-server-airgap-${{ matrix.target.id }}${{ matrix.target.exe_ext }}
+          if-no-files-found: error
+
+  # Package the static-local-design SPA (VITE_LOCAL_ONLY build) into a single standalone,
+  # backend-free archive operators can host on any static web server (plan-7 / 1.7). Separate
+  # from the platform bundles: it has no binaries, no controller backend, one cross-platform zip.
+  package-local-design:
+    name: Package Static-Local-Design Site
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Static-Local-Design Dist Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-local
+          path: .tmp/dist-local
+
+      - name: Create Static-Local-Design Archive
+        run: |
+          set -euo pipefail
+          # github.ref_name is the tag (e.g. v2.0.0-beta.9). Name the asset by version so it is
+          # self-describing alongside the platform bundles.
+          (cd .tmp/dist-local && zip -r "$GITHUB_WORKSPACE/yaog-local-design-${{ github.ref_name }}.zip" .)
+
+      - name: Upload Static-Local-Design Archive Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaog-local-design
+          path: yaog-local-design-${{ github.ref_name }}.zip
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
-    needs: build-bundles
+    needs: [build-bundles, package-local-design]
     runs-on: ubuntu-latest
     steps:
       - name: Download All Release Artifacts
@@ -250,5 +320,7 @@ jobs:
             yaog-bundle-*.zip
             yaog-agent-linux-*
             yaog-agent-windows-*
+            yaog-server-airgap-*
+            yaog-local-design-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

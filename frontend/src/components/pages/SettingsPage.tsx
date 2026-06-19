@@ -3,6 +3,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useUiStore, type ThemePref } from '../../stores/uiStore';
 import { t, type MessageKey } from '../../i18n';
+import { localOnly } from '../../lib/localOnly';
 import { ConnectionSettings } from '../deploy/ConnectionSettings';
 import { BootstrapSettings } from '../deploy/BootstrapSettings';
 import { AgentUpdateSettings } from '../deploy/AgentUpdateSettings';
@@ -79,24 +80,30 @@ export function SettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
-      <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-        <h3 className="text-lg font-semibold text-blue-400">
-          {t(language, 'settingsModeHeading')}
-        </h3>
-        <p className="text-sm text-gray-400">{t(language, 'settingsModeHint')}</p>
-        <div className="flex w-fit items-center overflow-hidden rounded border border-gray-600 bg-gray-700">
-          <button type="button" onClick={onSelectLocal} className={seg(mode === 'local')}>
-            {t(language, 'modeLocal')}
-          </button>
-          <button
-            type="button"
-            onClick={onSelectController}
-            className={seg(mode === 'controller')}
-          >
-            {t(language, 'modeController')}
-          </button>
-        </div>
-      </section>
+      {/* Mode toggle. Hidden in the static-local-design build (VITE_LOCAL_ONLY): that build has
+          no controller backend, so the controller half of the toggle would offer a dead
+          "connect to controller" path. The store-side guards (setMode/switchToController) make
+          the lock load-bearing; this just removes the affordance (R7). */}
+      {!localOnly() && (
+        <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
+          <h3 className="text-lg font-semibold text-blue-400">
+            {t(language, 'settingsModeHeading')}
+          </h3>
+          <p className="text-sm text-gray-400">{t(language, 'settingsModeHint')}</p>
+          <div className="flex w-fit items-center overflow-hidden rounded border border-gray-600 bg-gray-700">
+            <button type="button" onClick={onSelectLocal} className={seg(mode === 'local')}>
+              {t(language, 'modeLocal')}
+            </button>
+            <button
+              type="button"
+              onClick={onSelectController}
+              className={seg(mode === 'controller')}
+            >
+              {t(language, 'modeController')}
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* controller→local lossy-switch confirmation (plan-5, D6): spells out exactly what is kept
           and what is cleared. */}
