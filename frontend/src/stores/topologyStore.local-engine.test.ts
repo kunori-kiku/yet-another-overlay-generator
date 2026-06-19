@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTopologyStore } from './topologyStore';
 import { useControllerStore } from './controllerStore';
 import * as compilerIndex from '../compiler/index';
+import { resolveNodeInterfaces } from '../lib/compiledInterfaces';
 import type { Topology } from '../types/topology';
 
 // A minimal but VALID 2-node topology carrying real WireGuard private keys (so the AirGap
@@ -205,8 +206,16 @@ describe('6.1 seam routing', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     await useTopologyStore.getState().validate();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy.mock.calls[0][0]).toBe('/api/validate');
+    await useTopologyStore.getState().compile().catch(() => {});
+    await useTopologyStore.getState().exportArtifacts().catch(() => {});
+    await useTopologyStore.getState().downloadDeployScript('sh').catch(() => {});
+    // Default-OFF: the single localEngineEnabled() predicate gates all four actions
+    // identically, so each falls through to its backend route (no client-side compile).
+    const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    expect(urls).toContain('/api/validate');
+    expect(urls).toContain('/api/compile');
+    expect(urls).toContain('/api/export');
+    expect(urls).toContain('/api/deploy-script?format=sh');
   });
 
   it("with the flag = backend (explicit opt-out), local-mode actions still fetch", async () => {
@@ -215,8 +224,16 @@ describe('6.1 seam routing', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     await useTopologyStore.getState().validate();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy.mock.calls[0][0]).toBe('/api/validate');
+    await useTopologyStore.getState().compile().catch(() => {});
+    await useTopologyStore.getState().exportArtifacts().catch(() => {});
+    await useTopologyStore.getState().downloadDeployScript('sh').catch(() => {});
+    // Default-OFF: the single localEngineEnabled() predicate gates all four actions
+    // identically, so each falls through to its backend route (no client-side compile).
+    const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    expect(urls).toContain('/api/validate');
+    expect(urls).toContain('/api/compile');
+    expect(urls).toContain('/api/export');
+    expect(urls).toContain('/api/deploy-script?format=sh');
   });
 });
 
@@ -352,9 +369,20 @@ describe('6.4 reconciliation parity + air-gap shape', () => {
     expect(st.allocSchemaVersion).toBe(1);
     expect(st.compileResult?.topology.alloc_schema_version).toBe(1);
 
-    // A wireguard config chip is resolvable (the result is consumable downstream).
+    // A wireguard config chip is resolvable (the result is consumable downstream) — drive the
+    // REAL downstream consumer (resolveNodeInterfaces), not just a non-empty-map check, so the
+    // wg key format (<nodeID>:<interfaceName>) and the chip resolution are pinned end-to-end.
     const wg = st.compileResult?.wireguard_configs ?? {};
     expect(Object.keys(wg).length).toBeGreaterThan(0);
+    const wgNodeId = Object.keys(wg)[0].split(':')[0];
+    const chips = resolveNodeInterfaces(
+      wgNodeId,
+      wg,
+      st.compileResult!.topology.nodes,
+      st.compileResult!.topology.edges,
+    );
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips[0].interfaceName).toBeTruthy();
 
     // Air-gap shape: /api/compile does NOT return skipped_unenrolled (topology.ts:156).
     expect(st.compileResult?.skipped_unenrolled).toBeUndefined();

@@ -580,6 +580,10 @@ export const zh: Record<keyof typeof en, string> = {
   'error.keygen_generate_failed': "为节点 {node} 生成 WireGuard 密钥失败：{detail}",
   // Compile-time constraint codes (plan-3.5b) — 422 failures returned by /api/compile|export|deploy-script.
   'error.compile_failed': '编译失败，请检查拓扑后重试。',
+  // 仅本地引擎（非 Go apierr 代码）：浏览器内 TS 编译器在本地 compile() 拒绝无效拓扑时抛出该
+  // 哨兵代码（compiler/errors.ts 的 CompileCode.TopologyValidationFailed），使本地路径的本地化与
+  // 服务端 compile_failed 在语义上保持一致。
+  'error.ts_topology_validation_failed': '编译失败：拓扑未通过校验，请检查拓扑后重试。',
   'error.compile_transit_pool_exhausted': 'CIDR {cidr} 的 transit 地址池已耗尽；请扩大 transit CIDR 或减少这些节点之间的链路数。',
   'error.compile_transit_cidr_invalid': 'transit CIDR {cidr} 无效：{detail}',
   'error.compile_transit_cidr_not_ipv4': 'transit CIDR {cidr} 必须为 IPv4。',
