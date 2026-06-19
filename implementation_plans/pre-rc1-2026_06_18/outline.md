@@ -526,8 +526,8 @@ partial/parked/abandoned, per close-phase).
 | plan-10 | 2.1 | S2 | delivered (PR #147) | plan-11; SUBJECT 1 |
 | plan-11 | 2.2 | S2 | delivered (PR #147) | SUBJECT 1 (FIRST in S2) |
 | plan-12 | 2.3 | S2 | delivered (PR #147) | plan-11 |
-| plan-13 | 3.1 | S3 | pending | SUBJECT 2 (FIRST in S3) |
-| plan-14 | 3.2 | S3 | pending | plan-13 |
+| plan-13 | 3.1 | S3 | delivered (PR #149) | SUBJECT 2 (FIRST in S3) |
+| plan-14 | 3.2 | S3 | delivered (PR #150) | plan-13 |
 | plan-15 | 3.3 | S3 | pending | plan-13 (alongside plan-14) |
 | plan-16 | 3.4 | S3 | pending | plan-13 |
 | plan-17 | 3.5 | S3 | pending | plan-13; SUBJECT 2 (plans 10–12) |
