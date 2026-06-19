@@ -1,0 +1,31 @@
+{
+  "name": "reserved-ranges",
+  "doc": "A domain whose reserved_ranges MIXES a CIDR block (10.41.0.0/30 -> covers 10.41.0.0-.3) and a bare single IP (10.41.0.5), forcing allocateFromCIDR to skip BOTH kinds of reservation. Sequential overlay allocation walks .1 (in /30, skipped), .2 (in /30, skipped), .3 (in /30, skipped), lands router-a on .4; then .5 (single-IP reserved, skipped) lands router-b on .6. No other corpus fixture sets reserved_ranges, so this pins the reservedNets (CIDR Contains) AND reservedSingleIPs (exact match) skip branches of the allocator.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "reserved-ranges", "name": "Reserved Ranges" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.41.0.0/24", "allocation_mode": "auto", "routing_mode": "babel", "reserved_ranges": [ "10.41.0.0/30", "10.41.0.5" ] }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "6PIfAKOwQ3nDD1Zea8u0upnGsvV4Pj1zLviibbRDQWc="
+      },
+      {
+        "id": "router-b", "name": "router-b", "hostname": "router-b.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-b-ep", "host": "router-b.example.com", "port": 51820 } ],
+        "wireguard_private_key": "OAuu3fd+HDtVbiH4mUs5f3fsIoJvEKY5AJ47yfHzBng="
+      }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "ssh-endpoint-port-mtu",
+  "doc": "Pins the SSH-deploy + endpoint_port-override + per-node-MTU byte surfaces that no other corpus fixture exercises. router-a carries an ssh_alias (deploy resolves to the bare alias, SSHPort 0 -> ssh_config decides) and a non-zero MTU (1380) -> the per-peer/router install.sh MTU echo branch (script.go:777). router-b carries ssh_host+ssh_user+ssh_port+ssh_key_path where the key path has a SPACE ('~/keys/My Deploy Key.pem', charset-legal) -> exercises the bashSingleQuote/powerShellArgQuote '-i <path>' quoting idiom in deploy-all.sh/.ps1 (deploy.go buildSSHOpts) plus the user@host + custom-port target. The router-a<->router-b edge sets an explicit endpoint_port (52000) -> CompiledPort override flows into router-a's wireguard peer Endpoint = router-b.example.com:52000 (compiler.go:233). client-a is a client-role node with MTU 1280 -> the client install.sh MTU echo branch (script.go:1425). The SSH fields are project-level (deploy scripts), the MTU + endpoint_port are per-node/per-file (install.sh + wireguard conf) — all in the pinned conformance byte set.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "ssh-ep-mtu", "name": "SSH Endpoint Port MTU" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.42.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1", "mtu": 1380,
+        "ssh_alias": "prod-router-a",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SC521YvxD87BZuiGCDp3uioD39kLXuRWyQtEcg/1708="
+      },
+      {
+        "id": "router-b", "name": "router-b", "hostname": "router-b.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "ssh_host": "router-b.example.com", "ssh_user": "deploy", "ssh_port": 2222, "ssh_key_path": "~/keys/My Deploy Key.pem",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-b-ep", "host": "router-b.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+FQpXOnUkY9GJb8wz5Gfpgl+iWidwek+UbuAyshRIVU="
+      },
+      {
+        "id": "client-a", "name": "client-a", "hostname": "client-a.local", "platform": "debian",
+        "role": "client", "domain_id": "domain-1", "mtu": 1280,
+        "capabilities": {},
+        "wireguard_private_key": "IJGzIVrOPaFsUWLxQfqWY2TghjeSDX79PMyx71F0Qmg="
+      }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "endpoint_port": 52000, "transport": "udp", "is_enabled": true },
+      { "id": "e-client", "from_node_id": "client-a", "to_node_id": "router-a", "type": "public-endpoint", "endpoint_host": "router-a.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "transit-cidr-non-24",
+  "doc": "Four routers on a domain with a CUSTOM non-/24 transit_cidr (10.40.0.0/28) wired into five links. A /28 transit pool holds only 7 usable pairs (network 10.40.0.0 and broadcast 10.40.0.15 excluded), so the five links allocate pairs at indices 0..4 -> 10.40.0.{1,2},{3,4},{5,6},{7,8},{9,10}, exercising gapFillTransitPair / allocateTransitPair / transitPoolPairCount at a NON-/24 mask boundary (network+broadcast exclusion derived generically from the mask, not hardcoded to /24). No other corpus fixture allocates transit pairs from a non-/24 pool, so this pins the mask-derived transit pool math byte surface.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "transit-non24", "name": "Transit CIDR Non /24" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.40.16.0/24", "allocation_mode": "auto", "routing_mode": "babel", "transit_cidr": "10.40.0.0/28" }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "wNjDSUq700M2tAdIIaZX9nwAz2kA42ylItzJLoPsWGE="
+      },
+      {
+        "id": "router-b", "name": "router-b", "hostname": "router-b.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-b-ep", "host": "router-b.example.com", "port": 51820 } ],
+        "wireguard_private_key": "IOCZgrJw7INyLCywAURMQP7UiCk0hwLUHixbMsyxuV0="
+      },
+      {
+        "id": "router-c", "name": "router-c", "hostname": "router-c.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-c-ep", "host": "router-c.example.com", "port": 51820 } ],
+        "wireguard_private_key": "kP1c0+Ye0eoXLgUnkm3sQZfgqwvArHtZWevpDNygaUo="
+      },
+      {
+        "id": "router-d", "name": "router-d", "hostname": "router-d.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-d-ep", "host": "router-d.example.com", "port": 51820 } ],
+        "wireguard_private_key": "4IKjycH3Yax2flKO8NOqS7J3y2KtlVd73ajBgxsgzE4="
+      }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-ac", "from_node_id": "router-a", "to_node_id": "router-c", "type": "public-endpoint", "endpoint_host": "router-c.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-ad", "from_node_id": "router-a", "to_node_id": "router-d", "type": "public-endpoint", "endpoint_host": "router-d.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-bc", "from_node_id": "router-b", "to_node_id": "router-c", "type": "public-endpoint", "endpoint_host": "router-c.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-cd", "from_node_id": "router-c", "to_node_id": "router-d", "type": "public-endpoint", "endpoint_host": "router-d.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}
