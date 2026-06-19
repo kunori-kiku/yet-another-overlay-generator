@@ -43,10 +43,20 @@ test('login passkey: register, then sign in passwordless', async ({ page, contex
   await page.getByRole('button', { name: 'Register a login passkey' }).click()
   await expect(page.getByText('A login passkey is registered')).toBeVisible({ timeout: 20_000 })
 
-  // Log out (re-render) and sign in PASSWORDLESS with the passkey (loginWithPasskey → get()).
+  // (1.5) Log out (re-render) and sign in PASSWORDLESS with the passkey (loginWithPasskey → get()).
   await logoutViaUserMenu(page)
   await page.locator('#login-username').fill(OPERATOR_USER)
   await page.getByRole('button', { name: /Sign in with passkey/ }).click()
+  await expect(page.locator('#login-username')).toBeHidden({ timeout: 20_000 })
+  await expect(page.getByRole('button', { name: 'Account' })).toBeVisible()
+
+  // (1.6) password+passkey 2FA: log out, then a PASSWORD login auto-runs the passkey ceremony
+  // (the account now has a passkey → the backend returns passkey_required → store.login completes
+  // the assertion via the authenticator without a second click).
+  await logoutViaUserMenu(page)
+  await page.locator('#login-username').fill(OPERATOR_USER)
+  await page.locator('#login-password').fill(OPERATOR_PASS)
+  await page.locator('form button[type="submit"]').click()
   await expect(page.locator('#login-username')).toBeHidden({ timeout: 20_000 })
   await expect(page.getByRole('button', { name: 'Account' })).toBeVisible()
 
@@ -88,8 +98,31 @@ test('TOTP 2FA: enroll a code factor, then complete a password+code login', asyn
   await page.locator('#login-password').fill(OPERATOR_PASS)
   await page.locator('form button[type="submit"]').click()
   await expect(page.locator('#login-totp')).toBeVisible({ timeout: 15_000 })
+
+  // Negative: a WRONG code is rejected and re-prompts (totpNotAccepted) — it does not advance the
+  // replay watermark, so the correct code in the same window still completes login below.
+  await page.locator('#login-totp').fill('000000')
+  await page.locator('form button[type="submit"]').click()
+  await expect(page.getByRole('alert')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('#login-totp')).toBeVisible()
+
   await page.locator('#login-totp').fill(totpNow(secret))
   await page.locator('form button[type="submit"]').click()
   await expect(page.locator('#login-username')).toBeHidden({ timeout: 15_000 })
   await expect(page.getByRole('button', { name: 'Account' })).toBeVisible()
+})
+
+test('passwordless passkey login for an unregistered username is rejected', async ({ page, context }) => {
+  test.setTimeout(60_000)
+  const target = keystoneOnTarget()
+  // A virtual authenticator is present but holds NO credential for this username, so the decoy
+  // assertion the server issues finds no match and the login is refused (noPasskeyRegistered).
+  await addVirtualAuthenticator(page)
+  await seedAndGotoController(page, context, target)
+
+  await page.locator('#login-username').fill('ghost-operator-not-registered')
+  await page.getByRole('button', { name: /Sign in with passkey/ }).click()
+  // The error banner surfaces and the login gate stays closed (still on the login page).
+  await expect(page.getByRole('alert')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#login-username')).toBeVisible()
 })
