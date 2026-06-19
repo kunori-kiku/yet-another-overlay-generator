@@ -1,7 +1,11 @@
 import { expect, type Page, type BrowserContext } from '@playwright/test'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { readHarness, httpURL, type HarnessState } from './harness'
 import { seedControllerMode } from './seedStore'
 import { OPERATOR_USER, OPERATOR_PASS } from './config'
+
+const execFileP = promisify(execFile)
 
 // panel.ts — shared operator-journey actions on plan-13's harness, reused across the plan-14
 // specs (login / session / deploy / export-import / revoke). Specs drive the UI + read
@@ -48,4 +52,69 @@ export async function logoutViaUserMenu(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Account' }).click()
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page.locator('#login-username')).toBeVisible({ timeout: 15_000 })
+}
+
+// readCsrf reads the double-submit CSRF cookie (yaog_csrf) for the panel origin, so an
+// operator-authed page.request POST can present the X-CSRF-Token header alongside the session
+// cookie. Returns '' if absent (not logged in).
+export async function readCsrf(context: BrowserContext, panelURL: string): Promise<string> {
+  const cookies = await context.cookies(panelURL)
+  return cookies.find((c) => c.name === 'yaog_csrf')?.value ?? ''
+}
+
+// mintEnrollToken mints a single-use enrollment token for nodeId via the operator API
+// (POST /enrollment-token, cookie + CSRF). Returns the plaintext token. The operator must be
+// logged in first. This is the operator-side of the enroll ceremony — the same effect as the
+// EnrollmentFlow UI, but deterministic.
+export async function mintEnrollToken(
+  page: Page,
+  context: BrowserContext,
+  panelURL: string,
+  nodeId: string,
+): Promise<string> {
+  const csrf = await readCsrf(context, panelURL)
+  const resp = await page.request.post(`${panelURL}/api/v1/operator/enrollment-token`, {
+    headers: { 'X-CSRF-Token': csrf },
+    data: { node_id: nodeId, ttl_seconds: 3600 },
+  })
+  expect(resp.status(), 'mint enrollment-token should be 200').toBe(200)
+  const body = (await resp.json()) as { token: string }
+  expect(body.token, 'enrollment-token response carries a plaintext token').toBeTruthy()
+  return body.token
+}
+
+// enrollNodeViaAgent runs cmd/e2eagent (--mock: enroll + check-in) for nodeId against the
+// controller agent port, so the node appears APPROVED in the registry with a WG public key —
+// enough for stage to compile it. keyPath should be a per-test temp path (auto-cleaned).
+export async function enrollNodeViaAgent(
+  h: HarnessState,
+  agentURL: string,
+  nodeId: string,
+  token: string,
+  keyPath: string,
+): Promise<void> {
+  const { stdout } = await execFileP(h.agentBin, [
+    '--controller', agentURL,
+    '--node-id', nodeId,
+    '--token', token,
+    '--mock',
+    '--key', keyPath,
+  ])
+  expect(stdout).toContain('E2E_AGENT')
+}
+
+// importDesignViaUI imports a design file through the panel's Import button (controller mode:
+// importDesignToServer — strips keys, writes a new server version, re-hydrates the canvas).
+// The caller MUST have registered a dialog handler that accepts the import confirm. It
+// navigates to /design (where the I/O cluster lives) and sets the hidden file input.
+export async function importDesignViaUI(page: Page, panelURL: string, filePath: string): Promise<void> {
+  await page.goto(`${panelURL}/design`)
+  const [resp] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/operator/update-topology') && r.request().method() === 'POST',
+      { timeout: 15_000 },
+    ),
+    page.locator('input[type="file"]').setInputFiles(filePath),
+  ])
+  expect(resp.status(), 'import update-topology should be 200').toBe(200)
 }
