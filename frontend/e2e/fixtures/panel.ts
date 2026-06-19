@@ -85,23 +85,30 @@ export async function mintEnrollToken(
   return body.token
 }
 
+// runE2eAgent invokes cmd/e2eagent with arbitrary args and returns its stdout (asserting exit 0).
+// The single entry point the lifecycle specs use to drive the agent's checkin/rekey/reprovision
+// modes; execFile rejects on a non-zero exit, which surfaces as a failed spec.
+export async function runE2eAgent(h: HarnessState, args: string[]): Promise<string> {
+  const { stdout } = await execFileP(h.agentBin, args)
+  return stdout
+}
+
 // enrollNodeViaAgent runs cmd/e2eagent (--mock: enroll + check-in) for nodeId against the
 // controller agent port, so the node appears APPROVED in the registry with a WG public key —
 // enough for stage to compile it. keyPath should be a per-test temp path (auto-cleaned).
+// bearerFile, when given, persists the issued per-node bearer token so a later invocation
+// (rekey/reprovision/real-checkin) can reuse it (the enrollment token is single-use).
 export async function enrollNodeViaAgent(
   h: HarnessState,
   agentURL: string,
   nodeId: string,
   token: string,
   keyPath: string,
+  bearerFile?: string,
 ): Promise<void> {
-  const { stdout } = await execFileP(h.agentBin, [
-    '--controller', agentURL,
-    '--node-id', nodeId,
-    '--token', token,
-    '--mock',
-    '--key', keyPath,
-  ])
+  const args = ['--controller', agentURL, '--node-id', nodeId, '--token', token, '--mock', '--key', keyPath]
+  if (bearerFile) args.push('--bearer-file', bearerFile)
+  const stdout = await runE2eAgent(h, args)
   expect(stdout).toContain('E2E_AGENT')
 }
 

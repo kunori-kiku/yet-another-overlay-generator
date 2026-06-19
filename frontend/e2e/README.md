@@ -97,11 +97,39 @@ e2eagent --controller http://<agent host:port> --node-id <id> --token <enrollTok
          [--mock] [--key <tmp.key>] [--agent-version <v>]
 ```
 
-`--mock` = enroll + report a fast visible check-in (no poll/fetch); default = the full wire
-(use after an operator deploy promotes a generation, plans 14+). It prints
+`--mock` = enroll + report a fast visible check-in (no poll/fetch); default (`--mode checkin`)
+= the full wire (use after an operator deploy promotes a generation). It prints
 `E2E_AGENT node=<id> reported_generation=<n> mode=<real|mock>` and exits 0.
 
-## Add a scenario (plans 14–18)
+`cmd/e2eagent` is a thin dispatcher (`main.go`) over sibling-file modes (`--mode`):
+
+| mode | what it drives | prints |
+|------|----------------|--------|
+| `checkin` (default) | enroll → [poll → fetch → VerifyBundle] → report (`--mock` skips poll/fetch) | `E2E_AGENT …` |
+| `rekey` | fetch `/config`, confirm `rekey_requested`, regen WG key, `(*ControllerClient).Rekey`, re-fetch+verify, report | `REKEY_DONE node=<id> newpub=<short> gen=<n>` |
+| `reprovision` | keystone-rotation node half: `VerifyMembership` REFUSES under the OLD pin → `ReprovisionKeystone` → ADOPTS under NEW | `REPROVISION node=<id> refuse-before=ok adopt-after=ok` |
+
+`--bearer-file <path>` persists/reuses the per-node bearer across invocations (the single-use
+enrollment token is consumed once); `rekey`/`reprovision` reuse it. The `reprovision` mode takes
+`--operator-cred <OLD.pem> --operator-cred-alg <alg> --new-cred-pem <NEW.pem> [--operator-rpid …]`.
+
+## Fleet-lifecycle scenarios (plan-15)
+
+On top of the operator-flow suite, the fleet-lifecycle layer (each spec self-contained, unique
+node ids per run, server-side guards driven through the real product):
+
+| spec | asserts | negative-proof (dev-only) |
+|------|---------|---------------------------|
+| `fleet-enroll-lifecycle` | the full real wire: enroll → deploy → poll/fetch/verify/report the applied generation (≥1) | n/a (happy path) |
+| `fleet-rekey` | Roll-keys + agent rekey clears the actor; per-node "Cancel rekey" releases a straggler WITHOUT eviction/bump | skip the agent rekey → straggler never clears |
+| `fleet-revoke` | the S4/S5 delta: a revoked node's live check-in is rejected + a held SECOND enrollment token cannot resurrect it | skip the purge → second token resurrects (RED) |
+| `keystone-rotation` | pin OLD → sign → acked rotate to NEW → sign → node REFUSES-then-ADOPTS via reprovision; un-acked rotate = 409 | point reprovision at the wrong PEM → adopt-after RED |
+| `pin-collision-heal` | a colliding topology heals on import + deploys without a duplicate-pin 4xx (R6: raw fixture collides) | bypass heal → stage 4xx (RED) |
+
+Sibling-plan ownership of adjacent surfaces: F1 → plan-14; basic-revoke + the `virtualAuthenticator`
+helper → plan-14; the TS↔Go heal byte-equality pin → plan-5's conformance harness.
+
+## Add a scenario (plans 16–18)
 
 Write `e2e/<name>.spec.ts`; reuse the bring-up — do NOT change it:
 
