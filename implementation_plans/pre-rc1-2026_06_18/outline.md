@@ -248,6 +248,18 @@ plan-22 D-decisions, recommended FIX/DOCUMENT respectively); plan-18 netns Optio
 container execution mode; plan-21 npm-audit advisory-vs-required threshold; plan-13 frontend-e2e
 required-from-day-one vs advisory-until-20×-green.
 
+**Decision (2026-06-19) — local-engine default-ON is folded into plan-7 (the soak gate is waived, replaced by the green harness).**
+plan-6 shipped the local-engine seam **default-OFF** and deferred the default-ON flip + dead-fetch removal to its
+"post-soak" Phase 7. But plan-7's whole purpose — gating the air-gap compute routes off the DEFAULT controller build —
+requires local mode to be browser-resident (it must NOT depend on the server routes), and task #49 / the program spine
+run plan-7 right after plan-6 with **"No real-world soak gate."** Reconciliation: the plan-5 conformance harness (green,
+required) is the program's *mechanical* drift guarantee that REPLACES real-world soak (the harness-FIRST thesis). So
+plan-7 completes plan-6's deferred Phase 7 as its Phase 0.5 — **flip `localEngineEnabled()` default-ON (`!== 'backend'`),
+remove the dead local-mode `fetch` branches** (retain `readApiErrorMessage` for controller validate) — making local mode
+browser-resident by default, THEN gates the now-unused routes behind `//go:build airgap`. The `VITE_YAOG_LOCAL_ENGINE=backend`
+escape hatch is retained (works against a `-tags airgap` server). Reversible via the flag; justified by the green harness +
+the expanded corpus (validator 93/97, all render/alloc branches byte-pinned). rc.1 is itself the soak vehicle.
+
 **Findings discovered during plan-3 execution (2026-06-18; recorded so they are not lost — none block
 plan-3, which is a no-byte-change freeze):**
 
@@ -438,8 +450,8 @@ partial/parked/abandoned, per close-phase).
 | plan-3  | 1.3 | S1 | delivered (PR #141) | plan-1 (clean tree), plan-8 (freeze FIXED C2/C3 behavior) |
 | plan-4  | 1.4 | S1 | delivered (PR #143) | plan-5 (green+required), plan-3, plan-9 |
 | plan-5  | 1.5 | S1 | delivered (PR #142) | plan-3 |
-| plan-6  | 1.6 | S1 | in-progress (branch feat/local-mode-rewire) | plan-4 |
-| plan-7  | 1.7 | S1 | pending | plan-6 (tail of S1; before Subject 4 re-audit) |
+| plan-6  | 1.6 | S1 | delivered (PR #144) | plan-4 |
+| plan-7  | 1.7 | S1 | in-progress (branch feat/backend-shrink-airgap) | plan-6 (tail of S1; before Subject 4 re-audit) |
 | plan-8  | 1.8 | S1 | delivered (PR #140) | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
 | plan-9  | 1.9 | S1 | delivered (PR #138) | plan-1 (EARLY off main; supports plan-4) |
 | plan-10 | 2.1 | S2 | pending | plan-11; SUBJECT 1 |
