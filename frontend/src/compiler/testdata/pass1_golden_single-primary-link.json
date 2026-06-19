@@ -1,0 +1,30 @@
+{
+ "node_overlay_ips": {
+  "node-alpha": "10.21.0.1",
+  "node-beta": "10.21.0.2"
+ },
+ "peers": {
+  "node-alpha|node-beta|node-alpha": {
+   "remote_node_id": "node-beta",
+   "public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw=",
+   "overlay_ip": "10.21.0.2",
+   "interface_name": "wg-beta",
+   "listen_port": 51820,
+   "local_transit_ip": "10.10.0.1",
+   "remote_transit_ip": "10.10.0.2",
+   "local_link_local": "fe80::1",
+   "remote_link_local": "fe80::2"
+  },
+  "node-alpha|node-beta|node-beta": {
+   "remote_node_id": "node-alpha",
+   "public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
+   "overlay_ip": "10.21.0.1",
+   "interface_name": "wg-alpha",
+   "listen_port": 51820,
+   "local_transit_ip": "10.10.0.2",
+   "remote_transit_ip": "10.10.0.1",
+   "local_link_local": "fe80::2",
+   "remote_link_local": "fe80::1"
+  }
+ }
+}

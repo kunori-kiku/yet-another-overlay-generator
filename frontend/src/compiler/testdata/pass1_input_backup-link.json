@@ -1,0 +1,81 @@
+{
+ "project": {
+  "id": "backup-link",
+  "name": "Backup Link"
+ },
+ "domains": [
+  {
+   "id": "domain-1",
+   "name": "mesh",
+   "cidr": "10.23.0.0/24",
+   "allocation_mode": "auto",
+   "routing_mode": "babel"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "node-alpha",
+   "name": "alpha",
+   "hostname": "alpha.example.com",
+   "platform": "debian",
+   "role": "router",
+   "domain_id": "domain-1",
+   "capabilities": {
+    "can_accept_inbound": true,
+    "can_forward": true,
+    "has_public_ip": true
+   },
+   "public_endpoints": [
+    {
+     "id": "alpha-ep",
+     "host": "alpha.example.com",
+     "port": 51820
+    }
+   ],
+   "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+  },
+  {
+   "id": "node-beta",
+   "name": "beta",
+   "hostname": "beta.example.com",
+   "platform": "ubuntu",
+   "role": "router",
+   "domain_id": "domain-1",
+   "capabilities": {
+    "can_accept_inbound": true,
+    "can_forward": true,
+    "has_public_ip": true
+   },
+   "public_endpoints": [
+    {
+     "id": "beta-ep",
+     "host": "beta.example.com",
+     "port": 51820
+    }
+   ],
+   "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "from_node_id": "node-alpha",
+   "to_node_id": "node-beta",
+   "type": "public-endpoint",
+   "endpoint_host": "beta.example.com",
+   "transport": "udp",
+   "role": "primary",
+   "is_enabled": true
+  },
+  {
+   "id": "e2",
+   "from_node_id": "node-alpha",
+   "to_node_id": "node-beta",
+   "type": "public-endpoint",
+   "endpoint_host": "beta.example.com",
+   "transport": "udp",
+   "role": "backup",
+   "is_enabled": true
+  }
+ ]
+}

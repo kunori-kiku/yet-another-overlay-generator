@@ -1,0 +1,31 @@
+{
+  "name": "validator-client-edge-constraints",
+  "doc": "client-edge constraint cluster: a backup edge touching a client + a client edge carrying allocation pins",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.51.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "router-b", "name": "router-b", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "router-b.example.com", "port": 51820 } ] },
+      { "id": "client-a", "name": "client-a", "platform": "debian", "role": "client", "domain_id": "d1",
+        "capabilities": {} },
+      { "id": "client-b", "name": "client-b", "platform": "debian", "role": "client", "domain_id": "d1",
+        "capabilities": {} }
+    ],
+    "edges": [
+      { "id": "e-out", "from_node_id": "client-a", "to_node_id": "router-a", "type": "public-endpoint", "endpoint_host": "router-a.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-bk", "from_node_id": "client-a", "to_node_id": "router-a", "type": "public-endpoint", "endpoint_host": "router-a.example.com", "role": "backup", "transport": "udp", "is_enabled": true },
+      { "id": "e-client-pin", "from_node_id": "client-b", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true,
+        "pinned_from_port": 51900, "pinned_to_port": 51901,
+        "pinned_from_transit_ip": "10.10.0.5", "pinned_to_transit_ip": "10.10.0.6" }
+    ]
+  }
+}

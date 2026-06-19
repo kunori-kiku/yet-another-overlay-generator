@@ -1,0 +1,29 @@
+{
+  "name": "schema-node-edge-field-rejects",
+  "doc": "schema cluster: project/node/edge structural + charset + range + enum rejects (no root short-circuit). The LIVE schema-drift gate counterpart to the frozen schema_expected.json snapshot.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "", "name": "" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.63.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "", "name": "", "platform": "debian", "role": "", "domain_id": "",
+        "capabilities": {} },
+      { "id": "n-badrole", "name": "n-badrole", "platform": "debian", "role": "supervisor", "domain_id": "d1",
+        "capabilities": {} },
+      { "id": "n-badvals", "name": "n badname!", "platform": "debian", "role": "router", "domain_id": "d1",
+        "xdp_mode": "Native", "overlay_ip": "999.1.1.1", "mtu": 200, "ssh_port": 70000,
+        "router_id": "not-a-mac", "extra_prefixes": [ "not-a-cidr", "2001:db8::/32" ],
+        "ssh_host": "evil$(reboot)", "ssh_alias": "a;b", "ssh_user": "u|v", "ssh_key_path": "/k`whoami`.pem",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "bv-ep", "host": "bad host!", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "", "from_node_id": "", "to_node_id": "", "type": "", "transport": "sctp", "endpoint_port": 70000, "role": "tertiary", "is_enabled": true },
+      { "id": "e-badtype", "from_node_id": "n-badrole", "to_node_id": "n-badvals", "type": "mesh-path", "endpoint_host": "bad host!", "transport": "udp", "is_enabled": true },
+      { "id": "e-self", "from_node_id": "n-badvals", "to_node_id": "n-badvals", "type": "direct", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

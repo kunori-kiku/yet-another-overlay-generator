@@ -1,0 +1,80 @@
+{
+  "fixture": "schema-node-edge-field-rejects",
+  "verdict": {
+    "validator": [
+      "validation_edge_endpoint_host_illegal_chars",
+      "validation_edge_endpoint_port_invalid",
+      "validation_edge_from_node_id_required",
+      "validation_edge_id_required",
+      "validation_edge_role_invalid",
+      "validation_edge_self_loop",
+      "validation_edge_to_node_id_required",
+      "validation_edge_transport_invalid",
+      "validation_edge_type_empty",
+      "validation_edge_type_invalid",
+      "validation_nat_no_outbound_to_public",
+      "validation_nat_target_unreachable",
+      "validation_node_domain_id_required",
+      "validation_node_extra_prefix_invalid",
+      "validation_node_extra_prefix_not_ipv4",
+      "validation_node_id_required",
+      "validation_node_interface_name_collision",
+      "validation_node_mtu_out_of_range",
+      "validation_node_name_illegal_chars",
+      "validation_node_name_required",
+      "validation_node_overlay_ip_invalid",
+      "validation_node_public_endpoint_host_illegal_chars",
+      "validation_node_role_empty",
+      "validation_node_role_invalid",
+      "validation_node_router_id_invalid",
+      "validation_node_ssh_alias_illegal_chars",
+      "validation_node_ssh_host_illegal_chars",
+      "validation_node_ssh_key_path_illegal_chars",
+      "validation_node_ssh_port_out_of_range",
+      "validation_node_ssh_user_illegal_chars",
+      "validation_node_xdp_mode_invalid",
+      "validation_project_id_required",
+      "validation_project_name_required"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
+  "healed_edges": [
+    {
+      "id": "",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    },
+    {
+      "id": "e-badtype",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    },
+    {
+      "id": "e-self",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    }
+  ]
+}

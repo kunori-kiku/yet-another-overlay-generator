@@ -1,0 +1,50 @@
+{
+  "fixture": "validator-edge-duplicate-and-endpoint-mismatch",
+  "verdict": {
+    "validator": [
+      "validation_edge_duplicate_enabled_same_direction",
+      "validation_edge_endpoint_no_match",
+      "validation_edge_multiple_explicit_primary"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
+  "healed_edges": [
+    {
+      "id": "e-dup",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    },
+    {
+      "id": "e-pri1",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    },
+    {
+      "id": "e-pri2",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    }
+  ]
+}

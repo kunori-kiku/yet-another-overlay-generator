@@ -1,0 +1,17 @@
+{
+  "fixture": "schema-no-domains-defined",
+  "verdict": {
+    "validator": [
+      "validation_domain_none_defined"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
+  "healed_edges": []
+}

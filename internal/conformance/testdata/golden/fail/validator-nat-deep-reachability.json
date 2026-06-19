@@ -1,0 +1,41 @@
+{
+  "fixture": "validator-nat-deep-reachability",
+  "verdict": {
+    "validator": [
+      "validation_nat_dead_link",
+      "validation_nat_double_nat_no_endpoint",
+      "validation_nat_no_outbound_to_public",
+      "validation_nat_target_unreachable"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
+  "healed_edges": [
+    {
+      "id": "e-dead",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    },
+    {
+      "id": "e-double",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "domain_cidr_invalid": {
+    "codes": [
+      "validation_domain_cidr_invalid"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "domain_cidr_ipv6": {
+    "codes": [
+      "validation_domain_cidr_not_ipv4"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "domain_cidr_too_large": {
+    "codes": [
+      "validation_domain_cidr_too_large"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "domain_field_errors": {
+    "codes": [
+      "validation_domain_allocation_mode_invalid",
+      "validation_domain_cidr_empty",
+      "validation_domain_id_required",
+      "validation_domain_name_required",
+      "validation_domain_routing_mode_unimplemented"
+    ],
+    "routing_modes": [
+      "static"
+    ],
+    "transports": []
+  },
+  "domain_routing_mode_bogus": {
+    "codes": [
+      "validation_domain_routing_mode_invalid"
+    ],
+    "routing_modes": [
+      "ospf"
+    ],
+    "transports": []
+  },
+  "edge_errors": {
+    "codes": [
+      "validation_edge_endpoint_host_illegal_chars",
+      "validation_edge_endpoint_port_invalid",
+      "validation_edge_from_node_id_required",
+      "validation_edge_id_required",
+      "validation_edge_role_invalid",
+      "validation_edge_self_loop",
+      "validation_edge_to_node_id_required",
+      "validation_edge_transport_invalid",
+      "validation_edge_type_invalid"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": [
+      "sctp",
+      "udp"
+    ]
+  },
+  "edge_valid": {
+    "codes": [],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": [
+      "udp"
+    ]
+  },
+  "missing_project": {
+    "codes": [
+      "validation_project_id_required",
+      "validation_project_name_required"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "no_domains": {
+    "codes": [
+      "validation_domain_none_defined"
+    ],
+    "routing_modes": [],
+    "transports": []
+  },
+  "node_field_errors": {
+    "codes": [
+      "validation_node_domain_id_required",
+      "validation_node_extra_prefix_invalid",
+      "validation_node_extra_prefix_not_ipv4",
+      "validation_node_id_required",
+      "validation_node_mtu_out_of_range",
+      "validation_node_name_illegal_chars",
+      "validation_node_overlay_ip_invalid",
+      "validation_node_platform_unsupported",
+      "validation_node_public_endpoint_host_illegal_chars",
+      "validation_node_role_invalid",
+      "validation_node_router_id_invalid",
+      "validation_node_ssh_alias_illegal_chars",
+      "validation_node_ssh_host_illegal_chars",
+      "validation_node_ssh_key_path_illegal_chars",
+      "validation_node_ssh_port_out_of_range",
+      "validation_node_ssh_user_illegal_chars",
+      "validation_node_xdp_mode_invalid"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "node_valid_variants": {
+    "codes": [],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "reserved_and_transit": {
+    "codes": [
+      "validation_domain_reserved_address_not_ipv4",
+      "validation_domain_reserved_range_invalid",
+      "validation_domain_reserved_range_not_ipv4",
+      "validation_domain_transit_cidr_not_ipv4"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "schema_version_future": {
+    "codes": [
+      "validation_topology_schema_version_unsupported"
+    ],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  },
+  "transit_too_small_and_large": {
+    "codes": [
+      "validation_domain_transit_cidr_invalid",
+      "validation_domain_transit_cidr_too_large",
+      "validation_domain_transit_cidr_too_small"
+    ],
+    "routing_modes": [
+      "babel",
+      "babel",
+      "babel"
+    ],
+    "transports": []
+  },
+  "valid_minimal": {
+    "codes": [],
+    "routing_modes": [
+      "babel"
+    ],
+    "transports": []
+  }
+}

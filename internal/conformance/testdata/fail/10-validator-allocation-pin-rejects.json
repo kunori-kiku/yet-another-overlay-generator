@@ -1,0 +1,53 @@
+{
+  "name": "validator-allocation-pin-rejects",
+  "doc": "allocation-pin cluster: structural rejects (incomplete + out-of-range + invalid + out-of-cidr) AND cross-link duplicate rejects (a primary link and a backup link pin the same resource)",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.56.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "hub", "name": "hub", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "hub-ep", "host": "hub.example.com", "port": 51820 } ] },
+      { "id": "ra", "name": "ra", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "ra.example.com", "port": 51820 } ] },
+      { "id": "rb", "name": "rb", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "rb.example.com", "port": 51820 } ] },
+      { "id": "rc", "name": "rc", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rc-ep", "host": "rc.example.com", "port": 51820 } ] },
+      { "id": "rd", "name": "rd", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rd-ep", "host": "rd.example.com", "port": 51820 } ] },
+      { "id": "rx", "name": "rx", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rx-ep", "host": "rx.example.com", "port": 51820 } ] },
+      { "id": "ry", "name": "ry", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ry-ep", "host": "ry.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-port", "from_node_id": "hub", "to_node_id": "ra", "type": "public-endpoint", "endpoint_host": "ra.example.com", "transport": "udp", "is_enabled": true,
+        "pinned_from_port": 100 },
+      { "id": "e-ll", "from_node_id": "hub", "to_node_id": "rb", "type": "public-endpoint", "endpoint_host": "rb.example.com", "transport": "udp", "is_enabled": true,
+        "pinned_from_link_local": "fe80::1" },
+      { "id": "e-transit", "from_node_id": "hub", "to_node_id": "rc", "type": "public-endpoint", "endpoint_host": "rc.example.com", "transport": "udp", "is_enabled": true,
+        "pinned_from_transit_ip": "not-an-ip", "pinned_to_transit_ip": "10.99.0.5" },
+      { "id": "e-transit-partial", "from_node_id": "hub", "to_node_id": "rd", "type": "public-endpoint", "endpoint_host": "rd.example.com", "transport": "udp", "is_enabled": true,
+        "pinned_from_transit_ip": "10.10.0.7" },
+      { "id": "e-pri", "from_node_id": "rx", "to_node_id": "ry", "type": "public-endpoint", "endpoint_host": "ry.example.com", "transport": "udp", "is_enabled": true,
+        "pinned_from_port": 52000, "pinned_to_port": 52001,
+        "pinned_from_transit_ip": "10.10.0.20", "pinned_to_transit_ip": "10.10.0.21",
+        "pinned_from_link_local": "fe80::20", "pinned_to_link_local": "fe80::21" },
+      { "id": "e-bak", "from_node_id": "rx", "to_node_id": "ry", "type": "public-endpoint", "endpoint_host": "ry.example.com", "role": "backup", "transport": "udp", "is_enabled": true,
+        "pinned_from_port": 52000, "pinned_to_port": 52002,
+        "pinned_from_transit_ip": "10.10.0.20", "pinned_to_transit_ip": "10.10.0.23",
+        "pinned_from_link_local": "fe80::20", "pinned_to_link_local": "fe80::24" }
+    ]
+  }
+}

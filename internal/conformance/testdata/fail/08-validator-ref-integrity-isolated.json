@@ -1,0 +1,26 @@
+{
+  "name": "validator-ref-integrity-isolated",
+  "doc": "ref-integrity + isolated cluster: a node referencing a non-existent domain (node_domain_ref_missing), an edge referencing a non-existent node (edge_node_ref_missing), and that orphan node having no enabled edge (node_isolated).",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.54.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "router-b", "name": "router-b", "platform": "debian", "role": "router", "domain_id": "d1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "router-b.example.com", "port": 51820 } ] },
+      { "id": "orphan", "name": "orphan", "platform": "debian", "role": "router", "domain_id": "no-such-domain",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true } }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true },
+      { "id": "e-ghost", "from_node_id": "router-a", "to_node_id": "ghost-node", "type": "public-endpoint", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}
