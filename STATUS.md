@@ -1,6 +1,6 @@
 # STATUS
 <!-- regenerated: 2026-06-19 -->
-<!-- by: pre-rc1 program — Subject 1 closed -->
+<!-- by: pre-rc1 program — Subject 2 closed -->
 
 ## Active work
 
@@ -14,9 +14,18 @@
   controller-only default, local mode **default-ON** (#145). Each: independent multi-lens workflow review
   → fix at root (no shims) → re-review GO → CI green → merge. Both Go build profiles (default +
   `-tags airgap`) are CI-gated; the conformance harness pins TS==Go byte-for-byte.
-- **NEXT: SUBJECT 2 (phone UX, plans 10–12).** Then Subject 3 (full-stack E2E simulation/pitfall-hunt,
-  plans 13–19, with the MANDATORY real-tunnel integration 3.6), Subject 4 (security re-audit, plans
-  20–21 + plan-22 cuts rc.1). rc.1 is NOT cut until all four subjects are done.
+- **SUBJECT 2 (phone UX) COMPLETE — all 3 plans merged to `main` (2026-06-19, PR #147).** One combined
+  branch `feat/phone-ux-subject2`: plan-11 reusable off-canvas `Drawer` primitive + `useMediaQuery`
+  (Contingency B — owns the primitive AND the sidebar consumer), plan-10 descriptor-spine responsive
+  operator surfaces (desktop table / mobile cards), plan-12 small-screen read-only design-canvas gate
+  (editing hard-disabled below `lg`; the store cannot be mutated from the gated canvas). Frontend-only;
+  no backend/contract change. Independent 3-lens review (correctness/no-desktop-regression ·
+  completeness/Contingency-B-scope · hygiene/adversarial) → GO/0-blockers → 3 non-blocking findings
+  fixed at root (gate-scrim-before-drawer; aria-label key rename) → CI green → merged.
+- **NEXT: SUBJECT 3 (full-stack E2E simulation / pitfall-hunt, plans 13–19).** plan-13 (Playwright +
+  virtual-WebAuthn + device-emulation harness) FIRST; real-tunnel integration plan-18 (3.6) is
+  MANDATORY before rc.1; plan-19 LAST. Then Subject 4 (security re-audit, plans 20–21 + plan-22 cuts
+  rc.1). rc.1 is NOT cut until all four subjects are done.
 - Decision (2026-06-19, in the outline decisions log): local-engine **default-ON** folded into plan-7
   (the real-world soak gate is waived — replaced by the green conformance harness); the
   `VITE_YAOG_LOCAL_ENGINE=backend` escape hatch is retained (works against a `-tags airgap` server).
@@ -116,6 +125,13 @@
      non-overlapping transit IPs/ports. Separately: controller-mode Export downloads the design;
      Import of that file writes a new server version, re-hydrates the canvas, and does NOT deploy or
      leave fleet data in localStorage. No FE test runner, so owner-verified in a browser.
+  9. **Phone-UX smoke (Subject 2):** on a real ~360–414px viewport — the Topbar hamburger opens the
+     off-canvas nav Drawer (focus-trap, Esc, backdrop-click, route-change auto-close), the Drawer never
+     leaks onto the login/splash branch and does not reopen on refresh; operator pages reflow to mobile
+     cards; the `/design` route shows the read-only gate below `lg` and editing stays disabled (no node
+     drag / edge draw / store mutation) in the read-only preview; no desktop ≥1024px regression. These
+     are owed-by-design (no in-env browser) and are slated to be **covered by Subject 3's device-emulation
+     E2E harness** (plan-13/plan-17), shrinking the owed-manual list rather than persisting it.
 - **rc.1 is a later owner call** once the owed smokes pass and the beta soak is clean.
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
@@ -125,11 +141,17 @@
 
 ## Next actions
 
-1. Owner: review `implementation_plans/pre-rc1-2026_06_18/` and sign off on the 3 pending decisions
-   (air-gap mechanism, transit-CIDR const home, rc.1 `--prerelease`).
-2. Execute the pre-rc.1 program subject by subject (start with plan-1 hygiene; harness-first within Subject 1).
-3. Owner: run the owed manual smokes on real hardware/fleet (see Open questions / blockers).
-4. After Subjects 1–4 land + smokes pass, cut `rc.1` (gated on real-tunnel + conformance harness green; per plan-22).
+1. Execute **Subject 3** (full-stack E2E simulation / pitfall-hunt, plans 13–19): plan-13 harness FIRST
+   (Playwright + virtual-WebAuthn-via-CDP + device emulation + network-fault injection against the real
+   built FE + a live Go controller + real/mock agent), then 14–17, then the MANDATORY real-tunnel
+   integration plan-18 (containers/netns bring up the GENERATED WireGuard+Babel and assert tunnels form
+   + routes converge), then plan-19 last. Same per-plan rhythm: build → independent multi-lens review →
+   fix at root → re-review GO → CI green → merge.
+2. Then Subject 4 (security re-audit, plans 20–21) → plan-22 cuts `rc.1` (gated on real-tunnel +
+   conformance harness green; plan-22 is the sole tag authority and adds `-race`, `govulncheck`,
+   frontend-e2e + realtunnel as required checks).
+3. Owner: run the owed manual smokes on real hardware/fleet (see Open questions / blockers) — the
+   Subject-2 phone smokes and several earlier ones are slated to be absorbed by the Subject-3 harness.
 
 ## Recently closed subjects (last 3)
 

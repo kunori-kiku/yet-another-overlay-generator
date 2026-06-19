@@ -447,7 +447,17 @@ partial/parked/abandoned, per close-phase).
 > local-mode→browser migration shipped end-to-end: the TS compiler is byte-exact vs the Go oracle
 > (conformance harness = required CI gate, both build profiles gated), local mode is browser-resident
 > by default, and the controller backend is shrunk to controller-only with the air-gap compute oracle
-> retained behind `//go:build airgap`. NEXT: Subject 2 (phone UX, plans 10–12).
+> retained behind `//go:build airgap`.
+>
+> **SUBJECT 2 (S2 / plans 10–12) COMPLETE — all delivered to `main` 2026-06-19** (PR #147; one combined
+> branch `feat/phone-ux-subject2`, independent 3-lens review GO/0-blockers → non-blocking findings fixed at
+> root → CI green → merged). Phone UX shipped: reusable off-canvas `Drawer` primitive + `useMediaQuery`
+> (plan-11, Contingency B — owns the primitive AND the sidebar consumer); descriptor-spine responsive
+> operator surfaces (plan-10); small-screen read-only design-canvas gate with editing hard-disabled below
+> `lg` (plan-12). Frontend-only; no backend/contract change. Owed-by-design: manual phone smokes
+> (a11y/boundary/login-gate/sidebar matrix) — validated under Subject 3's device-emulation E2E harness.
+> NEXT: Subject 3 (full-stack E2E simulation / pitfall-hunt, plans 13–19; plan-13 harness FIRST,
+> real-tunnel plan-18 MANDATORY before rc.1).
 
 | plan | milestone | subject | status | depends-on |
 |------|-----------|---------|--------|------------|
@@ -460,9 +470,9 @@ partial/parked/abandoned, per close-phase).
 | plan-7  | 1.7 | S1 | delivered (PR #145) | plan-6 (tail of S1; before Subject 4 re-audit) |
 | plan-8  | 1.8 | S1 | delivered (PR #140) | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
 | plan-9  | 1.9 | S1 | delivered (PR #138) | plan-1 (EARLY off main; supports plan-4) |
-| plan-10 | 2.1 | S2 | pending | plan-11; SUBJECT 1 |
-| plan-11 | 2.2 | S2 | pending | SUBJECT 1 (FIRST in S2) |
-| plan-12 | 2.3 | S2 | pending | plan-11 |
+| plan-10 | 2.1 | S2 | delivered (PR #147) | plan-11; SUBJECT 1 |
+| plan-11 | 2.2 | S2 | delivered (PR #147) | SUBJECT 1 (FIRST in S2) |
+| plan-12 | 2.3 | S2 | delivered (PR #147) | plan-11 |
 | plan-13 | 3.1 | S3 | pending | SUBJECT 2 (FIRST in S3) |
 | plan-14 | 3.2 | S3 | pending | plan-13 |
 | plan-15 | 3.3 | S3 | pending | plan-13 (alongside plan-14) |
