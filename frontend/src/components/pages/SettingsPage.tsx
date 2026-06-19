@@ -79,7 +79,7 @@ export function SettingsPage() {
   ];
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
+    <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-6">
       {/* Mode toggle. Hidden in the static-local-design build (VITE_LOCAL_ONLY): that build has
           no controller backend, so the controller half of the toggle would offer a dead
           "connect to controller" path. The store-side guards (setMode/switchToController) make

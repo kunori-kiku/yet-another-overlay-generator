@@ -110,7 +110,7 @@ export function DeployBar() {
 
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-lg font-semibold text-teal-400">
           {t(language, 'deployBar.deployToFleet')}
         </h3>
@@ -118,7 +118,7 @@ export function DeployBar() {
           <button
             onClick={onRollKeys}
             disabled={loading || noAuth}
-            className="px-4 py-1.5 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {t(language, 'deployBar.rollKeys')}
           </button>
@@ -130,7 +130,7 @@ export function DeployBar() {
                 ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })
                 : undefined
             }
-            className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {loading
               ? t(language, 'deployBar.deploying')
@@ -203,14 +203,14 @@ export function DeployBar() {
               <button
                 onClick={() => enrollOperator({ rotate: true })}
                 disabled={enrolling || loading || noAuth}
-                className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+                className="px-3 py-2 text-xs bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
               >
                 {t(language, 'deployBar.rotateKeystoneConfirm')}
               </button>
               <button
                 onClick={() => cancelKeystoneRotate()}
                 disabled={enrolling}
-                className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-3 py-2 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
               >
                 {t(language, 'deployBar.cancel')}
               </button>
@@ -220,7 +220,7 @@ export function DeployBar() {
           <button
             onClick={() => enrollOperator()}
             disabled={enrolling || loading || noAuth || !keystoneKnown}
-            className="px-4 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
           >
             {enrolling
               ? t(language, 'deployBar.waitingForSecurityKey')
@@ -328,7 +328,7 @@ export function DeployBar() {
                     <button
                       onClick={() => revoke(o.nodeId)}
                       disabled={loading}
-                      className="shrink-0 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
+                      className="shrink-0 px-3 py-2 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
                     >
                       {t(language, 'deployBar.revoke')}
                     </button>
@@ -375,7 +375,7 @@ export function DeployBar() {
                   setShrinkTyped('');
                   cancelShrinkConfirm();
                 }}
-                className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+                className="rounded border border-gray-600 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700"
               >
                 {t(language, 'deployBar.cancel')}
               </button>
@@ -386,7 +386,7 @@ export function DeployBar() {
                   setShrinkTyped('');
                   void deploy({ confirmedShrink: true });
                 }}
-                className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400"
+                className="rounded bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400"
               >
                 {t(language, 'deployBar.confirmDeploy')}
               </button>

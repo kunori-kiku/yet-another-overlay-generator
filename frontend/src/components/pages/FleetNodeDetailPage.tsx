@@ -31,7 +31,7 @@ export function FleetNodeDetailPage() {
   const settings = useControllerStore((s) => s.settings);
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-4">
+    <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-4">
       <Link to="/fleet" className="text-sm text-blue-400 hover:underline">
         {t(language, 'fleetBack')}
       </Link>

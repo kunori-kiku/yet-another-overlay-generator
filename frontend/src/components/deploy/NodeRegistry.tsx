@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { t } from '../../i18n';
-import type { ControllerNodeStatus } from '../../types/controller';
+import { t, type MessageKey } from '../../i18n';
+import type { ControllerNode, ControllerNodeStatus } from '../../types/controller';
 import { UpdateStatusChip } from './UpdateStatusChip';
 
 // isDrifting reports whether a node's applied-vs-desired generation has drifted (an approved node
@@ -29,6 +30,98 @@ function fmtTime(iso: string): string {
   if (!iso || iso.startsWith('0001-01-01')) return '—';
   const d = new Date(iso);
   return isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+// NodeCell is one per-node status field. The single descriptor array (nodeCells, below) is the shared
+// spine BOTH the desktop table and the below-lg mobile cards iterate: the table renders each cell as a
+// <td>, the cards render the same cell as a labeled key/value row. Adding/removing/reordering a column
+// edits this one array — the two presentations can never drift in which fields they show (the
+// structural single-source-of-truth this plan owes, 2.1 step 5).
+interface NodeCell {
+  // labelKey is the column header (table <th>) / row label (mobile card).
+  labelKey: MessageKey;
+  // value is the per-node cell content; identical JSX in both presentations.
+  value: ReactNode;
+}
+
+// CELL_LABEL_KEYS is the column header order, derived from the descriptor so the table <thead> needs
+// no node data to render its labels (and the header can never list a different set than the body).
+const CELL_LABEL_KEYS: readonly MessageKey[] = [
+  'nodeRegistry.status',
+  'nodeRegistry.genAppliedDesired',
+  'nodeRegistry.health',
+  'nodeRegistry.agentVersion',
+  'updateStatus.label',
+  'nodeRegistry.lastSeen',
+];
+
+// nodeCells builds the descriptor array for one node from the same module-scope helpers (isDrifting,
+// statusClass, fmtTime), the UpdateStatusChip, and the rekeying/orphan badges the table used inline.
+// settings drives the UpdateStatusChip (plan-5); orphan marks a node in the registry but not in the
+// current design (computed by the component-scope isOrphan closure and passed in).
+function nodeCells(
+  n: ControllerNode,
+  settings: Parameters<typeof UpdateStatusChip>[0]['settings'],
+  language: Parameters<typeof UpdateStatusChip>[0]['language'],
+  orphan: boolean,
+): NodeCell[] {
+  const drift = isDrifting(n.appliedGeneration, n.desiredGeneration);
+  return [
+    {
+      labelKey: 'nodeRegistry.status',
+      value: (
+        <>
+          <span className={`px-2 py-0.5 rounded text-xs border ${statusClass(n.status)}`}>
+            {n.status}
+          </span>
+          {/* plan-4.6: the operator has requested this node rotate its WG key; waiting for the agent
+              to regenerate and register a new public key. */}
+          {n.rekeyRequested && (
+            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
+              {t(language, 'nodeRegistry.rekeying')}
+            </span>
+          )}
+          {/* plan-6: this node is in the fleet registry but not in the current design — an
+              identity-reconciliation marker telling the operator it has left the design (revoke it to
+              remove it from the fleet). */}
+          {orphan && n.status !== 'revoked' && (
+            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-900/40 text-orange-300 border-orange-700">
+              {t(language, 'nodeRegistry.notInDesign')}
+            </span>
+          )}
+        </>
+      ),
+    },
+    {
+      labelKey: 'nodeRegistry.genAppliedDesired',
+      value: (
+        <span className="font-mono">
+          <span className={drift ? 'text-yellow-400' : 'text-gray-300'}>
+            {n.appliedGeneration} / {n.desiredGeneration}
+          </span>
+          {drift && (
+            <span className="ml-1 text-[10px] text-yellow-400">{t(language, 'nodeRegistry.drift')}</span>
+          )}
+        </span>
+      ),
+    },
+    {
+      labelKey: 'nodeRegistry.health',
+      value: <span className="text-gray-300">{n.lastHealth || '—'}</span>,
+    },
+    {
+      labelKey: 'nodeRegistry.agentVersion',
+      value: <span className="font-mono text-xs text-gray-400">{n.agentVersion || '—'}</span>,
+    },
+    {
+      labelKey: 'updateStatus.label',
+      value: <UpdateStatusChip node={n} settings={settings} language={language} />,
+    },
+    {
+      labelKey: 'nodeRegistry.lastSeen',
+      value: <span className="text-gray-400 text-xs">{fmtTime(n.lastSeen)}</span>,
+    },
+  ];
 }
 
 export function NodeRegistry() {
@@ -67,6 +160,43 @@ export function NodeRegistry() {
   const edgeReady = (fromId: string, toId: string): boolean =>
     statusByNodeId.get(fromId) === 'approved' && statusByNodeId.get(toId) === 'approved';
 
+  // The per-node action cluster (Cancel-rekey + Revoke), shared by the desktop table row and the
+  // below-lg mobile card so the two presentations stay behaviorally identical. `fullWidth` makes the
+  // buttons stretch in the narrow card (easier phone tap targets) while staying inline in the table.
+  const actions = (n: ControllerNode, fullWidth: boolean): ReactNode => {
+    const btn = fullWidth ? 'flex-1 text-center' : '';
+    return (
+      <>
+        {/* Cancel rekey: release a stuck "Roll keys" straggler WITHOUT evicting it (clears the flag;
+            node keeps its approval + token). Shown only while the node still owes a rotation — it is
+            the non-destructive fix for a node that never re-registered and is wedging the Deploy gate. */}
+        {n.rekeyRequested && n.status === 'approved' && (
+          <button
+            onClick={() => clearRekey(n.nodeId)}
+            disabled={loading}
+            title={t(language, 'nodeRegistry.cancelRekeyHint')}
+            className={`${btn} px-3 py-2 text-xs bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white`}
+          >
+            {t(language, 'nodeRegistry.cancelRekey')}
+          </button>
+        )}
+        <button
+          onClick={() => {
+            // Revocation evicts a node from the fleet — confirm before firing (no immediate,
+            // single-click destructive action).
+            if (window.confirm(t(language, 'nodeRegistry.revokeConfirm', { node: n.nodeId }))) {
+              revoke(n.nodeId);
+            }
+          }}
+          disabled={loading || n.status === 'revoked'}
+          className={`${btn} px-3 py-2 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white`}
+        >
+          {t(language, 'nodeRegistry.revoke')}
+        </button>
+      </>
+    );
+  };
+
   return (
     <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-4">
       <h3 className="text-lg font-semibold text-blue-400">
@@ -78,24 +208,25 @@ export function NodeRegistry() {
           {t(language, 'nodeRegistry.noRegisteredNodesConfigure')}
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-700">
-              <tr>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.node')}</th>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.status')}</th>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.genAppliedDesired')}</th>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.health')}</th>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.agentVersion')}</th>
-                <th className="py-2 pr-3">{t(language, 'updateStatus.label')}</th>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.lastSeen')}</th>
-                <th className="py-2 pr-3">{t(language, 'nodeRegistry.actions')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ctlNodes.map((n) => {
-                const drift = isDrifting(n.appliedGeneration, n.desiredGeneration);
-                return (
+        <>
+          {/* Desktop / large-tablet: the 8-column table (lg+, ≥1024px). Hidden below lg, where the
+              card list (next block) takes over — both iterate the SAME nodeCells descriptor spine, so
+              the column set never drifts between presentations. */}
+          <div className="hidden lg:block overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-700">
+                <tr>
+                  <th className="py-2 pr-3">{t(language, 'nodeRegistry.node')}</th>
+                  {CELL_LABEL_KEYS.map((labelKey) => (
+                    <th key={labelKey} className="py-2 pr-3">
+                      {t(language, labelKey)}
+                    </th>
+                  ))}
+                  <th className="py-2 pr-3">{t(language, 'nodeRegistry.actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ctlNodes.map((n) => (
                   <tr key={n.nodeId} className="border-b border-gray-700/50">
                     <td className="py-2 pr-3 font-mono break-all">
                       <Link
@@ -105,77 +236,47 @@ export function NodeRegistry() {
                         {n.nodeId}
                       </Link>
                     </td>
+                    {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
+                      <td key={c.labelKey} className="py-2 pr-3">
+                        {c.value}
+                      </td>
+                    ))}
                     <td className="py-2 pr-3">
-                      <span className={`px-2 py-0.5 rounded text-xs border ${statusClass(n.status)}`}>
-                        {n.status}
-                      </span>
-                      {/* plan-4.6: the operator has requested this node rotate its WG key; waiting for
-                          the agent to regenerate and register a new public key. */}
-                      {n.rekeyRequested && (
-                        <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
-                          {t(language, 'nodeRegistry.rekeying')}
-                        </span>
-                      )}
-                      {/* plan-6: this node is in the fleet registry but not in the current design — an
-                          identity-reconciliation marker telling the operator it has left the design
-                          (revoke it on the right to remove it from the fleet). */}
-                      {isOrphan(n.nodeId) && n.status !== 'revoked' && (
-                        <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-900/40 text-orange-300 border-orange-700">
-                          {t(language, 'nodeRegistry.notInDesign')}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-3 font-mono">
-                      <span className={drift ? 'text-yellow-400' : 'text-gray-300'}>
-                        {n.appliedGeneration} / {n.desiredGeneration}
-                      </span>
-                      {drift && (
-                        <span className="ml-1 text-[10px] text-yellow-400">
-                          {t(language, 'nodeRegistry.drift')}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-3 text-gray-300">{n.lastHealth || '—'}</td>
-                    <td className="py-2 pr-3 font-mono text-xs text-gray-400">{n.agentVersion || '—'}</td>
-                    <td className="py-2 pr-3">
-                      <UpdateStatusChip node={n} settings={settings} language={language} />
-                    </td>
-                    <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(n.lastSeen)}</td>
-                    <td className="py-2 pr-3 whitespace-nowrap">
-                      {/* Cancel rekey: release a stuck "Roll keys" straggler WITHOUT evicting it
-                          (clears the flag; node keeps its approval + token). Shown only while the
-                          node still owes a rotation — it is the non-destructive fix for a node that
-                          never re-registered and is wedging the Deploy gate. */}
-                      {n.rekeyRequested && n.status === 'approved' && (
-                        <button
-                          onClick={() => clearRekey(n.nodeId)}
-                          disabled={loading}
-                          title={t(language, 'nodeRegistry.cancelRekeyHint')}
-                          className="mr-2 px-2 py-1 text-xs bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
-                        >
-                          {t(language, 'nodeRegistry.cancelRekey')}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => {
-                          // Revocation evicts a node from the fleet — confirm before firing (no
-                          // immediate, single-click destructive action).
-                          if (window.confirm(t(language, 'nodeRegistry.revokeConfirm', { node: n.nodeId }))) {
-                            revoke(n.nodeId);
-                          }
-                        }}
-                        disabled={loading || n.status === 'revoked'}
-                        className="px-2 py-1 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
-                      >
-                        {t(language, 'nodeRegistry.revoke')}
-                      </button>
+                      <div className="flex items-center gap-2 whitespace-nowrap">{actions(n, false)}</div>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Phone / small-tablet (below lg): the same nodes reflowed into stacked cards — node-id
+              heading, the nodeCells descriptor as labeled key/value rows, then the action cluster. */}
+          <div className="lg:hidden space-y-3">
+            {ctlNodes.map((n) => (
+              <div
+                key={n.nodeId}
+                className="rounded-lg border border-gray-700 bg-gray-900 p-3 space-y-2"
+              >
+                <Link
+                  to={`/fleet/nodes/${encodeURIComponent(n.nodeId)}`}
+                  className="block font-mono text-sm text-blue-300 hover:underline break-all"
+                >
+                  {n.nodeId}
+                </Link>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
+                  {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
+                    <div key={c.labelKey} className="contents">
+                      <dt className="text-xs text-gray-400">{t(language, c.labelKey)}</dt>
+                      <dd className="text-right">{c.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <div className="flex items-center gap-2 pt-1">{actions(n, true)}</div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {/* Per-edge readiness: an edge is "ready" only when both endpoint nodes are approved (its link
