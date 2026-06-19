@@ -436,9 +436,9 @@ partial/parked/abandoned, per close-phase).
 | plan-1  | 1.1 | S1 | delivered (PR #137) | — (FIRST mover; before plan-2/8/9 on shared files) |
 | plan-2  | 1.2 | S1 | delivered (PR #139) | plan-1 |
 | plan-3  | 1.3 | S1 | delivered (PR #141) | plan-1 (clean tree), plan-8 (freeze FIXED C2/C3 behavior) |
-| plan-4  | 1.4 | S1 | in-progress (branch feat/ts-compiler) | plan-5 (green+required), plan-3, plan-9 |
+| plan-4  | 1.4 | S1 | delivered (PR #143) | plan-5 (green+required), plan-3, plan-9 |
 | plan-5  | 1.5 | S1 | delivered (PR #142) | plan-3 |
-| plan-6  | 1.6 | S1 | pending | plan-4 |
+| plan-6  | 1.6 | S1 | in-progress (branch feat/local-mode-rewire) | plan-4 |
 | plan-7  | 1.7 | S1 | pending | plan-6 (tail of S1; before Subject 4 re-audit) |
 | plan-8  | 1.8 | S1 | delivered (PR #140) | plan-1 (comments), plan-2 (handler split); lands BEFORE plan-3 |
 | plan-9  | 1.9 | S1 | delivered (PR #138) | plan-1 (EARLY off main; supports plan-4) |
