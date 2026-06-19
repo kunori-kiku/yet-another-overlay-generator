@@ -34,6 +34,12 @@ import type {
 } from './model';
 import { deriveClientConfigs, derivePeers } from './peers';
 import type { PairAllocation } from './peers';
+import { renderAllBabelConfigs } from './renderers/babel';
+import { renderAllSysctlConfigs } from './renderers/sysctl';
+import {
+  renderAllWireGuardConfigs,
+  renderClientWireGuardConfig,
+} from './renderers/wireguard';
 import { validateSchema, validateSemantic } from './validator';
 import type { ValidationError } from './validator';
 
@@ -284,6 +290,21 @@ export function compile(
   // Stamp the allocation-scheme version (invariant I10).
   compiledTopo.alloc_schema_version = AllocationSchemaVersion;
 
+  // Renderers (the byte-exact half of Phase 4). Mirrors render.AllWith (render.go:305-334) ordering:
+  // per-peer WireGuard configs + client wg0, Babel configs, sysctl configs. The renderers consume the
+  // `keys` map built above (NOT the topology's private-key field) so the AgentHeld placeholder
+  // (render.PrivateKeyPlaceholder) is emitted verbatim on the PrivateKey line, exactly as the Go path
+  // does. install.sh / artifacts.json / deploy scripts are later Phase-4 substeps (22-25) and stay
+  // empty here. The conformance harness pins every rendered file byte-for-byte against the Go golden.
+  const wireGuardConfigs = renderAllWireGuardConfigs(compiledTopo, peerMap, keys);
+  for (const nodeID of Object.keys(clientConfigs)) {
+    wireGuardConfigs[nodeID + ':wg0'] = renderClientWireGuardConfig(
+      clientConfigs[nodeID],
+    );
+  }
+  const babelConfigs = renderAllBabelConfigs(compiledTopo, peerMap);
+  const sysctlConfigs = renderAllSysctlConfigs(compiledTopo);
+
   // The compile manifest. compiled_at + checksum are display-only and OUT of the conformance byte set
   // (the harness excludes them); they are filled by the Phase-4 / plan-6 caller that owns the clock.
   const manifest: CompileManifest = {
@@ -295,14 +316,14 @@ export function compile(
     checksum: '',
   };
 
-  // Renderers are Phase 4: the rendered-file maps are empty for now (the compiled topology + peer map +
-  // client configs are the surface the allocations projection and plan-6 store rewire need).
+  // The WireGuard / Babel / sysctl maps are now populated by the Phase-4 renderers above; install.sh,
+  // artifacts.json, and the deploy scripts are later substeps and stay empty until then.
   return {
     topology: compiledTopo,
     peerMap,
-    wireGuardConfigs: {},
-    babelConfigs: {},
-    sysctlConfigs: {},
+    wireGuardConfigs,
+    babelConfigs,
+    sysctlConfigs,
     installScripts: {},
     artifactsJSON: {},
     deployScripts: {},
