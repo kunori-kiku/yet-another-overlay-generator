@@ -2,13 +2,14 @@
 //
 // topologyStore.local-engine.test.ts — the FIRST store-level vitest suite (plan-6, milestone
 // 1.6; report §7: "FRONTEND HAS ZERO AUTOMATED TESTS"). It pins the local-engine SEAM: that
-// in LOCAL mode with VITE_YAOG_LOCAL_ENGINE='local' the four compute actions
-// (validate/compile/exportArtifacts/downloadDeployScript) run the in-browser plan-4 TS
-// compiler and never fetch; that with the flag unset/'backend' (default-OFF) they still POST
-// to the backend; that the CONTROLLER-mode boundary is untouched (authenticated same-origin
-// validate fetch with Bearer+CSRF and NO credentials:'include'; compile/export/deploy refuse);
-// that an in-flight controller mode-flip drops a local compile's reconstructed private keys;
-// and that the local CompileResponse is the exact air-gap shape downstream consumers expect.
+// in LOCAL mode with the flag unset or set to 'local' (default-ON, plan-7 Phase 0.5) the four
+// compute actions (validate/compile/exportArtifacts/downloadDeployScript) run the in-browser
+// plan-4 TS compiler and never fetch; that ONLY the explicit 'backend' opt-out makes them POST
+// to the backend (the retained escape-hatch path); that the CONTROLLER-mode boundary is
+// untouched (authenticated same-origin validate fetch with Bearer+CSRF and NO
+// credentials:'include'; compile/export/deploy refuse); that an in-flight controller mode-flip
+// drops a local compile's reconstructed private keys; and that the local CompileResponse is the
+// exact air-gap shape downstream consumers expect.
 //
 // The suite uses the REAL compiler (no compiler mock) so the parity groups (6.4/6.5/6.6) pin
 // the actual library output, and uses a node environment with a minimal DOM stub for the
@@ -176,7 +177,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// ── 6.1 — seam routing (default-OFF + opt-in) ──
+// ── 6.1 — seam routing (default-ON + explicit opt-out) ──
 describe('6.1 seam routing', () => {
   it('with the flag = local, all four actions run the TS compiler and never fetch', async () => {
     vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
@@ -200,22 +201,28 @@ describe('6.1 seam routing', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(0);
   });
 
-  it('with the flag unset (default), local-mode actions still fetch the backend', async () => {
-    // No stubEnv ⇒ VITE_YAOG_LOCAL_ENGINE undefined ⇒ default-OFF ⇒ backend path.
-    const fetchSpy = makeFetchOk({ valid: true, errors: [], warnings: [] });
+  it('with the flag unset (default-ON), all four actions run the TS compiler and never fetch', async () => {
+    // No stubEnv ⇒ VITE_YAOG_LOCAL_ENGINE undefined ⇒ default-ON (plan-7 Phase 0.5) ⇒ the
+    // in-browser compiler runs; nothing POSTs to the backend.
+    const fetchSpy = vi.fn(async () => {
+      throw new Error('fetch must not be called when the local engine is default-ON');
+    });
     vi.stubGlobal('fetch', fetchSpy);
 
     await useTopologyStore.getState().validate();
-    await useTopologyStore.getState().compile().catch(() => {});
-    await useTopologyStore.getState().exportArtifacts().catch(() => {});
-    await useTopologyStore.getState().downloadDeployScript('sh').catch(() => {});
-    // Default-OFF: the single localEngineEnabled() predicate gates all four actions
-    // identically, so each falls through to its backend route (no client-side compile).
-    const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
-    expect(urls).toContain('/api/validate');
-    expect(urls).toContain('/api/compile');
-    expect(urls).toContain('/api/export');
-    expect(urls).toContain('/api/deploy-script?format=sh');
+    expect(useTopologyStore.getState().validateResult).not.toBeNull();
+    expect(useTopologyStore.getState().validateResult?.valid).toBe(true);
+
+    await useTopologyStore.getState().compile();
+    expect(useTopologyStore.getState().compileResult).not.toBeNull();
+    expect(useTopologyStore.getState().error).toBeNull();
+
+    await useTopologyStore.getState().exportArtifacts();
+    await useTopologyStore.getState().downloadDeployScript('sh');
+
+    // Default-ON: the single localEngineEnabled() predicate gates all four actions identically,
+    // so each runs the client-side compiler and none falls through to a backend route.
+    expect(fetchSpy).toHaveBeenCalledTimes(0);
   });
 
   it("with the flag = backend (explicit opt-out), local-mode actions still fetch", async () => {
@@ -227,8 +234,10 @@ describe('6.1 seam routing', () => {
     await useTopologyStore.getState().compile().catch(() => {});
     await useTopologyStore.getState().exportArtifacts().catch(() => {});
     await useTopologyStore.getState().downloadDeployScript('sh').catch(() => {});
-    // Default-OFF: the single localEngineEnabled() predicate gates all four actions
-    // identically, so each falls through to its backend route (no client-side compile).
+    // Explicit 'backend' opt-out: the single localEngineEnabled() predicate gates all four
+    // actions identically, so each falls through to its backend route (no client-side compile).
+    // This escape-hatch path is functional only against a `-tags airgap` server (plan-7 gates
+    // these routes off the default controller build).
     const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
     expect(urls).toContain('/api/validate');
     expect(urls).toContain('/api/compile');

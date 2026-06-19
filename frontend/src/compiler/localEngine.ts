@@ -8,10 +8,16 @@
 // (`mode === 'local' && localEngineEnabled()` in topologyStore.ts), never four scattered
 // branches that could drift (the F3-class hazard the plan calls out).
 //
-// Default-OFF: merging 1.6 changes no default behaviour. With the flag unset or set to any
-// value other than 'local', `localEngineEnabled()` is false and the store falls through to
-// the existing, proven backend (air-gap fetch) path. Flipping the default to local is a
-// deliberate post-soak follow-up (plan-6 Phase 7.4), NOT part of this merge.
+// Default-ON (plan-7 Phase 0.5): LOCAL mode runs entirely in the browser by default —
+// `localEngineEnabled()` is true unless VITE_YAOG_LOCAL_ENGINE is explicitly set to
+// 'backend'. This is justified by the green plan-5 conformance harness, which pins the
+// in-browser TS compiler byte-for-byte against the Go pipeline (the drift guarantee that
+// replaces plan-6's deferred post-soak gate). The 'backend' value is the explicit opt-out
+// escape hatch: it makes the store POST to the Go air-gap routes
+// (/api/validate|compile|export|deploy-script), which is functional ONLY against a
+// `-tags airgap` server — plan-7 gates those routes off the default controller build, so a
+// stock controller has nothing to answer them. The store retains the air-gap fetch branches
+// solely as that escape-hatch path; their aggressive removal stays deferred.
 //
 // Controller mode is UNTOUCHED by this module: the store's controller-mode branches (the
 // authenticated same-origin validate fetch and the compile/export/deploy refusal guards)
@@ -24,12 +30,14 @@ import type {
 } from '../types/topology';
 
 // localEngineEnabled reports whether LOCAL-mode compute should run in the browser via the
-// plan-4 TS compiler instead of POSTing to the Go air-gap routes. Default-OFF: only the
-// exact literal 'local' opts in; unset / 'backend' / anything else ⇒ false ⇒ backend path.
-// The flag is typed as 'local' | 'backend' in vite-env.d.ts so this comparison is a
+// plan-4 TS compiler instead of POSTing to the Go air-gap routes. Default-ON (plan-7 Phase
+// 0.5): local mode is browser-resident unless VITE_YAOG_LOCAL_ENGINE is explicitly 'backend'
+// — unset / 'local' / anything else ⇒ true ⇒ in-browser compiler; only the exact literal
+// 'backend' opts back out to the air-gap fetch path (functional only against a `-tags airgap`
+// server). The flag is typed as 'local' | 'backend' in vite-env.d.ts so this comparison is a
 // type-checked union narrowing under `tsc -b`.
 export function localEngineEnabled(): boolean {
-  return import.meta.env.VITE_YAOG_LOCAL_ENGINE === 'local';
+  return import.meta.env.VITE_YAOG_LOCAL_ENGINE !== 'backend';
 }
 
 // The compiler library is loaded via a dynamic `import()` so a controller-mode-only
