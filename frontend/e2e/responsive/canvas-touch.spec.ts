@@ -31,19 +31,40 @@ test('phone: read-only canvas pans by drag without mutating the design', async (
   await expect(page.locator('.react-flow__controls')).toBeVisible()
 
   const viewport = page.locator('.react-flow__viewport')
+
+  // Settle the mount-time fitView animation (fitViewOptions duration 400ms) BEFORE snapshotting the
+  // baseline transform — otherwise the transform would still be animating toward its fit target and
+  // would change between reads regardless of the drag, weakening the pan proof. Poll until two
+  // consecutive style reads (≥150ms apart) are identical (the animation has come to rest).
+  let prevStyle = ''
+  await expect
+    .poll(
+      async () => {
+        const cur = (await viewport.getAttribute('style')) ?? ''
+        const stable = cur !== '' && cur === prevStyle
+        prevStyle = cur
+        return stable
+      },
+      { timeout: 5_000, intervals: [150, 150, 150] },
+    )
+    .toBe(true)
+
   const transformBefore = await viewport.getAttribute('style')
   const nodesBefore = await page.locator('.react-flow__node').count()
 
-  // Pan the read-only canvas with a pointer drag across the pane.
+  // Pan the read-only canvas with a pointer drag. Start in the EMPTY top-left corner of the pane:
+  // fitView centers the nodes with 0.2 padding, so the corner is background — dragging it pans,
+  // whereas a center drag could land on a node (which, read-only, neither pans nor moves).
   const pane = page.locator('.react-flow__pane')
   const box = await pane.boundingBox()
   if (!box) throw new Error('canvas pane has no bounding box')
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.move(box.x + 15, box.y + 15)
   await page.mouse.down()
-  await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2 - 80, { steps: 8 })
+  await page.mouse.move(box.x + 135, box.y + 95, { steps: 8 })
   await page.mouse.up()
 
-  // The viewport transform changed (it panned) but the design is untouched (read-only).
+  // The viewport transform changed (the drag panned it) — and since fitView had already settled, the
+  // drag is the only thing that could have moved it — but the design is untouched (read-only).
   await expect(viewport).not.toHaveAttribute('style', transformBefore ?? '')
   expect(await page.locator('.react-flow__node').count(), 'a read-only pan must not add/remove nodes').toBe(
     nodesBefore,

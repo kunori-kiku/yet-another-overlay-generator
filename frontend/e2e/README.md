@@ -209,12 +209,21 @@ controllerClient), and reuse `expectNoHorizontalPageOverflow` / `gridTrackCount`
 
 ### Visual-regression corpus (`snapshots.spec.ts` + `__screenshots__/`)
 
-`toHaveScreenshot` baselines pin each surface (Login/Overview/Fleet/Deploy/Security/Settings/Design)
-× {phone, desktop} × {light, dark}, captured in the deterministic no-enrolled-node state with the
-non-deterministic canvas region masked. Theme + controller-mode are seeded via `addInitScript`
-**before navigation** (`seedTheme` / `seedControllerMode`) so the anti-FOUC paint is correct (no
-`ThemeProvider` race). Baselines live under `e2e/responsive/__screenshots__/{project}-{platform}/`
-(kept in git; `playwright-report/` + `test-results/` stay ignored).
+`toHaveScreenshot` baselines pin the **data-independent** surfaces — **Login + Settings** —
+× {phone, desktop} × {light, dark} (8 baselines). Theme + controller-mode are seeded via
+`addInitScript` **before navigation** (`seedTheme` / `seedControllerMode`) so the anti-FOUC paint is
+correct (no `ThemeProvider` race). Baselines live under
+`e2e/responsive/__screenshots__/{project}-{platform}/` (kept in git; `playwright-report/` +
+`test-results/` stay ignored).
+
+The data-bearing surfaces (Overview/Fleet/Deploy/Security/Design) are deliberately **excluded** from
+the pixel corpus: this suite shares one controller boot with the enrolling behavior specs, which seed
+uniquely-named (timestamped) nodes, so those surfaces' content is non-deterministic in-suite and a
+pixel baseline of them would flake. Their **responsive layout** is instead pinned by the behavior
+smokes (`fleet-table-reflow` / `overview-grid` / `page-padding-overflow` / `design-route`) — the pixel
+corpus complements them on stable chrome, it does not duplicate them. To add a NEW surface to the
+pixel corpus it must be data-independent on the keystone-OFF boot (or mask its dynamic regions); add
+it to `SURFACES` in `snapshots.spec.ts` and `--update-snapshots`. See `docs/spec/rc1/3.5-findings.md`.
 
 - **Regenerate (Linux is authoritative):** `npx playwright test e2e/responsive/snapshots.spec.ts
   --project=desktop --project=phone --update-snapshots`, then PR-review the diff.
