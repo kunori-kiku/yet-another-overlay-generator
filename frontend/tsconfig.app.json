@@ -29,6 +29,11 @@
   // are test-only: they import 'vitest' + Node fs/path and read fixtures from disk, none of which belong
   // to the production app's type surface (types: ["vite/client"]). Excluding them keeps `tsc -b` /
   // `vite build` green; vitest type-checks them at run time against its own config. The production logic
-  // they pin (src/lib/normalizeEdges.ts, src/compiler/*.ts) stays fully type-checked by the app build.
-  "exclude": ["src/**/*.conformance.test.ts", "src/compiler/**/*.test.ts"]
+  // they pin (src/lib/normalizeEdges.ts, src/compiler/*.ts, src/stores/topologyStore.ts) stays fully
+  // type-checked by the app build.
+  "exclude": [
+    "src/**/*.conformance.test.ts",
+    "src/compiler/**/*.test.ts",
+    "src/stores/**/*.test.ts"
+  ]
 }
