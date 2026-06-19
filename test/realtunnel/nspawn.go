@@ -25,21 +25,40 @@ type container struct {
 	mu   sync.Mutex
 }
 
-// bootContainer boots name from rootfs and blocks until systemd inside reports State=running, then
-// registers teardown (terminate + wait) on t.Cleanup so it is reclaimed even on failure.
-func bootContainer(t *testing.T, rootfs, name string) *container {
+// bootOpts configures a node container's networking + mounts.
+type bootOpts struct {
+	// bridge, when set, attaches the container's veth to this host bridge (--network-bridge, which
+	// implies a private netns). When empty the container gets an isolated --private-network netns.
+	bridge string
+	// binds are "hostPath:containerPath" read-only bind mounts (the node's deployment bundle).
+	binds []string
+}
+
+// bootContainer boots name from rootfs with the given network/bind options and blocks until systemd
+// inside reports State=running, then registers teardown (terminate + wait) on t.Cleanup so it is
+// reclaimed even on failure.
+func bootContainer(t *testing.T, rootfs, name string, opts bootOpts) *container {
 	t.Helper()
 	c := &container{name: name, log: &strings.Builder{}}
-	// --boot runs systemd as PID 1; --volatile=overlay isolates writes; --private-network gives the
-	// container its own netns (veths are added afterward). --register=yes so machinectl can drive it.
-	c.cmd = exec.Command("systemd-nspawn",
+	// --boot runs systemd as PID 1; --volatile=overlay isolates per-container writes over the shared
+	// read-only base (fast — no full rootfs copy). Networking: a host bridge (the topology underlay)
+	// or an isolated private netns. --machine lets machinectl drive it.
+	args := []string{
 		"--quiet",
-		"--directory="+rootfs,
+		"--directory=" + rootfs,
 		"--volatile=overlay",
-		"--machine="+name,
-		"--private-network",
+		"--machine=" + name,
 		"--boot",
-	)
+	}
+	if opts.bridge != "" {
+		args = append(args, "--network-bridge="+opts.bridge)
+	} else {
+		args = append(args, "--private-network")
+	}
+	for _, b := range opts.binds {
+		args = append(args, "--bind-ro="+b)
+	}
+	c.cmd = exec.Command("systemd-nspawn", args...)
 	c.cmd.Stdout = c.log
 	c.cmd.Stderr = c.log
 	if err := c.cmd.Start(); err != nil {

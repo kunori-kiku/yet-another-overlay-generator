@@ -16,9 +16,17 @@ import (
 // runToken disambiguates this run's object names from a concurrent local run (CI runs one at a time).
 var runToken = os.Getpid()
 
-// machineName builds a prefixed, unique container/object name for a node base name.
+// machineName builds a prefixed, unique container name for a node base name (machine names may be
+// long; only network devices are length-capped).
 func machineName(base string) string {
 	return fmt.Sprintf("%s-%s-%d", objectPrefix, base, runToken)
+}
+
+// bridgeName builds a prefixed, unique BRIDGE name that fits the 15-char network-device cap
+// (objectPrefix "yrt" + "br" + a 5-digit token ⇒ ≤ "yrtbr99999", 10 chars). Still objectPrefix-
+// prefixed so sweepOrphans reclaims it.
+func bridgeName() string {
+	return fmt.Sprintf("%sbr%d", objectPrefix, runToken%100000)
 }
 
 func TestMain(m *testing.M) {
@@ -74,7 +82,7 @@ func sweepOrphans() {
 // tears down cleanly. If this can't pass, no scenario can.
 func TestNspawnLifecycle(t *testing.T) {
 	rootfs := requireCapabilities(t)
-	c := bootContainer(t, rootfs, machineName("life"))
+	c := bootContainer(t, rootfs, machineName("life"), bootOpts{})
 
 	// systemd booted (running or degraded — a minimal container legitimately has some inactive units).
 	state := strings.TrimSpace(c.exec(t, "systemctl", "is-system-running", "--wait"))
