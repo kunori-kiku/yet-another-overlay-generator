@@ -22,6 +22,12 @@ CI does the same in the `frontend-e2e` job (required check). Binary/dist locatio
 overridable via `E2E_SERVER_BIN`, `E2E_AGENT_BIN`, `E2E_WEB_DIR`; the defaults
 (`.e2e-bin/*`, `frontend/dist`) match the commands above.
 
+> **Run ONE `npm run test:e2e` at a time per checkout.** globalSetup/teardown share a single
+> handoff (`e2e/.harness/state.json`) and boot fixed processes, so two concurrent invocations in
+> the same working tree clobber each other's state file + boots (ECONNREFUSED / ENOENT mid-run).
+> CI runs a single invocation per job, so this is a local-dev caveat only — don't kick off a
+> second suite (or a tool that runs the suite) while one is in flight.
+
 ## The boot model (and why)
 
 `globalSetup.ts` boots `cmd/e2eserver` **three times** from one binary (the operator-flow suite,
