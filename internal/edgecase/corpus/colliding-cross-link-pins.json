@@ -1,0 +1,90 @@
+{
+  "name": "colliding-cross-link-pins",
+  "class": "degenerate",
+  "topo": {
+    "project": {
+      "id": "e2e-colliding-pins",
+      "name": "colliding-pins"
+    },
+    "domains": [
+      {
+        "id": "d1",
+        "name": "d1",
+        "cidr": "10.50.0.0/24",
+        "allocation_mode": "auto",
+        "routing_mode": "babel",
+        "transit_cidr": "10.10.0.0/24"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "r1",
+        "name": "r1",
+        "hostname": "r1.example.com",
+        "role": "router",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": true,
+          "can_forward": true,
+          "can_relay": false,
+          "has_public_ip": true
+        },
+        "public_endpoints": [
+          {
+            "id": "r1-ep",
+            "host": "r1.example.com",
+            "port": 51820
+          }
+        ]
+      },
+      {
+        "id": "pa",
+        "name": "pa",
+        "role": "peer",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": false,
+          "can_forward": false,
+          "can_relay": false,
+          "has_public_ip": false
+        }
+      },
+      {
+        "id": "pb",
+        "name": "pb",
+        "role": "peer",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": false,
+          "can_forward": false,
+          "can_relay": false,
+          "has_public_ip": false
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e-a",
+        "from_node_id": "pa",
+        "to_node_id": "r1",
+        "type": "public-endpoint",
+        "endpoint_host": "r1.example.com",
+        "transport": "udp",
+        "is_enabled": true,
+        "pinned_from_transit_ip": "10.10.0.2",
+        "pinned_to_transit_ip": "10.10.0.1"
+      },
+      {
+        "id": "e-b",
+        "from_node_id": "pb",
+        "to_node_id": "r1",
+        "type": "public-endpoint",
+        "endpoint_host": "r1.example.com",
+        "transport": "udp",
+        "is_enabled": true,
+        "pinned_from_transit_ip": "10.10.0.2",
+        "pinned_to_transit_ip": "10.10.0.1"
+      }
+    ]
+  }
+}

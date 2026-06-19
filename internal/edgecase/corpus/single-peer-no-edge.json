@@ -1,0 +1,34 @@
+{
+  "name": "single-peer-no-edge",
+  "class": "degenerate",
+  "topo": {
+    "project": {
+      "id": "e2e-single-peer",
+      "name": "single-peer"
+    },
+    "domains": [
+      {
+        "id": "d1",
+        "name": "d1",
+        "cidr": "10.50.0.0/24",
+        "allocation_mode": "auto",
+        "routing_mode": "babel"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "n1",
+        "name": "n1",
+        "role": "peer",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": false,
+          "can_forward": false,
+          "can_relay": false,
+          "has_public_ip": false
+        }
+      }
+    ],
+    "edges": null
+  }
+}

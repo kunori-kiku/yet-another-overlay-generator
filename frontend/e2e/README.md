@@ -13,14 +13,33 @@ go build -tags airgap -o .e2e-bin/e2eserver ./cmd/e2eserver
 go build -o .e2e-bin/e2eagent ./cmd/e2eagent
 
 cd frontend
-npm run build                              # produces dist/ (the panel the boots serve)
+VITE_E2E=1 npm run build                   # produces dist/ (the panel the boots serve)
 npx playwright install --with-deps chromium
 npm run test:e2e                           # runs e2e/*.spec.ts headless
 ```
 
-CI does the same in the `frontend-e2e` job (required check). Binary/dist locations are
-overridable via `E2E_SERVER_BIN`, `E2E_AGENT_BIN`, `E2E_WEB_DIR`; the defaults
-(`.e2e-bin/*`, `frontend/dist`) match the commands above.
+`VITE_E2E=1` compiles in the test-only ErrorBoundary render-throw probe (`App.tsx` /
+`E2ERenderThrowProbe`) that `e2e/adversarial/error-render.spec.ts` drives; it is
+dead-code-eliminated from any build that does not set the flag, so production/release/Docker
+bundles never ship it. Omit the flag and that one spec fails (the probe is absent); every other
+spec is unaffected.
+
+CI does the same in the `frontend-e2e` job (required check), building with `VITE_E2E=1`.
+Binary/dist locations are overridable via `E2E_SERVER_BIN`, `E2E_AGENT_BIN`, `E2E_WEB_DIR`; the
+defaults (`.e2e-bin/*`, `frontend/dist`) match the commands above.
+
+### Engine B (Go) — `internal/edgecase/` adversarial corpus + fuzz + DoS oracle
+
+The Go-only adversarial layer (plan-16 / 3.4) lives under `internal/edgecase/` and ships in no
+binary. From the repo root:
+
+```bash
+go test ./internal/edgecase/...                               # corpus drift guard + DoS oracle (heavy cases Short()-gated)
+go test -run TestCorpusWriteOrVerify ./internal/edgecase/ -update   # regenerate the committed corpus/*.json
+go test -run Fuzz -fuzztime=20s ./internal/edgecase/...        # bounded fuzz (CI); longer locally:
+go test -fuzz=FuzzCompile -fuzztime=5m ./internal/edgecase/    # extended local fuzzing
+go test -tags airgap ./internal/edgecase/...                   # also runs the /api/compile HTTP DoS tier
+```
 
 > **Run ONE `npm run test:e2e` at a time per checkout.** globalSetup/teardown share a single
 > handoff (`e2e/.harness/state.json`) and boot fixed processes, so two concurrent invocations in

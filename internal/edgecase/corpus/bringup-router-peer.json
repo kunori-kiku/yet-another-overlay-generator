@@ -1,0 +1,64 @@
+{
+  "name": "bringup-router-peer",
+  "class": "bringup",
+  "topo": {
+    "project": {
+      "id": "e2e-router-peer",
+      "name": "router-peer"
+    },
+    "domains": [
+      {
+        "id": "d1",
+        "name": "d1",
+        "cidr": "10.50.0.0/24",
+        "allocation_mode": "auto",
+        "routing_mode": "babel"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "r1",
+        "name": "r1",
+        "hostname": "r1.example.com",
+        "role": "router",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": true,
+          "can_forward": true,
+          "can_relay": false,
+          "has_public_ip": true
+        },
+        "public_endpoints": [
+          {
+            "id": "r1-ep",
+            "host": "r1.example.com",
+            "port": 51820
+          }
+        ]
+      },
+      {
+        "id": "p1",
+        "name": "p1",
+        "role": "peer",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": false,
+          "can_forward": false,
+          "can_relay": false,
+          "has_public_ip": false
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "from_node_id": "p1",
+        "to_node_id": "r1",
+        "type": "public-endpoint",
+        "endpoint_host": "198.51.100.1",
+        "transport": "udp",
+        "is_enabled": true
+      }
+    ]
+  }
+}

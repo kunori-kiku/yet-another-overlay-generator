@@ -1,0 +1,42 @@
+{
+  "name": "single-router",
+  "class": "degenerate",
+  "topo": {
+    "project": {
+      "id": "e2e-single-router",
+      "name": "single-router"
+    },
+    "domains": [
+      {
+        "id": "d1",
+        "name": "d1",
+        "cidr": "10.50.0.0/24",
+        "allocation_mode": "auto",
+        "routing_mode": "babel"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "n1",
+        "name": "n1",
+        "hostname": "n1.example.com",
+        "role": "router",
+        "domain_id": "d1",
+        "capabilities": {
+          "can_accept_inbound": true,
+          "can_forward": true,
+          "can_relay": false,
+          "has_public_ip": true
+        },
+        "public_endpoints": [
+          {
+            "id": "n1-ep",
+            "host": "n1.example.com",
+            "port": 51820
+          }
+        ]
+      }
+    ],
+    "edges": null
+  }
+}

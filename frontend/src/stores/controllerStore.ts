@@ -1333,6 +1333,13 @@ export const useControllerStore = create<ControllerState>()(
       // If keystone is ON but no operator credential is enrolled locally yet, give an actionable
       // error (enroll the signing key first).
       deploy: async (opts) => {
+        // Idempotency guard (plan-16 / 3.4): a deploy is a multi-request fleet mutation
+        // (update-topology → stage → sign → promote). The Deploy button is disabled while
+        // loading, but a re-entrant programmatic/synthetic invocation would otherwise re-enter and
+        // double-POST. Drop a call that arrives while a deploy is already in flight. A confirmed-
+        // shrink re-call is unaffected: the shrink-confirm branch sets loading:false before
+        // returning, so deploy({confirmedShrink:true}) runs with loading already cleared.
+        if (get().loading) return;
         set({ loading: true, error: null });
         try {
           const cfg = configOf(get());
@@ -1589,6 +1596,11 @@ export const useControllerStore = create<ControllerState>()(
       // undeployed in-progress work no longer lives only in a discardable mirror (lost on refresh
       // / logout).
       saveDesign: async (opts) => {
+        // Idempotency guard (plan-16 / 3.4): the Save button is disabled while `saving`, but a
+        // re-entrant programmatic/synthetic invocation would otherwise re-enter and double-write.
+        // Drop a call that arrives while a save is already in flight (mirrors deploy()'s guard on
+        // its own in-flight flag).
+        if (get().saving) return;
         // loading = the global busy flag (consistent with other actions); saving = specific to
         // this save, driving the Save button / conflict dialog, so the global loading set by an
         // unrelated op does not light it up (plan-11 review #1). Both must be cleared at every exit.

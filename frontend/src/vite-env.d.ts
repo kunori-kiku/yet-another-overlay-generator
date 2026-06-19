@@ -22,6 +22,12 @@ interface ImportMetaEnv {
   // controller backend the static site does not have). Unset/'' ⇒ the default all-in-one
   // controller panel (unchanged). Read via lib/localOnly.ts's localOnly().
   readonly VITE_LOCAL_ONLY?: string;
+
+  // E2E test-build flag (plan-16 / 3.4). Set ONLY by the e2e CI job's `VITE_E2E=1 npm run build`
+  // (never by the release/Docker builds), it gates the App's E2ERenderThrowProbe — a test-only
+  // render-error seam for the ErrorBoundary adversarial spec — so the probe is dead-code-eliminated
+  // from every production bundle. Read at one site (App.tsx); any truthy literal enables it.
+  readonly VITE_E2E?: string;
 }
 
 interface ImportMeta {
