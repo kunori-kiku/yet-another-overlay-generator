@@ -23,3 +23,9 @@ func (s *Server) registerExtraRoutes() {}
 // Server.operatorAuth is never read or written here. The DISTINCT controller operator-route auth
 // (ControllerHandler.operatorAuth) is wired by EnableController in both builds and is unaffected.
 func (s *Server) armAirgapAuth(_ *ControllerHandler) {}
+
+// printAirgapBanner is a no-op in the default build: the ListenAndServe startup banner must not
+// advertise the four POST /api/{validate,compile,export,deploy-script} compute routes, which this
+// build neither registers nor links. The //go:build airgap override (airgap_routes.go) prints
+// them so they appear only in the air-gap build.
+func (s *Server) printAirgapBanner() {}

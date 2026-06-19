@@ -2,7 +2,10 @@
 
 package api
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 // airgap_routes.go — the -tags airgap build's air-gap route registration + operator-auth gate.
 //
@@ -39,6 +42,18 @@ func (s *Server) registerExtraRoutes() {
 // at request time because EnableController runs after registerRoutes.
 func (s *Server) armAirgapAuth(ch *ControllerHandler) {
 	s.operatorAuth = ch.operatorAuth
+}
+
+// printAirgapBanner prints the four POST air-gap compute routes in the ListenAndServe startup
+// banner. It runs ONLY under -tags airgap (plan-7 / 1.7 banner hook); the DEFAULT (controller-only)
+// build uses the no-op stub in airgap_stubs.go so the banner advertises only GET /api/health (the
+// one route present in both builds). The un-tagged banner prints the listen line + /api/health;
+// this hook appends the compute routes that this build registered via registerExtraRoutes.
+func (s *Server) printAirgapBanner() {
+	fmt.Println("  POST /api/validate - validate topology")
+	fmt.Println("  POST /api/compile  - compile topology")
+	fmt.Println("  POST /api/export   - export artifacts ZIP")
+	fmt.Println("  POST /api/deploy-script - download deploy script")
 }
 
 // gateAirgap wraps an air-gap compute handler so it requires operator auth IN CONTROLLER MODE

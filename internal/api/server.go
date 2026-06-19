@@ -210,10 +210,11 @@ func (s *Server) ListenAndServe(addr string) error {
 	fmt.Printf("API server listening on: http://%s\n", addr)
 	fmt.Println("available endpoints:")
 	fmt.Println("  GET  /api/health   - health check")
-	fmt.Println("  POST /api/validate - validate topology")
-	fmt.Println("  POST /api/compile  - compile topology")
-	fmt.Println("  POST /api/export   - export artifacts ZIP")
-	fmt.Println("  POST /api/deploy-script - download deploy script")
+	// The four POST /api/{validate,compile,export,deploy-script} compute routes are registered
+	// ONLY under -tags airgap (plan-7 / 1.7). printAirgapBanner is a build-tagged hook: a no-op
+	// in the DEFAULT (controller-only) build (so the banner does not advertise routes the binary
+	// neither registers nor links) and the four-line print under -tags airgap.
+	s.printAirgapBanner()
 
 	srv := &http.Server{
 		Addr:              addr,

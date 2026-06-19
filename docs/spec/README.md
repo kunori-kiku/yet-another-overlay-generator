@@ -53,6 +53,8 @@ docs/spec/
 ├── operations/
 │   ├── development-workflow.md    # dev.sh, manual start, CLI compiler, tests
 │   ├── ci-cd.md                   # Release workflow, deployment scripts
+│   ├── deployment-topology.md     # Two deployments (static-local site vs controller),
+│   │                              #   the //go:build airgap boundary, security delta
 │   └── examples.md                # Example topologies
 ├── security/
 │   └── security.md                # Security considerations
