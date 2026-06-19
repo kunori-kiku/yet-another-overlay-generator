@@ -11,7 +11,8 @@ permissions:
 jobs:
   # Release gate: a tag must never ship untested code. Normally the tagged commit
   # already passed PR CI on main, but tags can point anywhere — re-verify here
-  # before any bundle is built. Mirrors ci.yml's two jobs.
+  # before any bundle is built. Mirrors ci.yml's gates (incl. the //go:build airgap
+  # profile and the required frontend-e2e Playwright job).
   gate-go:
     name: Gate — Go vet + test
     runs-on: ubuntu-latest
@@ -30,6 +31,15 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      # Mirror ci.yml: also exercise the -tags airgap profile (the air-gap compute routes /
+      # local-design oracle live behind //go:build airgap and are not compiled by the default
+      # build above).
+      - name: Vet (airgap profile)
+        run: go vet -tags airgap ./...
+
+      - name: Test (airgap profile)
+        run: go test -tags airgap ./...
 
   gate-frontend:
     name: Gate — Frontend lint
@@ -54,9 +64,52 @@ jobs:
       - name: Lint
         run: npm run lint
 
+  # Mirror ci.yml's required frontend-e2e job: a tag must not ship a panel that would have
+  # failed the full-stack Playwright suite on PR CI (tests_ci.recommendations[2]).
+  gate-e2e:
+    name: Gate — Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build E2E bring-up binaries
+        run: |
+          mkdir -p .e2e-bin
+          go build -tags airgap -o .e2e-bin/e2eserver ./cmd/e2eserver
+          go build -o .e2e-bin/e2eagent ./cmd/e2eagent
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+      - name: Build panel
+        working-directory: frontend
+        run: npm run build
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E suite
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+
   build-frontend:
     name: Build Frontend Dist
-    needs: [gate-go, gate-frontend]
+    needs: [gate-go, gate-frontend, gate-e2e]
     runs-on: ubuntu-latest
 
     steps:
