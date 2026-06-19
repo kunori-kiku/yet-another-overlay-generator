@@ -16,6 +16,9 @@ import { uniqueColliding, runId } from './fixtures/designs'
 // CodePin*DuplicateCrossLink 4xx, because the heal runs on update-topology (server) and on canvas
 // load (FE mirror). It does NOT assert TS↔Go heal byte-equality (1.5's conformance pin owns that);
 // it proves wiring/behavior. R6 precondition: first confirm the raw fixture genuinely collides.
+//
+// Negative-proof (dev-only): bypass the heal (load/import the colliding fixture without
+// HealCollidingPins) → stage 4xx on CodePin*DuplicateCrossLink → this spec goes RED.
 
 test('a colliding topology heals on import and deploys without a duplicate-pin error', async (
   { page, context },

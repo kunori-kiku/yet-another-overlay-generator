@@ -25,6 +25,9 @@ import { uniqueRouterPeer, runId } from './fixtures/designs'
 // (they navigate); both keystone enrolls + both signing deploys then run on /deploy with no
 // navigation between, so the CDP virtual authenticator (which doesn't survive a full-page nav)
 // stays alive holding both credentials.
+//
+// Negative-proof (dev-only): point the reprovision step at the wrong (OLD) PEM as the NEW key →
+// adopt-after's VerifyMembership fails → this spec goes RED.
 
 interface CredBody {
   credential_id: string

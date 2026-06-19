@@ -16,6 +16,9 @@ import { runId } from './fixtures/designs'
 // (a) a revoked node's LIVE agent check-in is rejected (bearer revoked — S-revoke), and
 // (b) a still-held SECOND enrollment token cannot RESURRECT the node (S5 purge-on-revoke / S4
 //     revoked-resurrection guard) — it never succeeds.
+//
+// Negative-proof (dev-only): skip the HandleRevoke token purge (S5) → the held second token
+// enrolls 200 (resurrection) → this spec goes RED.
 
 test('revoke: live agent check-in is rejected and a held second token cannot resurrect the node', async (
   { page, context },

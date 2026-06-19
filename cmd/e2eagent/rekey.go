@@ -22,13 +22,9 @@ func rekeyMode(client *agent.ControllerClient, f *agentFlags) int {
 		return 1
 	}
 
-	// Force a fresh WG key: EnsureKey is idempotent (reuses an existing key), so remove the old
-	// one first to make the public key actually rotate.
-	if err := os.Remove(f.keyPath); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "e2eagent: rekey: clear old key: %v\n", err)
-		return 1
-	}
-	newPub, _, err := agent.EnsureKey(f.keyPath)
+	// Force a fresh WG key via the dedicated rotate seam (the explicit force-rotate counterpart to
+	// EnsureKey's idempotent reuse; its doc describes exactly a controller-requested fleet rekey).
+	newPub, err := agent.RegenerateKey(f.keyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "e2eagent: rekey: regen key: %v\n", err)
 		return 1

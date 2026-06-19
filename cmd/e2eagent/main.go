@@ -1,7 +1,8 @@
 // Command e2eagent is a TEST-ONLY node-agent fixture for the Playwright E2E layer
-// (plan-13 / 3.1, extended by plan-15 / 3.3). It is NOT a release artifact:
-// .github/workflows/release.yml builds explicit targets only (./cmd/server, ./cmd/compiler,
-// ./cmd/agent), so this main is excluded from shipped binaries by construction.
+// (plan-13 / 3.1, extended by plan-15 / 3.3). It is NOT a release artifact: it is built ONLY
+// for the gate-e2e Playwright job (into .e2e-bin/, never uploaded) — the release publish matrix
+// builds explicit targets only (server / compiler / agent / server-airgap) — so it is excluded
+// from shipped binaries by construction.
 //
 // It reuses the REAL internal/agent client seams (exactly as
 // internal/agent/controller_client_test.go drives them) so an E2E spec can walk a node through

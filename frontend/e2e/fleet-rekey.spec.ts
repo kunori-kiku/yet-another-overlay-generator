@@ -18,6 +18,9 @@ import { uniqueRouterPeer, runId } from './fixtures/designs'
 // (b) a straggler that never re-registers is released by the per-node "Cancel rekey" button
 //     (HandleClearRekey) WITHOUT eviction (still approved, no generation bump).
 // There is no third "cancel-rekey" path — only these two.
+//
+// Negative-proof (dev-only): skip the agent rekey → the actor keeps owing a rotation (its
+// "Cancel rekey" badge never clears) → this spec goes RED.
 
 test('Roll-keys + agent rekey clears the actor; Cancel-rekey releases a straggler without eviction', async (
   { page, context },
