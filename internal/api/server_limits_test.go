@@ -3,40 +3,53 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 // TestRequestBodySizeCap_Returns413 verifies that a POST request body exceeding the 4 MiB
-// cap is rejected by http.MaxBytesReader and mapped by the handler to 413 Payload Too
-// Large (D34).
+// cap is rejected by http.MaxBytesReader and mapped to 413 Payload Too Large (D34).
 //
-// The request body is the prefix of valid JSON (padded with one huge string field until it
-// exceeds the cap), ensuring the size limit is what triggers, not a JSON parse error -- the
-// read phase fails on the cap before parsing begins.
+// plan-7 / 1.7: the body cap lives in readTopology, which is shared by the operator-only
+// HandleCompilePreview (default build) and the air-gap compute routes (-tags airgap). With the
+// air-gap routes gated out of the default build, this test retargets the cap assertion onto
+// HandleCompilePreview (operator route /api/v1/operator/compile-preview) so it keeps guarding the
+// readTopology body cap in the default suite. The oversized body is a single huge run of bytes, so
+// http.MaxBytesReader trips on the cap during the read phase, before any JSON parse — and before
+// CompileSubgraph — proving the cap is what rejects.
 func TestRequestBodySizeCap_Returns413(t *testing.T) {
-	server := NewServer()
+	env := newCtlTestEnv(t)
 
 	// Build a request body slightly larger than maxRequestBodyBytes.
 	oversized := bytes.Repeat([]byte("a"), int(maxRequestBodyBytes)+1024)
-	req := httptest.NewRequest(http.MethodPost, "/api/validate", bytes.NewReader(oversized))
+	req, err := http.NewRequest(http.MethodPost, env.opURL("compile-preview"), bytes.NewReader(oversized))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
+	// Authenticate so the request reaches HandleCompilePreview → readTopology (the cap fires
+	// inside the handler, after operator auth, before the compile).
+	req.Header.Set("Authorization", "Bearer "+testOperatorToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST compile-preview: %v", err)
+	}
+	defer resp.Body.Close()
 
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("want 413, got %d, body: %s", rec.Code, rec.Body.String())
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 413, got %d, body: %s", resp.StatusCode, body)
 	}
 
 	// The error response must be of the form {"error":{code,message,params}} for the
 	// frontend to display/localize.
-	var resp apiError
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+	var env413 apiError
+	if err := json.NewDecoder(resp.Body).Decode(&env413); err != nil {
 		t.Fatalf("failed to decode error response: %v", err)
 	}
-	if resp.Error.Message == "" {
+	if env413.Error.Message == "" {
 		t.Errorf("413 response should contain a non-empty error.message field")
 	}
 }
@@ -85,7 +98,10 @@ func TestRecoverPanics_Returns500JSON(t *testing.T) {
 
 	wrapped := server.recoverPanics(panicking)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/compile", nil)
+	// The path is a neutral label: recoverPanics is invoked directly on the handler (not via the
+	// mux), so this exercises the middleware regardless of route. Retargeted off /api/compile in
+	// plan-7 / 1.7 (that air-gap route is no longer registered in the default build).
+	req := httptest.NewRequest(http.MethodPost, "/recover-test", nil)
 	rec := httptest.NewRecorder()
 
 	// The panic should not propagate up; the middleware must catch it and convert it to 500.

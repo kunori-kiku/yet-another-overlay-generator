@@ -58,15 +58,19 @@ export const ALLOCATION_PIN_FIELDS = [
 //   2. else, the single local-engine seam: `mode === 'local' && localEngineEnabled()` ⇒
 //      call the corresponding localEngine adapter (localValidate / localCompile /
 //      localExport / localDeployScripts), running the plan-4 TS compiler in the browser;
-//   3. else (local mode, flag OFF) ⇒ fall through to the existing, proven backend air-gap
-//      fetch — the default path, unchanged.
+//   3. else (local mode, flag = 'backend') ⇒ fall through to the air-gap fetch — retained
+//      ONLY as the explicit 'backend' escape-hatch path (deferred cleanup).
 //
-// localEngineEnabled() is default-OFF (it reads the typed VITE_YAOG_LOCAL_ENGINE flag —
-// see compiler/localEngine.ts + vite-env.d.ts), so merging 1.6 changes no default behaviour:
-// the server path stays the proven default and the migration-isolation invariant holds. The
-// controller-mode branches (refusal guards, the authenticated same-origin validate fetch, and
-// compile()'s in-flight mode-flip key-custody guard) are kept byte-for-byte regardless of the
-// flag — the seam only ever replaces the LOCAL-mode arm.
+// localEngineEnabled() is default-ON (plan-7 Phase 0.5): it reads the typed
+// VITE_YAOG_LOCAL_ENGINE flag (see compiler/localEngine.ts + vite-env.d.ts) and is true
+// unless the flag is explicitly 'backend'. So LOCAL mode is browser-resident by default —
+// justified by the green plan-5 conformance harness, which pins the in-browser compiler
+// against the Go pipeline. The air-gap fetch branches below survive only as the 'backend'
+// escape hatch (functional solely against a `-tags airgap` server, since plan-7 gates those
+// routes off the default controller build). The controller-mode branches (refusal guards, the
+// authenticated same-origin validate fetch, and compile()'s in-flight mode-flip key-custody
+// guard) are kept byte-for-byte regardless of the flag — the seam only ever replaces the
+// LOCAL-mode arm.
 
 interface TopologyState {
   // Data
@@ -763,10 +767,10 @@ export const useTopologyStore = create<TopologyState>()(
     try {
       const topo = get().getTopology();
       const cs = useControllerStore.getState();
-      // Local-engine seam: in LOCAL mode with the flag on, validate in the browser via the
-      // plan-4 TS compiler — no fetch. Controller mode never enters this branch (it keeps its
-      // authenticated same-origin fetch below); with the flag off, local mode falls through to
-      // the existing public /api/validate fetch (default-OFF, unchanged).
+      // Local-engine seam: in LOCAL mode validate in the browser via the plan-4 TS compiler
+      // (default-ON) — no fetch. Controller mode never enters this branch (it keeps its
+      // authenticated same-origin fetch below); only the explicit 'backend' opt-out makes local
+      // mode fall through to the public /api/validate fetch (the retained escape-hatch path).
       if (cs.mode === 'local' && localEngineEnabled()) {
         const data = await localValidate(topo);
         set({ validateResult: data, isValidating: false });
@@ -822,12 +826,12 @@ export const useTopologyStore = create<TopologyState>()(
     try {
       const topo = get().getTopology();
       let data: CompileResponse;
-      // Local-engine seam: in LOCAL mode with the flag on, compile in the browser via the
-      // plan-4 TS compiler. localCompile runs the full AirGap pipeline, so data.topology.nodes
+      // Local-engine seam: in LOCAL mode compile in the browser via the plan-4 TS compiler
+      // (default-ON). localCompile runs the full AirGap pipeline, so data.topology.nodes
       // carries reconstructed private keys (local export/deploy bundles need them) and
       // data.skipped_unenrolled is UNDEFINED (air-gap shape) — exactly the /api/compile shape
-      // the post-compile reconciliation below consumes. With the flag off, local mode falls
-      // through to the existing /api/compile fetch (default-OFF, unchanged).
+      // the post-compile reconciliation below consumes. Only the explicit 'backend' opt-out
+      // makes local mode fall through to the /api/compile fetch (the retained escape-hatch path).
       if (localEngineEnabled()) {
         data = await localCompile(topo);
       } else {
@@ -902,14 +906,15 @@ export const useTopologyStore = create<TopologyState>()(
       const topo = get().getTopology();
       let blob: Blob;
       let filename: string;
-      // Local-engine seam: in LOCAL mode with the flag on, build the per-node bundle ZIP in
-      // the browser via the plan-4 TS compiler — no fetch — and name the download locally,
-      // VERBATIM mirroring handler.go:240's `fmt.Sprintf("%s-artifacts.zip", topo.Project.ID)`
+      // Local-engine seam: in LOCAL mode build the per-node bundle ZIP in the browser via the
+      // plan-4 TS compiler (default-ON) — no fetch — and name the download locally, VERBATIM
+      // mirroring handler.go:240's `fmt.Sprintf("%s-artifacts.zip", topo.Project.ID)`
       // with NO `|| 'project'` fallback: an empty project.id yields `-artifacts.zip` on BOTH
       // paths (a fallback here would be a silent F3-class divergence; defaultProject.id is
       // 'project-1' so the empty case is unreachable today, but parity holds unconditionally).
-      // With the flag off, local mode falls through to the existing /api/export fetch, which
-      // carries the server's Content-Disposition filename (default-OFF, unchanged).
+      // Only the explicit 'backend' opt-out makes local mode fall through to the /api/export
+      // fetch (the retained escape-hatch path), which carries the server's Content-Disposition
+      // filename.
       if (localEngineEnabled()) {
         blob = await localExport(topo);
         filename = `${topo.project.id}-artifacts.zip`;
@@ -962,11 +967,11 @@ export const useTopologyStore = create<TopologyState>()(
     try {
       const topo = get().getTopology();
       let blob: Blob;
-      // Local-engine seam: in LOCAL mode with the flag on, render the project-level deploy
-      // script in the browser via the plan-4 TS compiler — no fetch — and wrap it in a Blob to
-      // reuse the same object-URL download below. localDeployScripts returns both formats; pick
-      // by `format`. With the flag off, local mode falls through to the existing
-      // /api/deploy-script fetch (default-OFF, unchanged).
+      // Local-engine seam: in LOCAL mode render the project-level deploy script in the browser
+      // via the plan-4 TS compiler (default-ON) — no fetch — and wrap it in a Blob to reuse the
+      // same object-URL download below. localDeployScripts returns both formats; pick by
+      // `format`. Only the explicit 'backend' opt-out makes local mode fall through to the
+      // /api/deploy-script fetch (the retained escape-hatch path).
       if (localEngineEnabled()) {
         const { sh, ps1 } = await localDeployScripts(topo);
         const script = format === 'ps1' ? ps1 : sh;

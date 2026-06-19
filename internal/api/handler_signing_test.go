@@ -1,3 +1,11 @@
+//go:build airgap
+
+// handler_signing_test.go — plan-7 / 1.7: tagged behind //go:build airgap. It exercises
+// makeSelfExtractingInstaller, which now lives in handler_airgap.go (the air-gap installer ships
+// only on the -tags airgap path). The bundlesig signing seam keeps its own un-tagged tests; if
+// installer-signing coverage on the live export path is wanted, add it under
+// cmd/compiler/internal/artifacts.
+
 package api
 
 import (

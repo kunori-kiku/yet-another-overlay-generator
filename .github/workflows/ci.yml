@@ -26,6 +26,14 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      # The air-gap compute routes/handlers live behind //go:build airgap (plan-7): the default
+      # `go test ./...` above does NOT compile or exercise them, so also build+vet+test the
+      # `-tags airgap` profile to keep the retained local-design oracle (the plan-13/21 boot
+      # target) from silently rotting.
+      - name: Vet (airgap profile)
+        run: go vet -tags airgap ./...
+      - name: Test (airgap profile)
+        run: go test -tags airgap ./...
 
   frontend:
     name: Frontend lint + build

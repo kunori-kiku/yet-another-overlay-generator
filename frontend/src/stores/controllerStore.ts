@@ -52,6 +52,7 @@ import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { stripPrivateKeys, dropAllKeys } from '../lib/custody';
 import { localizeError as localizeErrorFor } from '../lib/localizeError';
+import { localOnly } from '../lib/localOnly';
 import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
 import { useUiStore } from './uiStore';
 import { t, type MessageKey, type TParams } from '../i18n';
@@ -619,6 +620,12 @@ export const useControllerStore = create<ControllerState>()(
       agentBaseURL: 'http://localhost:9090',
       operatorToken: '',
 
+      // Initial workflow mode. The static-local-design build (VITE_LOCAL_ONLY) forces 'local'
+      // and locks it there (setMode/switchToController are guarded no-ops below); the default
+      // all-in-one build starts in 'local' but lets the operator switch to 'controller'. (A
+      // persisted controller mode is additionally coerced to local on rehydrate via merge,
+      // below, so a build that was once the controller image and is re-hosted as the static
+      // site cannot resurface a stale controller mode out of localStorage.)
       mode: 'local',
 
       sessionToken: '',
@@ -663,7 +670,16 @@ export const useControllerStore = create<ControllerState>()(
 
       setConfig: (partial) => set(partial),
 
-      setMode: (mode) => set({ mode }),
+      // setMode is a guarded no-op toward controller mode in the static-local-design build
+      // (VITE_LOCAL_ONLY): that build has no controller backend, so switching to controller
+      // would only strand the user behind a login gate that can never authenticate. The
+      // affordances that call this are hidden in that build too, but the guard is the
+      // load-bearing lock (a deep link / programmatic call cannot escape local mode). The
+      // default all-in-one build is unaffected.
+      setMode: (mode) => {
+        if (localOnly() && mode === 'controller') return;
+        set({ mode });
+      },
 
       // Refresh the fleet view: fetch nodes + audit + bootstrap settings in parallel. If any
       // fails, record the error and leave the existing view unchanged. A settings-fetch failure
@@ -1550,6 +1566,9 @@ export const useControllerStore = create<ControllerState>()(
       // when a pubkey-only file was imported in local mode. Valid keypairs are untouched; once logged
       // in, server hydration replaces the canvas anyway. Notices are cleared for a clean controller entry.
       switchToController: () => {
+        // Static-local-design build (VITE_LOCAL_ONLY): controller mode is unreachable — refuse
+        // the switch (mirrors setMode's guard; the calling affordance is hidden there too).
+        if (localOnly()) return;
         const ts = useTopologyStore.getState();
         ts.clearStrandedKeys();
         // Drop any LOCAL air-gap compile result on the way into controller mode (review should-fix #1).
@@ -1792,6 +1811,17 @@ export const useControllerStore = create<ControllerState>()(
         settings: state.settings,
         lastSyncedAt: state.lastSyncedAt,
       }),
+      // merge replicates the persist middleware's default (shallow-merge persisted state over
+      // the freshly-built initial state), then COERCES mode to 'local' in the static-local-design
+      // build (VITE_LOCAL_ONLY). Without this, a localStorage 'controller' written by the
+      // all-in-one build and then loaded by the static site (same origin re-hosted, or a stale
+      // cache) would resurface controller mode the build is supposed to lock out. The default
+      // build keeps the persisted mode verbatim (the standard rehydration).
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as Partial<ControllerState>) };
+        if (localOnly()) merged.mode = 'local';
+        return merged;
+      },
     }
   )
 );

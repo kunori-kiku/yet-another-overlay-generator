@@ -8,6 +8,12 @@ CLAUDE.md
 .dev-backend.pid
 .dev-frontend.log
 .dev-frontend.pid
+# Stray Go build artifacts emitted at the repo root by `go build ./cmd/...` (the binaries are
+# released via the build pipeline, never committed from the tree).
+/server
+/compiler
+/yaog-server
+/yaog-compiler
 # private key material must never be committed (bundle signing key, TLS, etc.)
 *.pem
 *.key

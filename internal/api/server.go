@@ -28,13 +28,13 @@ type Server struct {
 	// HTTP — TLS is delegated to a reverse proxy (plan-4.5).
 	agentMux *http.ServeMux
 
-	// operatorAuth is the operator-auth middleware, set by EnableController in controller
-	// mode and nil in air-gap mode (plan-12 / T6). The air-gap compute routes (validate/
-	// compile/export/deploy-script) read it AT REQUEST TIME via gateAirgap: in a controller
-	// deployment they are then gated behind operator auth (closing the unauthenticated
-	// compute / key-gen oracle on the operator port); in air-gap mode they stay open exactly
-	// as before. Stored as a field (not wired at registerRoutes time) because EnableController
-	// runs AFTER registerRoutes.
+	// operatorAuth is the operator-auth middleware used to gate the air-gap compute routes
+	// IN CONTROLLER MODE. It is read/written ONLY under -tags airgap (plan-7 / 1.7): the
+	// air-gap routes, gateAirgap, and the arming in armAirgapAuth all live behind the build
+	// tag, so in the DEFAULT (controller-only) build this field is never read or written and
+	// the four anonymous compute routes are not even linked. The DISTINCT operator-route auth
+	// for the controller surface is ControllerHandler.operatorAuth (auth_controller.go), wired
+	// in both builds and unaffected by this field.
 	operatorAuth func(http.HandlerFunc) http.HandlerFunc
 
 	// srvMu guards the live *http.Server handles, which ListenAndServe[Agent] publish
@@ -81,10 +81,12 @@ func NewServer() *Server {
 func (s *Server) EnableController(ch *ControllerHandler) {
 	ch.RegisterOperatorRoutes(s.mux)
 	ch.RegisterAgentRoutes(s.agentMux)
-	// plan-12 / T6: in a controller deployment the air-gap compute routes on s.mux must not be
-	// an unauthenticated compute/key-gen oracle on the operator port. Arm the operator-auth gate;
-	// gateAirgap (wrapping those routes since registerRoutes) reads it at request time.
-	s.operatorAuth = ch.operatorAuth
+	// plan-7 / 1.7: arm the operator-auth gate for the air-gap compute routes. This is a build-
+	// tagged hook: under -tags airgap it stores ch.operatorAuth so gateAirgap can require operator
+	// auth on those routes (closing the unauthenticated compute/key-gen oracle on the operator
+	// port); in the DEFAULT (controller-only) build it is a no-op stub because the four air-gap
+	// routes are not registered or linked at all.
+	s.armAirgapAuth(ch)
 	// plan-8 Phase 5.2 (TOFU-MITM DOCUMENT): surface a single startup warning when the controller
 	// is in the dev-only no-anchor posture (keystone OFF + no TLS hint), where a network MITM can
 	// substitute the fetched bootstrap/config. Advisory only — refusing the posture in code is
@@ -93,45 +95,29 @@ func (s *Server) EnableController(ch *ControllerHandler) {
 	ch.WarnInsecureControllerPosture(context.Background())
 }
 
-// gateAirgap wraps an air-gap compute handler so it requires operator auth IN CONTROLLER MODE
-// (s.operatorAuth armed by EnableController) and is a passthrough in air-gap mode (s.operatorAuth
-// nil), exactly as before. Read at request time because EnableController runs after registerRoutes.
-// /api/health is intentionally NOT wrapped (it stays a public liveness probe in both modes).
-func (s *Server) gateAirgap(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if s.operatorAuth != nil {
-			s.operatorAuth(h)(w, r)
-			return
-		}
-		h(w, r)
-	}
+// wrap composes the un-tagged middleware chain for a public route (outermost runs first):
+// panic recovery -> CORS -> business handler. recoverPanics wraps the outermost layer so a
+// panic during either the CORS stage or the business handler is caught and converted into a
+// 500 JSON response instead of tearing the connection down (D60). /api/health uses this in
+// BOTH builds; the tagged air-gap routes reuse it (plus the operator-auth gate) under
+// -tags airgap.
+func (s *Server) wrap(h http.HandlerFunc) http.HandlerFunc {
+	return s.recoverPanics(s.cors(h))
 }
 
+// registerRoutes registers the routes present in BOTH builds. In the DEFAULT (controller-only)
+// build that is exactly one route — /api/health, the public liveness probe (still CORS-wrapped
+// + panic-recovered via wrap). The four anonymous air-gap compute routes are registered ONLY
+// under -tags airgap, via registerExtraRoutes (a no-op stub in the default build, overridden by
+// the //go:build airgap file). See plan-7 / 1.7.
 func (s *Server) registerRoutes() {
-	// Middleware chain (outermost runs first): panic recovery -> CORS -> business handler.
-	// recoverPanics wraps the outermost layer so a panic during either the CORS stage or the
-	// business handler is caught and converted into a 500 JSON response instead of tearing the
-	// connection down (D60).
-	wrap := func(h http.HandlerFunc) http.HandlerFunc {
-		return s.recoverPanics(s.cors(h))
-	}
-
-	// compute wraps an air-gap compute route with the controller-mode operator-auth gate
-	// (gateAirgap) INSIDE the panic/cors chain, so a 401/403 from the gate still gets CORS
-	// headers (the panel can read it). Health is exempt — public liveness probe in both modes.
-	compute := func(h http.HandlerFunc) http.HandlerFunc {
-		return s.recoverPanics(s.cors(s.gateAirgap(h)))
-	}
-
-	s.mux.HandleFunc("/api/health", wrap(s.handler.HandleHealth))
-	s.mux.HandleFunc("/api/validate", compute(s.handler.HandleValidate))
-	s.mux.HandleFunc("/api/compile", compute(s.handler.HandleCompile))
-	s.mux.HandleFunc("/api/export", compute(s.handler.HandleExport))
-	s.mux.HandleFunc("/api/deploy-script", compute(s.handler.HandleDeployScript))
+	s.mux.HandleFunc("/api/health", s.wrap(s.handler.HandleHealth))
+	s.registerExtraRoutes()
 }
 
-// cors wraps next with permissive CORS headers for the air-gap compute routes and
-// short-circuits preflight OPTIONS requests with 204 No Content.
+// cors wraps next with permissive CORS headers and short-circuits preflight OPTIONS requests
+// with 204 No Content. It wraps /api/health in BOTH builds (via wrap) and, under -tags airgap,
+// the four air-gap compute routes (via the compute chain in airgap_routes.go).
 func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -224,10 +210,11 @@ func (s *Server) ListenAndServe(addr string) error {
 	fmt.Printf("API server listening on: http://%s\n", addr)
 	fmt.Println("available endpoints:")
 	fmt.Println("  GET  /api/health   - health check")
-	fmt.Println("  POST /api/validate - validate topology")
-	fmt.Println("  POST /api/compile  - compile topology")
-	fmt.Println("  POST /api/export   - export artifacts ZIP")
-	fmt.Println("  POST /api/deploy-script - download deploy script")
+	// The four POST /api/{validate,compile,export,deploy-script} compute routes are registered
+	// ONLY under -tags airgap (plan-7 / 1.7). printAirgapBanner is a build-tagged hook: a no-op
+	// in the DEFAULT (controller-only) build (so the banner does not advertise routes the binary
+	// neither registers nor links) and the four-line print under -tags airgap.
+	s.printAirgapBanner()
 
 	srv := &http.Server{
 		Addr:              addr,

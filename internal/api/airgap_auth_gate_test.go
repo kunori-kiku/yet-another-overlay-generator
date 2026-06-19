@@ -1,10 +1,17 @@
+//go:build airgap
+
 package api
 
-// airgap_auth_gate_test.go — plan-12 / T6. In a CONTROLLER deployment the air-gap compute
-// routes (/api/validate, /api/compile, /api/export, /api/deploy-script) live on the operator
-// port and must be behind operator-auth — otherwise they are an unauthenticated compute /
-// key-gen oracle (and DoS surface) on that port. In a pure AIR-GAP deployment they stay open
-// exactly as before. /api/health is a public liveness probe in both modes.
+// airgap_auth_gate_test.go — tagged behind //go:build airgap (plan-7 / 1.7): its gateAirgap /
+// operator-gate assertions reference symbols (gateAirgap, the four route registrations) that exist
+// only under -tags airgap, so the file compiles only in the air-gap build. Default-build
+// operator-route auth is covered by controller_http_test.go.
+//
+// What it guards (plan-12 / T6): in a CONTROLLER deployment the air-gap compute routes
+// (/api/validate, /api/compile, /api/export, /api/deploy-script) live on the operator port and must
+// be behind operator-auth — otherwise they are an unauthenticated compute / key-gen oracle (and DoS
+// surface) on that port. In a pure AIR-GAP deployment they stay open exactly as before. /api/health
+// is a public liveness probe in both modes.
 //
 // The gate is request-time (Server.gateAirgap reads Server.operatorAuth, armed by
 // EnableController). This test exercises the real *Server* (NewServer + EnableController),

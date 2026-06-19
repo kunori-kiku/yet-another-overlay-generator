@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # dev.sh — start/stop the overlay generator dev environment
 # Usage: ./dev.sh [start|stop|restart|status]
+#
+# Backend: the DEFAULT (controller-only) server (`go run ./cmd/server/`, no -tags airgap) on
+# :8080 — the four anonymous air-gap compute routes (/api/validate|compile|export|deploy-script)
+# are gated off this build behind //go:build airgap (plan-7 / 1.7). LOCAL design now compiles
+# entirely IN-BROWSER (the plan-4 TS compiler, default-ON), so the Vite dev server only ever
+# talks to the backend for /api/health + the controller (operator/agent) routes. To exercise the
+# air-gap routes locally, run the oracle instead: `go run -tags airgap ./cmd/server/` (or
+# `cmd/compiler` for the CLI). See docs/spec/operations/deployment-topology.md.
 
 set -euo pipefail
 cd "$(dirname "$0")"

@@ -110,10 +110,22 @@ func main() {
 		server.EnableStatic(webDir)
 	}
 
-	// Air-gap mode (the default): controller env not configured → serve exactly as
-	// before. The mux and the HTTP serve path are untouched.
+	// Controller env not configured (state dir and/or tenant id unset). The fate of this
+	// branch is build-tagged (plan-7 / 1.7, LOCKED build-tag mechanism):
+	//
+	//   - DEFAULT (controller-only) build: serveAirgap FAILS LOUD. The default binary is a
+	//     CONTROLLER and has no air-gap compute surface linked (the four anonymous
+	//     /api/{validate,compile,export,deploy-script} routes live behind //go:build airgap),
+	//     so booting a "serve exactly as before" air-gap server here would stand up a panel/
+	//     health-only listener that silently does nothing useful. Refusing names the fix:
+	//     set the controller env, or use the -tags airgap local-design build / the standalone
+	//     static-local-design site / cmd/compiler for offline compilation.
+	//   - -tags airgap build: serveAirgap boots the air-gap server (server.ListenAndServe),
+	//     the local-design oracle and the --mode airgap boot target for plan-13's E2E.
+	//
+	// Both implementations live in build-tagged files (boot_default.go / boot_airgap.go).
 	if stateDir == "" || tenant == "" {
-		if err := server.ListenAndServe(*addr); err != nil {
+		if err := serveAirgap(server, *addr); err != nil {
 			log.Fatalf("server: %v", err)
 		}
 		return

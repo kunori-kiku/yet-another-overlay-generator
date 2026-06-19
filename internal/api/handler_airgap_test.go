@@ -1,0 +1,349 @@
+//go:build airgap
+
+// handler_airgap_test.go — plan-7 / 1.7: the air-gap compute handler tests, tagged behind
+// //go:build airgap. These drive /api/validate, /api/compile, and /api/export, which are
+// registered/linked only under -tags airgap, so they compile only in that build. The
+// validTopologyJSON helper lives here too because its only callers are these tests.
+
+package api
+
+import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestHandleValidate_ValidTopology(t *testing.T) {
+	server := NewServer()
+
+	body := validTopologyJSON()
+	req := httptest.NewRequest(http.MethodPost, "/api/validate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp ValidateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if !resp.Valid {
+		t.Errorf("expected topology to be valid, errors: %v", resp.Errors)
+	}
+}
+
+func TestHandleValidate_InvalidTopology(t *testing.T) {
+	server := NewServer()
+
+	topo := map[string]interface{}{
+		"project": map[string]interface{}{
+			"id":   "", // missing project ID
+			"name": "Test",
+		},
+		"domains": []interface{}{},
+		"nodes":   []interface{}{},
+		"edges":   []interface{}{},
+	}
+	body, _ := json.Marshal(topo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/validate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d", rec.Code)
+	}
+
+	var resp ValidateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Valid {
+		t.Errorf("expected topology to be invalid")
+	}
+
+	if len(resp.Errors) == 0 {
+		t.Errorf("expected non-empty validation errors")
+	}
+}
+
+func TestHandleValidate_EmptyBody(t *testing.T) {
+	server := NewServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/validate", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleValidate_InvalidJSON(t *testing.T) {
+	server := NewServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/validate", bytes.NewReader([]byte("not json")))
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleCompile_ValidTopology(t *testing.T) {
+	server := NewServer()
+
+	body := validTopologyJSON()
+	req := httptest.NewRequest(http.MethodPost, "/api/compile", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp CompileResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Every node should have an allocated overlay IP.
+	for _, node := range resp.Topology.Nodes {
+		if node.OverlayIP == "" {
+			t.Errorf("node %s has no overlay IP", node.Name)
+		}
+	}
+
+	// Should produce WireGuard configs.
+	if len(resp.WireGuardConfigs) == 0 {
+		t.Errorf("expected non-empty WireGuard configs")
+	}
+
+	// Should produce Babel configs.
+	if len(resp.BabelConfigs) == 0 {
+		t.Errorf("expected non-empty Babel configs")
+	}
+
+	// Should produce install scripts.
+	if len(resp.InstallScripts) == 0 {
+		t.Errorf("expected non-empty install scripts")
+	}
+}
+
+func TestHandleCompile_InvalidTopology(t *testing.T) {
+	server := NewServer()
+
+	topo := map[string]interface{}{
+		"project": map[string]interface{}{"id": "", "name": ""},
+		"domains": []interface{}{},
+		"nodes":   []interface{}{},
+		"edges":   []interface{}{},
+	}
+	body, _ := json.Marshal(topo)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/compile", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("want 422, got %d", rec.Code)
+	}
+}
+
+func TestHandleExport_ReturnsZipWithNodeInstallers(t *testing.T) {
+	server := NewServer()
+
+	body := validTopologyJSON()
+	req := httptest.NewRequest(http.MethodPost, "/api/export", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Check the Content-Type header.
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/zip" {
+		t.Errorf("want Content-Type=application/zip, got %s", ct)
+	}
+
+	// Check the Content-Disposition header.
+	cd := rec.Header().Get("Content-Disposition")
+	if cd == "" {
+		t.Errorf("missing Content-Disposition header")
+	}
+
+	zipReader, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+	if err != nil {
+		t.Fatalf(" failed to read zip stream: %v", err)
+	}
+
+	entries := map[string]*zip.File{}
+	for _, f := range zipReader.File {
+		entries[f.Name] = f
+	}
+
+	if _, ok := entries["node-alpha.tar.gz"]; ok {
+		t.Fatalf("zip should not include node-alpha.tar.gz; only node-alpha.install.sh is expected")
+	}
+
+	alphaInstaller, ok := entries["node-alpha.install.sh"]
+	if !ok {
+		t.Fatalf("zip missing node-alpha.install.sh")
+	}
+
+	rc, err := alphaInstaller.Open()
+	if err != nil {
+		t.Fatalf("failed to open node-alpha.install.sh in zip: %v", err)
+	}
+	defer rc.Close()
+
+	installerBytes, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("failed to read node-alpha.install.sh bytes: %v", err)
+	}
+
+	installerText := string(installerBytes)
+	payloadMarker := "__PAYLOAD_BELOW__\n"
+	idx := strings.Index(installerText, payloadMarker)
+	if idx < 0 {
+		t.Fatalf("node-alpha.install.sh missing payload marker")
+	}
+
+	payloadBase64 := strings.TrimSpace(installerText[idx+len(payloadMarker):])
+	tarBytes, err := base64.StdEncoding.DecodeString(payloadBase64)
+	if err != nil {
+		t.Fatalf("failed to decode embedded payload from node-alpha.install.sh: %v", err)
+	}
+
+	gzReader, err := gzip.NewReader(bytes.NewReader(tarBytes))
+	if err != nil {
+		t.Fatalf("failed to read gzip stream in node-alpha.tar.gz: %v", err)
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+	hasWgConf := false
+	for {
+		hdr, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("failed to read tar entry from node-alpha.tar.gz: %v", err)
+		}
+		// per-peer architecture: the interface name is wg-<peername>; node-alpha's peer is node-beta
+		if strings.HasPrefix(hdr.Name, "wireguard/wg-") && strings.HasSuffix(hdr.Name, ".conf") {
+			hasWgConf = true
+			break
+		}
+	}
+
+	if !hasWgConf {
+		t.Errorf("node-alpha.tar.gz missing wireguard/wg-*.conf (per-peer interface config)")
+	}
+}
+
+// validTopologyJSON returns a minimal two-router topology used by the air-gap compute handler
+// tests above.
+func validTopologyJSON() []byte {
+	topo := map[string]interface{}{
+		"project": map[string]interface{}{
+			"id":      "test-001",
+			"name":    "Test Project",
+			"version": "0.1.0",
+		},
+		"domains": []interface{}{
+			map[string]interface{}{
+				"id":              "domain-1",
+				"name":            "test-network",
+				"cidr":            "10.10.0.0/24",
+				"allocation_mode": "auto",
+				"routing_mode":    "babel",
+			},
+		},
+		"nodes": []interface{}{
+			map[string]interface{}{
+				"id":          "node-1",
+				"name":        "node-alpha",
+				"hostname":    "alpha.example.com",
+				"platform":    "debian",
+				"role":        "router",
+				"domain_id":   "domain-1",
+				"listen_port": 51820,
+				"capabilities": map[string]interface{}{
+					"can_accept_inbound": true,
+					"can_forward":        true,
+					"can_relay":          false,
+					"has_public_ip":      true,
+				},
+			},
+			map[string]interface{}{
+				"id":          "node-2",
+				"name":        "node-beta",
+				"hostname":    "beta.example.com",
+				"platform":    "ubuntu",
+				"role":        "router",
+				"domain_id":   "domain-1",
+				"listen_port": 51820,
+				"capabilities": map[string]interface{}{
+					"can_accept_inbound": true,
+					"can_forward":        true,
+					"can_relay":          false,
+					"has_public_ip":      true,
+				},
+			},
+		},
+		"edges": []interface{}{
+			map[string]interface{}{
+				"id":            "edge-1",
+				"from_node_id":  "node-1",
+				"to_node_id":    "node-2",
+				"type":          "direct",
+				"endpoint_host": "203.0.113.2",
+				"endpoint_port": 51820,
+				"transport":     "udp",
+				"is_enabled":    true,
+			},
+			map[string]interface{}{
+				"id":            "edge-2",
+				"from_node_id":  "node-2",
+				"to_node_id":    "node-1",
+				"type":          "direct",
+				"endpoint_host": "203.0.113.1",
+				"endpoint_port": 51820,
+				"transport":     "udp",
+				"is_enabled":    true,
+			},
+		},
+	}
+
+	body, _ := json.Marshal(topo)
+	return body
+}
