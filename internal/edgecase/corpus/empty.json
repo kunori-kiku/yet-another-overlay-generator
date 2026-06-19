@@ -1,0 +1,21 @@
+{
+  "name": "empty",
+  "class": "degenerate",
+  "topo": {
+    "project": {
+      "id": "e2e-empty",
+      "name": "empty"
+    },
+    "domains": [
+      {
+        "id": "d1",
+        "name": "d1",
+        "cidr": "10.50.0.0/24",
+        "allocation_mode": "auto",
+        "routing_mode": "babel"
+      }
+    ],
+    "nodes": null,
+    "edges": null
+  }
+}

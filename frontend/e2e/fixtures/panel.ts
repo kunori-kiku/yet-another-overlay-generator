@@ -151,6 +151,22 @@ export async function prepareUniqueDesign(
   return built
 }
 
+// selectNodeAndRename dirties the controller canvas deterministically: it navigates to /design,
+// selects a node by React Flow's stable data-id (opening the DesignAside NodeEditor), and edits the
+// node-name input (the aside's first textbox) so the canvas diverges from the synced baseline. This
+// is the non-brittle dirty path the Save / save-conflict adversarial specs need (a real React-Flow
+// drag/add is the brittle interaction the deploy.spec residual flags). It drives the UI only.
+export async function selectNodeAndRename(page: Page, panelURL: string, nodeId: string, newName: string): Promise<void> {
+  await page.goto(`${panelURL}/design`)
+  const node = page.locator(`.react-flow__node[data-id="${nodeId}"]`)
+  await expect(node).toBeVisible({ timeout: 15_000 })
+  await node.click()
+  const nameInput = page.locator('aside input').first()
+  await expect(nameInput).toBeVisible({ timeout: 10_000 })
+  await nameInput.fill(newName)
+  await nameInput.blur()
+}
+
 // runDeploy clicks Deploy on /deploy and waits for the Last-deploy block (a successful
 // stage→(sign)→promote). It does NOT navigate away after.
 export async function runDeploy(page: Page, target: ControllerTarget): Promise<void> {

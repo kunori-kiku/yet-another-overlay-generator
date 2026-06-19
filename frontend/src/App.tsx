@@ -3,6 +3,7 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { ReactFlowProvider } from '@xyflow/react';
 import { Shell } from './components/shell/Shell';
 import { ErrorBoundary } from './components/shell/ErrorBoundary';
+import { E2ERenderThrowProbe } from './components/shell/E2ERenderThrowProbe';
 import { ThemeProvider } from './theme/ThemeProvider';
 import { useControllerStore } from './stores/controllerStore';
 import { landingPathForMode } from './components/shell/nav';
@@ -62,6 +63,9 @@ const router = createBrowserRouter([
 function App() {
   return (
     <ErrorBoundary>
+      {/* Test-only render-error probe, dead-code-eliminated from any build that does not set
+          VITE_E2E (i.e. all production builds). Drives the ErrorBoundary adversarial spec. */}
+      {import.meta.env.VITE_E2E ? <E2ERenderThrowProbe /> : null}
       <ThemeProvider>
         <RouterProvider router={router} />
       </ThemeProvider>
