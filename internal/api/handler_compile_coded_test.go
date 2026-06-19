@@ -1,3 +1,10 @@
+//go:build airgap
+
+// handler_compile_coded_test.go — plan-7 / 1.7: tagged behind //go:build airgap. It drives the
+// anonymous /api/compile route, which is registered/linked only under -tags airgap. The default-
+// build compile coded-error contract is exercised by the controller compile-preview tests +
+// internal/conformance/.
+
 package api
 
 import (

@@ -1,3 +1,8 @@
+//go:build airgap
+
+// handler_deployscript_test.go — plan-7 / 1.7: tagged behind //go:build airgap. It drives the
+// anonymous /api/deploy-script route (registered/linked only under -tags airgap).
+
 package api
 
 import (

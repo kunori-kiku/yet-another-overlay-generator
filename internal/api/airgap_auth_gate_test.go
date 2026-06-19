@@ -1,5 +1,12 @@
+//go:build airgap
+
 package api
 
+// airgap_auth_gate_test.go — plan-7 / 1.7: tagged behind //go:build airgap. Its gateAirgap /
+// operator-gate assertions against the four compute routes reference symbols (gateAirgap, the four
+// route registrations) that exist only under -tags airgap, so the file compiles only in the air-gap
+// build. Default-build operator-route auth is covered by controller_http_test.go.
+//
 // airgap_auth_gate_test.go — plan-12 / T6. In a CONTROLLER deployment the air-gap compute
 // routes (/api/validate, /api/compile, /api/export, /api/deploy-script) live on the operator
 // port and must be behind operator-auth — otherwise they are an unauthenticated compute /

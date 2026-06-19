@@ -1,3 +1,10 @@
+//go:build airgap
+
+// handler_compile_warnings_test.go — plan-7 / 1.7: tagged behind //go:build airgap. It drives the
+// anonymous /api/compile route (registered/linked only under -tags airgap). HandleCompilePreview
+// surfaces the same warnings array on the controller path; conformance covers the warning contract
+// in the default build.
+
 package api
 
 import (
