@@ -109,10 +109,15 @@ test('a re-entrant login submit produces a single login POST', async ({ page, co
   const faults = await installFaults(page, [{ route: 'login', method: 'POST', delayMs: 1500 }])
   await page.locator('#login-username').fill(OPERATOR_USER)
   await page.locator('#login-password').fill(OPERATOR_PASS)
-  const submit = page.locator('form button[type="submit"]')
-  await submit.click() // login() fires; loading:true; the login POST is held ~1.5s
-  await submit.dispatchEvent('click') // re-entrant submit during the in-flight login
-  await submit.dispatchEvent('click')
+  const form = page.locator('form')
+  await form.locator('button[type="submit"]').click() // login() fires; loading:true; login POST held ~1.5s
+  // Re-entrancy probe: unlike Deploy/Roll-keys/revoke (React onClick, which fires even on a DISABLED
+  // button), login submits via the form's NATIVE activation — and a disabled submit button's native
+  // activation is DOM-suppressed, so a click on it would NOT re-enter. Dispatch a synthetic 'submit'
+  // straight to the <form> instead: React's delegated onSubmit fires regardless of the button state,
+  // genuinely re-invoking login() so the idempotency guard (not the disabled button) is what's tested.
+  await form.dispatchEvent('submit')
+  await form.dispatchEvent('submit')
 
   // The login completes and the form detaches; exactly one login POST was issued (no extra
   // rate-limit attempt burned).
