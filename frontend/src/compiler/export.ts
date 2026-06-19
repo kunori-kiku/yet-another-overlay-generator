@@ -23,6 +23,10 @@ import JSZip from 'jszip';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
+// compile is imported back from ./index, which re-exports this module's export builders — a deliberate
+// import cycle. It is resolution-safe because compile is only ever CALLED at runtime (inside
+// exportArtifacts), never at module-evaluation time: ESM live bindings guarantee the binding is populated
+// by the time any export runs, so the cycle never observes a half-initialized module.
 import { compile } from './index';
 import type { KeyCustody } from './index';
 import type { CompileResult, Topology } from './model';
