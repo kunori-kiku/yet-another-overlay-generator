@@ -96,3 +96,51 @@ jobs:
         run: |
           npm ci --legacy-peer-deps
           npm run conformance
+
+  frontend-e2e:
+    name: Frontend E2E (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # Build the TEST-ONLY bring-up binaries PREBUILT (not `go run` — offline-module
+      # determinism). cmd/e2eserver MUST be -tags airgap: the air-gap boot's /api/compile
+      # lives behind //go:build airgap (plan-7). They land in .e2e-bin/ — the default path
+      # the Playwright globalSetup resolves (no env override needed).
+      - name: Build E2E bring-up binaries
+        run: |
+          mkdir -p .e2e-bin
+          go build -tags airgap -o .e2e-bin/e2eserver ./cmd/e2eserver
+          go build -o .e2e-bin/e2eagent ./cmd/e2eagent
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+      # Build the panel the boots serve from (EnableStatic). globalSetup resolves dist at
+      # frontend/dist by default.
+      - name: Build panel
+        working-directory: frontend
+        run: npm run build
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E canaries
+        working-directory: frontend
+        run: npm run test:e2e
+      # Report + traces for a failed run (trace: retain-on-failure). Always-collected on
+      # failure so a flake is diagnosable from the CI artifact, never re-run blind.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
