@@ -1,9 +1,12 @@
 import { test, expect } from '@playwright/test'
+import { readHarness } from './fixtures/harness'
 import {
   seedAndGotoController,
   loginAsOperator,
   logoutViaUserMenu,
   keystoneOffTarget,
+  prepareUniqueDesign,
+  runDeploy,
 } from './fixtures/panel'
 import { readPersisted, assertNoFleetSecrets } from './fixtures/leakOracle'
 
@@ -22,19 +25,34 @@ test('session survives a page refresh (cookie restore)', async ({ page, context 
   await expect(page.locator('#login-username')).toBeHidden()
 })
 
-test('logout returns to login, drops the session, and leaves no secrets in storage', async ({
-  page,
-  context,
-}) => {
-  const target = keystoneOffTarget()
+test('logout flushes the server-held canvas and drops the session (custody)', async (
+  { page, context },
+  testInfo,
+) => {
+  const h = readHarness()
+  const target = keystoneOffTarget(h)
+  page.on('dialog', (d) => void d.accept()) // accept the import confirm
+
   await seedAndGotoController(page, context, target)
   await loginAsOperator(page)
 
+  // Establish a SERVER-HELD canvas first (otherwise the logout-path flush — clearServerCanvasAtGate
+  // → flushWorkspace, gated on canvasFromServer — is never exercised and the custody check is
+  // vacuous): import + enroll + deploy so canvasFromServer===true and the fleet sentinels are live.
+  await prepareUniqueDesign(page, context, h, target, testInfo)
+  await runDeploy(page, target)
+
   await logoutViaUserMenu(page)
 
-  // Custody: after logout, localStorage carries no session secrets and no fleet sentinels, and
-  // controller-storage holds only the persist allowlist (clearServerCanvasAtGate + partialize).
-  assertNoFleetSecrets(await readPersisted(page))
+  // Custody: the logout-path flush RAN — clearServerCanvasAtGate saw the server-held canvas
+  // (canvasFromServer was true) and ran flushWorkspace, resetting it to the local default
+  // (canvasFromServer:false, nodes/edges empty). A regression where logout skips the flush would
+  // leave canvasFromServer true → caught here. And no fleet sentinel / session secret persisted.
+  const after = await readPersisted(page)
+  assertNoFleetSecrets(after)
+  const topo = after.topology?.state as { canvasFromServer?: boolean; nodes?: unknown[] } | undefined
+  expect(topo?.canvasFromServer, 'logout must flush the server-held canvas (canvasFromServer→false)').toBe(false)
+  expect(Array.isArray(topo?.nodes) ? topo!.nodes!.length : -1, 'logout must clear the design').toBe(0)
 
   // Server-side: GET /session is now unauthenticated (the cookie session was revoked).
   const session = await page.request.get(`${target.panel}/api/v1/operator/session`)

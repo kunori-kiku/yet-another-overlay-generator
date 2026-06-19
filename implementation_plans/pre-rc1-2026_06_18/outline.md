@@ -296,8 +296,22 @@ reconciliations, all forced by real constraints discovered while running against
   enrollment tokens (operator API + CSRF), so the shared keystone-OFF FileStore stays collision-free across
   specs/runs. WebAuthn RP-IDs require **localhost** (not 127.0.0.1) — a `localhostURL()` helper keeps the port.
 - **Release gate mirrors CI** (5.3): release.yml gate-go now runs the -tags airgap profile + a new gate-e2e
-  runs the Playwright suite. The leakOracle is the runner-level custody gate (structural blank + value
-  sentinels + persist allowlist + ControllerNode-only node cache), run post-deploy/refresh/logout.
+  runs the Playwright suite. The leakOracle is the runner-level custody gate (structural blank incl.
+  project/domains + value sentinels + WG-key-shape + persist allowlist + ControllerNode-only node cache),
+  run post-deploy/refresh/logout.
+- **Independent review (NO-GO → fixed → re-review) caught 5 real "present-but-not-load-bearing" defects**,
+  all fixed at root: (1) the post-logout custody check was vacuous (no server-held canvas established) →
+  now deploys first, then asserts the logout flush ran (canvasFromServer→false); (2) the F1 leg ran on a
+  Bearer session where the pre-fix code also 200'd → added a keystone-OFF deploy-AFTER-REFRESH leg asserting
+  getTrustlist is 404-not-401 on a cookie-only session (the real client-side credentials regression); (3) the
+  post-refresh leakOracle checkpoint was missing → added a reload+recheck to the deploy spec (DoD #5's three
+  checkpoints now all present); (4) dropAllKeys was asserted against a key-free design → inject key material
+  + capture the update-topology POST body + assert stripped; (5) the structural blank omitted project/domains
+  (fleet CIDR/name blind spot) → added. **Residual (3.5 shrink-guard):** NOT E2E'd — the ≥50% typed-confirm
+  gate compares canvas vs the server's CURRENT design, but controller-mode import auto-pushes so the only
+  deterministic trigger is brittle live-canvas node deletion; covered by manual smoke + a candidate unit test
+  of the guard predicate. 3.1 compile-preview IS covered (asserts the server compile-preview returns rendered
+  configs on the wire).
 
 **Findings discovered during plan-3 execution (2026-06-18; recorded so they are not lost — none block
 plan-3, which is a no-byte-change freeze):**

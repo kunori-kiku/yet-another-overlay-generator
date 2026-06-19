@@ -16,6 +16,11 @@ import { OPERATOR_USER, OPERATOR_PASS } from './fixtures/config'
 // that follows; the TOTP test runs LAST and may leave TOTP enabled (no later spec logs into the
 // keystone-ON tenant in the same run, and the FileStore is fresh next run).
 
+// Serial mode makes the in-file ordering robust (and a failure skips the rest rather than
+// cascading on a leftover factor): the passkey test must remove its passkey before the TOTP
+// test's password login, and the TOTP test runs last.
+test.describe.configure({ mode: 'serial' })
+
 function keystoneOnTarget() {
   const h = readHarness()
   return {

@@ -22,23 +22,32 @@ CI does the same in the `frontend-e2e` job (required check). Binary/dist locatio
 overridable via `E2E_SERVER_BIN`, `E2E_AGENT_BIN`, `E2E_WEB_DIR`; the defaults
 (`.e2e-bin/*`, `frontend/dist`) match the commands above.
 
-## The two-boot model (and why)
+## The boot model (and why)
 
-`globalSetup.ts` boots `cmd/e2eserver` **twice** from one binary:
+`globalSetup.ts` boots `cmd/e2eserver` **three times** from one binary (the operator-flow suite,
+plan-14, added the keystone-ON tenant on top of plan-13's controller + airgap boots):
 
-| boot | flags | serves | gate |
-|------|-------|--------|------|
-| **controller** | `--mode controller --state-dir <tmp> --web-dir dist …` | operator/panel mux + agent mux + the panel SPA | `EnableController` arms `operatorAuth` → the air-gap compute routes are **401** without auth |
-| **air-gap** | `--mode airgap --web-dir dist` | `/api/{validate,compile,export,deploy-script}` + the panel SPA | no `EnableController` → `operatorAuth` nil → those routes are **open (200)** |
+| boot | `HarnessState` key | flags | role |
+|------|--------------------|-------|------|
+| **controller (keystone-OFF)** | `controller` | `--mode controller --state-dir <tmpA> …` | the default tenant; NO operator credential is ever pinned, so the keystone-OFF deploy branch + the cookie-only F1 leg stay reachable |
+| **controller (keystone-ON)** | `controllerOn` | `--mode controller --state-dir <tmpB> …` | a separate tenant where the keystone spec pins an operator SIGNING credential + the WebAuthn/TOTP login legs run (self-cleaning); isolated so pinning never flips the keystone-OFF boot |
+| **air-gap** | `airgap` | `--mode airgap --web-dir dist` | serves the unauthenticated `/api/compile` oracle + the panel SPA |
 
-Two boots are required, not one env-tweaked `cmd/server`: `EnableController` arms
-`operatorAuth` **unconditionally** (`internal/api/server.go`), so a single controller boot
-cannot also serve the *unauthenticated* `/api/compile` the air-gap oracle exposes. The two
-boots make that auth split observable at the HTTP layer: `airgap-design.spec.ts` asserts the
-air-gap `/api/compile` is **open (200)** and `controller-fleet.spec.ts` asserts the controller
-boot's is **gated (401)**. The authoritative server-level assertion lives in the required Go
-gate test `internal/api/airgap_auth_gate_test.go` (`TestAirgapRoutes_GatedInControllerMode`,
-run by CI's `go test -tags airgap ./...`); the Playwright assertions are the cross-stack echo.
+The two controller boots have separate state dirs precisely so a pinned credential on one never
+flips the other (`EnableController` arms `operatorAuth` **unconditionally**, so a single
+controller boot cannot also serve the *unauthenticated* `/api/compile` the air-gap oracle
+exposes). The controller-vs-airgap auth split is observable at the HTTP layer:
+`airgap-design.spec.ts` asserts the air-gap `/api/compile` is **open (200)** and
+`controller-fleet.spec.ts` asserts the controller boot's is **gated (401)**. The authoritative
+server-level assertion lives in the required Go gate test
+`internal/api/airgap_auth_gate_test.go` (`TestAirgapRoutes_GatedInControllerMode`, run by CI's
+`go test -tags airgap ./...`); the Playwright assertions are the cross-stack echo.
+
+The operator-flow suite (plan-14) adds `login`, `login-webauthn` (TOTP + passkey via a CDP
+virtual authenticator), `session`, `deploy`, `deploy-keystone` (the keystone-ON signature
+accepted by the Go verifier), `export-import`, `revoke`, and `fixtures` (the `leakOracle` custody
+gate + `totpNow` self-checks) on top of this bring-up. See `fixtures/leakOracle.ts` for the
+zero-knowledge custody checks run post-deploy / post-refresh / post-logout.
 
 `cmd/e2eserver` MUST be built `-tags airgap`: the four air-gap routes live behind
 `//go:build airgap` (plan-7), so a default build's air-gap boot would 404 `/api/compile`.

@@ -1,9 +1,11 @@
-import { expect, type Page, type BrowserContext } from '@playwright/test'
+import { expect, type Page, type BrowserContext, type TestInfo } from '@playwright/test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import fs from 'node:fs'
 import { readHarness, httpURL, type HarnessState } from './harness'
 import { seedControllerMode } from './seedStore'
 import { OPERATOR_USER, OPERATOR_PASS } from './config'
+import { uniqueRouterPeer, runId, type BuiltDesign } from './designs'
 
 const execFileP = promisify(execFile)
 
@@ -117,4 +119,35 @@ export async function importDesignViaUI(page: Page, panelURL: string, filePath: 
     page.locator('input[type="file"]').setInputFiles(filePath),
   ])
   expect(resp.status(), 'import update-topology should be 200').toBe(200)
+}
+
+// prepareUniqueDesign mints tokens + enrolls a fresh router+peer pair, writes the design to a
+// per-test file, and imports it (controller mode) — leaving the canvas holding a server-held
+// design whose nodes are enrolled, ready to stage+promote. Returns the unique node ids. The
+// caller MUST have registered a dialog handler that accepts the import confirm. It does NOT
+// deploy (so a caller can interpose a reload — e.g. the F1 cookie-only leg — before Deploy).
+export async function prepareUniqueDesign(
+  page: Page,
+  context: BrowserContext,
+  h: HarnessState,
+  target: ControllerTarget,
+  testInfo: TestInfo,
+): Promise<BuiltDesign> {
+  const built = uniqueRouterPeer(runId(process.pid, testInfo.workerIndex, Date.now()))
+  const designPath = testInfo.outputPath('design.json')
+  fs.writeFileSync(designPath, JSON.stringify(built.topo))
+  const rTok = await mintEnrollToken(page, context, target.panel, built.router)
+  const pTok = await mintEnrollToken(page, context, target.panel, built.peer)
+  await enrollNodeViaAgent(h, target.agent, built.router, rTok, testInfo.outputPath('r.key'))
+  await enrollNodeViaAgent(h, target.agent, built.peer, pTok, testInfo.outputPath('p.key'))
+  await importDesignViaUI(page, target.panel, designPath)
+  return built
+}
+
+// runDeploy clicks Deploy on /deploy and waits for the Last-deploy block (a successful
+// stage→(sign)→promote). It does NOT navigate away after.
+export async function runDeploy(page: Page, target: ControllerTarget): Promise<void> {
+  await page.goto(`${target.panel}/deploy`)
+  await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
 }

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import { readHarness, stateFile } from './fixtures/harness'
 
-// globalTeardown kills both cmd/e2eserver children (and any stray e2eagent the specs
+// globalTeardown kills the cmd/e2eserver children (and any stray e2eagent the specs
 // spawned exits on its own) and removes the temp controller state dir, so a run leaves no
 // orphan processes or temp dirs (DoD #2). It is defensive: a missing/partial state file
 // (setup failed before writing it) is not an error here.

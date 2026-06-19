@@ -45,9 +45,38 @@ test.describe('plan-14 fixture self-checks', () => {
     expect(() => assertNoFleetSecrets(leaky)).toThrow()
   })
 
+  test('leakOracle CATCHES a leaked fleet domain CIDR in the server-held project/domains', () => {
+    const leaky: PersistedStores = {
+      topology: {
+        state: {
+          nodes: [],
+          edges: [],
+          canvasFromServer: true,
+          allocSchemaVersion: 0,
+          project: { id: 'project-1', name: 'New Project' },
+          // domains NOT blanked: a real fleet CIDR survived (the regression the structural check catches).
+          domains: [{ id: 'd1', cidr: '203.0.113.0/24' }],
+        },
+      },
+      controller: null,
+      ui: null,
+    }
+    expect(() => assertNoFleetSecrets(leaky, { expectServerHeldBlank: true })).toThrow()
+  })
+
   test('leakOracle PASSES a clean allowlist-only snapshot with a legitimate nodeId', () => {
     const clean: PersistedStores = {
-      topology: { state: { nodes: [], edges: [], canvasFromServer: true, allocSchemaVersion: 0 } },
+      topology: {
+        state: {
+          nodes: [],
+          edges: [],
+          canvasFromServer: true,
+          allocSchemaVersion: 0,
+          // project/domains blanked to the defaults (topologyStore partialize server-held branch).
+          project: { id: 'project-1', name: 'New Project', version: '0.1.0' },
+          domains: [{ id: 'domain-default', name: 'overlay', cidr: '10.20.0.0/24' }],
+        },
+      },
       controller: {
         state: {
           mode: 'controller',

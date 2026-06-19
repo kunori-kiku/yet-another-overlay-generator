@@ -100,14 +100,28 @@ export interface LeakCheckOptions {
 export function assertNoFleetSecrets(stores: PersistedStores, opts: LeakCheckOptions = {}): void {
   const sentinels = opts.sentinels ?? FIXTURE_SENTINELS
 
-  // (1) STRUCTURAL — server-held design slices are blanked (topologyStore.ts partialize).
+  // (1) STRUCTURAL — server-held design slices are blanked (topologyStore.ts partialize blanks
+  // SIX slices, each under its own serverHeld ternary: project→defaultProject,
+  // domains→makeDefaultDomains(), nodes:[], edges:[], allocSchemaVersion:0, canvasFromServer kept).
+  // Check all of them so a regression that stops blanking just project/domains (a fleet
+  // project-name / domain-CIDR leak) is caught, not only the nodes/edges blanking.
   if (opts.expectServerHeldBlank) {
-    const t = stores.topology?.state
+    const t = stores.topology?.state as Record<string, unknown> | undefined
     expect(t, 'topology-storage.state must exist for the server-held blank check').toBeTruthy()
     expect(t!.nodes, 'server-held topology must persist nodes:[]').toEqual([])
     expect(t!.edges, 'server-held topology must persist edges:[]').toEqual([])
     expect(t!.canvasFromServer, 'server-held topology must mark canvasFromServer:true').toBe(true)
     expect(t!.allocSchemaVersion, 'server-held topology must reset allocSchemaVersion:0').toBe(0)
+    // project → defaultProject (id 'project-1', name 'New Project'); a leaked fleet project name
+    // would surface here.
+    const project = t!.project as { id?: string; name?: string } | undefined
+    expect(project?.name, 'server-held topology must blank project→defaultProject (name)').toBe('New Project')
+    expect(project?.id, 'server-held topology must blank project→defaultProject (id)').toBe('project-1')
+    // domains → makeDefaultDomains() (one 'overlay' domain at 10.20.0.0/24); a leaked fleet CIDR
+    // would surface here.
+    const domains = t!.domains as Array<{ cidr?: string }> | undefined
+    expect(Array.isArray(domains) ? domains.length : -1, 'server-held topology must blank to one default domain').toBe(1)
+    expect(domains?.[0]?.cidr, 'server-held default domain must be 10.20.0.0/24, not a fleet CIDR').toBe('10.20.0.0/24')
   }
 
   // (2) VALUE — no fleet sentinel and no key-material shape anywhere in the serialized stores.
@@ -118,6 +132,13 @@ export function assertNoFleetSecrets(stores: PersistedStores, opts: LeakCheckOpt
     )
   }
   expect(blob.includes('-----BEGIN'), 'persisted stores must not contain a PEM/key block').toBe(false)
+  // WG key shape: a Curve25519 key is 32 bytes → exactly 43 base64 chars + one '=' pad. Guard
+  // against a raw WG public/private key landing in any persisted store (plan step 0.3). The
+  // allowlisted persisted values (URLs, mode, node ids, timestamps) never match this shape.
+  expect(
+    /[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])/.test(blob),
+    'persisted stores must not contain a base64 WireGuard-key-shaped value',
+  ).toBe(false)
 
   // (3) CUSTODY + ALLOWLIST — controller-storage keys ⊆ allowlist, no session secrets, and each
   // node-cache entry carries only ControllerNode non-secret fields.

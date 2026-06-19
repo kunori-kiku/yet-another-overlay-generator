@@ -15,7 +15,7 @@ import { uniqueRouterPeer, runId } from './fixtures/designs'
 // import drops keys + writes a new version WITHOUT staging/promoting; a malformed import is
 // rejected by the shape gate; nothing fleet-secret persists.
 
-test('controller export is key-free and import does not deploy; no leak', async (
+test('controller import strips keys before upload; export is key-free; import does not deploy', async (
   { page, context },
   testInfo,
 ) => {
@@ -26,19 +26,36 @@ test('controller export is key-free and import does not deploy; no leak', async 
   await seedAndGotoController(page, context, target)
   await loginAsOperator(page)
 
-  // Watch for any stage/promote during the import — there must be none (import ≠ deploy).
+  // Build a KEYED design so dropAllKeys (custody.ts) actually has key material to strip — the
+  // security contract "a private key never reaches the server". A key-FREE design would make the
+  // strip assertion vacuous (dropped===0).
+  const PRIV_SENTINEL = 'INJECTED-PRIVATE-KEY-must-be-stripped-zzzz'
+  const PUB_SENTINEL = 'INJECTED-PUBLIC-KEY-must-be-stripped-yyyy'
+  const built = uniqueRouterPeer(runId(process.pid, testInfo.workerIndex, Date.now()))
+  const topo = built.topo as { nodes: Record<string, unknown>[] }
+  topo.nodes[0].wireguard_private_key = PRIV_SENTINEL
+  topo.nodes[0].wireguard_public_key = PUB_SENTINEL
+  topo.nodes[0].fixed_private_key = true
+  const designPath = testInfo.outputPath('design.json')
+  fs.writeFileSync(designPath, JSON.stringify(built.topo))
+
+  // Capture the update-topology POST body (to prove the keys never reach the server) and watch
+  // for any stage/promote (import ≠ deploy). Registered BEFORE the import fires.
+  let updateBody = ''
   const deployCalls: string[] = []
   page.on('request', (r) => {
     const u = r.url()
+    if (u.includes('/operator/update-topology') && r.method() === 'POST') updateBody = r.postData() ?? ''
     if (u.includes('/operator/stage') || u.includes('/operator/promote')) deployCalls.push(u)
   })
 
-  const { topo } = uniqueRouterPeer(runId(process.pid, testInfo.workerIndex, Date.now()))
-  const designPath = testInfo.outputPath('design.json')
-  fs.writeFileSync(designPath, JSON.stringify(topo))
-
-  // (4.2) Import: posts update-topology (asserted in importDesignViaUI), never stage/promote.
   await importDesignViaUI(page, target.panel, designPath)
+
+  // (4.2) dropAllKeys ran: the injected key material is NOT in the uploaded body, and the import
+  // posted update-topology but never staged/promoted.
+  expect(updateBody, 'the update-topology POST body was captured').not.toBe('')
+  expect(updateBody.includes(PRIV_SENTINEL), 'the private key must be stripped before upload').toBe(false)
+  expect(updateBody.includes(PUB_SENTINEL), 'the public key must be stripped before upload').toBe(false)
   expect(deployCalls, 'import must not stage or promote').toEqual([])
 
   // (4.1) Export the controller design and assert it is key-free (controller is key-authoritative).
@@ -49,10 +66,9 @@ test('controller export is key-free and import does not deploy; no leak', async 
   const exported = fs.readFileSync(await download.path(), 'utf8')
   const parsed = JSON.parse(exported) as { nodes?: unknown[] }
   expect(Array.isArray(parsed.nodes), 'export parses as a design with nodes').toBe(true)
-  expect(exported.includes('-----BEGIN'), 'export must carry no PEM/private key').toBe(false)
-  expect(/"private_key"\s*:\s*"[^"]+"/.test(exported), 'export must carry no private key value').toBe(
-    false,
-  )
+  expect(exported.includes(PRIV_SENTINEL), 'export must carry no private key').toBe(false)
+  expect(exported.includes(PUB_SENTINEL), 'export must carry no public key').toBe(false)
+  expect(exported.includes('-----BEGIN'), 'export must carry no PEM block').toBe(false)
 
   // (4.4) Custody: after the controller import nothing fleet-secret persisted.
   assertNoFleetSecrets(await readPersisted(page), { expectServerHeldBlank: true })

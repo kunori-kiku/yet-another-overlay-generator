@@ -4,11 +4,11 @@ import { defineConfig, devices } from '@playwright/test'
 // browser end-to-end tests the project has had. It runs the REAL built panel (served by a
 // test-mode Go controller, EnableStatic) against a live controller + a real agent fixture.
 //
-// globalSetup boots TWO cmd/e2eserver processes (--mode controller + --mode airgap) on
-// OS-assigned :0 ports and writes their resolved ports + the enrollment token to a handoff
-// file the specs read (e2e/fixtures/harness.ts). It is NOT the default webServer.url wait —
-// that checks a single fixed port and cannot capture the second boot's port or the enroll
-// token. globalTeardown kills both children and removes the temp state dir.
+// globalSetup boots THREE cmd/e2eserver processes (--mode controller ×2 for the keystone-OFF and
+// keystone-ON tenants, + --mode airgap) on OS-assigned :0 ports and writes their resolved ports +
+// enrollment tokens to a handoff file the specs read (e2e/fixtures/harness.ts). It is NOT the
+// default webServer.url wait — that checks a single fixed port and cannot capture the other boots'
+// ports or the enroll tokens. globalTeardown kills the children and removes the temp state dirs.
 //
 // SERIAL by design (workers: 1, no parallelism, no retries): the two canaries share the
 // single pre-minted enrollment token and the two long-lived boots, and the required-from-
