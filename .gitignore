@@ -14,6 +14,11 @@ CLAUDE.md
 /compiler
 /yaog-server
 /yaog-compiler
+/e2eserver
+/e2eagent
+# TEST-ONLY E2E bring-up binaries (plan-13): built into .e2e-bin/ by the verify step / the
+# frontend-e2e CI job; resolved by the Playwright globalSetup. Never committed.
+/.e2e-bin/
 # private key material must never be committed (bundle signing key, TLS, etc.)
 *.pem
 *.key

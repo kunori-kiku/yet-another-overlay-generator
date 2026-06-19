@@ -71,11 +71,9 @@ func runCreateOperator(args []string) error {
 		return err
 	}
 
-	op, err := controller.NewOperator(*username, password, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	if err := store.PutOperator(ctx, tid, op); err != nil {
+	// The shared write path (also used by the e2e harness's operator seed): validate +
+	// argon2id-hash + PutOperator. The not-exists/--force guard above stays CLI-side.
+	if err := controller.SeedOperator(ctx, store, tid, *username, password, time.Now().UTC()); err != nil {
 		return err
 	}
 	fmt.Printf("created operator %q in tenant %q\n", *username, *tenant)

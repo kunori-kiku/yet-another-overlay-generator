@@ -1,0 +1,41 @@
+{
+  "project": { "id": "e2e-001", "name": "E2E Canary" },
+  "domains": [
+    {
+      "id": "domain-1",
+      "name": "net",
+      "cidr": "10.61.0.0/24",
+      "allocation_mode": "auto",
+      "routing_mode": "babel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "router",
+      "hostname": "router.example.com",
+      "role": "router",
+      "domain_id": "domain-1",
+      "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true }
+    },
+    {
+      "id": "node-2",
+      "name": "peer",
+      "role": "peer",
+      "domain_id": "domain-1",
+      "capabilities": { "can_accept_inbound": false, "can_forward": false, "has_public_ip": false }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-1",
+      "from_node_id": "node-2",
+      "to_node_id": "node-1",
+      "type": "public-endpoint",
+      "endpoint_host": "198.51.100.1",
+      "endpoint_port": 0,
+      "transport": "udp",
+      "is_enabled": true
+    }
+  ]
+}

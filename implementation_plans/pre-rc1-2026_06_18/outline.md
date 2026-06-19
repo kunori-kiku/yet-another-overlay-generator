@@ -260,6 +260,21 @@ browser-resident by default, THEN gates the now-unused routes behind `//go:build
 escape hatch is retained (works against a `-tags airgap` server). Reversible via the flag; justified by the green harness +
 the expanded corpus (validator 93/97, all render/alloc branches byte-pinned). rc.1 is itself the soak vehicle.
 
+**Decision (2026-06-19) — plan-13 Phase-1 owner gate locked (Subject 3 first plan).** The owner confirmed the
+three plan-13 bring-up choices via the prompt channel before any code: **(a) TWO `cmd/e2eserver` boots**
+(`--mode controller` + `--mode airgap`) — forced by `EnableController` arming `operatorAuth` unconditionally;
+**(b) real agent fixture `cmd/e2eagent` + `--mock` fallback**; **(c) `frontend-e2e` REQUIRED from day one**
+(owner OVERRIDE of the plan's advisory-first recommendation — no advisory window; `retries:0` surfaces any
+flake). Formal branch-protection required-check wiring stays consolidated in plan-22 (which also adds `-race`
++ `govulncheck`); the job runs + blocks-by-discipline now. Two reconciliations applied during execution,
+both forced by the now-COMPLETE Subject 1: **(1)** `cmd/e2eserver` is built `-tags airgap` (the plan's plain
+`go build` would 404 the airgap boot's `/api/compile`, since the air-gap routes live behind `//go:build airgap`);
+**(2)** the airgap-design canary pins `/api/compile` at the HTTP layer (the retained oracle / backend-engine /
+DAST surface), NOT via the panel UI — local mode now compiles in-browser by default (plan-6/7), exactly the
+plan's own retirement-note prediction. The reserved `test:unit` is an echo stub (vitest already runs via the
+`conformance` script). Validated locally: two-boot auth split (airgap `/api/compile` 200 unauth, controller 401),
+full enroll→login→fleet integration, and 5/5 headless green + negative proof.
+
 **Findings discovered during plan-3 execution (2026-06-18; recorded so they are not lost — none block
 plan-3, which is a no-byte-change freeze):**
 
