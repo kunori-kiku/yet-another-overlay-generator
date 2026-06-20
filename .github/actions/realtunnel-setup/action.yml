@@ -45,7 +45,7 @@ runs:
         build() {
           sudo rm -rf /tmp/yaog-rt-rootfs
           sudo -E debootstrap --variant=minbase --components=main,universe \
-            --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,iputils-ping,kmod \
+            --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,openssl,iputils-ping,kmod \
             noble /tmp/yaog-rt-rootfs http://archive.ubuntu.com/ubuntu/
         }
         for i in 1 2 3; do build && exit 0; echo "::warning::debootstrap attempt $i failed"; sleep $((i*10)); done

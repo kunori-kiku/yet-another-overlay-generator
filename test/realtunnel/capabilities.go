@@ -27,9 +27,12 @@ const objectPrefix = "yrt"
 // rootfsEnv names the env var pointing at the prebuilt base rootfs.
 const rootfsEnv = "REALTUNNEL_ROOTFS"
 
-// rootfsRecipe is printed on skip so a developer can build the base rootfs in one command.
+// rootfsRecipe is printed on skip so a developer can build the base rootfs in one command. The
+// include list must carry every tool install.sh requires (ensure_cmd: wireguard-tools, iproute2,
+// openssl, iptables/nftables, babeld) because the container runs on an isolated underlay bridge with
+// no internet — a missing tool cannot be apt-fetched at install time, it must be pre-baked here.
 const rootfsRecipe = "sudo debootstrap --variant=minbase --components=main,universe " +
-	"--include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,iputils-ping,kmod " +
+	"--include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,openssl,iputils-ping,kmod " +
 	"noble /tmp/yaog-rt-rootfs https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ && export REALTUNNEL_ROOTFS=/tmp/yaog-rt-rootfs"
 
 // requireCapabilities t.Skips (not fails) unless every prerequisite for the systemd-nspawn tier is

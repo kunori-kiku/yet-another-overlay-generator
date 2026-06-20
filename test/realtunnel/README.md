@@ -36,10 +36,14 @@ drifts — forcing the script and this harness to be reconciled in the same PR. 
 
   ```bash
   sudo debootstrap --variant=minbase --components=main,universe \
-    --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,iputils-ping,kmod \
+    --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,openssl,iputils-ping,kmod \
     noble /tmp/yaog-rt-rootfs http://archive.ubuntu.com/ubuntu/
   export REALTUNNEL_ROOTFS=/tmp/yaog-rt-rootfs
   ```
+
+  The include list must carry **every** tool `install.sh` requires (`wireguard-tools`, `iproute2`,
+  `openssl`, `iptables`/`nftables`, `babeld`): the containers run on an isolated underlay bridge with
+  no internet, so a tool missing from the rootfs cannot be fetched at install time.
 
   (Locally, swap the mirror for one that is reachable from your network.)
 
