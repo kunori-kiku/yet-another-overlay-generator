@@ -19,7 +19,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
@@ -69,8 +68,10 @@ func bootController(t *testing.T) *server {
 
 	srv := &server{cmd: cmd}
 	ready := make(chan struct{})
+	died := make(chan struct{}) // closed if stdout reaches EOF without an E2E_READY line (early death)
 	go func() {
 		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024) // tolerate long boot lines (default cap is 64KB)
 		for sc.Scan() {
 			line := sc.Text()
 			if strings.HasPrefix(line, "E2E_READY") {
@@ -88,9 +89,12 @@ func bootController(t *testing.T) *server {
 				return
 			}
 		}
+		close(died) // EOF without READY → the boot crashed; fail fast instead of waiting out the timeout
 	}()
 	select {
 	case <-ready:
+	case <-died:
+		t.Fatalf("e2eserver exited before printing E2E_READY (boot failed)")
 	case <-time.After(30 * time.Second):
 		t.Fatalf("e2eserver did not print E2E_READY within 30s")
 	}
@@ -182,7 +186,9 @@ func TestDAST_RevokeBlocksTokenResurrection(t *testing.T) {
 func mintEnrollmentToken(t *testing.T, srv *server) string {
 	t.Helper()
 	buf, _ := json.Marshal(map[string]any{"node_id": "node-1", "ttl_seconds": 3600})
-	req, _ := http.NewRequest(http.MethodPost, srv.panel+operatorBase+"enrollment-token", bytes.NewReader(buf))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.panel+operatorBase+"enrollment-token", bytes.NewReader(buf))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+dastOpToken)
 	resp, err := http.DefaultClient.Do(req)
@@ -201,5 +207,3 @@ func mintEnrollmentToken(t *testing.T, srv *server) string {
 	}
 	return out.Token
 }
-
-var _ = fmt.Sprintf // keep fmt imported for ad-hoc diagnostics
