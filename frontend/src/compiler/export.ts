@@ -171,6 +171,22 @@ export function buildChecksums(result: CompileResult): Record<string, string> {
 // The compiled_at the manifest.json carries is the one impurity in this layer: it is read from the
 // caller-supplied clock (default: the wall clock at export time). It is excluded from the conformance
 // byte set, so a varying timestamp never reds the harness.
+// validateSafeName mirrors internal/artifacts/export.go validateSafeName: it rejects a name that is
+// unsafe as a ZIP path component (path traversal). The schema name-charset validator allows '.', so a
+// node named "." or ".." passes validation — this is the export-time defense the Go exporter applies
+// (CodeExportUnsafeName); the TS port must match it (N1 parity, plan-21 / 4.2). Throws on an unsafe name.
+function validateSafeName(name: string): void {
+  if (name === '' || name === '.' || name === '..') {
+    throw new Error(`export: unsafe node name ${JSON.stringify(name)}`);
+  }
+  if (name.includes('/') || name.includes('\\')) {
+    throw new Error(`export: node name must not contain a path separator: ${JSON.stringify(name)}`);
+  }
+  if (name.includes('..')) {
+    throw new Error(`export: node name must not contain '..': ${JSON.stringify(name)}`);
+  }
+}
+
 export async function exportArtifacts(
   topo: Topology,
   custody: KeyCustody = 'airgap',
@@ -180,6 +196,12 @@ export async function exportArtifacts(
   const zip = new JSZip();
 
   for (const node of result.topology.nodes) {
+    // Path-traversal guard: mirror internal/artifacts/export.go validateSafeName before using the
+    // node name as a ZIP directory component. The node-name charset validator (validator.ts) allows
+    // dots, so a name like ".." passes schema validation; this export-time guard is the defense the
+    // Go exporter applies (CodeExportUnsafeName) and the TS port MUST match (N1 — the browser
+    // exporter must not be security-weaker than Go). Plan-21 / 4.2 finding.
+    validateSafeName(node.name);
     const isClient = node.role === 'client';
     const dir = node.name;
     const files = bundleFiles(result, node.id);
