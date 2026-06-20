@@ -79,12 +79,44 @@ run (it is owner-triggered) — that run is the last box to tick before rc.1.
   overlay route to have converged, so `requireSNATRewrite` polls (bounded, fails loud) rather than
   single-shotting.
 
+## Criterion C1 — owed manual-smoke ledger (three-state)
+
+The nine `STATUS.md` owner-owed smokes (eight from beta.1–beta.7 + the Subject-2 phone-UX smoke),
+triaged by plan-19 (3.7) through the three mechanizing tiers (A conformance / B browser-E2E / 3.6-netns)
+down to the irreducible residue. **Reasoning + procedures
+live in [`docs/spec/rc1/RUNBOOK.md`](docs/spec/rc1/RUNBOOK.md); this table is the live STATE of
+record.** plan-22 finalizes the hard-vs-advisory call per the open owner decision below.
+
+State legend: **automated** = a CI tier proves it (no owner run) · **owner-run** = an owner hardware
+run is required · **accepted-risk** = owner accepts without a run.
+
+| # | Owed smoke | Disposition | State | Covered by / RUNBOOK §|
+|---|---|---|---|---|
+| 1 | WebAuthn login + refresh + no-localStorage-token | refresh/token automated (B); login ceremony owner-run | **automated** (B) + **owner-run** (§C1) | `frontend/e2e/session.spec.ts` + `fixtures/leakOracle.ts` + `login-webauthn.spec.ts` + RUNBOOK §C1 |
+| 2 | NAT sticky-pin compile→deploy→no-drift | data plane automated (A+3.6); NAT-box rewrite owner-run | **automated** (A + 3.6-netns) + **owner-run** (§C2-shrunk) | `internal/conformance/` + `test/realtunnel/` (canary required; C3 footprint additive) + RUNBOOK §C2 |
+| 3 | mimic `.deb` install on kernel ≥6.1 | owner-run (eBPF/DKMS/XDP) | **owner-run** (§C3) | `script_mimic_test.go` (bash) + RUNBOOK §C3 |
+| 4 | Self-update field smoke | automated | **automated** (A) | self-update unit/E2E; optional confirmation |
+| 5 | Panel rollout-UI smoke | bucket-B-eligible, NO spec yet | **OPEN DEP / owner-run** | ⚠️ no rollout E2E or vitest exists — not retired (Risk R1); RUNBOOK row 5 |
+| 6 | Keystone rotation + reprovision + passkey rotation | reconverge automated (3.6); passkey + systemd-lifecycle owner-run | **automated** (3.6-netns) + **owner-run** (§C1) | `test/realtunnel/` + RUNBOOK §C1 |
+| 7 | Fleet-operability panel smoke | automated | **automated** (A+B) | unit + `frontend/e2e/fleet-rekey.spec.ts` (no residue) |
+| 8 | Pin-collision + Export/Import smoke | automated | **automated** (A+B) | unit + `frontend/e2e/export-import.spec.ts` (no residue) |
+| 9 | Phone-UX smoke (Subject 2) | automated | **automated** (B) | `frontend/e2e/responsive/` (plan-17, no residue) |
+
+**Surviving owner-run residue (the rc.1 manual gate):** §C1 real authenticator, §C2-shrunk real-NAT-box
+endpoint-rewrite, §C3 mimic eBPF — all in `RUNBOOK.md`. Smokes 4,7,8,9 fully retired to CI; **smoke 5 is
+an OPEN DEPENDENCY** (bucket-B-eligible but unspec'd — owner must run it OR a rollout spec must land
+before rc.1; do NOT count it retired).
+
+**Open owner decision (plan-22 freezes it):** if 3.6 is escalated to a required **Tier-3** (real
+multi-host VMs with real NAT), §C2 retires and only §C1 + §C3 remain. Conservative default kept here:
+3.6 stays Tier-1, §C2-shrunk survives as the single NAT line.
+
 ## Owner actions before rc.1
 
-- [ ] Run **`realtunnel-bakein`** on CI; require 20/20; paste the run URL into the ledger.
+- [ ] Run **`realtunnel-bakein`** on CI; require 20/20; paste the run URL into the Phase-9 ledger above.
 - [ ] **plan-22 / 4.3 (owner_flag):** list `realtunnel` (ci.yml job) as a **distinct required status
       check** on `main`, separate from `frontend-e2e`, and update branch protection + the gate doc.
       The release mirror (`gate-realtunnel`) is already in place.
-- [ ] Confirm the CI `ubuntu-latest` runner can boot nested `systemd-nspawn --boot` (validated
-      locally on 6.8; first green CI run confirms runner viability — if it cannot, the blocker + the
-      Tier-2 fallback are documented in `test/realtunnel/README.md`).
+- [x] ~~Confirm the CI `ubuntu-latest` runner can boot nested `systemd-nspawn --boot`~~ — **confirmed**
+      on PR #155: the `realtunnel` job passed green (canary + additive scenarios) on `ubuntu-latest`.
+- [ ] Run the **§C1 / §C2 / §C3** manual smokes in `RUNBOOK.md`; record each in the criterion-C1 ledger.
