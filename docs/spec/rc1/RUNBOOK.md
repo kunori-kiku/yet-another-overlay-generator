@@ -3,7 +3,7 @@
 > **What this is.** The *smallest defensible set* of manual smokes the owner must run before tagging
 > `v2.0.0-rc.1` — the legs that **no** in-process test, browser E2E, or single-host netns tier can
 > synthesize honestly. Produced by plan-19 (3.7). The **live pass/fail STATE** of these legs lives in
-> [`RC1-GATE.md`](../../../RC1-GATE.md) (criterion C1, the three-state ledger); **this file owns the
+> [`RC1-GATE.md`](RC1-GATE.md) (criterion C1, the three-state ledger); **this file owns the
 > *reasoning* and the *procedures*.** Do not duplicate the live STATE here — one ledger, no drift.
 
 ## How the nine owed smokes collapse to three (+ one open dependency)
@@ -219,7 +219,7 @@ attaches via XDP to a real NIC; a netns shares the host kernel and has no eBPF/D
 ## Cross-reference
 
 - The **live three-state STATE** (automated / owner-run-passed / owner-accepted-risk) for every leg
-  above lives in [`RC1-GATE.md`](../../../RC1-GATE.md) (criterion C1). This file is the *procedure + reasoning*;
+  above lives in [`RC1-GATE.md`](RC1-GATE.md) (criterion C1). This file is the *procedure + reasoning*;
   that file is the *state-of-record*. They link bidirectionally.
 - rc.1 gates on the surviving irreducible runs via `RC1-GATE.md` criterion C1 (hard-vs-advisory per the
   owner; recorded there).

@@ -106,46 +106,14 @@
 
 ## Open questions / blockers
 
-- **Owed manual smokes (owner-accepted risk), gate rc.1 — not code-merge:**
-  1. Two-node controller WebAuthn login → hydrated canvas + login-survives-refresh + no token in
-     localStorage (beta.1).
-  2. NAT sticky-pin Compile → edit port/transit IP → deploy → no drift (beta.1).
-  3. mimic GitHub-`.deb` install on a kernel-≥6.1 Debian host (beta.1).
-  4. **Self-update field smoke (beta.2):** canary agent version → download/verify/swap/re-exec →
-     badge flips → promote to fleet; tampered hash refused keep-last-good; crashing binary rolls back
-     within the attempt cap. Mechanism unit-tested + deep-reviewed; the live end-to-end run is owed.
-  5. **Panel rollout-UI smoke (beta.3):** in controller mode, the agent + mimic config cards render,
-     "Assist from GitHub release" pre-fills pins, a bootstrap-field save round-trips the rollout/mimic
-     config (drop-on-save), fleet-wide gates on the confirm, the per-node chip shows
-     pending→applying→applied as a canary advances, and the Live poll stops on logout. No FE test
-     runner exists, so this is owner-verified in a browser.
-  6. **Keystone rotation + reprovision smoke (beta.5):** on two real systemd hosts — rotate the
-     operator credential (acked), confirm the fleet refuses the served bundle (fail-closed) and the
-     panel shows `redeploy_required`, then `yaog-agent reprovision-keystone` on a node re-pins the new
-     key and `systemctl restart`s so it trusts the fresh signed deploy; plus the WebAuthn-passkey
-     rotation path. The headless path is covered (in-process + real-binary ed25519 bash repro + the
-     `internal/regression` suite); the real-host restart + passkey legs are owed.
-  7. **Fleet-operability panel smoke (beta.6):** in controller mode — a stuck "Roll keys" straggler
-     is released by the per-node "Cancel rekey" button (node stays approved, keeps polling); Deploy
-     stays enabled while nodes rekey and routes through the advisory confirm; flipping an edge
-     primary↔backup then re-compiling shows NO "pin occupied by two different links"; an existing
-     topology with a duplicate-pinned backup auto-heals on load; the registry reflects server truth on
-     login/reload without a manual re-login and "Live" refreshes immediately. No FE test runner, so
-     owner-verified in a browser.
-  8. **Pin-collision + Export/Import smoke (beta.7):** on the real fleet whose stored topology had the
-     collision — log in (canvas heals, local Validate now passes), then Deploy and confirm the staged
-     bundles compile clean (deploy self-heal) and the previously-colliding links come up with fresh,
-     non-overlapping transit IPs/ports. Separately: controller-mode Export downloads the design;
-     Import of that file writes a new server version, re-hydrates the canvas, and does NOT deploy or
-     leave fleet data in localStorage. No FE test runner, so owner-verified in a browser.
-  9. **Phone-UX smoke (Subject 2):** on a real ~360–414px viewport — the Topbar hamburger opens the
-     off-canvas nav Drawer (focus-trap, Esc, backdrop-click, route-change auto-close), the Drawer never
-     leaks onto the login/splash branch and does not reopen on refresh; operator pages reflow to mobile
-     cards; the `/design` route shows the read-only gate below `lg` and editing stays disabled (no node
-     drag / edge draw / store mutation) in the read-only preview; no desktop ≥1024px regression. These
-     are owed-by-design (no in-env browser) and are slated to be **covered by Subject 3's device-emulation
-     E2E harness** (plan-13/plan-17), shrinking the owed-manual list rather than persisting it.
-- **rc.1 is a later owner call** once the owed smokes pass and the beta soak is clean.
+- **Owed manual smokes (owner-accepted risk), gate rc.1 — not code-merge:** the nine beta.1–Subject-2
+  owed smokes are triaged (9 → 3 irreducible owner-run legs + 1 open dependency) in
+  [`docs/spec/rc1/RUNBOOK.md`](docs/spec/rc1/RUNBOOK.md), with their live A/B/C state in the criterion-C1
+  ledger of [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md). Not re-listed here (single source of
+  truth — no third drift surface).
+- **rc.1 gates on [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md); the owner signs the go/no-go
+  there.** That document is the single source of truth for the criteria (A–E), the owed-smoke ledger (it
+  references `docs/spec/rc1/RUNBOOK.md`), the required-checks set, and the release runbook.
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
   a reliable *persistent* per-node `failed` update-state (would need a positive agent-reported field —
@@ -154,17 +122,19 @@
 
 ## Next actions
 
-1. Execute **Subject 3** (full-stack E2E simulation / pitfall-hunt, plans 13–19): plan-13 harness FIRST
-   (Playwright + virtual-WebAuthn-via-CDP + device emulation + network-fault injection against the real
-   built FE + a live Go controller + real/mock agent), then 14–17, then the MANDATORY real-tunnel
-   integration plan-18 (containers/netns bring up the GENERATED WireGuard+Babel and assert tunnels form
-   + routes converge), then plan-19 last. Same per-plan rhythm: build → independent multi-lens review →
-   fix at root → re-review GO → CI green → merge.
-2. Then Subject 4 (security re-audit, plans 20–21) → plan-22 cuts `rc.1` (gated on real-tunnel +
-   conformance harness green; plan-22 is the sole tag authority and adds `-race`, `govulncheck`,
-   frontend-e2e + realtunnel as required checks).
-3. Owner: run the owed manual smokes on real hardware/fleet (see Open questions / blockers) — the
-   Subject-2 phone smokes and several earlier ones are slated to be absorbed by the Subject-3 harness.
+**Subjects 1–4 are all delivered + merged (PRs #137–#158).** The rc.1 gate is authored and every
+*automatable* criterion is GREEN in CI (`go` incl. `-race`, `frontend`, `conformance`, `frontend-e2e`
+incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). The remaining steps are
+**owner-only**, tracked in [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md):
+
+1. Run the **`realtunnel-bakein`** workflow on CI → require 20/20 + the negative proof; paste the run URL
+   into RC1-GATE.md.
+2. Run the three irreducible hardware smokes (`docs/spec/rc1/RUNBOOK.md` §C1 authenticator / §C2
+   real-NAT-box / §C3 mimic eBPF ≥6.1) + owed-smoke #5 (rollout UI) — pass-or-accept-risk.
+3. Set branch protection to require `go`, `frontend`, `conformance`, `frontend-e2e`, `realtunnel`.
+4. Sign the go/no-go in RC1-GATE.md, then execute the release runbook (CHANGELOG roll → annotated tag →
+   `--latest` publish → verify). rc.1 ships as GitHub **Latest** (beta.8 demoted — the 2026-06-18 owner
+   override).
 
 ## Recently closed subjects (last 3)
 

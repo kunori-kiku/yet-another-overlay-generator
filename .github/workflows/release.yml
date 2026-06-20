@@ -11,8 +11,11 @@ permissions:
 jobs:
   # Release gate: a tag must never ship untested code. Normally the tagged commit
   # already passed PR CI on main, but tags can point anywhere — re-verify here
-  # before any bundle is built. Mirrors ci.yml's gates (incl. the //go:build airgap
-  # profile and the required frontend-e2e Playwright job).
+  # before any bundle is built. A true step-by-step mirror of ci.yml's gate
+  # BEHAVIOR (plan-22 / 4.3): gofmt-drift + go test -race + the //go:build airgap
+  # profile, npm run build (tsc -b), the required frontend-e2e Playwright job, and
+  # the realtunnel netns gate (gate-realtunnel). (setup-go here adds check-latest;
+  # the resolved toolchain is identical — go.mod pins toolchain go1.26.4.)
   gate-go:
     name: Gate — Go vet + test
     runs-on: ubuntu-latest
@@ -26,11 +29,23 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      # Step-by-step mirror of ci.yml's `go` gate behavior (plan-22 / 4.3 Task 3): gofmt-drift +
+      # vet + `go test -race`. Previously gate-go omitted gofmt + -race, so a tag could ship code
+      # that would have failed PR CI.
+      - name: Format check
+        run: |
+          drift="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$drift" ]; then
+            echo "::error::gofmt drift — run 'gofmt -w ./cmd ./internal':"
+            echo "$drift"
+            exit 1
+          fi
+
       - name: Vet
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
 
       # Mirror ci.yml: also exercise the -tags airgap profile (the air-gap compute routes /
       # local-design oracle live behind //go:build airgap and are not compiled by the default
@@ -63,6 +78,11 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Mirror ci.yml's `frontend` job (plan-22 / 4.3 Task 3): run the build (tsc -b, the stricter
+      # project-references typecheck) HERE so a tsc-b failure reds the gate, not deep in build-frontend.
+      - name: Build
+        run: npm run build
 
   # Mirror ci.yml's required frontend-e2e job: a tag must not ship a panel that would have
   # failed the full-stack Playwright suite on PR CI (tests_ci.recommendations[2]).
@@ -404,6 +424,12 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          # Deterministically promote rc.N and final vX.Y.Z to GitHub "Latest" while keeping
+          # -beta./-preview. tags OFF Latest, independent of operator timing (plan-22 / 4.3 Task 4b;
+          # closes the "Latest left to GitHub's newest-non-prerelease heuristic" defect). This encodes
+          # the EXPLICIT 2026-06-18 owner override of RELEASING.md's prerelease/not-latest default:
+          # rc.1 ships as Latest, beta.8 demoted. (The runbook's pre-create --latest is the suspenders.)
+          make_latest: ${{ !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-preview.') }}
           files: |
             yaog-bundle-*.tar.gz
             yaog-bundle-*.zip
