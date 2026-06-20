@@ -132,12 +132,11 @@
 incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). The remaining steps are
 **owner-only**, tracked in [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md):
 
-1. Run the **`realtunnel-bakein`** workflow on CI → require 20/20 + the negative proof; paste the run URL
-   into RC1-GATE.md.
-2. Run the three irreducible hardware smokes (`docs/spec/rc1/RUNBOOK.md` §C1 authenticator / §C2
+0. ✅ DONE — `realtunnel-bakein` 20/20 + negative proof green on CI (run 27881474085, 2026-06-21).
+1. Run the three irreducible hardware smokes (`docs/spec/rc1/RUNBOOK.md` §C1 authenticator / §C2
    real-NAT-box / §C3 mimic eBPF ≥6.1) + owed-smoke #5 (rollout UI) — pass-or-accept-risk.
-3. Set branch protection to require `go`, `frontend`, `conformance`, `frontend-e2e`, `realtunnel`.
-4. Sign the go/no-go in RC1-GATE.md, then execute the release runbook (CHANGELOG roll → annotated tag →
+2. Set branch protection to require `go`, `frontend`, `conformance`, `frontend-e2e`, `realtunnel`.
+3. Sign the go/no-go in RC1-GATE.md, then execute the release runbook (CHANGELOG roll → annotated tag →
    `--latest` publish → verify). rc.1 ships as GitHub **Latest** (beta.8 demoted — the 2026-06-18 owner
    override).
 
