@@ -106,8 +106,9 @@ func isPublicUnicastIP(ip net.IP) bool {
 var nat64WellKnownPrefix = []byte{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0}
 
 // embeddedIPv4 returns the IPv4 carried inside a 6to4 (2002::/16), NAT64 well-known
-// (64:ff9b::/96), or IPv4-compatible (::a.b.c.d, the deprecated RFC 4291 form with a zero
-// high-96 and a non-trivial low-32) IPv6 address, or nil if ip is none of those.
+// (64:ff9b::/96), SIIT IPv4-translatable (::ffff:0:0/96), or IPv4-compatible (::a.b.c.d, the
+// deprecated RFC 4291 form with a zero high-96 and a non-trivial low-32) IPv6 address, or nil
+// if ip is none of those.
 func embeddedIPv4(ip net.IP) net.IP {
 	ip = ip.To16()
 	if ip == nil {
@@ -118,6 +119,23 @@ func embeddedIPv4(ip net.IP) net.IP {
 	}
 	if bytes.Equal(ip[:12], nat64WellKnownPrefix) { // NAT64: IPv4 in the trailing 4 bytes
 		return net.IPv4(ip[12], ip[13], ip[14], ip[15])
+	}
+	// SIIT/RFC 6052 IPv4-translatable ::ffff:0:0/96 (bytes 8-9 == 0xffff, 10-11 == 0, IPv4 in the
+	// trailing 32). Go's To4() does NOT unwrap this (only the v4-MAPPED ::ffff:a.b.c.d, where 0xffff
+	// sits in bytes 10-11), so without this branch ::ffff:0:169.254.169.254 / ::ffff:0:127.0.0.1
+	// would slip through as an ordinary public IPv6. Mirrors the sibling 6to4/NAT64 unwraps;
+	// defense-in-depth for a host running a stateless SIIT translator (Jool/Tayga SIIT mode).
+	if ip[8] == 0xff && ip[9] == 0xff && ip[10] == 0 && ip[11] == 0 {
+		highZero := true
+		for i := 0; i < 8; i++ {
+			if ip[i] != 0 {
+				highZero = false
+				break
+			}
+		}
+		if highZero {
+			return net.IPv4(ip[12], ip[13], ip[14], ip[15])
+		}
 	}
 	// IPv4-compatible ::a.b.c.d: a zero high-96 with a non-trivial low-32. Go's To4() does NOT
 	// unwrap this form (only ::ffff:a.b.c.d), so without this branch ::127.0.0.1 (parsed to

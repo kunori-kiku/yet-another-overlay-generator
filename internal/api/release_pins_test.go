@@ -73,6 +73,12 @@ func TestIsPublicUnicastIP(t *testing.T) {
 		{"::127.0.0.1", false},       // ::a.b.c.d of loopback (parses to ::7f00:1)
 		{"::169.254.169.254", false}, // ::a.b.c.d of cloud-metadata link-local
 		{"::8.8.8.8", true},          // ::a.b.c.d of public 8.8.8.8 → still public (no over-block)
+		// plan-21 / 4.2: SIIT/RFC 6052 IPv4-translatable ::ffff:0:0/96 — the one embedded-v4 form the
+		// S7 unwrap originally missed (To4() does not decode it; "ffff" sits in bytes 8-9, not 10-11).
+		{"::ffff:0:7f00:1", false},    // SIIT of 127.0.0.1 (loopback)
+		{"::ffff:0:a9fe:a9fe", false}, // SIIT of 169.254.169.254 (cloud metadata)
+		{"::ffff:0:a00:1", false},     // SIIT of 10.0.0.1 (RFC1918)
+		{"::ffff:0:808:808", true},    // SIIT of public 8.8.8.8 → still public (no over-block)
 		// S11: OCI instance-metadata service lives at 192.0.0.192 inside the IETF
 		// special-purpose 192.0.0.0/24 block (RFC 6890) — not RFC1918, not CGNAT, so the
 		// pre-fix To4 branch let it through. Deny the whole /24 (IETF protocol assignments,
