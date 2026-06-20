@@ -11,10 +11,11 @@ permissions:
 jobs:
   # Release gate: a tag must never ship untested code. Normally the tagged commit
   # already passed PR CI on main, but tags can point anywhere — re-verify here
-  # before any bundle is built. TRUE byte-identical mirror of ci.yml's gates
-  # (plan-22 / 4.3): gofmt-drift + go test -race + the //go:build airgap profile,
-  # npm run build (tsc -b), the required frontend-e2e Playwright job, and the
-  # realtunnel netns gate (gate-realtunnel).
+  # before any bundle is built. A true step-by-step mirror of ci.yml's gate
+  # BEHAVIOR (plan-22 / 4.3): gofmt-drift + go test -race + the //go:build airgap
+  # profile, npm run build (tsc -b), the required frontend-e2e Playwright job, and
+  # the realtunnel netns gate (gate-realtunnel). (setup-go here adds check-latest;
+  # the resolved toolchain is identical — go.mod pins toolchain go1.26.4.)
   gate-go:
     name: Gate — Go vet + test
     runs-on: ubuntu-latest
@@ -28,7 +29,7 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      # True byte-identical mirror of ci.yml's `go` job (plan-22 / 4.3 Task 3): gofmt-drift +
+      # Step-by-step mirror of ci.yml's `go` gate behavior (plan-22 / 4.3 Task 3): gofmt-drift +
       # vet + `go test -race`. Previously gate-go omitted gofmt + -race, so a tag could ship code
       # that would have failed PR CI.
       - name: Format check
