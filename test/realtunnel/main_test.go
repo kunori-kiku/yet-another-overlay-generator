@@ -10,8 +10,9 @@ import (
 )
 
 // main_test.go — TestMain (pre/post orphan sweep) + the Phase-2 nspawn-lifecycle proof. The sweep
-// reclaims any of OUR objects (objectPrefix-named machines / veths / bridges / netns) left by a
-// crashed prior run, so a re-run starts clean; TestMain runs it before and after the suite.
+// reclaims any of OUR objects left by a crashed prior run — objectPrefix-named machines + bridge, and
+// the nspawn host veths those machines spawned — so a re-run starts clean; TestMain runs it before
+// and after the suite.
 
 // runToken disambiguates this run's object names from a concurrent local run (CI runs one at a time).
 var runToken = os.Getpid()
@@ -36,11 +37,17 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// sweepOrphans terminates every machine and deletes every veth/bridge/netns whose name starts with
-// objectPrefix — best-effort, never fatal (it runs outside a *testing.T). It is the crash-recovery
-// net: a killed run leaves containers/links behind, and the next run must not trip over them.
+// sweepOrphans is the crash-recovery net: a killed run leaves objects behind, and the next run must
+// not trip over them. Best-effort, never fatal (it runs outside a *testing.T). The PRIMARY reclaim is
+// machine termination — `machinectl terminate` tears the machine's netns + veth pair down with it, so
+// terminating our machines reclaims the bulk. The link sweep then removes (a) the harness's OWN
+// bridge (objectPrefix-named, created directly in bringUp) and (b) systemd-nspawn's host-side veths,
+// which nspawn names "vb-"/"ve-" + the machine name (NOT objectPrefix-prefixed) — the genuine
+// crash-orphan case where a machine died leaving a dangling host veth with no live machinectl entry.
+// The netns loop is a defensive backstop for any directly-created named netns (Option B creates none;
+// nspawn's netns is anonymous and dies with the machine).
 func sweepOrphans() {
-	// Machines.
+	// Machines (primary reclaim — also drops each machine's netns + veth).
 	if out, err := tryRun("machinectl", "list", "--no-legend", "--no-pager"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			fields := strings.Fields(line)
@@ -49,7 +56,7 @@ func sweepOrphans() {
 			}
 		}
 	}
-	// veth / bridge links.
+	// Links: our own bridge (objectPrefix...) + nspawn host veths (vb-/ve- + machine name).
 	if out, err := tryRun("ip", "-o", "link", "show"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			// "<idx>: <name>@... : ..." — take the name token, strip any @peer suffix.
@@ -61,12 +68,14 @@ func sweepOrphans() {
 			if at := strings.Index(name, "@"); at >= 0 {
 				name = name[:at]
 			}
-			if strings.HasPrefix(name, objectPrefix) {
+			if strings.HasPrefix(name, objectPrefix) ||
+				strings.HasPrefix(name, "vb-"+objectPrefix) ||
+				strings.HasPrefix(name, "ve-"+objectPrefix) {
 				_, _ = tryRun("ip", "link", "del", name)
 			}
 		}
 	}
-	// Network namespaces.
+	// Network namespaces (defensive backstop — Option B creates no named netns of its own).
 	if out, err := tryRun("ip", "-o", "netns", "list"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
 			fields := strings.Fields(line)

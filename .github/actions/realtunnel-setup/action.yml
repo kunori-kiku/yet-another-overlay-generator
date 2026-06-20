@@ -27,17 +27,29 @@ runs:
       run: |
         sudo modprobe wireguard
         lsmod | grep -q wireguard
+    # apt + debootstrap reach the network and are the most common flake source for this kind of job;
+    # a required gate must not be flaky (plan-18 Phase 9), so each is wrapped in a bounded retry.
     - name: Install systemd-nspawn + debootstrap
       shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo apt-get update
-        sudo apt-get install -y systemd-container debootstrap
+        retry() { for i in 1 2 3; do "$@" && return 0; echo "::warning::attempt $i failed: $*"; sleep $((i*5)); done; return 1; }
+        retry sudo -E apt-get update
+        retry sudo -E apt-get install -y systemd-container debootstrap
     - name: Build the base rootfs
       shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo debootstrap --variant=minbase --components=main,universe \
-          --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,iputils-ping,kmod \
-          noble /tmp/yaog-rt-rootfs http://archive.ubuntu.com/ubuntu/
+        build() {
+          sudo rm -rf /tmp/yaog-rt-rootfs
+          sudo -E debootstrap --variant=minbase --components=main,universe \
+            --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,iputils-ping,kmod \
+            noble /tmp/yaog-rt-rootfs http://archive.ubuntu.com/ubuntu/
+        }
+        for i in 1 2 3; do build && exit 0; echo "::warning::debootstrap attempt $i failed"; sleep $((i*10)); done
+        echo "::error::debootstrap failed after 3 attempts"; exit 1
     - name: Compile the integration test binary (as runner user)
       shell: bash
       run: go test -c -tags integration -o /tmp/realtunnel.test ./test/realtunnel/

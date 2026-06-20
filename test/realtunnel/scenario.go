@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
 // scenario.go — Phases 4-6: wire a topology's nodes into per-node systemd-nspawn containers on a
@@ -18,8 +19,9 @@ import (
 // UNMODIFIED install.sh in each (Option B), and assert the overlay works on the kernel.
 //
 // Underlay vs overlay: the bridge subnet (underlaySubnet) is the "internet" the WireGuard Endpoints
-// dial; it is deliberately disjoint from the overlay CIDRs (10.11/10.10) so a route to an overlay IP
-// can ONLY exist because babel converged it over a formed tunnel — never because of the underlay.
+// dial; it is deliberately disjoint from EVERY fixture's overlay/transit CIDRs (10.10–10.40, e.g.
+// simple-mesh 10.11 + transit 10.10, nat-hub 10.20, relay 10.30, c3 10.40) so a route to an overlay
+// IP can ONLY exist because babel converged it over a formed tunnel — never because of the underlay.
 const underlaySubnet = "10.123.0" // node i -> 10.123.0.(i+1)/24 on the bridge
 
 // rtNode is a node under test: its identity + role + the allocated overlay IP (from the compiler) +
@@ -238,7 +240,7 @@ func (sc *scenario) requireSNATRewrite(t *testing.T) {
 		if transit == "" {
 			t.Fatalf("node %s: no transit IP found on a wg interface", from.name)
 		}
-		to := sc.otherNode(from)
+		to := sc.otherNode(t, from)
 		waitFor(t, 60*time.Second, fmt.Sprintf("SNAT rewrite %s(transit %s)->%s(%s)", from.name, transit, to.name, to.overlayIP), func() bool {
 			ok, _ := sc.snatFunctionalOK(t, from, transit, to)
 			return ok
@@ -279,7 +281,10 @@ func (sc *scenario) applyFault(t *testing.T, fault string) {
 // reverseEndpointPresent reports whether nodeName's rendered WireGuard config for the peer peerName
 // carries an `Endpoint =` line. It reads the exported bundle (not the kernel), so it is a
 // deterministic, race-free assertion on the compiler's reverse-endpoint resolution — the C3 contract.
-// The per-peer config file is named `wg-<peerName>.conf` by the renderer.
+// The per-peer config file is named `<InterfaceName>.conf`, where the interface name is resolved via
+// the single naming authority (naming.WgInterfaceName) rather than string-concatenating "wg-"+peer —
+// so a long or non-lowercase peer name (which the renderer hashes/sanitizes) still maps to the right
+// file. (C3's fixture uses only primary, non-backup links, so WgInterfaceName is exact here.)
 func (sc *scenario) reverseEndpointPresent(t *testing.T, nodeName, peerName string) bool {
 	t.Helper()
 	var nd *rtNode
@@ -292,7 +297,7 @@ func (sc *scenario) reverseEndpointPresent(t *testing.T, nodeName, peerName stri
 	if nd == nil {
 		t.Fatalf("reverseEndpointPresent: no node named %q in scenario", nodeName)
 	}
-	path := filepath.Join(nd.dir, "wireguard", "wg-"+peerName+".conf")
+	path := filepath.Join(nd.dir, "wireguard", naming.WgInterfaceName(peerName)+".conf")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reverseEndpointPresent: read %s: %v", path, err)
@@ -331,13 +336,16 @@ func (sc *scenario) aTransitIP(t *testing.T, nd *rtNode) string {
 	return ""
 }
 
-// otherNode returns any node distinct from nd.
-func (sc *scenario) otherNode(nd *rtNode) *rtNode {
+// otherNode returns any node distinct from nd, fataling if the scenario has no second node (every
+// caller needs a peer to probe — a single-node topology is a fixture error, not a silent nil-deref).
+func (sc *scenario) otherNode(t *testing.T, nd *rtNode) *rtNode {
+	t.Helper()
 	for _, o := range sc.nodes {
 		if o.id != nd.id {
 			return o
 		}
 	}
+	t.Fatalf("otherNode: scenario has no node distinct from %s (need >=2 nodes for the transit probe)", nd.name)
 	return nil
 }
 

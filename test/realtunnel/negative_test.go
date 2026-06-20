@@ -40,7 +40,7 @@ func TestNegativeProof(t *testing.T) {
 		if transit == "" {
 			t.Fatalf("node %s: no transit IP found on a wg interface", from.name)
 		}
-		to := sc.otherNode(from)
+		to := sc.otherNode(t, from)
 		waitFor(t, 60*time.Second, fmt.Sprintf("pre-fault SNAT path %s(transit %s)->%s", from.name, transit, to.name), func() bool {
 			ok, _ := sc.snatFunctionalOK(t, from, transit, to)
 			return ok
@@ -55,7 +55,7 @@ func TestNegativeProof(t *testing.T) {
 	// from the pre-fault flow survives to mask the dropped rule.)
 	for _, from := range sc.nodes {
 		transit := sc.aTransitIP(t, from)
-		to := sc.otherNode(from)
+		to := sc.otherNode(t, from)
 		if ok, out := sc.snatFunctionalOK(t, from, transit, to); ok {
 			t.Fatalf("negative proof FAILED: after fault %q, %s(transit %s)->%s(%s) STILL has 0%% loss — "+
 				"the SNAT assertion is vacuous (the fault did not break the data plane):\n%s",

@@ -3,6 +3,7 @@
 package realtunnel
 
 import (
+	"bytes"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -21,8 +22,28 @@ import (
 type container struct {
 	name string
 	cmd  *exec.Cmd
-	log  *strings.Builder
-	mu   sync.Mutex
+	log  *syncBuffer
+}
+
+// syncBuffer is a goroutine-safe sink for the nspawn boot log. os/exec runs a copier goroutine that
+// writes to cmd.Stdout/Stderr for the whole life of the container, while bootLog() may read the log
+// on a failure path BEFORE the process exits — so Write and String must share one lock (a plain
+// strings.Builder would be a data race the race detector flags).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // bootOpts configures a node container's networking + mounts.
@@ -39,7 +60,7 @@ type bootOpts struct {
 // reclaimed even on failure.
 func bootContainer(t *testing.T, rootfs, name string, opts bootOpts) *container {
 	t.Helper()
-	c := &container{name: name, log: &strings.Builder{}}
+	c := &container{name: name, log: &syncBuffer{}}
 	// --boot runs systemd as PID 1; --volatile=overlay isolates per-container writes over the shared
 	// read-only base (fast — no full rootfs copy). Networking: a host bridge (the topology underlay)
 	// or an isolated private netns. --machine lets machinectl drive it.
@@ -95,10 +116,8 @@ func (c *container) tryExec(argv ...string) (string, error) {
 	return string(out), err
 }
 
-// bootLog returns the container's captured nspawn stdout/stderr.
+// bootLog returns the container's captured nspawn stdout/stderr (goroutine-safe via syncBuffer).
 func (c *container) bootLog() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	return c.log.String()
 }
 

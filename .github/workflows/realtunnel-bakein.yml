@@ -30,11 +30,18 @@ jobs:
           set -o pipefail
           n="${{ github.event.inputs.runs }}"
           n="${n:-20}"
+          # Validate the dispatch input: a non-numeric value would make `seq` iterate zero times and
+          # then print a false "N/N GREEN" without running anything.
+          case "$n" in (''|*[!0-9]*) echo "::error::runs must be a positive integer (got '$n')"; exit 1;; esac
+          [ "$n" -ge 1 ] || { echo "::error::runs must be >= 1 (got '$n')"; exit 1; }
           for i in $(seq 1 "$n"); do
             echo "::group::canary run $i/$n"
             sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} ${{ steps.rt.outputs.testbin }} \
-              -test.run TestSimpleMeshCanary -test.timeout 300s 2>&1 | tee "/tmp/realtunnel-bakein-$i.log" \
+              -test.v -test.run TestSimpleMeshCanary -test.timeout 300s 2>&1 | tee "/tmp/realtunnel-bakein-$i.log" \
               || { echo "::error::FLAKE/FAIL on bake-in run $i/$n"; exit 1; }
+            # Positive run-assertion: a skipped canary exits 0, so confirm it actually PASSED.
+            grep -q '^--- PASS: TestSimpleMeshCanary' "/tmp/realtunnel-bakein-$i.log" \
+              || { echo "::error::canary did not PASS on run $i/$n (skipped or absent)"; exit 1; }
             echo "::endgroup::"
           done
           echo "$n/$n GREEN"
@@ -46,6 +53,8 @@ jobs:
           sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} REALTUNNEL_NEGATIVE=drop-snat \
             ${{ steps.rt.outputs.testbin }} -test.run TestNegativeProof -test.v -test.timeout 300s \
             2>&1 | tee /tmp/realtunnel-negative.log
+          grep -q '^--- PASS: TestNegativeProof' /tmp/realtunnel-negative.log \
+            || { echo "::error::TestNegativeProof did not PASS (skipped or absent) — the red-proof did not run"; exit 1; }
       - name: Upload bake-in logs
         if: always()
         uses: actions/upload-artifact@v4

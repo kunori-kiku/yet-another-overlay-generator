@@ -15,9 +15,12 @@ import (
 // are: root, systemd-nspawn, the WireGuard kernel module, and a base rootfs (REALTUNNEL_ROOTFS) that
 // already carries systemd + wireguard-tools + babeld + iproute2 + iptables/nft.
 
-// objectPrefix namespaces every host object this tier creates (machines, bridges, netns) so the
-// orphan sweep + teardown can find and remove exactly ours, never a co-tenant's. It is kept SHORT
-// because network-device names are capped at 15 chars (IFNAMSIZ): a bridge "yrtbr<token>" must fit.
+// objectPrefix namespaces the host objects this tier creates directly — the machines and the underlay
+// bridge — so the orphan sweep + teardown can find and remove exactly ours, never a co-tenant's.
+// (systemd-nspawn's host veths inherit the machine name with a "vb-"/"ve-" prefix, and its netns is
+// anonymous; both die when the machine is terminated, and sweepOrphans matches the veths as a
+// crash-orphan backstop.) It is kept SHORT because network-device names are capped at 15 chars
+// (IFNAMSIZ): a bridge "yrtbr<token>" must fit.
 // The PID-derived token keeps concurrent local runs from colliding; CI runs one at a time.
 const objectPrefix = "yrt"
 

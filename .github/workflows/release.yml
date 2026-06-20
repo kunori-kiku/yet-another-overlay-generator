@@ -129,6 +129,12 @@ jobs:
           set -o pipefail
           sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} ${{ steps.rt.outputs.testbin }} \
             -test.v -test.timeout 600s 2>&1 | tee /tmp/realtunnel-release.log
+          # Positive run-assertion: a skipped canary exits 0, which must not let the release gate pass
+          # vacuously — require the canary to have actually PASSED, and fail loud if it SKIPPED.
+          grep -q '^--- PASS: TestSimpleMeshCanary' /tmp/realtunnel-release.log \
+            || { echo "::error::TestSimpleMeshCanary did not PASS (skipped or absent) — release gate must not pass vacuously"; exit 1; }
+          ! grep -q '^--- SKIP: TestSimpleMeshCanary' /tmp/realtunnel-release.log \
+            || { echo "::error::TestSimpleMeshCanary SKIPPED — a prerequisite is missing on the runner"; exit 1; }
       - name: Upload realtunnel logs
         if: failure()
         uses: actions/upload-artifact@v4
