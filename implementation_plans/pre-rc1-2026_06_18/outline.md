@@ -533,6 +533,6 @@ partial/parked/abandoned, per close-phase).
 | plan-17 | 3.5 | S3 | delivered (PR #154) | plan-13; SUBJECT 2 (plans 10–12) |
 | plan-18 | 3.6 | S3 | delivered (PR #155) | plan-13, plan-16 (bringup fixtures); MANDATORY before plan-22 |
 | plan-19 | 3.7 | S3 | delivered (PR #156) | plan-18 (LAST in S3) |
-| plan-20 | 4.1 | S4 | in-progress | SUBJECT 3 (frozen tree) |
-| plan-21 | 4.2 | S4 | pending | plan-20 |
-| plan-22 | 4.3 | S4 | pending | plan-21, plan-5, plan-8, plan-18, all S3 (sole tag authority) |
+| plan-20 | 4.1 | S4 | delivered (PR #157) | SUBJECT 3 (frozen tree) |
+| plan-21 | 4.2 | S4 | delivered (PR #158) | plan-20 |
+| plan-22 | 4.3 | S4 | delivered (PR #159) — rc.1 gate authored; terminal tag cut is owner-only | plan-21, plan-5, plan-8, plan-18, all S3 (sole tag authority) |

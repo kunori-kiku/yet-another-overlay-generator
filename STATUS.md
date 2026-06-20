@@ -1,8 +1,13 @@
 # STATUS
-<!-- regenerated: 2026-06-19 -->
-<!-- by: pre-rc1 program — Subject 2 closed -->
+<!-- regenerated: 2026-06-21 -->
+<!-- by: pre-rc1 program — ALL 4 subjects closed; rc.1 gate authored, terminal cut owner-only -->
 
 ## Active work
+
+- **PRE-RC.1 PROGRAM COMPLETE (authorable scope) — all 22 plans across Subjects 1–4 merged (PRs
+  #137–#159, 2026-06-19/21).** Every CI-gated rc.1 criterion is GREEN. The remaining steps to cut
+  `v2.0.0-rc.1` are **owner-only** and tracked in [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md)
+  (the single-source-of-truth go/no-go) — see **Next actions**.
 
 - **SUBJECT 1 (refactor + security) COMPLETE — all 9 plans merged to `main` (2026-06-19).** The
   local-mode→browser migration shipped: plan-1 CJK→English hygiene (#137), plan-2 god-file splits
@@ -138,6 +143,14 @@ incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). T
 
 ## Recently closed subjects (last 3)
 
+- `pre-rc1-2026_06_18` (2026-06-19/21) — **the full pre-rc.1 program: 22 plans across 4 subjects (PRs
+  #137–#159).** Subject 1 refactor+security (TS browser compiler, controller-only backend, plan-8
+  fixes), Subject 2 phone UX, Subject 3 full-stack E2E sim + the MANDATORY real-tunnel netns gate,
+  Subject 4 the final security re-audit (GO verdict, `internal/dast` live-wire, `security-scan` CI incl.
+  govulncheck which caught + fixed go1.25.0 stdlib CVEs via the go1.26.4 toolchain bump). Each plan:
+  build → independent multi-lens workflow review → fix → re-review clean → CI green → merge. The rc.1
+  go/no-go gate is authored at `docs/spec/rc1/RC1-GATE.md`; the **terminal `v2.0.0-rc.1` tag cut is
+  owner-only** (hardware smokes + 20/20 CI bake-in + branch protection + owner signature).
 - `keystone-rotation-safety` (2026-06-17, **released `v2.0.0-beta.5`, GitHub latest**) — reproduced +
   fixed the keystone-rotation fleet-stranding root cause (acked rotation, server-truth
   `redeploy_required`, `yaog-agent reprovision-keystone`; PRs #129/#130/#131); built the non-release
