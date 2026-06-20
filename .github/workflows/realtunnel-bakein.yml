@@ -1,0 +1,66 @@
+name: realtunnel-bakein
+
+# The non-flake gate (plan-18 Phase 9) and rc.1 precondition: a REQUIRED gate cannot be flaky, so
+# before the v2.0.0-rc.1 tag is cut we must show the simple-mesh canary is 20/20 green AND that the
+# suite catches a deliberately broken wire (the negative proof). This is heavy (~20 boots), so it is
+# manually dispatched rather than run on every PR; record the run URL + result in RC1-GATE.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Number of canary bake-in iterations (require N/N green)
+        required: false
+        default: "20"
+
+jobs:
+  bakein:
+    name: 20x canary bake-in + negative proof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prepare real-tunnel tier
+        id: rt
+        uses: ./.github/actions/realtunnel-setup
+      - name: Canary bake-in (require N/N green)
+        run: |
+          set -o pipefail
+          n="${{ github.event.inputs.runs }}"
+          n="${n:-20}"
+          # Validate the dispatch input: a non-numeric value would make `seq` iterate zero times and
+          # then print a false "N/N GREEN" without running anything.
+          case "$n" in (''|*[!0-9]*) echo "::error::runs must be a positive integer (got '$n')"; exit 1;; esac
+          [ "$n" -ge 1 ] || { echo "::error::runs must be >= 1 (got '$n')"; exit 1; }
+          for i in $(seq 1 "$n"); do
+            echo "::group::canary run $i/$n"
+            sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} ${{ steps.rt.outputs.testbin }} \
+              -test.v -test.run TestSimpleMeshCanary -test.timeout 300s 2>&1 | tee "/tmp/realtunnel-bakein-$i.log" \
+              || { echo "::error::FLAKE/FAIL on bake-in run $i/$n"; exit 1; }
+            # Positive run-assertion: a skipped canary exits 0, so confirm it actually PASSED.
+            grep -q '^--- PASS: TestSimpleMeshCanary' "/tmp/realtunnel-bakein-$i.log" \
+              || { echo "::error::canary did not PASS on run $i/$n (skipped or absent)"; exit 1; }
+            echo "::endgroup::"
+          done
+          echo "$n/$n GREEN"
+      # The red-proof: drop the SNAT rule and confirm the required SNAT assertion CATCHES it (the
+      # test is GREEN when the fault is detected — it would fail if the assertion were vacuous).
+      - name: Negative proof (drop-snat must be caught)
+        run: |
+          set -o pipefail
+          sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} REALTUNNEL_NEGATIVE=drop-snat \
+            ${{ steps.rt.outputs.testbin }} -test.run TestNegativeProof -test.v -test.timeout 300s \
+            2>&1 | tee /tmp/realtunnel-negative.log
+          grep -q '^--- PASS: TestNegativeProof' /tmp/realtunnel-negative.log \
+            || { echo "::error::TestNegativeProof did not PASS (skipped or absent) — the red-proof did not run"; exit 1; }
+      - name: Upload bake-in logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtunnel-bakein-logs
+          path: |
+            /tmp/realtunnel-bakein-*.log
+            /tmp/realtunnel-negative.log
+          retention-days: 14

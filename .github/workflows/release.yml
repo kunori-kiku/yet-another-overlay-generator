@@ -107,9 +107,45 @@ jobs:
             frontend/test-results/
           retention-days: 7
 
+  # Mirror ci.yml's `realtunnel` job: a tag must not ship code that would have failed the rc.1-gating
+  # real-tunnel canary on PR CI. Brings up the simple-mesh bundle in per-node systemd-nspawn
+  # containers and asserts the kernel overlay works (handshake/route/ping/SNAT). The additive
+  # scenarios + negative proof are NOT part of the release gate (they are non-required / on-demand);
+  # the 20x bake-in is the separate realtunnel-bakein workflow run as the rc.1 precondition.
+  gate-realtunnel:
+    name: Gate — Real-tunnel netns integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Prepare real-tunnel tier
+        id: rt
+        uses: ./.github/actions/realtunnel-setup
+      - name: Real-tunnel canary (REQUIRED)
+        run: |
+          set -o pipefail
+          sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} ${{ steps.rt.outputs.testbin }} \
+            -test.v -test.timeout 600s 2>&1 | tee /tmp/realtunnel-release.log
+          # Positive run-assertion: a skipped canary exits 0, which must not let the release gate pass
+          # vacuously — require the canary to have actually PASSED, and fail loud if it SKIPPED.
+          grep -q '^--- PASS: TestSimpleMeshCanary' /tmp/realtunnel-release.log \
+            || { echo "::error::TestSimpleMeshCanary did not PASS (skipped or absent) — release gate must not pass vacuously"; exit 1; }
+          ! grep -q '^--- SKIP: TestSimpleMeshCanary' /tmp/realtunnel-release.log \
+            || { echo "::error::TestSimpleMeshCanary SKIPPED — a prerequisite is missing on the runner"; exit 1; }
+      - name: Upload realtunnel logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtunnel-release-logs
+          path: /tmp/realtunnel-release.log
+          retention-days: 7
+
   build-frontend:
     name: Build Frontend Dist
-    needs: [gate-go, gate-frontend, gate-e2e]
+    needs: [gate-go, gate-frontend, gate-e2e, gate-realtunnel]
     runs-on: ubuntu-latest
 
     steps:
