@@ -24,8 +24,8 @@ func TestSimpleMeshCanary(t *testing.T) {
 		}
 	})
 
-	sc.requireHandshakes(t)       // (a)
-	sc.requireRouteConvergence(t) // (b)
-	sc.requireOverlayPing(t)      // (c)
-	sc.requireSNATRewrite(t)      // (d)
+	sc.requireHandshakes(t)                 // (a)
+	sc.requireRouteConvergence(t, allPairs) // (b)
+	sc.requireOverlayPing(t, allPairs)      // (c)
+	sc.requireSNATRewrite(t)                // (d)
 }

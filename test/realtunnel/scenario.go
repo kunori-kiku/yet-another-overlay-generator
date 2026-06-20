@@ -4,6 +4,7 @@ package realtunnel
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,15 +22,26 @@ import (
 // can ONLY exist because babel converged it over a formed tunnel — never because of the underlay.
 const underlaySubnet = "10.123.0" // node i -> 10.123.0.(i+1)/24 on the bridge
 
-// rtNode is a node under test: its identity + the allocated overlay IP (from the compiler) + the
-// assigned underlay IP + its bundle directory + the running container.
+// rtNode is a node under test: its identity + role + the allocated overlay IP (from the compiler) +
+// the assigned underlay IP + its bundle directory + the running container.
 type rtNode struct {
 	id, name   string
+	role       string // compiler role (router/relay/gateway/peer/client) — drives reachability predicates
 	overlayIP  string // compiler-allocated dummy0 address (the convergence/ping target)
 	underlayIP string // bridge address the WG Endpoint dials
 	dir        string // host path of this node's exported bundle (bind-mounted into the container)
 	c          *container
 }
+
+// reachPredicate decides whether overlay traffic from one node to another is EXPECTED to route, so
+// the all-pairs convergence/ping assertions assert only the connectivity a topology actually
+// provides. Most YAOG topologies are fully reachable (per-peer AllowedIPs are 0.0.0.0/0 with Table=
+// off and babel owning the routing table, so even a router hub forwards spoke-to-spoke), so allPairs
+// is the common case; a scenario that deliberately withholds a path supplies its own predicate.
+type reachPredicate func(from, to *rtNode) bool
+
+// allPairs expects every ordered node pair to be reachable over the overlay.
+func allPairs(_, _ *rtNode) bool { return true }
 
 // scenario is a brought-up topology: the underlay bridge + the running node containers.
 type scenario struct {
@@ -97,6 +109,7 @@ func bringUp(t *testing.T, rootfs, topoPath string) *scenario {
 		nd := &rtNode{
 			id:         n.ID,
 			name:       n.Name,
+			role:       n.Role,
 			overlayIP:  n.OverlayIP,
 			underlayIP: underlay[n.ID],
 			dir:        filepath.Join(out, n.Name),
@@ -163,12 +176,13 @@ func (sc *scenario) requireHandshakes(t *testing.T) {
 }
 
 // requireRouteConvergence (Phase 6b, REQUIRED) polls each node's kernel routing table for a route to
-// every other node's OverlayIP/32 — babel converged the AnnounceSelf redistribute over the tunnels.
-func (sc *scenario) requireRouteConvergence(t *testing.T) {
+// every reachable other node's OverlayIP/32 — babel converged the AnnounceSelf redistribute over the
+// tunnels. The reach predicate selects which ordered pairs the topology is expected to connect.
+func (sc *scenario) requireRouteConvergence(t *testing.T, reach reachPredicate) {
 	t.Helper()
 	for _, from := range sc.nodes {
 		for _, to := range sc.nodes {
-			if to.id == from.id {
+			if to.id == from.id || !reach(from, to) {
 				continue
 			}
 			waitFor(t, 60*time.Second, fmt.Sprintf("route %s->%s/32 (%s)", from.name, to.name, to.overlayIP), func() bool {
@@ -183,13 +197,14 @@ func (sc *scenario) requireRouteConvergence(t *testing.T) {
 	}
 }
 
-// requireOverlayPing (Phase 6c, REQUIRED) pings every other node's overlay IP from each node's overlay
-// IP and requires 0% loss — the generated overlay actually routes packets end to end.
-func (sc *scenario) requireOverlayPing(t *testing.T) {
+// requireOverlayPing (Phase 6c, REQUIRED) pings every reachable other node's overlay IP from each
+// node's overlay IP and requires 0% loss — the generated overlay actually routes packets end to end.
+// The reach predicate selects which ordered pairs the topology is expected to connect.
+func (sc *scenario) requireOverlayPing(t *testing.T, reach reachPredicate) {
 	t.Helper()
 	for _, from := range sc.nodes {
 		for _, to := range sc.nodes {
-			if to.id == from.id {
+			if to.id == from.id || !reach(from, to) {
 				continue
 			}
 			out := from.c.exec(t, "ping", "-c", "3", "-W", "2", "-I", from.overlayIP, to.overlayIP)
@@ -202,9 +217,13 @@ func (sc *scenario) requireOverlayPing(t *testing.T) {
 
 // requireSNATRewrite (Phase 6d, REQUIRED floor) asserts the overlay-SNAT rule is installed on each
 // node AND functionally rewrites transit-sourced traffic to the overlay source. The functional proof:
-// ping a peer's overlay IP sourced from THIS node's transit IP — without the rewrite the peer would
-// reply to the (non-babel-routed) transit address and the ping would be lost; 0% loss proves egress
-// SNAT rewrote the source to the babel-routed overlay IP. (The byte/agent/UI layers cannot see this.)
+// ping another node's overlay IP sourced from THIS node's transit IP. Transit IPs are allocated /32
+// (no shared subnet), so a transit-sourced packet's reply is routable back ONLY if egress SNAT
+// rewrote the source to the babel-announced overlay IP — without the rewrite the target replies to a
+// /32 transit address it has no route to, and the ping is lost. 0% loss therefore proves the rewrite
+// fired (the unique-to-netns data-plane check the byte/agent/UI layers structurally cannot see). The
+// probe POLLS: SNAT-carried delivery needs the overlay route to have converged first, so a single
+// shot can lose to timing on the first node even though the rewrite is correct.
 func (sc *scenario) requireSNATRewrite(t *testing.T) {
 	t.Helper()
 	for _, nd := range sc.nodes {
@@ -214,19 +233,76 @@ func (sc *scenario) requireSNATRewrite(t *testing.T) {
 			t.Fatalf("node %s: no overlay-SNAT rule installed:\n%s", nd.name, ruleset)
 		}
 	}
-	// Functional rewrite: from each node, ping a peer's overlay IP sourced from a transit IP.
 	for _, from := range sc.nodes {
 		transit := sc.aTransitIP(t, from)
 		if transit == "" {
 			t.Fatalf("node %s: no transit IP found on a wg interface", from.name)
 		}
 		to := sc.otherNode(from)
-		out := from.c.exec(t, "ping", "-c", "3", "-W", "2", "-I", transit, to.overlayIP)
-		if !strings.Contains(out, " 0% packet loss") {
-			t.Fatalf("SNAT functional check %s(transit %s)->%s(%s) lost packets — egress source not rewritten:\n%s",
-				from.name, transit, to.name, to.overlayIP, out)
+		waitFor(t, 60*time.Second, fmt.Sprintf("SNAT rewrite %s(transit %s)->%s(%s)", from.name, transit, to.name, to.overlayIP), func() bool {
+			ok, _ := sc.snatFunctionalOK(t, from, transit, to)
+			return ok
+		})
+	}
+}
+
+// snatFunctionalOK pings `to`'s overlay IP from `from` sourced at `transit` and reports whether the
+// reply made it back (0% loss). It is NON-fatal (ping exits non-zero on loss) because it is shared by
+// requireSNATRewrite (which polls until it returns true) and the negative proof (which fails when,
+// after the drop-snat fault, it still returns true — proving the assertion has teeth).
+func (sc *scenario) snatFunctionalOK(t *testing.T, from *rtNode, transit string, to *rtNode) (bool, string) {
+	t.Helper()
+	out, err := from.c.tryExec("ping", "-c", "3", "-W", "2", "-I", transit, to.overlayIP)
+	if err != nil {
+		return false, out
+	}
+	return strings.Contains(out, " 0% packet loss"), out
+}
+
+// applyFault deliberately breaks a wire on every node (the negative-proof injector). The only fault
+// is `drop-snat`: remove the overlay-SNAT rule so the transit->overlay source rewrite no longer
+// happens — exactly the data-plane defect requireSNATRewrite must catch. Unknown faults are fatal so
+// a typo in REALTUNNEL_NEGATIVE never silently runs a no-op (vacuously "passing") red-proof.
+func (sc *scenario) applyFault(t *testing.T, fault string) {
+	t.Helper()
+	switch fault {
+	case "drop-snat":
+		for _, nd := range sc.nodes {
+			// Remove both possible rule homes (install.sh chose one); best-effort each.
+			nd.c.tryExec("sh", "-c", "nft flush ruleset 2>/dev/null; iptables -t nat -F 2>/dev/null; true")
+		}
+	default:
+		t.Fatalf("realtunnel: unknown REALTUNNEL_NEGATIVE fault %q (supported: drop-snat)", fault)
+	}
+}
+
+// reverseEndpointPresent reports whether nodeName's rendered WireGuard config for the peer peerName
+// carries an `Endpoint =` line. It reads the exported bundle (not the kernel), so it is a
+// deterministic, race-free assertion on the compiler's reverse-endpoint resolution — the C3 contract.
+// The per-peer config file is named `wg-<peerName>.conf` by the renderer.
+func (sc *scenario) reverseEndpointPresent(t *testing.T, nodeName, peerName string) bool {
+	t.Helper()
+	var nd *rtNode
+	for _, n := range sc.nodes {
+		if n.name == nodeName {
+			nd = n
+			break
 		}
 	}
+	if nd == nil {
+		t.Fatalf("reverseEndpointPresent: no node named %q in scenario", nodeName)
+	}
+	path := filepath.Join(nd.dir, "wireguard", "wg-"+peerName+".conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reverseEndpointPresent: read %s: %v", path, err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Endpoint =") {
+			return true
+		}
+	}
+	return false
 }
 
 // wgInterfaces returns the node's active WireGuard interface names (`wg show interfaces`).

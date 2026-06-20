@@ -1,0 +1,94 @@
+{
+  "project": {
+    "id": "c3-onedir-001",
+    "name": "C3 one-directional reverse-endpoint fixture",
+    "description": "Purpose-built plan-18 fixture for the C3 reverse-endpoint contract. Two NAT-side peers dial one public hub; neither has a reverse edge. 'c3-endpoint' sets public_endpoints WHILE has_public_ip=false (the C3 case) and MUST get a populated reverse Endpoint via the plan-8 HasPublicIP normalization; 'c3-natpeer' is genuinely unreachable (no public_endpoints) and MUST get an EMPTY reverse Endpoint (correct one-directional). The kernel run proves the contrast is real and both tunnels still form (the peers dial in).",
+    "version": "0.1.0"
+  },
+  "domains": [
+    {
+      "id": "domain-1",
+      "name": "c3-network",
+      "cidr": "10.40.0.0/24",
+      "allocation_mode": "auto",
+      "routing_mode": "babel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-hub",
+      "name": "c3-hub",
+      "hostname": "hub.example.com",
+      "platform": "debian",
+      "role": "router",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": false,
+        "has_public_ip": true
+      }
+    },
+    {
+      "id": "node-ep",
+      "name": "c3-endpoint",
+      "hostname": "endpoint.local",
+      "platform": "ubuntu",
+      "role": "peer",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "public_endpoints": [
+        {
+          "id": "pe-ep-1",
+          "host": "203.0.113.77",
+          "port": 51820,
+          "note": "reachable endpoint set WHILE has_public_ip=false — the C3 case"
+        }
+      ],
+      "capabilities": {
+        "can_accept_inbound": false,
+        "can_forward": false,
+        "can_relay": false,
+        "has_public_ip": false
+      }
+    },
+    {
+      "id": "node-nat",
+      "name": "c3-natpeer",
+      "hostname": "natpeer.local",
+      "platform": "debian",
+      "role": "peer",
+      "domain_id": "domain-1",
+      "listen_port": 51820,
+      "capabilities": {
+        "can_accept_inbound": false,
+        "can_forward": false,
+        "can_relay": false,
+        "has_public_ip": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-ep-hub",
+      "from_node_id": "node-ep",
+      "to_node_id": "node-hub",
+      "type": "public-endpoint",
+      "endpoint_host": "203.0.113.10",
+      "transport": "udp",
+      "is_enabled": true,
+      "notes": "c3-endpoint dials the hub; no reverse edge — the reverse Endpoint comes only from the fallback"
+    },
+    {
+      "id": "edge-nat-hub",
+      "from_node_id": "node-nat",
+      "to_node_id": "node-hub",
+      "type": "public-endpoint",
+      "endpoint_host": "203.0.113.10",
+      "transport": "udp",
+      "is_enabled": true,
+      "notes": "c3-natpeer dials the hub; no reverse edge and no public_endpoints — reverse Endpoint stays empty (correct)"
+    }
+  ]
+}

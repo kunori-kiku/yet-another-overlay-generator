@@ -159,3 +159,48 @@ jobs:
             frontend/playwright-report/
             frontend/test-results/
           retention-days: 7
+
+  # The MANDATORY rc.1-gating real-tunnel tier (plan-18 / 3.6): bring up the configs cmd/compiler
+  # actually generates (per-peer WireGuard + babeld + the unmodified install.sh) inside per-node
+  # systemd-nspawn containers on this one runner, then assert the overlay works on the kernel —
+  # handshake, babel route convergence, overlay ping (0% loss), and the SNAT transit->overlay
+  # rewrite. Test-only under //go:build linux && integration (invisible to every other job's build).
+  realtunnel:
+    name: Real-tunnel netns integration (rc.1 gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prepare real-tunnel tier
+        id: rt
+        uses: ./.github/actions/realtunnel-setup
+      # REQUIRED: the simple-mesh canary (+ nspawn lifecycle + the no-root template-shape pin). The
+      # additive scenarios and the negative proof SKIP here (their env selectors are unset), so this
+      # step is exactly the rc.1-gating floor. Run as root from the prebuilt binary; tee for the log.
+      - name: Real-tunnel canary (REQUIRED)
+        run: |
+          set -o pipefail
+          sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} ${{ steps.rt.outputs.testbin }} \
+            -test.v -test.timeout 600s 2>&1 | tee /tmp/realtunnel-ci.log
+      # Non-blocking opt-in tier (plan-18 Phase 7): the C3 reverse-endpoint contract, relay transit,
+      # and router hub-and-spoke. continue-on-error keeps them OFF the required path (the canary is
+      # the floor) while still exercising them every PR so a break is caught early.
+      - name: Additive scenarios (non-blocking)
+        id: additive
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} REALTUNNEL_SCENARIOS=all ${{ steps.rt.outputs.testbin }} \
+            -test.v -test.timeout 900s -test.run 'TestC3OneDirectional|TestRelayTopology|TestNatHub' \
+            2>&1 | tee /tmp/realtunnel-additive.log
+      - name: Upload realtunnel logs
+        if: failure() || steps.additive.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtunnel-logs
+          path: |
+            /tmp/realtunnel-ci.log
+            /tmp/realtunnel-additive.log
+          retention-days: 7

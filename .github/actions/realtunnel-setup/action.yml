@@ -1,0 +1,43 @@
+name: realtunnel-setup
+description: >
+  Prepare an ubuntu-latest runner for the real-tunnel netns integration tier (plan-18 / 3.6):
+  load the WireGuard kernel module, install systemd-nspawn + debootstrap, build the base rootfs,
+  and compile the integration test binary AS THE RUNNER USER (so root never needs the Go toolchain
+  or module cache). Requires actions/checkout + actions/setup-go to have run first. Shared by the
+  required PR `realtunnel` job and the 20x bake-in workflow so both stay byte-identical in setup.
+
+outputs:
+  rootfs:
+    description: Path to the prebuilt base rootfs (pass as REALTUNNEL_ROOTFS).
+    value: ${{ steps.vars.outputs.rootfs }}
+  testbin:
+    description: Path to the compiled integration test binary (run as root).
+    value: ${{ steps.vars.outputs.testbin }}
+
+runs:
+  using: composite
+  steps:
+    - id: vars
+      shell: bash
+      run: |
+        echo "rootfs=/tmp/yaog-rt-rootfs" >> "$GITHUB_OUTPUT"
+        echo "testbin=/tmp/realtunnel.test" >> "$GITHUB_OUTPUT"
+    - name: Load the WireGuard kernel module
+      shell: bash
+      run: |
+        sudo modprobe wireguard
+        lsmod | grep -q wireguard
+    - name: Install systemd-nspawn + debootstrap
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y systemd-container debootstrap
+    - name: Build the base rootfs
+      shell: bash
+      run: |
+        sudo debootstrap --variant=minbase --components=main,universe \
+          --include=systemd,systemd-sysv,udev,dbus,wireguard-tools,babeld,iproute2,iptables,nftables,iputils-ping,kmod \
+          noble /tmp/yaog-rt-rootfs http://archive.ubuntu.com/ubuntu/
+    - name: Compile the integration test binary (as runner user)
+      shell: bash
+      run: go test -c -tags integration -o /tmp/realtunnel.test ./test/realtunnel/
