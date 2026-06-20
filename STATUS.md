@@ -33,6 +33,15 @@
 - Decision (2026-06-19, in the outline decisions log): local-engine **default-ON** folded into plan-7
   (the real-world soak gate is waived — replaced by the green conformance harness); the
   `VITE_YAOG_LOCAL_ENGINE=backend` escape hatch is retained (works against a `-tags airgap` server).
+- **SUBJECT 3 COMPLETE — plans 13–19 merged (2026-06-19/20, PRs #149–#156).** plan-18 (3.6 real-tunnel
+  netns gate, PR #155) green-and-required on CI (`ubuntu-latest` boots nested systemd-nspawn); plan-19
+  (3.7 closure, PR #156) authored `docs/spec/rc1/RUNBOOK.md` (9 owed smokes → 3 irreducible hardware
+  legs) + the criterion-C1 owed-smoke ledger in `RC1-GATE.md`.
+- **IN PROGRESS: SUBJECT 4 (security re-audit, the LAST subject before rc.1).** plan-20 (4.1) authored
+  the post-refactor **re-audit charter** at `docs/spec/rc1/plans/4.1-reaudit-charter.md` (11-surface
+  inventory: O1–O7 re-verify + N1–N4 new; the two-lens workflow; the 14+B1–B4 baseline disposition map;
+  the exit bar — amended to include `realtunnel` + conformance green-and-required; the owner sign-off
+  path). plan-21 (4.2) EXECUTES it (→ `docs/spec/rc1/4.2-verdict.md`); plan-22 (4.3) cuts rc.1.
 
 ### Prior release history
 
