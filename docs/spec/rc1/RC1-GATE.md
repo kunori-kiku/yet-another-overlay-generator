@@ -129,12 +129,13 @@ this makes them *blocking*.)
 A REQUIRED gate must not be flaky. Before tagging, run the **`realtunnel-bakein`** workflow
 (`Actions → realtunnel-bakein → Run workflow`, 20 runs): require **20/20** green canary + the
 `drop-snat` negative proof catches the broken wire. ⏳ OWNER (manual dispatch). Local proof: 3/3 +
-negative-proof green on the dev kernel (2026-06-20). Record the CI run URL here before the tag.
+negative-proof green on the dev kernel (2026-06-20). **✅ DISCHARGED 2026-06-21: CI 20/20 + negative
+proof green** (Actions run 27881474085).
 
 | date | env | bake-in | negative proof | evidence |
 |------|-----|---------|----------------|----------|
 | 2026-06-20 | local (kernel 6.8) | 3/3 | ✅ drop-snat caught | dev box |
-| _pending_ | CI `ubuntu-latest` | _run, require 20/20_ | _same run_ | _paste Actions URL_ |
+| 2026-06-21 | CI `ubuntu-latest` | **✅ 20/20** | ✅ drop-snat caught | [Actions run 27881474085](https://github.com/kunori-kiku/yet-another-overlay-generator/actions/runs/27881474085) (success) |
 
 ---
 
@@ -186,10 +187,10 @@ general rule still governs `-beta.`/`-preview.` (those stay not-latest).
 
 ## Owner go/no-go sign-off
 
-rc.1 is cut ONLY when every criterion above is `✅ GO` or carries a signed exception below. The remaining
-**owner-only** actions: (1) run `realtunnel-bakein` 20/20 on CI; (2) run RUNBOOK §C1/§C2/§C3 + smoke #5
-(or accept-risk); (3) set branch protection to the required-checks set; (4) confirm A–E; (5) execute the
-runbook to cut + publish the tag.
+rc.1 is cut ONLY when every criterion above is `✅ GO` or carries a signed exception below. The
+`realtunnel-bakein` 20/20 + negative proof is **✅ DONE** (CI run 27881474085, 2026-06-21). The remaining
+**owner-only** actions: (1) run RUNBOOK §C1/§C2/§C3 + smoke #5 (or accept-risk); (2) set branch protection
+to the required-checks set; (3) confirm A–E; (4) execute the runbook to cut + publish the tag.
 
 ```
 Owner go/no-go:  ☐ GO   ☐ NO-GO
