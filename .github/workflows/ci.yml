@@ -24,8 +24,11 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      # -race is the program's highest-value CI add (plan-22 / 4.3 Task 4a OWNS it): it guards the
+      # concurrency invariants — GetServedConfig atomicity under concurrent promote + the
+      # FileStore/tenantlock mutex paths. A surfaced race is a NEW rc.1 blocker (criterion A2).
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
       # The air-gap compute routes/handlers live behind //go:build airgap (plan-7): the default
       # `go test ./...` above does NOT compile or exercise them, so also build+vet+test the
       # `-tags airgap` profile to keep the retained local-design oracle (the plan-13/21 boot

@@ -145,7 +145,9 @@
      drag / edge draw / store mutation) in the read-only preview; no desktop ≥1024px regression. These
      are owed-by-design (no in-env browser) and are slated to be **covered by Subject 3's device-emulation
      E2E harness** (plan-13/plan-17), shrinking the owed-manual list rather than persisting it.
-- **rc.1 is a later owner call** once the owed smokes pass and the beta soak is clean.
+- **rc.1 gates on [`RC1-GATE.md`](RC1-GATE.md); the owner signs the go/no-go there.** That document is the
+  single source of truth for the criteria (A–E), the owed-smoke ledger (it references
+  `docs/spec/rc1/RUNBOOK.md`), the required-checks set, and the release runbook — not duplicated here.
 - **Deferred to rc.2/GA** (documented, not built): the bootstrap-TOFU hole (the agent's first binary
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
   a reliable *persistent* per-node `failed` update-state (would need a positive agent-reported field —
@@ -154,17 +156,19 @@
 
 ## Next actions
 
-1. Execute **Subject 3** (full-stack E2E simulation / pitfall-hunt, plans 13–19): plan-13 harness FIRST
-   (Playwright + virtual-WebAuthn-via-CDP + device emulation + network-fault injection against the real
-   built FE + a live Go controller + real/mock agent), then 14–17, then the MANDATORY real-tunnel
-   integration plan-18 (containers/netns bring up the GENERATED WireGuard+Babel and assert tunnels form
-   + routes converge), then plan-19 last. Same per-plan rhythm: build → independent multi-lens review →
-   fix at root → re-review GO → CI green → merge.
-2. Then Subject 4 (security re-audit, plans 20–21) → plan-22 cuts `rc.1` (gated on real-tunnel +
-   conformance harness green; plan-22 is the sole tag authority and adds `-race`, `govulncheck`,
-   frontend-e2e + realtunnel as required checks).
-3. Owner: run the owed manual smokes on real hardware/fleet (see Open questions / blockers) — the
-   Subject-2 phone smokes and several earlier ones are slated to be absorbed by the Subject-3 harness.
+**Subjects 1–4 are all delivered + merged (PRs #137–#158).** The rc.1 gate is authored and every
+*automatable* criterion is GREEN in CI (`go` incl. `-race`, `frontend`, `conformance`, `frontend-e2e`
+incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). The remaining steps are
+**owner-only**, tracked in [`RC1-GATE.md`](RC1-GATE.md):
+
+1. Run the **`realtunnel-bakein`** workflow on CI → require 20/20 + the negative proof; paste the run URL
+   into RC1-GATE.md.
+2. Run the three irreducible hardware smokes (`docs/spec/rc1/RUNBOOK.md` §C1 authenticator / §C2
+   real-NAT-box / §C3 mimic eBPF ≥6.1) + owed-smoke #5 (rollout UI) — pass-or-accept-risk.
+3. Set branch protection to require `go`, `frontend`, `conformance`, `frontend-e2e`, `realtunnel`.
+4. Sign the go/no-go in RC1-GATE.md, then execute the release runbook (CHANGELOG roll → annotated tag →
+   `--latest` publish → verify). rc.1 ships as GitHub **Latest** (beta.8 demoted — the 2026-06-18 owner
+   override).
 
 ## Recently closed subjects (last 3)
 
