@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestCollectConditions_Funnel(t *testing.T) {
 	t.Cleanup(func() { wgShowFn = orig })
 
 	// Bare cycle: no self-update activity + a failing WG probe → only configapply.
-	wgShowFn = func() ([]byte, error) { return nil, errCmd }
+	wgShowFn = func() ([]byte, error) { return nil, errors.New("wg: not available") }
 	bare := collectConditions(nil, true, now)
 	if len(bare) != 1 {
 		t.Fatalf("bare cycle: len = %d, want 1 (configapply only): %+v", len(bare), bare)
@@ -52,10 +53,3 @@ func TestCollectConditions_Funnel(t *testing.T) {
 		t.Fatalf("expected wireguard/AllPeersUp, got %+v", full)
 	}
 }
-
-// errCmd is a sentinel probe error for the best-effort WG path.
-var errCmd = &cmdErr{}
-
-type cmdErr struct{}
-
-func (*cmdErr) Error() string { return "wg: not available" }
