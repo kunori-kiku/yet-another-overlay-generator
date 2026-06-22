@@ -12,12 +12,14 @@ export type UpdateState = 'off' | 'not-targeted' | 'pending' | 'applying' | 'app
 // cadence so a healthy node is never falsely flagged. A node mid-update goes 'applying', not stale.
 const STALE_MS = 3 * 60 * 1000;
 
-// deriveUpdateState maps a node + the configured rollout to one chip state. The lastHealth markers
-// are quoted VERBATIM from internal/agent/selfupdate.go and matched as SUBSTRINGS (only 'applied'
-// is a true prefix), ordered failed -> applying -> applied; version compare is the fallback ONLY
-// when no marker is present (an older version-aware agent reports a version but no self-update
-// health line). See PRINCIPLES.md / the outline Principle 7: 'failed' is best-effort (the
-// 'abandoned:' line is transient, overwritten by the next routine apply report).
+// deriveUpdateState maps a node + the configured rollout to one chip state. Precedence (plan-3):
+// (1) the STRUCTURED selfupdate condition when present — a new agent reports a closed reason
+// (Abandoned→failed, Active/HealthConfirmedProbationary→applying, Updated→applied; an unknown future
+// reason falls through to the version compare); (2) the LEGACY lastHealth substring markers (quoted
+// VERBATIM from internal/agent/selfupdate.go) ONLY for old agents that send no conditions — keeping
+// every shipped agent's chip working while retiring the brittle string match for new ones; (3) the
+// reported running version vs target. See the outline Principle: 'failed' is best-effort (the
+// 'abandoned:'/Abandoned signal is transient on the legacy path, durable on the structured path).
 export function deriveUpdateState(
   node: ControllerNode,
   settings: ControllerSettings | null,
@@ -27,12 +29,29 @@ export function deriveUpdateState(
   if (target === '') return 'off'; // empty target ⇒ no self-update (the safety contract) ⇒ no chip
   if (!node.inRollout) return 'not-targeted';
 
-  const health = node.lastHealth || '';
-  if (health.includes(' abandoned:')) return 'failed'; // "self-update to <v> abandoned: <reason>"
-  if (health.includes('health-confirmed (probationary)')) return 'applying';
-  if (health.startsWith('self-updated to ')) return 'applied';
+  // (1) PREFERRED: the structured selfupdate condition (plan-2 maps Node.conditions). When a NEW
+  // agent reports it, the brittle lastHealth substring parse is bypassed entirely.
+  const su = (node.conditions ?? []).find((c) => c.type === 'selfupdate');
+  if (su) {
+    switch (su.reason) {
+      case 'Abandoned':
+        return 'failed';
+      case 'Active':
+      case 'HealthConfirmedProbationary':
+        return 'applying';
+      case 'Updated':
+        return 'applied';
+      // an unknown future reason falls through to the version compare below (forward-compat)
+    }
+  } else {
+    // (2) LEGACY fallback (old agents send no conditions): the historical lastHealth substring parse.
+    const health = node.lastHealth || '';
+    if (health.includes(' abandoned:')) return 'failed'; // "self-update to <v> abandoned: <reason>"
+    if (health.includes('health-confirmed (probationary)')) return 'applying';
+    if (health.startsWith('self-updated to ')) return 'applied';
+  }
 
-  // No self-update health marker: the reported running version vs the target is authoritative.
+  // (3) No self-update signal (structured or legacy): the reported running version vs target is authoritative.
   if (node.agentVersion.trim() && compareSemver(node.agentVersion, target) >= 0) return 'applied';
 
   // Below target (or an unknown reported version): pending — unless the node has gone quiet, in
