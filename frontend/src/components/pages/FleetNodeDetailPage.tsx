@@ -4,6 +4,7 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
+import { NodeConditions } from '../deploy/NodeConditions';
 
 // last_seen / enrolled_at are RFC3339 strings; the zero value ("0001-01-01T00:00:00Z") is
 // displayed as "—".
@@ -51,6 +52,9 @@ export function FleetNodeDetailPage() {
               {node.appliedGeneration} / {node.desiredGeneration}
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.health')}>{node.lastHealth || '—'}</Field>
+            <Field label={t(language, 'fleetNodeDetailPage.conditions')}>
+              {node.conditions.length > 0 ? <NodeConditions conditions={node.conditions} /> : '—'}
+            </Field>
             <Field label={t(language, 'fleetNodeDetailPage.agentVersion')}>{node.agentVersion || '—'}</Field>
             <Field label={t(language, 'updateStatus.label')}>
               <UpdateStatusChip node={node} settings={settings} language={language} />

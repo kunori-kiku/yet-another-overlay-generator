@@ -242,6 +242,28 @@ func (h *ControllerHandler) HandlePromote(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, generationResponseJSON{Generation: gen})
 }
 
+// mapConditions projects the stored controller.NodeCondition slice onto the operator wire view
+// (plan-2). nil/empty in => nil out (omitempty drops the field). It reads the embedded model.Condition
+// fields plus the wrapper's server-stamped ObservedAt, copying verbatim — the curation/length-cap
+// already happened at ingest (handler_agent), so this is pure projection, no re-classification.
+func mapConditions(cs []controller.NodeCondition) []conditionJSON {
+	if len(cs) == 0 {
+		return nil
+	}
+	out := make([]conditionJSON, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, conditionJSON{
+			Type:       c.Type,
+			Status:     c.Status,
+			Reason:     c.Reason,
+			Message:    c.Message,
+			Since:      c.Since,
+			ObservedAt: c.ObservedAt,
+		})
+	}
+	return out
+}
+
 // HandleNodes lists the fleet registry for the operator panel (operator-only). It
 // returns a []nodeJSON view that carries fleet state but NO key material.
 func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +306,7 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			EnrolledAt:        n.EnrolledAt,
 			RekeyRequested:    n.RekeyRequested,
 			InRollout:         rollout[n.NodeID],
+			Conditions:        mapConditions(n.Conditions),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

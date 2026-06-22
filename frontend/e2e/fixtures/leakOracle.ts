@@ -51,6 +51,11 @@ const CONTROLLER_NODE_ALLOWED_FIELDS = new Set([
   'enrolledAt',
   'rekeyRequested',
   'inRollout',
+  // plan-2: the structured Node Conditions strip. Curated, non-secret observability — each condition
+  // is {type,status,reason,message,since,observedAt} where message is a closed-enum-curated, length-
+  // capped one-liner (NEVER raw stderr / key material — the classify() invariant), so it is a legit
+  // persisted ControllerNode field, not a fleet-secret leak.
+  'conditions',
 ])
 
 export interface PersistedStores {

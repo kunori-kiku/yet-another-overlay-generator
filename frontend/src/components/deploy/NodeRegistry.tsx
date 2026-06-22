@@ -5,6 +5,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type MessageKey } from '../../i18n';
 import type { ControllerNode, ControllerNodeStatus } from '../../types/controller';
 import { UpdateStatusChip } from './UpdateStatusChip';
+import { NodeConditions } from './NodeConditions';
 
 // isDrifting reports whether a node's applied-vs-desired generation has drifted (an approved node
 // whose applied lags desired ⇒ it has not yet fetched/applied the latest generation of config).
@@ -50,6 +51,7 @@ const CELL_LABEL_KEYS: readonly MessageKey[] = [
   'nodeRegistry.status',
   'nodeRegistry.genAppliedDesired',
   'nodeRegistry.health',
+  'nodeRegistry.conditions',
   'nodeRegistry.agentVersion',
   'updateStatus.label',
   'nodeRegistry.lastSeen',
@@ -108,6 +110,12 @@ function nodeCells(
     {
       labelKey: 'nodeRegistry.health',
       value: <span className="text-gray-300">{n.lastHealth || '—'}</span>,
+    },
+    {
+      // plan-2: the structured conditions strip — the curated channel that supersedes string-matching
+      // the free-form health line. Renders nothing (NodeConditions returns null) when the node has none.
+      labelKey: 'nodeRegistry.conditions',
+      value: <NodeConditions conditions={n.conditions} />,
     },
     {
       labelKey: 'nodeRegistry.agentVersion',
