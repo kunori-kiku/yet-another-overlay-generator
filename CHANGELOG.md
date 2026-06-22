@@ -18,8 +18,9 @@ operations console (structured "Node Conditions", per-link mimic→UDP fallback,
 rollout, working default release URLs). The agent-feedback features are additive and
 backward-compatible (old agents send no conditions; old controllers ignore the field). One deliberate
 **backward-incompatible** hardening: the default controller build no longer serves the anonymous
-`/api/{validate,compile,export,deploy-script}` compute routes (see **Changed**). Shipped as a beta
-prerelease — `v2.0.0-beta.8` stays GitHub Latest.
+`/api/{validate,compile,export,deploy-script}` compute routes (see **Changed**). Published as
+`v2.0.0-beta.9` and promoted to **GitHub Latest** (the `releases/latest/download` alias resolves
+here) for easier deployment.
 
 ### Added
 - **Node Conditions feedback channel.** Agents now report structured, curated conditions
