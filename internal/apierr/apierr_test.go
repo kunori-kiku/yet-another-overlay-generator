@@ -98,6 +98,7 @@ var allCodes = []Code{
 	CodeAgentReleaseRequestInvalid,
 	CodeAgentReleaseFetchFailed,
 	CodeAgentReleaseSidecarInvalid,
+	CodeAgentTargetNewerThanController,
 	CodeSigningKeyMissing,
 	CodeSigningKeyMismatch,
 	CodeKeystoneRotationRequiresAck,

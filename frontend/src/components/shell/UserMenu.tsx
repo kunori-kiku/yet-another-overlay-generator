@@ -15,6 +15,7 @@ export function UserMenu() {
   const loggedIn = useControllerStore(selectLoggedIn);
   const operatorName = useControllerStore((s) => s.operatorName);
   const sessionExpiresAt = useControllerStore((s) => s.sessionExpiresAt);
+  const controllerVersion = useControllerStore((s) => s.controllerVersion);
   const operatorToken = useControllerStore((s) => s.operatorToken);
   const logout = useControllerStore((s) => s.logout);
   const loading = useControllerStore((s) => s.loading);
@@ -94,6 +95,15 @@ export function UserMenu() {
           ) : (
             <p className="px-2 py-1.5 text-sm text-[var(--content-muted)]">
               {t(language, 'userMenu.notSignedIn')}
+            </p>
+          )}
+          {/* Controller build version (plan-8): server truth from the /session + login probe.
+              Rendered once here for any authed controller session (genuine login OR break-glass),
+              so the identity-branch markup above stays a single source per case. */}
+          {mode === 'controller' && controllerVersion !== '' && (
+            <p className="mt-1 border-t border-[var(--hairline)] px-2 pt-1.5 text-xs text-[var(--content-muted)]">
+              {t(language, 'shell.controllerVersion')}{' '}
+              <span className="font-mono">{controllerVersion}</span>
             </p>
           )}
         </div>

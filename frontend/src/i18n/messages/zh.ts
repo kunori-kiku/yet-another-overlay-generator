@@ -109,6 +109,10 @@ export const zh: Record<keyof typeof en, string> = {
   'agentUpdate.loading': "正在加载设置…",
   'agentUpdate.targetVersionLabel': "目标 agent 版本",
   'agentUpdate.targetVersionHint': "滚动更新要达到的版本（如 v2.0.0-beta.3）。留空 = 不自更新。",
+  'agentUpdate.updateAllToControllerVersion': "将所有代理更新到 {version}",
+  'agentUpdate.updateAllHint': "以控制器自身版本为目标，获取其二进制固定值并启用全 fleet 推送。请先核对固定值，然后保存。",
+  'agentUpdate.noControllerVersion': "控制器未报告版本（开发版构建），因此没有可对齐的版本。",
+  'agentUpdate.targetNewerThanController': "目标 {target} 比控制器（{controller}）更新；控制器只能将代理升级到它已发布过的版本，因此保存时将被拒绝。",
   'agentUpdate.advanced': "高级",
   'agentUpdate.minVersionLabel': "最低 agent 版本（可选）",
   'agentUpdate.minVersionHint': "在节点应用任何 bundle 之前强制先更新。留空 = 无强制下限。",
@@ -539,6 +543,7 @@ export const zh: Record<keyof typeof en, string> = {
   'settingsPage.wireguardPublicPrivateKeys': "WireGuard 公私钥（重新生成一套新密钥）",
   'settingsPage.yourDesignGraphIs': "设计图会保留（项目、网络域、节点与连线）。但以下内容将被清除，下次本地编译时重新生成：",
   'shell.checkingSession': "正在检查会话…",
+  'shell.controllerVersion': "控制器版本",
   'shell.dismissNotice': "关闭提示",
   'shell.dismissNotice_2': "关闭提示",
   'shell.yourLocalDesignWas': "本地设计已被服务端副本覆盖（控制器模式下服务端是唯一权威）。原本地设计已自动下载为备份文件。",
@@ -653,6 +658,9 @@ export const zh: Record<keyof typeof en, string> = {
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
   'error.agent_release_fetch_failed': '无法从 {url} 获取发布校验和：{detail}',
   'error.agent_release_sidecar_invalid': '从 {url} 获取的发布校验和不是有效的 SHA-256。',
+  // Refuse-newer rollout floor (plan-8): the controller can only certify a target it has shipped.
+  'error.agent_target_newer_than_controller':
+    '代理目标版本 {target} 比控制器版本 {controller} 更新；控制器只能将代理升级到它已发布过的版本。',
   // Bundle signing anchor (persist-signing-anchor): fail loudly at stage time if the signing key is missing/changed.
   'error.signing_key_missing': '本 fleet 的捆绑包是签名的，但当前未配置签名密钥（YAOG_BUNDLE_SIGNING_KEY 未设置或不可读）。拒绝暂存未签名的捆绑包——请恢复签名密钥。',
   'error.signing_key_mismatch': '当前配置的捆绑签名密钥与本 fleet 已固定的密钥不一致。请恢复原密钥，或在一次部署时设置 YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 以有意轮换。',

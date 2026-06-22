@@ -79,6 +79,10 @@ export interface LoginResult {
   // csrfToken is the double-submit token (also set as the readable yaog_csrf cookie). Held
   // in memory and echoed as X-CSRF-Token on state-changing cookie-authed requests.
   csrfToken: string;
+  // controllerVersion mirrors GET /session: the controller's own build version, echoed on every
+  // login so the panel surfaces it + uses it as the one-click agent rollout target without waiting
+  // for the next /session probe. "" on an unstamped dev build (the wire field is omitted).
+  controllerVersion: string;
 }
 
 // LoginOutcome is what login() returns. Either the password (and any required second
@@ -131,6 +135,7 @@ interface LoginResponseJSON {
   operator: string;
   expires_at: string;
   csrf_token: string;
+  controller_version?: string;
 }
 
 // --- keystone (off-host operator signing) wire types ---
@@ -432,6 +437,7 @@ export async function login(
       operator: data.operator,
       expiresAt: data.expires_at,
       csrfToken: data.csrf_token,
+      controllerVersion: data.controller_version ?? '',
     },
   };
 }
@@ -593,6 +599,7 @@ export async function passkeyLoginFinish(
     operator: d.operator,
     expiresAt: d.expires_at,
     csrfToken: d.csrf_token,
+    controllerVersion: d.controller_version ?? '',
   };
 }
 
@@ -603,12 +610,17 @@ export interface SessionInfo {
   operator: string;
   expiresAt: string;
   csrfToken: string;
+  // controllerVersion is the controller's own build version (plan-7/8). "" when the controller
+  // is an unstamped dev build (the field is omitted on the wire). The panel surfaces it in the
+  // user menu and uses it as the one-click "update all agents" target + the refuse-newer hint.
+  controllerVersion: string;
 }
 
 interface SessionResponseJSON {
   operator: string;
   expires_at: string;
   csrf_token: string;
+  controller_version?: string;
 }
 
 // getSession probes the current operator session via the httpOnly cookie (or Bearer).
@@ -628,7 +640,12 @@ export async function getSession(cfg: ControllerConfig): Promise<SessionInfo | n
     throw await errorFromResponse(res);
   }
   const d = (await res.json()) as SessionResponseJSON;
-  return { operator: d.operator, expiresAt: d.expires_at, csrfToken: d.csrf_token };
+  return {
+    operator: d.operator,
+    expiresAt: d.expires_at,
+    csrfToken: d.csrf_token,
+    controllerVersion: d.controller_version ?? '',
+  };
 }
 
 // logout revokes the current session (POST /logout, authed by the session bearer in

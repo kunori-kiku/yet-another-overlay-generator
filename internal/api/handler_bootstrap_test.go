@@ -178,6 +178,52 @@ func TestValidateMimicCatalog(t *testing.T) {
 	}
 }
 
+// TestValidateAgentRolloutRefusesNewer pins the plan-8 refuse-newer floor: a target_agent_version
+// strictly newer than the controller's own build version is rejected (the controller can only roll
+// agents to a version its own pipeline shipped), while equal/older targets pass and a dev/non-semver
+// controller version DISABLES the floor (so a `go run` controller is never frozen). The floor runs
+// AFTER the agent_bins precondition, so every reachable case carries a valid AgentBins pin.
+func TestValidateAgentRolloutRefusesNewer(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	bins := map[string]model.Artifact{"linux-amd64": {Asset: "yaog-agent-linux-amd64", SHA256: sha}}
+
+	cases := []struct {
+		name              string
+		target            string
+		controllerVersion string
+		wantCode          apierr.Code // "" = expect nil (accepted)
+	}{
+		{"newer target rejected", "v2.0.0-beta.10", "v2.0.0-beta.9", apierr.CodeAgentTargetNewerThanController},
+		{"newer major rejected", "v3.0.0", "v2.0.0-beta.9", apierr.CodeAgentTargetNewerThanController},
+		{"equal target accepted", "v2.0.0-beta.9", "v2.0.0-beta.9", ""},
+		{"older target accepted", "v2.0.0-beta.8", "v2.0.0-beta.9", ""},
+		{"dev controller disables floor", "v2.0.0-beta.10", "dev", ""},
+		{"empty controller disables floor", "v2.0.0-beta.10", "", ""},
+		{"empty target skips floor", "", "v2.0.0-beta.9", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := controller.ControllerSettings{TargetAgentVersion: tc.target}
+			if tc.target != "" {
+				cs.AgentBins = bins // satisfy the prior agent_bins precondition
+			}
+			err := validateAgentRollout(cs, tc.controllerVersion)
+			if tc.wantCode == "" {
+				if err != nil {
+					t.Fatalf("validateAgentRollout(target=%q, controller=%q) = %v, want nil", tc.target, tc.controllerVersion, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateAgentRollout(target=%q, controller=%q) = nil, want %s", tc.target, tc.controllerVersion, tc.wantCode)
+			}
+			if err.Code() != tc.wantCode {
+				t.Errorf("validateAgentRollout(target=%q, controller=%q) code = %s, want %s", tc.target, tc.controllerVersion, err.Code(), tc.wantCode)
+			}
+		})
+	}
+}
+
 // TestValidateOperatorCredentialBinding: the operator-credential RPID/Origin are baked
 // (unquoted, by design — OP_FLAGS is a word-split multi-flag accumulator) into the
 // bootstrap script. Validate-at-pin rejects whitespace (the word-splitting vector) and
