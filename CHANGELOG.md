@@ -71,7 +71,8 @@ prerelease — `v2.0.0-beta.8` stays GitHub Latest.
 - **Toolchain + crypto bump clearing reachable CVEs.** Builds now pin `toolchain go1.26.4` and
   `golang.org/x/crypto v0.52.0` (up from the go1.25 stdlib / x/crypto v0.31.0), clearing reachable
   `crypto/x509`, `crypto/tls`, `encoding/pem`, and `net/url` advisories. A required `govulncheck`
-  gate (plus a gosec + npm SCA scan) now blocks a release that reintroduces a reachable vulnerability.
+  gate now fails CI on any reachable vulnerability across both build profiles (default and
+  `-tags airgap`); gosec SAST and an npm/frontend SCA scan run alongside it as advisory checks.
 - **Release-pin fetch SSRF completeness.** The server-side "Assist from release" fetch closes the
   remaining SSRF gaps (redirect/egress handling) so a crafted base cannot reach a private address.
 - **Bootstrap operator-credential binding validated at pin time** (RPID/Origin), with a loud
