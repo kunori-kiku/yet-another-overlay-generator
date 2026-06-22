@@ -319,6 +319,12 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 		LastChecksum: "deadbeef",
 		LastResult:   "ok",
 		Health:       "applied",
+		// plan-1: the structured condition set rides the same /report payload; assert it round-trips
+		// end to end (State -> reportRequestWire -> reportRequestJSON -> store -> Node.Conditions).
+		Conditions: []model.Condition{{
+			Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK,
+			Reason: "Applied", Message: "configuration applied", Since: "2026-06-22T10:00:00Z",
+		}},
 	})
 	if err != nil {
 		t.Fatalf("marshal state payload: %v", err)
@@ -341,6 +347,18 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 	}
 	if node.LastAgentVersion != "v2.0.0-beta.1-test" {
 		t.Fatalf("GetNode agent version %q, want v2.0.0-beta.1-test (the reported BuildVersion)", node.LastAgentVersion)
+	}
+	// plan-1: the configapply condition round-trips, server-stamped with a non-zero ObservedAt (the
+	// controller clock, not the agent's advisory Since).
+	if len(node.Conditions) != 1 {
+		t.Fatalf("GetNode conditions length %d, want 1", len(node.Conditions))
+	}
+	if c := node.Conditions[0]; c.Type != model.ConditionTypeConfigApply || c.Status != model.ConditionStatusOK ||
+		c.Reason != "Applied" || c.Since != "2026-06-22T10:00:00Z" {
+		t.Fatalf("GetNode condition not preserved: %+v", node.Conditions[0])
+	}
+	if node.Conditions[0].ObservedAt.IsZero() {
+		t.Fatalf("GetNode condition ObservedAt is zero, want server-stamped")
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // Compile-time assertion that *MemStore satisfies the Store interface.
@@ -189,10 +191,11 @@ func (s *MemStore) ListNodes(ctx context.Context, t TenantID) ([]Node, error) {
 }
 
 // SetAppliedGeneration records what an agent reported applying (generation,
-// checksum, health, and the reported agent build version). Returns ErrNotFound if
-// the node does not exist. An empty agentVersion (a legacy agent) leaves the stored
-// version untouched so a previously-known version is not wiped.
-func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string) error {
+// checksum, health, the reported agent build version, and the structured conditions
+// set). Returns ErrNotFound if the node does not exist. An empty agentVersion (a legacy
+// agent) leaves the stored version untouched so a previously-known version is not wiped;
+// conditions are server-stamped with observedAt and a nil/empty slice clears the set.
+func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
@@ -206,6 +209,7 @@ func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID 
 	if agentVersion != "" {
 		n.LastAgentVersion = agentVersion
 	}
+	n.Conditions = stampConditions(conditions, observedAt)
 	ts.nodes[nodeID] = n
 	return nil
 }

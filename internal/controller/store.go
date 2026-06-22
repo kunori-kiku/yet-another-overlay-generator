@@ -100,14 +100,44 @@ type Node struct {
 	// LastAgentVersion is the agent build version reported alongside the last apply ("" until a
 	// version-aware agent reports). Observability only (plan-4); the binary-swap floor is plan-9.
 	LastAgentVersion string
-	LastSeen         time.Time
-	EnrolledAt       time.Time
+	// Conditions is the structured feedback set the agent last reported, each server-stamped with
+	// ObservedAt on receipt (plan-1). Nil until a conditions-aware agent reports; replaced wholesale
+	// each report (the latest report is the truth). Observability only — not custody, not allocation.
+	Conditions []NodeCondition
+	LastSeen   time.Time
+	EnrolledAt time.Time
 	// RekeyRequested is set by the operator's fleet-wide key-rotation request
 	// (POST /rekey-all) and cleared when the agent re-registers its new WireGuard
 	// PUBLIC key (POST /rekey). It is a flag the agent observes via /config; it
 	// carries no key material. Like every other Node field it is persisted by both
 	// Store impls (it rides along on the whole-Node UpsertNode write).
 	RekeyRequested bool
+}
+
+// NodeCondition is one stored agent condition with a SERVER-stamped ObservedAt. It embeds the
+// reported model.Condition verbatim (type/status/reason/message/since) and adds the controller's
+// authoritative receipt time, so the panel orders/ages conditions by a clock the node cannot spoof
+// (the wire Since is advisory only). Persisted by both Store impls on the whole-Node write.
+type NodeCondition struct {
+	model.Condition
+	// ObservedAt is the controller wall-clock time SetAppliedGeneration recorded this condition.
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// stampConditions wraps each reported model.Condition with the controller's authoritative
+// ObservedAt. A nil/empty report clears the stored set (the latest report is the truth: an agent
+// that no longer reports a condition has it removed). The wire Since is carried through unchanged
+// (advisory); ObservedAt is the server clock. Shared by both Store impls so the server-stamp logic
+// is not duplicated.
+func stampConditions(conditions []model.Condition, observedAt time.Time) []NodeCondition {
+	if len(conditions) == 0 {
+		return nil
+	}
+	out := make([]NodeCondition, len(conditions))
+	for i, c := range conditions {
+		out[i] = NodeCondition{Condition: c, ObservedAt: observedAt}
+	}
+	return out
 }
 
 // TopologyRecord is the operator's stored topology for a tenant. The JSON is
@@ -430,9 +460,11 @@ type Store interface {
 	// ListNodes returns all nodes for the tenant (stable order by NodeID).
 	ListNodes(ctx context.Context, t TenantID) ([]Node, error)
 	// SetAppliedGeneration records what an agent reported applying (the applied
-	// generation, the manifest checksum, the free-form health string, and the agent's
-	// reported build version — "" from a legacy agent leaves the stored version unchanged).
-	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string) error
+	// generation, the manifest checksum, the free-form health string, the agent's
+	// reported build version — "" from a legacy agent leaves the stored version unchanged —
+	// and the structured conditions set, server-stamped with observedAt; a nil/empty
+	// conditions slice clears the stored set).
+	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 

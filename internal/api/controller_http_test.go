@@ -610,6 +610,34 @@ func TestControllerHTTP_HealthSurfaced(t *testing.T) {
 	}
 }
 
+// TestReport_OldPayloadNoConditions pins the plan-1 backward-compat contract: a legacy agent's
+// /report body that carries NO "conditions" field is accepted (200) and yields a nil Node.Conditions
+// — a conditions-unaware agent is never rejected, and its absent field never fabricates a condition.
+// Perpetual: any future /report wire edit that broke this would silently de-stabilize the fleet.
+func TestReport_OldPayloadNoConditions(t *testing.T) {
+	env := newCtlTestEnv(t)
+	node1Token := env.enrollNode(t, "node-1")
+	env.promoteSmallTopo(t)
+
+	// reportRequestJSON with Conditions unset marshals WITHOUT the "conditions" key (omitempty) —
+	// the exact legacy wire shape a pre-plan-1 agent sends.
+	if status := doJSON(t, http.MethodPost, env.agentURL("report"), node1Token, reportRequestJSON{
+		AppliedGeneration: 1,
+		Checksum:          "cafebabe",
+		Health:            "applied",
+	}, nil); status != http.StatusOK {
+		t.Fatalf("legacy report (no conditions): status %d, want 200", status)
+	}
+
+	node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if node.Conditions != nil {
+		t.Fatalf("legacy report must yield nil Node.Conditions, got %+v", node.Conditions)
+	}
+}
+
 // TestControllerHTTP_RekeyFlow exercises the fleet-wide key-rotation flow end-to-end
 // over the two muxes: the operator POSTs /rekey-all (flagging every APPROVED node),
 // the operator GET /nodes view and the agent GET /config response both surface

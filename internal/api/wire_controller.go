@@ -11,6 +11,7 @@ package api
 import (
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -58,6 +59,8 @@ type reportRequestJSON struct {
 	Health            string `json:"health"`
 	// AgentVersion is the reporting agent's build version (omitempty; "" from a legacy agent).
 	AgentVersion string `json:"agent_version,omitempty"`
+	// Conditions is the structured feedback set (plan-1); omitempty — absent from a legacy agent.
+	Conditions []model.Condition `json:"conditions,omitempty"`
 }
 
 // stageResponseJSON is the wire form of a stage result.

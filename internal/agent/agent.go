@@ -339,6 +339,9 @@ func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult
 			s.MembershipEpoch = prev.MembershipEpoch
 		}
 	}
+	// Structured feedback (plan-1): one configapply condition mirroring Health, additive to the
+	// existing Health string. Regenerated each cycle; not custody state.
+	s.Conditions = collectConditions(true, time.Now().UTC())
 	persistAndReport(cfg, s)
 }
 
@@ -372,6 +375,8 @@ func recordFailure(cfg *Config, prev *State, detail string) {
 	if s.NodeID == "" {
 		s.NodeID = cfg.NodeID
 	}
+	// Structured feedback (plan-1): one configapply condition mirroring the degraded Health.
+	s.Conditions = collectConditions(false, time.Now().UTC())
 	persistAndReport(cfg, s)
 }
 

@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // tokenHash returns the hex SHA-256 of a plaintext, matching the on-the-wire
@@ -647,7 +649,13 @@ func TestStoreAgentReports(t *testing.T) {
 				t.Fatalf("UpsertNode: %v", err)
 			}
 
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy", "v2.0.0-beta.1"); err != nil {
+			obsAt := time.Date(2026, 6, 8, 15, 29, 0, 0, time.UTC)
+			cond := model.Condition{
+				Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK,
+				Reason: "Applied", Message: "configuration applied", Since: "2026-06-08T15:28:00Z",
+			}
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy", "v2.0.0-beta.1",
+				[]model.Condition{cond}, obsAt); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 			seen := time.Date(2026, 6, 8, 15, 30, 0, 0, time.UTC)
@@ -674,10 +682,25 @@ func TestStoreAgentReports(t *testing.T) {
 			if !got.LastSeen.Equal(seen) {
 				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, seen)
 			}
+			// The structured condition round-trips, server-stamped with the passed ObservedAt (not
+			// the node's advisory Since). Pins plan-1's store-side conditions persistence in both impls.
+			if len(got.Conditions) != 1 {
+				t.Fatalf("Conditions length = %d, want 1", len(got.Conditions))
+			}
+			gc := got.Conditions[0]
+			if gc.Type != model.ConditionTypeConfigApply || gc.Status != model.ConditionStatusOK ||
+				gc.Reason != "Applied" || gc.Message != "configuration applied" || gc.Since != "2026-06-08T15:28:00Z" {
+				t.Fatalf("Condition payload not preserved: %+v", gc)
+			}
+			if !gc.ObservedAt.Equal(obsAt) {
+				t.Fatalf("ObservedAt = %v, want server-stamped %v", gc.ObservedAt, obsAt)
+			}
 
-			// A later report from a legacy (versionless) agent must NOT wipe the known version,
-			// while still advancing the generation. Pins the empty-agentVersion guard in both impls.
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 8, "checksum-8", "healthy", ""); err != nil {
+			// A later report from a legacy (versionless, conditionless) agent must NOT wipe the known
+			// version, while still advancing the generation; and a nil conditions report CLEARS the
+			// stored set (the latest report is the truth). Pins the empty-agentVersion guard + the
+			// conditions-clear semantics in both impls.
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 8, "checksum-8", "healthy", "", nil, seen); err != nil {
 				t.Fatalf("SetAppliedGeneration (empty version): %v", err)
 			}
 			got2, err := s.GetNode(ctx, tenant, "alpha")
@@ -689,6 +712,9 @@ func TestStoreAgentReports(t *testing.T) {
 			}
 			if got2.AppliedGeneration != 8 {
 				t.Fatalf("AppliedGeneration after second report = %d, want 8", got2.AppliedGeneration)
+			}
+			if got2.Conditions != nil {
+				t.Fatalf("nil conditions report must clear the stored set, got %+v", got2.Conditions)
 			}
 		})
 	}

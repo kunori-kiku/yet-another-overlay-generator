@@ -226,7 +226,9 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 	}
 
 	now := time.Now()
-	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health, req.AgentVersion); err != nil {
+	// Server-stamp the conditions' ObservedAt with the controller clock (inside the store): a node
+	// clock cannot be trusted for ordering/ageing, so req.Conditions carry only the advisory Since.
+	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health, req.AgentVersion, req.Conditions, now); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
