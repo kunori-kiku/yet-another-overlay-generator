@@ -61,5 +61,13 @@ func collectConditions(prev *State, ok bool, now time.Time) []model.Condition {
 	if c, has := sampleWireGuardCondition(now); has {
 		conds = append(conds, c)
 	}
+	if c, has := readMimicCondition(mimicBreadcrumbPath, now); has {
+		conds = append(conds, c)
+	}
 	return conds
 }
+
+// mimicBreadcrumbPath is where the agent reads install.sh's mimic-provisioning breadcrumb (plan-5).
+// Indirected through a package var so tests inject a fixture path without touching /var/lib; the
+// production default is model.MimicBreadcrumbPath (the same path install.sh writes).
+var mimicBreadcrumbPath = model.MimicBreadcrumbPath
