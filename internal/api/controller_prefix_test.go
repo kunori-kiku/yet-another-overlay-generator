@@ -127,7 +127,7 @@ func TestPrefixSplit_Normalization(t *testing.T) {
 		"a/b":        "/a/b",
 		"//s3cr3t//": "/s3cr3t",
 	} {
-		ch := NewControllerHandler(controller.NewMemStore(), testTenant, "", DefaultOperatorName)
+		ch := NewControllerHandler(controller.NewMemStore(), testTenant, "", DefaultOperatorName, "dev")
 		ch.SetOperatorPathPrefix(in)
 		ch.SetAgentPathPrefix(in)
 		if got, want := ch.OperatorBasePath(), seg+"/api/v1/operator/"; got != want {

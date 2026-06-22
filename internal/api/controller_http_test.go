@@ -73,7 +73,7 @@ func newCtlTestEnvWith(t *testing.T, configure func(*ControllerHandler)) *ctlTes
 	t.Helper()
 
 	store := controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	// Shrink the server-side /poll long-poll deadline so the timeout-204 path returns
 	// promptly instead of waiting the production ~55s. The server (not the client) is
 	// what produces the 204, so this is the right knob.
@@ -460,7 +460,7 @@ func TestControllerHTTP_NodeActsOnlyAsItself(t *testing.T) {
 // controller, and confirm /api/health responds with no Authorization header.
 func TestControllerHTTP_AirGapOpen(t *testing.T) {
 	srv := NewServer()
-	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	srv.EnableController(ch)
 
 	ts := httptest.NewServer(srv.Handler())

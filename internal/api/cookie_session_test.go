@@ -30,7 +30,7 @@ func newCookieEnv(t *testing.T, origins []string) *httptest.Server {
 	if err := store.PutOperator(context.Background(), testTenant, op); err != nil {
 		t.Fatalf("PutOperator: %v", err)
 	}
-	ch := NewControllerHandler(store, testTenant, "", DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, "", DefaultOperatorName, "dev")
 	ch.SetSecureCookie(false)
 	if len(origins) > 0 {
 		ch.SetPanelOrigins(origins)

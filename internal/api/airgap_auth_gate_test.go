@@ -49,7 +49,7 @@ func newGatedControllerServer(t *testing.T) *httptest.Server {
 	if err := store.PutOperator(context.Background(), testTenant, op); err != nil {
 		t.Fatalf("PutOperator: %v", err)
 	}
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	ch.SetSecureCookie(false)
 	s := NewServer()
 	s.EnableController(ch)

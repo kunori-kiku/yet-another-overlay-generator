@@ -335,7 +335,7 @@ func TestReleasePins_SSRFRefusesLoopback(t *testing.T) {
 // that confirms which internal IP a hostname resolves to. The inner err stays in the server log
 // (the wrapped cause), never on the wire.
 func TestFetchSidecar_ErrorBodyHidesResolvedIP(t *testing.T) {
-	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	ch.releaseClient = newReleasePinClient() // PRODUCTION egress-guarded client
 
 	// A hostname (NOT a literal IP) so the resolved IP is a NEW fact the response would disclose:

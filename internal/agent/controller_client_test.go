@@ -71,7 +71,7 @@ func newCtlEnv(t *testing.T) *ctlEnv {
 	t.Helper()
 
 	store := controller.NewMemStore()
-	ch := api.NewControllerHandler(store, testTenant, controller.HashToken(operatorPlaintext), api.DefaultOperatorName)
+	ch := api.NewControllerHandler(store, testTenant, controller.HashToken(operatorPlaintext), api.DefaultOperatorName, "dev")
 
 	agentMux := http.NewServeMux()
 	ch.RegisterAgentRoutes(agentMux)
