@@ -113,7 +113,7 @@ function SettingsForm({
           t(language, 'bootstrapSettings.agentReleaseBaseURL'),
           agentReleaseBaseURL,
           setAgentReleaseBaseURL,
-          'https://github.com/.../releases/latest/download',
+          'https://github.com/kunori-kiku/yet-another-overlay-generator/releases/latest/download',
           t(language, 'bootstrapSettings.whereThePerArch'),
         )}
       </div>

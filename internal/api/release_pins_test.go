@@ -136,6 +136,13 @@ func TestResolveReleaseBase(t *testing.T) {
 		{"no version keeps latest", latest, "", latest, false},
 		{"trailing slash trimmed", latest + "/", "v1.2.3", "https://github.com/o/r/releases/download/v1.2.3", true},
 		{"custom base ignores version", "https://mirror.local/agent", "v1.0.0", "https://mirror.local/agent", false},
+		// plan-9: the shipped DefaultMimicReleaseBase is a latest/download alias, so a version-bearing
+		// mimic assist tag-pins it (the one-click cannot stall on the moving latest alias); no version
+		// keeps the alias; a custom mirror base ignores version (the moving-alias custody contract).
+		{"default mimic base + bare version pins tag", controller.DefaultMimicReleaseBase, "1.4.0", "https://github.com/hack3ric/mimic/releases/download/v1.4.0", true},
+		{"default mimic base + v-version pins tag", controller.DefaultMimicReleaseBase, "v1.4.0", "https://github.com/hack3ric/mimic/releases/download/v1.4.0", true},
+		{"default mimic base + no version keeps latest", controller.DefaultMimicReleaseBase, "", controller.DefaultMimicReleaseBase, false},
+		{"mimic mirror base ignores version", "https://mirror/m", "1.4.0", "https://mirror/m", false},
 	}
 	for _, c := range cases {
 		gotBase, gotApplied := resolveReleaseBase(c.base, c.version)
@@ -251,6 +258,39 @@ func TestReleasePins_MimicHappyPath(t *testing.T) {
 	}
 	if got := resp.Resolved["bookworm-amd64"]; !strings.HasSuffix(got, "/yaog-mimic_1.0_amd64.deb.sha256") {
 		t.Errorf("resolved url = %q, want the .deb.sha256 sidecar path", got)
+	}
+}
+
+// TestReleasePins_MimicNoBaseUsesDefaultBase pins the plan-9 contract: a mimic assist with NO request
+// base falls back to the settings' MimicReleaseBase (which DefaultSettings/WithDefaults now always
+// fill) and PROCEEDS to fetch — it does NOT fail the base=="" guard. We seed the settings base with a
+// loopback stub (offline + deterministic) standing in for the shipped default; the literal upstream
+// default value + its tag-pinning are pinned by TestResolveReleaseBase and the controller settings_test,
+// and the end-to-end GET surfacing by handler_bootstrap_test.
+func TestReleasePins_MimicNoBaseUsesDefaultBase(t *testing.T) {
+	srv := newSidecarServer(t, testSidecarHash+"\n")
+	env := newCtlTestEnvWith(t, permissiveReleaseClient)
+	// A controller whose only configured base is the (stub) mimic release base — exactly the shape a
+	// defaulted controller has, minus the unreachable real github host.
+	if err := env.store.PutSettings(context.Background(), testTenant, controller.ControllerSettings{
+		MimicReleaseBase: srv.URL,
+	}); err != nil {
+		t.Fatalf("PutSettings: %v", err)
+	}
+
+	var resp releasePinResponseJSON
+	status := doJSON(t, http.MethodPost, env.opURL("release-pins"), testOperatorToken, releasePinRequestJSON{
+		Kind:   "mimic", // NO Base field — must fall back to the settings MimicReleaseBase
+		Assets: []releasePinAssetJSON{{Key: "bookworm-amd64", Asset: "yaog-mimic_1.0_amd64.deb"}},
+	}, &resp)
+	if status != http.StatusOK {
+		t.Fatalf("status %d, want 200 (a base-less mimic request must fall back to the settings base, not 400)", status)
+	}
+	if resp.Base != srv.URL {
+		t.Errorf("resp.Base = %q, want the settings default base %q", resp.Base, srv.URL)
+	}
+	if pin, ok := resp.Pins["bookworm-amd64"]; !ok || pin.SHA256 != testSidecarHash {
+		t.Fatalf("expected a pin from the default base fetch, got %+v", resp.Pins)
 	}
 }
 
@@ -408,7 +448,10 @@ func TestReleasePins_BadInput(t *testing.T) {
 	}{
 		{"unknown kind", releasePinRequestJSON{Kind: "weird", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "a"}}}, "kind"},
 		{"non-semver version", releasePinRequestJSON{Kind: "agent", Version: "not a version", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "yaog-agent-linux-amd64"}}}, "version"},
-		{"mimic without base", releasePinRequestJSON{Kind: "mimic", Assets: []releasePinAssetJSON{{Key: "bookworm-amd64", Asset: "mimic.deb"}}}, "base"},
+		// NOTE (plan-9): "mimic without base" is no longer a base error — DefaultSettings/WithDefaults now
+		// fill MimicReleaseBase with the upstream default, so a base-less mimic request resolves against
+		// it and proceeds to fetch (see TestReleasePins_MimicNoBaseUsesDefaultBase). The base=="" guard
+		// stays in the handler as defense-in-depth but is unreachable via the default-applied load path.
 		{"bad agent asset", releasePinRequestJSON{Kind: "agent", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "linux-amd64", Asset: "bad/asset"}}}, "assets.asset"},
 		{"bad agent key", releasePinRequestJSON{Kind: "agent", Base: "https://github.com/x", Assets: []releasePinAssetJSON{{Key: "win-amd64", Asset: "yaog-agent"}}}, "assets.key"},
 		{"mimic empty assets", releasePinRequestJSON{Kind: "mimic", Base: "https://github.com/x"}, "assets"},

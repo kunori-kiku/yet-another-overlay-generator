@@ -332,6 +332,11 @@ func TestBootstrapHTTP(t *testing.T) {
 	if got.PublicAgentURL != "" || got.AgentReleaseBaseURL != controller.DefaultAgentReleaseBaseURL {
 		t.Fatalf("default settings = %+v", got)
 	}
+	// plan-9: a never-configured controller also surfaces the default mimic release base end-to-end,
+	// so the .deb catalog assist has a working pre-fill instead of the assistNeedsBase hard error.
+	if got.MimicReleaseBase != controller.DefaultMimicReleaseBase {
+		t.Fatalf("default settings mimic base = %q, want %q", got.MimicReleaseBase, controller.DefaultMimicReleaseBase)
+	}
 
 	// POST invalid public_agent_url -> 400.
 	resp = opReq(http.MethodPost, "settings", `{"public_agent_url":"not a url"}`)

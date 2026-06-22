@@ -169,7 +169,7 @@ export const en = {
   'mimicCatalog.versionLabel': "Catalog version (optional)",
   'mimicCatalog.versionHint': "The mimic release version tag (e.g. v1.4.0). Optional, for your records.",
   'mimicCatalog.releaseBaseLabel': "Release base URL",
-  'mimicCatalog.releaseBaseHint': "Absolute http(s) URL the .deb assets are fetched from. Required when any package is set.",
+  'mimicCatalog.releaseBaseHint': "Absolute http(s) URL the .deb assets are fetched from. Defaults to the upstream mimic releases; upstream may not publish per-distro .deb assets, so Assist rows may need manual entry. Required when any package is set.",
   'mimicCatalog.fallbackDefaultLabel': "Mimic fallback default",
   'mimicCatalog.fallbackDefaultUnset': "Unset (fail closed)",
   'mimicCatalog.fallbackDefaultUdp': "Fall back to UDP",

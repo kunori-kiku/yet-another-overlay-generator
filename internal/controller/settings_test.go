@@ -34,6 +34,24 @@ func TestDefaultSettingsAndWithDefaults(t *testing.T) {
 		t.Errorf("WithDefaults overrode a set release URL: %q", got.AgentReleaseBaseURL)
 	}
 
+	// Mimic release base (plan-9): the default carries the upstream mimic latest-release base, and
+	// WithDefaults fills an empty one (legacy load) but never overrides an operator-set base.
+	if d.MimicReleaseBase != DefaultMimicReleaseBase {
+		t.Errorf("DefaultSettings mimic release base = %q, want %q", d.MimicReleaseBase, DefaultMimicReleaseBase)
+	}
+	if legacyBase := (ControllerSettings{}.WithDefaults()).MimicReleaseBase; legacyBase != DefaultMimicReleaseBase {
+		t.Errorf("WithDefaults did not fill empty mimic release base: %q", legacyBase)
+	}
+	if setBase := (ControllerSettings{MimicReleaseBase: "https://mirror/m"}.WithDefaults()).MimicReleaseBase; setBase != "https://mirror/m" {
+		t.Errorf("WithDefaults overrode a set mimic release base: %q", setBase)
+	}
+	// The default MUST use the "releases/latest/download" alias so a version-bearing assist can
+	// tag-pin it (resolveReleaseBase only rewrites a base ending in that alias). A regression to a
+	// pinned "download/v0.1.0" base would silently break mimic version-pinning.
+	if !strings.HasSuffix(DefaultMimicReleaseBase, "releases/latest/download") {
+		t.Errorf("DefaultMimicReleaseBase must end with the latest-download alias for tag-pinning, got %q", DefaultMimicReleaseBase)
+	}
+
 	// Translucency: default ON; WithDefaults fills a nil (legacy-load) value with true but
 	// preserves an explicit false (the absent-vs-false migration).
 	if d.Translucency == nil || !*d.Translucency {
