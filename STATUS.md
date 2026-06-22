@@ -12,8 +12,10 @@
   independently workflow-reviewed (4 lenses) → fixed at root → re-reviewed clean → CI green → merged
   (PRs #162–#173). plan-10 rolled the CHANGELOG (#171; the review caught that the beta.9 delta is the
   whole pre-rc.1 program PRs #137–#171, so the notes carry a full `Security` section + the air-gap
-  boundary change) and **published `v2.0.0-beta.9`** (a `--prerelease`, NOT Latest — `v2.0.0-beta.8`
-  stays Latest). The first tag push exposed a real **release.yml gate bug** (gate-e2e ran the
+  boundary change) and **published `v2.0.0-beta.9`**, then promoted it to **GitHub Latest** at the
+  owner's request (easier deploy — the `releases/latest/download` alias now resolves to beta.9;
+  promoting a release to Latest clears its prerelease flag, so beta.9 is a non-prerelease Latest and
+  beta.8 is demoted). The first tag push exposed a real **release.yml gate bug** (gate-e2e ran the
   non-blocking visual corpus AND built the panel without `VITE_E2E=1`, so the required ErrorBoundary
   spec deterministically failed) — fixed in **#173** (gate-e2e now mirrors ci.yml's required job), tag
   re-cut from the green tip, `release.yml` + `docker.yml` green, all 29 assets present (7 bundles, 7
