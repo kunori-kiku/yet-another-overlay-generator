@@ -30,7 +30,7 @@ export function conditionLabel(c: NodeCondition): string {
   return c.reason ? `${c.type}: ${c.reason}` : c.type;
 }
 
-// conditionWire is the snake_case operator wire shape (controller conditionJSON). It is mapped to the
+// ConditionWire is the snake_case operator wire shape (controller conditionJSON). It is mapped to the
 // camelCase NodeCondition by mapNodeConditions; kept here so the mapping + its test live in one place.
 export interface ConditionWire {
   type: string;
