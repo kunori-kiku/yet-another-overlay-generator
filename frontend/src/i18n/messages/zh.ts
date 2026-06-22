@@ -157,7 +157,7 @@ export const zh: Record<keyof typeof en, string> = {
   'mimicCatalog.versionLabel': "目录版本（可选）",
   'mimicCatalog.versionHint': "mimic 发布版本标签（如 v1.4.0）。可选，仅供记录。",
   'mimicCatalog.releaseBaseLabel': "发布基址 URL",
-  'mimicCatalog.releaseBaseHint': "下载 .deb 资产的绝对 http(s) URL。配置了任意包时必填。",
+  'mimicCatalog.releaseBaseHint': "下载 .deb 资产的绝对 http(s) URL。默认指向上游 mimic 发布；上游可能未发布各发行版的 .deb 资产，因此 Assist 行可能需手动填写。配置了任意包时必填。",
   'mimicCatalog.fallbackDefaultLabel': "Mimic 回退默认",
   'mimicCatalog.fallbackDefaultUnset': "未设置（失败即停）",
   'mimicCatalog.fallbackDefaultUdp': "回退到 UDP",

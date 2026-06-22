@@ -224,7 +224,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
               setReleaseBase(e.target.value);
               dirty();
             }}
-            placeholder="https://github.com/.../releases/download/v1.4.0"
+            placeholder="https://github.com/hack3ric/mimic/releases/latest/download"
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
           />
           <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'mimicCatalog.releaseBaseHint')}</p>
