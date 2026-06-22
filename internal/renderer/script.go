@@ -73,6 +73,61 @@ type InstallScriptConfig struct {
 	// byte-identical to the pre-FetchSettings output (air-gap byte-identity). Set by the
 	// signed renderer after buildInstallScriptConfig, mirroring SigningPubkeyPEM.
 	Fetch model.InstallFetch
+	// MimicFallbackUDP is the per-node resolved mimic fallback policy (plan-5): true when EVERY mimic
+	// link on this node resolves to "udp" (plan-4), so a mimic-provisioning failure (kernel lacks
+	// eBPF / unit start fails / binary missing) SKIPS mimic and brings WireGuard up as plain UDP
+	// instead of aborting. False (the default, incl. policy "none"/inherit-off, AND any mixed node —
+	// fail-closed wins) preserves the fail-closed abort. Only meaningful when HasMimic is true.
+	MimicFallbackUDP bool
+	// MimicBreadcrumb carries the breadcrumb contract constants (path + the closed MimicOutcome*
+	// tokens) install.sh writes, sourced from model so the script and the agent reader share one
+	// source of truth. Only referenced inside the {{ if .HasMimic }} block, so a non-mimic node's
+	// install.sh is byte-identical to pre-plan-5.
+	MimicBreadcrumb MimicBreadcrumbData
+}
+
+// MimicBreadcrumbData carries the mimic-provisioning breadcrumb contract for the install template:
+// the path install.sh writes the marker to, and the closed-enum outcome tokens (model.MimicOutcome*).
+// Sourced from package model so the script writer and the agent reader (plan-5) cannot drift.
+type MimicBreadcrumbData struct {
+	Path          string
+	Active        string
+	KernelTooOld  string
+	EbpfLoad      string
+	InstallFailed string
+	FellBackToUDP string
+}
+
+// newMimicBreadcrumbData returns the breadcrumb constants from package model (single source of truth).
+func newMimicBreadcrumbData() MimicBreadcrumbData {
+	return MimicBreadcrumbData{
+		Path:          model.MimicBreadcrumbPath,
+		Active:        model.MimicOutcomeActive,
+		KernelTooOld:  model.MimicOutcomeKernelTooOld,
+		EbpfLoad:      model.MimicOutcomeEbpfLoad,
+		InstallFailed: model.MimicOutcomeInstallFailed,
+		FellBackToUDP: model.MimicOutcomeFellBackToUDP,
+	}
+}
+
+// resolveMimicFallbackUDP reports whether this node's mimic provisioning may fall back to plain UDP.
+// True only when EVERY mimic link (p.Mimic) resolves to the "udp" policy (plan-4 PeerInfo.MimicFallback);
+// a single "none" mimic link forces fail-closed for the whole node, since one shared mimic@<egress>
+// unit serves all this node's mimic ports and partial fallback is not representable — fail-closed must
+// win so a "none" link is never silently de-cloaked by a sibling "udp" link. A node with no mimic link
+// returns false (no fallback branch rendered).
+func resolveMimicFallbackUDP(peers []compiler.PeerInfo) bool {
+	any := false
+	for _, p := range peers {
+		if !p.Mimic {
+			continue
+		}
+		any = true
+		if p.MimicFallback != "udp" {
+			return false
+		}
+	}
+	return any
 }
 
 // WgIfaceInfo describes a single WireGuard interface.
@@ -442,6 +497,19 @@ ensure_cmd babeld babeld
 # above), so reading it here is not a trust boundary; the download is verified against that pin
 # and FAILS CLOSED under set -e. GH_PROXY is shell-escaped (shq) at generation time.
 GH_PROXY={{ shq .Fetch.GithubProxy }}
+# mimic-provisioning outcome breadcrumb (plan-5): a small Go-constant-keyed JSON marker the agent
+# reads to emit the mimic Node Condition. Only the OUTCOME token (a fixed shell literal from a Go
+# constant) and the kernel-derived egress NIC (set in Phase 3; empty here) are interpolated — never
+# captured stderr / node name / upstream text (PRINCIPLES root-script safety).
+mkdir -p /var/lib/yaog-agent
+_mimic_breadcrumb() {
+    printf '{"outcome":"%s","egress":"%s","ts":"%s"}\n' \
+        "$1" "${MIMIC_EGRESS_IF:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > {{ shq .MimicBreadcrumb.Path }}
+}
+# _MIMIC_SKIP is set when the mimic binary could not be installed AND policy=udp, so the Phase-3
+# provisioning block skips mimic and the link comes up as plain UDP. Empty = provision normally.
+_MIMIC_SKIP=
 if ! command -v mimic >/dev/null 2>&1 && [ -n "$YAOG_PM" ]; then
     _pm_install mimic || true
 fi
@@ -482,7 +550,18 @@ if ! command -v mimic >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y "$_mimic_deb"
     rm -f "$_mimic_deb"
 fi
-command -v mimic >/dev/null 2>&1 || { echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2; exit 1; }
+if ! command -v mimic >/dev/null 2>&1; then
+{{ if .MimicFallbackUDP -}}
+    # policy=udp: the mimic binary is unavailable — skip mimic, bring the link up as plain UDP.
+    echo "WARNING: mimic still missing after distro + GitHub .deb fallback; falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
+    _MIMIC_SKIP=1
+{{ else -}}
+    echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
+    exit 1
+{{ end -}}
+fi
 # Kernel/eBPF sanity: mimic is an eBPF (TC/XDP) program; warn early if BPF looks absent.
 if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
     echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
@@ -698,6 +777,12 @@ echo "  IPv4 forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
 # mimic attaches to the EGRESS NIC (the default-route interface), NOT the wg interface; the
 # egress if/ip are not known at compile time, so detect them here at runtime. YAOG only supplies
 # the mimic listen-port set via the template.
+if [ -n "${_MIMIC_SKIP:-}" ]; then
+# The mimic binary could not be installed and this node's policy is udp — skip provisioning; the
+# WireGuard interfaces come up as plain UDP below (install_failed was breadcrumbed in the deps phase).
+echo "Skipping mimic provisioning; falling back to plain UDP" >&2
+_mimic_breadcrumb {{ shq .MimicBreadcrumb.FellBackToUDP }}
+else
 echo "Provisioning mimic TCP-shaping transport..."
 MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
 MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
@@ -706,9 +791,21 @@ if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
     exit 1
 fi
 echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
-mkdir -p /etc/mimic
+# eBPF gate: mimic is an eBPF (TC/XDP) program — a kernel without BPF cannot run it. This is the
+# kernel-too-old case (the dominant mimic-failure mode the per-link fallback policy guards).
+if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+{{ if .MimicFallbackUDP -}}
+    echo "WARNING: kernel lacks eBPF/bpffs; mimic unavailable — falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.KernelTooOld }}
+{{ else -}}
+    echo "ERROR: kernel lacks eBPF/bpffs; mimic required by this link's policy (no fallback)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.KernelTooOld }}
+    exit 1
+{{ end -}}
+else
 # One filter per mimic listen port on this node; all OR'ed by mimic. xdp_mode is operator-selectable
 # per node (default skb for portability; native opt-in via Node.xdp_mode) — see mimic.md.
+mkdir -p /etc/mimic
 {
     {{ range .MimicPorts -}}
     echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
@@ -718,8 +815,24 @@ mkdir -p /etc/mimic
 echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
 # The distro mimic package ships mimic@<iface>.service (Requires=modprobe@mimic.service, so the
 # kernel module auto-loads). Enable+start it on the egress NIC before WireGuard comes up.
-systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"
-echo "  Started mimic@${MIMIC_EGRESS_IF}"
+if systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
+    echo "  Started mimic@${MIMIC_EGRESS_IF}"
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+else
+{{ if .MimicFallbackUDP -}}
+    echo "WARNING: mimic@${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
+    # De-provision the half-applied filter so no orphaned mimic shaping survives on a UDP link.
+    systemctl disable --now "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true
+    rm -f "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EbpfLoad }}
+{{ else -}}
+    echo "ERROR: mimic@${MIMIC_EGRESS_IF} failed to start; mimic required by this link's policy (no fallback)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EbpfLoad }}
+    exit 1
+{{ end -}}
+fi
+fi
+fi
 {{ end -}}
 
 # Start all WireGuard per-peer interfaces
@@ -871,21 +984,23 @@ func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBa
 	mimicPorts := collectMimicPorts(peers)
 
 	config := InstallScriptConfig{
-		NodeName:       node.Name,
-		NodeNameQuoted: bashSingleQuote(node.Name),
-		NodeRole:       node.Role,
-		Platform:       node.Platform,
-		OverlayIP:      node.OverlayIP,
-		TransitCIDRs:   resolvedTransitCIDRs,
-		MTU:            node.MTU,
-		HasBabel:       hasBabel,
-		HasForward:     node.Capabilities.CanForward,
-		HasMimic:       len(mimicPorts) > 0,
-		MimicPorts:     mimicPorts,
-		MimicXDPMode:   resolveMimicXDPMode(node.XDPMode),
-		WgInterfaces:   wgIfaces,
-		BabelConfName:  "babeld.conf",
-		SysctlConfName: "99-overlay.conf",
+		NodeName:         node.Name,
+		NodeNameQuoted:   bashSingleQuote(node.Name),
+		NodeRole:         node.Role,
+		Platform:         node.Platform,
+		OverlayIP:        node.OverlayIP,
+		TransitCIDRs:     resolvedTransitCIDRs,
+		MTU:              node.MTU,
+		HasBabel:         hasBabel,
+		HasForward:       node.Capabilities.CanForward,
+		HasMimic:         len(mimicPorts) > 0,
+		MimicPorts:       mimicPorts,
+		MimicXDPMode:     resolveMimicXDPMode(node.XDPMode),
+		MimicFallbackUDP: resolveMimicFallbackUDP(peers),
+		MimicBreadcrumb:  newMimicBreadcrumbData(),
+		WgInterfaces:     wgIfaces,
+		BabelConfName:    "babeld.conf",
+		SysctlConfName:   "99-overlay.conf",
 	}
 
 	if config.Platform == "" {
@@ -988,6 +1103,10 @@ type ClientInstallScriptConfig struct {
 	HasMimic     bool
 	MimicPorts   []int
 	MimicXDPMode string // normalized xdp_mode ("skb"/"native"), see InstallScriptConfig
+	// MimicFallbackUDP / MimicBreadcrumb: same semantics as InstallScriptConfig (plan-5). The client
+	// has a single wg0 link, so the per-node resolution collapses to that link's policy.
+	MimicFallbackUDP bool
+	MimicBreadcrumb  MimicBreadcrumbData
 	// SigningPubkeyPEM is the pinned Ed25519 verifying public key (PEM) for bundle-signature
 	// verification; same semantics as InstallScriptConfig.SigningPubkeyPEM. Empty when signing is
 	// off (opt-in), keeping the client install.sh byte-identical to the pre-signing output.
@@ -1269,6 +1388,19 @@ ensure_cmd openssl  openssl
 # transport="tcp". YAOG ships no mimic binary. Distro-first, else a SHA-256-PINNED GitHub .deb
 # whose pin lives in the integrity-verified artifacts.json (mirrors the per-peer install.sh).
 GH_PROXY={{ shq .Fetch.GithubProxy }}
+# mimic-provisioning outcome breadcrumb (plan-5): a small Go-constant-keyed JSON marker the agent
+# reads to emit the mimic Node Condition. Only the OUTCOME token (a fixed shell literal from a Go
+# constant) and the kernel-derived egress NIC (set in Phase 3; empty here) are interpolated — never
+# captured stderr / node name / upstream text (PRINCIPLES root-script safety).
+mkdir -p /var/lib/yaog-agent
+_mimic_breadcrumb() {
+    printf '{"outcome":"%s","egress":"%s","ts":"%s"}\n' \
+        "$1" "${MIMIC_EGRESS_IF:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > {{ shq .MimicBreadcrumb.Path }}
+}
+# _MIMIC_SKIP is set when the mimic binary could not be installed AND policy=udp, so the Phase-3
+# provisioning block skips mimic and the link comes up as plain UDP. Empty = provision normally.
+_MIMIC_SKIP=
 if ! command -v mimic >/dev/null 2>&1 && [ -n "$YAOG_PM" ]; then
     _pm_install mimic || true
 fi
@@ -1305,7 +1437,18 @@ if ! command -v mimic >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y "$_mimic_deb"
     rm -f "$_mimic_deb"
 fi
-command -v mimic >/dev/null 2>&1 || { echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2; exit 1; }
+if ! command -v mimic >/dev/null 2>&1; then
+{{ if .MimicFallbackUDP -}}
+    # policy=udp: the mimic binary is unavailable — skip mimic, bring the link up as plain UDP.
+    echo "WARNING: mimic still missing after distro + GitHub .deb fallback; falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
+    _MIMIC_SKIP=1
+{{ else -}}
+    echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
+    exit 1
+{{ end -}}
+fi
 if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
     echo "WARNING: eBPF/BPF filesystem not detected; mimic requires kernel eBPF support" >&2
 fi
@@ -1390,6 +1533,12 @@ sysctl --system > /dev/null 2>&1
 {{ if .HasMimic -}}
 # Provision mimic TCP-shaping transport BEFORE bringing wg0 up (docs/spec/artifacts/mimic.md
 # «Ordering»). mimic attaches to the EGRESS NIC, detected at runtime; YAOG supplies the port set.
+if [ -n "${_MIMIC_SKIP:-}" ]; then
+# The mimic binary could not be installed and policy is udp — skip provisioning; wg0 comes up as
+# plain UDP below (the install_failed breadcrumb was written in the deps phase).
+echo "Skipping mimic provisioning; falling back to plain UDP" >&2
+_mimic_breadcrumb {{ shq .MimicBreadcrumb.FellBackToUDP }}
+else
 echo "Provisioning mimic TCP-shaping transport..."
 MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
 MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
@@ -1398,6 +1547,17 @@ if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
     exit 1
 fi
 echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
+# eBPF gate: mimic is an eBPF (TC/XDP) program — a kernel without BPF cannot run it (kernel-too-old).
+if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
+{{ if .MimicFallbackUDP -}}
+    echo "WARNING: kernel lacks eBPF/bpffs; mimic unavailable — falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.KernelTooOld }}
+{{ else -}}
+    echo "ERROR: kernel lacks eBPF/bpffs; mimic required by this link's policy (no fallback)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.KernelTooOld }}
+    exit 1
+{{ end -}}
+else
 mkdir -p /etc/mimic
 {
     {{ range .MimicPorts -}}
@@ -1406,8 +1566,23 @@ mkdir -p /etc/mimic
     echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
 echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
-systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"
-echo "  Started mimic@${MIMIC_EGRESS_IF}"
+if systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
+    echo "  Started mimic@${MIMIC_EGRESS_IF}"
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+else
+{{ if .MimicFallbackUDP -}}
+    echo "WARNING: mimic@${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
+    systemctl disable --now "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true
+    rm -f "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EbpfLoad }}
+{{ else -}}
+    echo "ERROR: mimic@${MIMIC_EGRESS_IF} failed to start; mimic required by this link's policy (no fallback)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EbpfLoad }}
+    exit 1
+{{ end -}}
+fi
+fi
+fi
 {{ end -}}
 
 # Start WireGuard wg0
@@ -1469,23 +1644,26 @@ func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, 
 // signed client renderers. SigningPubkeyPEM is left empty here; signed callers set it after.
 func buildClientInstallScriptConfig(node *model.Node, clientInfo []*compiler.ClientPeerInfo) ClientInstallScriptConfig {
 	config := ClientInstallScriptConfig{
-		NodeName:       node.Name,
-		NodeNameQuoted: bashSingleQuote(node.Name),
-		NodeRole:       node.Role,
-		Platform:       node.Platform,
-		OverlayIP:      node.OverlayIP,
-		MTU:            node.MTU,
-		MimicXDPMode:   resolveMimicXDPMode(node.XDPMode),
-		SysctlConfName: "99-overlay.conf",
+		NodeName:        node.Name,
+		NodeNameQuoted:  bashSingleQuote(node.Name),
+		NodeRole:        node.Role,
+		Platform:        node.Platform,
+		OverlayIP:       node.OverlayIP,
+		MTU:             node.MTU,
+		MimicXDPMode:    resolveMimicXDPMode(node.XDPMode),
+		MimicBreadcrumb: newMimicBreadcrumbData(),
+		SysctlConfName:  "99-overlay.conf",
 	}
 
 	// The client wg0 is a single link: if its transport=="tcp" (Mimic==true) and the listen port is
-	// valid, wire in mimic, with the filter port being that wg0's listen port.
+	// valid, wire in mimic, with the filter port being that wg0's listen port. The per-node fallback
+	// policy collapses to this one link's resolved policy (plan-5).
 	if len(clientInfo) > 0 && clientInfo[0] != nil {
 		ci := clientInfo[0]
 		if ci.Mimic && ci.ListenPort > 0 {
 			config.HasMimic = true
 			config.MimicPorts = []int{ci.ListenPort}
+			config.MimicFallbackUDP = ci.MimicFallback == "udp"
 		}
 	}
 

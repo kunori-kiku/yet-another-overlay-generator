@@ -30,3 +30,22 @@ type InstallFetch struct {
 	// template boundary before being baked as GH_PROXY.
 	GithubProxy string
 }
+
+// MimicBreadcrumbPath is the absolute path install.sh writes the mimic-provisioning outcome
+// breadcrumb to (a small JSON marker keyed by the MimicOutcome* Go constants below — never raw
+// stderr). The agent reads it each cycle to emit the `mimic` Node Condition (plan-5). It lives
+// outside the bundle (host-local mutable state) so it survives re-applies, mirroring the agent state
+// dir. install.sh creates the directory 0700 under root. See docs/spec/artifacts/mimic.md (UDP
+// fallback). A node with no tcp (mimic) link never writes it ⇒ the agent reads ENOENT ⇒ no condition.
+const MimicBreadcrumbPath = "/var/lib/yaog-agent/mimic-status.json"
+
+// MimicOutcome* are the closed-enum outcome codes install.sh writes into the breadcrumb's "outcome"
+// field. They are the ONLY values the script emits; the agent's classifyMimic maps each to a
+// Condition reason. Adding a value here is a coordinated script+agent change (the contract is closed).
+const (
+	MimicOutcomeActive        = "active"           // mimic provisioned + mimic@<egress> started
+	MimicOutcomeKernelTooOld  = "kernel_too_old"   // eBPF/bpffs absent → mimic cannot load
+	MimicOutcomeEbpfLoad      = "ebpf_load_failed" // mimic@<egress> failed to start (eBPF attach or unit-start error)
+	MimicOutcomeInstallFailed = "install_failed"   // distro pkg + pinned .deb both failed
+	MimicOutcomeFellBackToUDP = "fell_back_to_udp" // policy=udp: skipped mimic, link up as plain UDP
+)

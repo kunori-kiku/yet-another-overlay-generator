@@ -125,12 +125,40 @@ and the default deploy is unchanged.
 - **Kernel/eBPF required**: the `mimic` kernel module is loaded by the packaged systemd unit's
   `Requires=modprobe@mimic.service` (verified in `mimic@.service`), so enabling `mimic@<egress>`
   pulls the module in at start and at boot — an explicit `/etc/modules-load.d` entry is not
-  required. The installer additionally emits an advisory eBPF/bpffs check; the **authoritative gate**
-  is that `systemctl enable --now mimic@<egress>` runs under `set -euo pipefail`, so on a kernel
-  without eBPF the service fails to start and the install aborts (a clear, hard failure).
+  required. The installer emits an explicit eBPF/bpffs gate plus a branch on the unit-start result;
+  on a kernel without eBPF the link either fails closed (the install aborts — a clear, hard failure)
+  or falls back to plain UDP, per the per-link policy below.
 - **Ordering**: mimic is provisioned and `mimic@<egress>` is started **before** `wg-quick up`, so the
   shaping is in place when the tunnel comes up. Uninstall stops/disables `mimic@<egress>`, removes
   its config, and detaches.
+
+## UDP fallback (per-link policy)
+
+Mimic needs a recent kernel (eBPF). When it cannot be provisioned, a link can either **fail closed**
+(preserving mimic's censorship-evasion guarantee) or **fall back to plain UDP** (so a too-old kernel
+does not block connectivity). This is a **per-link policy** (`Edge.mimic_fallback`: `""` inherit /
+`"udp"` / `"none"`) inheriting a **fleet-wide default** (`ControllerSettings.mimic_fallback_default`,
+shipped `"none"`); the compiler resolves the effective per-link value into `PeerInfo.MimicFallback`.
+
+- **Per-node resolution (all-udp-or-fail-closed).** mimic provisioning is per-NODE (one shared
+  `mimic@<egress>` unit serves all the node's mimic ports), but the policy is per-link. The installer
+  falls back to UDP only when **every** mimic link on the node resolves to `"udp"`; a single `"none"`
+  link forces fail-closed for the whole node, so a `"none"` link is never silently de-cloaked by a
+  sibling `"udp"` link.
+- **Failure categories.** The installer detects, with explicit checks: `kernel_too_old` (no
+  eBPF/bpffs), `ebpf_load_failed` (`mimic@<egress>` failed to start), `install_failed` (distro pkg +
+  pinned `.deb` both unavailable), and `fell_back_to_udp` (skipped mimic, link up as UDP); the success
+  case is `active`. A `.deb` download/integrity FAILURE always fails closed regardless of policy — we
+  never proceed past a failed SHA-256 verify, nor silently mask it as a de-cloak.
+- **Breadcrumb → Node Condition.** The installer writes the outcome to a small JSON marker at
+  `/var/lib/yaog-agent/mimic-status.json` (`model.MimicBreadcrumbPath`), keyed by the closed Go
+  constants `model.MimicOutcome*` — never raw stderr. The agent reads it each cycle and emits a
+  structured `mimic` Node Condition (`KernelTooOld` / `EbpfLoadFailed` / `InstallFailed` /
+  `FellBackToUDP` / `Active`) with a curated one-line message, so the panel shows *why* mimic is down
+  without a log dump. A fallback is always a `warn` condition (it de-cloaks the link — surface it).
+- **Deployable in both branches.** On fallback the link comes up as plain UDP (endpoint/port are
+  mimic-independent; the MTU−12 conf is conservative-safe for UDP), and any half-applied mimic filter
+  is de-provisioned so no orphaned shaping survives.
 
 ## Verification
 
