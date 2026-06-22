@@ -337,6 +337,30 @@ export function EdgeEditor() {
               {t(language, 'mimicHint')}
             </p>
           )}
+          {/* Per-link mimic UDP-fallback policy (plan-6), shown only for a tcp (mimic) link. '' clears
+              back to inherit (omit from JSON ⇒ back-compat); 'udp'/'none' are pure renderer policy and
+              touch no allocation pin. The Subject-2 small-screen gate is structural: EdgeEditor is
+              never mounted below lg (DesignPage), so a gated read-only canvas cannot reach updateEdge. */}
+          {selectedEdge.transport === 'tcp' && (
+            <div className="mt-2">
+              <label className="text-xs text-gray-400">{t(language, 'edgeEditor.mimicFallback')}</label>
+              <select
+                value={selectedEdge.mimic_fallback ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  updateEdge(selectedEdge.id, {
+                    mimic_fallback: v === '' ? undefined : (v as 'udp' | 'none'),
+                  });
+                }}
+                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+              >
+                <option value="">{t(language, 'edgeEditor.mimicFallbackInherit')}</option>
+                <option value="udp">{t(language, 'edgeEditor.mimicFallbackUdp')}</option>
+                <option value="none">{t(language, 'edgeEditor.mimicFallbackNone')}</option>
+              </select>
+              <p className="mt-0.5 text-[10px] text-gray-500">{t(language, 'edgeEditor.mimicFallbackHint')}</p>
+            </div>
+          )}
         </div>
         {/* Link role (edge.md parallel links): empty = primary class; backup = an independent
             backup link. Changing the role changes the link identity (it re-keys: a backup's LinkKey

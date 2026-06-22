@@ -69,6 +69,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
 
   const [version, setVersion] = useState(initial.mimicVersion);
   const [releaseBase, setReleaseBase] = useState(initial.mimicReleaseBase);
+  // Fleet-wide mimic UDP-fallback default a link inherits (plan-6): '' inherit/unset (fail closed) /
+  // 'udp' / 'none'. A string tri-state mirroring the Go ControllerSettings.MimicFallbackDefault.
+  const [fallbackDefault, setFallbackDefault] = useState(initial.mimicFallbackDefault);
   // Seed the id counter to the initial row count (no ref write during render); addRow advances it
   // in its event handler. Initial rows get ids 0..n-1 by index.
   const nextId = useRef(Object.keys(initial.mimicDebs).length);
@@ -182,6 +185,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       mimicVersion: version.trim(),
       mimicReleaseBase: releaseBase.trim(),
       mimicDebs: filledDebs(),
+      mimicFallbackDefault: fallbackDefault,
     });
     if (err) {
       setLocalError(err);
@@ -224,6 +228,22 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
           />
           <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'mimicCatalog.releaseBaseHint')}</p>
+        </div>
+        <div>
+          <label className="text-xs text-gray-400">{t(language, 'mimicCatalog.fallbackDefaultLabel')}</label>
+          <select
+            value={fallbackDefault}
+            onChange={(e) => {
+              setFallbackDefault(e.target.value);
+              dirty();
+            }}
+            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+          >
+            <option value="">{t(language, 'mimicCatalog.fallbackDefaultUnset')}</option>
+            <option value="udp">{t(language, 'mimicCatalog.fallbackDefaultUdp')}</option>
+            <option value="none">{t(language, 'mimicCatalog.fallbackDefaultNone')}</option>
+          </select>
+          <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'mimicCatalog.fallbackDefaultHint')}</p>
         </div>
       </div>
 

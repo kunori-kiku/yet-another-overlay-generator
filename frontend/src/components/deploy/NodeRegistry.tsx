@@ -115,7 +115,7 @@ function nodeCells(
       // plan-2: the structured conditions strip — the curated channel that supersedes string-matching
       // the free-form health line. Renders nothing (NodeConditions returns null) when the node has none.
       labelKey: 'nodeRegistry.conditions',
-      value: <NodeConditions conditions={n.conditions} />,
+      value: <NodeConditions conditions={n.conditions} language={language} />,
     },
     {
       labelKey: 'nodeRegistry.agentVersion',
