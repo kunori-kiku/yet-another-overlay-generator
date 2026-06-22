@@ -157,7 +157,7 @@ func serveController(cfg controllerConfig) error {
 		opTokenHash = controller.HashToken(cfg.operatorToken)
 	}
 
-	ch := api.NewControllerHandler(store, tid, opTokenHash, api.DefaultOperatorName)
+	ch := api.NewControllerHandler(store, tid, opTokenHash, api.DefaultOperatorName, "dev")
 	ch.SetSecureCookie(cfg.secureCookie)
 
 	// Pre-mint ONE single-use enrollment token for the configured node, straight to the

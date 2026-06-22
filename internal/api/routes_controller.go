@@ -70,22 +70,34 @@ type ControllerHandler struct {
 	// test can inject a permissive client pointed at a loopback test server — the production
 	// guard rejects loopback by design, so the happy path cannot be exercised through it.
 	releaseClient *http.Client
+	// version is the controller's build version (cmd/server main.BuildVersion, stamped at release
+	// link time via -ldflags -X; "dev" for a non-release build). Threaded in at construction
+	// (immutable, never a runtime setter) and surfaced ONLY on the AUTHENTICATED operator /session
+	// response — never on an anonymous surface beyond /api/health. The panel reads it to display the
+	// controller version and (plan-8) to default the agent-rollout target + reject a target newer
+	// than the controller. Empty is normalized to "dev" by the constructor.
+	version string
 }
 
 // NewControllerHandler builds a ControllerHandler. operatorTokenHash is the hex
 // SHA-256 of the operator's bearer token (callers hash the plaintext via
 // controller.HashToken; the plaintext never reaches the handler). operatorName
 // defaults to DefaultOperatorName when empty; the poll deadline defaults to
-// defaultPollDeadline.
-func NewControllerHandler(store controller.Store, tenant controller.TenantID, operatorTokenHash, operatorName string) *ControllerHandler {
+// defaultPollDeadline. buildVersion is the controller build version surfaced on the
+// operator session (normalized to "dev" when empty).
+func NewControllerHandler(store controller.Store, tenant controller.TenantID, operatorTokenHash, operatorName, buildVersion string) *ControllerHandler {
 	if operatorName == "" {
 		operatorName = DefaultOperatorName
+	}
+	if buildVersion == "" {
+		buildVersion = "dev"
 	}
 	return &ControllerHandler{
 		store:             store,
 		tenant:            tenant,
 		operatorTokenHash: operatorTokenHash,
 		operatorName:      operatorName,
+		version:           buildVersion,
 		loginLimiter:      newLoginLimiter(),
 		enrollLimiter:     newLimiter(maxEnrollFailures, loginWindow),
 		sessionTTL:        controller.DefaultSessionTTL,

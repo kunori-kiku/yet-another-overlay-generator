@@ -214,7 +214,7 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 		}
 	}
 
-	ch := api.NewControllerHandler(store, controller.TenantID(tenant), opTokenHash, api.DefaultOperatorName)
+	ch := api.NewControllerHandler(store, controller.TenantID(tenant), opTokenHash, api.DefaultOperatorName, BuildVersion)
 	ch.SetOperatorPathPrefix(os.Getenv(envOperatorPathPrefix))
 	ch.SetAgentPathPrefix(os.Getenv(envAgentPathPrefix))
 	// Credentialed-CORS allowlist for cross-origin panel hosting (cookie auth). Empty =

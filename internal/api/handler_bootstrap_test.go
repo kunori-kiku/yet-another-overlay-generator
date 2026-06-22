@@ -244,7 +244,7 @@ func TestRenderBootstrapScript_SafeShellForms(t *testing.T) {
 // (unauthenticated) agent GET /bootstrap.
 func TestBootstrapHTTP(t *testing.T) {
 	store := controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	opMux := http.NewServeMux()
 	ch.RegisterOperatorRoutes(opMux)
 	agentMux := http.NewServeMux()
@@ -337,7 +337,7 @@ func TestBootstrapHTTP(t *testing.T) {
 // bootstrap script (it is a panel-appearance setting with no bearing on a node).
 func TestSettingsTranslucencyRoundTrip(t *testing.T) {
 	store := controller.NewMemStore()
-	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	opMux := http.NewServeMux()
 	ch.RegisterOperatorRoutes(opMux)
 	agentMux := http.NewServeMux()

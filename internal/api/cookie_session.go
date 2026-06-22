@@ -135,6 +135,11 @@ type sessionResponseJSON struct {
 	Operator  string `json:"operator"`
 	ExpiresAt string `json:"expires_at"`
 	CSRFToken string `json:"csrf_token"`
+	// ControllerVersion is the controller's build version (handler.version; "dev" for a non-release
+	// build). Surfaced ONLY here on the AUTHENTICATED operator session — never on /api/health or any
+	// anonymous surface. The panel displays it and (plan-8) uses it to default the agent-rollout
+	// target + reject a target newer than the controller. omitempty: additive wire shape.
+	ControllerVersion string `json:"controller_version,omitempty"`
 }
 
 // HandleSession reports the current operator session (operator-authed via Bearer OR
@@ -164,7 +169,7 @@ func (h *ControllerHandler) HandleSession(w http.ResponseWriter, r *http.Request
 	if c, err := r.Cookie(csrfCookieName); err == nil {
 		csrf = c.Value
 	}
-	writeJSON(w, http.StatusOK, sessionResponseJSON{Operator: operator, ExpiresAt: expiresAt, CSRFToken: csrf})
+	writeJSON(w, http.StatusOK, sessionResponseJSON{Operator: operator, ExpiresAt: expiresAt, CSRFToken: csrf, ControllerVersion: h.version})
 }
 
 // bearerOrCookieToken returns the operator credential from the Authorization header if

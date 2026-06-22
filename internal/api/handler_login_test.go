@@ -33,7 +33,7 @@ func newLoginEnv(t *testing.T, breakGlassHash string) (*httptest.Server, control
 	if err := store.PutOperator(context.Background(), testTenant, op); err != nil {
 		t.Fatalf("PutOperator: %v", err)
 	}
-	ch := NewControllerHandler(store, testTenant, breakGlassHash, DefaultOperatorName)
+	ch := NewControllerHandler(store, testTenant, breakGlassHash, DefaultOperatorName, "dev")
 	mux := http.NewServeMux()
 	ch.RegisterOperatorRoutes(mux)
 	srv := httptest.NewServer(mux)

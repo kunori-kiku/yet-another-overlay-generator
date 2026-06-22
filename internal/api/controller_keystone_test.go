@@ -433,7 +433,7 @@ func TestControllerKeystone_PinRejectsUnsafeBinding(t *testing.T) {
 func TestWarnInsecureControllerPosture(t *testing.T) {
 	capture := func(configure func(*ControllerHandler)) string {
 		store := controller.NewMemStore()
-		ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName)
+		ch := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 		if configure != nil {
 			configure(ch)
 		}
