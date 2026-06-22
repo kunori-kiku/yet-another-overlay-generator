@@ -9,6 +9,47 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.9] - 2026-06-23
+
+Makes the controller panel a trustworthy fleet-operations console: a structured agent→panel
+feedback channel ("Node Conditions"), a per-link mimic→UDP fallback so an old-kernel node is not
+blocked, panel version self-awareness with version-aware agent rollout, and working default release
+URLs for both the agent and mimic. Additive and backward-compatible; shipped as a beta prerelease
+(`v2.0.0-beta.8` stays GitHub Latest).
+
+### Added
+- **Node Conditions feedback channel.** Agents now report structured, curated conditions
+  (`{type, status, reason, message, since}`) for `config-apply`, `self-update`, `wireguard`, and
+  `mimic` alongside the legacy `health` string. A single agent-side `classify()` chokepoint caps each
+  message and emits only closed reason enums (never raw stderr), and the panel renders them
+  generically (colour by status, tooltip = curated message). Fully additive: old agents send no
+  conditions and old controllers ignore the field. (plan-1, plan-2, plan-3)
+- **Mimic → UDP fallback, per link.** An edge gains a tri-state `mimic_fallback`
+  (inherit / `udp` / `none`) with a fleet-wide `MimicFallbackDefault`. When the resolved policy is
+  `udp` and mimic provisioning fails (kernel too old, eBPF load, install), the link comes up as plain
+  UDP and reports a categorised, loud `warn` mimic condition instead of staying down; otherwise it
+  fails closed (unchanged). The shipped default is conservative (`none` — fail closed), preserving
+  mimic's censorship-evasion guarantee; the operator opts in fleet-wide or per link. (plan-4, plan-5,
+  plan-6)
+- **Default release URLs + working "Assist from release."** A `DefaultMimicReleaseBase` (the upstream
+  `hack3ric/mimic` `releases/latest/download` alias) ships so the mimic `.deb` catalog assist no
+  longer hard-errors on a never-edited controller, and the agent assist pins to a real release tag
+  instead of leaving the base on the moving `latest` alias (killing the silent rollout stall). The
+  panel placeholders now show the real defaults. Custody is unchanged — assist only fills pins the
+  operator reviews and saves through the validated `/settings` path. (plan-9)
+
+### Changed
+- **Version-aware agent rollout.** The controller now knows and displays its own build version (in
+  the user menu, surfaced on `/session` and login). "Update all agents" with no version typed targets
+  the panel's own version (one click: sets the target, fetches its pins, arms the fleet-wide confirm —
+  never auto-saves), and the controller refuses to set an agent target newer than itself
+  (`agent_target_newer_than_controller`, with an advisory hint before save). The version comparator is
+  single-sourced (`internal/version`) so the agent's anti-downgrade floor and the controller's
+  refuse-newer guard can never diverge. (plan-7, plan-8)
+- **Self-update status is read from a structured condition** rather than free-form `health`
+  substring-matching when a `selfupdate` condition is present (the legacy string fallback is retained
+  for old agents). (plan-3)
+
 ## [2.0.0-beta.8] - 2026-06-18
 
 ### Security
@@ -472,7 +513,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.8...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.9...HEAD
+[2.0.0-beta.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.8...v2.0.0-beta.9
 [2.0.0-beta.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.7...v2.0.0-beta.8
 [2.0.0-beta.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.6...v2.0.0-beta.7
 [2.0.0-beta.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.5...v2.0.0-beta.6
