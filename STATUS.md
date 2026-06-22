@@ -1,18 +1,23 @@
 # STATUS
-<!-- regenerated: 2026-06-22 -->
-<!-- by: agent-feedback-and-version-aware-rollout subject — executing (plan-1 in flight) -->
+<!-- regenerated: 2026-06-23 -->
+<!-- by: agent-feedback-and-version-aware-rollout subject — Phase I complete (plans 1-9 + CHANGELOG merged); beta.9 tag owner-gated -->
 
 ## Active work
 
-- **NEW SUBJECT EXECUTING: agent-feedback-and-version-aware-rollout (2026-06-22).** A reusable,
-  structured agent→panel **Node Conditions** feedback channel + **mimic→UDP per-link fallback** +
-  **version-aware rollout** (panel knows its own version; "Update all" → panel version; refuse a
-  target newer than the panel) + **default release URLs / working "Assist from release"**, then a
-  **`v2.0.0-beta.9`** cut so the owner can smoke. 10 plans, foldered in
-  [`implementation_plans/agent-feedback-and-version-aware-rollout-2026_06_22/`](implementation_plans/agent-feedback-and-version-aware-rollout-2026_06_22/outline.md)
-  (4-lens-critiqued clean). Branch per plan; each PR independently workflow-reviewed → fixed →
-  re-reviewed → merged. **plan-1 (Node Conditions channel — wire + agent collector + store) built +
-  local-green; PR pending.**
+- **SUBJECT agent-feedback-and-version-aware-rollout — code COMPLETE (2026-06-23); beta.9 tag is the
+  only remaining step, owner-gated.** All nine feature plans merged (PRs #162–#170): the reusable
+  structured agent→panel **Node Conditions** channel (plan-1/2/3), **mimic→UDP per-link fallback**
+  (plan-4/5/6), **version-aware rollout** — panel knows + displays its own version, "Update all" →
+  panel version, refuse a target newer than the panel (plan-7/8), and **default release URLs /
+  working "Assist from release"** (plan-9). Each PR independently workflow-reviewed (4 lenses) → fixed
+  at root → re-reviewed clean → CI green → merged. **plan-10 Phase I (CHANGELOG roll for
+  `v2.0.0-beta.9`) merged (#171)**; the review caught that the beta.9 delta is the whole pre-rc.1
+  program (PRs #137–#171), so the notes now carry a full `Security` section (go1.26.4 + x/crypto CVE
+  clearance, plan-8 hardening), the in-browser local compiler + phone UX, and the air-gap boundary
+  change. **plan-10 Phase II — cut + push the annotated `v2.0.0-beta.9` tag (a `--prerelease`, NOT
+  Latest; beta.8 stays Latest) — is RESERVED FOR THE OWNER per their instruction.** Runbook +
+  release-notes (`/tmp/beta9-notes.md`) prepared; pre-flight all green (build-stamp reproduced, full
+  `-race` + airgap + FE suites pass).
 
 - **PRE-RC.1 PROGRAM COMPLETE (authorable scope) — all 22 plans across Subjects 1–4 merged (PRs
   #137–#159, 2026-06-19/21).** Every CI-gated rc.1 criterion is GREEN. The remaining steps to cut
