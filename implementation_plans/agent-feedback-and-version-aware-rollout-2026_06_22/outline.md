@@ -376,13 +376,13 @@ subject-specific additions:
 
 | Plan | Title | Status |
 |------|-------|--------|
-| plan-1 | Node Conditions channel (wire + agent + store) | pending |
-| plan-2 | Operator API + panel generic conditions render | pending |
-| plan-3 | self-update + wireguard conditions (retire string-match) | pending |
-| plan-4 | per-link mimic fallback (model + compiler + validator + default) | pending |
-| plan-5 | mimic fallback mechanism (script + agent + condition) | pending |
-| plan-6 | panel mimic fallback UI + condition chip | pending |
-| plan-7 | controller version self-awareness (backend) | pending |
-| plan-8 | panel version + update-all-to-panel-version + refuse-newer guard | pending |
-| plan-9 | default release URLs + fix assist-from-release | pending |
-| plan-10 | release: CHANGELOG + cut & push v2.0.0-beta.9 | pending |
+| plan-1 | Node Conditions channel (wire + agent + store) | merged (#162) |
+| plan-2 | Operator API + panel generic conditions render | merged (#163) |
+| plan-3 | self-update + wireguard conditions (retire string-match) | merged (#164) |
+| plan-4 | per-link mimic fallback (model + compiler + validator + default) | merged (#165) |
+| plan-5 | mimic fallback mechanism (script + agent + condition) | merged (#166) |
+| plan-6 | panel mimic fallback UI + condition chip | merged (#167) |
+| plan-7 | controller version self-awareness (backend) | merged (#168) |
+| plan-8 | panel version + update-all-to-panel-version + refuse-newer guard | merged (#169) |
+| plan-9 | default release URLs + fix assist-from-release | merged (#170) |
+| plan-10 | release: CHANGELOG + cut & push v2.0.0-beta.9 | Phase I merged (#171); Phase II (tag cut) **owner-gated** |
