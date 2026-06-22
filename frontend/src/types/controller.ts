@@ -7,6 +7,20 @@
 // 'revoked' (evicted; the bearer credential is invalidated immediately).
 export type ControllerNodeStatus = 'pending' | 'approved' | 'revoked';
 
+// NodeCondition is one structured agent→panel feedback item (plan-1 model.Condition → conditionJSON).
+// status drives the badge color; reason is a closed CamelCase code per type; message is the curated
+// single line (already length-capped server-side — never a raw error dump). Generic by design: the
+// panel renders ANY {type,status,reason} with no per-type code, so later plans add producers
+// (selfupdate/wireguard/mimic) with zero new rendering. observedAt is the controller's receive stamp.
+export interface NodeCondition {
+  type: string;
+  status: string; // 'ok' | 'warn' | 'error' | 'unknown' (open at the type level; colored by map)
+  reason: string;
+  message: string;
+  since: string; // RFC3339 (agent-advisory)
+  observedAt: string; // RFC3339 controller receive stamp
+}
+
 // Operator view of a registered node. Deliberately contains no key material (neither WG public-key bytes nor an API
 // token hash): hasWGPublicKey only indicates a public key is on file. Mirrors nodeJSON in handler_controller.go.
 export interface ControllerNode {
@@ -28,6 +42,9 @@ export interface ControllerNode {
   // (AgentRolloutNodeIDs — the canary subset, or the whole fleet once promoted). The per-node
   // update-status chip reads it; the panel never re-derives canary membership client-side.
   inRollout: boolean;
+  // plan-1/2: structured feedback channel. Empty array when the agent reported none (legacy agents,
+  // or a node with nothing to report) — the panel then renders no conditions strip.
+  conditions: NodeCondition[];
 }
 
 // A single record in the audit chain. Mirrors the operator-facing fields of controller.AuditEntry.

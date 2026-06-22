@@ -90,6 +90,21 @@ type topologyVersionsResponseJSON struct {
 	Limit    int                   `json:"limit"`
 }
 
+// conditionJSON is the operator-facing view of one structured Node Condition (plan-1's
+// model.Condition + the controller's server stamp). It is the curated channel that replaces panel
+// string-matching of the free-form last_health line: status drives the badge color, reason is the
+// closed CamelCase code, message is the single length-capped human line (NEVER a raw stderr dump).
+// observed_at is the controller's receive stamp (server truth, not agent-clock). All plain data; no
+// key material. Pure DTO — the projection from controller.NodeCondition lives in handler_deploy.go.
+type conditionJSON struct {
+	Type       string    `json:"type"`
+	Status     string    `json:"status"`
+	Reason     string    `json:"reason"`
+	Message    string    `json:"message,omitempty"`
+	Since      string    `json:"since,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
 // nodeJSON is the operator-facing view of one registry node. It deliberately
 // exposes NO key material (neither the WG public key bytes nor the API token hash):
 // only a boolean that a public key is on file. The operator panel lists fleet state
@@ -118,6 +133,11 @@ type nodeJSON struct {
 	// (false when no rollout is configured); the target itself is read from /settings, not echoed
 	// per node.
 	InRollout bool `json:"in_rollout"`
+	// Conditions is the node's structured feedback channel (plan-1/2). omitempty: a legacy agent /
+	// a node that has reported none round-trips with the field absent, and the panel renders no
+	// strip — byte-identical served JSON to the pre-conditions shape. Curated + length-capped at
+	// ingest (handler_agent); this view re-serializes only (see mapConditions in handler_deploy.go).
+	Conditions []conditionJSON `json:"conditions,omitempty"`
 }
 
 // revokeRequestJSON is the operator's request to revoke (evict) a node: the target

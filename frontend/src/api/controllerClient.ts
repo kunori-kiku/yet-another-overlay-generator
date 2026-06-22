@@ -17,6 +17,7 @@ import type {
   StageResult,
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
+import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
 
 // ControllerError is thrown for any non-2xx controller response. It preserves the parsed coded
 // error envelope on .body so the store can localize it via tError; .status is the HTTP status and
@@ -273,6 +274,7 @@ interface NodeJSON {
   enrolled_at: string;
   rekey_requested: boolean;
   in_rollout?: boolean;
+  conditions?: ConditionWire[];
 }
 
 interface AuditEntryJSON {
@@ -652,6 +654,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     enrolledAt: n.enrolled_at,
     rekeyRequested: n.rekey_requested,
     inRollout: n.in_rollout ?? false,
+    conditions: mapNodeConditions(n.conditions),
   };
 }
 
