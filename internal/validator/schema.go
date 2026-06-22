@@ -441,6 +441,16 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 		// longer warns. The semantic constraint that "both ends must be deployable Linux" is handled
 		// by validateMimicTransport in semantic.go.
 
+		// mimic_fallback enum (plan-4): "" (inherit the fleet default) / "udp" / "none". A meaningful
+		// tri-state, so "" is NOT normalized; the enum guard rejects typos ("UDP"/"off"/"yes") at the
+		// schema stage. Only relevant on a tcp edge (semantic.go advises if set on a udp edge); the
+		// resolver in the compiler floors anything unrecognized to "none" defensively, but a stored
+		// value must be one of these three.
+		validFallback := map[string]bool{"": true, "udp": true, "none": true}
+		if !validFallback[edge.MimicFallback] {
+			result.AddError(prefix+".mimic_fallback", CodeEdgeMimicFallbackInvalid, P{"policy", edge.MimicFallback})
+		}
+
 		// EndpointPort
 		if edge.EndpointPort < 0 || edge.EndpointPort > 65535 {
 			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})

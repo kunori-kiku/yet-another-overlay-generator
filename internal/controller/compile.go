@@ -140,14 +140,15 @@ func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs
 // version means no agent block is emitted regardless, so the set only matters when a rollout is on.
 func BuildFetchSettings(cs ControllerSettings) render.FetchSettings {
 	return render.FetchSettings{
-		GithubProxy:      cs.GithubProxy,
-		MimicVersion:     cs.MimicVersion,
-		MimicReleaseBase: cs.MimicReleaseBase,
-		MimicDebs:        cs.MimicDebs,
-		AgentVersion:     cs.TargetAgentVersion,
-		AgentMinVersion:  cs.MinAgentVersion,
-		AgentReleaseBase: cs.AgentReleaseBaseURL,
-		AgentBins:        cs.AgentBins,
+		GithubProxy:          cs.GithubProxy,
+		MimicVersion:         cs.MimicVersion,
+		MimicReleaseBase:     cs.MimicReleaseBase,
+		MimicDebs:            cs.MimicDebs,
+		MimicFallbackDefault: cs.MimicFallbackDefault,
+		AgentVersion:         cs.TargetAgentVersion,
+		AgentMinVersion:      cs.MinAgentVersion,
+		AgentReleaseBase:     cs.AgentReleaseBaseURL,
+		AgentBins:            cs.AgentBins,
 	}
 }
 

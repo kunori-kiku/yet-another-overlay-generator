@@ -86,6 +86,9 @@ func CompileResultCtx(ctx context.Context, req CompileRequest) (*compiler.Compil
 	if req.Reserved != nil {
 		c = c.WithReserved(req.Reserved)
 	}
+	// Thread the fleet-wide mimic-fallback default (plan-4). Setting it unconditionally is safe: "" ⇒
+	// resolveMimicFallback floors to "none" everywhere ⇒ byte-identical to the pre-change pipeline.
+	c = c.WithMimicFallbackDefault(req.Fetch.MimicFallbackDefault)
 	// CompileAt injects the explicit clock (req.CompiledAt) instead of the compiler's
 	// internal time.Now(); ctx bounds the allocator scan (cancellable on the live paths,
 	// context.Background() on the pure entry points + the CLI).

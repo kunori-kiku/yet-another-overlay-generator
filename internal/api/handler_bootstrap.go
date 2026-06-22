@@ -44,6 +44,8 @@ type settingsJSON struct {
 	MimicVersion     string                    `json:"mimic_version,omitempty"`
 	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
 	MimicDebs        map[string]model.Artifact `json:"mimic_debs,omitempty"`
+	// MimicFallbackDefault is the fleet-wide mimic→UDP fallback policy ("" / "udp" / "none"). plan-4.
+	MimicFallbackDefault string `json:"mimic_fallback_default,omitempty"`
 	// Signed agent self-update (plan-9, canary-then-fleet). All NON-SECRET pins; the agent
 	// release base is the existing AgentReleaseBaseURL above. Empty target ⇒ no self-update.
 	TargetAgentVersion    string                    `json:"target_agent_version,omitempty"`
@@ -67,6 +69,7 @@ func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) s
 		MimicVersion:          cs.MimicVersion,
 		MimicReleaseBase:      cs.MimicReleaseBase,
 		MimicDebs:             cs.MimicDebs,
+		MimicFallbackDefault:  cs.MimicFallbackDefault,
 		TargetAgentVersion:    cs.TargetAgentVersion,
 		MinAgentVersion:       cs.MinAgentVersion,
 		AgentBins:             cs.AgentBins,
@@ -123,6 +126,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			MimicVersion:          strings.TrimSpace(req.MimicVersion),
 			MimicReleaseBase:      strings.TrimSpace(req.MimicReleaseBase),
 			MimicDebs:             req.MimicDebs,
+			MimicFallbackDefault:  strings.TrimSpace(req.MimicFallbackDefault),
 			TargetAgentVersion:    strings.TrimSpace(req.TargetAgentVersion),
 			MinAgentVersion:       strings.TrimSpace(req.MinAgentVersion),
 			AgentBins:             req.AgentBins,
@@ -143,6 +147,14 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 		}
 		if err := validateAbsoluteHTTPURL(cs.AgentReleaseBaseURL); err != nil {
 			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_release_base_url").Wrap(err))
+			return
+		}
+		// Fleet-wide mimic-fallback default enum (plan-4): the raw submitted value must be ""
+		// (inherit→WithDefaults fills "none") / "udp" / "none". A typo is rejected, not silently floored.
+		switch strings.TrimSpace(req.MimicFallbackDefault) {
+		case "", "udp", "none":
+		default:
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_fallback_default"))
 			return
 		}
 		if err := validateMimicCatalog(cs); err != nil {

@@ -694,6 +694,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_edge_self_loop': "起始节点与目标节点不能相同（自环）",
   'error.validation_edge_to_node_id_required': "目标节点 ID 不能为空",
   'error.validation_edge_transport_invalid': "传输协议无效: {transport}，可选值: udp, tcp",
+  'error.validation_edge_mimic_fallback_invalid': "mimic_fallback 策略无效: {policy}，可选值: udp, none（留空表示继承机群默认值）",
   'error.validation_edge_type_empty': "链路类型不能为空",
   'error.validation_edge_type_invalid': "链路类型无效: {type}，可选值: direct, public-endpoint, relay-path, candidate",
   'error.validation_link_equal_cost': "节点 {node} 与 {other} 之间有 {count} 条链路但解析出的代价全部相同（{low}）：Babel 无从偏好任何一条，配置表达不出故障切换；请通过 role backup 或 priority/weight 为各链路设置不同代价",

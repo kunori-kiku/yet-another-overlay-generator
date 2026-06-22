@@ -364,6 +364,11 @@ type ControllerSettings struct {
 	MimicVersion     string                    `json:"mimic_version,omitempty"`
 	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
 	MimicDebs        map[string]model.Artifact `json:"mimic_debs,omitempty"`
+	// MimicFallbackDefault is the FLEET-WIDE mimic→UDP fallback policy a transport=="tcp" link
+	// inherits when its edge leaves mimic_fallback empty. "" / "udp" / "none". NON-SECRET. The
+	// shipped default is "none" (fail-closed, D1) — preserving mimic's censorship-evasion guarantee
+	// unless the operator opts in. omitempty: a legacy settings.json with no field loads as "".
+	MimicFallbackDefault string `json:"mimic_fallback_default,omitempty"`
 	// Signed agent self-update (plan-9, canary-then-fleet D2). All NON-SECRET. The agent
 	// release base URL is the EXISTING AgentReleaseBaseURL above (reused as the self-update
 	// download base — no duplicate field). The pins below are emitted into the per-node,

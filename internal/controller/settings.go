@@ -10,6 +10,12 @@ package controller
 // internal mirror, a pinned tag) via the operator settings.
 const DefaultAgentReleaseBaseURL = "https://github.com/kunori-kiku/yet-another-overlay-generator/releases/latest/download"
 
+// DefaultMimicFallbackPolicy is the shipped fleet-wide mimic-fallback default: "none" (fail-closed).
+// A fallback to plain UDP DE-CLOAKS the link, so the conservative default preserves mimic's
+// censorship-evasion guarantee; the operator opts in fleet-wide ("udp") or per-link (D1). FLAG FOR
+// OWNER CONFIRM at review (outline D1 marks this an inferred default).
+const DefaultMimicFallbackPolicy = "none"
+
 // boolPtr returns a pointer to v (for the optional Translucency field).
 func boolPtr(v bool) *bool { return &v }
 
@@ -19,10 +25,11 @@ func boolPtr(v bool) *bool { return &v }
 // the panel's default appearance).
 func DefaultSettings() ControllerSettings {
 	return ControllerSettings{
-		PublicAgentURL:      "",
-		GithubProxy:         "",
-		AgentReleaseBaseURL: DefaultAgentReleaseBaseURL,
-		Translucency:        boolPtr(true),
+		PublicAgentURL:       "",
+		GithubProxy:          "",
+		AgentReleaseBaseURL:  DefaultAgentReleaseBaseURL,
+		MimicFallbackDefault: DefaultMimicFallbackPolicy, // "none" — fail-closed (D1)
+		Translucency:         boolPtr(true),
 	}
 }
 
@@ -32,6 +39,11 @@ func DefaultSettings() ControllerSettings {
 func (s ControllerSettings) WithDefaults() ControllerSettings {
 	if s.AgentReleaseBaseURL == "" {
 		s.AgentReleaseBaseURL = DefaultAgentReleaseBaseURL
+	}
+	// A legacy record (empty) gets the fail-closed default explicitly on save (resolveMimicFallback
+	// already floors "" to "none", but make the stored value definite, D1).
+	if s.MimicFallbackDefault == "" {
+		s.MimicFallbackDefault = DefaultMimicFallbackPolicy
 	}
 	if s.Translucency == nil {
 		s.Translucency = boolPtr(true)

@@ -713,6 +713,7 @@ export const en = {
   'error.validation_edge_self_loop': "Edge source and target nodes must not be the same (self-loop).",
   'error.validation_edge_to_node_id_required': "Edge target node ID is required.",
   'error.validation_edge_transport_invalid': "Invalid transport protocol: {transport}. Allowed values: udp, tcp.",
+  'error.validation_edge_mimic_fallback_invalid': "Invalid mimic_fallback policy: {policy}. Allowed values: udp, none (empty = inherit fleet default).",
   'error.validation_edge_type_empty': "Edge type must not be empty.",
   'error.validation_edge_type_invalid': "Invalid edge type: {type}. Allowed values: direct, public-endpoint, relay-path, candidate.",
   'error.validation_link_equal_cost': "There are {count} links between node {node} and {other} but all resolved costs are identical ({low}): Babel cannot prefer any one of them and the configuration cannot express failover; please set distinct costs per link via role backup or priority/weight",
