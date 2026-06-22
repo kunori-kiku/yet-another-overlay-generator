@@ -58,8 +58,19 @@ describe('controllerVersion plumbing (plan-8)', () => {
     expect(useControllerStore.getState().loggedIn).toBe(false);
   });
 
-  it('checkSession leaves controllerVersion empty when the controller omits it (dev build)', async () => {
-    stubFetch({ operator: 'breakglass', expires_at: '', csrf_token: '' }); // no controller_version field
+  it('checkSession keeps the literal "dev" identity from an unstamped controller', async () => {
+    // A dev/`go run` controller normalizes its empty BuildVersion to "dev" and sends it verbatim;
+    // the store holds it as-is (the panel decides usability — "dev" is non-semver, so the one-click
+    // affordance is gated off at the component via isUsableControllerVersion, not here).
+    stubFetch({ operator: 'breakglass', expires_at: '', csrf_token: '', controller_version: 'dev' });
+    await useControllerStore.getState().checkSession();
+    expect(useControllerStore.getState().controllerVersion).toBe('dev');
+  });
+
+  it('checkSession leaves controllerVersion empty when an older controller omits the field', async () => {
+    // Forward-compat: a controller predating the controller_version field sends no key at all; the
+    // `?? ''` mapping collapses the absence to ''. (This is NOT the dev-build shape above.)
+    stubFetch({ operator: 'breakglass', expires_at: '', csrf_token: '' });
     await useControllerStore.getState().checkSession();
     expect(useControllerStore.getState().controllerVersion).toBe('');
   });

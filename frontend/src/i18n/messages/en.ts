@@ -123,7 +123,7 @@ export const en = {
   // fetch its pins, and arm fleet-wide so every node converges on the version this panel ships.
   'agentUpdate.updateAllToControllerVersion': "Update all agents to {version}",
   'agentUpdate.updateAllHint': "Targets the controller's own version, fetches its binary pins, and arms fleet-wide. Review the pins, then Save.",
-  'agentUpdate.noControllerVersion': "The controller did not report a version (dev build), so there is no version to match.",
+  'agentUpdate.noControllerVersion': "The controller has no released version to match (it reports a development build), so there is nothing to roll agents to.",
   'agentUpdate.targetNewerThanController': "Target {target} is newer than the controller ({controller}); the controller can only roll agents to a version it has shipped, so this will be refused on save.",
   'agentUpdate.advanced': "Advanced",
   'agentUpdate.minVersionLabel': "Minimum agent version (optional)",

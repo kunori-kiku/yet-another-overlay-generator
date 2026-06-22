@@ -7,6 +7,11 @@ import {
 import { t, type UILanguage } from '../../i18n';
 import { localizeError } from '../../lib/localizeError';
 import { compareSemver } from '../../lib/updateStatus';
+import {
+  AGENT_VERSION_RE,
+  isUsableControllerVersion,
+  planUpdateAllToControllerVersion,
+} from '../../lib/agentRollout';
 import { type AgentPin, type ControllerSettings } from '../../api/controllerClient';
 
 // AgentUpdateSettings (controller-panel-rollout-ui plan-3): the operator card that configures the
@@ -25,8 +30,10 @@ import { type AgentPin, type ControllerSettings } from '../../api/controllerClie
 const CERTIFIED_ARCHES = ['linux-amd64', 'linux-arm64'] as const;
 
 // Client-side mirrors of validateAgentRollout (handler_bootstrap.go). The server is authoritative;
-// these only give inline hints before save.
-const SEMVER_RE = /^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$/;
+// these only give inline hints before save. SEMVER_RE is the shared version grammar from
+// lib/agentRollout (AGENT_VERSION_RE) so the field validation + the controller-version usability
+// check can never disagree on what a valid version is.
+const SEMVER_RE = AGENT_VERSION_RE;
 const ASSET_RE = /^[A-Za-z0-9._-]+$/;
 const SHA256_RE = /^[0-9a-fA-F]{64}$/;
 
@@ -76,9 +83,13 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
   const loading = useControllerStore((s) => s.loading);
   const saveSettings = useControllerStore((s) => s.saveSettings);
   const fetchReleasePins = useControllerStore((s) => s.fetchReleasePins);
-  // controllerVersion is server truth (plan-8). "" on a dev controller build, which disables the
-  // one-click "update all" affordance (there is no version to match) AND the refuse-newer hint.
+  // controllerVersion is server truth (plan-8): a real semver on a stamped release build, the literal
+  // "dev" on an unstamped build, or "" only when talking to an older controller that predates the
+  // field. The one-click "update all" affordance + the refuse-newer hint gate on isUsableControllerVersion
+  // (real semver), so a "dev"/non-semver controller degrades to the "no version to match" note rather
+  // than offering a doomed rollout — mirroring the backend guard's own semverPattern gate.
   const controllerVersion = useControllerStore((s) => s.controllerVersion);
+  const controllerVersionUsable = isUsableControllerVersion(controllerVersion);
 
   const [targetVersion, setTargetVersion] = useState(initial.targetAgentVersion);
   const [minVersion, setMinVersion] = useState(initial.minAgentVersion);
@@ -160,8 +171,9 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
     // Advisory mirror of the backend refuse-newer floor (validateAgentRollout): a target strictly
     // newer than the controller's own version is rejected at save, so warn before the round-trip.
     // compareSemver is the panel's existing SemVer-ish comparator (updateStatus.ts) — reused, not a
-    // second implementation. Only meaningful when the controller reported a real version.
-    if (target && controllerVersion && SEMVER_RE.test(controllerVersion) && compareSemver(target, controllerVersion) > 0) {
+    // second implementation. Only meaningful when the controller reported a USABLE (real-semver)
+    // version — a "dev"/non-semver controller version disables the floor (same as the backend).
+    if (target && controllerVersionUsable && compareSemver(target, controllerVersion) > 0) {
       return t(language, 'agentUpdate.targetNewerThanController', { target, controller: controllerVersion });
     }
     return null;
@@ -218,15 +230,16 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
   };
 
   // handleUpdateAllToControllerVersion is the one-click "roll the whole fleet to the version this
-  // panel ships" (plan-8 / requirement 3): set the target to the controller's own version, assist
-  // its pins in the same tick, and — only if that succeeded — arm the existing fleet-wide confirm.
-  // It NEVER auto-saves: the operator reviews the fetched pins and clicks Save, keeping custody.
-  const handleUpdateAllToControllerVersion = async () => {
-    if (!controllerVersion) return;
-    onTargetChange(controllerVersion); // set target + invalidate any stale assist pins (shared path)
-    const ok = await handleAssist(controllerVersion);
-    if (ok) setShowFleetConfirm(true);
-  };
+  // panel ships" (plan-8 / requirement 3). The orchestration (gate on a usable version → set target
+  // → assist in the SAME tick via the override → arm the fleet-wide confirm ONLY on success, never
+  // auto-save) lives in lib/agentRollout.planUpdateAllToControllerVersion so it is unit-testable
+  // without a render; here we just bind it to this card's React state + store effects.
+  const handleUpdateAllToControllerVersion = () =>
+    planUpdateAllToControllerVersion(controllerVersion, {
+      setTarget: onTargetChange, // set target + invalidate any stale assist pins (shared path)
+      assist: handleAssist, // passes the version as targetOverride, avoiding stale React state
+      armFleetConfirm: () => setShowFleetConfirm(true),
+    });
 
   const handleFleetToggle = (on: boolean) => {
     // Arming fleet-wide is the one fleet-affecting action; gate ON behind a confirm. OFF is
@@ -294,8 +307,9 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
         )}
         <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.targetVersionHint')}</p>
         {/* One-click "match the controller" (plan-8): present only when the controller reported a
-            version; otherwise a quiet dev-build note so the absence is explained, not mysterious. */}
-        {controllerVersion ? (
+            USABLE (real-semver) version; a "dev"/non-semver/absent version shows a quiet note so the
+            absence is explained, not a button that would arm a doomed rollout. */}
+        {controllerVersionUsable ? (
           <div className="space-y-1">
             <button
               type="button"

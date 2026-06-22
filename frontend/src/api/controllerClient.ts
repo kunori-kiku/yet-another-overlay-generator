@@ -81,7 +81,9 @@ export interface LoginResult {
   csrfToken: string;
   // controllerVersion mirrors GET /session: the controller's own build version, echoed on every
   // login so the panel surfaces it + uses it as the one-click agent rollout target without waiting
-  // for the next /session probe. "" on an unstamped dev build (the wire field is omitted).
+  // for the next /session probe. A stamped release reports a real semver; an unstamped build reports
+  // the literal "dev" (the controller normalizes an empty BuildVersion to "dev"); "" only when an
+  // older controller predates the field. The panel treats "dev"/non-semver as "no version to match".
   controllerVersion: string;
 }
 
@@ -610,9 +612,10 @@ export interface SessionInfo {
   operator: string;
   expiresAt: string;
   csrfToken: string;
-  // controllerVersion is the controller's own build version (plan-7/8). "" when the controller
-  // is an unstamped dev build (the field is omitted on the wire). The panel surfaces it in the
-  // user menu and uses it as the one-click "update all agents" target + the refuse-newer hint.
+  // controllerVersion is the controller's own build version (plan-7/8): a real semver on a stamped
+  // release, the literal "dev" on an unstamped build, or "" only when an older controller predates
+  // the field. The panel surfaces it in the user menu and uses a real-semver value as the one-click
+  // "update all agents" target + the refuse-newer hint ("dev"/non-semver = no version to match).
   controllerVersion: string;
 }
 

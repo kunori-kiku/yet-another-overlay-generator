@@ -250,9 +250,11 @@ interface ControllerState {
   // selectLoggedIn = sessionToken !== '' || loggedIn.
   loggedIn: boolean;
   // controllerVersion is the controller's own build version, surfaced on /session and login
-  // (plan-7/8). "" when the controller is an unstamped dev build. The user menu displays it,
-  // and the agent-update panel uses it as the one-click "update all agents to the controller's
-  // version" target + the refuse-newer advisory. Memory only, never persisted (server truth).
+  // (plan-7/8): a real semver on a stamped release, the literal "dev" on an unstamped build, or ""
+  // only when an older controller predates the field. The user menu displays it verbatim; the
+  // agent-update panel uses a real-semver value as the one-click "update all agents" target + the
+  // refuse-newer advisory (treating "dev"/non-semver as "no version to match"). Memory only, never
+  // persisted (server truth).
   controllerVersion: string;
 
   // TOTP 2FA (plan-5.2): totpRequired means the last login had the correct password but a

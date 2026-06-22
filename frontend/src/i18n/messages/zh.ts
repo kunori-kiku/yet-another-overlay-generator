@@ -111,7 +111,7 @@ export const zh: Record<keyof typeof en, string> = {
   'agentUpdate.targetVersionHint': "滚动更新要达到的版本（如 v2.0.0-beta.3）。留空 = 不自更新。",
   'agentUpdate.updateAllToControllerVersion': "将所有代理更新到 {version}",
   'agentUpdate.updateAllHint': "以控制器自身版本为目标，获取其二进制固定值并启用全 fleet 推送。请先核对固定值，然后保存。",
-  'agentUpdate.noControllerVersion': "控制器未报告版本（开发版构建），因此没有可对齐的版本。",
+  'agentUpdate.noControllerVersion': "控制器没有可对齐的已发布版本（它报告为开发版构建），因此无法将代理升级到任何版本。",
   'agentUpdate.targetNewerThanController': "目标 {target} 比控制器（{controller}）更新；控制器只能将代理升级到它已发布过的版本，因此保存时将被拒绝。",
   'agentUpdate.advanced': "高级",
   'agentUpdate.minVersionLabel': "最低 agent 版本（可选）",
