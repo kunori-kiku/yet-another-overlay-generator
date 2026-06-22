@@ -45,7 +45,7 @@ const MimicBreadcrumbPath = "/var/lib/yaog-agent/mimic-status.json"
 const (
 	MimicOutcomeActive        = "active"           // mimic provisioned + mimic@<egress> started
 	MimicOutcomeKernelTooOld  = "kernel_too_old"   // eBPF/bpffs absent → mimic cannot load
-	MimicOutcomeEbpfLoad      = "ebpf_load_failed" // module present but the unit failed to start
+	MimicOutcomeEbpfLoad      = "ebpf_load_failed" // mimic@<egress> failed to start (eBPF attach or unit-start error)
 	MimicOutcomeInstallFailed = "install_failed"   // distro pkg + pinned .deb both failed
 	MimicOutcomeFellBackToUDP = "fell_back_to_udp" // policy=udp: skipped mimic, link up as plain UDP
 )

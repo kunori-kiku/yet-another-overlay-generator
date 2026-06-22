@@ -15,8 +15,9 @@ import (
 // tcp (mimic) link never writes the breadcrumb → ENOENT → no condition (the absence is the zero
 // value, not an error).
 
-// MimicReason is a closed enum of `mimic` Node Condition reasons (CamelCase codes) — the curated
-// classification of install.sh's breadcrumb outcome.
+// mimicReason* are the closed set of CamelCase reason codes returned by classifyMimic — the curated
+// classification of install.sh's breadcrumb outcome (plain string constants; classifyMimic returns
+// string, matching the model.ConditionStatus*/ConditionType* idiom).
 const (
 	mimicReasonActive         = "Active"
 	mimicReasonKernelTooOld   = "KernelTooOld"

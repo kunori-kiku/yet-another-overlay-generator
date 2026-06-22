@@ -1533,9 +1533,15 @@ function buildClientInstallScriptConfig(
 ): ClientInstallScriptConfig {
   let hasMimic = false;
   let mimicPorts: number[] = [];
+  let mimicFallbackUDP = false;
+  // Mirror Go buildClientInstallScriptConfig (script.go): MimicFallbackUDP is set INSIDE the
+  // `mimic && listenPort > 0` block, so it stays false when there is no bound listen port — keeping
+  // the dual-implementation bit-for-bit equivalent (the conformance byte-compare gates on HasMimic
+  // and so cannot catch a divergence here).
   if (clientInfo !== undefined && clientInfo.mimic && clientInfo.listenPort > 0) {
     hasMimic = true;
     mimicPorts = [clientInfo.listenPort];
+    mimicFallbackUDP = clientInfo.mimicFallback === 'udp';
   }
 
   return {
@@ -1549,10 +1555,7 @@ function buildClientInstallScriptConfig(
     HasMimic: hasMimic,
     MimicPorts: mimicPorts,
     MimicXDPMode: resolveMimicXDPMode(node.xdp_mode),
-    MimicFallbackUDP:
-      clientInfo !== undefined &&
-      clientInfo.mimic &&
-      clientInfo.mimicFallback === 'udp',
+    MimicFallbackUDP: mimicFallbackUDP,
     MimicBreadcrumb: newMimicBreadcrumbData(),
     SigningPubkeyPEM: '',
     SplicePlaceholder: false,
