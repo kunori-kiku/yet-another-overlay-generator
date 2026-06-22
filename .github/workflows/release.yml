@@ -108,9 +108,13 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci --legacy-peer-deps
+      # VITE_E2E=1 (matching ci.yml's frontend-e2e Build panel) compiles in the test-only
+      # ErrorBoundary render-throw probe (App.tsx, gated on import.meta.env.VITE_E2E, else DCE'd).
+      # The REQUIRED adversarial spec e2e/adversarial/error-render.spec.ts drives it, so without this
+      # flag that spec deterministically times out — the gate must build the panel the same way CI does.
       - name: Build panel
         working-directory: frontend
-        run: npm run build
+        run: VITE_E2E=1 npm run build
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
