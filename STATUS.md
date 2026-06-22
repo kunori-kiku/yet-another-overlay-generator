@@ -1,8 +1,18 @@
 # STATUS
-<!-- regenerated: 2026-06-21 -->
-<!-- by: pre-rc1 program — ALL 4 subjects closed; rc.1 gate authored, terminal cut owner-only -->
+<!-- regenerated: 2026-06-22 -->
+<!-- by: agent-feedback-and-version-aware-rollout subject — executing (plan-1 in flight) -->
 
 ## Active work
+
+- **NEW SUBJECT EXECUTING: agent-feedback-and-version-aware-rollout (2026-06-22).** A reusable,
+  structured agent→panel **Node Conditions** feedback channel + **mimic→UDP per-link fallback** +
+  **version-aware rollout** (panel knows its own version; "Update all" → panel version; refuse a
+  target newer than the panel) + **default release URLs / working "Assist from release"**, then a
+  **`v2.0.0-beta.9`** cut so the owner can smoke. 10 plans, foldered in
+  [`implementation_plans/agent-feedback-and-version-aware-rollout-2026_06_22/`](implementation_plans/agent-feedback-and-version-aware-rollout-2026_06_22/outline.md)
+  (4-lens-critiqued clean). Branch per plan; each PR independently workflow-reviewed → fixed →
+  re-reviewed → merged. **plan-1 (Node Conditions channel — wire + agent collector + store) built +
+  local-green; PR pending.**
 
 - **PRE-RC.1 PROGRAM COMPLETE (authorable scope) — all 22 plans across Subjects 1–4 merged (PRs
   #137–#159, 2026-06-19/21).** Every CI-gated rc.1 criterion is GREEN. The remaining steps to cut
