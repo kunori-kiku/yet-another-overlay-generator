@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // compiledAtLayout is the timestamp format the export path writes into
@@ -72,6 +74,11 @@ type State struct {
 	// not perpetually re-flap; it is cleared when the operator moves to a different target. Empty
 	// means nothing abandoned.
 	AbandonedAgentVersion string `json:"abandoned_agent_version,omitempty"`
+	// Conditions is the structured feedback set this agent reports about itself (plan-1). It is
+	// rebuilt on every apply by collectConditions and rides the /report payload (omitempty: a build
+	// with no conditions, or an old persisted state, round-trips as nil). It is observability that
+	// recordSuccess/recordFailure regenerate each cycle — NOT load-bearing custody state.
+	Conditions []model.Condition `json:"conditions,omitempty"`
 }
 
 // PendingUpdate is the self-update breadcrumb (plan-9): the swap that was attempted and how

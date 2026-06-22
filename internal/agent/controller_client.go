@@ -33,6 +33,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // controllerHTTPTimeout bounds non-poll controller requests (enroll/config/report).
@@ -96,6 +98,9 @@ type reportRequestWire struct {
 	// controller + panel can show each node's running version. omitempty: a legacy agent that
 	// does not send it round-trips as "" (the operator view shows "unknown").
 	AgentVersion string `json:"agent_version,omitempty"`
+	// Conditions is the structured feedback set (plan-1), omitempty so a build/agent that reports
+	// none round-trips as an absent field (an old controller ignores it; a new controller stores nil).
+	Conditions []model.Condition `json:"conditions,omitempty"`
 }
 
 // EnrollResult is what a successful Enroll hands back to the caller (cmd/agent):
@@ -373,19 +378,20 @@ func (c *ControllerClient) Report(nodeID string, payload []byte) error {
 	if st.LastResult == LastResultOK {
 		gen = c.lastFetchedGen
 	}
-	return c.postReport(gen, st.LastChecksum, st.Health)
+	return c.postReport(gen, st.LastChecksum, st.Health, st.Conditions)
 }
 
 // postReport POSTs a reportRequestWire over the bearer-authed client. It is the
 // single report transport shared by the Reporter interface (Report) and any explicit
 // caller. It is best-effort: a transport or non-2xx error is returned to the caller
 // (which logs it) but must not fail an otherwise-applied bundle.
-func (c *ControllerClient) postReport(gen int64, checksum, health string) error {
+func (c *ControllerClient) postReport(gen int64, checksum, health string, conditions []model.Condition) error {
 	reqBody, err := json.Marshal(reportRequestWire{
 		AppliedGeneration: gen,
 		Checksum:          checksum,
 		Health:            health,
 		AgentVersion:      c.AgentVersion,
+		Conditions:        conditions,
 	})
 	if err != nil {
 		return fmt.Errorf("agent: marshal report request: %w", err)

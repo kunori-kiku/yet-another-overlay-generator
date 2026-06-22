@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // FileStore is a JSON-on-disk Store implementation, durable for the single-tenant
@@ -573,9 +575,10 @@ func (fs *FileStore) listNodesLocked(dir string) ([]Node, error) {
 }
 
 // SetAppliedGeneration records what an agent reported applying (generation,
-// checksum, health, and the reported agent build version). An empty agentVersion
-// (a legacy agent) leaves the stored version untouched.
-func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string) error {
+// checksum, health, the reported agent build version, and the structured conditions
+// set). An empty agentVersion (a legacy agent) leaves the stored version untouched;
+// conditions are server-stamped with observedAt and a nil/empty slice clears the set.
+func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -603,6 +606,7 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 	if agentVersion != "" {
 		n.LastAgentVersion = agentVersion
 	}
+	n.Conditions = stampConditions(conditions, observedAt)
 	return writeJSONAtomic(p, n)
 }
 
