@@ -40,9 +40,11 @@ export function UpdateStatusChip({
   const state = deriveUpdateState(node, settings);
   if (state === 'off') return <span className="text-gray-500">—</span>;
 
-  // Tooltip carries the raw agent health line; for 'failed' it also flags the best-effort caveat
-  // (the 'abandoned:' marker is transient — see updateStatus.ts / Principle 7).
-  const base = node.lastHealth || '';
+  // Tooltip prefers the curated selfupdate condition message (plan-3); falls back to the raw
+  // lastHealth line only for legacy agents that send no conditions. For 'failed' it also flags the
+  // best-effort caveat (the Abandoned/'abandoned:' signal — see updateStatus.ts).
+  const su = (node.conditions ?? []).find((c) => c.type === 'selfupdate');
+  const base = su?.message || node.lastHealth || '';
   const title =
     state === 'failed'
       ? `${base}${base ? ' ' : ''}(${t(language, 'updateStatus.failedBestEffort')})`

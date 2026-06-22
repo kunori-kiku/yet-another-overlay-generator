@@ -31,24 +31,35 @@ func classify(condType, status, reason, detail string, since time.Time) model.Co
 	}
 }
 
-// collectConditions builds the per-cycle condition set from the apply outcome. plan-1 wires exactly
-// ONE condition — configapply — that MIRRORS the existing State.Health with no behavior change:
+// configApplyCondition mirrors the existing State.Health with no behavior change (plan-1):
 //   - success -> status ok,   reason "Applied",                 message "configuration applied"
 //   - failure -> status warn, reason "DegradedKeepingLastGood", message "keeping last-good configuration"
 //
-// plan-3/plan-5 extend this to append selfupdate/wireguard/mimic conditions; the signature stays.
 // Every detail string is a Go-emitted constant — never prev.LastError / err.Error() (the curation
-// invariant): plan-1 carries no upstream text at all; plan-5 (mimic) is the first to classify a
-// failure category, and even then passes a curated category string, never the raw dump.
-func collectConditions(ok bool, now time.Time) []model.Condition {
+// invariant).
+func configApplyCondition(ok bool, now time.Time) model.Condition {
 	if ok {
-		return []model.Condition{
-			classify(model.ConditionTypeConfigApply, model.ConditionStatusOK,
-				"Applied", "configuration applied", now),
-		}
+		return classify(model.ConditionTypeConfigApply, model.ConditionStatusOK,
+			"Applied", "configuration applied", now)
 	}
-	return []model.Condition{
-		classify(model.ConditionTypeConfigApply, model.ConditionStatusWarn,
-			"DegradedKeepingLastGood", "keeping last-good configuration", now),
+	return classify(model.ConditionTypeConfigApply, model.ConditionStatusWarn,
+		"DegradedKeepingLastGood", "keeping last-good configuration", now)
+}
+
+// collectConditions builds the per-cycle condition set the agent reports about itself. It is the
+// SINGLE funnel every emitter goes through (plan-1 configapply, plan-3 selfupdate + wireguard,
+// plan-5 mimic), so the curation + message-cap invariant lives in one place (classify). prev is the
+// PRIOR persisted State (recordSuccess/recordFailure pass it): the configapply condition reflects the
+// apply outcome (ok), the selfupdate condition is derived from prev (whose Health still holds a
+// terminal marker the new state resets — see selfUpdateCondition), and the wireguard condition is a
+// best-effort `wg show` sample that yields nothing on a probe error (never fails a cycle).
+func collectConditions(prev *State, ok bool, now time.Time) []model.Condition {
+	conds := []model.Condition{configApplyCondition(ok, now)}
+	if c, has := selfUpdateCondition(prev, now); has {
+		conds = append(conds, c)
 	}
+	if c, has := sampleWireGuardCondition(now); has {
+		conds = append(conds, c)
+	}
+	return conds
 }

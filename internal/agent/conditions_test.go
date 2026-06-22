@@ -8,30 +8,24 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// TestCollectConditions_MirrorsHealth pins plan-1's contract: the per-cycle condition set is exactly
-// one configapply condition that mirrors State.Health, with no other behavior change.
-func TestCollectConditions_MirrorsHealth(t *testing.T) {
+// TestConfigApplyCondition_MirrorsHealth pins plan-1's contract: the configapply condition mirrors
+// State.Health (ok→Applied, failure→DegradedKeepingLastGood) with no behavior change.
+func TestConfigApplyCondition_MirrorsHealth(t *testing.T) {
 	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 
-	got := collectConditions(true, now)
-	if len(got) != 1 {
-		t.Fatalf("success: len = %d, want 1", len(got))
+	ok := configApplyCondition(true, now)
+	if ok.Type != model.ConditionTypeConfigApply || ok.Status != model.ConditionStatusOK ||
+		ok.Reason != "Applied" || ok.Message != "configuration applied" {
+		t.Fatalf("success condition = %+v, want configapply/ok/Applied", ok)
 	}
-	if c := got[0]; c.Type != model.ConditionTypeConfigApply || c.Status != model.ConditionStatusOK ||
-		c.Reason != "Applied" || c.Message != "configuration applied" {
-		t.Fatalf("success condition = %+v, want configapply/ok/Applied", got[0])
-	}
-	if got[0].Since != now.Format(time.RFC3339) {
-		t.Fatalf("Since = %q, want %q", got[0].Since, now.Format(time.RFC3339))
+	if ok.Since != now.Format(time.RFC3339) {
+		t.Fatalf("Since = %q, want %q", ok.Since, now.Format(time.RFC3339))
 	}
 
-	bad := collectConditions(false, now)
-	if len(bad) != 1 {
-		t.Fatalf("failure: len = %d, want 1", len(bad))
-	}
-	if c := bad[0]; c.Type != model.ConditionTypeConfigApply || c.Status != model.ConditionStatusWarn ||
-		c.Reason != "DegradedKeepingLastGood" || c.Message != "keeping last-good configuration" {
-		t.Fatalf("failure condition = %+v, want configapply/warn/DegradedKeepingLastGood", bad[0])
+	bad := configApplyCondition(false, now)
+	if bad.Type != model.ConditionTypeConfigApply || bad.Status != model.ConditionStatusWarn ||
+		bad.Reason != "DegradedKeepingLastGood" || bad.Message != "keeping last-good configuration" {
+		t.Fatalf("failure condition = %+v, want configapply/warn/DegradedKeepingLastGood", bad)
 	}
 }
 

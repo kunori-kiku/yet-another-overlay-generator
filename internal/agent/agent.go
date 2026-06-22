@@ -339,9 +339,10 @@ func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult
 			s.MembershipEpoch = prev.MembershipEpoch
 		}
 	}
-	// Structured feedback (plan-1): one configapply condition mirroring Health, additive to the
-	// existing Health string. Regenerated each cycle; not custody state.
-	s.Conditions = collectConditions(true, time.Now().UTC())
+	// Structured feedback (plan-1/3): configapply (mirrors Health) + selfupdate (from prev, whose
+	// Health still holds a terminal marker this new state resets) + best-effort wireguard. Additive
+	// to the existing Health string; regenerated each cycle; not custody state.
+	s.Conditions = collectConditions(prev, true, time.Now().UTC())
 	persistAndReport(cfg, s)
 }
 
@@ -375,8 +376,10 @@ func recordFailure(cfg *Config, prev *State, detail string) {
 	if s.NodeID == "" {
 		s.NodeID = cfg.NodeID
 	}
-	// Structured feedback (plan-1): one configapply condition mirroring the degraded Health.
-	s.Conditions = collectConditions(false, time.Now().UTC())
+	// Structured feedback (plan-1/3): configapply (degraded) + selfupdate (from prev) + best-effort
+	// wireguard. The self-update breadcrumb / abandoned-target memory survive in prev across a failed
+	// apply, so the selfupdate condition stays correct even when the apply itself failed.
+	s.Conditions = collectConditions(prev, false, time.Now().UTC())
 	persistAndReport(cfg, s)
 }
 
