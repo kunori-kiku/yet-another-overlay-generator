@@ -1,23 +1,28 @@
 # STATUS
 <!-- regenerated: 2026-06-23 -->
-<!-- by: agent-feedback-and-version-aware-rollout subject — Phase I complete (plans 1-9 + CHANGELOG merged); beta.9 tag owner-gated -->
+<!-- by: agent-feedback-and-version-aware-rollout subject — DELIVERED; v2.0.0-beta.9 published -->
 
 ## Active work
 
-- **SUBJECT agent-feedback-and-version-aware-rollout — code COMPLETE (2026-06-23); beta.9 tag is the
-  only remaining step, owner-gated.** All nine feature plans merged (PRs #162–#170): the reusable
-  structured agent→panel **Node Conditions** channel (plan-1/2/3), **mimic→UDP per-link fallback**
-  (plan-4/5/6), **version-aware rollout** — panel knows + displays its own version, "Update all" →
-  panel version, refuse a target newer than the panel (plan-7/8), and **default release URLs /
-  working "Assist from release"** (plan-9). Each PR independently workflow-reviewed (4 lenses) → fixed
-  at root → re-reviewed clean → CI green → merged. **plan-10 Phase I (CHANGELOG roll for
-  `v2.0.0-beta.9`) merged (#171)**; the review caught that the beta.9 delta is the whole pre-rc.1
-  program (PRs #137–#171), so the notes now carry a full `Security` section (go1.26.4 + x/crypto CVE
-  clearance, plan-8 hardening), the in-browser local compiler + phone UX, and the air-gap boundary
-  change. **plan-10 Phase II — cut + push the annotated `v2.0.0-beta.9` tag (a `--prerelease`, NOT
-  Latest; beta.8 stays Latest) — is RESERVED FOR THE OWNER per their instruction.** Runbook +
-  release-notes (`/tmp/beta9-notes.md`) prepared; pre-flight all green (build-stamp reproduced, full
-  `-race` + airgap + FE suites pass).
+- **SUBJECT agent-feedback-and-version-aware-rollout — DELIVERED (2026-06-23); `v2.0.0-beta.9`
+  published.** All ten plans done. The reusable structured agent→panel **Node Conditions** channel
+  (plan-1/2/3), **mimic→UDP per-link fallback** (plan-4/5/6), **version-aware rollout** — panel knows +
+  displays its own version, "Update all" → panel version, refuse a target newer than the panel
+  (plan-7/8), and **default release URLs / working "Assist from release"** (plan-9). Each PR
+  independently workflow-reviewed (4 lenses) → fixed at root → re-reviewed clean → CI green → merged
+  (PRs #162–#173). plan-10 rolled the CHANGELOG (#171; the review caught that the beta.9 delta is the
+  whole pre-rc.1 program PRs #137–#171, so the notes carry a full `Security` section + the air-gap
+  boundary change) and **published `v2.0.0-beta.9`** (a `--prerelease`, NOT Latest — `v2.0.0-beta.8`
+  stays Latest). The first tag push exposed a real **release.yml gate bug** (gate-e2e ran the
+  non-blocking visual corpus AND built the panel without `VITE_E2E=1`, so the required ErrorBoundary
+  spec deterministically failed) — fixed in **#173** (gate-e2e now mirrors ci.yml's required job), tag
+  re-cut from the green tip, `release.yml` + `docker.yml` green, all 29 assets present (7 bundles, 7
+  airgap servers, agent linux/windows binaries **+ `.sha256` sidecars**, local-design zip). Smokes:
+  published `yaog-server`/`yaog-agent` `version` → `v2.0.0-beta.9`; agent `.sha256` verifies the
+  binary; `DefaultMimicReleaseBase` (hack3ric/mimic) reachable. **Owed:** owner browser+two-node smoke
+  of the new panel features (the agent-feedback subject's UI) — beta.9 was cut so the owner can smoke.
+  **Follow-up (non-blocking):** regenerate the visual-corpus baselines for the new settings UI via a
+  reviewed `--update-snapshots` run (the corpus is `continue-on-error` until that determinism pass).
 
 - **PRE-RC.1 PROGRAM COMPLETE (authorable scope) — all 22 plans across Subjects 1–4 merged (PRs
   #137–#159, 2026-06-19/21).** Every CI-gated rc.1 criterion is GREEN. The remaining steps to cut

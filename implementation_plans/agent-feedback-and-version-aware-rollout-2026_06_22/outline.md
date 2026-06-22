@@ -385,4 +385,4 @@ subject-specific additions:
 | plan-7 | controller version self-awareness (backend) | merged (#168) |
 | plan-8 | panel version + update-all-to-panel-version + refuse-newer guard | merged (#169) |
 | plan-9 | default release URLs + fix assist-from-release | merged (#170) |
-| plan-10 | release: CHANGELOG + cut & push v2.0.0-beta.9 | Phase I merged (#171); Phase II (tag cut) **owner-gated** |
+| plan-10 | release: CHANGELOG + cut & push v2.0.0-beta.9 | **delivered** — `v2.0.0-beta.9` published 2026-06-23 (prerelease, NOT Latest; beta.8 stays Latest). Required a release.yml gate fix (#173) before the tag passed. |
