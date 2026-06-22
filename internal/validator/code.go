@@ -66,6 +66,7 @@ const (
 	CodeEdgeTypeEmpty                      Code = "validation_edge_type_empty"
 	CodeEdgeTypeInvalid                    Code = "validation_edge_type_invalid"
 	CodeEdgeTransportInvalid               Code = "validation_edge_transport_invalid"
+	CodeEdgeMimicFallbackInvalid           Code = "validation_edge_mimic_fallback_invalid"
 	CodeEdgeEndpointHostIllegalChars       Code = "validation_edge_endpoint_host_illegal_chars"
 	CodeEdgeEndpointPortInvalid            Code = "validation_edge_endpoint_port_invalid"
 	CodeEdgeRoleInvalid                    Code = "validation_edge_role_invalid"
@@ -170,6 +171,7 @@ var registry = map[Code]string{
 	CodeEdgeTypeEmpty:                      "Edge type must not be empty.",
 	CodeEdgeTypeInvalid:                    "Invalid edge type: {type}. Allowed values: direct, public-endpoint, relay-path, candidate.",
 	CodeEdgeTransportInvalid:               "Invalid transport protocol: {transport}. Allowed values: udp, tcp.",
+	CodeEdgeMimicFallbackInvalid:           "Invalid mimic_fallback policy: {policy}. Allowed values: udp, none (empty = inherit fleet default).",
 	CodeEdgeEndpointHostIllegalChars:       "endpoint_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.",
 	CodeEdgeEndpointPortInvalid:            "Invalid endpoint port: {port}.",
 	CodeEdgeRoleInvalid:                    "Invalid link role: {role}. Allowed values: primary, backup (empty is equivalent to primary).",

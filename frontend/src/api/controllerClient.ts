@@ -706,6 +706,8 @@ export interface ControllerSettings {
   mimicVersion: string;
   mimicReleaseBase: string;
   mimicDebs: Record<string, AgentPin>;
+  // Fleet-wide mimic→UDP fallback policy a tcp link inherits ('' / 'udp' / 'none'). plan-4; UI in plan-6.
+  mimicFallbackDefault: string;
 }
 
 // SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go. The rollout + mimic
@@ -724,6 +726,7 @@ interface SettingsJSON {
   mimic_version?: string;
   mimic_release_base?: string;
   mimic_debs?: Record<string, AgentPin>;
+  mimic_fallback_default?: string;
 }
 
 function mapSettings(d: SettingsJSON): ControllerSettings {
@@ -741,6 +744,7 @@ function mapSettings(d: SettingsJSON): ControllerSettings {
     mimicVersion: d.mimic_version ?? '',
     mimicReleaseBase: d.mimic_release_base ?? '',
     mimicDebs: d.mimic_debs ?? {},
+    mimicFallbackDefault: d.mimic_fallback_default ?? '',
   };
 }
 
@@ -764,6 +768,7 @@ export function emptyControllerSettings(): ControllerSettings {
     mimicVersion: '',
     mimicReleaseBase: '',
     mimicDebs: {},
+    mimicFallbackDefault: '',
   };
 }
 
@@ -786,6 +791,7 @@ function toSettingsJSON(s: ControllerSettings): SettingsJSON {
     mimic_version: s.mimicVersion,
     mimic_release_base: s.mimicReleaseBase,
     mimic_debs: s.mimicDebs,
+    mimic_fallback_default: s.mimicFallbackDefault,
   };
 }
 

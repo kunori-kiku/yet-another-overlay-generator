@@ -85,6 +85,9 @@ export interface PeerInfo {
   // Whether this link has mimic (tcp shaping transport) enabled: equivalent to
   // link.primaryEdge.Transport=="tcp".
   mimic: boolean;
+  // The RESOLVED per-link mimic-fallback policy ('udp' or 'none', never ''). Pure policy carried for
+  // plan-5's install-script branch; not in any rendered artifact yet (mirrors PeerInfo.MimicFallback).
+  mimicFallback: string;
   // The effective WireGuard MTU this interface emits.
   // non-mimic: keep node.mtu as is (0 => renderer omits the MTU line).
   // mimic: ((node.mtu>0 ? node.mtu : 1420) − 12).
@@ -102,6 +105,9 @@ export interface ClientPeerInfo {
   mtu: number;
   // Whether the client's single outbound edge has mimic enabled (transport=="tcp").
   mimic: boolean;
+  // The RESOLVED per-link mimic-fallback policy ('udp' or 'none', never ''). Pure policy carried for
+  // plan-5; not in any rendered artifact yet (mirrors ClientPeerInfo.MimicFallback).
+  mimicFallback: string;
   // The client's WireGuard private key.
   privateKey: string;
   // Router-side information.

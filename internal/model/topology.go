@@ -166,6 +166,16 @@ type Edge struct {
 	// Transport protocol: udp, tcp.
 	Transport string `json:"transport,omitempty"`
 
+	// MimicFallback is the per-link mimic→UDP fallback POLICY. Only meaningful on a
+	// transport=="tcp" (mimic) edge; ignored on a udp edge. Tri-state:
+	//   ""      inherit the fleet-wide default (ControllerSettings.MimicFallbackDefault);
+	//   "udp"   if mimic provisioning fails at install time, bring the link up as plain UDP;
+	//   "none"  fail closed (do not fall back) — preserves mimic's censorship-evasion guarantee.
+	// PURE POLICY: it feeds the renderer-input PeerInfo, NEVER the allocator (allocation stays
+	// byte-identical). omitempty for back-compat: an old topology with no field loads as "" (inherit).
+	// See docs/spec/data-model/edge.md §TCP transport and docs/spec/artifacts/mimic.md.
+	MimicFallback string `json:"mimic_fallback,omitempty"`
+
 	// Whether the edge is enabled.
 	IsEnabled bool `json:"is_enabled"`
 

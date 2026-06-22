@@ -430,6 +430,21 @@ function effectiveMTU(nodeMTU: number, mimic: boolean): number {
   return base - mimicMTUOverhead;
 }
 
+// Mimic-fallback policy values (mirror compiler peers.go). '' on an EDGE means "inherit the fleet
+// default"; the RESOLVED value is always 'udp' or 'none'.
+const mimicFallbackUDP = 'udp';
+const mimicFallbackNone = 'none';
+
+// resolveMimicFallback mirrors compiler.resolveMimicFallback (peers.go). PURE, deterministic in its
+// two args only — keeps the Go↔TS conformance byte-set identical. Resolves to 'udp' or 'none' only.
+// The local engine has no controller fleet default, so callers pass defaultPolicy = '' ⇒ resolves to
+// 'none' everywhere ⇒ byte-identical to the pre-change pipeline.
+export function resolveMimicFallback(edgePolicy: string | undefined, defaultPolicy: string): string {
+  if (edgePolicy === mimicFallbackUDP) return mimicFallbackUDP;
+  if (edgePolicy === mimicFallbackNone) return mimicFallbackNone;
+  return defaultPolicy === mimicFallbackUDP ? mimicFallbackUDP : mimicFallbackNone;
+}
+
 // deriveLinkCost derives a link's Babel rxcost override. Resolution order (peers.go:1078-1091):
 //   1. explicit operator setting: edge.priority (>0) wins, else edge.weight (>0) — adopted verbatim;
 //   2. backup preset: backup link without an explicit setting => BackupDefaultLinkCost (384);
@@ -594,6 +609,7 @@ function derivePass2(
         clientOverlayIP: fromNode.overlay_ip ?? '',
         linkCost: 0,
         mimic,
+        mimicFallback: resolveMimicFallback(link.primaryEdge?.mimic_fallback, ''),
         mtu: effectiveMTU(toNode.mtu ?? 0, mimic),
       };
 
@@ -676,6 +692,7 @@ function derivePass2(
       clientOverlayIP: '',
       linkCost,
       mimic,
+      mimicFallback: resolveMimicFallback(link.primaryEdge?.mimic_fallback, ''),
       // The local interface belongs to fromNode, so derive MTU from fromNode.mtu.
       mtu: effectiveMTU(fromNode.mtu ?? 0, mimic),
     };
@@ -776,6 +793,7 @@ function derivePass2(
       clientOverlayIP: '',
       linkCost,
       mimic,
+      mimicFallback: resolveMimicFallback(link.primaryEdge?.mimic_fallback, ''),
       // The reverse peer's local interface belongs to toNode, so derive MTU from toNode.mtu.
       mtu: effectiveMTU(toNode.mtu ?? 0, mimic),
     };
@@ -904,6 +922,7 @@ export function deriveClientConfigs(
       overlayIP: node.overlay_ip ?? '',
       mtu: effectiveMTU(node.mtu ?? 0, mimic),
       mimic,
+      mimicFallback: resolveMimicFallback(clientEdge?.mimic_fallback, ''),
       privateKey: clientKey.privateKey,
       routerPublicKey: routerKey.publicKey,
       routerEndpoint,

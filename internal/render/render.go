@@ -249,6 +249,10 @@ type FetchSettings struct {
 	MimicVersion     string
 	MimicReleaseBase string
 	MimicDebs        map[string]Artifact
+	// MimicFallbackDefault is the fleet-wide mimic→UDP fallback policy a link inherits when its edge
+	// leaves mimic_fallback empty ("" / "udp" / "none"). PURE policy threaded to the compiler
+	// (compiler.WithMimicFallbackDefault); "" ⇒ resolves to "none" everywhere ⇒ byte-identical.
+	MimicFallbackDefault string
 	// Agent self-update (plan-9): the desired/floor agent versions, the agent release base URL, and the
 	// per-"linux-<arch>" binary asset + SHA-256 the agent verifies against the signed artifacts.json
 	// pin. NOT consumed by install.sh (the agent self-updates at runtime); carried here for the signed

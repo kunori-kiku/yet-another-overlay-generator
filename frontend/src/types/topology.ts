@@ -90,6 +90,10 @@ export interface Edge {
   // See docs/spec/data-model/edge.md (§Parallel links).
   role?: 'primary' | 'backup';
   transport?: 'udp' | 'tcp';
+  // Per-link mimic→UDP fallback POLICY (plan-4). undefined/omitted = inherit fleet default; 'udp' =
+  // fall back to plain UDP if mimic provisioning fails; 'none' = fail closed. Only meaningful on a
+  // tcp edge. See docs/spec/data-model/edge.md §TCP transport.
+  mimic_fallback?: 'udp' | 'none';
   is_enabled: boolean;
   notes?: string;
   // Allocation pins: written by the compiler and echoed back verbatim, so that a recompile preserves existing

@@ -84,6 +84,10 @@ type Compiler struct {
 	// by edges outside the subgraph, so subgraph compiles let gap-fill avoid them and prevent
 	// cross-subgraph pin collisions. nil (the default) = full compile, behavior unchanged.
 	reserved *ReservedAllocations
+	// mimicFallbackDefault is the fleet-wide mimic-fallback policy a link inherits when its edge
+	// leaves mimic_fallback empty. "" (the default) ⇒ no fleet preference ⇒ resolveMimicFallback
+	// floors to "none" — byte-identical to the pre-change pipeline. PURE policy, never allocation.
+	mimicFallbackDefault string
 }
 
 // NewCompiler constructs a Compiler with a fresh IP allocator.
@@ -98,6 +102,15 @@ func NewCompiler() *Compiler {
 // subgraph compiles need it; full compiles (air-gap CLI / API) do not call it and reserved stays nil.
 func (c *Compiler) WithReserved(r *ReservedAllocations) *Compiler {
 	c.reserved = r
+	return c
+}
+
+// WithMimicFallbackDefault sets the fleet-wide mimic-fallback default and returns the same *Compiler
+// for chaining. Full air-gap/CLI compiles do not call it (default stays "" ⇒ resolveMimicFallback
+// floors to "none" everywhere ⇒ byte-identical). Only the controller threads the operator setting
+// through (via localcompile from render.FetchSettings).
+func (c *Compiler) WithMimicFallbackDefault(policy string) *Compiler {
+	c.mimicFallbackDefault = policy
 	return c
 }
 
@@ -171,13 +184,13 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	// On a subgraph compile c.reserved is non-nil, letting gap-fill avoid the resources occupied by
 	// out-of-subgraph edges (the cross-subgraph collision root-cause fix); on a full compile
 	// c.reserved==nil, and derivePeers degrades to the original DerivePeers behavior.
-	peerMap, pairAllocations, err := derivePeers(compiledTopo, keys, c.reserved)
+	peerMap, pairAllocations, err := derivePeers(compiledTopo, keys, c.reserved, c.mimicFallbackDefault)
 	if err != nil {
 		return nil, fmt.Errorf("deriving WireGuard peer configuration failed: %w", err)
 	}
 
 	// Client configs.
-	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations)
+	clientConfigs := DeriveClientConfigs(compiledTopo, keys, pairAllocations, c.mimicFallbackDefault)
 
 	// Write the resources allocated to each enabled edge back into its pin fields (the six
 	// pinned_*), oriented by this edge's from/to direction; also write back the read-only

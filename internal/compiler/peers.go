@@ -167,6 +167,37 @@ func isMimicEdge(edge *model.Edge) bool {
 	return edge != nil && edge.Transport == transportTCP
 }
 
+// Mimic-fallback policy values (the closed enum for Edge.MimicFallback and the resolved
+// PeerInfo.MimicFallback). "" on an EDGE means "inherit the fleet default"; the RESOLVED value on a
+// PeerInfo is always one of mimicFallbackUDP / mimicFallbackNone (never "").
+const (
+	mimicFallbackInherit = ""     // edge-level only: defer to the fleet-wide default
+	mimicFallbackUDP     = "udp"  // fall back to plain UDP if mimic provisioning fails
+	mimicFallbackNone    = "none" // fail closed; do not fall back (the shipped default, D1)
+)
+
+// resolveMimicFallback computes the EFFECTIVE per-link mimic-fallback policy:
+//   - edgePolicy "udp"/"none"                 -> that explicit edge choice;
+//   - edgePolicy "" (inherit) + default "udp" -> "udp";
+//   - otherwise                               -> "none" (the fail-closed floor — D1, shipped OFF).
+//
+// PURE: deterministic in its two string args only, so the Go and TS ports stay byte-identical and it
+// never touches allocation. An unrecognized defaultPolicy (defensive) also floors to "none". With
+// defaultPolicy=="" (the air-gap/CLI + conformance default) every link resolves to "none" — which
+// plan-5 renders identically to today's fail-closed mimic install, so no rendered artifact changes.
+func resolveMimicFallback(edgePolicy, defaultPolicy string) string {
+	switch edgePolicy {
+	case mimicFallbackUDP:
+		return mimicFallbackUDP
+	case mimicFallbackNone:
+		return mimicFallbackNone
+	}
+	if defaultPolicy == mimicFallbackUDP {
+		return mimicFallbackUDP
+	}
+	return mimicFallbackNone
+}
+
 // effectiveMTU computes the effective MTU a WireGuard interface on a link should emit.
 // Spec (docs/spec/artifacts/mimic.md "MTU −12" / docs/spec/data-model/edge.md §TCP transport):
 //   - non-mimic: keep node.MTU as is (0 ⇒ still 0 ⇒ renderer omits the MTU line,
@@ -251,6 +282,11 @@ type PeerInfo struct {
 	// mimic listen ports.
 	Mimic bool
 
+	// MimicFallback is the RESOLVED per-link mimic-fallback policy ("udp" or "none", never "").
+	// Pure policy: plan-5's install-script branch reads it; this plan only carries it. It is NOT
+	// part of any rendered artifact yet, so adding it leaves all current output byte-identical.
+	MimicFallback string
+
 	// The effective WireGuard MTU this interface emits.
 	// non-mimic: keep node.MTU as is (0 ⇒ renderer omits the MTU line, byte-unchanged).
 	// mimic: ((node.MTU>0 ? node.MTU : 1420) − 12), subtracting mimic's 12-byte overhead
@@ -262,7 +298,9 @@ type PeerInfo struct {
 // New architecture: one dedicated interface per peer.
 // Returns map[nodeID][]PeerInfo.
 func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
-	return derivePeers(topo, keys, nil)
+	// External callers get the fail-closed default ("" resolves to "none"); the controller threads a
+	// real fleet default via the compiler's WithMimicFallbackDefault → derivePeers path.
+	return derivePeers(topo, keys, nil, mimicFallbackInherit)
 }
 
 // derivePeers is the internal variant of DerivePeers that additionally accepts a set
@@ -270,14 +308,14 @@ func DerivePeers(topo *model.Topology, keys map[string]KeyPair) (map[string][]Pe
 // (air-gap CLI / API) pass nil — there are no dropped edges in the topology, so the
 // behavior is byte-identical to before the change; only the controller's subgraph
 // compile passes a non-nil reservation set (see CompileSubgraph).
-func derivePeers(topo *model.Topology, keys map[string]KeyPair, reserved *ReservedAllocations) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
+func derivePeers(topo *model.Topology, keys map[string]KeyPair, reserved *ReservedAllocations, mimicFallbackDefault string) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	// Build the domain index
 	domainMap := make(map[string]*model.Domain)
 	for i := range topo.Domains {
 		domainMap[topo.Domains[i].ID] = &topo.Domains[i]
 	}
 
-	return derivePeersWithDomains(topo, keys, domainMap, reserved)
+	return derivePeersWithDomains(topo, keys, domainMap, reserved, mimicFallbackDefault)
 }
 
 // pairAllocation holds the pre-allocated resources for a node pair (ports, transit
@@ -297,7 +335,7 @@ type pairAllocation struct {
 // Pass 1: pre-allocate the ports and address resources for all node pairs.
 // Pass 2: build PeerInfo using the pre-allocated ports (ensuring endpoint port =
 // remote interface listen port).
-func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain, reserved *ReservedAllocations) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
+func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain, reserved *ReservedAllocations, mimicFallbackDefault string) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	peerMap := make(map[string][]PeerInfo)
 
 	// Node index
@@ -698,6 +736,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 					IsClientPeer:        true,
 					ClientOverlayIP:     fromNode.OverlayIP,
 					Mimic:               mimic,
+					MimicFallback:       resolveMimicFallback(link.primaryEdge.MimicFallback, mimicFallbackDefault),
 					MTU:                 effectiveMTU(toNode.MTU, mimic),
 				}
 
@@ -797,6 +836,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			ClientOverlayIP:     "",
 			LinkCost:            linkCost,
 			Mimic:               mimic,
+			MimicFallback:       resolveMimicFallback(link.primaryEdge.MimicFallback, mimicFallbackDefault),
 			// The local interface belongs to fromNode, so derive from fromNode.MTU.
 			MTU: effectiveMTU(fromNode.MTU, mimic),
 		}
@@ -893,8 +933,9 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				// The reverse peer belongs to one link → same mimic flag; the local
 				// interface belongs to toNode, so derive from toNode.MTU
 				// (docs/spec/artifacts/mimic.md "MTU −12").
-				Mimic: mimic,
-				MTU:   effectiveMTU(toNode.MTU, mimic),
+				Mimic:         mimic,
+				MimicFallback: resolveMimicFallback(link.primaryEdge.MimicFallback, mimicFallbackDefault),
+				MTU:           effectiveMTU(toNode.MTU, mimic),
 			}
 
 			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)
@@ -1183,6 +1224,10 @@ type ClientPeerInfo struct {
 	// set of mimic listen ports.
 	Mimic bool
 
+	// MimicFallback is the RESOLVED per-link mimic-fallback policy ("udp" or "none", never "").
+	// Pure policy carried for plan-5's install-script branch; not in any rendered artifact yet.
+	MimicFallback string
+
 	// The client's WireGuard private key
 	PrivateKey string
 
@@ -1198,7 +1243,7 @@ type ClientPeerInfo struct {
 }
 
 // DeriveClientConfigs generates wg0 configuration info for all client nodes.
-func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocations map[string]*pairAllocation) map[string]*ClientPeerInfo {
+func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocations map[string]*pairAllocation, mimicFallbackDefault string) map[string]*ClientPeerInfo {
 	configs := make(map[string]*ClientPeerInfo)
 
 	nodeMap := make(map[string]*model.Node)
@@ -1302,6 +1347,7 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			OverlayIP:       node.OverlayIP,
 			MTU:             effectiveMTU(node.MTU, mimic),
 			Mimic:           mimic,
+			MimicFallback:   resolveMimicFallback(clientEdge.MimicFallback, mimicFallbackDefault),
 			PrivateKey:      clientKey.PrivateKey,
 			RouterPublicKey: routerKey.PublicKey,
 			RouterEndpoint:  routerEndpoint,

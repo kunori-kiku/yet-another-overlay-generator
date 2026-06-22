@@ -8,7 +8,7 @@
     "wgPerPeerConfigTemplate": "a8c45243c8367f6c9533fb16530fe441d6375b35c9e73dedacae81a3e8557257"
   },
   "validator_codes": {
-    "count": 97,
+    "count": 98,
     "codes": [
       "validation_client_endpoint_host_required",
       "validation_client_extra_prefixes_meaningless",
@@ -44,6 +44,7 @@
       "validation_edge_from_node_id_required",
       "validation_edge_id_duplicate",
       "validation_edge_id_required",
+      "validation_edge_mimic_fallback_invalid",
       "validation_edge_mimic_platform_unsupported",
       "validation_edge_multiple_explicit_primary",
       "validation_edge_node_ref_missing",
