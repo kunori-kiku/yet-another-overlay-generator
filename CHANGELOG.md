@@ -11,32 +11,40 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [2.0.0-beta.9] - 2026-06-23
 
-Makes the controller panel a trustworthy fleet-operations console: a structured agent→panel
-feedback channel ("Node Conditions"), a per-link mimic→UDP fallback so an old-kernel node is not
-blocked, panel version self-awareness with version-aware agent rollout, and working default release
-URLs for both the agent and mimic. Additive and backward-compatible; shipped as a beta prerelease
-(`v2.0.0-beta.8` stays GitHub Latest).
+The first release since beta.8, folding in the whole pre-rc.1 program — a backend/local-compute
+refactor with a hardening security re-audit, a phone/responsive operator UX pass, an end-to-end test
+foundation — plus the agent→panel feedback work that makes the controller panel a trustworthy fleet
+operations console (structured "Node Conditions", per-link mimic→UDP fallback, version-aware agent
+rollout, working default release URLs). The agent-feedback features are additive and
+backward-compatible (old agents send no conditions; old controllers ignore the field). One deliberate
+**backward-incompatible** hardening: the default controller build no longer serves the anonymous
+`/api/{validate,compile,export,deploy-script}` compute routes (see **Changed**). Shipped as a beta
+prerelease — `v2.0.0-beta.8` stays GitHub Latest.
 
 ### Added
 - **Node Conditions feedback channel.** Agents now report structured, curated conditions
   (`{type, status, reason, message, since}`) for `config-apply`, `self-update`, `wireguard`, and
   `mimic` alongside the legacy `health` string. A single agent-side `classify()` chokepoint caps each
   message and emits only closed reason enums (never raw stderr), and the panel renders them
-  generically (colour by status, tooltip = curated message). Fully additive: old agents send no
-  conditions and old controllers ignore the field. (plan-1, plan-2, plan-3)
+  generically (colour by status, tooltip = curated message).
 - **Mimic → UDP fallback, per link.** An edge gains a tri-state `mimic_fallback`
   (inherit / `udp` / `none`) with a fleet-wide `MimicFallbackDefault`. When the resolved policy is
   `udp` and mimic provisioning fails (kernel too old, eBPF load, install), the link comes up as plain
   UDP and reports a categorised, loud `warn` mimic condition instead of staying down; otherwise it
   fails closed (unchanged). The shipped default is conservative (`none` — fail closed), preserving
-  mimic's censorship-evasion guarantee; the operator opts in fleet-wide or per link. (plan-4, plan-5,
-  plan-6)
+  mimic's censorship-evasion guarantee; the operator opts in fleet-wide or per link.
 - **Default release URLs + working "Assist from release."** A `DefaultMimicReleaseBase` (the upstream
   `hack3ric/mimic` `releases/latest/download` alias) ships so the mimic `.deb` catalog assist no
   longer hard-errors on a never-edited controller, and the agent assist pins to a real release tag
   instead of leaving the base on the moving `latest` alias (killing the silent rollout stall). The
   panel placeholders now show the real defaults. Custody is unchanged — assist only fills pins the
-  operator reviews and saves through the validated `/settings` path. (plan-9)
+  operator reviews and saves through the validated `/settings` path.
+- **Phone / responsive operator UX.** The operator panel now lays out for phone and tablet: an
+  off-canvas navigation drawer/sheet, a read-only canvas gate on small screens, and a responsive
+  pass across the operator pages.
+- **In-browser local design compiler.** Local (non-controller) design now compiles entirely in the
+  browser via a TypeScript port of the Go compiler, pinned byte-for-byte to the Go output by a
+  Go↔TS conformance gate in CI — so local design needs no backend at all.
 
 ### Changed
 - **Version-aware agent rollout.** The controller now knows and displays its own build version (in
@@ -45,10 +53,33 @@ URLs for both the agent and mimic. Additive and backward-compatible; shipped as 
   never auto-saves), and the controller refuses to set an agent target newer than itself
   (`agent_target_newer_than_controller`, with an advisory hint before save). The version comparator is
   single-sourced (`internal/version`) so the agent's anti-downgrade floor and the controller's
-  refuse-newer guard can never diverge. (plan-7, plan-8)
+  refuse-newer guard can never diverge.
 - **Self-update status is read from a structured condition** rather than free-form `health`
   substring-matching when a `selfupdate` condition is present (the legacy string fallback is retained
-  for old agents). (plan-3)
+  for old agents).
+- **Local design moved to the browser; the backend is controller-only.** Local mode is now
+  browser-resident by default and the Go backend's job is the operator-gated controller path.
+- **Anonymous compute routes are gated behind a build tag (backward-incompatible for the default
+  build).** The four anonymous routes `POST /api/{validate,compile,export,deploy-script}` are now
+  compiled only into the `-tags airgap` build (the local-design oracle / air-gapped target) and are
+  **absent (404) from the default controller build**, so no unauthenticated path reaches the compile
+  pipeline in the shipped controller. The default controller boot fails loud if its controller
+  environment is unset rather than standing up an anonymous compute listener. Operators who relied on
+  the anonymous routes must use the `-tags airgap` build or the in-browser local-design path.
+
+### Security
+- **Toolchain + crypto bump clearing reachable CVEs.** Builds now pin `toolchain go1.26.4` and
+  `golang.org/x/crypto v0.52.0` (up from the go1.25 stdlib / x/crypto v0.31.0), clearing reachable
+  `crypto/x509`, `crypto/tls`, `encoding/pem`, and `net/url` advisories. A required `govulncheck`
+  gate (plus a gosec + npm SCA scan) now blocks a release that reintroduces a reachable vulnerability.
+- **Release-pin fetch SSRF completeness.** The server-side "Assist from release" fetch closes the
+  remaining SSRF gaps (redirect/egress handling) so a crafted base cannot reach a private address.
+- **Bootstrap operator-credential binding validated at pin time** (RPID/Origin), with a loud
+  TOFU/MITM startup warning when a legacy unsafe binding is detected.
+- **Durability + auth hardening.** The file store now fsyncs on write (no torn state on crash),
+  passkey login binds the WebAuthn Origin, and the IP allocator caps its scan budget to bound a
+  pathological-topology DoS.
+- **Diff-aware adversarial security re-audit** of the whole pre-rc.1 delta signed off before this cut.
 
 ## [2.0.0-beta.8] - 2026-06-18
 
