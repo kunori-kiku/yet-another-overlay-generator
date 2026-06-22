@@ -729,7 +729,7 @@ interface SettingsJSON {
   mimic_fallback_default?: string;
 }
 
-function mapSettings(d: SettingsJSON): ControllerSettings {
+export function mapSettings(d: SettingsJSON): ControllerSettings {
   return {
     publicAgentURL: d.public_agent_url,
     githubProxy: d.github_proxy,
@@ -777,7 +777,7 @@ export function emptyControllerSettings(): ControllerSettings {
 // from the body (handler_bootstrap.go), so any omitted field is persisted as its zero value — an
 // omit-list literal here would silently WIPE the rollout/mimic config on an unrelated edit. The
 // read-only agent_path_prefix is deliberately NOT sent (server-derived; POST ignores it).
-function toSettingsJSON(s: ControllerSettings): SettingsJSON {
+export function toSettingsJSON(s: ControllerSettings): SettingsJSON {
   return {
     public_agent_url: s.publicAgentURL,
     github_proxy: s.githubProxy,

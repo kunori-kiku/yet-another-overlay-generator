@@ -53,7 +53,7 @@ export function FleetNodeDetailPage() {
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.health')}>{node.lastHealth || '—'}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.conditions')}>
-              {node.conditions.length > 0 ? <NodeConditions conditions={node.conditions} /> : '—'}
+              {node.conditions.length > 0 ? <NodeConditions conditions={node.conditions} language={language} /> : '—'}
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.agentVersion')}>{node.agentVersion || '—'}</Field>
             <Field label={t(language, 'updateStatus.label')}>
