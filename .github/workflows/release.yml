@@ -114,9 +114,15 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Run E2E suite
+      # Mirror ci.yml's REQUIRED frontend-e2e step exactly: the functional/adversarial suite + the
+      # deterministic responsive BEHAVIOR matrix, EXCLUDING the pixel "visual corpus". The visual
+      # snapshots are a deliberately NON-blocking, not-yet-CI-stable gate (ci.yml runs them as a
+      # separate continue-on-error step; e2e/README.md §visual-regression). Gating a release tag on
+      # them would block on a check the project does not treat as required, so this step must use the
+      # same --grep-invert as the required CI step, not the full `npm run test:e2e`.
+      - name: Run E2E suite (required set — excludes the non-blocking visual corpus)
         working-directory: frontend
-        run: npm run test:e2e
+        run: npm run test:e2e -- --grep-invert "visual corpus"
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
