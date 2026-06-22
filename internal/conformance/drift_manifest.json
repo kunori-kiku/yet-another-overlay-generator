@@ -111,11 +111,12 @@
     ]
   },
   "apierr_codes": {
-    "count": 58,
+    "count": 59,
     "codes": [
       "agent_release_fetch_failed",
       "agent_release_request_invalid",
       "agent_release_sidecar_invalid",
+      "agent_target_newer_than_controller",
       "auth_credentials_invalid",
       "auth_passkey_failed",
       "auth_passkey_verify_failed",

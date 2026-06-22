@@ -49,6 +49,13 @@ type loginResponseJSON struct {
 	Operator     string `json:"operator"`
 	ExpiresAt    string `json:"expires_at"`
 	CSRFToken    string `json:"csrf_token"`
+	// ControllerVersion mirrors GET /session (plan-7/8): every successful login echoes the
+	// controller's own build version so the panel can surface it + use it as the one-click agent
+	// rollout target IMMEDIATELY, without waiting for the next /session probe. h.version is a real
+	// semver on a stamped release or the literal "dev" on an unstamped build (NewControllerHandler
+	// normalizes an empty BuildVersion to "dev"), so this is normally populated; omitempty is
+	// defensive for a future "" and never fires on the live controller path.
+	ControllerVersion string `json:"controller_version,omitempty"`
 }
 
 // HandleLogin authenticates an operator by username + password and mints a session.
@@ -193,10 +200,11 @@ func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx conte
 		Action:    "login-success",
 	})
 	writeJSON(w, http.StatusOK, loginResponseJSON{
-		SessionToken: plaintext,
-		Operator:     op.Username,
-		ExpiresAt:    sess.ExpiresAt.Format(time.RFC3339),
-		CSRFToken:    csrf,
+		SessionToken:      plaintext,
+		Operator:          op.Username,
+		ExpiresAt:         sess.ExpiresAt.Format(time.RFC3339),
+		CSRFToken:         csrf,
+		ControllerVersion: h.version,
 	})
 }
 

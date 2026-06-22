@@ -24,6 +24,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/version"
 )
 
 // settingsJSON is the wire form of the operator-editable controller settings.
@@ -161,7 +162,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			writeAPIError(w, err)
 			return
 		}
-		if err := validateAgentRollout(cs); err != nil {
+		if err := validateAgentRollout(cs, h.version); err != nil {
 			writeAPIError(w, err)
 			return
 		}
@@ -359,7 +360,16 @@ func UnsafeOperatorCredentialBindingField(cred controller.OperatorCredential) st
 // as a misconfiguration rather than silently freeze the rollout. The agent release base is the
 // already-validated AgentReleaseBaseURL (http(s)). Canary node-ids need no format check: an id
 // matching no enrolled node is simply absent from the rollout set (AgentRolloutNodeIDs intersects).
-func validateAgentRollout(cs controller.ControllerSettings) *apierr.Error {
+// validateAgentRollout also enforces the plan-8 refuse-newer floor: a TargetAgentVersion strictly
+// NEWER than controllerVersion is rejected, because the controller can only certify a self-update
+// target its own release pipeline shipped (the release the agent fetches is published by the same
+// pipeline that stamps BuildVersion), so a newer target can only ever fail-closed at verify time —
+// reject it at save with a clear coded error rather than arming a rollout that can never converge.
+// controllerVersion is the in-process main.BuildVersion (plan-7). The floor is a PRODUCTION safety net,
+// not a dev blocker: an unstamped/non-semver controllerVersion (a "dev" `go run` build) DISABLES the
+// floor (version.Compare treats a non-semver core as 0.0.0, which would otherwise reject every real
+// target and freeze a dev controller), so the floor only applies when controllerVersion is real semver.
+func validateAgentRollout(cs controller.ControllerSettings, controllerVersion string) *apierr.Error {
 	if cs.TargetAgentVersion != "" && !semverPattern.MatchString(cs.TargetAgentVersion) {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "target_agent_version")
 	}
@@ -379,6 +389,16 @@ func validateAgentRollout(cs controller.ControllerSettings) *apierr.Error {
 	}
 	if cs.TargetAgentVersion != "" && len(cs.AgentBins) == 0 {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_bins")
+	}
+	// Refuse-newer floor (plan-8): reject a target strictly newer than the controller's own version,
+	// using the SAME comparator as the agent's anti-downgrade floor (internal/version, single-sourced).
+	// Only applies when controllerVersion is real semver — a dev/unstamped build's non-semver version
+	// would otherwise reject every target, so it disables the floor instead of freezing the controller.
+	if cs.TargetAgentVersion != "" && semverPattern.MatchString(controllerVersion) &&
+		version.Compare(cs.TargetAgentVersion, controllerVersion) > 0 {
+		return apierr.New(apierr.CodeAgentTargetNewerThanController).
+			With("target", cs.TargetAgentVersion).
+			With("controller", controllerVersion)
 	}
 	return nil
 }

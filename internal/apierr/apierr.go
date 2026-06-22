@@ -107,6 +107,13 @@ const (
 	CodeAgentReleaseFetchFailed    Code = "agent_release_fetch_failed"    // 502: upstream fetch failed
 	CodeAgentReleaseSidecarInvalid Code = "agent_release_sidecar_invalid" // 502: sidecar not a SHA-256
 
+	// CodeAgentTargetNewerThanController (plan-8 refuse-newer floor): the operator set a
+	// target_agent_version strictly NEWER than the controller's own build version. The controller can
+	// only certify a self-update target its release pipeline shipped, so a newer target can never
+	// converge (it fails closed at the agent's verify step) — reject it at save with the two versions
+	// echoed back rather than arming a rollout that bricks nothing but freezes on every poll.
+	CodeAgentTargetNewerThanController Code = "agent_target_newer_than_controller" // 400: target > controller
+
 	// Bundle-signing anchor (persist-signing-anchor) — the controller pins the signing PUBLIC key
 	// a fleet's bundles are signed with, so a redeploy that drops or swaps the signing key is
 	// DETECTED at stage time instead of silently downgrading. CodeSigningKeyMissing: the fleet is
@@ -200,6 +207,8 @@ var registry = map[Code]def{
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},
 	CodeAgentReleaseFetchFailed:    {"Could not fetch the release checksum from {url}: {detail}", http.StatusBadGateway},
 	CodeAgentReleaseSidecarInvalid: {"The release checksum fetched from {url} is not a valid SHA-256.", http.StatusBadGateway},
+
+	CodeAgentTargetNewerThanController: {"The agent target version {target} is newer than the controller version {controller}; the controller can only roll agents to a version it has shipped.", http.StatusBadRequest},
 
 	CodeSigningKeyMissing:  {"This fleet's bundles are signed, but no signing key is configured (YAOG_BUNDLE_SIGNING_KEY is unset or unreadable). Refusing to stage unsigned bundles — restore the signing key.", http.StatusPreconditionFailed},
 	CodeSigningKeyMismatch: {"The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.", http.StatusConflict},

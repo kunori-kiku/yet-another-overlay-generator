@@ -249,6 +249,13 @@ interface ControllerState {
   // valid after a refresh (at which point sessionToken has been lost with memory).
   // selectLoggedIn = sessionToken !== '' || loggedIn.
   loggedIn: boolean;
+  // controllerVersion is the controller's own build version, surfaced on /session and login
+  // (plan-7/8): a real semver on a stamped release, the literal "dev" on an unstamped build, or ""
+  // only when an older controller predates the field. The user menu displays it verbatim; the
+  // agent-update panel uses a real-semver value as the one-click "update all agents" target + the
+  // refuse-newer advisory (treating "dev"/non-semver as "no version to match"). Memory only, never
+  // persisted (server truth).
+  controllerVersion: string;
 
   // TOTP 2FA (plan-5.2): totpRequired means the last login had the correct password but a
   // missing/wrong second-factor code (backend 401 totp_required); the login form shows the code
@@ -633,6 +640,7 @@ export const useControllerStore = create<ControllerState>()(
       sessionExpiresAt: null,
       csrfToken: '',
       loggedIn: false,
+      controllerVersion: '',
 
       totpRequired: false,
       totpEnabled: null,
@@ -797,6 +805,7 @@ export const useControllerStore = create<ControllerState>()(
                   loggedIn: true,
                   operatorName: after.result.operator,
                   sessionExpiresAt: after.result.expiresAt,
+                  controllerVersion: after.result.controllerVersion,
                   totpRequired: false,
                   loginCeremony: false,
                   loading: false,
@@ -841,6 +850,7 @@ export const useControllerStore = create<ControllerState>()(
             loggedIn: true,
             operatorName: outcome.result.operator,
             sessionExpiresAt: outcome.result.expiresAt,
+            controllerVersion: outcome.result.controllerVersion,
             totpRequired: false,
             loading: false,
           });
@@ -947,6 +957,7 @@ export const useControllerStore = create<ControllerState>()(
           loggedIn: false,
           operatorName: null,
           sessionExpiresAt: null,
+          controllerVersion: '',
           // Clear the 2FA session state: reset totpRequired, return totpEnabled to "unknown", so
           // the next operator who logs in with a password re-fetches their own account's status
           // (TwoFactorSettings's guarded effect re-fires when it is null).
@@ -996,7 +1007,14 @@ export const useControllerStore = create<ControllerState>()(
           // server-authoritative keystone status so the panel never renders a premature/false
           // "Not enrolled" on mount. Best-effort; null info (401/403) leaves it unprobed.
           if (info) {
+            // controllerVersion is server truth on every authed probe (genuine cookie session OR
+            // break-glass Bearer), so capture it here rather than in the login-only branch below.
+            // It is NOT cleared in the break-glass branch (empty csrf) below — break-glass is authed,
+            // just "not a login" — only on a genuine session loss (the `!info` else here / the catch).
+            set({ controllerVersion: info.controllerVersion });
             await get().hydrateKeystoneStatus();
+          } else {
+            set({ controllerVersion: '' });
           }
           // Only a GENUINE cookie session counts as "logged in". GET /session also answers
           // 200 for a break-glass Bearer token (it authenticates operator routes), but
@@ -1032,6 +1050,9 @@ export const useControllerStore = create<ControllerState>()(
             // the gate uses the live baseline to judge dirty accurately.
             // Also flush the server-authoritative keystone status (lockstep with logout) so a stale
             // enrolled/redeploy status can't render before the next probe.
+            // NOTE: controllerVersion is NOT cleared here — this else also runs for a break-glass
+            // token (info present, empty csrf), which is authed and should keep the version. A
+            // genuine logout (info null) already cleared it in the `!info` branch above.
             const lostSnap = get().lastSyncedSnapshot;
             set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
             clearServerCanvasAtGate(get().mode, lostSnap);
@@ -1039,7 +1060,7 @@ export const useControllerStore = create<ControllerState>()(
           }
         } catch {
           const lostSnap = get().lastSyncedSnapshot;
-          set({ loggedIn: false, lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
+          set({ loggedIn: false, controllerVersion: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
           clearServerCanvasAtGate(get().mode, lostSnap);
           useUiStore.getState().restoreLocalTranslucency();
         }
@@ -1112,6 +1133,7 @@ export const useControllerStore = create<ControllerState>()(
             loggedIn: true,
             operatorName: result.operator,
             sessionExpiresAt: result.expiresAt,
+            controllerVersion: result.controllerVersion,
             loading: false,
           });
           await get().hydrateFromServer();

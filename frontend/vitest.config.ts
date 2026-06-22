@@ -18,6 +18,9 @@ export default defineConfig({
       'src/**/*.conformance.test.ts',
       'src/compiler/**/*.test.ts',
       'src/stores/**/*.test.ts',
+      // Pure lib unit pins (plan-8: lib/agentRollout — the one-click rollout orchestration + the
+      // controller-version usability gate). Dependency-free node-env, same family as the above.
+      'src/lib/**/*.test.ts',
     ],
     environment: 'node',
     // Globals stay OFF: the conformance test imports describe/it/expect explicitly from 'vitest',

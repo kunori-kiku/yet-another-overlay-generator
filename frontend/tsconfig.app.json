@@ -34,6 +34,7 @@
   "exclude": [
     "src/**/*.conformance.test.ts",
     "src/compiler/**/*.test.ts",
-    "src/stores/**/*.test.ts"
+    "src/stores/**/*.test.ts",
+    "src/lib/**/*.test.ts"
   ]
 }

@@ -119,6 +119,12 @@ export const en = {
   'agentUpdate.loading': "Loading settings…",
   'agentUpdate.targetVersionLabel': "Target agent version",
   'agentUpdate.targetVersionHint': "The version the rollout drives toward (e.g. v2.0.0-beta.3). Empty = no self-update.",
+  // One-click "match the controller" (plan-8): fill the target with the controller's own version,
+  // fetch its pins, and arm fleet-wide so every node converges on the version this panel ships.
+  'agentUpdate.updateAllToControllerVersion': "Update all agents to {version}",
+  'agentUpdate.updateAllHint': "Targets the controller's own version, fetches its binary pins, and arms fleet-wide. Review the pins, then Save.",
+  'agentUpdate.noControllerVersion': "The controller has no released version to match (it reports a development build), so there is nothing to roll agents to.",
+  'agentUpdate.targetNewerThanController': "Target {target} is newer than the controller ({controller}); the controller can only roll agents to a version it has shipped, so this will be refused on save.",
   'agentUpdate.advanced': "Advanced",
   'agentUpdate.minVersionLabel': "Minimum agent version (optional)",
   'agentUpdate.minVersionHint': "Forces an update before a node applies any bundle. Empty = no forced floor.",
@@ -549,6 +555,7 @@ export const en = {
   'settingsPage.wireguardPublicPrivateKeys': "WireGuard public/private keys (a fresh keypair is generated)",
   'settingsPage.yourDesignGraphIs': "Your design graph is kept (project, domains, nodes, edges). The following will be cleared and regenerated on the next local compile:",
   'shell.checkingSession': "Checking session…",
+  'shell.controllerVersion': "Controller version",
   'shell.dismissNotice': "Dismiss notice",
   'shell.dismissNotice_2': "Dismiss notice",
   'shell.yourLocalDesignWas': "Your local design was replaced by the server copy (the server is authoritative in controller mode). A backup of the previous local design was downloaded.",
@@ -672,6 +679,9 @@ export const en = {
   'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
   'error.agent_release_fetch_failed': 'Could not fetch the release checksum from {url}: {detail}',
   'error.agent_release_sidecar_invalid': 'The release checksum fetched from {url} is not a valid SHA-256.',
+  // Refuse-newer rollout floor (plan-8): the controller can only certify a target it has shipped.
+  'error.agent_target_newer_than_controller':
+    'The agent target version {target} is newer than the controller version {controller}; the controller can only roll agents to a version it has shipped.',
   // Bundle-signing anchor (persist-signing-anchor): stage-time fail-loud when the signing key is missing/changed.
   'error.signing_key_missing': "This fleet's bundles are signed, but no signing key is configured (YAOG_BUNDLE_SIGNING_KEY is unset or unreadable). Refusing to stage unsigned bundles — restore the signing key.",
   'error.signing_key_mismatch': 'The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.',
