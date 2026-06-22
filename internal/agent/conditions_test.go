@@ -35,7 +35,7 @@ func TestCollectConditions_MirrorsHealth(t *testing.T) {
 	}
 }
 
-// TestClassify_CapsMessage pins the curation invariant (outline D5): classify truncates Message to
+// TestClassify_CapsMessage pins the curation invariant: classify truncates Message to
 // ConditionMessageMax runes so a multi-line / oversize detail can never leak through as a tooltip.
 func TestClassify_CapsMessage(t *testing.T) {
 	long := strings.Repeat("x", model.ConditionMessageMax+50)
