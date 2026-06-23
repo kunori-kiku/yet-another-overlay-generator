@@ -255,6 +255,8 @@ export const zh: Record<keyof typeof en, string> = {
   'connectionSettings.syncing': "同步中...",
   'controllerStore.cannotDisableNoCredential': "无法禁用：未注册可用于重新认证的凭据。",
   'controllerStore.noEnrolledNodes': "暂无已注册节点可编译——请先在「机群」注册节点，再编译。",
+  'controllerStore.noSigningKeyEnrolled': "本次部署需要离机签名，但尚未注册操作员签名密钥——请先注册签名密钥。",
+  'controllerStore.signingDescriptorUnrecovered': "本次部署需要离机签名。控制器已注册签名密钥，但本浏览器无法恢复可用的签名句柄——请连接当初注册所用的认证器（或在本设备上重新注册），然后重新部署。无需重新固定（re-pin）。",
   'controllerStore.noPasskeyRegistered': "此账户未注册 passkey。",
   'controllerStore.passkeyDidNotComplete': "passkey 登录未完成——请重试。",
   'controllerStore.passkeyRequiredNoneRegistered': "此账户要求使用 passkey，但尚未注册任何 passkey。",

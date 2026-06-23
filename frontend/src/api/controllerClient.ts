@@ -215,7 +215,10 @@ export interface OperatorCredentialPinResult {
 
 // OperatorCredentialStatus is the SERVER-authoritative keystone status (GET /operator-credential):
 // the panel reflects THIS, never a browser-local cache, so a cleared browser can never falsely
-// read "Not enrolled". It carries only non-secret public identifiers (never the PEM body).
+// read "Not enrolled". It carries only non-secret public identifiers. publicKeyPEM is the
+// credential's PUBLIC PEM (audit-only, already baked into every node bundle): a cleared/fresh
+// browser recovers it — with credentialId/alg/rpId — to re-prompt the authenticator WITHOUT
+// re-pinning (plan-3 signing-handle auto-recovery). The private key never leaves the authenticator.
 export interface OperatorCredentialStatus {
   pinned: boolean;
   alg: string;
@@ -223,6 +226,7 @@ export interface OperatorCredentialStatus {
   rpId: string;
   origin: string;
   fingerprint: string;
+  publicKeyPEM: string;
   redeployRequired: boolean;
 }
 
@@ -1102,6 +1106,7 @@ export async function getOperatorCredentialStatus(
     rpid?: string;
     origin?: string;
     fingerprint?: string;
+    public_key_pem?: string;
     redeploy_required?: boolean;
   };
   return {
@@ -1111,6 +1116,7 @@ export async function getOperatorCredentialStatus(
     rpId: d.rpid ?? '',
     origin: d.origin ?? '',
     fingerprint: d.fingerprint ?? '',
+    publicKeyPEM: d.public_key_pem ?? '',
     redeployRequired: d.redeploy_required ?? false,
   };
 }

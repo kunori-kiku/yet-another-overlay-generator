@@ -267,6 +267,8 @@ export const en = {
   'connectionSettings.syncing': "Syncing...",
   'controllerStore.cannotDisableNoCredential': "Cannot disable: no credential is registered to re-authenticate with.",
   'controllerStore.noEnrolledNodes': "No enrolled nodes to compile yet — enroll nodes in Fleet, then Compile.",
+  'controllerStore.noSigningKeyEnrolled': "This deploy requires an off-host signature, but no operator signing key is enrolled — enroll your signing key first.",
+  'controllerStore.signingDescriptorUnrecovered': "This deploy requires an off-host signature. A signing key is enrolled on the controller, but this browser couldn't recover a usable signing handle — connect the authenticator you enrolled with (or re-enroll on this device), then deploy again. No re-pin is needed.",
   'controllerStore.noPasskeyRegistered': "No passkey is registered for this account.",
   'controllerStore.passkeyDidNotComplete': "Passkey login did not complete — please try again.",
   'controllerStore.passkeyRequiredNoneRegistered': "This account requires a passkey, but none is registered.",
