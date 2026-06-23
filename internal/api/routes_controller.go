@@ -70,6 +70,13 @@ type ControllerHandler struct {
 	// test can inject a permissive client pointed at a loopback test server — the production
 	// guard rejects loopback by design, so the happy path cannot be exercised through it.
 	releaseClient *http.Client
+	// githubAPIBase is the GitHub REST API origin the asset-DISCOVERY fetch (HandleReleaseAssets)
+	// hits DIRECTLY — "https://api.github.com" in production. Discovery does NOT route through the
+	// gh-proxy: the proxy's shared API identity is globally rate-limited (a 403 for everyone), and
+	// api.github.com is broadly reachable + the listing is non-custody metadata (the SHA pin is
+	// fetched separately, still through the proxy). A struct field so a test can point it at a
+	// loopback stub (with a permissive releaseClient) — the production egress guard still applies.
+	githubAPIBase string
 	// version is the controller's build version (cmd/server main.BuildVersion, stamped at release
 	// link time via -ldflags -X; "dev" for a non-release build). Threaded in at construction
 	// (immutable, never a runtime setter) and surfaced ONLY on the AUTHENTICATED operator /session
@@ -108,6 +115,8 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		// The assisted release-pin fetch egresses to github.com / the gh-proxy, so it gets
 		// an egress-guarded client (SSRF private-IP reject + redirect/timeout caps).
 		releaseClient: newReleasePinClient(),
+		// Asset discovery hits the GitHub REST API directly (not via the gh-proxy).
+		githubAPIBase: defaultGithubAPIBase,
 	}
 }
 

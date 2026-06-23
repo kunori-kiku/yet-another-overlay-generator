@@ -116,7 +116,19 @@ Crash-safety: rollback renames `.bak → target` BEFORE clearing the breadcrumb,
 mid-rollback re-tries on the next boot rather than stranding a broken binary unbreadcrumbed. A
 failed update **never** advances the floor; `AbandonedAgentVersion` records a doomed target so
 `decideSelfUpdate` will not re-arm the SAME version (no perpetual flap) until the operator moves to
-a different target. And the routine apply-state writers (`recordSuccess`/`recordFailure`) **preserve**
+a different target.
+
+Stalled-rollout visibility (`selfupdate: Blocked`): a post-apply self-update that keeps being
+**deferred** before any swap — most commonly when the rollout target was bumped but its pins still
+resolve to the *old* binary, so the downloaded binary's self-test version (or its signed hash) does
+not match the target and `performSelfUpdate` refuses (no brick, no breadcrumb) — now records a
+curated reason in `State.SelfUpdateBlocked`. `selfUpdateCondition` surfaces it (lowest precedence,
+below an in-flight/abandoned signal) as a `selfupdate` **Blocked** warn condition, so the panel +
+the `/telemetry` heartbeat show WHY a node is not advancing instead of it silently staying behind.
+It is observability only (touches no custody field) and self-clearing: `recordSuccess` rebuilds the
+apply state without it each cycle, and the deferred path re-sets it only while the block persists.
+The remedy is operator-side — re-arm the rollout so its pins point at the target build (the one-click
+"update all → controller version" re-fetches matching pins), then redeploy. And the routine apply-state writers (`recordSuccess`/`recordFailure`) **preserve**
 `AgentVersionFloor` + the in-flight breadcrumb (the same discipline as the membership floor), so a
 normal cycle can neither wipe the anti-downgrade floor nor erase a swap in flight.
 

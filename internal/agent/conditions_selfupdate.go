@@ -24,7 +24,37 @@ const (
 	reasonSelfUpdateProbationary = "HealthConfirmedProbationary" // passed the health gate, awaiting one clean cycle
 	reasonSelfUpdateUpdated      = "Updated"                     // finalized (floor advanced; transient — one report)
 	reasonSelfUpdateAbandoned    = "Abandoned"                   // rolled back at the cap / health gate (durable until retargeted)
+	reasonSelfUpdateBlocked      = "Blocked"                     // a post-apply update keeps being refused (e.g. a pin/version mismatch)
 )
+
+// classifySelfUpdateBlock maps a performSelfUpdate deferral error to a CURATED, actionable reason
+// stored in State.SelfUpdateBlocked and surfaced as the Blocked condition's message. It never echoes
+// the raw error (the conditions channel emits curated English, never raw stderr); it returns "" for
+// the in-flight case (a swap breadcrumb is present — the Active/Probationary condition owns that, not
+// Blocked). The most common cause on a fleet is a target/pin mismatch (the rollout target was bumped
+// but the pins still resolve to the old binary), so that maps to an explicitly re-arm-the-pins hint.
+func classifySelfUpdateBlock(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "already in flight"):
+		return "" // a swap is pending; the Active/Probationary condition reports it, not Blocked
+	case strings.Contains(msg, "self-test version") || strings.Contains(msg, "hash mismatch"):
+		return "the fetched agent binary does not match the rollout target version — re-arm the rollout so its pins point at the target build, then redeploy"
+	case strings.Contains(msg, "self-test of new binary failed"):
+		return "the fetched agent binary failed its self-test (it would not run) — re-arm the rollout with a good build, then redeploy"
+	case strings.Contains(msg, "no signed self-update pin"):
+		return "no signed self-update pin for this node's CPU architecture — add the arch to the rollout pins, then redeploy"
+	case strings.Contains(msg, "unsupported on arch"):
+		return "self-update is not supported on this node's CPU architecture"
+	case strings.Contains(msg, "download"):
+		return "could not download the update binary from the release — check the agent release base + the GitHub proxy"
+	default:
+		return "self-update was deferred and keeps being refused — check the agent logs (journalctl -u yaog-agent)"
+	}
+}
 
 // selfUpdateCondition derives the structured selfupdate condition from the PRIOR persisted State.
 // It MUST be passed the PRIOR state (prev), not the freshly-rebuilt apply state: recordSuccess/
@@ -53,6 +83,13 @@ func selfUpdateCondition(prev *State, now time.Time) (model.Condition, bool) {
 	case strings.HasPrefix(prev.Health, "self-updated to "):
 		return classify(model.ConditionTypeSelfUpdate, model.ConditionStatusOK, reasonSelfUpdateUpdated,
 			"self-updated to "+strings.TrimPrefix(prev.Health, "self-updated to "), now), true
+	case prev.SelfUpdateBlocked != "":
+		// Lowest precedence: only when no swap is in flight (PendingUpdate) and nothing was abandoned.
+		// Surfaces a stalled rollout (e.g. a pin/version mismatch) so the panel shows WHY a node is
+		// not advancing, instead of it silently staying behind. The message is the curated reason
+		// classifySelfUpdateBlock already produced (never raw stderr).
+		return classify(model.ConditionTypeSelfUpdate, model.ConditionStatusWarn, reasonSelfUpdateBlocked,
+			prev.SelfUpdateBlocked, now), true
 	}
 	return model.Condition{}, false
 }

@@ -202,7 +202,7 @@ export const en = {
   'mimicCatalog.discoverNeedKey': "Each selected package needs a <codename>-<arch> label.",
   'mimicCatalog.discoverDupKey': "Two selected packages share a label — give each a unique <codename>-<arch> (a duplicate would silently drop a pin).",
   'mimicCatalog.discoverEmpty': "No .deb assets found in that release.",
-  'mimicCatalog.discoverFailed': "Couldn't discover assets from the release — check the release base, or add rows manually.",
+  'mimicCatalog.discoverFailed': "Couldn't discover assets — the release base must be a GitHub release URL like https://github.com/<owner>/<repo>/releases/latest/download (or .../releases/download/<tag>). Fix it, or add rows manually.",
   'mimicCatalog.assistCustody': "Fetched over the GitHub proxy as a convenience and is best-effort — many mirrors publish no .sha256 sidecar, so enter it manually when a fetch misses. Trust comes from the signed artifacts.json + the install-time sha256sum -c, not this fetch.",
   'mimicCatalog.proxyLabel': "GitHub proxy",
   'mimicCatalog.proxyHint': "The assist and the install's download route through this prefix. Edit it in Bootstrap settings.",

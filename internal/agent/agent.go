@@ -219,9 +219,30 @@ func Run(cfg *Config) (*RunResult, error) {
 		// next-boot reconcile — either way we only log, never recordFailure (which never runs here).
 		if _, err := performSelfUpdate(cfg, selfUpdateCatalog, cfg.SelfUpdate.RunningVersion, cfg.SelfUpdate.GithubProxy, stderrOf(cfg)); err != nil {
 			fmt.Fprintf(stderrOf(cfg), "agent: post-apply self-update deferred: %v\n", err)
+			// Surface WHY (observability only): persist a curated reason so the panel/telemetry shows
+			// the stalled rollout as a `selfupdate` Blocked condition instead of the node silently
+			// staying behind. recordSuccess above rebuilt the apply state WITHOUT this field, so it is
+			// self-clearing — set only while the block persists. No custody state is touched.
+			if reason := classifySelfUpdateBlock(err); reason != "" {
+				recordSelfUpdateBlocked(cfg, reason)
+			}
 		}
 	}
 	return res, nil
+}
+
+// recordSelfUpdateBlocked persists the curated reason a post-apply self-update was deferred, so the
+// panel/telemetry can surface a stalled rollout (see State.SelfUpdateBlocked). Load-modify-save over
+// the just-persisted apply state; observability only — it touches no custody field. Best-effort: a
+// state-write failure is non-fatal (the bundle is already applied; the next cycle retries).
+func recordSelfUpdateBlocked(cfg *Config, reason string) {
+	st, _ := LoadState(cfg.StateDir)
+	if st == nil {
+		st = &State{}
+	}
+	st.NodeID = cfg.NodeID
+	st.SelfUpdateBlocked = reason
+	_ = SaveState(cfg.StateDir, st)
 }
 
 // stage materializes the verified bundle into a staging directory, preserving
