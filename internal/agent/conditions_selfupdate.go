@@ -49,7 +49,10 @@ func classifySelfUpdateBlock(err error) string {
 		return "no signed self-update pin for this node's CPU architecture — add the arch to the rollout pins, then redeploy"
 	case strings.Contains(msg, "unsupported on arch"):
 		return "self-update is not supported on this node's CPU architecture"
-	case strings.Contains(msg, "download"):
+	case strings.Contains(msg, "download "):
+		// The DOWNLOAD failure is wrapped as "download <url>: ..." (note the trailing space); the
+		// local "hash downloaded binary: ..." read failure is NOT matched (it has no "download " —
+		// the char after "download" is "e") and correctly falls through to the default below.
 		return "could not download the update binary from the release — check the agent release base + the GitHub proxy"
 	default:
 		return "self-update was deferred and keeps being refused — check the agent logs (journalctl -u yaog-agent)"

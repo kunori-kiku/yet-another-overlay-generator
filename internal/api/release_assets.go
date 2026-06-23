@@ -3,8 +3,11 @@ package api
 // release_assets.go is the operator-only assisted release-ASSET DISCOVERY fetch (beta9-smoke-
 // hardening plan-4). The mimic ".deb catalog" otherwise forces the operator to hand-type the exact
 // upstream package filenames; this lists a GitHub release's .deb assets so the panel can present a
-// pick-from checklist. It reuses the same egress-guarded client (h.releaseClient), gh-proxy, and
-// SSRF dial guard (blockPrivateAddr) as the sibling release-pin fetch (release_pins.go).
+// pick-from checklist. It reuses the same egress-guarded client (h.releaseClient) + SSRF dial guard
+// (blockPrivateAddr) as the sibling release-pin fetch (release_pins.go), but — unlike that pin fetch
+// — it hits the GitHub REST API DIRECTLY (NOT the gh-proxy): the proxy's shared API identity is
+// globally rate-limited, and api.github.com is broadly reachable + the listing is non-custody. The
+// .deb DOWNLOADS the install performs still route through the gh-proxy (its real purpose).
 //
 // CUSTODY: like release-pins, this is a CONVENIENCE — the discovered names are just labels the
 // operator picks from; nothing is trusted or persisted here. The SHA-256 pin (the actual custody

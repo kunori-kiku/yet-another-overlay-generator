@@ -2,12 +2,69 @@ package agent
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
+
+// TestRecordSelfUpdateBlocked pins the custody invariant: recording the (observability-only)
+// self-update block must set the field on a healthy state WITHOUT disturbing the custody floors, and
+// must NEVER overwrite an UNREADABLE state with a stripped one (which would zero the anti-rollback /
+// anti-downgrade floors + the in-flight breadcrumb — the major review finding).
+func TestRecordSelfUpdateBlocked(t *testing.T) {
+	t.Run("sets the reason and preserves custody on a healthy state", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		prior := &State{
+			NodeID:                "n1",
+			LastCompiledAt:        "2026-06-23T08:00:00Z",
+			LastChecksum:          "abc123",
+			MembershipEpoch:       7,
+			AgentVersionFloor:     "v2.0.0-beta.10",
+			PendingUpdate:         &PendingUpdate{To: "v2.0.0-beta.11", Attempts: 1},
+			AbandonedAgentVersion: "v1.9.9",
+		}
+		if err := SaveState(dir, prior); err != nil {
+			t.Fatalf("SaveState: %v", err)
+		}
+		recordSelfUpdateBlocked(cfg, "the fetched agent binary does not match the rollout target version")
+		got, err := LoadState(dir)
+		if err != nil || got == nil {
+			t.Fatalf("LoadState after record: %v", err)
+		}
+		if got.SelfUpdateBlocked == "" {
+			t.Errorf("SelfUpdateBlocked not recorded")
+		}
+		// Every custody-bearing field must be intact.
+		if got.LastCompiledAt != prior.LastCompiledAt || got.LastChecksum != prior.LastChecksum ||
+			got.MembershipEpoch != prior.MembershipEpoch || got.AgentVersionFloor != prior.AgentVersionFloor ||
+			got.AbandonedAgentVersion != prior.AbandonedAgentVersion || got.PendingUpdate == nil {
+			t.Fatalf("custody fields were not preserved: got %+v", got)
+		}
+	})
+
+	t.Run("does NOT clobber an unreadable state (LoadState error → bail)", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{NodeID: "n1", StateDir: dir}
+		// A corrupt (non-JSON) state.json makes LoadState return (nil, err). recordSelfUpdateBlocked
+		// must leave it untouched rather than overwrite it with a stripped {NodeID, SelfUpdateBlocked}.
+		corrupt := []byte("{ this is not valid json")
+		if err := os.WriteFile(statePath(dir), corrupt, 0o600); err != nil {
+			t.Fatalf("seed corrupt state: %v", err)
+		}
+		recordSelfUpdateBlocked(cfg, "some reason")
+		after, err := os.ReadFile(statePath(dir))
+		if err != nil {
+			t.Fatalf("read state after record: %v", err)
+		}
+		if string(after) != string(corrupt) {
+			t.Fatalf("recordSelfUpdateBlocked clobbered an unreadable state (custody-wipe risk): %q", string(after))
+		}
+	})
+}
 
 // TestClassifySelfUpdateBlock pins the deferral-error → curated-reason mapping the panel surfaces:
 // the common fleet case (a target/pin mismatch — the user's live "self-test version … != desired"
@@ -28,6 +85,9 @@ func TestClassifySelfUpdateBlock(t *testing.T) {
 		{"no pin for arch", errors.New(`no signed self-update pin for "linux-arm64"`), false, "architecture"},
 		{"unsupported arch", errors.New(`self-update unsupported on arch "riscv64"`), false, "architecture"},
 		{"download failure", errors.New("download https://x/y: connection refused"), false, "download"},
+		// A LOCAL "hash downloaded binary" read error must NOT be mislabeled as a download failure
+		// (it contains "download" but not "download " with a trailing space) — falls to the default.
+		{"local hash error is not a download failure", errors.New("hash downloaded binary: read error"), false, "journalctl"},
 		{"unknown", errors.New("something odd happened"), false, "journalctl"},
 	}
 	for _, tc := range cases {

@@ -295,8 +295,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             value={version}
             onChange={(e) => {
               setVersion(e.target.value);
-              // A discovered checklist was fetched against the OLD base+version; editing either
-              // invalidates it, so drop it rather than let "Add selected" append stale rows.
+              // Drop any open discover checklist when the form is edited, so "Add selected" can't
+              // append rows from a now-superseded discovery. (Discovery keys off the base, not this
+              // version field — but clearing on any edit keeps the checklist from going stale.)
               setDiscovered(null);
               dirty();
             }}

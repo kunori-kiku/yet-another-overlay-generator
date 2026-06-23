@@ -236,9 +236,14 @@ func Run(cfg *Config) (*RunResult, error) {
 // the just-persisted apply state; observability only — it touches no custody field. Best-effort: a
 // state-write failure is non-fatal (the bundle is already applied; the next cycle retries).
 func recordSelfUpdateBlocked(cfg *Config, reason string) {
-	st, _ := LoadState(cfg.StateDir)
-	if st == nil {
-		st = &State{}
+	st, err := LoadState(cfg.StateDir)
+	if err != nil || st == nil {
+		// A read/parse error must NOT cause us to write a stripped state — that would zero the
+		// custody floors recordSuccess just persisted (config + keystone anti-rollback,
+		// AgentVersionFloor, the in-flight breadcrumb) and open an anti-rollback/downgrade hole.
+		// SelfUpdateBlocked is observability only, so we'd rather skip recording it this cycle (the
+		// next clean cycle re-derives it) than risk custody. Never fall back to a fresh &State{}.
+		return
 	}
 	st.NodeID = cfg.NodeID
 	st.SelfUpdateBlocked = reason
