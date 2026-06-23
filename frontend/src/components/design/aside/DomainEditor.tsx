@@ -14,30 +14,30 @@ export function DomainEditor() {
 
   return (
     <section>
-      <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
+      <h2 className="text-sm font-semibold text-[var(--content-muted)] uppercase tracking-wider mb-2">
         {t(language, 'domainEditor.domainProperties')}
       </h2>
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'domainEditor.name')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'domainEditor.name')}</label>
           <input
             type="text"
             value={selectedDomain.name}
             onChange={(e) => updateDomain(selectedDomain.id, { name: e.target.value })}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">CIDR</label>
+          <label className="text-xs text-[var(--content-muted)]">CIDR</label>
           <input
             type="text"
             value={selectedDomain.cidr}
             onChange={(e) => updateDomain(selectedDomain.id, { cidr: e.target.value })}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'domainEditor.transitCIDROptional')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'domainEditor.transitCIDROptional')}</label>
           <input
             type="text"
             value={selectedDomain.transit_cidr || ''}
@@ -49,11 +49,11 @@ export function DomainEditor() {
             pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$"
             title={t(language, 'domainEditor.ipv4CIDRFormatE')}
             placeholder="10.10.0.0/24"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'domainEditor.routingMode')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'domainEditor.routingMode')}</label>
           <select
             value={selectedDomain.routing_mode}
             onChange={(e) =>
@@ -61,7 +61,7 @@ export function DomainEditor() {
                 routing_mode: e.target.value as 'babel' | 'static' | 'none',
               })
             }
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="babel">Babel</option>
             <option value="static">Static</option>
@@ -69,7 +69,7 @@ export function DomainEditor() {
           </select>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'domainEditor.allocationMode')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'domainEditor.allocationMode')}</label>
           <select
             value={selectedDomain.allocation_mode}
             onChange={(e) =>
@@ -77,7 +77,7 @@ export function DomainEditor() {
                 allocation_mode: e.target.value as 'auto' | 'manual',
               })
             }
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="auto">Auto</option>
             <option value="manual">Manual</option>
@@ -85,7 +85,7 @@ export function DomainEditor() {
         </div>
         <button
           onClick={() => removeDomain(selectedDomain.id)}
-          className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
+          className="w-full py-1 bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded text-sm"
         >
           {t(language, 'domainEditor.deleteDomain')}
         </button>

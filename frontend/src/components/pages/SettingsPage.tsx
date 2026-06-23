@@ -46,7 +46,7 @@ export function SettingsPage() {
 
   const seg = (selected: boolean) =>
     `px-3 py-1.5 text-sm ${
-      selected ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-600'
+      selected ? 'bg-[var(--accent)] text-[var(--accent-fg)]' : 'text-[var(--content)] hover:bg-[var(--control-hover)]'
     }`;
 
   // Local-mode click while in controller mode: open the lossy-switch confirm dialog
@@ -85,12 +85,12 @@ export function SettingsPage() {
           "connect to controller" path. The store-side guards (setMode/switchToController) make
           the lock load-bearing; this just removes the affordance (R7). */}
       {!localOnly() && (
-        <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-          <h3 className="text-lg font-semibold text-blue-400">
+        <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+          <h3 className="text-lg font-semibold text-[var(--accent)]">
             {t(language, 'settingsModeHeading')}
           </h3>
-          <p className="text-sm text-gray-400">{t(language, 'settingsModeHint')}</p>
-          <div className="flex w-fit items-center overflow-hidden rounded border border-gray-600 bg-gray-700">
+          <p className="text-sm text-[var(--content-muted)]">{t(language, 'settingsModeHint')}</p>
+          <div className="flex w-fit items-center overflow-hidden rounded border border-[var(--hairline)] bg-[var(--control)]">
             <button type="button" onClick={onSelectLocal} className={seg(mode === 'local')}>
               {t(language, 'modeLocal')}
             </button>
@@ -109,28 +109,28 @@ export function SettingsPage() {
           and what is cleared. */}
       {showSwitchToLocal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-5">
-            <h4 className="text-base font-semibold text-amber-400">
+          <div className="w-full max-w-md space-y-4 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-5">
+            <h4 className="text-base font-semibold text-[var(--warning)]">
               {t(language, 'settingsPage.switchToLocalMode')}
             </h4>
             {/* Copy forks on canvasFromServer (plan-10 / T1): a server-held mirror is FLUSHED
                 (graph not kept) — say so accurately instead of the local-original "graph is
                 kept, secrets purged" copy, which would be false for a server mirror. */}
             {canvasFromServer ? (
-              <p className="text-sm text-gray-300">
+              <p className="text-sm text-[var(--content)]">
                 {t(language, 'settingsPage.serverHeldClearsLocal')}
               </p>
             ) : (
               <>
-                <p className="text-sm text-gray-300">
+                <p className="text-sm text-[var(--content)]">
                   {t(language, 'settingsPage.yourDesignGraphIs')}
                 </p>
-                <ul className="list-disc space-y-1 pl-5 text-sm text-gray-400">
+                <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--content-muted)]">
                   <li>{t(language, 'settingsPage.wireguardPublicPrivateKeys')}</li>
                   <li>{t(language, 'settingsPage.allocationPinsOverlayIPs')}</li>
                   <li>{t(language, 'settingsPage.compileHistoryAndThe')}</li>
                 </ul>
-                <p className="text-xs text-amber-300/80">
+                <p className="text-xs text-[var(--warning)]">
                   {t(language, 'settingsPage.thisGuaranteesNoFleet')}
                 </p>
               </>
@@ -139,14 +139,14 @@ export function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setShowSwitchToLocal(false)}
-                className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+                className="rounded border border-[var(--hairline)] px-3 py-1.5 text-sm text-[var(--content)] hover:bg-[var(--control-hover)]"
               >
                 {t(language, 'settingsPage.cancel')}
               </button>
               <button
                 type="button"
                 onClick={confirmSwitchToLocal}
-                className="rounded bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500"
+                className="rounded bg-[var(--warning-solid)] px-3 py-1.5 text-sm font-medium text-[var(--warning-solid-fg)] hover:bg-[var(--warning-solid)]"
               >
                 {t(language, 'settingsPage.switchAndClear')}
               </button>
@@ -167,15 +167,15 @@ export function SettingsPage() {
         </>
       )}
 
-      <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-4 max-w-2xl">
-        <h3 className="text-lg font-semibold text-blue-400">
+      <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-4 max-w-2xl">
+        <h3 className="text-lg font-semibold text-[var(--accent)]">
           {t(language, 'settingsAppearanceHeading')}
         </h3>
 
         {/* Theme — mirrors the top-right toggle (client-persisted, per device). */}
         <div className="space-y-1">
-          <label className="text-xs text-gray-400">{t(language, 'appearanceTheme')}</label>
-          <div className="flex w-fit items-center overflow-hidden rounded border border-gray-600 bg-gray-700">
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'appearanceTheme')}</label>
+          <div className="flex w-fit items-center overflow-hidden rounded border border-[var(--hairline)] bg-[var(--control)]">
             {themeOptions.map((opt) => (
               <button
                 key={opt.value}
@@ -205,7 +205,7 @@ export function SettingsPage() {
             />
             {t(language, 'appearanceTranslucency')}
           </label>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-[var(--content-muted)]">
             {t(language, 'appearanceTranslucencyHint')}
           </p>
         </div>

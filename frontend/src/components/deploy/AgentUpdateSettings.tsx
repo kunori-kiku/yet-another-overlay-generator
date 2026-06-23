@@ -57,15 +57,15 @@ export function AgentUpdateSettings() {
   }, [hasAuth, settings, loadSettings]);
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <h3 className="text-lg font-semibold text-emerald-400">{t(language, 'agentUpdate.heading')}</h3>
-      <p className="text-sm text-gray-400">{t(language, 'agentUpdate.description')}</p>
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+      <h3 className="text-lg font-semibold text-[var(--success)]">{t(language, 'agentUpdate.heading')}</h3>
+      <p className="text-sm text-[var(--content-muted)]">{t(language, 'agentUpdate.description')}</p>
       {!hasAuth ? (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'agentUpdate.signInToConfigure')}
         </p>
       ) : settings === null ? (
-        <p className="text-xs text-gray-500">{t(language, 'agentUpdate.loading')}</p>
+        <p className="text-xs text-[var(--content-muted)]">{t(language, 'agentUpdate.loading')}</p>
       ) : (
         // Render only once settings have loaded, with NO settings-keyed remount: the form seeds its
         // local state from the loaded values on mount and then OWNS the operator's edits — a save
@@ -284,13 +284,13 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
 
   const field = (label: string, value: string, set: (v: string) => void, placeholder: string) => (
     <div>
-      <label className="text-xs text-gray-400">{label}</label>
+      <label className="text-xs text-[var(--content-muted)]">{label}</label>
       <input
         type="text"
         value={value}
         onChange={(e) => set(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
     </div>
   );
@@ -305,7 +305,7 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
           onTargetChange,
           'v2.0.0-beta.3',
         )}
-        <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.targetVersionHint')}</p>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.targetVersionHint')}</p>
         {/* One-click "match the controller" (plan-8): present only when the controller reported a
             USABLE (real-semver) version; a "dev"/non-semver/absent version shows a quiet note so the
             absence is explained, not a button that would arm a doomed rollout. */}
@@ -315,19 +315,19 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
               type="button"
               onClick={() => void handleUpdateAllToControllerVersion()}
               disabled={busy || loading}
-              className="w-full rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:bg-gray-600 disabled:text-gray-400"
+              className="w-full rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
             >
               {t(language, 'agentUpdate.updateAllToControllerVersion', { version: controllerVersion })}
             </button>
-            <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.updateAllHint')}</p>
+            <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.updateAllHint')}</p>
           </div>
         ) : (
-          <p className="text-[10px] text-gray-600">{t(language, 'agentUpdate.noControllerVersion')}</p>
+          <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.noControllerVersion')}</p>
         )}
         <button
           type="button"
           onClick={() => setShowAdvanced((s) => !s)}
-          className="text-xs text-blue-400 hover:text-blue-300"
+          className="text-xs text-[var(--accent)] hover:text-[var(--accent)]"
         >
           {showAdvanced ? '▾ ' : '▸ '}
           {t(language, 'agentUpdate.advanced')}
@@ -343,28 +343,28 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
               },
               'v2.0.0-beta.1',
             )}
-            <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'agentUpdate.minVersionHint')}</p>
+            <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'agentUpdate.minVersionHint')}</p>
           </div>
         )}
       </div>
 
       {/* Per-arch binary pins + assist */}
-      <div className="space-y-2 p-3 bg-gray-900 border border-gray-700 rounded">
+      <div className="space-y-2 p-3 bg-[var(--surface-sunken)] border border-[var(--hairline)] rounded">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-gray-200">{t(language, 'agentUpdate.binsHeading')}</h4>
+          <h4 className="text-sm font-semibold text-[var(--content)]">{t(language, 'agentUpdate.binsHeading')}</h4>
           <button
             type="button"
             onClick={() => void handleAssist()}
             disabled={busy || loading}
-            className="px-3 py-1 text-xs bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-3 py-1 text-xs bg-[var(--info-solid)] hover:bg-[var(--info-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--info-solid-fg)] font-medium"
           >
             {busy ? t(language, 'agentUpdate.assisting') : t(language, 'agentUpdate.assistButton')}
           </button>
         </div>
-        <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.binsHint')}</p>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.binsHint')}</p>
         {CERTIFIED_ARCHES.map((arch) => (
-          <div key={arch} className="space-y-1 border-t border-gray-800 pt-2">
-            <p className="text-xs font-mono text-emerald-300">{arch}</p>
+          <div key={arch} className="space-y-1 border-t border-[var(--hairline)] pt-2">
+            <p className="text-xs font-mono text-[var(--success)]">{arch}</p>
             <div className="grid grid-cols-1 gap-1">
               {field(
                 t(language, 'agentUpdate.assetLabel'),
@@ -381,20 +381,20 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
             </div>
           </div>
         ))}
-        <p className="text-[10px] text-amber-300/80">{t(language, 'agentUpdate.assistCustody')}</p>
-        {assistNote && <p className="text-[10px] text-sky-300 bg-sky-900/20 px-2 py-1 rounded">{assistNote}</p>}
+        <p className="text-[10px] text-[var(--warning)]">{t(language, 'agentUpdate.assistCustody')}</p>
+        {assistNote && <p className="text-[10px] text-[var(--info)] bg-[var(--info-bg)] px-2 py-1 rounded">{assistNote}</p>}
       </div>
 
       {/* Canary node set */}
       <div className="space-y-1">
-        <label className="text-xs text-gray-400">{t(language, 'agentUpdate.canaryHeading')}</label>
-        <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.canaryHint')}</p>
+        <label className="text-xs text-[var(--content-muted)]">{t(language, 'agentUpdate.canaryHeading')}</label>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.canaryHint')}</p>
         {nodes.length === 0 ? (
-          <p className="text-xs text-gray-500">{t(language, 'agentUpdate.canaryNoNodes')}</p>
+          <p className="text-xs text-[var(--content-muted)]">{t(language, 'agentUpdate.canaryNoNodes')}</p>
         ) : (
           <div className={`space-y-1 ${fleetWide ? 'opacity-50' : ''}`}>
             {nodes.map((n) => (
-              <label key={n.nodeId} className="flex items-center gap-2 text-sm text-gray-200">
+              <label key={n.nodeId} className="flex items-center gap-2 text-sm text-[var(--content)]">
                 <input
                   type="checkbox"
                   checked={canary.includes(n.nodeId)}
@@ -406,36 +406,36 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
             ))}
           </div>
         )}
-        {fleetWide && <p className="text-[10px] text-amber-300/80">{t(language, 'agentUpdate.canaryFleetWideActive')}</p>}
+        {fleetWide && <p className="text-[10px] text-[var(--warning)]">{t(language, 'agentUpdate.canaryFleetWideActive')}</p>}
       </div>
 
       {/* Promote fleet-wide */}
       <div className="space-y-1">
-        <label className="flex items-center gap-2 text-sm text-gray-200">
+        <label className="flex items-center gap-2 text-sm text-[var(--content)]">
           <input type="checkbox" checked={fleetWide} onChange={(e) => handleFleetToggle(e.target.checked)} />
           {t(language, 'agentUpdate.fleetWideLabel')}
         </label>
-        <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.fleetWideHint')}</p>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.fleetWideHint')}</p>
       </div>
 
       {/* GitHub proxy echo (read-only; edited in Bootstrap settings) */}
       <div className="space-y-0.5">
-        <label className="text-xs text-gray-400">{t(language, 'agentUpdate.proxyLabel')}</label>
-        <p className="text-sm font-mono text-gray-300 break-all">{proxyText}</p>
-        <p className="text-[10px] text-gray-500">{t(language, 'agentUpdate.proxyHint')}</p>
+        <label className="text-xs text-[var(--content-muted)]">{t(language, 'agentUpdate.proxyLabel')}</label>
+        <p className="text-sm font-mono text-[var(--content)] break-all">{proxyText}</p>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'agentUpdate.proxyHint')}</p>
       </div>
 
       {/* Custody reminder */}
-      <p className="text-[10px] text-gray-500 border-t border-gray-700 pt-2">{t(language, 'agentUpdate.custodyNote')}</p>
+      <p className="text-[10px] text-[var(--content-muted)] border-t border-[var(--hairline)] pt-2">{t(language, 'agentUpdate.custodyNote')}</p>
 
-      {validationHint && <p className="text-xs text-amber-400 bg-amber-900/20 px-2 py-1 rounded">{validationHint}</p>}
-      {localError && <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {localError}</p>}
-      {saved && <p className="text-xs text-green-300 bg-green-900/20 px-2 py-1 rounded">{t(language, 'agentUpdate.savedNotice')}</p>}
+      {validationHint && <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">{validationHint}</p>}
+      {localError && <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {localError}</p>}
+      {saved && <p className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded">{t(language, 'agentUpdate.savedNotice')}</p>}
 
       <button
         onClick={() => void handleSave()}
         disabled={loading || busy || validationHint !== null}
-        className="px-4 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+        className="px-4 py-1.5 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
       >
         {loading ? t(language, 'agentUpdate.saving') : t(language, 'agentUpdate.saveButton')}
       </button>
@@ -443,14 +443,14 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
       {/* Promote-fleet-wide confirm (amber modal, modeled on SettingsPage's lossy-switch dialog). */}
       {showFleetConfirm && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-5">
-            <h4 className="text-base font-semibold text-amber-400">{t(language, 'agentUpdate.fleetConfirmTitle')}</h4>
-            <p className="text-sm text-gray-300">{t(language, 'agentUpdate.fleetConfirmBody')}</p>
+          <div className="w-full max-w-md space-y-4 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-5">
+            <h4 className="text-base font-semibold text-[var(--warning)]">{t(language, 'agentUpdate.fleetConfirmTitle')}</h4>
+            <p className="text-sm text-[var(--content)]">{t(language, 'agentUpdate.fleetConfirmBody')}</p>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setShowFleetConfirm(false)}
-                className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+                className="rounded border border-[var(--hairline)] px-3 py-1.5 text-sm text-[var(--content)] hover:bg-[var(--control-hover)]"
               >
                 {t(language, 'agentUpdate.cancel')}
               </button>
@@ -461,7 +461,7 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
                   setShowFleetConfirm(false);
                   setSaved(false);
                 }}
-                className="rounded bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500"
+                className="rounded bg-[var(--warning-solid)] px-3 py-1.5 text-sm font-medium text-[var(--warning-solid-fg)] hover:bg-[var(--warning-solid)]"
               >
                 {t(language, 'agentUpdate.fleetConfirmAction')}
               </button>

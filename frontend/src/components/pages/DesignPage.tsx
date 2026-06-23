@@ -28,7 +28,7 @@ export function DesignPage() {
   // so the read-only canvas gets the full narrow width.
   if (!isDesktop) {
     return (
-      <div className="relative h-full bg-gray-900 text-gray-100">
+      <div className="relative h-full bg-[var(--surface)] text-[var(--content)]">
         <TopologyCanvas editable={false} />
         <CanvasGate />
       </div>
@@ -36,24 +36,24 @@ export function DesignPage() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-gray-900 text-gray-100">
+    <div className="flex h-full flex-col bg-[var(--surface)] text-[var(--content)]">
       <CanvasToolbar listsOpen={listsOpen} onToggleLists={() => setListsOpen((open) => !open)} />
       <div className="flex flex-1 overflow-hidden">
         {listsOpen && (
           <aside
             id="design-lists-drawer"
             aria-label={t(language, 'toolbarLists')}
-            className="w-72 shrink-0 overflow-y-auto border-r border-gray-700 bg-gray-800"
+            className="w-72 shrink-0 overflow-y-auto border-r border-[var(--hairline)] bg-[var(--surface-elevated)]"
           >
             <ElementsLists />
           </aside>
         )}
-        <main className="relative flex-1 overflow-auto bg-gray-900">
+        <main className="relative flex-1 overflow-auto bg-[var(--surface)]">
           <TopologyCanvas />
         </main>
         <DesignAside />
       </div>
-      <footer className="h-40 shrink-0 overflow-y-auto border-t border-gray-700 bg-gray-800">
+      <footer className="h-40 shrink-0 overflow-y-auto border-t border-[var(--hairline)] bg-[var(--surface-elevated)]">
         <BottomBar />
       </footer>
     </div>

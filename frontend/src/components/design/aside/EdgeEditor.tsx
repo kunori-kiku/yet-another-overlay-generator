@@ -171,12 +171,12 @@ export function EdgeEditor() {
 
   return (
     <section>
-      <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
+      <h2 className="text-sm font-semibold text-[var(--content-muted)] uppercase tracking-wider mb-2">
         {t(language, 'edgeEditor.edgeProperties')}
       </h2>
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.type')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.type')}</label>
           <select
             value={selectedEdge.type}
             onChange={(e) =>
@@ -186,7 +186,7 @@ export function EdgeEditor() {
                 compiled_port: undefined,
               })
             }
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="direct">{t(language, 'edgeEditor.typeDirect')}</option>
             <option value="public-endpoint">{t(language, 'edgeEditor.typePublicEndpoint')}</option>
@@ -196,7 +196,7 @@ export function EdgeEditor() {
         </div>
         {/* Endpoint IP — pick from target's public IPs or manual */}
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.endpointIPFromTarget')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.endpointIPFromTarget')}</label>
           {targetHostOptions.length > 0 && (
             <select
               value={matchedTargetHost}
@@ -219,7 +219,7 @@ export function EdgeEditor() {
                   compiled_port: undefined,
                 });
               }}
-              className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+              className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
             >
               <option value="__none__">{t(language, 'edgeEditor.unset')}</option>
               {targetHostOptions.map((host) => (
@@ -236,12 +236,12 @@ export function EdgeEditor() {
             value={selectedEdge.endpoint_host || ''}
             onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined, compiled_port: undefined })}
             placeholder={t(language, 'edgeEditor.ipOrHostname')}
-            className="w-full mt-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full mt-1 px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         {/* Endpoint Port — 0 or empty = auto, nonzero = NAT/port-forward override */}
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.endpointPort0Auto')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.endpointPort0Auto')}</label>
           <div className="flex gap-1 items-center">
             <input
               key={`ep-port-${selectedEdge.id}`}
@@ -259,14 +259,14 @@ export function EdgeEditor() {
                 }
               }}
               placeholder={t(language, 'edgeEditor.0Auto')}
-              className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
             />
           </div>
           {compiledEdgePort && (
-            <p className="text-[10px] text-cyan-400 mt-0.5 font-mono">
+            <p className="text-[10px] text-[var(--info)] mt-0.5 font-mono">
               {t(language, 'edgeEditor.compiledPort')}: {compiledEdgePort}
               {selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0 && selectedEdge.endpoint_port !== compiledEdgePort && (
-                <span className="text-yellow-400 ml-1">
+                <span className="text-[var(--warning)] ml-1">
                   ({t(language, 'edgeEditor.natOverrideActive')})
                 </span>
               )}
@@ -292,17 +292,17 @@ export function EdgeEditor() {
             compileResult.wireguard_configs[`${selectedEdge.from_node_id}:${fromIface.interfaceName}`];
           const endpointMatch = config?.match(/Endpoint\s*=\s*(.+)/);
           return (
-            <div className="p-2 bg-gray-700/50 rounded space-y-1">
-              <p className="text-xs text-gray-400 font-semibold">{t(language, 'edgeEditor.compiledValues')}</p>
-              <p className="text-xs text-cyan-300 font-mono break-all">{t(language, 'edgeEditor.localInterface')}: {fromIface.interfaceName}</p>
+            <div className="p-2 bg-[var(--surface-sunken)] rounded space-y-1">
+              <p className="text-xs text-[var(--content-muted)] font-semibold">{t(language, 'edgeEditor.compiledValues')}</p>
+              <p className="text-xs text-[var(--info)] font-mono break-all">{t(language, 'edgeEditor.localInterface')}: {fromIface.interfaceName}</p>
               {endpointMatch && (
-                <p className="text-xs text-cyan-300 font-mono break-all">{t(language, 'edgeEditor.endpoint')}: {endpointMatch[1]}</p>
+                <p className="text-xs text-[var(--info)] font-mono break-all">{t(language, 'edgeEditor.endpoint')}: {endpointMatch[1]}</p>
               )}
               {/* Name the node on the local listen port so it does NOT read as a contradiction with
                   the NAT-forward line below: per-peer links have a DISTINCT listen port per end, so
                   this (the from node's, e.g. 51822) and the forward's "→ <to-node> <port>" (the to
                   node's, e.g. 51821) are two different ends, both correct — not a mismatch. */}
-              <p className="text-xs text-cyan-300 font-mono">
+              <p className="text-xs text-[var(--info)] font-mono">
                 {t(language, 'edgeEditor.localListenPort')}
                 {selectedEdgeFrom ? ` (${selectedEdgeFrom.name})` : ''}: {fromIface.listenPort}
               </p>
@@ -319,7 +319,7 @@ export function EdgeEditor() {
         </label>
         {/* Transport / priority / weight / notes (D68). priority and weight affect Babel's link cost. */}
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.transport')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.transport')}</label>
           <select
             value={selectedEdge.transport || 'udp'}
             onChange={(e) =>
@@ -327,13 +327,13 @@ export function EdgeEditor() {
                 transport: e.target.value as 'udp' | 'tcp',
               })
             }
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="udp">UDP</option>
             <option value="tcp">{t(language, 'edgeEditor.tcpMimic')}</option>
           </select>
           {selectedEdge.transport === 'tcp' && (
-            <p className="mt-1 text-xs text-gray-400">
+            <p className="mt-1 text-xs text-[var(--content-muted)]">
               {t(language, 'mimicHint')}
             </p>
           )}
@@ -343,7 +343,7 @@ export function EdgeEditor() {
               never mounted below lg (DesignPage), so a gated read-only canvas cannot reach updateEdge. */}
           {selectedEdge.transport === 'tcp' && (
             <div className="mt-2">
-              <label className="text-xs text-gray-400">{t(language, 'edgeEditor.mimicFallback')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.mimicFallback')}</label>
               <select
                 value={selectedEdge.mimic_fallback ?? ''}
                 onChange={(e) => {
@@ -352,13 +352,13 @@ export function EdgeEditor() {
                     mimic_fallback: v === '' ? undefined : (v as 'udp' | 'none'),
                   });
                 }}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
               >
                 <option value="">{t(language, 'edgeEditor.mimicFallbackInherit')}</option>
                 <option value="udp">{t(language, 'edgeEditor.mimicFallbackUdp')}</option>
                 <option value="none">{t(language, 'edgeEditor.mimicFallbackNone')}</option>
               </select>
-              <p className="mt-0.5 text-[10px] text-gray-500">{t(language, 'edgeEditor.mimicFallbackHint')}</p>
+              <p className="mt-0.5 text-[10px] text-[var(--content-muted)]">{t(language, 'edgeEditor.mimicFallbackHint')}</p>
             </div>
           )}
         </div>
@@ -371,7 +371,7 @@ export function EdgeEditor() {
             (the validator reports "two different links", which is exactly that bug). Once cleared,
             the edge is re-allocated on the next compile (e.g. .3/.4). */}
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'roleLabel')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'roleLabel')}</label>
           <select
             value={selectedEdge.role || ''}
             onChange={(e) => {
@@ -387,23 +387,23 @@ export function EdgeEditor() {
                 pinned_to_link_local: undefined,
               });
             }}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="">{t(language, 'rolePrimary')} ({t(language, 'edgeEditor.default')})</option>
             <option value="primary">{t(language, 'rolePrimary')}</option>
             <option value="backup">{t(language, 'roleBackup')}</option>
           </select>
-          <p className="text-[10px] text-gray-500 mt-0.5">
+          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
             {t(language, 'edgeEditor.backupLinksDefaultTo')}
           </p>
           {hasPinnedPort && (
-            <p className="text-[10px] text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded mt-1">
+            <p className="text-[10px] text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded mt-1">
               {t(language, 'edgeEditor.roleChangeRealloc')}
             </p>
           )}
         </div>
         <div>
-          <label className="text-xs text-gray-400">
+          <label className="text-xs text-[var(--content-muted)]">
             {t(language, 'edgeEditor.priorityDrivesBabelLink')}
           </label>
           <input
@@ -421,11 +421,11 @@ export function EdgeEditor() {
               }
             }}
             placeholder={t(language, 'edgeEditor.default_2')}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">
+          <label className="text-xs text-[var(--content-muted)]">
             {t(language, 'edgeEditor.weightDrivesBabelLink')}
           </label>
           <input
@@ -443,11 +443,11 @@ export function EdgeEditor() {
               }
             }}
             placeholder={t(language, 'edgeEditor.default_3')}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'edgeEditor.notes')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.notes')}</label>
           <input
             type="text"
             value={selectedEdge.notes || ''}
@@ -455,7 +455,7 @@ export function EdgeEditor() {
               updateEdge(selectedEdge.id, { notes: e.target.value || undefined })
             }
             placeholder={t(language, 'edgeEditor.notesOptional')}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         {/* Add backup link (edge.md parallel links): derive a parallel edge with role=backup from
@@ -466,13 +466,13 @@ export function EdgeEditor() {
         {showAddBackupButton && (
           <button
             onClick={() => addBackupEdge(selectedEdge.id)}
-            className="w-full py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm"
+            className="w-full py-1 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded text-sm"
           >
             + {t(language, 'addBackupLink')}
           </button>
         )}
         {showBackupEndpointNudge && (
-          <p className="text-[10px] text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+          <p className="text-[10px] text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
             {t(language, 'backupEndpointNudge')}
           </p>
         )}
@@ -483,84 +483,84 @@ export function EdgeEditor() {
             inline feedback; the backend validator (Validate/Compile/Deploy) is the authoritative
             gate. See docs/spec/compiler/allocation-stability.md. */}
         {hasAnyPin && (
-          <div className="p-2 bg-gray-700/50 rounded space-y-2">
-            <p className="text-xs text-gray-400 font-semibold">
+          <div className="p-2 bg-[var(--surface-sunken)] rounded space-y-2">
+            <p className="text-xs text-[var(--content-muted)] font-semibold">
               {t(language, 'edgeEditor.pinnedAllocation')}
             </p>
             {/* Directional NAT readout (info): which internal port the external→internal forward
                 must target. Shown when the edge dials a host (endpoint_host). */}
             {hasPinnedPort && selectedEdge.endpoint_host && (
               <div className="space-y-0.5">
-                <p className="text-xs text-cyan-300 font-mono break-all">
+                <p className="text-xs text-[var(--info)] font-mono break-all">
                   {t(language, 'edgeEditor.natForwardTitle')}: {selectedEdge.endpoint_host}:{natDialPort ?? '—'} → {natTargetNode?.name ? `${natTargetNode.name} ` : ''}{natTargetPort ?? '—'}
                 </p>
                 {natForwardActive && (
-                  <p className="text-[10px] text-gray-400">{t(language, 'edgeEditor.natForwardHint')}</p>
+                  <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'edgeEditor.natForwardHint')}</p>
                 )}
               </div>
             )}
             {/* Editable listen ports (from → to). */}
             <div>
-              <label className="text-xs text-gray-400">{t(language, 'edgeEditor.ports')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.ports')}</label>
               <div className="flex items-center gap-1">
                 <input
                   type="number"
                   value={selectedEdge.pinned_from_port ?? ''}
                   onChange={(e) => setPinPort('pinned_from_port', e.target.value)}
                   placeholder={t(language, 'edgeEditor.pinFrom')}
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
-                <span className="text-gray-500">→</span>
+                <span className="text-[var(--content-muted)]">→</span>
                 <input
                   type="number"
                   value={selectedEdge.pinned_to_port ?? ''}
                   onChange={(e) => setPinPort('pinned_to_port', e.target.value)}
                   placeholder={t(language, 'edgeEditor.pinTo')}
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
               </div>
               {portPairIncomplete && (
-                <p className="text-[10px] text-yellow-400 mt-0.5">{t(language, 'edgeEditor.pinPairBoth')}</p>
+                <p className="text-[10px] text-[var(--warning)] mt-0.5">{t(language, 'edgeEditor.pinPairBoth')}</p>
               )}
               {portOutOfRange && (
-                <p className="text-[10px] text-yellow-400 mt-0.5">
+                <p className="text-[10px] text-[var(--warning)] mt-0.5">
                   {t(language, 'edgeEditor.pinPortRange', { min: MIN_PINNED_PORT })}
                 </p>
               )}
             </div>
             {/* Editable transit IPs (from → to), chosen from the edge's transit pool. */}
             <div>
-              <label className="text-xs text-gray-400">{t(language, 'edgeEditor.transitIPs')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.transitIPs')}</label>
               <div className="flex items-center gap-1">
                 <input
                   type="text"
                   value={selectedEdge.pinned_from_transit_ip ?? ''}
                   onChange={(e) => setPinTransit('pinned_from_transit_ip', e.target.value)}
                   placeholder={t(language, 'edgeEditor.pinFrom')}
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none font-mono"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none font-mono"
                 />
-                <span className="text-gray-500">→</span>
+                <span className="text-[var(--content-muted)]">→</span>
                 <input
                   type="text"
                   value={selectedEdge.pinned_to_transit_ip ?? ''}
                   onChange={(e) => setPinTransit('pinned_to_transit_ip', e.target.value)}
                   placeholder={t(language, 'edgeEditor.pinTo')}
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none font-mono"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none font-mono"
                 />
               </div>
-              <p className="text-[10px] text-gray-500 mt-0.5">
+              <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
                 {t(language, 'edgeEditor.transitPoolPick', { cidr: edgeTransitCidr })}
               </p>
               {transitPairIncomplete && (
-                <p className="text-[10px] text-yellow-400 mt-0.5">{t(language, 'edgeEditor.pinPairBoth')}</p>
+                <p className="text-[10px] text-[var(--warning)] mt-0.5">{t(language, 'edgeEditor.pinPairBoth')}</p>
               )}
               {transitOutOfPool && (
-                <p className="text-[10px] text-yellow-400 mt-0.5">{t(language, 'edgeEditor.transitOutOfPool')}</p>
+                <p className="text-[10px] text-[var(--warning)] mt-0.5">{t(language, 'edgeEditor.transitOutOfPool')}</p>
               )}
             </div>
             {/* Link-locals stay read-only (auto fe80::; manual editing is error-prone). */}
             {hasLinkLocalPin && (
-              <p className="text-xs text-cyan-300 font-mono break-all">
+              <p className="text-xs text-[var(--info)] font-mono break-all">
                 {t(language, 'edgeEditor.linkLocals')}: {selectedEdge.pinned_from_link_local ?? '—'} → {selectedEdge.pinned_to_link_local ?? '—'}
               </p>
             )}
@@ -576,7 +576,7 @@ export function EdgeEditor() {
                   compiled_port: undefined,
                 })
               }
-              className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-xs"
+              className="w-full py-1 bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded text-xs"
             >
               {t(language, 'edgeEditor.unpinReallocateOnNext')}
             </button>
@@ -584,7 +584,7 @@ export function EdgeEditor() {
         )}
         <button
           onClick={() => removeEdge(selectedEdge.id)}
-          className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
+          className="w-full py-1 bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded text-sm"
         >
           {t(language, 'edgeEditor.deleteEdge')}
         </button>

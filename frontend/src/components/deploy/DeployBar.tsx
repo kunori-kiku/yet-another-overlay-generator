@@ -109,20 +109,22 @@ export function DeployBar() {
     : [];
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-lg font-semibold text-teal-400">
+        <h3 className="text-lg font-semibold text-[var(--accent)]">
           {t(language, 'deployBar.deployToFleet')}
         </h3>
         <div className="flex items-center gap-2">
           <button
+            data-testid="roll-keys"
             onClick={onRollKeys}
             disabled={loading || noAuth}
-            className="px-4 py-2 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-[var(--info-solid)] hover:bg-[var(--info-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--info-solid-fg)] font-medium"
           >
             {t(language, 'deployBar.rollKeys')}
           </button>
           <button
+            data-testid="deploy"
             onClick={onDeploy}
             disabled={loading || noAuth}
             title={
@@ -130,7 +132,7 @@ export function DeployBar() {
                 ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })
                 : undefined
             }
-            className="px-4 py-2 text-sm bg-teal-600 hover:bg-teal-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
           >
             {loading
               ? t(language, 'deployBar.deploying')
@@ -139,11 +141,11 @@ export function DeployBar() {
         </div>
       </div>
 
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'deployBar.uploadTheCurrentTopology')}
       </p>
 
-      <p className="text-xs text-purple-300/80">
+      <p className="text-xs text-[var(--info)]">
         {t(language, 'deployBar.rollKeysAsksEach')}
       </p>
 
@@ -152,35 +154,35 @@ export function DeployBar() {
           — clearing browser data will not falsely report "not enrolled" anymore. When enrolled it
           shows the algorithm + fingerprint; rotation is a fleet-invalidating dangerous action, so it
           goes through an explicit confirm. */}
-      <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2">
+      <div className="p-3 bg-[var(--surface-sunken)] border border-[var(--hairline)] rounded space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <h4 className="text-sm font-semibold text-amber-300">
+          <h4 className="text-sm font-semibold text-[var(--warning)]">
             {t(language, 'deployBar.operatorSigningKey')}
           </h4>
           {!keystoneKnown ? (
-            <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
+            <span className="text-xs text-[var(--content-muted)] bg-[var(--control)] px-2 py-0.5 rounded">
               {t(language, 'deployBar.keystoneChecking')}
             </span>
           ) : serverOperatorPinned ? (
-            <span className="text-xs text-green-300 bg-green-900/20 px-2 py-0.5 rounded font-mono">
+            <span className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-0.5 rounded font-mono">
               {t(language, 'deployBar.enrolled')}
               {serverOperatorAlg ? ` (${serverOperatorAlg})` : ''}
               {serverOperatorFingerprint ? ` · ${serverOperatorFingerprint.slice(0, 12)}` : ''}
             </span>
           ) : (
-            <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
+            <span className="text-xs text-[var(--content-muted)] bg-[var(--control)] px-2 py-0.5 rounded">
               {t(language, 'deployBar.notEnrolled')}
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-[var(--content-muted)]">
           {t(language, 'deployBar.pinAnOffHost')}
         </p>
 
         {/* Rotated-but-not-redeployed: the served bundle is still signed under the OLD key, so every
             node is stranded until a fresh signed deploy lands. Surface it loudly. */}
         {serverRedeployRequired && (
-          <p className="text-xs text-red-200 bg-red-900/30 border border-red-700/50 px-2 py-1 rounded">
+          <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] px-2 py-1 rounded">
             {t(language, 'deployBar.keystoneRedeployRequired')}
           </p>
         )}
@@ -188,29 +190,29 @@ export function DeployBar() {
         {/* Pinned on the server but this browser has no local signing key (enrolled elsewhere / after
             a browser-data clear): you can't sign a deploy here — do it on the enrolling device. */}
         {serverOperatorPinned && !hasLocalSigningKey && (
-          <p className="text-xs text-amber-200 bg-amber-900/20 border border-amber-700/40 px-2 py-1 rounded">
+          <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning-border)] px-2 py-1 rounded">
             {t(language, 'deployBar.keystonePinnedNoLocalKey')}
           </p>
         )}
 
         {/* Pending rotate confirmation: rotating strands the fleet, so demand an explicit confirm. */}
         {pendingKeystoneRotate ? (
-          <div className="space-y-2 border border-red-700/50 bg-red-900/20 rounded p-2">
-            <p className="text-xs text-red-200">
+          <div className="space-y-2 border border-[var(--danger-border)] bg-[var(--danger-bg)] rounded p-2">
+            <p className="text-xs text-[var(--danger)]">
               {t(language, 'deployBar.rotateKeystoneWarning')}
             </p>
             <div className="flex gap-2">
               <button
                 onClick={() => enrollOperator({ rotate: true })}
                 disabled={enrolling || loading || noAuth}
-                className="px-3 py-2 text-xs bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+                className="px-3 py-2 text-xs bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--danger-solid-fg)] font-medium"
               >
                 {t(language, 'deployBar.rotateKeystoneConfirm')}
               </button>
               <button
                 onClick={() => cancelKeystoneRotate()}
                 disabled={enrolling}
-                className="px-3 py-2 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-3 py-2 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-[var(--content)]"
               >
                 {t(language, 'deployBar.cancel')}
               </button>
@@ -220,7 +222,7 @@ export function DeployBar() {
           <button
             onClick={() => enrollOperator()}
             disabled={enrolling || loading || noAuth || !keystoneKnown}
-            className="px-4 py-2 text-sm bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-[var(--warning-solid)] hover:bg-[var(--warning-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--warning-solid-fg)] font-medium"
           >
             {enrolling
               ? t(language, 'deployBar.waitingForSecurityKey')
@@ -229,7 +231,7 @@ export function DeployBar() {
                 : t(language, 'deployBar.enrollSigningKeyPasskey')}
           </button>
         )}
-        <p className="text-[10px] text-gray-500">
+        <p className="text-[10px] text-[var(--content-muted)]">
           {t(language, 'deployBar.whenTheKeystoneIs')}
         </p>
       </div>
@@ -238,7 +240,7 @@ export function DeployBar() {
           security key. The copy distinguishes the two ceremonies: enroll (registering the signing
           key, with no deploy in progress) versus deploy signing (authorizing this deploy). */}
       {(signing || enrolling) && (
-        <p className="text-sm text-amber-200 bg-amber-900/30 border border-amber-700/50 px-3 py-2 rounded animate-pulse">
+        <p className="text-sm text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning-border)] px-3 py-2 rounded animate-pulse">
           {enrolling
             ? t(language, 'deployBar.touchYourSecurityKey')
             : t(language, 'deployBar.touchYourSecurityKey_2')}
@@ -246,19 +248,19 @@ export function DeployBar() {
       )}
 
       {noAuth && (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'deployBar.signInAboveFirst')}
         </p>
       )}
 
       {anyRekeying && (
-        <p className="text-xs text-purple-300 bg-purple-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--info)] bg-[var(--info-bg)] px-2 py-1 rounded">
           {t(language, 'deployBar.rekeyingBanner', { count: rekeyingCount })}
         </p>
       )}
 
       {error && (
-        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">
+        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">
           ⚠️ {error}
         </p>
       )}
@@ -266,7 +268,7 @@ export function DeployBar() {
       {/* "Stripped N private keys" notice (plan-5, D4): controller mode is zero-knowledge, so private
           keys were stripped before upload. Dismissible. */}
       {lastStrippedKeys > 0 && (
-        <div className="flex items-start justify-between gap-2 text-xs text-sky-300 bg-sky-900/20 px-2 py-1 rounded">
+        <div className="flex items-start justify-between gap-2 text-xs text-[var(--info)] bg-[var(--info-bg)] px-2 py-1 rounded">
           <span>
             {t(language, 'deployBar.strippedKeys', { count: lastStrippedKeys })}
           </span>
@@ -274,7 +276,7 @@ export function DeployBar() {
             type="button"
             onClick={dismissStripNotice}
             aria-label={t(language, 'deployBar.dismissNotice')}
-            className="shrink-0 px-1 text-sky-400 hover:text-sky-200"
+            className="shrink-0 px-1 text-[var(--info)] hover:text-[var(--info)]"
           >
             ✕
           </button>
@@ -282,32 +284,32 @@ export function DeployBar() {
       )}
 
       {lastDeploy && (
-        <div className="p-3 bg-gray-900 border border-gray-700 rounded space-y-2 text-sm">
-          <p className="text-gray-300">
+        <div className="p-3 bg-[var(--surface-sunken)] border border-[var(--hairline)] rounded space-y-2 text-sm">
+          <p className="text-[var(--content)]">
             {t(language, 'deployBar.lastDeploy')} —{' '}
-            <span className="font-mono text-cyan-300">
+            <span className="font-mono text-[var(--info)]">
               {t(language, 'deployBar.generation')} {lastDeploy.generation}
             </span>
           </p>
           <div>
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-[var(--content-muted)]">
               {t(language, 'deployBar.stagedNodes')} ({lastDeploy.staged.length})
             </p>
             {lastDeploy.staged.length === 0 ? (
-              <p className="text-xs text-gray-500 italic">{t(language, 'deployBar.none')}</p>
+              <p className="text-xs text-[var(--content-muted)] italic">{t(language, 'deployBar.none')}</p>
             ) : (
-              <p className="text-xs text-green-300 font-mono break-all">
+              <p className="text-xs text-[var(--success)] font-mono break-all">
                 {lastDeploy.staged.join(', ')}
               </p>
             )}
           </div>
           {lastDeploy.skippedUnenrolled.length > 0 && (
             <div>
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-[var(--content-muted)]">
                 {t(language, 'deployBar.skippedUnenrolled')} (
                 {lastDeploy.skippedUnenrolled.length})
               </p>
-              <p className="text-xs text-yellow-300 font-mono break-all">
+              <p className="text-xs text-[var(--warning)] font-mono break-all">
                 {lastDeploy.skippedUnenrolled.join(', ')}
               </p>
             </div>
@@ -317,18 +319,18 @@ export function DeployBar() {
               "revoke" per row (manual only, never automatic, D10). */}
           {orphans.length > 0 && (
             <div>
-              <p className="text-xs text-orange-300">
+              <p className="text-xs text-[var(--warning)]">
                 {t(language, 'deployBar.enrolledButNotIn')} (
                 {orphans.length})
               </p>
               <ul className="mt-1 space-y-1">
                 {orphans.map((o) => (
-                  <li key={o.nodeId} className="flex items-center justify-between gap-2 bg-orange-900/10 px-2 py-1 rounded">
-                    <span className="text-xs text-orange-200 font-mono break-all">{o.nodeId}</span>
+                  <li key={o.nodeId} className="flex items-center justify-between gap-2 bg-[var(--warning-bg)] px-2 py-1 rounded">
+                    <span className="text-xs text-[var(--warning)] font-mono break-all">{o.nodeId}</span>
                     <button
                       onClick={() => revoke(o.nodeId)}
                       disabled={loading}
-                      className="shrink-0 px-3 py-2 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
+                      className="shrink-0 px-3 py-2 text-xs bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--danger-solid-fg)]"
                     >
                       {t(language, 'deployBar.revoke')}
                     </button>
@@ -347,17 +349,17 @@ export function DeployBar() {
           (plan-2) is the after-the-fact backstop; this guard is the up-front prevention. */}
       {pendingShrink && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md space-y-4 rounded-lg border border-red-700 bg-gray-800 p-5">
-            <h4 className="text-base font-semibold text-red-400">
+          <div className="w-full max-w-md space-y-4 rounded-lg border border-[var(--danger-border)] bg-[var(--surface-elevated)] p-5">
+            <h4 className="text-base font-semibold text-[var(--danger)]">
               {t(language, 'deployBar.thisDeployShrinksThe')}
             </h4>
-            <p className="text-sm text-gray-300">
+            <p className="text-sm text-[var(--content)]">
               {t(language, 'deployBar.shrinkSummary', {
                 server: pendingShrink.serverNodeCount,
                 canvas: pendingShrink.canvasNodeCount,
               })}
             </p>
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-[var(--content-muted)]">
               {t(language, 'deployBar.shrinkConfirmPrompt', { phrase: pendingShrink.confirmPhrase })}
             </p>
             <input
@@ -366,7 +368,7 @@ export function DeployBar() {
               onChange={(e) => setShrinkTyped(e.target.value)}
               placeholder={pendingShrink.confirmPhrase}
               autoFocus
-              className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-red-400 outline-none"
+              className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--danger-border)] outline-none"
             />
             <div className="flex justify-end gap-2">
               <button
@@ -375,7 +377,7 @@ export function DeployBar() {
                   setShrinkTyped('');
                   cancelShrinkConfirm();
                 }}
-                className="rounded border border-gray-600 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700"
+                className="rounded border border-[var(--hairline)] px-3 py-2 text-sm text-[var(--content)] hover:bg-[var(--control-hover)]"
               >
                 {t(language, 'deployBar.cancel')}
               </button>
@@ -386,7 +388,7 @@ export function DeployBar() {
                   setShrinkTyped('');
                   void deploy({ confirmedShrink: true });
                 }}
-                className="rounded bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400"
+                className="rounded bg-[var(--danger-solid)] px-3 py-2 text-sm font-medium text-[var(--danger-solid-fg)] hover:bg-[var(--danger-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
               >
                 {t(language, 'deployBar.confirmDeploy')}
               </button>

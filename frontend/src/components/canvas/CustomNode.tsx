@@ -4,11 +4,11 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
 const roleColors: Record<string, string> = {
-  peer: 'border-green-500 bg-green-900/50',
-  router: 'border-blue-500 bg-blue-900/50',
-  relay: 'border-yellow-500 bg-yellow-900/50',
-  gateway: 'border-purple-500 bg-purple-900/50',
-  client: 'border-cyan-500 bg-cyan-900/50',
+  peer: 'border-green-500 bg-green-500/15',
+  router: 'border-blue-500 bg-blue-500/15',
+  relay: 'border-yellow-500 bg-yellow-500/15',
+  gateway: 'border-purple-500 bg-purple-500/15',
+  client: 'border-cyan-500 bg-cyan-500/15',
 };
 
 // Connection handles: node-level, role-colored, always present (same shape before and after
@@ -102,19 +102,19 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
 
       <div
         className={`px-3 py-2 rounded-lg border-2 ${colorClass} ${
-          selected ? 'ring-2 ring-white' : ''
+          selected ? 'ring-2 ring-[var(--hairline)]' : ''
         } min-w-[120px] text-center transition-shadow duration-150 ${
           selected ? 'shadow-lg' : 'shadow'
         }`}
       >
         <div className="text-lg">{icon}</div>
-        <div className="text-sm font-bold text-white">{data.label}</div>
-        <div className="text-xs text-gray-300">{role}</div>
+        <div className="text-sm font-bold text-[var(--content)]">{data.label}</div>
+        <div className="text-xs text-[var(--content)]">{role}</div>
         {data.overlayIp && (
-          <div className="text-xs text-gray-400 font-mono">{data.overlayIp}</div>
+          <div className="text-xs text-[var(--content-muted)] font-mono">{data.overlayIp}</div>
         )}
         {data.domainName && (
-          <div className="text-xs text-blue-300">{data.domainName}</div>
+          <div className="text-xs text-[var(--info)]">{data.domainName}</div>
         )}
         {/* Compiled interface details (display only, toggle-gated): wg-<peer> interface name +
             listen port. Handles are no longer bound to interfaces, so this is the only canvas

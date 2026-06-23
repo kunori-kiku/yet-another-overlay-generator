@@ -44,7 +44,7 @@ test('an unsaved canvas edit survives a design→deploy→back navigation (dirty
 
   // Edit the canvas (dirty). The Save button (stable green class) becomes enabled.
   await selectNodeAndRename(page, target.panel, built.router, 'edit-survives-nav')
-  const save = page.locator('button.bg-green-600')
+  const save = page.getByTestId('save-design')
   await expect(save).toBeEnabled()
 
   // Navigate to /deploy via the in-app nav LINK (SPA route change), NOT page.goto — a full reload
@@ -59,5 +59,5 @@ test('an unsaved canvas edit survives a design→deploy→back navigation (dirty
   // The edit persisted (the renamed node is still selected with the new name) and the canvas is
   // still dirty — Save remains enabled, not silently reset by the navigation.
   await expect(page.locator(`.react-flow__node[data-id="${built.router}"]`)).toBeVisible({ timeout: 15_000 })
-  await expect(page.locator('button.bg-green-600')).toBeEnabled()
+  await expect(page.getByTestId('save-design')).toBeEnabled()
 })

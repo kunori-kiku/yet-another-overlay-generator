@@ -14,7 +14,21 @@
   --ease-quiet: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Light theme (default). Accent = refined teal. */
+/* Light theme (default). Accent = refined teal.
+   These semantic tokens are the SINGLE source of color for every component. Components
+   must reference them (e.g. `bg-[var(--surface-elevated)]`, `text-[var(--content-muted)]`)
+   rather than raw Tailwind palette classes, so the whole UI follows the active theme. The
+   buckets:
+     - surface*  : page / card / sunken-input backgrounds (low → high elevation:
+                   sunken < surface < elevated)
+     - control*  : neutral interactive fill (secondary buttons, inputs, toggles, badges)
+     - content*  : primary / muted foreground text
+     - hairline  : borders, dividers, rings
+     - accent*   : the theme accent (focus rings, primary buttons, active nav)
+     - danger/success/warning/info (+ -bg / -border / -solid / -solid-fg): semantic STATUS
+                   colors — keep their meaning but stay legible in BOTH themes. Use the base
+                   token for icon/text, -bg for a subtle banner fill, -border for its edge,
+                   and -solid/-solid-fg for a filled button. */
 :root {
   --accent: #0d9488;
   --accent-hover: #0f766e;
@@ -22,12 +36,39 @@
   --surface: #ffffff;
   --surface-elevated: #f8fafc;
   --surface-sunken: #f1f5f9;
+  --control: #e2e8f0;
+  --control-hover: #cbd5e1;
   --content: #1e293b;
   --content-muted: #64748b;
   --hairline: #e2e8f0;
+
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --danger-solid: #dc2626;
+  --danger-solid-fg: #ffffff;
+
+  --success: #16a34a;
+  --success-bg: #f0fdf4;
+  --success-border: #bbf7d0;
+  --success-solid: #16a34a;
+  --success-solid-fg: #ffffff;
+
+  --warning: #b45309;
+  --warning-bg: #fffbeb;
+  --warning-border: #fde68a;
+  --warning-solid: #d97706;
+  --warning-solid-fg: #ffffff;
+
+  --info: #2563eb;
+  --info-bg: #eff6ff;
+  --info-border: #bfdbfe;
+  --info-solid: #2563eb;
+  --info-solid-fg: #ffffff;
 }
 
-/* Dark theme. Accent = graphite (a restrained neutral, macOS "Graphite" feel). */
+/* Dark theme. Accent = graphite (a restrained neutral, macOS "Graphite" feel). The status
+   tokens shift to lighter text shades + low-alpha fills so they read on the dark surface. */
 :root.dark {
   --accent: #8b93a1;
   --accent-hover: #a3acbb;
@@ -35,9 +76,35 @@
   --surface: #0b0f14;
   --surface-elevated: #11161d;
   --surface-sunken: #080b0f;
+  --control: #1f2937;
+  --control-hover: #374151;
   --content: #e5e7eb;
   --content-muted: #94a3b8;
   --hairline: #1f2937;
+
+  --danger: #f87171;
+  --danger-bg: rgba(127, 29, 29, 0.25);
+  --danger-border: #b91c1c;
+  --danger-solid: #dc2626;
+  --danger-solid-fg: #ffffff;
+
+  --success: #4ade80;
+  --success-bg: rgba(20, 83, 45, 0.25);
+  --success-border: #15803d;
+  --success-solid: #16a34a;
+  --success-solid-fg: #ffffff;
+
+  --warning: #fbbf24;
+  --warning-bg: rgba(120, 53, 15, 0.25);
+  --warning-border: #b45309;
+  --warning-solid: #d97706;
+  --warning-solid-fg: #1a1206;
+
+  --info: #60a5fa;
+  --info-bg: rgba(30, 58, 138, 0.25);
+  --info-border: #1d4ed8;
+  --info-solid: #2563eb;
+  --info-solid-fg: #ffffff;
 }
 
 body {

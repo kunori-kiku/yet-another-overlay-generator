@@ -53,15 +53,15 @@ export function MimicCatalogSettings() {
   }, [hasAuth, settings, loadSettings]);
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <h3 className="text-lg font-semibold text-emerald-400">{t(language, 'mimicCatalog.heading')}</h3>
-      <p className="text-sm text-gray-400">{t(language, 'mimicCatalog.description')}</p>
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+      <h3 className="text-lg font-semibold text-[var(--success)]">{t(language, 'mimicCatalog.heading')}</h3>
+      <p className="text-sm text-[var(--content-muted)]">{t(language, 'mimicCatalog.description')}</p>
       {!hasAuth ? (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'mimicCatalog.signInToConfigure')}
         </p>
       ) : settings === null ? (
-        <p className="text-xs text-gray-500">{t(language, 'mimicCatalog.loading')}</p>
+        <p className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.loading')}</p>
       ) : (
         // Render only once settings load and do NOT remount on settings change (same rationale as
         // AgentUpdateSettings): the form owns the operator's edits and the success notice; handleSave
@@ -289,7 +289,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       {/* Version + release base */}
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'mimicCatalog.versionLabel')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.versionLabel')}</label>
           <input
             type="text"
             value={version}
@@ -302,12 +302,12 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
               dirty();
             }}
             placeholder="v1.4.0"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
-          <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'mimicCatalog.versionHint')}</p>
+          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'mimicCatalog.versionHint')}</p>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'mimicCatalog.releaseBaseLabel')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.releaseBaseLabel')}</label>
           <input
             type="text"
             value={releaseBase}
@@ -317,38 +317,38 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
               dirty();
             }}
             placeholder="https://github.com/hack3ric/mimic/releases/latest/download"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
-          <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'mimicCatalog.releaseBaseHint')}</p>
+          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'mimicCatalog.releaseBaseHint')}</p>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'mimicCatalog.fallbackDefaultLabel')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.fallbackDefaultLabel')}</label>
           <select
             value={fallbackDefault}
             onChange={(e) => {
               setFallbackDefault(e.target.value);
               dirty();
             }}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           >
             <option value="">{t(language, 'mimicCatalog.fallbackDefaultUnset')}</option>
             <option value="udp">{t(language, 'mimicCatalog.fallbackDefaultUdp')}</option>
             <option value="none">{t(language, 'mimicCatalog.fallbackDefaultNone')}</option>
           </select>
-          <p className="text-[10px] text-gray-500 mt-0.5">{t(language, 'mimicCatalog.fallbackDefaultHint')}</p>
+          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'mimicCatalog.fallbackDefaultHint')}</p>
         </div>
       </div>
 
       {/* Per-distro .deb rows */}
-      <div className="space-y-2 p-3 bg-gray-900 border border-gray-700 rounded">
+      <div className="space-y-2 p-3 bg-[var(--surface-sunken)] border border-[var(--hairline)] rounded">
         <div className="flex items-center justify-between gap-2">
-          <h4 className="text-sm font-semibold text-gray-200">{t(language, 'mimicCatalog.debsHeading')}</h4>
+          <h4 className="text-sm font-semibold text-[var(--content)]">{t(language, 'mimicCatalog.debsHeading')}</h4>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => void handleDiscover()}
               disabled={discovering || busy || loading}
-              className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+              className="px-3 py-1 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--content)] font-medium"
             >
               {discovering ? t(language, 'mimicCatalog.discovering') : t(language, 'mimicCatalog.discoverButton')}
             </button>
@@ -356,28 +356,28 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
               type="button"
               onClick={() => void handleAssist()}
               disabled={busy || loading}
-              className="px-3 py-1 text-xs bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+              className="px-3 py-1 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--content)] font-medium"
             >
               {busy ? t(language, 'mimicCatalog.assisting') : t(language, 'mimicCatalog.assistButton')}
             </button>
           </div>
         </div>
-        <p className="text-[10px] text-gray-500">{t(language, 'mimicCatalog.debsHint')}</p>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'mimicCatalog.debsHint')}</p>
 
         {/* Discover checklist: pick + label the release's .deb assets, then add them as empty-SHA rows. */}
         {discovered !== null && (
-          <div className="space-y-2 p-2 bg-gray-800 border border-indigo-800 rounded">
+          <div className="space-y-2 p-2 bg-[var(--surface-elevated)] border border-[var(--info-border)] rounded">
             <div className="flex items-center justify-between gap-2">
-              <h5 className="text-xs font-semibold text-indigo-300">{t(language, 'mimicCatalog.discoverHeading')}</h5>
+              <h5 className="text-xs font-semibold text-[var(--info)]">{t(language, 'mimicCatalog.discoverHeading')}</h5>
               <button
                 type="button"
                 onClick={() => setDiscovered(null)}
-                className="px-2 py-0.5 text-[10px] bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-2 py-0.5 text-[10px] bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-[var(--content)]"
               >
                 {t(language, 'mimicCatalog.discoverDismiss')}
               </button>
             </div>
-            <p className="text-[10px] text-gray-500">{t(language, 'mimicCatalog.discoverHint')}</p>
+            <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'mimicCatalog.discoverHint')}</p>
             {discovered.map((r) => {
               const isDup = r.checked && r.key.trim() !== '' && dupKeys.has(r.key.trim());
               const isBlank = r.checked && r.key.trim() === '';
@@ -388,39 +388,39 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                     checked={r.checked}
                     onChange={(e) => setDiscoveredRow(r.asset, { checked: e.target.checked })}
                     aria-label={r.asset}
-                    className="accent-indigo-500"
+                    className="accent-[var(--accent)]"
                   />
-                  <span className="font-mono text-[11px] text-gray-300 flex-1 break-all">{r.asset}</span>
+                  <span className="font-mono text-[11px] text-[var(--content)] flex-1 break-all">{r.asset}</span>
                   <input
                     type="text"
                     value={r.key}
                     onChange={(e) => setDiscoveredRow(r.asset, { key: e.target.value })}
                     placeholder={t(language, 'mimicCatalog.keyLabel')}
                     aria-label={t(language, 'mimicCatalog.keyLabel')}
-                    className={`w-32 px-2 py-0.5 bg-gray-600 rounded text-[11px] font-mono border outline-none ${
-                      isDup || isBlank ? 'border-amber-500' : 'border-gray-500 focus:border-blue-400'
+                    className={`w-32 px-2 py-0.5 bg-[var(--control)] rounded text-[11px] font-mono border outline-none ${
+                      isDup || isBlank ? 'border-[var(--warning-border)]' : 'border-[var(--hairline)] focus:border-[var(--accent)]'
                     }`}
                   />
                 </div>
               );
             })}
-            {hasBlankCheckedKey && <p className="text-[10px] text-amber-400">{t(language, 'mimicCatalog.discoverNeedKey')}</p>}
-            {dupKeys.size > 0 && <p className="text-[10px] text-amber-400">{t(language, 'mimicCatalog.discoverDupKey')}</p>}
+            {hasBlankCheckedKey && <p className="text-[10px] text-[var(--warning)]">{t(language, 'mimicCatalog.discoverNeedKey')}</p>}
+            {dupKeys.size > 0 && <p className="text-[10px] text-[var(--warning)]">{t(language, 'mimicCatalog.discoverDupKey')}</p>}
             <button
               type="button"
               onClick={handleAddSelected}
               disabled={!canAddSelected}
-              className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+              className="px-3 py-1 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--content)] font-medium"
             >
               {t(language, 'mimicCatalog.discoverAddSelected')}
             </button>
           </div>
         )}
         {debs.length === 0 ? (
-          <p className="text-xs text-gray-500">{t(language, 'mimicCatalog.noDebs')}</p>
+          <p className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.noDebs')}</p>
         ) : (
           debs.map((row) => (
-            <div key={row.id} className="space-y-1 border-t border-gray-800 pt-2">
+            <div key={row.id} className="space-y-1 border-t border-[var(--hairline)] pt-2">
               <div className="grid grid-cols-1 gap-1">
                 <div className="flex gap-2">
                   <input
@@ -429,13 +429,13 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                     onChange={(e) => setRow(row.id, { key: e.target.value })}
                     placeholder="bookworm-amd64"
                     aria-label={t(language, 'mimicCatalog.keyLabel')}
-                    className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
+                    className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => removeRow(row.id)}
                     disabled={busy || loading}
-                    className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 rounded text-gray-200"
+                    className="px-2 py-1 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] rounded text-[var(--content)]"
                   >
                     {t(language, 'mimicCatalog.removeRow')}
                   </button>
@@ -446,7 +446,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                   onChange={(e) => setRow(row.id, { asset: e.target.value })}
                   placeholder="mimic_1.4.0_amd64.deb"
                   aria-label={t(language, 'mimicCatalog.assetLabel')}
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
                 <input
                   type="text"
@@ -454,10 +454,10 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                   onChange={(e) => setRow(row.id, { sha256: e.target.value })}
                   placeholder={t(language, 'mimicCatalog.sha256Placeholder')}
                   aria-label={t(language, 'mimicCatalog.sha256Label')}
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-sm font-mono border border-gray-500 focus:border-blue-400 outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
               </div>
-              {row.note && <p className="text-[10px] text-amber-300/80">{row.note}</p>}
+              {row.note && <p className="text-[10px] text-[var(--warning)]">{row.note}</p>}
             </div>
           ))
         )}
@@ -465,30 +465,30 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
           type="button"
           onClick={addRow}
           disabled={busy || loading}
-          className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 rounded text-gray-200"
+          className="px-3 py-1 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] rounded text-[var(--content)]"
         >
           + {t(language, 'mimicCatalog.addRow')}
         </button>
-        <p className="text-[10px] text-amber-300/80">{t(language, 'mimicCatalog.assistCustody')}</p>
+        <p className="text-[10px] text-[var(--warning)]">{t(language, 'mimicCatalog.assistCustody')}</p>
       </div>
 
       {/* GitHub proxy echo (read-only) */}
       <div className="space-y-0.5">
-        <label className="text-xs text-gray-400">{t(language, 'mimicCatalog.proxyLabel')}</label>
-        <p className="text-sm font-mono text-gray-300 break-all">{proxyText}</p>
-        <p className="text-[10px] text-gray-500">{t(language, 'mimicCatalog.proxyHint')}</p>
+        <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.proxyLabel')}</label>
+        <p className="text-sm font-mono text-[var(--content)] break-all">{proxyText}</p>
+        <p className="text-[10px] text-[var(--content-muted)]">{t(language, 'mimicCatalog.proxyHint')}</p>
       </div>
 
-      <p className="text-[10px] text-gray-500 border-t border-gray-700 pt-2">{t(language, 'mimicCatalog.custodyNote')}</p>
+      <p className="text-[10px] text-[var(--content-muted)] border-t border-[var(--hairline)] pt-2">{t(language, 'mimicCatalog.custodyNote')}</p>
 
-      {validationHint && <p className="text-xs text-amber-400 bg-amber-900/20 px-2 py-1 rounded">{validationHint}</p>}
-      {localError && <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {localError}</p>}
-      {saved && <p className="text-xs text-green-300 bg-green-900/20 px-2 py-1 rounded">{t(language, 'mimicCatalog.savedNotice')}</p>}
+      {validationHint && <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">{validationHint}</p>}
+      {localError && <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {localError}</p>}
+      {saved && <p className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded">{t(language, 'mimicCatalog.savedNotice')}</p>}
 
       <button
         onClick={() => void handleSave()}
         disabled={loading || busy || validationHint !== null}
-        className="px-4 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+        className="px-4 py-1.5 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
       >
         {loading ? t(language, 'mimicCatalog.saving') : t(language, 'mimicCatalog.saveButton')}
       </button>

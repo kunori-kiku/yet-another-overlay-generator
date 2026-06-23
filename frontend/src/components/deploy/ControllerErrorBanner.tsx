@@ -11,7 +11,7 @@ export function ControllerErrorBanner() {
   return (
     <p
       role="alert"
-      className="text-sm text-red-300 bg-red-900/20 border border-red-800 px-3 py-2 rounded break-words"
+      className="text-sm text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] px-3 py-2 rounded break-words"
     >
       ⚠️ {error}
     </p>

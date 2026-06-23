@@ -40,9 +40,9 @@ test('a re-entrant Deploy during an in-flight deploy produces a single update-to
   // Hold the first update-topology in flight so the second click lands during the loading window.
   const faults = await installFaults(page, [{ route: 'update-topology', method: 'POST', delayMs: 1500 }])
 
-  // Locate the Deploy button by its stable Tailwind class: its accessible NAME flips to "Deploying…"
+  // Locate the Deploy button by its stable data-testid: its accessible NAME flips to "Deploying…"
   // while loading, so a name-based locator cannot see it mid-flight.
-  const button = page.locator('button.bg-teal-600')
+  const button = page.getByTestId('deploy')
   await button.click() // fires deploy(); loading:true; update-topology now pending for ~1.5s
   await expect(button).toBeDisabled() // the visual guard engages
 
@@ -77,7 +77,7 @@ test('a re-entrant Save during an in-flight save produces a single update-topolo
   const faults = await installFaults(page, [{ route: 'update-topology', method: 'POST', delayMs: 1500 }])
   // The Save button's accessible NAME changes across states (💾 Save → Saving... → Saved), so locate
   // it by its stable Tailwind base class instead. It starts enabled (canvas dirty).
-  const save = page.locator('button.bg-green-600')
+  const save = page.getByTestId('save-design')
   await expect(save).toBeEnabled()
 
   const savedP = page.waitForResponse(
@@ -91,7 +91,7 @@ test('a re-entrant Save during an in-flight save produces a single update-topolo
 
   await savedP
   // After the save settles the button reads "Saved" (not dirty). Exactly one write hit the wire.
-  await expect(page.locator('button.bg-green-600')).toHaveText('Saved', { timeout: 20_000 })
+  await expect(page.getByTestId('save-design')).toHaveText('Saved', { timeout: 20_000 })
   expect(
     faults.count('update-topology', 'POST'),
     'a re-entrant Save must not double-POST update-topology (saving guard)',
@@ -135,7 +135,7 @@ test('a re-entrant Roll-keys produces a single rekey-all POST', async ({ page, c
   await page.goto(`${target.panel}/deploy`)
 
   const faults = await installFaults(page, [{ route: 'rekey-all', method: 'POST', delayMs: 1500 }])
-  const rollKeys = page.locator('button.bg-purple-700') // Roll-keys; stable base class
+  const rollKeys = page.getByTestId('roll-keys') // Roll-keys; stable data-testid
   const rekeyP = page.waitForResponse(
     (r) => r.url().includes('/operator/rekey-all') && r.request().method() === 'POST',
     { timeout: 20_000 },

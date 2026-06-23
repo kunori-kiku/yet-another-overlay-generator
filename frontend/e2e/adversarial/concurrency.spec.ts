@@ -50,7 +50,7 @@ test('Save detects a concurrent server change and does not clobber it (saveConfl
 
   // Count writes from the Save attempt only (faults installed after the external edit).
   const faults = await installFaults(page, [])
-  const save = page.locator('button.bg-green-600')
+  const save = page.getByTestId('save-design')
   await expect(save).toBeEnabled()
   await save.click()
 

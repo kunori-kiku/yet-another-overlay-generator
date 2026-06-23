@@ -10,12 +10,12 @@ import { deriveUpdateState, type UpdateState } from '../../lib/updateStatus';
 
 const CHIP_CLASS: Record<UpdateState, string> = {
   off: '',
-  'not-targeted': 'bg-gray-800 text-gray-400 border-gray-600',
-  pending: 'bg-amber-900/40 text-amber-300 border-amber-700',
-  applying: 'bg-amber-900/40 text-amber-300 border-amber-700',
-  applied: 'bg-green-900/40 text-green-300 border-green-700',
-  failed: 'bg-red-900/40 text-red-300 border-red-700',
-  stale: 'bg-gray-700/40 text-gray-300 border-gray-600',
+  'not-targeted': 'bg-[var(--control)] text-[var(--content-muted)] border-[var(--hairline)]',
+  pending: 'bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning-border)]',
+  applying: 'bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning-border)]',
+  applied: 'bg-[var(--success-bg)] text-[var(--success)] border-[var(--success-border)]',
+  failed: 'bg-[var(--danger-bg)] text-[var(--danger)] border-[var(--danger-border)]',
+  stale: 'bg-[var(--control)] text-[var(--content)] border-[var(--hairline)]',
 };
 
 const LABEL_KEY: Record<UpdateState, MessageKey> = {
@@ -38,7 +38,7 @@ export function UpdateStatusChip({
   language: UILanguage;
 }) {
   const state = deriveUpdateState(node, settings);
-  if (state === 'off') return <span className="text-gray-500">—</span>;
+  if (state === 'off') return <span className="text-[var(--content-muted)]">—</span>;
 
   // Tooltip prefers the curated selfupdate condition message (plan-3); falls back to the raw
   // lastHealth line only for legacy agents that send no conditions. For 'failed' it also flags the

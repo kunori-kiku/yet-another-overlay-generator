@@ -29,15 +29,15 @@ export function BootstrapSettings() {
   }, [hasAuth, settings, loadSettings]);
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
-      <h3 className="text-lg font-semibold text-emerald-400">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3">
+      <h3 className="text-lg font-semibold text-[var(--success)]">
         {t(language, 'bootstrapSettings.bootstrapSettings')}
       </h3>
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'bootstrapSettings.theseArePersistedServer')}
       </p>
       {!hasAuth ? (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'bootstrapSettings.signInToRead')}
         </p>
       ) : (
@@ -80,15 +80,15 @@ function SettingsForm({
     hint: string,
   ) => (
     <div>
-      <label className="text-xs text-gray-400">{label}</label>
+      <label className="text-xs text-[var(--content-muted)]">{label}</label>
       <input
         type="text"
         value={value}
         onChange={(e) => set(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
-      <p className="text-[10px] text-gray-500 mt-0.5">{hint}</p>
+      <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{hint}</p>
     </div>
   );
 
@@ -131,7 +131,7 @@ function SettingsForm({
           })
         }
         disabled={loading}
-        className="mt-3 px-4 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+        className="mt-3 px-4 py-1.5 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
       >
         {t(language, 'bootstrapSettings.saveSettings')}
       </button>

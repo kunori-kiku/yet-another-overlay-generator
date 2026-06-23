@@ -55,35 +55,35 @@ export function PasskeySettings() {
   };
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <h3 className="text-lg font-semibold text-fuchsia-400">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+      <h3 className="text-lg font-semibold text-[var(--accent)]">
         {t(language, 'passkeySettings.loginPasskey')}
       </h3>
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'passkeySettings.registerAWebAuthnPasskey')}
       </p>
 
       {!loggedIn ? (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'passkeySettings.signInWithYour')}
         </p>
       ) : passkeyRegistered === null ? (
-        <p className="text-xs text-gray-500">{t(language, 'passkeySettings.checkingStatus')}</p>
+        <p className="text-xs text-[var(--content-muted)]">{t(language, 'passkeySettings.checkingStatus')}</p>
       ) : passkeyRegistered ? (
         <div className="space-y-2">
-          <p className="text-xs text-green-300 bg-green-900/20 px-2 py-1 rounded">
+          <p className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded">
             {t(language, 'passkeySettings.aLoginPasskeyIs')}
           </p>
           <button
             onClick={() => void handleDisable()}
             disabled={loginCeremony}
-            className="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            className="px-4 py-1.5 text-sm bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--danger-solid-fg)] font-medium"
           >
             {loginCeremony
               ? t(language, 'passkeySettings.touchYourSecurityKey')
               : t(language, 'passkeySettings.removePasskey')}
           </button>
-          <p className="text-[10px] text-gray-500">
+          <p className="text-[10px] text-[var(--content-muted)]">
             {t(language, 'passkeySettings.removalRequiresAFresh')}
           </p>
         </div>
@@ -91,7 +91,7 @@ export function PasskeySettings() {
         <button
           onClick={() => void handleRegister()}
           disabled={loginCeremony}
-          className="px-4 py-1.5 text-sm bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+          className="px-4 py-1.5 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
         >
           {loginCeremony
             ? t(language, 'passkeySettings.touchYourSecurityKey_2')
@@ -100,7 +100,7 @@ export function PasskeySettings() {
       )}
 
       {localError && (
-        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {localError}</p>
+        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {localError}</p>
       )}
     </section>
   );

@@ -29,14 +29,14 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
       return (
         <div
           role="alert"
-          className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gray-900 p-8 text-center text-gray-100"
+          className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[var(--surface)] p-8 text-center text-[var(--content)]"
         >
           <h1 className="text-lg font-semibold">{t(lang, 'errorBoundary.title')}</h1>
-          <p className="max-w-md text-sm text-gray-400">{t(lang, 'errorBoundary.body')}</p>
+          <p className="max-w-md text-sm text-[var(--content-muted)]">{t(lang, 'errorBoundary.body')}</p>
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="rounded bg-blue-700 px-4 py-2 text-sm text-white hover:bg-blue-600"
+            className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
           >
             {t(lang, 'errorBoundary.reload')}
           </button>
