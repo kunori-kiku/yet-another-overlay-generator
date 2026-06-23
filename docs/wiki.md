@@ -94,7 +94,7 @@ A **Domain** is an overlay address space defining the allocatable IP range.
 | Name | Display name and logical identifier |
 | CIDR | Address range, e.g. `10.11.0.0/24` |
 | Allocation Mode | `auto` (compiler assigns) / `manual` (you specify per node) |
-| Routing Mode | `babel` (dynamic routing) / `static` / `none` |
+| Routing Mode | `babel` (dynamic routing) — the only implemented mode; `static` / `none` are reserved and **rejected at validation** today (empty normalizes to `babel`) |
 
 ### 2.2 Node and roles
 
@@ -125,10 +125,13 @@ Router ID (optional Babel MAC-48; blank = auto-generated).
 > (`redistribute ip <prefix> allow`, matching a real connected/WAN kernel route) rather than
 > `redistribute local`. See [spec/roles/roles.md](spec/roles/roles.md).
 
-> **Link cost is per-edge, not per-role.** There is no per-role Babel cost. A link's `rxcost` comes
-> from the edge's `priority` (if > 0), else its `weight`, else it is omitted and babeld applies its
-> built-in wired default (96). Backup links carry a higher preset cost (384) so Babel prefers the
-> primary; see [§2.3](#23-edge-directed-connection) and [spec/artifacts/babel.md](spec/artifacts/babel.md).
+> **Link cost (Babel `rxcost`) — a per-role default with per-edge overrides.** The default is per
+> *node-role*: a `relay` is written with an explicit `rxcost 96` (a cost bias so paths avoid relaying
+> when a direct link exists), while `router` / `gateway` / `peer` omit the token and let babeld apply
+> its own wired default. An edge's `priority` (if > 0), else its `weight`, overrides the default; a
+> **backup** edge carries a preset cost (384) so Babel prefers the primary while it is up. See
+> [§2.3](#23-edge-directed-connection), [spec/compiler/routing-modes.md](spec/compiler/routing-modes.md),
+> and [spec/artifacts/babel.md](spec/artifacts/babel.md).
 
 > **Client role.** Client is the lightest role, for devices that don't participate in dynamic
 > routing. A client uses a single `wg0` interface to connect to one router/relay/gateway. It does not
