@@ -9,6 +9,31 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.13] - 2026-06-24
+
+Makes the whole panel follow the light/dark theme — the feature views now theme like the app-shell —
+plus refreshed bilingual documentation. Published as `v2.0.0-beta.13` and promoted to **GitHub Latest**.
+
+### Changed
+- **The entire panel follows the selected light/dark theme.** Previously only the app-shell themed
+  correctly; the feature components (deploy/fleet panels, design editors, forms, audit, settings,
+  canvas) were hardcoded dark, so in light mode they stayed dark "islands" in a light shell. All ~39
+  components now reference the semantic CSS-variable tokens, so the full UI follows the active theme in
+  both modes. Adds neutral `--control` tokens plus four semantic status token families (`--danger` /
+  `--success` / `--warning` / `--info`, each with `-bg` / `-border` / `-solid` / `-solid-fg`), defined
+  for both themes, so status badges, buttons, and banners stay legible in light *and* dark. Categorical
+  hues (canvas node-role colors, edge-type colors, per-peer status dots) are kept as distinct cues. No
+  agent/controller behavior change — panel styling only.
+
+### Docs
+- **Full bilingual wiki rewrite** (`docs/wiki.md` + `docs/wiki-zh.md`): covers both the local /
+  air-gap generator and controller mode end-to-end — the two-modes / `//go:build airgap` boundary,
+  controller operations (enrollment, stage→promote, agent pull/verify/apply, signed self-update, live
+  fleet health + the per-peer WireGuard panel), the security model, and an accurate per-build HTTP API
+  reference. Corrects stale facts (the air-gap-only `/api/{validate,compile,export}` routes, in-browser
+  local compilation, per-edge Babel link cost incl. the relay `rxcost 96` preset).
+- **README freshened**: in-browser local compile, controller-only default backend, the 2.0 beta feature set.
+
 ## [2.0.0-beta.12] - 2026-06-23
 
 Surfaces per-peer WireGuard link health — the granularity the aggregate `wireguard` condition hid.
