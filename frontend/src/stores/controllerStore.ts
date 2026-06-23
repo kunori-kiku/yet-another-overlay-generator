@@ -47,6 +47,8 @@ import {
   getOperatorCredentialStatus,
   controllerErrorCode,
   getTopology as ctlGetTopology,
+  AlgWebAuthnES256,
+  AlgWebAuthnEdDSA,
 } from '../api/controllerClient';
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
@@ -603,6 +605,14 @@ export function selectHasLocalSigningKey(state: ControllerState): boolean {
     state.operatorCredentialAlg !== null &&
     !!state.operatorPublicKeyPEM
   );
+}
+
+// isRecoverableWebAuthnAlg narrows a SERVER-reported alg string to a WebAuthn signing alg the
+// BROWSER can sign with (ES256 / EdDSA). A raw-ed25519 (CLI) keystone signs entirely off-host, so
+// its descriptor is NOT browser-recoverable — deploy() cannot tap an authenticator for it, and the
+// signing-handle auto-recovery (hydrateKeystoneStatus, plan-3) must leave it alone.
+function isRecoverableWebAuthnAlg(alg: string): alg is WebAuthnAlg {
+  return alg === AlgWebAuthnES256 || alg === AlgWebAuthnEdDSA;
 }
 
 // serverKeystoneReset is the "unknown" state of the SERVER-authoritative keystone fields. It is the
@@ -1298,6 +1308,32 @@ export const useControllerStore = create<ControllerState>()(
             serverOperatorFingerprint: st.pinned ? st.fingerprint : null,
             serverRedeployRequired: st.pinned && st.redeployRequired,
           });
+          // Signing-handle auto-recovery (plan-3): when the server holds a WebAuthn credential but
+          // THIS browser has no local signing descriptor (cleared cache / fresh device), recover the
+          // NON-SECRET descriptor (credentialId + alg + rpId + public PEM, which the server now
+          // serves) into the EMPTY local slots so deploy() can re-prompt the authenticator for a tap
+          // — no fleet-stranding re-pin. The private key never leaves the authenticator; this only
+          // restores public material the node bundles already carry. Guards: (1) only WebAuthn algs
+          // can browser-sign — a raw-ed25519 CLI keystone is left untouched; (2) FILL-EMPTY-ONLY (the
+          // per-field ?? + the selectHasLocalSigningKey gate) never clobbers a freshly-enrolled local
+          // cache (enrollOperator sets the local fields before calling hydrate, so a populated slot is
+          // authoritative).
+          if (
+            st.pinned &&
+            isRecoverableWebAuthnAlg(st.alg) &&
+            !!st.credentialId &&
+            !!st.publicKeyPEM
+          ) {
+            const s = get();
+            if (!selectHasLocalSigningKey(s)) {
+              set({
+                operatorCredentialId: s.operatorCredentialId ?? st.credentialId,
+                operatorCredentialAlg: s.operatorCredentialAlg ?? st.alg,
+                operatorRpId: s.operatorRpId ?? (st.rpId || null),
+                operatorPublicKeyPEM: s.operatorPublicKeyPEM ?? st.publicKeyPEM,
+              });
+            }
+          }
         } catch {
           // Leave the prior status untouched — a probe failure is not evidence of "not enrolled".
         }
@@ -1467,15 +1503,38 @@ export const useControllerStore = create<ControllerState>()(
             // KEYSTONE: retrieve the manifest to sign. null = keystone OFF, promote directly.
             const toSign = await getTrustlist(cfg);
             if (toSign !== null) {
+              // Signing-handle auto-recovery belt (plan-3): a fresh/cleared browser may hold no local
+              // signing descriptor even though the controller HAS a credential pinned. Re-probe server
+              // truth once on the deploy path — hydrateKeystoneStatus recovers the non-secret
+              // descriptor into the empty local slots (WebAuthn only) — then re-read, so the operator
+              // is not forced into a fleet-stranding re-pin just because this browser was cleared.
+              // Best-effort: a probe failure must not mask the actionable precondition error below.
+              if (!selectHasLocalSigningKey(get())) {
+                try {
+                  await get().hydrateKeystoneStatus();
+                } catch {
+                  // ignore — the precondition check below still fires with a clear message.
+                }
+              }
               const credentialId = get().operatorCredentialId;
               const alg = get().operatorCredentialAlg;
               const pem = get().operatorPublicKeyPEM;
               if (credentialId === null || alg === null || !pem) {
-                // keystone is on (nodes require a signature) but the complete pinned signing
-                // credential (credential_id + alg + PEM) is not held locally: this is an
-                // actionable precondition failure, not an internal error.
+                // keystone is on (nodes require a signature) but this browser still holds no complete
+                // signing descriptor (credential_id + alg + PEM). We are PROVABLY inside the
+                // keystone-ON branch (toSign !== null ⇒ getTrustlist returned a staged manifest ⇒ a
+                // credential is pinned), so the right message is "pinned but this browser couldn't
+                // recover a browser-signable descriptor — connect the enrolling authenticator /
+                // re-enroll on this device, NOT a re-pin". Discriminate on `!== false` (not truthy):
+                // serverOperatorPinned is null on a fresh browser and the belt re-probe above is
+                // best-effort, so a transient probe failure leaves it null — a truthy check would
+                // then wrongly nudge toward a fleet-stranding re-pin (the very thing this fixes).
+                // Only an impossible false (keystone off, yet toSign was non-null) takes the
+                // enroll-here branch, kept as defense-in-depth.
                 throw new Error(
-                  'This deploy requires an off-host signature, but no operator signing key is enrolled — enroll your signing key first.',
+                  get().serverOperatorPinned !== false
+                    ? tLocal('controllerStore.signingDescriptorUnrecovered')
+                    : tLocal('controllerStore.noSigningKeyEnrolled'),
                 );
               }
               // rpId must equal the value pinned at enroll time (nodes verify SHA256(rpid)==the
