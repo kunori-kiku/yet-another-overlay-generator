@@ -687,7 +687,7 @@ export const en = {
   'error.stage_failed': 'Staging or promoting the deployment failed.',
   // Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator release-pins endpoint.
   'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
-  'error.agent_release_fetch_failed': 'Could not fetch the release checksum from {url}: {detail}',
+  'error.agent_release_fetch_failed': 'Could not fetch from the release at {url}: {detail}',
   'error.agent_release_sidecar_invalid': 'The release checksum fetched from {url} is not a valid SHA-256.',
   // Refuse-newer rollout floor (plan-8): the controller can only certify a target it has shipped.
   'error.agent_target_newer_than_controller':

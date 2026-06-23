@@ -287,6 +287,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             value={version}
             onChange={(e) => {
               setVersion(e.target.value);
+              // A discovered checklist was fetched against the OLD base+version; editing either
+              // invalidates it, so drop it rather than let "Add selected" append stale rows.
+              setDiscovered(null);
               dirty();
             }}
             placeholder="v1.4.0"
@@ -301,6 +304,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             value={releaseBase}
             onChange={(e) => {
               setReleaseBase(e.target.value);
+              setDiscovered(null); // invalidate a checklist discovered against the old base
               dirty();
             }}
             placeholder="https://github.com/hack3ric/mimic/releases/latest/download"

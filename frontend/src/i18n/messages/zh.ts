@@ -666,7 +666,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.stage_failed': '暂存或提升部署失败。',
   // Assisted fetch of release pins (controller-panel-rollout-ui plan-1) — operator release-pins endpoint.
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
-  'error.agent_release_fetch_failed': '无法从 {url} 获取发布校验和：{detail}',
+  'error.agent_release_fetch_failed': '无法从发布地址 {url} 获取：{detail}',
   'error.agent_release_sidecar_invalid': '从 {url} 获取的发布校验和不是有效的 SHA-256。',
   // Refuse-newer rollout floor (plan-8): the controller can only certify a target it has shipped.
   'error.agent_target_newer_than_controller':
