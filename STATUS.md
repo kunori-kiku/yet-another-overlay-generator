@@ -1,21 +1,33 @@
 # STATUS
 <!-- regenerated: 2026-06-23 -->
-<!-- by: draft-implementation-plan — beta9-smoke-hardening subject drafted (5 plans), executing plan-1 -->
+<!-- by: beta9-smoke-hardening subject DELIVERED — v2.0.0-beta.10 published to GitHub Latest -->
 
 ## Active work
 
-- **NEW SUBJECT EXECUTING: beta9-smoke-hardening (2026-06-23).** Fixes the defects + UX gaps surfaced
-  while smoking `v2.0.0-beta.9` on a live ~9-node fleet, shipping as `v2.0.0-beta.10` (→ Latest). 5
-  plans, foldered in
-  [`implementation_plans/beta9-smoke-hardening-2026_06_23/`](implementation_plans/beta9-smoke-hardening-2026_06_23/outline.md)
-  (owner-approved). **Headline:** the Node Conditions channel is apply-time-only → the panel freezes a
-  worst-case post-apply snapshot (false `wireguard: LinkDown` sampled pre-handshake, stuck
-  `selfupdate: HealthConfirmedProbationary`) though the overlay is healthy — fixed by a **dedicated,
-  extensible `/telemetry` monitoring heartbeat** (plan-1). Plus: controller-mode Validate runs the
-  in-browser validator (kill the `/api/validate` 404, plan-2); off-host signing-handle auto-recovery
-  (serve the public descriptor — no fleet-stranding rotation, plan-3); mimic catalog discover-and-pick
-  (plan-4); release beta.10 (plan-5). Each PR independently workflow-reviewed → fixed → re-reviewed →
-  merged. **plan-1 EXECUTING.**
+- **SUBJECT beta9-smoke-hardening — DELIVERED (2026-06-23); `v2.0.0-beta.10` published to GitHub
+  Latest.** All 5 plans merged (PRs #176 spine, #177–#181). Fixed the defects + UX gaps surfaced while
+  smoking `v2.0.0-beta.9` on a live ~9-node fleet, foldered in
+  [`implementation_plans/beta9-smoke-hardening-2026_06_23/`](implementation_plans/beta9-smoke-hardening-2026_06_23/outline.md).
+  **Headline fix:** the beta.9 Node Conditions channel sampled conditions ONLY at apply time (false
+  `wireguard: LinkDown` pre-handshake, stuck `selfupdate: HealthConfirmedProbationary`) and froze that
+  worst-case snapshot while idle — made honest by a **dedicated, extensible `POST /telemetry`
+  heartbeat** (agent `Sampler` framework; default 30s; carries conditions + a metrics map but NO
+  applied_generation/checksum — observability split from deploy custody; plan-1 #177). Plus:
+  controller-mode Validate runs the in-browser validator — browser-local verify, the controller never
+  serves nor calls `/api/validate` (plan-2 #178); off-host signing-handle auto-recovery — the
+  controller serves the non-secret public descriptor so a cleared browser re-prompts the authenticator
+  instead of a fleet-stranding re-pin (plan-3 #179); mimic catalog discover-and-pick (`/release-assets`,
+  SSRF-guarded; pick-from checklist, empty-SHA rows; plan-4 #180); CHANGELOG + release (plan-5 #181).
+  Each PR independently 4-lens workflow-reviewed (security-weighted for plan-3/4) → fixed at root →
+  re-reviewed → CI green → merged; full local verify (both build profiles, `-race`, airgap, FE) green
+  before the tag. `release.yml` + `docker.yml` green; release promoted to **GitHub Latest**
+  (`releases/latest` → beta.10; beta.9 demoted). **Process note:** a review workflow's agents ran
+  `git checkout` in the shared tree and discarded uncommitted plan-3 edits → recovered via isolated
+  **git worktrees** per branch + made all review workflows **checkout-free** (`git show <ref>:<path>`).
+  **Owed (gating rc.1, not merge):** owner browser smoke — the live telemetry heartbeat un-freezing
+  conditions on a node; controller-mode Validate; signing-handle recovery on a cleared/fresh browser
+  (enroll A → clear → fresh B → Deploy prompts a tap, no re-pin); mimic Discover against the real
+  upstream. **Follow-up (non-blocking):** visual-corpus baseline regen for the new mimic Discover UI.
 
 - **SUBJECT agent-feedback-and-version-aware-rollout — DELIVERED (2026-06-23); `v2.0.0-beta.9`
   published.** All ten plans done. The reusable structured agent→panel **Node Conditions** channel
@@ -162,6 +174,14 @@
 
 ## Next actions
 
+**Immediate (beta9-smoke-hardening, just shipped):** owner browser smoke of `v2.0.0-beta.10` on the
+live fleet — (a) the `/telemetry` heartbeat un-freezing a node's conditions (`wireguard: AllPeersUp` /
+`selfupdate: Updated` appear within ~one interval without a redeploy); (b) controller-mode Validate
+renders a result with no `/api/validate` 404; (c) signing-handle recovery on a cleared/fresh browser
+(enroll on A → clear A / open fresh B → Deploy prompts an authenticator tap, no re-pin, fleet accepts
+the signature); (d) mimic catalog "Discover from release" against the real upstream → pick → per-row
+Assist → Save. Non-blocking follow-up: regenerate the visual-corpus baselines for the new Discover UI.
+
 **Subjects 1–4 are all delivered + merged (PRs #137–#158).** The rc.1 gate is authored and every
 *automatable* criterion is GREEN in CI (`go` incl. `-race`, `frontend`, `conformance`, `frontend-e2e`
 incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). The remaining steps are
@@ -177,6 +197,13 @@ incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). T
 
 ## Recently closed subjects (last 3)
 
+- `beta9-smoke-hardening-2026_06_23` (2026-06-23) — **5 plans, `v2.0.0-beta.10` → GitHub Latest (PRs
+  #176–#181).** Live-fleet smoke fixes: a dedicated `/telemetry` heartbeat + `Sampler` framework that
+  makes Node Conditions honest (no more frozen apply-time snapshot); controller-mode Validate →
+  in-browser (kills the `/api/validate` 404); off-host signing-handle auto-recovery (serve the
+  non-secret descriptor → no fleet-stranding re-pin); mimic catalog discover-and-pick (SSRF-guarded
+  `/release-assets`). Each PR 4-lens-reviewed → fixed → merged; review workflows made checkout-free
+  after a shared-tree clobber; isolated git worktrees per branch.
 - `pre-rc1-2026_06_18` (2026-06-19/21) — **the full pre-rc.1 program: 22 plans across 4 subjects (PRs
   #137–#159).** Subject 1 refactor+security (TS browser compiler, controller-only backend, plan-8
   fixes), Subject 2 phone UX, Subject 3 full-stack E2E sim + the MANDATORY real-tunnel netns gate,
