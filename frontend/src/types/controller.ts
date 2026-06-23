@@ -47,9 +47,12 @@ export interface ControllerNode {
   conditions: NodeCondition[];
   // beta.12: per-peer WireGuard link health from the agent's /telemetry metrics map
   // (telemetry.wireguard_peers), surfaced as a collapsible per-link panel — the detail behind the
-  // aggregate wireguard condition. Empty when the agent emits none (a legacy/beta.11 agent, a client
-  // node, or no peers). Observability only; no key material.
-  wireguardPeers: WireGuardPeer[];
+  // aggregate wireguard condition. mapNode always sets it (empty for a legacy/beta.11 agent, a
+  // client node, or no peers), but it is LIVE-ONLY: deliberately NOT persisted (controllerStore
+  // partialize strips it — it carries raw peer endpoints, and a frozen handshake age is stale on
+  // reload), so a node rehydrated from the localStorage cache before the first refresh has no
+  // wireguardPeers key. Hence optional; every reader coerces (?? []). Observability only; no key material.
+  wireguardPeers?: WireGuardPeer[];
 }
 
 // WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
