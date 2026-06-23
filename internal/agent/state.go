@@ -74,6 +74,14 @@ type State struct {
 	// not perpetually re-flap; it is cleared when the operator moves to a different target. Empty
 	// means nothing abandoned.
 	AbandonedAgentVersion string `json:"abandoned_agent_version,omitempty"`
+	// SelfUpdateBlocked is the curated reason a post-apply self-update was DEFERRED (refused) on the
+	// last cycle — e.g. the fetched binary's version/hash did not match the rollout target. It is
+	// OBSERVABILITY ONLY: it surfaces a stalled rollout as a `selfupdate` Blocked condition so the
+	// panel shows WHY a node is not advancing (rather than silently staying behind). It touches no
+	// custody state (not the version floor, breadcrumb, or applied generation) and is SELF-CLEARING:
+	// recordSuccess rebuilds the apply state without it each cycle, and the deferred path re-sets it
+	// only while the block persists. Empty means the last cycle's self-update was not blocked.
+	SelfUpdateBlocked string `json:"self_update_blocked,omitempty"`
 	// Conditions is the structured feedback set this agent reports about itself (plan-1). It is
 	// rebuilt on every apply by collectConditions and rides the /report payload (omitempty: a build
 	// with no conditions, or an old persisted state, round-trips as nil). It is observability that

@@ -3,8 +3,11 @@ package api
 // release_assets.go is the operator-only assisted release-ASSET DISCOVERY fetch (beta9-smoke-
 // hardening plan-4). The mimic ".deb catalog" otherwise forces the operator to hand-type the exact
 // upstream package filenames; this lists a GitHub release's .deb assets so the panel can present a
-// pick-from checklist. It reuses the same egress-guarded client (h.releaseClient), gh-proxy, and
-// SSRF dial guard (blockPrivateAddr) as the sibling release-pin fetch (release_pins.go).
+// pick-from checklist. It reuses the same egress-guarded client (h.releaseClient) + SSRF dial guard
+// (blockPrivateAddr) as the sibling release-pin fetch (release_pins.go), but — unlike that pin fetch
+// — it hits the GitHub REST API DIRECTLY (NOT the gh-proxy): the proxy's shared API identity is
+// globally rate-limited, and api.github.com is broadly reachable + the listing is non-custody. The
+// .deb DOWNLOADS the install performs still route through the gh-proxy (its real purpose).
 //
 // CUSTODY: like release-pins, this is a CONVENIENCE — the discovered names are just labels the
 // operator picks from; nothing is trusted or persisted here. The SHA-256 pin (the actual custody
@@ -35,6 +38,8 @@ const (
 	// releaseAssetsMaxCount caps how many .deb names are returned, so a release with a pathological
 	// asset count cannot balloon the response. Far above any real mimic .deb matrix.
 	releaseAssetsMaxCount = 200
+	// defaultGithubAPIBase is the GitHub REST API origin asset discovery hits directly.
+	defaultGithubAPIBase = "https://api.github.com"
 )
 
 // ghPathSegPattern is the character allow-list for a github.com owner / repo / tag path segment:
@@ -48,76 +53,92 @@ func safeGitHubSeg(s string) bool {
 	return s != "." && s != ".." && ghPathSegPattern.MatchString(s)
 }
 
-// deriveReleasesAPIURL maps a GitHub release DOWNLOAD base to the GitHub REST API endpoint that
-// lists that release's assets. It accepts ONLY the two canonical github.com download bases:
+// deriveReleaseRefs maps a github.com release URL — in any of the forms an operator might naturally
+// paste — to (a) the REST API PATH that lists that release's assets and (b) the canonical DOWNLOAD
+// base the install fetches .debs from (`downloadBase + "/" + asset`). Accepted inputs:
 //
-//	https://github.com/<owner>/<repo>/releases/latest/download  ->  .../releases/latest
-//	https://github.com/<owner>/<repo>/releases/download/<tag>    ->  .../releases/tags/<tag>
+//	github.com/<owner>/<repo>                          \
+//	github.com/<owner>/<repo>/releases                  > latest -> apiPath /repos/<o>/<r>/releases/latest
+//	github.com/<owner>/<repo>/releases/latest           |        downloadBase .../releases/latest/download
+//	github.com/<owner>/<repo>/releases/latest/download /
+//	github.com/<owner>/<repo>/releases/download/<tag>  \
+//	github.com/<owner>/<repo>/releases/tag/<tag>        > tagged -> apiPath /repos/<o>/<r>/releases/tags/<tag>
+//	github.com/<owner>/<repo>/releases/tags/<tag>      /        downloadBase .../releases/download/<tag>
 //
-// The host is PINNED to github.com and owner/repo/tag must each match ghPathSegPattern (no slashes,
-// no traversal), so the derived API URL cannot be steered off api.github.com. A non-github or
-// malformed base hard-fails — asset discovery is a github-release convenience, not a general
-// fetcher. The returned URL targets api.github.com; the caller applies any gh-proxy prefix.
-func deriveReleasesAPIURL(base string) (string, error) {
+// The host is PINNED to github.com and owner/repo/tag must each pass safeGitHubSeg (char allow-list +
+// no "."/".." traversal), so the derived API path cannot be steered off-host. Returning the canonical
+// download base lets discover NORMALIZE a loosely-typed base to the form the install actually needs
+// (the panel adopts it). A non-github / unrecognizable URL hard-fails — discovery is a github-release
+// convenience, not a general fetcher.
+func deriveReleaseRefs(base string) (apiPath, downloadBase string, err error) {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	u, err := url.Parse(base)
-	if err != nil {
-		return "", fmt.Errorf("unparseable release base: %w", err)
+	u, perr := url.Parse(base)
+	if perr != nil {
+		return "", "", fmt.Errorf("unparseable release base: %w", perr)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", errors.New("release base must be an http(s) URL")
+		return "", "", errors.New("release base must be an http(s) URL")
 	}
 	if !strings.EqualFold(u.Host, "github.com") {
-		return "", errors.New("asset discovery supports only github.com release bases")
+		return "", "", errors.New("the release base must be a github.com release URL (e.g. https://github.com/<owner>/<repo>/releases/latest/download)")
 	}
-	// Path: /<owner>/<repo>/releases/(latest/download | download/<tag>)
 	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(segs) != 5 || segs[2] != "releases" {
-		return "", errors.New("release base path must be /<owner>/<repo>/releases/...")
+	if len(segs) < 2 {
+		return "", "", errors.New("the release base must name an owner/repo (e.g. https://github.com/<owner>/<repo>/releases/latest/download)")
 	}
 	owner, repo := segs[0], segs[1]
 	if !safeGitHubSeg(owner) || !safeGitHubSeg(repo) {
-		return "", errors.New("owner/repo contain disallowed characters")
+		return "", "", errors.New("owner/repo contain disallowed characters")
 	}
-	switch {
-	case segs[3] == "latest" && segs[4] == "download":
-		return "https://api.github.com/repos/" + owner + "/" + repo + "/releases/latest", nil
-	case segs[3] == "download":
-		tag := segs[4]
+	apiBase := "/repos/" + owner + "/" + repo
+	dlBase := "https://github.com/" + owner + "/" + repo
+	rest := segs[2:] // path after /<owner>/<repo>
+
+	// latest: repo root, ".../releases", ".../releases/latest", ".../releases/latest/download".
+	isLatest := len(rest) == 0 ||
+		(len(rest) == 1 && rest[0] == "releases") ||
+		(len(rest) == 2 && rest[0] == "releases" && rest[1] == "latest") ||
+		(len(rest) == 3 && rest[0] == "releases" && rest[1] == "latest" && rest[2] == "download")
+	if isLatest {
+		return apiBase + "/releases/latest", dlBase + "/releases/latest/download", nil
+	}
+	// tagged: ".../releases/(download|tag|tags)/<tag>".
+	if len(rest) == 3 && rest[0] == "releases" && (rest[1] == "download" || rest[1] == "tag" || rest[1] == "tags") {
+		tag := rest[2]
 		if !safeGitHubSeg(tag) {
-			return "", errors.New("tag contains disallowed characters")
+			return "", "", errors.New("tag contains disallowed characters")
 		}
-		return "https://api.github.com/repos/" + owner + "/" + repo + "/releases/tags/" + tag, nil
-	default:
-		return "", errors.New("release base must end in releases/latest/download or releases/download/<tag>")
+		return apiBase + "/releases/tags/" + tag, dlBase + "/releases/download/" + tag, nil
 	}
+	return "", "", errors.New("unrecognized github release URL; use .../releases/latest/download or .../releases/download/<tag>")
 }
 
 // --- wire types ---
 
 // releaseAssetsRequestJSON asks the server to list the .deb assets of a GitHub release. base
-// (optional) overrides the settings MimicReleaseBase so the panel can discover before saving;
-// version (optional) pins a "releases/latest/download" base to a tag (same rule as release-pins).
+// (optional) overrides the settings MimicReleaseBase so the panel can discover before saving. There
+// is NO version field: which release is listed is determined entirely by the base (a
+// ".../releases/latest/..." base lists latest; a ".../releases/download/<tag>" base lists that tag).
+// The catalog "version" is operator bookkeeping only — it does not steer discovery.
 type releaseAssetsRequestJSON struct {
-	Base    string `json:"base,omitempty"`
-	Version string `json:"version,omitempty"`
+	Base string `json:"base,omitempty"`
 }
 
 // releaseAssetsResponseJSON returns the discovered .deb asset names for the operator to pick from.
-// base + version echo what was used; version_applied is false when a custom/mirror base ignored the
-// requested version; proxy_applied reports whether the gh-proxy prefixed the fetch.
+// base is the CANONICAL download base derived from the request (normalized to the
+// ".../releases/latest/download" | ".../releases/download/<tag>" form the install actually fetches
+// from), so the panel can adopt it. Discovery hits the GitHub REST API directly — never the
+// gh-proxy — so there is no proxy_applied field.
 type releaseAssetsResponseJSON struct {
-	Assets         []string `json:"assets"`
-	Base           string   `json:"base"`
-	Version        string   `json:"version"`
-	VersionApplied bool     `json:"version_applied"`
-	ProxyApplied   bool     `json:"proxy_applied"`
+	Assets []string `json:"assets"`
+	Base   string   `json:"base"`
 }
 
 // HandleReleaseAssets (POST {operatorBase}release-assets, operator-authenticated) lists a GitHub
-// release's .deb asset names through the persisted gh-proxy and egress-guarded client, so the mimic
-// catalog UI can offer a pick-from checklist instead of hand-typed filenames. See the file header:
-// discovery is a convenience; the SHA-256 pin is still fetched + saved separately.
+// release's .deb asset names by hitting the GitHub REST API DIRECTLY (not the gh-proxy — see the
+// githubAPIBase field doc), so the mimic catalog UI can offer a pick-from checklist instead of
+// hand-typed filenames. See the file header: discovery is a convenience; the SHA-256 pin is still
+// fetched + saved separately (through the proxy).
 func (h *ControllerHandler) HandleReleaseAssets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
@@ -129,7 +150,7 @@ func (h *ControllerHandler) HandleReleaseAssets(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Settings supply the gh-proxy and the default mimic release base (when not overridden).
+	// Settings supply the default mimic release base (when the request does not override it).
 	cs, err := h.loadSettings(r)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeInternalStorage, err)
@@ -144,49 +165,37 @@ func (h *ControllerHandler) HandleReleaseAssets(w http.ResponseWriter, r *http.R
 		writeAPIError(w, apierr.New(apierr.CodeAgentReleaseRequestInvalid).With("field", "base"))
 		return
 	}
-	// version: format-check before it is interpolated into a tag path (mirrors release-pins).
-	version := strings.TrimSpace(req.Version)
-	if version != "" && !semverPattern.MatchString(version) {
-		writeAPIError(w, apierr.New(apierr.CodeAgentReleaseRequestInvalid).With("field", "version"))
-		return
-	}
 	if err := validateReleaseURL(base); err != nil {
 		writeAPIError(w, apierr.New(apierr.CodeAgentReleaseRequestInvalid).With("field", "base").Wrap(err))
 		return
 	}
 
-	resolvedBase, versionApplied := resolveReleaseBase(base, version)
-	apiURL, err := deriveReleasesAPIURL(resolvedBase)
+	apiPath, downloadBase, err := deriveReleaseRefs(base)
 	if err != nil {
 		writeAPIError(w, apierr.New(apierr.CodeAgentReleaseRequestInvalid).With("field", "base").Wrap(err))
 		return
 	}
-	proxy := cs.GithubProxy
-	fetchURL := proxy + apiURL
-	if err := validateReleaseURL(fetchURL); err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeAgentReleaseRequestInvalid).With("field", "url").Wrap(err))
-		return
-	}
+	// Direct to the GitHub REST API — NOT through the gh-proxy (its shared API identity is globally
+	// rate-limited; a 403 for everyone). The egress-guarded releaseClient still applies the dial-time
+	// private-IP reject, and the host is pinned by deriveReleaseRefs.
+	apiURL := strings.TrimRight(h.githubAPIBase, "/") + apiPath
 
-	names, aerr := h.fetchReleaseAssetNames(r.Context(), fetchURL)
+	names, aerr := h.fetchReleaseAssetNames(r.Context(), apiURL)
 	if aerr != nil {
 		writeAPIError(w, aerr)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, releaseAssetsResponseJSON{
-		Assets:         names,
-		Base:           resolvedBase,
-		Version:        version,
-		VersionApplied: versionApplied,
-		ProxyApplied:   proxy != "",
+		Assets: names,
+		Base:   downloadBase,
 	})
 }
 
 // fetchReleaseAssetNames GETs the GitHub releases API through the egress-guarded client and returns
 // the release's *.deb asset names — excluding debug sidecars (dbgsym / .ddeb) — deduped and capped.
-// A transport/status failure → CodeAgentReleaseFetchFailed (502); a non-JSON body (e.g. a gh-proxy
-// that does not proxy api.github.com and returns HTML) is rejected as a fetch failure rather than
+// A transport/status failure → CodeAgentReleaseFetchFailed (502); a non-JSON body (e.g. a captive
+// portal or an intercepting middlebox returning HTML) is rejected as a fetch failure rather than
 // trusted. The resolved IP a dial refusal carries is logged server-side only (S8), never serialized.
 func (h *ControllerHandler) fetchReleaseAssetNames(ctx context.Context, fetchURL string) ([]string, *apierr.Error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
@@ -216,7 +225,7 @@ func (h *ControllerHandler) fetchReleaseAssetNames(ctx context.Context, fetchURL
 		} `json:"assets"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		// A gh-proxy that does not proxy the REST API typically returns HTML — not a github asset list.
+		// An intercepting middlebox / captive portal returns HTML — not a github asset list.
 		return nil, apierr.New(apierr.CodeAgentReleaseFetchFailed).With("url", fetchURL).With("detail", "non-JSON response")
 	}
 

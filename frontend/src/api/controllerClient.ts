@@ -882,28 +882,27 @@ export async function fetchPins(cfg: ControllerConfig, body: AgentPinFetchReques
 }
 
 // ReleaseAssetsRequest is the body of the assisted release-asset DISCOVERY fetch (POST
-// release-assets, plan-4): base optionally overrides the saved mimic release base; version
-// optionally pins a "latest" base to a tag. The kind is implicitly mimic (the only discover caller).
+// release-assets): base optionally overrides the saved mimic release base. There is NO version —
+// which release is listed is determined entirely by the base (a ".../releases/latest/..." base
+// lists latest; a ".../releases/download/<tag>" base lists that tag). The kind is implicitly mimic.
 export interface ReleaseAssetsRequest {
   base?: string;
-  version?: string;
 }
 
-// ReleaseAssetsResult is the discovered .deb asset names + resolution metadata. assets is the list
-// of *.deb names the release publishes (debug sidecars excluded server-side); the operator picks
-// from it. base/version/versionApplied/proxyApplied mirror the release-pins resolution metadata.
+// ReleaseAssetsResult is the discovered .deb asset names + the CANONICAL download base. assets is the
+// list of *.deb names the release publishes (debug sidecars excluded server-side); the operator picks
+// from it. base is the server-normalized ".../releases/latest/download" | ".../releases/download/<tag>"
+// form the install fetches from — the panel adopts it so a loosely-typed base becomes install-valid.
 export interface ReleaseAssetsResult {
   assets: string[];
   base: string;
-  version: string;
-  versionApplied: boolean;
-  proxyApplied: boolean;
 }
 
 // fetchReleaseAssets calls the operator release-assets endpoint to LIST a GitHub release's .deb
-// asset names, so the mimic catalog can offer a pick-from checklist instead of hand-typed
-// filenames. Discovery is a convenience only — the SHA-256 pin is still fetched (per-row Assist) and
-// saved separately; nothing is trusted or persisted here. A coded error surfaces as ControllerError.
+// asset names (the controller hits the GitHub REST API directly — never the gh-proxy), so the mimic
+// catalog can offer a pick-from checklist instead of hand-typed filenames. Discovery is a convenience
+// only — the SHA-256 pin is still fetched (per-row Assist) and saved separately; nothing is trusted
+// or persisted here. A coded error surfaces as ControllerError.
 export async function fetchReleaseAssets(
   cfg: ControllerConfig,
   body: ReleaseAssetsRequest,
@@ -911,17 +910,11 @@ export async function fetchReleaseAssets(
   const res = await postJSON(cfg, 'release-assets', JSON.stringify(body));
   const d = (await res.json()) as {
     assets?: string[];
-    base: string;
-    version: string;
-    version_applied: boolean;
-    proxy_applied: boolean;
+    base?: string;
   };
   return {
     assets: d.assets ?? [],
-    base: d.base,
-    version: d.version,
-    versionApplied: d.version_applied,
-    proxyApplied: d.proxy_applied,
+    base: d.base ?? '',
   };
 }
 

@@ -190,7 +190,7 @@ export const zh: Record<keyof typeof en, string> = {
   'mimicCatalog.discoverNeedKey': "每个所选的包都需要一个 <代号>-<架构> 标签。",
   'mimicCatalog.discoverDupKey': "有两个所选的包标签相同——请为每个填写唯一的 <代号>-<架构>（重复会静默丢失一个 pin）。",
   'mimicCatalog.discoverEmpty': "该发行版中未找到 .deb 资产。",
-  'mimicCatalog.discoverFailed': "无法从该发行版发现资产——请检查发行版基址，或手动添加行。",
+  'mimicCatalog.discoverFailed': "无法发现资产——发行版基址必须是 GitHub 发行版 URL，例如 https://github.com/<owner>/<repo>/releases/latest/download（或 .../releases/download/<tag>）。请修正，或手动添加行。",
   'mimicCatalog.assistCustody': "通过 GitHub 代理获取，且为尽力而为——许多镜像不发布 .sha256 sidecar，获取不到时请手动填写。信任来自已签名的 artifacts.json 与安装时的 sha256sum -c，而非此次获取。",
   'mimicCatalog.proxyLabel': "GitHub 代理",
   'mimicCatalog.proxyHint': "辅助获取与安装时的下载都经由此前缀。请在 Bootstrap 设置中修改。",

@@ -193,8 +193,11 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
 
   // handleDiscover lists the release's .deb assets (POST release-assets) and opens the pick-from
   // checklist. Best-effort convenience: a failure leaves the checklist hidden and the operator adds
-  // rows by hand. deriveKey prefills the "<codename>-<arch>" label; a package we cannot label
-  // (dkms / unmatched) starts unchecked so the operator must label it before adding.
+  // rows by hand. The version field is NOT sent — the base alone selects the release (it is operator
+  // bookkeeping). On success the field is normalized to the canonical download base the server
+  // returns (so a loosely-typed base becomes the form the install actually fetches from). deriveKey
+  // prefills the "<codename>-<arch>" label; a package we cannot label (dkms / unmatched) starts
+  // unchecked so the operator must label it before adding.
   const handleDiscover = async () => {
     setLocalError(null);
     const base = releaseBase.trim();
@@ -204,7 +207,12 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
     }
     setDiscovering(true);
     try {
-      const res = await fetchReleaseAssets({ base, version: version.trim() || undefined });
+      const res = await fetchReleaseAssets({ base });
+      // Adopt the server-normalized canonical download base (install-valid form).
+      if (res.base && res.base !== releaseBase) {
+        setReleaseBase(res.base);
+        dirty();
+      }
       if (res.assets.length === 0) {
         setDiscovered(null);
         setLocalError(t(language, 'mimicCatalog.discoverEmpty'));
@@ -287,8 +295,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             value={version}
             onChange={(e) => {
               setVersion(e.target.value);
-              // A discovered checklist was fetched against the OLD base+version; editing either
-              // invalidates it, so drop it rather than let "Add selected" append stale rows.
+              // Drop any open discover checklist when the form is edited, so "Add selected" can't
+              // append rows from a now-superseded discovery. (Discovery keys off the base, not this
+              // version field — but clearing on any edit keeps the checklist from going stale.)
               setDiscovered(null);
               dirty();
             }}
