@@ -250,7 +250,7 @@ func TestStoreRecordTelemetry(t *testing.T) {
 			s := impl.factory(t)
 
 			// ErrNotFound for an absent node.
-			if err := s.RecordTelemetry(ctx, tenant, "missing", nil, "", time.Now()); !errors.Is(err, ErrNotFound) {
+			if err := s.RecordTelemetry(ctx, tenant, "missing", nil, nil, "", time.Now()); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("RecordTelemetry(missing) = %v, want ErrNotFound", err)
 			}
 
@@ -264,10 +264,14 @@ func TestStoreRecordTelemetry(t *testing.T) {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 
-			// A telemetry heartbeat with FRESH conditions + a new version + a later observed-at.
+			// A telemetry heartbeat with FRESH conditions + an extensible metrics map + a new version
+			// + a later observed-at.
 			beatAt := time.Date(2026, 6, 23, 12, 0, 30, 0, time.UTC)
 			liveCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
-			if err := s.RecordTelemetry(ctx, tenant, "alpha", []model.Condition{liveCond}, "v2.0.0-beta.10", beatAt); err != nil {
+			metrics := map[string]json.RawMessage{
+				"wireguard_peers": json.RawMessage(`[{"peer":"bravo","interface":"wg-bravo","last_handshake":1782820825,"status":"up"}]`),
+			}
+			if err := s.RecordTelemetry(ctx, tenant, "alpha", []model.Condition{liveCond}, metrics, "v2.0.0-beta.10", beatAt); err != nil {
 				t.Fatalf("RecordTelemetry: %v", err)
 			}
 			got, err := s.GetNode(ctx, tenant, "alpha")
@@ -284,6 +288,12 @@ func TestStoreRecordTelemetry(t *testing.T) {
 			if !got.LastSeen.Equal(beatAt) {
 				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, beatAt)
 			}
+			// The extensible metrics map round-trips (the per-peer detail behind the panel). The
+			// FileStore pretty-prints on disk (re-indents the embedded RawMessage), so assert
+			// format-agnostically on the payload's content, not exact bytes.
+			if raw, ok := got.Telemetry["wireguard_peers"]; !ok || !bytes.Contains(raw, []byte("bravo")) {
+				t.Fatalf("Telemetry[wireguard_peers] = %s (ok=%v), want the per-peer payload persisted", raw, ok)
+			}
 			if got.LastAgentVersion != "v2.0.0-beta.10" {
 				t.Fatalf("LastAgentVersion = %q, want v2.0.0-beta.10", got.LastAgentVersion)
 			}
@@ -298,13 +308,16 @@ func TestStoreRecordTelemetry(t *testing.T) {
 				t.Fatalf("LastHealth = %q, want applied (untouched)", got.LastHealth)
 			}
 
-			// An empty-version heartbeat keeps the stored version; nil conditions clears the set.
-			if err := s.RecordTelemetry(ctx, tenant, "alpha", nil, "", beatAt.Add(time.Minute)); err != nil {
+			// An empty-version heartbeat keeps the stored version; nil conditions + nil metrics clear them.
+			if err := s.RecordTelemetry(ctx, tenant, "alpha", nil, nil, "", beatAt.Add(time.Minute)); err != nil {
 				t.Fatalf("RecordTelemetry(nil conds): %v", err)
 			}
 			got, _ = s.GetNode(ctx, tenant, "alpha")
 			if got.Conditions != nil {
 				t.Fatalf("Conditions = %+v, want nil after a nil-conditions heartbeat", got.Conditions)
+			}
+			if got.Telemetry != nil {
+				t.Fatalf("Telemetry = %+v, want nil after a nil-metrics heartbeat", got.Telemetry)
 			}
 			if got.LastAgentVersion != "v2.0.0-beta.10" {
 				t.Fatalf("LastAgentVersion = %q, want unchanged on an empty-version heartbeat", got.LastAgentVersion)

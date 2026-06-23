@@ -102,5 +102,8 @@ func (s conditionSampler) Sample(now time.Time) ([]model.Condition, map[string]a
 // monitoring probe is added HERE (e.g. append a latencySampler) — the heartbeat transport, wire shape,
 // and controller endpoint already carry whatever it emits.
 func BuildTelemetry(stateDir string) *Telemetry {
-	return &Telemetry{samplers: []Sampler{conditionSampler{stateDir: stateDir}}}
+	return &Telemetry{samplers: []Sampler{
+		conditionSampler{stateDir: stateDir},
+		wireguardPeersSampler{}, // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
+	}}
 }

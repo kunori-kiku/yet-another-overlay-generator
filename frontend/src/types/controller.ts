@@ -45,6 +45,22 @@ export interface ControllerNode {
   // plan-1/2: structured feedback channel. Empty array when the agent reported none (legacy agents,
   // or a node with nothing to report) — the panel then renders no conditions strip.
   conditions: NodeCondition[];
+  // beta.12: per-peer WireGuard link health from the agent's /telemetry metrics map
+  // (telemetry.wireguard_peers), surfaced as a collapsible per-link panel — the detail behind the
+  // aggregate wireguard condition. Empty when the agent emits none (a legacy/beta.11 agent, a client
+  // node, or no peers). Observability only; no key material.
+  wireguardPeers: WireGuardPeer[];
+}
+
+// WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
+// wg-<peer> interface minus its prefix); lastHandshake is unix seconds (0 = never); status is the
+// agent's up | stale | never classification. endpoint is "" for a not-yet-connected peer.
+export interface WireGuardPeer {
+  peer: string;
+  interface: string;
+  endpoint: string;
+  lastHandshake: number;
+  status: 'up' | 'stale' | 'never';
 }
 
 // A single record in the audit chain. Mirrors the operator-facing fields of controller.AuditEntry.

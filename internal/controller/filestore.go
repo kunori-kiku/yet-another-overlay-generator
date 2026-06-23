@@ -613,7 +613,7 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 // RecordTelemetry writes a LIVE health heartbeat: conditions + last-seen (+ agent version when
 // non-empty). It is a strict subset of SetAppliedGeneration — it does NOT touch AppliedGeneration /
 // LastChecksum / LastHealth / DesiredGeneration, so a heartbeat never affects deploy custody.
-func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, agentVersion string, observedAt time.Time) error {
+func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -639,6 +639,7 @@ func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID str
 		n.LastAgentVersion = agentVersion
 	}
 	n.Conditions = stampConditions(conditions, observedAt)
+	n.Telemetry = metrics
 	n.LastSeen = observedAt
 	return writeJSONAtomic(p, n)
 }

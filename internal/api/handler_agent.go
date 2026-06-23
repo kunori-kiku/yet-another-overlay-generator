@@ -273,7 +273,7 @@ func (h *ControllerHandler) HandleTelemetry(w http.ResponseWriter, r *http.Reque
 		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
-	if err := h.store.RecordTelemetry(r.Context(), tenant, node, req.Conditions, req.AgentVersion, time.Now()); err != nil {
+	if err := h.store.RecordTelemetry(r.Context(), tenant, node, req.Conditions, req.Metrics, req.AgentVersion, time.Now()); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return

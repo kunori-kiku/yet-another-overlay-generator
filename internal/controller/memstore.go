@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"sync"
 	"time"
@@ -217,7 +218,7 @@ func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID 
 // RecordTelemetry writes a LIVE health heartbeat: conditions + last-seen (+ agent version when
 // non-empty). It is a strict subset of SetAppliedGeneration — it does NOT touch AppliedGeneration /
 // LastChecksum / LastHealth / DesiredGeneration, so a heartbeat never affects deploy custody.
-func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, agentVersion string, observedAt time.Time) error {
+func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
@@ -229,6 +230,7 @@ func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID strin
 		n.LastAgentVersion = agentVersion
 	}
 	n.Conditions = stampConditions(conditions, observedAt)
+	n.Telemetry = metrics
 	n.LastSeen = observedAt
 	ts.nodes[nodeID] = n
 	return nil

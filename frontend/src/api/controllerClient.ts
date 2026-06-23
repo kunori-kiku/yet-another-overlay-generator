@@ -15,6 +15,7 @@ import type {
   ControllerNode,
   ControllerAuditEntry,
   StageResult,
+  WireGuardPeer,
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
@@ -286,6 +287,19 @@ interface NodeJSON {
   rekey_requested: boolean;
   in_rollout?: boolean;
   conditions?: ConditionWire[];
+  // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
+  // known wireguard_peers key for the per-link panel; other keys are ignored here.
+  telemetry?: { wireguard_peers?: WireGuardPeerWire[] } | null;
+}
+
+// WireGuardPeerWire mirrors the agent's per-peer link health (snake_case wire shape under
+// telemetry.wireguard_peers), mapped to the camelCase WireGuardPeer at the boundary.
+interface WireGuardPeerWire {
+  peer?: string;
+  interface?: string;
+  endpoint?: string;
+  last_handshake?: number;
+  status?: string;
 }
 
 interface AuditEntryJSON {
@@ -679,7 +693,22 @@ function mapNode(n: NodeJSON): ControllerNode {
     rekeyRequested: n.rekey_requested,
     inRollout: n.in_rollout ?? false,
     conditions: mapNodeConditions(n.conditions),
+    wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
   };
+}
+
+// mapWireGuardPeers projects the agent's per-peer link telemetry (snake_case) to WireGuardPeer[].
+// Defensive: tolerates a missing/garbled metric (returns []), and coerces an unknown status to
+// 'never' (the safe "not up" default) so the panel never renders an unhandled state.
+function mapWireGuardPeers(peers: WireGuardPeerWire[] | undefined): WireGuardPeer[] {
+  if (!Array.isArray(peers)) return [];
+  return peers.map((p) => ({
+    peer: p.peer ?? p.interface ?? '',
+    interface: p.interface ?? '',
+    endpoint: p.endpoint ?? '',
+    lastHandshake: typeof p.last_handshake === 'number' ? p.last_handshake : 0,
+    status: p.status === 'up' || p.status === 'stale' ? p.status : 'never',
+  }));
 }
 
 function mapAuditEntry(e: AuditEntryJSON): ControllerAuditEntry {

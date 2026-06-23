@@ -5,6 +5,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 import { NodeConditions } from '../deploy/NodeConditions';
+import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
 
 // last_seen / enrolled_at are RFC3339 strings; the zero value ("0001-01-01T00:00:00Z") is
 // displayed as "—".
@@ -69,6 +70,9 @@ export function FleetNodeDetailPage() {
               {node.rekeyRequested ? t(language, 'fleetNodeDetailPage.yes') : t(language, 'fleetNodeDetailPage.no')}
             </Field>
           </dl>
+          {node.wireguardPeers.length > 0 && (
+            <WireGuardPeersPanel peers={node.wireguardPeers} language={language} />
+          )}
         </section>
       )}
     </div>

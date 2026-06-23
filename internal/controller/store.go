@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -104,6 +105,12 @@ type Node struct {
 	// ObservedAt on receipt (plan-1). Nil until a conditions-aware agent reports; replaced wholesale
 	// each report (the latest report is the truth). Observability only — not custody, not allocation.
 	Conditions []NodeCondition
+	// Telemetry is the agent's extensible metrics map from the last /telemetry heartbeat (the
+	// framework's extension slot — e.g. wireguard_peers, the per-peer link detail). Opaque JSON the
+	// controller persists + serves verbatim for the panel to interpret by key; nil until a
+	// metrics-emitting agent heartbeats. Replaced wholesale each heartbeat. Observability only — never
+	// custody, never key material (the agent emits no keys/allowed-ips).
+	Telemetry  map[string]json.RawMessage
 	LastSeen   time.Time
 	EnrolledAt time.Time
 	// RekeyRequested is set by the operator's fleet-wide key-rotation request
@@ -471,13 +478,13 @@ type Store interface {
 	// conditions slice clears the stored set).
 	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error
 	// RecordTelemetry records a LIVE health heartbeat (beta9-smoke-hardening plan-1): it writes ONLY
-	// the node's structured conditions (server-stamped with observedAt; nil/empty clears the set), its
-	// last-seen time, and — when non-empty — its reported agent build version. It is a strict subset of
-	// SetAppliedGeneration that DELIBERATELY does NOT touch AppliedGeneration / LastChecksum /
-	// LastHealth / DesiredGeneration: telemetry is observability, kept strictly separate from deploy
-	// custody, so a heartbeat can never advance or regress a node's applied generation. Returns
-	// ErrNotFound if the node does not exist.
-	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, agentVersion string, observedAt time.Time) error
+	// the node's structured conditions (server-stamped with observedAt; nil/empty clears the set), the
+	// extensible metrics map (replaced wholesale; nil clears it), its last-seen time, and — when
+	// non-empty — its reported agent build version. It is a strict subset of SetAppliedGeneration that
+	// DELIBERATELY does NOT touch AppliedGeneration / LastChecksum / LastHealth / DesiredGeneration:
+	// telemetry is observability, kept strictly separate from deploy custody, so a heartbeat can never
+	// advance or regress a node's applied generation. Returns ErrNotFound if the node does not exist.
+	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 

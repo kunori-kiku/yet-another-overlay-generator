@@ -322,11 +322,12 @@ showed a stale worst case.)
   same structured conditions as `/report` PLUS an extensible `metrics` map, and **deliberately no**
   `applied_generation` / `checksum`: telemetry is **observability, kept strictly separate from deploy
   custody**.
-- **Handler** — `store.RecordTelemetry(ctx, tenant, callerNode, conditions, agent_version, now)`, which
-  updates ONLY the node's `Conditions` (server-stamped with the controller clock) + `LastSeen`
-  (+ `LastAgentVersion`). It **never** touches `AppliedGeneration` / `LastChecksum` / `LastHealth` /
-  `DesiredGeneration`, so a heartbeat can never advance or regress a node's applied generation. It is
-  **intentionally not audited** — a 30s heartbeat would flood the hash-chained audit log.
+- **Handler** — `store.RecordTelemetry(ctx, tenant, callerNode, conditions, metrics, agent_version, now)`,
+  which updates ONLY the node's `Conditions` (server-stamped with the controller clock), the extensible
+  `Telemetry` metrics map (replaced wholesale; served verbatim in the node JSON for the panel), and
+  `LastSeen` (+ `LastAgentVersion`). It **never** touches `AppliedGeneration` / `LastChecksum` /
+  `LastHealth` / `DesiredGeneration`, so a heartbeat can never advance or regress a node's applied
+  generation. It is **intentionally not audited** — a 30s heartbeat would flood the hash-chained log.
 - **Conditions: dual-write.** Conditions now flow from BOTH paths: `/telemetry` is the LIVE source
   (refreshes every `--telemetry-interval`, default 30s) and `/report` still stamps them at apply-time;
   both wholesale-replace `node.Conditions`, last-writer-wins, so the heartbeat supersedes the stale
@@ -335,10 +336,16 @@ showed a stale worst case.)
   agent against an old controller (no `/telemetry` route) gets a swallowed `404` heartbeat and its
   `/report` conditions still land.
 - **Extension point.** The agent side is a pluggable `Sampler` framework (`internal/agent/telemetry.go`):
-  the condition sampler is the first probe; a future probe (e.g. per-peer handshake RTT) implements
-  `Sampler`, is registered in `BuildTelemetry`, and writes into the `metrics` map — which already
-  travels on the wire — with no transport change. `Condition.Type`/`Status` are plain strings, so a new
-  condition type needs no model change. (The `metrics` map is currently accepted-but-not-persisted.)
+  a `Sampler` is registered in `BuildTelemetry`, runs each heartbeat under a panic guard, and writes
+  conditions and/or named `metrics`. The first probe is the condition sampler; the first real **metric**
+  is `wireguardPeersSampler`, which emits `metrics["wireguard_peers"]` — the per-peer link health
+  (`{peer, interface, endpoint, last_handshake, status}`, no key material) the controller persists +
+  serves under `node.telemetry` and the panel renders as a **collapsible per-link panel** (the detail
+  behind the aggregate `wireguard` condition). A future probe (e.g. per-peer RTT) adds another `Sampler`
+  with no transport change. `Condition.Type`/`Status` are plain strings, so a new condition type needs
+  no model change. Relatedly, the aggregate `wireguard` condition now distinguishes **all** peers down
+  (`LinkDown`) from **some** down (`SomePeersDown`), so one offline mesh peer no longer flags the whole
+  node as down.
 - **Response** — `200` (`{"status": "ok"}`).
 
 ### `POST /update-topology` — operator stores the topology
