@@ -117,9 +117,13 @@ const wgMetricKey = "wireguard_peers"
 
 // wgPeerHealth is one WireGuard peer's live link health — the per-peer detail BEHIND the aggregate
 // wireguard condition, carried on the telemetry metrics map (metrics["wireguard_peers"]) and
-// rendered as a collapsible per-link panel. Peer is the link name (the wg-<peer> interface minus its
-// prefix, or the interface itself, e.g. a client's wg0); LastHandshake is unix seconds (0 = never);
-// Status is up | stale | never. No key material is exposed (no keys, no allowed-ips).
+// rendered as a collapsible per-link panel. Peer is the link label derived from the interface name
+// (`wg-<peer>` minus its prefix). NOTE: for a long remote name (>12 chars) or any backup link the
+// interface is HASHED (internal/naming: wg-<clean[:8]><sha[:4]>), so the label is a stable but
+// truncated tail rather than the clean peer name — Interface (always unique) + Endpoint disambiguate,
+// and a readable node-name label is a controller-side follow-up (the controller knows the topology).
+// LastHandshake is unix seconds (0 = never); Status is up | stale | never. No key material is exposed
+// (no keys, no allowed-ips).
 type wgPeerHealth struct {
 	Peer          string `json:"peer"`
 	Interface     string `json:"interface"`

@@ -256,8 +256,9 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 // can never advance or regress the applied generation. It is INTENTIONALLY NOT audited — a 30s
 // heartbeat would flood the hash-chained audit log (HandleReport's append); do not "fix" the
 // asymmetry by adding an audit entry here. Conditions are server-stamped with the controller clock
-// inside the store (a node clock cannot be trusted for ageing). The metrics map is accepted as the
-// framework's extension slot but not yet persisted. Returns {status:"ok"}.
+// inside the store (a node clock cannot be trusted for ageing). The metrics map (the framework's
+// extension slot — e.g. wireguard_peers) is persisted wholesale and served under node.telemetry.
+// Returns {status:"ok"}.
 func (h *ControllerHandler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))

@@ -34,6 +34,7 @@ function node(over: Partial<ControllerNode>): ControllerNode {
     rekeyRequested: false,
     inRollout: true,
     conditions: [],
+    wireguardPeers: [],
     ...over,
   };
 }

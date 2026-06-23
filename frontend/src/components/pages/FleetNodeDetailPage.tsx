@@ -54,7 +54,7 @@ export function FleetNodeDetailPage() {
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.health')}>{node.lastHealth || '—'}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.conditions')}>
-              {node.conditions.length > 0 ? <NodeConditions conditions={node.conditions} language={language} /> : '—'}
+              {(node.conditions?.length ?? 0) > 0 ? <NodeConditions conditions={node.conditions} language={language} /> : '—'}
             </Field>
             <Field label={t(language, 'fleetNodeDetailPage.agentVersion')}>{node.agentVersion || '—'}</Field>
             <Field label={t(language, 'updateStatus.label')}>
@@ -70,9 +70,11 @@ export function FleetNodeDetailPage() {
               {node.rekeyRequested ? t(language, 'fleetNodeDetailPage.yes') : t(language, 'fleetNodeDetailPage.no')}
             </Field>
           </dl>
-          {node.wireguardPeers.length > 0 && (
-            <WireGuardPeersPanel peers={node.wireguardPeers} language={language} />
-          )}
+          {/* Unconditional + nullish-coerced: a node persisted by a pre-beta.12 panel (in
+              localStorage) has no wireguardPeers key, and this deep-linkable route has no
+              refresh-on-mount, so guarding on node.wireguardPeers.length would crash on a reload
+              after upgrade. The panel itself renders nothing for an empty list. */}
+          <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
         </section>
       )}
     </div>
