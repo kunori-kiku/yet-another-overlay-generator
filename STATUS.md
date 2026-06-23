@@ -1,8 +1,22 @@
 # STATUS
 <!-- regenerated: 2026-06-23 -->
-<!-- by: beta9-smoke-hardening subject DELIVERED — v2.0.0-beta.10 published to GitHub Latest -->
+<!-- by: v2.0.0-beta.11 published to GitHub Latest (beta.10 smoke-fix follow-up) -->
 
 ## Active work
+
+- **`v2.0.0-beta.11` — published to GitHub Latest (2026-06-23, PR #183; beta.10 demoted).** A fast
+  follow-up fixing two findings the owner hit smoking beta.10 on the live fleet (both reproduced
+  against the real `hack3ric/mimic` upstream + a real `gh-proxy.com`): (1) **mimic "Discover from
+  release" failed** because discovery routed the GitHub REST API through the gh-proxy, whose shared
+  API token is globally rate-limited (403) — fixed by hitting `api.github.com` **directly** (egress
+  guard + host-pin retained; `.deb` downloads still proxied), a forgiving+normalizing release-base
+  parser, and dropping the version field from discovery; (2) **a stalled self-update rollout was
+  invisible** — a deferred update (target bumped but pins still resolve to the old binary → the
+  self-test correctly refuses, no brick) now surfaces as a `selfupdate: Blocked` condition (live via
+  `/telemetry`), observability-only + self-clearing. Reviewed (4-lens, security-weighted) → caught a
+  real **major** (the Blocked-record path could wipe custody floors on a corrupt state.json → fixed
+  to bail, with a regression test) + nits → re-reviewed PASS → CI green. **Owed:** owner re-smoke of
+  Discover (now direct) + the self-update re-arm (re-fetch beta.11 pins → redeploy → nodes advance).
 
 - **SUBJECT beta9-smoke-hardening — DELIVERED (2026-06-23); `v2.0.0-beta.10` published to GitHub
   Latest.** All 5 plans merged (PRs #176 spine, #177–#181). Fixed the defects + UX gaps surfaced while

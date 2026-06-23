@@ -9,6 +9,33 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.11] - 2026-06-23
+
+A fast follow-up fixing two findings from smoking beta.10 on the live fleet — both reproduced against
+the real `hack3ric/mimic` upstream + a real `gh-proxy.com`. Published as `v2.0.0-beta.11` and promoted
+to **GitHub Latest**.
+
+### Fixed
+- **Mimic catalog "Discover from release" works again.** Discovery was routing the GitHub REST API
+  call through the configured GitHub proxy, whose shared API identity is globally rate-limited (a
+  `403` for everyone) — so discovery failed even with a correct URL. Discovery now hits the GitHub
+  REST API **directly** (`api.github.com`); the dial-time SSRF egress guard + the `github.com`
+  host-pin still apply, and the actual `.deb` **downloads** still route through the proxy (its real
+  purpose). The release-base parser is also more forgiving — it accepts the forms an operator
+  naturally pastes (`.../releases`, `.../releases/latest`, `.../releases/tag|tags/<tag>`, the repo
+  root) and **normalizes** the field to the canonical `.../releases/latest/download` |
+  `.../releases/download/<tag>` form the install fetches from. Discovery no longer applies the
+  "Catalog version" field (it is operator bookkeeping — the base alone selects the release), so a
+  stale/nonexistent version tag can no longer 404 the discover. Clearer failure message.
+- **A stalled agent self-update rollout is now visible in the panel.** When a post-apply self-update
+  keeps being **deferred** — most commonly because the rollout target was bumped but its pins still
+  resolve to the *old* binary, so the agent's self-test correctly refuses the version/hash-mismatched
+  binary (no brick) — the agent now records the reason and surfaces it as a `selfupdate: Blocked`
+  condition (lowest precedence), live via the `/telemetry` heartbeat. The panel shows **why** a node
+  is not advancing instead of it silently staying behind; the remedy is to re-arm the rollout's pins
+  (the one-click "update all → controller version" re-fetches matching pins) and redeploy. The signal
+  is observability only — it touches no custody/anti-rollback state and is self-clearing.
+
 ## [2.0.0-beta.10] - 2026-06-23
 
 A smoke-hardening release for the cluster of live-fleet defects and UX gaps surfaced while smoking
