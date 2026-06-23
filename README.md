@@ -22,7 +22,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Off-Host Signing Keystone (2.0):** Each controller Deploy is signed by the operator's hardware-backed passkey in a WebAuthn ceremony over the exact trust-list bytes, and nodes verify the signature before applying — a compromised controller alone cannot push configs to your fleet.
 - **Hardened Operator Auth (2.0):** Sessions live in an httpOnly cookie (login survives page refresh; no token in `localStorage`) with double-submit CSRF protection and credentialed CORS (`YAOG_PANEL_ORIGIN`). Second factors are TOTP (RFC 6238) and/or passkeys; passkeys also enable passwordless login.
 - **Fleet Management (2.0):** Per-node fleet pages with status detail, single-use enrollment tokens minted from the panel, a compile-history/audit view, and manual fleet-wide WireGuard key rotation (Roll keys).
-- **Live Fleet Health (2.0):** Agents report structured **Node Conditions** (`config-apply`, `self-update`, `wireguard`, `mimic`) and refresh them on a dedicated `/telemetry` heartbeat (default 30s), so the panel reflects *current* health — not a frozen apply-time snapshot. The node-detail page has a collapsible **WireGuard links** panel showing each peer's last handshake, and a partly-degraded node reads `SomePeersDown` (which link is down), not a blanket `LinkDown`.
+- **Live Fleet Health (2.0):** Agents report structured **Node Conditions** (`configapply`, `selfupdate`, `wireguard`, `mimic`) and refresh them on a dedicated `/telemetry` heartbeat (default 30s), so the panel reflects *current* health — not a frozen apply-time snapshot. The node-detail page has a collapsible **WireGuard links** panel showing each peer's last handshake, and a partly-degraded node reads `SomePeersDown` (which link is down), not a blanket `LinkDown`.
 - **Signed Agent Self-Update + Version-Aware Rollout (2.0):** Agents can update their own binary from a release, verified against the controller-signed `artifacts.json` (hash + a self-test) before exec, with a crash-bounded canary-then-fleet rollout and an anti-downgrade floor. The panel knows its own version, drives a one-click "update all to the controller version," and refuses a target newer than itself; a stalled rollout surfaces as a `selfupdate: Blocked` condition.
 - **Mimic `.deb` Catalog (2.0):** For distros that don't package mimic, the panel pins per-`<codename>-<arch>` `.deb` packages by SHA-256; **Discover from release** lists a GitHub release's `.deb` assets to pick from (the install verifies each against the signed pin before `dpkg`).
 - **Theming, i18n & Accessibility (2.0):** System-following dark/light themes with manual override and optional translucency/vibrancy, reduced-motion support, keyboard/skip-link accessibility, and a fully bilingual English/中文 UI.
@@ -51,10 +51,10 @@ npm install --legacy-peer-deps
 npm run dev          # Vite dev server on :5173 — open http://localhost:5173
 ```
 
-For contributing across the whole stack, `./dev.sh` runs the Vite frontend plus the Go server together (the server is controller-only — see the note above):
+`./dev.sh` is a contributor convenience that runs the Vite frontend (where local design compiles) and also launches the Go server. Note the Go server is the **default controller-only build**, so it only stays up when the controller env is set (`YAOG_CONTROLLER_STATE_DIR` + `YAOG_TENANT_ID`) — for pure local design you only need the frontend above; export those vars before `./dev.sh start` to also bring up a dev controller:
 
 ```bash
-./dev.sh start     # Vite frontend on :5173 (+ the Go server)
+./dev.sh start     # Vite frontend on :5173 (+ the Go server when the controller env is set)
 ./dev.sh stop      # Stop all
 ./dev.sh restart   # Restart both
 ./dev.sh status    # Check if running
@@ -73,10 +73,10 @@ YAOG_CONTROLLER_STATE_DIR=./data YAOG_TENANT_ID=default go run ./cmd/server/
 go run -tags airgap ./cmd/server/
 ```
 
-The CLI compiler reads `topology.json` and writes `output/` with no server at all:
+The CLI compiler reads a topology JSON and writes `output/` with no server at all:
 
 ```bash
-go run ./cmd/compiler/
+go run ./cmd/compiler/ -input topology.json   # -input is required; -output defaults to ./output
 ```
 
 #### Browser E2E tests
