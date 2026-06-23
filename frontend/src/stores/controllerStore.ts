@@ -47,6 +47,8 @@ import {
   getOperatorCredentialStatus,
   controllerErrorCode,
   getTopology as ctlGetTopology,
+  AlgWebAuthnES256,
+  AlgWebAuthnEdDSA,
 } from '../api/controllerClient';
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
@@ -610,7 +612,7 @@ export function selectHasLocalSigningKey(state: ControllerState): boolean {
 // its descriptor is NOT browser-recoverable — deploy() cannot tap an authenticator for it, and the
 // signing-handle auto-recovery (hydrateKeystoneStatus, plan-3) must leave it alone.
 function isRecoverableWebAuthnAlg(alg: string): alg is WebAuthnAlg {
-  return alg === 'webauthn-es256' || alg === 'webauthn-eddsa';
+  return alg === AlgWebAuthnES256 || alg === AlgWebAuthnEdDSA;
 }
 
 // serverKeystoneReset is the "unknown" state of the SERVER-authoritative keystone fields. It is the
@@ -1519,14 +1521,18 @@ export const useControllerStore = create<ControllerState>()(
               const pem = get().operatorPublicKeyPEM;
               if (credentialId === null || alg === null || !pem) {
                 // keystone is on (nodes require a signature) but this browser still holds no complete
-                // signing descriptor (credential_id + alg + PEM). Split the message by WHY, so the
-                // operator knows the next step:
-                //   - the controller has NONE pinned        → enroll a signing key here; or
-                //   - the controller HAS one pinned but no browser-signable descriptor could be
-                //     recovered (a raw-ed25519 CLI keystone, or recovery failed) → connect the
-                //     enrolling authenticator / re-enroll on this device — NOT a re-pin.
+                // signing descriptor (credential_id + alg + PEM). We are PROVABLY inside the
+                // keystone-ON branch (toSign !== null ⇒ getTrustlist returned a staged manifest ⇒ a
+                // credential is pinned), so the right message is "pinned but this browser couldn't
+                // recover a browser-signable descriptor — connect the enrolling authenticator /
+                // re-enroll on this device, NOT a re-pin". Discriminate on `!== false` (not truthy):
+                // serverOperatorPinned is null on a fresh browser and the belt re-probe above is
+                // best-effort, so a transient probe failure leaves it null — a truthy check would
+                // then wrongly nudge toward a fleet-stranding re-pin (the very thing this fixes).
+                // Only an impossible false (keystone off, yet toSign was non-null) takes the
+                // enroll-here branch, kept as defense-in-depth.
                 throw new Error(
-                  get().serverOperatorPinned
+                  get().serverOperatorPinned !== false
                     ? tLocal('controllerStore.signingDescriptorUnrecovered')
                     : tLocal('controllerStore.noSigningKeyEnrolled'),
                 );
