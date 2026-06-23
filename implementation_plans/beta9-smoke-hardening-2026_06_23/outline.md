@@ -2,6 +2,16 @@
 
 <!-- drafted: 2026-06-23 by draft-implementation-plan; approved by owner -->
 
+> **STATUS: DELIVERED (2026-06-23).** All 5 plans merged to `main` (PRs #176 spine, #177 plan-1
+> telemetry, #178 plan-2 validate, #179 plan-3 signing recovery, #180 plan-4 mimic discover, #181
+> plan-5 CHANGELOG). `v2.0.0-beta.10` cut from the green tip (tag on `49b3566`), `release.yml` +
+> `docker.yml` green, promoted to **GitHub Latest** (`releases/latest` → beta.10; beta.9 demoted).
+> Each PR independently 4-lens-reviewed (security-weighted for plan-3/4) → fixed at root → re-reviewed →
+> CI green. All success criteria met in code; the **owner browser smoke** on the live fleet is the one
+> owed item (telemetry un-freeze · controller Validate · signing recovery on a cleared browser · mimic
+> Discover) — gates rc.1, not the release. Process lesson recorded in the decisions log
+> (shared-working-tree clobber → isolated worktrees + checkout-free reviews).
+
 ## Mission
 
 Fix the cluster of real defects + UX gaps surfaced while smoking `v2.0.0-beta.9` on a live ~9-node fleet, and ship them as **`v2.0.0-beta.10`** (promoted to GitHub Latest, like beta.9) so the owner can re-smoke. The headline: the **Node Conditions feedback channel is lying** — conditions are sampled only at apply time (WireGuard mid-handshake → `LinkDown`; self-update mid-probation → `HealthConfirmedProbationary`) and never refresh while idle, so the panel freezes a worst-case post-apply snapshot even though the overlay + self-update are healthy. Build the fix as a **dedicated, extensible monitoring channel** (`/telemetry` heartbeat).
@@ -49,16 +59,20 @@ Fix the cluster of real defects + UX gaps surfaced while smoking `v2.0.0-beta.9`
 - **Preflight Q3 (signing security):** Serve the public descriptor (preserves off-host guarantee) — NOT discoverable-passkey re-enrollment.
 - **Preflight Q4 (heartbeat cadence):** Dedicated faster interval — explicitly to build a reusable/extensible **monitoring framework** the owner can extend later (latency, resource metrics).
 - **Midflight (heartbeat transport):** A dedicated `/telemetry` endpoint (not reuse of `/report`) — clean separation of observability from deploy custody.
+- **plan-4 (error code):** Reuse `CodeAgentReleaseRequestInvalid` (400) / `CodeAgentReleaseFetchFailed` (502) for `release-assets` rather than mint new codes (no apierr-bijection churn). The shared fetch-failed message was genericized from "release checksum" to "from the release at {url}" so it reads correctly for both the pin (checksum sidecar) and the asset-list fetch (review nit).
+- **Process lesson (shared working tree):** A review workflow's subagents ran `git checkout`/`gh pr checkout` in the SHARED main working tree, switching its branch and **discarding uncommitted plan-3 edits**. Recovered by (a) doing each branch's work in an **isolated `git worktree`** (so main-tree churn can't touch it) and (b) making every subsequent review workflow **checkout-free** — read PR code via `git show <ref>:<path>` + `gh pr diff`, never a checkout. Never leave uncommitted work in a tree a background agent may `git checkout`.
 
 ## Milestones
 
 | Plan | Title | Status |
 |------|-------|--------|
-| plan-1 | Telemetry monitoring channel (`/telemetry` heartbeat + sampler framework) | pending |
-| plan-2 | Controller-mode Validate runs the in-browser validator | pending |
-| plan-3 | Off-host signing-handle auto-recovery | pending |
-| plan-4 | Mimic catalog discover-and-pick | pending |
-| plan-5 | Release `v2.0.0-beta.10` | pending |
+| plan-1 | Telemetry monitoring channel (`/telemetry` heartbeat + sampler framework) | ✅ merged (#177) |
+| plan-2 | Controller-mode Validate runs the in-browser validator | ✅ merged (#178) |
+| plan-3 | Off-host signing-handle auto-recovery | ✅ merged (#179) |
+| plan-4 | Mimic catalog discover-and-pick | ✅ merged (#180) |
+| plan-5 | Release `v2.0.0-beta.10` | ✅ merged (#181) → tagged + Latest |
+
+No insertion plans were needed: the `-race` suite found no telemetry data race (plan-1.5 not triggered), and the `deriveKey` heuristic + duplicate-key guard handled the mimic asset-naming variance (plan-4.5 not triggered).
 
 plan-1 is the priority (makes the feedback channel honest + lays the framework). Plans 2–4 are file-disjoint (parallelizable off main). plan-5 gates on all merged + green.
 
@@ -69,6 +83,8 @@ plan-1 is the priority (makes the feedback channel honest + lays the framework).
 
 ## Closure criteria
 
-- [ ] plans 1–4 each: built → independent workflow review (4 lens) → fix → re-review clean → CI green → merged.
-- [ ] plan-5: `v2.0.0-beta.10` published, GitHub Latest, assets+sidecars verified, smokes green (version stamp + telemetry heartbeat).
+- [x] plans 1–4 each: built → independent workflow review (4 lens) → fix → re-review clean → CI green → merged.
+- [x] plan-5: `v2.0.0-beta.10` published, GitHub Latest, assets+sidecars verified (7-arch agents + `.sha256` sidecars, 7 bundles, 7 airgap servers, local-design zip), `release.yml` + `docker.yml` green.
+- [ ] **Owner browser smoke** on the live fleet (the one owed item; gates rc.1, not the release): telemetry un-freeze · controller-mode Validate · signing-handle recovery on a cleared/fresh browser · mimic Discover against the real upstream.
+- [ ] Non-blocking follow-up: visual-corpus baseline regen for the new mimic Discover UI.
 - [ ] STATUS.md + this outline's status table updated; memory note appended; subject archived to `_completed/` at closeout.
