@@ -1,466 +1,658 @@
-# Yet Another Overlay Generator Wiki
+# Yet Another Overlay Generator — Wiki
 
-> **适用范围：** 本 Wiki 仅涵盖**本地 / air-gap 模式**——在浏览器内设计、导出各节点配置包、通过 SSH 部署，
-> 内容早于 Controller 模式 2.0。**Controller 模式**（长期运行的控制平面：运营者登录、Agent 注册、keystone
-> 签名、签名自更新）请见 [`docs/spec/controller/`](spec/controller/)。
+> 其他语言版本：[English](wiki.md)
 
-## 1. 项目简介
+本 Wiki 是 **YAOG** 的完整用户文档，覆盖项目运行的**两种方式**：
 
-Yet Another Overlay Generator 是一个基于 Web 的交互式组网设计与配置生成系统。用户通过图形化拓扑界面定义节点、网络域和可达关系，系统自动分配地址、生成 WireGuard + Babel 配置文件及一键安装脚本。
+- **本地生成器（air-gap）：** 在浏览器中设计拓扑、**完全在浏览器内编译**、导出各节点的可部署配置包，再通过
+  SSH 安装。全程不涉及任何后端。
+- **控制器（Agent 拉取式）：** 将 YAOG 作为长期运行的服务运行，每个节点**主动拉取**自己那份经 keystone 签名
+  的配置，并把实时健康状态回报给运营者面板。
+
+两种模式共用同一个编译器（浏览器内的 TypeScript 移植版本由 CI 一致性门禁按字节对齐到 Go 实现），因此拓扑模型、
+地址分配和渲染产物在两种模式间完全一致。架构层面的权威说明位于 [`docs/spec/`](spec/)——本 Wiki 是在其之上的
+叙述式指南。
+
+---
+
+## 目录
+
+1. [项目概览](#1-项目概览)
+2. [核心概念](#2-核心概念)
+3. [两种模式与构建边界](#3-两种模式与构建边界)
+4. [本地模式 — 设计、编译、导出、部署](#4-本地模式--设计编译导出部署)
+5. [控制器模式 — Agent 拉取式控制平面](#5-控制器模式--agent-拉取式控制平面)
+6. [编译器工作原理](#6-编译器工作原理)
+7. [生成产物](#7-生成产物)
+8. [安全模型](#8-安全模型)
+9. [HTTP API 参考](#9-http-api-参考)
+10. [调试与故障排查](#10-调试与故障排查)
+11. [术语表](#11-术语表)
+
+---
+
+## 1. 项目概览
+
+Yet Another Overlay Generator 是一个基于 Web 的网络设计与配置生成系统。你通过可视化拓扑编辑器定义节点、网域和
+连通关系；系统自动分配地址，并确定性地生成 **WireGuard**（三层加密隧道）+ **Babel**（动态路由）配置，以及一键
+安装脚本。
 
 ### 设计哲学
 
-系统遵循**设计 → 编译 → 部署**三层架构：
+系统遵循 **设计 → 编译 → 部署** 的三层架构：
 
 ```text
-[Web 前端 / CLI]
-        │  Topology JSON
+[Web 画布  /  CLI]
+        │  拓扑 JSON
         ▼
-[编译器]
-  ├─ Schema 校验
+[编译器]                          ← 在浏览器内运行（本地模式）或在控制器上运行
+  ├─ 模式（Schema）校验
   ├─ 语义校验
-  ├─ IP 分配器
-  ├─ Peer 推导器
+  ├─ IP 分配
+  ├─ 能力推导
+  ├─ Peer 推导
   └─ 配置渲染器
         │  ├─ WireGuard 配置
         │  ├─ Babel 配置
         │  ├─ sysctl 内核参数
-        │  └─ 安装脚本
+        │  ├─ 安装脚本
+        │  └─ 部署脚本
         ▼
-[产物导出器]
-        │  每节点部署包
+[产物导出器]                       ← 各节点配置包（本地）或各节点签名配置包（控制器）
         ▼
 [目标主机]
-        └─ 执行 install.sh → 网络上线
+        └─ 运行 install.sh → overlay 网络启动
 ```
 
 核心原则：
-- **拓扑即代码**：JSON 拓扑是唯一真相源，所有配置确定性推导。
-- **离线编译**：密钥和配置在本地可信主机生成，不依赖在线控制面。
-- **幂等部署**：安装脚本可安全重复执行。
+
+- **拓扑即代码。** 拓扑 JSON 是唯一事实来源；每一份配置都由它确定性派生而来。
+- **确定性编译。** 同一份拓扑总是产生相同的字节（编译器是其输入的纯函数——见[第 6 节](#6-编译器工作原理)）。
+  正是这一点使得浏览器内的 TypeScript 编译器可以按字节对齐到 Go 版本。
+- **幂等部署。** 安装脚本可安全地重复运行；新增一个节点不会改动其他无关节点的配置包字节。
+- **密钥各居其所。** 本地模式下密钥在你的设计主机上生成并保存；控制器模式下每个节点持有自己的私钥，控制器
+  永远看不到它（见[第 8 节](#8-安全模型)）。
 
 ---
 
 ## 2. 核心概念
 
+这些概念在两种模式下完全一致——它们描述的是编译器消费的拓扑模型。
+
 ### 2.1 网域（Domain）
 
-网域是一个 Overlay 地址空间，定义了可分配 IP 的范围。
+**网域**是定义可分配 IP 范围的 overlay 地址空间。
 
 | 字段 | 说明 |
-|------|------|
-| 名称 | 显示名与逻辑标识 |
-| CIDR | 网段范围，如 `10.11.0.0/24` |
-| 分配模式 | `auto`（自动分配）/ `manual`（手工指定） |
-| 路由模式 | `babel`（动态路由）/ `static`（静态路由）/ `none`（不生成） |
+|-------|-------------|
+| Name | 显示名与逻辑标识 |
+| CIDR | 地址范围，例如 `10.11.0.0/24` |
+| Allocation Mode（分配模式） | `auto`（编译器分配）/ `manual`（按节点手动指定） |
+| Routing Mode（路由模式） | `babel`（动态路由）/ `static` / `none` |
 
 ### 2.2 节点（Node）与角色
 
-节点代表一台机器（云主机、物理机、容器宿主）。
+**节点**代表一台机器（云主机、裸金属服务器、容器宿主机）。
 
-**基础字段：**
-- 节点名称、主机名（可选）、平台（`debian` / `ubuntu`）
-- 所属网域、Overlay IP（可选手动指定）
-- WireGuard 监听端口（默认 51820）、MTU（可选）
+**基本字段：** Name、Hostname（可选）、Platform（`debian` / `ubuntu`）、所属网域、Overlay IP（可选手动覆盖）、
+WireGuard 基础监听端口（默认 51820）、MTU（可选）、Router ID（可选的 Babel MAC-48；留空则自动生成）。
 
-**角色与能力：**
+**角色与能力**（权威来源：`internal/compiler/roles.go`）：
 
-| 角色 | 转发 | 中继 | Babel 通告 | 典型用途 |
-|------|------|------|-----------|---------|
-| `peer` | ✗ | ✗ | 仅自身 IP | 终端客户端 |
-| `router` | ✓ | ✗ | 自身 IP + Domain CIDR + 额外前缀（设置时） | 骨干转发节点 |
-| `relay` | ✓ | ✓ | 自身 IP + Domain CIDR + 额外前缀（设置时），cost 96 | NAT 场景中继 |
-| `gateway` | ✓ | ✗ | 自身 IP + Domain CIDR + 额外前缀 + 默认路由 | 桥接外部网段 |
-| `client` | ✗ | ✗ | 不运行 Babel | 轻量终端（手机、笔记本） |
+| 角色 | IP 转发 | 接受入站 | 运行 Babel | Babel 通告 | 典型用途 |
+|------|-----------|----------------|------------|-----------------|-------------|
+| `peer` | 否 | 否 | 是 | 仅自身 overlay `/32` | 终端用户节点 |
+| `router` | 是 | 仅当具备公网 IP | 是 | 自身 `/32` + 网域 CIDR + extra prefixes（设置时） | 骨干转发节点 |
+| `relay` | 是 | **始终接受** | 是 | 自身 `/32` + 网域 CIDR + extra prefixes（设置时） | NAT 穿透中继 |
+| `gateway` | 是 | 仅当具备公网 IP | 是 | 自身 `/32` + 网域 CIDR + extra prefixes + **默认路由 `0.0.0.0/0`** | 通往外部网络的桥接 |
+| `client` | 否 | 否 | **否** | 无（不运行 Babel） | 轻量端点（手机、笔记本） |
 
-> **额外前缀（extra_prefixes）：** 只要 `extra_prefixes` 非空，`router` 与 `relay` 都会通告它，
-> 并非仅 `gateway`（`internal/compiler/roles.go`）。额外前缀和 gateway 的默认路由通过内核路由机制
-> 通告（`redistribute ip <prefix> allow`，匹配真实的连接路由 / WAN 默认路由），而非
-> `redistribute local`；详见 [spec/roles/roles.md](spec/roles/roles.md) 及审计档案 D40/D41。
+> **接受入站是有条件的。** `router` 与 `gateway` 只有在节点可被公网访问时才接受入站；`relay` 始终接受入站。
+> 拥有任意公网端点的节点即被视为可公网访问，即便未显式设置该标志（当 `PublicEndpoints` 非空时，`roles.go`
+> 会把 `HasPublicIP` 归一化为真）。
 
-> **Client 角色说明：** Client 是最轻量的角色，适用于不需要参与动态路由的终端设备。Client 使用单个 `wg0` 接口连接到一个 router/relay/gateway 节点，不运行 Babel，不使用 dummy0，不使用 per-peer 接口模型。Client 的可达性通过 router 侧的内核路由注入（`PostUp = ip route add <client_ip>/32 dev %i`）+ Babel 重分发实现，使 overlay 中的其他节点都能访问到 client。
+> **Extra prefixes（额外前缀）。** `router` 与 `relay` 仅在 `extra_prefixes` 字段非空时通告它（例如节点背后的
+> 一段 LAN）；`gateway` 则无条件通告。Extra prefixes 与网关默认路由通过内核路由机制通告
+> （`redistribute ip <prefix> allow`，匹配真实的 connected/WAN 内核路由），而非 `redistribute local`。
+> 见 [spec/roles/roles.md](spec/roles/roles.md)。
 
-**能力字段：**
-- 公网可达：节点是否可被外部路径访问
-- 可入站：外部流量能否到达此节点
-- 可转发：是否可转发他人流量
-- 可中继：是否作为中继角色运行
+> **链路开销是按边（per-edge）而非按角色（per-role）。** 不存在按角色的 Babel 开销。链路的 `rxcost` 取自边的
+> `priority`（>0 时），否则取 `weight`，再否则省略并由 babeld 套用其内建默认值（96）。备份链路带有更高的预设
+> 开销（384），使 Babel 优先选择主链路；见[第 2.3 节](#23-连线edge有向连接)与
+> [spec/artifacts/babel.md](spec/artifacts/babel.md)。
 
-**多公网映射：** 节点支持配置多组 `Host:Port` 公网端点（支持域名），用于多出口、多 ISP、NAT 多重映射等场景。
+> **Client 角色。** Client 是最轻量的角色，面向不参与动态路由的设备。Client 使用单个 `wg0` 接口连接到一个
+> router/relay/gateway。它不运行 Babel、不使用 `dummy0`、也不使用 per-peer 接口模型。Client 的可达性通过
+> router 侧的内核路由注入（`PostUp = ip route add <client_ip>/32 dev %i`）加上 Babel 再分发实现。
 
-**SSH 连接配置（自动部署）：** 节点可配置 SSH 连接信息，用于一键远程部署：
+**能力字段**（由角色推导，可覆盖）：可公网访问、可接受入站、可转发、可中继。
 
-| 参数 | 说明 |
-|------|------|
-| SSH 别名 | `~/.ssh/config` 中的 Host 别名，设置后忽略下方手动配置 |
-| SSH 主机 | SSH 目标 IP 或域名 |
-| SSH 端口 | SSH 端口（默认 22） |
-| SSH 用户 | SSH 登录用户名（默认 root） |
-| SSH 密钥路径 | SSH 私钥文件路径 |
+**多个公网端点。** 一个节点可携带多个 `Host:Port` 公网端点映射（允许主机名），用于多出口 / 多 ISP / NAT
+多映射场景。
 
-> 注：不支持密码认证，应在项目层面使用密钥管理。SSH 详情在节点属性面板中默认折叠。
-
-### 2.3 连线（Edge）与有向语义
-
-有向连线 `A → B` 的含义：**A 主动去连 B**。
+**SSH 连接（自动部署）。** 节点可选地存储供生成的部署脚本使用的 SSH 连接信息（本地模式）：
 
 | 字段 | 说明 |
-|------|------|
-| 类型 | `direct`（直连）/ `public-endpoint`（公网端点）/ `relay-path`（中继路径）/ `candidate`（候选） |
-| Endpoint IP | 目标公网 IP 或域名，可从目标节点的公网映射下拉选择，也可手动输入 |
-| Endpoint Port | 用户指定端口：`0` = 自动分配（默认），非零 = NAT/端口转发覆盖（如外部端口 443 映射到内部 WireGuard 端口） |
-| Compiled Port | 编译器分配的实际端口（只读），编译后显示在端口字段下方 |
-| Transport | `udp` = 普通 WireGuard。`tcp` = 该链路由 [mimic](https://github.com/hack3ric/mimic)（eBPF UDP→伪 TCP）包裹，适用于限速或封锁 UDP 的网络。两端均需支持 eBPF 的 Linux；MTU 自动下调 12 字节；安装脚本从发行版仓库装配 mimic。**不是**绕过审查（DPI）的功能。详见 `docs/spec/artifacts/mimic.md` |
-| Priority / Weight | 路径偏好权重 |
-| Is Enabled | 该连线是否参与编译 |
+|-------|-------------|
+| SSH Alias | 来自 `~/.ssh/config` 的主机别名；设置后覆盖下方手动字段 |
+| SSH Host | SSH 目标 IP 或主机名 |
+| SSH Port | SSH 端口（默认 22） |
+| SSH User | SSH 登录用户名（默认 root） |
+| SSH Key Path | **你本机上**的 SSH 私钥路径 |
 
-> **端口分离设计：** `endpoint_port` 是用户意图（0 = 让编译器自动分配，非零 = NAT 覆盖），`compiled_port` 是编译器输出的实际端口。这样设计支持 NAT/端口转发场景：例如外部通过 `8.8.8.8:443` 访问，但节点实际 WireGuard 监听在 `51821`。`endpoint_port=443` 不会被编译器覆盖，重新编译后用户的 NAT 配置得以保留。
+> 不支持密码认证——请使用基于密钥的认证。SSH 信息在节点属性面板中默认折叠，且绝不是 WireGuard 密钥材料。
+
+### 2.3 连线（Edge，有向连接）
+
+有向边 `A → B` 表示 **A 主动连接到 B**。
+
+| 字段 | 说明 |
+|-------|-------------|
+| Type | `direct` / `public-endpoint` / `relay-path` / `candidate` |
+| Endpoint Host | 目标公网 IP 或主机名；从目标节点的公网端点中选择或手动填写 |
+| Endpoint Port | 运营者 NAT / 端口转发覆盖：`0`（默认）= 编译器自动分配；非零 = from 侧逐字拨号的外部端口 |
+| Compiled Port | 只读：from 侧实际拨号的端口，编译后填入 |
+| Transport | `udp` = 普通 WireGuard。`tcp` = 该链路由 [mimic](https://github.com/hack3ric/mimic) 包裹（eBPF UDP→伪 TCP），用于限速或封锁 UDP 的网络。两端都须为带 eBPF 的 Linux；MTU 会被自动下调；安装器从发行版仓库装配 mimic。这**不是**审查规避 / DPI 绕过功能。见 [spec/artifacts/mimic.md](spec/artifacts/mimic.md) |
+| Priority / Weight | 链路开销偏好（越低越优先）；输入到 Babel 的 `rxcost` |
+| Is Enabled | 该边是否参与编译 |
+
+> **端口归属。** 编译器是 WireGuard 监听端口的唯一权威。`endpoint_port` *不是*所分配端口的副本——把它保留为
+> `0`，编译器就会拨号对端接口自动分配的监听端口，并把结果写入只读的 `compiled_port`。仅当需要显式的
+> NAT / 端口转发覆盖时（例如某 router 将外部 `:51900` DNAT 到节点内部 `:51820`）才把 `endpoint_port` 设为非
+> 零值；该覆盖会被逐字尊重并在重编译间保留。完整契约见 [spec/data-model/edge.md](spec/data-model/edge.md)。
+
+> **并行链路与故障切换。** 一对节点之间可携带一条主链路外加一条或多条**备份**链路，每条都是独立的 WireGuard
+> 接口。Babel 按每条链路的开销选择并自动故障切换——例如一条普通 UDP 主链路配一条 `TCP (mimic)` 备份链路。
+> 备份链路具有更高的默认开销（384），使主链路在线时被优先选用。
 
 ### 2.4 两层地址分离
 
-系统使用两个独立的 IP 地址池，避免链路地址与节点身份地址冲突：
+系统使用两个独立的 IP 地址池，使链路地址永远不与节点身份地址冲突：
 
-| | Overlay IP（业务地址） | Transit IP（链路地址） |
+| | Overlay IP（身份地址） | Transit IP（链路地址） |
 |---|---|---|
-| 地址池 | 每个 Domain 的 CIDR 定义（如 `10.11.0.0/24`） | 每个 Domain 的 `transit_cidr`（默认 `10.10.0.0/24`） |
+| 地址池 | 各网域 CIDR（例如 `10.11.0.0/24`） | 各网域的 `transit_cidr`（默认 `10.10.0.0/24`） |
 | 分配到 | `dummy0` 接口 | 每个 per-peer WireGuard 接口 |
-| 用途 | 节点稳定身份地址（DNS、应用、监控） | 隧道点对点寻址 |
-| Babel 通告 | ✓ `redistribute local` | ✗ 内部使用 |
-| 稳定性 | 不随拓扑变化 | 随链路增删变化 |
+| 用途 | 稳定的节点身份（DNS、应用、监控） | 隧道点对点编址 |
+| Babel 通告 | 是（`redistribute local`） | 否——仅内部使用 |
+| 稳定性 | 不随拓扑变化 | 随链路增删而变化 |
 
-另外，每条链路还分配一对 IPv6 link-local 地址（`fe80::X`），用于 Babel 邻居发现。
+每条链路还获得一对 IPv6 链路本地地址（`fe80::X`），供 Babel 邻居发现使用。
 
 ### 2.5 Per-Peer WireGuard 接口模型
 
-**为什么不用单个 wg0 + 多 Peer？**
+**为什么不用带多个 Peer 的单个 `wg0`？** 传统的单接口多 peer 模型与 Babel 动态路由不兼容：Babel 需要**每个
+邻居一个独立接口**以分别跟踪各链路的质量；单个 `wg0` 在 Babel 看来像一个广播域；多个 peer 的 `AllowedIPs`
+还会互相冲突。
 
-传统 WireGuard 单接口多 Peer 模型与 Babel 动态路由不兼容：
-- Babel 需要**每个邻居一个独立接口**才能独立跟踪链路质量
-- 单 wg0 多 peer 在 Babel 看来是一个广播域，无法区分各链路
-- 多 peer 的 `AllowedIPs` 容易产生地址冲突
-
-**Per-peer 设计：** 每条 peer 连接使用独立的 WireGuard 接口：
+**Per-peer 设计**——每个 peer 连接使用一个专属的 WireGuard 接口：
 
 ```
-Node alpha:
-  wg-node-beta   ← 到 beta 的隧道 (port 51820)
-  wg-node-gamma  ← 到 gamma 的隧道 (port 51821)
-  dummy0         ← 稳定 overlay 地址
+节点 alpha：
+  wg-beta    ← 通往 beta 的隧道  （端口 51820）
+  wg-gamma   ← 通往 gamma 的隧道 （端口 51821）
+  dummy0     ← 稳定的 overlay 地址
 ```
 
-每个接口特点：
-- 独立监听端口（基础端口 + 偏移量递增）
-- 独立 transit IP（/32 点对点）+ IPv6 link-local
-- 仅一个 `[Peer]` 段
-- `Table = off`（阻止 wg-quick 添加路由，由 Babel 管理）
-- `AllowedIPs = 0.0.0.0/0, ::/0`（每接口仅一个 peer，安全）
+每个接口具备：独立的监听端口（基础端口 + 递增偏移）、独立的 transit IP（`/32` 点对点）+ IPv6 链路本地地址、
+恰好一个 `[Peer]` 段、`Table = off`（wg-quick 不添加路由——由 Babel 管理路由），以及
+`AllowedIPs = 0.0.0.0/0, ::/0`（每接口仅一个 peer，因此安全）。
 
-**接口命名规则：** `wg-<对端名称>`，小写，且把所有 `[a-z0-9-]` 之外的字符（含 `_`）替换为 `-`。
-Linux 内核将接口名限制为 15 字符，因此算法分两条路径：若 `wg-<清理后名称>` 不超过 15 字符则原样使用；
-否则走长名路径——返回 `wg-` + 清理后名称的前 8 个字符 + `sha256(对端名称)` 的前 4 个十六进制字符
-（3 + 8 + 4 = 15 字符）。hash 后缀确保两个共享前缀的长名不会截断成同一接口名。该名称由后端
-（`internal/naming`）唯一权威生成，前端必须消费编译输出的名称，不得自行重建。完整算法见
+**接口命名。** `wg-<peer-name>`，全部小写，`[a-z0-9-]` 之外的字符（包括 `_`）替换为 `-`。Linux 内核将接口名
+限制在 15 个字符，因此：若 `wg-<clean-name>` ≤ 15 字符则原样使用；否则算法返回 `wg-` + 清洗后名称的前 8 个字符
++ `sha256(peer-name)` 的前 4 个十六进制字符（3 + 8 + 4 = 15）。哈希后缀可避免两个共享前缀的不同长名冲突。后端
+是该名称的唯一权威（`internal/naming`）；前端始终消费已编译的名称，绝不自行重新推导。完整算法见
 [spec/artifacts/naming.md](spec/artifacts/naming.md)。
 
 ---
 
-## 3. 使用指南
+## 3. 两种模式与构建边界
 
-### 3.1 拓扑编辑工作流
+YAOG 由同一套源码构建，但发布为**两套不同的部署形态**，外加一个 CLI。**哪一个计算面（compute surface）存在，
+取决于构建方式，而非运行时配置**——这是一条刻意设置的安全边界。权威说明见
+[spec/operations/deployment-topology.md](spec/operations/deployment-topology.md)。
 
-标准操作顺序：
+### 3.1 本地生成器（air-gap）——在浏览器内计算
 
-1. **创建网域** — 定义地址空间（CIDR）、分配模式、路由模式
-2. **创建节点** — 设置名称、平台、角色，分配到网域
-3. **添加公网映射**（可选）— 为有公网入口的节点配置 Host:Port
-4. **画连线** — 在画布上从源节点拖向目标节点，设置 endpoint
-5. **校验** — 检查拓扑完整性和语义错误
-6. **编译** — 生成所有配置文件
-7. **导出** — 下载每节点部署包
+本地生成器是一个**纯前端包**：面板完全在浏览器中运行，**浏览器内的 TypeScript 编译器**
+（`frontend/src/compiler/`）执行校验 / 编译 / 导出。它不向任何后端发起 POST——根本没有服务器监听，因此你可以把
+它托管在任意静态文件服务器或 CDN 上。发布物中提供一个自包含的 `yaog-local-design-<version>.zip`；你也可以直接
+运行前端开发服务器（见[第 4 节](#4-本地模式--设计编译导出部署)）。
 
-**界面布局：**
-- 中央画布：可视化节点与有向连线
-- 左侧面板：创建并排序网域、节点（支持拖拽排序）
-- 右侧面板：编辑当前选中的网域/节点/连线属性
-- 底部面板：校验结果与诊断信息
+一个构建期标志 `VITE_LOCAL_ONLY` 会产出一个**模式锁定**的静态站点：控制器模式被设为不可达（隐藏切换开关与
+控制器专属导航，并把已持久化的控制器模式强制扳回本地）。`yaog-local-design` 资产正是以此标志构建的。
 
-### 3.2 参数全解
+### 3.2 控制器——长期运行的 Go 后端
 
-#### 网域参数
+默认的 `go build ./...` 产出 `yaog-server`，即**控制器**（面板 + API）。它服务面板 SPA、公开的
+`GET /api/health` 探针、`:8080` 上的运营者路由，以及 `:9090` 上的 agent 路由。控制器的编译路径是**经运营者
+鉴权的**服务端渲染（`compile-preview` / `stage`），而非匿名计算端点。
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| Name | ✓ | 显示名与逻辑标识 |
-| CIDR | ✓ | Overlay 地址池，如 `10.11.0.0/24` |
-| Allocation Mode | ✓ | `auto` 自动分配 / `manual` 手动指定 |
-| Routing Mode | ✓ | `babel` 动态路由 / `static` 静态 / `none` 不生成 |
+> **默认二进制是“仅控制器”且会高声失败（fail loud）。** 在**未**同时设置 `YAOG_CONTROLLER_STATE_DIR` 与
+> `YAOG_TENANT_ID` 的情况下运行 `yaog-server`，会**以一条醒目的错误退出**，而不会去启动一个匿名计算监听器。
+> 这就是 `//go:build airgap` 边界：四个匿名计算路由——`POST /api/{validate,compile,export,deploy-script}`
+> ——**仅**存在于 `go build -tags airgap` 构建中。在默认（发布）的控制器与 Docker 镜像中它们不会被链接，并
+> **返回 404**。一个回归测试（`airgap_routes_removed_test.go`）锁定了这一点。
 
-#### 节点参数
+### 3.3 第三条路径——`cmd/compiler` CLI
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| Name | ✓ | 画布与列表显示名 |
-| Hostname | ✗ | 真实 hostname 或域名标签 |
-| Platform | ✓ | `debian` / `ubuntu` |
-| Domain | ✓ | 所属网域 |
-| Role | ✓ | `peer` / `router` / `relay` / `gateway` / `client` |
-| Overlay IP | ✗ | 手工指定时使用，否则自动分配 |
-| Listen Port | ✗ | WireGuard 基础监听端口，默认 51820 |
-| MTU | ✗ | WireGuard 接口 MTU，0 = 系统默认 |
-| Router ID | ✗ | Babel router-id（MAC-48），留空自动生成 |
+`cmd/compiler` 是离线 CLI 兼参考实现。它读取一份拓扑 JSON 并写出一个配置包目录，完全不需要服务器，且在两种
+构建配置下产出字节一致的输出：
 
-**能力字段：**
+```bash
+go run ./cmd/compiler/ -input topology.json   # -input 必填；-output 默认为 ./output
+```
 
-| 参数 | 说明 |
-|------|------|
-| 公网可达 | 节点是否可从公网访问 |
-| 可入站 | 外部流量是否能到达 |
-| 可转发 | 是否转发他人流量 |
-| 可中继 | 是否作为中继节点 |
+### 3.4 计算在何处运行（一览）
 
-**公网映射（每组）：**
+| 产物 | 构建 | 计算面 |
+|---|---|---|
+| 静态本地设计站点（`yaog-local-design-<ver>.zip`） | `npm run build:local` | 浏览器内 TS 编译器；**无**后端监听 |
+| 控制器 `yaog-server`（发布二进制 + Docker 镜像） | `go build ./...` | `/api/health` + 运营者/agent 路由；编译走经运营者鉴权的服务端渲染。四个匿名路由 404。缺少控制器环境变量时高声失败。 |
+| 本地设计 oracle `yaog-server-airgap-*`（仅供开发/E2E/DAST） | `go build -tags airgap ./...` | 保留四个匿名 `/api/{validate,compile,export,deploy-script}` + `/api/health` |
+| `cmd/compiler` CLI | 任一构建 | 离线 `render → export`，两种配置下字节一致 |
 
-| 参数 | 说明 |
-|------|------|
-| Host | 公网 IP 或域名 |
-| Port | 公网端口 |
-| Note | 备注（如 "电信出口A"、"东京入口"） |
-
-#### 连线参数
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| Type | ✓ | `direct` / `public-endpoint` / `relay-path` / `candidate` |
-| Endpoint IP | ✗ | 目标 IP 或域名（可从目标节点公网地址下拉选择或手动输入） |
-| Endpoint Port | ✗ | 用户指定端口：`0` = 自动（默认），非零 = NAT/端口转发覆盖 |
-| Compiled Port | — | 编译器分配的实际端口（只读，编译后自动填充） |
-| Transport | ✗ | `udp` / `tcp` 元数据 |
-| Priority | ✗ | 路径优先级 |
-| Weight | ✗ | 路径权重 |
-| Is Enabled | ✓ | 是否参与编译 |
-
-### 3.3 校验、编译与导出
-
-**校验** 检查两类问题：
-- **Schema 校验**：必填字段、类型正确性、引用有效性（如节点的 domain_id 指向已有网域）
-- **语义校验**：IP 是否重复、节点是否孤立、CIDR 是否合法、Client 节点连线规则（必须恰好一条出站边、目标必须为 router/relay/gateway、不允许入站边）
-
-**编译** 从拓扑 JSON 确定性生成：
-- 每个 per-peer WireGuard 配置文件
-- 每节点 Babel 路由配置
-- 每节点 sysctl 内核参数
-- 每节点一键安装脚本
-- **自动部署脚本**（`deploy-all.sh` 和 `deploy-all.ps1`）
-
-**导出** 打包为每节点独立的部署目录，包含所有配置文件、install.sh、manifest.json 和 checksums.sha256。
+浏览器内编译器之所以能作为默认，是因为有**一致性门禁**（`internal/conformance/`）——一个必需的、绿色的 CI
+检查，它通过冻结的 `localcompile.Compile` I/O 契约把 TypeScript 编译器按字节对齐到 Go 流水线
+（[spec/compiler/io-contract.md](spec/compiler/io-contract.md)）。
 
 ---
 
-## 4. 编译器工作原理
+## 4. 本地模式 — 设计、编译、导出、部署
 
-### 4.1 编译流水线
+本地模式下一切都在浏览器中发生；你唯一需要运行的就是前端。
 
-编译器（`internal/compiler/compiler.go`）按 5 个阶段处理拓扑：
-
-**Pass 1：Schema 校验** — 校验 JSON 结构正确性：必填字段、类型、引用有效性。
-
-**Pass 2：语义校验** — 检查逻辑一致性：IP 冲突、孤立节点、非法边引用、CIDR 合法性。
-
-**Pass 3：IP 分配 + Peer 推导**
-- **IP 分配器**（`internal/allocator/ip.go`）：为无手动 IP 的节点从 Domain CIDR 池顺序分配，跳过网络地址/广播地址/保留区间
-- **能力推导**（`internal/compiler/roles.go`）：根据角色推导能力字段（如 `router` → `can_forward=true`）
-- **Peer 推导**（`internal/compiler/peers.go`）：处理 Edge 生成每对节点的 PeerInfo（详见 4.2）
-
-**Pass 4：配置渲染** — 四个独立渲染器：
-
-| 渲染器 | 输出 | 源码位置 |
-|--------|------|----------|
-| WireGuard | 每 peer 一个 `.conf` | `internal/renderer/wireguard.go` |
-| Babel | 每节点 `babeld.conf` | `internal/renderer/babel.go` |
-| sysctl | `99-overlay.conf` | `internal/renderer/sysctl.go` |
-| 安装脚本 | `install.sh` | `internal/renderer/script.go` |
-
-**Pass 5：产物导出**（`internal/artifacts/export.go`）— 组织为每节点独立目录。
-
-### 4.2 Peer 推导逻辑
-
-Peer 推导器是编译器中最复杂的部分，负责将拓扑 Edge 转换为具体的 WireGuard Peer 配置。
-
-**输入 → 输出：**
-- 输入：Topology（节点 + 边）+ 密钥对
-- 输出：`map[nodeID][]PeerInfo` — 每节点的 peer 接口配置列表
-
-**Edge 处理规则：**
-1. 按顺序遍历所有启用的 edge
-2. 去重：某对节点 `A→B` 已处理过则跳过后续同对 edge
-3. 每对新节点同时生成正向 peer 和自动反向 peer
-
-**Endpoint 解析：**
-- **正向 peer**：直接使用 edge 的 `endpoint_host:endpoint_port`
-- **反向 peer**：查找是否存在反向 edge（`B→A`），如有则使用其 endpoint；如无则反向 peer 没有 endpoint（依赖正向侧发起连接）
-
-```
-示例（双向 edge）:
-  Edge: node-1 → node-2, endpoint=203.0.113.2:51820
-  Edge: node-2 → node-1, endpoint=203.0.113.1:51820
-
-  结果:
-    node-1 的 peer 配置: Endpoint = 203.0.113.2:51820
-    node-2 的 peer 配置: Endpoint = 203.0.113.1:51820  ← 反向 edge 查找
+```bash
+cd frontend
+npm install --legacy-peer-deps
+npm run dev          # Vite 开发服务器，端口 :5173 —— 打开 http://localhost:5173
 ```
 
-**PersistentKeepalive 判定：**
+（`./dev.sh start` 是贡献者便捷脚本，会同时启动 Go 服务器，但 Go 服务器是仅控制器构建，只有设置了控制器环境
+变量时才会保持运行——纯本地设计只需上面的前端即可。）
 
-| 条件 | Keepalive |
-|------|-----------|
-| 节点可入站 且 存在反向 edge | 0（不启用） |
-| 节点不可入站（NAT 后） | 25 秒 |
-| 无反向 edge（单向连接） | 25 秒 |
+### 4.1 拓扑编辑工作流
 
-**Transit IP 分配：** 每对节点从所属 Domain 的 `transit_cidr`（默认 `10.10.0.0/24`）顺序分配一对地址：
-- Link 0: `10.10.0.1` ↔ `10.10.0.2`
-- Link N: `10.10.0.(2N+1)` ↔ `10.10.0.(2N+2)`
+所有编辑都在 **Design（设计）** 页面进行（本地模式的默认落地页）：
 
-**IPv6 Link-Local 分配：** 同步分配，Link 0: `fe80::1` ↔ `fe80::2`，依此类推。
+1. **新增网域** —— 定义地址空间（CIDR）、分配模式、路由模式。
+2. **新增节点** —— 设置名称、平台、角色，并指派到某网域。
+3. **添加公网端点**（可选）—— 为有公网入站的节点配置 `Host:Port`。
+4. **配置 SSH**（可选）—— 自动部署所需的连接信息（默认折叠）。
+5. **绘制连线** —— 在画布上从源拖到目标；设置端点主机（除非需要 NAT 覆盖，否则把端口保留为 `0`）。
+6. **校验** —— 检查完整性与语义错误（在浏览器内运行）。
+7. **编译** —— 分配 IP 与端口、推导 peer 配置、渲染全部产物（在浏览器内运行；无后端往返）。画布随后会显示
+   彩色编码的 per-peer 句柄，以及每条边只读的 `compiled_port`。
+8. **导出与部署** —— 切到 **Deploy（部署）** 页面查看已编译产物并下载产物 ZIP，以及生成的
+   `deploy-all.sh` / `deploy-all.ps1`。
 
-**监听端口分配：** 每节点从 `listen_port`（默认 51820）开始，为每个额外 peer 接口向上 gap-fill。Client 节点不参与 per-peer 端口分配（使用单一 wg0 接口）。
+**界面布局：** 中央画布以彩色编码的 per-peer 句柄可视化节点与有向边；画布工具栏创建网域/节点；右侧侧栏编辑
+所选的网域/节点/边；底栏显示校验结果。
 
-**Pinned（粘性）分配：** 一旦某条链路的监听端口、transit IP 对和 IPv6 link-local 被选定，编译器会把它们作为 `pinned_*` 字段回写到对应的 edge 上，并在下一次编译时原样复用。这样在新增节点时，既有服务器的部署包保持逐字节稳定——新增一个节点不会影响无关节点。WireGuard 密钥以同样方式持久化（见 4.4）。完整的「先预留所有 pin、再 gap-fill」契约与不变量见 [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md)。
+### 4.2 校验、编译与导出
 
-**端口覆盖（NAT/端口转发）：** 当 Edge 的 `endpoint_port` 为非零值时，编译器使用用户指定的端口作为 endpoint 连接端口（适用于 NAT 映射，如外部 443 → 内部 51821）。`endpoint_port` 为 0 时使用自动分配的端口。两种情况下 `compiled_port` 都记录该条 edge 实际拨号的端口。
+**校验**检查两类内容：
 
-**Client 节点的 Peer 推导：**
+- **Schema（模式）** —— 必填字段、类型正确性、引用有效性（例如节点的 `domain_id` 指向一个存在的网域）。
+- **语义** —— IP 冲突、孤立节点、非法 CIDR、被破坏的 NAT 可达性。
 
-Client 节点不使用 per-peer 接口模型，而是使用单个 `wg0` 接口。Peer 推导器对 client 的特殊处理：
+**编译**确定性地产出各 peer 的 WireGuard 配置、各节点的 Babel 配置、各节点的 sysctl 参数、各节点的安装脚本，
+以及项目级部署脚本。
 
-1. **Pass 1**：为 client edge 分配 transit IP 和 link-local，但**不为 client 侧分配端口偏移**（client 使用固定的 `listen_port`）
-2. **Pass 2**：
-   - 不在 peerMap 中为 client 创建 PeerInfo（client 的 wg0 由 `DeriveClientConfigs` 单独处理）
-   - 在 router 侧创建带 `IsClientPeer=true` 标记的 PeerInfo
-   - 不为 client 创建反向 peer
-3. **`DeriveClientConfigs`**：为每个 client 节点生成 `ClientPeerInfo`，包含 router 公钥、endpoint、域 CIDR（作为 AllowedIPs），以及固定的 `PersistentKeepalive=25`
+**导出**将各节点目录打包，其中包含所有配置文件、`install.sh`、`manifest.json` 与 `checksums.sha256`。完整目录
+结构与安装脚本各阶段见[第 7 节](#7-生成产物)。
 
-**Router 侧 Client 可达性：**
+### 4.3 部署配置包
 
-Router 为 client 分配的 per-peer 接口添加内核路由注入：
-```ini
-PostUp = ip route add <client_overlay_ip>/32 dev %i
-PostDown = ip route del <client_overlay_ip>/32 dev %i 2>/dev/null || true
-```
-Babel 通过 `redistribute local` 发现该内核路由并向全网通告，使 overlay 中的任意节点都能访问 client。
-
-### 4.3 Babel 路由集成
-
-Babel 是使多跳 overlay 网络运转的动态路由守护程序。
-
-**何时运行 Babel？** 当节点所属 Domain 的 `routing_mode` 为 `"babel"` 时生成 Babel 配置。**Client 角色例外**——Client 永远不运行 Babel，无论 Domain 路由模式如何。
-
-**Router-ID 生成：**
-1. 计算 `SHA-256(node_id)`
-2. 取前 6 字节作为 MAC-48 地址
-3. 设置 locally administered bit（`| 0x02`），清除 multicast bit（`& 0xFE`）
-4. 保证稳定性（同节点同 ID）和唯一性（SHA-256 分布均匀）
-5. 用户可手动指定 `router_id` 覆盖
-
-**接口声明：** 每个 per-peer WireGuard 接口声明为 Babel tunnel 接口：
-```
-interface wg-node-beta type tunnel hello-interval 4 update-interval 16
-```
-- `type tunnel`：声明为点对点隧道
-- `hello-interval 4`：每 4 秒发送 hello
-- `update-interval 16`：每 16 秒发送完整路由更新
-
-`hello-interval 4` 与 `update-interval 16` 这两个默认值现在由按角色的 Babel 预设提供
-（`internal/renderer/babel_presets.go`），不再硬编码在模板里，便于后续按角色调参。下表的「默认 Cost」
-（`rxcost`）同样取自该预设；边上设置了 `priority`/`weight` 链路 cost 时覆盖预设值。
-
-**路由重分发策略（按角色）：**
-
-| 角色 | 通告内容 | 默认 Cost |
-|------|---------|-----------|
-| `peer` | 自身 overlay IP | 0 |
-| `router` | 自身 overlay IP + Domain CIDR + 额外前缀（设置时） | 0 |
-| `relay` | 自身 overlay IP + Domain CIDR + 额外前缀（设置时） | 96（优先直连） |
-| `gateway` | 自身 overlay IP + Domain CIDR + 额外前缀 + 默认路由 | 0 |
-| `client` | 不运行 Babel | — |
-
-通告使用两种重分发机制（`internal/renderer/babel.go`）：
-- **`redistribute local ip <prefix> allow`** —— 用于有 `dummy0` 连接路由支撑的前缀：节点自身的
-  overlay `/32`，以及（router 侧）注入的 client `/32`。
-- **`redistribute ip <prefix> allow`**（不带 `local` 关键字）—— 用于有真实内核路由、但不是 `dummy0`
-  连接路由的前缀：节点的 `extra_prefixes`（LAN 网段）和 gateway 的默认路由 `0.0.0.0/0`（WAN 默认）。
-  采用非 `local` 形式才能真正匹配内核路由并向全网传播（审计档案 D40/D41）。
-
-末尾的 `redistribute local deny` 至关重要——防止意外通告 transit IP 池或系统路由。
-
-**Client 可达性与路由重分发：** Client 不运行 Babel，但 overlay 中的其他节点仍然可以访问它。实现方式：Router 在连接 client 的 per-peer 接口上通过 `PostUp` 注入内核路由（`ip route add <client_overlay_ip>/32 dev %i`），Babel 通过 `redistribute local` 发现该内核路由并向全网通告。
-
-**全局设置：**
-- `local-port 33123`：Babel 管理端口
-- `skip-kernel-setup false`：让 Babel 管理内核路由表
-
-### 4.4 密钥管理与持久化
-
-WireGuard 密钥是**持久化**的，不会每次编译都重新生成。新节点首次编译时生成一对新密钥，并把私钥和
-公钥**都**回写到拓扑 JSON 的节点上（私钥按设计随拓扑往返，以便无状态编译器能再次渲染该节点自己的
-`Interface PrivateKey`）。此后每次编译都复用同一对密钥，因此新增无关节点绝不会轮换既有节点的密钥。
-
-- **轮换是显式操作：** 只有当操作员**同时清空**两个密钥字段（触发重新生成）或粘贴一把不同的私钥时，
-  节点密钥才会改变。任何其他编辑都不会作为副作用轮换密钥。
-- **迁移契约：** 若某节点带有公钥但缺少私钥，则为硬错误——操作员必须粘贴真实私钥（从主机的
-  `/etc/wireguard/<iface>.conf` 读取），或清空两个密钥字段以显式轮换。从旧的「每次编译都轮换」行为
-  迁移的一次性流程见 [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md)。
-
-由于持久化的拓扑（及浏览器 localStorage）现在携带真实私钥，应将其视为机密材料。完整契约见
-[spec/data-model/node.md](spec/data-model/node.md) 与 [spec/security/security.md](spec/security/security.md)。
+每个节点的配置包是自包含的——把它拷到主机上运行 `sudo bash install.sh` 即可。对于一整个集群，生成的
+`deploy-all.sh`（Bash）/ `deploy-all.ps1`（PowerShell）会 SSH 进每个配置了 SSH 的节点并替你运行安装器；
+见[第 7.5 节](#75-自动部署脚本)。
 
 ---
 
-## 5. 生成产物
+## 5. 控制器模式 — Agent 拉取式控制平面
 
-### 5.1 产物目录结构
+> **2.0（beta）新增。** 你不必再导出 air-gap 配置包，而可以把 YAOG 作为长期运行的**控制器**运行，让每个节点
+> **主动拉取**自己那份签名配置。控制器是单个 Docker 镜像（SPA 面板 + API）；各节点上的 agent 是一个小型主机
+> 二进制，控制器会给你一行安装命令。上文经典的生成/导出流程保持不变。
 
-每个节点的部署包包含上线所需的全部文件：
+### 5.1 启动控制器（Docker）
+
+需要带 Compose 插件的 Docker Engine（`docker compose`，v2）。
+
+```bash
+# 获取 compose 文件（或直接用仓库根目录的那一份）
+curl -fsSLO https://raw.githubusercontent.com/kunori-kiku/yet-another-overlay-generator/main/docker-compose.yml
+
+# 状态保存在 ./data（bind mount）；容器以 uid 65532 运行，所以先创建一次该目录：
+mkdir -p data && sudo chown 65532:65532 data
+
+docker compose up -d
+```
+
+所有控制器状态都持久化到 `./data`，因此备份控制器只需快照这个目录。compose 自带可用默认值——无需 `.env`。默认
+两个端口都**仅绑定到 loopback**（`127.0.0.1`），因为登录表单携带明文密码；请从同一主机访问面板，或通过隧道
+（`ssh -L 8080:127.0.0.1:8080 <host>`）。
+
+> **镜像可见性。** compose 拉取 `ghcr.io/kunori-kiku/yaog-controller:latest`。若拉取被拒（GHCR 包为私有），
+> 要么先 `docker login ghcr.io`，要么本地构建——在 `docker-compose.yml` 中注释掉 `image:` 并取消注释
+> `build: .`。
+
+### 5.2 创建运营者并登录
+
+```bash
+docker compose run --rm controller create-operator \
+    --state-dir /data --tenant default --username admin
+```
+
+会提示你输入密码（不回显）；加 `--force` 可重置已有运营者。面板 + 运营者 API 在 **`http://localhost:8080`**
+（面向节点的 agent API 在 **`:9090`**）。控制器模式下，在任何面板界面之前你会先看到一个**全屏登录页**——以
+`admin` 登录。
+
+密码以 **argon2id** 哈希；登录成功后会签发一个存放在 **httpOnly cookie** 中的会话，因此刷新页面后登录依然有效，
+且 **`localStorage` 中不保存任何 token**。登出在右上角账户菜单；可选的应急（break-glass）运营者令牌从登录页的
+**Recovery（恢复）** 展开项输入。可选的第二因子是 **TOTP**（RFC 6238）和/或 **passkey**；passkey 还支持无密码
+登录。完整鉴权模型见[第 8.4 节](#84-运营者认证)。
+
+> **Passkey/WebAuthn 在 `http://localhost` 上可用**（浏览器将 loopback 视为安全上下文）。⚠️ 请使用主机名
+> **`localhost`** 而非 `127.0.0.1`——WebAuthn 禁止 IP 地址域名，因此在 `127.0.0.1` 上注册 passkey 会以
+> *“invalid domain”* 失败。任何**远程**访问都请在控制器前置一个终止 TLS 的反向代理（compose 文件中注释了一个
+> 示例 `caddy` 服务）。
+
+### 5.3 服务器是权威
+
+控制器模式下，**控制器存储的设计是唯一事实来源**；浏览器缓存只是一份可丢弃的镜像。每次登录（以及 cookie 会话
+恢复）时，面板都会拉取控制器存储的拓扑并覆盖本地画布。
+
+如果你的浏览器持有一份非空且与服务器副本**不同**的本地设计，面板会在覆盖**之前**下载一份新的
+`pre-hydration-backup-<date>.json` 并显示提示。这在*每一次*会丢弃分歧本地工作的覆盖时都会触发（不仅是第一次），
+因此未部署的本地工作永远不会被悄然丢失。在稳态（本地 == 服务器）下不会下载备份。
+
+登录后你会落在 **Overview（概览）**。面板分区（可折叠侧栏；路由可深链接）：
+
+| 分区 | 路由 | 模式 | 用途 |
+|---|---|---|---|
+| Overview | `/overview` | 仅控制器 | 拓扑 + 集群一览 |
+| Design | `/design` | 两种 | React Flow 拓扑画布 |
+| Fleet | `/fleet` | 仅控制器 | 节点注册 + 各节点详情（孤立行标记“not in design”） |
+| Deploy | `/deploy` | 两种 | 编译预览 + 一键 Deploy（带缩减确认护栏） |
+| Security | `/security` | 两种 | TOTP/passkey 注册、审计日志、编译历史 |
+| Settings | `/settings` | 两种 | 模式、连接、bootstrap、外观 |
+
+控制器模式落地于 `/overview`；本地模式落地于 `/design` 并隐藏 Overview/Fleet。
+
+> **升级既有控制器？** 本次发布重命名了密钥路径前缀环境变量并改变了登录/水合流程——部署前请阅读
+> [`docs/MIGRATION-controller-server-authority.md`](MIGRATION-controller-server-authority.md)。
+
+### 5.4 注册并部署到节点（Agent 拉取）
+
+要让远程节点拉取配置，先暴露 agent 端口（`:9090`）——实验环境用
+`YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`；生产环境用上文的 TLS 代理。然后：
+
+1. 在 **Settings → Bootstrap Settings** 中，把 **Public Agent URL** 设为节点访问控制器的地址（例如
+   `https://overlay.example.com` 或 `http://<host>:9090`）。
+2. 把节点加入你的拓扑（**Design**），然后在 **Fleet** 页面为它铸造一个单次使用的**注册令牌
+   （enrollment token）**。
+3. 在目标主机（Linux + systemd）上以 root 身份：
+
+```bash
+bash <(curl -fsSL https://<public-agent-url>/api/v1/agent/bootstrap) \
+     --token <enrollment-token> --node-id <id>
+```
+
+这会下载 `yaog-agent` 二进制、注册该节点、应用当前 generation，并安装一个 `yaog-agent.service` systemd
+守护进程，使日后的 Deploy 自动应用。各节点的 bearer 令牌落在 `/etc/wireguard/agent-controller.token`
+（权限 0600）；启用 keystone 时，运营者的验证凭据落在 `/etc/wireguard/operator-cred.pem`。除必填的
+`--token` / `--node-id` 外，这行命令还接受 `--controller`、`--gh-proxy`、`--release-base` 覆盖项。
+
+**注册仪式**（仅用标准库密码学——无 CA、无 CSR、无 mTLS）：面板铸造一个**单次使用、短 TTL** 的注册令牌（以哈希
+存储）；节点向 `/enroll` 出示它一次，连同自己的 WireGuard **公**钥，换得一个常驻的**各节点 bearer 令牌**（仅
+返回一次，此后作为 `Authorization: Bearer …` 发送）。注册令牌在签发任何身份**之前**就被原子地销毁，因此一个
+令牌永远无法供给两个节点。一个已批准的公钥恰好绑定一个 node-id（重复则拒绝，409）。吊销某节点会清除其 bearer
+令牌（下一次调用起即失效）并把它从未来所有渲染中剔除。
+
+### 5.5 部署生命周期 — 编译 → 暂存（stage）→ 提升（promote）
+
+一次 Deploy 是对每租户单调递增的 **generation** 计数器进行的两阶段、经运营者鉴权的转换：
+
+1. **编译 + 暂存**（`Deploy` → stage）。控制器加载存储的拓扑，选取**已注册子图**，运行与本地模式相同的冻结
+   流水线，并把各节点的签名配置包**暂存**在 `generation + 1`。暂存是可逆的、对 agent 不可见的（尚未成为
+   `current`）。重新暂存会替换之前的暂存集合；它不会推进计数器。
+2. **提升**（原子翻转）。所有已暂存的配置包变为 `current`，generation 自增，所有正在长轮询的 agent 被唤醒。
+   控制器从不自行提升。
+
+**只渲染就绪的部分（render-what's-ready）。** 控制器只渲染**已注册子图**——一个节点只有在它已批准*且*已登记
+公钥时才被纳入；一条边只有在*两*端都已注册时才被保留。这让你可以提前设计整个集群，再增量地把节点拉上线；
+通往尚未注册对端的边，会在远端注册并重新 Deploy 后重新出现在双方的配置包中。分配 pin（overlay IP、transit
+IP、端口——绝不含密钥材料）会在每次 stage 后写回，因此增量注册永远不会给已上线节点重新编号。
+
+**安全护栏。** 一次会清空设计或丢弃 ≥ 50% 节点的 Deploy 需要键入项目名以确认。控制器保留**最近 10 个拓扑
+版本**用于恢复，并用一份只追加、哈希链式的**审计日志**记录每次 enroll/revoke/stage/promote/rekey
+（`/telemetry` 心跳刻意**不**审计——30 秒一跳会淹没链）。
+
+**集群级密钥轮换（Roll keys）。** 轮换复用同一模型，分四步：(1) `rekey-all` 标记每个已批准节点并推进 generation
+以*唤醒*停泊的 agent；(2) 每个被唤醒的 agent 重新生成自己的私钥并登记新的**公**钥（跳过那份陈旧的唤醒配置包）；
+(3) 你等待每个“rotating keys（轮换密钥中）”徽章清除（其间 Deploy 被禁用）；(4) 一次普通的 Deploy 用新公钥重新
+编译。代价是一次短暂的滚动式逐链路抖动。
+
+### 5.6 节点 agent — 拉取、验证、应用
+
+agent（`cmd/agent`）是 `install.sh` 之上的一层薄薄的“先验证再应用”包装，而非一个 reconciler：
+
+1. **keygen**（一次性）在本地生成一对 WireGuard 密钥；**私钥**留在 `/etc/wireguard/agent.key`（权限 0600），
+   永不离开主机。
+2. **poll/pull** —— 长轮询 `GET /poll?after=<watermark>` 会阻塞直到存在更新的 generation（204 表示“无变化”）；
+   随后 `GET /config` 返回已提升的配置包。
+3. **verify** —— agent 重算规范化的 `checksums.sha256`，用运营者预置（pinned）的公钥凭据验证 keystone 签名，
+   并复核每个文件的哈希。任何不匹配都会在任何东西以 root 运行**之前**被**硬性拒绝**。
+4. **apply** —— 对一份已验证、未回滚的配置包，agent 运行配置包自带的 `install.sh`，由它把本地持有的私钥拼接进
+   被拷贝配置中的占位符（见[第 8.3 节](#83-零知识密钥托管)）。
+5. **report** —— `POST /report` 记录已应用的 generation/校验和/健康（尽力而为）。
+
+`run --controller` 默认是单次的（一次 poll→apply→report 循环）；`--daemon` 让它持续循环，这也是 bootstrap 所
+安装的形态。一个防回滚高水位线会拒绝 `manifest.json` 构建时间不晚于上次已应用的配置包。
+
+### 5.7 签名的 agent 自更新 + 版本感知滚动发布
+
+agent 可以把**自己的二进制**替换为已验证配置包中 `artifacts.json` 所固定（pinned）的版本（该文件本身被配置包
+签名覆盖）。下载的二进制会针对**签名内的 SHA-256 pin** 验证（绝不针对上游 `.sha256` 旁文件），并在 exec 前
+通过一次**自检**（`<新二进制> version` 必须等于目标版本），且整个替换是有崩溃上限的：`Restart=always` 循环被
+限制在 3 次尝试，之后 agent 回滚到保存的 `.bak`。一次健康检查把新版本标记为**试用期（probationary）**，且
+**防降级下限**只有在一次完整、干净的循环之后才推进。
+
+从面板：一键 **“将所有 agent 更新到 {version}”** 以控制器自身版本为目标，装配一次**金丝雀-然后-全量
+（canary-then-fleet）** 滚动发布，且控制器**拒绝比自己更新的目标**。卡住的滚动发布会以 `selfupdate: Blocked`
+状态浮现，并附带可操作的原因。
+
+### 5.8 实时集群健康 — Node Conditions + `/telemetry` 心跳
+
+agent 在一个专用的 `POST /telemetry` 心跳上回报结构化的 **Node Conditions**——Kubernetes 风格的
+`{type, status, reason, message}`（默认 **30 秒**，由 agent 的 `--telemetry-interval` 标志设置；`0` 关闭；
+心跳仅在 daemon 模式下进行）。心跳实时刷新这些状态，使面板反映*当前*健康，而非应用时定格的快照。它携带 conditions
+外加一个可扩展的 `metrics` 映射，并刻意**绝不**触碰部署托管字段（已应用 generation/校验和）——可观测性与部署
+状态严格分离，且心跳不被审计。
+
+四个 condition **类型（type）**（小写、闭集）及其 `status`（`ok`/`warn`/`error`/`unknown`）：
+
+| 类型 | 报告内容 | 主要原因（reason） |
+|---|---|---|
+| `configapply` | 最近一次配置应用 | `Applied`（ok）、`DegradedKeepingLastGood`（warn） |
+| `selfupdate` | 自更新状态 | `Active`、`HealthConfirmedProbationary`、`Updated`、`Abandoned`、`Blocked` |
+| `wireguard` | 链路健康 | `AllPeersUp`（ok）、`PeerHandshakeStale`、`SomePeersDown`、`LinkDown`、`NoInterfaces` |
+| `mimic` | mimic shaper 状态 | 读取自安装器的面包屑（breadcrumb） |
+
+> **`SomePeersDown` 对比 `LinkDown`（beta.12）。** 网格中单个离线的 peer（一条 Babel 会绕过的链路）现在读作
+> **`SomePeersDown`**（“1/3 peers down”），而非令人惊慌的整机 **`LinkDown`**；`LinkDown` 保留给*所有* peer
+> 都掉线（或首次握手前的全新应用）的情形。
+
+**各 Peer 的“WireGuard links”面板（beta.12）。** 节点详情页显示一个**可折叠**的“WireGuard links”面板——它是
+聚合 `wireguard` 状态背后的逐链路细节。每一行是一个 peer，带一个状态点（绿 = up / 黄 = stale / 红 = never）和
+一个相对的、实时跳动的最近握手时间。仅当某链路掉线/陈旧时它才自动展开；全部在线的节点保持折叠。数据搭载在心跳的
+`metrics["wireguard_peers"]` 映射上（peer / interface / endpoint / last_handshake / status——无密钥材料）。
+这份遥测是**仅实时（live-only）**的：它在刷新时重新获取，并刻意**不**持久化到浏览器（定格的握手时间会误导，
+而原始端点属于集群机密）。
+
+### 5.9 Mimic `.deb` 目录
+
+对于不打包 mimic 的发行版，面板按 `<codename>-<arch>` 以 SHA-256 固定（pin）各 `.deb` 包。**Discover from
+release（从发布发现）** 会列出某个 GitHub release 的 `.deb` 资产供你勾选（直接查询 GitHub API，而非经下载代理）。
+安装时会先针对签名 pin 校验每个包再 `dpkg`。
+
+### 5.10 配置参考
+
+控制器行为通过容器上的环境变量配置（在 `docker-compose.yml` 中设置），外加少量在面板中编辑的服务器存储设置。
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `YAOG_BIND_ADDR` | `127.0.0.1` | 仅 compose：两个发布端口绑定的宿主机接口。`0.0.0.0` 可暴露到 loopback 之外。 |
+| `YAOG_PANEL_PORT` | `8080` | 仅 compose：运营者/面板 API 在宿主机上发布的端口。 |
+| `YAOG_AGENT_PORT` | `9090` | 仅 compose：agent API 在宿主机上发布的端口。 |
+| `YAOG_CONTROLLER_STATE_DIR` | 未设置 | 控制器状态目录。与 `YAOG_TENANT_ID` 一起，是开启控制器模式的开关（镜像设为 `/data`）。 |
+| `YAOG_TENANT_ID` | 未设置 | 限定所有控制器状态的租户标识（目前单租户）。 |
+| `YAOG_CONTROLLER_AGENT_ADDR` | `:9090` | 面向节点的 agent API 的监听地址。 |
+| `YAOG_OPERATOR_PATH_PREFIX` | 空 | 运营者 API（`:8080`）的可选密钥路径前缀。 |
+| `YAOG_AGENT_PATH_PREFIX` | 空 | agent API（`:9090`）的可选密钥路径前缀，与运营者前缀相互独立；bootstrap 命令会把它烘焙进 agent 的 URL。 |
+| `YAOG_PANEL_ORIGIN` | 空 | 允许携带凭据跨源访问面板的源（origin）逗号分隔白名单（仅当面板来自不同源时需要；需 HTTPS）。 |
+| `YAOG_SECURE_COOKIE` | `true` | 会话/CSRF cookie 的 `Secure` 属性。仅本地非 TLS 开发时设为 `false`。 |
+| `YAOG_CONTROLLER_OPERATOR_TOKEN` | 未设置 | 可选的应急运营者令牌（恢复通道）。仅保存其 SHA-256。 |
+| `YAOG_BUNDLE_SIGNING_KEY` | 未设置 | 指向 Ed25519 PKCS#8 PEM 的路径。设置后每个配置包都携带分离签名，且 `install.sh` 固定该公钥；加载是 fail-closed。 |
+| `YAOG_WEB_DIR` | 未设置 | 服务器据以服务面板 SPA 的目录（镜像设为 `/app/web`）。 |
+
+> **密钥路径前缀**把两类受众挂在不同命名空间下——运营者在 `/<operator-prefix>/api/v1/operator/`、agent 在
+> `/<agent-prefix>/api/v1/agent/`——因此基于路径的代理可把各自路由到各自端口，你也可以只公开 agent 端点。这是
+> 纵深防御式的**隐蔽**，**不是**安全边界；真正的边界是 bearer 令牌与 keystone 签名。旧的单个
+> `YAOG_CONTROLLER_PATH_PREFIX` 已移除——若仍设置则服务器拒绝启动。面板的“Secret Path Prefix”字段只镜像
+> **运营者**前缀。
+
+完整参考：[spec/controller/](spec/controller/)（从 `controller-api.md` 与 `agent.md` 开始）。
+
+---
+
+## 6. 编译器工作原理
+
+编译器在两种模式下相同——浏览器内的 TypeScript 移植版由一致性门禁按字节对齐到 Go 实现
+（`internal/compiler/compiler.go`）。它是其输入的**纯函数**：不读时钟、不访问文件系统、无全局状态（每个非确定性
+输入都被提升进请求里）。正是这种纯粹性使输出可复现、两个实现可比对。
+
+### 6.1 编译流水线
+
+编译器分多趟处理拓扑：
+
+1. **Schema 校验** —— JSON 结构：必填字段、类型、引用有效性。
+2. **语义校验** —— 逻辑一致性：IP 冲突、孤立节点、非法引用、CIDR 有效性。
+3. **IP 分配 + 能力推导 + Peer 推导** ——
+   - *IP 分配器*（`internal/allocator/ip.go`）：为没有手动 IP 的节点从网域 CIDR 顺序分配 overlay IP，跳过
+     网络/广播/保留地址。
+   - *能力推导*（`internal/compiler/roles.go`）：从角色派生能力字段。
+   - *Peer 推导*（`internal/compiler/peers.go`）：把边转换为各节点的 `PeerInfo`（见[第 6.2 节](#62-peer-推导)）。
+4. **配置渲染** —— 四个渲染器外加部署脚本：
+
+   | 渲染器 | 输出 | 源文件 |
+   |----------|--------|--------|
+   | WireGuard | 每个 peer 一份 `.conf`（client 为单个 `wg0`） | `internal/renderer/wireguard.go` |
+   | Babel | 每节点一份 `babeld.conf` | `internal/renderer/babel.go` |
+   | sysctl | `99-overlay.conf` | `internal/renderer/sysctl.go` |
+   | 安装脚本 | `install.sh` | `internal/renderer/script.go` |
+   | 部署脚本 | `deploy-all.sh` + `.ps1` | `internal/renderer/deploy.go` |
+
+5. **产物导出**（`internal/artifacts/export.go`）—— 把一切组织进各节点目录，附带 manifest 与校验和。
+
+### 6.2 Peer 推导
+
+Peer 推导把拓扑的边转换为具体的 WireGuard peer 配置。
+
+- **输入 → 输出：** 拓扑（节点 + 边）+ 密钥对 → `map[nodeID][]PeerInfo`。
+- **两趟算法。** 第一趟按节点对预分配：监听端口（各节点递增偏移）、transit IP、IPv6 链路本地地址，双向存储。
+  第二趟再次遍历边，查出预分配的资源，并用正确的已分配端口构建 `PeerInfo`。
+- **端点解析。** 正向 peer 使用边的 `endpoint_host` + 目标侧已分配端口。反向 peer 若存在反向边（`B→A`）则用之；
+  否则没有端点，依赖正向侧发起。
+- **PersistentKeepalive。**
+
+  | 条件 | Keepalive |
+  |-----------|-----------|
+  | 节点可接受入站 且 存在反向边 | 0（关闭） |
+  | 节点在 NAT 之后（无法接受入站） | 25 秒 |
+  | 无反向边（单向） | 25 秒 |
+
+- **Transit IP 分配。** 每对节点从其网域的 `transit_cidr`（默认 `10.10.0.0/24`）取得一对：链路 0 →
+  `10.10.0.1` ↔ `10.10.0.2`；链路 N → `10.10.0.(2N+1)` ↔ `10.10.0.(2N+2)`。
+- **监听端口分配。** 每个节点从 `listen_port`（默认 51820）起步，为每个额外 peer 接口向上补空隙分配。
+- **固定（sticky）分配。** 一旦某链路的端口、transit IP 与链路本地地址选定，编译器就把它们作为 `pinned_*` 字段
+  写回边，并在下次编译时逐字复用。这使你新增节点时既有服务器保持字节稳定。先预留 pin、再补空隙的完整契约与
+  不变式见 [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md)。
+
+### 6.3 Babel 路由集成
+
+Babel 是让多跳 overlay 网络得以工作的动态路由守护进程；当某节点的网域设置了 `routing_mode = "babel"` 时它便
+运行。
+
+**Router-ID 生成：** `SHA-256(node_id)` → 取前 6 字节作为 MAC-48；置本地管理位（`| 0x02`）、清组播位
+（`& 0xFE`）。稳定（同节点 → 同 ID）且分布良好；手动的 `router_id` 可覆盖它。
+
+**接口声明：** 每个 per-peer WireGuard 接口被声明为一个 Babel tunnel 接口，例如
+`interface wg-beta type tunnel hello-interval 4 update-interval 16`。hello/update 间隔与 `rxcost` 来自按角色的
+Babel 预设（`internal/renderer/babel_presets.go`）；边的 `priority`/`weight` 覆盖链路开销。
+
+**再分发（redistribution）** 使用两种机制（`internal/renderer/babel.go`）：
+
+- `redistribute local ip <prefix> allow` —— 用于由 `dummy0` connected 路由支撑的前缀：节点自身的 overlay
+  `/32`，以及（router 侧）注入的 client `/32`。
+- `redistribute ip <prefix> allow`（无 `local`）—— 用于由真实内核路由（而非 `dummy0` connected 路由）支撑的
+  前缀：`extra_prefixes`（LAN 段）与网关的 `0.0.0.0/0` 默认路由。正是这种无 `local` 的形式使它们能匹配内核
+  路由并传播。
+
+末尾的 `redistribute local deny` 可防止误通告 transit IP 或系统路由。
+
+### 6.4 密钥管理与持久化
+
+WireGuard 密钥是**持久的**，并非每次编译都重新生成。
+
+- **本地 / air-gap（AirGap 托管）。** 新节点首次编译会生成一对密钥，并把**两把**密钥写回拓扑 JSON 中的该节点
+  （私钥按设计往返，使无状态编译器能重新渲染该节点自己的 `Interface PrivateKey`）。之后每次编译复用这对密钥，
+  因此新增无关节点永不轮换某把密钥。轮换是显式的：清空**两个**密钥字段（强制重新生成）或粘贴一把不同的私钥。
+  一个携带公钥但无私钥的节点是硬错误。由于拓扑（以及浏览器 localStorage）携带活私钥，须将其视为机密材料。
+- **控制器（AgentHeld 托管）。** 控制器仅从**公钥**渲染——每个节点的 `[Interface] PrivateKey =` 行渲染为占位
+  符，由 agent 在安装时把自己本地持有的私钥拼接进去。控制器永远看不到私钥。见[第 8.3 节](#83-零知识密钥托管)。
+
+完整契约：[spec/data-model/node.md](spec/data-model/node.md) 与
+[spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md)。
+
+---
+
+## 7. 生成产物
+
+### 7.1 配置包目录结构
+
+每个节点的部署配置包包含上线所需的一切：
 
 ```
 node-alpha/
   ├── wireguard/
-  │   ├── wg-node-beta.conf      # 到 beta 的 WireGuard 隧道配置
-  │   └── wg-node-gamma.conf     # 到 gamma 的 WireGuard 隧道配置
+  │   ├── wg-beta.conf       # 通往 beta 的 WireGuard 隧道配置
+  │   └── wg-gamma.conf      # 通往 gamma 的 WireGuard 隧道配置
   ├── babel/
-  │   └── babeld.conf            # Babel 路由守护程序配置
+  │   └── babeld.conf        # Babel 路由守护进程配置
   ├── sysctl/
-  │   └── 99-overlay.conf        # 内核参数（转发、rp_filter）
-  ├── install.sh                 # 一键安装脚本
-  ├── manifest.json              # 构建元信息与文件清单
-  ├── checksums.sha256           # SHA-256 完整性校验
-  └── README.txt                 # 快速上手说明
+  │   └── 99-overlay.conf    # 内核参数（转发、rp_filter）
+  ├── install.sh             # 一键安装脚本
+  ├── manifest.json          # 构建元数据与文件清单
+  ├── checksums.sha256       # SHA-256 完整性校验
+  └── README.txt             # 快速上手说明
 ```
 
-**Client 节点目录结构**（单接口模型，无 Babel）：
+在控制器模式下，签名配置包还会额外携带 `bundle.sig` + `signing-pubkey.pem`（当设置了
+`YAOG_BUNDLE_SIGNING_KEY` 时）以及 `artifacts.json`（自更新 pin）。
 
-```
-client-phone/
-  ├── wireguard/
-  │   └── wg0.conf               # 单一 WireGuard 接口配置
-  ├── sysctl/
-  │   └── 99-overlay.conf        # 内核参数
-  ├── install.sh                 # 一键安装脚本（无 Babel）
-  ├── manifest.json              # 构建元信息（architecture: "single-interface"）
-  ├── checksums.sha256           # SHA-256 完整性校验
-  └── README.txt                 # 快速上手说明
-```
+### 7.2 WireGuard 配置详解
 
-### 5.2 WireGuard 配置详解
-
-生成的 per-peer WireGuard 配置示例：
+一份 per-peer 配置（服务器类角色）：
 
 ```ini
-# WireGuard per-peer interface: wg-node-beta
+# WireGuard per-peer interface: wg-beta
 # Node: node-alpha -> Peer: node-beta
 
 [Interface]
-PrivateKey = <private_key>
+PrivateKey = <private_key>          # 控制器模式下为占位符；由 agent 拼接
 Address = 10.10.0.1/32
 Table = off
 ListenPort = 51820
@@ -474,135 +666,60 @@ AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = 203.0.113.2:51820
 ```
 
-**关键设计点：**
+`client` 角色的节点改为获得一个单一的 `wg0`，只有一个 peer（它的上游 router/relay/gateway），没有 `dummy0`、
+也没有 Babel。
 
-- **`Table = off`**：阻止 `wg-quick` 添加内核路由。由于 `AllowedIPs = 0.0.0.0/0`，不加此选项每个接口都会尝试添加默认路由、相互冲突。路由完全交给 Babel。
-- **`AllowedIPs = 0.0.0.0/0, ::/0`**：在 per-peer 模型中是安全的——每个接口仅一个 peer，允许任何流量通过隧道，由 Babel 决定使用哪条隧道。
-- **`PostUp`/`PostDown`**：添加 Babel 邻居发现所需的 IPv6 link-local 地址。
+关键设计点：
 
-**Client 节点 WireGuard 配置（单接口 wg0）：**
+- **`Table = off`** —— wg-quick 不添加内核路由；若 `AllowedIPs = 0.0.0.0/0`，每个接口本会争抢默认路由。路由
+  全部由 Babel 管理。
+- **`AllowedIPs = 0.0.0.0/0, ::/0`** —— 在 per-peer 模型下安全（每接口一个 peer）；由 Babel 决定走哪条隧道。
+- **`PostUp`/`PostDown`** —— 添加 Babel 邻居发现所需的 IPv6 链路本地地址。
 
-```ini
-# WireGuard client interface: wg0
-# Node: client-phone -> Router: node-alpha
+### 7.3 安装脚本逻辑
 
-[Interface]
-PrivateKey = <private_key>
-Address = 10.11.0.5/32
-ListenPort = 51820
-
-[Peer]
-PublicKey = <router_public_key>
-AllowedIPs = 10.11.0.0/24
-Endpoint = 203.0.113.1:51820
-PersistentKeepalive = 25
-```
-
-**与 per-peer 模型的区别：**
-- 无 `Table = off`（wg0 是唯一接口，不会路由冲突）
-- `Address` 使用 overlay IP 而非 transit IP（无 dummy0）
-- `AllowedIPs` 限定为 Domain CIDR（非 `0.0.0.0/0`）
-- 固定 `PersistentKeepalive = 25`（client 通常在 NAT 后）
-- 无 PostUp/PostDown IPv6 link-local（不运行 Babel）
-
-**Router 侧 Client 路由注入：** 当 router 的 per-peer 接口连接 client 时，自动添加内核路由：
-
-```ini
-PostUp = ip route add 10.11.0.5/32 dev %i
-PostDown = ip route del 10.11.0.5/32 dev %i 2>/dev/null || true
-```
-
-### 5.3 安装脚本逻辑
-
-`install.sh` 遵循幂等的分阶段部署：
-
-**使用方式：**
+`install.sh` 是一个幂等的、分阶段的部署：
 
 ```bash
 sudo bash install.sh              # 安装 / 升级 overlay
-sudo bash install.sh --uninstall  # 从此节点完全卸载 overlay
+sudo bash install.sh --uninstall  # 从本节点彻底移除 overlay
 ```
 
-**`--uninstall` / `-u` 选项：** 执行完整的卸载清理：
-- 停止并禁用所有托管和遗留的 WireGuard 接口
-- 移除 `/etc/wireguard/` 下所有 WireGuard 配置文件
-- 停止并禁用 Babel，移除 Babel 配置和 systemd override
-- 移除 overlay SNAT 规则及 `overlay-snat.service`
-- 移除 sysctl overlay 配置并重新加载系统默认值
-- 移除 `dummy0` overlay 接口及其 `overlay-dummy.service` systemd 服务
-- 重载 systemd daemon
+**`--uninstall` / `-u`** 会彻底拆除：停止并禁用所有受管及遗留 WireGuard 接口、移除 `/etc/wireguard/` 配置、
+停止 Babel 并移除其配置/override、移除 overlay SNAT 规则与 `overlay-snat.service`、还原 sysctl 默认值、移除
+`dummy0` 及其 `overlay-dummy.service`，并重载 systemd。
 
 **正常安装阶段：**
 
-**Phase 0 — 清理**
-- 停止并移除现有的 WireGuard 接口和旧配置
-- **全面清理遗留 WireGuard 配置**：扫描所有活跃的 `wg*` 接口（`wg show interfaces`）和 `/etc/wireguard/*.conf` 文件，移除不属于当前 overlay 的所有旧配置（包括 `wg0`、`wg1`、`wg-overlay` 等任何遗留接口）
-- 停止 Babel 守护程序
-- 移除旧 sysctl 配置
+- **阶段 0 — 清理。** 停止/移除既有 WireGuard 接口与旧配置。一次全面的遗留清扫会扫描所有 `wg*` 接口与
+  `/etc/wireguard/*.conf`，移除一切不归当前 overlay 管理的内容（捕获 `wg0`、`wg1`、`wg-overlay` 等残留）。
+  停止 Babel；移除旧 sysctl。
+- **阶段 1 — 环境准备。** 校验 checksum；检查 root；探测 OS；安装依赖（`wireguard`、`wireguard-tools`、
+  `babeld`）；创建 `dummy0` 并分配 overlay IP；安装一个 systemd 单元以持久化 `dummy0`；配置 overlay SNAT
+  （见[第 7.4 节](#74-dummy0--tableoff--snat-修正)）。
+- **阶段 2 — 部署配置。** 把 WireGuard 配置拷到 `/etc/wireguard/`、Babel 配置拷到 `/etc/babel/`、sysctl 配置
+  拷到 `/etc/sysctl.d/`。
+- **阶段 3 — 激活与验证。** 应用 sysctl；启动各 `wg-quick@<iface>`；安装 babeld systemd override（依赖所有
+  WireGuard 服务）；启动并启用 babeld；打印状态摘要。
 
-**Phase 1 — 环境准备**
-- 校验文件完整性（checksums.sha256）
-- 检查 root 权限、检测 OS（Debian / Ubuntu）
-- 安装依赖包（`wireguard`、`wireguard-tools`、`babeld`）
-- 创建 `dummy0` 接口并分配 overlay IP
-- 安装 systemd 服务使 `dummy0` 在重启后持久化
-- 配置 overlay 源地址 SNAT 修正（详见 5.4b）
+当配置包已签名（控制器模式且开启 keystone）时，脚本会在运行 `sha256sum -c` **之前**用内嵌公钥校验
+`bundle.sig`；签名构建的 `install.sh` 若缺少签名会被视为篡改并拒绝。
 
-**Phase 2 — 部署配置**
-- 复制 WireGuard 配置到 `/etc/wireguard/`
-- 复制 Babel 配置到 `/etc/babel/`
-- 复制 sysctl 配置到 `/etc/sysctl.d/`
+### 7.4 dummy0 + Table=off + SNAT 修正
 
-**Phase 3 — 激活验证**
-- 应用 sysctl 设置
-- 启动所有 `wg-quick@<interface>` 服务
-- 配置 babeld systemd override（声明依赖所有 WireGuard 服务）
-- 启动并启用 babeld
-- 显示状态摘要
+`dummy0` 承载 Babel 通告的稳定 overlay IP（应用与 DNS 始终指向这里）。每个 `wg-*` 接口都是 `Table = off`，
+因此由 Babel——而非 wg-quick——安装与移除内核路由并处理链路故障切换。
 
-**Client 安装脚本：** Client 使用简化的安装流程，不包含 dummy0 和 Babel：
-- 无 Phase 0 Babel 清理（client 不运行 Babel）
-- Phase 1 仅安装 `wireguard` 和 `wireguard-tools`，不安装 `babeld`
-- 无 `dummy0` 接口（overlay IP 直接作为 wg0 的 `Address`）
-- Phase 3 仅启动 `wg-quick@wg0`，无 babeld 服务
+**源地址问题。** 每个 `wg-*` 接口都有一个 transit IP（例如 `10.10.0.3/32`）。当内核向某 overlay 目标发包时，
+Babel 经某个 `wg-*` 接口路由它，而内核挑选了 **transit IP** 作为源地址——而非 `dummy0` 上的 overlay IP。发往
+transit IP 的回包不可路由（transit IP 未被通告），因此 `ping 10.111.0.3` 会静默失败，而
+`ping -I 10.111.0.2 10.111.0.3` 正常。
 
-### 5.4 dummy0 + Table=off 设计
-
-这个组合是 per-peer 接口与 Babel 协同工作的关键：
+**修正。** 安装器添加一条 SNAT 规则，把从 `wg-*` 接口外发、源为 transit（`10.10.0.0/24`）的包改写为节点的
+overlay IP：
 
 ```
-┌─────────────────────────────────────────┐
-│              Node alpha                   │
-│                                           │
-│  dummy0: 10.11.0.1/32  ← Overlay IP      │
-│  (稳定地址，Babel 通告)                     │
-│                                           │
-│  wg-node-beta:  10.10.0.1/32 (Table=off) │
-│  wg-node-gamma: 10.10.0.3/32 (Table=off) │
-│                                           │
-│  Babel 管理所有路由决策                      │
-│  - 从邻居学习路由                           │
-│  - 在内核路由表中安装/移除路由                │
-│  - 自动处理链路故障切换                      │
-└─────────────────────────────────────────┘
-```
-
-- `dummy0` 提供 Babel 通告的稳定地址——应用和 DNS 始终指向这里
-- 每个 WireGuard 接口 `Table = off`，`wg-quick` 不触碰路由表
-- Babel 将每个 `wg-*` 接口视为独立隧道链路，独立跟踪可达性
-- 某条链路故障时，Babel 自动通过存活链路重新路由——无需手动调整
-
-### 5.4b 源地址修正（Overlay SNAT）
-
-**问题：** 在 per-peer 接口模型中，每个 WireGuard 接口使用 transit IP 地址（如 `10.10.0.3/32`）。当内核向 overlay 目标发送数据包时，Babel 通过 `wg-*` 接口路由，内核选择 **transit IP** 作为源地址而非 `dummy0` 上的 overlay IP。这导致：
-
-- `ping 10.111.0.3` **静默失败**（远端收到数据包，但回复发往 `10.10.0.3`，该地址未被 Babel 通告，因此不可路由）
-- `ping -I 10.111.0.2 10.111.0.3` **正常工作**（显式指定了源地址）
-
-**修复方案：** 安装脚本在所有 `wg-*` 接口上添加 SNAT（源地址转换）规则，将来自 transit 地址池（`10.10.0.0/24`）的源地址改写为节点的 overlay IP：
-
-```
-# nftables（优先使用）：
+# nftables（优先）：
 table inet overlay-snat {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
@@ -614,290 +731,265 @@ table inet overlay-snat {
 iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source <overlay_ip>
 ```
 
-安装脚本自动检测 `nft` 命令，不可用时回退到 `iptables`。持久化的 `overlay-snat.service` systemd 单元确保规则在重启后生效。
+安装器自动探测 `nft` 并回退到 `iptables`；一个持久的 `overlay-snat.service` 使该规则跨重启存活。要手动修正既有
+部署，运行等价规则并把 `<overlay_ip>` 替换为该节点的 overlay IP 即可。
 
-**手动修复已部署的节点：**
+### 7.5 自动部署脚本
 
-```bash
-# 将 <OVERLAY_IP> 替换为节点的 overlay IP（如 10.111.0.2）
-
-# nftables：
-sudo nft add table inet overlay-snat
-sudo nft add chain inet overlay-snat postrouting '{ type nat hook postrouting priority srcnat; policy accept; }'
-sudo nft add rule inet overlay-snat postrouting oifname "wg-*" ip saddr 10.10.0.0/24 snat to <OVERLAY_IP>
-
-# 或 iptables：
-sudo iptables -t nat -A POSTROUTING -o wg-+ -s 10.10.0.0/24 -j SNAT --to-source <OVERLAY_IP>
-```
-
-### 5.5 自动部署脚本
-
-部署脚本通过 Web UI 的独立按钮下载（不包含在产物 ZIP 中），支持 Bash 和 PowerShell 两种格式：
-
-- `deploy-all.sh`（Bash，Linux/macOS）
-- `deploy-all.ps1`（PowerShell，Windows/Linux）
-
-**使用方式：**
+编译会生成两个项目级部署脚本：`deploy-all.sh`（Bash）与 `deploy-all.ps1`（PowerShell）。
 
 ```bash
-# 先从 Web UI 导出产物 ZIP，再单独下载部署脚本
-bash deploy-all.sh path/to/artifacts.zip
-
-# 使用 --clean 选项清理所有现有 WireGuard 配置（适用于从 wg0 迁移到 per-peer 模型）
-bash deploy-all.sh --clean path/to/artifacts.zip
-
-# 使用 --uninstall 选项从所有节点完全卸载 overlay（不需要产物 ZIP）
-bash deploy-all.sh --uninstall
+bash deploy-all.sh path/to/artifacts.zip            # 部署
+bash deploy-all.sh --clean path/to/artifacts.zip    # 先清掉既有 WG 配置
+bash deploy-all.sh --uninstall                      # 在所有节点上拆除 overlay（无需 ZIP）
 ```
 
 ```powershell
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip
-
-# 使用 -Clean 选项
 .\deploy-all.ps1 -ArtifactsZip path\to\artifacts.zip -Clean
-
-# 使用 -Uninstall 选项从所有节点完全卸载 overlay（不需要产物 ZIP）
 .\deploy-all.ps1 -Uninstall
 ```
 
-**选项说明：**
+它们解压 ZIP，然后对每个配置了 SSH 的节点：SCP 自解压安装器到 `/tmp/`、运行 `sudo bash /tmp/<node>.install.sh`、
+清理，并打印成功/跳过/失败汇总。未配置 SSH 的节点会被跳过。SSH 在设置了别名时用 `ssh <alias>`，否则用
+`ssh -p <port> -i <key> <user>@<host>`；不支持密码认证。
 
-| 选项 (bash) | 选项 (PS1) | 说明 |
-|---|---|---|
-| `--clean` | `-Clean` | 部署前移除目标节点上所有现有 WireGuard 接口和配置（适用于接口模型迁移） |
-| `--uninstall` | `-Uninstall` | SSH 到每个节点直接执行卸载命令：停止所有已命名的 WireGuard 接口、移除配置、停止 Babel、移除 dummy0、重载 systemd。无需上传安装包。 |
+### 7.6 画布可视化
 
-**`--clean` / `-Clean` 选项：** 在部署前移除目标节点上所有现有的 WireGuard 接口和配置文件。适用于：
-- 从单接口（wg0）布局迁移到 per-peer 接口模型
-- 从 per-peer 模型迁移回单接口
-- 清理遗留的 overlay 配置
-
-**工作流程：**
-1. 解压产物 ZIP 到临时目录
-2. 遍历所有节点，对每个配置了 SSH 信息的节点：
-   - 先测试 SSH 连通性（超时 15 秒）
-   - 如指定 `--clean`，远程清理所有 `wg*` 接口和 `/etc/wireguard/wg*.conf`
-   - 使用 `scp` 上传自解压安装包到远程 `/tmp/`
-   - 使用 `ssh` 执行 `sudo bash /tmp/<node>.install.sh`
-   - 执行后自动清理远程临时文件
-3. 跳过未配置 SSH 信息的节点
-4. 输出部署摘要（成功 / 跳过 / 失败计数）
-
-**错误处理：** 每个节点的部署错误独立处理，单个节点失败不会中断整个部署流程。错误分为三级：
-- SSH 连接失败（超时或认证错误）
-- SCP 上传失败
-- 安装脚本执行失败
-
-**SSH 行为：** 脚本完全尊重用户的 SSH 配置，不覆盖任何 SSH 选项：
-- 不设置 `StrictHostKeyChecking`——由用户的 `~/.ssh/config` 或系统策略决定
-- 不设置 `ConnectTimeout`——避免干扰需要交互式确认的 SSH agent（如 Bitwarden SSH agent）
-- 不使用 `BatchMode=yes`——允许 SSH 客户端自动遍历 ssh-agent 中的密钥、`~/.ssh/config` 以及默认密钥路径
-
-**SSH 连接方式：**
-- 如果节点配置了 SSH 别名，使用 `ssh <alias>` 连接（端口、用户、密钥均由 `~/.ssh/config` 决定，脚本不附加 `-p` 等参数）
-- 如果配置了手动 SSH 信息，使用 `ssh -p <port> -i <key> <user>@<host>` 连接（仅在显式配置时附加 `-p` 和 `-i`）
-- 不支持密码认证
-
-**远程清理命令传递：** `--clean` 的远程清理脚本通过 `stdin` 管道传递（bash 使用 `<<'HEREDOC'`，PowerShell 使用单引号字符串管道），避免了嵌套引号和 `$` 转义问题。
-
-### 5.6 画布可视化特性
-
-编译后，画布会展示丰富的可视化信息：
-
-**多接口连接点（Handles）：**
-- 每个节点在编译后显示多个连接点（上方为入站，下方为出站）
-- 每个连接点对应一个 per-peer WireGuard 接口
-- 不同 peer 的连接点使用不同颜色（红、橙、黄、绿、青、靛、紫、玫红循环）
-- 鼠标悬停连接点显示接口名、监听端口和对端节点名
-
-**节点信息卡片：**
-- 编译后节点卡片内显示每个 peer 接口的颜色标签，格式为 `<peer名>:<端口>`
-- 颜色与连接点一一对应
-
-**边标签：**
-- 边标签显示 `<源节点> → <目标节点> | <endpoint>` 格式
-- 不同连接类型使用不同颜色：direct=青色、public-endpoint=琥珀色、relay-path=紫色、candidate=灰色
+编译后画布会显示：**多接口句柄**（上 = 入站，下 = 出站），每个 per-peer 接口一个，循环配色，带悬停提示（接口名、
+监听端口、peer 名）；**节点信息卡**带与句柄配色一致的 `<peerName>:<port>` 彩色标签；以及**边标签**
+`<source> → <target> | <endpoint>`，按类型配色（direct = 青，public-endpoint = 琥珀，relay-path = 紫，
+candidate = 灰）。
 
 ---
 
-## 6. 调试与故障排查
+## 8. 安全模型
 
-### 6.1 开发环境
+YAOG 的安全建立在一个刻意的拆分上：一次无人值守的控制器沦陷绝不能 (a) 伪造集群**成员关系**，或 (b) 窃取任何
+WireGuard **私钥**。运营者面板鉴权只守护面板——它**不是**网络信任锚。权威说明见
+[spec/security/security.md](spec/security/security.md) 与 [spec/controller/](spec/controller/)。
 
-使用 `dev.sh` 快速启动/停止开发环境：
+### 8.1 两个截然不同的签名角色（切勿混淆）
+
+| | **离线部署 keystone** | **配置包签名密钥**（`YAOG_BUNDLE_SIGNING_KEY`） |
+|---|---|---|
+| 持有者 | 运营者的**硬件/同步 passkey**——私钥永不接触服务器 | **服务器侧**的 Ed25519 PEM 文件（或 air-gap 导出主机） |
+| 签什么 | 规范化的**信任列表字节**（谁被信任），经一次内容绑定的 WebAuthn 断言 | 每个节点配置包规范化的 `checksums.sha256` 字节 |
+| 关闭的威胁 | 被沦陷的控制器**单凭自身无法向集群推送成员变更** | 已渲染配置包的真实性/完整性（前提是有带外 pin） |
+| 服务器持久化 | 仅**非机密的公开**运营者凭据（描述符 + 公开 PEM） | **绝不**持久化私钥——只持久化公钥，作为每租户的 pin |
+
+两者使用同一个 WebAuthn 验证器；唯一不同的是挑战（challenge）：keystone 用内容哈希，登录 passkey 用随机 nonce。
+
+### 8.2 离线签名 keystone
+
+改变**谁被信任**（准入、驱逐或为节点轮换密钥）需要一次人工硬件密钥对*变更内容本身*的签名——规范化信任列表字节
+加一个单调版本号的哈希。私钥永不离开 authenticator；控制器只持久化非机密的公开凭据，该凭据被烘焙进 agent
+bootstrap 脚本并以 `--operator-cred` 传入，因此**节点在应用之前会验证签名**。结果：一次无人值守的控制器沦陷
+**没有任何自主能力**去改变集群成员关系。“keystone 开 vs 关”是一种部署姿态；keystone 关意味着节点不强制要求
+签名成员关系（仅限开发）。
+
+### 8.3 零知识密钥托管
+
+**保证：** 任何控制器渲染的配置包都绝不包含可解析的 WireGuard 私钥；注册表只存**公钥**。渲染有两种托管模式
+（`render.GenerateKeys`）：
+
+- **AirGap**（本地 / CLI 默认）—— 私钥经拓扑 JSON 往返以实现无状态的密钥稳定性。因此拓扑与浏览器 localStorage
+  携带私钥，须视为机密材料。
+- **AgentHeld**（控制器）—— `GenerateKeys` 永不返回真实私钥；每个节点的 `[Interface] PrivateKey =` 是一个
+  故意无效的占位符，由 **agent 在安装时拼接自己本地持有的私钥**。其余一切与 AirGap 字节一致。
+
+强制是双保险（belt-and-braces）：面板在**每次 `update-topology` POST 之前剥除私钥**，且服务器**拒绝（400）**
+任何携带非空 `wireguard_private_key` 的拓扑。常驻测试门禁对两者都做断言。
+
+### 8.4 运营者认证
+
+- **初始化** —— 账户由 `create-operator` 带外创建；密码用 argon2id 哈希（明文绝不存储或记录）。
+- **登录** —— `POST /login` 签发一个 256 位会话（仅存其 SHA-256，TTL 12 小时），并设置一个**跨刷新存活的
+  httpOnly `yaog_session` cookie**，Web 存储中不放任何 token；面板从 `GET /session` 重新推导状态。
+- **CSRF** —— 双重提交（double-submit）：登录设置一个可读的 `yaog_csrf` cookie 并返回 `csrf_token`；每个 cookie
+  路径的状态变更请求必须在 `X-CSRF-Token` 中回显它（常量时间比较）。Bearer 路径与 GET 免除。
+- **CORS** —— `YAOG_PANEL_ORIGIN` 是允许携带凭据跨源访问的精确源白名单；通配符绝不与凭据一同发送。同源 Docker
+  无需设置。
+- **TOTP（RFC 6238）** —— 标准库 HMAC-SHA1，仅登录用的第二因子；防重放、±1 步漂移。诚实的局限：该秘密是对称的
+  且存于静态——属于便利，弱于 passkey，且**绝不**是 keystone 签名因子。
+- **Passkey** —— 一个 WebAuthn 登录凭据（与 keystone 凭据不同）。既可作 2FA 因子（两者都注册时优先于 TOTP），
+  也可用于**无密码**登录；挑战是一个单次使用、5 分钟、被原子销毁的 nonce。同步 passkey（Bitwarden/iCloud/…）
+  无需硬件密钥。
+- **应急令牌**（`YAOG_CONTROLLER_OPERATOR_TOKEN`）—— 一个可选的恢复凭据，作为 Bearer 令牌直接鉴权运营者路由并
+  绕过 `/login`（从按用户名锁定中脱困的逃生通道）。
+- **限速** —— 一个共享限流器为每次登录/passkey 尝试在 `user:<name>` 与 `ip:<client>` 两个维度各占一个名额
+  （15 分钟内 10 次失败 → 429）；无用户名探测预言机。
+
+> **传输是硬性要求。** `/login` 携带明文密码，且控制器讲明文 HTTP（TLS 委托给反向代理）。生产环境**必须**在
+> 控制器前置一个终止 TLS 的代理。明文 HTTP + keystone 关闭的姿态没有信任锚，仅限开发（由启动告警强制，而非
+> 代码层拒绝）。
+
+### 8.5 配置包签名 — `YAOG_BUNDLE_SIGNING_KEY`
+
+当设为一个 Ed25519 PKCS#8 PEM 的路径时，每个节点配置包都会得到一个分离的 `bundle.sig`（对规范化
+`checksums.sha256` 的原始 Ed25519 签名）+ `signing-pubkey.pem`，且 `install.sh` 把验证公钥内嵌为常量。加载是
+**fail-closed** ——一把已设置但不可读的密钥会中止导出，而不会悄悄发出未签名的包。控制器模式下公钥**按租户固定
+（pinned）**且无静默降级：先前已固定的密钥消失 → 拒绝（412）；换了一把不同的 → 拒绝（409）。有意轮换用
+`YAOG_BUNDLE_SIGNING_KEY_ROTATE`（设置一次部署后取消设置）。请把私钥排除在仓库之外并做静态保护（`chmod 600`、
+`systemd-creds` 或编排器密钥库）；KMS/HSM 可通过 `ConfigSigner` 接缝接入。
+
+> **诚实的局限。** Phase-0 签名把公钥装在配置包*内部*，因此真实性只与带外 pin 一样强：来源不可信的配置包可被
+> 换上一把密钥重新签名。对于运营者自建的 air-gap 配置包（密钥是你配置的）以及 agent 预置（pinned）的 keystone
+> 路径，签名是真正的来源证明；agent 预置的信任锚是更长远的设计。
+
+---
+
+## 9. HTTP API 参考
+
+路由面随构建方式而有显著差异（见[第 3 节](#3-两种模式与构建边界)）。
+
+### 9.1 始终存在（两种构建）
+
+- `GET /api/health` —— 未鉴权的公开存活探针（`{status:"ok", timestamp}`）；仅 GET，带 CORS 与 panic 包裹。在
+  默认控制器构建的未打标签服务器层中，这是**唯一**的路由；其余一切都来自控制器 handler。
+
+### 9.2 仅 air-gap 的匿名计算路由（**仅**在 `-tags airgap` 时存在）
+
+```
+POST /api/validate         POST /api/compile
+POST /api/export           POST /api/deploy-script
+```
+
+> **陈旧文档警告。** 较旧的文档（以及本 Wiki 的早期版本）把这些列为常规后端端点。它们**仅**存在于
+> `go build -tags airgap` 的本地设计 oracle 中；在**默认发布的控制器与 Docker 镜像中它们返回 404**。要做离线
+> 编译，请使用浏览器内生成器、`cmd/compiler` CLI，或 `-tags airgap` oracle。
+
+### 9.3 控制器运营者路由（`/api/v1/operator/...`，端口 `:8080`）
+
+除未鉴权的登录面外，均位于 `operatorAuth` 之后。要点：`login` / `login/passkey/{begin,finish}`（未鉴权）/
+`logout` / `session`；`totp/*`、`passkey/*`；`update-topology`、`stage`、`compile-preview`、`promote`、
+`topology`（含 `?version=N`、`/topology/versions`）；`nodes`、`revoke`、`audit`、`enrollment-token`、
+`rekey-all`、`clear-rekey`；`settings`、`release-pins`、`release-assets`；`operator-credential`、`trustlist`、
+`trustlist-signature`。
+
+### 9.4 控制器 agent 路由（`/api/v1/agent/...`，端口 `:9090`）
+
+机器对机器 JSON。`enroll`（无鉴权——单次注册令牌）与 `bootstrap`（无鉴权——通用安装器）开放；`config`、`poll`、
+`report`、`telemetry`、`rekey` 需要各节点 bearer 令牌。`telemetry` 仅可观测（更新 conditions + last-seen，绝不
+触碰部署托管），且不被审计。
+
+> **状态码：** 200 OK；400 请求体损坏/为空；405 方法错误；413 请求体超过 4 MiB 上限；422 结构有效但编译失败；
+> 500 keygen/渲染/已恢复的 panic。错误使用嵌套编码信封 `{"error":{"code","message","params"}}`。运营者路由上
+> 出现节点令牌 → 403；已吊销节点 → 403；凭据缺失/无效 → 401。
+
+---
+
+## 10. 调试与故障排查
+
+### 10.1 开发环境
 
 ```bash
-# 启动（后台运行后端 :8080 + 前端 :5173）
-./dev.sh start
-
-# 停止
+./dev.sh start     # Vite 前端 :5173（设置了控制器环境变量时还会拉起 Go 服务器）
 ./dev.sh stop
-
-# 重启
 ./dev.sh restart
-
-# 查看状态
 ./dev.sh status
-
-# 跟踪日志
-./dev.sh logs
+./dev.sh logs      # 同时跟踪两份日志
 ```
 
-日志文件位于项目根目录：
-- `.dev-backend.log` — Go 后端日志
-- `.dev-frontend.log` — Vite 前端日志
+日志在项目根目录：`.dev-backend.log`（Go）、`.dev-frontend.log`（Vite）。纯本地设计只需在 `frontend/` 里
+`npm run dev`。
 
-### 6.2 常见问题
+### 10.2 本地模式问题
 
-#### 端口被占用
+**编译失败。** 编译在浏览器内运行——查看底栏与 DevTools 控制台中的错误。常见原因：未定义网域、节点未指派网域、
+非法 CIDR、孤立节点（无边）。
+
+**节点在画布上重叠。** 把它们拖开（位置在会话内持久化）；刷新会回到默认网格。
+
+**WireGuard 接口起不来。**
 
 ```bash
-# 查看谁占用了端口
-lsof -i :8080
-lsof -i :5173
-
-# 强制停止
-./dev.sh stop
+wg show                              # 所有接口
+wg show wg-beta                      # 单个接口
+sudo wg-quick up wg-beta             # 手动启动
+cat /etc/wireguard/wg-beta.conf      # 查看配置
+systemctl status wg-quick@wg-beta    # 服务状态
 ```
 
-`dev.sh stop` 会自动清理占用 8080/5173 端口的进程。
-
-#### 节点在画布上重叠
-
-节点位置在拖拽后会持久化到会话中。如果节点重叠：
-1. 手动拖拽节点到新位置——位置会在后续操作中保持
-2. 刷新页面会重置为默认网格布局（4 列，间距 280×250px）
-
-#### 编译失败
-
-**常见原因：**
-- 缺少网域定义（至少需要一个 Domain）
-- 节点未分配到网域
-- CIDR 格式错误
-- 孤立节点（无任何连线）
-
-**调试方法：**
-1. 点击"编译"按钮查看错误信息
-2. 检查浏览器开发者工具 Console
-3. 查看后端日志 `.dev-backend.log`
-
-#### WireGuard 接口未启动
+**Babel 路由不工作。**
 
 ```bash
-# 检查接口状态
-wg show
-
-# 检查特定接口
-wg show wg-node-beta
-
-# 手动启动接口
-sudo wg-quick up wg-node-beta
-
-# 检查配置文件
-cat /etc/wireguard/wg-node-beta.conf
-
-# 检查 systemd 服务状态
-systemctl status wg-quick@wg-node-beta
-```
-
-#### Babel 路由不生效
-
-```bash
-# 检查 babeld 状态
 systemctl status babeld
-
-# 查看 Babel 路由表
-echo "dump" | nc ::1 33123
-
-# 检查 babeld 日志
+echo "dump" | nc ::1 33123           # 转储 Babel 路由表
 journalctl -u babeld -f
-
-# 检查内核路由表
 ip route show table main | grep -E "^10\."
-
-# 验证 dummy0 地址
-ip addr show dummy0
+ip addr show dummy0                  # 验证 overlay 地址
 ```
 
-#### 安装脚本执行失败
+**安装脚本失败。**
 
 ```bash
-# 以 verbose 模式运行
-sudo bash -x install.sh
-
-# 检查 checksum 是否通过
+sudo bash -x install.sh                       # 详细模式
 cd /path/to/node-dir && sha256sum -c checksums.sha256
-
-# 手动清理后重试
-sudo wg-quick down wg-node-beta 2>/dev/null
-sudo bash install.sh
+sudo wg-quick down wg-beta 2>/dev/null && sudo bash install.sh
 ```
 
-#### SSH 自动部署失败
+**网络检查。**
 
 ```bash
-# 测试 SSH 连接（使用别名）
-ssh -v my-server-alias
-
-# 测试 SSH 连接（手动参数）
-ssh -v -p 22 -i ~/.ssh/id_ed25519 root@1.2.3.4
-
-# 检查密钥权限
-ls -la ~/.ssh/id_ed25519  # 应为 600
-
-# 测试 SCP 上传
-scp -P 22 -i ~/.ssh/id_ed25519 test.txt root@1.2.3.4:/tmp/
-```
-
-### 6.3 API 调试
-
-后端 API 端点：
-
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `/api/health` | GET | 健康检查 |
-| `/api/validate` | POST | 校验拓扑 JSON |
-| `/api/compile` | POST | 编译并返回所有配置 |
-| `/api/export` | POST | 编译并导出 ZIP 产物包 |
-| `/api/deploy-script` | POST | 生成部署脚本（`?format=sh` 或 `?format=ps1`） |
-
-```bash
-# 健康检查
-curl http://localhost:8080/api/health
-
-# 手动编译（使用导出的 JSON）
-curl -X POST http://localhost:8080/api/compile \
-  -H "Content-Type: application/json" \
-  -d @project.json | jq .
-
-# 校验拓扑
-curl -X POST http://localhost:8080/api/validate \
-  -H "Content-Type: application/json" \
-  -d @project.json | jq .
-```
-
-### 6.4 网络调试
-
-```bash
-# 测试 overlay 连通性
-ping -c 3 10.11.0.2
-
-# 测试 WireGuard 隧道（transit IP）
-ping -c 3 10.10.0.2
-
-# 跟踪路由
-traceroute -n 10.11.0.2
-
-# 检查 WireGuard 握手状态
+ping -c 3 10.11.0.2                  # overlay 连通性
+ping -c 3 10.10.0.2                  # transit IP（隧道）
 sudo wg show all | grep -A5 "latest handshake"
-
-# 检查 MTU
-ping -M do -s 1392 10.11.0.2
-
-# 抓包调试（WireGuard UDP 流量）
-sudo tcpdump -i eth0 udp port 51820
-
-# 抓包调试（overlay 隧道内流量）
-sudo tcpdump -i wg-node-beta
+ping -M do -s 1392 10.11.0.2         # MTU
+sudo tcpdump -i eth0 udp port 51820  # WireGuard UDP
 ```
 
+### 10.3 控制器模式问题
+
+**`yaog-server` 立即退出。** 默认构建是仅控制器；请同时设置 `YAOG_CONTROLLER_STATE_DIR` 与 `YAOG_TENANT_ID`
+（Docker 已做）。缺少它们时它按设计高声失败——不会回退成一个匿名计算服务器。
+
+**`/api/validate` 或 `/api/compile` 返回 404。** 在发布的控制器上这是预期——这些路由仅存在于 air-gap 构建。
+请用浏览器内生成器或 `cmd/compiler` CLI。（控制器模式下，校验在浏览器内运行，编译在服务端经运营者鉴权的
+Deploy/preview 路径运行。）
+
+**Passkey 注册以 “invalid domain” 失败。** 你在 `http://127.0.0.1` 上；请改用主机名 `localhost`（WebAuthn 禁止
+IP 地址域名），或为远程访问在控制器前置 TLS。
+
+**登录无法保持 / 跨源面板无法登录。** 会话是一个 httpOnly cookie，在非 localhost 源上需要 `Secure`——TLS 之后
+设 `YAOG_SECURE_COOKIE=true`，并为不同源的面板设置 `YAOG_PANEL_ORIGIN`。
+
+**某节点显示 `wireguard: LinkDown` / `SomePeersDown`。** 在节点详情页打开 **WireGuard links** 面板，查看哪个
+peer 掉线及其最近握手时间。`SomePeersDown` 表示部分（非全部）链路掉线——Babel 会绕过它们；`LinkDown` 表示尚无
+peer 握手成功。在节点上：`sudo wg show all | grep -A5 handshake` 与 `journalctl -u yaog-agent -f`。
+
+**某次自更新卡住。** 一个 `selfupdate: Blocked` 状态会附带可操作的原因（常为“重新装配滚动发布，使其 pin 指向
+目标构建”）。控制器拒绝比自己更新的目标；用 `journalctl -u yaog-agent -f` 查看 agent 日志。
+
+**Agent 健康检查。**
+
+```bash
+curl http://localhost:8080/api/health        # 控制器存活
+systemctl status yaog-agent                   # agent 守护进程
+journalctl -u yaog-agent -f                    # agent 日志（poll/verify/apply/自更新）
+cat /etc/wireguard/agent-controller.token      # 各节点 bearer 令牌（权限 0600）
+```
+
+---
+
+## 11. 术语表
+
+| 术语 | 含义 |
+|------|---------|
+| **Overlay IP** | 节点在 `dummy0` 上稳定的身份地址，由 Babel 通告。 |
+| **Transit IP** | `wg-*` 接口上每条链路的点对点地址；绝不通告。 |
+| **Per-peer 接口** | 每个邻居一个专属的 `wg-<peer>` WireGuard 接口（相对于单个 `wg0`）。 |
+| **网域（Domain）** | 一个带分配模式与路由模式的 overlay 地址空间（CIDR）。 |
+| **Generation** | 控制器单调递增的部署计数器；每次 promote 自增。 |
+| **Stage / Promote** | stage 在 `gen+1` 处不可见地渲染配置包；promote 把它们翻转为 current 并自增 generation。 |
+| **已注册子图** | 控制器实际渲染的、已批准且有公钥的节点（及它们之间的边）。 |
+| **Keystone** | 运营者离线的硬件密钥，用于签署信任列表/成员变更。 |
+| **Node Condition** | 结构化的 `{type,status,reason,message}` 健康项（`configapply`/`selfupdate`/`wireguard`/`mimic`）。 |
+| **AirGap 对比 AgentHeld** | 密钥托管模式：私钥在拓扑中（本地）对比只由节点持有（控制器）。 |
+| **mimic** | 一个 eBPF UDP→伪 TCP 整形器，为 UDP 不友好的网络包裹链路（transport `tcp`）。 |
+
+---
+
+> **规范交叉引用。** 本 Wiki 叙述系统；规范性细节位于 [`docs/spec/`](spec/)——`overview/`、`data-model/`、
+> `roles/`、`compiler/`、`artifacts/`、`api/`、`frontend/`、`operations/`、`security/` 与 `controller/`。
+> 从 [spec/README.md](spec/README.md) 开始。
