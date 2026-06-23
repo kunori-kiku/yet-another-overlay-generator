@@ -5,11 +5,11 @@
 // in LOCAL mode with the flag unset or set to 'local' (default-ON, plan-7 Phase 0.5) the four
 // compute actions (validate/compile/exportArtifacts/downloadDeployScript) run the in-browser
 // plan-4 TS compiler and never fetch; that ONLY the explicit 'backend' opt-out makes them POST
-// to the backend (the retained escape-hatch path); that the CONTROLLER-mode boundary is
-// untouched (authenticated same-origin validate fetch with Bearer+CSRF and NO
-// credentials:'include'; compile/export/deploy refuse); that an in-flight controller mode-flip
-// drops a local compile's reconstructed private keys; and that the local CompileResponse is the
-// exact air-gap shape downstream consumers expect.
+// to the backend (the retained escape-hatch path, LOCAL-mode-only); that the CONTROLLER-mode
+// boundary keeps verify off the wire (validate runs the in-browser validator — browser-local
+// verify — and never calls /api/validate, even under the 'backend' flag; compile/export/deploy
+// refuse); that an in-flight controller mode-flip drops a local compile's reconstructed private
+// keys; and that the local CompileResponse is the exact air-gap shape downstream consumers expect.
 //
 // The suite uses the REAL compiler (no compiler mock) so the parity groups (6.4/6.5/6.6) pin
 // the actual library output, and uses a node environment with a minimal DOM stub for the
@@ -243,58 +243,61 @@ describe('6.1 seam routing', () => {
     expect(urls).toContain('/api/compile');
     expect(urls).toContain('/api/export');
     expect(urls).toContain('/api/deploy-script?format=sh');
+    // LOCAL-mode oracle fetches carry NO auth headers — the air-gap routes are anonymous by
+    // design, and the controller-mode bearer/CSRF attachment was removed from validate() (the
+    // controller never reaches the wire). The validate POST therefore sends only Content-Type.
+    const validateCall = fetchSpy.mock.calls.find((c) => String(c[0]) === '/api/validate');
+    const validateHeaders = (validateCall?.[1] as RequestInit).headers as Record<string, string>;
+    expect(validateHeaders['Authorization']).toBeUndefined();
+    expect(validateHeaders['X-CSRF-Token']).toBeUndefined();
   });
 });
 
 // ── 6.2 — controller-mode boundary ──
 describe('6.2 controller-mode boundary', () => {
-  it('controller validate fetches /api/validate with Bearer+CSRF and NO credentials:include', async () => {
-    // Even with the local-engine flag ON, controller mode must keep the server-authoritative fetch.
+  it('controller validate runs the in-browser validator and never fetches /api/validate', async () => {
+    // The shipped controller 404s /api/validate (plan-7 gates the air-gap routes off the default
+    // build), and validate is key-free, so controller mode does browser-local verify — the
+    // controller neither serves nor calls the route, keeping its attack surface minimal.
     vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
     useControllerStore.setState({
       mode: 'controller',
       sessionToken: 'sess-abc',
       csrfToken: 'csrf-xyz',
     });
-    const fetchSpy = makeFetchOk({ valid: true, errors: [], warnings: [] });
+    const fetchSpy = vi.fn(async () => {
+      throw new Error('controller validate must not reach the wire');
+    });
     vi.stubGlobal('fetch', fetchSpy);
 
     await useTopologyStore.getState().validate();
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('/api/validate');
-    const headers = init.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer sess-abc');
-    expect(headers['X-CSRF-Token']).toBe('csrf-xyz');
-    // Intentional same-origin (Design §2): the httpOnly cookie rides automatically; a later
-    // reviewer MUST NOT add credentials:'include' (that is the F1 cross-origin class, not this).
-    expect(init.credentials).toBeUndefined();
+    // In-browser validator populated the result; zero network calls.
+    expect(useTopologyStore.getState().validateResult).not.toBeNull();
+    expect(useTopologyStore.getState().validateResult?.valid).toBe(true);
+    expect(useTopologyStore.getState().error).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(0);
   });
 
-  it('controller validate post-refresh (cookie+CSRF only, no in-memory bearer) still fetches', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
-    // Simulate a page-refresh state: the in-memory bearer is gone, only the cookie session +
-    // CSRF token survive. loggedIn marks the cookie-backed session.
+  it('controller validate stays in-browser even under the backend opt-out (no un-authed server call)', async () => {
+    // The 'backend' escape hatch is LOCAL-mode-only. In controller mode validate must STAY
+    // in-browser regardless of the flag — an operator cannot flip a env var and make the
+    // controller call an un-authed server-side validation endpoint.
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'backend');
     useControllerStore.setState({
       mode: 'controller',
-      sessionToken: '',
-      operatorToken: '',
-      csrfToken: 'csrf-refreshed',
-      loggedIn: true,
+      sessionToken: 'sess-abc',
+      csrfToken: 'csrf-xyz',
     });
-    const fetchSpy = makeFetchOk({ valid: true, errors: [], warnings: [] });
+    const fetchSpy = vi.fn(async () => {
+      throw new Error('controller validate must not reach the wire even with the backend flag');
+    });
     vi.stubGlobal('fetch', fetchSpy);
 
     await useTopologyStore.getState().validate();
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('/api/validate');
-    const headers = init.headers as Record<string, string>;
-    expect(headers['Authorization']).toBeUndefined(); // no in-memory bearer post-refresh
-    expect(headers['X-CSRF-Token']).toBe('csrf-refreshed');
-    expect(init.credentials).toBeUndefined();
+    expect(useTopologyStore.getState().validateResult?.valid).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(0);
   });
 
   it('controller compile/export/deploy refuse — no compiler call, no fetch', async () => {

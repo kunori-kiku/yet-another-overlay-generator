@@ -55,3 +55,37 @@ export async function seedLocalMode(context: BrowserContext): Promise<void> {
     localStorage.setItem(key, JSON.stringify({ state: { mode: 'local' }, version: 0 }))
   }, STORAGE_KEY)
 }
+
+// seedCanvasTopology seeds the `topology-storage` persist entry with a design BEFORE the panel
+// loads, so the /design canvas hydrates a non-empty topology. The BottomBar Validate button is
+// disabled until nodes.length > 0, so a spec that drives Validate must pre-load a design.
+// canvasFromServer is false: this is the operator's OWN local design (not a confidential server
+// mirror), so the controller-mode login gate preserves it instead of wiping it. The shape mirrors
+// the topology store's partialize (topology-storage declares no persist version → default 0).
+export async function seedCanvasTopology(
+  context: BrowserContext,
+  topology: { project: unknown; domains: unknown[]; nodes: unknown[]; edges: unknown[] },
+): Promise<void> {
+  await context.addInitScript(
+    ([key, topo]) => {
+      const t = topo as { project: unknown; domains: unknown[]; nodes: unknown[]; edges: unknown[] }
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          state: {
+            project: t.project,
+            domains: t.domains,
+            nodes: t.nodes,
+            edges: t.edges,
+            allocSchemaVersion: 0,
+            canvasFromServer: false,
+            language: 'en',
+            showInterfaces: false,
+          },
+          version: 0,
+        }),
+      )
+    },
+    ['topology-storage', topology] as const,
+  )
+}

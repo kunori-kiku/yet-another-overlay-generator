@@ -51,26 +51,24 @@ export const ALLOCATION_PIN_FIELDS = [
 //
 // The four compute actions below — validate(), compile(), exportArtifacts(),
 // downloadDeployScript() — share ONE decision shape, deliberately NOT four scattered
-// branches (which is how F3-class drift creeps in). Each action is:
+// branches (which is how F3-class drift creeps in). They split into two kinds:
 //
-//   1. controller-mode branch FIRST (the authenticated same-origin validate fetch, or the
-//      compile/export/deploy refusal guard) — verbatim, untouched by 1.6;
-//   2. else, the single local-engine seam: `mode === 'local' && localEngineEnabled()` ⇒
-//      call the corresponding localEngine adapter (localValidate / localCompile /
-//      localExport / localDeployScripts), running the plan-4 TS compiler in the browser;
-//   3. else (local mode, flag = 'backend') ⇒ fall through to the air-gap fetch — retained
-//      ONLY as the explicit 'backend' escape-hatch path (deferred cleanup).
+//   - validate() is KEY-FREE (schema + semantic only), so it runs the in-browser TS validator
+//     (localValidate) ALWAYS in controller mode — browser-local verify, the controller never calls
+//     /api/validate — and in local mode whenever `localEngineEnabled()`. It has no controller-mode
+//     refusal guard, because a public-keys-only canvas validates identically.
+//   - compile() / exportArtifacts() / downloadDeployScript() need PRIVATE keys (key generation /
+//     bundling), so they keep a controller-mode REFUSAL guard FIRST (controller mode is
+//     zero-knowledge — the controller compiles server-side on Deploy), then the local-engine arm.
 //
-// localEngineEnabled() is default-ON (plan-7 Phase 0.5): it reads the typed
-// VITE_YAOG_LOCAL_ENGINE flag (see compiler/localEngine.ts + vite-env.d.ts) and is true
-// unless the flag is explicitly 'backend'. So LOCAL mode is browser-resident by default —
-// justified by the green plan-5 conformance harness, which pins the in-browser compiler
-// against the Go pipeline. The air-gap fetch branches below survive only as the 'backend'
-// escape hatch (functional solely against a `-tags airgap` server, since plan-7 gates those
-// routes off the default controller build). The controller-mode branches (refusal guards, the
-// authenticated same-origin validate fetch, and compile()'s in-flight mode-flip key-custody
-// guard) are kept byte-for-byte regardless of the flag — the seam only ever replaces the
-// LOCAL-mode arm.
+// `localEngineEnabled()` (default-ON, plan-7 Phase 0.5 — true unless the typed VITE_YAOG_LOCAL_ENGINE
+// flag is explicitly 'backend') ⇒ call the localEngine adapter (localValidate / localCompile /
+// localExport / localDeployScripts), running the plan-4 TS compiler in the browser, byte-pinned to
+// the Go pipeline by the green plan-5 conformance harness. The air-gap fetch branches survive ONLY as
+// the explicit 'backend' escape hatch and ONLY in LOCAL mode — functional solely against a
+// `-tags airgap` oracle, since plan-7 gates those routes off the default controller build (a shipped
+// controller 404s /api/validate). Controller mode keeps its verify off the wire entirely: no
+// anonymous server-side validation endpoint is reachable, minimizing the controller's attack surface.
 
 interface TopologyState {
   // Data
@@ -767,30 +765,28 @@ export const useTopologyStore = create<TopologyState>()(
     try {
       const topo = get().getTopology();
       const cs = useControllerStore.getState();
-      // Local-engine seam: in LOCAL mode validate in the browser via the plan-4 TS compiler
-      // (default-ON) — no fetch. Controller mode never enters this branch (it keeps its
-      // authenticated same-origin fetch below); only the explicit 'backend' opt-out makes local
-      // mode fall through to the public /api/validate fetch (the retained escape-hatch path).
-      if (cs.mode === 'local' && localEngineEnabled()) {
+      // Validation is purely STRUCTURAL — schema + semantic checks over the topology, no private keys,
+      // no server state — and the in-browser TS validator is byte-pinned to the Go pipeline by the
+      // conformance harness. So in CONTROLLER mode it ALWAYS runs in-browser (browser-local verify):
+      // the controller neither serves nor calls /api/validate. That is a security choice as much as a
+      // correctness one — the shipped controller gates the air-gap compute routes off (plan-7,
+      // //go:build airgap → 404), and keeping the controller's verify path off the wire keeps its
+      // attack surface minimal (no anonymous server-side validation endpoint to reach). A controller
+      // (public-keys-only) canvas validates identically — the validator never touches a private key —
+      // so validate has no controller-mode refusal guard (unlike compile/export/deploy). In LOCAL
+      // mode it runs in-browser too whenever localEngineEnabled() (default-ON); only the explicit
+      // VITE_YAOG_LOCAL_ENGINE='backend' opt-out falls through to the air-gap /api/validate fetch.
+      if (cs.mode === 'controller' || localEngineEnabled()) {
         const data = await localValidate(topo);
         set({ validateResult: data, isValidating: false });
         return;
       }
-      // In controller mode /api/validate sits behind operator-auth (plan-12 / T6). The route is
-      // on the panel's own (operator) origin, so the httpOnly session cookie is sent automatically
-      // with the same-origin request; attach operator credentials so the POST passes: prefer
-      // Bearer (the in-memory session/break-glass token, CSRF-free), and after a refresh with no
-      // in-memory token, fall back to cookie + double-submit CSRF header (consistent with
-      // controllerClient's configOf). Local mode adds no headers (the route is public).
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (cs.mode === 'controller') {
-        const bearer = cs.sessionToken || cs.operatorToken;
-        if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
-        if (cs.csrfToken) headers['X-CSRF-Token'] = cs.csrfToken;
-      }
+      // LOCAL-mode 'backend' opt-out only: the retained /api/validate fetch, hitting the anonymous
+      // air-gap oracle (a -tags airgap server). No auth headers — controller mode never reaches here
+      // (it returned above), and the air-gap oracle is anonymous by design.
       const res = await fetch('/api/validate', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(topo),
       });
       if (!res.ok) {

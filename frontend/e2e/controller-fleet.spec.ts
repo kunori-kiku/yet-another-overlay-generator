@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readHarness, httpURL, e2eDir } from './fixtures/harness'
-import { seedControllerMode } from './fixtures/seedStore'
+import { seedControllerMode, seedCanvasTopology } from './fixtures/seedStore'
 import { OPERATOR_USER, OPERATOR_PASS, ENROLL_NODE } from './fixtures/config'
 
 // Canary 2 — the controller cross-stack wire end to end: operator login (cookie + CSRF) +
@@ -73,4 +73,50 @@ test('controller boot: operator login + agent check-in makes the node appear in 
   await expect(page.getByRole('link', { name: ENROLL_NODE }).first()).toBeVisible({
     timeout: 15_000,
   })
+})
+
+// Controller-mode Validate is browser-local verify: the panel runs the in-browser TS validator
+// and NEVER calls /api/validate (the shipped controller 404s that air-gap route; keeping verify
+// off the wire minimizes the controller's attack surface — no anonymous server-side validation
+// endpoint to reach). This guard is CLIENT-SIDE on purpose: the air-gap e2e controller boot DOES
+// register /api/validate and answers 200 when authed, so only asserting that the panel JS never
+// issues the request captures the shipped-controller behavior (the authoritative server-side 404
+// lives in the !airgap Go test internal/api/airgap_routes_removed_test.go).
+test('controller-mode Validate runs the in-browser validator and never calls /api/validate', async ({
+  page,
+  context,
+}) => {
+  const h = readHarness()
+  const panel = httpURL(h.controller.panel)
+
+  await seedControllerMode(context, {
+    baseURL: panel,
+    agentBaseURL: httpURL(h.controller.agent),
+  })
+  // A non-empty design so the BottomBar Validate button is enabled (it disables at 0 nodes).
+  await seedCanvasTopology(context, seedTopology)
+
+  // Fail the test if the panel ever calls /api/validate in controller mode.
+  let validateCalls = 0
+  await page.route('**/api/validate', async (route) => {
+    validateCalls += 1
+    await route.abort()
+  })
+
+  // Log in (controller-mode Shell gates on it), then open the design canvas.
+  await page.goto(`${panel}/`)
+  await page.locator('#login-username').fill(OPERATOR_USER)
+  await page.locator('#login-password').fill(OPERATOR_PASS)
+  await page.locator('form button[type="submit"]').click()
+  await expect(page.locator('#login-username')).toBeHidden({ timeout: 15_000 })
+
+  await page.goto(`${panel}/design`)
+  const validateBtn = page.getByRole('button', { name: /Validate Topology/ })
+  await expect(validateBtn).toBeEnabled({ timeout: 15_000 })
+  await validateBtn.click()
+
+  // The in-browser validator populated a result (the seed topology is valid) …
+  await expect(page.getByText('Topology validation passed')).toBeVisible({ timeout: 15_000 })
+  // … and the panel never touched the air-gap validate route.
+  expect(validateCalls).toBe(0)
 })
