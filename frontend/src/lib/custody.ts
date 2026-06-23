@@ -1,11 +1,14 @@
 import type { Topology } from '../types/topology';
 import type { ControllerNode } from '../types/controller';
 
-// custody.ts — client-side key-custody helpers for controller mode (plan-5, D4/D5).
+// custody.ts — client-side custody helpers for controller mode (plan-5, D4/D5).
 // Controller mode is zero-knowledge: a WireGuard private key must never reach the
 // server (the panel strips before every update-topology POST — the client mirror of
 // the server's 400 in plan-1) and must never enter the design via import. These are
-// pure functions over a Topology; the dialogs/notices live in the stores/components.
+// pure functions; most operate over a Topology (the upload/import custody primitives),
+// and stripLiveTelemetry operates over a ControllerNode (the persist-custody primitive
+// that keeps fleet-confidential live telemetry out of localStorage). The dialogs/notices
+// live in the stores/components.
 
 export interface StripResult {
   topo: Topology;
@@ -71,6 +74,11 @@ export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number }
 // (curated, endpoint-free) still persists for instant coloring; the per-link detail is re-fetched live
 // on refresh. Setting the field to undefined makes JSON.stringify omit the key (same idiom as
 // dropAllKeys), so a rehydrated node has no wireguardPeers and every reader coerces (?? []).
+//
+// MAINTENANCE: this clears the single live-only field that exists today. If a future Sampler's
+// metric is lifted by mapNode into a NEW endpoint/IP-bearing ControllerNode field, clear it here too
+// (rather than allowlisting it in leakOracle) — the leakOracle e2e guard is the backstop that fails
+// the build if a new non-allowlisted field reaches the persisted cache.
 export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
   return { ...node, wireguardPeers: undefined };
 }
