@@ -1,8 +1,21 @@
 # STATUS
 <!-- regenerated: 2026-06-23 -->
-<!-- by: agent-feedback-and-version-aware-rollout subject — DELIVERED; v2.0.0-beta.9 published -->
+<!-- by: draft-implementation-plan — beta9-smoke-hardening subject drafted (5 plans), executing plan-1 -->
 
 ## Active work
+
+- **NEW SUBJECT EXECUTING: beta9-smoke-hardening (2026-06-23).** Fixes the defects + UX gaps surfaced
+  while smoking `v2.0.0-beta.9` on a live ~9-node fleet, shipping as `v2.0.0-beta.10` (→ Latest). 5
+  plans, foldered in
+  [`implementation_plans/beta9-smoke-hardening-2026_06_23/`](implementation_plans/beta9-smoke-hardening-2026_06_23/outline.md)
+  (owner-approved). **Headline:** the Node Conditions channel is apply-time-only → the panel freezes a
+  worst-case post-apply snapshot (false `wireguard: LinkDown` sampled pre-handshake, stuck
+  `selfupdate: HealthConfirmedProbationary`) though the overlay is healthy — fixed by a **dedicated,
+  extensible `/telemetry` monitoring heartbeat** (plan-1). Plus: controller-mode Validate runs the
+  in-browser validator (kill the `/api/validate` 404, plan-2); off-host signing-handle auto-recovery
+  (serve the public descriptor — no fleet-stranding rotation, plan-3); mimic catalog discover-and-pick
+  (plan-4); release beta.10 (plan-5). Each PR independently workflow-reviewed → fixed → re-reviewed →
+  merged. **plan-1 EXECUTING.**
 
 - **SUBJECT agent-feedback-and-version-aware-rollout — DELIVERED (2026-06-23); `v2.0.0-beta.9`
   published.** All ten plans done. The reusable structured agent→panel **Node Conditions** channel
