@@ -193,6 +193,16 @@ export const en = {
   'mimicCatalog.assisting': "Fetching…",
   'mimicCatalog.assistNeedsBase': "Set a release base URL before fetching.",
   'mimicCatalog.assistRowFailed': "Couldn't fetch a sidecar for {asset} — enter the SHA-256 manually.",
+  'mimicCatalog.discoverButton': "Discover from release",
+  'mimicCatalog.discovering': "Discovering…",
+  'mimicCatalog.discoverHeading': "Discovered .deb assets",
+  'mimicCatalog.discoverHint': "Pick the packages to add and label each with <codename>-<arch>, then Add selected. The SHA-256 stays blank — fill it with Assist (or paste it) and Save.",
+  'mimicCatalog.discoverDismiss': "Dismiss",
+  'mimicCatalog.discoverAddSelected': "Add selected",
+  'mimicCatalog.discoverNeedKey': "Each selected package needs a <codename>-<arch> label.",
+  'mimicCatalog.discoverDupKey': "Two selected packages share a label — give each a unique <codename>-<arch> (a duplicate would silently drop a pin).",
+  'mimicCatalog.discoverEmpty': "No .deb assets found in that release.",
+  'mimicCatalog.discoverFailed': "Couldn't discover assets from the release — check the release base, or add rows manually.",
   'mimicCatalog.assistCustody': "Fetched over the GitHub proxy as a convenience and is best-effort — many mirrors publish no .sha256 sidecar, so enter it manually when a fetch misses. Trust comes from the signed artifacts.json + the install-time sha256sum -c, not this fetch.",
   'mimicCatalog.proxyLabel': "GitHub proxy",
   'mimicCatalog.proxyHint': "The assist and the install's download route through this prefix. Edit it in Bootstrap settings.",
@@ -679,7 +689,7 @@ export const en = {
   'error.stage_failed': 'Staging or promoting the deployment failed.',
   // Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator release-pins endpoint.
   'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
-  'error.agent_release_fetch_failed': 'Could not fetch the release checksum from {url}: {detail}',
+  'error.agent_release_fetch_failed': 'Could not fetch from the release at {url}: {detail}',
   'error.agent_release_sidecar_invalid': 'The release checksum fetched from {url} is not a valid SHA-256.',
   // Refuse-newer rollout floor (plan-8): the controller can only certify a target it has shipped.
   'error.agent_target_newer_than_controller':

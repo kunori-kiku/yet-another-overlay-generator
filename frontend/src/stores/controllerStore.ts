@@ -33,6 +33,9 @@ import {
   fetchPins as ctlFetchPins,
   type AgentPinFetchRequest,
   type AgentPinFetchResult,
+  fetchReleaseAssets as ctlFetchReleaseAssets,
+  type ReleaseAssetsRequest,
+  type ReleaseAssetsResult,
   getTOTPStatus,
   enrollTOTP as ctlEnrollTOTP,
   confirmTOTP as ctlConfirmTOTP,
@@ -411,6 +414,13 @@ interface ControllerState {
   // persists nor auto-trusts anything (custody) and does NOT touch global loading/error; the
   // caller surfaces its own busy/localError. Throws ControllerError on a coded failure.
   fetchReleasePins: (body: AgentPinFetchRequest) => Promise<AgentPinFetchResult>;
+
+  // fetchReleaseAssets runs the assisted release-asset DISCOVERY fetch (POST release-assets) over
+  // the current controller config. It returns the .deb asset names a config CARD lets the operator
+  // pick from — it neither persists nor auto-trusts anything (custody) and does NOT touch global
+  // loading/error; the caller surfaces its own busy/localError. Throws ControllerError on a coded
+  // failure.
+  fetchReleaseAssets: (body: ReleaseAssetsRequest) => Promise<ReleaseAssetsResult>;
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -775,6 +785,10 @@ export const useControllerStore = create<ControllerState>()(
       // Convenience pin-fetch for the rollout/mimic config cards: wraps the client over the current
       // auth config and rethrows so the card localizes its own error. No global state side effects.
       fetchReleasePins: (body) => ctlFetchPins(configOf(get()), body),
+
+      // Convenience asset-discovery for the mimic catalog card: wraps the client over the current
+      // auth config and rethrows so the card localizes its own error. No global state side effects.
+      fetchReleaseAssets: (body) => ctlFetchReleaseAssets(configOf(get()), body),
 
       // Operator password login (plan-5.2): POST /login to obtain a session token, held in memory
       // only. On success, immediately refresh the fleet view. The session takes precedence over a

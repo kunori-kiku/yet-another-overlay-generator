@@ -205,7 +205,7 @@ var registry = map[Code]def{
 	CodeStageFailed:              {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
 
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},
-	CodeAgentReleaseFetchFailed:    {"Could not fetch the release checksum from {url}: {detail}", http.StatusBadGateway},
+	CodeAgentReleaseFetchFailed:    {"Could not fetch from the release at {url}: {detail}", http.StatusBadGateway},
 	CodeAgentReleaseSidecarInvalid: {"The release checksum fetched from {url} is not a valid SHA-256.", http.StatusBadGateway},
 
 	CodeAgentTargetNewerThanController: {"The agent target version {target} is newer than the controller version {controller}; the controller can only roll agents to a version it has shipped.", http.StatusBadRequest},

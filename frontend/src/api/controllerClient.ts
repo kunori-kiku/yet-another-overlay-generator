@@ -881,6 +881,50 @@ export async function fetchPins(cfg: ControllerConfig, body: AgentPinFetchReques
   };
 }
 
+// ReleaseAssetsRequest is the body of the assisted release-asset DISCOVERY fetch (POST
+// release-assets, plan-4): base optionally overrides the saved mimic release base; version
+// optionally pins a "latest" base to a tag. The kind is implicitly mimic (the only discover caller).
+export interface ReleaseAssetsRequest {
+  base?: string;
+  version?: string;
+}
+
+// ReleaseAssetsResult is the discovered .deb asset names + resolution metadata. assets is the list
+// of *.deb names the release publishes (debug sidecars excluded server-side); the operator picks
+// from it. base/version/versionApplied/proxyApplied mirror the release-pins resolution metadata.
+export interface ReleaseAssetsResult {
+  assets: string[];
+  base: string;
+  version: string;
+  versionApplied: boolean;
+  proxyApplied: boolean;
+}
+
+// fetchReleaseAssets calls the operator release-assets endpoint to LIST a GitHub release's .deb
+// asset names, so the mimic catalog can offer a pick-from checklist instead of hand-typed
+// filenames. Discovery is a convenience only — the SHA-256 pin is still fetched (per-row Assist) and
+// saved separately; nothing is trusted or persisted here. A coded error surfaces as ControllerError.
+export async function fetchReleaseAssets(
+  cfg: ControllerConfig,
+  body: ReleaseAssetsRequest,
+): Promise<ReleaseAssetsResult> {
+  const res = await postJSON(cfg, 'release-assets', JSON.stringify(body));
+  const d = (await res.json()) as {
+    assets?: string[];
+    base: string;
+    version: string;
+    version_applied: boolean;
+    proxy_applied: boolean;
+  };
+  return {
+    assets: d.assets ?? [],
+    base: d.base,
+    version: d.version,
+    versionApplied: d.version_applied,
+    proxyApplied: d.proxy_applied,
+  };
+}
+
 // --- public API (each takes (cfg, ...)) ---
 
 // getNodes lists the entire fleet registry (operator-only).

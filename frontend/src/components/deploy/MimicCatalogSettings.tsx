@@ -3,6 +3,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { t, type UILanguage } from '../../i18n';
 import { type ControllerSettings } from '../../api/controllerClient';
+import { deriveKey, collidingKeys } from '../../lib/mimicDiscover';
 
 // MimicCatalogSettings (controller-panel-rollout-ui plan-4): the operator card for the mimic
 // GitHub-.deb catalog — a version tag, the release base URL, and per-"<codename>-<arch>" .deb pins
@@ -23,6 +24,15 @@ interface DebRow {
   asset: string;
   sha256: string;
   note?: string;
+}
+
+// A discovered .deb asset awaiting the operator's pick + label. asset is the immutable release
+// filename (also the stable React key — unique within a release); key is the operator-editable
+// "<codename>-<arch>" label (prefilled via deriveKey); checked drives inclusion in "Add selected".
+interface DiscoveredRow {
+  asset: string;
+  key: string;
+  checked: boolean;
 }
 
 // Client-side mirrors of validateMimicCatalog (handler_bootstrap.go); the server is authoritative.
@@ -66,6 +76,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
   const loading = useControllerStore((s) => s.loading);
   const saveSettings = useControllerStore((s) => s.saveSettings);
   const fetchReleasePins = useControllerStore((s) => s.fetchReleasePins);
+  const fetchReleaseAssets = useControllerStore((s) => s.fetchReleaseAssets);
 
   const [version, setVersion] = useState(initial.mimicVersion);
   const [releaseBase, setReleaseBase] = useState(initial.mimicReleaseBase);
@@ -86,6 +97,10 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // The release-asset discovery checklist: null = hidden (not yet discovered / dismissed);
+  // a list = the operator is picking which discovered .deb assets to add as rows.
+  const [discovered, setDiscovered] = useState<DiscoveredRow[] | null>(null);
+  const [discovering, setDiscovering] = useState(false);
 
   const dirty = () => setSaved(false);
 
@@ -176,6 +191,70 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
     setBusy(false);
   };
 
+  // handleDiscover lists the release's .deb assets (POST release-assets) and opens the pick-from
+  // checklist. Best-effort convenience: a failure leaves the checklist hidden and the operator adds
+  // rows by hand. deriveKey prefills the "<codename>-<arch>" label; a package we cannot label
+  // (dkms / unmatched) starts unchecked so the operator must label it before adding.
+  const handleDiscover = async () => {
+    setLocalError(null);
+    const base = releaseBase.trim();
+    if (!base) {
+      setLocalError(t(language, 'mimicCatalog.assistNeedsBase'));
+      return;
+    }
+    setDiscovering(true);
+    try {
+      const res = await fetchReleaseAssets({ base, version: version.trim() || undefined });
+      if (res.assets.length === 0) {
+        setDiscovered(null);
+        setLocalError(t(language, 'mimicCatalog.discoverEmpty'));
+        return;
+      }
+      setDiscovered(
+        res.assets.map((asset) => {
+          const key = deriveKey(asset);
+          return { asset, key, checked: key !== '' };
+        }),
+      );
+    } catch {
+      setDiscovered(null);
+      setLocalError(t(language, 'mimicCatalog.discoverFailed'));
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const setDiscoveredRow = (asset: string, patch: Partial<DiscoveredRow>) => {
+    setDiscovered((rows) => (rows ? rows.map((r) => (r.asset === asset ? { ...r, ...patch } : r)) : rows));
+  };
+
+  // A CHECKED discovered key collides when it duplicates another checked row OR an existing deb row;
+  // "Add selected" is blocked until every checked key is unique (a duplicate would silently drop a
+  // pin on save — see collidingKeys). An empty checked key is reported separately (needs a label).
+  const checkedRows = (discovered ?? []).filter((r) => r.checked);
+  const dupKeys = collidingKeys(
+    checkedRows.map((r) => r.key),
+    debs.map((r) => r.key),
+  );
+  const hasBlankCheckedKey = checkedRows.some((r) => !r.key.trim());
+  const canAddSelected = checkedRows.length > 0 && !hasBlankCheckedKey && dupKeys.size === 0;
+
+  // handleAddSelected appends the checked discovered assets as new deb rows with an EMPTY sha256:
+  // custody keeps discovery (the name) separate from the pin (the hash), so the operator then runs
+  // the existing per-row Assist (or pastes the hash) and Saves. Clears the checklist when done.
+  const handleAddSelected = () => {
+    if (!canAddSelected) return;
+    const toAdd: DebRow[] = checkedRows.map((r) => ({
+      id: nextId.current++,
+      key: r.key.trim(),
+      asset: r.asset,
+      sha256: '',
+    }));
+    setDebs((rows) => [...rows, ...toAdd]);
+    setDiscovered(null);
+    dirty();
+  };
+
   const handleSave = async () => {
     if (validate()) return;
     setLocalError(null);
@@ -208,6 +287,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             value={version}
             onChange={(e) => {
               setVersion(e.target.value);
+              // A discovered checklist was fetched against the OLD base+version; editing either
+              // invalidates it, so drop it rather than let "Add selected" append stale rows.
+              setDiscovered(null);
               dirty();
             }}
             placeholder="v1.4.0"
@@ -222,6 +304,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
             value={releaseBase}
             onChange={(e) => {
               setReleaseBase(e.target.value);
+              setDiscovered(null); // invalidate a checklist discovered against the old base
               dirty();
             }}
             placeholder="https://github.com/hack3ric/mimic/releases/latest/download"
@@ -249,18 +332,81 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
 
       {/* Per-distro .deb rows */}
       <div className="space-y-2 p-3 bg-gray-900 border border-gray-700 rounded">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-gray-200">{t(language, 'mimicCatalog.debsHeading')}</h4>
-          <button
-            type="button"
-            onClick={() => void handleAssist()}
-            disabled={busy || loading}
-            className="px-3 py-1 text-xs bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
-          >
-            {busy ? t(language, 'mimicCatalog.assisting') : t(language, 'mimicCatalog.assistButton')}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleDiscover()}
+              disabled={discovering || busy || loading}
+              className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            >
+              {discovering ? t(language, 'mimicCatalog.discovering') : t(language, 'mimicCatalog.discoverButton')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleAssist()}
+              disabled={busy || loading}
+              className="px-3 py-1 text-xs bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            >
+              {busy ? t(language, 'mimicCatalog.assisting') : t(language, 'mimicCatalog.assistButton')}
+            </button>
+          </div>
         </div>
         <p className="text-[10px] text-gray-500">{t(language, 'mimicCatalog.debsHint')}</p>
+
+        {/* Discover checklist: pick + label the release's .deb assets, then add them as empty-SHA rows. */}
+        {discovered !== null && (
+          <div className="space-y-2 p-2 bg-gray-800 border border-indigo-800 rounded">
+            <div className="flex items-center justify-between gap-2">
+              <h5 className="text-xs font-semibold text-indigo-300">{t(language, 'mimicCatalog.discoverHeading')}</h5>
+              <button
+                type="button"
+                onClick={() => setDiscovered(null)}
+                className="px-2 py-0.5 text-[10px] bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+              >
+                {t(language, 'mimicCatalog.discoverDismiss')}
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-500">{t(language, 'mimicCatalog.discoverHint')}</p>
+            {discovered.map((r) => {
+              const isDup = r.checked && r.key.trim() !== '' && dupKeys.has(r.key.trim());
+              const isBlank = r.checked && r.key.trim() === '';
+              return (
+                <div key={r.asset} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={r.checked}
+                    onChange={(e) => setDiscoveredRow(r.asset, { checked: e.target.checked })}
+                    aria-label={r.asset}
+                    className="accent-indigo-500"
+                  />
+                  <span className="font-mono text-[11px] text-gray-300 flex-1 break-all">{r.asset}</span>
+                  <input
+                    type="text"
+                    value={r.key}
+                    onChange={(e) => setDiscoveredRow(r.asset, { key: e.target.value })}
+                    placeholder={t(language, 'mimicCatalog.keyLabel')}
+                    aria-label={t(language, 'mimicCatalog.keyLabel')}
+                    className={`w-32 px-2 py-0.5 bg-gray-600 rounded text-[11px] font-mono border outline-none ${
+                      isDup || isBlank ? 'border-amber-500' : 'border-gray-500 focus:border-blue-400'
+                    }`}
+                  />
+                </div>
+              );
+            })}
+            {hasBlankCheckedKey && <p className="text-[10px] text-amber-400">{t(language, 'mimicCatalog.discoverNeedKey')}</p>}
+            {dupKeys.size > 0 && <p className="text-[10px] text-amber-400">{t(language, 'mimicCatalog.discoverDupKey')}</p>}
+            <button
+              type="button"
+              onClick={handleAddSelected}
+              disabled={!canAddSelected}
+              className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+            >
+              {t(language, 'mimicCatalog.discoverAddSelected')}
+            </button>
+          </div>
+        )}
         {debs.length === 0 ? (
           <p className="text-xs text-gray-500">{t(language, 'mimicCatalog.noDebs')}</p>
         ) : (

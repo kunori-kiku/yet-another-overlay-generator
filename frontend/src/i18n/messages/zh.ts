@@ -181,6 +181,16 @@ export const zh: Record<keyof typeof en, string> = {
   'mimicCatalog.assisting': "获取中…",
   'mimicCatalog.assistNeedsBase': "请先设置发布基址 URL 再获取。",
   'mimicCatalog.assistRowFailed': "无法为 {asset} 获取 sidecar——请手动填写 SHA-256。",
+  'mimicCatalog.discoverButton': "从发行版发现",
+  'mimicCatalog.discovering': "发现中…",
+  'mimicCatalog.discoverHeading': "已发现的 .deb 资产",
+  'mimicCatalog.discoverHint': "勾选要添加的包，并为每个填写 <代号>-<架构> 标签，然后点击「添加所选」。SHA-256 暂留空——稍后用「从发行版协助」获取（或手动粘贴）并保存。",
+  'mimicCatalog.discoverDismiss': "关闭",
+  'mimicCatalog.discoverAddSelected': "添加所选",
+  'mimicCatalog.discoverNeedKey': "每个所选的包都需要一个 <代号>-<架构> 标签。",
+  'mimicCatalog.discoverDupKey': "有两个所选的包标签相同——请为每个填写唯一的 <代号>-<架构>（重复会静默丢失一个 pin）。",
+  'mimicCatalog.discoverEmpty': "该发行版中未找到 .deb 资产。",
+  'mimicCatalog.discoverFailed': "无法从该发行版发现资产——请检查发行版基址，或手动添加行。",
   'mimicCatalog.assistCustody': "通过 GitHub 代理获取，且为尽力而为——许多镜像不发布 .sha256 sidecar，获取不到时请手动填写。信任来自已签名的 artifacts.json 与安装时的 sha256sum -c，而非此次获取。",
   'mimicCatalog.proxyLabel': "GitHub 代理",
   'mimicCatalog.proxyHint': "辅助获取与安装时的下载都经由此前缀。请在 Bootstrap 设置中修改。",
@@ -658,7 +668,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.stage_failed': '暂存或提升部署失败。',
   // Assisted fetch of release pins (controller-panel-rollout-ui plan-1) — operator release-pins endpoint.
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
-  'error.agent_release_fetch_failed': '无法从 {url} 获取发布校验和：{detail}',
+  'error.agent_release_fetch_failed': '无法从发布地址 {url} 获取：{detail}',
   'error.agent_release_sidecar_invalid': '从 {url} 获取的发布校验和不是有效的 SHA-256。',
   // Refuse-newer rollout floor (plan-8): the controller can only certify a target it has shipped.
   'error.agent_target_newer_than_controller':

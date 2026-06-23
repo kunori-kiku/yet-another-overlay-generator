@@ -258,6 +258,11 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// pins for operator REVIEW. A convenience only — trust stays the keystone-signed
 	// artifacts.json the agent verifies against (see release_pins.go custody note).
 	mux.HandleFunc(base+"release-pins", op(h.HandleReleasePins))
+	// Assisted release-ASSET discovery (beta9-smoke-hardening plan-4): list a GitHub release's
+	// .deb asset names through the gh-proxy so the mimic catalog offers a pick-from checklist
+	// instead of hand-typed filenames. Convenience only — the SHA-256 pin is still fetched +
+	// saved separately (see release_assets.go custody note).
+	mux.HandleFunc(base+"release-assets", op(h.HandleReleaseAssets))
 	// Keystone (plan-5.1b): pin the off-host operator credential, fetch the canonical
 	// trust-list bytes to sign, and submit the off-host signature.
 	mux.HandleFunc(base+"operator-credential", op(h.HandleOperatorCredential))
