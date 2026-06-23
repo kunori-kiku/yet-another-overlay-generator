@@ -95,7 +95,7 @@ export function EnrollmentFlow() {
 
   return (
     <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3">
-      <h3 className="text-lg font-semibold text-purple-400">
+      <h3 className="text-lg font-semibold text-[var(--accent)]">
         {t(language, 'enrollmentFlow.nodeEnrollment')}
       </h3>
       <p className="text-sm text-[var(--content-muted)]">
@@ -132,7 +132,7 @@ export function EnrollmentFlow() {
           <button
             onClick={handleMint}
             disabled={minting || !nodeId || ttlSeconds <= 0}
-            className="w-full py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
+            className="w-full py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
           >
             {minting
               ? t(language, 'enrollmentFlow.minting')
@@ -179,7 +179,7 @@ export function EnrollmentFlow() {
             <label className="text-[10px] text-[var(--content-muted)] uppercase tracking-wider">
               {t(language, 'enrollmentFlow.enrollmentToken')}
             </label>
-            <pre className="text-xs text-cyan-300 font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded">
+            <pre className="text-xs text-[var(--content)] font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded">
               {token}
             </pre>
           </div>

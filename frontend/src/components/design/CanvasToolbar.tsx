@@ -113,6 +113,7 @@ export function CanvasToolbar({
       {mode === 'controller' && (
         <button
           type="button"
+          data-testid="save-design"
           onClick={() => saveDesign()}
           disabled={saving || !dirty}
           title={dirty ? undefined : t(language, 'canvasToolbar.saveUpToDate')}

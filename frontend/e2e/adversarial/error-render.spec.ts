@@ -78,7 +78,7 @@ test('CSRF positive contract: a cookie-auth state-changing request with no CSRF 
     (r) => r.url().includes('/operator/update-topology') && r.request().method() === 'POST',
     { timeout: 15_000 },
   )
-  await page.locator('button.bg-green-600').click()
+  await page.getByTestId('save-design').click()
   expect((await writeP).status(), 'a CSRF-less cookie-auth mutation must be rejected (403)').toBe(403)
 })
 

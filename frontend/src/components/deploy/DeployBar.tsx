@@ -116,13 +116,15 @@ export function DeployBar() {
         </h3>
         <div className="flex items-center gap-2">
           <button
+            data-testid="roll-keys"
             onClick={onRollKeys}
             disabled={loading || noAuth}
-            className="px-4 py-2 text-sm bg-purple-700 hover:bg-purple-600 disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-white font-medium"
+            className="px-4 py-2 text-sm bg-[var(--info-solid)] hover:bg-[var(--info-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--info-solid-fg)] font-medium"
           >
             {t(language, 'deployBar.rollKeys')}
           </button>
           <button
+            data-testid="deploy"
             onClick={onDeploy}
             disabled={loading || noAuth}
             title={
@@ -143,7 +145,7 @@ export function DeployBar() {
         {t(language, 'deployBar.uploadTheCurrentTopology')}
       </p>
 
-      <p className="text-xs text-purple-300/80">
+      <p className="text-xs text-[var(--info)]">
         {t(language, 'deployBar.rollKeysAsksEach')}
       </p>
 
@@ -252,7 +254,7 @@ export function DeployBar() {
       )}
 
       {anyRekeying && (
-        <p className="text-xs text-purple-300 bg-purple-500/15 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--info)] bg-[var(--info-bg)] px-2 py-1 rounded">
           {t(language, 'deployBar.rekeyingBanner', { count: rekeyingCount })}
         </p>
       )}

@@ -13,15 +13,16 @@ function isDrifting(applied: number, desired: number): boolean {
   return applied < desired;
 }
 
-// statusClass returns the status-badge color: approved green, pending yellow, revoked red.
+// statusClass returns the status-badge color via the semantic status tokens (legible in both
+// themes): approved → success, pending → warning, revoked → danger.
 function statusClass(status: ControllerNodeStatus): string {
   switch (status) {
     case 'approved':
-      return 'bg-green-500/15 text-green-300 border-green-700';
+      return 'bg-[var(--success-bg)] text-[var(--success)] border-[var(--success-border)]';
     case 'pending':
-      return 'bg-yellow-500/15 text-yellow-300 border-yellow-700';
+      return 'bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning-border)]';
     case 'revoked':
-      return 'bg-red-500/15 text-red-300 border-red-700';
+      return 'bg-[var(--danger-bg)] text-[var(--danger)] border-[var(--danger-border)]';
   }
 }
 
@@ -79,7 +80,7 @@ function nodeCells(
           {/* plan-4.6: the operator has requested this node rotate its WG key; waiting for the agent
               to regenerate and register a new public key. */}
           {n.rekeyRequested && (
-            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-500/15 text-purple-300 border-purple-700">
+            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-[var(--info-bg)] text-[var(--info)] border-[var(--info-border)]">
               {t(language, 'nodeRegistry.rekeying')}
             </span>
           )}
@@ -87,7 +88,7 @@ function nodeCells(
               identity-reconciliation marker telling the operator it has left the design (revoke it to
               remove it from the fleet). */}
           {orphan && n.status !== 'revoked' && (
-            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-500/15 text-orange-300 border-orange-700">
+            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning-border)]">
               {t(language, 'nodeRegistry.notInDesign')}
             </span>
           )}
@@ -98,11 +99,11 @@ function nodeCells(
       labelKey: 'nodeRegistry.genAppliedDesired',
       value: (
         <span className="font-mono">
-          <span className={drift ? 'text-yellow-400' : 'text-[var(--content)]'}>
+          <span className={drift ? 'text-[var(--warning)]' : 'text-[var(--content)]'}>
             {n.appliedGeneration} / {n.desiredGeneration}
           </span>
           {drift && (
-            <span className="ml-1 text-[10px] text-yellow-400">{t(language, 'nodeRegistry.drift')}</span>
+            <span className="ml-1 text-[10px] text-[var(--warning)]">{t(language, 'nodeRegistry.drift')}</span>
           )}
         </span>
       ),
@@ -186,7 +187,7 @@ export function NodeRegistry() {
             onClick={() => clearRekey(n.nodeId)}
             disabled={loading}
             title={t(language, 'nodeRegistry.cancelRekeyHint')}
-            className={`${btn} px-3 py-2 text-xs bg-purple-800 hover:bg-purple-700 disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-white`}
+            className={`${btn} px-3 py-2 text-xs bg-[var(--info-solid)] hover:bg-[var(--info-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--info-solid-fg)]`}
           >
             {t(language, 'nodeRegistry.cancelRekey')}
           </button>
@@ -320,7 +321,7 @@ export function NodeRegistry() {
                     )}
                   </span>
                   {ready ? (
-                    <span className="px-2 py-0.5 rounded border bg-green-500/15 text-green-300 border-green-700">
+                    <span className="px-2 py-0.5 rounded border bg-[var(--success-bg)] text-[var(--success)] border-[var(--success-border)]">
                       {t(language, 'nodeRegistry.ready')}
                     </span>
                   ) : (

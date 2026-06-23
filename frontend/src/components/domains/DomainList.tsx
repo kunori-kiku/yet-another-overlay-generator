@@ -36,7 +36,7 @@ export function DomainList() {
           title={t(language, 'domainList.clickToEditDrag')}
         >
           <div className="flex items-center justify-between">
-            <span className="font-medium text-blue-400">☰ {domain.name}</span>
+            <span className="font-medium text-[var(--content)]">☰ {domain.name}</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();

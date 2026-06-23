@@ -65,7 +65,7 @@ export function CompilePreview() {
                   const portLabel = portMatch ? ` (port: ${portMatch[1]})` : '';
                   return (
                     <details key={key} className="bg-[var(--surface-sunken)] rounded p-2">
-                      <summary className="text-xs cursor-pointer text-cyan-300">
+                      <summary className="text-xs cursor-pointer text-[var(--content)]">
                         wireguard/{interfaceName}.conf{portLabel}
                       </summary>
                       <pre className="text-xs text-[var(--content-muted)] mt-1 whitespace-pre-wrap">
@@ -80,14 +80,14 @@ export function CompilePreview() {
               {Object.keys(compileResult.wireguard_configs)
                 .filter((key) => key.startsWith(n.id + ':')).length === 0 && (
                 <details className="bg-[var(--surface-sunken)] rounded p-2">
-                  <summary className="text-xs cursor-pointer text-cyan-300 text-[var(--content-muted)]">
+                  <summary className="text-xs cursor-pointer text-[var(--content)]">
                     wireguard/ ({t(language, 'compilePreview.noConfigs')})
                   </summary>
                 </details>
               )}
 
               <details className="bg-[var(--surface-sunken)] rounded p-2">
-                <summary className="text-xs cursor-pointer text-amber-300">
+                <summary className="text-xs cursor-pointer text-[var(--content)]">
                   babel/babeld.conf
                 </summary>
                 <pre className="text-xs text-[var(--content-muted)] mt-1 whitespace-pre-wrap">
@@ -99,7 +99,7 @@ export function CompilePreview() {
               </details>
 
               <details className="bg-[var(--surface-sunken)] rounded p-2">
-                <summary className="text-xs cursor-pointer text-lime-300">
+                <summary className="text-xs cursor-pointer text-[var(--content)]">
                   sysctl/99-overlay.conf
                 </summary>
                 <pre className="text-xs text-[var(--content-muted)] mt-1 whitespace-pre-wrap">
@@ -111,7 +111,7 @@ export function CompilePreview() {
               </details>
 
               <details className="bg-[var(--surface-sunken)] rounded p-2">
-                <summary className="text-xs cursor-pointer text-fuchsia-300">
+                <summary className="text-xs cursor-pointer text-[var(--content)]">
                   scripts/install.sh
                 </summary>
                 <pre className="text-xs text-[var(--content-muted)] mt-1 whitespace-pre-wrap">
@@ -133,7 +133,7 @@ export function CompilePreview() {
           </h3>
           {Object.entries(compileResult.deploy_scripts).map(([name, script]) => (
             <details key={name} className="bg-[var(--control)] rounded p-2">
-              <summary className="text-sm cursor-pointer text-orange-300">
+              <summary className="text-sm cursor-pointer text-[var(--content)]">
                 {name}
               </summary>
               <pre className="text-xs text-[var(--content)] mt-2 overflow-x-auto whitespace-pre-wrap max-h-72">

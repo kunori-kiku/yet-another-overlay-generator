@@ -36,7 +36,7 @@ export function NodeList() {
           title={t(language, 'nodeList.clickToEditDrag')}
         >
           <div className="flex items-center justify-between">
-            <span className="font-medium text-green-400">☰ {node.name}</span>
+            <span className="font-medium text-[var(--content)]">☰ {node.name}</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();
