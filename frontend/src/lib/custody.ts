@@ -1,4 +1,5 @@
 import type { Topology } from '../types/topology';
+import type { ControllerNode } from '../types/controller';
 
 // custody.ts — client-side key-custody helpers for controller mode (plan-5, D4/D5).
 // Controller mode is zero-knowledge: a WireGuard private key must never reach the
@@ -60,4 +61,16 @@ export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number }
     return n;
   });
   return { topo: { ...topo, nodes }, dropped };
+}
+
+// stripLiveTelemetry clears a node's LIVE telemetry (beta.12 wireguardPeers) before it enters the
+// persisted controller-storage cache. It is live-only, never persisted, for two reasons: (1) custody —
+// wireguardPeers carries each peer's raw endpoint (IP:port), fleet-confidential network topology of the
+// same class the server-held design blank keeps out of localStorage; (2) honesty — a handshake age
+// frozen at persist time is stale and misleading after a reload. The aggregate wireguard CONDITION
+// (curated, endpoint-free) still persists for instant coloring; the per-link detail is re-fetched live
+// on refresh. Setting the field to undefined makes JSON.stringify omit the key (same idiom as
+// dropAllKeys), so a rehydrated node has no wireguardPeers and every reader coerces (?? []).
+export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
+  return { ...node, wireguardPeers: undefined };
 }
