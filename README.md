@@ -5,6 +5,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 ## Features
 
 - **Visual Topology Builder:** Drag-and-drop React Flow interface to design your network nodes and connect their links. Color-coded per-peer interface handles appear after compilation.
+- **In-Browser Compiler (no backend for local design):** Local design compiles entirely in the browser — a TypeScript port of the Go compiler, pinned **byte-for-byte** to the Go output by a CI conformance gate. The Go backend's job is the controller (the air-gap compute routes are gated behind a build tag), so the classic "design → compile → export bundle" flow needs only the static frontend.
 - **Per-Peer WireGuard Interfaces:** Each peer connection gets a dedicated WireGuard interface with an independently allocated listen port, compatible with Babel dynamic routing.
 - **Parallel Links & Babel Failover:** A node pair can carry a primary link plus backup links, each its own WireGuard interface; Babel picks by per-link cost and fails over automatically (e.g. a plain-UDP primary with a `TCP (mimic)` backup). See [`docs/spec/data-model/edge.md`](docs/spec/data-model/edge.md).
 - **TCP-Shaping Transport (mimic):** Set an edge's transport to **`TCP (mimic)`** to wrap its WireGuard traffic with [mimic](https://github.com/hack3ric/mimic) (an eBPF UDP→fake-TCP shaper) so the link traverses networks that throttle (UDP QoS) or block UDP ports. The install script provisions mimic from the node's distribution and configures it automatically; MTU is auto-lowered and both endpoints must be Linux with eBPF. This is a connectivity/performance feature for UDP-restricted networks — **not** a censorship/DPI-circumvention tool. See [`docs/spec/artifacts/mimic.md`](docs/spec/artifacts/mimic.md).
@@ -21,52 +22,62 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Off-Host Signing Keystone (2.0):** Each controller Deploy is signed by the operator's hardware-backed passkey in a WebAuthn ceremony over the exact trust-list bytes, and nodes verify the signature before applying — a compromised controller alone cannot push configs to your fleet.
 - **Hardened Operator Auth (2.0):** Sessions live in an httpOnly cookie (login survives page refresh; no token in `localStorage`) with double-submit CSRF protection and credentialed CORS (`YAOG_PANEL_ORIGIN`). Second factors are TOTP (RFC 6238) and/or passkeys; passkeys also enable passwordless login.
 - **Fleet Management (2.0):** Per-node fleet pages with status detail, single-use enrollment tokens minted from the panel, a compile-history/audit view, and manual fleet-wide WireGuard key rotation (Roll keys).
+- **Live Fleet Health (2.0):** Agents report structured **Node Conditions** (`configapply`, `selfupdate`, `wireguard`, `mimic`) and refresh them on a dedicated `/telemetry` heartbeat (default 30s), so the panel reflects *current* health — not a frozen apply-time snapshot. The node-detail page has a collapsible **WireGuard links** panel showing each peer's last handshake, and a partly-degraded node reads `SomePeersDown` (which link is down), not a blanket `LinkDown`.
+- **Signed Agent Self-Update + Version-Aware Rollout (2.0):** Agents can update their own binary from a release, verified against the controller-signed `artifacts.json` (hash + a self-test) before exec, with a crash-bounded canary-then-fleet rollout and an anti-downgrade floor. The panel knows its own version, drives a one-click "update all to the controller version," and refuses a target newer than itself; a stalled rollout surfaces as a `selfupdate: Blocked` condition.
+- **Mimic `.deb` Catalog (2.0):** For distros that don't package mimic, the panel pins per-`<codename>-<arch>` `.deb` packages by SHA-256; **Discover from release** lists a GitHub release's `.deb` assets to pick from (the install verifies each against the signed pin before `dpkg`).
 - **Theming, i18n & Accessibility (2.0):** System-following dark/light themes with manual override and optional translucency/vibrancy, reduced-motion support, keyboard/skip-link accessibility, and a fully bilingual English/中文 UI.
 
 ## Getting Started
 
+### Two ways to run YAOG
+
+- **Local generator (air-gap).** Design a topology and export deployable bundles. **Local design compiles entirely in the browser** — a TypeScript port of the Go compiler, pinned byte-for-byte to the Go oracle by a CI conformance gate — so no backend is involved. You only need the frontend; see [Quick Start](#1-quick-start) below.
+- **Controller (agent-pull).** Run YAOG as a long-lived service where each node **pulls** its own keystone-signed config and reports live health back. The Go backend is the **controller**; see [Controller Mode (Docker)](#controller-mode-docker).
+
+> The `cmd/server` **default build is controller-only**: running it without the controller env (`YAOG_CONTROLLER_STATE_DIR` + `YAOG_TENANT_ID`) **exits with a loud error** rather than standing up an anonymous compute listener — the air-gap compute routes (`/api/{validate,compile,export,deploy-script}`) are gated behind `//go:build airgap`. For offline compilation use the in-browser generator, the `cmd/compiler` CLI, or the `-tags airgap` local-design oracle.
+
 ### Prerequisites
 
-- Go `1.25+`
-- Node.js `v20+` (LTS recommended)
+- Node.js `v20+` (LTS recommended) — all you need for local design
+- Go `1.25+` (the module pins `toolchain go1.26.4`, fetched automatically) — only to build the backend / CLI
 
-### 1. Quick Start (Dev Script)
+### 1. Quick Start
 
-The easiest way to run both backend and frontend:
+For **local design**, the frontend alone is enough — its compiler runs in the browser:
 
 ```bash
-./dev.sh start
+cd frontend
+npm install --legacy-peer-deps
+npm run dev          # Vite dev server on :5173 — open http://localhost:5173
 ```
 
-This starts the Go backend on `:8080` and Vite frontend on `:5173` in the background. Visit `http://localhost:5173`.
+`./dev.sh` is a contributor convenience that runs the Vite frontend (where local design compiles) and also launches the Go server. Note the Go server is the **default controller-only build**, so it only stays up when the controller env is set (`YAOG_CONTROLLER_STATE_DIR` + `YAOG_TENANT_ID`) — for pure local design you only need the frontend above; export those vars before `./dev.sh start` to also bring up a dev controller:
 
 ```bash
+./dev.sh start     # Vite frontend on :5173 (+ the Go server when the controller env is set)
 ./dev.sh stop      # Stop all
 ./dev.sh restart   # Restart both
 ./dev.sh status    # Check if running
 ./dev.sh logs      # Tail both log files
 ```
 
-### 2. Manual Setup
+### 2. Running the Go backend
 
-#### Backend
-
-```bash
-# From the project root
-go run ./cmd/server/main.go
-```
-
-The server will begin listening on `:8080`.
-
-#### Frontend
+The `cmd/server` binary is the **controller** (or, built `-tags airgap`, the local-design oracle):
 
 ```bash
-cd frontend
-npm install --legacy-peer-deps
-npm run dev
+# Controller — set the controller env first (or just use Docker; see Controller Mode below):
+YAOG_CONTROLLER_STATE_DIR=./data YAOG_TENANT_ID=default go run ./cmd/server/
+
+# Air-gap local-design oracle — serves the anonymous /api/{validate,compile,export,deploy-script} routes:
+go run -tags airgap ./cmd/server/
 ```
 
-Visit `http://localhost:5173` in your browser.
+The CLI compiler reads a topology JSON and writes `output/` with no server at all:
+
+```bash
+go run ./cmd/compiler/ -input topology.json   # -input is required; -output defaults to ./output
+```
 
 #### Browser E2E tests
 
@@ -82,12 +93,12 @@ All topology editing happens on the **Design** page (the default landing in loca
 2. **Add Nodes:** Use the node form in the canvas toolbar. Define their Roles (Peer, Router, Relay, Gateway, Client) and capabilities (e.g., a public address / `Can Forward`).
 3. **Edit Properties:** Select any domain, node, or edge on the canvas (or via the toolbar's list drawer) to edit it in the right-hand aside — including the optional SSH Connection section (alias or host/port/user/key) used by auto-deploy.
 4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown). Leave the port at `0` so the compiler allocates it; only set `endpoint_port` when you need an explicit NAT/port-forward override.
-5. **Compile:** Hit `Compile` in the canvas toolbar to allocate IPs and ports, derive peer configs, and generate all artifacts. The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
+5. **Compile:** Hit `Compile` in the canvas toolbar to allocate IPs and ports, derive peer configs, and generate all artifacts. This runs **in the browser** (no backend round-trip). The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
 6. **Export & Deploy:** Switch to the **Deploy** page to review the compiled artifacts and download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
 
 ## Controller Mode (Docker)
 
-> **New in 2.0 (preview).** Instead of exporting an air-gapped bundle, you can run YAOG as a long-lived **controller** and let each node **pull** its own signed config. The controller is a single Docker image (the SPA panel + API); the per-node agent is a small host binary the controller hands you a one-line installer for. The classic generator/export flow above is unchanged.
+> **New in 2.0 (beta).** Instead of exporting an air-gapped bundle, you can run YAOG as a long-lived **controller** and let each node **pull** its own signed config. The controller is a single Docker image (the SPA panel + API); the per-node agent is a small host binary the controller hands you a one-line installer for. The classic generator/export flow above is unchanged.
 
 Requires Docker Engine with the Compose plugin (`docker compose`, v2).
 
@@ -129,7 +140,7 @@ After login you land on **Overview** (topology + fleet at a glance). The other s
 
 By default both ports bind to **loopback only** (`127.0.0.1`) — the login form carries a plaintext password, so nothing is exposed on other interfaces out of the box. Reach the panel from the same host, or tunnel it: `ssh -L 8080:127.0.0.1:8080 <host>`.
 
-> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. ⚠️ Use the hostname **`localhost`**, not the IP `http://127.0.0.1` — WebAuthn forbids IP-address domains, so passkey enrollment at `127.0.0.1` fails with *"invalid domain."* For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony. (As of `v2.0.0-preview.5` the rest of the panel — including Compile — degrades gracefully over plain HTTP on a LAN address; only the passkey/WebAuthn ceremonies hard-require a secure context.)
+> **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. ⚠️ Use the hostname **`localhost`**, not the IP `http://127.0.0.1` — WebAuthn forbids IP-address domains, so passkey enrollment at `127.0.0.1` fails with *"invalid domain."* For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony. (The rest of the panel — including Compile — degrades gracefully over plain HTTP on a LAN address; only the passkey/WebAuthn ceremonies hard-require a secure context.)
 
 ### 4. Deploy to a node (agent pull)
 
@@ -177,9 +188,9 @@ Full reference: [`docs/spec/controller/docker.md`](docs/spec/controller/docker.m
 ## Documentation
 
 - Architectural ground truth: [`specs/`](specs/) — start with [`specs/README.md`](specs/README.md).
-- Controller-mode operations & internals: [`docs/spec/controller/`](docs/spec/controller/) (the wikis below predate Controller Mode 2.0 and cover local/air-gap mode only).
-- [Wiki (English)](docs/wiki.md) — user guide for **local / air-gap mode** (architecture, parameters, troubleshooting).
-- [Wiki (中文)](docs/wiki-zh.md) — **本地 / air-gap 模式**用户文档。
+- Controller-mode internals (deep reference): [`docs/spec/controller/`](docs/spec/controller/).
+- [Wiki (English)](docs/wiki.md) — full user guide covering **both** the local / air-gap generator and controller mode (architecture, concepts, usage, compiler internals, artifacts, operations, troubleshooting).
+- [Wiki (中文)](docs/wiki-zh.md) — 覆盖**本地 / air-gap 生成器与控制器模式**的完整中文用户文档。
 
 ## Debugging
 
