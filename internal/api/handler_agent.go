@@ -249,6 +249,41 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// HandleTelemetry records a LIVE health heartbeat from the CALLER (the node from the bearer token,
+// never the request body) — beta9-smoke-hardening plan-1. Unlike HandleReport it carries NO
+// applied_generation/checksum and writes ONLY the node's conditions + last_seen via RecordTelemetry:
+// telemetry is high-frequency observability kept strictly separate from deploy custody, so a heartbeat
+// can never advance or regress the applied generation. It is INTENTIONALLY NOT audited — a 30s
+// heartbeat would flood the hash-chained audit log (HandleReport's append); do not "fix" the
+// asymmetry by adding an audit entry here. Conditions are server-stamped with the controller clock
+// inside the store (a node clock cannot be trusted for ageing). The metrics map is accepted as the
+// framework's extension slot but not yet persisted. Returns {status:"ok"}.
+func (h *ControllerHandler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
+		return
+	}
+	tenant, node, ok := identity(r.Context())
+	if !ok {
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
+		return
+	}
+	var req telemetryRequestJSON
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	if err := h.store.RecordTelemetry(r.Context(), tenant, node, req.Conditions, req.AgentVersion, time.Now()); err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
+			return
+		}
+		writeCodedOr(w, apierr.CodeInternalStorage, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // HandleRekey re-registers the CALLER's rotated WireGuard PUBLIC key (the node from
 // the bearer token, never the request body). It stamps the new public key onto the
 // node record and clears RekeyRequested, all via GetNode/UpsertNode so every other

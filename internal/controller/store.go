@@ -470,6 +470,14 @@ type Store interface {
 	// and the structured conditions set, server-stamped with observedAt; a nil/empty
 	// conditions slice clears the stored set).
 	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error
+	// RecordTelemetry records a LIVE health heartbeat (beta9-smoke-hardening plan-1): it writes ONLY
+	// the node's structured conditions (server-stamped with observedAt; nil/empty clears the set), its
+	// last-seen time, and — when non-empty — its reported agent build version. It is a strict subset of
+	// SetAppliedGeneration that DELIBERATELY does NOT touch AppliedGeneration / LastChecksum /
+	// LastHealth / DesiredGeneration: telemetry is observability, kept strictly separate from deploy
+	// custody, so a heartbeat can never advance or regress a node's applied generation. Returns
+	// ErrNotFound if the node does not exist.
+	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, agentVersion string, observedAt time.Time) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 

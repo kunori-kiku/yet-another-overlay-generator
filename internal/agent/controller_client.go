@@ -103,6 +103,18 @@ type reportRequestWire struct {
 	Conditions []model.Condition `json:"conditions,omitempty"`
 }
 
+// telemetryRequestWire is the POST /telemetry body (beta9-smoke-hardening plan-1): a LIVE health
+// heartbeat. It carries the same conditions as a report PLUS an extensible metrics map, but
+// DELIBERATELY no applied_generation/checksum — telemetry is observability, kept strictly separate
+// from deploy custody so a heartbeat can never advance (or regress) the node's applied generation.
+// Metrics is the framework's extension slot (a future probe writes named values here); it is
+// omitempty and ignored by the current controller, so adding a probe needs no wire change.
+type telemetryRequestWire struct {
+	Conditions   []model.Condition `json:"conditions,omitempty"`
+	Metrics      map[string]any    `json:"metrics,omitempty"`
+	AgentVersion string            `json:"agent_version,omitempty"`
+}
+
 // EnrollResult is what a successful Enroll hands back to the caller (cmd/agent):
 // the per-node bearer API token the controller minted. The caller writes the token
 // to disk (0600) and uses it to build the bearer ControllerClient for `run`.
@@ -409,6 +421,38 @@ func (c *ControllerClient) postReport(gen int64, checksum, health string, condit
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("agent: report: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// Telemetry POSTs a LIVE health heartbeat (conditions + optional metrics) to /telemetry over the
+// bearer-authed client (beta9-smoke-hardening plan-1). It is called from the daemon's dedicated
+// heartbeat goroutine, NOT the poll loop: it reads only this client's immutable fields (nodeToken /
+// baseURL / AgentVersion) + the goroutine-safe http.Client, and carries NO generation, so it never
+// touches the poll loop's mutable cursor fields and needs no lock. Best-effort: a transport or non-2xx
+// error is returned to the caller (which logs+swallows it) and must never disturb the running overlay.
+func (c *ControllerClient) Telemetry(conditions []model.Condition, metrics map[string]any) error {
+	reqBody, err := json.Marshal(telemetryRequestWire{
+		Conditions:   conditions,
+		Metrics:      metrics,
+		AgentVersion: c.AgentVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("agent: marshal telemetry request: %w", err)
+	}
+	req, err := c.authedRequest(http.MethodPost, c.url("telemetry"), bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("agent: telemetry POST: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("agent: telemetry: status %d", resp.StatusCode)
 	}
 	return nil
 }
