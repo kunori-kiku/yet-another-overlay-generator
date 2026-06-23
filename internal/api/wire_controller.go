@@ -259,8 +259,13 @@ type operatorCredentialPinResultJSON struct {
 
 // operatorCredentialStatusJSON is the GET /operator-credential body: the SERVER-authoritative
 // keystone status the panel reflects (so a browser-local cache is never the source of the
-// "enrolled" display). It carries ONLY non-secret public identifiers — never the PEM body, never
-// any private key. redeploy_required signals a rotated-but-not-redeployed fleet.
+// "enrolled" display). It carries ONLY non-secret public identifiers — never any private key.
+// public_key_pem is the credential's PUBLIC PEM: non-secret (it is already baked into every node
+// bundle + the bootstrap script and verified per-signature by each node), served audit-only so a
+// cleared/fresh browser can recover the WebAuthn signing descriptor (credentialId + alg + rpId +
+// public PEM) and re-prompt the authenticator for a tap — WITHOUT re-pinning (which would strand
+// the fleet). The private key never leaves the authenticator; the node never trusts this PEM over
+// its own baked-in copy. redeploy_required signals a rotated-but-not-redeployed fleet.
 type operatorCredentialStatusJSON struct {
 	Pinned           bool   `json:"pinned"`
 	Alg              string `json:"alg,omitempty"`
@@ -268,6 +273,7 @@ type operatorCredentialStatusJSON struct {
 	RPID             string `json:"rpid,omitempty"`
 	Origin           string `json:"origin,omitempty"`
 	Fingerprint      string `json:"fingerprint,omitempty"`
+	PublicKeyPEM     string `json:"public_key_pem,omitempty"`
 	RedeployRequired bool   `json:"redeploy_required,omitempty"`
 }
 

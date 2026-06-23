@@ -114,12 +114,16 @@ func (h *ControllerHandler) handleOperatorCredentialStatus(w http.ResponseWriter
 		return
 	}
 	writeJSON(w, http.StatusOK, operatorCredentialStatusJSON{
-		Pinned:           true,
-		Alg:              cred.Alg,
-		CredentialID:     cred.CredentialID,
-		RPID:             cred.RPID,
-		Origin:           cred.Origin,
-		Fingerprint:      fp,
+		Pinned:       true,
+		Alg:          cred.Alg,
+		CredentialID: cred.CredentialID,
+		RPID:         cred.RPID,
+		Origin:       cred.Origin,
+		Fingerprint:  fp,
+		// Non-secret public PEM (audit-only): lets a cleared/fresh browser recover the WebAuthn
+		// signing descriptor and re-prompt the authenticator without re-pinning. See the
+		// operatorCredentialStatusJSON doc for why this is safe to serve.
+		PublicKeyPEM:     cred.PublicKeyPEM,
 		RedeployRequired: redeploy,
 	})
 }

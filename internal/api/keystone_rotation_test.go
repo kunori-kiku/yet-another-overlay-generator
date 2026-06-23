@@ -58,8 +58,8 @@ func postCred(t *testing.T, env *ctlTestEnv, pub ed25519.PublicKey, rotate bool)
 
 func TestKeystoneStatus_OffUntilPinned(t *testing.T) {
 	env := newCtlTestEnv(t)
-	if st := keystoneStatus(t, env); st.Pinned {
-		t.Fatalf("keystone OFF: want pinned=false, got %+v", st)
+	if st := keystoneStatus(t, env); st.Pinned || st.PublicKeyPEM != "" {
+		t.Fatalf("keystone OFF: want pinned=false and no public_key_pem, got %+v", st)
 	}
 	pub, _, _ := ed25519.GenerateKey(nil)
 	if status, res := postCred(t, env, pub, false); status != http.StatusOK || !res.OK || res.Rotated {
@@ -225,10 +225,15 @@ func TestKeystoneRotation_WebAuthnRebinding(t *testing.T) {
 	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, base, nil); status != http.StatusOK {
 		t.Fatalf("first webauthn pin: status %d, want 200", status)
 	}
-	// GET status round-trips the public identifiers (the panel's authoritative source).
+	// GET status round-trips the public identifiers (the panel's authoritative source) — including
+	// the non-secret public_key_pem, which a cleared/fresh browser recovers to re-prompt the
+	// authenticator without re-pinning (plan-3 signing-handle auto-recovery).
 	st := keystoneStatus(t, env)
 	if st.Alg != base.Alg || st.RPID != base.RPID || st.Origin != base.Origin || st.CredentialID != base.CredentialID || st.Fingerprint == "" {
 		t.Fatalf("webauthn status round-trip mismatch: got %+v, want fields of %+v", st, base)
+	}
+	if st.PublicKeyPEM != pemES {
+		t.Fatalf("webauthn status must serve the non-secret public_key_pem for recovery: got %q, want %q", st.PublicKeyPEM, pemES)
 	}
 
 	// Same key, CHANGED rpid, no rotate -> 409, store unchanged.
