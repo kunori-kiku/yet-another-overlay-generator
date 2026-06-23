@@ -55,7 +55,7 @@ import {
 } from '../api/controllerClient';
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
-import { stripPrivateKeys, dropAllKeys } from '../lib/custody';
+import { stripPrivateKeys, dropAllKeys, stripLiveTelemetry } from '../lib/custody';
 import { localizeError as localizeErrorFor } from '../lib/localizeError';
 import { localOnly } from '../lib/localOnly';
 import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
@@ -1916,6 +1916,11 @@ export const useControllerStore = create<ControllerState>()(
       // never "lets through" a deploy that live state should have blocked; refresh() converges once
       // it has the live state. The controller backend is still the final authority at
       // stage/promote.
+      //
+      // Per-node LIVE telemetry (beta.12 wireguardPeers) is stripped via stripLiveTelemetry — it
+      // carries raw peer endpoints (fleet-confidential) and a frozen handshake age is stale on
+      // reload; the aggregate wireguard condition in `conditions` (curated, endpoint-free) stays
+      // for instant coloring, and the per-link detail is re-fetched live on refresh.
       partialize: (state) => ({
         baseURL: state.baseURL,
         pathPrefix: state.pathPrefix,
@@ -1925,7 +1930,7 @@ export const useControllerStore = create<ControllerState>()(
         operatorRpId: state.operatorRpId,
         operatorPublicKeyPEM: state.operatorPublicKeyPEM,
         mode: state.mode,
-        nodes: state.nodes,
+        nodes: state.nodes.map(stripLiveTelemetry),
         settings: state.settings,
         lastSyncedAt: state.lastSyncedAt,
       }),

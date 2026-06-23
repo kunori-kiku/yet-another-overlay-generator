@@ -56,6 +56,11 @@ const CONTROLLER_NODE_ALLOWED_FIELDS = new Set([
   // capped one-liner (NEVER raw stderr / key material — the classify() invariant), so it is a legit
   // persisted ControllerNode field, not a fleet-secret leak.
   'conditions',
+  // NOTE on beta.12 `wireguardPeers`: deliberately NOT allowlisted. The per-peer link detail carries
+  // raw peer endpoints (IP:port — fleet-confidential), so it is LIVE-ONLY: controllerStore.partialize
+  // strips it via stripLiveTelemetry before persisting, and this oracle then proves it never reaches
+  // localStorage. A future telemetry metric carrying an endpoint/IP must follow the same rule (strip
+  // on persist) rather than be added here.
 ])
 
 export interface PersistedStores {
