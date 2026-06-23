@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -66,5 +68,56 @@ func TestHandleTelemetry(t *testing.T) {
 	// No bearer → rejected by requireNode (401), never reaches the handler.
 	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), "", body, nil); status != http.StatusUnauthorized {
 		t.Fatalf("POST /telemetry (no token): status %d, want 401", status)
+	}
+}
+
+// TestHandleTelemetry_MetricsRoundTrip pins the full metrics seam: a heartbeat carrying the
+// extensible metrics map (wireguard_peers — the per-peer link detail) is persisted by the agent
+// endpoint and served VERBATIM to the operator under node.telemetry, so the panel can render the
+// collapsible per-link panel. A nil-metrics heartbeat then clears it.
+func TestHandleTelemetry_MetricsRoundTrip(t *testing.T) {
+	env := newCtlTestEnv(t)
+	token := env.enrollNode(t, "node-1")
+
+	body := telemetryRequestJSON{
+		Metrics: map[string]json.RawMessage{
+			"wireguard_peers": json.RawMessage(`[{"peer":"bravo","interface":"wg-bravo","last_handshake":1782820825,"status":"up"}]`),
+		},
+	}
+	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token, body, nil); status != http.StatusOK {
+		t.Fatalf("POST /telemetry (metrics): status %d, want 200", status)
+	}
+
+	// The operator /nodes view serves node.telemetry verbatim.
+	var nodes []nodeJSON
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("GET /nodes: status %d, want 200", status)
+	}
+	var found *nodeJSON
+	for i := range nodes {
+		if nodes[i].NodeID == "node-1" {
+			found = &nodes[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("node-1 not in /nodes response")
+	}
+	raw, ok := found.Telemetry["wireguard_peers"]
+	if !ok || !bytes.Contains(raw, []byte("bravo")) {
+		t.Fatalf("served node.telemetry[wireguard_peers] = %s (ok=%v), want the per-peer payload", raw, ok)
+	}
+
+	// A nil-metrics heartbeat clears the served map.
+	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token, telemetryRequestJSON{}, nil); status != http.StatusOK {
+		t.Fatalf("POST /telemetry (no metrics): status %d, want 200", status)
+	}
+	nodes = nil
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &nodes); status != http.StatusOK {
+		t.Fatalf("GET /nodes (after clear): status %d, want 200", status)
+	}
+	for i := range nodes {
+		if nodes[i].NodeID == "node-1" && nodes[i].Telemetry != nil {
+			t.Fatalf("node.telemetry = %+v, want nil after a nil-metrics heartbeat", nodes[i].Telemetry)
+		}
 	}
 }

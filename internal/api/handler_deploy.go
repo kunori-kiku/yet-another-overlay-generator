@@ -307,6 +307,7 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			RekeyRequested:    n.RekeyRequested,
 			InRollout:         rollout[n.NodeID],
 			Conditions:        mapConditions(n.Conditions),
+			Telemetry:         n.Telemetry,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

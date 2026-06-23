@@ -67,8 +67,9 @@ type reportRequestJSON struct {
 // telemetryRequestJSON is the POST /telemetry body (beta9-smoke-hardening plan-1): a LIVE health
 // heartbeat. It carries conditions + an extensible metrics map but NO applied_generation/checksum —
 // telemetry is observability, kept strictly separate from deploy custody, so a heartbeat updates only
-// the node's conditions + last_seen and can never advance/regress its applied generation. Metrics is
-// the framework's extension slot (a future probe writes named values); accepted-but-not-yet-persisted.
+// the node's conditions + metrics + last_seen and can never advance/regress its applied generation.
+// Metrics is the framework's extension slot (e.g. wireguard_peers — the per-peer link detail);
+// RecordTelemetry persists it wholesale and HandleNodes serves it verbatim under node.telemetry.
 type telemetryRequestJSON struct {
 	Conditions   []model.Condition          `json:"conditions,omitempty"`
 	Metrics      map[string]json.RawMessage `json:"metrics,omitempty"`
@@ -150,6 +151,11 @@ type nodeJSON struct {
 	// strip — byte-identical served JSON to the pre-conditions shape. Curated + length-capped at
 	// ingest (handler_agent); this view re-serializes only (see mapConditions in handler_deploy.go).
 	Conditions []conditionJSON `json:"conditions,omitempty"`
+	// Telemetry is the agent's extensible metrics map from the last /telemetry heartbeat (e.g.
+	// wireguard_peers — the per-peer link detail behind a collapsible panel). Opaque JSON served
+	// verbatim for the panel to interpret by key; omitempty so a node that emits none round-trips with
+	// the field absent. Observability only — no key material.
+	Telemetry map[string]json.RawMessage `json:"telemetry,omitempty"`
 }
 
 // revokeRequestJSON is the operator's request to revoke (evict) a node: the target
