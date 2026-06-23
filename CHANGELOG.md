@@ -9,6 +9,29 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.12] - 2026-06-23
+
+Surfaces per-peer WireGuard link health — the granularity the aggregate `wireguard` condition hid.
+Published as `v2.0.0-beta.12` and promoted to **GitHub Latest**.
+
+### Added
+- **Per-peer WireGuard link telemetry + a collapsible panel.** The telemetry framework's first real
+  metric probe: the agent emits per-peer link health (`{peer, interface, endpoint, last_handshake,
+  status}`) on the existing `/telemetry` heartbeat as `metrics["wireguard_peers"]` — no wire change,
+  no key material. The controller persists + serves it under `node.telemetry`, and the node detail
+  page renders a collapsible **"WireGuard links"** panel showing each peer's last handshake (relative,
+  live-ticking) + a status dot, auto-opened only when a link is down. This is the granularity behind
+  the aggregate condition: you can now see *which* link is down, not just a whole-node state.
+
+### Changed
+- **The aggregate `wireguard` condition distinguishes some-down from all-down.** A single
+  never-handshaked peer in a mesh (an offline/asymmetric link Babel routes around) now reads as
+  **`SomePeersDown`** ("1/3 peers down"), not a misleading whole-node `LinkDown`; `LinkDown` is
+  reserved for *all* peers down (or a fresh apply). The per-peer panel shows the offending link.
+- **Telemetry metrics are now persisted + served.** `RecordTelemetry` stores the heartbeat's
+  extensible metrics map on the node (replaced wholesale, observability-only — still never touches
+  applied generation or any custody floor) and `/nodes` serves it under `node.telemetry`.
+
 ## [2.0.0-beta.11] - 2026-06-23
 
 A fast follow-up fixing two findings from smoking beta.10 on the live fleet — both reproduced against
