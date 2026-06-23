@@ -8,17 +8,17 @@ export function BottomBar() {
   return (
     <div className="p-3 h-full flex flex-col">
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+        <h2 className="text-sm font-semibold text-[var(--content-muted)] uppercase tracking-wider">
           {t(language, 'bottomBar.validationStatus')}
         </h2>
         <div className="flex items-center gap-4">
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-[var(--content-muted)]">
             {t(language, 'bottomBar.domains')}: {domains.length} | {t(language, 'bottomBar.nodes')}: {nodes.length} | {t(language, 'bottomBar.edges')}: {edges.length}
           </span>
           <button
             onClick={() => validate()}
             disabled={isValidating || nodes.length === 0}
-            className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-xs"
+            className="px-3 py-1 bg-[var(--warning-solid)] text-[var(--warning-solid-fg)] hover:bg-[var(--warning-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-xs"
           >
             {isValidating ? t(language, 'bottomBar.validating') : t(language, 'bottomBar.validateTopology')}
           </button>
@@ -28,7 +28,7 @@ export function BottomBar() {
       <div className="flex-1 overflow-y-auto space-y-1">
         {/* Global error */}
         {error && (
-          <div className="text-sm text-red-400 bg-red-900/30 px-2 py-1 rounded">
+          <div className="text-sm text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded">
             ❌ {error}
           </div>
         )}
@@ -37,7 +37,7 @@ export function BottomBar() {
         {validateResult && (
           <>
             {validateResult.valid && (
-              <div className="text-sm text-green-400 bg-green-900/30 px-2 py-1 rounded">
+              <div className="text-sm text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded">
                 {t(language, 'bottomBar.topologyValidationPassed')}
               </div>
             )}
@@ -45,7 +45,7 @@ export function BottomBar() {
             {validateResult.errors?.map((e, i) => (
               <div
                 key={`err-${i}`}
-                className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded"
+                className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded"
               >
                 ❌ [{e.field}] {tValidationError(e, language)}
               </div>
@@ -54,7 +54,7 @@ export function BottomBar() {
             {validateResult.warnings?.map((w, i) => (
               <div
                 key={`warn-${i}`}
-                className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded"
+                className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded"
               >
                 ⚠️ [{w.field}] {tValidationError(w, language)}
               </div>
@@ -63,7 +63,7 @@ export function BottomBar() {
         )}
 
         {!validateResult && !error && (
-          <p className="text-xs text-gray-500 italic">
+          <p className="text-xs text-[var(--content-muted)] italic">
             {t(language, 'bottomBar.clickValidateTopologyTo')}
           </p>
         )}

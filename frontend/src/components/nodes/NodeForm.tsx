@@ -144,7 +144,7 @@ export function NodeForm() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-500 rounded text-sm mb-2"
+        className="w-full py-1.5 px-3 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded text-sm mb-2"
       >
         + {t(language, 'nodeForm.addNode')}
       </button>
@@ -152,19 +152,19 @@ export function NodeForm() {
   }
 
   return (
-    <div className="p-2 bg-gray-700 rounded space-y-2 mb-2">
+    <div className="p-2 bg-[var(--surface-elevated)] rounded space-y-2 mb-2">
       <input
         type="text"
         placeholder={t(language, 'nodeForm.nodeName')}
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
       {/* UX-5: the public-address primary entry point. When non-empty it derives has_public_ip.
           The client role has no such concept, so it is hidden. */}
       {role !== 'client' && (
         <div className="space-y-1">
-          <label className="block text-xs text-gray-300">
+          <label className="block text-xs text-[var(--content)]">
             {t(language, 'publicAddressLabel')}
           </label>
           <input
@@ -172,10 +172,10 @@ export function NodeForm() {
             placeholder={t(language, 'publicAddressPlaceholder')}
             value={publicAddress}
             onChange={(e) => setPublicAddress(e.target.value)}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
           {!publicAddress.trim() && (
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-[var(--content-muted)]">
               {t(language, 'publicAddressHint')}
             </p>
           )}
@@ -186,12 +186,12 @@ export function NodeForm() {
         placeholder={t(language, 'nodeForm.hostnameOptional')}
         value={hostname}
         onChange={(e) => setHostname(e.target.value)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
       <select
         value={domainId || (domains.length > 0 ? domains[0].id : '')}
         onChange={(e) => setDomainId(e.target.value)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
       >
         {domains.map((d) => (
           <option key={d.id} value={d.id}>
@@ -202,7 +202,7 @@ export function NodeForm() {
       <select
         value={role}
         onChange={(e) => setRole(e.target.value as NodeRole)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
       >
         <option value="peer">Peer</option>
         <option value="router">Router</option>
@@ -217,7 +217,7 @@ export function NodeForm() {
         placeholder={t(language, 'nodeForm.mtuLeaveEmptyFor')}
         value={mtu || ''}
         onChange={(e) => setMtu(parseInt(e.target.value) || 0)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
       {/* UX-5: the checkbox is demoted to an advanced path that reveals the multi-endpoint
           (multiple public mappings) editor. Public reachability itself is already derived from
@@ -246,21 +246,21 @@ export function NodeForm() {
         </label>
       )}
       {hasPublicIP && (
-        <div className="space-y-2 p-2 bg-gray-800 rounded border border-gray-600">
-          <p className="text-xs text-gray-300">{t(language, 'nodeForm.additionalPublicEndpointMapping')}</p>
+        <div className="space-y-2 p-2 bg-[var(--surface-sunken)] rounded border border-[var(--hairline)]">
+          <p className="text-xs text-[var(--content)]">{t(language, 'nodeForm.additionalPublicEndpointMapping')}</p>
           <input
             type="text"
             placeholder={t(language, 'nodeForm.publicIPOrDomain')}
             value={endpointHost}
             onChange={(e) => setEndpointHost(e.target.value)}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
           <input
             type="number"
             placeholder={t(language, 'nodeForm.port')}
             value={endpointPort}
             onChange={(e) => setEndpointPort(parseInt(e.target.value, 10) || 51820)}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
       )}
@@ -273,17 +273,17 @@ export function NodeForm() {
         />
         {t(language, 'nodeForm.canForwardTraffic')}
       </label>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
       <div className="flex gap-2">
         <button
           onClick={handleSubmit}
-          className="flex-1 py-1 bg-green-600 hover:bg-green-500 rounded text-sm"
+          className="flex-1 py-1 bg-[var(--success-solid)] hover:bg-[var(--success-solid)] text-[var(--success-solid-fg)] rounded text-sm"
         >
           {t(language, 'nodeForm.confirm')}
         </button>
         <button
           onClick={() => { setIsOpen(false); setError(''); }}
-          className="flex-1 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm"
+          className="flex-1 py-1 bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-sm"
         >
           {t(language, 'nodeForm.cancel')}
         </button>

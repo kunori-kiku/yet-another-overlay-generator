@@ -8,7 +8,7 @@ export function DomainList() {
 
   if (domains.length === 0) {
     return (
-      <p className="text-xs text-gray-500 italic">{t(language, 'domainList.noDomainsCreatedYet')}</p>
+      <p className="text-xs text-[var(--content-muted)] italic">{t(language, 'domainList.noDomainsCreatedYet')}</p>
     );
   }
 
@@ -30,25 +30,25 @@ export function DomainList() {
           onClick={() => selectDomain(domain.id)}
           className={`p-2 rounded text-sm space-y-1 cursor-pointer border ${
             selectedDomainId === domain.id
-              ? 'bg-blue-900/30 border-blue-500'
-              : 'bg-gray-700 border-transparent hover:border-gray-500'
+              ? 'bg-[var(--control-hover)] border-[var(--accent)]'
+              : 'bg-[var(--control)] border-transparent hover:border-[var(--hairline)]'
           }`}
           title={t(language, 'domainList.clickToEditDrag')}
         >
           <div className="flex items-center justify-between">
-            <span className="font-medium text-blue-300">☰ {domain.name}</span>
+            <span className="font-medium text-blue-400">☰ {domain.name}</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 removeDomain(domain.id);
               }}
-              className="text-red-400 hover:text-red-300 text-xs"
+              className="text-[var(--danger)] hover:text-[var(--danger)] text-xs"
               title={t(language, 'domainList.delete')}
             >
               ✕
             </button>
           </div>
-          <div className="text-xs text-gray-400">
+          <div className="text-xs text-[var(--content-muted)]">
             CIDR: {domain.cidr} | {domain.routing_mode} | {domain.allocation_mode}
           </div>
         </div>

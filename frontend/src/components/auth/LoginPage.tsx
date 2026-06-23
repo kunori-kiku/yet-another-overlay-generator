@@ -209,7 +209,7 @@ export function LoginPage() {
           </div>
 
           {error && (
-            <p className="break-all rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500" role="alert">
+            <p className="break-all rounded-lg bg-[var(--danger-bg)] px-3 py-2 text-xs text-[var(--danger)]" role="alert">
               ⚠️ {error}
             </p>
           )}

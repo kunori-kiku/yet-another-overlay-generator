@@ -53,14 +53,14 @@ export function WireGuardPeersPanel({
   const allUp = counts.never === 0 && counts.stale === 0;
 
   return (
-    <details open={!allUp} className="rounded border border-gray-700 bg-gray-900/40">
-      <summary className="cursor-pointer px-3 py-2 text-sm text-gray-200">
+    <details open={!allUp} className="rounded border border-[var(--hairline)] bg-[var(--surface)]">
+      <summary className="cursor-pointer px-3 py-2 text-sm text-[var(--content)]">
         {t(language, 'wgPeers.heading')}{' '}
-        <span className="text-xs text-gray-400">
+        <span className="text-xs text-[var(--content-muted)]">
           {t(language, 'wgPeers.upOfTotal', { up: String(counts.up), total: String(peers.length) })}
         </span>
       </summary>
-      <ul className="divide-y divide-gray-800 px-3 pb-2">
+      <ul className="divide-y divide-[var(--hairline)] px-3 pb-2">
         {peers.map((p) => (
           <li
             key={p.interface || p.peer}
@@ -68,8 +68,8 @@ export function WireGuardPeersPanel({
             title={p.endpoint || p.interface}
           >
             <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[p.status]}`} aria-hidden />
-            <span className="flex-1 break-all font-mono text-gray-200">{p.peer || p.interface}</span>
-            <span className="shrink-0 text-gray-400">{fmtAge(language, handshakeAge(nowSec, p.lastHandshake, p.status))}</span>
+            <span className="flex-1 break-all font-mono text-[var(--content)]">{p.peer || p.interface}</span>
+            <span className="shrink-0 text-[var(--content-muted)]">{fmtAge(language, handshakeAge(nowSec, p.lastHandshake, p.status))}</span>
           </li>
         ))}
       </ul>

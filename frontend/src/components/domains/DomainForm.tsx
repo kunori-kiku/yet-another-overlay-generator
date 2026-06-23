@@ -56,7 +56,7 @@ export function DomainForm() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-500 rounded text-sm mb-2"
+        className="w-full py-1.5 px-3 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] rounded text-sm mb-2"
       >
         + {t(language, 'domainForm.newDomain')}
       </button>
@@ -64,48 +64,48 @@ export function DomainForm() {
   }
 
   return (
-    <div className="p-2 bg-gray-700 rounded space-y-2 mb-2">
+    <div className="p-2 bg-[var(--surface-elevated)] rounded space-y-2 mb-2">
       <input
         type="text"
         placeholder={t(language, 'domainForm.domainName')}
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
       <input
         type="text"
         placeholder={t(language, 'domainForm.cidrEG10')}
         value={cidr}
         onChange={(e) => setCidr(e.target.value)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
       <input
         type="text"
         placeholder={t(language, 'domainForm.transitCIDROptionalDefault')}
         value={transitCidr}
         onChange={(e) => setTransitCidr(e.target.value)}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
       />
       <select
         value={routingMode}
         onChange={(e) => setRoutingMode(e.target.value as 'babel' | 'static' | 'none')}
-        className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
       >
         <option value="babel">{t(language, 'domainForm.babelDynamicRouting')}</option>
         <option value="static">{t(language, 'domainForm.staticRouting')}</option>
         <option value="none">None</option>
       </select>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
       <div className="flex gap-2">
         <button
           onClick={handleSubmit}
-          className="flex-1 py-1 bg-green-600 hover:bg-green-500 rounded text-sm"
+          className="flex-1 py-1 bg-[var(--success-solid)] hover:bg-[var(--success-solid)] text-[var(--success-solid-fg)] rounded text-sm"
         >
           {t(language, 'domainForm.confirm')}
         </button>
         <button
           onClick={() => { setIsOpen(false); setError(''); }}
-          className="flex-1 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm"
+          className="flex-1 py-1 bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-sm"
         >
           {t(language, 'domainForm.cancel')}
         </button>

@@ -18,8 +18,8 @@ function fmtTime(iso: string): string {
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
-      <dt className="text-gray-400">{label}</dt>
-      <dd className="text-gray-200 font-mono break-all">{children}</dd>
+      <dt className="text-[var(--content-muted)]">{label}</dt>
+      <dd className="text-[var(--content)] font-mono break-all">{children}</dd>
     </>
   );
 }
@@ -34,19 +34,19 @@ export function FleetNodeDetailPage() {
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-4">
-      <Link to="/fleet" className="text-sm text-blue-400 hover:underline">
+      <Link to="/fleet" className="text-sm text-[var(--info)] hover:underline">
         {t(language, 'fleetBack')}
       </Link>
 
-      <h1 className="text-xl font-semibold text-gray-100">
+      <h1 className="text-xl font-semibold text-[var(--content)]">
         {t(language, 'fleetNodeDetailTitle')}
       </h1>
 
       {!node ? (
-        <p className="text-sm text-gray-400">{t(language, 'fleetNodeNotFound')}</p>
+        <p className="text-sm text-[var(--content-muted)]">{t(language, 'fleetNodeNotFound')}</p>
       ) : (
-        <section className="max-w-2xl space-y-3 rounded-lg border border-gray-700 bg-gray-800 p-4">
-          <h2 className="break-all font-mono text-lg font-semibold text-blue-400">{node.nodeId}</h2>
+        <section className="max-w-2xl space-y-3 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-4">
+          <h2 className="break-all font-mono text-lg font-semibold text-[var(--info)]">{node.nodeId}</h2>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <Field label={t(language, 'fleetNodeDetailPage.status')}>{node.status}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.genAppliedDesired')}>

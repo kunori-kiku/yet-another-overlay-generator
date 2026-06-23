@@ -15,15 +15,15 @@ export function LocalDeploy() {
   const noNodes = nodes.length === 0;
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <h3 className="text-lg font-semibold text-blue-400">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+      <h3 className="text-lg font-semibold text-[var(--info)]">
         {t(language, 'localDeploy.localManualDeploy')}
       </h3>
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'localDeploy.keysAndConfigsAre')}
       </p>
       {noNodes && (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'localDeploy.theCurrentTopologyHas')}
         </p>
       )}
@@ -31,7 +31,7 @@ export function LocalDeploy() {
         <button
           onClick={() => compile()}
           disabled={isCompiling || noNodes}
-          className="w-full py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+          className="w-full py-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
         >
           {isCompiling
             ? t(language, 'localDeploy.compiling')
@@ -40,7 +40,7 @@ export function LocalDeploy() {
         <button
           onClick={() => exportArtifacts()}
           disabled={noNodes}
-          className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+          className="w-full py-1.5 bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
         >
           {t(language, 'localDeploy.exportArtifacts')}
         </button>
@@ -48,14 +48,14 @@ export function LocalDeploy() {
           <button
             onClick={() => downloadDeployScript('sh')}
             disabled={noNodes}
-            className="flex-1 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            className="flex-1 py-1.5 bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
           >
             {t(language, 'localDeploy.deploySh')}
           </button>
           <button
             onClick={() => downloadDeployScript('ps1')}
             disabled={noNodes}
-            className="flex-1 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            className="flex-1 py-1.5 bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
           >
             {t(language, 'localDeploy.deployPs1')}
           </button>

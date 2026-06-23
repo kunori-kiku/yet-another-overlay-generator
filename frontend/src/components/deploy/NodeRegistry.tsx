@@ -17,11 +17,11 @@ function isDrifting(applied: number, desired: number): boolean {
 function statusClass(status: ControllerNodeStatus): string {
   switch (status) {
     case 'approved':
-      return 'bg-green-900/40 text-green-300 border-green-700';
+      return 'bg-green-500/15 text-green-300 border-green-700';
     case 'pending':
-      return 'bg-yellow-900/40 text-yellow-300 border-yellow-700';
+      return 'bg-yellow-500/15 text-yellow-300 border-yellow-700';
     case 'revoked':
-      return 'bg-red-900/40 text-red-300 border-red-700';
+      return 'bg-red-500/15 text-red-300 border-red-700';
   }
 }
 
@@ -79,7 +79,7 @@ function nodeCells(
           {/* plan-4.6: the operator has requested this node rotate its WG key; waiting for the agent
               to regenerate and register a new public key. */}
           {n.rekeyRequested && (
-            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-900/40 text-purple-300 border-purple-700">
+            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-purple-500/15 text-purple-300 border-purple-700">
               {t(language, 'nodeRegistry.rekeying')}
             </span>
           )}
@@ -87,7 +87,7 @@ function nodeCells(
               identity-reconciliation marker telling the operator it has left the design (revoke it to
               remove it from the fleet). */}
           {orphan && n.status !== 'revoked' && (
-            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-900/40 text-orange-300 border-orange-700">
+            <span className="ml-1 px-2 py-0.5 rounded text-xs border bg-orange-500/15 text-orange-300 border-orange-700">
               {t(language, 'nodeRegistry.notInDesign')}
             </span>
           )}
@@ -98,7 +98,7 @@ function nodeCells(
       labelKey: 'nodeRegistry.genAppliedDesired',
       value: (
         <span className="font-mono">
-          <span className={drift ? 'text-yellow-400' : 'text-gray-300'}>
+          <span className={drift ? 'text-yellow-400' : 'text-[var(--content)]'}>
             {n.appliedGeneration} / {n.desiredGeneration}
           </span>
           {drift && (
@@ -109,7 +109,7 @@ function nodeCells(
     },
     {
       labelKey: 'nodeRegistry.health',
-      value: <span className="text-gray-300">{n.lastHealth || '—'}</span>,
+      value: <span className="text-[var(--content)]">{n.lastHealth || '—'}</span>,
     },
     {
       // plan-2: the structured conditions strip — the curated channel that supersedes string-matching
@@ -119,7 +119,7 @@ function nodeCells(
     },
     {
       labelKey: 'nodeRegistry.agentVersion',
-      value: <span className="font-mono text-xs text-gray-400">{n.agentVersion || '—'}</span>,
+      value: <span className="font-mono text-xs text-[var(--content-muted)]">{n.agentVersion || '—'}</span>,
     },
     {
       labelKey: 'updateStatus.label',
@@ -127,7 +127,7 @@ function nodeCells(
     },
     {
       labelKey: 'nodeRegistry.lastSeen',
-      value: <span className="text-gray-400 text-xs">{fmtTime(n.lastSeen)}</span>,
+      value: <span className="text-[var(--content-muted)] text-xs">{fmtTime(n.lastSeen)}</span>,
     },
   ];
 }
@@ -186,7 +186,7 @@ export function NodeRegistry() {
             onClick={() => clearRekey(n.nodeId)}
             disabled={loading}
             title={t(language, 'nodeRegistry.cancelRekeyHint')}
-            className={`${btn} px-3 py-2 text-xs bg-purple-800 hover:bg-purple-700 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white`}
+            className={`${btn} px-3 py-2 text-xs bg-purple-800 hover:bg-purple-700 disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-white`}
           >
             {t(language, 'nodeRegistry.cancelRekey')}
           </button>
@@ -200,7 +200,7 @@ export function NodeRegistry() {
             }
           }}
           disabled={loading || n.status === 'revoked'}
-          className={`${btn} px-3 py-2 text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white`}
+          className={`${btn} px-3 py-2 text-xs bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--danger-solid-fg)]`}
         >
           {t(language, 'nodeRegistry.revoke')}
         </button>
@@ -209,13 +209,13 @@ export function NodeRegistry() {
   };
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-4">
-      <h3 className="text-lg font-semibold text-blue-400">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-4">
+      <h3 className="text-lg font-semibold text-[var(--info)]">
         {t(language, 'nodeRegistry.nodeRegistry')}
       </h3>
 
       {ctlNodes.length === 0 ? (
-        <p className="text-sm text-gray-500 italic">
+        <p className="text-sm text-[var(--content-muted)] italic">
           {t(language, 'nodeRegistry.noRegisteredNodesConfigure')}
         </p>
       ) : (
@@ -225,7 +225,7 @@ export function NodeRegistry() {
               the column set never drifts between presentations. */}
           <div className="hidden lg:block overflow-x-auto">
             <table className="w-full text-sm text-left">
-              <thead className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-700">
+              <thead className="text-xs text-[var(--content-muted)] uppercase tracking-wider border-b border-[var(--hairline)]">
                 <tr>
                   <th className="py-2 pr-3">{t(language, 'nodeRegistry.node')}</th>
                   {CELL_LABEL_KEYS.map((labelKey) => (
@@ -238,11 +238,11 @@ export function NodeRegistry() {
               </thead>
               <tbody>
                 {ctlNodes.map((n) => (
-                  <tr key={n.nodeId} className="border-b border-gray-700/50">
+                  <tr key={n.nodeId} className="border-b border-[var(--hairline)]">
                     <td className="py-2 pr-3 font-mono break-all">
                       <Link
                         to={`/fleet/nodes/${encodeURIComponent(n.nodeId)}`}
-                        className="text-blue-300 hover:underline"
+                        className="text-[var(--info)] hover:underline"
                       >
                         {n.nodeId}
                       </Link>
@@ -267,18 +267,18 @@ export function NodeRegistry() {
             {ctlNodes.map((n) => (
               <div
                 key={n.nodeId}
-                className="rounded-lg border border-gray-700 bg-gray-900 p-3 space-y-2"
+                className="rounded-lg border border-[var(--hairline)] bg-[var(--surface)] p-3 space-y-2"
               >
                 <Link
                   to={`/fleet/nodes/${encodeURIComponent(n.nodeId)}`}
-                  className="block font-mono text-sm text-blue-300 hover:underline break-all"
+                  className="block font-mono text-sm text-[var(--info)] hover:underline break-all"
                 >
                   {n.nodeId}
                 </Link>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
                   {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
                     <div key={c.labelKey} className="contents">
-                      <dt className="text-xs text-gray-400">{t(language, c.labelKey)}</dt>
+                      <dt className="text-xs text-[var(--content-muted)]">{t(language, c.labelKey)}</dt>
                       <dd className="text-right">{c.value}</dd>
                     </div>
                   ))}
@@ -293,11 +293,11 @@ export function NodeRegistry() {
       {/* Per-edge readiness: an edge is "ready" only when both endpoint nodes are approved (its link
           can then be compiled into the fleet). */}
       <div className="space-y-2">
-        <h4 className="text-sm font-semibold text-gray-400">
+        <h4 className="text-sm font-semibold text-[var(--content-muted)]">
           {t(language, 'nodeRegistry.edgeReadiness')}
         </h4>
         {edges.length === 0 ? (
-          <p className="text-xs text-gray-500 italic">
+          <p className="text-xs text-[var(--content-muted)] italic">
             {t(language, 'nodeRegistry.theCurrentTopologyHas')}
           </p>
         ) : (
@@ -309,22 +309,22 @@ export function NodeRegistry() {
               return (
                 <li
                   key={e.id}
-                  className="flex items-center justify-between text-xs bg-gray-700/40 px-2 py-1 rounded"
+                  className="flex items-center justify-between text-xs bg-[var(--control)] px-2 py-1 rounded"
                 >
-                  <span className="text-gray-300">
+                  <span className="text-[var(--content)]">
                     {fromName} → {toName}
                     {e.role === 'backup' && (
-                      <span className="ml-1 text-gray-500">
+                      <span className="ml-1 text-[var(--content-muted)]">
                         ({t(language, 'nodeRegistry.backup')})
                       </span>
                     )}
                   </span>
                   {ready ? (
-                    <span className="px-2 py-0.5 rounded border bg-green-900/40 text-green-300 border-green-700">
+                    <span className="px-2 py-0.5 rounded border bg-green-500/15 text-green-300 border-green-700">
                       {t(language, 'nodeRegistry.ready')}
                     </span>
                   ) : (
-                    <span className="px-2 py-0.5 rounded border bg-gray-800 text-gray-400 border-gray-600">
+                    <span className="px-2 py-0.5 rounded border bg-[var(--surface-elevated)] text-[var(--content-muted)] border-[var(--hairline)]">
                       {t(language, 'nodeRegistry.notReady')}
                     </span>
                   )}

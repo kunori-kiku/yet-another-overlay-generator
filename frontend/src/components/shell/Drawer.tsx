@@ -168,7 +168,7 @@ export function Drawer({ open, onClose, side, ariaLabel, id, children }: DrawerP
         aria-label={t(language, 'shell.dialogBackdrop')}
         tabIndex={-1}
         onClick={onClose}
-        className="fixed inset-0 z-30 cursor-default bg-black/40"
+        className="fixed inset-0 z-30 cursor-default bg-black/50"
       />
       <div
         ref={panelRef}

@@ -26,7 +26,7 @@ export function CanvasGate() {
     // obvious the canvas cannot be edited here.
     return (
       <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center p-3">
-        <span className="pointer-events-auto rounded-full border border-gray-600 bg-gray-800/90 px-3 py-1 text-xs text-gray-300 shadow">
+        <span className="pointer-events-auto rounded-full border border-[var(--hairline)] bg-[var(--surface-elevated)] px-3 py-1 text-xs text-[var(--content)] shadow">
           {t(language, 'canvasGate.readOnlyBadge')}
         </span>
       </div>
@@ -40,11 +40,11 @@ export function CanvasGate() {
       aria-modal="true"
       aria-labelledby="canvas-gate-title"
     >
-      <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-700 bg-gray-800 p-5">
-        <h4 id="canvas-gate-title" className="text-base font-semibold text-gray-100">
+      <div className="w-full max-w-md space-y-4 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-5">
+        <h4 id="canvas-gate-title" className="text-base font-semibold text-[var(--content)]">
           {t(language, 'canvasGate.title')}
         </h4>
-        <p className="text-sm text-gray-300">{t(language, 'canvasGate.body')}</p>
+        <p className="text-sm text-[var(--content)]">{t(language, 'canvasGate.body')}</p>
         <div className="flex flex-wrap justify-end gap-2">
           <button
             type="button"
@@ -56,14 +56,14 @@ export function CanvasGate() {
               setDismissed(true);
               setMobileNavOpen(true);
             }}
-            className="min-h-11 rounded border border-gray-600 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+            className="min-h-11 rounded border border-[var(--hairline)] px-4 py-2 text-sm text-[var(--content)] hover:bg-[var(--control-hover)]"
           >
             {t(language, 'canvasGate.openMenu')}
           </button>
           <button
             type="button"
             onClick={() => setDismissed(true)}
-            className="min-h-11 rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
+            className="min-h-11 rounded bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
           >
             {t(language, 'canvasGate.viewReadOnly')}
           </button>

@@ -49,7 +49,7 @@ export function FleetPage() {
     <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-6">
       <ControllerErrorBanner />
       <div className="flex justify-end">
-        <label className="flex items-center gap-2 text-xs text-gray-400">
+        <label className="flex items-center gap-2 text-xs text-[var(--content-muted)]">
           <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
           {t(language, 'updateStatus.live')}
         </label>

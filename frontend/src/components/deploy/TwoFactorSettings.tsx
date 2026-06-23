@@ -117,27 +117,27 @@ export function TwoFactorSettings() {
   const groupedSecret = (s: string) => s.replace(/(.{4})/g, '$1 ').trim();
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <h3 className="text-lg font-semibold text-sky-400">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+      <h3 className="text-lg font-semibold text-[var(--info)]">
         {t(language, 'twoFactorSettings.twoFactorTOTP')}
       </h3>
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'twoFactorSettings.addATimeBased')}
       </p>
 
       {!loggedIn ? (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'twoFactorSettings.signInWithYour')}
         </p>
       ) : totpEnabled === null ? (
-        <p className="text-xs text-gray-500">{t(language, 'twoFactorSettings.checkingStatus')}</p>
+        <p className="text-xs text-[var(--content-muted)]">{t(language, 'twoFactorSettings.checkingStatus')}</p>
       ) : totpEnabled ? (
         // Enabled: show the status + require a current code to disable.
         <div className="space-y-2">
-          <p className="text-xs text-green-300 bg-green-900/20 px-2 py-1 rounded">
+          <p className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded">
             {t(language, 'twoFactorSettings.twoFactorIsEnabled')}
           </p>
-          <label className="text-xs text-gray-400 block">
+          <label className="text-xs text-[var(--content-muted)] block">
             {t(language, 'twoFactorSettings.enterACurrentCode')}
           </label>
           <div className="flex gap-2">
@@ -148,12 +148,12 @@ export function TwoFactorSettings() {
               value={code}
               onChange={(e) => onCodeChange(e.target.value)}
               placeholder="123456"
-              className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm font-mono tracking-widest border border-gray-500 focus:border-blue-400 outline-none"
+              className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-sm font-mono tracking-widest border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
             />
             <button
               onClick={() => void handleDisable()}
               disabled={busy || code.length < 6}
-              className="px-4 py-1.5 text-sm bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+              className="px-4 py-1.5 text-sm bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--danger-solid-fg)] font-medium"
             >
               {busy ? t(language, 'twoFactorSettings.working') : t(language, 'twoFactorSettings.disable2FA')}
             </button>
@@ -164,50 +164,50 @@ export function TwoFactorSettings() {
         <button
           onClick={() => void handleEnroll()}
           disabled={busy}
-          className="px-4 py-1.5 text-sm bg-sky-600 hover:bg-sky-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+          className="px-4 py-1.5 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
         >
           {busy ? t(language, 'twoFactorSettings.preparing') : t(language, 'twoFactorSettings.enableTwoFactor')}
         </button>
       ) : (
         // Enroll in progress: show the setup key + otpauth URI and take a code to complete activation.
-        <div className="space-y-3 p-3 bg-gray-900 border border-gray-700 rounded">
-          <p className="text-xs text-gray-300">
+        <div className="space-y-3 p-3 bg-[var(--surface-sunken)] border border-[var(--hairline)] rounded">
+          <p className="text-xs text-[var(--content)]">
             {t(language, 'twoFactorSettings.1AddTheKey')}
           </p>
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-[10px] text-gray-500 uppercase tracking-wider">
+              <label className="text-[10px] text-[var(--content-muted)] uppercase tracking-wider">
                 {t(language, 'twoFactorSettings.setupKey')}
               </label>
               <button
                 onClick={() => void copyText(pending.secret, 'secret')}
-                className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-2 py-0.5 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-[var(--content)]"
               >
                 {copied === 'secret' ? t(language, 'twoFactorSettings.copied') : t(language, 'twoFactorSettings.copy')}
               </button>
             </div>
-            <pre className="text-sm text-sky-200 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded tracking-widest">
+            <pre className="text-sm text-[var(--info)] font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded tracking-widest">
               {groupedSecret(pending.secret)}
             </pre>
           </div>
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-[10px] text-gray-500 uppercase tracking-wider">
+              <label className="text-[10px] text-[var(--content-muted)] uppercase tracking-wider">
                 {t(language, 'twoFactorSettings.otpauthLink')}
               </label>
               <button
                 onClick={() => void copyText(pending.otpauthURI, 'uri')}
-                className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-2 py-0.5 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-[var(--content)]"
               >
                 {copied === 'uri' ? t(language, 'twoFactorSettings.copied_2') : t(language, 'twoFactorSettings.copy_2')}
               </button>
             </div>
-            <pre className="text-[11px] text-gray-400 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
+            <pre className="text-[11px] text-[var(--content-muted)] font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded">
               {pending.otpauthURI}
             </pre>
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-1">
+            <label className="text-xs text-[var(--content-muted)] block mb-1">
               {t(language, 'twoFactorSettings.6DigitCodeFrom')}
             </label>
             <div className="flex gap-2">
@@ -218,19 +218,19 @@ export function TwoFactorSettings() {
                 value={code}
                 onChange={(e) => onCodeChange(e.target.value)}
                 placeholder="123456"
-                className="flex-1 px-2 py-1 bg-gray-600 rounded text-sm font-mono tracking-widest border border-gray-500 focus:border-blue-400 outline-none"
+                className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-sm font-mono tracking-widest border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
               />
               <button
                 onClick={() => void handleConfirm()}
                 disabled={busy || code.length < 6}
-                className="px-4 py-1.5 text-sm bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white font-medium"
+                className="px-4 py-1.5 text-sm bg-[var(--success-solid)] hover:bg-[var(--success-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--success-solid-fg)] font-medium"
               >
                 {busy ? t(language, 'twoFactorSettings.verifying') : t(language, 'twoFactorSettings.confirmEnable')}
               </button>
               <button
                 onClick={handleCancelEnroll}
                 disabled={busy}
-                className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 rounded text-gray-200"
+                className="px-3 py-1.5 text-sm bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] rounded text-[var(--content)]"
               >
                 {t(language, 'twoFactorSettings.cancel')}
               </button>
@@ -240,7 +240,7 @@ export function TwoFactorSettings() {
       )}
 
       {localError && (
-        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {localError}</p>
+        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {localError}</p>
       )}
     </section>
   );

@@ -31,7 +31,7 @@ export function DeployPage() {
         <LocalDeploy />
       ) : (
         <>
-          <p className="text-sm text-gray-400">{t(language, 'deployControllerHint')}</p>
+          <p className="text-sm text-[var(--content-muted)]">{t(language, 'deployControllerHint')}</p>
           <DeployBar />
         </>
       )}

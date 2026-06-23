@@ -107,7 +107,7 @@ export function Topbar() {
             <button
               type="button"
               onClick={handleFlush}
-              className={`px-2.5 py-1 text-xs rounded-lg text-red-500 transition-colors hover:bg-red-500/10 ${FOCUS_RING}`}
+              className={`px-2.5 py-1 text-xs rounded-lg text-[var(--danger)] transition-colors hover:bg-[var(--danger-bg)] ${FOCUS_RING}`}
             >
               {t(language, 'topbar.flush')}
             </button>

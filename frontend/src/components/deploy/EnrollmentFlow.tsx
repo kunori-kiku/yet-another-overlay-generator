@@ -94,21 +94,21 @@ export function EnrollmentFlow() {
   };
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3">
       <h3 className="text-lg font-semibold text-purple-400">
         {t(language, 'enrollmentFlow.nodeEnrollment')}
       </h3>
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'enrollmentFlow.mintASingleUse')}
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
         <div className="md:col-span-1">
-          <label className="text-xs text-gray-400">{t(language, 'enrollmentFlow.node')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'enrollmentFlow.node')}</label>
           <select
             value={nodeId}
             onChange={(e) => setNodeId(e.target.value)}
-            className="w-full px-2 py-2 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-2 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="">{t(language, 'enrollmentFlow.selectANode')}</option>
             {topoNodes.map((n) => (
@@ -119,20 +119,20 @@ export function EnrollmentFlow() {
           </select>
         </div>
         <div className="md:col-span-1">
-          <label className="text-xs text-gray-400">{t(language, 'enrollmentFlow.ttlSeconds')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'enrollmentFlow.ttlSeconds')}</label>
           <input
             type="number"
             min={1}
             value={ttlSeconds}
             onChange={(e) => setTtlSeconds(parseInt(e.target.value, 10) || 0)}
-            className="w-full px-2 py-2 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-2 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div className="md:col-span-1">
           <button
             onClick={handleMint}
             disabled={minting || !nodeId || ttlSeconds <= 0}
-            className="w-full py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:text-gray-400 rounded text-sm"
+            className="w-full py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
           >
             {minting
               ? t(language, 'enrollmentFlow.minting')
@@ -142,13 +142,13 @@ export function EnrollmentFlow() {
       </div>
 
       {topoNodes.length === 0 && (
-        <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
           {t(language, 'enrollmentFlow.theCurrentTopologyHas')}
         </p>
       )}
 
       {mintError && (
-        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">
+        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">
           ⚠️ {mintError}
         </p>
       )}
@@ -159,27 +159,27 @@ export function EnrollmentFlow() {
           only a "warn or not" switch; the copy is rendered on the frontend per language (the server
           string is English and is no longer concatenated verbatim). */}
       {mintWarning && (
-        <p className="text-xs text-amber-300 bg-amber-900/20 px-2 py-1 rounded break-all">
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded break-all">
           ⚠️{' '}
           {t(language, 'enrollmentFlow.thisNodeIdIs')}
         </p>
       )}
 
       {token && (
-        <div className="space-y-2 p-3 bg-gray-900 border border-gray-700 rounded">
-          <p className="text-xs text-yellow-400">
+        <div className="space-y-2 p-3 bg-[var(--surface)] border border-[var(--hairline)] rounded">
+          <p className="text-xs text-[var(--warning)]">
             {t(language, 'enrollmentFlow.thisTokenIsShown')}
           </p>
           {!agentPrefixKnown && (
-            <p className="text-xs text-yellow-400 bg-yellow-900/20 px-2 py-1 rounded">
+            <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
               {t(language, 'enrollmentFlow.serverSettingsNotLoaded')}
             </p>
           )}
           <div>
-            <label className="text-[10px] text-gray-500 uppercase tracking-wider">
+            <label className="text-[10px] text-[var(--content-muted)] uppercase tracking-wider">
               {t(language, 'enrollmentFlow.enrollmentToken')}
             </label>
-            <pre className="text-xs text-cyan-300 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
+            <pre className="text-xs text-cyan-300 font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded">
               {token}
             </pre>
           </div>
@@ -187,21 +187,21 @@ export function EnrollmentFlow() {
               daemon). */}
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">
+              <label className="text-[10px] text-[var(--success)] uppercase tracking-wider font-semibold">
                 {t(language, 'enrollmentFlow.oneShotInstallRecommended')}
               </label>
               <button
                 onClick={() => copyText(bootstrapCommand, 'bootstrap')}
-                className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded text-gray-100"
+                className="px-3 py-1.5 text-xs bg-[var(--success-solid)] hover:bg-[var(--success-solid)] rounded text-[var(--success-solid-fg)]"
               >
                 {copied === 'bootstrap' ? t(language, 'enrollmentFlow.copied') : t(language, 'enrollmentFlow.copy')}
               </button>
             </div>
-            <pre className="text-xs text-emerald-200 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
+            <pre className="text-xs text-[var(--success)] font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded">
               {bootstrapCommand}
             </pre>
             {!settings?.publicAgentURL && (
-              <p className="text-[10px] text-yellow-400 mt-1">
+              <p className="text-[10px] text-[var(--warning)] mt-1">
                 {t(language, 'enrollmentFlow.tipNoPublicAgent')}
               </p>
             )}
@@ -209,17 +209,17 @@ export function EnrollmentFlow() {
           {/* Alternative: manual enroll (when the node already ships with the agent binary). */}
           <div>
             <div className="flex items-center justify-between">
-              <label className="text-[10px] text-gray-500 uppercase tracking-wider">
+              <label className="text-[10px] text-[var(--content-muted)] uppercase tracking-wider">
                 {t(language, 'enrollmentFlow.orManualEnrollCommand')}
               </label>
               <button
                 onClick={() => copyText(enrollCommand, 'enroll')}
-                className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                className="px-3 py-1.5 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] rounded text-[var(--content)]"
               >
                 {copied === 'enroll' ? t(language, 'enrollmentFlow.copied_2') : t(language, 'enrollmentFlow.copy_2')}
               </button>
             </div>
-            <pre className="text-xs text-gray-300 font-mono break-all whitespace-pre-wrap bg-gray-950 p-2 rounded">
+            <pre className="text-xs text-[var(--content)] font-mono break-all whitespace-pre-wrap bg-[var(--surface-sunken)] p-2 rounded">
               {enrollCommand}
             </pre>
           </div>

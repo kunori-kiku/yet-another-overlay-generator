@@ -18,13 +18,13 @@ export function ConnectionSettings() {
   const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3 max-w-2xl">
-      <h3 className="text-lg font-semibold text-teal-400">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3 max-w-2xl">
+      <h3 className="text-lg font-semibold text-[var(--accent)]">
         {t(language, 'connectionSettings.controllerConnection')}
       </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
-          <label className="text-xs text-gray-400">
+          <label className="text-xs text-[var(--content-muted)]">
             {t(language, 'connectionSettings.operatorBaseURL')}
           </label>
           <input
@@ -32,11 +32,11 @@ export function ConnectionSettings() {
             value={baseURL}
             onChange={(e) => setConfig({ baseURL: e.target.value })}
             placeholder="http://localhost:8080"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">
+          <label className="text-xs text-[var(--content-muted)]">
             {t(language, 'connectionSettings.secretPathPrefixOptional')}
           </label>
           <input
@@ -44,14 +44,14 @@ export function ConnectionSettings() {
             value={pathPrefix}
             onChange={(e) => setConfig({ pathPrefix: e.target.value })}
             placeholder="/s3cr3t"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
-          <p className="text-[10px] text-gray-500 mt-0.5">
+          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
             {t(language, 'connectionSettings.mustMatchTheServer')}
           </p>
         </div>
         <div>
-          <label className="text-xs text-gray-400">
+          <label className="text-xs text-[var(--content-muted)]">
             {t(language, 'connectionSettings.agentBaseURL')}
           </label>
           <input
@@ -59,11 +59,11 @@ export function ConnectionSettings() {
             value={agentBaseURL}
             onChange={(e) => setConfig({ agentBaseURL: e.target.value })}
             placeholder="http://localhost:9090"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
       </div>
-      <p className="text-[10px] text-gray-500">
+      <p className="text-[10px] text-[var(--content-muted)]">
         {t(language, 'connectionSettings.signInHappensOn')}
       </p>
       {/* Refresh as a bottom submit-style action — gives the connection form a
@@ -71,17 +71,17 @@ export function ConnectionSettings() {
       <button
         onClick={() => refresh()}
         disabled={loading}
-        className="w-full py-2 text-sm font-medium bg-teal-700 hover:bg-teal-600 disabled:bg-gray-600 disabled:text-gray-400 rounded text-white"
+        className="w-full py-2 text-sm font-medium bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)]"
       >
         {loading
           ? t(language, 'connectionSettings.syncing')
           : t(language, 'connectRefresh')}
       </button>
       {error && (
-        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded break-all">⚠️ {error}</p>
+        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {error}</p>
       )}
       {lastSyncedAt !== null && (
-        <p className="text-[10px] text-gray-500">
+        <p className="text-[10px] text-[var(--content-muted)]">
           {t(language, 'connectionSettings.lastSynced')}: {new Date(lastSyncedAt).toLocaleString()}
         </p>
       )}

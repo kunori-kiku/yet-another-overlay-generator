@@ -14,16 +14,16 @@ export function ElementsLists() {
   return (
     <div className="p-3 space-y-4">
       <section>
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
+        <h2 className="text-sm font-semibold text-[var(--content-muted)] uppercase tracking-wider mb-2">
           {t(language, 'elementsLists.domains')} ({domains.length})
         </h2>
         <DomainList />
       </section>
 
-      <hr className="border-gray-700" />
+      <hr className="border-[var(--hairline)]" />
 
       <section>
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
+        <h2 className="text-sm font-semibold text-[var(--content-muted)] uppercase tracking-wider mb-2">
           {t(language, 'elementsLists.nodes')} ({nodes.length})
         </h2>
         <NodeList />

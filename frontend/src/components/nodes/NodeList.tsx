@@ -7,7 +7,7 @@ export function NodeList() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   if (nodes.length === 0) {
-    return <p className="text-xs text-gray-500 italic">{t(language, 'nodeList.noNodesYet')}</p>;
+    return <p className="text-xs text-[var(--content-muted)] italic">{t(language, 'nodeList.noNodesYet')}</p>;
   }
 
   const domainName = (domainId: string) => domains.find((d) => d.id === domainId)?.name || t(language, 'nodeList.unassignedDomain');
@@ -30,25 +30,25 @@ export function NodeList() {
           onClick={() => selectNode(node.id)}
           className={`p-2 rounded text-sm space-y-1 cursor-pointer border ${
             selectedNodeId === node.id
-              ? 'bg-blue-900/30 border-blue-500'
-              : 'bg-gray-700 border-transparent hover:border-gray-500'
+              ? 'bg-[var(--control-hover)] border-[var(--accent)]'
+              : 'bg-[var(--control)] border-transparent hover:border-[var(--hairline)]'
           }`}
           title={t(language, 'nodeList.clickToEditDrag')}
         >
           <div className="flex items-center justify-between">
-            <span className="font-medium text-green-300">☰ {node.name}</span>
+            <span className="font-medium text-green-400">☰ {node.name}</span>
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 removeNode(node.id);
               }}
-              className="text-red-400 hover:text-red-300 text-xs"
+              className="text-[var(--danger)] hover:text-[var(--danger)] text-xs"
               title={t(language, 'nodeList.delete')}
             >
               ✕
             </button>
           </div>
-          <div className="text-xs text-gray-400">
+          <div className="text-xs text-[var(--content-muted)]">
             {node.role} | {domainName(node.domain_id)}
           </div>
         </div>

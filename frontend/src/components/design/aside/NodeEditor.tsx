@@ -101,23 +101,23 @@ export function NodeEditor() {
 
   return (
     <section>
-      <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">
+      <h2 className="text-sm font-semibold text-[var(--content-muted)] uppercase tracking-wider mb-2">
         {t(language, 'nodeEditor.nodeProperties')}
       </h2>
       <div className="space-y-2">
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.name')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.name')}</label>
           <input
             type="text"
             value={selectedNode.name}
             onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
             pattern="^[A-Za-z0-9 ._-]+$"
             title={t(language, 'nodeEditor.onlyLettersDigitsSpace')}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.hostnameOptional')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.hostnameOptional')}</label>
           <input
             type="text"
             value={selectedNode.hostname || ''}
@@ -126,11 +126,11 @@ export function NodeEditor() {
                 hostname: e.target.value || undefined,
               })
             }
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.role')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.role')}</label>
           <select
             value={selectedNode.role}
             onChange={(e) => {
@@ -145,7 +145,7 @@ export function NodeEditor() {
                 capabilities: deriveCapabilitiesFromRole(newRole, operatorHasPublicIP),
               });
             }}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="peer">Peer</option>
             <option value="router">Router</option>
@@ -155,11 +155,11 @@ export function NodeEditor() {
           </select>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.domain')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.domain')}</label>
           <select
             value={selectedNode.domain_id}
             onChange={(e) => updateNode(selectedNode.id, { domain_id: e.target.value })}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             {domains.map((d) => (
               <option key={d.id} value={d.id}>{d.name}</option>
@@ -167,17 +167,17 @@ export function NodeEditor() {
           </select>
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.overlayIPEmptyFor')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.overlayIPEmptyFor')}</label>
           <input
             type="text"
             value={selectedNode.overlay_ip || ''}
             onChange={(e) => updateNode(selectedNode.id, { overlay_ip: e.target.value || undefined })}
             placeholder={t(language, 'nodeEditor.autoAssigned')}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'nodeEditor.mtuEmptyForDefault')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.mtuEmptyForDefault')}</label>
           <input
             type="number"
             min={576}
@@ -185,27 +185,27 @@ export function NodeEditor() {
             value={selectedNode.mtu || ''}
             onChange={(e) => updateNode(selectedNode.id, { mtu: parseInt(e.target.value) || undefined })}
             placeholder="1420"
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
           />
         </div>
         {/* mimic XDP mode: only takes effect when this node has a transport=tcp link. Defaults to
             skb (generic, compatible with VPS NICs that do not support native); the operator can
             pick native for better performance once they confirm the NIC supports it. */}
         <div>
-          <label className="text-xs text-gray-400">{t(language, 'xdpModeLabel')}</label>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'xdpModeLabel')}</label>
           <select
             value={selectedNode.xdp_mode || 'skb'}
             onChange={(e) => updateNode(selectedNode.id, { xdp_mode: e.target.value === 'native' ? 'native' : undefined })}
-            className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
           >
             <option value="skb">{t(language, 'nodeEditor.skbGenericDefault')}</option>
             <option value="native">{t(language, 'nodeEditor.nativeFasterNeedsNIC')}</option>
           </select>
-          <p className="mt-1 text-xs text-gray-500">{t(language, 'xdpModeHint')}</p>
+          <p className="mt-1 text-xs text-[var(--content-muted)]">{t(language, 'xdpModeHint')}</p>
         </div>
         {selectedNode.role !== 'client' && (
           <div>
-            <label className="text-xs text-gray-400">{t(language, 'nodeEditor.routerIdLabel')}</label>
+            <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.routerIdLabel')}</label>
             <input
               type="text"
               value={selectedNode.router_id || ''}
@@ -213,7 +213,7 @@ export function NodeEditor() {
               placeholder={t(language, 'nodeEditor.routerIdPlaceholder')}
               pattern="^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(\d{1,3}\.){3}\d{1,3})$"
               title={t(language, 'nodeEditor.routerIdHint')}
-              className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+              className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
             />
           </div>
         )}
@@ -258,12 +258,12 @@ export function NodeEditor() {
           </label>
         )}
         {mode === 'local' && selectedNode.fixed_private_key && (
-          <div className="p-2 bg-gray-700 rounded space-y-1">
-            <p className="text-xs text-gray-300">{t(language, 'nodeEditor.pinnedKeyStatus')}</p>
-            <p className="text-xs text-gray-400 break-all">
+          <div className="p-2 bg-[var(--control)] rounded space-y-1">
+            <p className="text-xs text-[var(--content)]">{t(language, 'nodeEditor.pinnedKeyStatus')}</p>
+            <p className="text-xs text-[var(--content-muted)] break-all">
               {t(language, 'nodeEditor.publicKey')}: {selectedNode.wireguard_public_key || t(language, 'nodeEditor.willBeGeneratedOn')}
             </p>
-            <p className="text-xs text-gray-500 break-all">
+            <p className="text-xs text-[var(--content-muted)] break-all">
               {t(language, 'nodeEditor.privateKey')}: {selectedNode.wireguard_private_key ? t(language, 'nodeEditor.generatedAndPersisted') : t(language, 'nodeEditor.notGeneratedYet')}
             </p>
           </div>
@@ -288,19 +288,19 @@ export function NodeEditor() {
         {selectedNode.role !== 'client' && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.publicAddressesHowPeers')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.publicAddressesHowPeers')}</label>
               <button
                 onClick={() => addNodeEndpoint(selectedNode.id)}
-                className="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500"
+                className="text-xs px-2 py-0.5 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)]"
               >
                 + {t(language, 'nodeEditor.add')}
               </button>
             </div>
             {(selectedNode.public_endpoints || []).length === 0 && (
-              <p className="text-xs text-gray-500 italic">{t(language, 'nodeEditor.noPublicAddressesConfigured')}</p>
+              <p className="text-xs text-[var(--content-muted)] italic">{t(language, 'nodeEditor.noPublicAddressesConfigured')}</p>
             )}
             {(selectedNode.public_endpoints || []).map((ep) => (
-              <div key={ep.id} className="p-2 bg-gray-700 rounded space-y-1">
+              <div key={ep.id} className="p-2 bg-[var(--control)] rounded space-y-1">
                 <div className="grid grid-cols-3 gap-1">
                   <input
                     type="text"
@@ -309,7 +309,7 @@ export function NodeEditor() {
                       updateNodeEndpoint(selectedNode.id, ep.id, { host: e.target.value })
                     }
                     placeholder={t(language, 'nodeEditor.ipDomain')}
-                    className="col-span-2 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500"
+                    className="col-span-2 px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)]"
                   />
                   <input
                     type="number"
@@ -320,7 +320,7 @@ export function NodeEditor() {
                       })
                     }
                     placeholder={t(language, 'nodeEditor.port')}
-                    className="px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500"
+                    className="px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)]"
                   />
                 </div>
                 <div className="flex gap-1">
@@ -331,11 +331,11 @@ export function NodeEditor() {
                       updateNodeEndpoint(selectedNode.id, ep.id, { note: e.target.value })
                     }
                     placeholder={t(language, 'nodeEditor.noteOptional')}
-                    className="flex-1 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500"
+                    className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)]"
                   />
                   <button
                     onClick={() => removeNodeEndpoint(selectedNode.id, ep.id)}
-                    className="px-2 py-1 text-xs bg-red-600 hover:bg-red-500 rounded"
+                    className="px-2 py-1 text-xs bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded"
                   >
                     {t(language, 'nodeEditor.delete')}
                   </button>
@@ -352,21 +352,21 @@ export function NodeEditor() {
           selectedNode.role === 'relay') && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.advertisedLANPrefixes')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.advertisedLANPrefixes')}</label>
               <button
                 onClick={() => addExtraPrefix(selectedNode.id)}
-                className="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500"
+                className="text-xs px-2 py-0.5 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)]"
               >
                 + {t(language, 'nodeEditor.add_2')}
               </button>
             </div>
             {(selectedNode.role === 'router' || selectedNode.role === 'relay') && (
-              <p className="text-[10px] text-gray-500">
+              <p className="text-[10px] text-[var(--content-muted)]">
                 {t(language, 'nodeEditor.whenSetThisNode')}
               </p>
             )}
             {(selectedNode.extra_prefixes || []).length === 0 && (
-              <p className="text-xs text-gray-500 italic">{t(language, 'nodeEditor.noLANPrefixesConfigured')}</p>
+              <p className="text-xs text-[var(--content-muted)] italic">{t(language, 'nodeEditor.noLANPrefixesConfigured')}</p>
             )}
             {(selectedNode.extra_prefixes || []).map((prefix, index) => (
               <div key={`extra-prefix-${index}`} className="flex gap-1">
@@ -377,11 +377,11 @@ export function NodeEditor() {
                   pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$"
                   title={t(language, 'nodeEditor.ipv4CIDRFormatE')}
                   placeholder="192.168.1.0/24"
-                  className="flex-1 px-2 py-1 bg-gray-600 rounded text-xs border border-gray-500 focus:border-blue-400 outline-none"
+                  className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
                 <button
                   onClick={() => removeExtraPrefix(selectedNode.id, index)}
-                  className="px-2 py-1 text-xs bg-red-600 hover:bg-red-500 rounded"
+                  className="px-2 py-1 text-xs bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded"
                 >
                   {t(language, 'nodeEditor.delete_2')}
                 </button>
@@ -395,13 +395,13 @@ export function NodeEditor() {
             where it is a dead, misleading affordance. Do NOT strip the ssh_* DATA — custody.ts
             deliberately preserves it so a controller→local switch retains the operator's SSH config. */}
         {mode === 'local' && (
-        <details className="bg-gray-700/50 rounded p-2">
-          <summary className="text-xs cursor-pointer text-gray-400 font-semibold">
+        <details className="bg-[var(--control)] rounded p-2">
+          <summary className="text-xs cursor-pointer text-[var(--content-muted)] font-semibold">
             {t(language, 'nodeEditor.sshConnectionAutoDeploy')}
           </summary>
           <div className="mt-2 space-y-2">
             <div>
-              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshAliasSshConfig')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshAliasSshConfig')}</label>
               <input
                 type="text"
                 value={selectedNode.ssh_alias || ''}
@@ -413,14 +413,14 @@ export function NodeEditor() {
                 pattern="^[A-Za-z0-9._:@-]+$"
                 title={t(language, 'nodeEditor.onlyLettersDigitsAre')}
                 placeholder={t(language, 'nodeEditor.eGMyServer')}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
               />
-              <p className="text-[10px] text-gray-500 mt-0.5">
+              <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
                 {t(language, 'nodeEditor.ifSetOverridesManual')}
               </p>
             </div>
             <div>
-              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshHost')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshHost')}</label>
               <input
                 type="text"
                 value={selectedNode.ssh_host || ''}
@@ -432,12 +432,12 @@ export function NodeEditor() {
                 pattern="^[A-Za-z0-9._:@-]+$"
                 title={t(language, 'nodeEditor.onlyLettersDigitsAre_2')}
                 placeholder={t(language, 'nodeEditor.ipOrHostname')}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshPort')}</label>
+                <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshPort')}</label>
                 <input
                   type="number"
                   min={1}
@@ -449,11 +449,11 @@ export function NodeEditor() {
                     })
                   }
                   placeholder="22"
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshUser')}</label>
+                <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshUser')}</label>
                 <input
                   type="text"
                   value={selectedNode.ssh_user || ''}
@@ -465,12 +465,12 @@ export function NodeEditor() {
                   pattern="^[A-Za-z0-9._:@-]+$"
                   title={t(language, 'nodeEditor.onlyLettersDigitsAre_3')}
                   placeholder="root"
-                  className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
               </div>
             </div>
             <div>
-              <label className="text-xs text-gray-400">{t(language, 'nodeEditor.sshKeyPath')}</label>
+              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshKeyPath')}</label>
               <input
                 type="text"
                 value={selectedNode.ssh_key_path || ''}
@@ -480,7 +480,7 @@ export function NodeEditor() {
                   })
                 }
                 placeholder={t(language, 'nodeEditor.eGSshId')}
-                className="w-full px-2 py-1 bg-gray-600 rounded text-sm border border-gray-500 focus:border-blue-400 outline-none"
+                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
               />
             </div>
           </div>
@@ -488,7 +488,7 @@ export function NodeEditor() {
         )}
         <button
           onClick={() => removeNode(selectedNode.id)}
-          className="w-full py-1 bg-red-600 hover:bg-red-500 rounded text-sm"
+          className="w-full py-1 bg-[var(--danger-solid)] hover:bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded text-sm"
         >
           {t(language, 'nodeEditor.deleteNode')}
         </button>

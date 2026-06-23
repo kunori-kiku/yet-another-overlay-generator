@@ -15,7 +15,7 @@ export function DesignAside() {
   if (!selectedDomainId && !selectedNodeId && !selectedEdgeId) return null;
 
   return (
-    <aside className="w-80 shrink-0 overflow-y-auto border-l border-gray-700 bg-gray-800">
+    <aside className="w-80 shrink-0 overflow-y-auto border-l border-[var(--hairline)] bg-[var(--surface-elevated)]">
       <div className="p-3 space-y-4">
         {selectedDomainId && <DomainEditor />}
         {selectedNodeId && <NodeEditor />}

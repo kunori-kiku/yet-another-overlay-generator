@@ -633,10 +633,10 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
       elementsSelectable={editable}
       fitView
       fitViewOptions={{ padding: 0.2, duration: 400 }}
-      className="bg-gray-900"
+      className="bg-[var(--surface)]"
     >
       <Background color="#374151" gap={20} />
-      <Controls className="!bg-gray-700 !border-gray-600 !text-gray-300" />
+      <Controls className="!bg-[var(--control)] !border-[var(--hairline)] !text-[var(--content-muted)]" />
       {/* Canvas toolbar: auto-layout + interface-detail toggle. Hidden in the
           read-only preview — auto-layout mutates node positions and the controls are
           fiddly on a phone; Controls (pan/zoom) and MiniMap stay for read-only use. */}
@@ -644,11 +644,11 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
       <Panel position="top-left" className="flex items-center gap-2">
         <button
           onClick={runAutoLayout}
-          className="px-2.5 py-1 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-xs text-gray-200 transition-colors duration-150"
+          className="px-2.5 py-1 bg-[var(--control)] hover:bg-[var(--control-hover)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] transition-colors duration-150"
         >
           ✨ {t(language, 'autoLayoutLabel')}
         </button>
-        <label className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-700 border border-gray-600 rounded text-xs text-gray-200 cursor-pointer transition-colors duration-150 hover:bg-gray-600">
+        <label className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--control)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] cursor-pointer transition-colors duration-150 hover:bg-[var(--control-hover)]">
           <input
             type="checkbox"
             checked={showInterfaces}
@@ -670,7 +670,7 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
             default: return '#22c55e';
           }
         }}
-        className="!bg-gray-800"
+        className="!bg-[var(--surface-elevated)]"
       />
     </ReactFlow>
   );

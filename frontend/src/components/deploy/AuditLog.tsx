@@ -17,31 +17,31 @@ export function AuditLog() {
   const auditVerified = useControllerStore((s) => s.auditVerified);
 
   return (
-    <section className="bg-gray-800 border border-gray-700 p-4 rounded-lg space-y-3">
+    <section className="bg-[var(--surface-elevated)] border border-[var(--hairline)] p-4 rounded-lg space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-orange-400">
+        <h3 className="text-lg font-semibold text-[var(--warning)]">
           {t(language, 'auditLog.auditLog')}
         </h3>
         {audit.length > 0 &&
           (auditVerified ? (
-            <span className="px-2 py-0.5 rounded text-xs border bg-green-900/40 text-green-300 border-green-700">
+            <span className="px-2 py-0.5 rounded text-xs border bg-[var(--success-bg)] text-[var(--success)] border-[var(--success-border)]">
               {t(language, 'auditLog.verified')}
             </span>
           ) : (
-            <span className="px-2 py-0.5 rounded text-xs border bg-red-900/40 text-red-300 border-red-700">
+            <span className="px-2 py-0.5 rounded text-xs border bg-[var(--danger-bg)] text-[var(--danger)] border-[var(--danger-border)]">
               {t(language, 'auditLog.unverified')}
             </span>
           ))}
       </div>
 
       {audit.length === 0 ? (
-        <p className="text-sm text-gray-500 italic">
+        <p className="text-sm text-[var(--content-muted)] italic">
           {t(language, 'auditLog.noAuditEntriesConfigure')}
         </p>
       ) : (
         <div className="max-h-80 overflow-y-auto">
           <table className="w-full text-sm text-left">
-            <thead className="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-700 sticky top-0 bg-gray-800">
+            <thead className="text-xs text-[var(--content-muted)] uppercase tracking-wider border-b border-[var(--hairline)] sticky top-0 bg-[var(--surface-elevated)]">
               <tr>
                 <th className="py-2 pr-3">{t(language, 'auditLog.time')}</th>
                 <th className="py-2 pr-3">{t(language, 'auditLog.actor')}</th>
@@ -51,13 +51,13 @@ export function AuditLog() {
             </thead>
             <tbody>
               {audit.map((e, i) => (
-                <tr key={`${e.timestamp}-${i}`} className="border-b border-gray-700/50">
-                  <td className="py-1.5 pr-3 text-gray-400 text-xs whitespace-nowrap">
+                <tr key={`${e.timestamp}-${i}`} className="border-b border-[var(--hairline)]">
+                  <td className="py-1.5 pr-3 text-[var(--content-muted)] text-xs whitespace-nowrap">
                     {fmtTime(e.timestamp)}
                   </td>
-                  <td className="py-1.5 pr-3 text-gray-300 font-mono text-xs break-all">{e.actor}</td>
-                  <td className="py-1.5 pr-3 text-cyan-300 text-xs">{e.action}</td>
-                  <td className="py-1.5 pr-3 text-gray-300 font-mono text-xs break-all">
+                  <td className="py-1.5 pr-3 text-[var(--content)] font-mono text-xs break-all">{e.actor}</td>
+                  <td className="py-1.5 pr-3 text-[var(--info)] text-xs">{e.action}</td>
+                  <td className="py-1.5 pr-3 text-[var(--content)] font-mono text-xs break-all">
                     {e.nodeId || '—'}
                   </td>
                 </tr>

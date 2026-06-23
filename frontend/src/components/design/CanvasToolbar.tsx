@@ -65,7 +65,7 @@ export function CanvasToolbar({
   );
 
   return (
-    <div className="flex flex-wrap items-start gap-2 border-b border-gray-700 bg-gray-800 px-3 py-2">
+    <div className="flex flex-wrap items-start gap-2 border-b border-[var(--hairline)] bg-[var(--surface-elevated)] px-3 py-2">
       <div className="w-56">
         <DomainForm />
       </div>
@@ -78,7 +78,7 @@ export function CanvasToolbar({
         aria-pressed={listsOpen}
         aria-controls="design-lists-drawer"
         className={`h-8 rounded px-3 text-sm ${
-          listsOpen ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
+          listsOpen ? 'bg-[var(--accent)] text-[var(--accent-fg)]' : 'bg-[var(--control)] text-[var(--content)] hover:bg-[var(--control-hover)]'
         }`}
       >
         <span aria-hidden="true">☰</span> {t(language, 'toolbarLists')}
@@ -91,7 +91,7 @@ export function CanvasToolbar({
           type="button"
           onClick={() => compile()}
           disabled={isCompiling || nodeCount === 0}
-          className="h-8 rounded bg-green-600 px-3 text-sm hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400"
+          className="h-8 rounded bg-[var(--accent)] px-3 text-sm text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
         >
           {isCompiling ? t(language, 'canvasToolbar.compiling') : t(language, 'canvasToolbar.compile')}
         </button>
@@ -103,7 +103,7 @@ export function CanvasToolbar({
           type="button"
           onClick={() => compilePreview()}
           disabled={previewing || nodeCount === 0}
-          className="h-8 rounded bg-cyan-700 px-3 text-sm hover:bg-cyan-600 disabled:bg-gray-600 disabled:text-gray-400"
+          className="h-8 rounded bg-[var(--accent)] px-3 text-sm text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
         >
           {previewing ? t(language, 'canvasToolbar.compiling') : t(language, 'canvasToolbar.compile')}
         </button>
@@ -116,7 +116,7 @@ export function CanvasToolbar({
           onClick={() => saveDesign()}
           disabled={saving || !dirty}
           title={dirty ? undefined : t(language, 'canvasToolbar.saveUpToDate')}
-          className="h-8 rounded bg-green-600 px-3 text-sm hover:bg-green-500 disabled:bg-gray-600 disabled:text-gray-400"
+          className="h-8 rounded bg-[var(--accent)] px-3 text-sm text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
         >
           {saving
             ? t(language, 'canvasToolbar.saving')
@@ -131,18 +131,18 @@ export function CanvasToolbar({
           explicit force-overwrite, instead of silently clobbering the other change. */}
       {saveConflict && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md space-y-4 rounded-lg border border-amber-700 bg-gray-800 p-5">
-            <h4 className="text-base font-semibold text-amber-400">
+          <div className="w-full max-w-md space-y-4 rounded-lg border border-[var(--warning-border)] bg-[var(--surface-elevated)] p-5">
+            <h4 className="text-base font-semibold text-[var(--warning)]">
               {t(language, 'canvasToolbar.saveConflictTitle')}
             </h4>
-            <p className="text-sm text-gray-300">
+            <p className="text-sm text-[var(--content)]">
               {t(language, 'canvasToolbar.saveConflictBody')}
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={dismissSaveConflict}
-                className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+                className="rounded border border-[var(--hairline)] px-3 py-1.5 text-sm text-[var(--content)] hover:bg-[var(--control-hover)]"
               >
                 {t(language, 'canvasToolbar.cancel')}
               </button>
@@ -153,7 +153,7 @@ export function CanvasToolbar({
                   dismissSaveConflict();
                   void hydrateFromServer();
                 }}
-                className="rounded border border-amber-600 px-3 py-1.5 text-sm text-amber-200 hover:bg-amber-900/30 disabled:opacity-40"
+                className="rounded border border-[var(--warning-border)] px-3 py-1.5 text-sm text-[var(--warning)] hover:bg-[var(--warning-bg)] disabled:opacity-40"
               >
                 {t(language, 'canvasToolbar.resyncFromServer')}
               </button>
@@ -161,7 +161,7 @@ export function CanvasToolbar({
                 type="button"
                 disabled={saving}
                 onClick={() => void saveDesign({ force: true })}
-                className="rounded bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500 disabled:bg-gray-600 disabled:text-gray-400"
+                className="rounded bg-[var(--warning-solid)] px-3 py-1.5 text-sm font-medium text-[var(--warning-solid-fg)] hover:bg-[var(--warning-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
               >
                 {t(language, 'canvasToolbar.overwriteServer')}
               </button>
