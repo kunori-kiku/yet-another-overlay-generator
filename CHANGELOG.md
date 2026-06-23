@@ -9,6 +9,70 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.10] - 2026-06-23
+
+A smoke-hardening release for the cluster of live-fleet defects and UX gaps surfaced while smoking
+beta.9 on a ~9-node fleet. The headline: the **Node Conditions feedback channel shipped in beta.9
+was lying** — conditions were sampled once, at apply time (while WireGuard was still mid-handshake
+and a self-update still in probation), and never re-sampled while the node was idle, so the panel
+froze a worst-case post-apply snapshot even though the overlay and self-update were healthy. beta.10
+makes the channel honest with a dedicated, extensible telemetry heartbeat, and fixes three more
+smoke findings (a controller-mode Validate 404, a fleet-stranding signing-key re-pin nudge, and the
+mimic catalog's hand-typed `.deb` filenames). Backward-compatible throughout (old agents keep
+reporting on `/report`; old controllers ignore the new field). Published as `v2.0.0-beta.10` and
+promoted to **GitHub Latest**.
+
+### Added
+- **Telemetry monitoring channel — a live-health heartbeat.** A new agent-authenticated
+  `POST /telemetry` carries the node's conditions (and an extensible metrics map) on a fast interval
+  (`--telemetry-interval`, default 30s), separate from the apply-time `/report`. It is built as a
+  reusable monitoring framework: an agent-side `Sampler` interface (conditions are the first probe;
+  latency / resource metrics plug in later with zero wire change) aggregated under a panic-isolating
+  collector. Telemetry carries **no** `applied_generation`/checksum — observability is kept strictly
+  separate from deploy custody, so a heartbeat can only refresh the node's conditions + last-seen and
+  can never advance or regress its applied generation. The panel needs no change (it already projects
+  `node.conditions`).
+- **Mimic catalog discover-and-pick.** The mimic `.deb` catalog gains a "Discover from release"
+  button that lists a GitHub release's `.deb` assets (operator-only, SSRF-guarded, through the
+  gh-proxy) so the operator picks from a checklist and labels each `<codename>-<arch>` instead of
+  hand-typing exact upstream filenames. Debug sidecars (`dbgsym` / `.ddeb`) are filtered out, two
+  picks that would collide on a label are blocked (so a save can't silently drop a pin), and the
+  SHA-256 stays blank — custody is unchanged (the hash is still fetched by the per-row Assist and
+  saved through the validated `/settings` path).
+
+### Fixed
+- **Node Conditions no longer freeze at apply time.** With the telemetry heartbeat, conditions
+  refresh every interval, so a node whose WireGuard finished handshaking and whose self-update left
+  probation reports `wireguard: AllPeersUp` / `selfupdate: Updated` within one interval instead of
+  showing the stale worst-case `LinkDown` / `HealthConfirmedProbationary` indefinitely. `/report`
+  still stamps conditions at apply time; both wholesale-replace the field (last-writer-wins), and the
+  heartbeat — firing far more often — supersedes the stale snapshot.
+- **Controller-mode Validate no longer 404s.** The shipped controller build gates the air-gap
+  compute routes off (`//go:build airgap`), but the panel was POSTing `/api/validate` in controller
+  mode → 404. Validation is structural (schema + semantic, key-free), so it now runs the in-browser
+  TypeScript validator in controller mode too (browser-local verify). The controller neither serves
+  nor calls `/api/validate`, keeping its attack surface minimal — even the `VITE_YAOG_LOCAL_ENGINE=
+  backend` escape hatch is local-mode-only.
+- **Deploy recovers an off-host signing key on a cleared/fresh browser.** A browser with no local
+  signing descriptor showed "no operator signing key is enrolled" on Deploy — even when the
+  controller HAD a credential pinned — nudging the operator toward a fleet-stranding re-pin. The
+  controller now serves the **non-secret** signing descriptor (credentialId + alg + rpId + the
+  audit-only public PEM already baked into every node bundle), and the panel recovers it into the
+  empty local slots (WebAuthn only, fill-empty-only) so Deploy just re-prompts the authenticator for
+  a tap. The deploy precondition message is also split so a pinned-but-unrecovered browser is told to
+  connect the authenticator / re-enroll — never to re-pin.
+
+### Security
+- **Signing-handle recovery preserves the off-host keystone boundary.** The recovered descriptor is
+  non-secret public material the controller already bakes into every node bundle; the private key
+  never leaves the authenticator, a tap is required per signature, and a node verifies each signature
+  against its OWN pinned key — never the served PEM. A compromised controller still cannot forge a
+  deploy.
+- **Release-asset discovery is SSRF-guarded.** The new `release-assets` endpoint reuses the
+  release-pin egress guard (dial-time private-IP reject + the gh-proxy), pins the API host to
+  `api.github.com`, and rejects owner/repo/tag path traversal — so a crafted base cannot reach an
+  internal address.
+
 ## [2.0.0-beta.9] - 2026-06-23
 
 The first release since beta.8, folding in the whole pre-rc.1 program — a backend/local-compute
