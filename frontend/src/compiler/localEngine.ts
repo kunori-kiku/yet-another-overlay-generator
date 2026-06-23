@@ -3,10 +3,13 @@
 // This is the ONE place that (a) decides whether LOCAL-mode compute runs in the browser
 // (the plan-4 TS compiler) or hits the Go air-gap routes, and (b) bridges the store's
 // air-gap action shapes onto the pure compiler library's public surface
-// (./index.ts). The store consults exactly one predicate — `localEngineEnabled()` — and
-// calls exactly these four adapters, so there is a SINGLE local-engine decision point
-// (`mode === 'local' && localEngineEnabled()` in topologyStore.ts), never four scattered
-// branches that could drift (the F3-class hazard the plan calls out).
+// (./index.ts). The store consults one predicate — `localEngineEnabled()` — alongside the
+// controller/local mode, in ONE documented decision shape (the seam docstring in
+// topologyStore.ts), and calls exactly these four adapters — never four scattered branches that
+// could drift (the F3-class hazard the plan calls out). The two action kinds differ only in their
+// controller-mode behavior: validate() is key-free and dispatches in-browser in controller mode
+// too (browser-local verify); compile/export/deploy need private keys and refuse in controller
+// mode (controller compute is server-side, on Deploy).
 //
 // Default-ON (plan-7 Phase 0.5): LOCAL mode runs entirely in the browser by default —
 // `localEngineEnabled()` is true unless VITE_YAOG_LOCAL_ENGINE is explicitly set to
@@ -19,9 +22,11 @@
 // stock controller has nothing to answer them. The store retains the air-gap fetch branches
 // solely as that escape-hatch path; their aggressive removal stays deferred.
 //
-// Controller mode is UNTOUCHED by this module: the store's controller-mode branches (the
-// authenticated same-origin validate fetch and the compile/export/deploy refusal guards)
-// run before any local-engine dispatch and never call these adapters.
+// Controller mode reaches this module for VALIDATE only: validate() is key-free, so in controller
+// mode it runs the in-browser validator (localValidate) here too — browser-local verify, so the
+// controller never serves nor calls /api/validate (minimizing its attack surface). The
+// compile/export/deploy controller-mode refusal guards still run before any local-engine dispatch
+// and never call localCompile/localExport/localDeployScripts (controller compute is server-side).
 
 import type {
   CompileResponse,
