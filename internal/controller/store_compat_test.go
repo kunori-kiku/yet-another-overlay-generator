@@ -237,6 +237,85 @@ func TestStoreTopologyVersioning(t *testing.T) {
 	}
 }
 
+// TestStoreRecordTelemetry covers RecordTelemetry (beta9-smoke-hardening plan-1): a LIVE health
+// heartbeat updates ONLY the node's conditions + last-seen (+ agent version), and CRUCIALLY leaves
+// the deploy-custody fields (AppliedGeneration / LastChecksum / LastHealth) UNCHANGED — the property
+// that lets the heartbeat carry no generation and never regress the applied state. Perpetual: this is
+// the custody-separation invariant the whole /telemetry channel rests on.
+func TestStoreRecordTelemetry(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+
+			// ErrNotFound for an absent node.
+			if err := s.RecordTelemetry(ctx, tenant, "missing", nil, "", time.Now()); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("RecordTelemetry(missing) = %v, want ErrNotFound", err)
+			}
+
+			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
+				t.Fatalf("UpsertNode: %v", err)
+			}
+			// Establish a deploy-status baseline via the apply path.
+			applyAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+			applyCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusWarn, Reason: "LinkDown", Message: "0/2 peers", Since: "2026-06-23T12:00:00Z"}
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 9, "checksum-9", "applied", "v2.0.0-beta.9", []model.Condition{applyCond}, applyAt); err != nil {
+				t.Fatalf("SetAppliedGeneration: %v", err)
+			}
+
+			// A telemetry heartbeat with FRESH conditions + a new version + a later observed-at.
+			beatAt := time.Date(2026, 6, 23, 12, 0, 30, 0, time.UTC)
+			liveCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
+			if err := s.RecordTelemetry(ctx, tenant, "alpha", []model.Condition{liveCond}, "v2.0.0-beta.10", beatAt); err != nil {
+				t.Fatalf("RecordTelemetry: %v", err)
+			}
+			got, err := s.GetNode(ctx, tenant, "alpha")
+			if err != nil {
+				t.Fatalf("GetNode: %v", err)
+			}
+			// Conditions replaced wholesale (live source), server-stamped with the heartbeat's observed-at.
+			if len(got.Conditions) != 1 || got.Conditions[0].Reason != "AllPeersUp" {
+				t.Fatalf("Conditions = %+v, want the live AllPeersUp set", got.Conditions)
+			}
+			if !got.Conditions[0].ObservedAt.Equal(beatAt) {
+				t.Fatalf("condition ObservedAt = %v, want %v (server-stamped with the heartbeat clock)", got.Conditions[0].ObservedAt, beatAt)
+			}
+			if !got.LastSeen.Equal(beatAt) {
+				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, beatAt)
+			}
+			if got.LastAgentVersion != "v2.0.0-beta.10" {
+				t.Fatalf("LastAgentVersion = %q, want v2.0.0-beta.10", got.LastAgentVersion)
+			}
+			// CUSTODY: the deploy-status fields are UNTOUCHED by the heartbeat.
+			if got.AppliedGeneration != 9 {
+				t.Fatalf("AppliedGeneration = %d, want 9 (telemetry must NOT advance/regress it)", got.AppliedGeneration)
+			}
+			if got.LastChecksum != "checksum-9" {
+				t.Fatalf("LastChecksum = %q, want checksum-9 (untouched)", got.LastChecksum)
+			}
+			if got.LastHealth != "applied" {
+				t.Fatalf("LastHealth = %q, want applied (untouched)", got.LastHealth)
+			}
+
+			// An empty-version heartbeat keeps the stored version; nil conditions clears the set.
+			if err := s.RecordTelemetry(ctx, tenant, "alpha", nil, "", beatAt.Add(time.Minute)); err != nil {
+				t.Fatalf("RecordTelemetry(nil conds): %v", err)
+			}
+			got, _ = s.GetNode(ctx, tenant, "alpha")
+			if got.Conditions != nil {
+				t.Fatalf("Conditions = %+v, want nil after a nil-conditions heartbeat", got.Conditions)
+			}
+			if got.LastAgentVersion != "v2.0.0-beta.10" {
+				t.Fatalf("LastAgentVersion = %q, want unchanged on an empty-version heartbeat", got.LastAgentVersion)
+			}
+			if got.AppliedGeneration != 9 {
+				t.Fatalf("AppliedGeneration = %d, want still 9", got.AppliedGeneration)
+			}
+		})
+	}
+}
+
 // TestStoreTopologyHistory covers the bounded version history (plan-2, D7):
 // every PutTopology is retained, the list is newest-first and pruned to
 // TopologyHistoryLimit, retained versions round-trip byte-exact, and pruned or

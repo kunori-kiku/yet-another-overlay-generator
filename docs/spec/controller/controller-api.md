@@ -212,6 +212,7 @@ appropriate status. Byte-valued bundle files are transported **base64-encoded** 
 | `GET`  | agent | `/api/v1/agent/config`              | node bearer    | Fetch the caller's current promoted bundle              |
 | `GET`  | agent | `/api/v1/agent/poll?after=N`        | node bearer    | Long-poll for a generation strictly greater than `N`    |
 | `POST` | agent | `/api/v1/agent/report`              | node bearer    | Report the generation/checksum/health the node applied  |
+| `POST` | agent | `/api/v1/agent/telemetry`           | node bearer    | LIVE health heartbeat (conditions + last-seen; never deploy state) |
 | `POST` | panel | `/api/v1/operator/update-topology`  | operator token | Store the tenant's topology (public-keys-only)         |
 | `POST` | panel | `/api/v1/operator/stage`            | operator token | Compile + stage the enrolled subgraph                  |
 | `POST` | panel | `/api/v1/operator/promote`          | operator token | Promote the staged generation to current               |
@@ -306,6 +307,38 @@ The node reports what it actually applied, closing the desired/applied loop the 
   `store.TouchLastSeen(ctx, tenant, callerNode, now)` + an audit append. The node's registry record then
   carries `AppliedGeneration` / `LastChecksum` / `LastSeen`, which the panel diffs against
   `DesiredGeneration` to show convergence.
+- **Response** — `200` (`{"status": "ok"}`).
+
+### `POST /telemetry` — live health heartbeat
+
+A daemon-mode agent sends a periodic heartbeat so the panel reflects **current** node health, not the
+frozen apply-time snapshot. (Before this channel, Node Conditions were sampled only at apply time —
+when WireGuard was still mid-handshake (`wireguard: LinkDown`) and a self-update was mid-probation
+(`selfupdate: HealthConfirmedProbationary`) — and never refreshed while the node idled, so the panel
+showed a stale worst case.)
+
+- **Auth** — node bearer; node identity from the token (the node reports only on **itself**).
+- **Request** — JSON `{"conditions": [...], "metrics": {...}, "agent_version": "..."}`. It carries the
+  same structured conditions as `/report` PLUS an extensible `metrics` map, and **deliberately no**
+  `applied_generation` / `checksum`: telemetry is **observability, kept strictly separate from deploy
+  custody**.
+- **Handler** — `store.RecordTelemetry(ctx, tenant, callerNode, conditions, agent_version, now)`, which
+  updates ONLY the node's `Conditions` (server-stamped with the controller clock) + `LastSeen`
+  (+ `LastAgentVersion`). It **never** touches `AppliedGeneration` / `LastChecksum` / `LastHealth` /
+  `DesiredGeneration`, so a heartbeat can never advance or regress a node's applied generation. It is
+  **intentionally not audited** — a 30s heartbeat would flood the hash-chained audit log.
+- **Conditions: dual-write.** Conditions now flow from BOTH paths: `/telemetry` is the LIVE source
+  (refreshes every `--telemetry-interval`, default 30s) and `/report` still stamps them at apply-time;
+  both wholesale-replace `node.Conditions`, last-writer-wins, so the heartbeat supersedes the stale
+  apply-time snapshot within one interval. **Back-compat:** a legacy agent (no heartbeat, or
+  `--telemetry-interval 0`) gets conditions only at apply-time on `/report` exactly as before; a new
+  agent against an old controller (no `/telemetry` route) gets a swallowed `404` heartbeat and its
+  `/report` conditions still land.
+- **Extension point.** The agent side is a pluggable `Sampler` framework (`internal/agent/telemetry.go`):
+  the condition sampler is the first probe; a future probe (e.g. per-peer handshake RTT) implements
+  `Sampler`, is registered in `BuildTelemetry`, and writes into the `metrics` map — which already
+  travels on the wire — with no transport change. `Condition.Type`/`Status` are plain strings, so a new
+  condition type needs no model change. (The `metrics` map is currently accepted-but-not-persisted.)
 - **Response** — `200` (`{"status": "ok"}`).
 
 ### `POST /update-topology` — operator stores the topology

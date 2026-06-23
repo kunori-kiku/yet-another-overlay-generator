@@ -9,6 +9,7 @@ package api
 // sibling handler_*.go files.
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -61,6 +62,17 @@ type reportRequestJSON struct {
 	AgentVersion string `json:"agent_version,omitempty"`
 	// Conditions is the structured feedback set (plan-1); omitempty — absent from a legacy agent.
 	Conditions []model.Condition `json:"conditions,omitempty"`
+}
+
+// telemetryRequestJSON is the POST /telemetry body (beta9-smoke-hardening plan-1): a LIVE health
+// heartbeat. It carries conditions + an extensible metrics map but NO applied_generation/checksum —
+// telemetry is observability, kept strictly separate from deploy custody, so a heartbeat updates only
+// the node's conditions + last_seen and can never advance/regress its applied generation. Metrics is
+// the framework's extension slot (a future probe writes named values); accepted-but-not-yet-persisted.
+type telemetryRequestJSON struct {
+	Conditions   []model.Condition          `json:"conditions,omitempty"`
+	Metrics      map[string]json.RawMessage `json:"metrics,omitempty"`
+	AgentVersion string                     `json:"agent_version,omitempty"`
 }
 
 // stageResponseJSON is the wire form of a stage result.

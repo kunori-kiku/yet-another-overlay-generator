@@ -268,6 +268,7 @@ func runRun(args []string) int {
 	after := fs.Int64("after", 0, "controller mode: poll for a generation strictly greater than this (the last applied generation; a daemon advances it each cycle)")
 	daemon := fs.Bool("daemon", false, "controller mode: keep running, continuously long-polling and applying new generations (default: a single poll->apply->report cycle)")
 	ghProxy := fs.String("gh-proxy", "", "controller mode: optional GitHub download proxy prefix for signed agent self-update (e.g. https://gh-proxy.com/)")
+	telemetryInterval := fs.Duration("telemetry-interval", 30*time.Second, "controller daemon mode: how often to send a live health heartbeat (POST /telemetry: node conditions + last-seen, never deploy state). 0 or less disables the heartbeat.")
 	_ = fs.Parse(args)
 
 	if *nodeID == "" {
@@ -278,19 +279,20 @@ func runRun(args []string) int {
 	// Controller mode takes precedence when --controller is set.
 	if *controller != "" {
 		return runControllerMode(controllerModeOpts{
-			nodeID:           *nodeID,
-			baseURL:          *controller,
-			tokenPath:        *tokenPath,
-			pubkeyPath:       *pubkeyPath,
-			operatorCredPath: *operatorCredPath,
-			operatorCredAlg:  *operatorCredAlg,
-			operatorRPID:     *operatorRPID,
-			operatorOrigin:   *operatorOrigin,
-			stateDir:         *stateDir,
-			stagingDir:       *stagingDir,
-			after:            *after,
-			daemon:           *daemon,
-			ghProxy:          *ghProxy,
+			nodeID:            *nodeID,
+			baseURL:           *controller,
+			tokenPath:         *tokenPath,
+			pubkeyPath:        *pubkeyPath,
+			operatorCredPath:  *operatorCredPath,
+			operatorCredAlg:   *operatorCredAlg,
+			operatorRPID:      *operatorRPID,
+			operatorOrigin:    *operatorOrigin,
+			stateDir:          *stateDir,
+			stagingDir:        *stagingDir,
+			after:             *after,
+			daemon:            *daemon,
+			ghProxy:           *ghProxy,
+			telemetryInterval: *telemetryInterval,
 		})
 	}
 
@@ -366,6 +368,10 @@ type controllerModeOpts struct {
 	// ghProxy is the optional GitHub download proxy prefix for signed agent self-update
 	// (plan-9), baked into the systemd unit by the bootstrap when configured. Empty = direct.
 	ghProxy string
+	// telemetryInterval is how often the DAEMON sends a live health heartbeat (POST /telemetry).
+	// 0 or less disables it. Single-shot runs never heartbeat (their one /report carries apply-time
+	// conditions). Default 30s (set in the run flag). beta9-smoke-hardening plan-1.
+	telemetryInterval time.Duration
 }
 
 // runControllerMode drives controller-pull deploys: load the per-node bearer token,
@@ -508,6 +514,19 @@ func runControllerMode(o controllerModeOpts) int {
 	// for OTHER nodes. install.sh never runs in those cycles.
 	const errBackoff = 5 * time.Second
 	fmt.Fprintf(os.Stderr, "agent: controller daemon started (node %s, resume @%d)\n", o.nodeID, lastAppliedGen)
+
+	// LIVE health heartbeat (beta9-smoke-hardening plan-1): a DEDICATED goroutine re-samples the node's
+	// conditions on an interval and POSTs them to /telemetry, so the panel reflects CURRENT health
+	// instead of the frozen apply-time snapshot (a pre-handshake wireguard:LinkDown, a mid-probation
+	// selfupdate). It is decoupled from the poll loop — it reads only the agent's persisted State + a
+	// read-only `wg show`, and the client's immutable fields, carrying no generation — so it needs no
+	// lock. It is daemon-only (a single-shot run's one /report still carries apply-time conditions). No
+	// context/cancel is needed: the daemon loop below never returns, and a self-update swap is
+	// syscall.Exec (which replaces the whole process image and destroys this goroutine with it).
+	if o.telemetryInterval > 0 {
+		go runHeartbeat(client, agent.BuildTelemetry(o.stateDir), o.telemetryInterval, os.Stderr)
+	}
+
 	finalizedSelfUpdate := false
 	for {
 		resumeGen, applied, err := cycle()
@@ -529,6 +548,32 @@ func runControllerMode(o controllerModeOpts) int {
 			time.Sleep(errBackoff) // idle/rekey wake: pace before re-polling
 		}
 		lastAppliedGen = resumeGen // advance on success, idle skip, or rekey wake; unchanged on a timed-out poll
+	}
+}
+
+// runHeartbeat is the daemon's LIVE health heartbeat loop (beta9-smoke-hardening plan-1). It samples
+// the registered telemetry probes and POSTs the result to /telemetry every `interval`, plus once
+// immediately so a node's current health shows within a round-trip rather than after a full interval.
+// Best-effort: a transport error is logged and swallowed (never disturbs the running overlay / poll
+// loop). It skips a post when there is nothing to report — a never-applied node, or a transient
+// State-read failure — so a momentary empty sample never WIPES the node's last-known conditions
+// (the controller replaces the set wholesale; an applied node always yields at least the configapply
+// condition, so this only ever skips genuinely-empty samples). Runs until the process exits/exec's.
+func runHeartbeat(client *agent.ControllerClient, tel *agent.Telemetry, interval time.Duration, stderr io.Writer) {
+	beat := func() {
+		conds, metrics := tel.Collect(time.Now().UTC())
+		if len(conds) == 0 && len(metrics) == 0 {
+			return
+		}
+		if err := client.Telemetry(conds, metrics); err != nil {
+			fmt.Fprintf(stderr, "agent: telemetry heartbeat: %v\n", err)
+		}
+	}
+	beat()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		beat()
 	}
 }
 

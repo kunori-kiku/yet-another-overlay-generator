@@ -362,6 +362,65 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 	}
 }
 
+// TestControllerClient_Telemetry drives the LIVE health heartbeat end-to-end against the real agent
+// routes (beta9-smoke-hardening plan-1): Telemetry() updates the node's conditions + last-seen +
+// agent version, but CRUCIALLY leaves the deploy-custody fields (AppliedGeneration / LastChecksum)
+// UNTOUCHED — the property that lets the heartbeat carry no generation and never regress deploy state.
+// A bad-token client's Telemetry surfaces a best-effort error (a heartbeat failure never crashes).
+func TestControllerClient_Telemetry(t *testing.T) {
+	env := newCtlEnv(t)
+	node1Token := env.enrollViaAgent(t, "node-1")
+	ctx := context.Background()
+
+	// Deploy baseline (the custody fields the heartbeat must NOT disturb).
+	baseAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	if err := env.store.SetAppliedGeneration(ctx, testTenant, "node-1", 5, "csum-5", "applied", "v-old", nil, baseAt); err != nil {
+		t.Fatalf("SetAppliedGeneration(baseline): %v", err)
+	}
+
+	agentClient, err := agent.NewControllerClient(env.agentSrv.URL, node1Token)
+	if err != nil {
+		t.Fatalf("NewControllerClient(bearer): %v", err)
+	}
+	agentClient.AgentVersion = "v-new"
+	liveCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
+	if err := agentClient.Telemetry([]model.Condition{liveCond}, map[string]any{"sample": "metric"}); err != nil {
+		t.Fatalf("Telemetry: %v", err)
+	}
+
+	node, err := env.store.GetNode(ctx, testTenant, "node-1")
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if len(node.Conditions) != 1 || node.Conditions[0].Reason != "AllPeersUp" {
+		t.Fatalf("Conditions = %+v, want the live AllPeersUp set", node.Conditions)
+	}
+	if node.Conditions[0].ObservedAt.IsZero() {
+		t.Fatalf("condition ObservedAt is zero, want server-stamped")
+	}
+	if node.LastAgentVersion != "v-new" {
+		t.Fatalf("LastAgentVersion = %q, want v-new (telemetry carried it)", node.LastAgentVersion)
+	}
+	// The baseline (SetAppliedGeneration) does not stamp LastSeen, so a non-zero LastSeen proves the
+	// telemetry heartbeat stamped it (the handler uses the real controller clock).
+	if node.LastSeen.IsZero() {
+		t.Fatalf("LastSeen is zero, want stamped by the telemetry heartbeat")
+	}
+	// CUSTODY: the heartbeat must not touch deploy state.
+	if node.AppliedGeneration != 5 {
+		t.Fatalf("AppliedGeneration = %d, want 5 (telemetry must never advance/regress it)", node.AppliedGeneration)
+	}
+	if node.LastChecksum != "csum-5" {
+		t.Fatalf("LastChecksum = %q, want csum-5 (untouched by telemetry)", node.LastChecksum)
+	}
+
+	// Best-effort: a wrong-token client's Telemetry returns an error (server 401), never a panic.
+	bad, _ := agent.NewControllerClient(env.agentSrv.URL, "wrong-token")
+	if err := bad.Telemetry([]model.Condition{liveCond}, nil); err == nil {
+		t.Fatalf("Telemetry(bad token): err = nil, want a best-effort non-2xx error")
+	}
+}
+
 // TestControllerClient_BadOrEmptyToken confirms that authed calls fail without a valid
 // per-node bearer token: an EMPTY token is rejected by the agent's own up-front guard
 // (it cannot present a credential), and a WRONG token is rejected by the server with a

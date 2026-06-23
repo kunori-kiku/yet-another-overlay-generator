@@ -610,6 +610,39 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 	return writeJSONAtomic(p, n)
 }
 
+// RecordTelemetry writes a LIVE health heartbeat: conditions + last-seen (+ agent version when
+// non-empty). It is a strict subset of SetAppliedGeneration — it does NOT touch AppliedGeneration /
+// LastChecksum / LastHealth / DesiredGeneration, so a heartbeat never affects deploy custody.
+func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, agentVersion string, observedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir, err := fs.tenantDir(t)
+	if err != nil {
+		return err
+	}
+	p, err := fs.nodePath(dir, nodeID)
+	if err != nil {
+		return err
+	}
+	var n Node
+	if err := readJSON(p, &n); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if agentVersion != "" {
+		n.LastAgentVersion = agentVersion
+	}
+	n.Conditions = stampConditions(conditions, observedAt)
+	n.LastSeen = observedAt
+	return writeJSONAtomic(p, n)
+}
+
 // TouchLastSeen records that the agent for nodeID checked in at the given time.
 func (fs *FileStore) TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error {
 	if err := ctx.Err(); err != nil {

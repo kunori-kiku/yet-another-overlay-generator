@@ -193,6 +193,9 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
 	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
 	mux.HandleFunc(base+"report", h.requireNode(h.HandleReport))
+	// /telemetry is the LIVE health heartbeat (beta9-smoke-hardening plan-1): per-node bearer auth like
+	// /report, but observability-only — it updates conditions + last_seen and never touches deploy custody.
+	mux.HandleFunc(base+"telemetry", h.requireNode(h.HandleTelemetry))
 	mux.HandleFunc(base+"rekey", h.requireNode(h.HandleRekey))
 	// Bootstrap (plan-5.2): the one-shot install script, served WITHOUT auth (it is
 	// generic; the single-use enrollment token is a flag the operator supplies).
