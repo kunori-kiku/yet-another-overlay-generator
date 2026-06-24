@@ -1,5 +1,6 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
+import { BTN_CTA } from '../shell/styles';
 
 // LocalDeploy is local / manual deploy: generate keys and configs in the browser, download the install
 // artifact bundle or deploy scripts, and run them manually on the target hosts.
@@ -31,7 +32,7 @@ export function LocalDeploy() {
         <button
           onClick={() => compile()}
           disabled={isCompiling || noNodes}
-          className="w-full py-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-fg)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm"
+          className={`w-full py-1.5 ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-sm`}
         >
           {isCompiling
             ? t(language, 'localDeploy.compiling')

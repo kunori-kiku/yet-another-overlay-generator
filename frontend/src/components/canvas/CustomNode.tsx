@@ -2,14 +2,7 @@ import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
-
-const roleColors: Record<string, string> = {
-  peer: 'border-green-500 bg-green-500/15',
-  router: 'border-blue-500 bg-blue-500/15',
-  relay: 'border-yellow-500 bg-yellow-500/15',
-  gateway: 'border-purple-500 bg-purple-500/15',
-  client: 'border-cyan-500 bg-cyan-500/15',
-};
+import { roleHue } from './roleHue';
 
 // Connection handles: node-level, role-colored, always present (same shape before and after
 // compile). Interfaces are a compile product, not a drawing primitive -- onConnect uses only the
@@ -17,17 +10,11 @@ const roleColors: Record<string, string> = {
 // longer render "one handle per interface" (the old shape left only occupied interface handles
 // after compile, which looked like "ports saturated, cannot connect anymore" and implied a new
 // connection would reuse an existing port).
+// The card border/fill AND handle colors both come from the shared ROLE_HUE map (roleHue.ts) so they
+// stay in lockstep with the MiniMap. react-flow's `.react-flow__handle` ships a default background;
+// ROLE_HUE.handle is `!`-important-prefixed so the role color wins.
 const handleClassBase =
   '!w-3.5 !h-3.5 !border-2 transition-all duration-150 hover:!w-4 hover:!h-4';
-
-// react-flow's `.react-flow__handle` ships a default background; the `!` important prefix lets the role color win.
-const roleHandleColorClass: Record<string, string> = {
-  peer: '!border-green-500 !bg-green-500',
-  router: '!border-blue-500 !bg-blue-500',
-  relay: '!border-yellow-500 !bg-yellow-500',
-  gateway: '!border-purple-500 !bg-purple-500',
-  client: '!border-cyan-500 !bg-cyan-500',
-};
 
 const roleIcons: Record<string, string> = {
   peer: '💻',
@@ -76,10 +63,11 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
   // The "show interface details" canvas toggle: interface/port info expands on demand, collapsed by default.
   const showInterfaces = useTopologyStore((state) => state.showInterfaces);
   const role = data.role || 'peer';
-  const colorClass = roleColors[role] || roleColors.peer;
+  const hue = roleHue(role);
+  const colorClass = `${hue.border} ${hue.fill}`;
   const icon = roleIcons[role] || '💻';
   const interfaces: IfaceChip[] = (data.interfaces as IfaceChip[]) || [];
-  const handleClass = `${roleHandleColorClass[role] || roleHandleColorClass.peer} ${handleClassBase}`;
+  const handleClass = `${hue.handle} ${handleClassBase}`;
   const dragHint = t(language, 'customNode.dragToConnect');
   const deemphasized = data.deemphasized === true;
 
@@ -102,7 +90,7 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
 
       <div
         className={`px-3 py-2 rounded-lg border-2 ${colorClass} ${
-          selected ? 'ring-2 ring-[var(--hairline)]' : ''
+          selected ? 'ring-2 ring-[var(--cta)]' : ''
         } min-w-[120px] text-center transition-shadow duration-150 ${
           selected ? 'shadow-lg' : 'shadow'
         }`}
@@ -132,7 +120,7 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
                 <span
                   key={iface.name}
                   className="text-[9px] font-mono px-1 rounded"
-                  style={{ backgroundColor: `${color.bg}30`, color: color.bg }}
+                  style={{ backgroundColor: `${color.bg}30`, color: 'var(--content)' }}
                   title={`${iface.name} :${iface.listenPort}`}
                 >
                   {marker ? `${marker} ` : ''}

@@ -7,15 +7,18 @@ import {
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 
-// Color scheme per edge type
-const edgeColors: Record<string, { stroke: string; label: string; bg: string }> = {
-  'direct':           { stroke: '#22d3ee', label: '#cffafe', bg: '#164e63' },    // cyan
-  'public-endpoint':  { stroke: '#f59e0b', label: '#fef3c7', bg: '#78350f' },    // amber
-  'relay-path':       { stroke: '#a78bfa', label: '#ede9fe', bg: '#4c1d95' },    // violet
-  'candidate':        { stroke: '#6b7280', label: '#e5e7eb', bg: '#374151' },    // gray
+// Per edge-type stroke hue — the CATEGORICAL identity color, kept on the line, the arrow marker, and
+// the label-pill border so each edge type stays recognizable. The label-pill FILL and TEXT are theme
+// tokens (surface-elevated / content), not a hardcoded dark color, so the tag reads on BOTH the light
+// and dark canvas (the old `bg:#164e63 / label:#cffafe` pair was dark-only and washed out on light).
+const edgeStroke: Record<string, string> = {
+  'direct':           '#22d3ee',    // cyan
+  'public-endpoint':  '#f59e0b',    // amber
+  'relay-path':       '#a78bfa',    // violet
+  'candidate':        '#6b7280',    // gray
 };
 
-const defaultColor = { stroke: '#6b7280', label: '#e5e7eb', bg: '#374151' };
+const defaultStroke = '#6b7280';
 
 interface CustomEdgeData {
   edgeType?: string;
@@ -55,7 +58,7 @@ export function CustomEdge({
 }: EdgeProps & { data: CustomEdgeData }) {
   const language = useTopologyStore((state) => state.language);
   const edgeType = data?.edgeType || 'direct';
-  const colors = edgeColors[edgeType] || defaultColor;
+  const stroke = edgeStroke[edgeType] || defaultStroke;
   const rawLabel = data?.label || edgeType;
   const srcName = data?.sourceNodeName || '';
   const tgtName = data?.targetNodeName || '';
@@ -101,12 +104,12 @@ export function CustomEdge({
         id={id}
         path={edgePath}
         style={{
-          stroke: colors.stroke,
+          stroke: stroke,
           strokeWidth,
           opacity: edgeOpacity,
           // pending (uncompiled) edges use a dashed line to distinguish the "port not yet allocated" state
           strokeDasharray: pending ? '7 5' : undefined,
-          filter: selected ? `drop-shadow(0 0 4px ${colors.stroke})` : undefined,
+          filter: selected ? `drop-shadow(0 0 4px ${stroke})` : undefined,
           transition: 'stroke 150ms, stroke-width 150ms, opacity 150ms',
         }}
         markerEnd={`url(#marker-${edgeType})`}
@@ -131,17 +134,17 @@ export function CustomEdge({
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
-              background: colors.bg,
-              color: colors.label,
-              border: `1.5px solid ${colors.stroke}`,
+              background: 'var(--surface-elevated)',
+              color: 'var(--content)',
+              border: `1.5px solid ${stroke}`,
               borderRadius: '4px',
               padding: '2px 6px',
               fontSize: '10px',
               fontWeight: selected ? 700 : 500,
               whiteSpace: 'nowrap',
               boxShadow: selected
-                ? `0 0 8px ${colors.stroke}80`
-                : '0 1px 3px rgba(0,0,0,0.4)',
+                ? `0 0 8px ${stroke}80`
+                : '0 1px 3px rgba(0,0,0,0.15)',
               transition: 'box-shadow 150ms',
             }}
           >
@@ -151,7 +154,7 @@ export function CustomEdge({
               <span
                 title="primary"
                 style={{
-                  color: '#fde68a',
+                  color: 'var(--warning)',
                   fontSize: '12px',
                   lineHeight: 1,
                 }}
@@ -166,9 +169,9 @@ export function CustomEdge({
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '2px',
-                  background: '#78350f',
-                  color: '#fde68a',
-                  border: '1px solid #f59e0b',
+                  background: 'var(--warning-bg)',
+                  color: 'var(--warning)',
+                  border: '1px solid var(--warning-border)',
                   borderRadius: '3px',
                   padding: '0 3px',
                   fontSize: '9px',
@@ -185,8 +188,8 @@ export function CustomEdge({
                   title={`backup ${roleChip}`}
                   style={{
                     fontFamily: 'monospace',
-                    background: `${colors.stroke}30`,
-                    color: colors.label,
+                    background: `${stroke}30`,
+                    color: 'var(--content)',
                     borderRadius: '3px',
                     padding: '0 4px',
                     fontSize: '9px',
@@ -203,8 +206,8 @@ export function CustomEdge({
               <span
                 style={{
                   fontFamily: 'monospace',
-                  background: `${colors.stroke}30`,
-                  color: colors.label,
+                  background: `${stroke}30`,
+                  color: 'var(--content)',
                   borderRadius: '3px',
                   padding: '0 4px',
                   fontStyle: pending ? 'italic' : 'normal',
@@ -230,7 +233,7 @@ export function CustomEdge({
             markerHeight="8"
             orient="auto-start-reverse"
           >
-            <path d="M 0 0 L 12 6 L 0 12 z" fill={colors.stroke} />
+            <path d="M 0 0 L 12 6 L 0 12 z" fill={stroke} />
           </marker>
         </defs>
       </svg>

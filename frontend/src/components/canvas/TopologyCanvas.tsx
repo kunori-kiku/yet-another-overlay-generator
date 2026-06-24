@@ -20,6 +20,7 @@ import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { CustomNode } from './CustomNode';
 import { CustomEdge } from './CustomEdge';
+import { roleHue } from './roleHue';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
 import { resolveNodeInterfaces } from '../../lib/compiledInterfaces';
@@ -635,7 +636,7 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
       fitViewOptions={{ padding: 0.2, duration: 400 }}
       className="bg-[var(--surface)]"
     >
-      <Background color="#374151" gap={20} />
+      <Background color="var(--hairline)" gap={20} />
       <Controls className="!bg-[var(--control)] !border-[var(--hairline)] !text-[var(--content-muted)]" />
       {/* Canvas toolbar: auto-layout + interface-detail toggle. Hidden in the
           read-only preview — auto-layout mutates node positions and the controls are
@@ -660,16 +661,7 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
       </Panel>
       )}
       <MiniMap
-        nodeColor={(n) => {
-          const role = (n.data as Record<string, unknown>)?.role as string;
-          switch (role) {
-            case 'router': return '#3b82f6';
-            case 'relay': return '#eab308';
-            case 'gateway': return '#a855f7';
-            case 'client': return '#06b6d4';
-            default: return '#22c55e';
-          }
-        }}
+        nodeColor={(n) => roleHue((n.data as Record<string, unknown>)?.role as string).hex}
         className="!bg-[var(--surface-elevated)]"
       />
     </ReactFlow>

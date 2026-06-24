@@ -24,7 +24,11 @@
      - control*  : neutral interactive fill (secondary buttons, inputs, toggles, badges)
      - content*  : primary / muted foreground text
      - hairline  : borders, dividers, rings
-     - accent*   : the theme accent (focus rings, primary buttons, active nav)
+     - accent*   : the theme IDENTITY (focus rings, input focus-borders, section headings, brand,
+                   active toggles). Restrained graphite in dark on purpose — do NOT brighten it.
+     - cta*      : the primary call-to-action FILL (Deploy / Compile). Vivid teal in BOTH themes so
+                   the main action never reads grey (the dark accent is graphite). Separate from
+                   accent so the identity stays restrained while the CTA stays vivid.
      - danger/success/warning/info (+ -bg / -border / -solid / -solid-fg): semantic STATUS
                    colors — keep their meaning but stay legible in BOTH themes. Use the base
                    token for icon/text, -bg for a subtle banner fill, -border for its edge,
@@ -33,6 +37,9 @@
   --accent: #0d9488;
   --accent-hover: #0f766e;
   --accent-fg: #ffffff;
+  --cta: #0f766e;
+  --cta-hover: #115e56;
+  --cta-fg: #ffffff;
   --surface: #ffffff;
   --surface-elevated: #f8fafc;
   --surface-sunken: #f1f5f9;
@@ -73,6 +80,9 @@
   --accent: #8b93a1;
   --accent-hover: #a3acbb;
   --accent-fg: #0b0f14;
+  --cta: #14b8a6;
+  --cta-hover: #2dd4bf;
+  --cta-fg: #06241f;
   --surface: #0b0f14;
   --surface-elevated: #11161d;
   --surface-sunken: #080b0f;
