@@ -83,6 +83,18 @@ green.
 - Canvas categorical hues (node role colors, edge-type colors) are KEPT (meaning-bearing); only
   neutral chrome (grid, label pill bg/text, shadows) maps to tokens, and they are made both-mode
   legible. Extract a single `ROLE_HUE` map so node border + handle + MiniMap stop drifting.
+- **Upstream mimic filter semantics (plan-2 Step 0, confirmed via the Debian `mimic.1` manpage):** the
+  filter form is strictly `{local|remote}={ip}:{port}` — **no** port-only or wildcard-IP form, IPv6
+  bracketed, multiple filters are a whitelist (OR). So the fix is the **additive `remote=<peer_ep>`
+  filter** (route-independent, the multi-homing fix) + a `local=` loopback guard, not a port-only match.
+- **plan-2 Step 3 (compile-time validation guard) — deliberately NOT added** (documented, not a silent
+  shrink). The root fix is the install-time `remote=`/loopback change; a compile-time guard cannot see
+  the *runtime* egress IP (the actual failure variable), and a new cross-language validator *code*
+  would either be dead (every mimic interface always gets a listen port, so a `local=` line always
+  exists) or fire on configs already problematic for plain dialing reasons (no endpoint ⇒ undialable),
+  which the existing `validateMimicTransport` + `validateEdgeEndpointConsistency` already cover. Added
+  surface < value; folded into the spec's documented egress limitation instead. The independent review
+  is the arbiter — if it judges the guard a real gap, it becomes a follow-up.
 
 ## Closure criteria
 

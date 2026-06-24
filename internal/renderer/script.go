@@ -1,7 +1,9 @@
 package renderer
 
 import (
+	"net"
 	"sort"
+	"strconv"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
@@ -40,6 +42,14 @@ type InstallScriptConfig struct {
 	// (local=<egress_ip>:<port>). YAOG supplies only the port set; the egress if/ip are probed by bash at
 	// install time — see docs/spec/artifacts/mimic.md "Attaches to the egress NIC".
 	MimicPorts []int
+	// MimicRemotes is the distinct set of mimic peer ENDPOINTS this node dials (host+port from
+	// PeerInfo.Endpoint). Each emits a `remote=<resolved-ip>:<port>` filter line in addition to the
+	// per-listen-port `local=` lines. The remote endpoint is KNOWN and route-independent, so it matches
+	// the obfuscated flow regardless of which local source IP the kernel picks for a multi-homed node —
+	// the root fix for "mimic local= filter used the wrong source IP and did not work". Inbound-only
+	// peers (Endpoint=="") contribute no remote line; the local= lines still catch their flow. Hosts
+	// are resolved to IPs at install time (getent) and IPv6 is bracketed. See docs/spec/artifacts/mimic.md.
+	MimicRemotes []MimicEndpoint
 	// MimicXDPMode is the xdp_mode written into the mimic config ("skb" or "native", already normalized, never empty).
 	// Defaults to "skb" (generic XDP, compatible with VPS NICs that lack native support); "native" when the node explicitly sets it.
 	MimicXDPMode string
@@ -90,23 +100,25 @@ type InstallScriptConfig struct {
 // the path install.sh writes the marker to, and the closed-enum outcome tokens (model.MimicOutcome*).
 // Sourced from package model so the script writer and the agent reader (plan-5) cannot drift.
 type MimicBreadcrumbData struct {
-	Path          string
-	Active        string
-	KernelTooOld  string
-	EbpfLoad      string
-	InstallFailed string
-	FellBackToUDP string
+	Path             string
+	Active           string
+	KernelTooOld     string
+	EbpfLoad         string
+	InstallFailed    string
+	FellBackToUDP    string
+	EgressUnresolved string
 }
 
 // newMimicBreadcrumbData returns the breadcrumb constants from package model (single source of truth).
 func newMimicBreadcrumbData() MimicBreadcrumbData {
 	return MimicBreadcrumbData{
-		Path:          model.MimicBreadcrumbPath,
-		Active:        model.MimicOutcomeActive,
-		KernelTooOld:  model.MimicOutcomeKernelTooOld,
-		EbpfLoad:      model.MimicOutcomeEbpfLoad,
-		InstallFailed: model.MimicOutcomeInstallFailed,
-		FellBackToUDP: model.MimicOutcomeFellBackToUDP,
+		Path:             model.MimicBreadcrumbPath,
+		Active:           model.MimicOutcomeActive,
+		KernelTooOld:     model.MimicOutcomeKernelTooOld,
+		EbpfLoad:         model.MimicOutcomeEbpfLoad,
+		InstallFailed:    model.MimicOutcomeInstallFailed,
+		FellBackToUDP:    model.MimicOutcomeFellBackToUDP,
+		EgressUnresolved: model.MimicOutcomeEgressUnresolved,
 	}
 }
 
@@ -784,12 +796,28 @@ echo "Skipping mimic provisioning; falling back to plain UDP" >&2
 _mimic_breadcrumb {{ shq .MimicBreadcrumb.FellBackToUDP }}
 else
 echo "Provisioning mimic TCP-shaping transport..."
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+# mimic filter helpers. _mimic_ipport formats an IP:port, bracketing IPv6 (mimic's config form is
+# [2001:db8::1]:port). _mimic_resolve maps a peer host to an IP at install time — getent handles
+# both a hostname and a literal IP; the caller falls back to the literal so an IP entered directly
+# still works even if getent is unavailable.
+_mimic_ipport() { case "$1" in *:*) printf '[%s]:%s' "$1" "$2";; *) printf '%s:%s' "$1" "$2";; esac; }
+_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}' || true; }
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+# A loopback src (e.g. 1.1.1.1 null-routed/blackholed) or an empty result would yield a loopback-only
+# filter that can NEVER match a real WireGuard egress packet — drop it so we treat the egress as
+# unresolved rather than writing a guaranteed-dead filter.
+case "$MIMIC_EGRESS_IP" in 127.*|::1) MIMIC_EGRESS_IP="" ;; esac
 if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
-    echo "ERROR: could not detect egress interface/IP for mimic (no default route?)" >&2
+{{ if .MimicFallbackUDP -}}
+    echo "WARNING: could not determine a routable egress IP for mimic; falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EgressUnresolved }}
+{{ else -}}
+    echo "ERROR: could not determine a routable egress IP for mimic; mimic required by this link's policy (no fallback)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EgressUnresolved }}
     exit 1
-fi
+{{ end -}}
+else
 echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
 # eBPF gate: mimic is an eBPF (TC/XDP) program — a kernel without BPF cannot run it. This is the
 # kernel-too-old case (the dominant mimic-failure mode the per-link fallback policy guards).
@@ -803,12 +831,22 @@ if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
     exit 1
 {{ end -}}
 else
-# One filter per mimic listen port on this node; all OR'ed by mimic. xdp_mode is operator-selectable
-# per node (default skb for portability; native opt-in via Node.xdp_mode) — see mimic.md.
+# Two filter families, all OR'ed by mimic (the config is a whitelist), xdp_mode operator-selectable
+# per node (default skb for portability; native opt-in via Node.xdp_mode) — see mimic.md:
+#   local=<egress_ip>:<listenport>  catches the LISTEN direction (peers that dial in to us).
+#   remote=<peer_ip>:<peer_port>    catches every flow to a peer we DIAL. The peer endpoint is known
+#     and route-independent, so it matches even when the kernel picks a different local source IP than
+#     the egress probe found (multi-homing / secondary or floating IPs / policy routing) — the root
+#     fix for "the local= filter used the wrong source IP and mimic did nothing".
 mkdir -p /etc/mimic
 {
     {{ range .MimicPorts -}}
-    echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
+    echo "filter = local=$(_mimic_ipport "$MIMIC_EGRESS_IP" {{ . }})"
+    {{ end -}}
+    {{ range .MimicRemotes -}}
+    _mimic_rip="$(_mimic_resolve {{ shq .Host }})"
+    [ -z "$_mimic_rip" ] && _mimic_rip={{ shq .Host }}
+    echo "filter = remote=$(_mimic_ipport "$_mimic_rip" {{ .Port }})"
     {{ end -}}
     echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
@@ -830,6 +868,7 @@ else
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.EbpfLoad }}
     exit 1
 {{ end -}}
+fi
 fi
 fi
 fi
@@ -995,6 +1034,7 @@ func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBa
 		HasForward:       node.Capabilities.CanForward,
 		HasMimic:         len(mimicPorts) > 0,
 		MimicPorts:       mimicPorts,
+		MimicRemotes:     collectMimicRemotes(peers),
 		MimicXDPMode:     resolveMimicXDPMode(node.XDPMode),
 		MimicFallbackUDP: resolveMimicFallbackUDP(peers),
 		MimicBreadcrumb:  newMimicBreadcrumbData(),
@@ -1039,6 +1079,49 @@ func collectMimicPorts(peers []compiler.PeerInfo) []int {
 	}
 	sort.Ints(ports)
 	return ports
+}
+
+// MimicEndpoint is one mimic peer's dial target (host + port), used to emit a route-independent
+// `remote=<ip>:<port>` filter line. Host may be a hostname (resolved to an IP at install time) or a
+// literal IPv4/IPv6 address.
+type MimicEndpoint struct {
+	Host string
+	Port int
+}
+
+// collectMimicRemotes returns the distinct set of mimic peer endpoints this node dials, parsed from
+// PeerInfo.Endpoint (a "host:port" / "[v6]:port" string). A peer we do not dial (Endpoint=="") or an
+// unparseable/zero-port endpoint contributes nothing — those flows are still covered by the per-port
+// local= lines. Deterministically ordered (host, then port) so the rendered conf is stable.
+func collectMimicRemotes(peers []compiler.PeerInfo) []MimicEndpoint {
+	seen := make(map[string]bool)
+	var out []MimicEndpoint
+	for _, p := range peers {
+		if !p.Mimic || p.Endpoint == "" {
+			continue
+		}
+		host, portStr, err := net.SplitHostPort(p.Endpoint)
+		if err != nil || host == "" {
+			continue
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		key := net.JoinHostPort(host, portStr)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, MimicEndpoint{Host: host, Port: port})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Port < out[j].Port
+	})
+	return out
 }
 
 // NodeTransitCIDRs resolves the transit address pools that a node's SNAT fix should cover.
@@ -1100,8 +1183,12 @@ type ClientInstallScriptConfig struct {
 	// HasMimic / MimicPorts are the same as in InstallScriptConfig: true when the client's sole wg0 link
 	// has transport=="tcp", and MimicPorts is the client wg0's listen port (a single port).
 	// See docs/spec/artifacts/mimic.md.
-	HasMimic     bool
-	MimicPorts   []int
+	HasMimic   bool
+	MimicPorts []int
+	// MimicRemotes is the client wg0's dial target (the router endpoint), emitting a route-independent
+	// `remote=<ip>:<port>` filter line; same semantics as InstallScriptConfig.MimicRemotes. A single
+	// entry (the client has one outbound link) or empty when the endpoint is unknown.
+	MimicRemotes []MimicEndpoint
 	MimicXDPMode string // normalized xdp_mode ("skb"/"native"), see InstallScriptConfig
 	// MimicFallbackUDP / MimicBreadcrumb: same semantics as InstallScriptConfig (plan-5). The client
 	// has a single wg0 link, so the per-node resolution collapses to that link's policy.
@@ -1540,12 +1627,24 @@ echo "Skipping mimic provisioning; falling back to plain UDP" >&2
 _mimic_breadcrumb {{ shq .MimicBreadcrumb.FellBackToUDP }}
 else
 echo "Provisioning mimic TCP-shaping transport..."
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+# mimic filter helpers (IPv6-bracketing + install-time host resolution) — see the per-peer install
+# script for the rationale.
+_mimic_ipport() { case "$1" in *:*) printf '[%s]:%s' "$1" "$2";; *) printf '%s:%s' "$1" "$2";; esac; }
+_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}' || true; }
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+# Drop a loopback/empty egress src (a dead loopback-only filter) — treat as unresolved.
+case "$MIMIC_EGRESS_IP" in 127.*|::1) MIMIC_EGRESS_IP="" ;; esac
 if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
-    echo "ERROR: could not detect egress interface/IP for mimic (no default route?)" >&2
+{{ if .MimicFallbackUDP -}}
+    echo "WARNING: could not determine a routable egress IP for mimic; falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EgressUnresolved }}
+{{ else -}}
+    echo "ERROR: could not determine a routable egress IP for mimic; mimic required by this link's policy (no fallback)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.EgressUnresolved }}
     exit 1
-fi
+{{ end -}}
+else
 echo "  mimic egress: $MIMIC_EGRESS_IF ($MIMIC_EGRESS_IP)"
 # eBPF gate: mimic is an eBPF (TC/XDP) program — a kernel without BPF cannot run it (kernel-too-old).
 if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
@@ -1558,10 +1657,17 @@ if [ ! -d /sys/fs/bpf ] && ! grep -qw bpf /proc/filesystems 2>/dev/null; then
     exit 1
 {{ end -}}
 else
+# local=<egress_ip>:<listenport> (listen direction) + remote=<router_ip>:<port> (the dialed router,
+# route-independent — the multi-homing fix). All OR'ed by mimic's whitelist.
 mkdir -p /etc/mimic
 {
     {{ range .MimicPorts -}}
-    echo "filter = local=${MIMIC_EGRESS_IP}:{{ . }}"
+    echo "filter = local=$(_mimic_ipport "$MIMIC_EGRESS_IP" {{ . }})"
+    {{ end -}}
+    {{ range .MimicRemotes -}}
+    _mimic_rip="$(_mimic_resolve {{ shq .Host }})"
+    [ -z "$_mimic_rip" ] && _mimic_rip={{ shq .Host }}
+    echo "filter = remote=$(_mimic_ipport "$_mimic_rip" {{ .Port }})"
     {{ end -}}
     echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
@@ -1580,6 +1686,7 @@ else
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.EbpfLoad }}
     exit 1
 {{ end -}}
+fi
 fi
 fi
 fi
@@ -1664,6 +1771,14 @@ func buildClientInstallScriptConfig(node *model.Node, clientInfo []*compiler.Cli
 			config.HasMimic = true
 			config.MimicPorts = []int{ci.ListenPort}
 			config.MimicFallbackUDP = ci.MimicFallback == "udp"
+			// The client dials the router at RouterEndpoint (host:port); emit a route-independent
+			// remote= filter for it. Parsed best-effort — an empty/unparseable endpoint just omits the
+			// remote line (the local= line still covers wg0's listen port).
+			if host, portStr, err := net.SplitHostPort(ci.RouterEndpoint); err == nil && host != "" {
+				if port, perr := strconv.Atoi(portStr); perr == nil && port > 0 {
+					config.MimicRemotes = []MimicEndpoint{{Host: host, Port: port}}
+				}
+			}
 		}
 	}
 

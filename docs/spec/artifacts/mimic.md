@@ -116,10 +116,29 @@ and the default deploy is unchanged.
   native capability (reliably probing it from a shell script is fragile, and mimic already probes
   internally); the explicit per-node override is the supported mechanism. Validator accepts only
   empty/`skb`/`native`.
-- **One filter per mimic link**, keyed on that link's allocated listen port. mimic's filter form is
-  `"{local|remote}={ip}:{port}"` (IPv6 in brackets); a node aggregates one filter per local mimic
-  listen port into its single egress config. (Exact directive/file syntax is taken from mimic's
-  source during implementation; this spec fixes the model, not the byte format.)
+- **Two filter families per node**, all OR'ed by mimic's whitelist (`"{local|remote}={ip}:{port}"`,
+  IPv6 bracketed):
+  - `local=<egress_ip>:<listen_port>` — one per local mimic listen port. Catches the **listen**
+    direction (peers that dial in to us). `<egress_ip>` is the default-route source detected at
+    install time (`ip route get`).
+  - `remote=<peer_ip>:<peer_port>` — one per mimic peer this node **dials** (the peer's known
+    endpoint, resolved to an IP at install time). Because the peer endpoint is **route-independent**,
+    this filter matches the obfuscated flow even when the kernel picks a different local source IP than
+    the egress probe found — the fix for the failure mode where a single guessed `local=` IP diverges
+    from WireGuard's real on-the-wire source on a **multi-homed / secondary-IP / policy-routed** host
+    (mimic's match is an exact lookup with no wildcard, so a one-octet IP mismatch shapes nothing and
+    the link silently drops to plain UDP).
+  - **Loopback guard**: a `local=` egress IP that resolves to `127.0.0.0/8` or `::1` (e.g. `1.1.1.1`
+    null-routed) is rejected rather than written as a guaranteed-dead filter; the node reports the
+    `egress_unresolved` breadcrumb and applies its per-link fallback policy (UDP or fail-closed).
+  - **Known residual limitations**: (a) mimic attaches one unit on the *default-route* egress
+    interface; a peer whose route egresses a *different* interface (policy routing / a dedicated WAN) is
+    not covered — per-peer egress-interface attach is a future item. (b) A **dual-stack hostname**
+    endpoint is resolved to a single IP at install time (`getent`, first result) independently of which
+    family WireGuard actually dials, so the `remote=` filter can key on the non-dialed family; the
+    `local=` lines still cover the listen direction. **For mimic links, prefer IP-literal endpoints**
+    (or a single-family hostname) so the `remote=` filter is unambiguous.
+  (Exact directive/file syntax is taken from mimic's source; this spec fixes the model, not the byte format.)
 - **MTU −12** on each mimic WireGuard interface, emitted explicitly in the `.conf`
   (`(node MTU or 1420) − 12`).
 - **Kernel/eBPF required**: the `mimic` kernel module is loaded by the packaged systemd unit's
@@ -147,15 +166,17 @@ shipped `"none"`); the compiler resolves the effective per-link value into `Peer
   sibling `"udp"` link.
 - **Failure categories.** The installer detects, with explicit checks: `kernel_too_old` (no
   eBPF/bpffs), `ebpf_load_failed` (`mimic@<egress>` failed to start), `install_failed` (distro pkg +
-  pinned `.deb` both unavailable), and `fell_back_to_udp` (skipped mimic, link up as UDP); the success
-  case is `active`. A `.deb` download/integrity FAILURE always fails closed regardless of policy — we
-  never proceed past a failed SHA-256 verify, nor silently mask it as a de-cloak.
+  pinned `.deb` both unavailable), `egress_unresolved` (no routable default-route source IP — empty or
+  loopback — so a `local=` filter could never match), and `fell_back_to_udp` (skipped mimic, link up as
+  UDP); the success case is `active`. A `.deb` download/integrity FAILURE always fails closed regardless
+  of policy — we never proceed past a failed SHA-256 verify, nor silently mask it as a de-cloak.
 - **Breadcrumb → Node Condition.** The installer writes the outcome to a small JSON marker at
   `/var/lib/yaog-agent/mimic-status.json` (`model.MimicBreadcrumbPath`), keyed by the closed Go
   constants `model.MimicOutcome*` — never raw stderr. The agent reads it each cycle and emits a
   structured `mimic` Node Condition (`KernelTooOld` / `EbpfLoadFailed` / `InstallFailed` /
-  `FellBackToUDP` / `Active`) with a curated one-line message, so the panel shows *why* mimic is down
-  without a log dump. A fallback is always a `warn` condition (it de-cloaks the link — surface it).
+  `EgressUnresolved` / `FellBackToUDP` / `Active`) with a curated one-line message, so the panel shows
+  *why* mimic is down without a log dump. A fallback is always a `warn` condition (it de-cloaks the
+  link — surface it).
 - **Deployable in both branches.** On fallback the link comes up as plain UDP (endpoint/port are
   mimic-independent; the MTU−12 conf is conservative-safe for UDP), and any half-applied mimic filter
   is de-provisioned so no orphaned shaping survives.

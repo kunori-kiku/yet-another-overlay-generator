@@ -41,8 +41,10 @@ var sshKeyPathCharset = regexp.MustCompile(`^[A-Za-z0-9._:@/\\~ -]+$`)
 // (the `Endpoint = <host>:<port>` line), so the charset admits exactly what a WireGuard endpoint
 // host can be — hostnames, IPv4, and bracketed IPv6 (letters, digits, dot, underscore, colon,
 // square brackets, hyphen) — and forbids whitespace and control/metacharacters that would
-// corrupt the config or confuse the parser. (It is NOT spliced onto a root shell command line —
-// the host never reaches the install script's shell; this is config-integrity defense-in-depth.)
+// corrupt the config or confuse the parser. The host is ALSO shq-escaped (single-quoted) and spliced
+// into the root install shell for a mimic edge (install.sh `_mimic_resolve <host>` resolves it to an
+// IP for the `remote=` filter), so this charset is shell-injection defense-in-depth on top of the
+// quoting — do NOT relax it to admit shell metacharacters.
 var endpointHostCharset = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
 
 // routerIDMAC48 constrains the MAC-48 form of a Babel router-id (D66): six colon-separated

@@ -10,13 +10,13 @@ Generated per-node bash script with phases:
   and checks kernel-eBPF support
 - **Phase 2**: Configuration deployment — copies WG configs, Babel config, sysctl config
 - **Phase 3**: Activation — applies sysctl; for mimic nodes, detects the egress NIC, writes
-  `/etc/mimic/<egress>.conf` (one filter per mimic listen port) and starts `mimic@<egress>` **before**
+  `/etc/mimic/<egress>.conf` (a `local=` filter per mimic listen port + a `remote=` filter per dialed peer) and starts `mimic@<egress>` **before**
   bringing up WireGuard; then starts WG interfaces, configures babeld systemd override, shows status.
   For nodes whose mimic links all resolve to the `udp` fallback policy, a mimic-provisioning failure
   (kernel lacks eBPF / package install / unit start) falls back to plain-UDP WireGuard and writes a
   status breadcrumb; otherwise it fails closed. See [mimic.md](./mimic.md) (UDP fallback).
 
-mimic teardown (one filter per mimic link on the egress NIC, MTU −12 per mimic interface) is detailed
+mimic teardown (`local=`/`remote=` filters on the egress NIC, MTU −12 per mimic interface) is detailed
 in [mimic.md](./mimic.md); uninstall stops/disables `mimic@<egress>`, removes its config and
 modules-load entry, and detaches.
 

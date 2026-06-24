@@ -8,7 +8,7 @@ import { t } from '../i18n';
 
 describe('REASON_LABEL', () => {
   // The keys MUST equal the agent classifyMimic reason codes (plan-5).
-  const reasons = ['Active', 'FellBackToUDP', 'KernelTooOld', 'EbpfLoadFailed', 'InstallFailed'];
+  const reasons = ['Active', 'FellBackToUDP', 'KernelTooOld', 'EbpfLoadFailed', 'InstallFailed', 'EgressUnresolved'];
   it('maps every emitted reason to a present, non-empty EN label', () => {
     for (const r of reasons) {
       const key = REASON_LABEL[r];

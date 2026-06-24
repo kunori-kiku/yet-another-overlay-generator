@@ -169,6 +169,7 @@ export const zh: Record<keyof typeof en, string> = {
   'mimicCond.kernelTooOld': "已回退到 UDP（内核缺少 eBPF）",
   'mimicCond.ebpfFailed': "已回退到 UDP（eBPF 加载失败）",
   'mimicCond.installFailed': "失败即停（mimic 安装失败）",
+  'mimicCond.egressUnresolved': "无可路由的出口 IP",
   'mimicCatalog.debsHeading': "各发行版包",
   'mimicCatalog.debsHint': "每个 <codename>-<arch>（如 bookworm-amd64）一行：.deb 资产名及其 SHA-256。",
   'mimicCatalog.keyLabel': "Codename-arch",
