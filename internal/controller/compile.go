@@ -461,22 +461,29 @@ func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) 
 	return store.PromoteStaged(ctx, t)
 }
 
-// enrolledSubgraph projects a stored topology down to its enrolled subgraph under
-// the render-what's-ready policy.
+// enrolledSubgraph projects a stored topology down to its ready subgraph under the
+// render-what's-ready policy.
 //
-// A topology node is included iff the registry holds a record for it that is
-// NodeApproved with a non-empty WGPublicKey. On every included node it stamps
-// WireGuardPublicKey from the registry value (authoritative: the agent holds the
-// matching private key) and clears WireGuardPrivateKey — zero-knowledge custody
-// means a stray private key from an imported topology must never reach a rendered
-// bundle. Any edge whose FromNodeID or ToNodeID is outside the enrolled set is
-// dropped; that edge activates on a later deploy once its far end enrolls.
+// A topology node is "ready" (included) when its authoritative WireGuard PUBLIC key
+// is known. For a MANAGED node (the default) that key comes from the enrollment
+// registry — the node must be NodeApproved with a non-empty WGPublicKey, and the
+// agent holds the matching private key. For a MANUAL node (deployment_mode=="manual",
+// hand-deployed, no agent, never enrolls) the key comes from the TOPOLOGY itself: the
+// operator registered the node's design-time WireGuardPublicKey and holds its private
+// key off-controller, so the controller stays zero-knowledge — it only ever sees the
+// public half. Either way the included node has WireGuardPrivateKey CLEARED — a stray
+// private key from an imported topology must never reach a rendered bundle.
 //
-// It returns the subgraph plus the list of excluded topology node IDs (skipped).
-// The input topology is never mutated (nodes are projected by value copy).
+// Any edge whose FromNodeID or ToNodeID is not ready is dropped; a managed edge
+// activates on a later deploy once its far end enrolls, while a manual far end is
+// ready immediately from its topology key.
+//
+// It returns the subgraph plus the list of excluded MANAGED node IDs (skipped =
+// not-yet-enrolled). Manual nodes are NEVER listed as skipped — they are intentionally
+// agent-less, not "not yet ready". The input topology is never mutated (value copy).
 func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []string) {
-	// registry indexes the enrolled public key by node ID. A node is enrolled iff it
-	// is NodeApproved with a non-empty WGPublicKey — the admission test.
+	// registry indexes the enrolled public key by node ID. A managed node is enrolled iff
+	// it is NodeApproved with a non-empty WGPublicKey — the admission test.
 	registry := make(map[string]string, len(nodes))
 	for _, n := range nodes {
 		if n.Status == NodeApproved && n.WGPublicKey != "" {
@@ -491,39 +498,53 @@ func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []str
 		AllocSchemaVersion: topo.AllocSchemaVersion,
 	}
 
-	// First pass: the set of nodes whose key material is enrolled.
-	enrolled := make(map[string]bool, len(topo.Nodes))
+	// readyKey resolves a node's authoritative public key: the topology key for a manual
+	// node, the enrollment registry for a managed node. Empty == not ready.
+	readyKey := func(node model.Node) string {
+		if node.IsManual() {
+			return node.WireGuardPublicKey
+		}
+		return registry[node.ID]
+	}
+
+	// First pass: the set of nodes whose public key is known (enrolled-managed OR manual).
+	ready := make(map[string]bool, len(topo.Nodes))
 	for _, node := range topo.Nodes {
-		if _, ok := registry[node.ID]; ok {
-			enrolled[node.ID] = true
+		if readyKey(node) != "" {
+			ready[node.ID] = true
 		}
 	}
 
 	// Render-what's-ready for the client role. A client requires EXACTLY ONE enabled
-	// outbound edge (compiler validateClientEdges is a HARD error otherwise), so an
-	// enrolled client whose dial target is not yet enrolled would be left edgeless and
-	// fail the whole stage. Treat such a client as itself not-ready: exclude it now and
-	// let it activate on a later deploy once its router/relay/gateway enrolls.
+	// outbound edge (compiler validateClientEdges is a HARD error otherwise), so a ready
+	// client whose dial target is not yet ready would be left edgeless and fail the whole
+	// stage. Treat such a client as itself not-ready: exclude it now and let it activate
+	// on a later deploy once its router/relay/gateway is ready.
 	for _, node := range topo.Nodes {
-		if enrolled[node.ID] && node.Role == "client" && !clientTargetEnrolled(topo, node.ID, enrolled) {
-			delete(enrolled, node.ID)
+		if ready[node.ID] && node.Role == "client" && !clientTargetEnrolled(topo, node.ID, ready) {
+			delete(ready, node.ID)
 		}
 	}
 
 	var skipped []string
 	for _, node := range topo.Nodes { // value copy: never mutate the caller's slice
-		if !enrolled[node.ID] {
-			skipped = append(skipped, node.ID)
+		if !ready[node.ID] {
+			// A not-ready MANAGED node is "skipped" (waiting to enroll). A not-ready manual
+			// node would mean a missing topology pubkey — a design error the validator already
+			// rejects before compile — so it is never reported as a transient skip.
+			if !node.IsManual() {
+				skipped = append(skipped, node.ID)
+			}
 			continue
 		}
-		node.WireGuardPublicKey = registry[node.ID]
+		node.WireGuardPublicKey = readyKey(node)
 		node.WireGuardPrivateKey = ""
 		sub.Nodes = append(sub.Nodes, node)
 	}
 
-	// Drop any edge whose far end is not enrolled: it activates on a later deploy.
+	// Drop any edge whose far end is not ready: it activates on a later deploy.
 	for _, edge := range topo.Edges {
-		if enrolled[edge.FromNodeID] && enrolled[edge.ToNodeID] {
+		if ready[edge.FromNodeID] && ready[edge.ToNodeID] {
 			sub.Edges = append(sub.Edges, edge)
 		}
 	}

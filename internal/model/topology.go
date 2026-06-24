@@ -68,6 +68,15 @@ type Node struct {
 	// Role: peer, router, relay, gateway, client.
 	Role string `json:"role"`
 
+	// DeploymentMode: "managed" (default) | "manual". ORTHOGONAL to Role. A "manual" node is deployed
+	// BY HAND (no agent) inside a controller topology — typically because it is not publicly reachable
+	// by the controller, or the operator does not want an agent on it. Empty == "managed" so every
+	// existing topology is unchanged (mirrors Edge.Role's empty-default). A manual node carries its own
+	// pre-known WireGuardPublicKey + a public endpoint in the topology (the controller never enrolls
+	// it); the operator holds its private key off-controller, so zero-knowledge custody is preserved.
+	// See implementation_plans/mixed-controller-local-mode-2026_06_25.
+	DeploymentMode string `json:"deployment_mode,omitempty"`
+
 	// Owning Domain ID (must reference an existing Domain).
 	DomainID string `json:"domain_id"`
 
@@ -110,6 +119,23 @@ type Node struct {
 	SSHPort    int    `json:"ssh_port,omitempty"`     // SSH port (default 22)
 	SSHUser    string `json:"ssh_user,omitempty"`     // SSH username
 	SSHKeyPath string `json:"ssh_key_path,omitempty"` // SSH private-key path
+}
+
+// Value constants for Node.DeploymentMode. An empty value is equivalent to DeploymentManaged.
+const (
+	// DeploymentManaged is an agent-managed node (the default): it enrolls with the controller, which
+	// learns its public key, and an agent pulls + applies its config. This is every pre-existing node.
+	DeploymentManaged = "managed"
+	// DeploymentManual is a hand-deployed node: no agent, never enrolls. Its identity (public key +
+	// endpoint) is carried in the topology, the controller compiles + signs its bundle like any other
+	// node, and the operator installs it by hand.
+	DeploymentManual = "manual"
+)
+
+// IsManual reports whether the node is a hand-deployed (agent-less) manual node. Empty DeploymentMode
+// is managed, so only an explicit "manual" returns true.
+func (n Node) IsManual() bool {
+	return n.DeploymentMode == DeploymentManual
 }
 
 // PublicEndpoint is a public reachable address mapping.
