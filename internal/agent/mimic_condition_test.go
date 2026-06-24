@@ -24,6 +24,7 @@ func TestClassifyMimic(t *testing.T) {
 		{model.MimicOutcomeEbpfLoad, mimicReasonEbpfLoadFailed, model.ConditionStatusWarn},
 		{model.MimicOutcomeInstallFailed, mimicReasonInstallFailed, model.ConditionStatusWarn},
 		{model.MimicOutcomeFellBackToUDP, mimicReasonFellBackToUDP, model.ConditionStatusWarn},
+		{model.MimicOutcomeEgressUnresolved, mimicReasonEgressUnresolved, model.ConditionStatusWarn},
 		{"some_future_token", mimicReasonUnknown, model.ConditionStatusWarn},
 		{"", mimicReasonUnknown, model.ConditionStatusWarn},
 	}

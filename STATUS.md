@@ -14,9 +14,10 @@
      the eBPF filter `local=${MIMIC_EGRESS_IP}:<port>` is pinned to `ip route get 1.1.1.1`'s src
      (`internal/renderer/script.go:788,811`), matched by exact hash with no fallback → diverges from
      WG's real on-the-wire source (multi-homing / secondary IPs / policy routing) or resolves to
-     `lo`/`127.0.0.1` → silent drop to plain UDP. Fix = route-correct per-peer filter + reject
-     loopback egress + compile-time guard + Go test ladder (data-plane confirmation is an owner
-     real-host smoke — not feasible in-sandbox). **plan-3** release.
+     `lo`/`127.0.0.1` → silent drop to plain UDP. Fix = route-independent per-peer `remote=` filter +
+     reject loopback egress + Go test ladder (the compile-time guard was deferred — it can't see the
+     runtime egress IP; see the plan-2 outline decision; data-plane confirmation is an owner real-host
+     smoke, not feasible in-sandbox). **plan-3** release.
   2. **`mixed-controller-local-mode-2026_06_25/`** (ships separately after smokes — the larger
      feature, owner chose **Hybrid Kit / Option C**): per-node `deployment_mode: manual` lets a node
      be deployed by hand (no agent) inside a controller topology. Single chokepoint is

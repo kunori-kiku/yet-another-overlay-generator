@@ -801,9 +801,9 @@ echo "Provisioning mimic TCP-shaping transport..."
 # both a hostname and a literal IP; the caller falls back to the literal so an IP entered directly
 # still works even if getent is unavailable.
 _mimic_ipport() { case "$1" in *:*) printf '[%s]:%s' "$1" "$2";; *) printf '%s:%s' "$1" "$2";; esac; }
-_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}'; }
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}' || true; }
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
 # A loopback src (e.g. 1.1.1.1 null-routed/blackholed) or an empty result would yield a loopback-only
 # filter that can NEVER match a real WireGuard egress packet — drop it so we treat the egress as
 # unresolved rather than writing a guaranteed-dead filter.
@@ -1105,7 +1105,7 @@ func collectMimicRemotes(peers []compiler.PeerInfo) []MimicEndpoint {
 			continue
 		}
 		port, err := strconv.Atoi(portStr)
-		if err != nil || port <= 0 {
+		if err != nil || port <= 0 || port > 65535 {
 			continue
 		}
 		key := net.JoinHostPort(host, portStr)
@@ -1630,9 +1630,9 @@ echo "Provisioning mimic TCP-shaping transport..."
 # mimic filter helpers (IPv6-bracketing + install-time host resolution) — see the per-peer install
 # script for the rationale.
 _mimic_ipport() { case "$1" in *:*) printf '[%s]:%s' "$1" "$2";; *) printf '%s:%s' "$1" "$2";; esac; }
-_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}'; }
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}' || true; }
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
 # Drop a loopback/empty egress src (a dead loopback-only filter) — treat as unresolved.
 case "$MIMIC_EGRESS_IP" in 127.*|::1) MIMIC_EGRESS_IP="" ;; esac
 if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then

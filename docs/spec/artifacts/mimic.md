@@ -131,9 +131,13 @@ and the default deploy is unchanged.
   - **Loopback guard**: a `local=` egress IP that resolves to `127.0.0.0/8` or `::1` (e.g. `1.1.1.1`
     null-routed) is rejected rather than written as a guaranteed-dead filter; the node reports the
     `egress_unresolved` breadcrumb and applies its per-link fallback policy (UDP or fail-closed).
-  - **Known residual limitation**: mimic attaches one unit on the *default-route* egress interface; a
-    peer whose route egresses a *different* interface (policy routing / a dedicated WAN) is not covered.
-    Per-peer egress-interface attach is a future item.
+  - **Known residual limitations**: (a) mimic attaches one unit on the *default-route* egress
+    interface; a peer whose route egresses a *different* interface (policy routing / a dedicated WAN) is
+    not covered — per-peer egress-interface attach is a future item. (b) A **dual-stack hostname**
+    endpoint is resolved to a single IP at install time (`getent`, first result) independently of which
+    family WireGuard actually dials, so the `remote=` filter can key on the non-dialed family; the
+    `local=` lines still cover the listen direction. **For mimic links, prefer IP-literal endpoints**
+    (or a single-family hostname) so the `remote=` filter is unambiguous.
   (Exact directive/file syntax is taken from mimic's source; this spec fixes the model, not the byte format.)
 - **MTU −12** on each mimic WireGuard interface, emitted explicitly in the `.conf`
   (`(node MTU or 1420) − 12`).

@@ -769,9 +769,9 @@ echo "Provisioning mimic TCP-shaping transport..."
 # both a hostname and a literal IP; the caller falls back to the literal so an IP entered directly
 # still works even if getent is unavailable.
 _mimic_ipport() { case "$1" in *:*) printf '[%s]:%s' "$1" "$2";; *) printf '%s:%s' "$1" "$2";; esac; }
-_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}'; }
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}' || true; }
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
 # A loopback src (e.g. 1.1.1.1 null-routed/blackholed) or an empty result would yield a loopback-only
 # filter that can NEVER match a real WireGuard egress packet — drop it so we treat the egress as
 # unresolved rather than writing a guaranteed-dead filter.
@@ -1343,9 +1343,9 @@ echo "Provisioning mimic TCP-shaping transport..."
 # mimic filter helpers (IPv6-bracketing + install-time host resolution) — see the per-peer install
 # script for the rationale.
 _mimic_ipport() { case "$1" in *:*) printf '[%s]:%s' "$1" "$2";; *) printf '%s:%s' "$1" "$2";; esac; }
-_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}'; }
-MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+_mimic_resolve() { getent ahosts "$1" 2>/dev/null | awk 'NR==1{print $1; exit}' || true; }
+MIMIC_EGRESS_IF="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)"
+MIMIC_EGRESS_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
 # Drop a loopback/empty egress src (a dead loopback-only filter) — treat as unresolved.
 case "$MIMIC_EGRESS_IP" in 127.*|::1) MIMIC_EGRESS_IP="" ;; esac
 if [ -z "$MIMIC_EGRESS_IF" ] || [ -z "$MIMIC_EGRESS_IP" ]; then
@@ -1491,8 +1491,9 @@ function splitHostPort(s: string): { host: string; port: string } | null {
 // collectMimicRemotes returns the distinct, deterministically-ordered set of mimic peer endpoints this
 // node dials (PeerInfo.endpoint), each emitting a route-independent remote= filter. Mirrors
 // renderer.collectMimicRemotes (script.go): inbound-only ('' endpoint), unparseable, and zero/non-numeric
-// port entries are skipped; deduped; sorted by host then port.
-function collectMimicRemotes(peers: PeerInfo[]): MimicEndpoint[] {
+// /out-of-range port entries are skipped; deduped; sorted by host then port. Exported for the direct
+// parity unit test (script.test.ts) so the Go↔TS equivalence is CI-locked, not only one-off-verified.
+export function collectMimicRemotes(peers: PeerInfo[]): MimicEndpoint[] {
   const seen = new Set<string>();
   const out: MimicEndpoint[] = [];
   for (const p of peers) {
@@ -1500,7 +1501,9 @@ function collectMimicRemotes(peers: PeerInfo[]): MimicEndpoint[] {
     const hp = splitHostPort(p.endpoint);
     if (hp === null || hp.host === '' || !/^\d+$/.test(hp.port)) continue;
     const port = parseInt(hp.port, 10);
-    if (port <= 0) continue;
+    // 0 < port <= 65535: the valid port range. The upper bound matches Go (strconv.Atoi overflows ->
+    // skip) and prevents a huge digit string rendering as a corrupt exponential (e.g. "1e+22").
+    if (port <= 0 || port > 65535) continue;
     const key = hp.host + ' ' + hp.port;
     if (seen.has(key)) continue;
     seen.add(key);
