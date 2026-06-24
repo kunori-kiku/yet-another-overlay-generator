@@ -99,6 +99,14 @@ parallel off plan-1; plan-7 gates on all.
   operator who authors the design + signs the manifest).
 - Manual nodes are excluded from `SkippedUnenrolled` and from convergence (D3) but INCLUDED in the
   signed membership manifest (D4).
+- **plan-1 scope refinements (during execution):** (a) `GenerateKeysWith` (render.go) needed **NO
+  change** — for a manual node the AgentHeld branch already trusts the pubkey `enrolledSubgraph` stamps
+  onto it from the topology + sets the private placeholder. Verified, not modified. (b) The "**a manual
+  node MUST carry a pubkey**" SEMANTIC error was **moved from plan-1 to plan-2** (controller
+  registration): the shared semantic validator runs PRE-keygen and would false-fire on a local-mode
+  manual node whose key is generated at compile; the controller registration path is the correct home.
+  plan-1 still ships the `deployment_mode` schema enum check (Go + TS) + the `enrolledSubgraph`
+  admission + tests; the not-ready-manual node is excluded (not skipped) defensively.
 
 ## Closure criteria
 
