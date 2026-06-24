@@ -1,8 +1,32 @@
 # STATUS
-<!-- regenerated: 2026-06-23 -->
-<!-- by: v2.0.0-beta.11 published to GitHub Latest (beta.10 smoke-fix follow-up) -->
+<!-- regenerated: 2026-06-25 -->
+<!-- by: draft-implementation-plan — two new subjects foldered (theme+mimic fixes; mixed controller+local mode) -->
 
 ## Active work
+
+- **TWO new subjects DRAFTED (2026-06-25), from three owner-reported items while running the live
+  fleet; both foldered under `implementation_plans/` with full per-plan detail. Latest shipped is
+  `v2.0.0-beta.13` (GitHub Latest).**
+  1. **`theme-and-mimic-fixes-2026_06_25/`** (ships first as a fixes beta — split-release D8):
+     **plan-1** theme stragglers (node-condition chips illegible in light mode → tokens; canvas grid +
+     edge labels not theme-aware → neutral-map + `ROLE_HUE` dedup; Deploy button grey in dark →
+     new `--cta` token family). **plan-2** the mimic "using local, did not work" bug — root cause:
+     the eBPF filter `local=${MIMIC_EGRESS_IP}:<port>` is pinned to `ip route get 1.1.1.1`'s src
+     (`internal/renderer/script.go:788,811`), matched by exact hash with no fallback → diverges from
+     WG's real on-the-wire source (multi-homing / secondary IPs / policy routing) or resolves to
+     `lo`/`127.0.0.1` → silent drop to plain UDP. Fix = route-correct per-peer filter + reject
+     loopback egress + compile-time guard + Go test ladder (data-plane confirmation is an owner
+     real-host smoke — not feasible in-sandbox). **plan-3** release.
+  2. **`mixed-controller-local-mode-2026_06_25/`** (ships separately after smokes — the larger
+     feature, owner chose **Hybrid Kit / Option C**): per-node `deployment_mode: manual` lets a node
+     be deployed by hand (no agent) inside a controller topology. Single chokepoint is
+     `enrolledSubgraph` (`internal/controller/compile.go:477-532`); `peers.go` needs ZERO change.
+     7 plans: model+compiler admission → registration+custody+keystone membership → signed manual
+     bundle+download → on-box kit (keygen→descriptor→register→splice) → optional telemetry-only
+     reporter → frontend → release. Zero-knowledge custody inviolable; manual nodes are signed
+     membership members (D4); shown "manual/unmonitored", excluded from convergence (D3).
+  - **NEXT = execute `theme-and-mimic-fixes` plan-1 + plan-2 (file-disjoint, parallelizable), each
+    per-PR workflow-reviewed → fixed → re-reviewed → merged, then plan-3 release.**
 
 - **`v2.0.0-beta.11` — published to GitHub Latest (2026-06-23, PR #183; beta.10 demoted).** A fast
   follow-up fixing two findings the owner hit smoking beta.10 on the live fleet (both reproduced
