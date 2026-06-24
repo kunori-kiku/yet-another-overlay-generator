@@ -333,6 +333,7 @@ func TestCollectMimicRemotes(t *testing.T) {
 		{Mimic: true, Endpoint: ""},                    // inbound-only -> skipped
 		{Mimic: true, Endpoint: "garbage-no-port"},     // unparseable -> skipped
 		{Mimic: true, Endpoint: "203.0.113.2:0"},       // zero port -> skipped
+		{Mimic: true, Endpoint: "203.0.113.3:70000"},   // out-of-range port -> skipped (parity w/ TS)
 		{Mimic: false, Endpoint: "198.51.100.1:51820"}, // non-mimic -> skipped
 	}
 	got := collectMimicRemotes(peers)
