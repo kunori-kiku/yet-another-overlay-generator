@@ -9,6 +9,34 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.14] - 2026-06-25
+
+Two bounded fixes surfaced while running the live fleet: the mimic TCP-transport filter now matches
+the real on-the-wire flow (it silently fell back to plain UDP on multi-homed hosts), and the last
+dark/light theme stragglers now follow the active theme.
+
+### Fixed
+- **mimic `transport: tcp` links silently dropped to plain UDP on some hosts.** The eBPF filter was a
+  single `local=<egress_ip>:<port>` line pinned to the source IP of the route to `1.1.1.1`, matched by
+  an exact lookup with no fallback — so when that IP didn't equal the source IP WireGuard actually put
+  on the wire (multi-homing / secondary or floating IPs / policy routing), or resolved to a loopback
+  address when `1.1.1.1` was null-routed, mimic shaped nothing and the tunnel went out as plain UDP.
+  Now each node also emits a route-independent `remote=<peer_ip>:<peer_port>` filter per dialed mimic
+  peer (the peer endpoint is known and stable, so it matches regardless of the local source IP), keeps
+  the `local=` lines for the listen direction, rejects a loopback/empty egress IP (new
+  `egress_unresolved` condition + the per-link UDP/fail-closed policy instead of a dead filter), and
+  formats IPv6 filters correctly. The install script no longer aborts under `set -euo pipefail` when
+  host resolution or egress detection fails (it degrades per policy). Rendered byte-for-byte identically
+  by the in-browser compiler and the controller. **Note:** the data-plane behavior is confirmed by a
+  two-host real-host smoke (see `docs/spec/artifacts/mimic.md`); for mimic links prefer IP-literal
+  endpoints so the `remote=` filter is unambiguous.
+- **The last panel light/dark theme inconsistencies.** Node-condition chips were dark-only (illegible
+  in light mode) — now driven by the semantic status tokens; the canvas grid and edge labels are now
+  theme-aware (the categorical edge-type / role hues are kept, deduplicated into one shared map); and
+  the primary **Deploy / Compile** buttons no longer render grey in dark mode — they use a new
+  dedicated `--cta` token (vivid teal in both themes) instead of the deliberately-graphite identity
+  accent.
+
 ## [2.0.0-beta.13] - 2026-06-24
 
 Makes the whole panel follow the light/dark theme — the feature views now theme like the app-shell —
