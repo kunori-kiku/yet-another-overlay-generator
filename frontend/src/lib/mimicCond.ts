@@ -15,4 +15,5 @@ export const REASON_LABEL: Record<string, MessageKey> = {
   KernelTooOld: 'mimicCond.kernelTooOld',
   EbpfLoadFailed: 'mimicCond.ebpfFailed',
   InstallFailed: 'mimicCond.installFailed',
+  EgressUnresolved: 'mimicCond.egressUnresolved',
 };
