@@ -9,12 +9,14 @@ import type { NodeCondition } from '../types/controller';
 // STATUS_CLASS maps a condition status to a Tailwind badge class. The canonical set is
 // ok/warn/error/unknown (the backend classify() is the source of truth); an unrecognized status
 // falls through to the neutral 'unknown' look so a new status never renders blank. Mirrors
-// UpdateStatusChip.CHIP_CLASS.
+// UpdateStatusChip.CHIP_CLASS — drives the chip from the semantic STATUS token families
+// (ok→success, warn→warning, error→danger, unknown→info) so the chip is legible in BOTH light and
+// dark themes (the prior raw `*-900/40 text-*-300` palette was dark-only and went light-on-light).
 const STATUS_CLASS: Record<string, string> = {
-  ok: 'bg-green-900/40 text-green-300 border-green-700',
-  unknown: 'bg-blue-900/40 text-blue-300 border-blue-700',
-  warn: 'bg-amber-900/40 text-amber-300 border-amber-700',
-  error: 'bg-red-900/40 text-red-300 border-red-700',
+  ok: 'bg-[var(--success-bg)] text-[var(--success)] border-[var(--success-border)]',
+  unknown: 'bg-[var(--info-bg)] text-[var(--info)] border-[var(--info-border)]',
+  warn: 'bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning-border)]',
+  error: 'bg-[var(--danger-bg)] text-[var(--danger)] border-[var(--danger-border)]',
 };
 
 // conditionVisual is the PURE status→class resolver (no DOM). Any unrecognized status ⇒ the neutral

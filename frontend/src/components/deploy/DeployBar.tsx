@@ -8,6 +8,7 @@ import {
 } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t } from '../../i18n';
+import { BTN_CTA } from '../shell/styles';
 
 // DeployBar publishes the current topology to the fleet. controllerStore.deploy() chains
 // update-topology → stage → (KEYSTONE signing) → promote → refresh, the whole promote-to-fleet flow.
@@ -132,7 +133,7 @@ export function DeployBar() {
                 ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })
                 : undefined
             }
-            className="px-4 py-2 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
+            className={`px-4 py-2 text-sm ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded font-medium`}
           >
             {loading
               ? t(language, 'deployBar.deploying')
