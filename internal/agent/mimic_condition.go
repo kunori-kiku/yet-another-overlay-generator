@@ -19,12 +19,13 @@ import (
 // classification of install.sh's breadcrumb outcome (plain string constants; classifyMimic returns
 // string, matching the model.ConditionStatus*/ConditionType* idiom).
 const (
-	mimicReasonActive         = "Active"
-	mimicReasonKernelTooOld   = "KernelTooOld"
-	mimicReasonEbpfLoadFailed = "EbpfLoadFailed"
-	mimicReasonInstallFailed  = "InstallFailed"
-	mimicReasonFellBackToUDP  = "FellBackToUDP"
-	mimicReasonUnknown        = "Unknown"
+	mimicReasonActive           = "Active"
+	mimicReasonKernelTooOld     = "KernelTooOld"
+	mimicReasonEbpfLoadFailed   = "EbpfLoadFailed"
+	mimicReasonInstallFailed    = "InstallFailed"
+	mimicReasonFellBackToUDP    = "FellBackToUDP"
+	mimicReasonEgressUnresolved = "EgressUnresolved"
+	mimicReasonUnknown          = "Unknown"
 )
 
 // mimicBreadcrumb is the on-disk JSON install.sh writes. Only the closed outcome token is trusted;
@@ -52,6 +53,8 @@ func classifyMimic(outcome string) (reason, status, message string) {
 		return mimicReasonInstallFailed, model.ConditionStatusWarn, "Mimic install failed"
 	case model.MimicOutcomeFellBackToUDP:
 		return mimicReasonFellBackToUDP, model.ConditionStatusWarn, "Mimic: fell back to plain UDP"
+	case model.MimicOutcomeEgressUnresolved:
+		return mimicReasonEgressUnresolved, model.ConditionStatusWarn, "Mimic: no routable egress IP"
 	default:
 		return mimicReasonUnknown, model.ConditionStatusWarn, "Mimic status unrecognized"
 	}

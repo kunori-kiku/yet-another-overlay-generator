@@ -56,9 +56,9 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 		// 3) /etc/mimic config directory and write
 		"mkdir -p /etc/mimic",
 		"/etc/mimic/",
-		// 4) one filter = local= line per port, carrying that interface's listen port 51820
+		// 4) one filter = local= line per listen port, formatted via the IPv6-safe _mimic_ipport helper
 		"filter = local=",
-		":51820",
+		"_mimic_ipport()",
 		// 5) mimic@<egress> enable and start
 		`systemctl enable --now "mimic@`,
 		// 6) the uninstall section's mimic teardown (disable + delete config)
@@ -71,10 +71,10 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 		}
 	}
 
-	// The listen port must appear inside the filter line (a stronger correlated assertion: not just
-	// 51820 appearing in isolation).
-	if !strings.Contains(script, "filter = local=${MIMIC_EGRESS_IP}:51820") {
-		t.Errorf("the mimic filter line should carry the interface listen port 51820 (local=...:51820), but it is missing")
+	// The listen port must appear inside the local= filter line, in the new IPv6-safe form
+	// (a stronger correlated assertion: not just 51820 appearing in isolation).
+	if !strings.Contains(script, `filter = local=$(_mimic_ipport "$MIMIC_EGRESS_IP" 51820)`) {
+		t.Errorf("the mimic filter line should carry the interface listen port 51820 via _mimic_ipport, but it is missing")
 	}
 }
 
@@ -146,22 +146,25 @@ func TestRenderInstallScript_MimicPorts_DedupSorted(t *testing.T) {
 		t.Fatalf("render failed: %v", err)
 	}
 
-	// One filter line each for the two deduplicated mimic ports.
-	for _, port := range []string{":51820", ":51822"} {
-		if c := strings.Count(script, "filter = local=${MIMIC_EGRESS_IP}"+port); c != 1 {
-			t.Errorf("mimic port %s should appear in exactly 1 filter line, got %d", port, c)
+	// One local= filter line each for the two deduplicated mimic ports (new IPv6-safe _mimic_ipport form).
+	localFilter := func(port string) string {
+		return `filter = local=$(_mimic_ipport "$MIMIC_EGRESS_IP" ` + port + `)`
+	}
+	for _, port := range []string{"51820", "51822"} {
+		if c := strings.Count(script, localFilter(port)); c != 1 {
+			t.Errorf("mimic port %s should appear in exactly 1 local= filter line, got %d", port, c)
 		}
 	}
 
 	// Ascending order: the 51820 filter line should come before 51822.
-	i20 := strings.Index(script, "filter = local=${MIMIC_EGRESS_IP}:51820")
-	i22 := strings.Index(script, "filter = local=${MIMIC_EGRESS_IP}:51822")
+	i20 := strings.Index(script, localFilter("51820"))
+	i22 := strings.Index(script, localFilter("51822"))
 	if i20 < 0 || i22 < 0 || i20 >= i22 {
 		t.Errorf("mimic filter lines should be in ascending port order (51820 before 51822), got idx20=%d idx22=%d", i20, i22)
 	}
 
 	// Negative assertion: a non-mimic interface's port 51999 must not enter any filter line.
-	if strings.Contains(script, "filter = local=${MIMIC_EGRESS_IP}:51999") {
+	if strings.Contains(script, localFilter("51999")) {
 		t.Errorf("a non-mimic interface's port 51999 should not appear in a mimic filter line")
 	}
 }
@@ -234,6 +237,117 @@ func TestRenderInstallScript_MimicXDPMode(t *testing.T) {
 	}
 	if strings.Contains(natScript, "xdp_mode = skb") {
 		t.Errorf("XDPMode=native should not write 'xdp_mode = skb', but it appeared")
+	}
+}
+
+// TestRenderInstallScript_MimicRemoteFilters covers the route-independent remote= filter (the root
+// fix for "mimic local= used the wrong source IP and did nothing"): every mimic peer this node DIALS
+// (PeerInfo.Endpoint != "") emits a `filter = remote=<resolved-ip>:<port>` line via the install-time
+// resolver; an inbound-only mimic peer (Endpoint=="") emits none. IPv6 endpoints are parsed via
+// net.SplitHostPort and the bracketed host is resolved.
+func TestRenderInstallScript_MimicRemoteFilters(t *testing.T) {
+	node := mimicRenderNode()
+	peers := []compiler.PeerInfo{
+		// dialed peer with an IPv4 endpoint -> remote= filter
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408,
+			Endpoint: "203.0.113.5:51820"},
+		// dialed peer with an IPv6 endpoint -> remote= filter, host parsed without brackets
+		{NodeID: "n3", NodeName: "gamma", InterfaceName: "wg-gamma", ListenPort: 51821,
+			LocalTransitIP: "10.10.0.3", LocalLinkLocal: "fe80::3", Mimic: true, MTU: 1408,
+			Endpoint: "[2001:db8::5]:51821"},
+		// inbound-only mimic peer (no endpoint we dial) -> NO remote= line, but its local= port stands
+		{NodeID: "n4", NodeName: "delta", InterfaceName: "wg-delta", ListenPort: 51822,
+			LocalTransitIP: "10.10.0.5", LocalLinkLocal: "fe80::5", Mimic: true, MTU: 1408,
+			Endpoint: ""},
+	}
+	script, err := RenderInstallScript(node, peers, true)
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+
+	// The IPv4 dialed peer must produce a resolve call + a remote= filter on its endpoint port.
+	if !strings.Contains(script, "_mimic_resolve '203.0.113.5'") {
+		t.Errorf("expected an install-time resolve of the IPv4 peer endpoint host, missing")
+	}
+	// The IPv6 host must be parsed WITHOUT brackets for resolution (net.SplitHostPort strips them).
+	if !strings.Contains(script, "_mimic_resolve '2001:db8::5'") {
+		t.Errorf("expected the IPv6 peer endpoint host parsed bracket-free for resolution, missing")
+	}
+	// Both dialed peers emit a remote= filter on the resolved IP (IPv6-safe via _mimic_ipport).
+	if c := strings.Count(script, `filter = remote=$(_mimic_ipport "$_mimic_rip"`); c != 2 {
+		t.Errorf("expected exactly 2 remote= filter lines (the two dialed peers), got %d", c)
+	}
+	// All three mimic listen ports still get a local= line (the inbound-only peer included).
+	for _, p := range []string{"51820", "51821", "51822"} {
+		if !strings.Contains(script, `filter = local=$(_mimic_ipport "$MIMIC_EGRESS_IP" `+p+`)`) {
+			t.Errorf("expected a local= filter for listen port %s, missing", p)
+		}
+	}
+}
+
+// TestRenderInstallScript_MimicEgressGuards covers the loopback/unresolved-egress guard (the literal
+// "using local" failure): a loopback or empty egress src is dropped rather than written as a dead
+// local=127.0.0.1 filter, and the new egress_unresolved breadcrumb is emitted. Also pins the
+// egress-detection command shape (previously unasserted) so the owner runbook stays in sync.
+func TestRenderInstallScript_MimicEgressGuards(t *testing.T) {
+	node := mimicRenderNode()
+	peers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408},
+	}
+	script, err := RenderInstallScript(node, peers, true)
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	for _, frag := range []string{
+		// egress-detection command shape (the runbook's compare points)
+		"ip route show default",
+		"ip route get 1.1.1.1",
+		// loopback/empty rejection: a 127.* or ::1 src is blanked so it is treated as unresolved
+		`case "$MIMIC_EGRESS_IP" in 127.*|::1)`,
+		// the new closed-enum breadcrumb token surfaces the unresolved-egress outcome to the agent
+		"egress_unresolved",
+		// the IPv6-safe filter helpers are defined
+		"_mimic_ipport()",
+		"_mimic_resolve()",
+	} {
+		if !strings.Contains(script, frag) {
+			t.Errorf("mimic egress guard fragment %q missing", frag)
+		}
+	}
+	// A dead loopback literal must never be hardcoded into a filter line.
+	if strings.Contains(script, "local=127.0.0.1:") {
+		t.Errorf("a loopback local= filter must never be rendered")
+	}
+}
+
+// TestCollectMimicRemotes unit-tests the endpoint collector: only dialed mimic peers contribute, the
+// set is deduped + deterministically ordered, and unparseable/zero-port/empty endpoints are skipped.
+func TestCollectMimicRemotes(t *testing.T) {
+	peers := []compiler.PeerInfo{
+		{Mimic: true, Endpoint: "203.0.113.9:51820"},
+		{Mimic: true, Endpoint: "203.0.113.1:51820"},   // out of order -> sorts before .9
+		{Mimic: true, Endpoint: "203.0.113.1:51820"},   // duplicate -> deduped
+		{Mimic: true, Endpoint: "[2001:db8::1]:51900"}, // IPv6 -> host parsed bracket-free
+		{Mimic: true, Endpoint: ""},                    // inbound-only -> skipped
+		{Mimic: true, Endpoint: "garbage-no-port"},     // unparseable -> skipped
+		{Mimic: true, Endpoint: "203.0.113.2:0"},       // zero port -> skipped
+		{Mimic: false, Endpoint: "198.51.100.1:51820"}, // non-mimic -> skipped
+	}
+	got := collectMimicRemotes(peers)
+	want := []MimicEndpoint{
+		{Host: "2001:db8::1", Port: 51900},
+		{Host: "203.0.113.1", Port: 51820},
+		{Host: "203.0.113.9", Port: 51820},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("collectMimicRemotes returned %d entries, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 
