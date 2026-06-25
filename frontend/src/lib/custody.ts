@@ -42,24 +42,32 @@ export function stripPrivateKeys(topo: Topology): StripResult {
   return { topo: { ...topo, nodes }, stripped };
 }
 
-// dropAllKeys returns a copy of topo with EVERY node's WireGuard key material removed — private key,
-// public key, AND the fixed_private_key pin flag — plus the count of nodes that carried any. Used on
-// CONTROLLER-mode import: the controller is server-authoritative for keys, so each node's public key is
-// supplied by its agent at enrollment and stamped at compile (enrolledSubgraph), and any private key is
-// barred by custody. A design's imported keys are therefore non-authoritative — overwritten or dropped
-// before any deploy — and keeping them only confuses the operator. (Contrast stripPrivateKeys, the
-// upload/local custody primitive that removes ONLY the secret value; and clearStrandedKeys in
-// topologyStore, the LOCAL-import path that drops pubkey-only nodes but keeps valid round-trip keypairs.)
+// dropAllKeys returns a copy of topo with each node's NON-AUTHORITATIVE WireGuard key material removed,
+// plus the count of nodes whose material was dropped. Used on CONTROLLER-mode import. Every node always
+// loses its private key + the fixed_private_key pin flag (zero-knowledge; the API gate bars private
+// keys). A MANAGED node also loses its public key — the controller is server-authoritative for managed
+// keys (the agent supplies the public key at enrollment, stamped at compile by enrolledSubgraph), so an
+// imported managed public key is non-authoritative and only confuses. A MANUAL (deployment_mode=manual,
+// hand-deployed, agent-less) node KEEPS its public key: it never enrolls, so the operator-asserted
+// public key in the design IS its authoritative identity (enrolledSubgraph admits the manual node by it,
+// and the off-host-signed membership manifest binds it). Mixed-controller-local-mode plan-6.
+// (Contrast stripPrivateKeys, the upload/local custody primitive that removes ONLY the secret value and
+// keeps every public key; and clearStrandedKeys in topologyStore, the LOCAL-import path.)
 export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number } {
   let dropped = 0;
   const nodes = topo.nodes.map((n) => {
-    const hasKeyMaterial =
-      (n.wireguard_private_key && n.wireguard_private_key !== '') ||
-      (n.wireguard_public_key && n.wireguard_public_key !== '') ||
-      n.fixed_private_key;
-    if (hasKeyMaterial) {
+    const isManual = n.deployment_mode === 'manual';
+    const hasPrivate = (n.wireguard_private_key && n.wireguard_private_key !== '') || !!n.fixed_private_key;
+    // A managed node's public key is non-authoritative → dropped; a manual node's IS its identity → kept.
+    const hasNonAuthoritativePublic = !isManual && !!n.wireguard_public_key && n.wireguard_public_key !== '';
+    if (hasPrivate || hasNonAuthoritativePublic) {
       dropped++;
-      return { ...n, wireguard_private_key: undefined, wireguard_public_key: undefined, fixed_private_key: false };
+      return {
+        ...n,
+        wireguard_private_key: undefined,
+        fixed_private_key: false,
+        wireguard_public_key: isManual ? n.wireguard_public_key : undefined,
+      };
     }
     return n;
   });
