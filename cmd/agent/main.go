@@ -10,6 +10,12 @@
 //	    Idempotently ensure the local WireGuard private key exists (mode 0600) and
 //	    print the corresponding public key. Re-running keeps the same key.
 //
+//	agent kit --node-id ID [--endpoint host:port] [--key PATH]
+//	    One-shot provisioning for a MANUAL (hand-deployed, agent-less) node: ensure the
+//	    WG key (the same file install.sh later splices) and print a {node_id,
+//	    wireguard_public_key, endpoint} descriptor to paste into the controller design.
+//	    Never contacts the controller; the private key never leaves the box.
+//
 //	agent run --node-id ID --source dir:PATH|http(s)://... [--pubkey PEM] [flags]
 //	    pull -> verify -> anti-rollback -> apply -> report (configured-source mode).
 //
@@ -38,6 +44,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,8 +126,9 @@ func runKeygen(args []string) int {
 
 // manualNodeDescriptor is the one-shot kit's output: the identity an operator pastes into the
 // controller design for a MANUAL (deployment_mode=manual, hand-deployed) node. It carries the PUBLIC
-// half only — the private key never leaves the box. (snake_case keys mirror the model fields the
-// operator sets: node id, wireguard_public_key, and the optional reachable endpoint.)
+// half only — the private key never leaves the box. node_id and wireguard_public_key mirror the
+// model.Node field names; endpoint is a flat host:port PASTE HINT (the operator enters it as the
+// node's public_endpoints[0] — model.Node has no flat endpoint field), omitted when not supplied.
 type manualNodeDescriptor struct {
 	NodeID    string `json:"node_id"`
 	PublicKey string `json:"wireguard_public_key"`
@@ -147,6 +155,13 @@ func runKit(args []string) int {
 	if *nodeID == "" {
 		fmt.Fprintln(os.Stderr, "agent: kit: --node-id is required")
 		return 2
+	}
+	// A malformed --endpoint is a warn-not-fail (it is a paste hint, not a wire field): surface it now
+	// rather than letting it become an opaque design error after the operator pastes it.
+	if *endpoint != "" {
+		if _, _, err := net.SplitHostPort(*endpoint); err != nil {
+			fmt.Fprintf(os.Stderr, "agent: kit: warning: --endpoint %q is not host:port (%v); passing it through as a paste hint\n", *endpoint, err)
+		}
 	}
 
 	wgPub, created, err := agent.EnsureKey(*keyPath)
