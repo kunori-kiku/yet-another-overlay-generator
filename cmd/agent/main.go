@@ -10,6 +10,12 @@
 //	    Idempotently ensure the local WireGuard private key exists (mode 0600) and
 //	    print the corresponding public key. Re-running keeps the same key.
 //
+//	agent kit --node-id ID [--endpoint host:port] [--key PATH]
+//	    One-shot provisioning for a MANUAL (hand-deployed, agent-less) node: ensure the
+//	    WG key (the same file install.sh later splices) and print a {node_id,
+//	    wireguard_public_key, endpoint} descriptor to paste into the controller design.
+//	    Never contacts the controller; the private key never leaves the box.
+//
 //	agent run --node-id ID --source dir:PATH|http(s)://... [--pubkey PEM] [flags]
 //	    pull -> verify -> anti-rollback -> apply -> report (configured-source mode).
 //
@@ -34,9 +40,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +67,8 @@ func main() {
 	switch os.Args[1] {
 	case "keygen":
 		os.Exit(runKeygen(os.Args[2:]))
+	case "kit":
+		os.Exit(runKit(os.Args[2:]))
 	case "enroll":
 		os.Exit(runEnroll(os.Args[2:]))
 	case "reprovision-keystone":
@@ -79,8 +89,9 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: agent <keygen|enroll|reprovision-keystone|run> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: agent <keygen|kit|enroll|reprovision-keystone|run> [flags]")
 	fmt.Fprintln(os.Stderr, "  keygen               ensure the local WireGuard private key exists and print its public key")
+	fmt.Fprintln(os.Stderr, "  kit                  provision a MANUAL (agent-less) node: ensure the key + print a descriptor to paste into the design")
 	fmt.Fprintln(os.Stderr, "  enroll               enroll against the networked controller and persist the per-node bearer token")
 	fmt.Fprintln(os.Stderr, "  reprovision-keystone adopt a ROTATED off-host operator credential supplied out of band (rewrites the pinned PEM + restarts)")
 	fmt.Fprintln(os.Stderr, "  run                  pull -> verify -> anti-rollback -> apply -> report (configured-source or --controller mode)")
@@ -110,6 +121,69 @@ func runKeygen(args []string) int {
 	// The public key is the only thing printed to stdout so it can be piped into a
 	// registration step. The private key is never printed.
 	fmt.Println(pub)
+	return 0
+}
+
+// manualNodeDescriptor is the one-shot kit's output: the identity an operator pastes into the
+// controller design for a MANUAL (deployment_mode=manual, hand-deployed) node. It carries the PUBLIC
+// half only — the private key never leaves the box. node_id and wireguard_public_key mirror the
+// model.Node field names; endpoint is a flat host:port PASTE HINT (the operator enters it as the
+// node's public_endpoints[0] — model.Node has no flat endpoint field), omitted when not supplied.
+type manualNodeDescriptor struct {
+	NodeID    string `json:"node_id"`
+	PublicKey string `json:"wireguard_public_key"`
+	Endpoint  string `json:"endpoint,omitempty"`
+}
+
+// runKit implements `agent kit`: the one-shot on-box provisioning helper for a MANUAL node in a
+// controller topology (mixed-controller-local-mode plan-4). A manual node has no agent and never
+// enrolls; the operator hand-deploys it. The kit (1) ensures the on-box WireGuard key at --key — the
+// SAME file the node's controller-rendered install.sh later splices over PRIVATEKEY_PLACEHOLDER at
+// install time (AgentHeld custody) — and (2) prints a DESCRIPTOR {node_id, wireguard_public_key,
+// endpoint} the operator pastes into the node's manual identity in the design. The private key NEVER
+// leaves the box and the kit does NOT contact the controller (it is not an enroll, mints no bearer
+// token, pulls no config). After pasting, the operator stages+promotes and downloads this node's
+// bundle (operator GET /manual-node-bundle?node=<id>); `sudo bash install.sh` then splices the on-box
+// key automatically. No splice step is needed here — install.sh already does it.
+func runKit(args []string) int {
+	fs := flag.NewFlagSet("kit", flag.ExitOnError)
+	nodeID := fs.String("node-id", "", "the node id this host will have in the controller design (required)")
+	endpoint := fs.String("endpoint", "", "this node's reachable WireGuard endpoint host:port (optional; set it for a manual node that accepts inbound)")
+	keyPath := fs.String("key", agent.DefaultKeyPath, "path to the local WireGuard private-key file (mode 0600) — the same file install.sh splices")
+	_ = fs.Parse(args)
+
+	if *nodeID == "" {
+		fmt.Fprintln(os.Stderr, "agent: kit: --node-id is required")
+		return 2
+	}
+	// A malformed --endpoint is a warn-not-fail (it is a paste hint, not a wire field): surface it now
+	// rather than letting it become an opaque design error after the operator pastes it.
+	if *endpoint != "" {
+		if _, _, err := net.SplitHostPort(*endpoint); err != nil {
+			fmt.Fprintf(os.Stderr, "agent: kit: warning: --endpoint %q is not host:port (%v); passing it through as a paste hint\n", *endpoint, err)
+		}
+	}
+
+	wgPub, created, err := agent.EnsureKey(*keyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit: %v\n", err)
+		return 1
+	}
+	if created {
+		fmt.Fprintf(os.Stderr, "agent: kit: generated new key at %s\n", *keyPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "agent: kit: reusing existing key at %s\n", *keyPath)
+	}
+
+	// Guidance to stderr; the machine-parseable descriptor (public half only) to stdout.
+	fmt.Fprintln(os.Stderr, "agent: kit: paste this descriptor into the manual node's identity in the controller design,")
+	fmt.Fprintln(os.Stderr, "agent: kit: then stage + promote and download this node's bundle; `sudo bash install.sh` splices the local key.")
+	out, err := json.MarshalIndent(manualNodeDescriptor{NodeID: *nodeID, PublicKey: wgPub, Endpoint: *endpoint}, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit: %v\n", err)
+		return 1
+	}
+	fmt.Println(string(out))
 	return 0
 }
 
