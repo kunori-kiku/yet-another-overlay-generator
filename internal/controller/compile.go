@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -500,21 +501,55 @@ func validateManualNodes(topo *model.Topology, nodes []Node) error {
 		if !node.IsManual() {
 			continue
 		}
-		if node.WireGuardPublicKey == "" {
-			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.Name).
+		// Identify the offending node by its stable, unique ID (a name may be empty or duplicated).
+		// Whitespace-insensitive comparison, matching CheckWGKeyUnique (a padded key cannot evade the
+		// gate, and would also break the rendered WG config).
+		key := strings.TrimSpace(node.WireGuardPublicKey)
+		if key == "" {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.ID).
 				With("detail", "no WireGuard public key — a manual node is hand-deployed, so it must carry its own pre-known public key")
 		}
-		if other, ok := enrolledByKey[node.WireGuardPublicKey]; ok {
-			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.Name).
+		if other, ok := enrolledByKey[key]; ok {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.ID).
 				With("detail", fmt.Sprintf("its WireGuard public key collides with enrolled node %s", other))
 		}
-		if other, ok := manualByKey[node.WireGuardPublicKey]; ok {
-			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.Name).
-				With("detail", fmt.Sprintf("its WireGuard public key duplicates manual node %q", other))
+		if other, ok := manualByKey[key]; ok {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.ID).
+				With("detail", fmt.Sprintf("its WireGuard public key duplicates manual node %s", other))
 		}
-		manualByKey[node.WireGuardPublicKey] = node.Name
+		manualByKey[key] = node.ID
 	}
 	return nil
+}
+
+// manualKeyConflict reports a conflict when a MANUAL node in the stored topology (other than
+// selfNodeID) already claims wgPubKey. It is the TOPOLOGY half of the cross-source one-pubkey-one-node
+// invariant; CheckWGKeyUnique (the registry half) calls it so a node can never enroll/rekey to a key a
+// manual node already holds (the enrolled→manual direction; validateManualNodes covers manual→enrolled).
+// A missing topology or empty key is never a conflict. Whitespace-insensitive, matching CheckWGKeyUnique.
+func manualKeyConflict(ctx context.Context, store Store, t TenantID, wgPubKey, selfNodeID string) (string, error) {
+	key := strings.TrimSpace(wgPubKey)
+	if key == "" {
+		return "", nil
+	}
+	rec, err := store.GetTopology(ctx, t)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("controller: loading topology for manual-key dedupe: %w", err)
+	}
+	var topo model.Topology
+	if err := json.Unmarshal(rec.JSON, &topo); err != nil {
+		return "", fmt.Errorf("controller: parsing topology for manual-key dedupe: %w", err)
+	}
+	for i := range topo.Nodes {
+		n := &topo.Nodes[i]
+		if n.IsManual() && n.ID != selfNodeID && strings.TrimSpace(n.WireGuardPublicKey) == key {
+			return n.ID, ErrDuplicateWGKey
+		}
+	}
+	return "", nil
 }
 
 // enrolledSubgraph projects a stored topology down to its ready subgraph under the

@@ -107,6 +107,21 @@ parallel off plan-1; plan-7 gates on all.
   manual node whose key is generated at compile; the controller registration path is the correct home.
   plan-1 still ships the `deployment_mode` schema enum check (Go + TS) + the `enrolledSubgraph`
   admission + tests; the not-ready-manual node is excluded (not skipped) defensively.
+- **plan-2 REFRAMED (during execution) — topology-based, NO separate `/api/manual-node` registration
+  endpoint.** Because plan-1 has `enrolledSubgraph` read a manual node's pubkey from the **topology**,
+  the cleanest design keeps the topology the single source of "ready" rather than a parallel registry
+  path. Consequences: (a) the **custody relax is a NO-OP** — the update-topology gate
+  (`handler_deploy.go:54-58`) only bars `wireguard_private_key`, so a manual node's PUBLIC key already
+  survives into the canonical stored topology (the FE `dropAllKeys` relax to KEEP it is plan-6); (b)
+  **keystone membership D4 holds by construction** — plan-1 made a manual node a subgraph node, so
+  `stageManifest` already binds its `{NodeID,pubkey,bundleSHA256}`; (c) the real plan-2 code is
+  **`controller.validateManualNodes`** (run inside `CompileSubgraph` → both stage + preview): a manual
+  node must carry a pubkey + the key must be unique across manual+enrolled (new `apierr.CodeManualNodeInvalid`
+  422); (d) the **cross-source dedupe is BIDIRECTIONAL** — `validateManualNodes` covers manual→enrolled
+  at stage time, and `CheckWGKeyUnique` (the shared Enroll/Rekey authority) now also calls
+  `manualKeyConflict` to reject the enrolled→manual direction at the source (with the enroll audit
+  trail). The `/api/manual-node` endpoint in the plan-2 draft is superseded; plan-4's kit emits a
+  descriptor the operator pastes into the **design** (topology), not a registry call.
 
 ## Closure criteria
 
