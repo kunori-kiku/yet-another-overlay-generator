@@ -8,7 +8,7 @@
     "wgPerPeerConfigTemplate": "a8c45243c8367f6c9533fb16530fe441d6375b35c9e73dedacae81a3e8557257"
   },
   "validator_codes": {
-    "count": 98,
+    "count": 99,
     "codes": [
       "validation_client_endpoint_host_required",
       "validation_client_extra_prefixes_meaningless",
@@ -60,6 +60,7 @@
       "validation_nat_double_nat_no_endpoint",
       "validation_nat_no_outbound_to_public",
       "validation_nat_target_unreachable",
+      "validation_node_deployment_mode_invalid",
       "validation_node_domain_id_required",
       "validation_node_domain_ref_missing",
       "validation_node_effective_port_range_overflow",
@@ -207,6 +208,7 @@
       "weight"
     ],
     "NODE_OMITEMPTY": [
+      "deployment_mode",
       "extra_prefixes",
       "fixed_private_key",
       "hostname",

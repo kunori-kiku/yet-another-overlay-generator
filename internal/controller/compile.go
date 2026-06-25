@@ -325,7 +325,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 
 	var staged []string
 	digests := make(map[string]string, len(subgraph.Nodes)) // nodeID -> bundleSHA256
-	pubKeys := make(map[string]string, len(subgraph.Nodes)) // nodeID -> wg public key (from the registry)
+	pubKeys := make(map[string]string, len(subgraph.Nodes)) // nodeID -> wg public key (stamped on the subgraph node: enrollment registry for a managed node, topology for a manual node)
 	for _, node := range subgraph.Nodes {
 		nodeDir := filepath.Join(tmp, node.Name)
 		files, err := readBundleDir(nodeDir)
@@ -530,8 +530,9 @@ func enrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []str
 	for _, node := range topo.Nodes { // value copy: never mutate the caller's slice
 		if !ready[node.ID] {
 			// A not-ready MANAGED node is "skipped" (waiting to enroll). A not-ready manual
-			// node would mean a missing topology pubkey — a design error the validator already
-			// rejects before compile — so it is never reported as a transient skip.
+			// node would mean a missing topology pubkey — a design error the controller-registration
+			// validator will reject (plan-2); until then this branch defensively excludes it. Either
+			// way a manual node is never reported as a transient enrollment skip.
 			if !node.IsManual() {
 				skipped = append(skipped, node.ID)
 			}

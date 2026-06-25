@@ -1,9 +1,15 @@
 package controller
 
 import (
+	"context"
+	"strings"
 	"testing"
 
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 )
 
 // manualMixedTopo models a controller topology with one MANAGED node (alpha, which enrolls) and one
@@ -113,9 +119,91 @@ func TestEnrolledSubgraph_ManualNodeZeroKnowledge(t *testing.T) {
 	}
 }
 
+// peerHasPubkey reports whether a node's derived peer set carries a peer with the given public key.
+func peerHasPubkey(peers []compiler.PeerInfo, pub string) bool {
+	for _, p := range peers {
+		if p.PublicKey == pub {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCompileSubgraph_ManualNode_BidirectionalRender_ZeroKnowledge is the plan-1 hazard-gated, load-
+// bearing proof on the RENDERED/STAGED OUTPUT (not just the enrolledSubgraph projection layer): a
+// manual node is rendered bidirectionally as a peer (the managed node carries it, and it carries the
+// managed node), AND a stray private key on the manual node is cleared all the way through to the
+// rendered output — the controller renders a manual node's bundle with the private-key PLACEHOLDER, so
+// no real private key ever appears in any staged file (the operator splices the real key off-host).
+func TestCompileSubgraph_ManualNode_BidirectionalRender_ZeroKnowledge(t *testing.T) {
+	alphaPriv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("gen alpha key: %v", err)
+	}
+	mikePriv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("gen mike key: %v", err)
+	}
+	alphaPub := alphaPriv.PublicKey().String()
+	mikePub := mikePriv.PublicKey().String()
+
+	full := manualMixedTopo(mikePub)
+	// Stray private key on the manual node (e.g. an imported air-gap topology): it MUST be cleared all
+	// the way to the rendered output, not just at the projection layer.
+	for i := range full.Nodes {
+		if full.Nodes[i].ID == "node-mike" {
+			full.Nodes[i].WireGuardPrivateKey = mikePriv.String()
+		}
+	}
+	// Only the managed node enrolls; the manual node never does.
+	nodes := []Node{{NodeID: "node-alpha", WGPublicKey: alphaPub, Status: NodeApproved}}
+
+	result, _, _, err := CompileSubgraph(context.Background(), full, nodes, render.FetchSettings{})
+	if err != nil {
+		t.Fatalf("CompileSubgraph: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("CompileSubgraph returned no result (the manual node was not admitted)")
+	}
+
+	// Bidirectional [Peer] render: the managed node carries the manual node as a peer (its pubkey), and
+	// the manual node carries the managed node — so the overlay link is configured on BOTH ends.
+	if !peerHasPubkey(result.PeerMap["node-alpha"], mikePub) {
+		t.Errorf("managed node alpha must render the manual node mike as a peer (mike's pubkey), but it does not")
+	}
+	if !peerHasPubkey(result.PeerMap["node-mike"], alphaPub) {
+		t.Errorf("manual node mike must render managed node alpha as a peer (alpha's pubkey), but it does not")
+	}
+
+	// Zero-knowledge on the rendered OUTPUT: gather every rendered file and assert the manual node's
+	// private key is NOWHERE in it, while the placeholder IS (so the manual node's own [Interface]
+	// PrivateKey is the splice placeholder, never a real key).
+	var all strings.Builder
+	for _, m := range []map[string]string{
+		result.WireGuardConfigs, result.InstallScripts, result.BabelConfigs,
+		result.SysctlConfigs, result.DeployScripts, result.ArtifactsJSON,
+	} {
+		for _, v := range m {
+			all.WriteString(v)
+			all.WriteByte('\n')
+		}
+	}
+	out := all.String()
+	if strings.Contains(out, mikePriv.String()) {
+		t.Errorf("ZERO-KNOWLEDGE VIOLATION: the manual node's private key appears in the rendered/staged output")
+	}
+	if strings.Contains(out, alphaPriv.String()) {
+		t.Errorf("ZERO-KNOWLEDGE VIOLATION: a node's private key appears in the rendered/staged output")
+	}
+	if !strings.Contains(out, render.PrivateKeyPlaceholder) {
+		t.Errorf("rendered output must carry the private-key placeholder %q (AgentHeld custody), but it is missing", render.PrivateKeyPlaceholder)
+	}
+}
+
 // TestEnrolledSubgraph_ManualWithoutPubkeyExcludedNotSkipped: a manual node missing its topology
-// pubkey (a design error the validator rejects pre-compile) is excluded, but is NEVER listed as a
-// transient "skipped/unenrolled" node — that status is for managed nodes awaiting enrollment.
+// pubkey (a design error the controller-registration validator will reject in plan-2; until then this
+// branch defensively excludes it) is excluded, but is NEVER listed as a transient "skipped/unenrolled"
+// node — that status is for managed nodes awaiting enrollment.
 func TestEnrolledSubgraph_ManualWithoutPubkeyExcludedNotSkipped(t *testing.T) {
 	full := manualMixedTopo("") // manual node mike has no pubkey
 	nodes := []Node{{NodeID: "node-alpha", WGPublicKey: genWGPubKey(t), Status: NodeApproved}}
