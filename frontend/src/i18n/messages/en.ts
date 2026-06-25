@@ -695,6 +695,7 @@ export const en = {
   'error.staged_manifest_mismatch': 'The submitted manifest does not match the current staged manifest; re-fetch and re-sign.',
   'error.manifest_signature_invalid': 'The manifest signature could not be verified against the pinned credential.',
   'error.stage_failed': 'Staging or promoting the deployment failed.',
+  'error.manual_node_invalid': 'Manual node {node} is invalid: {detail}',
   // Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator release-pins endpoint.
   'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
   'error.agent_release_fetch_failed': 'Could not fetch from the release at {url}: {detail}',

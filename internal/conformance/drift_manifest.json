@@ -112,7 +112,7 @@
     ]
   },
   "apierr_codes": {
-    "count": 59,
+    "count": 60,
     "codes": [
       "agent_release_fetch_failed",
       "agent_release_request_invalid",
@@ -149,6 +149,7 @@
       "keystone_no_signed_manifest",
       "keystone_rotation_requires_ack",
       "manifest_signature_invalid",
+      "manual_node_invalid",
       "method_not_allowed",
       "no_pinned_credential",
       "no_staged_bundle",

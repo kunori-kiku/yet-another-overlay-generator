@@ -45,6 +45,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
@@ -88,6 +89,14 @@ type StageResult struct {
 // bound for an over-large CIDR. The frozen contract itself stays context-free (the TS port
 // mirrors a context-free seam); ctx is the orthogonal Go-runtime param the live callers pass.
 func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
+	// Validate the operator-asserted identity of any MANUAL (hand-deployed, agent-less) node before it
+	// is admitted: a manual node carries its own pre-known public key (no enrollment proves it), so it
+	// must have one and it must be unique across the fleet. This runs on BOTH the stage and the compile
+	// -preview path (both call here), so a missing/colliding manual key is a LOUD error, not the silent
+	// exclusion enrolledSubgraph would otherwise apply.
+	if err := validateManualNodes(topo, nodes); err != nil {
+		return nil, model.Topology{}, nil, err
+	}
 	subgraph, skipped := enrolledSubgraph(topo, nodes)
 	if len(subgraph.Nodes) == 0 {
 		return nil, subgraph, skipped, nil
@@ -459,6 +468,53 @@ func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) 
 	}
 
 	return store.PromoteStaged(ctx, t)
+}
+
+// validateManualNodes rejects a stage/preview whose topology carries a MANUAL (deployment_mode=manual,
+// hand-deployed, agent-less) node that is not deployable. A manual node is admitted from its
+// OPERATOR-ASSERTED topology public key (no enrollment token proves it), so the controller validates
+// that asserted identity here — before it is rendered into managed peers' bundles AND bound into the
+// off-host-signed membership manifest:
+//
+//   - it MUST carry a WireGuard public key (without one, enrolledSubgraph would silently exclude it;
+//     surfacing a clear error is the plan-1 deferred rule, now in its correct controller-side home —
+//     the shared pre-keygen validator can't host it because a LOCAL-mode manual node legitimately has
+//     no key until compile generates one);
+//   - that key MUST be unique across the fleet: not duplicating another manual node's, and not
+//     colliding with an enrolled node's registry key — the same one-pubkey-one-node invariant
+//     CheckWGKeyUnique enforces for enrolling managed nodes, extended across the manual+enrolled split
+//     so a manual node can never claim (or be confused with) an enrolled node's identity.
+//
+// A managed node carrying a stray deployment_mode is not affected (IsManual gates on exactly "manual").
+func validateManualNodes(topo *model.Topology, nodes []Node) error {
+	// Enrolled public key -> node ID, for the cross-source (manual-vs-enrolled) collision check.
+	enrolledByKey := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		if n.Status == NodeApproved && n.WGPublicKey != "" {
+			enrolledByKey[n.WGPublicKey] = n.NodeID
+		}
+	}
+	manualByKey := make(map[string]string)
+	for i := range topo.Nodes {
+		node := &topo.Nodes[i]
+		if !node.IsManual() {
+			continue
+		}
+		if node.WireGuardPublicKey == "" {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.Name).
+				With("detail", "no WireGuard public key — a manual node is hand-deployed, so it must carry its own pre-known public key")
+		}
+		if other, ok := enrolledByKey[node.WireGuardPublicKey]; ok {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.Name).
+				With("detail", fmt.Sprintf("its WireGuard public key collides with enrolled node %s", other))
+		}
+		if other, ok := manualByKey[node.WireGuardPublicKey]; ok {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.Name).
+				With("detail", fmt.Sprintf("its WireGuard public key duplicates manual node %q", other))
+		}
+		manualByKey[node.WireGuardPublicKey] = node.Name
+	}
+	return nil
 }
 
 // enrolledSubgraph projects a stored topology down to its ready subgraph under the

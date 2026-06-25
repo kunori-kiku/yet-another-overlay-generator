@@ -7,6 +7,7 @@ import (
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
@@ -116,6 +117,42 @@ func TestEnrolledSubgraph_ManualNodeZeroKnowledge(t *testing.T) {
 		if sub.Nodes[i].ID == "node-mike" && sub.Nodes[i].WireGuardPrivateKey != "" {
 			t.Errorf("manual node private key must be cleared in the subgraph, got %q", sub.Nodes[i].WireGuardPrivateKey)
 		}
+	}
+}
+
+// TestValidateManualNodes covers the plan-2 controller-side identity guard for manual nodes: a manual
+// node must carry a public key, and that key must be unique across the fleet (not duplicating another
+// manual node's, nor colliding with an enrolled node's). All failures surface CodeManualNodeInvalid.
+func TestValidateManualNodes(t *testing.T) {
+	enrolledPub := genWGPubKey(t)
+	managed := []Node{{NodeID: "node-alpha", WGPublicKey: enrolledPub, Status: NodeApproved}}
+
+	// A valid manual node (its own unique pubkey) passes.
+	if err := validateManualNodes(manualMixedTopo(genWGPubKey(t)), managed); err != nil {
+		t.Errorf("a valid manual node should pass validateManualNodes, got %v", err)
+	}
+
+	// A manual node with NO public key is rejected loudly (vs the silent exclusion enrolledSubgraph applies).
+	if err := validateManualNodes(manualMixedTopo(""), managed); !apierr.HasCode(err, apierr.CodeManualNodeInvalid) {
+		t.Errorf("a pubkey-less manual node must be rejected with CodeManualNodeInvalid, got %v", err)
+	}
+
+	// A manual node whose pubkey COLLIDES with an enrolled node's is rejected (no identity confusion).
+	if err := validateManualNodes(manualMixedTopo(enrolledPub), managed); !apierr.HasCode(err, apierr.CodeManualNodeInvalid) {
+		t.Errorf("a manual node colliding with an enrolled pubkey must be rejected, got %v", err)
+	}
+
+	// Two manual nodes SHARING a pubkey are rejected (dedupe across manual nodes).
+	dupPub := genWGPubKey(t)
+	topo := manualMixedTopo(dupPub)
+	topo.Nodes = append(topo.Nodes, model.Node{
+		ID: "node-mike2", Name: "mike2", Role: "router", DomainID: "domain-1",
+		DeploymentMode: model.DeploymentManual, WireGuardPublicKey: dupPub,
+		Capabilities:    model.NodeCapabilities{CanAcceptInbound: true, HasPublicIP: true},
+		PublicEndpoints: []model.PublicEndpoint{{ID: "m2-ep", Host: "mike2.example.com", Port: 51820}},
+	})
+	if err := validateManualNodes(topo, managed); !apierr.HasCode(err, apierr.CodeManualNodeInvalid) {
+		t.Errorf("two manual nodes sharing a pubkey must be rejected, got %v", err)
 	}
 }
 
