@@ -154,6 +154,40 @@ export function NodeEditor() {
             <option value="client">Client</option>
           </select>
         </div>
+        {/* Deployment mode (controller only): a MANUAL node is hand-deployed (no agent). It carries its
+            own pre-known public key + endpoint in the design (mixed-controller-local-mode plan-6). */}
+        {mode === 'controller' && (
+          <div>
+            <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.deploymentMode')}</label>
+            <select
+              value={selectedNode.deployment_mode === 'manual' ? 'manual' : 'managed'}
+              onChange={(e) =>
+                updateNode(selectedNode.id, {
+                  deployment_mode: e.target.value === 'manual' ? 'manual' : undefined,
+                })
+              }
+              className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
+            >
+              <option value="managed">Managed (agent)</option>
+              <option value="manual">Manual (no agent)</option>
+            </select>
+            {selectedNode.deployment_mode === 'manual' && (
+              <div className="mt-1 space-y-1">
+                <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.manualPublicKey')}</label>
+                <input
+                  type="text"
+                  value={selectedNode.wireguard_public_key || ''}
+                  onChange={(e) =>
+                    updateNode(selectedNode.id, { wireguard_public_key: e.target.value || undefined })
+                  }
+                  placeholder={t(language, 'nodeEditor.manualPublicKeyHint')}
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+                />
+                <p className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.manualHint')}</p>
+              </div>
+            )}
+          </div>
+        )}
         <div>
           <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.domain')}</label>
           <select
