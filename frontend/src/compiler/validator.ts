@@ -56,6 +56,7 @@ export const Code = {
   NodeDomainIDRequired: 'validation_node_domain_id_required',
   NodeRoleEmpty: 'validation_node_role_empty',
   NodeRoleInvalid: 'validation_node_role_invalid',
+  NodeDeploymentModeInvalid: 'validation_node_deployment_mode_invalid',
   NodePlatformUnsupported: 'validation_node_platform_unsupported',
   NodeXDPModeInvalid: 'validation_node_xdp_mode_invalid',
   NodeOverlayIPInvalid: 'validation_node_overlay_ip_invalid',
@@ -511,6 +512,13 @@ function validateNodesSchema(topo: Topology, result: ValidationResult): void {
       addError(result, prefix + '.role', Code.NodeRoleEmpty);
     } else if (role !== 'peer' && role !== 'router' && role !== 'relay' && role !== 'gateway' && role !== 'client') {
       addError(result, prefix + '.role', Code.NodeRoleInvalid, { k: 'role', v: role });
+    }
+
+    // Deployment mode (optional; empty == managed) (schema.go). Reject a typo rather than silently
+    // treating it as managed, since it changes custody/admission behavior.
+    const deploymentMode = (node.deployment_mode ?? '') as string;
+    if (deploymentMode !== '' && deploymentMode !== 'managed' && deploymentMode !== 'manual') {
+      addError(result, prefix + '.deployment_mode', Code.NodeDeploymentModeInvalid, { k: 'mode', v: deploymentMode });
     }
 
     // Platform (optional; unsupported → warning) (schema.go:304-310). Lowercased for the membership test.
@@ -1604,6 +1612,7 @@ const registry: Record<string, string> = {
   [Code.NodeDomainIDRequired]: 'Node must reference a Domain.',
   [Code.NodeRoleEmpty]: 'Node role must not be empty.',
   [Code.NodeRoleInvalid]: 'Invalid role: {role}. Allowed values: peer, router, relay, gateway, client.',
+  [Code.NodeDeploymentModeInvalid]: 'Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).',
   [Code.NodePlatformUnsupported]: 'Unsupported platform: {platform}. Allowed values: debian, ubuntu.',
   [Code.NodeXDPModeInvalid]: 'Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).',
   [Code.NodeOverlayIPInvalid]: 'Invalid overlay IP address: {ip}.',

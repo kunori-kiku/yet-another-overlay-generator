@@ -769,6 +769,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_node_public_endpoint_host_illegal_chars': "public_endpoints 主机 {host} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、方括号([ ])、连字符(-)，禁止空白与元字符，因为该主机会被写入部署到节点上的 WireGuard 配置",
   'error.validation_node_role_empty': "角色不能为空",
   'error.validation_node_role_invalid': "角色无效: {role}，可选值: peer, router, relay, gateway, client",
+  'error.validation_node_deployment_mode_invalid': "deployment_mode 无效: {mode}，可选值: managed、manual（留空即 managed）",
   'error.validation_node_router_id_invalid': "router_id {id} 格式无效：必须为 MAC-48 形式（六组冒号分隔的十六进制对，如 02:11:22:33:44:55）或 IPv4 地址，否则会被 babeld 拒绝",
   'error.validation_node_ssh_alias_illegal_chars': "ssh_alias {alias} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符",
   'error.validation_node_ssh_host_illegal_chars': "ssh_host {host} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符",

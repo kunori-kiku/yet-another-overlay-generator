@@ -38,6 +38,10 @@ export interface Node {
   hostname?: string;
   platform?: 'debian' | 'ubuntu';
   role: 'peer' | 'router' | 'relay' | 'gateway' | 'client';
+  // Deployment mode (controller mode): 'managed' (default/empty) = agent-managed; 'manual' =
+  // hand-deployed, no agent, carries its own pre-known public key + endpoint. Orthogonal to role.
+  // See implementation_plans/mixed-controller-local-mode-2026_06_25.
+  deployment_mode?: 'managed' | 'manual';
   domain_id: string;
   overlay_ip?: string;
   mtu?: number;

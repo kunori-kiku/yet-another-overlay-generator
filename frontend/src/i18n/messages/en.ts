@@ -790,6 +790,7 @@ export const en = {
   'error.validation_node_public_endpoint_host_illegal_chars': "public_endpoints host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.",
   'error.validation_node_role_empty': "Node role must not be empty.",
   'error.validation_node_role_invalid': "Invalid role: {role}. Allowed values: peer, router, relay, gateway, client.",
+  'error.validation_node_deployment_mode_invalid': "Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).",
   'error.validation_node_router_id_invalid': "Invalid router_id format: {id}. It must be in MAC-48 form (six colon-separated hex pairs, e.g. 02:11:22:33:44:55) or an IPv4 address; otherwise babeld will reject it.",
   'error.validation_node_ssh_alias_illegal_chars': "ssh_alias {alias} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), @, and hyphen (-) are allowed; whitespace and shell metacharacters are forbidden.",
   'error.validation_node_ssh_host_illegal_chars': "ssh_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), @, and hyphen (-) are allowed; whitespace and shell metacharacters are forbidden.",

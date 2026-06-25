@@ -303,6 +303,13 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".role", CodeNodeRoleInvalid, P{"role", node.Role})
 		}
 
+		// Deployment mode (optional; empty == managed). Orthogonal to role. An invalid value changes
+		// custody/admission behavior (manual nodes carry their own pre-known key), so reject a typo
+		// rather than silently treating it as managed.
+		if node.DeploymentMode != "" && node.DeploymentMode != model.DeploymentManaged && node.DeploymentMode != model.DeploymentManual {
+			result.AddError(prefix+".deployment_mode", CodeNodeDeploymentModeInvalid, P{"mode", node.DeploymentMode})
+		}
+
 		// Platform (optional; unsupported values are a warning, not an error)
 		if node.Platform != "" {
 			validPlatforms := map[string]bool{"debian": true, "ubuntu": true}

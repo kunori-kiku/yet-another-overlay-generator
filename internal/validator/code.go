@@ -47,6 +47,7 @@ const (
 	CodeNodeDomainIDRequired               Code = "validation_node_domain_id_required"
 	CodeNodeRoleEmpty                      Code = "validation_node_role_empty"
 	CodeNodeRoleInvalid                    Code = "validation_node_role_invalid"
+	CodeNodeDeploymentModeInvalid          Code = "validation_node_deployment_mode_invalid"
 	CodeNodePlatformUnsupported            Code = "validation_node_platform_unsupported"
 	CodeNodeXDPModeInvalid                 Code = "validation_node_xdp_mode_invalid"
 	CodeNodeOverlayIPInvalid               Code = "validation_node_overlay_ip_invalid"
@@ -152,6 +153,7 @@ var registry = map[Code]string{
 	CodeNodeDomainIDRequired:               "Node must reference a Domain.",
 	CodeNodeRoleEmpty:                      "Node role must not be empty.",
 	CodeNodeRoleInvalid:                    "Invalid role: {role}. Allowed values: peer, router, relay, gateway, client.",
+	CodeNodeDeploymentModeInvalid:          "Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).",
 	CodeNodePlatformUnsupported:            "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
 	CodeNodeXDPModeInvalid:                 "Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).",
 	CodeNodeOverlayIPInvalid:               "Invalid overlay IP address: {ip}.",
