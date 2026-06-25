@@ -2,9 +2,12 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // TestNewEnrollmentToken covers the single-use enrollment token mint: the plaintext
@@ -176,6 +179,37 @@ func TestEnrollFailures(t *testing.T) {
 		if _, err := store.LookupNodeByAPIToken(ctx, tnt, HashToken("anything")); !errors.Is(err, ErrTokenInvalid) {
 			t.Fatalf("LookupNodeByAPIToken after failed enroll: err = %v, want ErrTokenInvalid", err)
 		}
+	})
+
+	t.Run("cannot-enroll-with-a-manual-nodes-key", func(t *testing.T) {
+		// Cross-source dedupe (mixed-mode plan-2): the one-pubkey-one-node invariant spans the
+		// agent-enrolled registry AND operator-asserted MANUAL nodes in the stored topology. A node
+		// must not enroll to a key a manual node already claims (the enrolled→manual direction).
+		store := NewMemStore()
+		const manualKey = "manual-node-operator-asserted-pubkey"
+		topo := model.Topology{
+			Project: model.Project{ID: "p", Name: "p"},
+			Nodes: []model.Node{{
+				ID: "node-manual", Name: "mike", Role: "router", DomainID: "d1",
+				DeploymentMode: model.DeploymentManual, WireGuardPublicKey: manualKey,
+			}},
+		}
+		raw, err := json.Marshal(topo)
+		if err != nil {
+			t.Fatalf("marshal topology: %v", err)
+		}
+		if _, err := store.PutTopology(ctx, tnt, raw); err != nil {
+			t.Fatalf("PutTopology: %v", err)
+		}
+		plaintext, tok := NewEnrollmentToken("node-new", time.Hour, now)
+		if err := store.CreateEnrollmentToken(ctx, tnt, tok); err != nil {
+			t.Fatalf("CreateEnrollmentToken: %v", err)
+		}
+		_, err = Enroll(ctx, store, tnt, EnrollRequest{Token: plaintext, NodeID: "node-new", WGPublicKey: manualKey}, now)
+		if !errors.Is(err, ErrDuplicateWGKey) {
+			t.Fatalf("Enroll with a manual node's key: err = %v, want ErrDuplicateWGKey", err)
+		}
+		requireNotApproved(t, store, tnt, "node-new")
 	})
 
 	t.Run("burned-token-cannot-re-enroll", func(t *testing.T) {

@@ -674,6 +674,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.staged_manifest_mismatch': '提交的清单与当前暂存清单不一致；请重新获取并重新签名。',
   'error.manifest_signature_invalid': '无法用已固定的凭据验证清单签名。',
   'error.stage_failed': '暂存或提升部署失败。',
+  'error.manual_node_invalid': '手动节点 {node} 无效：{detail}',
   // Assisted fetch of release pins (controller-panel-rollout-ui plan-1) — operator release-pins endpoint.
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
   'error.agent_release_fetch_failed': '无法从发布地址 {url} 获取：{detail}',

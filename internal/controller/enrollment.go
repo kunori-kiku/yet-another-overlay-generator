@@ -277,7 +277,11 @@ func CheckWGKeyUnique(ctx context.Context, store Store, t TenantID, wgPubKey, se
 			return n.NodeID, ErrDuplicateWGKey
 		}
 	}
-	return "", nil
+	// Cross-source: the one-pubkey-one-node invariant also spans MANUAL nodes, whose operator-asserted
+	// public key lives in the stored TOPOLOGY (not the registry). Reject enrolling/rekeying to a key a
+	// manual node already claims (the enrolled→manual direction; validateManualNodes covers the reverse,
+	// at stage/preview time). manualKeyConflict returns ("", nil) when free, so it is a safe tail.
+	return manualKeyConflict(ctx, store, t, key, selfNodeID)
 }
 
 // Rekey re-registers a node's rotated WireGuard PUBLIC key (the zero-knowledge

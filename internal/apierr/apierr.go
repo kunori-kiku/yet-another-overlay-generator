@@ -98,6 +98,12 @@ const (
 	CodeStagedManifestMismatch   Code = "staged_manifest_mismatch"
 	CodeManifestSignatureInvalid Code = "manifest_signature_invalid"
 	CodeStageFailed              Code = "stage_failed"
+	// CodeManualNodeInvalid rejects a stage whose topology carries a manual (deployment_mode=manual)
+	// node that is not deployable: no WireGuard public key, or a key that duplicates another manual
+	// node's or collides with an enrolled node's. A manual node is hand-deployed with a pre-known key
+	// (no enrollment proves it), so the controller validates the asserted identity at stage time before
+	// rendering it into managed peers' bundles. See mixed-controller-local-mode-2026_06_25.
+	CodeManualNodeInvalid Code = "manual_node_invalid"
 
 	// Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator-only
 	// release-pins endpoint that fetches per-asset .sha256 sidecars through the gh-proxy to
@@ -203,6 +209,7 @@ var registry = map[Code]def{
 	CodeStagedManifestMismatch:   {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
 	CodeManifestSignatureInvalid: {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
 	CodeStageFailed:              {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
+	CodeManualNodeInvalid:        {"Manual node {node} is invalid: {detail}", http.StatusUnprocessableEntity},
 
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},
 	CodeAgentReleaseFetchFailed:    {"Could not fetch from the release at {url}: {detail}", http.StatusBadGateway},
