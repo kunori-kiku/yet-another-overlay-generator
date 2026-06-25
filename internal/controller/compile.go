@@ -491,8 +491,12 @@ func validateManualNodes(topo *model.Topology, nodes []Node) error {
 	// Enrolled public key -> node ID, for the cross-source (manual-vs-enrolled) collision check.
 	enrolledByKey := make(map[string]string, len(nodes))
 	for _, n := range nodes {
-		if n.Status == NodeApproved && n.WGPublicKey != "" {
-			enrolledByKey[n.WGPublicKey] = n.NodeID
+		// Trim the enrolled key too (symmetry with the manual side + CheckWGKeyUnique), so a padded
+		// registry key still matches a clean manual key of the same value.
+		if n.Status == NodeApproved {
+			if k := strings.TrimSpace(n.WGPublicKey); k != "" {
+				enrolledByKey[k] = n.NodeID
+			}
 		}
 	}
 	manualByKey := make(map[string]string)

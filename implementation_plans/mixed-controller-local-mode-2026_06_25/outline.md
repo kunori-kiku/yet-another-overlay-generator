@@ -122,6 +122,11 @@ parallel off plan-1; plan-7 gates on all.
   `manualKeyConflict` to reject the enrolled→manual direction at the source (with the enroll audit
   trail). The `/api/manual-node` endpoint in the plan-2 draft is superseded; plan-4's kit emits a
   descriptor the operator pastes into the **design** (topology), not a registry call.
+  - **Known TOCTOU (fail-closed, pre-existing):** `HandleUpdateTopology` is not under `lockTenantOps`,
+    so a topology-update racing an enroll could momentarily let a key satisfy `CheckWGKeyUnique` (the
+    topology not yet written) and then collide. It stays **fail-closed**: the stage-time
+    `validateManualNodes` rejects the whole stage (422) before any colliding bundle ships. Closing it
+    at both writers (serializing update-topology) is a future hardening, not required for plan-2.
 
 ## Closure criteria
 
