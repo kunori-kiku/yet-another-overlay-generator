@@ -251,6 +251,11 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"compile-preview", op(h.HandleCompilePreview))
 	mux.HandleFunc(base+"promote", op(h.HandlePromote))
 	mux.HandleFunc(base+"nodes", op(h.HandleNodes))
+	// Manual-node bundle download (mixed-controller-local-mode plan-3): a MANUAL (agent-less) node has
+	// no agent to pull /config, so the operator downloads its promoted, off-host-signed bundle as a ZIP
+	// (?node=<id>) and installs it by hand. Manual-only; the bundle carries the key placeholder, never
+	// real key material.
+	mux.HandleFunc(base+"manual-node-bundle", op(h.HandleManualNodeBundle))
 	mux.HandleFunc(base+"revoke", op(h.HandleRevoke))
 	mux.HandleFunc(base+"audit", op(h.HandleAudit))
 	mux.HandleFunc(base+"topology", op(h.HandleTopology))
