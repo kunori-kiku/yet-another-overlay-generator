@@ -647,7 +647,9 @@ func runControllerMode(o controllerModeOpts) int {
 		// an apply already ran the post-apply attempt (agent.go step 7) — paced by the interval, on
 		// the MAIN thread so a swap (syscall.Exec) never interrupts a mid-flight apply. A no-op unless
 		// State.SelfUpdateBlocked is armed, so calling it past the backoff is cheap when nothing is due.
-		if selfUpdate != nil && o.selfUpdateRetryInterval > 0 && !applied &&
+		// (selfUpdate is always non-nil in controller daemon mode; RetryDeferredSelfUpdate is nil-safe
+		// regardless, so the interval gate is the only guard needed here.)
+		if o.selfUpdateRetryInterval > 0 && !applied &&
 			time.Since(lastSelfUpdateRetry) >= o.selfUpdateRetryInterval {
 			lastSelfUpdateRetry = time.Now()
 			if _, suErr := agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, verifiedFetch, os.Stderr); suErr != nil {

@@ -56,8 +56,10 @@ any failure BEFORE the swap keeps the running binary (keep-last-good):
    (`${.agent.release_url}/<asset>`) as a fallback when the proxy is slow/down (the live failure mode
    — a gh-proxy body-read timeout). The SHA-256-vs-pin check (step 3) gates the swap regardless of
    which source served the bytes, so multi-source is custody-safe. Each attempt is bounded by a
-   **response-header timeout** + a **stall watchdog** (abort if no bytes flow for `selfUpdateStallTimeout`)
-   + a generous **absolute ceiling** — NOT a single total deadline, which used to trip on the body
+   **response-header timeout** + a per-attempt **stall watchdog** (abort if no bytes flow for
+   `selfUpdateStallTimeout`); a single **absolute ceiling** (`selfUpdateAbsoluteCap`) bounds the WHOLE
+   download — both source attempts share it, so the fallback cannot multiply the worst-case stall on
+   the (main-thread) caller. This replaces the old single total deadline, which tripped on the body
    read of a large binary over a slow link.
 3. **CUSTODY: verify** the bytes' SHA-256 against the signed pin — mismatch ⇒ refuse.
 4. **self-test** `<partial> version` must print EXACTLY `desired` — else refuse (catches a corrupt

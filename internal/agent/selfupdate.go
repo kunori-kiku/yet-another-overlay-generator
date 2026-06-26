@@ -42,10 +42,12 @@ const maxSelfUpdateAttempts = 3
 // download is bounded instead by THREE independent guards: a response-header timeout (a mirror that
 // never answers fails fast), a STALL watchdog (no bytes for selfUpdateStallTimeout ⇒ abort — catches
 // a hung mid-transfer), and a generous absolute ceiling (a final backstop).
-const (
+// Download bounds are vars (not consts) so tests can shrink them, the same indirection pattern as
+// execFn/osExecutable. Production values are unchanged.
+var (
 	selfUpdateHeaderTimeout = 45 * time.Second // time-to-first-byte (response headers)
 	selfUpdateStallTimeout  = 90 * time.Second // max idle gap between body chunks
-	selfUpdateAbsoluteCap   = 15 * time.Minute // hard backstop regardless of progress
+	selfUpdateAbsoluteCap   = 15 * time.Minute // hard backstop for the WHOLE download (all sources)
 )
 
 // execFn is syscall.Exec, indirected so tests can observe the re-exec without replacing the test
@@ -219,9 +221,14 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 		urls = append(urls, ghProxy+direct)
 	}
 	urls = append(urls, direct)
+	// ONE absolute deadline across BOTH source attempts (not per-source): the whole download — proxy
+	// fallback included — is bounded by selfUpdateAbsoluteCap, so a slow-but-progressing trickle on one
+	// source then the other cannot block the (main-thread) caller for a multiple of the cap.
+	dlCtx, dlCancel := context.WithTimeout(context.Background(), selfUpdateAbsoluteCap)
+	defer dlCancel()
 	var dlErr error
 	for i, u := range urls {
-		if dlErr = downloadTo(u, partial); dlErr == nil {
+		if dlErr = downloadTo(dlCtx, u, partial); dlErr == nil {
 			if i > 0 {
 				fmt.Fprintf(stderr, "agent: self-update downloaded via fallback source (proxy failed)\n")
 			}
@@ -450,20 +457,22 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// downloadTo fetches url into path (truncating). It is bounded by a response-header timeout, a STALL
-// watchdog, and an absolute ceiling (the selfUpdate*Timeout constants) rather than a single total
-// deadline — so a large binary on a slow link (which kept tripping the old 2-minute total) is
-// tolerated as long as bytes keep flowing, while a hung mirror still fails fast. The bytes are
+// downloadTo fetches url into path (truncating) under the caller's `parent` context. It is bounded by
+// a response-header timeout + a STALL watchdog + the parent's absolute ceiling rather than a single
+// total deadline — so a large binary on a slow link (which kept tripping the old 2-minute total) is
+// tolerated as long as bytes keep flowing, while a hung mirror still fails fast. The parent carries
+// the WHOLE-download absolute cap (shared across source-fallback attempts); this call derives a child
+// for its own stall cancellation, so a stall on one source does not poison the next. The bytes are
 // UNTRUSTED until the caller verifies them against the signed pin.
-func downloadTo(url, path string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), selfUpdateAbsoluteCap)
+func downloadTo(parent context.Context, url, path string) error {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	// No total Client.Timeout: the body is bounded by the stall watchdog + the absolute ctx cap, so a
-	// slow-but-progressing transfer is never killed mid-body. ResponseHeaderTimeout bounds the
+	// No total Client.Timeout: the body is bounded by the stall watchdog + the parent's absolute cap,
+	// so a slow-but-progressing transfer is never killed mid-body. ResponseHeaderTimeout bounds the
 	// time-to-first-byte. Proxy:FromEnvironment preserves the default transport's proxy posture.
 	client := &http.Client{Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -485,12 +494,14 @@ func downloadTo(url, path string) error {
 	_, copyErr := io.Copy(f, sr)
 	sr.stop()
 	closeErr := f.Close()
-	if sr.stalled() {
-		// The watchdog cancelled the request mid-transfer; surface a clear stall error rather than the
-		// opaque "context canceled" io.Copy returns when the body read is aborted.
-		return fmt.Errorf("download stalled: no data for %s", selfUpdateStallTimeout)
-	}
 	if copyErr != nil {
+		// A stall surfaces as a copy error (the watchdog cancelled the context). Distinguish it from a
+		// generic transport error / the parent absolute-cap deadline so the log is actionable. Only
+		// consult stalled() here — checking it on a CLEAN copy would risk a benign false positive if the
+		// watchdog fired in the tiny window between the final Read and stop().
+		if sr.stalled() {
+			return fmt.Errorf("download stalled: no data for %s", selfUpdateStallTimeout)
+		}
 		return copyErr
 	}
 	return closeErr

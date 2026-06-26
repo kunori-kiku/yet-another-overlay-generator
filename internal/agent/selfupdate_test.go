@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -382,6 +384,80 @@ func (d *dripReader) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
+// TestDownloadTo_SlowProgressingSucceeds is the integrated Part-C happy path: a body that arrives in
+// small chunks with brief gaps (well inside the stall window) downloads fully — the behavior the old
+// single TOTAL timeout broke.
+func TestDownloadTo_SlowProgressingSucceeds(t *testing.T) {
+	payload := bytes.Repeat([]byte("y"), 4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl, _ := w.(http.Flusher)
+		for i := 0; i < len(payload); i += 512 {
+			_, _ = w.Write(payload[i : i+512])
+			if fl != nil {
+				fl.Flush()
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+	out := filepath.Join(t.TempDir(), "dl")
+	if err := downloadTo(context.Background(), srv.URL, out); err != nil {
+		t.Fatalf("a slow-but-progressing download must succeed; got %v", err)
+	}
+	if got, _ := os.ReadFile(out); !bytes.Equal(got, payload) {
+		t.Errorf("downloaded %d bytes, want %d (content mismatch)", len(got), len(payload))
+	}
+}
+
+// TestDownloadTo_Non200 surfaces a non-200 (e.g. a 502 from a down proxy) as an error.
+func TestDownloadTo_Non200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	err := downloadTo(context.Background(), srv.URL, filepath.Join(t.TempDir(), "dl"))
+	if err == nil || !strings.Contains(err.Error(), "502") {
+		t.Errorf("a non-200 must error with the status; got %v", err)
+	}
+}
+
+// TestDownloadTo_StallSurfacesClearError pins the integrated Part-C stall path: a body that sends
+// headers then stops returning bytes trips the watchdog (shrunk here so the test is fast) and yields
+// the clear "download stalled" error, not an opaque context-cancel.
+func TestDownloadTo_StallSurfacesClearError(t *testing.T) {
+	old := selfUpdateStallTimeout
+	selfUpdateStallTimeout = 40 * time.Millisecond
+	defer func() { selfUpdateStallTimeout = old }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush() // headers out, then no body bytes — the read stalls
+		}
+		<-r.Context().Done() // unblock when the client cancels (no handler-goroutine leak)
+	}))
+	defer srv.Close()
+	err := downloadTo(context.Background(), srv.URL, filepath.Join(t.TempDir(), "dl"))
+	if err == nil || !strings.Contains(err.Error(), "stalled") {
+		t.Errorf("a stalled body must surface a clear 'stalled' error; got %v", err)
+	}
+}
+
+// TestDownloadTo_HeaderTimeout: a mirror that accepts the connection but never sends response headers
+// fails fast via ResponseHeaderTimeout (shrunk here), rather than hanging to the absolute cap.
+func TestDownloadTo_HeaderTimeout(t *testing.T) {
+	old := selfUpdateHeaderTimeout
+	selfUpdateHeaderTimeout = 40 * time.Millisecond
+	defer func() { selfUpdateHeaderTimeout = old }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never write headers
+	}))
+	defer srv.Close()
+	err := downloadTo(context.Background(), srv.URL, filepath.Join(t.TempDir(), "dl"))
+	if err == nil {
+		t.Errorf("a mirror that never sends headers must error fast (ResponseHeaderTimeout)")
+	}
+}
+
 // TestReconcileSelfUpdatePromote_Probation: booted as the target, a clean health gate marks the
 // update PROBATIONARY (Confirmed) — it does NOT advance the floor, drop .bak, or re-exec yet;
 // FinalizeSelfUpdate (after a full cycle) does that.
@@ -561,6 +637,7 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 		AgentVersionFloor:     "1.1.0",
 		AbandonedAgentVersion: "0.9.0",
 		PendingUpdate:         &PendingUpdate{From: "1.1.0", To: "1.2.0", Attempts: 1},
+		SelfUpdateBlocked:     "a stale deferred-update reason",
 	}
 	man := &manifestInfo{NodeID: "n1", CompiledAt: "2026-06-16T00:00:00Z", Checksum: "abc"}
 
@@ -574,6 +651,13 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 	}
 	if st.AbandonedAgentVersion != "0.9.0" {
 		t.Errorf("recordSuccess wiped AbandonedAgentVersion; got %q", st.AbandonedAgentVersion)
+	}
+	// plan-8 Part D: a clean (new-generation) apply must DROP the deferred-self-update Blocked latch —
+	// recordSuccess rebuilds State and deliberately does NOT carry SelfUpdateBlocked forward (the
+	// stable-generation clear lives in the retry path). Pin it so a future refactor that "preserves"
+	// it cannot silently re-introduce the stuck-Blocked condition.
+	if st.SelfUpdateBlocked != "" {
+		t.Errorf("recordSuccess must clear SelfUpdateBlocked on a clean apply; got %q", st.SelfUpdateBlocked)
 	}
 
 	recordFailure(cfg, prev, "boom")
