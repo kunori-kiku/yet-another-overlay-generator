@@ -4,8 +4,22 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type MessageKey } from '../../i18n';
 import type { ControllerNode, ControllerNodeStatus } from '../../types/controller';
+import type { Node } from '../../types/topology';
 import { UpdateStatusChip } from './UpdateStatusChip';
 import { NodeConditions } from './NodeConditions';
+
+// manualEndpoint formats a manual node's first public endpoint as host:port (port omitted when auto/0),
+// or "—" when none is set.
+function manualEndpoint(n: Node): string {
+  const ep = n.public_endpoints?.[0];
+  if (!ep || !ep.host) return '—';
+  return ep.port ? `${ep.host}:${ep.port}` : ep.host;
+}
+
+// truncKey shows the head of a WG public key (full keys are 44 base64 chars — too wide for the card).
+function truncKey(k: string): string {
+  return k.length > 14 ? `${k.slice(0, 14)}…` : k;
+}
 
 // isDrifting reports whether a node's applied-vs-desired generation has drifted (an approved node
 // whose applied lags desired ⇒ it has not yet fetched/applied the latest generation of config).
@@ -141,6 +155,7 @@ export function NodeRegistry() {
   const ctlNodes = useControllerStore((s) => s.nodes);
   const revoke = useControllerStore((s) => s.revoke);
   const clearRekey = useControllerStore((s) => s.clearRekey);
+  const downloadManualBundle = useControllerStore((s) => s.downloadManualNodeBundle);
   const loading = useControllerStore((s) => s.loading);
   // The configured rollout drives the per-node update-status chip (plan-5). null (settings not yet
   // loaded) ⇒ deriveUpdateState returns 'off' ⇒ a muted dash, never a misleading chip.
@@ -164,6 +179,13 @@ export function NodeRegistry() {
   const designNodeIds = new Set<string>(topoNodes.map((n) => n.id));
   const designLoaded = topoNodes.length > 0;
   const isOrphan = (nodeId: string): boolean => designLoaded && !designNodeIds.has(nodeId);
+
+  // Manual nodes (deployment_mode==='manual') are hand-deployed and agent-less: they carry an
+  // operator-asserted identity in the DESIGN but never enroll, so they have NO registry record and
+  // never appear in the monitored table above (nor in the convergence/edge-readiness gating — they
+  // are intentionally unmonitored, D3). Derive them from the topology and surface them separately so
+  // the operator can see them and download each one's bundle to install by hand.
+  const manualNodes = topoNodes.filter((n) => n.deployment_mode === 'manual');
 
   // Edge readiness: ready iff both endpoint nodes are approved in the controller registry.
   const edgeReady = (fromId: string, toId: string): boolean =>
@@ -289,6 +311,64 @@ export function NodeRegistry() {
             ))}
           </div>
         </>
+      )}
+
+      {/* Manual nodes (hand-deployed, agent-less): derived from the design, NOT the registry. They are
+          deliberately unmonitored — the operator downloads each one's signed bundle and installs it by
+          hand. Shown only when the design has manual nodes. */}
+      {manualNodes.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="text-sm font-semibold text-[var(--content-muted)]">
+            {t(language, 'nodeRegistry.manualNodes')}
+          </h4>
+          <p className="text-xs text-[var(--content-muted)] italic">
+            {t(language, 'nodeRegistry.manualNodesHint')}
+          </p>
+          <ul className="space-y-2">
+            {manualNodes.map((n) => (
+              <li
+                key={n.id}
+                className="rounded-lg border border-[var(--hairline)] bg-[var(--surface)] p-3 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-sm text-[var(--content)] break-all">
+                      {n.name || n.id}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-xs border bg-[var(--info-bg)] text-[var(--info)] border-[var(--info-border)] whitespace-nowrap">
+                      {t(language, 'nodeRegistry.manualUnmonitored')}
+                    </span>
+                    <span className="text-xs text-[var(--content-muted)]">{n.role}</span>
+                  </div>
+                  <button
+                    onClick={() => downloadManualBundle(n.id)}
+                    disabled={loading}
+                    title={t(language, 'nodeRegistry.downloadBundleHint')}
+                    className="px-3 py-2 text-xs bg-[var(--info-solid)] hover:bg-[var(--info-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--info-solid-fg)] min-h-11 lg:min-h-0"
+                  >
+                    {t(language, 'nodeRegistry.downloadBundle')}
+                  </button>
+                </div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                  <dt className="text-[var(--content-muted)]">{t(language, 'nodeRegistry.publicKey')}</dt>
+                  <dd className="text-right font-mono break-all">
+                    {n.wireguard_public_key ? (
+                      <span className="text-[var(--content)]">{truncKey(n.wireguard_public_key)}</span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded border bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning-border)]">
+                        {t(language, 'nodeRegistry.noPublicKey')}
+                      </span>
+                    )}
+                  </dd>
+                  <dt className="text-[var(--content-muted)]">{t(language, 'nodeRegistry.endpoint')}</dt>
+                  <dd className="text-right font-mono break-all text-[var(--content)]">
+                    {manualEndpoint(n)}
+                  </dd>
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Per-edge readiness: an edge is "ready" only when both endpoint nodes are approved (its link

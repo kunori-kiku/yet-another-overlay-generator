@@ -1078,6 +1078,26 @@ export async function clearRekey(cfg: ControllerConfig, nodeId: string): Promise
   return { cleared: data.cleared };
 }
 
+// downloadManualNodeBundle fetches a MANUAL node's promoted, off-host-signed install bundle as a ZIP
+// (operator-only; GET <operator>/manual-node-bundle?node=<id>, the backend handler_manual_node.go). A
+// managed node's agent pulls its config from /config; a manual (agent-less) node has no agent, so the
+// operator downloads the same served bundle here and installs it by hand. The bundle carries
+// PRIVATEKEY_PLACEHOLDER, never real key material (install.sh splices the on-box key), so zero-knowledge
+// holds. Returns the blob + the server-suggested filename (the caller triggers the browser download).
+export async function downloadManualNodeBundle(
+  cfg: ControllerConfig,
+  nodeId: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await request(cfg, `manual-node-bundle?node=${encodeURIComponent(nodeId)}`);
+  const blob = await res.blob();
+  // Mirror the export-download Content-Disposition parse (topologyStore.exportArtifacts); fall back to
+  // the backend's deterministic name when the header is absent.
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+  const filename = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || `${nodeId}-bundle.zip`);
+  return { blob, filename };
+}
+
 // --- keystone (off-host operator signing) ---
 
 // getTrustlist fetches the STAGED membership manifest the operator must sign

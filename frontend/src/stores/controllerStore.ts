@@ -23,6 +23,7 @@ import {
   revoke,
   rekeyAll,
   clearRekey,
+  downloadManualNodeBundle,
   getTrustlist,
   postTrustlistSignature,
   postOperatorCredential,
@@ -509,6 +510,9 @@ interface ControllerState {
   revoke: (nodeId: string) => Promise<void>;
   rollKeys: () => Promise<void>;
   clearRekey: (nodeId: string) => Promise<void>;
+  // downloadManualNodeBundle downloads a MANUAL node's promoted, signed install bundle as a ZIP and
+  // triggers a browser download. Manual nodes have no agent, so the operator installs by hand.
+  downloadManualNodeBundle: (nodeId: string) => Promise<void>;
 }
 
 // configOf slices the ControllerConfig the controllerClient needs out of the connection fields
@@ -1898,6 +1902,28 @@ export const useControllerStore = create<ControllerState>()(
             error: localizeError(err, 'error.generic'),
             loading: false,
           });
+        }
+      },
+      // Download a MANUAL node's promoted, off-host-signed install bundle and trigger a browser
+      // download. The bundle is the same served snapshot a managed node's agent pulls from /config,
+      // carrying PRIVATEKEY_PLACEHOLDER (install.sh splices the on-box key) — so zero-knowledge holds.
+      // A 404 (node not yet staged+promoted, or not manual) surfaces as a localized error.
+      downloadManualNodeBundle: async (nodeId) => {
+        set({ loading: true, error: null });
+        try {
+          const { blob, filename } = await downloadManualNodeBundle(configOf(get()), nodeId);
+          // Same browser-download idiom as topologyStore.exportArtifacts.
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          set({ loading: false });
+        } catch (err) {
+          set({ error: localizeError(err, 'error.generic'), loading: false });
         }
       },
     }),
