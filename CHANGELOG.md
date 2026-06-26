@@ -9,6 +9,47 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.15] - 2026-06-27
+
+Adds **mixed controller + local mode** — some nodes in a controller topology can be hand-deployed
+("manual") rather than agent-managed — and fixes the agent self-update so a stalled rollout recovers
+on its own instead of needing a manual service restart (reproduced on the live fleet while smoking
+beta.14). Both items want an owner fleet smoke before this is promoted to Latest.
+
+### Added
+- **Mixed controller + local mode (manual nodes).** A node can be marked `deployment_mode: manual`:
+  hand-deployed, agent-less, carrying its own operator-asserted WireGuard **public** key in the design
+  (the private key never leaves the box; zero-knowledge custody is unchanged). The controller admits a
+  manual node into the fleet through the single `enrolledSubgraph` chokepoint — managed peers carry it
+  as a `[Peer]`, it carries the managed peers, and the off-host-signed membership manifest includes it
+  — while keeping it out of the agent-convergence/edge-readiness gating (it is intentionally
+  unmonitored). Its identity is validated at stage time (a manual node must carry a public key, unique
+  across manual + enrolled nodes — new `manual_node_invalid` error). End-to-end flow:
+  - **Design:** the node editor exposes a Managed | Manual control (controller mode) with a
+    public-key field + hint; controller import keeps a manual node's public key (drops every private
+    key + managed public key as before).
+  - **Provision:** `yaog-agent kit --node-id <id> [--endpoint host:port]` ensures the on-box WG key
+    (the same file `install.sh` later splices over `PRIVATEKEY_PLACEHOLDER`) and prints a
+    `{node_id, wireguard_public_key, endpoint}` descriptor to paste into the design. It never contacts
+    the controller.
+  - **Deliver:** the operator downloads the node's promoted, signed bundle from the panel (a
+    "manual / unmonitored" card with a Download button → `GET <operator>/manual-node-bundle?node=<id>`)
+    and runs `sudo bash install.sh` on the host, which splices the on-box private key.
+- **`agent kit` subcommand** (see above) for on-box provisioning of a manual node.
+
+### Fixed
+- **Agent self-update no longer needs a manual `systemctl restart yaog-agent` to recover.** A
+  post-apply self-update whose binary download failed (e.g. a slow/timed-out GitHub-proxy fetch) was
+  deferred and only retried on the *next applied generation* — so on a stable generation it stayed
+  wedged until a restart. Now: (1) the daemon re-attempts a deferred self-update on its **idle cycles**
+  on a backoff (`--selfupdate-retry-interval`, default 10m) without waiting for a new generation;
+  (2) the download tries the configured proxy first, then **falls back to a direct GitHub fetch**;
+  (3) the download is bounded by a response-header timeout + a **stall watchdog** + one shared absolute
+  ceiling instead of a single total deadline that tripped on the body read of a large binary over a
+  slow link. The signed-self-update custody model is unchanged — every retry re-verifies the bundle and
+  the swap is still gated by the SHA-256-vs-signed-pin check; the crash-loop cap, anti-downgrade floor,
+  abandoned-target memory, and in-flight guard are untouched.
+
 ## [2.0.0-beta.14] - 2026-06-25
 
 Two bounded fixes surfaced while running the live fleet: the mimic TCP-transport filter now matches
