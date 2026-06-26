@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,8 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // TestDecideSelfUpdate is the pure decision table (plan-9): noop / downgrade-refuse / floor-refuse
@@ -274,6 +279,185 @@ func TestPerformSelfUpdate_InFlightGuard(t *testing.T) {
 	}
 }
 
+// TestPerformSelfUpdate_ProxyFallbackToDirect pins plan-8 Part B: when the proxy source fails (a
+// gh-proxy timeout/error — the live failure mode), performSelfUpdate falls back to a DIRECT GitHub
+// fetch and still swaps. The proxy is modeled as a server that always 500s; ghProxy is its URL prefix
+// (so ghProxy+ReleaseURL routes to it), while the direct ReleaseURL serves the real binary.
+func TestPerformSelfUpdate_ProxyFallbackToDirect(t *testing.T) {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("arch %s", runtime.GOARCH)
+	}
+	bin, sha := fakeBinary(t, "1.2.0")
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(bin) }))
+	defer direct.Close()
+	var proxyHits int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&proxyHits, 1)
+		w.WriteHeader(http.StatusBadGateway) // the proxy is down/slow → 502, as in the live log
+	}))
+	defer proxy.Close()
+
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("OLD"), 0o755)
+	execed, restore := stubSwap(t, self)
+	defer restore()
+
+	cfg := &Config{NodeID: "n1", StateDir: filepath.Join(dir, "state")}
+	cat := selfUpdateCatalog(t, direct, "1.2.0", sha) // ReleaseURL = direct.URL + "/dl"
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", proxy.URL+"/", io.Discard)
+	if err != nil {
+		t.Fatalf("fallback to direct must succeed; got %v", err)
+	}
+	if !swapped || *execed != self {
+		t.Errorf("a fallback download must still swap+re-exec; swapped=%v execed=%q", swapped, *execed)
+	}
+	if atomic.LoadInt32(&proxyHits) == 0 {
+		t.Errorf("the proxy source must be tried FIRST (then fall back to direct)")
+	}
+	if got, _ := os.ReadFile(self); string(got) != string(bin) {
+		t.Errorf("direct fallback binary not swapped in; on-disk=%q", got)
+	}
+}
+
+// TestStallReader_FiresOnIdle pins plan-8 Part C: with no bytes flowing for the timeout, the stall
+// watchdog cancels the request context and stalled() reports true (so downloadTo surfaces a clear
+// stall error instead of an opaque context-cancel).
+func TestStallReader_FiresOnIdle(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// blockingReader.Read blocks until the ctx is cancelled (the watchdog fires cancel), modeling an
+	// http body whose read is aborted when the request context is cancelled — so the io.Copy goroutine
+	// unwinds cleanly rather than leaking.
+	sr := newStallReader(blockingReader{ctx: ctx}, 30*time.Millisecond, cancel)
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, sr); close(done) }()
+	select {
+	case <-ctx.Done():
+		if !sr.stalled() {
+			t.Errorf("stalled() must be true after the watchdog fired")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stall watchdog did not fire within 2s (timeout was 30ms)")
+	}
+	sr.stop()
+	<-done // the reader unblocks on cancel; assert no goroutine leak
+}
+
+// TestStallReader_ResetsOnProgress pins the other half of Part C: a slow-but-progressing transfer
+// (bytes arriving faster than the timeout) keeps resetting the watchdog and is NOT aborted.
+func TestStallReader_ResetsOnProgress(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	// dripReader returns one byte every 5ms for 8 chunks, then EOF — each chunk is well within the
+	// 40ms stall window, so the watchdog must never fire.
+	sr := newStallReader(&dripReader{remaining: 8, gap: 5 * time.Millisecond}, 40*time.Millisecond, cancel)
+	n, err := io.Copy(io.Discard, sr)
+	sr.stop()
+	if err != nil {
+		t.Fatalf("a progressing transfer must not error; got %v", err)
+	}
+	if n != 8 {
+		t.Errorf("expected 8 bytes copied, got %d", n)
+	}
+	if sr.stalled() {
+		t.Errorf("the watchdog must NOT fire while bytes keep flowing")
+	}
+}
+
+// blockingReader.Read blocks until its context is cancelled, then returns the context error.
+type blockingReader struct{ ctx context.Context }
+
+func (b blockingReader) Read(p []byte) (int, error) { <-b.ctx.Done(); return 0, b.ctx.Err() }
+
+// dripReader returns a single byte per Read, `gap` apart, `remaining` times, then io.EOF.
+type dripReader struct {
+	remaining int
+	gap       time.Duration
+}
+
+func (d *dripReader) Read(p []byte) (int, error) {
+	if d.remaining <= 0 {
+		return 0, io.EOF
+	}
+	time.Sleep(d.gap)
+	d.remaining--
+	p[0] = 'x'
+	return 1, nil
+}
+
+// TestDownloadTo_SlowProgressingSucceeds is the integrated Part-C happy path: a body that arrives in
+// small chunks with brief gaps (well inside the stall window) downloads fully — the behavior the old
+// single TOTAL timeout broke.
+func TestDownloadTo_SlowProgressingSucceeds(t *testing.T) {
+	payload := bytes.Repeat([]byte("y"), 4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl, _ := w.(http.Flusher)
+		for i := 0; i < len(payload); i += 512 {
+			_, _ = w.Write(payload[i : i+512])
+			if fl != nil {
+				fl.Flush()
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+	out := filepath.Join(t.TempDir(), "dl")
+	if err := downloadTo(context.Background(), srv.URL, out); err != nil {
+		t.Fatalf("a slow-but-progressing download must succeed; got %v", err)
+	}
+	if got, _ := os.ReadFile(out); !bytes.Equal(got, payload) {
+		t.Errorf("downloaded %d bytes, want %d (content mismatch)", len(got), len(payload))
+	}
+}
+
+// TestDownloadTo_Non200 surfaces a non-200 (e.g. a 502 from a down proxy) as an error.
+func TestDownloadTo_Non200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	err := downloadTo(context.Background(), srv.URL, filepath.Join(t.TempDir(), "dl"))
+	if err == nil || !strings.Contains(err.Error(), "502") {
+		t.Errorf("a non-200 must error with the status; got %v", err)
+	}
+}
+
+// TestDownloadTo_StallSurfacesClearError pins the integrated Part-C stall path: a body that sends
+// headers then stops returning bytes trips the watchdog (shrunk here so the test is fast) and yields
+// the clear "download stalled" error, not an opaque context-cancel.
+func TestDownloadTo_StallSurfacesClearError(t *testing.T) {
+	old := selfUpdateStallTimeout
+	selfUpdateStallTimeout = 40 * time.Millisecond
+	defer func() { selfUpdateStallTimeout = old }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush() // headers out, then no body bytes — the read stalls
+		}
+		<-r.Context().Done() // unblock when the client cancels (no handler-goroutine leak)
+	}))
+	defer srv.Close()
+	err := downloadTo(context.Background(), srv.URL, filepath.Join(t.TempDir(), "dl"))
+	if err == nil || !strings.Contains(err.Error(), "stalled") {
+		t.Errorf("a stalled body must surface a clear 'stalled' error; got %v", err)
+	}
+}
+
+// TestDownloadTo_HeaderTimeout: a mirror that accepts the connection but never sends response headers
+// fails fast via ResponseHeaderTimeout (shrunk here), rather than hanging to the absolute cap.
+func TestDownloadTo_HeaderTimeout(t *testing.T) {
+	old := selfUpdateHeaderTimeout
+	selfUpdateHeaderTimeout = 40 * time.Millisecond
+	defer func() { selfUpdateHeaderTimeout = old }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never write headers
+	}))
+	defer srv.Close()
+	err := downloadTo(context.Background(), srv.URL, filepath.Join(t.TempDir(), "dl"))
+	if err == nil {
+		t.Errorf("a mirror that never sends headers must error fast (ResponseHeaderTimeout)")
+	}
+}
+
 // TestReconcileSelfUpdatePromote_Probation: booted as the target, a clean health gate marks the
 // update PROBATIONARY (Confirmed) — it does NOT advance the floor, drop .bak, or re-exec yet;
 // FinalizeSelfUpdate (after a full cycle) does that.
@@ -453,6 +637,7 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 		AgentVersionFloor:     "1.1.0",
 		AbandonedAgentVersion: "0.9.0",
 		PendingUpdate:         &PendingUpdate{From: "1.1.0", To: "1.2.0", Attempts: 1},
+		SelfUpdateBlocked:     "a stale deferred-update reason",
 	}
 	man := &manifestInfo{NodeID: "n1", CompiledAt: "2026-06-16T00:00:00Z", Checksum: "abc"}
 
@@ -466,6 +651,13 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 	}
 	if st.AbandonedAgentVersion != "0.9.0" {
 		t.Errorf("recordSuccess wiped AbandonedAgentVersion; got %q", st.AbandonedAgentVersion)
+	}
+	// plan-8 Part D: a clean (new-generation) apply must DROP the deferred-self-update Blocked latch —
+	// recordSuccess rebuilds State and deliberately does NOT carry SelfUpdateBlocked forward (the
+	// stable-generation clear lives in the retry path). Pin it so a future refactor that "preserves"
+	// it cannot silently re-introduce the stuck-Blocked condition.
+	if st.SelfUpdateBlocked != "" {
+		t.Errorf("recordSuccess must clear SelfUpdateBlocked on a clean apply; got %q", st.SelfUpdateBlocked)
 	}
 
 	recordFailure(cfg, prev, "boom")

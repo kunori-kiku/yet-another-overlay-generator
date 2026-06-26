@@ -343,6 +343,7 @@ func runRun(args []string) int {
 	daemon := fs.Bool("daemon", false, "controller mode: keep running, continuously long-polling and applying new generations (default: a single poll->apply->report cycle)")
 	ghProxy := fs.String("gh-proxy", "", "controller mode: optional GitHub download proxy prefix for signed agent self-update (e.g. https://gh-proxy.com/)")
 	telemetryInterval := fs.Duration("telemetry-interval", 30*time.Second, "controller daemon mode: how often to send a live health heartbeat (POST /telemetry: node conditions + last-seen, never deploy state). 0 or less disables the heartbeat.")
+	selfUpdateRetryInterval := fs.Duration("selfupdate-retry-interval", 10*time.Minute, "controller daemon mode: how often to re-attempt a DEFERRED agent self-update (a download that failed on a stable generation) without waiting for a new generation or a restart. 0 or less disables the retry.")
 	_ = fs.Parse(args)
 
 	if *nodeID == "" {
@@ -353,20 +354,21 @@ func runRun(args []string) int {
 	// Controller mode takes precedence when --controller is set.
 	if *controller != "" {
 		return runControllerMode(controllerModeOpts{
-			nodeID:            *nodeID,
-			baseURL:           *controller,
-			tokenPath:         *tokenPath,
-			pubkeyPath:        *pubkeyPath,
-			operatorCredPath:  *operatorCredPath,
-			operatorCredAlg:   *operatorCredAlg,
-			operatorRPID:      *operatorRPID,
-			operatorOrigin:    *operatorOrigin,
-			stateDir:          *stateDir,
-			stagingDir:        *stagingDir,
-			after:             *after,
-			daemon:            *daemon,
-			ghProxy:           *ghProxy,
-			telemetryInterval: *telemetryInterval,
+			nodeID:                  *nodeID,
+			baseURL:                 *controller,
+			tokenPath:               *tokenPath,
+			pubkeyPath:              *pubkeyPath,
+			operatorCredPath:        *operatorCredPath,
+			operatorCredAlg:         *operatorCredAlg,
+			operatorRPID:            *operatorRPID,
+			operatorOrigin:          *operatorOrigin,
+			stateDir:                *stateDir,
+			stagingDir:              *stagingDir,
+			after:                   *after,
+			daemon:                  *daemon,
+			ghProxy:                 *ghProxy,
+			telemetryInterval:       *telemetryInterval,
+			selfUpdateRetryInterval: *selfUpdateRetryInterval,
 		})
 	}
 
@@ -446,6 +448,10 @@ type controllerModeOpts struct {
 	// 0 or less disables it. Single-shot runs never heartbeat (their one /report carries apply-time
 	// conditions). Default 30s (set in the run flag). beta9-smoke-hardening plan-1.
 	telemetryInterval time.Duration
+	// selfUpdateRetryInterval is how often the DAEMON re-attempts a DEFERRED self-update (a download
+	// that failed on a stable generation) without waiting for a new generation or a restart. 0 or less
+	// disables it. Default 10m (set in the run flag). plan-8.
+	selfUpdateRetryInterval time.Duration
 }
 
 // runControllerMode drives controller-pull deploys: load the per-node bearer token,
@@ -510,15 +516,23 @@ func runControllerMode(o controllerModeOpts) int {
 	// marks the update PROBATIONARY (FinalizeSelfUpdate promotes it after the first clean cycle
 	// below); a failure (or a reboot during probation) rolls back to the prior binary. No-op
 	// without a breadcrumb.
-	healthCheck := func() error {
+	// verifiedFetch returns the cryptographically VERIFIED served bundle (Fetch + VerifyBundle). It is
+	// the shared primitive for BOTH the self-update reconcile health-gate AND the deferred-self-update
+	// retry (plan-8), so every self-update decision re-fetches + re-verifies — a swap never acts on
+	// stale or unverified pins.
+	verifiedFetch := func() (map[string][]byte, error) {
 		files, ferr := client.Fetch(o.nodeID)
 		if ferr != nil {
-			return fmt.Errorf("fetch: %w", ferr)
+			return nil, fmt.Errorf("fetch: %w", ferr)
 		}
 		if _, verr := agent.VerifyBundle(files, pinned); verr != nil {
-			return fmt.Errorf("verify: %w", verr)
+			return nil, fmt.Errorf("verify: %w", verr)
 		}
-		return nil
+		return files, nil
+	}
+	healthCheck := func() error {
+		_, err := verifiedFetch()
+		return err
 	}
 	agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
 
@@ -601,6 +615,11 @@ func runControllerMode(o controllerModeOpts) int {
 		go runHeartbeat(client, agent.BuildTelemetry(o.stateDir), o.telemetryInterval, os.Stderr)
 	}
 
+	// lastSelfUpdateRetry paces the deferred-self-update retry (plan-8): a download that failed on a
+	// stable generation is re-attempted on idle cycles every selfUpdateRetryInterval, so a stalled
+	// rollout recovers without a new generation or a manual restart. Initialized to now so the first
+	// retry waits one interval after start (the apply path already made the initial attempt).
+	lastSelfUpdateRetry := time.Now()
 	finalizedSelfUpdate := false
 	for {
 		resumeGen, applied, err := cycle()
@@ -622,6 +641,21 @@ func runControllerMode(o controllerModeOpts) int {
 			time.Sleep(errBackoff) // idle/rekey wake: pace before re-polling
 		}
 		lastAppliedGen = resumeGen // advance on success, idle skip, or rekey wake; unchanged on a timed-out poll
+
+		// Deferred self-update retry (plan-8): re-attempt a self-update that a prior cycle deferred
+		// (e.g. a gh-proxy download timeout) WITHOUT waiting for a new generation. Idle cycles only —
+		// an apply already ran the post-apply attempt (agent.go step 7) — paced by the interval, on
+		// the MAIN thread so a swap (syscall.Exec) never interrupts a mid-flight apply. A no-op unless
+		// State.SelfUpdateBlocked is armed, so calling it past the backoff is cheap when nothing is due.
+		// (selfUpdate is always non-nil in controller daemon mode; RetryDeferredSelfUpdate is nil-safe
+		// regardless, so the interval gate is the only guard needed here.)
+		if o.selfUpdateRetryInterval > 0 && !applied &&
+			time.Since(lastSelfUpdateRetry) >= o.selfUpdateRetryInterval {
+			lastSelfUpdateRetry = time.Now()
+			if _, suErr := agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, verifiedFetch, os.Stderr); suErr != nil {
+				fmt.Fprintf(os.Stderr, "agent: deferred self-update retry: %v (will retry)\n", suErr)
+			}
+		}
 	}
 }
 

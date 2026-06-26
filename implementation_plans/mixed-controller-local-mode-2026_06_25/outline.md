@@ -82,10 +82,12 @@ beta after owner smokes.
 | plan-4 | On-box kit: `yaog-agent kit` (keygen → descriptor → register → private-key splice) | Go/agent | plan-2, plan-3 |
 | plan-5 | Optional telemetry-only reporter for manual nodes (health without `/config`, excluded from convergence) | Go/agent | plan-2 |
 | plan-6 | Frontend: `deployment_mode` editor + custody relax (public allowed) + manual-node panel UX (chip, convergence exclusion, per-node bundle download) | TS | plan-1 (parallel to 2-5) |
+| plan-8 | Self-update reliability rider (retry-without-restart + dual-source + stall timeout) — folded in 2026-06-26 (owner) | Go/agent | — (independent; ships in plan-7's beta) |
 | plan-7 | Release the mixed-mode beta + owner smoke runbook | release | all |
 
 Spine = plan-1 → {plan-2, plan-3 (after 2)} → {plan-4 (after 2,3), plan-5 (after 2)}; plan-6 runs in
-parallel off plan-1; plan-7 gates on all.
+parallel off plan-1; plan-7 gates on all. plan-8 (a fleet-reliability rider, see plan-8-2026_06_26.md)
+is file-disjoint and ships in plan-7's release because it gates the rollout of every future beta.
 
 ## Decisions log
 
@@ -149,5 +151,6 @@ parallel off plan-1; plan-7 gates on all.
 | plan-3 | drafted |
 | plan-4 | drafted |
 | plan-5 | drafted |
-| plan-6 | drafted |
+| plan-6 | pt.1 merged (#200); panel remainder pending |
 | plan-7 | drafted |
+| plan-8 | drafted (self-update reliability rider, owner-folded 2026-06-26) |
