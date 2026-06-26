@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // TestDecideSelfUpdate is the pure decision table (plan-9): noop / downgrade-refuse / floor-refuse
@@ -272,6 +275,111 @@ func TestPerformSelfUpdate_InFlightGuard(t *testing.T) {
 	if st.PendingUpdate.Attempts != 2 {
 		t.Errorf("a blocked re-swap must not reset Attempts; got %d, want 2", st.PendingUpdate.Attempts)
 	}
+}
+
+// TestPerformSelfUpdate_ProxyFallbackToDirect pins plan-8 Part B: when the proxy source fails (a
+// gh-proxy timeout/error — the live failure mode), performSelfUpdate falls back to a DIRECT GitHub
+// fetch and still swaps. The proxy is modeled as a server that always 500s; ghProxy is its URL prefix
+// (so ghProxy+ReleaseURL routes to it), while the direct ReleaseURL serves the real binary.
+func TestPerformSelfUpdate_ProxyFallbackToDirect(t *testing.T) {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("arch %s", runtime.GOARCH)
+	}
+	bin, sha := fakeBinary(t, "1.2.0")
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(bin) }))
+	defer direct.Close()
+	var proxyHits int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&proxyHits, 1)
+		w.WriteHeader(http.StatusBadGateway) // the proxy is down/slow → 502, as in the live log
+	}))
+	defer proxy.Close()
+
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("OLD"), 0o755)
+	execed, restore := stubSwap(t, self)
+	defer restore()
+
+	cfg := &Config{NodeID: "n1", StateDir: filepath.Join(dir, "state")}
+	cat := selfUpdateCatalog(t, direct, "1.2.0", sha) // ReleaseURL = direct.URL + "/dl"
+	swapped, err := performSelfUpdate(cfg, cat, "1.0.0", proxy.URL+"/", io.Discard)
+	if err != nil {
+		t.Fatalf("fallback to direct must succeed; got %v", err)
+	}
+	if !swapped || *execed != self {
+		t.Errorf("a fallback download must still swap+re-exec; swapped=%v execed=%q", swapped, *execed)
+	}
+	if atomic.LoadInt32(&proxyHits) == 0 {
+		t.Errorf("the proxy source must be tried FIRST (then fall back to direct)")
+	}
+	if got, _ := os.ReadFile(self); string(got) != string(bin) {
+		t.Errorf("direct fallback binary not swapped in; on-disk=%q", got)
+	}
+}
+
+// TestStallReader_FiresOnIdle pins plan-8 Part C: with no bytes flowing for the timeout, the stall
+// watchdog cancels the request context and stalled() reports true (so downloadTo surfaces a clear
+// stall error instead of an opaque context-cancel).
+func TestStallReader_FiresOnIdle(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// blockingReader.Read blocks until the ctx is cancelled (the watchdog fires cancel), modeling an
+	// http body whose read is aborted when the request context is cancelled — so the io.Copy goroutine
+	// unwinds cleanly rather than leaking.
+	sr := newStallReader(blockingReader{ctx: ctx}, 30*time.Millisecond, cancel)
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, sr); close(done) }()
+	select {
+	case <-ctx.Done():
+		if !sr.stalled() {
+			t.Errorf("stalled() must be true after the watchdog fired")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stall watchdog did not fire within 2s (timeout was 30ms)")
+	}
+	sr.stop()
+	<-done // the reader unblocks on cancel; assert no goroutine leak
+}
+
+// TestStallReader_ResetsOnProgress pins the other half of Part C: a slow-but-progressing transfer
+// (bytes arriving faster than the timeout) keeps resetting the watchdog and is NOT aborted.
+func TestStallReader_ResetsOnProgress(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	// dripReader returns one byte every 5ms for 8 chunks, then EOF — each chunk is well within the
+	// 40ms stall window, so the watchdog must never fire.
+	sr := newStallReader(&dripReader{remaining: 8, gap: 5 * time.Millisecond}, 40*time.Millisecond, cancel)
+	n, err := io.Copy(io.Discard, sr)
+	sr.stop()
+	if err != nil {
+		t.Fatalf("a progressing transfer must not error; got %v", err)
+	}
+	if n != 8 {
+		t.Errorf("expected 8 bytes copied, got %d", n)
+	}
+	if sr.stalled() {
+		t.Errorf("the watchdog must NOT fire while bytes keep flowing")
+	}
+}
+
+// blockingReader.Read blocks until its context is cancelled, then returns the context error.
+type blockingReader struct{ ctx context.Context }
+
+func (b blockingReader) Read(p []byte) (int, error) { <-b.ctx.Done(); return 0, b.ctx.Err() }
+
+// dripReader returns a single byte per Read, `gap` apart, `remaining` times, then io.EOF.
+type dripReader struct {
+	remaining int
+	gap       time.Duration
+}
+
+func (d *dripReader) Read(p []byte) (int, error) {
+	if d.remaining <= 0 {
+		return 0, io.EOF
+	}
+	time.Sleep(d.gap)
+	d.remaining--
+	p[0] = 'x'
+	return 1, nil
 }
 
 // TestReconcileSelfUpdatePromote_Probation: booted as the target, a clean health gate marks the

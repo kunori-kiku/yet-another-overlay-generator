@@ -15,6 +15,7 @@ package agent
 // floor advances ONLY after a swapped binary survives one clean cycle.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -34,8 +36,17 @@ import (
 // the reconcile abandons it (rolls back to the prior binary). It is the crash-loop ceiling.
 const maxSelfUpdateAttempts = 3
 
-// selfUpdateDownloadTimeout bounds the binary download so a hung mirror cannot wedge a cycle.
-const selfUpdateDownloadTimeout = 2 * time.Minute
+// Download bounds. A binary self-update over a slow GitHub proxy is a large, slow-but-progressing
+// transfer, so a single TOTAL deadline (the historic http.Client.Timeout) wrongly trips on the body
+// read of a ~10–15 MB binary (the live "context deadline exceeded while reading body" failure). The
+// download is bounded instead by THREE independent guards: a response-header timeout (a mirror that
+// never answers fails fast), a STALL watchdog (no bytes for selfUpdateStallTimeout ⇒ abort — catches
+// a hung mid-transfer), and a generous absolute ceiling (a final backstop).
+const (
+	selfUpdateHeaderTimeout = 45 * time.Second // time-to-first-byte (response headers)
+	selfUpdateStallTimeout  = 90 * time.Second // max idle gap between body chunks
+	selfUpdateAbsoluteCap   = 15 * time.Minute // hard backstop regardless of progress
+)
 
 // execFn is syscall.Exec, indirected so tests can observe the re-exec without replacing the test
 // process. The real syscall.Exec NEVER returns on success.
@@ -196,9 +207,30 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 	partial := filepath.Join(dir, ".yaog-agent."+cat.Version+".partial")
 	defer os.Remove(partial) // removed on every error path; consumed (renamed away) on success
 
-	url := ghProxy + cat.ReleaseURL + "/" + pin.Asset
-	if err := downloadTo(url, partial); err != nil {
-		return false, fmt.Errorf("download %s: %w", url, err)
+	// Source order: the operator-configured proxy FIRST (it exists for nodes that cannot reach GitHub
+	// directly), then a DIRECT GitHub fetch as the fallback when the proxy is slow/down (the live
+	// failure — a gh-proxy body-read timeout). The SHA-256-vs-signed-pin check below gates the swap
+	// regardless of WHICH source served the bytes, so trying multiple sources is custody-safe: a
+	// tampered mirror fails the pin and is refused. Keep the "download " error prefix so
+	// classifySelfUpdateBlock still recognizes a download failure.
+	direct := cat.ReleaseURL + "/" + pin.Asset
+	urls := make([]string, 0, 2)
+	if strings.TrimSpace(ghProxy) != "" {
+		urls = append(urls, ghProxy+direct)
+	}
+	urls = append(urls, direct)
+	var dlErr error
+	for i, u := range urls {
+		if dlErr = downloadTo(u, partial); dlErr == nil {
+			if i > 0 {
+				fmt.Fprintf(stderr, "agent: self-update downloaded via fallback source (proxy failed)\n")
+			}
+			break
+		}
+		fmt.Fprintf(stderr, "agent: self-update download from %s failed: %v\n", u, dlErr)
+	}
+	if dlErr != nil {
+		return false, fmt.Errorf("download %s: %w", strings.Join(urls, ", "), dlErr)
 	}
 
 	// CUSTODY: verify the downloaded bytes against the SIGNED artifacts.json pin BEFORE the
@@ -418,12 +450,26 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// downloadTo fetches url into path (truncating), with a bounded timeout and the same
-// http(s)-only posture as the rest of the agent's transport. The bytes are UNTRUSTED until the
-// caller verifies them against the signed pin.
+// downloadTo fetches url into path (truncating). It is bounded by a response-header timeout, a STALL
+// watchdog, and an absolute ceiling (the selfUpdate*Timeout constants) rather than a single total
+// deadline — so a large binary on a slow link (which kept tripping the old 2-minute total) is
+// tolerated as long as bytes keep flowing, while a hung mirror still fails fast. The bytes are
+// UNTRUSTED until the caller verifies them against the signed pin.
 func downloadTo(url, path string) error {
-	client := &http.Client{Timeout: selfUpdateDownloadTimeout}
-	resp, err := client.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), selfUpdateAbsoluteCap)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	// No total Client.Timeout: the body is bounded by the stall watchdog + the absolute ctx cap, so a
+	// slow-but-progressing transfer is never killed mid-body. ResponseHeaderTimeout bounds the
+	// time-to-first-byte. Proxy:FromEnvironment preserves the default transport's proxy posture.
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: selfUpdateHeaderTimeout,
+	}}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -435,12 +481,54 @@ func downloadTo(url, path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		_ = f.Close()
-		return err
+	sr := newStallReader(resp.Body, selfUpdateStallTimeout, cancel)
+	_, copyErr := io.Copy(f, sr)
+	sr.stop()
+	closeErr := f.Close()
+	if sr.stalled() {
+		// The watchdog cancelled the request mid-transfer; surface a clear stall error rather than the
+		// opaque "context canceled" io.Copy returns when the body read is aborted.
+		return fmt.Errorf("download stalled: no data for %s", selfUpdateStallTimeout)
 	}
-	return f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
+
+// stallReader wraps a download body with an IDLE (stall) watchdog: if no bytes are read for `timeout`,
+// it fires `cancel` (cancelling the request context, which aborts the in-flight transfer). It imposes
+// NO total-time cap — a slow-but-progressing transfer keeps resetting the timer and is tolerated.
+// stalled() reports whether the watchdog fired, so the caller can surface a clear stall error instead
+// of the opaque context-cancelled error. AfterFunc timers carry no channel, so Reset/Stop here are
+// race-free with the firing callback (the t.C-drain caveat does not apply).
+type stallReader struct {
+	r       io.Reader
+	timeout time.Duration
+	cancel  context.CancelFunc
+	timer   *time.Timer
+	fired   atomic.Bool
+}
+
+func newStallReader(r io.Reader, timeout time.Duration, cancel context.CancelFunc) *stallReader {
+	s := &stallReader{r: r, timeout: timeout, cancel: cancel}
+	s.timer = time.AfterFunc(timeout, func() {
+		s.fired.Store(true)
+		s.cancel()
+	})
+	return s
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.timer.Reset(s.timeout)
+	}
+	return n, err
+}
+
+func (s *stallReader) stop()         { s.timer.Stop() }
+func (s *stallReader) stalled() bool { return s.fired.Load() }
 
 // fileSHA256 returns the lowercase hex SHA-256 of the file at path.
 func fileSHA256(path string) (string, error) {

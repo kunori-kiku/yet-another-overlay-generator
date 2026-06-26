@@ -49,9 +49,16 @@ any failure BEFORE the swap keeps the running binary (keep-last-good):
 
 1. **arch → asset.** `key := "linux-" + runtime.GOARCH`; scoped to **amd64/arm64** (D9),
    fail-closed otherwise. The pin is `.agent.bins[key]`.
-2. **download** `${GH_PROXY}${.agent.release_url}/<asset>` to `.yaog-agent.<ver>.partial` beside the
-   current binary (same FS ⇒ the install rename is atomic; a cross-FS layout falls back to
-   copy+fsync+rename).
+2. **download** to `.yaog-agent.<ver>.partial` beside the current binary (same FS ⇒ the install
+   rename is atomic; a cross-FS layout falls back to copy+fsync+rename). Two sources are tried in
+   order — the operator-configured **proxy first** (`${GH_PROXY}${.agent.release_url}/<asset>`, for
+   nodes that cannot reach GitHub directly), then a **direct GitHub fetch**
+   (`${.agent.release_url}/<asset>`) as a fallback when the proxy is slow/down (the live failure mode
+   — a gh-proxy body-read timeout). The SHA-256-vs-pin check (step 3) gates the swap regardless of
+   which source served the bytes, so multi-source is custody-safe. Each attempt is bounded by a
+   **response-header timeout** + a **stall watchdog** (abort if no bytes flow for `selfUpdateStallTimeout`)
+   + a generous **absolute ceiling** — NOT a single total deadline, which used to trip on the body
+   read of a large binary over a slow link.
 3. **CUSTODY: verify** the bytes' SHA-256 against the signed pin — mismatch ⇒ refuse.
 4. **self-test** `<partial> version` must print EXACTLY `desired` — else refuse (catches a corrupt
    or wrong-arch binary that somehow matched a hash).
@@ -69,8 +76,20 @@ any failure BEFORE the swap keeps the running binary (keep-last-good):
 AFTER verify+membership+anti-rollback but BEFORE apply, so an agent below the bundle's required
 floor never applies an incompatible bundle (if it cannot update — no pin / downgrade / abandoned /
 target-below-min — it refuses to apply and reports unhealthy). A non-forced update runs after a
-clean apply (best-effort; the next cycle retries). The anti-rollback (`compiled_at`) check precedes
-the self-update so a stale bundle never triggers an agent swap.
+clean apply (best-effort). The anti-rollback (`compiled_at`) check precedes the self-update so a
+stale bundle never triggers an agent swap.
+
+**Deferred-update retry (no restart needed).** A non-forced (`after-apply`) update is attempted in
+the apply path, but the daemon applies only on a NEW generation — so a download that fails on a
+*stable* generation used to wedge the rollout until a manual `systemctl restart yaog-agent`. The
+daemon therefore re-attempts a deferred self-update on its **idle cycles**, on a backoff
+(`--selfupdate-retry-interval`, default 10m; `≤0` disables), WITHOUT waiting for a new generation.
+The trigger is the persisted `State.SelfUpdateBlocked` latch (set when a post-apply attempt is
+refused/deferred; cleared once the target is no longer armed). The retry reuses the SAME
+`Fetch + VerifyBundle → decideSelfUpdate → performSelfUpdate` path (every retry re-verifies — no
+stale/unverified pins) and runs on the **main loop thread** so a swap never interrupts a mid-flight
+apply. The forced (pre-apply) path already retries — a failure errors the whole cycle and the daemon
+re-runs it on its error backoff.
 
 ## Startup reconcile + crash-loop bound (two phases + finalize)
 
