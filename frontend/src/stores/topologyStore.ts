@@ -14,6 +14,7 @@ import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } fro
 import { uuid } from '../lib/uuid';
 import { healCollidingPins } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
+import { parseContentDispositionFilename, triggerBrowserDownload } from '../lib/download';
 // The local-engine seam (plan-6, milestone 1.6). localEngineEnabled() is the SINGLE decision
 // point this store consults; the four adapters bridge the air-gap action shapes onto the
 // plan-4 TS compiler (drift-pinned by the plan-5 conformance harness). See the seam docstring
@@ -925,19 +926,10 @@ export const useTopologyStore = create<TopologyState>()(
         }
 
         blob = await res.blob();
-        const disposition = res.headers.get('Content-Disposition') || '';
-        const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
-        filename = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || 'artifacts.zip');
+        filename = parseContentDispositionFilename(res, 'artifacts.zip');
       }
 
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      triggerBrowserDownload(blob, filename);
     } catch (err) {
       set({
         error: localEngineErrorMessage(err, 'error.exportFailed', get().language),
@@ -986,14 +978,7 @@ export const useTopologyStore = create<TopologyState>()(
 
       // Filenames match handler.go:298/:302 (deploy-all.ps1 / deploy-all.sh) on both paths.
       const filename = format === 'ps1' ? 'deploy-all.ps1' : 'deploy-all.sh';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      triggerBrowserDownload(blob, filename);
     } catch (err) {
       set({
         error: localEngineErrorMessage(err, 'error.deployScriptFailed', get().language),
