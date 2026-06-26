@@ -186,10 +186,15 @@ export function NodeRegistry() {
   // are intentionally unmonitored, D3). Derive them from the topology and surface them separately so
   // the operator can see them and download each one's bundle to install by hand.
   const manualNodes = topoNodes.filter((n) => n.deployment_mode === 'manual');
+  const manualNodeIds = new Set<string>(manualNodes.map((n) => n.id));
 
-  // Edge readiness: ready iff both endpoint nodes are approved in the controller registry.
-  const edgeReady = (fromId: string, toId: string): boolean =>
-    statusByNodeId.get(fromId) === 'approved' && statusByNodeId.get(toId) === 'approved';
+  // Edge readiness: an endpoint is ready when it is approved in the registry OR it is a MANUAL node.
+  // A manual node never enrolls (no registry record), so it can never be 'approved' — but it is
+  // excluded from convergence/edge-readiness gating (D3): its readiness is operator-asserted (the
+  // operator hand-deploys it), so we treat it as satisfied rather than reporting every manual-touching
+  // link as perpetually "Not ready".
+  const endpointReady = (id: string): boolean => manualNodeIds.has(id) || statusByNodeId.get(id) === 'approved';
+  const edgeReady = (fromId: string, toId: string): boolean => endpointReady(fromId) && endpointReady(toId);
 
   // The per-node action cluster (Cancel-rekey + Revoke), shared by the desktop table row and the
   // below-lg mobile card so the two presentations stay behaviorally identical. `fullWidth` makes the
@@ -328,6 +333,7 @@ export function NodeRegistry() {
             {manualNodes.map((n) => (
               <li
                 key={n.id}
+                data-testid="manual-node-card"
                 className="rounded-lg border border-[var(--hairline)] bg-[var(--surface)] p-3 space-y-2"
               >
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -343,6 +349,7 @@ export function NodeRegistry() {
                   <button
                     onClick={() => downloadManualBundle(n.id)}
                     disabled={loading}
+                    data-testid="download-manual-bundle"
                     title={t(language, 'nodeRegistry.downloadBundleHint')}
                     className="px-3 py-2 text-xs bg-[var(--info-solid)] hover:bg-[var(--info-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--info-solid-fg)] min-h-11 lg:min-h-0"
                   >

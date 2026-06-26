@@ -19,6 +19,7 @@ import type {
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
+import { parseContentDispositionFilename } from '../lib/download';
 
 // ControllerError is thrown for any non-2xx controller response. It preserves the parsed coded
 // error envelope on .body so the store can localize it via tError; .status is the HTTP status and
@@ -1090,11 +1091,10 @@ export async function downloadManualNodeBundle(
 ): Promise<{ blob: Blob; filename: string }> {
   const res = await request(cfg, `manual-node-bundle?node=${encodeURIComponent(nodeId)}`);
   const blob = await res.blob();
-  // Mirror the export-download Content-Disposition parse (topologyStore.exportArtifacts); fall back to
-  // the backend's deterministic name when the header is absent.
-  const disposition = res.headers.get('Content-Disposition') || '';
-  const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
-  const filename = decodeURIComponent(filenameMatch?.[1] || filenameMatch?.[2] || `${nodeId}-bundle.zip`);
+  // The backend (handler_manual_node.go) sets `Content-Disposition: attachment; filename="<id>-bundle.zip"`;
+  // fall back to that deterministic name if the header is absent. parseContentDispositionFilename only
+  // percent-decodes the RFC 5987 `filename*` form, so a plain filename with a literal '%' is safe.
+  const filename = parseContentDispositionFilename(res, `${nodeId}-bundle.zip`);
   return { blob, filename };
 }
 

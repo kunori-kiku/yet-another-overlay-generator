@@ -57,6 +57,7 @@ import {
 import type { Topology } from '../types/topology';
 import { enrollOperatorCredential, signManifest, assertLogin } from '../lib/webauthn';
 import { stripPrivateKeys, dropAllKeys, stripLiveTelemetry } from '../lib/custody';
+import { triggerBrowserDownload } from '../lib/download';
 import { localizeError as localizeErrorFor } from '../lib/localizeError';
 import { localOnly } from '../lib/localOnly';
 import { useTopologyStore, ALLOCATION_PIN_FIELDS } from './topologyStore';
@@ -1912,15 +1913,7 @@ export const useControllerStore = create<ControllerState>()(
         set({ loading: true, error: null });
         try {
           const { blob, filename } = await downloadManualNodeBundle(configOf(get()), nodeId);
-          // Same browser-download idiom as topologyStore.exportArtifacts.
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          triggerBrowserDownload(blob, filename);
           set({ loading: false });
         } catch (err) {
           set({ error: localizeError(err, 'error.generic'), loading: false });
