@@ -533,6 +533,50 @@ func TestFinalizeSelfUpdate_ClearsSelfUpdateBlocked(t *testing.T) {
 	}
 }
 
+// TestFinalizeSelfUpdate_NoopLeavesBlockedIntact pins the custody guard the beta.16 Blocked-clear sits
+// under: FinalizeSelfUpdate must be a NO-OP (latch + breadcrumb + floor untouched) when the breadcrumb
+// is not Confirmed, or the running build is not the target. A genuinely-blocked node that has NOT yet
+// reached the target must keep its Blocked latch so a stalled rollout stays visible.
+func TestFinalizeSelfUpdate_NoopLeavesBlockedIntact(t *testing.T) {
+	cases := []struct {
+		name      string
+		confirmed bool
+		build     string // the running buildVersion passed to FinalizeSelfUpdate
+	}{
+		{"not confirmed", false, "1.1.0"},
+		{"wrong build (not yet on target)", true, "1.0.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			self := filepath.Join(dir, "yaog-agent")
+			_ = os.WriteFile(self, []byte("NEW"), 0o755)
+			stateDir := filepath.Join(dir, "state")
+			mustSave(t, stateDir, &State{
+				NodeID:            "n1",
+				AgentVersionFloor: "1.0.0",
+				SelfUpdateBlocked: "could not download the update binary",
+				PendingUpdate:     &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: tc.confirmed},
+			})
+			_, restore := stubSwap(t, self)
+			defer restore()
+
+			FinalizeSelfUpdate(stateDir, tc.build, io.Discard)
+
+			st, _ := LoadState(stateDir)
+			if st.PendingUpdate == nil {
+				t.Errorf("a no-op finalize must NOT clear the breadcrumb")
+			}
+			if st.AgentVersionFloor != "1.0.0" {
+				t.Errorf("a no-op finalize must NOT advance the floor; got %q", st.AgentVersionFloor)
+			}
+			if st.SelfUpdateBlocked == "" {
+				t.Errorf("a no-op finalize must LEAVE the Blocked latch intact (a stalled rollout stays visible)")
+			}
+		})
+	}
+}
+
 // TestReconcileSelfUpdatePromote_HealthFailRollback: booted as the target but unhealthy → roll back
 // to .bak, re-exec, and remember the abandoned target.
 func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
