@@ -7,6 +7,7 @@ import { t } from '../../i18n';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 import { NodeConditions } from '../deploy/NodeConditions';
 import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
+import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
 
 // last_seen / enrolled_at are RFC3339 strings; the zero value ("0001-01-01T00:00:00Z") is
 // displayed as "—".
@@ -42,6 +43,10 @@ export function FleetNodeDetailPage() {
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-4">
+      {/* Surface a failed refresh (an expired session, or the controller's 502s) — this page actively
+          calls refresh() (mount, Live poll, manual button), so without the banner a failed fetch would
+          silently stop the lastSynced stamp and look identical to a quiet node (mirrors FleetPage). */}
+      <ControllerErrorBanner />
       <Link to="/fleet" className="text-sm text-[var(--info)] hover:underline">
         {t(language, 'fleetBack')}
       </Link>
