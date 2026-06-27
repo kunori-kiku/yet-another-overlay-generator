@@ -423,6 +423,8 @@ export const en = {
   'fleetNodeDetailPage.lastSeen': "Last Seen",
   'fleetNodeDetailPage.no': "no",
   'fleetNodeDetailPage.rekeying': "Rekeying",
+  'fleetNodeDetailPage.refresh': "Refresh",
+  'fleetNodeDetailPage.lastSynced': "Last synced",
   'fleetNodeDetailPage.status': "Status",
   'wgPeers.heading': "WireGuard links",
   'wgPeers.upOfTotal': "{up}/{total} up",
