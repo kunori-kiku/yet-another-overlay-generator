@@ -9,6 +9,37 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.16] - 2026-06-27
+
+A smoke-hardening of beta.15: while smoking the fleet, the controller's view of a node could look
+**stale** — old agent version, a stuck `selfupdate: Blocked`, a frozen `Last Seen` — even when the node
+itself was healthy and had successfully self-updated. The node and the beta.15 self-update fix were
+working; these are three fixes to the **status/observability path**. Owner fleet re-smoke gates
+promotion to Latest.
+
+### Fixed
+- **The node-detail page (`/fleet/nodes/:id`) now refreshes.** It previously rendered a frozen
+  `localStorage` snapshot — no refresh-on-mount and no poll — so an operator watching a single node saw
+  status (`Last Seen`, agent version, conditions) that never advanced even when the controller was
+  current. It now refreshes on mount, offers a manual **Refresh** button plus the opt-in **Live** poll
+  (both shared with the `/fleet` list via one hook), shows a **"last synced"** stamp, and surfaces a
+  failed refresh (an expired session or a controller 502) instead of silently freezing.
+- **`selfupdate: Blocked` no longer outlives a successful update.** A node that recovered and finished
+  self-updating kept reporting `Blocked` — the latch from the earlier deferred/failed attempts — until
+  the next config deploy bumped its generation. `FinalizeSelfUpdate` now clears the latch (a confirmed
+  self-update means the node is no longer blocked), complementing the existing new-generation and
+  idle-retry clears.
+- **The telemetry heartbeat is hardened against a wedged probe.** `wg show all dump` (run twice per
+  beat) now runs under a 10s timeout, and the heartbeat loop has a panic-recover, so a hung
+  `wg`/netlink or a stray panic can no longer silently freeze a node's `Last Seen` while the agent
+  process is alive.
+
+### Note
+- The controller's intermittent **502s** (its reverse-proxy / origin availability) are an operational
+  concern, not an agent bug — the agent correctly keeps last-good and retries every interval. If status
+  propagation stalls during an outage window, stabilize the controller origin; nothing is lost once it
+  is reachable again.
+
 ## [2.0.0-beta.15] - 2026-06-27
 
 Adds **mixed controller + local mode** — some nodes in a controller topology can be hand-deployed
