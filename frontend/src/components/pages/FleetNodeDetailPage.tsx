@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useFleetLiveRefresh } from '../../hooks/useFleetLiveRefresh';
 import { t } from '../../i18n';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 import { NodeConditions } from '../deploy/NodeConditions';
@@ -31,6 +32,13 @@ export function FleetNodeDetailPage() {
   const language = useTopologyStore((s) => s.language);
   const node = useControllerStore((s) => s.nodes.find((n) => n.nodeId === id));
   const settings = useControllerStore((s) => s.settings);
+  const refresh = useControllerStore((s) => s.refresh);
+  const loading = useControllerStore((s) => s.loading);
+  const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
+  // Refresh-on-mount + the opt-in Live poll (beta.16): this deep-linked route previously rendered a
+  // FROZEN cache snapshot (no refresh-on-mount), so an operator watching a node saw stale status that
+  // never advanced. Shared with /fleet via the hook so the two stay behaviorally identical.
+  const { live, setLive } = useFleetLiveRefresh();
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-4">
@@ -38,9 +46,32 @@ export function FleetNodeDetailPage() {
         {t(language, 'fleetBack')}
       </Link>
 
-      <h1 className="text-xl font-semibold text-[var(--content)]">
-        {t(language, 'fleetNodeDetailTitle')}
-      </h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold text-[var(--content)]">
+          {t(language, 'fleetNodeDetailTitle')}
+        </h1>
+        {/* Server-truth controls: a manual Refresh, the opt-in Live poll, and a "last synced" stamp so
+            the operator knows this is a snapshot (and how fresh) rather than a live mirror. */}
+        <div className="flex items-center gap-3 text-xs text-[var(--content-muted)]">
+          {lastSyncedAt && (
+            <span>
+              {t(language, 'fleetNodeDetailPage.lastSynced')}: {new Date(lastSyncedAt).toLocaleTimeString()}
+            </span>
+          )}
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+            {t(language, 'updateStatus.live')}
+          </label>
+          <button
+            onClick={() => void refresh()}
+            disabled={loading}
+            data-testid="node-detail-refresh"
+            className="px-2 py-1 rounded border border-[var(--hairline)] text-[var(--info)] hover:bg-[var(--control)] disabled:text-[var(--content-muted)]"
+          >
+            {t(language, 'fleetNodeDetailPage.refresh')}
+          </button>
+        </div>
+      </div>
 
       {!node ? (
         <p className="text-sm text-[var(--content-muted)]">{t(language, 'fleetNodeNotFound')}</p>
@@ -71,9 +102,9 @@ export function FleetNodeDetailPage() {
             </Field>
           </dl>
           {/* Unconditional + nullish-coerced: a node persisted by a pre-beta.12 panel (in
-              localStorage) has no wireguardPeers key, and this deep-linkable route has no
-              refresh-on-mount, so guarding on node.wireguardPeers.length would crash on a reload
-              after upgrade. The panel itself renders nothing for an empty list. */}
+              localStorage) has no wireguardPeers key, and the refresh-on-mount above completes
+              asynchronously (the first paint is the cache), so guarding on node.wireguardPeers.length
+              would crash on a reload after upgrade. The panel itself renders nothing for an empty list. */}
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
         </section>
       )}

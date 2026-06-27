@@ -411,6 +411,8 @@ export const zh: Record<keyof typeof en, string> = {
   'fleetNodeDetailPage.lastSeen': "最近一次心跳",
   'fleetNodeDetailPage.no': "否",
   'fleetNodeDetailPage.rekeying': "轮换密钥中",
+  'fleetNodeDetailPage.refresh': "刷新",
+  'fleetNodeDetailPage.lastSynced': "上次同步",
   'fleetNodeDetailPage.status': "状态",
   'wgPeers.heading': "WireGuard 链路",
   'wgPeers.upOfTotal': "{up}/{total} 在线",
