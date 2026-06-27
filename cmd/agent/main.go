@@ -669,6 +669,15 @@ func runControllerMode(o controllerModeOpts) int {
 // condition, so this only ever skips genuinely-empty samples). Runs until the process exits/exec's.
 func runHeartbeat(client *agent.ControllerClient, tel *agent.Telemetry, interval time.Duration, stderr io.Writer) {
 	beat := func() {
+		// A panic anywhere in a beat (a sampler outside its own guard, the merge, or the POST) must
+		// NOT kill this goroutine — it is the ONLY thing that refreshes Last Seen after apply time, so
+		// a silent death would freeze the controller's view of a live node. Recover, log, and let the
+		// next tick try again (beta.16 heartbeat-resilience hardening).
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(stderr, "agent: telemetry heartbeat: recovered from panic: %v\n", r)
+			}
+		}()
 		conds, metrics := tel.Collect(time.Now().UTC())
 		if len(conds) == 0 && len(metrics) == 0 {
 			return

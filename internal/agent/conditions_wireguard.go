@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -29,11 +30,19 @@ const (
 // idle link is never falsely flagged.
 const wgHandshakeStaleAfter = 5 * time.Minute
 
-// wgShowFn runs `wg show all dump` and returns its stdout, indirected so a test can inject a fixture
-// without a kernel WireGuard interface. A non-nil error (wg absent, not root, no interfaces) is
-// BEST-EFFORT: the caller emits NO condition and NEVER fails the cycle.
+// wgShowTimeout bounds the `wg show all dump` probe so a wedged wg/netlink can NEVER block the
+// telemetry heartbeat (which runs this twice per beat). Without it, a hung probe would stall every
+// subsequent beat and freeze the node's Last Seen on the controller while the daemon looks alive — a
+// beta.16 "alive but frozen" smoke finding. Generous: a healthy `wg show` returns in milliseconds.
+const wgShowTimeout = 10 * time.Second
+
+// wgShowFn runs `wg show all dump` (under wgShowTimeout) and returns its stdout, indirected so a test
+// can inject a fixture without a kernel WireGuard interface. A non-nil error (wg absent, not root, no
+// interfaces, or the timeout) is BEST-EFFORT: the caller emits NO condition and NEVER fails the cycle.
 var wgShowFn = func() ([]byte, error) {
-	return exec.Command("wg", "show", "all", "dump").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), wgShowTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "wg", "show", "all", "dump").Output()
 }
 
 // sampleWireGuardCondition probes link health via `wg show all dump` and classifies it into one
