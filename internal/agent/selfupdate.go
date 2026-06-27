@@ -384,6 +384,11 @@ func FinalizeSelfUpdate(stateDir, buildVersion string, stderr io.Writer) {
 	st.PendingUpdate = nil
 	st.AgentVersionFloor = pu.To
 	st.AbandonedAgentVersion = "" // a successful promote supersedes any prior abandonment
+	// A successful self-update means the node is no longer blocked: clear any leftover Blocked latch
+	// from the earlier deferred/failed attempts so the selfupdate condition stops reporting "Blocked"
+	// once the node IS on the target. Otherwise it would persist until the next generation apply
+	// (recordSuccess) or a reachable idle retry — the beta.16 "sticky Blocked" smoke finding.
+	st.SelfUpdateBlocked = ""
 	st.Health = "self-updated to " + pu.To
 	_ = SaveState(stateDir, st)
 	_ = os.Remove(self + ".bak")

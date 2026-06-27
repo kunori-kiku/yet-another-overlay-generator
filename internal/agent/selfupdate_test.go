@@ -501,6 +501,38 @@ func TestReconcileSelfUpdatePromote_Probation(t *testing.T) {
 	}
 }
 
+// TestFinalizeSelfUpdate_ClearsSelfUpdateBlocked pins the beta.16 sticky-Blocked fix: a SUCCESSFUL
+// self-update (finalize) drops a leftover SelfUpdateBlocked latch from the earlier failed/deferred
+// attempts, so the node stops reporting "Blocked" once it is actually on the target — without waiting
+// for the next generation apply or a reachable idle retry.
+func TestFinalizeSelfUpdate_ClearsSelfUpdateBlocked(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	_ = os.WriteFile(self, []byte("NEW"), 0o755)
+	_ = os.WriteFile(self+".bak", []byte("OLD"), 0o755)
+	stateDir := filepath.Join(dir, "state")
+	mustSave(t, stateDir, &State{
+		NodeID:            "n1",
+		SelfUpdateBlocked: "could not download the update binary from the release",
+		PendingUpdate:     &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: true},
+	})
+	_, restore := stubSwap(t, self)
+	defer restore()
+
+	FinalizeSelfUpdate(stateDir, "1.1.0", io.Discard)
+
+	st, _ := LoadState(stateDir)
+	if st.PendingUpdate != nil {
+		t.Errorf("finalize must clear the breadcrumb")
+	}
+	if st.AgentVersionFloor != "1.1.0" {
+		t.Errorf("finalize must advance the floor; got %q", st.AgentVersionFloor)
+	}
+	if st.SelfUpdateBlocked != "" {
+		t.Errorf("finalize must clear the stale SelfUpdateBlocked latch (beta.16); got %q", st.SelfUpdateBlocked)
+	}
+}
+
 // TestReconcileSelfUpdatePromote_HealthFailRollback: booted as the target but unhealthy → roll back
 // to .bak, re-exec, and remember the abandoned target.
 func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
