@@ -85,14 +85,18 @@ without any operator action beyond marking each node publicly reachable.
 ### Runtime endpoint roaming (operational note)
 
 The rendered `Endpoint` line is only the **initial dial address**. WireGuard rewrites a peer's runtime
-endpoint to the source address of the most recent authenticated packet it receives from that peer
-("roaming"). So on a node behind a port-forward (inbound DNAT to `:51820`) **plus** source NAT on its
-outbound path, `wg show` reports the peer's *observed egress* `IP:port` — which legitimately differs
-from the `Endpoint =` written in the `.conf`. This is expected WireGuard behavior, **not** a compiler
-or config defect: the `.conf` carries the operator's configured endpoint; the kernel's live endpoint
-follows the authenticated source. A mismatch between `wg show` and the deploy-page endpoint on a
-DNAT+SNAT (port-forwarded) node is therefore normal and needs no action. (Pinning the runtime endpoint
-against roaming would require periodically re-asserting it — a deliberate future option, not a default.)
+endpoint to the source address of the most recent authenticated packet it receives **from that peer**
+("roaming"). The divergence therefore shows up on the DIALER, for a peer that is itself behind NAT:
+when a peer sits behind a port-forward (you dial its front, e.g. a router DNATs `:51820` → the peer's
+internal `:51820`) **plus** source NAT on the peer's outbound path (its packets egress from a different
+`IP:port`), your node's `wg show` for THAT PEER reports the peer's *observed egress* — which
+legitimately differs from the `Endpoint =` your `.conf` dials. In a fleet where several nodes are NAT'd
+this is symmetric: each node sees its NAT'd peers roamed. It is expected WireGuard behavior, **not** a
+compiler or config defect: the `.conf` carries the operator's configured (dial-front) endpoint; the
+kernel's live endpoint follows the authenticated source. A mismatch between `wg show` and the
+deploy-page endpoint for a peer behind DNAT+SNAT is therefore normal and needs no action. (Pinning the
+runtime endpoint against roaming would require periodically re-asserting it — a deliberate future
+option, not a default.)
 
 ### Determinism caveat
 
