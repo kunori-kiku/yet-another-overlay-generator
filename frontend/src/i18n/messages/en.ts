@@ -800,6 +800,7 @@ export const en = {
   'error.validation_node_name_required': "Node name is required.",
   'error.validation_node_overlay_ip_conflict': "Overlay IP {cidr} conflicts: already used by node {other}, also assigned to node {node}",
   'error.validation_node_overlay_ip_invalid': "Invalid overlay IP address: {ip}.",
+  'error.validation_node_wg_public_key_invalid': "wireguard_public_key {key} is not a valid Curve25519 public key: it must be 32 bytes encoded as standard base64 (44 characters). It is written verbatim into the WireGuard configuration deployed on peer nodes, so a malformed value is rejected here.",
   'error.validation_node_overlay_ip_out_of_cidr': "Overlay IP {cidr} of node {node} is not within the CIDR {prefix} of Domain {name}",
   'error.validation_node_platform_unsupported': "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
   'error.validation_node_public_endpoint_host_illegal_chars': "public_endpoints host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.",

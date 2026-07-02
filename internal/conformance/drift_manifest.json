@@ -8,7 +8,7 @@
     "wgPerPeerConfigTemplate": "a8c45243c8367f6c9533fb16530fe441d6375b35c9e73dedacae81a3e8557257"
   },
   "validator_codes": {
-    "count": 99,
+    "count": 100,
     "codes": [
       "validation_client_endpoint_host_required",
       "validation_client_extra_prefixes_meaningless",
@@ -89,6 +89,7 @@
       "validation_node_ssh_key_path_illegal_chars",
       "validation_node_ssh_port_out_of_range",
       "validation_node_ssh_user_illegal_chars",
+      "validation_node_wg_public_key_invalid",
       "validation_node_xdp_mode_invalid",
       "validation_pin_client_allocation_ignored",
       "validation_pin_client_port_pin",

@@ -58,6 +58,11 @@ var (
 	// pubkey ↔ one node-id — the duplicate-fleet-rows vector). Same-id re-enroll
 	// (reinstalled host, fresh token) is unaffected.
 	ErrDuplicateWGKey = errors.New("controller: WireGuard public key already enrolled under a different node id")
+	// ErrInvalidWGKey is returned by Enroll/Rekey when the presented WireGuard public
+	// key is not a valid Curve25519 key (32 bytes of standard base64). It is rejected
+	// up front, before the enrollment token is burned, so a malformed value never
+	// reaches the registry or a rendered peer config.
+	ErrInvalidWGKey = errors.New("controller: WireGuard public key is not a valid base64/32-byte Curve25519 key")
 	// ErrNodeRevoked is returned by Enroll when the claimed node-id exists and is
 	// revoked: a revoked node-id must not be silently resurrected by a still-valid
 	// enrollment token. The operator deletes the node to reuse the id.

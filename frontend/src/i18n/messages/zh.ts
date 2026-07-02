@@ -779,6 +779,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_node_name_required': "节点名称不能为空",
   'error.validation_node_overlay_ip_conflict': "IP {cidr} 冲突：已被节点 {other} 使用，又分配给节点 {node}",
   'error.validation_node_overlay_ip_invalid': "Overlay IP 地址无效: {ip}",
+  'error.validation_node_wg_public_key_invalid': "wireguard_public_key {key} 不是有效的 Curve25519 公钥：必须是 32 字节的标准 base64 编码（44 个字符）。它会被原样写入部署到对端节点的 WireGuard 配置，因此非法值在此被拒绝。",
   'error.validation_node_overlay_ip_out_of_cidr': "节点 {node} 的 IP {cidr} 不在 Domain {name} 的 CIDR {prefix} 内",
   'error.validation_node_platform_unsupported': "平台不受支持: {platform}，可选值: debian, ubuntu",
   'error.validation_node_public_endpoint_host_illegal_chars': "public_endpoints 主机 {host} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、方括号([ ])、连字符(-)，禁止空白与元字符，因为该主机会被写入部署到节点上的 WireGuard 配置",

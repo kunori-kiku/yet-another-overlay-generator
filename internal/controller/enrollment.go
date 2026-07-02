@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
 // enrollTokenBytes is the number of crypto/rand bytes behind a plaintext token
@@ -151,6 +153,14 @@ func Enroll(ctx context.Context, store Store, t TenantID, req EnrollRequest, now
 	// the exact duplicate-fleet-rows the dedupe forbids. The lock also serializes
 	// enroll against stage/promote (which read the registry). Enroll is infrequent.
 	defer lockTenantOps(t)()
+
+	// (a0) Reject a malformed WireGuard public key up front, BEFORE burning the token: a pure format
+	// check (no store access, no oracle) so a valid token is never wasted on a typo, and a bad key
+	// never reaches the registry or a rendered peer config. Curve25519 keys are 32 bytes of standard
+	// base64 — the same source of truth the schema validator and validateManualNodes use.
+	if !validator.ValidWGPublicKey(req.WGPublicKey) {
+		return EnrollResult{}, fmt.Errorf("%w: %q", ErrInvalidWGKey, req.WGPublicKey)
+	}
 
 	// (a) Atomically validate-and-burn the token. On any token error (invalid,
 	// expired, or already consumed) we return immediately without touching the
@@ -293,6 +303,12 @@ func CheckWGKeyUnique(ctx context.Context, store Store, t TenantID, wgPubKey, se
 // (the new key already belongs to another approved node), or a wrapped store error.
 func Rekey(ctx context.Context, store Store, t TenantID, nodeID, newPubKey string, now time.Time) error {
 	defer lockTenantOps(t)()
+
+	// Reject a malformed new key before any store work (same gate as Enroll): a rekey must not be
+	// able to bind an invalid key the enroll path forbids.
+	if !validator.ValidWGPublicKey(newPubKey) {
+		return fmt.Errorf("%w: %q", ErrInvalidWGKey, newPubKey)
+	}
 
 	rec, err := store.GetNode(ctx, t, nodeID)
 	if err != nil {

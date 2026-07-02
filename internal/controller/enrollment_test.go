@@ -80,7 +80,7 @@ func TestEnrollHappyPath(t *testing.T) {
 	res, err := Enroll(ctx, store, tnt, EnrollRequest{
 		Token:       plaintext,
 		NodeID:      "node-1",
-		WGPublicKey: "wg-pub-node-1",
+		WGPublicKey: "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
 	}, now)
 	if err != nil {
 		t.Fatalf("Enroll: %v", err)
@@ -101,8 +101,8 @@ func TestEnrollHappyPath(t *testing.T) {
 	if node.Status != NodeApproved {
 		t.Fatalf("node Status = %q, want %q", node.Status, NodeApproved)
 	}
-	if node.WGPublicKey != "wg-pub-node-1" {
-		t.Fatalf("node WGPublicKey = %q, want wg-pub-node-1", node.WGPublicKey)
+	if node.WGPublicKey != "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=" {
+		t.Fatalf("node WGPublicKey = %q, want AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=", node.WGPublicKey)
 	}
 	if node.APITokenHash == "" {
 		t.Fatalf("node APITokenHash is empty after enroll")
@@ -169,7 +169,7 @@ func TestEnrollFailures(t *testing.T) {
 		_, err := Enroll(ctx, store, tnt, EnrollRequest{
 			Token:       "bogus-never-minted-token",
 			NodeID:      "node-1",
-			WGPublicKey: "wg-pub-node-1",
+			WGPublicKey: "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
 		}, now)
 		if !errors.Is(err, ErrTokenInvalid) {
 			t.Fatalf("Enroll(unknown token): err = %v, want ErrTokenInvalid", err)
@@ -186,7 +186,7 @@ func TestEnrollFailures(t *testing.T) {
 		// agent-enrolled registry AND operator-asserted MANUAL nodes in the stored topology. A node
 		// must not enroll to a key a manual node already claims (the enrolled→manual direction).
 		store := NewMemStore()
-		const manualKey = "manual-node-operator-asserted-pubkey"
+		const manualKey = "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw="
 		topo := model.Topology{
 			Project: model.Project{ID: "p", Name: "p"},
 			Nodes: []model.Node{{
@@ -212,18 +212,39 @@ func TestEnrollFailures(t *testing.T) {
 		requireNotApproved(t, store, tnt, "node-new")
 	})
 
+	t.Run("malformed-wg-key-rejected-without-burning-token", func(t *testing.T) {
+		// A malformed WireGuard public key is rejected up front (before the token is consumed), so a
+		// valid token is never wasted on a typo and a bad key never reaches the registry / a rendered
+		// peer config (plan-4).
+		store := NewMemStore()
+		plaintext, tok := NewEnrollmentToken("node-x", time.Hour, now)
+		if err := store.CreateEnrollmentToken(ctx, tnt, tok); err != nil {
+			t.Fatalf("CreateEnrollmentToken: %v", err)
+		}
+		bad := EnrollRequest{Token: plaintext, NodeID: "node-x", WGPublicKey: "not-a-valid-key"}
+		if _, err := Enroll(ctx, store, tnt, bad, now); !errors.Is(err, ErrInvalidWGKey) {
+			t.Fatalf("Enroll(malformed key): err = %v, want ErrInvalidWGKey", err)
+		}
+		requireNotApproved(t, store, tnt, "node-x")
+		// The token was NOT burned: a corrected retry with the SAME token succeeds.
+		good := EnrollRequest{Token: plaintext, NodeID: "node-x", WGPublicKey: "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw="}
+		if _, err := Enroll(ctx, store, tnt, good, now); err != nil {
+			t.Fatalf("Enroll(corrected key, same token) must succeed (token not burned by the reject): %v", err)
+		}
+	})
+
 	t.Run("burned-token-cannot-re-enroll", func(t *testing.T) {
 		store := NewMemStore()
 		plaintext, tok := NewEnrollmentToken("node-1", time.Hour, now)
 		if err := store.CreateEnrollmentToken(ctx, tnt, tok); err != nil {
 			t.Fatalf("CreateEnrollmentToken: %v", err)
 		}
-		req := EnrollRequest{Token: plaintext, NodeID: "node-1", WGPublicKey: "wg-pub-node-1"}
+		req := EnrollRequest{Token: plaintext, NodeID: "node-1", WGPublicKey: "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw="}
 		if _, err := Enroll(ctx, store, tnt, req, now); err != nil {
 			t.Fatalf("Enroll(first): %v", err)
 		}
 		// Second enroll with the same (now-burned) token -> ErrTokenConsumed.
-		req2 := EnrollRequest{Token: plaintext, NodeID: "node-1", WGPublicKey: "wg-pub-node-1"}
+		req2 := EnrollRequest{Token: plaintext, NodeID: "node-1", WGPublicKey: "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw="}
 		_, err := Enroll(ctx, store, tnt, req2, now)
 		if !errors.Is(err, ErrTokenConsumed) {
 			t.Fatalf("Enroll(burned token): err = %v, want ErrTokenConsumed", err)

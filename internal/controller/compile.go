@@ -53,6 +53,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
 // StageResult reports the outcome of CompileAndStage. Staged and SkippedUnenrolled
@@ -512,6 +513,14 @@ func validateManualNodes(topo *model.Topology, nodes []Node) error {
 		if key == "" {
 			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.ID).
 				With("detail", "no WireGuard public key — a manual node is hand-deployed, so it must carry its own pre-known public key")
+		}
+		// The manual key is operator-asserted and rendered VERBATIM (the raw, untrimmed value flows to
+		// the peer config), so validate the raw key: a valid Curve25519 key has no surrounding
+		// whitespace, and bad base64 / wrong length / an embedded newline is rejected. Same source of
+		// truth as the schema validator + enroll/rekey.
+		if !validator.ValidWGPublicKey(node.WireGuardPublicKey) {
+			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.ID).
+				With("detail", "its WireGuard public key is not a valid base64/32-byte Curve25519 key")
 		}
 		if other, ok := enrolledByKey[key]; ok {
 			return apierr.New(apierr.CodeManualNodeInvalid).With("node", node.ID).
