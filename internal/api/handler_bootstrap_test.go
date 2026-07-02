@@ -47,6 +47,7 @@ func TestRenderBootstrapScript_KeystoneOn(t *testing.T) {
 		"https://overlay.example.com:9090/s3cr3t",
 		"https://gh-proxy.com/",
 		"https://github.com/o/r/releases/latest/download",
+		nil,
 		cred,
 	)
 	for _, want := range []string{
@@ -91,7 +92,7 @@ func TestRenderBootstrapScript_KeystoneOn(t *testing.T) {
 // TestRenderBootstrapScript_KeystoneOff: with no pinned credential, the operator-cred
 // values render empty (the runtime OP_FLAGS block stays inert).
 func TestRenderBootstrapScript_KeystoneOff(t *testing.T) {
-	s := renderBootstrapScript("https://x", "", "https://r/dl", nil)
+	s := renderBootstrapScript("https://x", "", "https://r/dl", nil, nil)
 	for _, want := range []string{
 		"OPERATOR_CRED_PEM=''",
 		"OPERATOR_CRED_ALG=''",
@@ -106,8 +107,42 @@ func TestRenderBootstrapScript_KeystoneOff(t *testing.T) {
 
 // TestRenderBootstrapScript_InjectionSafe: a hostile single quote in an injected value
 // is escaped, never breaking out of the single-quoted assignment.
+// TestRenderBootstrapScript_AgentPinning (plan-6): with AgentBins configured, the script bakes the
+// per-arch pin vars and verifies the downloaded binary against the SHA-256 (fail-closed) before
+// install; with no pins it warns loudly and proceeds. Pin values are shell-safe (shQuote).
+func TestRenderBootstrapScript_AgentPinning(t *testing.T) {
+	bins := map[string]model.Artifact{
+		"linux-amd64": {Asset: "yaog-agent-linux-amd64", SHA256: strings.Repeat("a", 64)},
+		"linux-arm64": {Asset: "yaog-agent-linux-arm64", SHA256: strings.Repeat("b", 64)},
+	}
+	s := renderBootstrapScript("https://x", "", "https://r/dl", bins, nil)
+	for _, want := range []string{
+		"AGENT_SHA_linux_amd64='" + strings.Repeat("a", 64) + "'",
+		"AGENT_ASSET_linux_amd64='yaog-agent-linux-amd64'",
+		"AGENT_SHA_linux_arm64='" + strings.Repeat("b", 64) + "'",
+		`pin_sha="${!sha_var:-}"`,
+		"sha256sum -c -",
+		"refusing to install",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("pinned bootstrap script missing %q", want)
+		}
+	}
+
+	// No pins configured → the loud WARNING; no baked pin block (the body still references the lookup
+	// var AGENT_SHA_linux_${agent_arch}, so assert the absence of the BAKED block header + a concrete
+	// per-arch assignment, not the generic string).
+	off := renderBootstrapScript("https://x", "", "https://r/dl", nil, nil)
+	if !strings.Contains(off, "no SHA-256 pin configured for linux-") {
+		t.Error("unpinned bootstrap script must warn that integrity is NOT verified")
+	}
+	if strings.Contains(off, "# per-arch agent-binary pins") || strings.Contains(off, "AGENT_SHA_linux_amd64=") {
+		t.Error("unpinned bootstrap script must not bake any per-arch pin assignment")
+	}
+}
+
 func TestRenderBootstrapScript_InjectionSafe(t *testing.T) {
-	s := renderBootstrapScript("https://x'; rm -rf / #", "", "https://r/dl", nil)
+	s := renderBootstrapScript("https://x'; rm -rf / #", "", "https://r/dl", nil, nil)
 	if strings.Contains(s, "CONTROLLER='https://x'; rm -rf / #'") {
 		t.Fatal("single quote was not escaped — injection possible")
 	}
@@ -269,7 +304,7 @@ func TestValidateOperatorCredentialBinding(t *testing.T) {
 // flag-shift form and quotes the ExecStart controller/node-id (no silent abort on a
 // trailing flag; no ExecStart word-split).
 func TestRenderBootstrapScript_SafeShellForms(t *testing.T) {
-	s := renderBootstrapScript("https://x", "", "https://r/dl", nil)
+	s := renderBootstrapScript("https://x", "", "https://r/dl", nil, nil)
 	for _, want := range []string{
 		`shift; [ $# -gt 0 ] && shift ;;`, // safe shift
 		`ExecStart=/usr/local/bin/yaog-agent run --controller "${CONTROLLER}" --node-id "${NODE_ID}"`, // quoted
@@ -487,7 +522,7 @@ func TestBootstrap_WriteOperatorCredBehavior(t *testing.T) {
 		Alg:          "ed25519",
 		PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nNEWKEY\n-----END PUBLIC KEY-----\n",
 	}
-	fn := extractWriteOperatorCred(t, renderBootstrapScript("https://x", "", "https://r/dl", cred))
+	fn := extractWriteOperatorCred(t, renderBootstrapScript("https://x", "", "https://r/dl", nil, cred))
 	const pem = "-----BEGIN PUBLIC KEY-----\nNEWKEY\n-----END PUBLIC KEY-----\n"
 
 	// run invokes the extracted function with (credFile, pem) and returns stdout+stderr.
