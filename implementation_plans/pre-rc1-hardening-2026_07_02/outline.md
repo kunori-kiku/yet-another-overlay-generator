@@ -159,6 +159,22 @@ drift + the TS mirror.
   digest-signing ceremony hardening; attacker-resistant anti-rollback; bootstrap operator-cred
   out-of-band delivery (keep the runbook fingerprint-compare step; plan-6 closes the adjacent
   *binary*-TOFU now).
+- **2026-07-02 midflight (plan-1) — NAT semantics = REQUIRE EXPLICIT HOST** (owner): an
+  explicitly-set endpoint host must be authoritative; a port override with no resolvable host is a
+  validation error, NOT a silent drop nor a fallback to the node's original public IP.
+- **2026-07-02 midflight (plan-1) — refined symptom + repro (redirects the hunt):** owner set a
+  *totally different* endpoint IP + port on a link and the deployed config used the node's ORIGINAL
+  public IP ("did not notice the port though"). In-package `DerivePeers` repro established: the compiler
+  HONORS a custom host on the direction it is set (`A→B` custom → A's peer-for-B = `custom-nat:51900`);
+  the REVERSE peer uses `PublicEndpoints[0]` = the original IP (the intended, tested fallback,
+  `peers.go:897`); a PORT-ONLY override (host empty) is dropped forward + reverse→original. So "fell back
+  to the original" is EITHER **(a)** the reverse direction was observed (B's config for A — a by-design
+  fallback, not a compiler bug), OR **(b)** the custom host was lost before compile (a frontend store /
+  controller-mode save round-trip dropping the edit). **DISAMBIGUATION PENDING (owner):** which node's
+  deployed config showed the original IP (the NEAR end you edited vs the FAR end of the link), whether it
+  was after a Deploy or just a preview, or the link's JSON. plan-1's investigation is redirected from
+  "compiler port-only" to "explicit host not honored: reverse-fallback (a) vs store round-trip (b)"; the
+  require-explicit-host semantics above governs the compiler side either way.
 
 ## 7. Milestones
 
