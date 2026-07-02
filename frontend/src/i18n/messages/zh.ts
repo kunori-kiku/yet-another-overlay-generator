@@ -748,6 +748,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_edge_endpoint_host_illegal_chars': "endpoint_host {host} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、方括号([ ])、连字符(-)，禁止空白与元字符，因为该主机会被写入部署到节点上的 WireGuard 配置",
   'error.validation_edge_endpoint_no_match': "边 {id} 拨号 {other}，但目标 {node} 没有匹配的 public endpoint（节点被编辑后 endpoint 快照可能已陈旧）",
   'error.validation_edge_endpoint_port_invalid': "端点端口无效: {port}",
+  'error.validation_edge_endpoint_port_without_host': "此链路设置了端点端口覆盖，但未设置端点主机。没有主机就无法拨号——请设置明确的端点主机，或清除端口以使用默认值。",
   'error.validation_edge_from_node_id_required': "起始节点 ID 不能为空",
   'error.validation_edge_id_duplicate': "Edge ID 重复：{id}",
   'error.validation_edge_id_required': "Edge ID 不能为空",

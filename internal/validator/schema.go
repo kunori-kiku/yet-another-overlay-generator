@@ -501,6 +501,15 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortInvalid, P{"port", strconv.Itoa(edge.EndpointPort)})
 		}
 
+		// A port override REQUIRES an explicit endpoint host (require-explicit-host semantics): a port
+		// alone cannot be dialed. Without this the compiler silently DROPS a port-only forward override
+		// (its Endpoint derivation requires endpoint_host) — or the reverse direction falls back to the
+		// peer's plain public IP — while the panel badge still claims "NAT override active". Reject the
+		// inconsistent state loudly here instead of shipping a config that quietly ignores the override.
+		if edge.EndpointPort > 0 && edge.EndpointHost == "" {
+			result.AddError(prefix+".endpoint_port", CodeEdgeEndpointPortWithoutHost)
+		}
+
 		// endpoint_host charset validation (plan-6): when non-empty it is rendered into the per-peer
 		// WireGuard config file parsed by root's wg-quick (the `Endpoint =` line), so it must exclude
 		// whitespace and control/metacharacters that would corrupt the config or confuse the parser.

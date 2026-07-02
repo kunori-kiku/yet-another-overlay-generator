@@ -147,6 +147,33 @@ describe('validateSchema node ID charset (plan-7)', () => {
   });
 });
 
+describe('validateSchema edge endpoint port requires host (plan-1)', () => {
+  // require-explicit-host: a port override with no host is rejected (mirrors schema.go).
+  const topoWith = (host: string, port: number): Topology => ({
+    project: { id: 'p', name: 'P' },
+    domains: [{ id: 'd1', name: 'mesh', cidr: '10.55.0.0/24', allocation_mode: 'manual', routing_mode: 'babel' }],
+    nodes: [
+      { id: 'a', name: 'a', role: 'router', domain_id: 'd1', capabilities: { can_accept_inbound: true, can_forward: true, has_public_ip: true } },
+      { id: 'b', name: 'b', role: 'router', domain_id: 'd1', capabilities: { can_accept_inbound: true, can_forward: true, has_public_ip: true } },
+    ],
+    edges: [
+      { id: 'e', from_node_id: 'a', to_node_id: 'b', type: 'public-endpoint', endpoint_host: host, endpoint_port: port, transport: 'udp', is_enabled: true },
+    ],
+  });
+  const portCodes = (host: string, port: number): string[] =>
+    validateSchema(topoWith(host, port)).errors.filter((e) => e.field === 'edges[0].endpoint_port').map((e) => e.code);
+
+  it('rejects a port override with no host', () => {
+    expect(portCodes('', 51999)).toContain(Code.EdgeEndpointPortWithoutHost);
+  });
+  it('accepts a port override WITH a host', () => {
+    expect(portCodes('host.example.com', 51999)).not.toContain(Code.EdgeEndpointPortWithoutHost);
+  });
+  it('accepts no port (auto) with no host', () => {
+    expect(portCodes('', 0)).not.toContain(Code.EdgeEndpointPortWithoutHost);
+  });
+});
+
 describe('validateSchema finding shape', () => {
   it('returns coded findings with field, code, message, level', () => {
     const topo: Topology = {

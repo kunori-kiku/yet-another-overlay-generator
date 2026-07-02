@@ -72,6 +72,7 @@ const (
 	CodeEdgeMimicFallbackInvalid           Code = "validation_edge_mimic_fallback_invalid"
 	CodeEdgeEndpointHostIllegalChars       Code = "validation_edge_endpoint_host_illegal_chars"
 	CodeEdgeEndpointPortInvalid            Code = "validation_edge_endpoint_port_invalid"
+	CodeEdgeEndpointPortWithoutHost        Code = "validation_edge_endpoint_port_without_host"
 	CodeEdgeRoleInvalid                    Code = "validation_edge_role_invalid"
 	CodeEdgeSelfLoop                       Code = "validation_edge_self_loop"
 	CodeRoutePolicyReserved                Code = "validation_routepolicy_reserved"
@@ -180,6 +181,7 @@ var registry = map[Code]string{
 	CodeEdgeMimicFallbackInvalid:           "Invalid mimic_fallback policy: {policy}. Allowed values: udp, none (empty = inherit fleet default).",
 	CodeEdgeEndpointHostIllegalChars:       "endpoint_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.",
 	CodeEdgeEndpointPortInvalid:            "Invalid endpoint port: {port}.",
+	CodeEdgeEndpointPortWithoutHost:        "This link sets an endpoint port override but no endpoint host. A port cannot be dialed without a host — set an explicit endpoint host, or clear the port to use the default.",
 	CodeEdgeRoleInvalid:                    "Invalid link role: {role}. Allowed values: primary, backup (empty is equivalent to primary).",
 	CodeEdgeSelfLoop:                       "Edge source and target nodes must not be the same (self-loop).",
 	CodeRoutePolicyReserved:                "route_policies is a reserved feature that is not yet implemented: no renderer consumes it, the compiler only passes it through verbatim, so it must be empty (detected {count} policies; please clear route_policies; for LAN bridging / route injection use extra_prefixes instead)",

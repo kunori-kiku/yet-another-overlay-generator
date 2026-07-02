@@ -769,6 +769,7 @@ export const en = {
   'error.validation_edge_endpoint_host_illegal_chars': "endpoint_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.",
   'error.validation_edge_endpoint_no_match': "Edge {id} dials {other} but target {node} has no matching public endpoint (the endpoint snapshot may be stale after a node edit)",
   'error.validation_edge_endpoint_port_invalid': "Invalid endpoint port: {port}.",
+  'error.validation_edge_endpoint_port_without_host': "This link sets an endpoint port override but no endpoint host. A port cannot be dialed without a host — set an explicit endpoint host, or clear the port to use the default.",
   'error.validation_edge_from_node_id_required': "Edge source node ID is required.",
   'error.validation_edge_id_duplicate': "Duplicate Edge ID: {id}",
   'error.validation_edge_id_required': "Edge ID is required.",

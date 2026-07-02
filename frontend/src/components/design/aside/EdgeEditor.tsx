@@ -203,8 +203,12 @@ export function EdgeEditor() {
               onChange={(e) => {
                 const value = e.target.value;
                 if (value === '__none__') {
+                  // Clear the port WITH the host (require-explicit-host coupling): a port override with
+                  // no host is invalid + rejected by the validator, so unsetting the host must not
+                  // orphan the port into that inconsistent state.
                   updateEdge(selectedEdge.id, {
                     endpoint_host: undefined,
+                    endpoint_port: undefined,
                     compiled_port: undefined,
                   });
                   return;
@@ -265,7 +269,9 @@ export function EdgeEditor() {
           {compiledEdgePort && (
             <p className="text-[10px] text-[var(--info)] mt-0.5 font-mono">
               {t(language, 'edgeEditor.compiledPort')}: {compiledEdgePort}
-              {selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0 && selectedEdge.endpoint_port !== compiledEdgePort && (
+              {/* Require an endpoint_host: a port-only override is invalid (require-explicit-host) and
+                  the compiler ignores it, so the badge must not claim it is active without a host. */}
+              {selectedEdge.endpoint_host && selectedEdge.endpoint_port && selectedEdge.endpoint_port > 0 && selectedEdge.endpoint_port !== compiledEdgePort && (
                 <span className="text-[var(--warning)] ml-1">
                   ({t(language, 'edgeEditor.natOverrideActive')})
                 </span>

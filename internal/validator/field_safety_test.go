@@ -118,6 +118,41 @@ func TestValidateSchema_NodeIDCharset(t *testing.T) {
 	}
 }
 
+// TestValidateSchema_EndpointPortRequiresHost covers require-explicit-host (plan-1 residual): an edge
+// with an endpoint_port override but no endpoint_host is rejected (a port cannot be dialed without a
+// host — otherwise the compiler silently drops the override while the panel badge claims it active).
+func TestValidateSchema_EndpointPortRequiresHost(t *testing.T) {
+	hasCode := func(topo *model.Topology) bool {
+		for _, e := range ValidateSchema(topo).Errors {
+			if e.Code == string(CodeEdgeEndpointPortWithoutHost) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Default validTopology edge[0] has host + port → no port-without-host error.
+	if hasCode(validTopology()) {
+		t.Fatal("valid topology (host+port) must not trigger endpoint_port_without_host")
+	}
+
+	// A port override with NO host → rejected, on the endpoint_port field.
+	portOnly := validTopology()
+	portOnly.Edges[0].EndpointHost = "" // EndpointPort stays 51820 > 0
+	assertHasError(t, ValidateSchema(portOnly), "edges[0].endpoint_port")
+	if !hasCode(portOnly) {
+		t.Error("a port override without a host must trigger CodeEdgeEndpointPortWithoutHost")
+	}
+
+	// Clearing BOTH (no port, no host) is fine — the default auto endpoint.
+	neither := validTopology()
+	neither.Edges[0].EndpointHost = ""
+	neither.Edges[0].EndpointPort = 0
+	if hasCode(neither) {
+		t.Error("no port + no host must not trigger endpoint_port_without_host")
+	}
+}
+
 // TestValidateSchema_SSHFieldCharset covers SSH-field charset validation (D44).
 // When non-empty, ssh_host / ssh_alias / ssh_user are interpolated into the bash and
 // PowerShell deploy scripts executed on the operator's machine; values containing

@@ -80,6 +80,7 @@ export const Code = {
   EdgeTransportInvalid: 'validation_edge_transport_invalid',
   EdgeEndpointHostIllegalChars: 'validation_edge_endpoint_host_illegal_chars',
   EdgeEndpointPortInvalid: 'validation_edge_endpoint_port_invalid',
+  EdgeEndpointPortWithoutHost: 'validation_edge_endpoint_port_without_host',
   EdgeRoleInvalid: 'validation_edge_role_invalid',
   EdgeSelfLoop: 'validation_edge_self_loop',
   TopologyTooManyNodes: 'validation_topology_too_many_nodes',
@@ -684,6 +685,13 @@ function validateEdgesSchema(topo: Topology, result: ValidationResult): void {
     const endpointHost = edge.endpoint_host ?? '';
     if (endpointHost !== '' && !endpointHostCharset.test(endpointHost)) {
       addError(result, prefix + '.endpoint_host', Code.EdgeEndpointHostIllegalChars, { k: 'host', v: goQuote(endpointHost) });
+    }
+
+    // A port override REQUIRES an explicit endpoint host (require-explicit-host): a port alone cannot
+    // be dialed, and the compiler would silently drop it (or fall back to the peer's public IP) while
+    // the badge claims "NAT override active". Reject the inconsistent state (schema.go mirror).
+    if (endpointPort > 0 && endpointHost === '') {
+      addError(result, prefix + '.endpoint_port', Code.EdgeEndpointPortWithoutHost);
     }
 
     // Role validation (schema.go:456-462): only empty, "primary", "backup" are allowed.
@@ -1662,6 +1670,7 @@ const registry: Record<string, string> = {
   [Code.EdgeTransportInvalid]: 'Invalid transport protocol: {transport}. Allowed values: udp, tcp.',
   [Code.EdgeEndpointHostIllegalChars]: 'endpoint_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.',
   [Code.EdgeEndpointPortInvalid]: 'Invalid endpoint port: {port}.',
+  [Code.EdgeEndpointPortWithoutHost]: 'This link sets an endpoint port override but no endpoint host. A port cannot be dialed without a host — set an explicit endpoint host, or clear the port to use the default.',
   [Code.EdgeRoleInvalid]: 'Invalid link role: {role}. Allowed values: primary, backup (empty is equivalent to primary).',
   [Code.EdgeSelfLoop]: 'Edge source and target nodes must not be the same (self-loop).',
   [Code.TopologyTooManyNodes]: 'Topology has too many nodes: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.',

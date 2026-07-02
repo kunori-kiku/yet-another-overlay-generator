@@ -4,6 +4,7 @@
     "validator": [
       "validation_edge_endpoint_host_illegal_chars",
       "validation_edge_endpoint_port_invalid",
+      "validation_edge_endpoint_port_without_host",
       "validation_edge_from_node_id_required",
       "validation_edge_id_required",
       "validation_edge_role_invalid",

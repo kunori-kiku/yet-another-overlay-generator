@@ -155,6 +155,23 @@ drift + the TS mirror.
   owner's affected topology if supplied, else constructed candidates) BEFORE committing to
   resolve-from-public-endpoint (recommended default) vs require-explicit-host. Recorded as a midflight
   decision plan-1 must resolve + record here before writing the compiler fix.
+- **2026-07-02 plan-1 RESOLVED — repro + semantics + roaming (the "goes direct to the other IP"):**
+  Two distinct things were conflated. (1) **The owner's live symptom = WireGuard endpoint ROAMING, not
+  a config bug.** The `.conf` carried the operator's custom endpoint; `wg show` showed a *different*
+  endpoint because the node sits behind a port-forward (inbound DNAT) **plus** outbound SNAT, so WG
+  rewrites the runtime endpoint to the peer's observed egress on each authenticated packet. Expected
+  behavior — documented in `docs/spec/compiler/peer-derivation.md` (Runtime endpoint roaming). (2) A
+  **real, separate compiler/frontend defect** was confirmed by repro: a **port-only override**
+  (`endpoint_port > 0`, `endpoint_host = ""`) is silently dropped by the forward `Endpoint` derivation
+  (which requires a host) — or the reverse falls back to the peer's plain public IP — while the panel
+  badge still says "NAT override active". **Chosen semantics = REQUIRE-EXPLICIT-HOST** (owner's NAT Q1
+  answer, over the plan's resolve-from-public-endpoint default): a port override needs an explicit host,
+  enforced by a new `validation_edge_endpoint_port_without_host` (Go + TS) instead of a silent drop;
+  the frontend couples the two fields (unset-host clears the port; the badge requires a host). **No
+  compiler `Endpoint`-derivation change → zero golden pin churn** (only the incidental 15-fixture golden
+  gained the new code, plus a dedicated fixture 22). **OPEN owner decision (deferred, rc.2 candidate):**
+  a *pinned-endpoint* feature that periodically re-asserts the configured endpoint to fight roaming —
+  not built (roaming is correct WG behavior; pinning is an opt-in future option).
 - **2026-07-02 post-flight — rc.2 deferrals confirmed:** FileStore backup/restore + HA; blind
   digest-signing ceremony hardening; attacker-resistant anti-rollback; bootstrap operator-cred
   out-of-band delivery (keep the runbook fingerprint-compare step; plan-6 closes the adjacent
