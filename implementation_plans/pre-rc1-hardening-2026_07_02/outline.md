@@ -338,11 +338,11 @@ coalescing) BEFORE 9/10 to freeze the write path.
 
 | Plan | Title | Status |
 |------|-------|--------|
-| plan-1 | NAT endpoint-override fix (critical) | pending |
-| plan-2 | self-update retry keystone bypass (critical) | pending |
-| plan-3 | interim release beta.17 + hygiene | pending |
-| plan-4 | WG public-key format validation | pending |
-| plan-5 | agent-route DoS hardening | pending |
+| plan-1 | NAT endpoint-override fix (critical) | RECLASSIFIED — not a config bug (WireGuard endpoint roaming over asymmetric DNAT+SNAT; owner's .conf verified correct). Residual: port-only-override → validation error (require-explicit-host) + document roaming. OPEN: owner decision on a pinned-endpoint feature (timer re-assert) vs docs-only. |
+| plan-2 | self-update retry keystone bypass (critical) | delivered (PR #208, reviewed GO) |
+| plan-3 | interim release beta.17 + hygiene | pending (needs plan-1 residual + plan-2; plan-2 done) |
+| plan-4 | WG public-key format validation | delivered (PR #209, reviewed GO, 4 findings applied) |
+| plan-5 | agent-route DoS hardening | pending (NEXT) |
 | plan-6 | bootstrap agent-binary SHA-256 pinning | pending |
 | plan-7 | node-ID validation + trusted-proxy client-IP | pending |
 | plan-8 | agent kit verify | pending |
