@@ -9,6 +9,58 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.17] - 2026-07-02
+
+A pre-rc.1 hardening pass: nine reviewed plans closing the security + robustness gaps surfaced in the
+pre-rc.1 audit, each independently reviewed and adversarially verified before merge. Headlined by a
+**CRITICAL** self-update keystone-bypass fix. Owner fleet smoke gates promotion to Latest and the
+subsequent `rc.1` cut.
+
+### Security
+- **CRITICAL — self-update keystone membership is verified on the deferred-retry swap path.** The
+  agent's deferred self-update retry swapped a downloaded binary after verifying only the bundle
+  signature, skipping the keystone membership gate the primary apply path enforces. The retry now runs
+  `VerifyBundle` **then** `VerifyMembership` (fail-closed; a no-op when keystone is off), matching the
+  primary path — so a downloaded binary can never be applied without the same custody check. (plan-2)
+- **WireGuard public keys are validated at every ingress.** A strict base64 Curve25519 pattern
+  (43 chars + `=`, regex-anchored so an embedded newline can't slip through `base64.DecodeString`)
+  rejects malformed keys at schema, enrollment (before the single-use token burns), rekey, and
+  manual-node validation — closing a config-injection vector into the root-run install script. (plan-4)
+- **Agent routes are hardened against DoS.** A per-node fixed-window request-rate limit on the agent
+  mux; boundary caps on `/report` + `/telemetry` payloads (conditions/metrics count, key + value size,
+  condition-field size); an in-memory FileStore telemetry overlay so a 30s heartbeat no longer fsyncs a
+  whole-record rewrite; and a trusted-proxy-aware client-IP (`X-Forwarded-For` honored only from
+  `YAOG_TRUSTED_PROXIES`, right-to-left skipping trusted hops) so the per-IP limiters work behind a
+  reverse proxy. (plan-5)
+- **The bootstrap agent binary is SHA-256-pinned.** The one-shot bootstrap verifies the downloaded
+  agent binary against the operator's configured per-arch pin (fail-closed `sha256sum -c`) **before**
+  install, closing the first-contact binary trust-on-first-use; an unpinned arch warns loudly and
+  proceeds (the operator's explicit, visible choice). (plan-6)
+- **Node IDs are charset-validated.** A node ID reaches path/file/interface-name sinks (the deploy
+  script filename spliced into a root shell, the manual-bundle `Content-Disposition`), so it now rejects
+  spaces, slashes, and shell metacharacters at the compile root. (plan-7)
+
+### Added
+- **`agent kit verify`.** A hand-installing operator can verify an already-downloaded manual-node bundle
+  (Ed25519 signature + per-file checksums + keystone membership) **before** `sudo bash install.sh` — the
+  same fail-closed gate a managed agent applies. Reads only public material; no controller contact.
+  (plan-8)
+- **Host resource telemetry.** The agent emits host load + memory via the existing Sampler framework
+  (pure `/proc` reads, best-effort); the node detail page shows a live load/memory readout (live-only,
+  stripped from the persisted cache like the per-peer link detail). (plan-10)
+
+### Fixed
+- **"Update failed" is now a distinguishable, reasoned, persistent state.** An abandoned self-update
+  surfaces as an **error** condition (distinct from the transient `Blocked` warning), carries a curated
+  failure reason durable across applies, and drops the panel's now-misleading best-effort caveat for the
+  authoritative structured condition. (plan-9)
+- **A port-only NAT override is rejected, not silently dropped.** An edge with an `endpoint_port`
+  override but no `endpoint_host` — which the compiler would silently drop while the panel still showed
+  a "NAT override active" badge — is now a clean validation error (require-explicit-host), and the
+  frontend keeps the two fields coupled. Also documents WireGuard endpoint **roaming**: a `wg show`
+  endpoint that differs from the `.conf` for a peer behind DNAT+SNAT is expected behavior, not a defect.
+  (plan-1)
+
 ## [2.0.0-beta.16] - 2026-06-27
 
 A smoke-hardening of beta.15: while smoking the fleet, the controller's view of a node could look
@@ -785,7 +837,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.9...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...HEAD
+[2.0.0-beta.17]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.16...v2.0.0-beta.17
 [2.0.0-beta.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.8...v2.0.0-beta.9
 [2.0.0-beta.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.7...v2.0.0-beta.8
 [2.0.0-beta.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.6...v2.0.0-beta.7
