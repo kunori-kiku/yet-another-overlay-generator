@@ -157,8 +157,10 @@ func TestRunKitVerify_Success(t *testing.T) {
 			if res.NodeIsMember {
 				t.Errorf("node_is_member = true, but no operator credential was supplied (keystone OFF)")
 			}
-			if res.FileCount != len(files) {
-				t.Errorf("file_count = %d, want %d", res.FileCount, len(files))
+			// file_count is the number of files whose checksum was VERIFIED (the 2 checksummed entries),
+			// not the total loaded (which also counts checksums.sha256/bundle.sig/signing-pubkey.pem).
+			if res.FileCount != 2 {
+				t.Errorf("file_count = %d, want 2 (verified files, not loaded meta-files)", res.FileCount)
 			}
 		})
 	}

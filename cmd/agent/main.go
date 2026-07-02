@@ -16,6 +16,12 @@
 //	    wireguard_public_key, endpoint} descriptor to paste into the controller design.
 //	    Never contacts the controller; the private key never leaves the box.
 //
+//	agent kit verify --bundle DIR|ZIP --node-id ID [--pubkey PEM] [--operator-cred FILE --operator-cred-alg ALG ...]
+//	    Verify an already-downloaded manual-node bundle (Ed25519 signature + per-file
+//	    SHA-256, then keystone membership) BEFORE running install.sh — the same fail-closed
+//	    gate a managed agent applies. Reads public material only; no controller contact.
+//	    Exit 0 verified / 1 verification failed / 2 usage or IO.
+//
 //	agent run --node-id ID --source dir:PATH|http(s)://... [--pubkey PEM] [flags]
 //	    pull -> verify -> anti-rollback -> apply -> report (configured-source mode).
 //
@@ -258,21 +264,27 @@ func runKitVerify(args []string) int {
 	}
 
 	member := len(operatorCred) > 0 // the keystone gate actually ran (an operator credential was pinned)
+	// Report vr.FileCount (the number of files whose SHA-256 was actually verified against
+	// checksums.sha256), NOT len(files) — the latter also counts the unchecked meta-files (bundle.sig,
+	// signing-pubkey.pem, trustlist.*) and would overstate coverage + disagree with `agent run`.
 	if member {
-		fmt.Fprintf(os.Stderr, "agent: kit verify: OK — %d files, signed=%v, membership verified (epoch %d, operator-cred %s)\n",
-			len(files), vr.Signed, epoch, agent.CredFingerprintShort(operatorCred))
+		fmt.Fprintf(os.Stderr, "agent: kit verify: OK — %d files verified, signed=%v, membership verified (epoch %d, operator-cred %s)\n",
+			vr.FileCount, vr.Signed, epoch, agent.CredFingerprintShort(operatorCred))
 	} else {
-		fmt.Fprintf(os.Stderr, "agent: kit verify: OK — %d files, signed=%v; keystone OFF (no --operator-cred, membership NOT checked)\n",
-			len(files), vr.Signed)
+		fmt.Fprintf(os.Stderr, "agent: kit verify: OK — %d files verified, signed=%v; keystone OFF (no --operator-cred, membership NOT checked)\n",
+			vr.FileCount, vr.Signed)
 	}
-	out, _ := json.Marshal(kitVerifyResult{OK: true, Signed: vr.Signed, FileCount: len(files), Epoch: epoch, NodeIsMember: member})
+	out, _ := json.Marshal(kitVerifyResult{OK: true, Signed: vr.Signed, FileCount: vr.FileCount, Epoch: epoch, NodeIsMember: member})
 	fmt.Println(string(out))
 	return 0
 }
 
-// loadBundleFiles reads a downloaded bundle into the flat filename->bytes map VerifyBundle expects,
-// from either a DIRECTORY of extracted files or a .zip archive. Bundle files are flat (no subdir), so
-// a directory's relative path and a zip entry name are both just the filename.
+// loadBundleFiles reads a downloaded bundle into the filename->bytes map VerifyBundle/VerifyMembership
+// expect, from either a DIRECTORY of extracted files or a .zip archive. Most bundle files are top-level,
+// but some live in a subdir (wireguard/*.conf); each relative path / zip entry name is preserved as a
+// SLASH-separated key (filepath.ToSlash) so those subpaths survive — VerifyMembership matches the
+// "wireguard/" prefix and VerifyBundle's per-file checksums are keyed by these exact paths (so do NOT
+// collapse to filepath.Base). Entries are mapped in memory only; nothing is written to disk (no zip-slip).
 func loadBundleFiles(path string) (map[string][]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
