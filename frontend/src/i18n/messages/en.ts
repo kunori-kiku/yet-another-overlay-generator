@@ -791,6 +791,7 @@ export const en = {
   'error.validation_node_extra_prefix_not_ipv4': "Extra route prefix must be IPv4: {prefix} (IPv6 and other address families are not supported yet).",
   'error.validation_node_id_duplicate': "Duplicate Node ID: {id}",
   'error.validation_node_id_required': "Node ID is required.",
+  'error.validation_node_id_illegal_chars': "Node ID {id} contains illegal characters: only letters, digits, dot (.), underscore (_), and hyphen (-) are allowed. A node ID is used as a filename and interface-name component, so spaces, slashes, and shell metacharacters are forbidden.",
   'error.validation_node_interface_name_collision': "Node {node} has two links generating the same WireGuard interface name {name}: {prefix} collides with {other}, one interface configuration will overwrite the other; please rename one of the colliding nodes to eliminate the 4-digit hash collision",
   'error.validation_node_isolated': "Node {node} ({id}) is isolated and not connected to any enabled edge",
   'error.validation_node_mtu_out_of_range': "MTU {mtu} is out of range: it must be between {low} and {high} (576 is the IPv4 datagram minimum; an out-of-range MTU is rejected by wg-quick).",

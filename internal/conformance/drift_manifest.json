@@ -8,7 +8,7 @@
     "wgPerPeerConfigTemplate": "a8c45243c8367f6c9533fb16530fe441d6375b35c9e73dedacae81a3e8557257"
   },
   "validator_codes": {
-    "count": 100,
+    "count": 101,
     "codes": [
       "validation_client_endpoint_host_required",
       "validation_client_extra_prefixes_meaningless",
@@ -67,6 +67,7 @@
       "validation_node_extra_prefix_invalid",
       "validation_node_extra_prefix_not_ipv4",
       "validation_node_id_duplicate",
+      "validation_node_id_illegal_chars",
       "validation_node_id_required",
       "validation_node_interface_name_collision",
       "validation_node_isolated",

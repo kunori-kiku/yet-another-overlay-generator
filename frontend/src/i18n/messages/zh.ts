@@ -770,6 +770,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_node_extra_prefix_not_ipv4': "额外路由前缀必须为 IPv4: {prefix}（暂不支持 IPv6 及其他地址族）",
   'error.validation_node_id_duplicate': "Node ID 重复：{id}",
   'error.validation_node_id_required': "节点 ID 不能为空",
+  'error.validation_node_id_illegal_chars': "节点 ID {id} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、连字符(-)。节点 ID 会用作文件名与接口名的组成部分，因此禁止空格、斜杠及 shell 元字符。",
   'error.validation_node_interface_name_collision': "节点 {node} 上有两条链路生成了相同的 WireGuard 接口名 {name}：{prefix} 与 {other} 相撞，一份接口配置会覆盖另一份；请重命名相撞节点之一以消除 4 位 hash 碰撞",
   'error.validation_node_isolated': "节点 {node} ({id}) 处于孤立状态，未连接到任何启用的边",
   'error.validation_node_mtu_out_of_range': "MTU {mtu} 越界：必须在 {low}–{high} 之间（576 为 IPv4 数据报最小值，越界的 MTU 会被 wg-quick 拒绝）",

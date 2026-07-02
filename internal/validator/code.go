@@ -42,6 +42,7 @@ const (
 	CodeDomainReservedRangeInvalid         Code = "validation_domain_reserved_range_invalid"
 	CodeDomainReservedAddressNotIPv4       Code = "validation_domain_reserved_address_not_ipv4"
 	CodeNodeIDRequired                     Code = "validation_node_id_required"
+	CodeNodeIDIllegalChars                 Code = "validation_node_id_illegal_chars"
 	CodeNodeNameRequired                   Code = "validation_node_name_required"
 	CodeNodeNameIllegalChars               Code = "validation_node_name_illegal_chars"
 	CodeNodeDomainIDRequired               Code = "validation_node_domain_id_required"
@@ -149,6 +150,7 @@ var registry = map[Code]string{
 	CodeDomainReservedRangeInvalid:         "Invalid reserved range format: {value}.",
 	CodeDomainReservedAddressNotIPv4:       "Reserved address must be IPv4: {ip} (IPv6 and other address families are not supported yet).",
 	CodeNodeIDRequired:                     "Node ID is required.",
+	CodeNodeIDIllegalChars:                 "Node ID {id} contains illegal characters: only letters, digits, dot (.), underscore (_), and hyphen (-) are allowed. A node ID is used as a filename and interface-name component, so spaces, slashes, and shell metacharacters are forbidden.",
 	CodeNodeNameRequired:                   "Node name is required.",
 	CodeNodeNameIllegalChars:               "Node name {name} contains illegal characters: only letters, digits, spaces, dot (.), underscore (_), and hyphen (-) are allowed; shell metacharacters such as quotes, backticks, $, and ; are forbidden.",
 	CodeNodeDomainIDRequired:               "Node must reference a Domain.",
