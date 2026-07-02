@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -8,15 +9,19 @@ import (
 // attempts a post-apply self-update once (agent.go step 7); the daemon only re-runs that path on a
 // NEW generation, so a download failure on a stable generation used to wedge the rollout until a
 // manual `systemctl restart yaog-agent`. RetryDeferredSelfUpdate re-attempts it on the daemon's idle
-// cycles (on a backoff), reusing the SAME verified-fetch → decide → perform path the apply uses — no
-// persisted or unverified pins, so the signed-self-update custody model is unchanged.
+// cycles (on a backoff), reusing the SAME verified-fetch → decide → perform path the apply uses. The
+// daemon passes a membership-verifying fetch (VerifyBundle + VerifyMembership) — the SAME keystone
+// binding the apply path enforces before a swap — so a swap decision is bound to the off-host operator
+// credential, not merely the tier-1 bundle signature; the signed-self-update custody model holds.
 
 // RetryDeferredSelfUpdate re-attempts a post-apply self-update that a prior cycle deferred, WITHOUT
 // requiring a new generation. It is a no-op unless State.SelfUpdateBlocked is set (an armed deferral)
 // and no swap is already in flight. verifiedFetch returns the cryptographically VERIFIED bundle file
-// map (client.Fetch + VerifyBundle — the same primitive the startup health-gate uses), so every retry
-// re-verifies before any swap. When the target is no longer armed (already updated on a prior
-// re-exec, or abandoned/refused) it clears the stale SelfUpdateBlocked latch.
+// map — the daemon passes a fetch that runs VerifyBundle AND VerifyMembership (the apply path's full
+// pre-swap verification), so a keystone-ON node binds the swap pin to the off-host credential and a
+// breached controller / MITM cannot drive a retry-path swap; every retry re-verifies before any swap.
+// When the target is no longer armed (already updated on a prior re-exec, or abandoned/refused) it
+// clears the stale SelfUpdateBlocked latch.
 //
 // It MUST be called on the daemon's MAIN loop thread, never a goroutine: performSelfUpdate re-execs
 // via syscall.Exec on success, which must never interrupt a mid-flight install.sh apply.
@@ -75,4 +80,30 @@ func clearSelfUpdateBlocked(stateDir string) {
 	}
 	st.SelfUpdateBlocked = ""
 	_ = SaveState(stateDir, st)
+}
+
+// WithMembershipGate wraps a bundle-verified fetch (one returning a VerifyBundle-verified file map)
+// with the off-host keystone membership check — the SAME gate the apply path runs before a swap
+// (agent.go: VerifyBundle then VerifyMembership). It loads the anti-rollback epoch floor from stateDir.
+// When keystone is OFF (cfg.OperatorCredPEM empty) VerifyMembership is a no-op and the wrapped fetch
+// passes through unchanged. On a membership failure it returns an error and NO files, so a caller that
+// swaps on the returned files fails closed: a breached controller or MITM that can serve a
+// VerifyBundle-passing bundle still cannot drive a self-update swap on a keystone-ON node. This is what
+// the deferred-retry path uses so a swap decision is bound to the off-host credential, not merely the
+// tier-1 bundle signature.
+func WithMembershipGate(fetch func() (map[string][]byte, error), cfg MembershipConfig, stateDir string) func() (map[string][]byte, error) {
+	return func() (map[string][]byte, error) {
+		files, err := fetch()
+		if err != nil {
+			return nil, err
+		}
+		prevEpoch := int64(0)
+		if st, _ := LoadState(stateDir); st != nil {
+			prevEpoch = st.MembershipEpoch
+		}
+		if _, err := VerifyMembership(files, cfg, prevEpoch); err != nil {
+			return nil, fmt.Errorf("membership: %w", err)
+		}
+		return files, nil
+	}
 }
