@@ -16,6 +16,12 @@
 //	    wireguard_public_key, endpoint} descriptor to paste into the controller design.
 //	    Never contacts the controller; the private key never leaves the box.
 //
+//	agent kit verify --bundle DIR|ZIP --node-id ID [--pubkey PEM] [--operator-cred FILE --operator-cred-alg ALG ...]
+//	    Verify an already-downloaded manual-node bundle (Ed25519 signature + per-file
+//	    SHA-256, then keystone membership) BEFORE running install.sh — the same fail-closed
+//	    gate a managed agent applies. Reads public material only; no controller contact.
+//	    Exit 0 verified / 1 verification failed / 2 usage or IO.
+//
 //	agent run --node-id ID --source dir:PATH|http(s)://... [--pubkey PEM] [flags]
 //	    pull -> verify -> anti-rollback -> apply -> report (configured-source mode).
 //
@@ -40,6 +46,7 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -68,6 +75,10 @@ func main() {
 	case "keygen":
 		os.Exit(runKeygen(os.Args[2:]))
 	case "kit":
+		// `kit verify` is a sub-command: verify an already-downloaded bundle before running install.sh.
+		if len(os.Args) > 2 && os.Args[2] == "verify" {
+			os.Exit(runKitVerify(os.Args[3:]))
+		}
 		os.Exit(runKit(os.Args[2:]))
 	case "enroll":
 		os.Exit(runEnroll(os.Args[2:]))
@@ -92,6 +103,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agent <keygen|kit|enroll|reprovision-keystone|run> [flags]")
 	fmt.Fprintln(os.Stderr, "  keygen               ensure the local WireGuard private key exists and print its public key")
 	fmt.Fprintln(os.Stderr, "  kit                  provision a MANUAL (agent-less) node: ensure the key + print a descriptor to paste into the design")
+	fmt.Fprintln(os.Stderr, "  kit verify           verify a downloaded manual-node bundle (signature + checksums + keystone membership) BEFORE install.sh")
 	fmt.Fprintln(os.Stderr, "  enroll               enroll against the networked controller and persist the per-node bearer token")
 	fmt.Fprintln(os.Stderr, "  reprovision-keystone adopt a ROTATED off-host operator credential supplied out of band (rewrites the pinned PEM + restarts)")
 	fmt.Fprintln(os.Stderr, "  run                  pull -> verify -> anti-rollback -> apply -> report (configured-source or --controller mode)")
@@ -185,6 +197,145 @@ func runKit(args []string) int {
 	}
 	fmt.Println(string(out))
 	return 0
+}
+
+// kitVerifyResult is the machine-parseable stdout of `kit verify` (human summary goes to stderr).
+type kitVerifyResult struct {
+	OK           bool  `json:"ok"`
+	Signed       bool  `json:"signed"`
+	FileCount    int   `json:"file_count"`
+	Epoch        int64 `json:"epoch"`
+	NodeIsMember bool  `json:"node_is_member"`
+}
+
+// runKitVerify implements `agent kit verify`: it runs the SAME fail-closed verification a managed agent
+// applies before install (VerifyBundle then VerifyMembership) over an already-DOWNLOADED manual-node
+// bundle, so a hand-installing operator can confirm a tampered install.sh / rotated keystone BEFORE
+// `sudo bash install.sh`. It never contacts the controller and reads only public material. Exit 0 =
+// verified, 1 = verification failed, 2 = usage/IO error.
+func runKitVerify(args []string) int {
+	fs := flag.NewFlagSet("kit verify", flag.ExitOnError)
+	bundlePath := fs.String("bundle", "", "path to the downloaded bundle: a directory of extracted files OR a .zip (required)")
+	nodeID := fs.String("node-id", "", "this node's id (for the keystone membership + bundle-digest binding; required)")
+	pubkeyPath := fs.String("pubkey", "", "pinned bundle-signing public-key PEM (optional; absent = trust-on-first-supply, like the agent)")
+	credPath := fs.String("operator-cred", "", "off-host operator credential public-key PEM (optional; when set, the keystone membership gate is enforced)")
+	credAlg := fs.String("operator-cred-alg", "", "operator credential algorithm (ed25519 | webauthn-es256 | webauthn-eddsa) — required with --operator-cred")
+	credRPID := fs.String("operator-rpid", "", "operator credential WebAuthn relying-party ID (WebAuthn algs only)")
+	credOrigin := fs.String("operator-origin", "", "operator credential WebAuthn origin (WebAuthn algs only)")
+	_ = fs.Parse(args)
+
+	if *bundlePath == "" || *nodeID == "" {
+		fmt.Fprintln(os.Stderr, "agent: kit verify: --bundle and --node-id are required")
+		return 2
+	}
+	files, err := loadBundleFiles(*bundlePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: %v\n", err)
+		return 2
+	}
+	pinned, err := readPinnedPubkey(*pubkeyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: %v\n", err)
+		return 2
+	}
+	operatorCred, err := readOperatorCred(*credPath, *credAlg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: %v\n", err)
+		return 2
+	}
+
+	vr, err := agent.VerifyBundle(files, pinned)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: bundle verification FAILED: %v\n", err)
+		return 1
+	}
+	// prevEpoch = 0: a pre-install human check is stateless (it tracks no persisted anti-rollback floor,
+	// so 0 accepts any epoch >= 0). The operator controls what they downloaded.
+	epoch, err := agent.VerifyMembership(files, agent.MembershipConfig{
+		NodeID:          *nodeID,
+		OperatorCredPEM: operatorCred,
+		OperatorCredAlg: *credAlg,
+		OperatorRPID:    *credRPID,
+		OperatorOrigin:  *credOrigin,
+	}, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: keystone membership verification FAILED: %v\n", err)
+		return 1
+	}
+
+	member := len(operatorCred) > 0 // the keystone gate actually ran (an operator credential was pinned)
+	// Report vr.FileCount (the number of files whose SHA-256 was actually verified against
+	// checksums.sha256), NOT len(files) — the latter also counts the unchecked meta-files (bundle.sig,
+	// signing-pubkey.pem, trustlist.*) and would overstate coverage + disagree with `agent run`.
+	if member {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: OK — %d files verified, signed=%v, membership verified (epoch %d, operator-cred %s)\n",
+			vr.FileCount, vr.Signed, epoch, agent.CredFingerprintShort(operatorCred))
+	} else {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: OK — %d files verified, signed=%v; keystone OFF (no --operator-cred, membership NOT checked)\n",
+			vr.FileCount, vr.Signed)
+	}
+	out, _ := json.Marshal(kitVerifyResult{OK: true, Signed: vr.Signed, FileCount: vr.FileCount, Epoch: epoch, NodeIsMember: member})
+	fmt.Println(string(out))
+	return 0
+}
+
+// loadBundleFiles reads a downloaded bundle into the filename->bytes map VerifyBundle/VerifyMembership
+// expect, from either a DIRECTORY of extracted files or a .zip archive. Most bundle files are top-level,
+// but some live in a subdir (wireguard/*.conf); each relative path / zip entry name is preserved as a
+// SLASH-separated key (filepath.ToSlash) so those subpaths survive — VerifyMembership matches the
+// "wireguard/" prefix and VerifyBundle's per-file checksums are keyed by these exact paths (so do NOT
+// collapse to filepath.Base). Entries are mapped in memory only; nothing is written to disk (no zip-slip).
+func loadBundleFiles(path string) (map[string][]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read bundle %s: %w", path, err)
+	}
+	files := map[string][]byte{}
+	if info.IsDir() {
+		walkErr := filepath.Walk(path, func(p string, fi os.FileInfo, e error) error {
+			if e != nil {
+				return e
+			}
+			if fi.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(path, p)
+			if relErr != nil {
+				return relErr
+			}
+			data, readErr := os.ReadFile(p)
+			if readErr != nil {
+				return readErr
+			}
+			files[filepath.ToSlash(rel)] = data
+			return nil
+		})
+		if walkErr != nil {
+			return nil, fmt.Errorf("read bundle directory: %w", walkErr)
+		}
+		return files, nil
+	}
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, fmt.Errorf("open bundle zip %s: %w", path, err)
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		rc, oErr := f.Open()
+		if oErr != nil {
+			return nil, fmt.Errorf("open %s in zip: %w", f.Name, oErr)
+		}
+		data, rErr := io.ReadAll(rc)
+		rc.Close()
+		if rErr != nil {
+			return nil, fmt.Errorf("read %s in zip: %w", f.Name, rErr)
+		}
+		files[filepath.ToSlash(f.Name)] = data
+	}
+	return files, nil
 }
 
 // runEnroll implements `agent enroll`: the one-time ceremony that turns a single-use
