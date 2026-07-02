@@ -104,6 +104,15 @@ A nonzero `endpoint_port` is an explicit operator decision and MUST be honored v
 the *only* sanctioned reason to set the field. It MUST NOT be produced as a side effect of
 selecting a node, drawing an edge, or copying a node's `public_endpoints`.
 
+**A nonzero `endpoint_port` REQUIRES a non-empty `endpoint_host` (require-explicit-host).** A port
+cannot be dialed without a host, and the compiler's `Endpoint`-line derivation resolves the dial host
+from `endpoint_host` — so a port-only override (`endpoint_port > 0`, `endpoint_host = ""`) would be
+silently dropped (the from-side emits no forward `Endpoint` at all, and only the reverse peer dials —
+falling back to the peer's plain public IP) while the panel still shows a "NAT override active" badge. Validation therefore
+rejects it at the schema stage (`validation_edge_endpoint_port_without_host`); the frontend keeps the
+two fields coupled (unsetting the host clears the port; the badge requires a host) so the state is
+never created in the first place. Set an explicit `endpoint_host` alongside the port, or clear the port.
+
 ### `compiled_port` semantics
 
 `compiled_port` is the port the from-side will actually dial for this edge — i.e. the value that

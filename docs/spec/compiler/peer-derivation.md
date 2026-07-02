@@ -46,6 +46,14 @@ The backend is the sole port authority: the auto path MUST use the compiler-allo
 listen port, never any port carried in the edge's `endpoint_host` hint or in the target node's
 `public_endpoints`.
 
+**Require-explicit-host.** Because the forward rule emits an `Endpoint` only when `endpoint_host` is
+non-empty, a port-only override (`endpoint_port > 0` with an empty `endpoint_host`) would silently
+produce no forward `Endpoint` — and the reverse would fall back to the peer's plain public IP — while
+the panel still shows a "NAT override active" badge. Rather than drop the operator's override silently,
+validation rejects that combination at the schema stage (`validation_edge_endpoint_port_without_host`;
+see [../data-model/edge.md](../data-model/edge.md#endpoint_port-semantics)), so the compiler never
+receives a port-only override.
+
 ### Reverse peer (to → from) endpoint fallback
 
 When the compiler auto-generates the reverse peer (to-side dialing back to the from-side), it MUST
@@ -73,6 +81,22 @@ without any operator action beyond marking each node publicly reachable.
 > the drag-target can dial (audit UX-2). Closed by Plan 2 (PR #4). The forward rule itself
 > matches this spec (internal/compiler/peers.go:290-306); its only defect is being fed a bogus
 > override by the frontend (see [../data-model/edge.md](../data-model/edge.md#the-backend-is-the-sole-port-authority)).
+
+### Runtime endpoint roaming (operational note)
+
+The rendered `Endpoint` line is only the **initial dial address**. WireGuard rewrites a peer's runtime
+endpoint to the source address of the most recent authenticated packet it receives **from that peer**
+("roaming"). The divergence therefore shows up on the DIALER, for a peer that is itself behind NAT:
+when a peer sits behind a port-forward (you dial its front, e.g. a router DNATs `:51820` → the peer's
+internal `:51820`) **plus** source NAT on the peer's outbound path (its packets egress from a different
+`IP:port`), your node's `wg show` for THAT PEER reports the peer's *observed egress* — which
+legitimately differs from the `Endpoint =` your `.conf` dials. In a fleet where several nodes are NAT'd
+this is symmetric: each node sees its NAT'd peers roamed. It is expected WireGuard behavior, **not** a
+compiler or config defect: the `.conf` carries the operator's configured (dial-front) endpoint; the
+kernel's live endpoint follows the authenticated source. A mismatch between `wg show` and the
+deploy-page endpoint for a peer behind DNAT+SNAT is therefore normal and needs no action. (Pinning the
+runtime endpoint against roaming would require periodically re-asserting it — a deliberate future
+option, not a default.)
 
 ### Determinism caveat
 
