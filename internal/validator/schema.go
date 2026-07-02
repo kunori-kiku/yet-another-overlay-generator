@@ -33,6 +33,13 @@ func ValidWGPublicKey(s string) bool {
 // Allowed only: letters, digits, spaces, dots, underscores, and hyphens.
 var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
 
+// nodeIDCharset constrains a node ID. Unlike a node NAME it is used as a path/file component (the
+// operator deploy-script filename `<id>-install.sh`, the manual-bundle Content-Disposition), an
+// interface-name seed, and a map key — so it forbids spaces and '/' (no path traversal) and every
+// shell metacharacter. Frontend-generated IDs (node-<uuid>) already satisfy it. Mirrors the TS
+// validator's nodeIDCharset byte-for-byte (conformance parity).
+var nodeIDCharset = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // sshFieldCharset constrains the legal character set for the SSH connection fields
 // (ssh_host / ssh_alias / ssh_user) (D44).
 // These fields are interpolated into the bash and PowerShell deploy scripts that run on the
@@ -298,6 +305,10 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 
 		if node.ID == "" {
 			result.AddError(prefix+".id", CodeNodeIDRequired)
+		} else if !nodeIDCharset.MatchString(node.ID) {
+			// A node ID reaches path/file/interface-name sinks (deploy-script filename,
+			// Content-Disposition), so reject spaces, '/', and shell metacharacters at the source.
+			result.AddError(prefix+".id", CodeNodeIDIllegalChars, P{"id", fmt.Sprintf("%q", node.ID)})
 		}
 		if node.Name == "" {
 			result.AddError(prefix+".name", CodeNodeNameRequired)

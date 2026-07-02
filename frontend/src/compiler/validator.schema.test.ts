@@ -121,6 +121,32 @@ describe('validateSchema WireGuard public key (plan-4)', () => {
   });
 });
 
+describe('validateSchema node ID charset (plan-7)', () => {
+  // A node ID is a path/file/interface-name component, so it is stricter than a name (no space, no '/').
+  const topoWith = (id: string): Topology => ({
+    project: { id: 'p', name: 'P' },
+    domains: [{ id: 'd1', name: 'mesh', cidr: '10.55.0.0/24', allocation_mode: 'auto', routing_mode: 'babel' }],
+    nodes: [
+      { id, name: 'router-a', role: 'router', domain_id: 'd1', capabilities: { can_accept_inbound: true, can_forward: true, has_public_ip: true } },
+    ],
+    edges: [],
+  });
+  const idCodes = (id: string): string[] =>
+    validateSchema(topoWith(id)).errors.filter((e) => e.field === 'nodes[0].id').map((e) => e.code);
+
+  it('accepts a clean slug/uuid', () => {
+    expect(idCodes('node-8f3a1c2e.4b5d_6')).toEqual([]);
+  });
+  it.each([
+    ['space', 'node alpha'],
+    ['path traversal', '../etc/passwd'],
+    ['command substitution', 'node$(whoami)'],
+    ['slash', 'a/b'],
+  ])('rejects %s', (_label, id) => {
+    expect(idCodes(id)).toEqual([Code.NodeIDIllegalChars]);
+  });
+});
+
 describe('validateSchema finding shape', () => {
   it('returns coded findings with field, code, message, level', () => {
     const topo: Topology = {

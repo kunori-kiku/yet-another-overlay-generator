@@ -81,6 +81,43 @@ func TestValidateSchema_WGPublicKey(t *testing.T) {
 	}
 }
 
+// TestValidateSchema_NodeIDCharset covers node-ID charset validation (plan-7). A node ID is a
+// path/file/interface-name component (the operator deploy-script filename, the manual-bundle
+// Content-Disposition), so spaces, '/', and shell metacharacters are rejected; a clean slug/uuid
+// passes. (An EMPTY id is a separate "required" error, not a charset error.)
+func TestValidateSchema_NodeIDCharset(t *testing.T) {
+	cases := []struct {
+		name        string
+		nodeID      string
+		expectError bool
+	}{
+		{name: "clean slug", nodeID: "node-alpha", expectError: false},
+		{name: "uuid-style with dot and underscore", nodeID: "node-8f3a1c2e.4b5d_6", expectError: false},
+		{name: "space", nodeID: "node alpha", expectError: true},
+		{name: "path traversal", nodeID: "../etc/passwd", expectError: true},
+		{name: "command substitution", nodeID: "node$(whoami)", expectError: true},
+		{name: "semicolon", nodeID: "node;rm -rf /", expectError: true},
+		{name: "slash", nodeID: "a/b", expectError: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			topo := validTopology()
+			topo.Nodes[0].ID = tc.nodeID
+			result := ValidateSchema(topo)
+			if tc.expectError {
+				assertHasError(t, result, "nodes[0].id")
+			} else {
+				for _, e := range result.Errors {
+					if contains(e.Field, "nodes[0].id") {
+						t.Errorf("id %q should not trigger a charset error, but got: %s", tc.nodeID, e.Error())
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestValidateSchema_SSHFieldCharset covers SSH-field charset validation (D44).
 // When non-empty, ssh_host / ssh_alias / ssh_user are interpolated into the bash and
 // PowerShell deploy scripts executed on the operator's machine; values containing

@@ -1,0 +1,25 @@
+{
+  "name": "schema-node-id-illegal-chars",
+  "doc": "plan-7: a node whose id contains an illegal character (here '!') is rejected at the schema stage on the validator channel. A node id is used as a filename / interface-name / Content-Disposition component, so spaces, slashes, and shell metacharacters are forbidden — pinned identically across the Go and TS validators through the shared corpus. AgentHeld custody with both nodes keyed keeps schema the sole failure.",
+  "custody": "agentheld",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.55.0.0/24", "allocation_mode": "manual", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a!", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.55.0.10", "wireguard_public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "router-b", "name": "router-b", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.55.0.11", "wireguard_public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "router-b.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a!", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

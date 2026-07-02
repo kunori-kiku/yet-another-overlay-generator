@@ -51,6 +51,7 @@ export const Code = {
   DomainReservedRangeInvalid: 'validation_domain_reserved_range_invalid',
   DomainReservedAddressNotIPv4: 'validation_domain_reserved_address_not_ipv4',
   NodeIDRequired: 'validation_node_id_required',
+  NodeIDIllegalChars: 'validation_node_id_illegal_chars',
   NodeNameRequired: 'validation_node_name_required',
   NodeNameIllegalChars: 'validation_node_name_illegal_chars',
   NodeDomainIDRequired: 'validation_node_domain_id_required',
@@ -272,6 +273,9 @@ function goQuote(s: string): string {
 
 // nodeNameCharset (schema.go:18): letters, digits, spaces, dots, underscores, hyphens.
 const nodeNameCharset = /^[A-Za-z0-9 ._-]+$/;
+// nodeIDCharset (schema.go): stricter than the name — no space, no '/' — because a node ID is a
+// path/file/interface-name component (deploy-script filename, Content-Disposition).
+const nodeIDCharset = /^[A-Za-z0-9._-]+$/;
 // sshFieldCharset (schema.go:25): letters, digits, dots, underscores, colons, @, hyphens.
 const sshFieldCharset = /^[A-Za-z0-9._:@-]+$/;
 // sshKeyPathCharset (schema.go:37): adds path characters (/ \ ~ space) to the ssh-field set.
@@ -507,6 +511,8 @@ function validateNodesSchema(topo: Topology, result: ValidationResult): void {
 
     if (node.id === '') {
       addError(result, prefix + '.id', Code.NodeIDRequired);
+    } else if (!nodeIDCharset.test(node.id)) {
+      addError(result, prefix + '.id', Code.NodeIDIllegalChars, { k: 'id', v: goQuote(node.id) });
     }
     if (node.name === '') {
       addError(result, prefix + '.name', Code.NodeNameRequired);
@@ -1627,6 +1633,7 @@ const registry: Record<string, string> = {
   [Code.DomainReservedRangeInvalid]: 'Invalid reserved range format: {value}.',
   [Code.DomainReservedAddressNotIPv4]: 'Reserved address must be IPv4: {ip} (IPv6 and other address families are not supported yet).',
   [Code.NodeIDRequired]: 'Node ID is required.',
+  [Code.NodeIDIllegalChars]: 'Node ID {id} contains illegal characters: only letters, digits, dot (.), underscore (_), and hyphen (-) are allowed. A node ID is used as a filename and interface-name component, so spaces, slashes, and shell metacharacters are forbidden.',
   [Code.NodeNameRequired]: 'Node name is required.',
   [Code.NodeNameIllegalChars]: 'Node name {name} contains illegal characters: only letters, digits, spaces, dot (.), underscore (_), and hyphen (-) are allowed; shell metacharacters such as quotes, backticks, $, and ; are forbidden.',
   [Code.NodeDomainIDRequired]: 'Node must reference a Domain.',
