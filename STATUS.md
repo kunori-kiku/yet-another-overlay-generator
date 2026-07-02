@@ -1,8 +1,17 @@
 # STATUS
-<!-- regenerated: 2026-06-25 -->
-<!-- by: draft-implementation-plan — two new subjects foldered (theme+mimic fixes; mixed controller+local mode) -->
+<!-- regenerated: 2026-07-02 -->
+<!-- by: draft-implementation-plan — pre-rc1-hardening subject foldered (2 criticals → beta.17, then hardening → rc.1) -->
 
 ## Active work
+
+- **SUBJECT `pre-rc1-hardening-2026_07_02` DRAFTED (2026-07-02).** From an owner smoke (NAT override
+  "goes direct to the other IP") + a 3-agent pre-rc.1 security audit (which found a `beta.15`
+  self-update RETRY keystone-bypass → root RCE). 11 plans on `docs/pre-rc1-hardening-plans`: 2 criticals
+  (plan-1 NAT, plan-2 self-update) → interim **beta.17** (plan-3) → security hardening (plans 4–7:
+  WG-pubkey validation, agent-route DoS, bootstrap binary pin, node-ID+proxy-IP) → functionality
+  (plans 8–10: `kit verify`, reliable failed-update state, richer telemetry metrics) → rc.1 gate
+  (plan-11). Latest shipped is `v2.0.0-beta.16` (GitHub Latest). rc.2 deferrals recorded in the outline
+  §6. **NEXT = execute plan-1 (reproduce the NAT bug first, then fix).**
 
 - **TWO new subjects DRAFTED (2026-06-25), from three owner-reported items while running the live
   fleet; both foldered under `implementation_plans/` with full per-plan detail. Latest shipped is
@@ -213,13 +222,11 @@
 
 ## Next actions
 
-**Immediate (beta9-smoke-hardening, just shipped):** owner browser smoke of `v2.0.0-beta.10` on the
-live fleet — (a) the `/telemetry` heartbeat un-freezing a node's conditions (`wireguard: AllPeersUp` /
-`selfupdate: Updated` appear within ~one interval without a redeploy); (b) controller-mode Validate
-renders a result with no `/api/validate` 404; (c) signing-handle recovery on a cleared/fresh browser
-(enroll on A → clear A / open fresh B → Deploy prompts an authenticator tap, no re-pin, fleet accepts
-the signature); (d) mimic catalog "Discover from release" against the real upstream → pick → per-row
-Assist → Save. Non-blocking follow-up: regenerate the visual-corpus baselines for the new Discover UI.
+**Immediate (pre-rc1-hardening, just drafted):** execute `implementation_plans/pre-rc1-hardening-2026_07_02/`
+plan-by-plan via `execute-implementation-plan`, each PR independently workflow-reviewed → fixed →
+re-reviewed → CI green → merged. Order: plan-1 (NAT, reproduce-first) → plan-2 (self-update keystone) →
+plan-3 (beta.17 + hygiene) → plans 4–7 (security) → plans 8–10 (functionality; plan-5 before 9/10) →
+plan-11 (rc.1 gate). For plan-1, the owner's affected topology/link JSON pins the exact trigger fastest.
 
 **Subjects 1–4 are all delivered + merged (PRs #137–#158).** The rc.1 gate is authored and every
 *automatable* criterion is GREEN in CI (`go` incl. `-race`, `frontend`, `conformance`, `frontend-e2e`
