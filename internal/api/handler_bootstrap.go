@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -221,7 +222,7 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	script := renderBootstrapScript(controllerBase, cs.GithubProxy, cs.AgentReleaseBaseURL, cred)
+	script := renderBootstrapScript(controllerBase, cs.GithubProxy, cs.AgentReleaseBaseURL, cs.AgentBins, cred)
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(script))
@@ -414,7 +415,7 @@ func shQuote(s string) string {
 
 // renderBootstrapScript composes the bootstrap script: the server-injected config
 // header (single-quoted) followed by the static body (bootstrapScriptBody).
-func renderBootstrapScript(controllerBase, ghProxy, releaseBase string, cred *controller.OperatorCredential) string {
+func renderBootstrapScript(controllerBase, ghProxy, releaseBase string, agentBins map[string]model.Artifact, cred *controller.OperatorCredential) string {
 	credAlg, credRPID, credOrigin, credPEM := "", "", "", ""
 	if cred != nil {
 		credAlg, credRPID, credOrigin, credPEM = cred.Alg, cred.RPID, cred.Origin, cred.PublicKeyPEM
@@ -432,6 +433,28 @@ func renderBootstrapScript(controllerBase, ghProxy, releaseBase string, cred *co
 	fmt.Fprintf(&b, "OPERATOR_RPID=%s\n", shQuote(credRPID))
 	fmt.Fprintf(&b, "OPERATOR_ORIGIN=%s\n", shQuote(credOrigin))
 	fmt.Fprintf(&b, "OPERATOR_CRED_PEM=%s\n\n", shQuote(credPEM))
+	// Bake the per-arch agent-binary pins (SHA-256 + asset) the operator configured, as shell-safe vars
+	// the body verifies before install (plan-6). Sorted for determinism. The keys are already
+	// charset-validated at settings-save (agentBinKeyPattern = linux-<arch>) and re-checked here
+	// defensively before becoming a bash identifier (hyphen -> underscore: linux-amd64 -> linux_amd64).
+	if len(agentBins) > 0 {
+		keys := make([]string, 0, len(agentBins))
+		for k := range agentBins {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("# per-arch agent-binary pins (from the operator's agent rollout settings)\n")
+		for _, k := range keys {
+			art := agentBins[k]
+			if !agentBinKeyPattern.MatchString(k) || !sha256HexPattern.MatchString(art.SHA256) || !agentBinAssetPattern.MatchString(art.Asset) {
+				continue
+			}
+			varSuffix := strings.ReplaceAll(k, "-", "_")
+			fmt.Fprintf(&b, "AGENT_SHA_%s=%s\n", varSuffix, shQuote(art.SHA256))
+			fmt.Fprintf(&b, "AGENT_ASSET_%s=%s\n", varSuffix, shQuote(art.Asset))
+		}
+		b.WriteString("\n")
+	}
 	b.WriteString(bootstrapScriptBody)
 	return b.String()
 }
@@ -480,12 +503,20 @@ command -v curl >/dev/null 2>&1 || fail "curl is required"
 # Map the machine architecture to the published agent asset name.
 arch="$(uname -m)"
 case "$arch" in
-  x86_64|amd64)   ASSET="yaog-agent-linux-amd64" ;;
-  aarch64|arm64)  ASSET="yaog-agent-linux-arm64" ;;
-  i386|i686)      ASSET="yaog-agent-linux-386" ;;
-  armv7l|armv7)   ASSET="yaog-agent-linux-armv7" ;;
+  x86_64|amd64)   ASSET="yaog-agent-linux-amd64"; agent_arch="amd64" ;;
+  aarch64|arm64)  ASSET="yaog-agent-linux-arm64"; agent_arch="arm64" ;;
+  i386|i686)      ASSET="yaog-agent-linux-386"; agent_arch="386" ;;
+  armv7l|armv7)   ASSET="yaog-agent-linux-armv7"; agent_arch="armv7" ;;
   *) fail "unsupported architecture: $arch" ;;
 esac
+
+# Resolve the per-arch agent-binary pin the operator configured (baked above; empty = not configured).
+# An operator-set asset overrides the default; the SHA-256 gates the install below.
+sha_var="AGENT_SHA_linux_${agent_arch}"
+asset_var="AGENT_ASSET_linux_${agent_arch}"
+pin_sha="${!sha_var:-}"
+pin_asset="${!asset_var:-}"
+[ -n "$pin_asset" ] && ASSET="$pin_asset"
 
 URL="${GH_PROXY}${RELEASE_BASE}/${ASSET}"
 echo ">> downloading agent: $URL"
@@ -496,6 +527,18 @@ trap 'rm -f "$tmp_bin"' EXIT
 # =...' would REPLACE the allow-list rather than extend it, leaving http-only), so a
 # redirect cannot pivot to file://, scp://, etc. --proto has been in curl since 7.20.
 curl -fL --retry 3 --proto '=https,http' "$URL" -o "$tmp_bin"
+# Verify the agent binary against the operator's SHA-256 pin (fail-closed): this closes the
+# first-contact binary-TOFU — a MITM or compromised mirror cannot ship a tampered root binary. The pin
+# makes integrity independent of the transport. When NO pin is configured for this arch, warn loudly
+# and proceed (preserves the "just set a release URL" bring-up; the binary-TOFU is then the operator's
+# explicit, visible choice — not a silent gap).
+if [ -n "$pin_sha" ]; then
+  command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required to verify the pinned agent binary"
+  printf '%s  %s\n' "$pin_sha" "$tmp_bin" | sha256sum -c - >/dev/null 2>&1 || fail "agent binary SHA-256 does not match the configured pin for linux-${agent_arch} (expected ${pin_sha}); refusing to install"
+  echo ">> agent binary verified against the configured SHA-256 pin"
+else
+  echo ">> WARNING: no SHA-256 pin configured for linux-${agent_arch}; agent binary integrity is NOT verified (set one in the agent rollout settings)" >&2
+fi
 install -m 0755 "$tmp_bin" /usr/local/bin/yaog-agent
 
 # write_operator_cred "$cred_file" "$pem": write the baked operator-credential PEM to $cred_file at

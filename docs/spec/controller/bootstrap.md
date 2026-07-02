@@ -54,15 +54,22 @@ metacharacter cannot break out of its assignment.
 
 ## Honest limits
 
-- **The agent binary download is not integrity-checked at bootstrap** (the first-fetch TOFU hole).
-  A compromised proxy/MITM could swap the *bootstrap-time* binary; the config **bundle** the agent
-  then pulls is still keystone-verified, so a rogue binary cannot forge membership, but it could
-  misbehave on the host. As of **beta.1 (plan-4, D9)** the Release workflow publishes a per-arch
-  `yaog-agent-<os>-<arch>.sha256` sidecar next to each binary, so the operator can read the pin;
-  having the bootstrap script verify the download against it (letting the `--gh-proxy` hop stay
-  untrusted) is **deferred to rc.2**. Until then `--gh-proxy` is an explicitly-trusted intermediary.
-  NOTE: this TOFU hole is the FIRST-fetch only — the **signed self-update** path (beta.2) always
-  verifies a fetched agent binary against the in-bundle, controller-signed `artifacts.json` pin.
+- **The agent binary download is SHA-256-pin-verified at bootstrap when a per-arch pin is configured
+  (plan-6).** The controller bakes the operator's `agent_bins` SHA-256 + asset pins into the bootstrap
+  script, which runs a fail-closed `sha256sum -c -` on the downloaded binary BEFORE installing it — so
+  a compromised proxy/MITM cannot swap the *bootstrap-time* binary. The pin makes integrity independent
+  of the transport, so the `--gh-proxy` hop / plain-http need not be trusted for integrity. The operator
+  reads the pin from the per-arch `yaog-agent-<os>-<arch>.sha256` sidecar the Release workflow publishes
+  (beta.1, plan-4/D9) and sets it in the agent-rollout settings. When NO pin is configured for the
+  node's arch, the script prints a loud WARNING and proceeds — the first-fetch binary TOFU is then the
+  operator's explicit, visible choice (configure `agent_bins` to close it). Independently the config
+  **bundle** the agent pulls is keystone-verified, and the **signed self-update** path (beta.2) always
+  verifies a fetched binary against the in-bundle, controller-signed `artifacts.json` pin — so a rogue
+  binary can never forge membership.
+- **The remaining first-contact TOFU is the off-host operator credential** baked into the (unauth,
+  plain-HTTP) bootstrap script: a controller compromised AT bootstrap (or a MITM on the fetch) could
+  bake an attacker key. Mitigate out-of-band — compare the printed credential fingerprint, or use
+  `yaog-agent reprovision-keystone`; a pre-shared bootstrap anchor is an rc.2 item.
 - The agent release binaries + their `.sha256` sidecars are published by the Release workflow
   (`yaog-agent-<os>-<arch>` and `yaog-agent-<os>-<arch>.sha256`) alongside the bundles.
 - The bootstrap is Linux + systemd (the controller's only supported node host).
