@@ -102,7 +102,7 @@ func TestEnrollHappyPath(t *testing.T) {
 		t.Fatalf("node Status = %q, want %q", node.Status, NodeApproved)
 	}
 	if node.WGPublicKey != "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=" {
-		t.Fatalf("node WGPublicKey = %q, want wg-pub-node-1", node.WGPublicKey)
+		t.Fatalf("node WGPublicKey = %q, want AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=", node.WGPublicKey)
 	}
 	if node.APITokenHash == "" {
 		t.Fatalf("node APITokenHash is empty after enroll")

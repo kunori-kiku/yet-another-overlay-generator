@@ -73,7 +73,7 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		// Malformed WireGuard public key: rejected up front (before the token is burned), so it is a
 		// plain bad request — not a token-guess and not a duplicate conflict.
 		if errors.Is(err, controller.ErrInvalidWGKey) {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "wireguard_public_key").Wrap(err))
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err))
 			return
 		}
 		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
@@ -326,7 +326,7 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if errors.Is(err, controller.ErrInvalidWGKey) {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "wireguard_public_key").Wrap(err))
+			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err))
 			return
 		}
 		if errors.Is(err, controller.ErrDuplicateWGKey) {

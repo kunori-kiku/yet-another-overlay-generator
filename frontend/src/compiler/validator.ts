@@ -491,9 +491,10 @@ function validateDomainsSchema(topo: Topology, result: ValidationResult): void {
 
 // validateNodesSchema mirrors schema.go:277-402.
 // validWGPublicKey mirrors validator.ValidWGPublicKey (schema.go): a WireGuard public key is 32 bytes
-// of standard base64. A 32-byte value encodes to exactly 43 base64 chars + one '=' pad, so this regex
-// characterizes StdEncoding.DecodeString(s) succeeding with len 32 — deterministically and without a
-// base64 decoder (whose leniency could diverge from Go's).
+// of standard base64 = exactly 43 base64 chars + one '=' pad. This regex is DELIBERATELY STRICTER than
+// base64-decoding: Go's base64 decoder (and JS atob) silently strip CR/LF and surrounding whitespace, so
+// a decode-and-check-length would ACCEPT a key with an embedded newline — the exact config-injection
+// vector this guards against. Do NOT "simplify" it back to a decoder. Byte-identical to the Go regex.
 const wgPublicKeyPattern = /^[A-Za-z0-9+/]{43}=$/;
 function validWGPublicKey(s: string): boolean {
   return wgPublicKeyPattern.test(s);
