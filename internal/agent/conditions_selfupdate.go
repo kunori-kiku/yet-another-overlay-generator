@@ -59,6 +59,23 @@ func classifySelfUpdateBlock(err error) string {
 	}
 }
 
+// curateAbandonReason maps rollbackAndAbandon's internal reason to a CURATED, actionable message for
+// the durable Abandoned condition. Like classifySelfUpdateBlock it never echoes a raw error (the health
+// gate reason embeds healthCheck's err.Error()), keying only on the failure CATEGORY so raw stderr
+// never reaches the conditions channel. Empty reason → "" (the condition falls back to its generic line).
+func curateAbandonReason(reason string) string {
+	switch {
+	case reason == "":
+		return ""
+	case strings.Contains(reason, "attempt cap"):
+		return "the update repeatedly failed to apply and hit the retry cap"
+	case strings.Contains(reason, "health gate"):
+		return "the updated binary failed its post-update health check and was rolled back"
+	default:
+		return "the update was rolled back"
+	}
+}
+
 // selfUpdateCondition derives the structured selfupdate condition from the PRIOR persisted State.
 // It MUST be passed the PRIOR state (prev), not the freshly-rebuilt apply state: recordSuccess/
 // recordFailure reset Health to "applied"/"degraded", so the terminal "self-updated to ..." marker
@@ -81,8 +98,15 @@ func selfUpdateCondition(prev *State, now time.Time) (model.Condition, bool) {
 		return classify(model.ConditionTypeSelfUpdate, model.ConditionStatusWarn, reasonSelfUpdateActive,
 			"self-update to "+prev.PendingUpdate.To+" in flight (attempt "+strconv.Itoa(prev.PendingUpdate.Attempts)+")", now), true
 	case prev.AbandonedAgentVersion != "":
-		return classify(model.ConditionTypeSelfUpdate, model.ConditionStatusWarn, reasonSelfUpdateAbandoned,
-			"self-update to "+prev.AbandonedAgentVersion+" abandoned (rolled back); change the target to retry", now), true
+		// A durable, TERMINAL failure — Error (not Warn) so it is distinguishable from the transient
+		// Blocked below. The curated reason (when present) tells the operator WHY; legacy states
+		// without it fall back to the generic line.
+		msg := "self-update to " + prev.AbandonedAgentVersion + " abandoned (rolled back)"
+		if prev.AbandonedReason != "" {
+			msg += ": " + prev.AbandonedReason
+		}
+		msg += "; change the target to retry"
+		return classify(model.ConditionTypeSelfUpdate, model.ConditionStatusError, reasonSelfUpdateAbandoned, msg, now), true
 	case strings.HasPrefix(prev.Health, "self-updated to "):
 		return classify(model.ConditionTypeSelfUpdate, model.ConditionStatusOK, reasonSelfUpdateUpdated,
 			"self-updated to "+strings.TrimPrefix(prev.Health, "self-updated to "), now), true

@@ -355,6 +355,7 @@ func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult
 		s.AgentVersionFloor = prev.AgentVersionFloor
 		s.PendingUpdate = prev.PendingUpdate
 		s.AbandonedAgentVersion = prev.AbandonedAgentVersion
+		s.AbandonedReason = prev.AbandonedReason
 		// The membership anti-rollback floor is MONOTONIC: a successful apply must never LOWER it
 		// (mirrors recordFailure). A keystone-OFF apply reports membershipEpoch==0 (VerifyMembership
 		// is a no-op without a pinned credential), so without this a node that had a keystone-ON
@@ -398,6 +399,7 @@ func recordFailure(cfg *Config, prev *State, detail string) {
 		s.AgentVersionFloor = prev.AgentVersionFloor
 		s.PendingUpdate = prev.PendingUpdate
 		s.AbandonedAgentVersion = prev.AbandonedAgentVersion
+		s.AbandonedReason = prev.AbandonedReason
 	}
 	if s.NodeID == "" {
 		s.NodeID = cfg.NodeID

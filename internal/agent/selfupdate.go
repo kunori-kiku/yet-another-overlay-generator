@@ -384,6 +384,7 @@ func FinalizeSelfUpdate(stateDir, buildVersion string, stderr io.Writer) {
 	st.PendingUpdate = nil
 	st.AgentVersionFloor = pu.To
 	st.AbandonedAgentVersion = "" // a successful promote supersedes any prior abandonment
+	st.AbandonedReason = ""       // cleared with the version it described
 	// A successful self-update means the node is no longer blocked: clear any leftover Blocked latch
 	// from the earlier deferred/failed attempts so the selfupdate condition stops reporting "Blocked"
 	// once the node IS on the target. Otherwise it would persist until the next generation apply
@@ -425,6 +426,7 @@ func rollbackAndAbandon(stateDir, buildVersion string, pu *PendingUpdate, reason
 	}
 	st.PendingUpdate = nil // cleared AFTER the rename above
 	st.AbandonedAgentVersion = pu.To
+	st.AbandonedReason = curateAbandonReason(reason) // durable, curated (no raw stderr) — feeds the Abandoned condition
 	st.Health = "self-update to " + pu.To + " abandoned: " + reason
 	_ = SaveState(stateDir, st)
 

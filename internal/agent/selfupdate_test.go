@@ -512,9 +512,11 @@ func TestFinalizeSelfUpdate_ClearsSelfUpdateBlocked(t *testing.T) {
 	_ = os.WriteFile(self+".bak", []byte("OLD"), 0o755)
 	stateDir := filepath.Join(dir, "state")
 	mustSave(t, stateDir, &State{
-		NodeID:            "n1",
-		SelfUpdateBlocked: "could not download the update binary from the release",
-		PendingUpdate:     &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: true},
+		NodeID:                "n1",
+		SelfUpdateBlocked:     "could not download the update binary from the release",
+		AbandonedAgentVersion: "0.9.0",
+		AbandonedReason:       "the update was rolled back",
+		PendingUpdate:         &PendingUpdate{From: "1.0.0", To: "1.1.0", Confirmed: true},
 	})
 	_, restore := stubSwap(t, self)
 	defer restore()
@@ -530,6 +532,9 @@ func TestFinalizeSelfUpdate_ClearsSelfUpdateBlocked(t *testing.T) {
 	}
 	if st.SelfUpdateBlocked != "" {
 		t.Errorf("finalize must clear the stale SelfUpdateBlocked latch (beta.16); got %q", st.SelfUpdateBlocked)
+	}
+	if st.AbandonedAgentVersion != "" || st.AbandonedReason != "" {
+		t.Errorf("finalize must clear AbandonedAgentVersion+AbandonedReason (plan-9); got %q / %q", st.AbandonedAgentVersion, st.AbandonedReason)
 	}
 }
 
@@ -606,6 +611,9 @@ func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
 	}
 	if st.AbandonedAgentVersion != "1.1.0" {
 		t.Errorf("rollback must remember the abandoned target to prevent re-arm; got %q", st.AbandonedAgentVersion)
+	}
+	if st.AbandonedReason == "" || strings.Contains(st.AbandonedReason, "\n") {
+		t.Errorf("rollback must record a curated one-line reason (plan-9); got %q", st.AbandonedReason)
 	}
 }
 
@@ -712,6 +720,7 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 		NodeID:                "n1",
 		AgentVersionFloor:     "1.1.0",
 		AbandonedAgentVersion: "0.9.0",
+		AbandonedReason:       "the update was rolled back",
 		PendingUpdate:         &PendingUpdate{From: "1.1.0", To: "1.2.0", Attempts: 1},
 		SelfUpdateBlocked:     "a stale deferred-update reason",
 	}
@@ -728,6 +737,9 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 	if st.AbandonedAgentVersion != "0.9.0" {
 		t.Errorf("recordSuccess wiped AbandonedAgentVersion; got %q", st.AbandonedAgentVersion)
 	}
+	if st.AbandonedReason != "the update was rolled back" {
+		t.Errorf("recordSuccess wiped AbandonedReason (plan-9); got %q", st.AbandonedReason)
+	}
 	// plan-8 Part D: a clean (new-generation) apply must DROP the deferred-self-update Blocked latch —
 	// recordSuccess rebuilds State and deliberately does NOT carry SelfUpdateBlocked forward (the
 	// stable-generation clear lives in the retry path). Pin it so a future refactor that "preserves"
@@ -738,9 +750,9 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 
 	recordFailure(cfg, prev, "boom")
 	st, _ = LoadState(dir)
-	if st.AgentVersionFloor != "1.1.0" || st.PendingUpdate == nil || st.AbandonedAgentVersion != "0.9.0" {
-		t.Errorf("recordFailure wiped self-update custody state; got floor=%q pending=%+v abandoned=%q",
-			st.AgentVersionFloor, st.PendingUpdate, st.AbandonedAgentVersion)
+	if st.AgentVersionFloor != "1.1.0" || st.PendingUpdate == nil || st.AbandonedAgentVersion != "0.9.0" || st.AbandonedReason != "the update was rolled back" {
+		t.Errorf("recordFailure wiped self-update custody state; got floor=%q pending=%+v abandoned=%q reason=%q",
+			st.AgentVersionFloor, st.PendingUpdate, st.AbandonedAgentVersion, st.AbandonedReason)
 	}
 }
 

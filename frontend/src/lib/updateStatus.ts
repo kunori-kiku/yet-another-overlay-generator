@@ -136,3 +136,18 @@ export function compareSemver(a: string, b: string): number {
   if (pa.pre.length !== pb.pre.length) return pa.pre.length < pb.pre.length ? -1 : 1;
   return 0;
 }
+
+// chipTitle builds the UpdateStatusChip tooltip text (pure, so it is node-testable without rendering):
+// the curated structured-condition message when present, else the legacy lastHealth line. The
+// best-effort `caveat` (already localized by the caller) is appended ONLY for a 'failed' state on the
+// LEGACY path (no structured selfupdate condition) — a structured Abandoned condition is authoritative
+// and already carries the curated reason, so the caveat would be dishonest there (plan-9). Returns
+// undefined when there is nothing to show.
+export function chipTitle(node: ControllerNode, state: UpdateState, caveat: string): string | undefined {
+  const su = (node.conditions ?? []).find((c) => c.type === 'selfupdate');
+  const base = su?.message || node.lastHealth || '';
+  if (state === 'failed' && !su) {
+    return `${base}${base ? ' ' : ''}(${caveat})`;
+  }
+  return base || undefined;
+}

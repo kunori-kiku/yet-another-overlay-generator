@@ -130,7 +130,7 @@ func TestSelfUpdateCondition(t *testing.T) {
 		{"probationary (confirmed)", &State{PendingUpdate: &PendingUpdate{To: "v2.0.0-beta.9", Confirmed: true}},
 			true, reasonSelfUpdateProbationary, model.ConditionStatusWarn},
 		{"abandoned (durable)", &State{AbandonedAgentVersion: "v2.0.0-beta.9"},
-			true, reasonSelfUpdateAbandoned, model.ConditionStatusWarn},
+			true, reasonSelfUpdateAbandoned, model.ConditionStatusError},
 		{"updated (transient Health marker)", &State{Health: "self-updated to v2.0.0-beta.9"},
 			true, reasonSelfUpdateUpdated, model.ConditionStatusOK},
 		// Precedence: an in-flight breadcrumb wins over a stale abandoned-target memory (operator retargeted).
@@ -143,7 +143,7 @@ func TestSelfUpdateCondition(t *testing.T) {
 		{"in-flight beats blocked", &State{PendingUpdate: &PendingUpdate{To: "v3"}, SelfUpdateBlocked: "mismatch"},
 			true, reasonSelfUpdateActive, model.ConditionStatusWarn},
 		{"abandoned beats blocked", &State{AbandonedAgentVersion: "v2", SelfUpdateBlocked: "mismatch"},
-			true, reasonSelfUpdateAbandoned, model.ConditionStatusWarn},
+			true, reasonSelfUpdateAbandoned, model.ConditionStatusError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,5 +164,48 @@ func TestSelfUpdateCondition(t *testing.T) {
 				t.Fatalf("message not a curated one-liner: %q", got.Message)
 			}
 		})
+	}
+}
+
+// TestSelfUpdateConditionAbandonedReason: a durable AbandonedReason is surfaced in the Abandoned
+// condition message (curated); an empty reason falls back to the generic line (legacy state), both Error.
+func TestSelfUpdateConditionAbandonedReason(t *testing.T) {
+	now := time.Now().UTC()
+	withReason, has := selfUpdateCondition(&State{
+		AbandonedAgentVersion: "v9",
+		AbandonedReason:       "the updated binary failed its post-update health check and was rolled back",
+	}, now)
+	if !has || withReason.Status != model.ConditionStatusError {
+		t.Fatalf("abandoned+reason: has=%v status=%s, want has+error", has, withReason.Status)
+	}
+	if !strings.Contains(withReason.Message, "failed its post-update health check") {
+		t.Errorf("abandoned message drops the curated reason: %q", withReason.Message)
+	}
+	// Legacy state (no reason) → generic line, still Error, no fabricated reason.
+	legacy, _ := selfUpdateCondition(&State{AbandonedAgentVersion: "v9"}, now)
+	if legacy.Status != model.ConditionStatusError || !strings.Contains(legacy.Message, "abandoned") {
+		t.Errorf("legacy abandoned: status=%s msg=%q", legacy.Status, legacy.Message)
+	}
+	if strings.Contains(legacy.Message, "health check") {
+		t.Errorf("legacy abandoned fabricated a reason: %q", legacy.Message)
+	}
+}
+
+// TestCurateAbandonReason: the curator maps failure categories to curated messages and NEVER echoes a
+// raw error — the health-gate reason embeds healthCheck's err.Error(), which must not reach the channel.
+func TestCurateAbandonReason(t *testing.T) {
+	if got := curateAbandonReason(""); got != "" {
+		t.Errorf("empty reason = %q, want empty", got)
+	}
+	if got := curateAbandonReason("attempt cap 3 exceeded"); !strings.Contains(got, "retry cap") {
+		t.Errorf("cap reason = %q, want the retry-cap line", got)
+	}
+	raw := "health gate failed: exec: \"/tmp/evil\": permission denied\nstacktrace..."
+	got := curateAbandonReason(raw)
+	if strings.Contains(got, "permission denied") || strings.Contains(got, "/tmp/evil") || strings.Contains(got, "\n") {
+		t.Errorf("curated reason leaked the raw error: %q", got)
+	}
+	if !strings.Contains(got, "health check") {
+		t.Errorf("health-gate reason = %q, want the curated health-check line", got)
 	}
 }

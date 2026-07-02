@@ -74,6 +74,13 @@ type State struct {
 	// not perpetually re-flap; it is cleared when the operator moves to a different target. Empty
 	// means nothing abandoned.
 	AbandonedAgentVersion string `json:"abandoned_agent_version,omitempty"`
+	// AbandonedReason is the CURATED (never raw stderr), durable reason the last self-update was
+	// abandoned — surfaced in the terminal `selfupdate` Abandoned condition so the panel shows WHY the
+	// update failed, not just that it did. Set beside AbandonedAgentVersion on rollback, preserved
+	// across applies with it, and cleared together on a successful finalize. Empty means either nothing
+	// was abandoned or a legacy state predating this field (the condition then falls back to a generic
+	// line).
+	AbandonedReason string `json:"abandoned_reason,omitempty"`
 	// SelfUpdateBlocked is the curated reason a post-apply self-update was DEFERRED (refused) on the
 	// last cycle — e.g. the fetched binary's version/hash did not match the rollout target. It is
 	// OBSERVABILITY ONLY: it surfaces a stalled rollout as a `selfupdate` Blocked condition so the
