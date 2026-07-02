@@ -75,9 +75,11 @@ type FileStore struct {
 	// heartbeat (RecordTelemetry / TouchLastSeen) never contends on the store-wide mu nor forces a
 	// durable fsync'd whole-record rewrite: telemetry is high-frequency observability that self-heals
 	// within one interval after a restart, so it must not ride the custody write path (which is the
-	// DoS-amplification the overlay removes). Lock order: a reader holds mu, THEN takes telemetryMu
-	// (GetNode/listNodesLocked merge the overlay); the heartbeat paths take ONLY telemetryMu — never
-	// mu while holding telemetryMu — so the two locks cannot deadlock.
+	// DoS-amplification the overlay removes). Lock order: mu is ALWAYS taken before telemetryMu — the
+	// readers GetNode/ListNodes (via applyTelemetryOverlay) and the /report writer SetAppliedGeneration
+	// (via refreshTelemetryOverlayFromReport) hold mu, THEN take telemetryMu; the heartbeat paths
+	// (RecordTelemetry/TouchLastSeen) take ONLY telemetryMu — never mu while holding telemetryMu — so
+	// the two locks cannot deadlock.
 	telemetryMu sync.Mutex
 	// telemetry is the in-memory overlay of a node's four OBSERVABILITY fields (LastSeen, Conditions,
 	// Telemetry, LastAgentVersion), per tenant, per node. It is merged OVER the durable record on read;

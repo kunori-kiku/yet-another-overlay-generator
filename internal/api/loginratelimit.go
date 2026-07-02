@@ -175,7 +175,12 @@ func (h *ControllerHandler) clientIP(r *http.Request) string {
 		parts := strings.Split(xff, ",")
 		for i := len(parts) - 1; i >= 0; i-- {
 			ip := strings.TrimSpace(parts[i])
-			if ip != "" && !ipInNets(ip, h.trustedProxies) {
+			// Skip empty AND malformed tokens: only a real IP may be returned as the rate-limit key,
+			// so a garbage rightmost entry never becomes the bucket.
+			if ip == "" || net.ParseIP(ip) == nil {
+				continue
+			}
+			if !ipInNets(ip, h.trustedProxies) {
 				return ip // first (rightmost) untrusted hop = the real client at the trusted edge
 			}
 		}

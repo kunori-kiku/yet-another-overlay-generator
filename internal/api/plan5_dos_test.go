@@ -74,6 +74,7 @@ func TestClientIP(t *testing.T) {
 		{"trusted proxy, no forwarding headers: RemoteAddr", []string{"10.0.0.0/8"}, "10.1.2.3:443", "", "", "10.1.2.3"},
 		{"bare-IP trusted entry", []string{"10.1.2.3"}, "10.1.2.3:443", "198.51.100.7", "", "198.51.100.7"},
 		{"malformed XFF entry skipped", []string{"10.0.0.0/8"}, "10.1.2.3:443", "not-an-ip, 198.51.100.7", "", "198.51.100.7"},
+		{"malformed rightmost XFF skipped (never returned as a key)", []string{"10.0.0.0/8"}, "10.1.2.3:443", "198.51.100.7, not-an-ip", "", "198.51.100.7"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,9 +129,40 @@ func TestHandleTelemetryBounds(t *testing.T) {
 		telemetryRequestJSON{Metrics: map[string]json.RawMessage{"big": json.RawMessage(`"` + strings.Repeat("A", maxTelemetryMetricsBytes+1) + `"`)}}, nil); status != http.StatusBadRequest {
 		t.Fatalf("over-size metrics: status %d, want 400", status)
 	}
+	// Over-size metric KEY → 400 (keys are attacker-chosen and must count toward the cap).
+	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token,
+		telemetryRequestJSON{Metrics: map[string]json.RawMessage{strings.Repeat("k", maxTelemetryMetricsBytes+1): json.RawMessage(`1`)}}, nil); status != http.StatusBadRequest {
+		t.Fatalf("over-size metric key: status %d, want 400", status)
+	}
+	// Over-size condition Reason (a non-Message field) → 400.
+	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token,
+		telemetryRequestJSON{Conditions: []model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: strings.Repeat("x", maxConditionBytes+1)}}}, nil); status != http.StatusBadRequest {
+		t.Fatalf("over-size condition Reason: status %d, want 400", status)
+	}
 	// At-limit conditions succeed.
 	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token,
 		telemetryRequestJSON{Conditions: manyConds(maxReportedConditions)}, nil); status != http.StatusOK {
 		t.Fatalf("at-limit conditions: status %d, want 200", status)
+	}
+}
+
+// TestHandleReportBounds (F2) pins the SAME conditions bound on the /report path (the plan calls for a
+// /report case): an over-count report is rejected 400, and a normal report still succeeds.
+func TestHandleReportBounds(t *testing.T) {
+	env := newCtlTestEnv(t)
+	token := env.enrollNode(t, "node-1")
+
+	over := make([]model.Condition, maxReportedConditions+1)
+	for i := range over {
+		over[i] = model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK}
+	}
+	if status := doJSON(t, http.MethodPost, env.agentURL("report"), token,
+		reportRequestJSON{AppliedGeneration: 1, Checksum: "c", Health: "applied", Conditions: over}, nil); status != http.StatusBadRequest {
+		t.Fatalf("/report over-count conditions: status %d, want 400", status)
+	}
+	if status := doJSON(t, http.MethodPost, env.agentURL("report"), token,
+		reportRequestJSON{AppliedGeneration: 1, Checksum: "c", Health: "applied",
+			Conditions: []model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Message: "ok"}}}, nil); status != http.StatusOK {
+		t.Fatalf("/report normal: status %d, want 200", status)
 	}
 }

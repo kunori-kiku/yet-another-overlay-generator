@@ -223,33 +223,43 @@ const (
 	// is served verbatim in every ListNodes response, so an unbounded map would bloat the operator
 	// /nodes payload as well as the per-node record.
 	maxTelemetryMetrics      = 32
-	maxTelemetryMetricsBytes = 64 << 10 // 64 KiB total across all metric values
+	maxTelemetryMetricsBytes = 64 << 10 // 64 KiB total across all metric KEYS + values
+	// maxConditionBytes bounds the total size of ALL of a single condition's attacker-controlled
+	// string fields (Type+Status+Reason+Message+Since). Generous — a legit condition is a short
+	// enum/timestamp set plus a <=160-rune Message (~640 bytes worst-case multibyte) — but it stops a
+	// compromised node stuffing Reason/Since to bypass the Message cap and bloat every /nodes response.
+	maxConditionBytes = 2048
 )
 
-// validateConditions bounds a reported conditions slice at the HTTP boundary: an over-count, or a
-// curated Message longer than the model cap, is rejected (the agent enforces the cap, but the server
-// must not trust the client). Returns nil when within bounds.
+// validateConditions bounds a reported conditions slice at the HTTP boundary: an over-count, a curated
+// Message longer than the model cap, or any single condition whose total field bytes exceed the cap is
+// rejected (the agent enforces these, but the server must not trust the client). Returns nil when
+// within bounds.
 func validateConditions(conds []model.Condition) *apierr.Error {
 	if len(conds) > maxReportedConditions {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
 	}
 	for i := range conds {
-		if len([]rune(conds[i].Message)) > model.ConditionMessageMax {
+		c := conds[i]
+		if len([]rune(c.Message)) > model.ConditionMessageMax {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
+		}
+		if len(c.Type)+len(c.Status)+len(c.Reason)+len(c.Message)+len(c.Since) > maxConditionBytes {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
 		}
 	}
 	return nil
 }
 
-// validateMetrics bounds the /telemetry metrics map: too many keys, or a total raw-value size over the
-// cap, is rejected. Returns nil when within bounds.
+// validateMetrics bounds the /telemetry metrics map: too many keys, or a total size (KEY bytes + value
+// bytes — the keys are attacker-chosen) over the cap, is rejected. Returns nil when within bounds.
 func validateMetrics(metrics map[string]json.RawMessage) *apierr.Error {
 	if len(metrics) > maxTelemetryMetrics {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "metrics")
 	}
 	total := 0
-	for _, v := range metrics {
-		total += len(v)
+	for k, v := range metrics {
+		total += len(k) + len(v)
 		if total > maxTelemetryMetricsBytes {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "metrics")
 		}
