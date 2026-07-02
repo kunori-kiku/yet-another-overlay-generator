@@ -88,10 +88,20 @@ daemon therefore re-attempts a deferred self-update on its **idle cycles**, on a
 (`--selfupdate-retry-interval`, default 10m; `≤0` disables), WITHOUT waiting for a new generation.
 The trigger is the persisted `State.SelfUpdateBlocked` latch (set when a post-apply attempt is
 refused/deferred; cleared once the target is no longer armed). The retry reuses the SAME
-`Fetch + VerifyBundle → decideSelfUpdate → performSelfUpdate` path (every retry re-verifies — no
-stale/unverified pins) and runs on the **main loop thread** so a swap never interrupts a mid-flight
-apply. The forced (pre-apply) path already retries — a failure errors the whole cycle and the daemon
-re-runs it on its error backoff.
+`Fetch → VerifyBundle → VerifyMembership → decideSelfUpdate → performSelfUpdate` path as the apply
+loop (every retry re-verifies — no stale/unverified pins) and runs on the **main loop thread** so a
+swap never interrupts a mid-flight apply. The forced (pre-apply) path already retries — a failure
+errors the whole cycle and the daemon re-runs it on its error backoff.
+
+The retry's fetch is wrapped by `agent.WithMembershipGate` (`selfupdate_retry.go`), which runs
+`VerifyMembership` after `VerifyBundle` — the **same keystone binding the apply path enforces before a
+swap**. This is load-bearing: the retry *decides a binary swap* from the fetched `artifacts.json` pin,
+so on a keystone-ON node that pin MUST be bound to the off-host operator credential, not merely the
+tier-1 `bundle.sig`. Verifying only `VerifyBundle` (which, with no `--pubkey` pinned in the standard
+controller posture, trusts the bundle's own `signing-pubkey.pem`) would let any party that can serve a
+`VerifyBundle`-passing bundle drive an agent-binary swap once a deferral is armed — a keystone bypass
+to root code-exec. When keystone is OFF (no operator credential) `VerifyMembership` is a no-op, so the
+gate is identical to the bundle-only fetch there.
 
 ## Startup reconcile + crash-loop bound (two phases + finalize)
 

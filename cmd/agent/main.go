@@ -530,6 +530,19 @@ func runControllerMode(o controllerModeOpts) int {
 		}
 		return files, nil
 	}
+	// membershipVerifiedFetch wraps verifiedFetch with the off-host keystone membership gate — the SAME
+	// pre-swap verification the apply path runs (VerifyBundle then VerifyMembership). The deferred
+	// self-update RETRY decides a binary swap from the fetched artifacts.json pin, so it MUST bind that
+	// pin to the operator credential; verifying only the tier-1 bundle signature would let any party that
+	// can serve a VerifyBundle-passing bundle swap the agent binary once a deferral is armed (keystone
+	// bypass). Keystone OFF (empty operatorCred) → VerifyMembership is a no-op → identical to verifiedFetch.
+	membershipVerifiedFetch := agent.WithMembershipGate(verifiedFetch, agent.MembershipConfig{
+		NodeID:          o.nodeID,
+		OperatorCredPEM: operatorCred,
+		OperatorCredAlg: o.operatorCredAlg,
+		OperatorRPID:    o.operatorRPID,
+		OperatorOrigin:  o.operatorOrigin,
+	}, o.stateDir)
 	healthCheck := func() error {
 		_, err := verifiedFetch()
 		return err
@@ -652,7 +665,7 @@ func runControllerMode(o controllerModeOpts) int {
 		if o.selfUpdateRetryInterval > 0 && !applied &&
 			time.Since(lastSelfUpdateRetry) >= o.selfUpdateRetryInterval {
 			lastSelfUpdateRetry = time.Now()
-			if _, suErr := agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, verifiedFetch, os.Stderr); suErr != nil {
+			if _, suErr := agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, membershipVerifiedFetch, os.Stderr); suErr != nil {
 				fmt.Fprintf(os.Stderr, "agent: deferred self-update retry: %v (will retry)\n", suErr)
 			}
 		}
