@@ -22,9 +22,11 @@ export function ResourcePanel({
 }) {
   if (!resource) return null;
   const pct = memUsedPercent(resource);
+  // pct === null means memory is UNKNOWN (an old kernel without MemAvailable, or a failed /proc/meminfo
+  // read leaves memTotalKB=0) — show an em dash, not formatKB(0)='0' which would misread as "0 bytes".
   const memText =
     pct === null
-      ? formatKB(resource.memTotalKB)
+      ? '—'
       : t(language, 'resourcePanel.memUsed', {
           used: formatKB(resource.memTotalKB - resource.memAvailableKB),
           total: formatKB(resource.memTotalKB),
