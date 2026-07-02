@@ -11,7 +11,12 @@
   WG-pubkey validation, agent-route DoS, bootstrap binary pin, node-ID+proxy-IP) → functionality
   (plans 8–10: `kit verify`, reliable failed-update state, richer telemetry metrics) → rc.1 gate
   (plan-11). Latest shipped is `v2.0.0-beta.16` (GitHub Latest). rc.2 deferrals recorded in the outline
-  §6. **NEXT = execute plan-1 (reproduce the NAT bug first, then fix).**
+  §6. **PROGRESS (2026-07-02):** plan-2 delivered (PR #208, reviewed GO) + plan-4 delivered (PR #209,
+  reviewed GO). **plan-1 RECLASSIFIED** — the NAT "goes direct" is WireGuard endpoint roaming over the
+  owner's asymmetric DNAT+SNAT (their `.conf` verified correct), not a config bug; residual =
+  port-only-override validation (require-explicit-host) + document roaming; OPEN owner decision on a
+  pinned-endpoint feature vs docs-only. **NEXT = plan-5 (agent-route DoS hardening)**; then plans 6–10,
+  plan-1 residual, plan-3 (interim beta.17 needs plan-1 residual + plan-2), plan-11 (rc.1 gate).
 
 - **TWO new subjects DRAFTED (2026-06-25), from three owner-reported items while running the live
   fleet; both foldered under `implementation_plans/` with full per-plan detail. Latest shipped is
