@@ -53,6 +53,10 @@ export interface ControllerNode {
   // reload), so a node rehydrated from the localStorage cache before the first refresh has no
   // wireguardPeers key. Hence optional; every reader coerces (?? []). Observability only; no key material.
   wireguardPeers?: WireGuardPeer[];
+  // resource is the node's live host load + memory (plan-10 metrics["resource"]). Live-only (stripped
+  // before the persisted cache, like wireguardPeers): a load average frozen at persist time is stale.
+  // Observability only; carries no endpoint/IP/key material. Optional — absent for a pre-plan-10 agent.
+  resource?: NodeResource;
 }
 
 // WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
@@ -64,6 +68,17 @@ export interface WireGuardPeer {
   endpoint: string;
   lastHandshake: number;
   status: 'up' | 'stale' | 'never';
+}
+
+// NodeResource is the node's host load + memory (plan-10), projected from the agent's
+// metrics["resource"] telemetry. Memory is in kB (as /proc/meminfo reports); mem fields are 0 when the
+// kernel did not report MemAvailable. No endpoint/IP/key material.
+export interface NodeResource {
+  load1: number;
+  load5: number;
+  load15: number;
+  memTotalKB: number;
+  memAvailableKB: number;
 }
 
 // A single record in the audit chain. Mirrors the operator-facing fields of controller.AuditEntry.
