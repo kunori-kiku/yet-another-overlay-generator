@@ -1,22 +1,30 @@
 # STATUS
-<!-- regenerated: 2026-07-02 -->
-<!-- by: draft-implementation-plan — pre-rc1-hardening subject foldered (2 criticals → beta.17, then hardening → rc.1) -->
+<!-- regenerated: 2026-07-03 -->
+<!-- by: hand — pre-rc1-hardening subject COMPLETE; v2.0.0-beta.17 released to GitHub Latest -->
 
 ## Active work
 
-- **SUBJECT `pre-rc1-hardening-2026_07_02` DRAFTED (2026-07-02).** From an owner smoke (NAT override
-  "goes direct to the other IP") + a 3-agent pre-rc.1 security audit (which found a `beta.15`
-  self-update RETRY keystone-bypass → root RCE). 11 plans on `docs/pre-rc1-hardening-plans`: 2 criticals
-  (plan-1 NAT, plan-2 self-update) → interim **beta.17** (plan-3) → security hardening (plans 4–7:
-  WG-pubkey validation, agent-route DoS, bootstrap binary pin, node-ID+proxy-IP) → functionality
-  (plans 8–10: `kit verify`, reliable failed-update state, richer telemetry metrics) → rc.1 gate
-  (plan-11). Latest shipped is `v2.0.0-beta.16` (GitHub Latest). rc.2 deferrals recorded in the outline
-  §6. **PROGRESS (2026-07-02):** plan-2 delivered (PR #208, reviewed GO) + plan-4 delivered (PR #209,
-  reviewed GO). **plan-1 RECLASSIFIED** — the NAT "goes direct" is WireGuard endpoint roaming over the
-  owner's asymmetric DNAT+SNAT (their `.conf` verified correct), not a config bug; residual =
-  port-only-override validation (require-explicit-host) + document roaming; OPEN owner decision on a
-  pinned-endpoint feature vs docs-only. **NEXT = plan-5 (agent-route DoS hardening)**; then plans 6–10,
-  plan-1 residual, plan-3 (interim beta.17 needs plan-1 residual + plan-2), plan-11 (rc.1 gate).
+- **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
+  2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each
+  independently workflow-reviewed → adversarially verified → fixed at root → re-verified → CI-green
+  before merge; CHANGELOG PR #218 merged (main `907c0a5`); annotated tag `v2.0.0-beta.17` pushed →
+  Release workflow green (29 assets incl. per-arch `yaog-agent-*` + `.sha256` pins) → promoted to
+  Latest. Plans:
+  - **Security:** plan-2 CRITICAL self-update keystone bypass on the deferred-retry swap (#208) ·
+    plan-4 WG public-key validation at every ingress (#209) · plan-5 agent-route DoS hardening —
+    per-node rate limit + `/report`+`/telemetry` bounds + no per-beat fsync + trusted-proxy IP (#211) ·
+    plan-6 bootstrap binary SHA-256 pin (#212) · plan-7 node-ID charset validation (#213).
+  - **Added:** plan-8 `agent kit verify` (#214) · plan-10 host resource telemetry via the Sampler
+    framework (#216).
+  - **Fixed:** plan-9 distinguishable/reasoned/persistent failed-update state (#215) · **plan-1**
+    (reclassified) — the NAT "goes direct" is **WireGuard endpoint roaming** over the owner's asymmetric
+    DNAT+SNAT (the `.conf` was correct), *not* a config bug; residual shipped = a port-only-override
+    validator (`validation_edge_endpoint_port_without_host`, require-explicit-host) + frontend field
+    coupling + roaming docs (#217).
+  - **OPEN owner decision (deferred → rc.2):** a *pinned-endpoint* feature (timer re-asserts the
+    configured endpoint to fight roaming) — not built; roaming is correct WG behavior.
+  - **OWED: owner fleet smoke of beta.17**, then **plan-11** (refresh `docs/spec/rc1/RC1-GATE.md` + cut
+    `v2.0.0-rc.1`). Owner chose "beta.17 now → smoke → rc.1".
 
 - **TWO new subjects DRAFTED (2026-06-25), from three owner-reported items while running the live
   fleet; both foldered under `implementation_plans/` with full per-plan detail. Latest shipped is
@@ -227,11 +235,21 @@
 
 ## Next actions
 
-**Immediate (pre-rc1-hardening, just drafted):** execute `implementation_plans/pre-rc1-hardening-2026_07_02/`
-plan-by-plan via `execute-implementation-plan`, each PR independently workflow-reviewed → fixed →
-re-reviewed → CI green → merged. Order: plan-1 (NAT, reproduce-first) → plan-2 (self-update keystone) →
-plan-3 (beta.17 + hygiene) → plans 4–7 (security) → plans 8–10 (functionality; plan-5 before 9/10) →
-plan-11 (rc.1 gate). For plan-1, the owner's affected topology/link JSON pins the exact trigger fastest.
+**Immediate (pre-rc1-hardening — DONE, beta.17 shipped 2026-07-03):** all 9 hardening plans are merged
+and `v2.0.0-beta.17` is GitHub **Latest** (29 assets, tag on `907c0a5`). The remaining steps are
+**owner-only**:
+1. **Owner fleet smoke of beta.17** (the full hardening set on real hosts) — pass-or-accept-risk.
+2. **plan-11 — cut `v2.0.0-rc.1`:** refresh `docs/spec/rc1/RC1-GATE.md`, roll the CHANGELOG, tag +
+   `--latest` publish. (rc.1 is `make_latest=true` in `release.yml`, so it self-promotes; betas need the
+   manual `gh release edit --latest`.) Say the word when the smoke is clean.
+
+Separate from the release: the owner's live WireGuard-endpoint symptom is a fleet **NAT/roaming**
+matter, not a YAOG defect — the fixes are (a) advertise the accelerator as the node's `public_endpoints`
+so BOTH link directions ride the relay (an L7 connection-terminating relay needs a local UDP-over-its-
+transport wrapper + WG endpoint = `127.0.0.1:<port>`), and (b) confirm the agent is actually applying
+deploys (`applied` vs `desired` generation; `install.sh` DOES full down→up WG then restart babeld, so a
+stale interface means the apply didn't run, not that deploy skips the restart). A `journalctl -u
+yaog-agent` slice would pin which. Any resulting apply-path fix is a post-beta.17 change.
 
 **Subjects 1–4 are all delivered + merged (PRs #137–#158).** The rc.1 gate is authored and every
 *automatable* criterion is GREEN in CI (`go` incl. `-race`, `frontend`, `conformance`, `frontend-e2e`
