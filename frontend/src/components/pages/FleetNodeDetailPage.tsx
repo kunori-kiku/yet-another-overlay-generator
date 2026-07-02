@@ -7,6 +7,7 @@ import { t } from '../../i18n';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 import { NodeConditions } from '../deploy/NodeConditions';
 import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
+import { ResourcePanel } from '../deploy/ResourcePanel';
 import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
 
 // last_seen / enrolled_at are RFC3339 strings; the zero value ("0001-01-01T00:00:00Z") is
@@ -111,6 +112,7 @@ export function FleetNodeDetailPage() {
               asynchronously (the first paint is the cache), so guarding on node.wireguardPeers.length
               would crash on a reload after upgrade. The panel itself renders nothing for an empty list. */}
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
+          <ResourcePanel resource={node.resource} language={language} />
         </section>
       )}
     </div>

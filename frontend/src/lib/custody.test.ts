@@ -37,6 +37,7 @@ function node(overrides: Partial<ControllerNode> = {}): ControllerNode {
       { peer: 'bravo', interface: 'wg-bravo', endpoint: '203.0.113.7:51820', lastHandshake: 1782820825, status: 'up' },
       { peer: 'charlie', interface: 'wg-charlie', endpoint: '', lastHandshake: 0, status: 'never' },
     ],
+    resource: { load1: 0.5, load5: 0.4, load15: 0.3, memTotalKB: 2048, memAvailableKB: 1024 },
     ...overrides,
   };
 }
@@ -47,6 +48,11 @@ describe('stripLiveTelemetry (persist custody)', () => {
     expect('wireguardPeers' in serialized).toBe(false);
     // The raw peer endpoint — fleet-confidential network topology — must not survive into the blob.
     expect(JSON.stringify(serialized).includes('203.0.113.7')).toBe(false);
+  });
+
+  it('omits resource from the SERIALIZED node (live-only: a frozen load average is stale, plan-10)', () => {
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    expect('resource' in serialized).toBe(false);
   });
 
   it('keeps the aggregate wireguard condition and every other field intact', () => {

@@ -16,6 +16,7 @@ import type {
   ControllerAuditEntry,
   StageResult,
   WireGuardPeer,
+  NodeResource,
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
@@ -289,8 +290,18 @@ interface NodeJSON {
   in_rollout?: boolean;
   conditions?: ConditionWire[];
   // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
-  // known wireguard_peers key for the per-link panel; other keys are ignored here.
-  telemetry?: { wireguard_peers?: WireGuardPeerWire[] } | null;
+  // known wireguard_peers + resource keys; other keys are ignored here.
+  telemetry?: { wireguard_peers?: WireGuardPeerWire[]; resource?: ResourceMetricWire } | null;
+}
+
+// ResourceMetricWire mirrors the agent's host resource metric (snake_case wire shape under
+// telemetry.resource), mapped to NodeResource at the boundary. All fields optional (defensive).
+interface ResourceMetricWire {
+  load1?: number;
+  load5?: number;
+  load15?: number;
+  mem_total_kb?: number;
+  mem_available_kb?: number;
 }
 
 // WireGuardPeerWire mirrors the agent's per-peer link health (snake_case wire shape under
@@ -695,6 +706,22 @@ function mapNode(n: NodeJSON): ControllerNode {
     inRollout: n.in_rollout ?? false,
     conditions: mapNodeConditions(n.conditions),
     wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
+    resource: mapResource(n.telemetry?.resource),
+  };
+}
+
+// mapResource projects the agent's host resource metric (snake_case) to NodeResource. Defensive: a
+// missing metric or a non-numeric load1 (garbled input) yields undefined so the panel renders nothing;
+// each numeric field is coerced (NaN/absent → 0).
+function mapResource(r: ResourceMetricWire | undefined): NodeResource | undefined {
+  if (!r || typeof r.load1 !== 'number') return undefined;
+  const num = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    load1: num(r.load1),
+    load5: num(r.load5),
+    load15: num(r.load15),
+    memTotalKB: num(r.mem_total_kb),
+    memAvailableKB: num(r.mem_available_kb),
   };
 }
 

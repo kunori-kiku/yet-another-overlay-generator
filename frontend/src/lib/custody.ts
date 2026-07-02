@@ -83,10 +83,12 @@ export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number }
 // on refresh. Setting the field to undefined makes JSON.stringify omit the key (same idiom as
 // dropAllKeys), so a rehydrated node has no wireguardPeers and every reader coerces (?? []).
 //
-// MAINTENANCE: this clears the single live-only field that exists today. If a future Sampler's
-// metric is lifted by mapNode into a NEW endpoint/IP-bearing ControllerNode field, clear it here too
+// MAINTENANCE: this clears the live-only telemetry fields (wireguardPeers + resource). If a future
+// Sampler's metric is lifted by mapNode into a NEW live ControllerNode field, clear it here too
 // (rather than allowlisting it in leakOracle) — the leakOracle e2e guard is the backstop that fails
-// the build if a new non-allowlisted field reaches the persisted cache.
+// the build if a new non-allowlisted field reaches the persisted cache. resource carries no
+// endpoint/IP/key material, but a load average frozen at persist time is stale (honesty), so it is
+// live-only for the same reason as wireguardPeers.
 export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
-  return { ...node, wireguardPeers: undefined };
+  return { ...node, wireguardPeers: undefined, resource: undefined };
 }
