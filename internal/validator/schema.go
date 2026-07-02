@@ -10,6 +10,22 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
+// wgPublicKeyPattern matches a WireGuard public key: 32 bytes of standard base64 = exactly 43 base64
+// chars + one '=' pad. A regex — NOT base64.DecodeString — is deliberate and load-bearing: Go's base64
+// decoder SILENTLY STRIPS '\r'/'\n', so DecodeString would ACCEPT a key with an embedded newline, which
+// is the exact config-injection vector this guards against (the key is rendered verbatim into peers'
+// root-parsed wg configs). The pattern pins the alphabet + length, rejects any whitespace/newline, and
+// mirrors the TS validator's wgPublicKeyPattern byte-for-byte (conformance parity).
+var wgPublicKeyPattern = regexp.MustCompile(`^[A-Za-z0-9+/]{43}=$`)
+
+// ValidWGPublicKey reports whether s is a well-formed WireGuard public key (32-byte Curve25519, clean
+// standard base64 with no surrounding or embedded whitespace). It is the single source of truth for
+// "is this key safe to emit", shared by the schema validator and the controller enrollment/manual-node
+// ingress.
+func ValidWGPublicKey(s string) bool {
+	return wgPublicKeyPattern.MatchString(s)
+}
+
 // nodeNameCharset constrains the legal character set for a node name (defence-in-depth for D15).
 // A node name is derived into a WireGuard interface name and is interpolated into the install
 // script that runs as root, so it must exclude quotes, backticks, dollar signs, semicolons and
@@ -334,6 +350,15 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			if net.ParseIP(node.OverlayIP) == nil {
 				result.AddError(prefix+".overlay_ip", CodeNodeOverlayIPInvalid, P{"ip", node.OverlayIP})
 			}
+		}
+
+		// WireGuardPublicKey (optional here: a MANAGED node's key comes from the enrollment
+		// registry, so the topology field is empty — check only when present, e.g. a MANUAL node or
+		// an air-gap/local topology that carries derived keys). It is rendered VERBATIM into peers'
+		// root-parsed wg configs via a non-escaping template, so a malformed value (bad base64 /
+		// wrong length / embedded newline) is rejected at the source.
+		if node.WireGuardPublicKey != "" && !ValidWGPublicKey(node.WireGuardPublicKey) {
+			result.AddError(prefix+".wireguard_public_key", CodeNodeWGPublicKeyInvalid, P{"key", fmt.Sprintf("%q", node.WireGuardPublicKey)})
 		}
 
 		// MTU validation (D64): 0 means use the system default (typically 1420) and is skipped.

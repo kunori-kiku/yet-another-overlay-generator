@@ -103,8 +103,11 @@ func TestEnrollDedupe_SameNodeReenrollAllowed(t *testing.T) {
 	}
 }
 
-// TestEnrollDedupe_WhitespaceCannotEvade: a pubkey padded with surrounding
-// whitespace must not slip past the dedupe (the compare is whitespace-insensitive).
+// TestEnrollDedupe_WhitespaceCannotEvade: a pubkey padded with surrounding whitespace must not slip
+// through. plan-4 rejects it at the FORMAT gate (a valid Curve25519 key is clean 44-char base64 with
+// no surrounding whitespace or embedded newline), which fires BEFORE the dedupe — a stronger guarantee
+// than the whitespace-insensitive compare (which remains as belt-and-braces). A padded key would also
+// break the rendered WG config, so rejecting it up front is the correct outcome.
 func TestEnrollDedupe_WhitespaceCannotEvade(t *testing.T) {
 	for _, impl := range storeImpls() {
 		impl := impl
@@ -116,9 +119,9 @@ func TestEnrollDedupe_WhitespaceCannotEvade(t *testing.T) {
 			if err := mintAndEnroll(t, ctx, s, tenant, "node-a", pub); err != nil {
 				t.Fatalf("first enroll: %v", err)
 			}
-			// Same key, padded — must still be rejected under a different id.
-			if err := mintAndEnroll(t, ctx, s, tenant, "node-b", "  "+pub+"\n"); !errors.Is(err, ErrDuplicateWGKey) {
-				t.Fatalf("padded duplicate enroll: err = %v, want ErrDuplicateWGKey", err)
+			// Same key, padded — rejected as a malformed key (before the dedupe even runs).
+			if err := mintAndEnroll(t, ctx, s, tenant, "node-b", "  "+pub+"\n"); !errors.Is(err, ErrInvalidWGKey) {
+				t.Fatalf("padded duplicate enroll: err = %v, want ErrInvalidWGKey", err)
 			}
 		})
 	}

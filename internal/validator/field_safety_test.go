@@ -44,6 +44,43 @@ func TestValidateSchema_NodeNameCharset(t *testing.T) {
 	}
 }
 
+// TestValidateSchema_WGPublicKey covers WireGuard public-key format validation (plan-4). A public key
+// is rendered VERBATIM into peers' root-parsed wg configs via a non-escaping template, so a malformed
+// value (bad base64, wrong length, or embedded whitespace/newline) must be rejected at the schema
+// stage; a clean 32-byte standard-base64 key passes, and an empty value is skipped (a managed node's
+// key comes from the enrollment registry, not the topology).
+func TestValidateSchema_WGPublicKey(t *testing.T) {
+	cases := []struct {
+		name        string
+		key         string
+		expectError bool
+	}{
+		{name: "valid 32-byte standard base64", key: "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=", expectError: false},
+		{name: "empty is skipped (managed key comes from the registry)", key: "", expectError: false},
+		{name: "not base64 (contains hyphen)", key: "not-a-valid-key", expectError: true},
+		{name: "valid base64 but wrong length", key: "QUJD", expectError: true},
+		{name: "embedded newline (config-injection vector)", key: "AetxbtqeRdq7xOMpbaVK3St4\nvAoSMsCzTSLvtqs8BTw=", expectError: true},
+		{name: "surrounding whitespace", key: "  AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=  ", expectError: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			topo := validTopology()
+			topo.Nodes[0].WireGuardPublicKey = tc.key
+			result := ValidateSchema(topo)
+			if tc.expectError {
+				assertHasError(t, result, "nodes[0].wireguard_public_key")
+			} else {
+				for _, e := range result.Errors {
+					if contains(e.Field, "nodes[0].wireguard_public_key") {
+						t.Errorf("key %q should not trigger a WG-key error, but got: %s", tc.key, e.Error())
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestValidateSchema_SSHFieldCharset covers SSH-field charset validation (D44).
 // When non-empty, ssh_host / ssh_alias / ssh_user are interpolated into the bash and
 // PowerShell deploy scripts executed on the operator's machine; values containing

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import type { Topology } from '../types/topology';
-import { validateSchema } from './validator';
+import { Code, validateSchema } from './validator';
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 
@@ -80,6 +80,45 @@ describe('validateSchema conformance (Go ValidateSchema oracle)', () => {
       expect(topo.edges.map((e) => e.transport as string)).toEqual(exp.transports);
     });
   }
+});
+
+describe('validateSchema WireGuard public key (plan-4)', () => {
+  // The WG public key is rendered VERBATIM into peers' root-parsed wg configs, so validateSchema must
+  // reject a malformed value (mirrors validator.ValidWGPublicKey / the Go schema check).
+  const topoWith = (key: string): Topology => ({
+    project: { id: 'p', name: 'P' },
+    domains: [{ id: 'd1', name: 'mesh', cidr: '10.55.0.0/24', allocation_mode: 'auto', routing_mode: 'babel' }],
+    nodes: [
+      {
+        id: 'router-a',
+        name: 'router-a',
+        role: 'router',
+        domain_id: 'd1',
+        wireguard_public_key: key,
+        capabilities: { can_accept_inbound: true, can_forward: true, has_public_ip: true },
+      },
+    ],
+    edges: [],
+  });
+  const wgKeyCodes = (key: string): string[] =>
+    validateSchema(topoWith(key))
+      .errors.filter((e) => e.field === 'nodes[0].wireguard_public_key')
+      .map((e) => e.code);
+
+  it('accepts a valid 32-byte standard-base64 key', () => {
+    expect(wgKeyCodes('AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=')).toEqual([]);
+  });
+  it('skips an empty key (a managed node gets its key from the registry)', () => {
+    expect(wgKeyCodes('')).toEqual([]);
+  });
+  it.each([
+    ['not base64 (hyphen)', 'not-a-valid-key'],
+    ['valid base64 but wrong length', 'QUJD'],
+    ['embedded newline (config-injection vector)', 'AetxbtqeRdq7xOMpbaVK3St4\nvAoSMsCzTSLvtqs8BTw='],
+    ['surrounding whitespace', '  AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=  '],
+  ])('rejects %s', (_label, key) => {
+    expect(wgKeyCodes(key)).toEqual([Code.NodeWGPublicKeyInvalid]);
+  });
 });
 
 describe('validateSchema finding shape', () => {

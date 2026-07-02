@@ -137,6 +137,13 @@ func TestValidateManualNodes(t *testing.T) {
 		t.Errorf("a pubkey-less manual node must be rejected with CodeManualNodeInvalid, got %v", err)
 	}
 
+	// A manual node with a MALFORMED pubkey (not valid base64/32-byte Curve25519) is rejected — the
+	// operator-asserted key is rendered verbatim into peers' root-parsed wg configs, so an
+	// injection-shaped value must never be admitted (plan-4).
+	if err := validateManualNodes(manualMixedTopo("not-a-valid-curve25519-key"), managed); !apierr.HasCode(err, apierr.CodeManualNodeInvalid) {
+		t.Errorf("a manual node with a malformed pubkey must be rejected with CodeManualNodeInvalid, got %v", err)
+	}
+
 	// A manual node whose pubkey COLLIDES with an enrolled node's is rejected (no identity confusion).
 	if err := validateManualNodes(manualMixedTopo(enrolledPub), managed); !apierr.HasCode(err, apierr.CodeManualNodeInvalid) {
 		t.Errorf("a manual node colliding with an enrolled pubkey must be rejected, got %v", err)

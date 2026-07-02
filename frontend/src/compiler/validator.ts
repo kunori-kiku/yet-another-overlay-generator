@@ -60,6 +60,7 @@ export const Code = {
   NodePlatformUnsupported: 'validation_node_platform_unsupported',
   NodeXDPModeInvalid: 'validation_node_xdp_mode_invalid',
   NodeOverlayIPInvalid: 'validation_node_overlay_ip_invalid',
+  NodeWGPublicKeyInvalid: 'validation_node_wg_public_key_invalid',
   NodeMTUOutOfRange: 'validation_node_mtu_out_of_range',
   NodeSSHPortOutOfRange: 'validation_node_ssh_port_out_of_range',
   NodeRouterIDInvalid: 'validation_node_router_id_invalid',
@@ -489,6 +490,15 @@ function validateDomainsSchema(topo: Topology, result: ValidationResult): void {
 }
 
 // validateNodesSchema mirrors schema.go:277-402.
+// validWGPublicKey mirrors validator.ValidWGPublicKey (schema.go): a WireGuard public key is 32 bytes
+// of standard base64. A 32-byte value encodes to exactly 43 base64 chars + one '=' pad, so this regex
+// characterizes StdEncoding.DecodeString(s) succeeding with len 32 — deterministically and without a
+// base64 decoder (whose leniency could diverge from Go's).
+const wgPublicKeyPattern = /^[A-Za-z0-9+/]{43}=$/;
+function validWGPublicKey(s: string): boolean {
+  return wgPublicKeyPattern.test(s);
+}
+
 function validateNodesSchema(topo: Topology, result: ValidationResult): void {
   for (let i = 0; i < topo.nodes.length; i++) {
     const node = topo.nodes[i];
@@ -544,6 +554,15 @@ function validateNodesSchema(topo: Topology, result: ValidationResult): void {
       if (parseIPFamily(overlayIP) === null) {
         addError(result, prefix + '.overlay_ip', Code.NodeOverlayIPInvalid, { k: 'ip', v: overlayIP });
       }
+    }
+
+    // WireGuardPublicKey (optional here; check only when present) (schema.go). It is rendered verbatim
+    // into peers' root-parsed wg configs, so a malformed value is rejected. Mirrors
+    // validator.ValidWGPublicKey (base64.StdEncoding + 32 bytes): a 32-byte Curve25519 key is exactly
+    // 43 standard-base64 chars + one '=' pad.
+    const wgPub = node.wireguard_public_key ?? '';
+    if (wgPub !== '' && !validWGPublicKey(wgPub)) {
+      addError(result, prefix + '.wireguard_public_key', Code.NodeWGPublicKeyInvalid, { k: 'key', v: goQuote(wgPub) });
     }
 
     // MTU (schema.go:330-336): 0 means system default; non-zero must be in [576, 65535].
@@ -1616,6 +1635,7 @@ const registry: Record<string, string> = {
   [Code.NodePlatformUnsupported]: 'Unsupported platform: {platform}. Allowed values: debian, ubuntu.',
   [Code.NodeXDPModeInvalid]: 'Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).',
   [Code.NodeOverlayIPInvalid]: 'Invalid overlay IP address: {ip}.',
+  [Code.NodeWGPublicKeyInvalid]: 'wireguard_public_key {key} is not a valid Curve25519 public key: it must be 32 bytes encoded as standard base64 (44 characters). It is written verbatim into the WireGuard configuration deployed on peer nodes, so a malformed value is rejected here.',
   [Code.NodeMTUOutOfRange]: 'MTU {mtu} is out of range: it must be between {low} and {high} (576 is the IPv4 datagram minimum; an out-of-range MTU is rejected by wg-quick).',
   [Code.NodeSSHPortOutOfRange]: 'ssh_port {port} is out of range: it must be between 1 and 65535.',
   [Code.NodeRouterIDInvalid]: 'Invalid router_id format: {id}. It must be in MAC-48 form (six colon-separated hex pairs, e.g. 02:11:22:33:44:55) or an IPv4 address; otherwise babeld will reject it.',

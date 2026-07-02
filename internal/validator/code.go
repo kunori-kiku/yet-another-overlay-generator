@@ -51,6 +51,7 @@ const (
 	CodeNodePlatformUnsupported            Code = "validation_node_platform_unsupported"
 	CodeNodeXDPModeInvalid                 Code = "validation_node_xdp_mode_invalid"
 	CodeNodeOverlayIPInvalid               Code = "validation_node_overlay_ip_invalid"
+	CodeNodeWGPublicKeyInvalid             Code = "validation_node_wg_public_key_invalid"
 	CodeNodeMTUOutOfRange                  Code = "validation_node_mtu_out_of_range"
 	CodeNodeSSHPortOutOfRange              Code = "validation_node_ssh_port_out_of_range"
 	CodeNodeRouterIDInvalid                Code = "validation_node_router_id_invalid"
@@ -157,6 +158,7 @@ var registry = map[Code]string{
 	CodeNodePlatformUnsupported:            "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
 	CodeNodeXDPModeInvalid:                 "Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).",
 	CodeNodeOverlayIPInvalid:               "Invalid overlay IP address: {ip}.",
+	CodeNodeWGPublicKeyInvalid:             "wireguard_public_key {key} is not a valid Curve25519 public key: it must be 32 bytes encoded as standard base64 (44 characters). It is written verbatim into the WireGuard configuration deployed on peer nodes, so a malformed value is rejected here.",
 	CodeNodeMTUOutOfRange:                  "MTU {mtu} is out of range: it must be between {low} and {high} (576 is the IPv4 datagram minimum; an out-of-range MTU is rejected by wg-quick).",
 	CodeNodeSSHPortOutOfRange:              "ssh_port {port} is out of range: it must be between 1 and 65535.",
 	CodeNodeRouterIDInvalid:                "Invalid router_id format: {id}. It must be in MAC-48 form (six colon-separated hex pairs, e.g. 02:11:22:33:44:55) or an IPv4 address; otherwise babeld will reject it.",
