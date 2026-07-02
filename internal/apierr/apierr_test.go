@@ -108,6 +108,7 @@ var allCodes = []Code{
 	CodeReqCSRFInvalid,
 	CodeReqOperatorRequired,
 	CodeAuthRateLimited,
+	CodeNodeRateLimited,
 	CodeAuthPasskeyFailed,
 	CodeAuthPasskeyVerifyFailed,
 	CodeTotpInvalidCode,

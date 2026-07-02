@@ -136,6 +136,12 @@ type NodeCondition struct {
 	ObservedAt time.Time `json:"observed_at"`
 }
 
+// maxStoredConditions is a defense-in-depth ceiling on the conditions stampConditions will allocate,
+// independent of the HTTP-boundary check (the /report + /telemetry handlers reject a slice larger than
+// 32). It is generous (2x the handler cap) so it never truncates a legitimate report, but guarantees no
+// caller — present or future — can drive an unbounded allocation here.
+const maxStoredConditions = 64
+
 // stampConditions wraps each reported model.Condition with the controller's authoritative
 // ObservedAt. A nil/empty report clears the stored set (the latest report is the truth: an agent
 // that no longer reports a condition has it removed). The wire Since is carried through unchanged
@@ -144,6 +150,9 @@ type NodeCondition struct {
 func stampConditions(conditions []model.Condition, observedAt time.Time) []NodeCondition {
 	if len(conditions) == 0 {
 		return nil
+	}
+	if len(conditions) > maxStoredConditions {
+		conditions = conditions[:maxStoredConditions]
 	}
 	out := make([]NodeCondition, len(conditions))
 	for i, c := range conditions {

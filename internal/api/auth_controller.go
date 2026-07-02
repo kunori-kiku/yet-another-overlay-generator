@@ -36,6 +36,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,6 +132,15 @@ func (h *ControllerHandler) requireNode(next http.HandlerFunc) http.HandlerFunc 
 		auth, ae := h.authenticateNode(r)
 		if ae != nil {
 			writeAPIError(w, ae)
+			return
+		}
+		// Per-node request-rate gate (fixed window, no refund): bound how fast an authenticated node
+		// can hit the agent mux so one abusive/compromised node cannot DoS the controller (e.g. a
+		// /telemetry flood forcing fsync'd, lock-contended writes). Keyed by node identity, so it
+		// survives a reverse-proxy IP collapse and isolates the offending node from the rest.
+		if allowed, _, retry := h.nodeLimiter.registerAttempt(time.Now().UTC(), "node:"+auth.node); !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+			writeAPIError(w, apierr.New(apierr.CodeNodeRateLimited))
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, auth.tenant)

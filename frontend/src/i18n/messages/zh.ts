@@ -706,6 +706,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.req_csrf_invalid': 'CSRF 令牌缺失或无效。',
   'error.req_operator_required': '需要操作员权限。',
   'error.auth_rate_limited': '登录尝试过多，请稍后再试。',
+  'error.node_rate_limited': '该节点请求过多，请放慢速度稍后重试。',
   'error.auth_passkey_failed': 'Passkey 登录失败。',
   'error.auth_passkey_verify_failed': 'Passkey 验证失败。',
   'error.totp_invalid_code': '两步验证码无效；请检查认证器的时间后重试。',

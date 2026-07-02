@@ -727,6 +727,7 @@ export const en = {
   'error.req_csrf_invalid': 'Missing or invalid CSRF token.',
   'error.req_operator_required': 'Operator privileges are required.',
   'error.auth_rate_limited': 'Too many login attempts; try again later.',
+  'error.node_rate_limited': 'Too many requests from this node; slow down and retry later.',
   'error.auth_passkey_failed': 'Passkey login failed.',
   'error.auth_passkey_verify_failed': 'Passkey verification failed.',
   'error.totp_invalid_code': "Invalid two-factor code; check your authenticator's time and try again.",

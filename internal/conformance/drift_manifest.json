@@ -113,7 +113,7 @@
     ]
   },
   "apierr_codes": {
-    "count": 60,
+    "count": 61,
     "codes": [
       "agent_release_fetch_failed",
       "agent_release_request_invalid",
@@ -158,6 +158,7 @@
       "no_topology_stored",
       "node_id_reserved",
       "node_not_found",
+      "node_rate_limited",
       "render_failed",
       "req_bearer_required",
       "req_body_empty",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -36,6 +37,11 @@ type ControllerHandler struct {
 	// behind one NAT (whose concurrent enrolls all reserve a slot before any refunds) without
 	// false 429s, while still throttling a token-guessing sprayer.
 	enrollLimiter *loginLimiter
+	// nodeLimiter is a per-node (bearer-identity) REQUEST-rate limiter for the agent mux
+	// (/config, /poll, /report, /telemetry, /rekey), used without succeed() as a fixed-window cap.
+	// It bounds an authenticated node's request rate so one abusive/compromised node cannot DoS the
+	// controller (e.g. a /telemetry flood forcing fsync'd, lock-contended writes). Keyed by node id.
+	nodeLimiter *loginLimiter
 	// sessionTTL is the lifetime of a session minted at /login.
 	sessionTTL time.Duration
 	// pollDeadline bounds a single /poll long-poll (defaultPollDeadline when zero).
@@ -60,6 +66,10 @@ type ControllerHandler struct {
 	// same-origin only for the cookie path (the Bearer path still works via the "*"
 	// non-credentialed fallback). Set via SetPanelOrigins.
 	panelOriginAllowlist []string
+	// trustedProxies is the set of reverse-proxy CIDRs/IPs whose X-Forwarded-For is trusted for
+	// rate-limit keying (YAOG_TRUSTED_PROXIES). Empty (default) trusts nobody — clientIP uses the
+	// direct peer and ignores forwarding headers. Set via SetTrustedProxies.
+	trustedProxies []net.IPNet
 	// secureCookie controls the Secure attribute on the session/CSRF cookies
 	// (YAOG_SECURE_COOKIE, default true). Set false ONLY for local non-TLS development;
 	// production MUST keep it true (the deployment fronts the controller with TLS).
@@ -107,6 +117,7 @@ func NewControllerHandler(store controller.Store, tenant controller.TenantID, op
 		version:           buildVersion,
 		loginLimiter:      newLoginLimiter(),
 		enrollLimiter:     newLimiter(maxEnrollFailures, loginWindow),
+		nodeLimiter:       newLimiter(maxNodeRequestsPerWindow, nodeRateWindow),
 		sessionTTL:        controller.DefaultSessionTTL,
 		pollDeadline:      defaultPollDeadline,
 		// Secure cookies by default: a non-TLS deployment must opt out explicitly
@@ -132,6 +143,33 @@ func (h *ControllerHandler) SetPanelOrigins(origins []string) {
 		}
 	}
 	h.panelOriginAllowlist = out
+}
+
+// SetTrustedProxies configures the CIDRs/IPs of reverse proxies whose X-Forwarded-For header is
+// trusted for rate-limit keying (clientIP). Empty (the default) trusts NOBODY — forwarding headers are
+// ignored and rate-limits key on the direct peer. Each entry is a CIDR (e.g. 10.0.0.0/8) or a bare IP
+// (normalized to a /32 or /128); invalid entries are skipped. NEVER configure 0.0.0.0/0 — it would
+// trust a spoofed X-Forwarded-For from any client.
+func (h *ControllerHandler) SetTrustedProxies(entries []string) {
+	out := make([]net.IPNet, 0, len(entries))
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if _, ipnet, err := net.ParseCIDR(e); err == nil {
+			out = append(out, *ipnet)
+			continue
+		}
+		if ip := net.ParseIP(e); ip != nil {
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			out = append(out, net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+		}
+	}
+	h.trustedProxies = out
 }
 
 // SetSecureCookie sets the Secure attribute on the session/CSRF cookies. Production

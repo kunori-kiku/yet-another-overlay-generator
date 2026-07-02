@@ -143,6 +143,7 @@ const (
 	CodeReqCSRFInvalid          Code = "req_csrf_invalid"
 	CodeReqOperatorRequired     Code = "req_operator_required"
 	CodeAuthRateLimited         Code = "auth_rate_limited"
+	CodeNodeRateLimited         Code = "node_rate_limited"
 	CodeAuthPasskeyFailed       Code = "auth_passkey_failed"
 	CodeAuthPasskeyVerifyFailed Code = "auth_passkey_verify_failed"
 	CodeTotpInvalidCode         Code = "totp_invalid_code"
@@ -227,6 +228,7 @@ var registry = map[Code]def{
 	CodeReqCSRFInvalid:          {"Missing or invalid CSRF token.", http.StatusForbidden},
 	CodeReqOperatorRequired:     {"Operator privileges are required.", http.StatusForbidden},
 	CodeAuthRateLimited:         {"Too many login attempts; try again later.", http.StatusTooManyRequests},
+	CodeNodeRateLimited:         {"Too many requests from this node; slow down and retry later.", http.StatusTooManyRequests},
 	CodeAuthPasskeyFailed:       {"Passkey login failed.", http.StatusUnauthorized},
 	CodeAuthPasskeyVerifyFailed: {"Passkey verification failed.", http.StatusBadRequest},
 	CodeTotpInvalidCode:         {"Invalid two-factor code; check your authenticator's time and try again.", http.StatusBadRequest},
