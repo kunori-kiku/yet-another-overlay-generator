@@ -1,8 +1,23 @@
 # STATUS
 <!-- regenerated: 2026-07-03 -->
-<!-- by: hand — pre-rc1-hardening subject COMPLETE; v2.0.0-beta.17 released to GitHub Latest -->
+<!-- by: draft-implementation-plan — link-directionality subject drafted (ships as beta.18); pre-rc1-hardening COMPLETE (beta.17 = Latest) -->
 
 ## Active work
+
+- **SUBJECT `link-directionality-2026_07_03` DRAFTED (2026-07-03) — awaiting execution; ships as
+  the interim `v2.0.0-beta.18`, then rc.1.** The owner root-caused the live "NAT override goes
+  direct" residue: edges are unconditionally bidirectional, so the auto-reverse peer dials the
+  from-node's plain public IP (`internal/compiler/peers.go:886-898`) and, when it handshakes first,
+  WireGuard endpoint roaming permanently bypasses the relay/accelerator path. Fix = a per-edge
+  **`link_direction`** (`""`≡`both` default / `forward` / `reverse`): the suppressed side keeps its
+  full `[Peer]` (AllowedIPs/Babel/return traffic) but carries NO dial `Endpoint`. 4 plans foldered
+  in [`implementation_plans/link-directionality-2026_07_03/`](implementation_plans/link-directionality-2026_07_03/outline.md):
+  plan-1 core (both compilers + 6 loud validation codes + sanitize + conformance, zero churn on all
+  20 pre-existing goldens) → plan-2 panel UX (node-name-labeled select `A ⇄ B`/`A → B`/`B → A` +
+  directional canvas style) → plan-3 realtunnel `c4` proof + docs/wiki → plan-4 release beta.18.
+  Verified-safe already: renderer omits empty `Endpoint`; mimic handles endpoint-less peers
+  (beta.14 `local=` design); controller/normalize/keepalive/allocation untouched. **Execution
+  pacing (owner): a 5-hour timer runs between plan-merge and plan-1 execution.**
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each
@@ -235,16 +250,19 @@
 
 ## Next actions
 
-**Immediate (pre-rc1-hardening — DONE, beta.17 shipped 2026-07-03):** all 9 hardening plans are merged
-and `v2.0.0-beta.17` is GitHub **Latest** (29 assets, tag on `907c0a5`). The remaining steps are
-**owner-only**:
-1. **Owner fleet smoke of beta.17** (the full hardening set on real hosts) — pass-or-accept-risk.
-2. **plan-11 — cut `v2.0.0-rc.1`:** refresh `docs/spec/rc1/RC1-GATE.md`, roll the CHANGELOG, tag +
-   `--latest` publish. (rc.1 is `make_latest=true` in `release.yml`, so it self-promotes; betas need the
-   manual `gh release edit --latest`.) Say the word when the smoke is clean.
+**Immediate — execute `link-directionality-2026_07_03` (after the owner-directed 5-hour timer):**
+plan-1 core semantics → plan-2 panel UX → plan-3 realtunnel proof + docs → plan-4 release
+`v2.0.0-beta.18` (each per-PR workflow-reviewed → fixed → re-reviewed → merged). Then:
+1. **Owner fleet smoke of beta.17 + beta.18** (the hardening set + single-linking the accelerator
+   edge under both boot orders) — pass-or-accept-risk.
+2. **pre-rc1-hardening plan-11 — cut `v2.0.0-rc.1`:** refresh `docs/spec/rc1/RC1-GATE.md`, roll the
+   CHANGELOG, tag + publish. (rc.1 is `make_latest=true` in `release.yml`, so it self-promotes;
+   betas need the manual `gh release edit --latest`.) Say the word when the smokes are clean.
 
 Separate from the release: the owner's live WireGuard-endpoint symptom is a fleet **NAT/roaming**
-matter, not a YAOG defect — the fixes are (a) advertise the accelerator as the node's `public_endpoints`
+matter — the deterministic in-product fix is the `link-directionality` subject above (single-link
+the edge so the reverse peer can never race the relay); operational alternatives remain (a)
+advertise the accelerator as the node's `public_endpoints`
 so BOTH link directions ride the relay (an L7 connection-terminating relay needs a local UDP-over-its-
 transport wrapper + WG endpoint = `127.0.0.1:<port>`), and (b) confirm the agent is actually applying
 deploys (`applied` vs `desired` generation; `install.sh` DOES full down→up WG then restart babeld, so a
