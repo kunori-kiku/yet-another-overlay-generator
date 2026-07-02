@@ -72,6 +72,11 @@ const (
 	// envSecureCookie toggles the Secure attribute on the session/CSRF cookies. Default
 	// true; set "false"/"0"/"no" ONLY for local non-TLS development.
 	envSecureCookie = "YAOG_SECURE_COOKIE"
+	// envTrustedProxies is a comma-separated allowlist of reverse-proxy CIDRs/IPs whose
+	// X-Forwarded-For is trusted for rate-limit keying (so the per-IP enroll/login limiters do not
+	// collapse to one bucket behind a proxy). Empty (default) trusts none — the direct peer is used.
+	// e.g. "10.0.0.0/8,192.168.0.0/16". NEVER set 0.0.0.0/0 (it would trust a spoofed header).
+	envTrustedProxies = "YAOG_TRUSTED_PROXIES"
 )
 
 // BuildVersion is the server's build version, overwritten at release link time via
@@ -221,6 +226,11 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	// same-origin only for the cookie path (the Bearer path still works).
 	if origins := os.Getenv(envPanelOrigin); strings.TrimSpace(origins) != "" {
 		ch.SetPanelOrigins(strings.Split(origins, ","))
+	}
+	// Trusted reverse-proxy allowlist: makes the per-IP enroll/login limiters meaningful behind a
+	// proxy (X-Forwarded-For honored ONLY from these peers). Empty = trust none (direct peer used).
+	if proxies := os.Getenv(envTrustedProxies); strings.TrimSpace(proxies) != "" {
+		ch.SetTrustedProxies(strings.Split(proxies, ","))
 	}
 	// Secure cookies default ON; an explicit false/0/no opts out for non-TLS dev.
 	if v := strings.ToLower(strings.TrimSpace(os.Getenv(envSecureCookie))); v != "" {

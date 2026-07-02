@@ -71,6 +71,36 @@ type FileStore struct {
 	// (the first append for a tenant reads the file once) and kept coherent under mu, of
 	// which AppendAudit/rotateAudit are the only writers. Guarded by mu.
 	auditTails map[TenantID]*auditTail
+	// telemetryMu guards the volatile telemetry overlay. It is a SEPARATE lock from mu so a
+	// heartbeat (RecordTelemetry / TouchLastSeen) never contends on the store-wide mu nor forces a
+	// durable fsync'd whole-record rewrite: telemetry is high-frequency observability that self-heals
+	// within one interval after a restart, so it must not ride the custody write path (which is the
+	// DoS-amplification the overlay removes). Lock order: mu is ALWAYS taken before telemetryMu — the
+	// readers GetNode/ListNodes (via applyTelemetryOverlay) and the /report writer SetAppliedGeneration
+	// (via refreshTelemetryOverlayFromReport) hold mu, THEN take telemetryMu; the heartbeat paths
+	// (RecordTelemetry/TouchLastSeen) take ONLY telemetryMu — never mu while holding telemetryMu — so
+	// the two locks cannot deadlock.
+	telemetryMu sync.Mutex
+	// telemetry is the in-memory overlay of a node's four OBSERVABILITY fields (LastSeen, Conditions,
+	// Telemetry, LastAgentVersion), per tenant, per node. It is merged OVER the durable record on read;
+	// it never holds custody fields (AppliedGeneration/LastChecksum/LastHealth/DesiredGeneration/keys),
+	// which stay on the durable temp+fsync+rename path. Guarded by telemetryMu; lazily populated.
+	telemetry map[TenantID]map[string]*volatileTelemetry
+}
+
+// volatileTelemetry is the in-memory-only overlay of a node's observability fields, written by the
+// heartbeat paths WITHOUT a durable rewrite and merged over the durable record on read. The *Set flags
+// distinguish "never overlaid" from a written zero value; writtenAt is the server observedAt of the
+// last conditions/metrics/version write and gates a monotonic last-writer-wins so a /report's fresh
+// conditions are never permanently shadowed by an older heartbeat (and vice-versa).
+type volatileTelemetry struct {
+	writtenAt    time.Time
+	conditions   []NodeCondition
+	telemetry    map[string]json.RawMessage
+	agentVersion string
+	telemetrySet bool
+	lastSeen     time.Time
+	lastSeenSet  bool
 }
 
 // auditTail is the in-memory tail of a tenant's audit log: the last entry's Seq and Hash
@@ -530,6 +560,7 @@ func (fs *FileStore) GetNode(ctx context.Context, t TenantID, nodeID string) (No
 		}
 		return Node{}, err
 	}
+	fs.applyTelemetryOverlay(t, &n)
 	return n, nil
 }
 
@@ -545,7 +576,17 @@ func (fs *FileStore) ListNodes(ctx context.Context, t TenantID) ([]Node, error) 
 	if err != nil {
 		return nil, err
 	}
-	return fs.listNodesLocked(dir)
+	out, err := fs.listNodesLocked(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Merge the live telemetry overlay over each durable record (observability fields only; custody
+	// fields untouched) so the operator /nodes view reflects the latest heartbeat without a per-beat
+	// durable write.
+	for i := range out {
+		fs.applyTelemetryOverlay(t, &out[i])
+	}
+	return out, nil
 }
 
 // listNodesLocked reads every node record under <dir>/nodes, sorted by NodeID.
@@ -607,19 +648,117 @@ func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeI
 		n.LastAgentVersion = agentVersion
 	}
 	n.Conditions = stampConditions(conditions, observedAt)
-	return writeJSONAtomic(p, n)
+	if err := writeJSONAtomic(p, n); err != nil {
+		return err
+	}
+	// Keep the telemetry overlay coherent: a /report writes conditions durably, so refresh the overlay
+	// to the report's (fresher) conditions — otherwise an older heartbeat overlay would shadow the
+	// just-written report on the next merge-on-read. Monotonic, so a concurrent newer heartbeat wins.
+	fs.refreshTelemetryOverlayFromReport(t, nodeID, n.Conditions, agentVersion, observedAt)
+	return nil
 }
 
-// RecordTelemetry writes a LIVE health heartbeat: conditions + last-seen (+ agent version when
-// non-empty). It is a strict subset of SetAppliedGeneration — it does NOT touch AppliedGeneration /
-// LastChecksum / LastHealth / DesiredGeneration, so a heartbeat never affects deploy custody.
+// telemetryEntryLocked returns the volatile overlay entry for (t, nodeID), lazily creating the maps
+// and the entry. The caller MUST hold telemetryMu.
+func (fs *FileStore) telemetryEntryLocked(t TenantID, nodeID string) *volatileTelemetry {
+	if fs.telemetry == nil {
+		fs.telemetry = make(map[TenantID]map[string]*volatileTelemetry)
+	}
+	m := fs.telemetry[t]
+	if m == nil {
+		m = make(map[string]*volatileTelemetry)
+		fs.telemetry[t] = m
+	}
+	ent := m[nodeID]
+	if ent == nil {
+		ent = &volatileTelemetry{}
+		m[nodeID] = ent
+	}
+	return ent
+}
+
+// applyTelemetryOverlay merges the volatile telemetry overlay OVER a durable node record, deep-copying
+// the slice/map so a returned Node can never alias (and later mutate) the shared overlay. Custody
+// fields are never touched. Takes telemetryMu; the caller holds mu (lock order mu -> telemetryMu).
+func (fs *FileStore) applyTelemetryOverlay(t TenantID, n *Node) {
+	fs.telemetryMu.Lock()
+	defer fs.telemetryMu.Unlock()
+	m := fs.telemetry[t]
+	if m == nil {
+		return
+	}
+	ent := m[n.NodeID]
+	if ent == nil {
+		return
+	}
+	if ent.lastSeenSet {
+		n.LastSeen = ent.lastSeen
+	}
+	if ent.telemetrySet {
+		n.Conditions = cloneNodeConditions(ent.conditions)
+		n.Telemetry = cloneMetrics(ent.telemetry)
+		if ent.agentVersion != "" {
+			n.LastAgentVersion = ent.agentVersion
+		}
+	}
+}
+
+// refreshTelemetryOverlayFromReport keeps the overlay coherent with a just-persisted /report: the
+// report's fresher conditions (+ agent version, + last-seen) win over an older heartbeat, gated by the
+// same monotonic writtenAt so a concurrent newer heartbeat is not regressed. It does NOT touch the
+// overlay's metrics — /report carries none, so the last heartbeat's metrics persist. Takes telemetryMu.
+func (fs *FileStore) refreshTelemetryOverlayFromReport(t TenantID, nodeID string, conditions []NodeCondition, agentVersion string, observedAt time.Time) {
+	fs.telemetryMu.Lock()
+	defer fs.telemetryMu.Unlock()
+	ent := fs.telemetryEntryLocked(t, nodeID)
+	if !ent.telemetrySet || !observedAt.Before(ent.writtenAt) { // observedAt >= writtenAt
+		ent.conditions = cloneNodeConditions(conditions)
+		ent.telemetrySet = true
+		ent.writtenAt = observedAt
+		if agentVersion != "" {
+			ent.agentVersion = agentVersion
+		}
+	}
+	if !ent.lastSeenSet || observedAt.After(ent.lastSeen) {
+		ent.lastSeen = observedAt
+		ent.lastSeenSet = true
+	}
+}
+
+// cloneNodeConditions returns a deep copy of a stamped-conditions slice (nil-safe).
+func cloneNodeConditions(in []NodeCondition) []NodeCondition {
+	if in == nil {
+		return nil
+	}
+	out := make([]NodeCondition, len(in))
+	copy(out, in)
+	return out
+}
+
+// cloneMetrics returns a copy of a metrics map (values are immutable json.RawMessage the callers never
+// mutate in place, so a per-key copy is sufficient isolation); nil-safe.
+func cloneMetrics(in map[string]json.RawMessage) map[string]json.RawMessage {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// RecordTelemetry writes a LIVE health heartbeat to the in-memory overlay ONLY — conditions + metrics +
+// last-seen (+ agent version when non-empty). It is a strict subset of SetAppliedGeneration (never
+// touches AppliedGeneration/LastChecksum/LastHealth/DesiredGeneration) AND, unlike the pre-overlay
+// version, performs NO durable rewrite: a 30s heartbeat must not fsync the whole node record (the DoS
+// vector). Node existence is confirmed with a metadata-only os.Stat (a corrupt-but-present record no
+// longer fails a heartbeat, which is strictly better — telemetry never writes the file). A monotonic
+// writtenAt guard drops a stale write so a concurrent /report's fresher conditions win.
 func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
 	dir, err := fs.tenantDir(t)
 	if err != nil {
 		return err
@@ -628,30 +767,38 @@ func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID str
 	if err != nil {
 		return err
 	}
-	var n Node
-	if err := readJSON(p, &n); err != nil {
-		if os.IsNotExist(err) {
+	if _, statErr := os.Stat(p); statErr != nil {
+		if os.IsNotExist(statErr) {
 			return ErrNotFound
 		}
-		return err
+		return statErr
 	}
-	if agentVersion != "" {
-		n.LastAgentVersion = agentVersion
+	fs.telemetryMu.Lock()
+	defer fs.telemetryMu.Unlock()
+	ent := fs.telemetryEntryLocked(t, nodeID)
+	if !ent.lastSeenSet || observedAt.After(ent.lastSeen) {
+		ent.lastSeen = observedAt
+		ent.lastSeenSet = true
 	}
-	n.Conditions = stampConditions(conditions, observedAt)
-	n.Telemetry = metrics
-	n.LastSeen = observedAt
-	return writeJSONAtomic(p, n)
+	if !ent.telemetrySet || !observedAt.Before(ent.writtenAt) { // observedAt >= writtenAt
+		ent.conditions = stampConditions(conditions, observedAt)
+		ent.telemetry = metrics
+		ent.telemetrySet = true
+		ent.writtenAt = observedAt
+		if agentVersion != "" {
+			ent.agentVersion = agentVersion
+		}
+	}
+	return nil
 }
 
-// TouchLastSeen records that the agent for nodeID checked in at the given time.
+// TouchLastSeen records that the agent for nodeID checked in at the given time — to the in-memory
+// overlay ONLY (no durable rewrite; same DoS reasoning as RecordTelemetry). Existence is confirmed with
+// a metadata-only os.Stat; LastSeen advances monotonically.
 func (fs *FileStore) TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
 	dir, err := fs.tenantDir(t)
 	if err != nil {
 		return err
@@ -660,15 +807,20 @@ func (fs *FileStore) TouchLastSeen(ctx context.Context, t TenantID, nodeID strin
 	if err != nil {
 		return err
 	}
-	var n Node
-	if err := readJSON(p, &n); err != nil {
-		if os.IsNotExist(err) {
+	if _, statErr := os.Stat(p); statErr != nil {
+		if os.IsNotExist(statErr) {
 			return ErrNotFound
 		}
-		return err
+		return statErr
 	}
-	n.LastSeen = at
-	return writeJSONAtomic(p, n)
+	fs.telemetryMu.Lock()
+	defer fs.telemetryMu.Unlock()
+	ent := fs.telemetryEntryLocked(t, nodeID)
+	if !ent.lastSeenSet || at.After(ent.lastSeen) {
+		ent.lastSeen = at
+		ent.lastSeenSet = true
+	}
+	return nil
 }
 
 // =============================== Topology ==================================

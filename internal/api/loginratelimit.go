@@ -19,6 +19,7 @@ package api
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,6 +41,15 @@ const (
 	// sweep drops expired records so a random-username/IP spray cannot grow it without
 	// bound.
 	loginLimiterSweepAt = 4096
+	// maxNodeRequestsPerWindow / nodeRateWindow bound the REQUEST rate (not failures) per enrolled
+	// node across the agent mux (/config, /poll, /report, /telemetry, /rekey), used as a fixed-window
+	// limiter (registerAttempt with no succeed()). Keyed by NODE identity (not IP) so one abusive
+	// enrolled node cannot force fsync'd/lock-contended controller work fleet-wide, and so the cap
+	// survives a reverse-proxy IP collapse and isolates a single node from the rest. 60/min is ~10x a
+	// healthy node's steady state (30s heartbeat + long-poll + the occasional report ≈ 5-6/min) and
+	// clears every legitimate deploy burst, while capping a flood to ~1 req/s.
+	maxNodeRequestsPerWindow = 60
+	nodeRateWindow           = 1 * time.Minute
 )
 
 // attemptRecord counts failures for one key within the current window.
@@ -146,12 +156,51 @@ func (l *loginLimiter) pruneLocked(now time.Time) {
 	}
 }
 
-// clientIP returns the source IP of a request (r.RemoteAddr with the port stripped).
-// See the proxy caveat at the top of this file.
-func clientIP(r *http.Request) string {
+// clientIP returns the source IP to key rate-limits on. By DEFAULT (no trusted proxies configured) it
+// is r.RemoteAddr's host and forwarding headers are IGNORED — a directly-connected client can forge
+// X-Forwarded-For, so it must never be trusted from an untrusted peer. When trustedProxies is set AND
+// the direct peer (RemoteAddr) is within it, the real client is recovered from X-Forwarded-For, walked
+// RIGHT-TO-LEFT and skipping trusted-proxy hops so a client-forged left-most entry is never returned;
+// it falls back to X-Real-IP (honored only from a trusted peer) and then RemoteAddr. This makes the
+// per-IP enroll/login limiters meaningful behind a reverse proxy instead of collapsing to one bucket.
+func (h *ControllerHandler) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if len(h.trustedProxies) == 0 || !ipInNets(host, h.trustedProxies) {
+		return host // untrusted direct peer: never trust forwarding headers
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			ip := strings.TrimSpace(parts[i])
+			// Skip empty AND malformed tokens: only a real IP may be returned as the rate-limit key,
+			// so a garbage rightmost entry never becomes the bucket.
+			if ip == "" || net.ParseIP(ip) == nil {
+				continue
+			}
+			if !ipInNets(ip, h.trustedProxies) {
+				return ip // first (rightmost) untrusted hop = the real client at the trusted edge
+			}
+		}
+	}
+	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+		return xr // honored only because the direct peer is a trusted proxy
 	}
 	return host
+}
+
+// ipInNets reports whether ipStr parses to an IP contained in any of nets.
+func ipInNets(ipStr string, nets []net.IPNet) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for i := range nets {
+		if nets[i].Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

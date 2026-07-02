@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
 // HandleEnroll runs the node-enrollment ceremony. It requires NO bearer token (it
@@ -27,7 +29,7 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 	// is locked out, reject with 429 + Retry-After without touching the body. A successful
 	// enroll refunds the slot below, so only failures count toward the lockout.
 	now := time.Now().UTC()
-	ipKey := "ip:" + clientIP(r)
+	ipKey := "ip:" + h.clientIP(r)
 	allowed, _, retry := h.enrollLimiter.registerAttempt(now, ipKey)
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
@@ -212,6 +214,59 @@ func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pollResponseJSON{Generation: gen})
 }
 
+const (
+	// maxReportedConditions bounds the conditions a node may send in one /report or /telemetry call
+	// (~8x the live condition types). The agent's classify() already caps its output; the server must
+	// not trust the client, so an over-count is rejected at the boundary rather than allocated.
+	maxReportedConditions = 32
+	// maxTelemetryMetrics / maxTelemetryMetricsBytes bound the /telemetry metrics map. node.Telemetry
+	// is served verbatim in every ListNodes response, so an unbounded map would bloat the operator
+	// /nodes payload as well as the per-node record.
+	maxTelemetryMetrics      = 32
+	maxTelemetryMetricsBytes = 64 << 10 // 64 KiB total across all metric KEYS + values
+	// maxConditionBytes bounds the total size of ALL of a single condition's attacker-controlled
+	// string fields (Type+Status+Reason+Message+Since). Generous — a legit condition is a short
+	// enum/timestamp set plus a <=160-rune Message (~640 bytes worst-case multibyte) — but it stops a
+	// compromised node stuffing Reason/Since to bypass the Message cap and bloat every /nodes response.
+	maxConditionBytes = 2048
+)
+
+// validateConditions bounds a reported conditions slice at the HTTP boundary: an over-count, a curated
+// Message longer than the model cap, or any single condition whose total field bytes exceed the cap is
+// rejected (the agent enforces these, but the server must not trust the client). Returns nil when
+// within bounds.
+func validateConditions(conds []model.Condition) *apierr.Error {
+	if len(conds) > maxReportedConditions {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
+	}
+	for i := range conds {
+		c := conds[i]
+		if len([]rune(c.Message)) > model.ConditionMessageMax {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
+		}
+		if len(c.Type)+len(c.Status)+len(c.Reason)+len(c.Message)+len(c.Since) > maxConditionBytes {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
+		}
+	}
+	return nil
+}
+
+// validateMetrics bounds the /telemetry metrics map: too many keys, or a total size (KEY bytes + value
+// bytes — the keys are attacker-chosen) over the cap, is rejected. Returns nil when within bounds.
+func validateMetrics(metrics map[string]json.RawMessage) *apierr.Error {
+	if len(metrics) > maxTelemetryMetrics {
+		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "metrics")
+	}
+	total := 0
+	for k, v := range metrics {
+		total += len(k) + len(v)
+		if total > maxTelemetryMetricsBytes {
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "metrics")
+		}
+	}
+	return nil
+}
+
 // HandleReport records an agent's apply outcome for ITSELF: SetAppliedGeneration +
 // TouchLastSeen + an audit entry. The node is the bearer token's node; the report
 // body carries only the applied generation, checksum, and a health string.
@@ -228,6 +283,10 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 	var req reportRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	if ae := validateConditions(req.Conditions); ae != nil {
+		writeAPIError(w, ae)
 		return
 	}
 
@@ -278,6 +337,14 @@ func (h *ControllerHandler) HandleTelemetry(w http.ResponseWriter, r *http.Reque
 	var req telemetryRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	if ae := validateConditions(req.Conditions); ae != nil {
+		writeAPIError(w, ae)
+		return
+	}
+	if ae := validateMetrics(req.Metrics); ae != nil {
+		writeAPIError(w, ae)
 		return
 	}
 	if err := h.store.RecordTelemetry(r.Context(), tenant, node, req.Conditions, req.Metrics, req.AgentVersion, time.Now()); err != nil {

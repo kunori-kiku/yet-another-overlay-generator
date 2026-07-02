@@ -348,7 +348,7 @@ func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *ht
 	// This endpoint is UNAUTHENTICATED and each call for a passkey-registered username
 	// persists a single-use challenge; gating it bounds both store growth and
 	// username-enumeration probing. A subsequent successful finish refunds the slot.
-	allowed, _, retry := h.loginLimiter.registerAttempt(now, "user:"+req.Username, "ip:"+clientIP(r))
+	allowed, _, retry := h.loginLimiter.registerAttempt(now, "user:"+req.Username, "ip:"+h.clientIP(r))
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
 		writeAPIError(w, apierr.New(apierr.CodeAuthRateLimited))
@@ -396,7 +396,7 @@ func (h *ControllerHandler) HandlePasskeyLoginFinish(w http.ResponseWriter, r *h
 	}
 	now := time.Now().UTC()
 	userKey := "user:" + req.Username
-	ipKey := "ip:" + clientIP(r)
+	ipKey := "ip:" + h.clientIP(r)
 	allowed, justLocked, retry := h.loginLimiter.registerAttempt(now, userKey, ipKey)
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))

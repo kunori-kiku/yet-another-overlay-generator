@@ -82,7 +82,7 @@ func (h *ControllerHandler) HandleLogin(w http.ResponseWriter, r *http.Request) 
 
 	now := time.Now().UTC()
 	userKey := "user:" + req.Username
-	ipKey := "ip:" + clientIP(r)
+	ipKey := "ip:" + h.clientIP(r)
 
 	// Atomic rate-limit gate (check-and-reserve), BEFORE any (expensive) password
 	// work: if the username or source IP is locked out, reject; otherwise this attempt
