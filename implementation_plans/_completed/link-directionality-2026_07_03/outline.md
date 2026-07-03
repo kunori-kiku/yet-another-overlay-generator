@@ -190,8 +190,8 @@ workflow → fix at root, re-tag from the green tip (never force-push a tag).
 - [x] All 4 plans merged (each reviewed → fixed → re-reviewed → CI green): #221, #222, #223, #224.
 - [x] `v2.0.0-beta.18` released; assets + version stamp verified; promoted to Latest (owner pattern).
 - [x] STATUS.md + project memory updated; owner smoke script handed off (see STATUS §Next actions).
-- [ ] Subject folder stays in `implementation_plans/` until the owner smoke passes (then archived to
-      `_completed/` alongside the rc.1 cut). **← the only open item; owner-gated.**
+- [x] Subject folder archived to `_completed/` alongside the rc.1 cut (owner smoke clean 2026-07-03;
+      `v2.0.0-rc.1` = GitHub Latest). **SUBJECT CLOSED.**
 
 ## 10. Plan status table
 

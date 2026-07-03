@@ -1,37 +1,28 @@
 # STATUS
 <!-- regenerated: 2026-07-03 -->
-<!-- by: hand — link-directionality subject DELIVERED + RELEASED as v2.0.0-beta.18 (GitHub Latest) -->
+<!-- by: hand — v2.0.0-rc.1 RELEASED (GitHub Latest); pre-rc1-hardening + link-directionality subjects CLOSED + archived -->
 
 ## Active work
 
-- **SUBJECT `link-directionality-2026_07_03` DELIVERED — RELEASED as `v2.0.0-beta.18` (GitHub
-  *Latest*, 2026-07-03; tag on `1c38dfa`; beta.17 demoted).** All 4 plans merged (PRs #221–#224),
-  each independently workflow-reviewed → adversarially verified → fixed at root → re-reviewed
-  clean → CI-green before merge. The owner root-caused the live "NAT override goes direct"
-  residue: edges are unconditionally bidirectional, so the auto-reverse peer dials the from-node's
-  plain public IP and, when it handshakes first, WireGuard endpoint roaming permanently bypasses
-  the relay/accelerator path. Shipped fix = per-edge **`link_direction`** (`""`≡`both` default /
-  `forward` — **no stored `reverse`, D11**: single-linking the other way is an explicit editor
-  FLIP that swaps from/to + mirrors pins, allocation-stable): a `forward` edge's reverse peer
-  keeps its full `[Peer]` (AllowedIPs/Babel/return traffic) but carries NO dial `Endpoint`.
-  - plan-1 (#221) core: both compilers + **4** loud validation codes + panel-load sanitize +
-    conformance (zero churn across all 20 pre-existing success goldens; allocation provably
-    direction-blind) **+ D12 discovered fix**: the TS validator never mirrored
-    `validation_edge_mimic_fallback_invalid` (bad `mimic_fallback` passed in-browser Validate,
-    failed Go compile) — mirrored + corpus-exercised.
-  - plan-2 (#222) panel UX: node-name-labeled select (`A ⇄ B`/`A → B`/`B → A`-flip), both-mode
-    **reverse-dial readout** (compiler-exact last-wins semantics), single-linked `→` chip, and the
-    label pill wired to true selection equivalence (review caught a real MAJOR: the pill's
-    store-only selection desynced React Flow's internal selection → default-Backspace deleted the
-    WRONG edge; fixed with `addSelectedEdges` + the `elementsSelectable` gate).
-  - plan-3 (#223) proof + docs: realtunnel **`c4` PASSED on the real kernel in CI** (suppressed
-    side renders no `Endpoint`, tunnel forms from the dialer's inbound handshake alone, routes
-    both ways) + `edge.md` §Link direction + `peer-derivation.md` rule 0 + bilingual wiki (review
-    caught a BLOCKER: the rule-0 insertion had deleted normative rule 1 — restored).
-  - plan-4 (#224) release: CHANGELOG (reviewed, 1 wording fix), tag, 29 assets, sidecar +
-    `version` stamp verified on the published binary, promoted to Latest.
-  - **OWED: owner fleet smoke of beta.18** (single-link the accelerator edge, both boot orders —
-    script in Next actions), alongside the still-owed beta.17 hardening smoke; both gate rc.1.
+- **🎯 `v2.0.0-rc.1` RELEASED — GitHub *Latest* (2026-07-03; tag on `f4c4389`; beta.18 demoted;
+  self-promoted via the `make_latest` belt exactly as gated).** The rc promotes the soaked
+  beta.18 line with ZERO code changes since the last beta. Gate
+  ([`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md)) closed **GO with zero accepted-risk
+  exceptions** on the owner's 2026-07-03 clean live-fleet smokes (beta.17 hardening set +
+  beta.18 single-linked accelerator edge): criteria A–E all satisfied, the owed-smoke residue
+  discharged by sustained live-fleet operation (beta.9→18), release verified (29 assets, sidecar
+  hash, published `version` = `v2.0.0-rc.1`), and **branch protection is now LIVE on `main`**
+  (all six CI jobs required — by their check-run DISPLAY names; the gate doc's old short job-ID
+  contexts would never have been satisfied and were corrected at set time; force-pushes +
+  deletions disallowed). Gate PR #226 (reviewed, 4 residuals fixed), closeout this PR.
+  **Both driving subjects are CLOSED + archived to `_completed/`:**
+  - `pre-rc1-hardening-2026_07_02` — 9 hardening plans (beta.17, PRs #208–#218) + plan-11 (the
+    rc.1 cut, #226).
+  - `link-directionality-2026_07_03` — per-edge `link_direction` killing the reverse-peer
+    roaming race (beta.18, PRs #220–#225; D11 one-spelling design; kernel-proven via realtunnel
+    `c4`; owner-smoked clean).
+  **No active subject.** The rc.1 soak is running on the fleet (Latest). Next milestones live in
+  "Next actions".
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each
@@ -264,20 +255,20 @@
 
 ## Next actions
 
-**`link-directionality` is DONE and RELEASED (beta.18 = Latest). The remaining steps are
-owner-only:**
-1. **Owner fleet smoke of beta.17 + beta.18** — the hardening set, plus the beta.18 script:
-   update the panel/agents to beta.18 → open the accelerator edge → set Link direction to
-   `<NAT-peer> → <hub>` (or use the flip choice if drawn the other way; the editor prefills the
-   accelerator host) → Deploy → on the hub, `wg show <iface>`: the peer for the NAT-side node must
-   show NO configured endpoint until its handshake arrives, and the runtime endpoint must be the
-   ACCELERATOR's egress, never the peer's direct IP → restart the two nodes in BOTH orders
-   (peer-first, hub-first) and confirm the path never goes direct. Pass-or-accept-risk.
-2. **pre-rc1-hardening plan-11 — cut `v2.0.0-rc.1`:** refresh `docs/spec/rc1/RC1-GATE.md`, roll the
-   CHANGELOG, tag + publish. (rc.1 is `make_latest=true` in `release.yml`, so it self-promotes;
-   betas need the manual `gh release edit --latest`.) Archiving
-   `link-directionality-2026_07_03/` to `_completed/` rides that session. Say the word when the
-   smokes are clean.
+**rc.1 is out. The road to GA (all owner-paced):**
+1. **Soak `v2.0.0-rc.1` on the live fleet** — it is Latest; agents self-update on the next
+   rollout re-arm. Any confirmed defect during the soak → fix → `v2.0.0-rc.2` (a red required
+   gate or a new blocker never tags over — the gate doc's rules stand).
+2. **rc.2 backlog (deliberate deferrals, unchanged):** FileStore host-loss SPOF
+   (backup/restore/HA — see the persisted encrypted-object-storage plan), bootstrap-TOFU
+   first-fetch pinning + operator-cred OOB delivery, the pinned-endpoint anti-roaming re-assert
+   option (owner decision open), the `EDGE_OMITEMPTY` `mimic_fallback` canonicalization gap, the
+   CHANGELOG footer's missing beta.10–16 compare links (cosmetic), and the Dockerfile-vs-go.mod
+   toolchain alignment note.
+3. **GA when the rc line has soaked clean** — per `RELEASING.md`'s ramp.
+
+Operational note (unchanged): a CI job display-name change silently orphans its required
+branch-protection context — update protection in the same PR as any `name:` edit in `ci.yml`.
 
 Separate from the release: the owner's live WireGuard-endpoint symptom is a fleet **NAT/roaming**
 matter — the deterministic in-product fix is the `link-directionality` subject above (single-link
@@ -304,6 +295,12 @@ incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). T
 
 ## Recently closed subjects (last 3)
 
+- `link-directionality-2026_07_03` (2026-07-03) — **4 plans, `v2.0.0-beta.18` (PRs #220–#225);
+  per-edge `link_direction` (D11 one-spelling; editor flip) killing the reverse-peer roaming race;
+  kernel-proven (realtunnel `c4`); owner-smoked clean; folded into `v2.0.0-rc.1`.**
+- `pre-rc1-hardening-2026_07_02` (2026-07-02/03) — **11 plans, `v2.0.0-beta.17` (PRs #208–#218) +
+  the `v2.0.0-rc.1` cut (#226); the CRITICAL self-update keystone bypass + the audited security
+  scopes + the rc.1 gate closed GO with zero exceptions; branch protection set.**
 - `beta9-smoke-hardening-2026_06_23` (2026-06-23) — **5 plans, `v2.0.0-beta.10` → GitHub Latest (PRs
   #176–#181).** Live-fleet smoke fixes: a dedicated `/telemetry` heartbeat + `Sampler` framework that
   makes Node Conditions honest (no more frozen apply-time snapshot); controller-mode Validate →
