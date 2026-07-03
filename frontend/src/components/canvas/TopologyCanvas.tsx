@@ -50,6 +50,7 @@ function edgeRenderEqual(a: FlowEdge, b: FlowEdge): boolean {
     'sourceNodeName',
     'targetNodeName',
     'roleChip',
+    'linkDirection',
     'deemphasized',
   ];
   return keys.every((k) => da[k] === db[k]);
@@ -288,6 +289,7 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
               sourceNodeName: sourceNode?.name || '',
               targetNodeName: targetNode?.name || '',
               roleChip: edgeRoleChip[e.id], // ★ / bN / duplicate / undefined (single-edge pair)
+              linkDirection: e.link_direction, // 'forward' -> single-linked chip; else no visual change
             },
             markerEnd: { type: MarkerType.ArrowClosed },
           };
