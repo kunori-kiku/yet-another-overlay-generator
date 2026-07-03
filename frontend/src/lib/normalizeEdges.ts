@@ -137,3 +137,32 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
 
   return changed ? healed : edges;
 }
+
+// sanitizeLinkDirection coerces an out-of-enum link_direction to undefined (≡ "both") on every
+// topology load path (file import, server hydrate, localStorage rehydrate) — the owner's
+// "existing configs auto-convert, remember sanitizing" contract. Recognized values pass through
+// untouched: '', 'both', 'forward' (and an absent field). Anything else — a garbled hand-edit, a
+// value from a future/foreign schema, or a never-released 'reverse' (dropped by design decision
+// D11: one spelling; single-linking the other way is expressed by flipping the edge) — is dropped
+// so the edge falls back to today's doubly-linked behavior instead of tripping the schema
+// validator on someone else's stored data. (The validator still rejects invalid values arriving
+// via compile/deploy inputs; this sanitize covers only the panel's own load paths, mirroring
+// healCollidingPins' placement.)
+//
+// Pure and idempotent: returns the SAME array reference when nothing needs coercing (no
+// React/zustand churn), otherwise a new array with the offending edges' field removed.
+export function sanitizeLinkDirection(edges: Edge[]): Edge[] {
+  const valid = new Set(['both', 'forward']);
+  let changed = false;
+  const out = edges.map((e) => {
+    const dir = (e as { link_direction?: unknown }).link_direction;
+    if (dir === undefined || dir === '' || (typeof dir === 'string' && valid.has(dir))) {
+      return e;
+    }
+    changed = true;
+    const clean = { ...e };
+    delete (clean as unknown as Record<string, unknown>).link_direction;
+    return clean;
+  });
+  return changed ? out : edges;
+}

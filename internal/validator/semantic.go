@@ -77,6 +77,10 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// participate in parallel links).
 	validateBackupClientEdges(topo, nodeMap, result)
 
+	// Link direction: a single-linked edge must be able to dial in its chosen direction, must not
+	// fold with other primary-class edges of its pair, and must not touch a client.
+	validateLinkDirection(topo, nodeMap, result)
+
 	// Parallel links: equal-cost and no-primary warnings for multi-link node pairs.
 	validateParallelLinkCosts(topo, nodeMap, result)
 
@@ -1000,6 +1004,78 @@ func validateSinglePrimaryPerPair(topo *model.Topology, nodeMap map[string]*mode
 			continue
 		}
 		firstPrimary[pk] = edge.ID
+	}
+}
+
+// validateLinkDirection validates the per-edge dial-direction policy (link_direction; semantics in
+// docs/spec/data-model/edge.md §Link direction). Every rule is an ERROR, not a warning: a
+// single-linked edge that cannot dial is a provably dead link, and a direction that pair-folding
+// would silently ignore is the same silently-dropped-config failure class as
+// CodeEdgeEndpointPortWithoutHost. Schema has already rejected unrecognized values (there is no
+// "reverse" — D11, one spelling), so this function acts only on "forward":
+//   - conflict: a primary-class edge folds with every other enabled primary-class edge of its node
+//     pair (either direction), so a folded edge's direction would be silently ignored — a
+//     direction-bearing edge must be its pair's ONLY enabled primary-class edge. Backup edges are
+//     their own links and are exempt from the pair rule.
+//   - forward requires endpoint_host: the forward peer only ever dials the edge's endpoint host,
+//     and the reverse dial is suppressed, so without a host no side could initiate.
+//   - a client-touching edge must not set a direction (a client link's dial semantics are fixed:
+//     the client always dials the router).
+func validateLinkDirection(topo *model.Topology, nodeMap map[string]*model.Node, result *ValidationResult) {
+	// Collect each node pair's enabled primary-class edge IDs (either direction), so a
+	// direction-bearing member of a multi-edge pair can name a folding sibling in its error.
+	pairEdgeIDs := make(map[string][]string) // pinKey -> enabled primary-class edge IDs, in order
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled || linkid.IsBackup(edge) {
+			continue
+		}
+		pk := linkid.PinKey(edge.FromNodeID, edge.ToNodeID)
+		pairEdgeIDs[pk] = append(pairEdgeIDs[pk], edge.ID)
+	}
+
+	for i := range topo.Edges {
+		edge := &topo.Edges[i]
+		if !edge.IsEnabled {
+			continue
+		}
+		dir := edge.LinkDirection
+		if dir != model.EdgeLinkDirectionForward {
+			continue // "", "both", and unrecognized (schema-rejected) values carry no dial rules
+		}
+		prefix := fmt.Sprintf("edges[%d].link_direction", i)
+
+		fromNode := nodeMap[edge.FromNodeID]
+		toNode := nodeMap[edge.ToNodeID]
+		if fromNode == nil || toNode == nil {
+			continue // dangling refs are validateEdgeNodeRefs' finding
+		}
+
+		// Client rule first: it is the root cause, so the dial rules below are skipped for it.
+		if fromNode.Role == "client" || toNode.Role == "client" {
+			clientNode := fromNode
+			if toNode.Role == "client" {
+				clientNode = toNode
+			}
+			result.AddError(prefix, CodeEdgeLinkDirectionClientEdge, P{"id", edge.ID}, P{"node", clientNode.Name}, P{"direction", dir})
+			continue
+		}
+
+		// Pair conflict (primary class only): folding would silently ignore this edge's direction.
+		if !linkid.IsBackup(edge) {
+			if ids := pairEdgeIDs[linkid.PinKey(edge.FromNodeID, edge.ToNodeID)]; len(ids) > 1 {
+				other := ids[0]
+				if other == edge.ID {
+					other = ids[1]
+				}
+				result.AddError(prefix, CodeEdgeLinkDirectionConflict, P{"id", edge.ID}, P{"direction", dir}, P{"other", other})
+			}
+		}
+
+		// Forward requires a dialable host on the edge itself.
+		if edge.EndpointHost == "" {
+			result.AddError(prefix, CodeEdgeLinkDirectionForwardNoEndpoint, P{"id", edge.ID})
+		}
 	}
 }
 

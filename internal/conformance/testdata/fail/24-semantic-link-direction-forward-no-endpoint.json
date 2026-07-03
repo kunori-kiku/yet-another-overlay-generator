@@ -1,0 +1,25 @@
+{
+  "name": "semantic-link-direction-forward-no-endpoint",
+  "doc": "link_direction=forward with no endpoint_host: the forward peer only ever dials the edge's endpoint host and the reverse dial is suppressed by the direction, so NO side could initiate the handshake — a provably dead link at compile time (validation_edge_link_direction_forward_no_endpoint). Both nodes public so no NAT finding muddies the verdict. AgentHeld custody with both nodes keyed keeps validation the sole failure.",
+  "custody": "agentheld",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.74.0.0/24", "allocation_mode": "manual", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.74.0.10", "wireguard_public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "router-b", "name": "router-b", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.74.0.11", "wireguard_public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "router-b.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "direct", "transport": "udp", "link_direction": "forward", "is_enabled": true }
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "semantic-link-direction-client-edge",
+  "doc": "link_direction on a client-touching edge: a client link uses a single wg0 with fixed dial semantics (the client always dials the router via the required endpoint_host), so a direction is meaningless there and rejected (validation_edge_link_direction_client_edge). The edge otherwise satisfies every client rule (exactly one outbound edge, router target, endpoint_host matching the router's public endpoint) so the direction finding is the sole failure. AgentHeld custody with both nodes keyed keeps validation the sole failure.",
+  "custody": "agentheld",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.77.0.0/24", "allocation_mode": "manual", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "laptop", "name": "laptop", "platform": "debian", "role": "client", "domain_id": "d1",
+        "overlay_ip": "10.77.0.10", "wireguard_public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
+        "capabilities": {} },
+      { "id": "router-pub", "name": "router-pub", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.77.0.11", "wireguard_public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rp-ep", "host": "router-pub.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-client", "from_node_id": "laptop", "to_node_id": "router-pub", "type": "public-endpoint", "endpoint_host": "router-pub.example.com", "transport": "udp", "link_direction": "forward", "is_enabled": true }
+    ]
+  }
+}

@@ -21,7 +21,7 @@
         "public_endpoints": [ { "id": "bv-ep", "host": "bad host!", "port": 51820 } ] }
     ],
     "edges": [
-      { "id": "", "from_node_id": "", "to_node_id": "", "type": "", "transport": "sctp", "endpoint_port": 70000, "role": "tertiary", "is_enabled": true },
+      { "id": "", "from_node_id": "", "to_node_id": "", "type": "", "transport": "sctp", "endpoint_port": 70000, "role": "tertiary", "mimic_fallback": "off", "link_direction": "one-way", "is_enabled": true },
       { "id": "e-badtype", "from_node_id": "n-badrole", "to_node_id": "n-badvals", "type": "mesh-path", "endpoint_host": "bad host!", "transport": "udp", "is_enabled": true },
       { "id": "e-self", "from_node_id": "n-badvals", "to_node_id": "n-badvals", "type": "direct", "transport": "udp", "is_enabled": true }
     ]

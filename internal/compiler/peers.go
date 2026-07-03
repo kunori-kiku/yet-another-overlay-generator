@@ -198,6 +198,20 @@ func resolveMimicFallback(edgePolicy, defaultPolicy string) string {
 	return mimicFallbackNone
 }
 
+// effectiveLinkDirection resolves an edge's dial-direction policy: "forward" passes through;
+// "" / "both" / anything unrecognized floors to EdgeLinkDirectionBoth (defensive — the validator
+// rejects unknown values at schema time; the compiler never re-errors). There is no "reverse"
+// value by design (D11: one spelling — single-linking the other way is expressed by flipping the
+// edge). PURE and allocation-blind: like resolveMimicFallback it is deterministic in its input
+// string only, so the Go and TS ports stay byte-identical and allocation never observes it
+// (docs/spec/data-model/edge.md §Link direction).
+func effectiveLinkDirection(edge *model.Edge) string {
+	if edge.LinkDirection == model.EdgeLinkDirectionForward {
+		return model.EdgeLinkDirectionForward
+	}
+	return model.EdgeLinkDirectionBoth
+}
+
 // effectiveMTU computes the effective MTU a WireGuard interface on a link should emit.
 // Spec (docs/spec/artifacts/mimic.md "MTU −12" / docs/spec/data-model/edge.md §TCP transport):
 //   - non-mimic: keep node.MTU as is (0 ⇒ still 0 ⇒ renderer omits the MTU line,
@@ -752,6 +766,11 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		toKey, _ := keys[toNode.ID]
 		fromKey, _ := keys[fromNode.ID]
 
+		// This link's dial-direction policy, from the driving edge (== link.primaryEdge on the
+		// producing iteration; the validator's conflict rule guarantees a single-edge pair
+		// whenever the direction is not "both", so no other edge's value can be shadowed).
+		linkDirection := effectiveLinkDirection(edge)
+
 		// === Compute the endpoint (a user-specified port takes priority, otherwise use the pre-allocated port) ===
 		endpoint := ""
 		if edge.EndpointHost != "" {
@@ -875,6 +894,10 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			}
 
 			// Resolve the reverse peer's endpoint:
+			//  0. A "forward" single-linked edge suppresses the reverse dial ENTIRELY (both the
+			//     explicit-reverse-edge branch and the public-endpoint fallback): the reverse
+			//     peer keeps AllowedIPs but never initiates, so it can never race the forward
+			//     path's relay/accelerator endpoint via WireGuard endpoint roaming;
 			//  1. When an explicit reverse edge exists and carries a host, resolve by the
 			//     forward rule (a user-specified port takes priority, otherwise use fromNode's
 			//     allocated port);
@@ -884,17 +907,19 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			//     not this link's listen port, and misusing it reproduces the port-ownership bug
 			//     on the server).
 			reverseEndpoint := ""
-			if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok && reverseEdge.EndpointHost != "" {
-				if reverseEdge.EndpointPort > 0 {
-					// The user specified a NAT/port-forwarding override port
-					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, reverseEdge.EndpointPort)
-				} else {
-					// Auto-allocate: use fromNode interface's allocated listen port
-					reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, fromSideListenPort)
+			if linkDirection != model.EdgeLinkDirectionForward {
+				if reverseEdge, ok := edgeMap[toNode.ID+"->"+fromNode.ID]; ok && reverseEdge.EndpointHost != "" {
+					if reverseEdge.EndpointPort > 0 {
+						// The user specified a NAT/port-forwarding override port
+						reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, reverseEdge.EndpointPort)
+					} else {
+						// Auto-allocate: use fromNode interface's allocated listen port
+						reverseEndpoint = formatEndpoint(reverseEdge.EndpointHost, fromSideListenPort)
+					}
+				} else if fromNode.Capabilities.HasPublicIP && len(fromNode.PublicEndpoints) > 0 {
+					// Fallback: no reverse edge (or its host is empty) and fromNode is publicly reachable
+					reverseEndpoint = formatEndpoint(fromNode.PublicEndpoints[0].Host, fromSideListenPort)
 				}
-			} else if fromNode.Capabilities.HasPublicIP && len(fromNode.PublicEndpoints) > 0 {
-				// Fallback: no reverse edge (or its host is empty) and fromNode is publicly reachable
-				reverseEndpoint = formatEndpoint(fromNode.PublicEndpoints[0].Host, fromSideListenPort)
 			}
 
 			// The reverse peer's resources are swapped relative to the forward

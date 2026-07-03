@@ -7,6 +7,8 @@
       "validation_edge_endpoint_port_without_host",
       "validation_edge_from_node_id_required",
       "validation_edge_id_required",
+      "validation_edge_link_direction_invalid",
+      "validation_edge_mimic_fallback_invalid",
       "validation_edge_role_invalid",
       "validation_edge_self_loop",
       "validation_edge_to_node_id_required",

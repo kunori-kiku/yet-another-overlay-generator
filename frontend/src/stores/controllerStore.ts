@@ -125,8 +125,8 @@ const NODE_OMITEMPTY = [
 ];
 const EDGE_OMITEMPTY = [
   'endpoint_host', 'endpoint_port', 'compiled_port', 'priority', 'weight', 'role', 'transport',
-  'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip', 'pinned_to_transit_ip',
-  'pinned_from_link_local', 'pinned_to_link_local',
+  'link_direction', 'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip',
+  'pinned_to_transit_ip', 'pinned_from_link_local', 'pinned_to_link_local',
 ];
 // PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
 const PUBLIC_ENDPOINT_OMITEMPTY = ['note'];

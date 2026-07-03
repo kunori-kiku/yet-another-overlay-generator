@@ -525,6 +525,18 @@ func validateEdgesSchema(topo *model.Topology, result *ValidationResult) {
 			result.AddError(prefix+".role", CodeEdgeRoleInvalid, P{"role", edge.Role})
 		}
 
+		// link_direction validation (per-edge dial-direction policy): only empty, "both", and
+		// "forward" are allowed; empty is equivalent to "both" (a meaningful default, so "" is NOT
+		// normalized — mirrors mimic_fallback). There is deliberately no "reverse" (D11, one
+		// spelling): single-linking the other way is expressed by flipping the edge. The compiler
+		// defensively floors anything unrecognized to "both", but a stored value must be one of
+		// these three; the semantic dial-direction rules (validateLinkDirection) only ever act on
+		// recognized values.
+		if edge.LinkDirection != "" && edge.LinkDirection != model.EdgeLinkDirectionBoth &&
+			edge.LinkDirection != model.EdgeLinkDirectionForward {
+			result.AddError(prefix+".link_direction", CodeEdgeLinkDirectionInvalid, P{"direction", edge.LinkDirection})
+		}
+
 		// Self-loop: an edge whose endpoints are the same node is invalid.
 		if edge.FromNodeID != "" && edge.FromNodeID == edge.ToNodeID {
 			result.AddError(prefix, CodeEdgeSelfLoop)

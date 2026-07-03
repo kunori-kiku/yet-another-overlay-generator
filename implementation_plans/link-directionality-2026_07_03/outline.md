@@ -18,8 +18,8 @@ first, and permanently bypasses the operator's relay/accelerator path via endpoi
 - [ ] `link_direction` lands in the model + BOTH compilers + BOTH validators, byte-exact (drift
       manifest, golden corpora, i18n sync all green); default `both` compiles **byte-identical**
       (zero churn across all 20 pre-existing goldens).
-- [ ] Every direction misconfiguration is a **loud validator error** (6 new codes), never a silently
-      dead link or silently ignored override.
+- [ ] Every direction misconfiguration is a **loud validator error** (4 new codes after D11), never
+      a silently dead link or a direction silently ignored by pair-folding.
 - [ ] The panel exposes the field on edge click, labeled with real node names + arrows
       (`A ⇄ B` / `A → B` / `B → A`), with a directional canvas style; existing configs auto-convert
       (absence ≡ both) and garbage values sanitize to both on load.
@@ -138,6 +138,8 @@ a fail fixture (coverage floor); install-script/renderer changes need BOTH golde
 | D8 | draft (executor call) | Canvas visual for `both` | **Unchanged** (zero cosmetic churn); single-linked edges get a direction chip (`data-testid`) + dial-side arrow marker |
 | D9 | draft (executor call) | Go-side sanitize | Go `normalize` intentionally NOT coercing invalid values — validators are the loud gate; panel-load sanitize covers the user path |
 | D10 | post-approval (owner) | Execution pacing | Materialize + merge the plan folder now; **sleep 5 hours**; execute plan-1 on wake |
+| D11 | mid-plan-1 (owner) | Reverse spelling | **Drop `reverse` from the model — one spelling.** The owner asked whether `reverse` canonicalizes to a flipped `forward` at compile time (worried about dual-spelling logic traps; two NAT special-branches had already materialized as evidence). Decision: single-linking is ALWAYS the drawn from→to direction (`""`≡`both` / `forward` only); the editor's "to(A)" choice performs an EXPLICIT flip (swap from/to + mirror the six pins — allocation-stable, link identity + interface names are direction-agnostic — + prefill endpoint_host from the dialed node's endpoint picker). Deleted vs the draft: 2 validator codes (reverse_unreachable, reverse_endpoint_ignored), both NAT special-branches, the forward-endpoint compiler gate. Trade-off accepted: a single-linked edge holds an explicit host copy (stale-snapshot warning covers drift) instead of dynamically following node endpoints |
+| D12 | mid-plan-1 (executor) | Discovered adjacent defect | The TS validator never mirrored Go's `validation_edge_mimic_fallback_invalid` (Go 102 vs TS 101 codes) and no fixture exercised it — a bad `mimic_fallback` passed in-browser Validate but failed Go compile. Fixed in plan-1 (TS check + registry + fixture-15 exercise); flagged to review. The sibling `EDGE_OMITEMPTY` list also lacks `mimic_fallback` — noted as follow-up, NOT changed (different blast radius: canonical-diff behavior) |
 
 ## 7. Milestones
 

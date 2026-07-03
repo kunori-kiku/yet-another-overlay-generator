@@ -12,7 +12,7 @@ import type {
 } from '../types/topology';
 import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
-import { healCollidingPins } from '../lib/normalizeEdges';
+import { healCollidingPins, sanitizeLinkDirection } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
 import { parseContentDispositionFilename, triggerBrowserDownload } from '../lib/download';
 // The local-engine seam (plan-6, milestone 1.6). localEngineEnabled() is the SINGLE decision
@@ -655,8 +655,10 @@ export const useTopologyStore = create<TopologyState>()(
       nodes: topo.nodes,
       // Self-heal the "pin occupied by two different links" corruption on every load (server hydrate
       // or local import) so a stale topology validates/compiles cleanly — strips a colliding edge's
-      // pins so it re-allocates fresh. Needs node roles to skip client edges. See lib/normalizeEdges.
-      edges: healCollidingPins(topo.edges, topo.nodes),
+      // pins so it re-allocates fresh. Needs node roles to skip client edges. Then coerce any
+      // out-of-enum link_direction to undefined (≡ both) so foreign/garbled stored data falls back
+      // to doubly-linked instead of tripping the validator. See lib/normalizeEdges.
+      edges: sanitizeLinkDirection(healCollidingPins(topo.edges, topo.nodes)),
       allocSchemaVersion: topo.alloc_schema_version ?? 0,
       history: [],
       validateResult: null,
@@ -1023,11 +1025,13 @@ export const useTopologyStore = create<TopologyState>()(
       },
       // Self-heal a stale localStorage topology on rehydrate: strip a colliding edge's pins (any two
       // different links sharing a transit IP / port / link-local — see lib/normalizeEdges), so a
-      // persisted corrupted design validates cleanly without the operator hand-fixing each edge.
-      // Runs AFTER hydration and adds NO version/migrate, so the partialize init-safety note holds.
+      // persisted corrupted design validates cleanly without the operator hand-fixing each edge;
+      // then coerce any out-of-enum link_direction to undefined (≡ both — same rationale, same
+      // choke-point). Runs AFTER hydration and adds NO version/migrate, so the partialize
+      // init-safety note holds.
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.edges = healCollidingPins(state.edges, state.nodes);
+          state.edges = sanitizeLinkDirection(healCollidingPins(state.edges, state.nodes));
         }
       },
     }

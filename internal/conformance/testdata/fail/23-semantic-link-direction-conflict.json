@@ -1,0 +1,26 @@
+{
+  "name": "semantic-link-direction-conflict",
+  "doc": "link_direction on a multi-edge pair: router-a->router-b carries link_direction=forward while an explicit reverse edge router-b->router-a also exists in the primary class. The pair folds into ONE link at compile time, so the folded edge's direction would be silently ignored — rejected loudly instead (validation_edge_link_direction_conflict). Both nodes public + both edges endpoint-clean so the conflict is the sole finding. AgentHeld custody with both nodes keyed keeps validation the sole failure.",
+  "custody": "agentheld",
+  "signing": false,
+  "topology": {
+    "project": { "id": "p", "name": "P" },
+    "domains": [
+      { "id": "d1", "name": "mesh", "cidr": "10.73.0.0/24", "allocation_mode": "manual", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      { "id": "router-a", "name": "router-a", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.73.0.10", "wireguard_public_key": "AetxbtqeRdq7xOMpbaVK3St4vAoSMsCzTSLvtqs8BTw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "ra-ep", "host": "router-a.example.com", "port": 51820 } ] },
+      { "id": "router-b", "name": "router-b", "platform": "debian", "role": "router", "domain_id": "d1",
+        "overlay_ip": "10.73.0.11", "wireguard_public_key": "X3ql2OijvFoFNeNgMq/dEyphEiguYDbGqUI/VXc55Uw=",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "rb-ep", "host": "router-b.example.com", "port": 51820 } ] }
+    ],
+    "edges": [
+      { "id": "e-ab", "from_node_id": "router-a", "to_node_id": "router-b", "type": "public-endpoint", "endpoint_host": "router-b.example.com", "transport": "udp", "link_direction": "forward", "is_enabled": true },
+      { "id": "e-ba", "from_node_id": "router-b", "to_node_id": "router-a", "type": "public-endpoint", "transport": "udp", "is_enabled": true }
+    ]
+  }
+}

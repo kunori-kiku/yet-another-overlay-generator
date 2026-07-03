@@ -445,6 +445,22 @@ export function resolveMimicFallback(edgePolicy: string | undefined, defaultPoli
   return defaultPolicy === mimicFallbackUDP ? mimicFallbackUDP : mimicFallbackNone;
 }
 
+// Link-direction policy values (Edge.link_direction; model.EdgeLinkDirection* on the Go side).
+// There is no 'reverse' by design (D11, one spelling): single-linking the other way is expressed
+// by flipping the edge.
+const linkDirectionBoth = 'both';
+const linkDirectionForward = 'forward';
+
+// effectiveLinkDirection mirrors compiler.effectiveLinkDirection (peers.go): 'forward' passes
+// through; undefined / '' / 'both' / anything unrecognized floors to 'both' (defensive — the
+// validator rejects unknown values at schema time; the compiler never re-errors). PURE and
+// allocation-blind, so the Go and TS ports stay byte-identical and allocation never observes it
+// (docs/spec/data-model/edge.md §Link direction).
+function effectiveLinkDirection(edge: Edge): string {
+  if (edge.link_direction === linkDirectionForward) return linkDirectionForward;
+  return linkDirectionBoth;
+}
+
 // deriveLinkCost derives a link's Babel rxcost override. Resolution order (peers.go:1078-1091):
 //   1. explicit operator setting: edge.priority (>0) wins, else edge.weight (>0) — adopted verbatim;
 //   2. backup preset: backup link without an explicit setting => BackupDefaultLinkCost (384);
@@ -624,6 +640,11 @@ function derivePass2(
     const toKey = keyOf(toNode.id);
     const fromKey = keyOf(fromNode.id);
 
+    // This link's dial-direction policy, from the driving edge (== link.primaryEdge on the
+    // producing iteration; the validator's conflict rule guarantees a single-edge pair whenever
+    // the direction is not "both", so no other edge's value can be shadowed).
+    const linkDirection = effectiveLinkDirection(edge);
+
     // ---- Endpoint: explicit edge.endpoint_port wins, else the peer's allocated listen port. ----
     let endpoint = '';
     if (edge.endpoint_host) {
@@ -729,30 +750,35 @@ function derivePass2(
       fromSideListenPort = alloc.toPort;
     }
 
-    // Resolve the reverse peer's endpoint (peers.go:846-858).
+    // Resolve the reverse peer's endpoint (peers.go:886-911). A "forward" single-linked edge
+    // suppresses the reverse dial ENTIRELY (both the explicit-reverse-edge branch and the
+    // public-endpoint fallback): the reverse peer keeps AllowedIPs but never initiates, so it can
+    // never race the forward path's relay/accelerator endpoint via WireGuard endpoint roaming.
     let reverseEndpoint = '';
-    const reverseEdge = edgeMap.get(`${toNode.id}->${fromNode.id}`);
-    if (reverseEdge !== undefined && reverseEdge.endpoint_host) {
-      if ((reverseEdge.endpoint_port ?? 0) > 0) {
+    if (linkDirection !== linkDirectionForward) {
+      const reverseEdge = edgeMap.get(`${toNode.id}->${fromNode.id}`);
+      if (reverseEdge !== undefined && reverseEdge.endpoint_host) {
+        if ((reverseEdge.endpoint_port ?? 0) > 0) {
+          reverseEndpoint = formatEndpoint(
+            reverseEdge.endpoint_host,
+            reverseEdge.endpoint_port as number,
+          );
+        } else {
+          reverseEndpoint = formatEndpoint(
+            reverseEdge.endpoint_host,
+            fromSideListenPort,
+          );
+        }
+      } else if (
+        fromNode.capabilities.has_public_ip &&
+        (fromNode.public_endpoints?.length ?? 0) > 0
+      ) {
         reverseEndpoint = formatEndpoint(
-          reverseEdge.endpoint_host,
-          reverseEdge.endpoint_port as number,
-        );
-      } else {
-        reverseEndpoint = formatEndpoint(
-          reverseEdge.endpoint_host,
+          (fromNode.public_endpoints as NonNullable<Node['public_endpoints']>)[0]
+            .host,
           fromSideListenPort,
         );
       }
-    } else if (
-      fromNode.capabilities.has_public_ip &&
-      (fromNode.public_endpoints?.length ?? 0) > 0
-    ) {
-      reverseEndpoint = formatEndpoint(
-        (fromNode.public_endpoints as NonNullable<Node['public_endpoints']>)[0]
-          .host,
-        fromSideListenPort,
-      );
     }
 
     // The reverse peer's resources are swapped relative to the forward.
