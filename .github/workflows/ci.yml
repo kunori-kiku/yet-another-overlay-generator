@@ -203,7 +203,7 @@ jobs:
         run: |
           set -o pipefail
           sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} REALTUNNEL_SCENARIOS=all ${{ steps.rt.outputs.testbin }} \
-            -test.v -test.timeout 900s -test.run 'TestC3OneDirectional|TestRelayTopology|TestNatHub' \
+            -test.v -test.timeout 900s -test.run 'TestC3OneDirectional|TestC4LinkDirection|TestRelayTopology|TestNatHub' \
             2>&1 | tee /tmp/realtunnel-additive.log
       - name: Upload realtunnel logs
         if: failure() || steps.additive.outcome == 'failure'

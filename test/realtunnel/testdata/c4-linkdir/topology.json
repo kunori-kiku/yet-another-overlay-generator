@@ -1,0 +1,75 @@
+{
+  "project": {
+    "id": "c4-linkdir-001",
+    "name": "C4 link-direction suppression fixture",
+    "description": "Purpose-built link-directionality fixture (plan-3). BOTH routers are genuinely dialable — without the feature, the hub's auto-reverse peer would dial c4-dialer's public endpoint and could win the WireGuard endpoint slot (the reverse-peer race that bypasses a relay/accelerator path). The single edge carries endpoint_host + link_direction=forward, so the hub's [Peer] for c4-dialer keeps AllowedIPs but MUST carry no Endpoint line; the kernel run then proves the tunnel still forms from the dialer's inbound handshake alone and routes both ways.",
+    "version": "0.1.0"
+  },
+  "domains": [
+    {
+      "id": "domain-1",
+      "name": "c4-network",
+      "cidr": "10.48.0.0/24",
+      "allocation_mode": "auto",
+      "routing_mode": "babel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-dialer",
+      "name": "c4-dialer",
+      "hostname": "dialer.example.com",
+      "platform": "debian",
+      "role": "router",
+      "domain_id": "domain-1",
+      "public_endpoints": [
+        {
+          "id": "pe-dialer-1",
+          "host": "203.0.113.20",
+          "port": 51820,
+          "note": "genuinely dialable — WITHOUT link_direction the hub's reverse peer would dial this (the race)"
+        }
+      ],
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": false,
+        "has_public_ip": true
+      }
+    },
+    {
+      "id": "node-hub",
+      "name": "c4-hub",
+      "hostname": "hub.example.com",
+      "platform": "ubuntu",
+      "role": "router",
+      "domain_id": "domain-1",
+      "public_endpoints": [
+        {
+          "id": "pe-hub-1",
+          "host": "203.0.113.10",
+          "port": 51820
+        }
+      ],
+      "capabilities": {
+        "can_accept_inbound": true,
+        "can_forward": true,
+        "can_relay": false,
+        "has_public_ip": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-dialer-hub",
+      "from_node_id": "node-dialer",
+      "to_node_id": "node-hub",
+      "type": "public-endpoint",
+      "endpoint_host": "203.0.113.10",
+      "transport": "udp",
+      "link_direction": "forward",
+      "is_enabled": true,
+      "notes": "single-linked: only c4-dialer initiates; the hub's reverse Endpoint is suppressed despite c4-dialer being publicly dialable"
+    }
+  ]
+}

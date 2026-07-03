@@ -59,7 +59,14 @@ receives a port-only override.
 When the compiler auto-generates the reverse peer (to-side dialing back to the from-side), it MUST
 resolve the reverse `Endpoint` as follows:
 
-1. **If a reverse edge exists** (`to → from`) with a non-empty `endpoint_host`: resolve exactly as
+0. **If the edge's `link_direction` is `forward`** ([../data-model/edge.md](../data-model/edge.md#link-direction)):
+   the reverse `Endpoint` is suppressed ENTIRELY — neither the explicit-reverse-edge branch nor
+   the public-endpoint fallback below runs. The reverse peer keeps its full `[Peer]` stanza
+   (AllowedIPs, transit addressing) but never initiates, so it can never race the forward path's
+   relay/accelerator endpoint via runtime roaming. (The validator's conflict rule guarantees a
+   direction-bearing pair has exactly one enabled primary-class edge, but the compiler applies
+   this gate deterministically regardless — validator-independent, floors unknown values to
+   `both`.)
    the forward rule above — `endpoint_port` override if `> 0`, otherwise the from-side
    interface's auto-allocated listen port.
 2. **Else, if no reverse edge exists (or its `endpoint_host` is empty) and the from-node has a
@@ -98,6 +105,14 @@ deploy-page endpoint for a peer behind DNAT+SNAT is therefore normal and needs n
 runtime endpoint against roaming would require periodically re-asserting it — a deliberate future
 option, not a default.)
 
+Roaming has one harmful special case: when BOTH sides can dial (the forward edge carries a
+relay/accelerator `endpoint_host` while the from-node also has plain `public_endpoints`), whichever
+side handshakes first wins the single runtime endpoint slot — a faster-booting to-side dials the
+from-node DIRECT and roaming then bypasses the relay path permanently. The deterministic in-product
+fix is single-linking the edge (`link_direction: forward`,
+[../data-model/edge.md](../data-model/edge.md#link-direction)): the reverse peer then never
+initiates, so the race cannot start.
+
 ### Determinism caveat
 
 The auto-allocated listen ports referenced above are assigned by positional counters over edge
@@ -134,6 +149,17 @@ A link, `51821` for the B link, `51822` for the C link — `base + per_node_offs
   `h.example:51822`. Each tunnel targets a distinct listening port, so all three establish.
 - Contrast the headline bug: if every edge inherited the same `endpoint_port` (e.g. all stamped
   `51820` from H's `public_endpoints`), only one tunnel could ever establish.
+
+**4. Single-linked via an accelerator.** Node A reaches node B fastest through a UDP accelerator
+(`accel.example` forwards to B); both nodes are ALSO plainly public. The operator sets the A → B
+edge's `endpoint_host = accel.example` and `link_direction: forward`. Resolution:
+- Forward (A dials B): dials `accel.example:<B's allocated port>` (or an explicit
+  `endpoint_port` override) — unaffected by the direction.
+- Reverse (B dials A): **suppressed** (rule 0). Without the direction, the fallback would dial
+  `a.example:<A's allocated port>` — and if B handshook first, roaming would pin the tunnel to
+  the direct path, bypassing the accelerator (example 1's symmetry is exactly what the race
+  exploits). B's `[Peer]` for A keeps AllowedIPs and learns A's address from A's inbound
+  handshake; the tunnel forms and routes both ways with A as the only initiator.
 
 ## Transit IP Allocation
 

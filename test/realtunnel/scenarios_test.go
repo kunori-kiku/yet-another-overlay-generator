@@ -84,6 +84,38 @@ func TestC3OneDirectional(t *testing.T) {
 	sc.requireOverlayPing(t, allPairs)
 }
 
+// TestC4LinkDirection (scenario key "c4") is the link-direction suppression proof on a real kernel
+// (plan-3 of link-directionality). BOTH routers are genuinely dialable, so WITHOUT the feature the
+// hub's auto-reverse peer would dial c4-dialer's public endpoint and could win WireGuard's single
+// per-peer endpoint slot (the reverse-peer race that bypasses a relay/accelerator path — the bug
+// that motivated the feature). The single edge carries endpoint_host + link_direction=forward:
+//   - the hub's rendered [Peer] for c4-dialer MUST carry NO Endpoint line (the public-endpoint
+//     fallback is suppressed DESPITE c4-dialer being dialable) — remove the compiler gate and this
+//     assertion goes red on the wire;
+//   - the dialer's conf MUST still carry its forward Endpoint (the positive control);
+//   - the kernel run then proves the semantics: the tunnel forms from the dialer's inbound
+//     handshake alone (the hub never initiates) and the overlay routes both ways.
+func TestC4LinkDirection(t *testing.T) {
+	rootfs := requireScenario(t, "c4")
+	sc := bringUp(t, rootfs, repoFile(t, "test/realtunnel/testdata/c4-linkdir/topology.json"))
+	onFailDump(t, sc)
+
+	// The suppression contract, asserted on the rendered bundle (deterministic, race-free).
+	if sc.reverseEndpointPresent(t, "c4-hub", "c4-dialer") {
+		t.Fatalf("link-direction regression: c4-hub carries an Endpoint for c4-dialer — the forward " +
+			"single-link must suppress the reverse dial (peers.go effectiveLinkDirection gate)")
+	}
+	if !sc.reverseEndpointPresent(t, "c4-dialer", "c4-hub") {
+		t.Fatalf("c4 fixture invalid: c4-dialer has no Endpoint for c4-hub — the forward dial must " +
+			"be unaffected by link_direction")
+	}
+
+	// The kernel run: only the dialer initiates; the tunnel still forms and routes both ways.
+	sc.requireHandshakes(t)
+	sc.requireRouteConvergence(t, allPairs)
+	sc.requireOverlayPing(t, allPairs)
+}
+
 // TestRelayTopology (scenario key "relay") exercises relay transit: two NAT peers with no direct edge
 // reach each other ONLY through the relay (the relay forwards + babel converges /32s across the two
 // tunnels). The all-pairs assertions therefore prove transitive peer<->peer reachability through the
