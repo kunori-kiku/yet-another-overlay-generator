@@ -78,10 +78,12 @@ export const Code = {
   EdgeTypeEmpty: 'validation_edge_type_empty',
   EdgeTypeInvalid: 'validation_edge_type_invalid',
   EdgeTransportInvalid: 'validation_edge_transport_invalid',
+  EdgeMimicFallbackInvalid: 'validation_edge_mimic_fallback_invalid',
   EdgeEndpointHostIllegalChars: 'validation_edge_endpoint_host_illegal_chars',
   EdgeEndpointPortInvalid: 'validation_edge_endpoint_port_invalid',
   EdgeEndpointPortWithoutHost: 'validation_edge_endpoint_port_without_host',
   EdgeRoleInvalid: 'validation_edge_role_invalid',
+  EdgeLinkDirectionInvalid: 'validation_edge_link_direction_invalid',
   EdgeSelfLoop: 'validation_edge_self_loop',
   TopologyTooManyNodes: 'validation_topology_too_many_nodes',
   TopologyTooManyEdges: 'validation_topology_too_many_edges',
@@ -133,6 +135,12 @@ export const Code = {
   NATDeadLink: 'validation_nat_dead_link',
   NATDoubleNATNoEndpoint: 'validation_nat_double_nat_no_endpoint',
   NATNoOutboundToPublic: 'validation_nat_no_outbound_to_public',
+  // Link-direction semantic rules (semantic.go validateLinkDirection): each is an ERROR — a
+  // single-linked edge that cannot dial, or whose direction pair-folding would silently ignore,
+  // is the same silently-dropped-config failure class as EdgeEndpointPortWithoutHost.
+  EdgeLinkDirectionConflict: 'validation_edge_link_direction_conflict',
+  EdgeLinkDirectionForwardNoEndpoint: 'validation_edge_link_direction_forward_no_endpoint',
+  EdgeLinkDirectionClientEdge: 'validation_edge_link_direction_client_edge',
 } as const;
 
 export type CodeValue = (typeof Code)[keyof typeof Code];
@@ -675,6 +683,14 @@ function validateEdgesSchema(topo: Topology, result: ValidationResult): void {
       addError(result, prefix + '.transport', Code.EdgeTransportInvalid, { k: 'transport', v: transport });
     }
 
+    // mimic_fallback enum (schema.go mirror): "" (inherit the fleet default) / "udp" / "none". A
+    // meaningful tri-state, so "" is NOT normalized. Read as a plain string — the wire value may be
+    // outside the frozen TS literal-union.
+    const mimicFallback = (edge.mimic_fallback ?? '') as string;
+    if (mimicFallback !== '' && mimicFallback !== 'udp' && mimicFallback !== 'none') {
+      addError(result, prefix + '.mimic_fallback', Code.EdgeMimicFallbackInvalid, { k: 'policy', v: mimicFallback });
+    }
+
     // EndpointPort (schema.go:444-447).
     const endpointPort = edge.endpoint_port ?? 0;
     if (endpointPort < 0 || endpointPort > 65535) {
@@ -698,6 +714,17 @@ function validateEdgesSchema(topo: Topology, result: ValidationResult): void {
     const edgeRole = (edge.role ?? '') as string;
     if (edgeRole !== '' && edgeRole !== edgeRolePrimary && edgeRole !== edgeRoleBackup) {
       addError(result, prefix + '.role', Code.EdgeRoleInvalid, { k: 'role', v: edgeRole });
+    }
+
+    // link_direction validation (schema.go mirror): only empty, "both", and "forward" are
+    // allowed; empty is equivalent to "both" (a meaningful default, so "" is NOT normalized —
+    // mirrors mimic_fallback). There is deliberately no "reverse" (D11, one spelling):
+    // single-linking the other way is expressed by flipping the edge. The compiler defensively
+    // floors anything unrecognized to "both", but a stored value must be one of these three; the
+    // semantic dial-direction rules (validateLinkDirection) only ever act on recognized values.
+    const linkDirection = (edge.link_direction ?? '') as string;
+    if (linkDirection !== '' && linkDirection !== 'both' && linkDirection !== 'forward') {
+      addError(result, prefix + '.link_direction', Code.EdgeLinkDirectionInvalid, { k: 'direction', v: linkDirection });
     }
 
     // Self-loop (schema.go:464-467).
@@ -753,6 +780,7 @@ export function validateSemantic(topo: Topology): ValidationResult {
   validateInterfaceNameUniqueness(topo, nodeMap, result);
   validateSinglePrimaryPerPair(topo, nodeMap, result);
   validateBackupClientEdges(topo, nodeMap, result);
+  validateLinkDirection(topo, nodeMap, result);
   validateParallelLinkCosts(topo, nodeMap, result);
   validateAllocationPins(topo, domainMap, nodeMap, result);
   validateRoutePoliciesReserved(topo, result);
@@ -1536,6 +1564,76 @@ function validateBackupClientEdges(topo: Topology, nodeMap: Map<string, Node>, r
   }
 }
 
+// validateLinkDirection mirrors semantic.go validateLinkDirection: the per-edge dial-direction
+// policy rules (docs/spec/data-model/edge.md §Link direction). Every rule is an ERROR, not a
+// warning. Schema has already rejected unrecognized values (there is no 'reverse' — D11, one
+// spelling), so this acts only on 'forward':
+//   - conflict: a primary-class edge folds with every other enabled primary-class edge of its node
+//     pair (either direction), so a folded edge's direction would be silently ignored — a
+//     direction-bearing edge must be its pair's ONLY enabled primary-class edge (backups exempt);
+//   - forward requires endpoint_host (the forward peer only ever dials the edge's endpoint host,
+//     and the reverse dial is suppressed, so without a host no side could initiate);
+//   - a client-touching edge must not set a direction (a client link's dial semantics are fixed).
+function validateLinkDirection(topo: Topology, nodeMap: Map<string, Node>, result: ValidationResult): void {
+  // Collect each node pair's enabled primary-class edge IDs (either direction), so a
+  // direction-bearing member of a multi-edge pair can name a folding sibling in its error.
+  const pairEdgeIDs = new Map<string, string[]>(); // pinKey -> enabled primary-class edge IDs, in order
+  for (const edge of topo.edges) {
+    if (!edge.is_enabled || isBackup(edge)) {
+      continue;
+    }
+    const pk = pinKey(edge.from_node_id, edge.to_node_id);
+    const ids = pairEdgeIDs.get(pk);
+    if (ids !== undefined) {
+      ids.push(edge.id);
+    } else {
+      pairEdgeIDs.set(pk, [edge.id]);
+    }
+  }
+
+  for (let i = 0; i < topo.edges.length; i++) {
+    const edge = topo.edges[i];
+    if (!edge.is_enabled) {
+      continue;
+    }
+    const dir = (edge.link_direction ?? '') as string;
+    if (dir !== 'forward') {
+      continue; // '', 'both', and unrecognized (schema-rejected) values carry no dial rules
+    }
+    const prefix = `edges[${i}].link_direction`;
+
+    const fromNode = nodeMap.get(edge.from_node_id);
+    const toNode = nodeMap.get(edge.to_node_id);
+    if (!fromNode || !toNode) {
+      continue; // dangling refs are validateEdgeNodeRefs' finding
+    }
+
+    // Client rule first: it is the root cause, so the dial rules below are skipped for it.
+    if (roleOf(fromNode) === 'client' || roleOf(toNode) === 'client') {
+      const clientNode = roleOf(toNode) === 'client' ? toNode : fromNode;
+      addError(result, prefix, Code.EdgeLinkDirectionClientEdge, { k: 'id', v: edge.id }, { k: 'node', v: clientNode.name }, { k: 'direction', v: dir });
+      continue;
+    }
+
+    // Pair conflict (primary class only): folding would silently ignore this edge's direction.
+    if (!isBackup(edge)) {
+      const ids = pairEdgeIDs.get(pinKey(edge.from_node_id, edge.to_node_id)) ?? [];
+      if (ids.length > 1) {
+        let other = ids[0];
+        if (other === edge.id) {
+          other = ids[1];
+        }
+        addError(result, prefix, Code.EdgeLinkDirectionConflict, { k: 'id', v: edge.id }, { k: 'direction', v: dir }, { k: 'other', v: other });
+      }
+    }
+
+    // Forward requires a dialable host on the edge itself.
+    if ((edge.endpoint_host ?? '') === '') {
+      addError(result, prefix, Code.EdgeLinkDirectionForwardNoEndpoint, { k: 'id', v: edge.id });
+    }
+  }
+}
+
 // pairLinkSummary mirrors semantic.go:1028-1034.
 interface PairLinkSummary {
   edgeIndex: number;
@@ -1668,10 +1766,12 @@ const registry: Record<string, string> = {
   [Code.EdgeTypeEmpty]: 'Edge type must not be empty.',
   [Code.EdgeTypeInvalid]: 'Invalid edge type: {type}. Allowed values: direct, public-endpoint, relay-path, candidate.',
   [Code.EdgeTransportInvalid]: 'Invalid transport protocol: {transport}. Allowed values: udp, tcp.',
+  [Code.EdgeMimicFallbackInvalid]: 'Invalid mimic_fallback policy: {policy}. Allowed values: udp, none (empty = inherit fleet default).',
   [Code.EdgeEndpointHostIllegalChars]: 'endpoint_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.',
   [Code.EdgeEndpointPortInvalid]: 'Invalid endpoint port: {port}.',
   [Code.EdgeEndpointPortWithoutHost]: 'This link sets an endpoint port override but no endpoint host. A port cannot be dialed without a host — set an explicit endpoint host, or clear the port to use the default.',
   [Code.EdgeRoleInvalid]: 'Invalid link role: {role}. Allowed values: primary, backup (empty is equivalent to primary).',
+  [Code.EdgeLinkDirectionInvalid]: 'Invalid link_direction: {direction}. Allowed values: both, forward (empty is equivalent to both); to single-link in the other direction, flip the edge instead.',
   [Code.EdgeSelfLoop]: 'Edge source and target nodes must not be the same (self-loop).',
   [Code.TopologyTooManyNodes]: 'Topology has too many nodes: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.',
   [Code.TopologyTooManyEdges]: 'Topology has too many edges: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.',
@@ -1723,4 +1823,7 @@ const registry: Record<string, string> = {
   [Code.NATDeadLink]: 'Edge {edge}: nodes {from} and {to} are both behind NAT, neither direction provides an endpoint host address, and neither end accepts inbound connections; the direct tunnel cannot be established (confirmed dead link). Configure a public endpoint on one end, or route through a relay instead',
   [Code.NATDoubleNATNoEndpoint]: 'Edge {edge}: nodes {from} and {to} are both behind NAT and provide no endpoint host address; the direct tunnel cannot be established (a relay or public relay is required)',
   [Code.NATNoOutboundToPublic]: 'Node {name} ({id}) is behind NAT and has no outbound connection to any public, inbound-capable, or relay node; it will not be able to join the overlay',
+  [Code.EdgeLinkDirectionConflict]: "Edge {id} sets link_direction {direction}, but edge {other} also connects the same pair of nodes in the primary class: the pair folds into a single link at compile time and a folded edge's direction would be silently ignored. Keep exactly one enabled primary-class edge for this pair (delete or disable the other), or clear link_direction",
+  [Code.EdgeLinkDirectionForwardNoEndpoint]: "Edge {id} sets link_direction forward but has no endpoint_host: the forward peer only ever dials the edge's endpoint host, so no side could initiate this link (dead link). Set endpoint_host, or clear link_direction",
+  [Code.EdgeLinkDirectionClientEdge]: 'Edge {id} touches client node {node} but sets link_direction {direction}: a client link uses a single wg0 with fixed dial semantics (the client always dials the router), so link_direction is meaningless there; please clear it',
 };

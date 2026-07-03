@@ -74,6 +74,7 @@ const (
 	CodeEdgeEndpointPortInvalid            Code = "validation_edge_endpoint_port_invalid"
 	CodeEdgeEndpointPortWithoutHost        Code = "validation_edge_endpoint_port_without_host"
 	CodeEdgeRoleInvalid                    Code = "validation_edge_role_invalid"
+	CodeEdgeLinkDirectionInvalid           Code = "validation_edge_link_direction_invalid"
 	CodeEdgeSelfLoop                       Code = "validation_edge_self_loop"
 	CodeRoutePolicyReserved                Code = "validation_routepolicy_reserved"
 	CodeTopologyTooManyNodes               Code = "validation_topology_too_many_nodes"
@@ -124,6 +125,14 @@ const (
 	CodeNATDeadLink                        Code = "validation_nat_dead_link"
 	CodeNATDoubleNATNoEndpoint             Code = "validation_nat_double_nat_no_endpoint"
 	CodeNATNoOutboundToPublic              Code = "validation_nat_no_outbound_to_public"
+
+	// Link-direction semantic rules (per-edge dial-direction policy, docs/spec/data-model/edge.md
+	// §Link direction). Each is an ERROR, not a warning: a single-linked edge that cannot dial, or
+	// whose direction would be silently ignored by pair-folding, is the same silently-dropped-config
+	// failure class as CodeEdgeEndpointPortWithoutHost (require-explicit-host).
+	CodeEdgeLinkDirectionConflict          Code = "validation_edge_link_direction_conflict"
+	CodeEdgeLinkDirectionForwardNoEndpoint Code = "validation_edge_link_direction_forward_no_endpoint"
+	CodeEdgeLinkDirectionClientEdge        Code = "validation_edge_link_direction_client_edge"
 )
 
 // registry maps each Code to its English message TEMPLATE. {role} placeholders map 1:1 to the
@@ -183,6 +192,7 @@ var registry = map[Code]string{
 	CodeEdgeEndpointPortInvalid:            "Invalid endpoint port: {port}.",
 	CodeEdgeEndpointPortWithoutHost:        "This link sets an endpoint port override but no endpoint host. A port cannot be dialed without a host — set an explicit endpoint host, or clear the port to use the default.",
 	CodeEdgeRoleInvalid:                    "Invalid link role: {role}. Allowed values: primary, backup (empty is equivalent to primary).",
+	CodeEdgeLinkDirectionInvalid:           "Invalid link_direction: {direction}. Allowed values: both, forward (empty is equivalent to both); to single-link in the other direction, flip the edge instead.",
 	CodeEdgeSelfLoop:                       "Edge source and target nodes must not be the same (self-loop).",
 	CodeRoutePolicyReserved:                "route_policies is a reserved feature that is not yet implemented: no renderer consumes it, the compiler only passes it through verbatim, so it must be empty (detected {count} policies; please clear route_policies; for LAN bridging / route injection use extra_prefixes instead)",
 	CodeTopologyTooManyNodes:               "Topology has too many nodes: {count} exceeds the maximum of {max}. Split the deployment into separate topologies.",
@@ -233,6 +243,9 @@ var registry = map[Code]string{
 	CodeNATDeadLink:                        "Edge {edge}: nodes {from} and {to} are both behind NAT, neither direction provides an endpoint host address, and neither end accepts inbound connections; the direct tunnel cannot be established (confirmed dead link). Configure a public endpoint on one end, or route through a relay instead",
 	CodeNATDoubleNATNoEndpoint:             "Edge {edge}: nodes {from} and {to} are both behind NAT and provide no endpoint host address; the direct tunnel cannot be established (a relay or public relay is required)",
 	CodeNATNoOutboundToPublic:              "Node {name} ({id}) is behind NAT and has no outbound connection to any public, inbound-capable, or relay node; it will not be able to join the overlay",
+	CodeEdgeLinkDirectionConflict:          "Edge {id} sets link_direction {direction}, but edge {other} also connects the same pair of nodes in the primary class: the pair folds into a single link at compile time and a folded edge's direction would be silently ignored. Keep exactly one enabled primary-class edge for this pair (delete or disable the other), or clear link_direction",
+	CodeEdgeLinkDirectionForwardNoEndpoint: "Edge {id} sets link_direction forward but has no endpoint_host: the forward peer only ever dials the edge's endpoint host, so no side could initiate this link (dead link). Set endpoint_host, or clear link_direction",
+	CodeEdgeLinkDirectionClientEdge:        "Edge {id} touches client node {node} but sets link_direction {direction}: a client link uses a single wg0 with fixed dial semantics (the client always dials the router), so link_direction is meaningless there; please clear it",
 }
 
 // P is one template parameter, keyword-style (P{"cidr", v}) so the ~91 call sites cannot

@@ -98,6 +98,13 @@ export interface Edge {
   // fall back to plain UDP if mimic provisioning fails; 'none' = fail closed. Only meaningful on a
   // tcp edge. See docs/spec/data-model/edge.md §TCP transport.
   mimic_fallback?: 'udp' | 'none';
+  // Per-edge dial-direction POLICY. undefined/omitted/'both' = both sides may initiate (today's
+  // behavior); 'forward' = only from→to initiates (dials the required endpoint_host), the reverse
+  // peer keeps its [Peer] stanza but carries no Endpoint. There is no 'reverse' (D11, one
+  // spelling): single-linking the other way is expressed by flipping the edge. Pure policy: gates
+  // only which peer gets a dial Endpoint, never allocation. See docs/spec/data-model/edge.md
+  // §Link direction.
+  link_direction?: 'both' | 'forward';
   is_enabled: boolean;
   notes?: string;
   // Allocation pins: written by the compiler and echoed back verbatim, so that a recompile preserves existing

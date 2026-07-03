@@ -1,0 +1,30 @@
+{
+  "name": "link-direction-forward-asymmetric",
+  "doc": "The flipped-forward no-op surface (D11: single-linking is ALWAYS the drawn direction; 'to(A)' flips the edge): a NAT'd peer single-links toward a public hub with an explicit endpoint_host. The from-node has no public endpoints, so the auto-reverse fallback was ALREADY empty — the golden pins that link_direction=forward on this shape produces rendered files byte-identical to the direction-less equivalent (suppression is a no-op here) while the field itself round-trips through the compile echo. Complements 21 (both-public), where the suppression visibly removes the reverse Endpoint line.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "link-dir-fwd-asym", "name": "Link Direction Forward Asymmetric" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.72.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "natpeer", "name": "natpeer", "hostname": "natpeer.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_forward": true },
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "hub", "name": "hub", "hostname": "hub.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "hub-ep", "host": "hub.example.com", "port": 51820 } ],
+        "wireguard_private_key": "Zwj3ssddBkwaaSNns0OOo01qoX0Nshgd5oECLCBa/lk="
+      }
+    ],
+    "edges": [
+      { "id": "e-fwd", "from_node_id": "natpeer", "to_node_id": "hub", "type": "public-endpoint", "endpoint_host": "hub.example.com", "transport": "udp", "link_direction": "forward", "is_enabled": true }
+    ]
+  }
+}

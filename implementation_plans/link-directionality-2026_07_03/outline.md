@@ -8,7 +8,8 @@
 
 ## 1. Mission
 
-Add a per-edge **`link_direction`** field (`""`≡`both` default / `forward` / `reverse`) so a
+Add a per-edge **`link_direction`** field (`""`≡`both` default / `forward`; no stored `reverse` —
+D11: one spelling, the editor's "to(A)" choice flips the edge instead) so a
 single-linked edge's suppressed side keeps its full `[Peer]` stanza (AllowedIPs, return traffic,
 Babel routing) but never carries a dial `Endpoint` — killing the reverse-peer race in which the
 auto-reverse peer dials the from-node's plain public IP, wins the WireGuard handshake when it boots
@@ -18,8 +19,8 @@ first, and permanently bypasses the operator's relay/accelerator path via endpoi
 - [ ] `link_direction` lands in the model + BOTH compilers + BOTH validators, byte-exact (drift
       manifest, golden corpora, i18n sync all green); default `both` compiles **byte-identical**
       (zero churn across all 20 pre-existing goldens).
-- [ ] Every direction misconfiguration is a **loud validator error** (6 new codes), never a silently
-      dead link or silently ignored override.
+- [ ] Every direction misconfiguration is a **loud validator error** (4 new codes after D11), never
+      a silently dead link or a direction silently ignored by pair-folding.
 - [ ] The panel exposes the field on edge click, labeled with real node names + arrows
       (`A ⇄ B` / `A → B` / `B → A`), with a directional canvas style; existing configs auto-convert
       (absence ≡ both) and garbage values sanitize to both on load.
@@ -46,11 +47,13 @@ Inherits `PRINCIPLES.md` (repo root) in full. Load-bearing for THIS subject, wit
   split immediately. *Violation:* a Go-only validator code; a TS-only sanitize rule that changes
   compile output.
 - **Generated configs must be deployable** `[STATED — PRINCIPLES.md]` **(HIGH).** A direction with
-  no possible dialer is a loud validator ERROR (rules 3/4 below), never a silently dead link.
+  no possible dialer is a loud validator ERROR (the forward-no-endpoint rule), never a silently
+  dead link.
   *Violation:* letting `forward` + empty `endpoint_host` compile (the forward peer only ever dials
   `edge.endpoint_host` — verified `peers.go:756-771`).
 - **Backend is the sole port authority** `[STATED — PRINCIPLES.md]` **(HIGH).** The UI writes only
-  `link_direction` (and CLEARS endpoint fields when `reverse` is chosen); it never stamps ports.
+  `link_direction` (and, on the D11 "to(A)" flip, swaps from/to + mirrors pins + clears the stale
+  endpoint fields); it never stamps ports.
 - **Backward compatibility of persisted topologies** `[STATED — PRINCIPLES.md]` **(MEDIUM).**
   Absent field ≡ both (`omitempty`); prior localStorage/JSON loads + compiles byte-identically;
   unknown values sanitize to both on panel load.
@@ -138,22 +141,26 @@ a fail fixture (coverage floor); install-script/renderer changes need BOTH golde
 | D8 | draft (executor call) | Canvas visual for `both` | **Unchanged** (zero cosmetic churn); single-linked edges get a direction chip (`data-testid`) + dial-side arrow marker |
 | D9 | draft (executor call) | Go-side sanitize | Go `normalize` intentionally NOT coercing invalid values — validators are the loud gate; panel-load sanitize covers the user path |
 | D10 | post-approval (owner) | Execution pacing | Materialize + merge the plan folder now; **sleep 5 hours**; execute plan-1 on wake |
+| D11 | mid-plan-1 (owner) | Reverse spelling | **Drop `reverse` from the model — one spelling.** The owner asked whether `reverse` canonicalizes to a flipped `forward` at compile time (worried about dual-spelling logic traps; two NAT special-branches had already materialized as evidence). Decision: single-linking is ALWAYS the drawn from→to direction (`""`≡`both` / `forward` only); the editor's "to(A)" choice performs an EXPLICIT flip (swap from/to + mirror the six pins — allocation-stable, link identity + interface names are direction-agnostic — + prefill endpoint_host from the dialed node's endpoint picker). Deleted vs the draft: 2 validator codes (reverse_unreachable, reverse_endpoint_ignored), both NAT special-branches, the forward-endpoint compiler gate. Trade-off accepted: a single-linked edge holds an explicit host copy (stale-snapshot warning covers drift) instead of dynamically following node endpoints |
+| D12 | mid-plan-1 (executor) | Discovered adjacent defect | The TS validator never mirrored Go's `validation_edge_mimic_fallback_invalid` (Go 102 vs TS 101 codes) and no fixture exercised it — a bad `mimic_fallback` passed in-browser Validate but failed Go compile. Fixed in plan-1 (TS check + registry + fixture-15 exercise); flagged to review. The sibling `EDGE_OMITEMPTY` list also lacks `mimic_fallback` — noted as follow-up, NOT changed (different blast radius: canonical-diff behavior) |
 
 ## 7. Milestones
 
 ### plan-1 — Core direction semantics, both compilers + validators → `plan-1-2026_07_03.md`
-**Goal:** the field + compile gates + 6 validation codes + sanitize + conformance, one PR,
-byte-exact. **Hazards:** pair-folding silently ignoring direction (→ conflict rule); the TS
+**Goal (as amended by D11/D12):** the field + the reverse-endpoint suppression gate + 4 validation
+codes + sanitize + conformance (+ the D12 mimic_fallback TS mirror), one PR, byte-exact.
+**Hazards:** pair-folding silently ignoring direction (→ conflict rule); the TS
 compile write-back dropping the field; drift/i18n gates. **Verification:** full local suite +
 zero-churn golden assertion + new fixtures green in both languages. **Stop-loss:** if TS echo
 drops the field in an edge-rebuilding path → plan-1.5 (fix the echo, never the fixture).
 
 ### plan-2 — Panel UX → `plan-2-2026_07_03.md`
-**Goal:** EdgeEditor select (real node names + arrows), direction chip + dial-side marker,
-sanitize-visible behavior, e2e. **Hazards:** e2e locator fragility (use `data-testid`);
-reverse-selection tripping rule 5 (editor clears endpoint fields). **Verification:** lint/build/
-vitest/e2e. **Stop-loss:** visual-corpus regressions → deliberate re-baseline (plan-2.5), never
-loosened locators.
+**Goal (as amended by D11):** EdgeEditor select (real node names + arrows; the "to(A)" choice is
+an explicit edge FLIP — swap from/to, mirror pins, clear stale endpoint fields, prefill the host
+picker), direction chip + end marker, sanitize-visible behavior, e2e. **Hazards:** e2e locator
+fragility (use `data-testid`); the flip's pin mirroring must be pure + allocation-stable.
+**Verification:** lint/build/vitest/e2e. **Stop-loss:** visual-corpus regressions → deliberate
+re-baseline (plan-2.5), never loosened locators.
 
 ### plan-3 — Behavioral proof + docs → `plan-3-2026_07_03.md`
 **Goal:** realtunnel `c4` scenario (suppressed side has no `Endpoint =`, tunnel still forms) +

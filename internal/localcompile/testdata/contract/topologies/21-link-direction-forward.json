@@ -1,0 +1,31 @@
+{
+  "name": "link-direction-forward",
+  "doc": "The link-direction race-killer surface: two PUBLIC routers (both dialable — without the feature the auto-reverse peer would dial relay-a's public endpoint and could win the WireGuard endpoint slot) joined by one edge carrying endpoint_host + link_direction=forward. The golden pins that relay-a's conf dials accel.example.com while relay-b's [Peer] for relay-a keeps AllowedIPs but has NO Endpoint line (the public-endpoint reverse fallback is suppressed), and that allocation (ports/transit/link-locals) is byte-identical to the direction-less equivalent — direction is allocation-blind.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "link-dir-forward", "name": "Link Direction Forward" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.71.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "relay-a", "name": "relay-a", "hostname": "relay-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "relay-a-ep", "host": "relay-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "relay-b", "name": "relay-b", "hostname": "relay-b.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "relay-b-ep", "host": "relay-b.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      }
+    ],
+    "edges": [
+      { "id": "e-fwd", "from_node_id": "relay-a", "to_node_id": "relay-b", "type": "public-endpoint", "endpoint_host": "accel.example.com", "endpoint_port": 45820, "transport": "udp", "link_direction": "forward", "is_enabled": true }
+    ]
+  }
+}

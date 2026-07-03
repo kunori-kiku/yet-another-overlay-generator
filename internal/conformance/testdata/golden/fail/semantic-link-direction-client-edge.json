@@ -1,0 +1,28 @@
+{
+  "fixture": "semantic-link-direction-client-edge",
+  "verdict": {
+    "validator": [
+      "validation_edge_link_direction_client_edge"
+    ],
+    "apierr": []
+  },
+  "topology": null,
+  "allocations": null,
+  "files": null,
+  "checksums": null,
+  "deploy": null,
+  "signatures": null,
+  "signing_pub_pem": "",
+  "healed_edges": [
+    {
+      "id": "e-client",
+      "compiled_port": 0,
+      "pinned_from_port": 0,
+      "pinned_to_port": 0,
+      "pinned_from_transit_ip": "",
+      "pinned_to_transit_ip": "",
+      "pinned_from_link_local": "",
+      "pinned_to_link_local": ""
+    }
+  ]
+}

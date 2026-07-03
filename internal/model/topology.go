@@ -162,6 +162,23 @@ const (
 	EdgeRoleBackup = "backup"
 )
 
+// Value constants for Edge.LinkDirection. An empty value is equivalent to EdgeLinkDirectionBoth.
+// There is deliberately NO "reverse" value: single-linking is ALWAYS expressed as the drawn
+// from→to direction (one spelling — a second spelling would force every direction-aware rule to
+// handle both forever; owner decision D11). To single-link the other way, flip the edge (the
+// editor's "to(A)" choice swaps from/to and mirrors the pin pairs — allocation-stable, since link
+// identity and interface names are direction-agnostic).
+const (
+	// EdgeLinkDirectionBoth lets both sides initiate the WireGuard handshake (the default; the
+	// forward peer dials edge.endpoint_host when set, the auto-reverse peer dials the from-node's
+	// public endpoint when resolvable).
+	EdgeLinkDirectionBoth = "both"
+	// EdgeLinkDirectionForward lets only from→to initiate: the reverse peer keeps its full [Peer]
+	// stanza (AllowedIPs, return traffic, Babel) but carries no dial Endpoint, so it can never
+	// race the forward path's relay/accelerator endpoint via WireGuard endpoint roaming.
+	EdgeLinkDirectionForward = "forward"
+)
+
 // Edge is an edge definition representing the connection intent between two nodes.
 // Its semantics are "from actively connects to to".
 type Edge struct {
@@ -201,6 +218,19 @@ type Edge struct {
 	// byte-identical). omitempty for back-compat: an old topology with no field loads as "" (inherit).
 	// See docs/spec/data-model/edge.md §TCP transport and docs/spec/artifacts/mimic.md.
 	MimicFallback string `json:"mimic_fallback,omitempty"`
+
+	// LinkDirection is the per-edge dial-direction POLICY. Tri-state:
+	//   ""        equivalent to "both" (back-compat: old topologies load with no field);
+	//   "both"    both sides may initiate — today's behavior, byte-identical output;
+	//   "forward" only from→to initiates (dials edge.endpoint_host, which the validator
+	//             requires); the reverse peer keeps its [Peer] stanza but carries no Endpoint,
+	//             so it can never race the forward path via WireGuard endpoint roaming.
+	// To single-link the OTHER way, flip the edge — there is no "reverse" value (D11, one
+	// spelling; see the EdgeLinkDirection* const block).
+	// PURE POLICY: it gates only which PeerInfo receives a dial Endpoint, NEVER the allocator
+	// (ports / transit IPs / link-locals / pins are direction-blind and stay byte-identical).
+	// omitempty for back-compat. See docs/spec/data-model/edge.md §Link direction.
+	LinkDirection string `json:"link_direction,omitempty"`
 
 	// Whether the edge is enabled.
 	IsEnabled bool `json:"is_enabled"`
