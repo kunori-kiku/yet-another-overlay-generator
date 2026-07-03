@@ -1,6 +1,7 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
 import { t } from '../../../i18n';
 import { resolveEdgeInterface } from '../../../lib/compiledInterfaces';
+import { flipEdge, reverseDialSource } from '../../../lib/edgeDirection';
 
 // MIN_PINNED_PORT mirrors the backend's minPinnedPort (validator) — the lower bound for an
 // operator-chosen pinned listen port. Auto-allocation still starts at 51820, but a port-
@@ -279,6 +280,71 @@ export function EdgeEditor() {
             </p>
           )}
         </div>
+        {/* Link direction (edge.md §Link direction, D11): the model stores only ''≡both / 'forward'
+            — one spelling. The "to(A)" option is an explicit edge FLIP (swap from/to, mirror the
+            pin pairs — allocation-stable — clear the stale dial fields, prefill the new target's
+            public host), so the drawn arrow always equals the dial direction. Hidden on client
+            edges (the validator forbids a direction there: client dial semantics are fixed). */}
+        {!selectedEdgeTouchesClient && selectedEdgeFrom && selectedEdgeTarget && (
+          <div>
+            <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.linkDirection')}</label>
+            <select
+              data-testid="link-direction-select"
+              value={selectedEdge.link_direction === 'forward' ? 'forward' : 'both'}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === 'both') {
+                  updateEdge(selectedEdge.id, { link_direction: undefined });
+                } else if (v === 'forward') {
+                  updateEdge(selectedEdge.id, { link_direction: 'forward' });
+                } else {
+                  // 'flip' — single-link toward the current FROM node: redraw the edge in the
+                  // opposite direction (one atomic store write) and prefill the dial host from
+                  // the NEW target's (the old from-node's) public endpoints when it has one.
+                  const flipped = flipEdge(selectedEdge);
+                  updateEdge(selectedEdge.id, {
+                    ...flipped,
+                    endpoint_host: selectedEdgeFrom.public_endpoints?.[0]?.host,
+                    link_direction: 'forward',
+                  });
+                }
+              }}
+              className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
+            >
+              <option value="both">
+                {t(language, 'edgeEditor.linkDirectionBoth', { from: selectedEdgeFrom.name, to: selectedEdgeTarget.name })}
+              </option>
+              <option value="forward">
+                {t(language, 'edgeEditor.linkDirectionForward', { from: selectedEdgeFrom.name, to: selectedEdgeTarget.name })}
+              </option>
+              <option value="flip">
+                {t(language, 'edgeEditor.linkDirectionFlip', { from: selectedEdgeFrom.name, to: selectedEdgeTarget.name })}
+              </option>
+            </select>
+            {selectedEdge.link_direction === 'forward' && !selectedEdge.endpoint_host && (
+              <p className="mt-0.5 text-[10px] text-[var(--warning)]">
+                {t(language, 'edgeEditor.linkDirectionForwardNeedsHost')}
+              </p>
+            )}
+            {selectedEdge.link_direction !== 'forward' && (() => {
+              // Both-mode readout: where the REVERSE dial (to→from) resolves from at compile time
+              // — the asymmetry (one configurable forward dial, one derived reverse dial) should
+              // be visible, not tribal knowledge.
+              const src = reverseDialSource(selectedEdge, selectedEdgeFrom, edges);
+              return (
+                <p className="mt-0.5 text-[10px] text-[var(--content-muted)] font-mono" data-testid="reverse-dial-readout">
+                  {t(language, 'edgeEditor.linkDirectionReverseDial', {
+                    to: selectedEdgeTarget.name,
+                    from: selectedEdgeFrom.name,
+                    source: src
+                      ? `${src.host}${src.kind === 'reverse-edge' ? ` (${t(language, 'edgeEditor.linkDirectionViaReverseEdge')})` : ''}`
+                      : t(language, 'edgeEditor.linkDirectionReverseDialNone'),
+                  })}
+                </p>
+              );
+            })()}
+          </div>
+        )}
         {compileResult && (() => {
           // Spec (naming.md / Decisions #12) forbids the frontend from rebuilding interface names
           // (above 12 chars the backend takes a hash-suffix branch, and for parallel links a backup

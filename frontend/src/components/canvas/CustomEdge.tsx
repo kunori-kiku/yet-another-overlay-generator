@@ -38,6 +38,11 @@ interface CustomEdgeData {
   //   'duplicate'           -> a redundant same-direction roleless/primary edge (mirrors backend D71 warning)
   //   undefined             -> single-edge node pair, no chip shown (keeps the look clean)
   roleChip?: 'primary' | 'duplicate' | string;
+  // Per-edge dial-direction policy (edge.md §Link direction, D11): 'forward' renders the
+  // single-linked chip (→); ''/'both'/undefined render EXACTLY as before the feature (zero
+  // cosmetic churn for existing designs — D8). The drawn arrow already equals the dial
+  // direction (D11: no stored reverse; the editor flips the edge instead).
+  linkDirection?: string;
   // Focus opacity (Decisions #11, literal implementation): a deemphasized element stays mounted,
   // visible, and clickable -- it only fades to 0.15 opacity with the existing 150ms transition.
   // Never display:none / unmount / block clicks.
@@ -57,6 +62,7 @@ export function CustomEdge({
   selected,
 }: EdgeProps & { data: CustomEdgeData }) {
   const language = useTopologyStore((state) => state.language);
+  const selectEdge = useTopologyStore((state) => state.selectEdge);
   const edgeType = data?.edgeType || 'direct';
   const stroke = edgeStroke[edgeType] || defaultStroke;
   const rawLabel = data?.label || edgeType;
@@ -67,6 +73,7 @@ export function CustomEdge({
   const pending = data?.pending === true;
   const port = data?.port;
   const roleChip = data?.roleChip;
+  const singleLinked = data?.linkDirection === 'forward';
   const deemphasized = data?.deemphasized === true;
 
   // Parallel-edge offset: compute the offset from parallelIndex and parallelCount
@@ -119,6 +126,12 @@ export function CustomEdge({
       <EdgeLabelRenderer>
         <div
           className="nodrag nopan"
+          data-testid={`edge-label-${id}`}
+          // The pill has always advertised clickability (cursor pointer + pointerEvents all) but the
+          // EdgeLabelRenderer portal sits ABOVE the SVG edges, so clicks here never reached React
+          // Flow's onEdgeClick — wire the same selection the edge path performs (TopologyCanvas
+          // onEdgeClick → selectEdge), making the label an equivalent, stable selection target.
+          onClick={() => selectEdge(id)}
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
@@ -199,6 +212,25 @@ export function CustomEdge({
                   {roleChip}
                 </span>
               )}
+            {/* Single-linked chip (edge.md §Link direction): only the drawn source dials; the
+                reverse peer never initiates. Doubly-linked edges render no chip (zero churn). */}
+            {singleLinked && (
+              <span
+                data-testid="edge-direction-chip"
+                title={t(language, 'edgeDirectionChipTitle')}
+                style={{
+                  fontFamily: 'monospace',
+                  background: `${stroke}30`,
+                  color: 'var(--content)',
+                  borderRadius: '3px',
+                  padding: '0 4px',
+                  fontSize: '9px',
+                  fontWeight: 700,
+                }}
+              >
+                →
+              </span>
+            )}
             <span>{label}</span>
             {/* Port chip: compiled -> the actual listen port (the backend-allocated truth);
                 uncompiled -> a "pending" placeholder, avoiding the old misleading dangling-colon "host:" form. */}
