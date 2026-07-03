@@ -1,23 +1,37 @@
 # STATUS
 <!-- regenerated: 2026-07-03 -->
-<!-- by: draft-implementation-plan — link-directionality subject drafted (ships as beta.18); pre-rc1-hardening COMPLETE (beta.17 = Latest) -->
+<!-- by: hand — link-directionality subject DELIVERED + RELEASED as v2.0.0-beta.18 (GitHub Latest) -->
 
 ## Active work
 
-- **SUBJECT `link-directionality-2026_07_03` DRAFTED (2026-07-03) — awaiting execution; ships as
-  the interim `v2.0.0-beta.18`, then rc.1.** The owner root-caused the live "NAT override goes
-  direct" residue: edges are unconditionally bidirectional, so the auto-reverse peer dials the
-  from-node's plain public IP (`internal/compiler/peers.go:886-898`) and, when it handshakes first,
-  WireGuard endpoint roaming permanently bypasses the relay/accelerator path. Fix = a per-edge
-  **`link_direction`** (`""`≡`both` default / `forward` / `reverse`): the suppressed side keeps its
-  full `[Peer]` (AllowedIPs/Babel/return traffic) but carries NO dial `Endpoint`. 4 plans foldered
-  in [`implementation_plans/link-directionality-2026_07_03/`](implementation_plans/link-directionality-2026_07_03/outline.md):
-  plan-1 core (both compilers + 6 loud validation codes + sanitize + conformance, zero churn on all
-  20 pre-existing goldens) → plan-2 panel UX (node-name-labeled select `A ⇄ B`/`A → B`/`B → A` +
-  directional canvas style) → plan-3 realtunnel `c4` proof + docs/wiki → plan-4 release beta.18.
-  Verified-safe already: renderer omits empty `Endpoint`; mimic handles endpoint-less peers
-  (beta.14 `local=` design); controller/normalize/keepalive/allocation untouched. **Execution
-  pacing (owner): a 5-hour timer runs between plan-merge and plan-1 execution.**
+- **SUBJECT `link-directionality-2026_07_03` DELIVERED — RELEASED as `v2.0.0-beta.18` (GitHub
+  *Latest*, 2026-07-03; tag on `1c38dfa`; beta.17 demoted).** All 4 plans merged (PRs #221–#224),
+  each independently workflow-reviewed → adversarially verified → fixed at root → re-reviewed
+  clean → CI-green before merge. The owner root-caused the live "NAT override goes direct"
+  residue: edges are unconditionally bidirectional, so the auto-reverse peer dials the from-node's
+  plain public IP and, when it handshakes first, WireGuard endpoint roaming permanently bypasses
+  the relay/accelerator path. Shipped fix = per-edge **`link_direction`** (`""`≡`both` default /
+  `forward` — **no stored `reverse`, D11**: single-linking the other way is an explicit editor
+  FLIP that swaps from/to + mirrors pins, allocation-stable): a `forward` edge's reverse peer
+  keeps its full `[Peer]` (AllowedIPs/Babel/return traffic) but carries NO dial `Endpoint`.
+  - plan-1 (#221) core: both compilers + **4** loud validation codes + panel-load sanitize +
+    conformance (zero churn across all 20 pre-existing success goldens; allocation provably
+    direction-blind) **+ D12 discovered fix**: the TS validator never mirrored
+    `validation_edge_mimic_fallback_invalid` (bad `mimic_fallback` passed in-browser Validate,
+    failed Go compile) — mirrored + corpus-exercised.
+  - plan-2 (#222) panel UX: node-name-labeled select (`A ⇄ B`/`A → B`/`B → A`-flip), both-mode
+    **reverse-dial readout** (compiler-exact last-wins semantics), single-linked `→` chip, and the
+    label pill wired to true selection equivalence (review caught a real MAJOR: the pill's
+    store-only selection desynced React Flow's internal selection → default-Backspace deleted the
+    WRONG edge; fixed with `addSelectedEdges` + the `elementsSelectable` gate).
+  - plan-3 (#223) proof + docs: realtunnel **`c4` PASSED on the real kernel in CI** (suppressed
+    side renders no `Endpoint`, tunnel forms from the dialer's inbound handshake alone, routes
+    both ways) + `edge.md` §Link direction + `peer-derivation.md` rule 0 + bilingual wiki (review
+    caught a BLOCKER: the rule-0 insertion had deleted normative rule 1 — restored).
+  - plan-4 (#224) release: CHANGELOG (reviewed, 1 wording fix), tag, 29 assets, sidecar +
+    `version` stamp verified on the published binary, promoted to Latest.
+  - **OWED: owner fleet smoke of beta.18** (single-link the accelerator edge, both boot orders —
+    script in Next actions), alongside the still-owed beta.17 hardening smoke; both gate rc.1.
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each
@@ -250,14 +264,20 @@
 
 ## Next actions
 
-**Immediate — execute `link-directionality-2026_07_03` (after the owner-directed 5-hour timer):**
-plan-1 core semantics → plan-2 panel UX → plan-3 realtunnel proof + docs → plan-4 release
-`v2.0.0-beta.18` (each per-PR workflow-reviewed → fixed → re-reviewed → merged). Then:
-1. **Owner fleet smoke of beta.17 + beta.18** (the hardening set + single-linking the accelerator
-   edge under both boot orders) — pass-or-accept-risk.
+**`link-directionality` is DONE and RELEASED (beta.18 = Latest). The remaining steps are
+owner-only:**
+1. **Owner fleet smoke of beta.17 + beta.18** — the hardening set, plus the beta.18 script:
+   update the panel/agents to beta.18 → open the accelerator edge → set Link direction to
+   `<NAT-peer> → <hub>` (or use the flip choice if drawn the other way; the editor prefills the
+   accelerator host) → Deploy → on the hub, `wg show <iface>`: the peer for the NAT-side node must
+   show NO configured endpoint until its handshake arrives, and the runtime endpoint must be the
+   ACCELERATOR's egress, never the peer's direct IP → restart the two nodes in BOTH orders
+   (peer-first, hub-first) and confirm the path never goes direct. Pass-or-accept-risk.
 2. **pre-rc1-hardening plan-11 — cut `v2.0.0-rc.1`:** refresh `docs/spec/rc1/RC1-GATE.md`, roll the
    CHANGELOG, tag + publish. (rc.1 is `make_latest=true` in `release.yml`, so it self-promotes;
-   betas need the manual `gh release edit --latest`.) Say the word when the smokes are clean.
+   betas need the manual `gh release edit --latest`.) Archiving
+   `link-directionality-2026_07_03/` to `_completed/` rides that session. Say the word when the
+   smokes are clean.
 
 Separate from the release: the owner's live WireGuard-endpoint symptom is a fleet **NAT/roaming**
 matter — the deterministic in-product fix is the `link-directionality` subject above (single-link

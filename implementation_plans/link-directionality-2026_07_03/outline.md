@@ -187,11 +187,11 @@ workflow → fix at root, re-tag from the green tip (never force-push a tag).
 
 ## 9. Closure criteria
 
-- [ ] All 4 plans merged (each reviewed → fixed → re-reviewed → CI green).
-- [ ] `v2.0.0-beta.18` released; assets + version stamp verified; promoted to Latest (owner pattern).
-- [ ] STATUS.md + project memory updated; owner smoke script handed off.
+- [x] All 4 plans merged (each reviewed → fixed → re-reviewed → CI green): #221, #222, #223, #224.
+- [x] `v2.0.0-beta.18` released; assets + version stamp verified; promoted to Latest (owner pattern).
+- [x] STATUS.md + project memory updated; owner smoke script handed off (see STATUS §Next actions).
 - [ ] Subject folder stays in `implementation_plans/` until the owner smoke passes (then archived to
-      `_completed/` alongside the rc.1 cut).
+      `_completed/` alongside the rc.1 cut). **← the only open item; owner-gated.**
 
 ## 10. Plan status table
 
@@ -200,4 +200,4 @@ workflow → fix at root, re-tag from the green tip (never force-push a tag).
 | plan-1 | Core direction semantics (both compilers + validators) | **done** (reviewed → fixed → re-reviewed clean → merged) | #221 |
 | plan-2 | Panel UX (EdgeEditor + canvas + e2e) | **done** (reviewed → fixed → re-reviewed → residuals fixed → final verify clean → merged) | #222 |
 | plan-3 | Behavioral proof + docs (realtunnel c4 + spec + wiki) | **done** (reviewed → blocker+5 fixed → re-reviewed clean → merged; c4 PASSED on the kernel in CI) | #223 |
-| plan-4 | Release v2.0.0-beta.18 + closeout | in progress (CHANGELOG PR) | — |
+| plan-4 | Release v2.0.0-beta.18 + closeout | **done** (CHANGELOG reviewed → 1 wording fix → merged; tag on `1c38dfa`; release workflow green, 29 assets, sidecar + `version` stamp verified on the published binary; promoted to **Latest**, beta.17 demoted) | #224 |
