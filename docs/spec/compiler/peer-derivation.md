@@ -67,6 +67,7 @@ resolve the reverse `Endpoint` as follows:
    direction-bearing pair has exactly one enabled primary-class edge, but the compiler applies
    this gate deterministically regardless — validator-independent, floors unknown values to
    `both`.)
+1. **If a reverse edge exists** (`to → from`) with a non-empty `endpoint_host`: resolve exactly as
    the forward rule above — `endpoint_port` override if `> 0`, otherwise the from-side
    interface's auto-allocated listen port.
 2. **Else, if no reverse edge exists (or its `endpoint_host` is empty) and the from-node has a

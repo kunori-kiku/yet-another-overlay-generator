@@ -11,8 +11,9 @@ import (
 // scenarios_test.go — the ADDITIVE scenario tier (plan-18 Phase 7). None of these gate rc.1 (the
 // simple-mesh canary is the required floor); each runs ONLY when explicitly selected via
 // REALTUNNEL_SCENARIOS (a comma list of scenario keys, or "all"). They extend coverage beyond the
-// full-mesh canary to: the C3 reverse-endpoint contract, relay transit reachability, and router
-// hub-and-spoke forwarding — each on the real kernel.
+// full-mesh canary to: the C3 reverse-endpoint contract, the C4 link-direction suppression
+// contract, relay transit reachability, and router hub-and-spoke forwarding — each on the real
+// kernel.
 
 // requireScenario skips unless this scenario key is selected in REALTUNNEL_SCENARIOS (or "all" is
 // present). It first runs the capability preflight, so a selected-but-incapable host still skips
