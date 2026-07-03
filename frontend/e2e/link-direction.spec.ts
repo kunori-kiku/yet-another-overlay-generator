@@ -8,11 +8,12 @@ import { seedLocalMode, seedCanvasTopology } from './fixtures/seedStore'
 // validation for a single-linked edge without a dial host. Runs on the air-gap boot in local
 // mode — validation is the in-browser TS validator, no server round-trip.
 //
-// Interactive locators are data-testid only (project lesson: color/class locators broke on the
-// theme refactor): edge-label-<id> (the label pill — a true selection-equivalent to the edge
-// path: it mirrors React Flow's addSelectedEdges + the store selectEdge), link-direction-select,
-// edge-endpoint-host-input, edge-direction-chip, reverse-dial-readout. Rendered COPY is asserted
-// by text on purpose — that pins the user-visible message, which is part of the contract.
+// Feature locators are data-testid (project lesson: color/class locators broke on the theme
+// refactor): edge-label-<id> (the label pill — a true selection-equivalent to the edge path: it
+// mirrors React Flow's addSelectedEdges + the store selectEdge), link-direction-select,
+// edge-endpoint-host-input, edge-direction-chip, reverse-dial-readout. Shared chrome (the
+// Validate button) is located by accessible role, and rendered COPY is asserted by text on
+// purpose — both pin user-visible contracts.
 
 // Two PUBLIC routers so the direction semantics are non-trivial (without the feature the
 // auto-reverse would dial alpha's public endpoint — the race). Pins seeded so the flip's

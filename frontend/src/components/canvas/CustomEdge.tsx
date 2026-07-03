@@ -133,13 +133,17 @@ export function CustomEdge({
           // EdgeLabelRenderer portal sits ABOVE the SVG edges, so clicks here never reached React
           // Flow's onEdgeClick. Make the pill a TRULY equivalent selection target by mirroring the
           // path click's BOTH effects, in the same order: React Flow's internal selection first
-          // (addSelectedEdges — exactly what its EdgeWrapper does; this also unselects nodes and
-          // keeps the default-Backspace deleteElements targeting THIS edge, never a stale one),
-          // then the app store (TopologyCanvas onEdgeClick → selectEdge). Writing only the app
-          // store would desync the two selections and Backspace would delete the previously
-          // path-clicked element instead.
+          // (addSelectedEdges — exactly what its EdgeWrapper does, and gated on the same
+          // elementsSelectable flag so the read-only below-lg preview never RF-selects what a path
+          // click could not; this also unselects nodes and keeps the default-Backspace
+          // deleteElements targeting THIS edge, never a stale one), then the app store
+          // (TopologyCanvas onEdgeClick → selectEdge). Writing only the app store would desync the
+          // two selections and Backspace would delete the previously path-clicked element instead.
           onClick={() => {
-            rfStore.getState().addSelectedEdges([id]);
+            const rf = rfStore.getState();
+            if (rf.elementsSelectable) {
+              rf.addSelectedEdges([id]);
+            }
             selectEdge(id);
           }}
           style={{
