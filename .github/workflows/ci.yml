@@ -194,16 +194,17 @@ jobs:
             || { echo "::error::TestSimpleMeshCanary did not PASS (skipped or absent) — the required realtunnel gate must not pass vacuously"; exit 1; }
           ! grep -q '^--- SKIP: TestSimpleMeshCanary' /tmp/realtunnel-ci.log \
             || { echo "::error::TestSimpleMeshCanary SKIPPED — a prerequisite is missing on the runner"; exit 1; }
-      # Non-blocking opt-in tier (plan-18 Phase 7): the C3 reverse-endpoint contract, relay transit,
-      # and router hub-and-spoke. continue-on-error keeps them OFF the required path (the canary is
-      # the floor) while still exercising them every PR so a break is caught early.
+      # Non-blocking opt-in tier (plan-18 Phase 7): the C3 reverse-endpoint contract, the C4
+      # link-direction suppression contract, relay transit, and router hub-and-spoke.
+      # continue-on-error keeps them OFF the required path (the canary is the floor) while still
+      # exercising them every PR so a break is caught early.
       - name: Additive scenarios (non-blocking)
         id: additive
         continue-on-error: true
         run: |
           set -o pipefail
           sudo REALTUNNEL_ROOTFS=${{ steps.rt.outputs.rootfs }} REALTUNNEL_SCENARIOS=all ${{ steps.rt.outputs.testbin }} \
-            -test.v -test.timeout 900s -test.run 'TestC3OneDirectional|TestRelayTopology|TestNatHub' \
+            -test.v -test.timeout 900s -test.run 'TestC3OneDirectional|TestC4LinkDirection|TestRelayTopology|TestNatHub' \
             2>&1 | tee /tmp/realtunnel-additive.log
       - name: Upload realtunnel logs
         if: failure() || steps.additive.outcome == 'failure'

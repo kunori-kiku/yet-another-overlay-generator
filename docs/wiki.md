@@ -170,6 +170,7 @@ A directed edge `A → B` means **A actively connects to B**.
 | Endpoint Port | Operator NAT/port-forward override: `0` (default) = compiler auto-allocates; nonzero = the external port the from-side dials verbatim |
 | Compiled Port | Read-only: the port the from-side actually dials, filled in after compilation |
 | Transport | `udp` = plain WireGuard. `tcp` = the link is wrapped by [mimic](https://github.com/hack3ric/mimic) (eBPF UDP→fake-TCP) for networks that throttle or block UDP. Both ends must be Linux with eBPF; MTU is auto-lowered; the installer provisions mimic from the distro. **Not** a censorship/DPI-circumvention feature. See [spec/artifacts/mimic.md](spec/artifacts/mimic.md) |
+| Link direction | `A ⇄ B` (doubly linked, default) = both sides may initiate the handshake. `A → B` (single-linked) = only A ever dials; B keeps routing but never initiates. The third choice, `B → A`, **flips the edge** (visible: the arrow reverses, allocations follow their nodes) and then single-links it. See the callout below |
 | Priority / Weight | Link-cost preference (lower wins); feeds the Babel `rxcost` |
 | Is Enabled | Whether this edge participates in compilation |
 
@@ -184,6 +185,21 @@ A directed edge `A → B` means **A actively connects to B**.
 > links, each its own WireGuard interface. Babel picks by per-link cost and fails over automatically —
 > e.g. a plain-UDP primary with a `TCP (mimic)` backup. Backup links get a higher default cost (384)
 > so the primary is preferred while it is up.
+
+> **When to single-link (accelerators & relays).** When the from-node has a public endpoint (or an
+> explicit reverse edge carries a host), a doubly-linked edge quietly creates TWO dial paths: the
+> from-side dials your Endpoint Host, and the to-side auto-dials the from-node's first public
+> endpoint (its plain address). WireGuard keeps one *runtime* endpoint per peer and follows
+> whoever handshook last — so if you route `A → B` through a UDP accelerator but B boots first, B
+> dials A **direct** and the accelerator is bypassed permanently. Setting the direction to
+> `A → B` (single-linked) removes the race: B keeps the tunnel, keeps routing, but never initiates —
+> it simply answers A's handshake arriving through the accelerator. A single-linked edge **requires**
+> an Endpoint Host (otherwise no side could dial — validation rejects it loudly), and the editor
+> shows where a doubly-linked edge's *reverse* dial would come from, so the asymmetry is never a
+> surprise. Client links can't be single-linked, and a primary-class edge can't be single-linked
+> while its node pair carries another enabled primary-class edge (they fold into one tunnel — the
+> direction would be silently ignored); backup links are their own tunnels and can (validation
+> explains each case).
 
 ### 2.4 Two-layer address separation
 

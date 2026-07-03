@@ -14,6 +14,7 @@ An Edge represents a unidirectional connection intent ("from actively connects t
 | `priority` | int | Connection priority |
 | `weight` | int | Connection weight |
 | `role` | `"primary" \| "backup" \| ""` | Link role for parallel links (see [Parallel links](#parallel-links-primary--backups)); empty = primary class |
+| `link_direction` | `"both" \| "forward" \| ""` | Per-edge dial-direction policy; empty ≡ `both` (today's behavior). `forward` = single-linked: only from→to initiates — see [Link direction](#link-direction). There is deliberately no `"reverse"` value (one spelling; flip the edge instead) |
 | `transport` | `"udp" \| "tcp"` | `udp` = plain WireGuard. `tcp` = the link is wrapped by **mimic** (eBPF UDP→fake-TCP) for UDP-hostile networks — see [TCP transport (mimic)](#tcp-transport-mimic). No new field: `tcp` is the whole signal (mimic is keyless) |
 | `is_enabled` | bool | Whether this edge is active. The one intentionally non-omitempty Edge bool: a missing value is the Go zero (`false`/disabled); the panel normalizes it to a concrete boolean at the import boundary so a hand-edited file cannot smuggle `undefined` past the type system |
 | `notes` | string | Free-form notes |
@@ -65,6 +66,49 @@ per dialed peer; see [../artifacts/mimic.md](../artifacts/mimic.md) for the depl
   Kernel-eBPF availability is checked at install time.
 - **Pairs with parallel links.** A plain `udp` primary + a `tcp` backup lets Babel fail over to the
   TCP-shaped path when the plain UDP one is throttled or blocked.
+
+## Link direction
+
+> **Normative.** `link_direction` is the per-edge dial-direction POLICY: it gates only which of the
+> link's two `[Peer]` stanzas receives a dial `Endpoint`. It NEVER touches allocation — ports,
+> transit pairs, link-locals, and every `pinned_*` field are direction-blind and byte-identical
+> under any value (link identity is direction-agnostic;
+> [../compiler/allocation-stability.md](../compiler/allocation-stability.md)).
+
+**Why it exists (the reverse-peer race).** A doubly-linked edge `A→B` emits a forward peer (A
+dials `endpoint_host`) AND an auto-reverse peer in which B dials A's `public_endpoints[0]` — the
+plain direct address ([../compiler/peer-derivation.md](../compiler/peer-derivation.md#reverse-peer-to--from-endpoint-fallback)).
+WireGuard keeps ONE runtime endpoint per peer and roams it to the source of the last authenticated
+inbound packet, so whichever side handshakes first wins: if B boots faster, B→A establishes
+*direct*, A roams onto B's real source, and an intended A→relay/accelerator→B path is bypassed
+permanently. Single-linking the edge removes the race deterministically.
+
+- **`""` / `"both"` (default):** both sides may initiate — exactly today's behavior; every
+  existing topology compiles byte-identically.
+- **`"forward"`:** only from→to initiates. The reverse peer keeps its full `[Peer]` stanza
+  (AllowedIPs, transit addressing, Babel routing, return traffic) but carries **no `Endpoint`
+  line**, so it can never dial and never race the forward path. The kernel learns the peer's
+  address from the inbound handshake (standard WireGuard).
+- **There is no `"reverse"` value** (decision D11: ONE spelling — a second spelling of
+  "single-linked toward the from-node" would force every direction-aware rule to handle both
+  forever). To single-link the other way, **flip the edge**: the editor's "to(A)" choice swaps
+  `from`/`to`, mirrors the three `pinned_*` pairs (allocation-stable — each node keeps its own
+  values; interface names are unchanged because each side names the REMOTE), clears the stale dial
+  fields, and prefills `endpoint_host` from the newly-dialed node's public endpoints. The drawn
+  arrow therefore always equals the dial direction.
+
+**Validation (all errors, both validators):**
+
+| Code | Rule |
+|---|---|
+| `validation_edge_link_direction_invalid` | value ∉ {`""`, `both`, `forward`} (schema) |
+| `validation_edge_link_direction_conflict` | direction ≠ both on an enabled primary-class edge whose node pair has any other enabled primary-class edge — pair-folding would silently ignore the folded edge's direction. Backup edges are their own links and are exempt |
+| `validation_edge_link_direction_forward_no_endpoint` | `forward` with an empty `endpoint_host` — the forward peer only ever dials the edge's host and the reverse dial is suppressed, so no side could initiate (provably dead link) |
+| `validation_edge_link_direction_client_edge` | direction ≠ both on a client-touching edge — a client link's dial semantics are fixed (the client always dials the router) |
+
+The panel additionally sanitizes out-of-enum values to `both` on its own load paths (file import,
+server hydrate, localStorage rehydrate) so foreign/garbled stored data degrades to today's
+behavior instead of tripping the validator.
 
 ## Port and endpoint ownership
 
@@ -137,6 +181,7 @@ it on every enabled edge that has a non-empty `endpoint_host`:
 | `endpoint_host` | operator (via frontend) | FE → BE | preserved; frontend MAY auto-stamp from `public_endpoints[0].host` |
 | `endpoint_port` | operator (via frontend) | FE → BE | explicit override only; frontend MUST NOT auto-stamp; `0`/absent ⇒ auto |
 | `compiled_port` | compiler | BE → FE | read-only output; never sent back as input |
+| `link_direction` | operator (via frontend) | FE → BE | preserved unchanged; empty ≡ `both`; panel sanitizes out-of-enum to absent on load |
 | `priority`, `weight`, `transport`, `is_enabled`, `notes` | frontend | FE → BE | preserved unchanged |
 | `pinned_*` | compiler (write) + frontend (persist) | BE ↔ FE | round-tripped verbatim (see below) |
 

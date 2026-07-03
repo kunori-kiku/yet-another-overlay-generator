@@ -198,6 +198,6 @@ workflow → fix at root, re-tag from the green tip (never force-push a tag).
 | Plan | Title | Status | PR |
 |---|---|---|---|
 | plan-1 | Core direction semantics (both compilers + validators) | **done** (reviewed → fixed → re-reviewed clean → merged) | #221 |
-| plan-2 | Panel UX (EdgeEditor + canvas + e2e) | in review | — |
-| plan-3 | Behavioral proof + docs (realtunnel c4 + spec + wiki) | pending | — |
+| plan-2 | Panel UX (EdgeEditor + canvas + e2e) | **done** (reviewed → fixed → re-reviewed → residuals fixed → final verify clean → merged) | #222 |
+| plan-3 | Behavioral proof + docs (realtunnel c4 + spec + wiki) | in review | — |
 | plan-4 | Release v2.0.0-beta.18 + closeout | pending | — |
