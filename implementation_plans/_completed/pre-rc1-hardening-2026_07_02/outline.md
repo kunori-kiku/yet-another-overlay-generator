@@ -349,20 +349,24 @@ coalescing) BEFORE 9/10 to freeze the write path.
 - [ ] beta.17 shipped + promoted (owner); rc.1 gate refreshed; rc.1 cut (owner terminal actions).
 - [ ] Both criticals regression-tested; the NAT repro + chosen semantics recorded in the Decisions log.
 - [ ] No new deprecated/stale entries; no shims; both compilers byte-exact; drift + i18n + goldens green.
-- [ ] STATUS.md refreshed; subject `git mv`'d to `_completed/`; memory updated.
+- [x] STATUS.md refreshed; subject `git mv`'d to `_completed/`; memory updated. **SUBJECT CLOSED
+      2026-07-03 with the `v2.0.0-rc.1` cut.**
 
 ## 10. Plan status table
 
+*(Final, at archive time — every plan delivered, each per-PR reviewed → adversarially verified →
+fixed → re-reviewed → merged; beta.17 released 2026-07-02 = then-Latest; rc.1 released 2026-07-03.)*
+
 | Plan | Title | Status |
 |------|-------|--------|
-| plan-1 | NAT endpoint-override fix (critical) | RECLASSIFIED — not a config bug (WireGuard endpoint roaming over asymmetric DNAT+SNAT; owner's .conf verified correct). Residual: port-only-override → validation error (require-explicit-host) + document roaming. OPEN: owner decision on a pinned-endpoint feature (timer re-assert) vs docs-only. |
+| plan-1 | NAT endpoint-override fix (critical) | RECLASSIFIED — WireGuard endpoint roaming, not a config bug. Residual delivered (PR #217): require-explicit-host validator + roaming docs. The deeper residual (the reverse-peer race) became the `link-directionality` subject → fixed in beta.18. Pinned-endpoint feature stays deferred (rc.2 option). |
 | plan-2 | self-update retry keystone bypass (critical) | delivered (PR #208, reviewed GO) |
-| plan-3 | interim release beta.17 + hygiene | pending (needs plan-1 residual + plan-2; plan-2 done) |
+| plan-3 | interim release beta.17 + hygiene | delivered (CHANGELOG PR #218; tag `907c0a5`; promoted to Latest) |
 | plan-4 | WG public-key format validation | delivered (PR #209, reviewed GO, 4 findings applied) |
-| plan-5 | agent-route DoS hardening | pending (NEXT) |
-| plan-6 | bootstrap agent-binary SHA-256 pinning | pending |
-| plan-7 | node-ID validation + trusted-proxy client-IP | pending |
-| plan-8 | agent kit verify | pending |
-| plan-9 | reliable failed-update state | pending |
-| plan-10 | richer telemetry metrics | pending |
-| plan-11 | rc.1 gate refresh + release | pending |
+| plan-5 | agent-route DoS hardening | delivered (PR #211) |
+| plan-6 | bootstrap agent-binary SHA-256 pinning | delivered (PR #212) |
+| plan-7 | node-ID validation + trusted-proxy client-IP | delivered (PR #213) |
+| plan-8 | agent kit verify | delivered (PR #214) |
+| plan-9 | reliable failed-update state | delivered (PR #215) |
+| plan-10 | richer telemetry metrics | delivered (PR #216) |
+| plan-11 | rc.1 gate refresh + release | **delivered (PR #226; `v2.0.0-rc.1` tagged on `f4c4389`, self-promoted to Latest; branch protection SET; gate GO with zero exceptions on the owner's 2026-07-03 clean fleet smokes)** |
