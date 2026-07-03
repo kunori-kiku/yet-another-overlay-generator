@@ -23,7 +23,8 @@ adversarially verified before merge; proven end-to-end on a real kernel.
   edge's reverse peer keeps its full `[Peer]` stanza (AllowedIPs, transit addressing, Babel
   routing, return traffic) but carries **no `Endpoint` line**, so it can never initiate and never
   race the forward dial. Default `both` compiles byte-identical for every existing topology (zero
-  churn across the whole pre-existing golden corpus); allocation is provably direction-blind —
+  churn across every pre-existing success golden; fixture-15's fail golden was deliberately
+  extended to cover the new codes); allocation is provably direction-blind —
   toggling the field moves no port, transit IP, link-local, or pin. There is deliberately **no
   `"reverse"` value** (one spelling — dual spellings would tax every future direction-aware rule):
   single-linking the other way is an explicit edge flip in the editor. (#221)
