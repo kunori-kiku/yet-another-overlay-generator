@@ -9,6 +9,49 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-beta.18] - 2026-07-03
+
+Per-edge **link directionality**: a single-linked edge now deterministically kills the reverse-peer
+race in which the auto-reverse peer dials the from-node's plain public IP, wins WireGuard's single
+runtime-endpoint slot on a faster boot, and permanently bypasses a relay/accelerator path via
+endpoint roaming — the residual behind the live fleet's "NAT override goes direct" symptom that
+beta.17 diagnosed as roaming. Three reviewed plans (#221–#223), each independently reviewed and
+adversarially verified before merge; proven end-to-end on a real kernel.
+
+### Added
+- **`link_direction` on edges** (`""`≡`both` default / `"forward"`): a `forward` single-linked
+  edge's reverse peer keeps its full `[Peer]` stanza (AllowedIPs, transit addressing, Babel
+  routing, return traffic) but carries **no `Endpoint` line**, so it can never initiate and never
+  race the forward dial. Default `both` compiles byte-identical for every existing topology (zero
+  churn across the whole pre-existing golden corpus); allocation is provably direction-blind —
+  toggling the field moves no port, transit IP, link-local, or pin. There is deliberately **no
+  `"reverse"` value** (one spelling — dual spellings would tax every future direction-aware rule):
+  single-linking the other way is an explicit edge flip in the editor. (#221)
+- **Editor + canvas UX**: the edge editor gains a direction select labeled with the real node names
+  (`A ⇄ B` / `A → B` / `B → A`); choosing `B → A` performs a visible **flip** — from/to swap, the
+  pin pairs mirror (allocation-stable), stale dial fields clear, and the newly-dialed node's public
+  host prefills. Doubly-linked edges show a **reverse-dial readout** (where the to→from dial
+  resolves: explicit reverse edge / from-node public endpoint / passive), mirroring the compiler's
+  resolution exactly. Single-linked edges carry a `→` chip on the canvas; doubly-linked edges
+  render exactly as before. The edge label pill now actually selects the edge (its cursor always
+  suggested it), mirroring React Flow's own selection semantics. (#222)
+- **Validation (4 new codes, both compilers, en+zh)**: invalid enum value; direction on a
+  pair-folding edge (would be silently ignored); `forward` without an `endpoint_host` (provably
+  dead link); direction on a client edge. All loud errors, mirroring the beta.17
+  require-explicit-host precedent; the panel additionally sanitizes out-of-enum values to `both`
+  on its own load paths. (#221)
+- **Real-kernel proof**: realtunnel scenario `c4` — with BOTH routers dialable, the suppressed
+  side's rendered config carries no `Endpoint` line and the tunnel still forms from the dialer's
+  inbound handshake alone, converging and routing both ways (CI additive tier). (#223)
+- **Docs**: normative `edge.md` §Link direction + `peer-derivation.md` resolution rule 0 and the
+  roaming note's harmful special case; bilingual wiki guidance ("when to single-link —
+  accelerators & relays"). (#223)
+
+### Fixed
+- **The TS validator never mirrored `validation_edge_mimic_fallback_invalid`** (a pre-existing
+  Go↔TS gap discovered during this work): a bad `mimic_fallback` passed in-browser Validate but
+  failed the Go compile. Mirrored and now exercised by the conformance corpus. (#221)
+
 ## [2.0.0-beta.17] - 2026-07-02
 
 A pre-rc.1 hardening pass: nine reviewed plans closing the security + robustness gaps surfaced in the
@@ -837,7 +880,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...HEAD
+[2.0.0-beta.18]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...v2.0.0-beta.18
 [2.0.0-beta.17]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.16...v2.0.0-beta.17
 [2.0.0-beta.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.8...v2.0.0-beta.9
 [2.0.0-beta.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.7...v2.0.0-beta.8
