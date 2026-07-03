@@ -237,6 +237,7 @@ export function EdgeEditor() {
           )}
           <input
             key={`ep-host-${selectedEdge.id}`}
+            data-testid="edge-endpoint-host-input"
             type="text"
             value={selectedEdge.endpoint_host || ''}
             onChange={(e) => updateEdge(selectedEdge.id, { endpoint_host: e.target.value || undefined, compiled_port: undefined })}
@@ -321,6 +322,9 @@ export function EdgeEditor() {
                 {t(language, 'edgeEditor.linkDirectionFlip', { from: selectedEdgeFrom.name, to: selectedEdgeTarget.name })}
               </option>
             </select>
+            <p className="mt-0.5 text-[10px] text-[var(--content-muted)]">
+              {t(language, 'edgeEditor.linkDirectionHint')}
+            </p>
             {selectedEdge.link_direction === 'forward' && !selectedEdge.endpoint_host && (
               <p className="mt-0.5 text-[10px] text-[var(--warning)]">
                 {t(language, 'edgeEditor.linkDirectionForwardNeedsHost')}

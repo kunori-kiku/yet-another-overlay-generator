@@ -2,6 +2,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  useStoreApi,
   type EdgeProps,
 } from '@xyflow/react';
 import { useTopologyStore } from '../../stores/topologyStore';
@@ -63,6 +64,7 @@ export function CustomEdge({
 }: EdgeProps & { data: CustomEdgeData }) {
   const language = useTopologyStore((state) => state.language);
   const selectEdge = useTopologyStore((state) => state.selectEdge);
+  const rfStore = useStoreApi();
   const edgeType = data?.edgeType || 'direct';
   const stroke = edgeStroke[edgeType] || defaultStroke;
   const rawLabel = data?.label || edgeType;
@@ -129,9 +131,17 @@ export function CustomEdge({
           data-testid={`edge-label-${id}`}
           // The pill has always advertised clickability (cursor pointer + pointerEvents all) but the
           // EdgeLabelRenderer portal sits ABOVE the SVG edges, so clicks here never reached React
-          // Flow's onEdgeClick — wire the same selection the edge path performs (TopologyCanvas
-          // onEdgeClick → selectEdge), making the label an equivalent, stable selection target.
-          onClick={() => selectEdge(id)}
+          // Flow's onEdgeClick. Make the pill a TRULY equivalent selection target by mirroring the
+          // path click's BOTH effects, in the same order: React Flow's internal selection first
+          // (addSelectedEdges — exactly what its EdgeWrapper does; this also unselects nodes and
+          // keeps the default-Backspace deleteElements targeting THIS edge, never a stale one),
+          // then the app store (TopologyCanvas onEdgeClick → selectEdge). Writing only the app
+          // store would desync the two selections and Backspace would delete the previously
+          // path-clicked element instead.
+          onClick={() => {
+            rfStore.getState().addSelectedEdges([id]);
+            selectEdge(id);
+          }}
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,

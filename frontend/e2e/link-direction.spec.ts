@@ -8,9 +8,11 @@ import { seedLocalMode, seedCanvasTopology } from './fixtures/seedStore'
 // validation for a single-linked edge without a dial host. Runs on the air-gap boot in local
 // mode — validation is the in-browser TS validator, no server round-trip.
 //
-// Locators are data-testid only (project lesson: color/class locators broke on the theme
-// refactor): edge-label-<id> (the label pill, an equivalent selection target to the edge path),
-// link-direction-select, edge-direction-chip, reverse-dial-readout.
+// Interactive locators are data-testid only (project lesson: color/class locators broke on the
+// theme refactor): edge-label-<id> (the label pill — a true selection-equivalent to the edge
+// path: it mirrors React Flow's addSelectedEdges + the store selectEdge), link-direction-select,
+// edge-endpoint-host-input, edge-direction-chip, reverse-dial-readout. Rendered COPY is asserted
+// by text on purpose — that pins the user-visible message, which is part of the contract.
 
 // Two PUBLIC routers so the direction semantics are non-trivial (without the feature the
 // auto-reverse would dial alpha's public endpoint — the race). Pins seeded so the flip's
@@ -72,6 +74,11 @@ test('direction select: both shows the reverse-dial readout; forward persists + 
   await seedCanvasTopology(context, dirTopology)
   await openEdgeEditor(page, panel)
 
+  // The pill click must move React Flow's INTERNAL selection too (addSelectedEdges), not just the
+  // app store — otherwise RF's default-Backspace delete targets a previously-selected element.
+  // `.selected` is React Flow's semantic state class (not a styling class).
+  await expect(page.locator('.react-flow__edge[data-id="e-dir"].selected')).toBeAttached()
+
   const select = page.getByTestId('link-direction-select')
   await expect(select).toHaveValue('both')
   // Both-mode readout: the reverse dial resolves from alpha's node endpoint (no reverse edge).
@@ -115,7 +122,7 @@ test('a single-linked edge without a dial host warns inline and fails Validate l
 
   await page.getByTestId('link-direction-select').selectOption('forward')
   // Clear the dial host via the editor's manual host input (the require-explicit-host field).
-  const hostInput = page.getByPlaceholder(/IP or hostname|IP 或主机名/)
+  const hostInput = page.getByTestId('edge-endpoint-host-input')
   await hostInput.fill('')
   // Inline warning appears immediately (early feedback before Validate).
   await expect(page.getByText(/single-linked edge needs an endpoint host/i)).toBeVisible()

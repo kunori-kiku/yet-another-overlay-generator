@@ -37,26 +37,33 @@ export function flipEdge(edge: Edge): Edge {
 }
 
 // reverseDialSource resolves where a doubly-linked edge's REVERSE dial (to→from) would come from
-// at compile time, mirroring the compiler's resolution order (peers.go:886-911 ⇄ peers.ts):
-//   1. an enabled primary-class explicit reverse edge carrying an endpoint_host → that host;
-//   2. else the from-node's public_endpoints[0].host (capability inference normalizes
-//      has_public_ip UP from endpoint presence, so presence alone decides);
+// at compile time, mirroring the compiler's resolution EXACTLY (peers.go:886-921 ⇄ peers.ts):
+//   1. the compilers build a from->to edge map in array order where the LAST enabled
+//      primary-class edge wins, then test THAT single edge's endpoint_host — so with duplicate
+//      same-direction reverse edges (compile-legal, warning-only) an earlier duplicate's host is
+//      never consulted. Mirror the map semantics: keep the last matching edge, THEN check its host;
+//   2. an empty winner host falls back to the from-node's public_endpoints[0].host (capability
+//      inference normalizes has_public_ip UP from endpoint presence, so presence alone decides);
 //   3. else null — the reverse peer is passive until dialed.
 // Surfaced as an EdgeEditor readout so the both-mode asymmetry (one configurable forward dial,
-// one derived reverse dial) is visible instead of tribal knowledge.
+// one derived reverse dial) is visible instead of tribal knowledge — which is only honest if it
+// shows the host the compile will actually use.
 export function reverseDialSource(
   edge: Edge,
   fromNode: Node | undefined,
   edges: Edge[],
 ): { kind: 'reverse-edge' | 'node-endpoint'; host: string } | null {
-  const reverseEdge = edges.find(
-    (e) =>
+  let reverseEdge: Edge | undefined;
+  for (const e of edges) {
+    if (
       e.is_enabled &&
       (e.role ?? '') !== 'backup' &&
       e.from_node_id === edge.to_node_id &&
-      e.to_node_id === edge.from_node_id &&
-      !!e.endpoint_host,
-  );
+      e.to_node_id === edge.from_node_id
+    ) {
+      reverseEdge = e; // last write wins — the compilers' edgeMap assignment semantics
+    }
+  }
   if (reverseEdge?.endpoint_host) {
     return { kind: 'reverse-edge', host: reverseEdge.endpoint_host };
   }

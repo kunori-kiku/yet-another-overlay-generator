@@ -102,4 +102,19 @@ describe('reverseDialSource', () => {
     expect(reverseDialSource(edge, bare, [edge])).toBeNull();
     expect(reverseDialSource(edge, undefined, [edge])).toBeNull();
   });
+
+  // Duplicate same-direction reverse edges are compile-legal (warning-only): the compilers'
+  // edgeMap keeps the LAST enabled primary-class edge and only then test its host — the readout
+  // must show the host the compile will actually use, never an earlier duplicate's.
+  it('with duplicate reverse edges, the LAST one wins — even when its host is empty', () => {
+    const rev1 = { id: 'e2', from_node_id: 'b', to_node_id: 'a', type: 'direct', endpoint_host: 'nat1.example', is_enabled: true } as Edge;
+    const rev2NoHost = { id: 'e3', from_node_id: 'b', to_node_id: 'a', type: 'direct', is_enabled: true } as Edge;
+    // The last duplicate has no host → the compilers fall back to the node endpoint; nat1 is never dialed.
+    expect(reverseDialSource(edge, fromWithEndpoint, [edge, rev1, rev2NoHost]))
+      .toEqual({ kind: 'node-endpoint', host: 'a.example' });
+
+    const rev2 = { ...rev2NoHost, endpoint_host: 'nat2.example' } as Edge;
+    expect(reverseDialSource(edge, fromWithEndpoint, [edge, rev1, rev2]))
+      .toEqual({ kind: 'reverse-edge', host: 'nat2.example' });
+  });
 });
