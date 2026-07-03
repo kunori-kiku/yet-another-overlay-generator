@@ -164,7 +164,10 @@ describe('link_direction — validator rules (mirrors TestValidate_LinkDirection
   });
 
   it('a direction on a client-touching edge errors, root cause first', () => {
-    const topo = linkDirectionTopology('forward');
+    // Deliberately NO endpoint_host so the skip is OBSERVABLE: without the client branch's
+    // early-continue, the forward-no-endpoint rule WOULD fire — the second assertion pins
+    // exactly that suppression (mirrors TestValidate_LinkDirectionClientEdge).
+    const topo = linkDirectionTopology('forward', '');
     topo.nodes[0] = { ...topo.nodes[0], role: 'client', capabilities: {}, public_endpoints: undefined } as Node;
     const result = validateSemantic(topo);
     expect(hasCode(result, Code.EdgeLinkDirectionClientEdge)).toBe(true);

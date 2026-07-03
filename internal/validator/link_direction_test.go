@@ -141,8 +141,12 @@ func TestValidate_LinkDirectionForwardNoEndpoint(t *testing.T) {
 
 // TestValidate_LinkDirectionClientEdge pins the client rule: a direction on a client-touching
 // edge errors with CodeEdgeLinkDirectionClientEdge and (root cause first) skips the dial rules.
+// The fixture deliberately has NO endpoint_host so the skip is OBSERVABLE: without the client
+// branch's continue, the forward-no-endpoint rule WOULD fire on this edge — the second assertion
+// pins exactly that suppression (an empty client host also trips validateClientEdges'
+// CodeClientEndpointHostRequired, which is that validator's finding and irrelevant here).
 func TestValidate_LinkDirectionClientEdge(t *testing.T) {
-	topo := linkDirectionTopo("forward", "b.example")
+	topo := linkDirectionTopo("forward", "")
 	topo.Nodes[0].Role = "client"
 	topo.Nodes[0].Capabilities = model.NodeCapabilities{}
 	topo.Nodes[0].PublicEndpoints = nil
