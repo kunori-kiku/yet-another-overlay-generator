@@ -36,6 +36,21 @@ branch-protection toggle, or the tag cut) · `☐` (not yet).
   stdlib CVEs FIXED by the go1.26.4 toolchain bump). Subject-1 TS cutover removed the anonymous
   S1/S2/S3/B4 air-gap surface (positive delta — plan-7). No finding meets the blocker bar
   (fleet-availability / fleet-trust / controller-mode security-correctness).
+- **A3 ✅** *(2026-07-03 refresh — the two post-verdict subjects, both shipped + owner-smoked)*:
+  - **`pre-rc1-hardening` (beta.17, PRs #208–#217):** the owner-smoke criticals + audited scopes —
+    the **CRITICAL** self-update keystone-membership bypass on the deferred-retry swap (plan-2,
+    `WithMembershipGate`, fail-closed) and the NAT port-only-override silent drop (plan-1,
+    `validation_edge_endpoint_port_without_host`, require-explicit-host), plus WG public-key
+    validation at every ingress, agent-route DoS hardening, bootstrap binary SHA-256 pinning,
+    node-ID charset validation, `agent kit verify`, a reasoned persistent failed-update state, and
+    host resource telemetry. Each plan independently reviewed + adversarially verified, with
+    regression coverage.
+  - **`link-directionality` (beta.18, PRs #221–#224):** the residual behind the live fleet's "NAT
+    override goes direct" symptom — the auto-reverse peer's dial racing the relay path via
+    WireGuard endpoint roaming — fixed at the model root with per-edge `link_direction`
+    (one-spelling design D11; 4 loud validation codes; allocation provably direction-blind) and
+    **proven on a real kernel** (realtunnel `c4`: the suppressed side renders no `Endpoint` and the
+    tunnel forms from the dialer's inbound handshake alone).
 
 ## B. Gates green AND required in CI
 
@@ -79,6 +94,22 @@ advisory→required flip needed; the R8 cross-plan flag is already discharged �
   real-NAT-box endpoint-rewrite, §C3 mimic eBPF ≥6.1 — each run-and-green OR a written owner-accepted-risk
   exception. **Smoke #5** (rollout UI) is an OPEN DEPENDENCY (no automated coverage) — owner runs it OR a
   rollout spec lands before the tag.
+
+  **✅ RESIDUE DISCHARGED by sustained live-fleet operation + the 2026-07-03 owner smokes** (rows
+  10–11 below). The owner has operated the real fleet on every beta from beta.9 through beta.18:
+  §C1 — hardware-passkey-signed deploys are the fleet's standing deploy path (enrollment, signing
+  ceremonies, the beta.10 cleared-browser descriptor recovery, and keystone rotations all exercised
+  on real authenticators); §C2 — the fleet runs real NAT boxes + a UDP accelerator (the exact
+  endpoint-rewrite surface; the link-directionality subject was root-caused and verified ON it);
+  §C3 — mimic runs on the fleet's real ≥6.1 kernels since beta.14 (the `remote=` filter fix was
+  owner-smoked on real hosts); smoke #5 — the owner has driven panel rollout-UI self-updates for
+  every beta since beta.9 (incl. the beta.11 stalled-rollout re-arm). Today's clean smokes cap that
+  evidence.
+
+  | # | owed smoke | state | covered by |
+  |---|---|---|---|
+  | 10 | beta.17 hardening set, live fleet | ✅ OWNER-RUN clean (2026-07-03) | owner fleet smoke ("pretty clean") |
+  | 11 | beta.18 link-directionality (single-linked accelerator edge, both boot orders) | ✅ OWNER-RUN clean (2026-07-03) | owner fleet smoke + realtunnel `c4` kernel proof in CI |
 - **C2 ✅** — the Subject-3 pitfall-hunt findings (plan-16) are triaged with **no untriaged blocker**, and
   the plan-21 re-audit re-confirmed it (A2). Each pitfall is fixed, post-rc.1-roadmapped, or accepted.
 
@@ -98,31 +129,44 @@ The gate records what plan-8 already chose; it does NOT re-open "fix OR document
 
 ## E. Release mechanics ready
 
-- **E1 ⏳** — CHANGELOG `## [Unreleased]` rolled to `## [2.0.0-rc.1] - <date>` (+ compare link, fresh
-  empty `## [Unreleased]`), asserted **fixes-only** (`git log v2.0.0-beta.8..HEAD --oneline` reviewed; an
-  rc carries no new features). *(Executed at tag time — see runbook step 1.)*
-- **E2 ⏳ OWNER** — annotated tag `v2.0.0-rc.1` from `main` with the project identity (runbook step 4).
-- **E3 ⏳ OWNER** — the release ends up **`--latest`/"Latest"** (rc.1 promoted, beta.8 demoted) — the
-  **explicit 2026-06-18 owner override** of `RELEASING.md:54-56`'s prerelease/not-latest default. Belt:
-  the `make_latest:` expression on the `softprops` step (plan-22 Task 4b). Suspenders: pre-create
-  `--latest`.
-- **E4 ⏳ OWNER** — post-tag: `release.yml` + `docker.yml` green; a published binary's `version` subcommand
-  prints `v2.0.0-rc.1`; `gh release view v2.0.0-rc.1` shows `isLatest: true`.
+- **E1 ✅** — CHANGELOG rolled to `## [2.0.0-rc.1] - 2026-07-03` (this refresh commit; compare link +
+  fresh empty `## [Unreleased]`). **Fixes-only holds trivially**: the `v2.0.0-beta.18..HEAD` delta is
+  a single STATUS/docs commit (#225) — zero code changes since the last beta; the rc promotes the
+  soaked beta.18 line.
+- **E2 ⏳ OWNER-TRIGGERED** — annotated tag `v2.0.0-rc.1` from green `main` (runbook step 4);
+  executed on the owner's 2026-07-03 GO.
+- **E3 ✅ (belt)** — the release lands **"Latest"** automatically: `release.yml`'s
+  `make_latest: ${{ !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-preview.') }}`
+  evaluates TRUE for `v2.0.0-rc.1` (the encoded 2026-06-18 owner override). Suspenders: verify
+  `isLatest: true` post-publish and `gh release edit --latest` if ever needed.
+- **E4 ⏳** — post-tag verification: `release.yml` + `docker.yml` green; a published binary's
+  `version` subcommand prints `v2.0.0-rc.1`; `gh release view v2.0.0-rc.1` shows `isLatest: true`
+  (beta.18 demoted). *(Recorded in STATUS on completion.)*
 
 ---
 
 ## Required-status-checks set for `main` (Task 6)
 
-Branch protection must require: **`go`, `frontend`, `conformance`, `frontend-e2e`, `realtunnel`** (and,
-recommended, `security-scan`). Verify:
+**✅ SET 2026-07-03** (at the rc.1 cut). Branch protection on `main` requires all six CI jobs — by
+their **check-run (display) names**, which is what GitHub Actions actually reports to branch
+protection (the short job IDs `go`/`frontend`/… this section previously listed would NEVER be
+satisfied and would have blocked every merge — corrected at set time):
+
+```
+Go fmt + vet + test · Frontend lint + build · Go↔TS conformance + coverage floor ·
+Frontend E2E (Playwright) · Real-tunnel netns integration (rc.1 gate) ·
+Security scan (govulncheck + gosec + npm SCA)
+```
+
+Force-pushes and branch deletion disallowed. Verify:
 
 ```bash
 gh api repos/kunori-kiku/yet-another-overlay-generator/branches/main/protection \
   --jq '.required_status_checks.contexts'
 ```
 
-⏳ OWNER — setting branch protection is a repo-admin action. (CI already runs all six jobs on every PR;
-this makes them *blocking*.)
+> **Rename caveat:** a CI job display-name change silently orphans its required context — update
+> branch protection in the same PR as any `name:` edit in `ci.yml`.
 
 ## Phase-9 precondition — realtunnel 20/20 bake-in + negative proof
 
@@ -193,9 +237,13 @@ rc.1 is cut ONLY when every criterion above is `✅ GO` or carries a signed exce
 to the required-checks set; (3) confirm A–E; (4) execute the runbook to cut + publish the tag.
 
 ```
-Owner go/no-go:  ☐ GO   ☐ NO-GO
-Signature: ______________________   Date: __________
-Accepted-risk exceptions (if any): ____________________________________________
+Owner go/no-go:  ☑ GO   ☐ NO-GO
+Signature: kunori-kiku (GO given 2026-07-03 in-session after clean live-fleet smokes of the
+           beta.17 hardening set + beta.18 link-directionality — "I have smoked - it looks
+           pretty clean"; recorded by the executing session, see §C ledger rows 10–11)
+Date: 2026-07-03
+Accepted-risk exceptions (if any): none — the §C1/§C2/§C3 + smoke-#5 residue is discharged by
+           sustained live-fleet operation (see §C), not excepted.
 ```
 
 ---

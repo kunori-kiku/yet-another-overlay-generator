@@ -9,6 +9,22 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] - 2026-07-03
+
+**Release candidate.** Promotes the soaked beta line to release-candidate status with **zero code
+changes since `v2.0.0-beta.18`** (the delta is this gate paperwork) — an rc carries no new features
+by policy, and this one carries no new fixes either: everything it ships already soaked as beta.18
+on the owner's live fleet.
+
+The go/no-go gate ([`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md)) is **GO** with every
+criterion satisfied: blocker-clean through two security audits plus the beta.17 hardening pass and
+the beta.18 link-directionality fix (kernel-proven); all six CI gates green **and now required via
+branch protection on `main`**; the owed-smoke ledger fully discharged by sustained live-fleet
+operation across beta.9–beta.18, capped by the owner's clean 2026-07-03 fleet smokes; the
+realtunnel 20/20 bake-in + negative proof on record. Deferred to rc.2/GA (documented, unchanged):
+FileStore host-loss SPOF, bootstrap-TOFU first-fetch, pinned-endpoint anti-roaming, the
+`EDGE_OMITEMPTY` `mimic_fallback` canonicalization gap.
+
 ## [2.0.0-beta.18] - 2026-07-03
 
 Per-edge **link directionality**: a single-linked edge now deterministically kills the reverse-peer
@@ -881,7 +897,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...HEAD
+[2.0.0-rc.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...v2.0.0-rc.1
 [2.0.0-beta.18]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...v2.0.0-beta.18
 [2.0.0-beta.17]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.16...v2.0.0-beta.17
 [2.0.0-beta.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.8...v2.0.0-beta.9
