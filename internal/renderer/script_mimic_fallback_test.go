@@ -45,7 +45,7 @@ func TestRenderInstallScript_MimicFallbackUDP(t *testing.T) {
 		"_mimic_breadcrumb()",                    // helper defined
 		model.MimicBreadcrumbPath,                // writes to the agent-read path
 		"falling back to plain UDP (policy=udp)", // the udp-gated fallback messaging
-		`if systemctl enable --now "mimic@`,      // start is branched, not a hard run
+		`if systemctl restart "mimic@`,           // start is branched (restart re-applies config each deploy), not a hard run
 		"systemctl disable --now \"mimic@",       // de-provision the half-applied filter on start-fail
 		model.MimicOutcomeActive,
 		model.MimicOutcomeKernelTooOld,

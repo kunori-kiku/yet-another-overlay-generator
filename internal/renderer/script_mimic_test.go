@@ -59,8 +59,9 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 		// 4) one filter = local= line per listen port, formatted via the IPv6-safe _mimic_ipport helper
 		"filter = local=",
 		"_mimic_ipport()",
-		// 5) mimic@<egress> enable and start
-		`systemctl enable --now "mimic@`,
+		// 5) mimic@<egress> enable (boot) + restart (re-apply the config each deploy, not a no-op start)
+		`systemctl enable "mimic@`,
+		`systemctl restart "mimic@`,
 		// 6) the uninstall section's mimic teardown (disable + delete config)
 		`systemctl disable --now "mimic@`,
 		"rm -f \"/etc/mimic/",
