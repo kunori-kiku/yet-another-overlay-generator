@@ -572,10 +572,23 @@ endpoint is fleet-confidential).
 
 ### 5.9 Mimic `.deb` catalog
 
-For distros that don't package mimic, the panel pins per-`<codename>-<arch>` `.deb` packages by
-SHA-256. **Discover from release** lists a GitHub release's `.deb` assets to pick from (the GitHub API
-is queried directly, not through the download proxy). The install verifies each package against its
-signed pin before `dpkg`.
+For distros that don't package mimic (Debian 12 / Ubuntu 24.04), the panel pins the mimic `.deb`
+packages by SHA-256, per `<codename>-<arch>`. Upstream ships **two** packages you must pin together:
+`mimic` (the tool) and `mimic-dkms` (its kernel module — the `mimic` package won't install without
+it). **Discover from release** lists a GitHub release's `.deb` assets and **pairs** the `mimic` + the
+`mimic-dkms` for one `<codename>-<arch>` into a single row; **Assist** fills in both SHA-256s (and, if
+the proxy misses a sidecar, retries the direct GitHub URL). The install downloads, verifies each
+against its signed pin, and installs **both** together before `dpkg`.
+
+If a node's kernel is too old to build the module (its exact `linux-headers` are no longer in the
+repo), reboot it into the current kernel first — until then the link falls back per its **Mimic
+fallback** policy (Fall back to UDP / Fail closed).
+
+**XDP mode (native vs skb).** A mimic link uses generic **skb** XDP by default (works on any NIC). You
+can opt a node into **native** XDP (faster) in the node editor — but many VPS NICs don't support it,
+so YAOG auto-downgrades to skb if the native attach fails (the link still comes up), and the node
+editor warns you up front when the NIC reports no native support. The node's `mimic` health chip shows
+the mode actually achieved.
 
 ### 5.10 Configuration reference
 
