@@ -1,8 +1,17 @@
 import { useTopologyStore } from '../../../stores/topologyStore';
 import { useControllerStore } from '../../../stores/controllerStore';
-import { t } from '../../../i18n';
+import { t, type MessageKey } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
 import { uuid } from '../../../lib/uuid';
+
+// NATIVE_XDP_KEY maps the fleet node's reported native-XDP capability (plan-4) to a localized hint
+// shown when xdp_mode=native is selected — closed set, so a garbled value renders nothing.
+const NATIVE_XDP_KEY: Record<'supported' | 'conditional' | 'unsupported' | 'unknown', MessageKey> = {
+  supported: 'nodeEditor.nativeXdp.supported',
+  conditional: 'nodeEditor.nativeXdp.conditional',
+  unsupported: 'nodeEditor.nativeXdp.unsupported',
+  unknown: 'nodeEditor.nativeXdp.unknown',
+};
 
 // Node property editor (extracted verbatim from RightPanel's selected-node block; covers public
 // addresses / advertised prefixes / SSH config, plus the coupling to reconcileEdgeEndpoints).
@@ -15,6 +24,10 @@ export function NodeEditor() {
   const updateNode = useTopologyStore((s) => s.updateNode);
   const removeNode = useTopologyStore((s) => s.removeNode);
   const reconcileEdgeEndpoints = useTopologyStore((s) => s.reconcileEdgeEndpoints);
+  // plan-4: the fleet node's PRE-DEPLOY native-XDP capability heuristic (controller mode only; the
+  // agent reports it via /telemetry). Drives the warning below when native is selected on a NIC that
+  // reports it unsupported/conditional. Undefined in local mode / before the first heartbeat.
+  const nativeXDP = useControllerStore((s) => s.nodes.find((n) => n.nodeId === selectedNodeId)?.nativeXDP);
   // fixed_private_key is a LOCAL/air-gap custody primitive: it tells the client-side compiler to
   // generate-and-persist a node's WireGuard private key into the design (+ localStorage).
   // Controller mode is zero-knowledge — the agent owns the private key, the server never sees it,
@@ -236,6 +249,20 @@ export function NodeEditor() {
             <option value="native">{t(language, 'nodeEditor.nativeFasterNeedsNIC')}</option>
           </select>
           <p className="mt-1 text-xs text-[var(--content-muted)]">{t(language, 'xdpModeHint')}</p>
+          {selectedNode.xdp_mode === 'native' && nativeXDP && (
+            <p
+              data-testid="node-native-xdp-hint"
+              className={`mt-1 text-xs ${
+                nativeXDP.capability === 'unsupported'
+                  ? 'text-[var(--warning)]'
+                  : nativeXDP.capability === 'supported'
+                    ? 'text-[var(--success)]'
+                    : 'text-[var(--content-muted)]'
+              }`}
+            >
+              {t(language, NATIVE_XDP_KEY[nativeXDP.capability], { driver: nativeXDP.driver || '?' })}
+            </p>
+          )}
         </div>
         {selectedNode.role !== 'client' && (
           <div>
