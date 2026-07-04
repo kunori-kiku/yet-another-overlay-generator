@@ -1,6 +1,6 @@
 # STATUS
-<!-- regenerated: 2026-07-03 -->
-<!-- by: hand — v2.0.0-rc.1 RELEASED (GitHub Latest); pre-rc1-hardening + link-directionality subjects CLOSED + archived -->
+<!-- regenerated: 2026-07-04 -->
+<!-- by: draft-implementation-plan — ACTIVE subject mimic-provisioning-reliability (→ v2.0.0-rc.2); v2.0.0-rc.1 is GitHub Latest -->
 
 ## Active work
 
@@ -21,8 +21,29 @@
   - `link-directionality-2026_07_03` — per-edge `link_direction` killing the reverse-peer
     roaming race (beta.18, PRs #220–#225; D11 one-spelling design; kernel-proven via realtunnel
     `c4`; owner-smoked clean).
-  **No active subject.** The rc.1 soak is running on the fleet (Latest). Next milestones live in
-  "Next actions".
+  The rc.1 soak is running on the fleet (Latest). **The first rc.2 subject is now ACTIVE — see the
+  next bullet.**
+
+- **🔧 ACTIVE SUBJECT `mimic-provisioning-reliability-2026_07_04` — DRAFTED (2026-07-04), executing;
+  ships as `v2.0.0-rc.2` (first rc.2 subject; rc self-promotes to Latest).** Owner live-fleet smoke of
+  rc.1 found `transport: tcp` (mimic) deploys **hard-failing on Debian-12 nodes** (`install.sh exit:
+  exit status 100`, taking tunnels down → `wireguard: NoInterfaces`). ROOT CAUSE: upstream
+  `hack3ric/mimic` ships **two** debs per `<codename>-<arch>` — `mimic` (userspace) + `mimic-dkms`
+  (the DKMS eBPF module, which **Provides** the `mimic-modules` the `mimic` pkg **Depends** on). YAOG's
+  one-pin-per-`<codename>-<arch>` catalog (`MimicDebs map[string]model.Artifact`) can pin only `mimic`,
+  so `apt install ./mimic.deb` can't resolve the dep → exit 100; and the unguarded `apt-get` under
+  `set -euo pipefail` (`script.go:562`/`:1524` + TS mirror) aborts the whole apply **before** the
+  fallback-to-UDP logic, so even a `mimic_fallback: udp` link bricks (and no mimic breadcrumb is
+  written). **6 plans:** (1) two-package catalog model (`MimicDebPin{asset,sha256,dkms_asset,
+  dkms_sha256}`, NOT extending the shared `model.Artifact`) + install BOTH debs + robust
+  policy-aware fallback + a NEW conformance fixture (no golden emits an `artifacts.json` today) · (2)
+  panel two-package UX (Discover pairs the `-dkms` asset to its sibling label) + Assist both-sidecars +
+  empty-SHA-is-a-miss · (3) native-XDP deploy-time auto-downgrade→skb + achieved-mode Node Condition ·
+  (4) native-XDP pre-deploy capability probe (agent heuristic) + panel warning · (5) docs + proof · (6)
+  release rc.2. **Owner decisions:** comprehensive/rc.2; the Phase-0 teardown is EXPECTED (failover by
+  design — NOT in scope, no follow-up subject); include the pre-deploy native probe (D-native). Plan
+  folder: [`implementation_plans/mimic-provisioning-reliability-2026_07_04/`](implementation_plans/mimic-provisioning-reliability-2026_07_04/outline.md).
+  **NEXT = execute plan-1** (branch `feat/mimic-two-package-install`).
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each
