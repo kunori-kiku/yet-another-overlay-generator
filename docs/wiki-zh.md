@@ -506,9 +506,19 @@ agent 在一个专用的 `POST /telemetry` 心跳上回报结构化的 **Node Co
 
 ### 5.9 Mimic `.deb` 目录
 
-对于不打包 mimic 的发行版，面板按 `<codename>-<arch>` 以 SHA-256 固定（pin）各 `.deb` 包。**Discover from
-release（从发布发现）** 会列出某个 GitHub release 的 `.deb` 资产供你勾选（直接查询 GitHub API，而非经下载代理）。
-安装时会先针对签名 pin 校验每个包再 `dpkg`。
+对于不打包 mimic 的发行版（Debian 12 / Ubuntu 24.04），面板按 `<codename>-<arch>` 以 SHA-256 固定（pin）
+mimic 的 `.deb` 包。上游发布了**两个**必须一起固定的包：`mimic`（工具本体）与 `mimic-dkms`（其内核模块——
+缺了它 `mimic` 包无法安装）。**Discover from release（从发布发现）** 会列出某个 GitHub release 的 `.deb` 资产，
+并把同一 `<codename>-<arch>` 的 `mimic` 与 `mimic-dkms` **配对**到一行；**Assist（辅助）** 会填入两者的
+SHA-256（若代理漏取某个 sidecar，会重试直连 GitHub）。安装时会下载、按签名 pin 校验每个包，并把**两者一起**
+安装后再 `dpkg`。
+
+若某节点内核过旧、无法编译模块（其精确的 `linux-headers` 已不在仓库中），请先将其重启到当前内核——在此之前
+该链路会按其 **Mimic 回退（Mimic fallback）** 策略降级（回退到 UDP / 失败即关闭）。
+
+**XDP 模式（native 与 skb）。** mimic 链路默认使用通用的 **skb** XDP（任何网卡都可用）。你可以在节点编辑器里把某
+节点切到 **native** XDP（更快）——但很多 VPS 网卡不支持，因此当 native attach 失败时 YAOG 会自动降级为 skb
+（链路照常建立），且当网卡报告不支持 native 时节点编辑器会提前警告。节点的 `mimic` 健康标签会显示实际生效的模式。
 
 ### 5.10 配置参考
 
