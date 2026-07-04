@@ -382,8 +382,8 @@ type ControllerSettings struct {
 	// release base URL, and per-"<codename>-<arch>" (e.g. "bookworm-amd64") asset names + SHA-256
 	// hashes the installer verifies before dpkg. The pins are emitted into the controller-signed
 	// artifacts.json. Empty ⇒ distro-only mimic, no GitHub fallback, no artifacts.json (D4).
-	MimicVersion     string                    `json:"mimic_version,omitempty"`
-	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
+	MimicVersion     string                       `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
 	MimicDebs        map[string]model.MimicDebPin `json:"mimic_debs,omitempty"`
 	// MimicFallbackDefault is the FLEET-WIDE mimic→UDP fallback policy a transport=="tcp" link
 	// inherits when its edge leaves mimic_fallback empty. "" / "udp" / "none". NON-SECRET. The

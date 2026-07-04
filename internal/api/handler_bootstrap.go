@@ -43,8 +43,8 @@ type settingsJSON struct {
 	// env-derived, not a stored setting — POST ignores any submitted value.
 	AgentPathPrefix string `json:"agent_path_prefix"`
 	// Mimic GitHub-.deb catalog (plan-3). All NON-SECRET pins. Empty = distro-only mimic.
-	MimicVersion     string                    `json:"mimic_version,omitempty"`
-	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
+	MimicVersion     string                       `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
 	MimicDebs        map[string]model.MimicDebPin `json:"mimic_debs,omitempty"`
 	// MimicFallbackDefault is the fleet-wide mimic→UDP fallback policy ("" / "udp" / "none"). plan-4.
 	MimicFallbackDefault string `json:"mimic_fallback_default,omitempty"`

@@ -32,8 +32,8 @@ type artifactsFile struct {
 // URL the .deb is fetched from (the GitHub proxy is prepended at install time, not stored here),
 // and the per-"<codename>-<arch>" asset + SHA-256 the installer verifies before dpkg.
 type artifactsMimic struct {
-	Version    string                    `json:"version,omitempty"`
-	ReleaseURL string                    `json:"release_url,omitempty"`
+	Version    string                       `json:"version,omitempty"`
+	ReleaseURL string                       `json:"release_url,omitempty"`
 	Debs       map[string]model.MimicDebPin `json:"debs,omitempty"`
 }
 

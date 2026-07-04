@@ -198,17 +198,17 @@ func TestValidateMimicCatalog(t *testing.T) {
 	}
 
 	bad := []controller.ControllerSettings{
-		{MimicVersion: "not.semver", MimicReleaseBase: base, MimicDebs: goodDebs},                                                // bad semver
-		{MimicReleaseBase: "ftp://x", MimicDebs: goodDebs},                                                                       // non-http base
-		{MimicReleaseBase: "https://ok/ p", MimicDebs: goodDebs},                                                                 // whitespace in base
-		{MimicReleaseBase: "https://ok/p$(reboot)", MimicDebs: goodDebs},                                                         // shell metachars (valid URL, caught by the charset guard)
+		{MimicVersion: "not.semver", MimicReleaseBase: base, MimicDebs: goodDebs},                                                   // bad semver
+		{MimicReleaseBase: "ftp://x", MimicDebs: goodDebs},                                                                          // non-http base
+		{MimicReleaseBase: "https://ok/ p", MimicDebs: goodDebs},                                                                    // whitespace in base
+		{MimicReleaseBase: "https://ok/p$(reboot)", MimicDebs: goodDebs},                                                            // shell metachars (valid URL, caught by the charset guard)
 		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: "short"}}},  // bad sha
 		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "m$(reboot).deb", SHA256: sha}}}, // unsafe asset
 		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bad key": {Asset: "mimic.deb", SHA256: sha}}},             // bad key
 		{MimicDebs: goodDebs}, // debs without a release base
-		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: sha, DKMSAsset: "dkms.deb", DKMSSHA256: "short"}}},     // bad dkms sha
-		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: sha, DKMSAsset: "d$(reboot).deb", DKMSSHA256: sha}}},    // unsafe dkms asset
-		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: sha, DKMSAsset: "dkms.deb"}}},                          // incomplete companion (asset, no sha)
+		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: sha, DKMSAsset: "dkms.deb", DKMSSHA256: "short"}}},   // bad dkms sha
+		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: sha, DKMSAsset: "d$(reboot).deb", DKMSSHA256: sha}}}, // unsafe dkms asset
+		{MimicReleaseBase: base, MimicDebs: map[string]model.MimicDebPin{"bookworm-amd64": {Asset: "mimic.deb", SHA256: sha, DKMSAsset: "dkms.deb"}}},                        // incomplete companion (asset, no sha)
 	}
 	for i, cs := range bad {
 		if err := validateMimicCatalog(cs); err == nil {
