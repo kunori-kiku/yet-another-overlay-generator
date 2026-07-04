@@ -45,7 +45,7 @@ type settingsJSON struct {
 	// Mimic GitHub-.deb catalog (plan-3). All NON-SECRET pins. Empty = distro-only mimic.
 	MimicVersion     string                    `json:"mimic_version,omitempty"`
 	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
-	MimicDebs        map[string]model.Artifact `json:"mimic_debs,omitempty"`
+	MimicDebs        map[string]model.MimicDebPin `json:"mimic_debs,omitempty"`
 	// MimicFallbackDefault is the fleet-wide mimic→UDP fallback policy ("" / "udp" / "none"). plan-4.
 	MimicFallbackDefault string `json:"mimic_fallback_default,omitempty"`
 	// Signed agent self-update (plan-9, canary-then-fleet). All NON-SECRET pins; the agent
@@ -297,6 +297,18 @@ func validateMimicCatalog(cs controller.ControllerSettings) *apierr.Error {
 		}
 		if !sha256HexPattern.MatchString(art.SHA256) {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs["+key+"].sha256")
+		}
+		// Companion mimic-dkms .deb (the two-package install): validated when EITHER dkms field is
+		// set — both must then be present + valid. A row with NEITHER is a mimic-only pin, allowed
+		// for back-compat but it fails on split-package distros (Debian 12 / Ubuntu 24.04); the
+		// panel surfaces that as a warning and the install degrades under mimic_fallback=udp.
+		if art.DKMSAsset != "" || art.DKMSSHA256 != "" {
+			if !debAssetPattern.MatchString(art.DKMSAsset) {
+				return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs["+key+"].dkms_asset")
+			}
+			if !sha256HexPattern.MatchString(art.DKMSSHA256) {
+				return apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_debs["+key+"].dkms_sha256")
+			}
 		}
 	}
 	return nil

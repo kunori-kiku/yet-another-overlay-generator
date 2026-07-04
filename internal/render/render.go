@@ -235,6 +235,11 @@ func GenerateKeysWith(topo *model.Topology, custody KeyCustody, kg Keygen) (map[
 // lives in renderer (the install.sh template consumes it), avoiding a render<->renderer import cycle.
 type Artifact = model.Artifact
 
+// MimicDebPin aliases model.MimicDebPin (a mimic catalog row's mimic+mimic-dkms package pair) into
+// package render so FetchSettings can reference it without the render<->renderer cycle, mirroring
+// the Artifact alias above.
+type MimicDebPin = model.MimicDebPin
+
 // FetchSettings is the typed channel of install-time fetch pins threaded through the single shared
 // render path (All). It is populated from ControllerSettings (controller mode; plan-3/4/9) or from
 // env/flags (air-gap; plan-7). The ZERO value means "no catalog configured", which MUST leave
@@ -248,7 +253,7 @@ type FetchSettings struct {
 	// threaded into install.sh (via renderer.InstallFetch).
 	MimicVersion     string
 	MimicReleaseBase string
-	MimicDebs        map[string]Artifact
+	MimicDebs        map[string]MimicDebPin
 	// MimicFallbackDefault is the fleet-wide mimic→UDP fallback policy a link inherits when its edge
 	// leaves mimic_fallback empty ("" / "udp" / "none"). PURE policy threaded to the compiler
 	// (compiler.WithMimicFallbackDefault); "" ⇒ resolves to "none" everywhere ⇒ byte-identical.

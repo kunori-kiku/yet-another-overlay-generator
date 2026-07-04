@@ -335,7 +335,7 @@ func TestAll_MimicCatalog_ArtifactsJSONSignedMember(t *testing.T) {
 	fs := FetchSettings{
 		MimicVersion:     "0.1.0",
 		MimicReleaseBase: "https://github.com/hack3ric/mimic/releases/download/v0.1.0",
-		MimicDebs: map[string]Artifact{
+		MimicDebs: map[string]MimicDebPin{
 			"bookworm-amd64": {Asset: "mimic_0.1.0_amd64.deb", SHA256: strings.Repeat("a", 64)},
 		},
 	}

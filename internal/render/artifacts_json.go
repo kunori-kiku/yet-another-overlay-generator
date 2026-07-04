@@ -6,8 +6,12 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// artifactsFileSchema is the schema version stamped into every emitted artifacts.json.
-const artifactsFileSchema = 1
+// artifactsFileSchema is the schema version stamped into every emitted artifacts.json. Bumped 1→2
+// when the mimic catalog gained the two-package `mimic-dkms` companion pin (.mimic.debs[k] now
+// carries dkms_asset/dkms_sha256): the shape is additive (an old {asset,sha256}-only catalog still
+// loads on a schema-2 binary — the loader guard rejects only schema > supported), but the bump lets
+// an OLD binary reading a NEW catalog fail-closed instead of silently installing without the module.
+const artifactsFileSchema = 2
 
 // artifactsFile is the controller-signed artifacts.json carried as a bundleFiles member
 // (internal/artifacts/export.go). It pins the EXTERNAL artifacts a node may fetch — the mimic
@@ -30,7 +34,7 @@ type artifactsFile struct {
 type artifactsMimic struct {
 	Version    string                    `json:"version,omitempty"`
 	ReleaseURL string                    `json:"release_url,omitempty"`
-	Debs       map[string]model.Artifact `json:"debs,omitempty"`
+	Debs       map[string]model.MimicDebPin `json:"debs,omitempty"`
 }
 
 // artifactsAgent is the agent self-update block (plan-9): the version the node should run, the

@@ -1,0 +1,31 @@
+{
+  "name": "mimic-tcp-udp-fallback",
+  "doc": "Two routers joined by a transport=tcp (mimic) link whose mimic_fallback=udp. Pins the install.sh policy=udp branch: a mimic provisioning failure sets _MIMIC_SKIP=1 and the link comes up as plain UDP (the _mimic_provision fail-degradable path), NOT the fail-closed exit the mimic-tcp fixture pins. No catalog is configured here (the contract harness has no Fetch field), so the two-package .mimic.debs[k] dkms_asset/dkms_sha256 JSON shape is pinned separately by internal/render/artifacts_json_test.go.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "mimic-udp-fb", "name": "Mimic UDP Fallback" },
+    "domains": [
+      { "id": "domain-1", "name": "mimic-net", "cidr": "10.32.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "tcp", "mimic_fallback": "udp", "is_enabled": true }
+    ]
+  }
+}
