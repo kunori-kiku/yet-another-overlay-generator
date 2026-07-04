@@ -106,5 +106,6 @@ func BuildTelemetry(stateDir string) *Telemetry {
 		conditionSampler{stateDir: stateDir},
 		wireguardPeersSampler{}, // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
 		resourceSampler{},       // host load + memory → metrics["resource"] (node detail readout)
+		nativeXDPSampler{},      // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
 	}}
 }

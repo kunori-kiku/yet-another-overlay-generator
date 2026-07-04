@@ -45,9 +45,11 @@
   folder: [`implementation_plans/mimic-provisioning-reliability-2026_07_04/`](implementation_plans/mimic-provisioning-reliability-2026_07_04/outline.md).
   **plans 1 (#228) + 2 (#229) MERGED: two-package model + install BOTH debs + robust fallback +
   new `_MIMIC_SKIP` fixture; panel two-package UX + Assist both-sidecars + release_pins direct-retry.**
-  plan-3 (native-XDP deploy-time auto-downgrade → skb + achieved-mode Node Condition; `MimicNative`
-  bool gate since the TS template engine has no `eq`) IN REVIEW. **NEXT after plan-3 = plan-4**
-  (native-XDP pre-deploy capability probe + panel warning).
+  plan-3 (#230, native-XDP deploy-time auto-downgrade → skb + achieved-mode Node Condition; review
+  caught a real redeploy+reboot de-cloak in BOTH node+client templates, fixed via `restart` + a new
+  client-tcp golden) MERGED. plan-4 (native-XDP PRE-deploy capability probe — an agent sysfs heuristic
+  → `metrics["native_xdp"]`, panel NodeEditor warning; no conformance impact, telemetry is runtime)
+  IN REVIEW. **NEXT after plan-4 = plan-5** (docs + proof), then plan-6 (release rc.2).
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each

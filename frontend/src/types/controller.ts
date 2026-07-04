@@ -57,6 +57,12 @@ export interface ControllerNode {
   // before the persisted cache, like wireguardPeers): a load average frozen at persist time is stale.
   // Observability only; carries no endpoint/IP/key material. Optional — absent for a pre-plan-10 agent.
   resource?: NodeResource;
+  // nativeXDP is the egress NIC's native-XDP capability heuristic (plan-4 metrics["native_xdp"]) — a
+  // PRE-DEPLOY advisory so the panel can warn before an operator picks xdp_mode=native. Live-only
+  // (stripped before the persisted cache, like resource — telemetry stays out of localStorage).
+  // Observability/advisory only; no endpoint/IP/key material. Optional — absent for a pre-plan-4 agent
+  // or before the first heartbeat.
+  nativeXDP?: NativeXDP;
 }
 
 // WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
@@ -79,6 +85,16 @@ export interface NodeResource {
   load15: number;
   memTotalKB: number;
   memAvailableKB: number;
+}
+
+// NativeXDP is the node's egress-NIC native-XDP capability heuristic (plan-4), projected from the
+// agent's metrics["native_xdp"]. Best-effort (driver-name + kernel heuristic, pure sysfs — no live-NIC
+// attach); the DEFINITIVE per-node answer is the deploy-time `mimic` Node Condition (plan-3's native→skb
+// auto-downgrade). No endpoint/IP/key material.
+export interface NativeXDP {
+  capability: 'supported' | 'conditional' | 'unsupported' | 'unknown';
+  driver: string;
+  kernel: string;
 }
 
 // A single record in the audit chain. Mirrors the operator-facing fields of controller.AuditEntry.

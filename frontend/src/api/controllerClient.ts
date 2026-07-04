@@ -17,6 +17,7 @@ import type {
   StageResult,
   WireGuardPeer,
   NodeResource,
+  NativeXDP,
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
@@ -291,7 +292,7 @@ interface NodeJSON {
   conditions?: ConditionWire[];
   // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
   // known wireguard_peers + resource keys; other keys are ignored here.
-  telemetry?: { wireguard_peers?: WireGuardPeerWire[]; resource?: ResourceMetricWire } | null;
+  telemetry?: { wireguard_peers?: WireGuardPeerWire[]; resource?: ResourceMetricWire; native_xdp?: NativeXDPWire } | null;
 }
 
 // ResourceMetricWire mirrors the agent's host resource metric (snake_case wire shape under
@@ -302,6 +303,14 @@ interface ResourceMetricWire {
   load15?: number;
   mem_total_kb?: number;
   mem_available_kb?: number;
+}
+
+// NativeXDPWire mirrors the agent's egress-NIC native-XDP capability heuristic (snake_case wire shape
+// under telemetry.native_xdp), mapped to NativeXDP at the boundary. All fields optional (defensive).
+interface NativeXDPWire {
+  capability?: string;
+  driver?: string;
+  kernel?: string;
 }
 
 // WireGuardPeerWire mirrors the agent's per-peer link health (snake_case wire shape under
@@ -707,6 +716,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     conditions: mapNodeConditions(n.conditions),
     wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
     resource: mapResource(n.telemetry?.resource),
+    nativeXDP: mapNativeXDP(n.telemetry?.native_xdp),
   };
 }
 
@@ -723,6 +733,16 @@ function mapResource(r: ResourceMetricWire | undefined): NodeResource | undefine
     memTotalKB: num(r.mem_total_kb),
     memAvailableKB: num(r.mem_available_kb),
   };
+}
+
+// mapNativeXDP projects the agent's egress-NIC native-XDP capability heuristic (snake_case) to
+// NativeXDP. Defensive: a missing metric or a capability outside the closed set yields undefined so the
+// panel renders no indicator; driver/kernel default to "".
+export function mapNativeXDP(w: NativeXDPWire | undefined): NativeXDP | undefined {
+  if (!w) return undefined;
+  const cap = w.capability;
+  if (cap !== 'supported' && cap !== 'conditional' && cap !== 'unsupported' && cap !== 'unknown') return undefined;
+  return { capability: cap, driver: w.driver ?? '', kernel: w.kernel ?? '' };
 }
 
 // mapWireGuardPeers projects the agent's per-peer link telemetry (snake_case) to WireGuardPeer[].
