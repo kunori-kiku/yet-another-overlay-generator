@@ -1,6 +1,6 @@
 # STATUS
 <!-- regenerated: 2026-07-04 -->
-<!-- by: draft-implementation-plan — ACTIVE subject mimic-provisioning-reliability (→ v2.0.0-rc.2); v2.0.0-rc.1 is GitHub Latest -->
+<!-- by: hand — v2.0.0-rc.2 RELEASED (GitHub Latest); mimic-provisioning-reliability CLOSED + archived (owner-requested security review clean) -->
 
 ## Active work
 
@@ -21,11 +21,12 @@
   - `link-directionality-2026_07_03` — per-edge `link_direction` killing the reverse-peer
     roaming race (beta.18, PRs #220–#225; D11 one-spelling design; kernel-proven via realtunnel
     `c4`; owner-smoked clean).
-  The rc.1 soak is running on the fleet (Latest). **The first rc.2 subject is now ACTIVE — see the
-  next bullet.**
+  **🎯 `v2.0.0-rc.2` RELEASED — GitHub *Latest* (2026-07-04; tag on `cb2ecdd`; rc.1 demoted;
+  self-promoted). Verified: 29 assets, sidecar hash + published `version` = `v2.0.0-rc.2`.**
 
-- **🔧 ACTIVE SUBJECT `mimic-provisioning-reliability-2026_07_04` — DRAFTED (2026-07-04), executing;
-  ships as `v2.0.0-rc.2` (first rc.2 subject; rc self-promotes to Latest).** Owner live-fleet smoke of
+- **✅ SUBJECT `mimic-provisioning-reliability-2026_07_04` — DELIVERED as `v2.0.0-rc.2`; CLOSED +
+  archived to `_completed/`. Owner-requested security review CLEAN (3 adversarial lenses —
+  install-integrity / trust-anchor / silent-escape — zero findings).** Owner live-fleet smoke of
   rc.1 found `transport: tcp` (mimic) deploys **hard-failing on Debian-12 nodes** (`install.sh exit:
   exit status 100`, taking tunnels down → `wireguard: NoInterfaces`). ROOT CAUSE: upstream
   `hack3ric/mimic` ships **two** debs per `<codename>-<arch>` — `mimic` (userspace) + `mimic-dkms`
@@ -43,14 +44,18 @@
   release rc.2. **Owner decisions:** comprehensive/rc.2; the Phase-0 teardown is EXPECTED (failover by
   design — NOT in scope, no follow-up subject); include the pre-deploy native probe (D-native). Plan
   folder: [`implementation_plans/mimic-provisioning-reliability-2026_07_04/`](implementation_plans/mimic-provisioning-reliability-2026_07_04/outline.md).
-  **plans 1 (#228) + 2 (#229) MERGED: two-package model + install BOTH debs + robust fallback +
-  new `_MIMIC_SKIP` fixture; panel two-package UX + Assist both-sidecars + release_pins direct-retry.**
-  plans 3 (#230) + 4 (#231) + 5 (#232, docs) MERGED — the FULL subject is on `main`, all six CI
-  checks green. plan-6: the `v2.0.0-rc.2` CHANGELOG is rolled + integrated `main` re-verified
-  (both Go profiles + `-race`, FE 446 vitest); **the rc.2 TAG is pending the owner's smoke-timing
-  call** — cut now (rc self-promotes to Latest) vs. after an owner fleet-smoke of the mimic fix
-  (mirroring the rc.1 smoke-then-cut precedent, since rc.2 changes the exact install path that broke
-  the fleet). A defect during soak → rc.3 under the same gate rules.
+  **All 6 plans MERGED (#228–#233) + `v2.0.0-rc.2` CUT (owner: "cut now").** plan-1 two-package model
+  + install BOTH debs + robust policy-aware fallback; plan-2 panel two-package UX + Assist; plan-3
+  native auto-downgrade (review caught a redeploy+reboot de-cloak → fixed via `restart` + a client-tcp
+  golden); plan-4 pre-deploy native probe; plan-5 docs; plan-6 CHANGELOG + tag. **Security review
+  CLEAN** — 3 adversarial lenses, zero findings: no unverified `.deb` installs (every download
+  SHA-256-verified against the signed `artifacts.json`); a UDP de-cloak requires the operator's
+  explicit `mimic_fallback=udp` (shipped default fail-closed) and surfaces as a `warn` condition; the
+  keystone / bundle-signing / off-host passkey trust anchor is untouched (mimic pins + install.sh ride
+  inside the signed bundle, verified before install); the new native-XDP telemetry is
+  observability-only. **Owed: an owner fleet-smoke of the mimic fix** (deploy a `transport: tcp` link
+  with the two-package catalog; confirm both debs install / clean UDP fallback on a stale-kernel node
+  / achieved XDP mode in the panel). A defect during soak → rc.3 under the same gate rules.
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each
@@ -323,6 +328,13 @@ incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). T
 
 ## Recently closed subjects (last 3)
 
+- `mimic-provisioning-reliability-2026_07_04` (2026-07-04) — **6 plans, `v2.0.0-rc.2` (GitHub Latest,
+  PRs #228–#233; tag on `cb2ecdd`).** Fixed the rc.1-soak mimic install defect: two-package
+  `mimic`+`mimic-dkms` install + robust policy-aware fallback, panel two-package UX + Assist
+  reliability, native-XDP deploy-time auto-downgrade + a pre-deploy capability probe, docs. Each PR
+  independently reviewed → adversarially verified → fixed → CI-green; the review caught a real
+  redeploy+reboot de-cloak (fixed via the `restart` lifecycle + a client-tcp golden). Owner-requested
+  security review CLEAN. Owed: owner fleet-smoke of the fix.
 - `link-directionality-2026_07_03` (2026-07-03) — **4 plans, `v2.0.0-beta.18` (PRs #220–#225);
   per-edge `link_direction` (D11 one-spelling; editor flip) killing the reverse-peer roaming race;
   kernel-proven (realtunnel `c4`); owner-smoked clean; folded into `v2.0.0-rc.1`.**
