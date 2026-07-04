@@ -45,11 +45,12 @@
   folder: [`implementation_plans/mimic-provisioning-reliability-2026_07_04/`](implementation_plans/mimic-provisioning-reliability-2026_07_04/outline.md).
   **plans 1 (#228) + 2 (#229) MERGED: two-package model + install BOTH debs + robust fallback +
   new `_MIMIC_SKIP` fixture; panel two-package UX + Assist both-sidecars + release_pins direct-retry.**
-  plans 3 (#230, native auto-downgrade + a review-caught redeploy+reboot de-cloak fixed via `restart`
-  + a client-tcp golden) + 4 (#231, native-XDP pre-deploy capability probe + panel NodeEditor warning)
-  MERGED. plan-5 (docs: `docs/spec/artifacts/mimic.md` + bilingual wiki updated for the two-package
-  install, the DKMS/kernel reality, robust policy-aware fallback, the `restart` lifecycle, and native
-  auto-downgrade + capability signal) IN REVIEW. **NEXT = plan-6** (cut `v2.0.0-rc.2`).
+  plans 3 (#230) + 4 (#231) + 5 (#232, docs) MERGED — the FULL subject is on `main`, all six CI
+  checks green. plan-6: the `v2.0.0-rc.2` CHANGELOG is rolled + integrated `main` re-verified
+  (both Go profiles + `-race`, FE 446 vitest); **the rc.2 TAG is pending the owner's smoke-timing
+  call** — cut now (rc self-promotes to Latest) vs. after an owner fleet-smoke of the mimic fix
+  (mirroring the rc.1 smoke-then-cut precedent, since rc.2 changes the exact install path that broke
+  the fleet). A defect during soak → rc.3 under the same gate rules.
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each

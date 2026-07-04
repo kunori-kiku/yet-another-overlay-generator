@@ -9,6 +9,44 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.2] - 2026-07-04
+
+**Release candidate.** Fixes the mimic (`transport: tcp`) install defect the `v2.0.0-rc.1` soak
+surfaced on the live fleet: a `transport: tcp` link failed to deploy on Debian 12 / Ubuntu 24.04
+(`install.sh exit: exit status 100`), taking the affected nodes' tunnels down. Root cause — upstream
+`hack3ric/mimic` ships **two** packages (`mimic` + `mimic-dkms`, the latter `Provides` the
+`mimic-modules` the first `Depends` on), but YAOG's catalog could pin only one, so `apt` could not
+satisfy the dependency; and the unguarded `apt-get` under `set -euo pipefail` aborted the whole node
+apply before the fallback-to-UDP logic ran. Five reviewed plans (PRs #228–#232), each independently
+reviewed and adversarially verified before merge — the review caught (and this ships the fix for) a
+real redeploy+reboot de-cloak in the native-XDP auto-downgrade.
+
+### Fixed
+- **Two-package mimic install.** The catalog now pins `{asset, sha256, dkms_asset, dkms_sha256}` per
+  `<codename>-<arch>` and the installer fetches, SHA-256-verifies, and `dpkg`s **both** the `mimic`
+  and `mimic-dkms` packages together, so `Depends: mimic-modules` resolves (artifacts.json schema
+  1→2, back-compatible — a legacy `{asset,sha256}`-only catalog still loads). (#228)
+- **Fail-degradable provisioning.** The mimic provisioning block is now a shell function that returns
+  on any failure instead of a `set -e` abort, so every failure (missing pin, download/checksum
+  failure, unsatisfiable `Depends: mimic-modules`, or a DKMS build failure on a stale kernel — reboot
+  into the current kernel to build the module) degrades per the link's `mimic_fallback` policy —
+  plain UDP under `udp`, a categorized breadcrumb + exit under `none` — rather than bricking the node
+  apply. `mimic@<egress>` is now `enable`d + **`restart`ed** (not a no-op `enable --now`), so a
+  redeploy re-applies the freshly-written config. (#228, #230)
+- **Assist reliability.** A gh-proxy `.sha256` sidecar miss now retries the direct GitHub URL before
+  giving up, and an empty/garbage fetched SHA is treated as a miss (never saved). (#229)
+
+### Added
+- **Panel two-package catalog.** Discover pairs a `mimic-dkms` asset to its `mimic` sibling under one
+  `<codename>-<arch>` row; Assist fetches both sidecars; a row missing its module companion warns.
+  (#229)
+- **Native-XDP auto-downgrade.** A failed `xdp_mode: native` attach auto-downgrades to `skb` and the
+  link still comes up, with the achieved mode surfaced as the `NativeDowngradedSkb` mimic Node
+  Condition (status `ok`). (#230)
+- **Native-XDP pre-deploy capability probe.** The agent reports each node's egress-NIC native-XDP
+  capability (a pure-sysfs heuristic → `metrics["native_xdp"]`) so the node editor warns before
+  `native` is selected on a NIC that can't do it. (#231)
+
 ## [2.0.0-rc.1] - 2026-07-03
 
 **Release candidate.** Promotes the soaked beta line to release-candidate status with **zero code
@@ -898,6 +936,7 @@ PRs #59–#65.
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
 [Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...HEAD
+[2.0.0-rc.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...v2.0.0-rc.1
 [2.0.0-beta.18]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...v2.0.0-beta.18
 [2.0.0-beta.17]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.16...v2.0.0-beta.17
