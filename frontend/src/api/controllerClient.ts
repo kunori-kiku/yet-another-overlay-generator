@@ -758,6 +758,25 @@ export interface AgentPin {
   sha256: string;
 }
 
+// MimicDebPin is one mimic-catalog row's pinned PAIR: the userspace `mimic` .deb (asset/sha256) and
+// its companion `mimic-dkms` .deb (dkmsAsset/dkmsSha256, absent on a legacy mimic-only row). Mirrors
+// model.MimicDebPin (Go) and the map values of mimic_debs on the wire. Distinct from AgentPin (which
+// backs agent_bins) so the dkms companion never leaks into the agent-bins path.
+export interface MimicDebPin {
+  asset: string;
+  sha256: string;
+  dkmsAsset?: string;
+  dkmsSha256?: string;
+}
+
+// MimicDebPinJSON is the wire form of a mimic_debs entry (snake_case dkms_* companion fields).
+interface MimicDebPinJSON {
+  asset: string;
+  sha256: string;
+  dkms_asset?: string;
+  dkms_sha256?: string;
+}
+
 // ControllerSettings is the operator-editable, server-persisted bootstrap config: the public
 // agent URL (where nodes curl the bootstrap / enroll), an optional GitHub proxy prefix (default
 // off), the agent-binary release base URL, the signed agent self-update rollout, and the mimic
@@ -786,7 +805,7 @@ export interface ControllerSettings {
   // mimicReleaseBase ⇒ distro-only mimic (no GitHub fallback).
   mimicVersion: string;
   mimicReleaseBase: string;
-  mimicDebs: Record<string, AgentPin>;
+  mimicDebs: Record<string, MimicDebPin>;
   // Fleet-wide mimic→UDP fallback policy a tcp link inherits ('' / 'udp' / 'none'). plan-4; UI in plan-6.
   mimicFallbackDefault: string;
 }
@@ -806,8 +825,31 @@ interface SettingsJSON {
   agent_rollout_fleet_wide?: boolean;
   mimic_version?: string;
   mimic_release_base?: string;
-  mimic_debs?: Record<string, AgentPin>;
+  mimic_debs?: Record<string, MimicDebPinJSON>;
   mimic_fallback_default?: string;
+}
+
+// mapMimicDebs / mimicDebsToJSON convert the two-package mimic catalog between the camelCase UI type
+// and the snake_case wire (an empty dkms_* string on the wire becomes undefined, so a mimic-only row
+// round-trips without a phantom companion). Kept beside the settings mappers.
+function mapMimicDebs(w?: Record<string, MimicDebPinJSON>): Record<string, MimicDebPin> {
+  const out: Record<string, MimicDebPin> = {};
+  for (const [k, v] of Object.entries(w ?? {})) {
+    out[k] = { asset: v.asset, sha256: v.sha256, dkmsAsset: v.dkms_asset || undefined, dkmsSha256: v.dkms_sha256 || undefined };
+  }
+  return out;
+}
+function mimicDebsToJSON(m: Record<string, MimicDebPin>): Record<string, MimicDebPinJSON> {
+  const out: Record<string, MimicDebPinJSON> = {};
+  for (const [k, v] of Object.entries(m)) {
+    out[k] = {
+      asset: v.asset,
+      sha256: v.sha256,
+      ...(v.dkmsAsset ? { dkms_asset: v.dkmsAsset } : {}),
+      ...(v.dkmsSha256 ? { dkms_sha256: v.dkmsSha256 } : {}),
+    };
+  }
+  return out;
 }
 
 export function mapSettings(d: SettingsJSON): ControllerSettings {
@@ -824,7 +866,7 @@ export function mapSettings(d: SettingsJSON): ControllerSettings {
     agentRolloutFleetWide: d.agent_rollout_fleet_wide ?? false,
     mimicVersion: d.mimic_version ?? '',
     mimicReleaseBase: d.mimic_release_base ?? '',
-    mimicDebs: d.mimic_debs ?? {},
+    mimicDebs: mapMimicDebs(d.mimic_debs),
     mimicFallbackDefault: d.mimic_fallback_default ?? '',
   };
 }
@@ -871,7 +913,7 @@ export function toSettingsJSON(s: ControllerSettings): SettingsJSON {
     agent_rollout_fleet_wide: s.agentRolloutFleetWide,
     mimic_version: s.mimicVersion,
     mimic_release_base: s.mimicReleaseBase,
-    mimic_debs: s.mimicDebs,
+    mimic_debs: mimicDebsToJSON(s.mimicDebs),
     mimic_fallback_default: s.mimicFallbackDefault,
   };
 }
