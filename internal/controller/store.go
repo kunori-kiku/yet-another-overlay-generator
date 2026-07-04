@@ -382,9 +382,9 @@ type ControllerSettings struct {
 	// release base URL, and per-"<codename>-<arch>" (e.g. "bookworm-amd64") asset names + SHA-256
 	// hashes the installer verifies before dpkg. The pins are emitted into the controller-signed
 	// artifacts.json. Empty ⇒ distro-only mimic, no GitHub fallback, no artifacts.json (D4).
-	MimicVersion     string                    `json:"mimic_version,omitempty"`
-	MimicReleaseBase string                    `json:"mimic_release_base,omitempty"`
-	MimicDebs        map[string]model.Artifact `json:"mimic_debs,omitempty"`
+	MimicVersion     string                       `json:"mimic_version,omitempty"`
+	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
+	MimicDebs        map[string]model.MimicDebPin `json:"mimic_debs,omitempty"`
 	// MimicFallbackDefault is the FLEET-WIDE mimic→UDP fallback policy a transport=="tcp" link
 	// inherits when its edge leaves mimic_fallback empty. "" / "udp" / "none". NON-SECRET. The
 	// shipped default is "none" (fail-closed, D1) — preserving mimic's censorship-evasion guarantee
@@ -423,12 +423,12 @@ type ControllerSettings struct {
 // Clone returns a deep copy of cs: the MimicDebs map and the Translucency pointer are duplicated
 // so a value handed to or returned from an in-memory store cannot be mutated through a shared
 // reference (the FileStore is naturally isolated by its JSON round-trip; MemStore uses this to
-// match). renderer.Artifact is itself a value type with no nested references, so a shallow map
+// match). model.MimicDebPin is itself a value type with no nested references, so a shallow map
 // copy fully isolates the entries.
 func (cs ControllerSettings) Clone() ControllerSettings {
 	out := cs
 	if cs.MimicDebs != nil {
-		m := make(map[string]model.Artifact, len(cs.MimicDebs))
+		m := make(map[string]model.MimicDebPin, len(cs.MimicDebs))
 		for k, v := range cs.MimicDebs {
 			m[k] = v
 		}

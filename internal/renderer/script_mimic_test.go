@@ -98,7 +98,7 @@ func TestRenderInstallScript_MimicGitHubFallback_VerifiesBeforeInstall(t *testin
 	// Verify-before-install ordering: the SHA-256 check must precede the apt-get install of the
 	// downloaded .deb, so an unverified binary can never be installed.
 	verifyIdx := strings.Index(script, "sha256sum -c -")
-	installIdx := strings.Index(script, `apt-get install -y "$_mimic_deb"`)
+	installIdx := strings.Index(script, "apt-get install -y $_mimic_install")
 	if verifyIdx < 0 || installIdx < 0 || verifyIdx >= installIdx {
 		t.Errorf("mimic .deb must be SHA-256-verified before install (verify=%d, install=%d)", verifyIdx, installIdx)
 	}
@@ -120,6 +120,130 @@ func TestRenderInstallScript_MimicGitHubFallback_VerifiesBeforeInstall(t *testin
 		if !strings.Contains(script, frag) {
 			t.Errorf("mimic fallback missing fail-closed guard %q", frag)
 		}
+	}
+}
+
+// TestRenderInstallScript_MimicTwoPackage_And_Fallback pins the two-package install + the
+// fail-degradable provisioning contract (the rc.2 fix): the rendered install.sh reads BOTH the mimic
+// and the mimic-dkms pins from artifacts.json and installs them together (so mimic's Depends:
+// mimic-modules resolves from the local dkms .deb), and — per the node's resolved mimic_fallback
+// policy — either skips to plain UDP (_MIMIC_SKIP=1, policy=udp) or fails closed at the call site
+// (exit 1, policy=none), never a bare set -e abort inside the provisioning function.
+func TestRenderInstallScript_MimicTwoPackage_And_Fallback(t *testing.T) {
+	node := mimicRenderNode()
+
+	// Structure common to both policies: a policy-agnostic provisioning function that reads the dkms
+	// companion pin and installs both .debs in one apt-get (the collected $_mimic_install list).
+	structural := []string{
+		"_mimic_provision() {",
+		`.mimic.debs[$k].dkms_asset // ""`,
+		`.mimic.debs[$k].dkms_sha256 // ""`,
+		"apt-get install -y $_mimic_install",
+	}
+
+	// policy=none (default): fail closed at the call site (exit 1), the fail-closed branch only.
+	nonePeers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408},
+	}
+	noneScript, err := RenderInstallScript(node, nonePeers, true)
+	if err != nil {
+		t.Fatalf("render (none): %v", err)
+	}
+	for _, frag := range structural {
+		if !strings.Contains(noneScript, frag) {
+			t.Errorf("two-package structural fragment %q missing (policy=none)", frag)
+		}
+	}
+	if !strings.Contains(noneScript, "mimic_fallback policy is fail-closed") {
+		t.Errorf("policy=none must render the fail-closed branch")
+	}
+	if strings.Contains(noneScript, "_MIMIC_SKIP=1") {
+		t.Errorf("policy=none must NOT render the _MIMIC_SKIP=1 (udp) branch")
+	}
+
+	// policy=udp: every mimic peer resolves to "udp" -> a provisioning failure degrades to plain UDP.
+	udpPeers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408,
+			MimicFallback: "udp"},
+	}
+	udpScript, err := RenderInstallScript(node, udpPeers, true)
+	if err != nil {
+		t.Fatalf("render (udp): %v", err)
+	}
+	for _, frag := range structural {
+		if !strings.Contains(udpScript, frag) {
+			t.Errorf("two-package structural fragment %q missing (policy=udp)", frag)
+		}
+	}
+	if !strings.Contains(udpScript, "_MIMIC_SKIP=1") || !strings.Contains(udpScript, "falling back to plain UDP (policy=udp)") {
+		t.Errorf("policy=udp must render the _MIMIC_SKIP=1 degrade branch")
+	}
+	if strings.Contains(udpScript, "mimic_fallback policy is fail-closed") {
+		t.Errorf("policy=udp must NOT render the fail-closed branch")
+	}
+}
+
+// TestRenderClientInstallScript_MimicTwoPackage_And_Fallback is the CLIENT-variant twin of the node
+// two-package/fail-degradable test: a client whose single wg0 link is transport=tcp (ClientPeerInfo.
+// Mimic) renders the SAME byte-identical _mimic_provision restructure (both debs + the policy-aware
+// fallback branches) in the client install template. The node and client templates are
+// hand-maintained copies and NO golden pairs a client role with a tcp edge, so the client mimic path
+// needs its own coverage (else a client-only regression would ship green).
+func TestRenderClientInstallScript_MimicTwoPackage_And_Fallback(t *testing.T) {
+	node := &model.Node{ID: "client-1", Name: "cli", Role: "client", Platform: "debian", OverlayIP: "10.50.0.9"}
+	structural := []string{
+		"_mimic_provision() {",
+		`.mimic.debs[$k].dkms_asset // ""`,
+		`.mimic.debs[$k].dkms_sha256 // ""`,
+		"apt-get install -y $_mimic_install",
+	}
+	base := compiler.ClientPeerInfo{
+		NodeID: "client-1", NodeName: "cli", OverlayIP: "10.50.0.9",
+		Mimic: true, MTU: 1408, ListenPort: 51820,
+		PrivateKey:      "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4=",
+		RouterPublicKey: "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U=",
+		RouterEndpoint:  "router.example.com:51820",
+		DomainCIDRs:     []string{"10.50.0.0/24"},
+	}
+
+	// policy=none (fail-closed): the fail-closed branch, no _MIMIC_SKIP.
+	none := base
+	none.MimicFallback = "none"
+	noneScript, err := RenderClientInstallScript(node, &none)
+	if err != nil {
+		t.Fatalf("render client (none): %v", err)
+	}
+	for _, frag := range structural {
+		if !strings.Contains(noneScript, frag) {
+			t.Errorf("client two-package fragment %q missing (policy=none)", frag)
+		}
+	}
+	if !strings.Contains(noneScript, "mimic_fallback policy is fail-closed") {
+		t.Errorf("client policy=none must render the fail-closed branch")
+	}
+	if strings.Contains(noneScript, "_MIMIC_SKIP=1") {
+		t.Errorf("client policy=none must NOT render the _MIMIC_SKIP=1 (udp) branch")
+	}
+
+	// policy=udp: a provisioning failure degrades wg0 to plain UDP.
+	udp := base
+	udp.MimicFallback = "udp"
+	udpScript, err := RenderClientInstallScript(node, &udp)
+	if err != nil {
+		t.Fatalf("render client (udp): %v", err)
+	}
+	for _, frag := range structural {
+		if !strings.Contains(udpScript, frag) {
+			t.Errorf("client two-package fragment %q missing (policy=udp)", frag)
+		}
+	}
+	if !strings.Contains(udpScript, "_MIMIC_SKIP=1") || !strings.Contains(udpScript, "falling back to plain UDP (policy=udp)") {
+		t.Errorf("client policy=udp must render the _MIMIC_SKIP=1 degrade branch")
+	}
+	if strings.Contains(udpScript, "mimic_fallback policy is fail-closed") {
+		t.Errorf("client policy=udp must NOT render the fail-closed branch")
 	}
 }
 

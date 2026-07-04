@@ -13,6 +13,26 @@ type Artifact struct {
 	SHA256 string `json:"sha256"`
 }
 
+// MimicDebPin is ONE mimic-catalog row's pinned package PAIR for a "<codename>-<arch>": the
+// userspace `mimic` .deb (Asset/SHA256) AND its companion `mimic-dkms` .deb (DKMSAsset/DKMSSHA256).
+// Upstream hack3ric/mimic ships both per distro/arch; the `mimic` package declares
+// `Depends: mimic-modules`, a virtual package `Provides`d by `mimic-dkms`, so the install MUST fetch
+// and dpkg BOTH or apt cannot satisfy the dependency (the rc.1 live-fleet `exit status 100`).
+//
+// It is deliberately NOT a reuse of Artifact: that type is shared by the mimic map, the agent
+// self-update bins, AND the release-pin Assist response, so a mimic-only `dkms_*` field on Artifact
+// would leak into the agent + Assist paths. The layout is flat + additive — the legacy Asset/SHA256
+// keep their meaning (the `mimic` pkg), so encoding/json round-trips an old {asset,sha256}-only
+// catalog into a pin with an empty (absent) dkms companion, and an old reader ignores the unknown
+// dkms_* fields. A row with no DKMS companion installs only `mimic` and so fails on split-package
+// distros (Debian 12 / Ubuntu 24.04) — surfaced by validation, and degradable under mimic_fallback=udp.
+type MimicDebPin struct {
+	Asset      string `json:"asset"`
+	SHA256     string `json:"sha256"`
+	DKMSAsset  string `json:"dkms_asset,omitempty"`
+	DKMSSHA256 string `json:"dkms_sha256,omitempty"`
+}
+
 // InstallFetch is the install.sh-relevant subset of render.FetchSettings. The install.sh
 // mimic-from-GitHub fallback reads the pin (release_url + per-"<codename>-<arch>" asset +
 // sha256) from the integrity-verified artifacts.json bundle member at install time — the

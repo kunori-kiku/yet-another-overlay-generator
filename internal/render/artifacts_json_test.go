@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestBuildArtifactsJSON_AgentBlockPerNode(t *testing.T) {
 	// (empty agent block), byte-shape-identical to plan-3.
 	fs.MimicVersion = "v1.4.0"
 	fs.MimicReleaseBase = "https://example/mimic"
-	fs.MimicDebs = map[string]Artifact{"bookworm-amd64": {Asset: "m.deb", SHA256: "cd"}}
+	fs.MimicDebs = map[string]MimicDebPin{"bookworm-amd64": {Asset: "m.deb", SHA256: "cd"}}
 	mo, err := buildArtifactsJSON(fs, "other")
 	if err != nil {
 		t.Fatalf("buildArtifactsJSON(other, mimic): %v", err)
@@ -66,5 +67,55 @@ func TestBuildArtifactsJSON_AgentBlockPerNode(t *testing.T) {
 	}
 	if mp.Agent.Version != "" {
 		t.Errorf("non-rollout node must get an EMPTY agent block; got version %q", mp.Agent.Version)
+	}
+}
+
+// TestBuildArtifactsJSON_MimicDkmsCompanion pins the two-package mimic catalog shape: a MimicDebPin
+// with a dkms companion serializes to .mimic.debs[k] = {asset, sha256, dkms_asset, dkms_sha256} under
+// the bumped schema, while a legacy mimic-only pin omits the dkms_* keys (omitempty) so an old
+// {asset,sha256}-only catalog stays byte-clean and round-trips.
+func TestBuildArtifactsJSON_MimicDkmsCompanion(t *testing.T) {
+	withDkms := FetchSettings{
+		MimicVersion:     "v0.7.1",
+		MimicReleaseBase: "https://example/mimic",
+		MimicDebs:        map[string]MimicDebPin{"bookworm-amd64": {Asset: "m.deb", SHA256: "aa", DKMSAsset: "m-dkms.deb", DKMSSHA256: "bb"}},
+	}
+	got, err := buildArtifactsJSON(withDkms, "any")
+	if err != nil {
+		t.Fatalf("buildArtifactsJSON(withDkms): %v", err)
+	}
+	var parsed struct {
+		Schema int `json:"schema"`
+		Mimic  struct {
+			Debs map[string]struct {
+				Asset      string `json:"asset"`
+				SHA256     string `json:"sha256"`
+				DKMSAsset  string `json:"dkms_asset"`
+				DKMSSHA256 string `json:"dkms_sha256"`
+			} `json:"debs"`
+		} `json:"mimic"`
+	}
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("parse artifacts.json: %v", err)
+	}
+	if parsed.Schema != artifactsFileSchema {
+		t.Errorf("schema = %d, want %d (the two-package bump)", parsed.Schema, artifactsFileSchema)
+	}
+	if p := parsed.Mimic.Debs["bookworm-amd64"]; p.Asset != "m.deb" || p.SHA256 != "aa" || p.DKMSAsset != "m-dkms.deb" || p.DKMSSHA256 != "bb" {
+		t.Errorf("companion pin wrong: %+v", p)
+	}
+
+	// A legacy mimic-only pin (no companion) must NOT emit the dkms_ keys at all (omitempty).
+	mimicOnly := FetchSettings{
+		MimicVersion:     "v0.7.1",
+		MimicReleaseBase: "https://example/mimic",
+		MimicDebs:        map[string]MimicDebPin{"bookworm-amd64": {Asset: "m.deb", SHA256: "aa"}},
+	}
+	gotOnly, err := buildArtifactsJSON(mimicOnly, "any")
+	if err != nil {
+		t.Fatalf("buildArtifactsJSON(mimicOnly): %v", err)
+	}
+	if strings.Contains(gotOnly, "dkms_") {
+		t.Errorf("mimic-only pin must omit dkms_ keys (omitempty); got:\n%s", gotOnly)
 	}
 }

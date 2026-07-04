@@ -487,57 +487,81 @@ _mimic_breadcrumb() {
         "$1" "\${MIMIC_EGRESS_IF:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
         > {{ shq .MimicBreadcrumb.Path }}
 }
-# _MIMIC_SKIP is set when the mimic binary could not be installed AND policy=udp, so the Phase-3
-# provisioning block skips mimic and the link comes up as plain UDP. Empty = provision normally.
+# _MIMIC_SKIP is set when mimic could not be provisioned AND policy=udp, so the Phase-3 provisioning
+# block skips mimic and the link comes up as plain UDP. Empty = provision normally.
 _MIMIC_SKIP=
-if ! command -v mimic >/dev/null 2>&1 && [ -n "$YAOG_PM" ]; then
-    _pm_install mimic || true
-fi
-if ! command -v mimic >/dev/null 2>&1; then
+# _mimic_provision installs mimic — the distro package, else a SHA-256-pinned GitHub .deb PAIR. It
+# RETURNS non-zero on any failure instead of exiting, so the caller honors the link's mimic_fallback
+# policy (udp: skip to plain UDP; none: fail closed) rather than aborting the whole apply under set -e.
+# Upstream mimic ships TWO packages: mimic (userspace) and mimic-dkms (the eBPF module, which
+# Provides the mimic-modules the mimic pkg Depends on), so BOTH .debs are fetched, verified against
+# their pins, and dpkg'd together — installing only mimic cannot satisfy the dependency.
+_mimic_provision() {
+    command -v mimic >/dev/null 2>&1 && return 0
+    if [ -n "$YAOG_PM" ]; then _pm_install mimic || true; fi
+    command -v mimic >/dev/null 2>&1 && return 0
     # Distro package unavailable -> pinned GitHub .deb (apt/dpkg systems only).
     if [ "$YAOG_PM" != "apt-get" ] || ! command -v dpkg >/dev/null 2>&1; then
         echo "ERROR: mimic is not in this distro's repositories and the GitHub .deb fallback requires apt/dpkg" >&2
-        exit 1
+        return 1
     fi
     if [ ! -f "$SCRIPT_DIR/artifacts.json" ]; then
         echo "ERROR: mimic GitHub fallback needs artifacts.json (no mimic catalog was configured for this deploy)" >&2
-        exit 1
+        return 1
     fi
     _mimic_codename="$(. /etc/os-release 2>/dev/null; echo "\${VERSION_CODENAME:-}")"
     _mimic_arch="$(dpkg --print-architecture 2>/dev/null)"
     _mimic_key="\${_mimic_codename}-\${_mimic_arch}"
-    # Read the pin with jq (auto-installed on this apt path if absent); fail closed if jq is
-    # unavailable rather than hand-parse nested JSON in bash.
+    # Read the pins with jq (auto-installed on this apt path if absent); fail if jq is unavailable
+    # rather than hand-parse nested JSON in bash.
     if ! command -v jq >/dev/null 2>&1; then
         _pm_install jq || true
     fi
-    command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; return 1; }
     _mimic_rel="$(jq -r '.mimic.release_url // ""' "$SCRIPT_DIR/artifacts.json")"
     _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' "$SCRIPT_DIR/artifacts.json")"
     _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_dkms_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].dkms_asset // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_dkms_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].dkms_sha256 // ""' "$SCRIPT_DIR/artifacts.json")"
     if [ -z "$_mimic_rel" ] || [ -z "$_mimic_asset" ] || [ -z "$_mimic_sha" ]; then
         echo "ERROR: no pinned mimic .deb for '$_mimic_key' in artifacts.json" >&2
-        exit 1
+        return 1
     fi
     echo "Installing mimic from a SHA-256-pinned GitHub .deb ($_mimic_key)..."
-    _mimic_deb="$(mktemp --suffix=.deb)"
-    curl -fL --retry 3 --proto '=https,http' "\${GH_PROXY}\${_mimic_rel}/\${_mimic_asset}" -o "$_mimic_deb"
-    echo "\${_mimic_sha}  \${_mimic_deb}" | sha256sum -c -
-    # mimic's .deb builds its eBPF module via DKMS -> kernel headers + toolchain.
+    # mimic-dkms builds the eBPF module via DKMS -> kernel headers + toolchain (best-effort; a stale
+    # kernel whose exact headers left the repo cannot build until it reboots into the current kernel).
     _pm_install "linux-headers-$(uname -r)" || _pm_install linux-headers-generic || true
     _pm_install dkms || true
     _pm_install gcc || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "$_mimic_deb"
-    rm -f "$_mimic_deb"
-fi
-if ! command -v mimic >/dev/null 2>&1; then
+    # _mimic_get <asset> <sha256> <dest>: download via the proxy and verify the pin (0 ok / non-zero fail).
+    _mimic_get() {
+        curl -fL --retry 3 --proto '=https,http' "\${GH_PROXY}\${_mimic_rel}/$1" -o "$3" || return 1
+        echo "$2  $3" | sha256sum -c -
+    }
+    _mimic_deb="$(mktemp --suffix=.deb)"
+    _mimic_get "$_mimic_asset" "$_mimic_sha" "$_mimic_deb" || { rm -f "$_mimic_deb"; return 1; }
+    _mimic_install="$_mimic_deb"
+    if [ -n "$_mimic_dkms_asset" ] && [ -n "$_mimic_dkms_sha" ]; then
+        _mimic_dkms_deb="$(mktemp --suffix=.deb)"
+        _mimic_get "$_mimic_dkms_asset" "$_mimic_dkms_sha" "$_mimic_dkms_deb" || { rm -f "$_mimic_deb" "$_mimic_dkms_deb"; return 1; }
+        _mimic_install="$_mimic_install $_mimic_dkms_deb"
+    fi
+    # Install both .debs together so mimic's Depends: mimic-modules resolves from the local dkms .deb.
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y $_mimic_install; then
+        rm -f $_mimic_install
+        return 1
+    fi
+    rm -f $_mimic_install
+    command -v mimic >/dev/null 2>&1
+}
+if ! _mimic_provision; then
 {{ if .MimicFallbackUDP -}}
-    # policy=udp: the mimic binary is unavailable — skip mimic, bring the link up as plain UDP.
-    echo "WARNING: mimic still missing after distro + GitHub .deb fallback; falling back to plain UDP (policy=udp)" >&2
+    # policy=udp: mimic could not be provisioned — skip it, bring the link up as plain UDP.
+    echo "WARNING: mimic could not be provisioned; falling back to plain UDP (policy=udp)" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
     _MIMIC_SKIP=1
 {{ else -}}
-    echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2
+    echo "ERROR: mimic could not be provisioned and this link's mimic_fallback policy is fail-closed" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
     exit 1
 {{ end -}}
@@ -1198,53 +1222,81 @@ _mimic_breadcrumb() {
         "$1" "\${MIMIC_EGRESS_IF:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
         > {{ shq .MimicBreadcrumb.Path }}
 }
-# _MIMIC_SKIP is set when the mimic binary could not be installed AND policy=udp, so the Phase-3
-# provisioning block skips mimic and the link comes up as plain UDP. Empty = provision normally.
+# _MIMIC_SKIP is set when mimic could not be provisioned AND policy=udp, so the Phase-3 provisioning
+# block skips mimic and the link comes up as plain UDP. Empty = provision normally.
 _MIMIC_SKIP=
-if ! command -v mimic >/dev/null 2>&1 && [ -n "$YAOG_PM" ]; then
-    _pm_install mimic || true
-fi
-if ! command -v mimic >/dev/null 2>&1; then
+# _mimic_provision installs mimic — the distro package, else a SHA-256-pinned GitHub .deb PAIR. It
+# RETURNS non-zero on any failure instead of exiting, so the caller honors the link's mimic_fallback
+# policy (udp: skip to plain UDP; none: fail closed) rather than aborting the whole apply under set -e.
+# Upstream mimic ships TWO packages: mimic (userspace) and mimic-dkms (the eBPF module, which
+# Provides the mimic-modules the mimic pkg Depends on), so BOTH .debs are fetched, verified against
+# their pins, and dpkg'd together — installing only mimic cannot satisfy the dependency.
+_mimic_provision() {
+    command -v mimic >/dev/null 2>&1 && return 0
+    if [ -n "$YAOG_PM" ]; then _pm_install mimic || true; fi
+    command -v mimic >/dev/null 2>&1 && return 0
+    # Distro package unavailable -> pinned GitHub .deb (apt/dpkg systems only).
     if [ "$YAOG_PM" != "apt-get" ] || ! command -v dpkg >/dev/null 2>&1; then
         echo "ERROR: mimic is not in this distro's repositories and the GitHub .deb fallback requires apt/dpkg" >&2
-        exit 1
+        return 1
     fi
     if [ ! -f "$SCRIPT_DIR/artifacts.json" ]; then
         echo "ERROR: mimic GitHub fallback needs artifacts.json (no mimic catalog was configured for this deploy)" >&2
-        exit 1
+        return 1
     fi
     _mimic_codename="$(. /etc/os-release 2>/dev/null; echo "\${VERSION_CODENAME:-}")"
     _mimic_arch="$(dpkg --print-architecture 2>/dev/null)"
     _mimic_key="\${_mimic_codename}-\${_mimic_arch}"
+    # Read the pins with jq (auto-installed on this apt path if absent); fail if jq is unavailable
+    # rather than hand-parse nested JSON in bash.
     if ! command -v jq >/dev/null 2>&1; then
         _pm_install jq || true
     fi
-    command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; exit 1; }
+    command -v jq >/dev/null 2>&1 || { echo "ERROR: mimic GitHub fallback needs jq to read artifacts.json" >&2; return 1; }
     _mimic_rel="$(jq -r '.mimic.release_url // ""' "$SCRIPT_DIR/artifacts.json")"
     _mimic_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].asset // ""' "$SCRIPT_DIR/artifacts.json")"
     _mimic_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].sha256 // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_dkms_asset="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].dkms_asset // ""' "$SCRIPT_DIR/artifacts.json")"
+    _mimic_dkms_sha="$(jq -r --arg k "$_mimic_key" '.mimic.debs[$k].dkms_sha256 // ""' "$SCRIPT_DIR/artifacts.json")"
     if [ -z "$_mimic_rel" ] || [ -z "$_mimic_asset" ] || [ -z "$_mimic_sha" ]; then
         echo "ERROR: no pinned mimic .deb for '$_mimic_key' in artifacts.json" >&2
-        exit 1
+        return 1
     fi
     echo "Installing mimic from a SHA-256-pinned GitHub .deb ($_mimic_key)..."
-    _mimic_deb="$(mktemp --suffix=.deb)"
-    curl -fL --retry 3 --proto '=https,http' "\${GH_PROXY}\${_mimic_rel}/\${_mimic_asset}" -o "$_mimic_deb"
-    echo "\${_mimic_sha}  \${_mimic_deb}" | sha256sum -c -
+    # mimic-dkms builds the eBPF module via DKMS -> kernel headers + toolchain (best-effort; a stale
+    # kernel whose exact headers left the repo cannot build until it reboots into the current kernel).
     _pm_install "linux-headers-$(uname -r)" || _pm_install linux-headers-generic || true
     _pm_install dkms || true
     _pm_install gcc || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "$_mimic_deb"
-    rm -f "$_mimic_deb"
-fi
-if ! command -v mimic >/dev/null 2>&1; then
+    # _mimic_get <asset> <sha256> <dest>: download via the proxy and verify the pin (0 ok / non-zero fail).
+    _mimic_get() {
+        curl -fL --retry 3 --proto '=https,http' "\${GH_PROXY}\${_mimic_rel}/$1" -o "$3" || return 1
+        echo "$2  $3" | sha256sum -c -
+    }
+    _mimic_deb="$(mktemp --suffix=.deb)"
+    _mimic_get "$_mimic_asset" "$_mimic_sha" "$_mimic_deb" || { rm -f "$_mimic_deb"; return 1; }
+    _mimic_install="$_mimic_deb"
+    if [ -n "$_mimic_dkms_asset" ] && [ -n "$_mimic_dkms_sha" ]; then
+        _mimic_dkms_deb="$(mktemp --suffix=.deb)"
+        _mimic_get "$_mimic_dkms_asset" "$_mimic_dkms_sha" "$_mimic_dkms_deb" || { rm -f "$_mimic_deb" "$_mimic_dkms_deb"; return 1; }
+        _mimic_install="$_mimic_install $_mimic_dkms_deb"
+    fi
+    # Install both .debs together so mimic's Depends: mimic-modules resolves from the local dkms .deb.
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y $_mimic_install; then
+        rm -f $_mimic_install
+        return 1
+    fi
+    rm -f $_mimic_install
+    command -v mimic >/dev/null 2>&1
+}
+if ! _mimic_provision; then
 {{ if .MimicFallbackUDP -}}
-    # policy=udp: the mimic binary is unavailable — skip mimic, bring the link up as plain UDP.
-    echo "WARNING: mimic still missing after distro + GitHub .deb fallback; falling back to plain UDP (policy=udp)" >&2
+    # policy=udp: mimic could not be provisioned — skip it, bring the link up as plain UDP.
+    echo "WARNING: mimic could not be provisioned; falling back to plain UDP (policy=udp)" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
     _MIMIC_SKIP=1
 {{ else -}}
-    echo "ERROR: mimic still missing after distro + GitHub .deb fallback" >&2
+    echo "ERROR: mimic could not be provisioned and this link's mimic_fallback policy is fail-closed" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
     exit 1
 {{ end -}}
