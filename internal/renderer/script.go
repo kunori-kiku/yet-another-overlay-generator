@@ -1744,11 +1744,15 @@ mkdir -p /etc/mimic
     echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/${MIMIC_EGRESS_IF}.conf"
 echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
-if systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
+# Enable mimic@<iface> for boot, then RESTART (not a no-op start on an already-running unit) so a
+# redeploy re-applies the freshly-written config and, for a native node, re-evaluates the native→skb
+# downgrade instead of leaving a stale on-disk native config a reboot would start from and fail.
+systemctl enable "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true
+if systemctl restart "mimic@${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
 {{ if .MimicNative -}}
-elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@${MIMIC_EGRESS_IF}"; then
     # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
     echo "  mimic@${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}

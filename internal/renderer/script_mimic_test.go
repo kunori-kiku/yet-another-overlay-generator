@@ -199,6 +199,9 @@ func TestRenderClientInstallScript_MimicTwoPackage_And_Fallback(t *testing.T) {
 		`.mimic.debs[$k].dkms_asset // ""`,
 		`.mimic.debs[$k].dkms_sha256 // ""`,
 		"apt-get install -y $_mimic_install",
+		// mimic@ is (re)started with restart, not a no-op enable --now, so a redeploy re-applies the
+		// config (and re-evaluates the native→skb downgrade) — the client path must not regress to it.
+		`if systemctl restart "mimic@`,
 	}
 	base := compiler.ClientPeerInfo{
 		NodeID: "client-1", NodeName: "cli", OverlayIP: "10.50.0.9",
