@@ -16,4 +16,5 @@ export const REASON_LABEL: Record<string, MessageKey> = {
   EbpfLoadFailed: 'mimicCond.ebpfFailed',
   InstallFailed: 'mimicCond.installFailed',
   EgressUnresolved: 'mimicCond.egressUnresolved',
+  NativeDowngradedSkb: 'mimicCond.nativeDowngraded',
 };

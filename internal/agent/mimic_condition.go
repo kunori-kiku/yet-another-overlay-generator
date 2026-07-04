@@ -25,6 +25,7 @@ const (
 	mimicReasonInstallFailed    = "InstallFailed"
 	mimicReasonFellBackToUDP    = "FellBackToUDP"
 	mimicReasonEgressUnresolved = "EgressUnresolved"
+	mimicReasonNativeDowngraded = "NativeDowngradedSkb"
 	mimicReasonUnknown          = "Unknown"
 )
 
@@ -55,6 +56,10 @@ func classifyMimic(outcome string) (reason, status, message string) {
 		return mimicReasonFellBackToUDP, model.ConditionStatusWarn, "Mimic: fell back to plain UDP"
 	case model.MimicOutcomeEgressUnresolved:
 		return mimicReasonEgressUnresolved, model.ConditionStatusWarn, "Mimic: no routable egress IP"
+	case model.MimicOutcomeNativeDowngraded:
+		// mimic IS active (skb mode) — not a degradation of function, only of the requested XDP mode;
+		// OK status (the link works) with a distinct reason so the operator sees native did not take.
+		return mimicReasonNativeDowngraded, model.ConditionStatusOK, "Mimic active (skb; native XDP unsupported on this NIC)"
 	default:
 		return mimicReasonUnknown, model.ConditionStatusWarn, "Mimic status unrecognized"
 	}

@@ -53,6 +53,10 @@ type InstallScriptConfig struct {
 	// MimicXDPMode is the xdp_mode written into the mimic config ("skb" or "native", already normalized, never empty).
 	// Defaults to "skb" (generic XDP, compatible with VPS NICs that lack native support); "native" when the node explicitly sets it.
 	MimicXDPMode string
+	// MimicNative is (MimicXDPMode == "native"): gates the install.sh native→skb auto-downgrade elif.
+	// A precomputed bool because the TS template-engine mirror has no `eq` (it rejects a comparison
+	// pipeline); every conditional in these templates is a plain bool field for that reason.
+	MimicNative bool
 	// per-peer interface list
 	WgInterfaces   []WgIfaceInfo
 	BabelConfName  string
@@ -107,6 +111,7 @@ type MimicBreadcrumbData struct {
 	InstallFailed    string
 	FellBackToUDP    string
 	EgressUnresolved string
+	NativeDowngraded string
 }
 
 // newMimicBreadcrumbData returns the breadcrumb constants from package model (single source of truth).
@@ -119,6 +124,7 @@ func newMimicBreadcrumbData() MimicBreadcrumbData {
 		InstallFailed:    model.MimicOutcomeInstallFailed,
 		FellBackToUDP:    model.MimicOutcomeFellBackToUDP,
 		EgressUnresolved: model.MimicOutcomeEgressUnresolved,
+		NativeDowngraded: model.MimicOutcomeNativeDowngraded,
 	}
 }
 
@@ -880,6 +886,12 @@ echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
 if systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+{{ if .MimicNative -}}
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
+    # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
+    echo "  mimic@${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
+{{ end -}}
 else
 {{ if .MimicFallbackUDP -}}
     echo "WARNING: mimic@${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
@@ -1060,6 +1072,7 @@ func buildInstallScriptConfig(node *model.Node, peers []compiler.PeerInfo, hasBa
 		MimicPorts:       mimicPorts,
 		MimicRemotes:     collectMimicRemotes(peers),
 		MimicXDPMode:     resolveMimicXDPMode(node.XDPMode),
+		MimicNative:      resolveMimicXDPMode(node.XDPMode) == "native",
 		MimicFallbackUDP: resolveMimicFallbackUDP(peers),
 		MimicBreadcrumb:  newMimicBreadcrumbData(),
 		WgInterfaces:     wgIfaces,
@@ -1214,6 +1227,7 @@ type ClientInstallScriptConfig struct {
 	// entry (the client has one outbound link) or empty when the endpoint is unknown.
 	MimicRemotes []MimicEndpoint
 	MimicXDPMode string // normalized xdp_mode ("skb"/"native"), see InstallScriptConfig
+	MimicNative  bool   // MimicXDPMode == "native"; gates the native→skb downgrade elif (no template `eq`)
 	// MimicFallbackUDP / MimicBreadcrumb: same semantics as InstallScriptConfig (plan-5). The client
 	// has a single wg0 link, so the per-node resolution collapses to that link's policy.
 	MimicFallbackUDP bool
@@ -1727,6 +1741,12 @@ echo "  Wrote /etc/mimic/${MIMIC_EGRESS_IF}.conf"
 if systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+{{ if .MimicNative -}}
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl enable --now "mimic@${MIMIC_EGRESS_IF}"; then
+    # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
+    echo "  mimic@${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
+{{ end -}}
 else
 {{ if .MimicFallbackUDP -}}
     echo "WARNING: mimic@${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
@@ -1810,6 +1830,7 @@ func buildClientInstallScriptConfig(node *model.Node, clientInfo []*compiler.Cli
 		OverlayIP:       node.OverlayIP,
 		MTU:             node.MTU,
 		MimicXDPMode:    resolveMimicXDPMode(node.XDPMode),
+		MimicNative:     resolveMimicXDPMode(node.XDPMode) == "native",
 		MimicBreadcrumb: newMimicBreadcrumbData(),
 		SysctlConfName:  "99-overlay.conf",
 	}

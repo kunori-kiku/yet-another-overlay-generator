@@ -242,8 +242,8 @@ clean UDP fallback (policy=udp) or a clean, mimic-specific error (policy=none), 
 | Plan | Title | Status | PR |
 |------|-------|--------|----|
 | 1 | Two-package catalog + install both debs + robust fallback | ✅ merged | #228 |
-| 2 | Panel catalog UX (two packages) + Assist robustness | in review | (this PR) |
-| 3 | Native-XDP deploy-time auto-downgrade + condition | pending | — |
+| 2 | Panel catalog UX (two packages) + Assist robustness | ✅ merged | #229 |
+| 3 | Native-XDP deploy-time auto-downgrade + condition | in review | (this PR) |
 | 4 | Native-XDP pre-deploy capability probe + panel warning | pending | — |
 | 5 | Docs + behavioral proof | pending | — |
 | 6 | Release v2.0.0-rc.2 | pending | — |

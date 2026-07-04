@@ -62,6 +62,7 @@ interface InstallScriptConfig {
   MimicPorts: number[];
   MimicRemotes: MimicEndpoint[];
   MimicXDPMode: string;
+  MimicNative: boolean;
   MimicFallbackUDP: boolean;
   MimicBreadcrumb: MimicBreadcrumbData;
   WgInterfaces: WgIfaceInfo[];
@@ -84,6 +85,7 @@ interface MimicBreadcrumbData {
   InstallFailed: string;
   FellBackToUDP: string;
   EgressUnresolved: string;
+  NativeDowngraded: string;
 }
 
 // MimicEndpoint is one mimic peer's dial target (host + port) for a route-independent remote= filter.
@@ -107,6 +109,7 @@ interface ClientInstallScriptConfig {
   MimicPorts: number[];
   MimicRemotes: MimicEndpoint[];
   MimicXDPMode: string;
+  MimicNative: boolean;
   MimicFallbackUDP: boolean;
   MimicBreadcrumb: MimicBreadcrumbData;
   SigningPubkeyPEM: string;
@@ -848,6 +851,12 @@ echo "  Wrote /etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 if systemctl enable --now "mimic@\${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@\${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+{{ if .MimicNative -}}
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl enable --now "mimic@\${MIMIC_EGRESS_IF}"; then
+    # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
+    echo "  mimic@\${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
+{{ end -}}
 else
 {{ if .MimicFallbackUDP -}}
     echo "WARNING: mimic@\${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
@@ -1440,6 +1449,12 @@ echo "  Wrote /etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 if systemctl enable --now "mimic@\${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@\${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+{{ if .MimicNative -}}
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl enable --now "mimic@\${MIMIC_EGRESS_IF}"; then
+    # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
+    echo "  mimic@\${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
+{{ end -}}
 else
 {{ if .MimicFallbackUDP -}}
     echo "WARNING: mimic@\${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
@@ -1520,6 +1535,7 @@ function newMimicBreadcrumbData(): MimicBreadcrumbData {
     InstallFailed: 'install_failed',
     FellBackToUDP: 'fell_back_to_udp',
     EgressUnresolved: 'egress_unresolved',
+    NativeDowngraded: 'native_downgraded_skb',
   };
 }
 
@@ -1664,6 +1680,7 @@ function buildInstallScriptConfig(
     MimicPorts: mimicPorts,
     MimicRemotes: collectMimicRemotes(peers),
     MimicXDPMode: resolveMimicXDPMode(node.xdp_mode),
+    MimicNative: resolveMimicXDPMode(node.xdp_mode) === 'native',
     MimicFallbackUDP: resolveMimicFallbackUDP(peers),
     MimicBreadcrumb: newMimicBreadcrumbData(),
     WgInterfaces: wgIfaces,
@@ -1719,6 +1736,7 @@ function buildClientInstallScriptConfig(
     MimicPorts: mimicPorts,
     MimicRemotes: mimicRemotes,
     MimicXDPMode: resolveMimicXDPMode(node.xdp_mode),
+    MimicNative: resolveMimicXDPMode(node.xdp_mode) === 'native',
     MimicFallbackUDP: mimicFallbackUDP,
     MimicBreadcrumb: newMimicBreadcrumbData(),
     SigningPubkeyPEM: '',

@@ -63,10 +63,11 @@ const MimicBreadcrumbPath = "/var/lib/yaog-agent/mimic-status.json"
 // field. They are the ONLY values the script emits; the agent's classifyMimic maps each to a
 // Condition reason. Adding a value here is a coordinated script+agent change (the contract is closed).
 const (
-	MimicOutcomeActive           = "active"            // mimic provisioned + mimic@<egress> started
-	MimicOutcomeKernelTooOld     = "kernel_too_old"    // eBPF/bpffs absent → mimic cannot load
-	MimicOutcomeEbpfLoad         = "ebpf_load_failed"  // mimic@<egress> failed to start (eBPF attach or unit-start error)
-	MimicOutcomeInstallFailed    = "install_failed"    // distro pkg + pinned .deb both failed
-	MimicOutcomeFellBackToUDP    = "fell_back_to_udp"  // policy=udp: skipped mimic, link up as plain UDP
-	MimicOutcomeEgressUnresolved = "egress_unresolved" // egress IP empty or loopback (no routable default-route src) → the local= filter would never match the real WG source; treated per policy
+	MimicOutcomeActive           = "active"                // mimic provisioned + mimic@<egress> started
+	MimicOutcomeKernelTooOld     = "kernel_too_old"        // eBPF/bpffs absent → mimic cannot load
+	MimicOutcomeEbpfLoad         = "ebpf_load_failed"      // mimic@<egress> failed to start (eBPF attach or unit-start error)
+	MimicOutcomeInstallFailed    = "install_failed"        // distro pkg + pinned .deb both failed
+	MimicOutcomeFellBackToUDP    = "fell_back_to_udp"      // policy=udp: skipped mimic, link up as plain UDP
+	MimicOutcomeEgressUnresolved = "egress_unresolved"     // egress IP empty or loopback (no routable default-route src) → the local= filter would never match the real WG source; treated per policy
+	MimicOutcomeNativeDowngraded = "native_downgraded_skb" // xdp_mode=native attach failed → auto-retried and active in skb mode (mimic still up; native XDP unsupported on this NIC)
 )
