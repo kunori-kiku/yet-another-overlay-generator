@@ -352,13 +352,26 @@ func (h *ControllerHandler) HandleReleasePins(w http.ResponseWriter, r *http.Req
 	pins := make(map[string]model.Artifact, len(assets))
 	resolved := make(map[string]string, len(assets))
 	for _, a := range assets {
-		url := proxy + resolvedBase + "/" + a.Asset + ".sha256"
-		resolved[a.Key] = url
-		if err := validateReleaseURL(url); err != nil {
+		proxied := proxy + resolvedBase + "/" + a.Asset + ".sha256"
+		direct := resolvedBase + "/" + a.Asset + ".sha256"
+		resolved[a.Key] = proxied
+		if err := validateReleaseURL(proxied); err != nil {
 			writeAPIError(w, apierr.New(apierr.CodeAgentReleaseRequestInvalid).With("field", "url").Wrap(err))
 			return
 		}
-		sum, aerr := h.fetchSidecar(r.Context(), url)
+		sum, aerr := h.fetchSidecar(r.Context(), proxied)
+		if aerr != nil && proxy != "" {
+			// The gh-proxy is best-effort and rate-limits / misses on some assets even when the sidecar
+			// DOES exist upstream (the operator's reported empty-SHA case); retry the DIRECT GitHub URL
+			// — still format-validated + dialed through the same private-IP-blocking egress guard — so a
+			// transient proxy hiccup does not force manual SHA entry for a real sidecar.
+			if err := validateReleaseURL(direct); err == nil {
+				if s2, aerr2 := h.fetchSidecar(r.Context(), direct); aerr2 == nil {
+					sum, aerr = s2, nil
+					resolved[a.Key] = direct
+				}
+			}
+		}
 		if aerr != nil {
 			writeAPIError(w, aerr)
 			return

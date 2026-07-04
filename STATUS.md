@@ -43,7 +43,10 @@
   release rc.2. **Owner decisions:** comprehensive/rc.2; the Phase-0 teardown is EXPECTED (failover by
   design — NOT in scope, no follow-up subject); include the pre-deploy native probe (D-native). Plan
   folder: [`implementation_plans/mimic-provisioning-reliability-2026_07_04/`](implementation_plans/mimic-provisioning-reliability-2026_07_04/outline.md).
-  **NEXT = execute plan-1** (branch `feat/mimic-two-package-install`).
+  **plan-1 MERGED (#228, squash `dbdee87`): two-package model + install BOTH debs + robust
+  policy-aware fallback + new `_MIMIC_SKIP` conformance fixture.** plan-2 (panel two-package UX:
+  Discover pairs the `-dkms` asset, Assist fetches both sidecars + treats empty-SHA as a miss, +
+  release_pins direct-retry) IN REVIEW. **NEXT after plan-2 = plan-3** (native-XDP auto-downgrade).
 
 - **SUBJECT `pre-rc1-hardening-2026_07_02` COMPLETE — RELEASED as `v2.0.0-beta.17` (GitHub *Latest*,
   2026-07-03; beta.16 demoted).** All **9 code/hardening plans merged** (PRs #208–#217), each

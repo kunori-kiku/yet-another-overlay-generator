@@ -3,7 +3,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { t, type UILanguage } from '../../i18n';
 import { type ControllerSettings } from '../../api/controllerClient';
-import { deriveKey, collidingKeys } from '../../lib/mimicDiscover';
+import { deriveKey, deriveSlot, collidingKeys, type MimicSlot } from '../../lib/mimicDiscover';
 
 // MimicCatalogSettings (controller-panel-rollout-ui plan-4): the operator card for the mimic
 // GitHub-.deb catalog — a version tag, the release base URL, and per-"<codename>-<arch>" .deb pins
@@ -23,6 +23,10 @@ interface DebRow {
   key: string;
   asset: string;
   sha256: string;
+  // Companion mimic-dkms .deb (the two-package install). Empty on a legacy mimic-only row; a filled
+  // mimic pair with an empty dkms pair is allowed but WARNED (it fails on split-package distros).
+  dkmsAsset: string;
+  dkmsSha256: string;
   note?: string;
 }
 
@@ -32,6 +36,7 @@ interface DebRow {
 interface DiscoveredRow {
   asset: string;
   key: string;
+  slot: MimicSlot;
   checked: boolean;
 }
 
@@ -92,6 +97,8 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       key,
       asset: pin.asset,
       sha256: pin.sha256,
+      dkmsAsset: pin.dkmsAsset ?? '',
+      dkmsSha256: pin.dkmsSha256 ?? '',
     })),
   );
   const [busy, setBusy] = useState(false);
@@ -109,7 +116,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
     dirty();
   };
   const addRow = () => {
-    setDebs((rows) => [...rows, { id: nextId.current++, key: '', asset: '', sha256: '' }]);
+    setDebs((rows) => [...rows, { id: nextId.current++, key: '', asset: '', sha256: '', dkmsAsset: '', dkmsSha256: '' }]);
     dirty();
   };
   const removeRow = (id: number) => {
@@ -119,11 +126,18 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
 
   // filledDebs is the Record the wire carries — only rows with all three fields populated (an
   // empty/partial row is not a pin). A duplicate key keeps the LAST occurrence (matches a JS map).
-  const filledDebs = (): Record<string, { asset: string; sha256: string }> => {
-    const out: Record<string, { asset: string; sha256: string }> = {};
+  const filledDebs = (): Record<string, { asset: string; sha256: string; dkmsAsset?: string; dkmsSha256?: string }> => {
+    const out: Record<string, { asset: string; sha256: string; dkmsAsset?: string; dkmsSha256?: string }> = {};
     for (const r of debs) {
       const key = r.key.trim();
-      if (key && r.asset.trim() && r.sha256.trim()) out[key] = { asset: r.asset.trim(), sha256: r.sha256.trim() };
+      if (key && r.asset.trim() && r.sha256.trim()) {
+        out[key] = {
+          asset: r.asset.trim(),
+          sha256: r.sha256.trim(),
+          ...(r.dkmsAsset.trim() ? { dkmsAsset: r.dkmsAsset.trim() } : {}),
+          ...(r.dkmsSha256.trim() ? { dkmsSha256: r.dkmsSha256.trim() } : {}),
+        };
+      }
     }
     return out;
   };
@@ -145,12 +159,25 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       if (!DEB_KEY_RE.test(key)) return t(language, 'mimicCatalog.invalidKey');
       if (!DEB_ASSET_RE.test(r.asset.trim())) return t(language, 'mimicCatalog.invalidAsset');
       if (!SHA256_RE.test(r.sha256.trim())) return t(language, 'mimicCatalog.invalidSha');
+      // Companion mimic-dkms pin: validated when EITHER field is set (both must then be valid).
+      const dkmsAsset = r.dkmsAsset.trim();
+      const dkmsSha = r.dkmsSha256.trim();
+      if (dkmsAsset || dkmsSha) {
+        if (!dkmsAsset || !dkmsSha) return t(language, 'mimicCatalog.incompleteDkms');
+        if (!DEB_ASSET_RE.test(dkmsAsset)) return t(language, 'mimicCatalog.invalidDkmsAsset');
+        if (!SHA256_RE.test(dkmsSha)) return t(language, 'mimicCatalog.invalidDkmsSha');
+      }
     }
     // debs-require-release-base (validateMimicCatalog): a deb with nowhere to fetch from is rejected.
     if (anyFilled && !releaseBase.trim()) return t(language, 'mimicCatalog.debsNeedReleaseBase');
     return null;
   };
   const validationHint = validate();
+  // A filled mimic pin with NO dkms companion is allowed (back-compat) but WILL fail on split-package
+  // distros (Debian 12 / Ubuntu 24.04); surface it as a non-blocking warning, not a save block.
+  const missingDkms = debs.some(
+    (r) => r.key.trim() && r.asset.trim() && r.sha256.trim() && !(r.dkmsAsset.trim() && r.dkmsSha256.trim()),
+  );
 
   // handleAssist fetches each fillable row's sidecar INDEPENDENTLY (best-effort): the mimic release
   // base is external and frequently lacks sidecars, so a per-row miss leaves that row for manual
@@ -164,18 +191,27 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       return;
     }
     setBusy(true);
+    // Fetch one asset's sidecar under a row's key; a missing/empty/garbage sha is a MISS (null), never
+    // a saved blank. The response is keyed by <codename>-<arch>, so the mimic and dkms sidecars are
+    // fetched as SEPARATE per-asset calls (each requests one asset) to avoid a same-key collision.
+    const fetchSha = async (key: string, asset: string): Promise<string | null> => {
+      if (!key || !asset) return null;
+      try {
+        const res = await fetchReleasePins({ kind: 'mimic', base, assets: [{ key, asset }] });
+        const sha = res.pins[key]?.sha256 ?? '';
+        return SHA256_RE.test(sha) ? sha : null;
+      } catch {
+        return null;
+      }
+    };
     const results = await Promise.all(
       debs.map(async (row) => {
         const key = row.key.trim();
-        const asset = row.asset.trim();
-        if (!key || !asset) return { id: row.id, sha256: null as string | null, failed: false };
-        try {
-          const res = await fetchReleasePins({ kind: 'mimic', base, assets: [{ key, asset }] });
-          const pin = res.pins[key];
-          return { id: row.id, sha256: pin ? pin.sha256 : null, failed: !pin };
-        } catch {
-          return { id: row.id, sha256: null, failed: true };
-        }
+        const [mimicSha, dkmsSha] = await Promise.all([
+          fetchSha(key, row.asset.trim()),
+          row.dkmsAsset.trim() ? fetchSha(key, row.dkmsAsset.trim()) : Promise.resolve(null),
+        ]);
+        return { id: row.id, mimicSha, dkmsSha };
       }),
     );
     const byId = new Map(results.map((r) => [r.id, r]));
@@ -183,9 +219,19 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       rows.map((row) => {
         const r = byId.get(row.id);
         if (!r) return row;
-        if (r.sha256) return { ...row, sha256: r.sha256, note: undefined };
-        if (r.failed) return { ...row, note: t(language, 'mimicCatalog.assistRowFailed', { asset: row.asset.trim() || row.key.trim() }) };
-        return row;
+        const key = row.key.trim();
+        const misses: string[] = [];
+        const next = { ...row };
+        if (key && row.asset.trim()) {
+          if (r.mimicSha) next.sha256 = r.mimicSha;
+          else misses.push(row.asset.trim());
+        }
+        if (key && row.dkmsAsset.trim()) {
+          if (r.dkmsSha) next.dkmsSha256 = r.dkmsSha;
+          else misses.push(row.dkmsAsset.trim());
+        }
+        next.note = misses.length ? t(language, 'mimicCatalog.assistRowFailed', { asset: misses.join(', ') }) : undefined;
+        return next;
       }),
     );
     setBusy(false);
@@ -221,7 +267,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       setDiscovered(
         res.assets.map((asset) => {
           const key = deriveKey(asset);
-          return { asset, key, checked: key !== '' };
+          return { asset, key, slot: deriveSlot(asset), checked: key !== '' };
         }),
       );
     } catch {
@@ -241,8 +287,8 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
   // pin on save — see collidingKeys). An empty checked key is reported separately (needs a label).
   const checkedRows = (discovered ?? []).filter((r) => r.checked);
   const dupKeys = collidingKeys(
-    checkedRows.map((r) => r.key),
-    debs.map((r) => r.key),
+    checkedRows.map((r) => ({ key: r.key, slot: r.slot })),
+    debs.map((r) => ({ key: r.key, hasMimic: !!r.asset.trim(), hasDkms: !!r.dkmsAsset.trim() })),
   );
   const hasBlankCheckedKey = checkedRows.some((r) => !r.key.trim());
   const canAddSelected = checkedRows.length > 0 && !hasBlankCheckedKey && dupKeys.size === 0;
@@ -252,13 +298,39 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
   // the existing per-row Assist (or pastes the hash) and Saves. Clears the checklist when done.
   const handleAddSelected = () => {
     if (!canAddSelected) return;
-    const toAdd: DebRow[] = checkedRows.map((r) => ({
-      id: nextId.current++,
-      key: r.key.trim(),
-      asset: r.asset,
-      sha256: '',
-    }));
-    setDebs((rows) => [...rows, ...toAdd]);
+    // Group the checked discovered assets by <codename>-<arch>: the mimic slot fills the row's asset,
+    // the dkms slot fills its dkmsAsset — so a discovered mimic + mimic-dkms pair lands in ONE row.
+    const byKey = new Map<string, { asset?: string; dkmsAsset?: string }>();
+    for (const r of checkedRows) {
+      const key = r.key.trim();
+      const g = byKey.get(key) ?? {};
+      if (r.slot === 'dkms') g.dkmsAsset = r.asset;
+      else g.asset = r.asset;
+      byKey.set(key, g);
+    }
+    setDebs((rows) => {
+      const next = rows.map((row) => ({ ...row }));
+      for (const [key, g] of byKey) {
+        const existing = next.find((row) => row.key.trim() === key);
+        if (existing) {
+          // Merge into a row that already carries this label (the collision guard ensured the slot we
+          // fill was empty). The SHA stays blank — the operator runs Assist or pastes it, then Saves.
+          if (g.asset) existing.asset = g.asset;
+          if (g.dkmsAsset) existing.dkmsAsset = g.dkmsAsset;
+          existing.note = undefined;
+        } else {
+          next.push({
+            id: nextId.current++,
+            key,
+            asset: g.asset ?? '',
+            sha256: '',
+            dkmsAsset: g.dkmsAsset ?? '',
+            dkmsSha256: '',
+          });
+        }
+      }
+      return next;
+    });
     setDiscovered(null);
     dirty();
   };
@@ -429,6 +501,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                     onChange={(e) => setRow(row.id, { key: e.target.value })}
                     placeholder="bookworm-amd64"
                     aria-label={t(language, 'mimicCatalog.keyLabel')}
+                    data-testid={`mimic-key-${row.id}`}
                     className="flex-1 px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                   />
                   <button
@@ -444,8 +517,9 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                   type="text"
                   value={row.asset}
                   onChange={(e) => setRow(row.id, { asset: e.target.value })}
-                  placeholder="mimic_1.4.0_amd64.deb"
+                  placeholder="bookworm_mimic_0.7.1-1_amd64.deb"
                   aria-label={t(language, 'mimicCatalog.assetLabel')}
+                  data-testid={`mimic-asset-${row.id}`}
                   className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
                 <input
@@ -454,6 +528,27 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
                   onChange={(e) => setRow(row.id, { sha256: e.target.value })}
                   placeholder={t(language, 'mimicCatalog.sha256Placeholder')}
                   aria-label={t(language, 'mimicCatalog.sha256Label')}
+                  data-testid={`mimic-sha-${row.id}`}
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+                />
+                {/* Companion mimic-dkms module .deb — the two-package install (Provides mimic-modules). */}
+                <p className="text-[10px] text-[var(--content-muted)] mt-1">{t(language, 'mimicCatalog.dkmsLabel')}</p>
+                <input
+                  type="text"
+                  value={row.dkmsAsset}
+                  onChange={(e) => setRow(row.id, { dkmsAsset: e.target.value })}
+                  placeholder="bookworm_mimic-dkms_0.7.1-1_amd64.deb"
+                  aria-label={t(language, 'mimicCatalog.dkmsAssetLabel')}
+                  data-testid={`mimic-dkms-asset-${row.id}`}
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+                />
+                <input
+                  type="text"
+                  value={row.dkmsSha256}
+                  onChange={(e) => setRow(row.id, { dkmsSha256: e.target.value })}
+                  placeholder={t(language, 'mimicCatalog.sha256Placeholder')}
+                  aria-label={t(language, 'mimicCatalog.dkmsShaLabel')}
+                  data-testid={`mimic-dkms-sha-${row.id}`}
                   className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
                 />
               </div>
@@ -465,6 +560,7 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
           type="button"
           onClick={addRow}
           disabled={busy || loading}
+          data-testid="mimic-add-package"
           className="px-3 py-1 text-xs bg-[var(--control)] hover:bg-[var(--control-hover)] disabled:bg-[var(--control)] rounded text-[var(--content)]"
         >
           + {t(language, 'mimicCatalog.addRow')}
@@ -482,12 +578,22 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
       <p className="text-[10px] text-[var(--content-muted)] border-t border-[var(--hairline)] pt-2">{t(language, 'mimicCatalog.custodyNote')}</p>
 
       {validationHint && <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">{validationHint}</p>}
+      {!validationHint && missingDkms && (
+        <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded" data-testid="mimic-missing-dkms-warning">
+          {t(language, 'mimicCatalog.missingDkmsWarning')}
+        </p>
+      )}
       {localError && <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {localError}</p>}
-      {saved && <p className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded">{t(language, 'mimicCatalog.savedNotice')}</p>}
+      {saved && (
+        <p className="text-xs text-[var(--success)] bg-[var(--success-bg)] px-2 py-1 rounded" data-testid="mimic-saved-notice">
+          {t(language, 'mimicCatalog.savedNotice')}
+        </p>
+      )}
 
       <button
         onClick={() => void handleSave()}
         disabled={loading || busy || validationHint !== null}
+        data-testid="mimic-save-catalog"
         className="px-4 py-1.5 text-sm bg-[var(--accent)] hover:bg-[var(--accent-hover)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded text-[var(--accent-fg)] font-medium"
       >
         {loading ? t(language, 'mimicCatalog.saving') : t(language, 'mimicCatalog.saveButton')}
