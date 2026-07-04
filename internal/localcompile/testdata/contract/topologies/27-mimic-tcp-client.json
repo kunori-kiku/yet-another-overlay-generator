@@ -1,0 +1,30 @@
+{
+  "name": "mimic-tcp-client",
+  "doc": "A client node whose single wg0 link is transport=tcp (mimic) with xdp_mode=native, attached to a router. Pins the CLIENT install.sh mimic block byte-for-byte (Go<->TS): the two-package _mimic_provision (mimic + mimic-dkms), the mimic@ enable+restart lifecycle (a redeploy re-applies the config, not a no-op start), and the native->skb auto-downgrade elif — the client path a router-only mimic fixture (10/26) does NOT cover, which let a client de-cloak bug slip a review. The client role uses a single wg0 + no babeld.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "mimic-tcp-client", "name": "Mimic TCP Client" },
+    "domains": [
+      { "id": "domain-1", "name": "mesh", "cidr": "10.33.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "router-a", "name": "router-a", "hostname": "router-a.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "router-a-ep", "host": "router-a.example.com", "port": 51820 } ],
+        "wireguard_private_key": "wFKYOOqtvK/YveTzNg98Eb4Prt6oHae1pOpD4FkdX1U="
+      },
+      {
+        "id": "client-a", "name": "client-a", "hostname": "client-a.local", "platform": "debian",
+        "role": "client", "domain_id": "domain-1", "xdp_mode": "native",
+        "capabilities": {},
+        "wireguard_private_key": "CMsYv43SL92ua2uUiANLL7bTu+tLO90YB++SVwSulH8="
+      }
+    ],
+    "edges": [
+      { "id": "e-client", "from_node_id": "client-a", "to_node_id": "router-a", "type": "public-endpoint", "endpoint_host": "router-a.example.com", "transport": "tcp", "is_enabled": true }
+    ]
+  }
+}

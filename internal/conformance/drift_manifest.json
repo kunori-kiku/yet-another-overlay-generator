@@ -1,8 +1,8 @@
 {
   "renderer_template_hashes": {
     "babelConfigTemplate": "1a2a930d6af5376dc8a0316cdecab2bdf19e65eae030570e154483e372eedef6",
-    "clientInstallScriptTemplate": "01518f0aac449857cc04f6183e0310af3acae6c14e8ebd739eb689063025c556",
-    "installScriptTemplate": "212d84000719196f8b61d8270edee4ba3955e3c08c30494915060e5b9b836d23",
+    "clientInstallScriptTemplate": "843a3dec8439b584099fa9237ac889d841d1ade94888a2fadabe5a52a7aad64a",
+    "installScriptTemplate": "73439a8f598314caade15a911c3ae5fa10d4b41baaf0f0db54921a3e03c994f0",
     "sysctlConfigTemplate": "3aae6ead43dc87eb45f8de1e2e7a5b3fb33f486c3b384132d5167a67245266cc",
     "wgClientConfigTemplate": "e14ca19bca7536df3741118405f4c1af88c6d57450feb6fa87d2747d841d58be",
     "wgPerPeerConfigTemplate": "a8c45243c8367f6c9533fb16530fe441d6375b35c9e73dedacae81a3e8557257"

@@ -59,8 +59,9 @@ func TestRenderInstallScript_MimicPeer_ProvisionsMimic(t *testing.T) {
 		// 4) one filter = local= line per listen port, formatted via the IPv6-safe _mimic_ipport helper
 		"filter = local=",
 		"_mimic_ipport()",
-		// 5) mimic@<egress> enable and start
-		`systemctl enable --now "mimic@`,
+		// 5) mimic@<egress> enable (boot) + restart (re-apply the config each deploy, not a no-op start)
+		`systemctl enable "mimic@`,
+		`systemctl restart "mimic@`,
 		// 6) the uninstall section's mimic teardown (disable + delete config)
 		`systemctl disable --now "mimic@`,
 		"rm -f \"/etc/mimic/",
@@ -198,6 +199,9 @@ func TestRenderClientInstallScript_MimicTwoPackage_And_Fallback(t *testing.T) {
 		`.mimic.debs[$k].dkms_asset // ""`,
 		`.mimic.debs[$k].dkms_sha256 // ""`,
 		"apt-get install -y $_mimic_install",
+		// mimic@ is (re)started with restart, not a no-op enable --now, so a redeploy re-applies the
+		// config (and re-evaluates the native→skb downgrade) — the client path must not regress to it.
+		`if systemctl restart "mimic@`,
 	}
 	base := compiler.ClientPeerInfo{
 		NodeID: "client-1", NodeName: "cli", OverlayIP: "10.50.0.9",
@@ -342,11 +346,17 @@ func TestRenderInstallScript_MimicXDPMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render failed: %v", err)
 	}
-	if !strings.Contains(defScript, "xdp_mode = skb") {
+	// Anchor on the config-WRITE line (echo "xdp_mode = ...") — the native auto-downgrade's sed
+	// mentions BOTH modes, so a bare Contains("xdp_mode = skb") would false-match on a native node.
+	if !strings.Contains(defScript, `echo "xdp_mode = skb"`) {
 		t.Errorf("default should write 'xdp_mode = skb', but it is missing")
 	}
-	if strings.Contains(defScript, "xdp_mode = native") {
+	if strings.Contains(defScript, `echo "xdp_mode = native"`) {
 		t.Errorf("default should not write 'xdp_mode = native', but it appeared")
+	}
+	// An skb node must NOT render the native→skb auto-downgrade elif (gated on MimicNative).
+	if strings.Contains(defScript, "native XDP attach failed") {
+		t.Errorf("an skb node must not render the native→skb downgrade elif, but it appeared")
 	}
 
 	// explicit native -> native
@@ -356,11 +366,23 @@ func TestRenderInstallScript_MimicXDPMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render failed: %v", err)
 	}
-	if !strings.Contains(natScript, "xdp_mode = native") {
+	if !strings.Contains(natScript, `echo "xdp_mode = native"`) {
 		t.Errorf("XDPMode=native should write 'xdp_mode = native', but it is missing")
 	}
-	if strings.Contains(natScript, "xdp_mode = skb") {
-		t.Errorf("XDPMode=native should not write 'xdp_mode = skb', but it appeared")
+	if strings.Contains(natScript, `echo "xdp_mode = skb"`) {
+		t.Errorf("XDPMode=native should not write the skb config line, but it appeared")
+	}
+	// A native node renders the auto-downgrade elif: on a failed native attach, rewrite the config to
+	// skb + retry, and record the achieved mode — so a NIC without native XDP degrades to skb instead
+	// of failing the whole deploy.
+	for _, frag := range []string{
+		`sed -i 's/^xdp_mode = native$/xdp_mode = skb/'`,
+		"native XDP attach failed; retried + started in skb mode",
+		"native_downgraded_skb",
+	} {
+		if !strings.Contains(natScript, frag) {
+			t.Errorf("native node should render the auto-downgrade fragment %q, but it is missing", frag)
+		}
 	}
 }
 

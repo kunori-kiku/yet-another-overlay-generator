@@ -62,6 +62,7 @@ interface InstallScriptConfig {
   MimicPorts: number[];
   MimicRemotes: MimicEndpoint[];
   MimicXDPMode: string;
+  MimicNative: boolean;
   MimicFallbackUDP: boolean;
   MimicBreadcrumb: MimicBreadcrumbData;
   WgInterfaces: WgIfaceInfo[];
@@ -84,6 +85,7 @@ interface MimicBreadcrumbData {
   InstallFailed: string;
   FellBackToUDP: string;
   EgressUnresolved: string;
+  NativeDowngraded: string;
 }
 
 // MimicEndpoint is one mimic peer's dial target (host + port) for a route-independent remote= filter.
@@ -107,6 +109,7 @@ interface ClientInstallScriptConfig {
   MimicPorts: number[];
   MimicRemotes: MimicEndpoint[];
   MimicXDPMode: string;
+  MimicNative: boolean;
   MimicFallbackUDP: boolean;
   MimicBreadcrumb: MimicBreadcrumbData;
   SigningPubkeyPEM: string;
@@ -844,10 +847,22 @@ mkdir -p /etc/mimic
 } > "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 echo "  Wrote /etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 # The distro mimic package ships mimic@<iface>.service (Requires=modprobe@mimic.service, so the
-# kernel module auto-loads). Enable+start it on the egress NIC before WireGuard comes up.
-if systemctl enable --now "mimic@\${MIMIC_EGRESS_IF}"; then
+# kernel module auto-loads). Enable it for boot, then RESTART (not a no-op start on an
+# already-running unit) so a redeploy RE-APPLIES the freshly-written config — and, for a native node,
+# RE-EVALUATES the native→skb downgrade rather than leaving a stale on-disk native config the next
+# reboot would start mimic from and fail (a silent de-cloak: the on-disk config would revert to
+# native while the running unit stayed skb). WG is down here (Phase 0), so the restart is not
+# disruptive. Runs before WireGuard comes up.
+systemctl enable "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+if systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@\${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+{{ if .MimicNative -}}
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
+    # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
+    echo "  mimic@\${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
+{{ end -}}
 else
 {{ if .MimicFallbackUDP -}}
     echo "WARNING: mimic@\${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
@@ -1437,9 +1452,19 @@ mkdir -p /etc/mimic
     echo "xdp_mode = {{ .MimicXDPMode }}"
 } > "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 echo "  Wrote /etc/mimic/\${MIMIC_EGRESS_IF}.conf"
-if systemctl enable --now "mimic@\${MIMIC_EGRESS_IF}"; then
+# Enable mimic@<iface> for boot, then RESTART (not a no-op start on an already-running unit) so a
+# redeploy re-applies the freshly-written config and, for a native node, re-evaluates the native→skb
+# downgrade instead of leaving a stale on-disk native config a reboot would start from and fail.
+systemctl enable "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+if systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@\${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
+{{ if .MimicNative -}}
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
+    # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
+    echo "  mimic@\${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
+{{ end -}}
 else
 {{ if .MimicFallbackUDP -}}
     echo "WARNING: mimic@\${MIMIC_EGRESS_IF} failed to start; falling back to plain UDP (policy=udp)" >&2
@@ -1520,6 +1545,7 @@ function newMimicBreadcrumbData(): MimicBreadcrumbData {
     InstallFailed: 'install_failed',
     FellBackToUDP: 'fell_back_to_udp',
     EgressUnresolved: 'egress_unresolved',
+    NativeDowngraded: 'native_downgraded_skb',
   };
 }
 
@@ -1664,6 +1690,7 @@ function buildInstallScriptConfig(
     MimicPorts: mimicPorts,
     MimicRemotes: collectMimicRemotes(peers),
     MimicXDPMode: resolveMimicXDPMode(node.xdp_mode),
+    MimicNative: resolveMimicXDPMode(node.xdp_mode) === 'native',
     MimicFallbackUDP: resolveMimicFallbackUDP(peers),
     MimicBreadcrumb: newMimicBreadcrumbData(),
     WgInterfaces: wgIfaces,
@@ -1719,6 +1746,7 @@ function buildClientInstallScriptConfig(
     MimicPorts: mimicPorts,
     MimicRemotes: mimicRemotes,
     MimicXDPMode: resolveMimicXDPMode(node.xdp_mode),
+    MimicNative: resolveMimicXDPMode(node.xdp_mode) === 'native',
     MimicFallbackUDP: mimicFallbackUDP,
     MimicBreadcrumb: newMimicBreadcrumbData(),
     SigningPubkeyPEM: '',
