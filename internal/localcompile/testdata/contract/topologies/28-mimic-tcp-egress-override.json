@@ -1,0 +1,31 @@
+{
+  "name": "mimic-tcp-egress-override",
+  "doc": "Two routers joined by a transport=tcp (mimic) link; node-beta pins mimic_egress_interface=wan0 (a multi-homed / policy-routing override), node-alpha auto-detects (default route). Pins the egress-override rendering: beta's install.sh sets MIMIC_EGRESS_IF=wan0 and derives the egress IP from that interface (ip -o -4 addr show dev), while alpha keeps the ip-route auto-detect — the override is additive and per-node.",
+  "custody": "airgap",
+  "signing": false,
+  "topology": {
+    "project": { "id": "mimic-egress", "name": "Mimic Egress Override" },
+    "domains": [
+      { "id": "domain-1", "name": "mimic-net", "cidr": "10.31.0.0/24", "allocation_mode": "auto", "routing_mode": "babel" }
+    ],
+    "nodes": [
+      {
+        "id": "node-alpha", "name": "alpha", "hostname": "alpha.example.com", "platform": "debian",
+        "role": "router", "domain_id": "domain-1",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "alpha-ep", "host": "alpha.example.com", "port": 51820 } ],
+        "wireguard_private_key": "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4="
+      },
+      {
+        "id": "node-beta", "name": "beta", "hostname": "beta.example.com", "platform": "ubuntu",
+        "role": "router", "domain_id": "domain-1", "mimic_egress_interface": "wan0",
+        "capabilities": { "can_accept_inbound": true, "can_forward": true, "has_public_ip": true },
+        "public_endpoints": [ { "id": "beta-ep", "host": "beta.example.com", "port": 51820 } ],
+        "wireguard_private_key": "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U="
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from_node_id": "node-alpha", "to_node_id": "node-beta", "type": "public-endpoint", "endpoint_host": "beta.example.com", "transport": "tcp", "is_enabled": true }
+    ]
+  }
+}

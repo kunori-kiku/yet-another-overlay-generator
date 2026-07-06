@@ -48,6 +48,9 @@ export interface Node {
   // XDP attach mode for mimic (transport=tcp): empty/'skb' = generic XDP (default, best compatibility);
   // 'native' = driver-level XDP (faster, requires NIC support). See docs/spec/artifacts/mimic.md for details.
   xdp_mode?: 'skb' | 'native';
+  // Overrides the auto-detected mimic egress interface ("" / omitted = auto-detect from the default
+  // route). Set for multi-homed / policy-routing nodes (e.g. "wan0"). Only meaningful on a tcp link.
+  mimic_egress_interface?: string;
   // Babel router-id; auto-generated from the node id when empty (see internal/renderer/babel.go).
   // MAC-48 form (e.g. 02:11:22:33:44:55) or an IPv4 address; meaningless for the client role.
   router_id?: string;

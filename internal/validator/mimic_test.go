@@ -173,3 +173,33 @@ func TestValidate_XDPModeEnum(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_MimicEgressInterface covers the optional per-node egress-interface override: empty and
+// plausible interface names are valid; malformed values (spaces, shell-injection chars, too long) error
+// at the schema stage. The renderer shq-escapes the value, so this is a typo/UX guard.
+func TestValidate_MimicEgressInterface(t *testing.T) {
+	hasEgressErr := func(r *ValidationResult) bool {
+		for _, e := range r.Errors {
+			if containsSubstring(e.Field, "mimic_egress_interface") {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, iface := range []string{"", "eth0", "wan0", "ens5", "br-lan", "eth0.100"} {
+		topo := mimicTransportTopology("tcp", "debian", "debian")
+		topo.Nodes[0].MimicEgressInterface = iface
+		if hasEgressErr(ValidateSchema(topo)) {
+			t.Errorf("mimic_egress_interface=%q is valid and should not error", iface)
+		}
+	}
+
+	for _, iface := range []string{"eth 0", "wan0; rm -rf /", "$(id)", "thisnameiswaytoolong", "a/b"} {
+		topo := mimicTransportTopology("tcp", "debian", "debian")
+		topo.Nodes[0].MimicEgressInterface = iface
+		if !hasEgressErr(ValidateSchema(topo)) {
+			t.Errorf("mimic_egress_interface=%q is invalid and should error at the schema stage", iface)
+		}
+	}
+}

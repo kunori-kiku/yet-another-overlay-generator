@@ -279,6 +279,18 @@ export function NodeEditor() {
             </p>
           )}
         </div>
+        <div>
+          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.mimicEgressLabel')}</label>
+          <input
+            type="text"
+            value={selectedNode.mimic_egress_interface || ''}
+            onChange={(e) => updateNode(selectedNode.id, { mimic_egress_interface: e.target.value.trim() || undefined })}
+            placeholder={t(language, 'nodeEditor.mimicEgressPlaceholder')}
+            data-testid="node-mimic-egress-interface"
+            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
+          />
+          <p className="mt-1 text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.mimicEgressHint')}</p>
+        </div>
         {selectedNode.role !== 'client' && (
           <div>
             <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.routerIdLabel')}</label>

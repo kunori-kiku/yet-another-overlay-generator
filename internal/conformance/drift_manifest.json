@@ -1,14 +1,14 @@
 {
   "renderer_template_hashes": {
     "babelConfigTemplate": "1a2a930d6af5376dc8a0316cdecab2bdf19e65eae030570e154483e372eedef6",
-    "clientInstallScriptTemplate": "bc09773c3b906f87dd2e2ae33aa3808ac66c4e9ac70a27a3fc496ca7267f0eff",
-    "installScriptTemplate": "914ff11d576f0af6d9b95984d675efc0beaaa5199e9deeb3825394584c3c84e1",
+    "clientInstallScriptTemplate": "4731886ad74d6a593cfd9bcd0775ccc43b3faf36c02f2e5f5275de7ec7888261",
+    "installScriptTemplate": "3e7af2122623dfcc5e508524030a7c69f105eed3b9ab6bf04298e65ea3d26594",
     "sysctlConfigTemplate": "3aae6ead43dc87eb45f8de1e2e7a5b3fb33f486c3b384132d5167a67245266cc",
     "wgClientConfigTemplate": "e14ca19bca7536df3741118405f4c1af88c6d57450feb6fa87d2747d841d58be",
     "wgPerPeerConfigTemplate": "a8c45243c8367f6c9533fb16530fe441d6375b35c9e73dedacae81a3e8557257"
   },
   "validator_codes": {
-    "count": 106,
+    "count": 107,
     "codes": [
       "validation_client_endpoint_host_required",
       "validation_client_extra_prefixes_meaningless",
@@ -76,6 +76,7 @@
       "validation_node_id_required",
       "validation_node_interface_name_collision",
       "validation_node_isolated",
+      "validation_node_mimic_egress_interface_invalid",
       "validation_node_mtu_out_of_range",
       "validation_node_name_duplicate",
       "validation_node_name_illegal_chars",
