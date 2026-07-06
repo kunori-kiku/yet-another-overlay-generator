@@ -223,6 +223,7 @@
       "extra_prefixes",
       "fixed_private_key",
       "hostname",
+      "mimic_egress_interface",
       "mtu",
       "overlay_ip",
       "platform",

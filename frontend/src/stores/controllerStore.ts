@@ -119,7 +119,7 @@ function stableStringify(value: unknown): string {
 const PROJECT_OMITEMPTY = ['description', 'version'];
 const DOMAIN_OMITEMPTY = ['description', 'reserved_ranges', 'transit_cidr'];
 const NODE_OMITEMPTY = [
-  'hostname', 'platform', 'deployment_mode', 'overlay_ip', 'mtu', 'xdp_mode', 'router_id',
+  'hostname', 'platform', 'deployment_mode', 'overlay_ip', 'mtu', 'xdp_mode', 'mimic_egress_interface', 'router_id',
   'fixed_private_key', 'wireguard_private_key', 'wireguard_public_key', 'public_endpoints',
   'extra_prefixes', 'ssh_alias', 'ssh_host', 'ssh_port', 'ssh_user', 'ssh_key_path',
 ];
