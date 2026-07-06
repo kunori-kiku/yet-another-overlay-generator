@@ -1,11 +1,12 @@
 # STATUS
 <!-- regenerated: 2026-07-04 -->
-<!-- by: hand — v2.0.0-rc.2 RELEASED (GitHub Latest); rc.2 soak surfaced a mimic runtime/module defect → ACTIVE subject mimic-runtime-reliability (→ v2.0.0-rc.3) -->
+<!-- by: hand — v2.0.0-rc.3 RELEASED (GitHub Latest); mimic-runtime-reliability CLOSED + archived -->
 
 ## Active work
 
-- **🔧 ACTIVE SUBJECT `mimic-runtime-reliability-2026_07_06` — DRAFTED (2026-07-06), executing; ships
-  as `v2.0.0-rc.3` (owner: bundle all).** The rc.2 live-fleet smoke (node hkg14) found `transport:
+- **✅ SUBJECT `mimic-runtime-reliability-2026_07_06` — DELIVERED as `v2.0.0-rc.3` (GitHub *Latest*,
+  2026-07-06; tag on `2ad18f2`; rc.2 demoted; self-promoted; 29 assets); CLOSED + archived to
+  `_completed/`.** The rc.2 live-fleet smoke (node hkg14) found `transport:
   tcp` failing at RUNTIME after the rc.2 install fix: mimic exit-22 (`is the Mimic kernel module
   loaded?`) → `dkms status: mimic/0.7.1 **added**` (never built) → `linux-headers-6.1.0-13-cloud-amd64`
   **pruned from the repo** (node on a stale kernel since Dec-2024, never rebooted). ROOT DEFECT:
@@ -22,12 +23,12 @@
   plans 1 (#235, module gate + honor-policy + lock cleanup) + 3 (#236, native-XDP always-visible +
   the mimic-capability probe; review caught + fixed a mimic-warning over-fire) + 2 (#237, per-node
   egress override + a signing guard for the owner's "sign the new surface" ask) + 4 (#238, docs) ALL
-  MERGED — the full subject is on `main`, all six CI checks green. plan-5: the `v2.0.0-rc.3` CHANGELOG
-  is rolled + integrated `main` re-verified (both Go profiles, FE 453 vitest); **the rc.3 TAG is
-  pending the owner's smoke-timing call** (cut now → rc self-promotes to Latest and stale-kernel nodes
-  self-heal on self-update; vs. after an owner fleet-smoke of the module fix). A defect during soak →
-  rc.4 under the same gate rules. Owner unblock handed off (udp fallback / reboot into the current
-  kernel).
+  MERGED, + plan-5 (#239, CHANGELOG) + the `v2.0.0-rc.3` tag CUT (owner: "cut now"). Release verified:
+  29 assets, GitHub Latest (rc.2 demoted; self-promoted). **Owed: owner updates the controller to rc.3
+  + re-deploys the affected fleet nodes** — the fix is in the rendered `install.sh`, delivered by the
+  controller, NOT the agent binary, so cutting rc.3 makes it available but the operator applies it by
+  updating the controller + redeploying. A defect during soak → rc.4 under the same gate rules. Owner
+  unblock still valid (udp fallback / reboot into the current kernel).
 
 - **🎯 `v2.0.0-rc.1` RELEASED — GitHub *Latest* (2026-07-03; tag on `f4c4389`; beta.18 demoted;
   self-promoted via the `make_latest` belt exactly as gated).** The rc promotes the soaked
@@ -353,6 +354,14 @@ incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). T
 
 ## Recently closed subjects (last 3)
 
+- `mimic-runtime-reliability-2026_07_06` (2026-07-06) — **5 plans, `v2.0.0-rc.3` (GitHub Latest, PRs
+  #235–#239; tag on `2ad18f2`).** Fixed the rc.2-soak mimic RUNTIME defect (a stale-kernel node looped
+  on mimic exit-22 because the DKMS module was never built): module build/load VERIFICATION (not just
+  `command -v mimic`) + honor-policy, orphaned-lock cleanup, `ModuleUnavailable` condition, a pre-deploy
+  mimic-capability probe, always-visible native-XDP (owner-flagged), a per-node egress-interface
+  override (rides the signed install.sh). Each PR reviewed → verified → fixed → green; reviews caught
+  the mimic-warning over-fire + the missing `NODE_OMITEMPTY` entry. Owner: "cut now"; owed: owner
+  updates the controller to rc.3 + re-deploys.
 - `mimic-provisioning-reliability-2026_07_04` (2026-07-04) — **6 plans, `v2.0.0-rc.2` (GitHub Latest,
   PRs #228–#233; tag on `cb2ecdd`).** Fixed the rc.1-soak mimic install defect: two-package
   `mimic`+`mimic-dkms` install + robust policy-aware fallback, panel two-package UX + Assist
