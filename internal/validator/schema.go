@@ -40,6 +40,10 @@ var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
 // validator's nodeIDCharset byte-for-byte (conformance parity).
 var nodeIDCharset = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// mimicEgressIfacePattern validates an optional per-node mimic egress-interface override. A Linux
+// interface name is <= IFNAMSIZ-1 (15) chars; the charset mirrors the TS validator byte-for-byte.
+var mimicEgressIfacePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,15}$`)
+
 // sshFieldCharset constrains the legal character set for the SSH connection fields
 // (ssh_host / ssh_alias / ssh_user) (D44).
 // These fields are interpolated into the bash and PowerShell deploy scripts that run on the
@@ -354,6 +358,11 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 			if !validXDPModes[node.XDPMode] {
 				result.AddError(prefix+".xdp_mode", CodeNodeXDPModeInvalid, P{"mode", node.XDPMode})
 			}
+		}
+		// MimicEgressInterface: optional per-node override of the mimic egress NIC. If set, require a
+		// plausible interface name (the renderer shq-escapes it, so this is a typo/UX guard, not safety).
+		if node.MimicEgressInterface != "" && !mimicEgressIfacePattern.MatchString(node.MimicEgressInterface) {
+			result.AddError(prefix+".mimic_egress_interface", CodeNodeMimicEgressInterfaceInvalid, P{"iface", node.MimicEgressInterface})
 		}
 
 		// OverlayIP (optional; must be a parseable IP when set)

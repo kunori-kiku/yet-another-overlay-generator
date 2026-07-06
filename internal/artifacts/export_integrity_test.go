@@ -46,6 +46,39 @@ func TestExport_ChecksumsCoversInstallScript(t *testing.T) {
 	}
 }
 
+// TestExport_EgressOverrideIsSigned proves the per-node mimic egress-interface override (a new config
+// surface, plan-2 of mimic-runtime-reliability) rides the SIGNED install.sh rather than any unsigned
+// path. The override renders INTO install.sh (byte-proven by the localcompile
+// 28-mimic-tcp-egress-override golden: MIMIC_EGRESS_IF='wan0'), and install.sh is a checksummed bundle
+// member covered by bundle.sig → keystone (TestExport_ChecksumsCoversInstallScript). This ties the
+// two: an install.sh carrying the override marker appears in checksums.sha256 with a MATCHING hash, so
+// the override cannot be tampered without failing the signature. (Auto-detect nodes carry no baked
+// value — the egress is the node's own runtime routing table — so there is nothing to sign there.)
+func TestExport_EgressOverrideIsSigned(t *testing.T) {
+	result := minimalCompileResult()
+	// The renderer emits MIMIC_EGRESS_IF='wan0' for an override node (byte-proven by the localcompile
+	// golden); assert that whatever install.sh carries is what gets signed.
+	result.InstallScripts["n1"] = "#!/usr/bin/env bash\nMIMIC_EGRESS_IF='wan0'\n"
+	outputDir := t.TempDir()
+	if _, err := Export(result, outputDir); err != nil {
+		t.Fatalf("Export failed: %v", err)
+	}
+	nodeDir := filepath.Join(outputDir, "alpha")
+
+	installBytes := mustReadFileBytes(t, filepath.Join(nodeDir, "install.sh"))
+	if !strings.Contains(string(installBytes), "MIMIC_EGRESS_IF='wan0'") {
+		t.Fatalf("the egress override was not written into install.sh")
+	}
+	recordedHash, ok := readChecksumFor(t, filepath.Join(nodeDir, "checksums.sha256"), "install.sh")
+	if !ok {
+		t.Fatalf("install.sh carrying the egress override is NOT in checksums.sha256 — the new surface would be unsigned")
+	}
+	actualHash := fmt.Sprintf("%x", sha256.Sum256(installBytes))
+	if recordedHash != actualHash {
+		t.Errorf("checksums.sha256 does not cover the override install.sh:\n  recorded: %s\n  actual: %s", recordedHash, actualHash)
+	}
+}
+
 // readChecksumFor parses a sha256sum-style checksum file and returns the hash for the
 // given relative path. A checksum line has the format "<hex>  <relpath>" (separated by two
 // spaces).

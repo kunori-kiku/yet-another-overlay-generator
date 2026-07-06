@@ -51,6 +51,7 @@ const (
 	CodeNodeDeploymentModeInvalid          Code = "validation_node_deployment_mode_invalid"
 	CodeNodePlatformUnsupported            Code = "validation_node_platform_unsupported"
 	CodeNodeXDPModeInvalid                 Code = "validation_node_xdp_mode_invalid"
+	CodeNodeMimicEgressInterfaceInvalid    Code = "validation_node_mimic_egress_interface_invalid"
 	CodeNodeOverlayIPInvalid               Code = "validation_node_overlay_ip_invalid"
 	CodeNodeWGPublicKeyInvalid             Code = "validation_node_wg_public_key_invalid"
 	CodeNodeMTUOutOfRange                  Code = "validation_node_mtu_out_of_range"
@@ -169,6 +170,7 @@ var registry = map[Code]string{
 	CodeNodeDeploymentModeInvalid:          "Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).",
 	CodeNodePlatformUnsupported:            "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
 	CodeNodeXDPModeInvalid:                 "Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).",
+	CodeNodeMimicEgressInterfaceInvalid:    "Invalid mimic egress interface: {iface}. Use a valid interface name (letters, digits, . _ -, up to 15 chars).",
 	CodeNodeOverlayIPInvalid:               "Invalid overlay IP address: {ip}.",
 	CodeNodeWGPublicKeyInvalid:             "wireguard_public_key {key} is not a valid Curve25519 public key: it must be 32 bytes encoded as standard base64 (44 characters). It is written verbatim into the WireGuard configuration deployed on peer nodes, so a malformed value is rejected here.",
 	CodeNodeMTUOutOfRange:                  "MTU {mtu} is out of range: it must be between {low} and {high} (576 is the IPv4 datagram minimum; an out-of-range MTU is rejected by wg-quick).",

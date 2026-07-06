@@ -60,6 +60,7 @@ export const Code = {
   NodeDeploymentModeInvalid: 'validation_node_deployment_mode_invalid',
   NodePlatformUnsupported: 'validation_node_platform_unsupported',
   NodeXDPModeInvalid: 'validation_node_xdp_mode_invalid',
+  NodeMimicEgressInterfaceInvalid: 'validation_node_mimic_egress_interface_invalid',
   NodeOverlayIPInvalid: 'validation_node_overlay_ip_invalid',
   NodeWGPublicKeyInvalid: 'validation_node_wg_public_key_invalid',
   NodeMTUOutOfRange: 'validation_node_mtu_out_of_range',
@@ -562,6 +563,12 @@ function validateNodesSchema(topo: Topology, result: ValidationResult): void {
       if (xdp !== 'skb' && xdp !== 'native') {
         addError(result, prefix + '.xdp_mode', Code.NodeXDPModeInvalid, { k: 'mode', v: xdp });
       }
+    }
+    // MimicEgressInterface (schema.go): optional; if set, a plausible interface name (shq-escaped in
+    // the renderer, so this is a typo guard). Charset mirrors mimicEgressIfacePattern byte-for-byte.
+    const egressIf = (node.mimic_egress_interface ?? '') as string;
+    if (egressIf !== '' && !/^[A-Za-z0-9._-]{1,15}$/.test(egressIf)) {
+      addError(result, prefix + '.mimic_egress_interface', Code.NodeMimicEgressInterfaceInvalid, { k: 'iface', v: egressIf });
     }
 
     // OverlayIP (optional; parseable IP when set) (schema.go:323-328). net.ParseIP accepts both families.
