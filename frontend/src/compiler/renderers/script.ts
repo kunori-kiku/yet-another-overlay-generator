@@ -584,6 +584,8 @@ _mimic_module_ready() {
     modprobe mimic 2>/dev/null && return 0
     if command -v dkms >/dev/null 2>&1; then
         _pm_install "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
+        _pm_install bubblewrap >/dev/null 2>&1 || true
+        _pm_install dwarves >/dev/null 2>&1 || true
         dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
         modprobe mimic 2>/dev/null && return 0
     fi
@@ -1385,6 +1387,8 @@ _mimic_module_ready() {
     modprobe mimic 2>/dev/null && return 0
     if command -v dkms >/dev/null 2>&1; then
         _pm_install "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
+        _pm_install bubblewrap >/dev/null 2>&1 || true
+        _pm_install dwarves >/dev/null 2>&1 || true
         dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
         modprobe mimic 2>/dev/null && return 0
     fi

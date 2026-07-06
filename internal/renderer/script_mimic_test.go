@@ -206,7 +206,13 @@ func TestRenderInstallScript_BuildDepsAndTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render mimic node: %v", err)
 	}
-	for _, frag := range []string{"_pm_install bubblewrap", "_pm_install dwarves"} {
+	for _, frag := range []string{
+		"_pm_install bubblewrap", "_pm_install dwarves",
+		// The deps must ALSO be in the _mimic_module_ready retry (the >/dev/null form) so an
+		// already-broken node (binary present, module unbuilt) rebuilds on redeploy — _mimic_provision
+		// short-circuits on `command -v mimic` and never reaches its .deb-path dep install.
+		"_pm_install bubblewrap >/dev/null 2>&1", "_pm_install dwarves >/dev/null 2>&1",
+	} {
 		if !strings.Contains(mimicScript, frag) {
 			t.Errorf("mimic node missing build dep %q", frag)
 		}
