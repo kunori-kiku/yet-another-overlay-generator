@@ -201,6 +201,7 @@ shipped `"none"`); the compiler resolves the effective per-link value into `Peer
   success gate is that the module is genuinely loadable (`lsmod` / `modprobe` / a `dkms autoinstall`
   retry), **not** merely that `command -v mimic` succeeds — the binary-only check was the rc.2 defect
   that let a node with an unbuilt module proceed to a cryptic `mimic run` exit-22 loop. Also
+  `ebpf_load_failed` (`mimic@<egress>` failed its eBPF attach at start),
   `egress_unresolved` (no routable default-route source IP — empty or loopback — so a `local=` filter
   could never match), `native_downgraded_skb` (a requested `xdp_mode=native` attach failed →
   auto-retried and active in **skb** mode; see below), and `fell_back_to_udp` (skipped mimic, link up
