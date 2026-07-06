@@ -297,6 +297,16 @@ fi
 
 echo "=== Phase 0: Cleanup Previous Installation ==="
 
+# rc.4: stop any stale mimic@ unit + config, unconditionally. The mimic teardown otherwise lives only
+# in the --uninstall path (HasMimic-gated), so flipping a node's last tcp link to udp (HasMimic
+# true->false) would never stop the old mimic@ (it would keep shaping traffic WG now sends as plain
+# UDP). A still-mimic node re-provisions in Phase 3; no-op when mimic was never installed.
+for _stale_mimic in $(systemctl list-units --plain --no-legend 'mimic@*.service' 2>/dev/null | awk '{print $1}'); do
+    echo "  Stopping stale mimic unit: $_stale_mimic..."
+    systemctl disable --now "$_stale_mimic" 2>/dev/null || true
+done
+rm -f /etc/mimic/*.conf 2>/dev/null || true
+
 # Stop all WireGuard interfaces managed by this overlay
 {{ range .WgInterfaces -}}
 if command -v wg >/dev/null 2>&1 && wg show "{{ .Name }}" > /dev/null 2>&1; then
@@ -578,6 +588,8 @@ _mimic_provision() {
     _pm_install "linux-headers-$(uname -r)" || _pm_install linux-headers-generic || true
     _pm_install dkms || true
     _pm_install gcc || true
+    _pm_install bubblewrap || true   # mimic-dkms's build sandbox (bwrap); the DKMS build is Error 127 without it
+    _pm_install dwarves || true      # provides pahole for the module's BTF generation (else 'pahole: not found')
     # _mimic_get <asset> <sha256> <dest>: download via the proxy and verify the pin (0 ok / non-zero fail).
     _mimic_get() {
         curl -fL --retry 3 --proto '=https,http' "${GH_PROXY}${_mimic_rel}/$1" -o "$3" || return 1
@@ -1391,6 +1403,16 @@ fi
 
 echo "=== Phase 0: Cleanup Previous Installation ==="
 
+# rc.4: stop any stale mimic@ unit + config, unconditionally. The mimic teardown otherwise lives only
+# in the --uninstall path (HasMimic-gated), so flipping a node's last tcp link to udp (HasMimic
+# true->false) would never stop the old mimic@ (it would keep shaping traffic WG now sends as plain
+# UDP). A still-mimic node re-provisions in Phase 3; no-op when mimic was never installed.
+for _stale_mimic in $(systemctl list-units --plain --no-legend 'mimic@*.service' 2>/dev/null | awk '{print $1}'); do
+    echo "  Stopping stale mimic unit: $_stale_mimic..."
+    systemctl disable --now "$_stale_mimic" 2>/dev/null || true
+done
+rm -f /etc/mimic/*.conf 2>/dev/null || true
+
 # Stop WireGuard wg0 if running
 if command -v wg >/dev/null 2>&1 && wg show "wg0" > /dev/null 2>&1; then
     echo "  Stopping WireGuard interface: wg0..."
@@ -1629,6 +1651,8 @@ _mimic_provision() {
     _pm_install "linux-headers-$(uname -r)" || _pm_install linux-headers-generic || true
     _pm_install dkms || true
     _pm_install gcc || true
+    _pm_install bubblewrap || true   # mimic-dkms's build sandbox (bwrap); the DKMS build is Error 127 without it
+    _pm_install dwarves || true      # provides pahole for the module's BTF generation (else 'pahole: not found')
     # _mimic_get <asset> <sha256> <dest>: download via the proxy and verify the pin (0 ok / non-zero fail).
     _mimic_get() {
         curl -fL --retry 3 --proto '=https,http' "${GH_PROXY}${_mimic_rel}/$1" -o "$3" || return 1

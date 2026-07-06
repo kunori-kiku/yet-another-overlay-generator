@@ -1,8 +1,26 @@
 # STATUS
 <!-- regenerated: 2026-07-04 -->
-<!-- by: hand — v2.0.0-rc.3 RELEASED (GitHub Latest); mimic-runtime-reliability CLOSED + archived -->
+<!-- by: hand — v2.0.0-rc.3 = GitHub Latest; ACTIVE subject mimic-fleet-robustness (→ v2.0.0-rc.4) -->
 
 ## Active work
+
+- **🔧 ACTIVE SUBJECT `mimic-fleet-robustness-2026_07_07` — DRAFTED (2026-07-07), executing; ships as
+  `v2.0.0-rc.4` (owner: "plan and fix what you can fix").** rc.3-soak fleet debugging surfaced 5
+  YAOG-fixable findings: (1) mimic-dkms's build needs **`bubblewrap`** (bwrap) + **`dwarves`** (pahole)
+  which it doesn't declare + YAOG didn't install → the module fails to build on a *current* Debian
+  kernel (`make: bwrap: No such file`; then `pahole: not found`) — confirmed fixed by installing both;
+  (2) the `mimic` panel condition is a frozen deploy-time breadcrumb (not live — `systemctl stop
+  mimic@` still shows "active"); (3) the mimic teardown is `--uninstall`-only + HasMimic-gated, so
+  tcp→udp never stops the stale `mimic@` (verified in code); (4) `mimic_fallback: udp` can SPLIT a link
+  (unilateral); (5) mimic over an **L7 relay** can't work (the relay terminates+re-originates → the
+  reverse fake-TCP leg RSTs — owner tcpdump-proven). **5 plans:** (1) install.sh build deps +
+  unconditional Phase-0 teardown · (2) live mimic condition · (3) relay-path validator warning · (4)
+  docs · (5) rc.4. **Deferred (Out of scope):** auto-coordinated fallback (telemetry→compile feedback
+  loop — low residual after the dep fix; the clean fix for an unbuildable node is `transport: udp`).
+  Plan folder:
+  [`implementation_plans/mimic-fleet-robustness-2026_07_07/`](implementation_plans/mimic-fleet-robustness-2026_07_07/outline.md).
+  **NEXT = plan-1** (`fix/mimic-build-deps-teardown`). Immediate fleet win handed to owner:
+  `apt-get install -y bubblewrap dwarves` + redeploy.
 
 - **✅ SUBJECT `mimic-runtime-reliability-2026_07_06` — DELIVERED as `v2.0.0-rc.3` (GitHub *Latest*,
   2026-07-06; tag on `2ad18f2`; rc.2 demoted; self-promoted; 29 assets); CLOSED + archived to
