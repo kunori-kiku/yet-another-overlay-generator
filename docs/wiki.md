@@ -201,6 +201,13 @@ A directed edge `A → B` means **A actively connects to B**.
 > direction would be silently ignored); backup links are their own tunnels and can (validation
 > explains each case).
 
+> **mimic needs a direct path (no L7 relay).** `tcp` (mimic) shapes UDP into fake-TCP and needs
+> **L3/L4 packet transparency end to end**. An L7 / UDP-accelerator relay that terminates and
+> re-originates the connection (a gost/realm-style relay doing DNAT+SNAT) breaks it — the reverse
+> fake-TCP leg is `RST`'d — so a link that rides such a relay must use **`transport: udp`**, not
+> `tcp`. YAOG warns at design time: an enabled `tcp` edge of type `relay-path` raises the
+> `validation_edge_mimic_relay_path` warning advising `udp` (a warning, not a blocker).
+
 ### 2.4 Two-layer address separation
 
 The system uses two independent IP pools so link addresses never collide with node-identity addresses:
@@ -554,7 +561,7 @@ The four condition **types** (lowercase, closed set) and their `status` (`ok`/`w
 | `configapply` | Last config apply | `Applied` (ok), `DegradedKeepingLastGood` (warn) |
 | `selfupdate` | Self-update state | `Active`, `HealthConfirmedProbationary`, `Updated`, `Abandoned`, `Blocked` |
 | `wireguard` | Link health | `AllPeersUp` (ok), `PeerHandshakeStale`, `SomePeersDown`, `LinkDown`, `NoInterfaces` |
-| `mimic` | mimic shaper state | read from the installer's breadcrumb |
+| `mimic` | mimic shaper state | breadcrumb + live re-probe each heartbeat (`systemctl is-active`): `Stopped` (warn) if a should-be-running unit died since deploy, else the deploy outcome (`Active` / `FellBackToUDP` / `ModuleUnavailable` / `NativeDowngradedSkb`) |
 
 > **`SomePeersDown` vs `LinkDown` (beta.12).** A single offline peer in a mesh (a link Babel routes
 > around) now reads as **`SomePeersDown`** ("1/3 peers down") instead of the alarming whole-node
