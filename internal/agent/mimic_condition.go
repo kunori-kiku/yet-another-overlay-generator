@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -27,8 +29,33 @@ const (
 	mimicReasonEgressUnresolved  = "EgressUnresolved"
 	mimicReasonNativeDowngraded  = "NativeDowngradedSkb"
 	mimicReasonModuleUnavailable = "ModuleUnavailable"
+	mimicReasonStopped           = "Stopped"
 	mimicReasonUnknown           = "Unknown"
 )
+
+// mimicIsActiveTimeout bounds the `systemctl is-active` probe so a wedged systemctl can NEVER stall the
+// telemetry heartbeat (mirrors wgShowTimeout). Generous: is-active returns in milliseconds.
+const mimicIsActiveTimeout = 5 * time.Second
+
+// mimicUnitActiveFn reports whether the mimic@<egress> unit is active NOW, under a bounded timeout,
+// indirected so a test injects the state without systemd. False on ANY error (systemctl absent, not
+// root, timeout, or the unit inactive/failed) — best-effort, mirroring wgShowFn.
+var mimicUnitActiveFn = func(egress string) bool {
+	if egress == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mimicIsActiveTimeout)
+	defer cancel()
+	// `systemctl is-active --quiet` exits 0 iff the unit is active; we only read the exit code.
+	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "mimic@"+egress+".service").Run() == nil
+}
+
+// expectsMimicRunning reports whether a breadcrumb OUTCOME implies mimic@ should be RUNNING (so a
+// not-active unit is a live-down discrepancy). Active + native-downgraded (still active, just skb)
+// expect it up; every fallback/failure outcome does not (the unit is intentionally absent there).
+func expectsMimicRunning(outcome string) bool {
+	return outcome == model.MimicOutcomeActive || outcome == model.MimicOutcomeNativeDowngraded
+}
 
 // mimicBreadcrumb is the on-disk JSON install.sh writes. Only the closed outcome token is trusted;
 // egress/ts are advisory (ts seeds the condition's Since when parseable; egress is never interpolated).
@@ -86,6 +113,13 @@ func readMimicCondition(path string, now time.Time) (model.Condition, bool) {
 	// A garbled breadcrumb is classified as an unknown outcome (generic warn), never a crash.
 	_ = json.Unmarshal(data, &bc)
 	reason, status, message := classifyMimic(bc.Outcome)
+	// Live reconcile (the breadcrumb is a DEPLOY-TIME outcome): if it says mimic should be RUNNING but
+	// the mimic@<egress> unit is not active NOW (stopped/failed/crashed at runtime), report the
+	// live-down state instead of a stale "active" — so `systemctl stop mimic@` or a runtime crash
+	// surfaces in the panel rather than a frozen apply-time snapshot.
+	if bc.Egress != "" && expectsMimicRunning(bc.Outcome) && !mimicUnitActiveFn(bc.Egress) {
+		reason, status, message = mimicReasonStopped, model.ConditionStatusWarn, "Mimic unit not running (was active at deploy)"
+	}
 	since := now
 	if bc.TS != "" {
 		if t, perr := time.Parse(time.RFC3339, bc.TS); perr == nil {

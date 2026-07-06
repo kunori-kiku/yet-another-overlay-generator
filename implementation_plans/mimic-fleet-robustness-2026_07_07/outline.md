@@ -52,8 +52,8 @@ owner's deeper fleet debugging surfaced five distinct issues, root-caused with l
 
 | # | Plan | Status | PR |
 |---|------|--------|-----|
-| 1 | install.sh: mimic build deps (bubblewrap+dwarves) + unconditional Phase-0 teardown | pending | — |
-| 2 | Live mimic condition (re-probe the mimic@ unit each heartbeat) | pending | — |
+| 1 | install.sh: mimic build deps (bubblewrap+dwarves) + unconditional Phase-0 teardown | ✅ merged | #241 |
+| 2 | Live mimic condition (re-probe the mimic@ unit each heartbeat) | in review | (this PR) |
 | 3 | Relay-path warning (`transport: tcp` on a `relay-path` edge) + mimic_fallback split caveat | pending | — |
 | 4 | Docs (mimic.md + bilingual wiki) | pending | — |
 | 5 | Release v2.0.0-rc.4 | pending | — |
