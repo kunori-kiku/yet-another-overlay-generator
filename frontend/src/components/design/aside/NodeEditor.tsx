@@ -20,6 +20,7 @@ const NATIVE_XDP_KEY: Record<'supported' | 'conditional' | 'unsupported' | 'unkn
 export function NodeEditor() {
   const language = useTopologyStore((s) => s.language);
   const nodes = useTopologyStore((s) => s.nodes);
+  const edges = useTopologyStore((s) => s.edges);
   const domains = useTopologyStore((s) => s.domains);
   const selectedNodeId = useTopologyStore((s) => s.selectedNodeId);
   const updateNode = useTopologyStore((s) => s.updateNode);
@@ -32,6 +33,11 @@ export function NodeEditor() {
   // mimicCapability (plan-3): can this node build/load the mimic kernel module. "unbuildable" warns
   // that a transport=tcp link here will fall back per policy (the stale-kernel case). Live-only.
   const mimicCapability = useControllerStore((s) => s.nodes.find((n) => n.nodeId === selectedNodeId)?.mimicCapability);
+  // Only warn about mimic buildability on a node that actually has a transport=tcp link — mimic is
+  // irrelevant otherwise, so a bare "unbuildable" would nag every pending-reboot fleet node.
+  const nodeHasTcpLink = edges.some(
+    (e) => (e.from_node_id === selectedNodeId || e.to_node_id === selectedNodeId) && e.transport === 'tcp',
+  );
   // fixed_private_key is a LOCAL/air-gap custody primitive: it tells the client-side compiler to
   // generate-and-persist a node's WireGuard private key into the design (+ localStorage).
   // Controller mode is zero-knowledge — the agent owns the private key, the server never sees it,
@@ -267,7 +273,7 @@ export function NodeEditor() {
               {t(language, NATIVE_XDP_KEY[nativeXDP.capability], { driver: nativeXDP.driver || '?' })}
             </p>
           )}
-          {mimicCapability?.capability === 'unbuildable' && (
+          {nodeHasTcpLink && mimicCapability?.capability === 'unbuildable' && (
             <p data-testid="node-mimic-capability-hint" className="mt-1 text-xs text-[var(--warning)]">
               {t(language, 'nodeEditor.mimicCapability.unbuildable', { kernel: mimicCapability.kernel || '?' })}
             </p>
