@@ -19,11 +19,15 @@
   release rc.3. Posture: detect + honor policy + clear "reboot into the current kernel" guidance —
   install.sh NEVER auto-swaps a kernel. Plan folder:
   [`implementation_plans/mimic-runtime-reliability-2026_07_06/`](implementation_plans/mimic-runtime-reliability-2026_07_06/outline.md).
-  plan-1 (#235, the fleet-critical module gate + honor-policy + lock cleanup) MERGED. plan-3 (the
-  owner-flagged native-XDP always-visible fix + the pre-deploy "can this node run mimic" capability
-  probe — an agent `mimic_capability` sampler + NodeEditor warning) IN REVIEW. **NEXT after plan-3 =
-  plan-2** (egress override), then plan-4 (docs), plan-5 (rc.3). Owner unblock handed off (udp
-  fallback / reboot into the current kernel).
+  plans 1 (#235, module gate + honor-policy + lock cleanup) + 3 (#236, native-XDP always-visible +
+  the mimic-capability probe; review caught + fixed a mimic-warning over-fire) + 2 (#237, per-node
+  egress override + a signing guard for the owner's "sign the new surface" ask) + 4 (#238, docs) ALL
+  MERGED — the full subject is on `main`, all six CI checks green. plan-5: the `v2.0.0-rc.3` CHANGELOG
+  is rolled + integrated `main` re-verified (both Go profiles, FE 453 vitest); **the rc.3 TAG is
+  pending the owner's smoke-timing call** (cut now → rc self-promotes to Latest and stale-kernel nodes
+  self-heal on self-update; vs. after an owner fleet-smoke of the module fix). A defect during soak →
+  rc.4 under the same gate rules. Owner unblock handed off (udp fallback / reboot into the current
+  kernel).
 
 - **🎯 `v2.0.0-rc.1` RELEASED — GitHub *Latest* (2026-07-03; tag on `f4c4389`; beta.18 demoted;
   self-promoted via the `make_latest` belt exactly as gated).** The rc promotes the soaked
