@@ -27,6 +27,19 @@ YAOG ships no mimic binary. It generates mimic's config and the install command 
 relationship it has with `wg-quick` and `babeld`. Because YAOG does not distribute mimic, mimic's
 GPL-2.0 license imposes no obligation on YAOG's own code.
 
+## Direct path required (no L7 relay)
+
+mimic's fake-TCP transform needs **L3/L4 packet transparency end to end**: the shaped packets must
+reach the far end unmodified so its eBPF can restore them. An **L7 / UDP-accelerator relay** that
+terminates and re-originates the connection (a gost/realm-style relay doing DNAT+SNAT) breaks this —
+the reverse fake-TCP leg is `RST`'d — so a link that traverses such a relay must use `transport: udp`,
+not `tcp`.
+
+YAOG warns at design time: an **enabled** `transport: tcp` edge whose `type` is `relay-path` produces
+the `validation_edge_mimic_relay_path` validation warning advising `transport: udp`. It is a
+**warning, not a hard error** — deploy is not blocked (a relay may in fact be L3/L4-transparent), but
+the common relayed-link mistake is surfaced.
+
 ## Install ladder (distro → pinned GitHub `.deb`)
 
 The generated `install.sh` installs mimic with a fallback ladder (`internal/renderer/script.go`,
@@ -45,7 +58,13 @@ the `.HasMimic` block), so a node on a distro that does not yet package mimic st
    pinned SHA-256 with `sha256sum -c`**, and installs **both together**
    (`apt-get install ./mimic.deb ./mimic-dkms.deb`) — installing only `mimic` cannot satisfy
    `Depends: mimic-modules` and apt aborts (the rc.1 live-fleet `exit status 100`). The `mimic-dkms`
-   package builds the module via DKMS, so kernel headers + dkms + gcc are pulled in first; a node
+   package builds the module via DKMS, so kernel headers + dkms + gcc — plus **`bubblewrap`** and
+   **`dwarves`** — are `_pm_install`ed first (in the provisioning step *and* again in the
+   `_mimic_module_ready` module-build retry). mimic-dkms's DKMS build needs `bwrap` (the bubblewrap
+   build sandbox) and `pahole` (from `dwarves`, for BTF generation) but declares **neither** as a
+   dependency, so without them the build fails **even on a current kernel with headers present**
+   (`make: bwrap: No such file` → Error 127, then `pahole: not found`); YAOG installs them defensively
+   (upstream `mimic-dkms` should `Depend` on them). A node
    whose running kernel is behind its repo's current point release (so `linux-headers-$(uname -r)`
    is no longer in the repo) cannot build the module until it **reboots into the current kernel** —
    until then the link degrades per its `mimic_fallback` policy (below).
@@ -175,6 +194,13 @@ and the default deploy is unchanged.
   required. The installer emits an explicit eBPF/bpffs gate plus a branch on the unit-start result;
   on a kernel without eBPF the link either fails closed (the install aborts — a clear, hard failure)
   or falls back to plain UDP, per the per-link policy below.
+- **Phase-0 teardown (unconditional).** Every install-path deploy first `systemctl disable --now`s any
+  stale `mimic@*.service` instance and removes `/etc/mimic/*.conf` **before** re-provisioning.
+  Previously mimic teardown lived only in the `--uninstall` path, so flipping a node's **last** `tcp`
+  link to `udp` (the node no longer runs mimic) never stopped the old `mimic@` — it kept shaping
+  packets WireGuard was now sending as plain UDP and the link stayed broken. With the unconditional
+  teardown a `tcp→udp` transition cleanly de-provisions mimic, while a node that still has a mimic link
+  re-provisions in Phase 3.
 - **Ordering**: mimic is provisioned and `mimic@<egress>` is started **before** `wg-quick up`, so the
   shaping is in place when the tunnel comes up. Uninstall stops/disables `mimic@<egress>`, removes
   its config, and detaches.
@@ -213,12 +239,16 @@ shipped `"none"`); the compiler resolves the effective per-link value into `Peer
   `/var/lib/yaog-agent/mimic-status.json` (`model.MimicBreadcrumbPath`), keyed by the closed Go
   constants `model.MimicOutcome*` — never raw stderr. The agent reads it each cycle and emits a
   structured `mimic` Node Condition (`KernelTooOld` / `InstallFailed` / `ModuleUnavailable` /
-  `EbpfLoadFailed` / `EgressUnresolved` / `FellBackToUDP` / `NativeDowngradedSkb` / `Active`) with a
+  `EbpfLoadFailed` / `EgressUnresolved` / `FellBackToUDP` / `NativeDowngradedSkb` / `Stopped` / `Active`) with a
   curated one-line message, so the panel shows *why* mimic is down (or in skb) without a log dump. A
   UDP fallback is a `warn` condition (it de-cloaks the link — surface it); `ModuleUnavailable` is a
   `warn` with a *"reboot into the current kernel, or set mimic_fallback=udp"* hint (a stale kernel
   can't build the module); `NativeDowngradedSkb` is `ok` (mimic IS active — only the requested XDP mode
-  changed).
+  changed). **The condition is not a frozen deploy-time snapshot:** each heartbeat the agent re-probes
+  the live unit with `systemctl is-active mimic@<egress>` (timeout-guarded), and when the breadcrumb
+  says mimic should be running (outcome `active` / `native_downgraded_skb`) but the unit is **not**
+  active now, it reports a live `Stopped` `warn` instead of a stale `Active` — so a `systemctl stop`,
+  a crash, or a flap shows up in the panel.
 - **Robust (re)start.** Before `systemctl restart mimic@<egress>`, the installer clears a wedged unit
   (`systemctl stop` + `rm -f /run/mimic/*.lock` + `systemctl reset-failed` + `modprobe mimic`) so an
   **orphaned `/run/mimic` lock** from an uncleanly-exited prior instance (a `failed to lock … File
@@ -227,6 +257,14 @@ shipped `"none"`); the compiler resolves the effective per-link value into `Peer
 - **Deployable in both branches.** On fallback the link comes up as plain UDP (endpoint/port are
   mimic-independent; the MTU−12 conf is conservative-safe for UDP), and any half-applied mimic filter
   is de-provisioned so no orphaned shaping survives.
+
+> **Caveat — `udp` fallback can SPLIT a link.** Fallback is resolved **per node** at apply time, so it
+> can leave a link asymmetric: if one end degrades to plain UDP while the other end still built mimic
+> and keeps shaping, the shaping end sends fake-TCP the UDP end cannot decode and the link **dies**.
+> `mimic_fallback: udp` is therefore a safety net against a *hard outage*, **not** a clean bilateral
+> solution. For a node that genuinely cannot build mimic, the clean fix is `transport: udp` on that
+> edge (both ends); the live `mimic` condition (a `Stopped` / `ModuleUnavailable` warn) and the
+> relay-path warning above now help surface which node to fix.
 
 ## Native XDP mode (skb default, native opt-in, auto-downgrade)
 
