@@ -19,14 +19,15 @@ import (
 // classification of install.sh's breadcrumb outcome (plain string constants; classifyMimic returns
 // string, matching the model.ConditionStatus*/ConditionType* idiom).
 const (
-	mimicReasonActive           = "Active"
-	mimicReasonKernelTooOld     = "KernelTooOld"
-	mimicReasonEbpfLoadFailed   = "EbpfLoadFailed"
-	mimicReasonInstallFailed    = "InstallFailed"
-	mimicReasonFellBackToUDP    = "FellBackToUDP"
-	mimicReasonEgressUnresolved = "EgressUnresolved"
-	mimicReasonNativeDowngraded = "NativeDowngradedSkb"
-	mimicReasonUnknown          = "Unknown"
+	mimicReasonActive            = "Active"
+	mimicReasonKernelTooOld      = "KernelTooOld"
+	mimicReasonEbpfLoadFailed    = "EbpfLoadFailed"
+	mimicReasonInstallFailed     = "InstallFailed"
+	mimicReasonFellBackToUDP     = "FellBackToUDP"
+	mimicReasonEgressUnresolved  = "EgressUnresolved"
+	mimicReasonNativeDowngraded  = "NativeDowngradedSkb"
+	mimicReasonModuleUnavailable = "ModuleUnavailable"
+	mimicReasonUnknown           = "Unknown"
 )
 
 // mimicBreadcrumb is the on-disk JSON install.sh writes. Only the closed outcome token is trusted;
@@ -60,6 +61,11 @@ func classifyMimic(outcome string) (reason, status, message string) {
 		// mimic IS active (skb mode) — not a degradation of function, only of the requested XDP mode;
 		// OK status (the link works) with a distinct reason so the operator sees native did not take.
 		return mimicReasonNativeDowngraded, model.ConditionStatusOK, "Mimic active (skb; native XDP unsupported on this NIC)"
+	case model.MimicOutcomeModuleUnavailable:
+		// The .deb installed but the DKMS kernel module isn't built/loadable for the running kernel
+		// (e.g. a stale kernel whose linux-headers were pruned). mimic can't run; honor-policy handled
+		// it in install.sh (udp degraded / none failed closed) — surface WHY with a reboot hint.
+		return mimicReasonModuleUnavailable, model.ConditionStatusWarn, "Mimic: kernel module unavailable (reboot into the current kernel, or set mimic_fallback=udp)"
 	default:
 		return mimicReasonUnknown, model.ConditionStatusWarn, "Mimic status unrecognized"
 	}

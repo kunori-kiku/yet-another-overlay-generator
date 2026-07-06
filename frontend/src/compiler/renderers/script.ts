@@ -86,6 +86,7 @@ interface MimicBreadcrumbData {
   FellBackToUDP: string;
   EgressUnresolved: string;
   NativeDowngraded: string;
+  ModuleUnavailable: string;
 }
 
 // MimicEndpoint is one mimic peer's dial target (host + port) for a route-independent remote= filter.
@@ -557,6 +558,21 @@ _mimic_provision() {
     rm -f $_mimic_install
     command -v mimic >/dev/null 2>&1
 }
+# _mimic_module_ready reports 0 iff mimic's DKMS kernel module is built AND loadable for the running
+# kernel. mimic's eBPF program calls a kfunc the module exports; without the module loaded 'mimic run'
+# fails to load the BPF program (exit 22). Installing the .deb (userspace binary) does NOT guarantee
+# the module built — a stale kernel whose linux-headers-$(uname -r) were pruned from the repo leaves
+# DKMS at "added" (never built). Try to load it; else build it via DKMS for THIS kernel and re-check.
+_mimic_module_ready() {
+    lsmod 2>/dev/null | grep -qw mimic && return 0
+    modprobe mimic 2>/dev/null && return 0
+    if command -v dkms >/dev/null 2>&1; then
+        _pm_install "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
+        dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
+        modprobe mimic 2>/dev/null && return 0
+    fi
+    return 1
+}
 if ! _mimic_provision; then
 {{ if .MimicFallbackUDP -}}
     # policy=udp: mimic could not be provisioned — skip it, bring the link up as plain UDP.
@@ -566,6 +582,19 @@ if ! _mimic_provision; then
 {{ else -}}
     echo "ERROR: mimic could not be provisioned and this link's mimic_fallback policy is fail-closed" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
+    exit 1
+{{ end -}}
+elif ! _mimic_module_ready; then
+{{ if .MimicFallbackUDP -}}
+    # policy=udp: the mimic binary installed but its kernel module isn't usable on this kernel — skip
+    # mimic and bring the link up as plain UDP (this closes the false-success that used to defeat the
+    # fallback when only the binary, not the module, was present).
+    echo "WARNING: the mimic kernel module could not be built/loaded for kernel $(uname -r); falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.ModuleUnavailable }}
+    _MIMIC_SKIP=1
+{{ else -}}
+    echo "ERROR: the mimic kernel module could not be built/loaded for kernel $(uname -r) — reboot into the current kernel so DKMS can build it, or set this link's mimic_fallback to udp" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.ModuleUnavailable }}
     exit 1
 {{ end -}}
 fi
@@ -854,11 +883,20 @@ echo "  Wrote /etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 # native while the running unit stayed skb). WG is down here (Phase 0), so the restart is not
 # disruptive. Runs before WireGuard comes up.
 systemctl enable "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+# Clear a wedged unit before (re)starting: a prior mimic instance can orphan its /run/mimic lock
+# ("failed to lock ... File exists" -> mimic exit 17), after which systemd rate-limits restarts
+# ("start request repeated too quickly"). A node has exactly one mimic egress, so removing all
+# /run/mimic locks while the unit is stopped is safe. modprobe explicitly too — the shipped unit's
+# Requires=modprobe@mimic only loads the module once it has actually been built.
+systemctl stop "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+rm -f /run/mimic/*.lock 2>/dev/null || true
+systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+modprobe mimic 2>/dev/null || true
 if systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@\${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
 {{ if .MimicNative -}}
-elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; rm -f /run/mimic/*.lock 2>/dev/null || true; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
     # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
     echo "  mimic@\${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
@@ -1304,6 +1342,21 @@ _mimic_provision() {
     rm -f $_mimic_install
     command -v mimic >/dev/null 2>&1
 }
+# _mimic_module_ready reports 0 iff mimic's DKMS kernel module is built AND loadable for the running
+# kernel. mimic's eBPF program calls a kfunc the module exports; without the module loaded 'mimic run'
+# fails to load the BPF program (exit 22). Installing the .deb (userspace binary) does NOT guarantee
+# the module built — a stale kernel whose linux-headers-$(uname -r) were pruned from the repo leaves
+# DKMS at "added" (never built). Try to load it; else build it via DKMS for THIS kernel and re-check.
+_mimic_module_ready() {
+    lsmod 2>/dev/null | grep -qw mimic && return 0
+    modprobe mimic 2>/dev/null && return 0
+    if command -v dkms >/dev/null 2>&1; then
+        _pm_install "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
+        dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
+        modprobe mimic 2>/dev/null && return 0
+    fi
+    return 1
+}
 if ! _mimic_provision; then
 {{ if .MimicFallbackUDP -}}
     # policy=udp: mimic could not be provisioned — skip it, bring the link up as plain UDP.
@@ -1313,6 +1366,19 @@ if ! _mimic_provision; then
 {{ else -}}
     echo "ERROR: mimic could not be provisioned and this link's mimic_fallback policy is fail-closed" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.InstallFailed }}
+    exit 1
+{{ end -}}
+elif ! _mimic_module_ready; then
+{{ if .MimicFallbackUDP -}}
+    # policy=udp: the mimic binary installed but its kernel module isn't usable on this kernel — skip
+    # mimic and bring the link up as plain UDP (this closes the false-success that used to defeat the
+    # fallback when only the binary, not the module, was present).
+    echo "WARNING: the mimic kernel module could not be built/loaded for kernel $(uname -r); falling back to plain UDP (policy=udp)" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.ModuleUnavailable }}
+    _MIMIC_SKIP=1
+{{ else -}}
+    echo "ERROR: the mimic kernel module could not be built/loaded for kernel $(uname -r) — reboot into the current kernel so DKMS can build it, or set this link's mimic_fallback to udp" >&2
+    _mimic_breadcrumb {{ shq .MimicBreadcrumb.ModuleUnavailable }}
     exit 1
 {{ end -}}
 fi
@@ -1456,11 +1522,20 @@ echo "  Wrote /etc/mimic/\${MIMIC_EGRESS_IF}.conf"
 # redeploy re-applies the freshly-written config and, for a native node, re-evaluates the native→skb
 # downgrade instead of leaving a stale on-disk native config a reboot would start from and fail.
 systemctl enable "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+# Clear a wedged unit before (re)starting: a prior mimic instance can orphan its /run/mimic lock
+# ("failed to lock ... File exists" -> mimic exit 17), after which systemd rate-limits restarts
+# ("start request repeated too quickly"). A node has exactly one mimic egress, so removing all
+# /run/mimic locks while the unit is stopped is safe. modprobe explicitly too — the shipped unit's
+# Requires=modprobe@mimic only loads the module once it has actually been built.
+systemctl stop "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+rm -f /run/mimic/*.lock 2>/dev/null || true
+systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true
+modprobe mimic 2>/dev/null || true
 if systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
     echo "  Started mimic@\${MIMIC_EGRESS_IF}"
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.Active }}
 {{ if .MimicNative -}}
-elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
+elif sed -i 's/^xdp_mode = native$/xdp_mode = skb/' "/etc/mimic/\${MIMIC_EGRESS_IF}.conf"; rm -f /run/mimic/*.lock 2>/dev/null || true; systemctl reset-failed "mimic@\${MIMIC_EGRESS_IF}" 2>/dev/null || true; systemctl restart "mimic@\${MIMIC_EGRESS_IF}"; then
     # native XDP attach failed on this NIC — auto-downgrade the config to skb (generic XDP) and retry.
     echo "  mimic@\${MIMIC_EGRESS_IF} native XDP attach failed; retried + started in skb mode" >&2
     _mimic_breadcrumb {{ shq .MimicBreadcrumb.NativeDowngraded }}
@@ -1546,6 +1621,7 @@ function newMimicBreadcrumbData(): MimicBreadcrumbData {
     FellBackToUDP: 'fell_back_to_udp',
     EgressUnresolved: 'egress_unresolved',
     NativeDowngraded: 'native_downgraded_skb',
+    ModuleUnavailable: 'module_unavailable',
   };
 }
 

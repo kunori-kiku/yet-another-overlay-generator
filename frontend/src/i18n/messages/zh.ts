@@ -172,6 +172,7 @@ export const zh: Record<keyof typeof en, string> = {
   'mimicCond.installFailed': "失败即停（mimic 安装失败）",
   'mimicCond.egressUnresolved': "无可路由的出口 IP",
   'mimicCond.nativeDowngraded': "已启用 skb（此网卡不支持 native XDP）",
+  'mimicCond.moduleUnavailable': "不可用（内核模块未构建——请重启进入当前内核）",
   'mimicCatalog.debsHeading': "各发行版包",
   'mimicCatalog.debsHint': "每个 <codename>-<arch>（如 bookworm-amd64）一行：.deb 资产名及其 SHA-256。",
   'mimicCatalog.keyLabel': "Codename-arch",
