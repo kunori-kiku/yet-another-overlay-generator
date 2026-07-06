@@ -1,8 +1,25 @@
 # STATUS
 <!-- regenerated: 2026-07-04 -->
-<!-- by: hand — v2.0.0-rc.2 RELEASED (GitHub Latest); mimic-provisioning-reliability CLOSED + archived (owner-requested security review clean) -->
+<!-- by: hand — v2.0.0-rc.2 RELEASED (GitHub Latest); rc.2 soak surfaced a mimic runtime/module defect → ACTIVE subject mimic-runtime-reliability (→ v2.0.0-rc.3) -->
 
 ## Active work
+
+- **🔧 ACTIVE SUBJECT `mimic-runtime-reliability-2026_07_06` — DRAFTED (2026-07-06), executing; ships
+  as `v2.0.0-rc.3` (owner: bundle all).** The rc.2 live-fleet smoke (node hkg14) found `transport:
+  tcp` failing at RUNTIME after the rc.2 install fix: mimic exit-22 (`is the Mimic kernel module
+  loaded?`) → `dkms status: mimic/0.7.1 **added**` (never built) → `linux-headers-6.1.0-13-cloud-amd64`
+  **pruned from the repo** (node on a stale kernel since Dec-2024, never rebooted). ROOT DEFECT:
+  `_mimic_provision` (`script.go:593`) declares success on `command -v mimic` (BINARY only), never
+  verifying the DKMS **module** built/loads — so it proceeds to a broken start; and on a
+  `mimic_fallback: udp` link the false-success **skips the UDP fallback** (silent no-degrade).
+  Secondary: the rc.2 `restart` change can orphan `/run/mimic/*.lock` → exit-17 wedge. **5 plans:**
+  (1) module build/load verification + honor-policy (`module_unavailable` outcome/condition) + lock
+  cleanup + `modprobe` on start [FLEET-CRITICAL] · (2) per-node egress-interface override (owner ask)
+  · (3) pre-deploy "can this node run mimic" capability probe + panel warning · (4) docs + proof · (5)
+  release rc.3. Posture: detect + honor policy + clear "reboot into the current kernel" guidance —
+  install.sh NEVER auto-swaps a kernel. Plan folder:
+  [`implementation_plans/mimic-runtime-reliability-2026_07_06/`](implementation_plans/mimic-runtime-reliability-2026_07_06/outline.md).
+  **NEXT = plan-1** (`fix/mimic-module-verify`). Owner unblock handed off (udp fallback / reboot).
 
 - **🎯 `v2.0.0-rc.1` RELEASED — GitHub *Latest* (2026-07-03; tag on `f4c4389`; beta.18 demoted;
   self-promoted via the `make_latest` belt exactly as gated).** The rc promotes the soaked

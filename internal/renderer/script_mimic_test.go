@@ -186,6 +186,58 @@ func TestRenderInstallScript_MimicTwoPackage_And_Fallback(t *testing.T) {
 	}
 }
 
+// TestRenderInstallScript_MimicModuleGate pins the rc.3 module-build gate + robust (re)start: the
+// rendered install.sh verifies the mimic DKMS kernel module is built AND loadable (_mimic_module_ready,
+// not just the userspace binary) before committing to mimic, classifies a distinct module_unavailable
+// outcome that honors the fallback policy, and clears an orphaned /run/mimic lock + modprobes before
+// (re)start. Both the node and the client templates must carry it (no golden pairs a client + tcp edge).
+func TestRenderInstallScript_MimicModuleGate(t *testing.T) {
+	fragments := []string{
+		"_mimic_module_ready() {",
+		"modprobe mimic 2>/dev/null && return 0",
+		`dkms autoinstall -k "$(uname -r)"`,
+		"elif ! _mimic_module_ready; then",
+		"module_unavailable",
+		"kernel module could not be built/loaded for kernel",
+		"rm -f /run/mimic/*.lock 2>/dev/null || true",
+		"modprobe mimic 2>/dev/null || true",
+	}
+
+	node := mimicRenderNode()
+	nodePeers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408},
+	}
+	nodeScript, err := RenderInstallScript(node, nodePeers, true)
+	if err != nil {
+		t.Fatalf("render node: %v", err)
+	}
+	for _, frag := range fragments {
+		if !strings.Contains(nodeScript, frag) {
+			t.Errorf("node module-gate fragment %q missing", frag)
+		}
+	}
+
+	cliNode := &model.Node{ID: "client-1", Name: "cli", Role: "client", Platform: "debian", OverlayIP: "10.50.0.9"}
+	cli := compiler.ClientPeerInfo{
+		NodeID: "client-1", NodeName: "cli", OverlayIP: "10.50.0.9",
+		Mimic: true, MTU: 1408, ListenPort: 51820,
+		PrivateKey:      "+NOf/2l0pnbz3g7hm+DMiVowUoYPwppUs8z5iz01+V4=",
+		RouterPublicKey: "SH/Te0Jw3dIijStvm889gwZ919RXSGrwEL8hnSRwB0U=",
+		RouterEndpoint:  "router.example.com:51820",
+		DomainCIDRs:     []string{"10.50.0.0/24"},
+	}
+	cliScript, err := RenderClientInstallScript(cliNode, &cli)
+	if err != nil {
+		t.Fatalf("render client: %v", err)
+	}
+	for _, frag := range fragments {
+		if !strings.Contains(cliScript, frag) {
+			t.Errorf("client module-gate fragment %q missing", frag)
+		}
+	}
+}
+
 // TestRenderClientInstallScript_MimicTwoPackage_And_Fallback is the CLIENT-variant twin of the node
 // two-package/fail-degradable test: a client whose single wg0 link is transport=tcp (ClientPeerInfo.
 // Mimic) renders the SAME byte-identical _mimic_provision restructure (both debs + the policy-aware

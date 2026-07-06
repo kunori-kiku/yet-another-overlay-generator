@@ -17,4 +17,5 @@ export const REASON_LABEL: Record<string, MessageKey> = {
   InstallFailed: 'mimicCond.installFailed',
   EgressUnresolved: 'mimicCond.egressUnresolved',
   NativeDowngradedSkb: 'mimicCond.nativeDowngraded',
+  ModuleUnavailable: 'mimicCond.moduleUnavailable',
 };

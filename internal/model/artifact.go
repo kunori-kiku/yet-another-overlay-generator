@@ -70,4 +70,8 @@ const (
 	MimicOutcomeFellBackToUDP    = "fell_back_to_udp"      // policy=udp: skipped mimic, link up as plain UDP
 	MimicOutcomeEgressUnresolved = "egress_unresolved"     // egress IP empty or loopback (no routable default-route src) → the local= filter would never match the real WG source; treated per policy
 	MimicOutcomeNativeDowngraded = "native_downgraded_skb" // xdp_mode=native attach failed → auto-retried and active in skb mode (mimic still up; native XDP unsupported on this NIC)
+	// MimicOutcomeModuleUnavailable: the .deb installed (mimic binary present) but the DKMS kernel
+	// module could not be built/loaded — e.g. a stale kernel whose linux-headers-$(uname -r) were
+	// pruned from the repo, or a build failure. mimic cannot run; treated per the fallback policy.
+	MimicOutcomeModuleUnavailable = "module_unavailable"
 )

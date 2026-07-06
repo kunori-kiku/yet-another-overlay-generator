@@ -26,6 +26,7 @@ func TestClassifyMimic(t *testing.T) {
 		{model.MimicOutcomeFellBackToUDP, mimicReasonFellBackToUDP, model.ConditionStatusWarn},
 		{model.MimicOutcomeEgressUnresolved, mimicReasonEgressUnresolved, model.ConditionStatusWarn},
 		{model.MimicOutcomeNativeDowngraded, mimicReasonNativeDowngraded, model.ConditionStatusOK},
+		{model.MimicOutcomeModuleUnavailable, mimicReasonModuleUnavailable, model.ConditionStatusWarn},
 		{"some_future_token", mimicReasonUnknown, model.ConditionStatusWarn},
 		{"", mimicReasonUnknown, model.ConditionStatusWarn},
 	}
