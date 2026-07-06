@@ -18,4 +18,5 @@ export const REASON_LABEL: Record<string, MessageKey> = {
   EgressUnresolved: 'mimicCond.egressUnresolved',
   NativeDowngradedSkb: 'mimicCond.nativeDowngraded',
   ModuleUnavailable: 'mimicCond.moduleUnavailable',
+  Stopped: 'mimicCond.stopped',
 };

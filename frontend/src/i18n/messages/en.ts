@@ -185,6 +185,7 @@ export const en = {
   'mimicCond.egressUnresolved': "no routable egress IP",
   'mimicCond.nativeDowngraded': "active in skb (native XDP unsupported on this NIC)",
   'mimicCond.moduleUnavailable': "unavailable (kernel module not built — reboot into the current kernel)",
+  'mimicCond.stopped': "unit stopped (was active at deploy)",
   'mimicCatalog.debsHeading': "Per-distro packages",
   'mimicCatalog.debsHint': "One row per <codename>-<arch> (e.g. bookworm-amd64): the .deb asset name and its SHA-256.",
   'mimicCatalog.keyLabel': "Codename-arch",

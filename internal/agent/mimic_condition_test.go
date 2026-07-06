@@ -81,6 +81,55 @@ func TestReadMimicCondition(t *testing.T) {
 	}
 }
 
+// TestReadMimicCondition_LiveReconcile covers the rc.4 live reconcile: the mimic condition re-probes
+// the mimic@<egress> unit each heartbeat, so a runtime stop/crash surfaces as a live warn instead of
+// the frozen deploy-time "active". mimicUnitActiveFn is injected (no systemd).
+func TestReadMimicCondition_LiveReconcile(t *testing.T) {
+	orig := mimicUnitActiveFn
+	defer func() { mimicUnitActiveFn = orig }()
+	now := time.Now()
+	path := filepath.Join(t.TempDir(), "mimic-status.json")
+	write := func(outcome, egress string) {
+		if err := os.WriteFile(path, []byte(`{"outcome":"`+outcome+`","egress":"`+egress+`","ts":"2026-07-07T00:00:00Z"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// active breadcrumb + unit NOT active -> live Stopped (warn).
+	mimicUnitActiveFn = func(string) bool { return false }
+	write("active", "eth0")
+	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonStopped || c.Status != model.ConditionStatusWarn {
+		t.Errorf("active breadcrumb + stopped unit = (%s,%s), want (%s,warn)", c.Reason, c.Status, mimicReasonStopped)
+	}
+
+	// active breadcrumb + unit active -> Active (no override).
+	mimicUnitActiveFn = func(string) bool { return true }
+	write("active", "eth0")
+	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonActive {
+		t.Errorf("active breadcrumb + active unit = %s, want %s", c.Reason, mimicReasonActive)
+	}
+
+	// native_downgraded_skb + unit NOT active -> Stopped (it too expects mimic running).
+	mimicUnitActiveFn = func(string) bool { return false }
+	write("native_downgraded_skb", "eth0")
+	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonStopped {
+		t.Errorf("native_downgraded + stopped unit should reconcile to Stopped, got %s", c.Reason)
+	}
+
+	// fell_back_to_udp + unit NOT active -> unchanged (mimic is intentionally not running there).
+	write("fell_back_to_udp", "eth0")
+	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonFellBackToUDP {
+		t.Errorf("fell_back should NOT reconcile, got %s", c.Reason)
+	}
+
+	// active breadcrumb + EMPTY egress -> trust the breadcrumb (no live check possible) -> Active.
+	mimicUnitActiveFn = func(string) bool { return false }
+	write("active", "")
+	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonActive {
+		t.Errorf("active + empty egress should trust the breadcrumb, got %s", c.Reason)
+	}
+}
+
 // TestCollectConditions_IncludesMimic proves the mimic producer is drained into the report set: with
 // a breadcrumb fixture present (path injected), collectConditions includes the mimic condition.
 func TestCollectConditions_IncludesMimic(t *testing.T) {
