@@ -1,26 +1,24 @@
 # STATUS
 <!-- regenerated: 2026-07-04 -->
-<!-- by: hand — v2.0.0-rc.3 = GitHub Latest; ACTIVE subject mimic-fleet-robustness (→ v2.0.0-rc.4) -->
+<!-- by: hand — v2.0.0-rc.4 = GitHub Latest; mimic-fleet-robustness DELIVERED + archived -->
 
 ## Active work
 
-- **🔧 ACTIVE SUBJECT `mimic-fleet-robustness-2026_07_07` — DRAFTED (2026-07-07), executing; ships as
-  `v2.0.0-rc.4` (owner: "plan and fix what you can fix").** rc.3-soak fleet debugging surfaced 5
-  YAOG-fixable findings: (1) mimic-dkms's build needs **`bubblewrap`** (bwrap) + **`dwarves`** (pahole)
-  which it doesn't declare + YAOG didn't install → the module fails to build on a *current* Debian
-  kernel (`make: bwrap: No such file`; then `pahole: not found`) — confirmed fixed by installing both;
-  (2) the `mimic` panel condition is a frozen deploy-time breadcrumb (not live — `systemctl stop
-  mimic@` still shows "active"); (3) the mimic teardown is `--uninstall`-only + HasMimic-gated, so
-  tcp→udp never stops the stale `mimic@` (verified in code); (4) `mimic_fallback: udp` can SPLIT a link
-  (unilateral); (5) mimic over an **L7 relay** can't work (the relay terminates+re-originates → the
-  reverse fake-TCP leg RSTs — owner tcpdump-proven). **5 plans:** (1) install.sh build deps +
-  unconditional Phase-0 teardown · (2) live mimic condition · (3) relay-path validator warning · (4)
-  docs · (5) rc.4. **Deferred (Out of scope):** auto-coordinated fallback (telemetry→compile feedback
-  loop — low residual after the dep fix; the clean fix for an unbuildable node is `transport: udp`).
-  Plan folder:
-  [`implementation_plans/mimic-fleet-robustness-2026_07_07/`](implementation_plans/mimic-fleet-robustness-2026_07_07/outline.md).
-  **NEXT = plan-1** (`fix/mimic-build-deps-teardown`). Immediate fleet win handed to owner:
-  `apt-get install -y bubblewrap dwarves` + redeploy.
+- **✅ SUBJECT `mimic-fleet-robustness-2026_07_07` — DELIVERED as `v2.0.0-rc.4` (GitHub *Latest*,
+  2026-07-07; tag on `cbe0735`; rc.3 demoted; self-promoted); CLOSED + archived to `_completed/`.**
+  The rc.3-soak fleet findings, each fixed per-PR (independent workflow review → fix → re-review → CI
+  green → merge): (1) mimic build deps — **`bubblewrap`** + **`dwarves`**, which mimic-dkms's DKMS
+  build needs but declares neither, now `_pm_install`ed in the provisioning step AND the
+  `_mimic_module_ready` retry (#241; the retry locus was the review catch — a binary-present but
+  module-unbuilt node short-circuits provision on `command -v mimic`); (2) unconditional Phase-0
+  teardown so tcp→udp de-provisions the stale `mimic@` (#241); (3) live mimic condition — re-probes
+  `systemctl is-active mimic@<egress>` each heartbeat → a `Stopped` warn (#242); (4) relay-path warning
+  `validation_edge_mimic_relay_path` — mimic needs a direct L3/L4 path, no L7 relay (#243); (5) docs
+  (#244); rc.4 roll (#245). **Deferred (out of scope):** auto-coordinated fallback (telemetry→compile;
+  the clean fix for a genuinely-unbuildable node is `transport: udp` both ends). **Owed (owner):**
+  update the controller to rc.4 + redeploy the fleet (fixes are in the rendered `install.sh`, not the
+  agent binary; `apt-get install -y bubblewrap dwarves` is now automatic on redeploy); set L7-relay
+  edges to `transport: udp`. Memory: `mimic-fleet-robustness-shipped.md`.
 
 - **✅ SUBJECT `mimic-runtime-reliability-2026_07_06` — DELIVERED as `v2.0.0-rc.3` (GitHub *Latest*,
   2026-07-06; tag on `2ad18f2`; rc.2 demoted; self-promoted; 29 assets); CLOSED + archived to
