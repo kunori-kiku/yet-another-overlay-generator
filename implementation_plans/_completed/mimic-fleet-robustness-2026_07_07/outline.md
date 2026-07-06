@@ -56,7 +56,7 @@ owner's deeper fleet debugging surfaced five distinct issues, root-caused with l
 | 2 | Live mimic condition (re-probe the mimic@ unit each heartbeat) | ✅ merged | #242 |
 | 3 | Relay-path warning (`transport: tcp` on a `relay-path` edge) | ✅ merged | #243 |
 | 4 | Docs (mimic.md + bilingual wiki) | ✅ merged | #244 |
-| 5 | Release v2.0.0-rc.4 | in progress | (this PR) |
+| 5 | Release v2.0.0-rc.4 | ✅ released (tag cbe0735) | #245 |
 
 ## Cross-cutting invariants (review lenses check these)
 
