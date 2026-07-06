@@ -9,6 +9,43 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.4] - 2026-07-07
+
+**Release candidate.** Fixes the mimic fleet issues the `v2.0.0-rc.3` soak surfaced during live
+debugging: the DKMS module failed to build **even on a current Debian kernel** because mimic-dkms's
+build needs `bubblewrap` + `dwarves` (which it doesn't declare and YAOG didn't install); the panel's
+`mimic` condition was a frozen deploy-time snapshot; flipping a node's last `tcp` link to `udp` never
+stopped the stale `mimic@`; and mimic over an L7 relay can't work. Four reviewed plans (PRs #241–#244),
+each independently reviewed and adversarially verified before merge.
+
+### Fixed
+- **mimic build dependencies.** The installer now installs `bubblewrap` (the `bwrap` build sandbox) and
+  `dwarves` (`pahole`, for BTF generation) alongside `dkms`/`gcc`/`linux-headers` — in the mimic
+  provisioning step *and* the `_mimic_module_ready` module-build retry. mimic-dkms's DKMS build needs
+  both but declares neither, so the module failed to build even on a current kernel with headers present
+  (`make: bwrap: No such file` → Error 127, then `pahole: not found`). This is the rc.3-soak build
+  failure; a node that already has the binary but an unbuilt module now rebuilds on redeploy. (#241)
+- **`tcp → udp` de-provisions mimic.** The install-path Phase 0 now unconditionally stops any stale
+  `mimic@` unit and removes `/etc/mimic/*.conf` before re-provisioning. The mimic teardown was
+  previously `--uninstall`-only, so flipping a node's last `tcp` link to `udp` left the old `mimic@`
+  running — it kept shaping traffic WireGuard now sent as plain UDP and the link stayed broken. (#241)
+- **Live `mimic` Node Condition.** The agent re-probes the actual unit (`systemctl is-active
+  mimic@<egress>`, timeout-guarded) each heartbeat and reports a live `Stopped` warning when mimic
+  should be running but the unit isn't — so a `systemctl stop`, crash, or flap shows in the panel
+  instead of a frozen deploy-time "active". (#242)
+
+### Added
+- **Relay-path mimic warning.** An enabled `transport: tcp` edge whose `type` is `relay-path` raises the
+  `validation_edge_mimic_relay_path` design-time **warning** (not a hard error): mimic (fake-TCP) needs
+  a direct L3/L4 path — an L7 / UDP-accelerator relay terminates and re-originates the connection so the
+  reverse fake-TCP leg is RST'd — use `transport: udp` for relayed edges. (#243)
+
+### Documentation
+- The mimic spec + bilingual wiki document the build deps, the unconditional teardown, the live
+  condition, a new "Direct path required (no L7 relay)" section, and a `mimic_fallback: udp`
+  unilateral-split caveat (the clean fix for a node that genuinely can't build mimic is `transport:
+  udp` on both ends). (#244)
+
 ## [2.0.0-rc.3] - 2026-07-06
 
 **Release candidate.** Fixes the mimic (`transport: tcp`) **runtime** defect the `v2.0.0-rc.2` soak
@@ -972,7 +1009,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.4...HEAD
+[2.0.0-rc.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.3...v2.0.0-rc.4
 [2.0.0-rc.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...v2.0.0-rc.1
