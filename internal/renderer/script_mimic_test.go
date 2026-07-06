@@ -186,6 +186,55 @@ func TestRenderInstallScript_MimicTwoPackage_And_Fallback(t *testing.T) {
 	}
 }
 
+// TestRenderInstallScript_BuildDepsAndTeardown pins the rc.4 install.sh changes: (1) mimic provisioning
+// installs bubblewrap + dwarves — the DKMS build tools mimic-dkms's build needs but doesn't declare
+// (without them the build is Error 127 / "pahole: not found"); (2) Phase 0 UNCONDITIONALLY stops any
+// stale mimic@ unit, so flipping a node's last tcp link to udp de-provisions mimic — present even on a
+// NON-mimic node (the teardown is not HasMimic-gated; the old teardown was --uninstall-only).
+func TestRenderInstallScript_BuildDepsAndTeardown(t *testing.T) {
+	node := mimicRenderNode()
+	mimicPeers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", Mimic: true, MTU: 1408},
+	}
+	plainPeers := []compiler.PeerInfo{
+		{NodeID: "n2", NodeName: "beta", InterfaceName: "wg-beta", ListenPort: 51820,
+			LocalTransitIP: "10.10.0.1", LocalLinkLocal: "fe80::1", MTU: 1420},
+	}
+
+	mimicScript, err := RenderInstallScript(node, mimicPeers, true)
+	if err != nil {
+		t.Fatalf("render mimic node: %v", err)
+	}
+	for _, frag := range []string{
+		"_pm_install bubblewrap", "_pm_install dwarves",
+		// The deps must ALSO be in the _mimic_module_ready retry (the >/dev/null form) so an
+		// already-broken node (binary present, module unbuilt) rebuilds on redeploy — _mimic_provision
+		// short-circuits on `command -v mimic` and never reaches its .deb-path dep install.
+		"_pm_install bubblewrap >/dev/null 2>&1", "_pm_install dwarves >/dev/null 2>&1",
+	} {
+		if !strings.Contains(mimicScript, frag) {
+			t.Errorf("mimic node missing build dep %q", frag)
+		}
+	}
+
+	plainScript, err := RenderInstallScript(node, plainPeers, true)
+	if err != nil {
+		t.Fatalf("render non-mimic node: %v", err)
+	}
+	// The Phase-0 teardown is UNCONDITIONAL — present on BOTH a mimic and a non-mimic node.
+	for _, s := range []string{mimicScript, plainScript} {
+		if !strings.Contains(s, "systemctl list-units --plain --no-legend 'mimic@*.service'") ||
+			!strings.Contains(s, "Stopping stale mimic unit") {
+			t.Errorf("the Phase-0 mimic teardown must be unconditional (present on every node)")
+		}
+	}
+	// A non-mimic node must NOT install the mimic build deps.
+	if strings.Contains(plainScript, "_pm_install bubblewrap") {
+		t.Errorf("non-mimic node should not install mimic build deps")
+	}
+}
+
 // TestRenderInstallScript_MimicModuleGate pins the rc.3 module-build gate + robust (re)start: the
 // rendered install.sh verifies the mimic DKMS kernel module is built AND loadable (_mimic_module_ready,
 // not just the userspace binary) before committing to mimic, classifies a distinct module_unavailable
@@ -367,18 +416,23 @@ func TestRenderInstallScript_UdpOnly_NoMimic(t *testing.T) {
 		t.Fatalf("render failed: %v", err)
 	}
 
+	// A udp-only node has NO mimic PROVISIONING. The Phase-0 teardown IS present (unconditional, rc.4)
+	// and references mimic@*.service + /etc/mimic to clean up a node that previously had mimic, so those
+	// strings are expected — assert only the provisioning-specific fragments are absent.
 	absent := []string{
-		"/etc/mimic",
-		"mimic@",
 		"_pm_install mimic",
+		"_pm_install bubblewrap",
 		"filter = local=",
 		"Provisioning mimic",
 		"--proto '=https,http'",
 	}
 	for _, frag := range absent {
 		if strings.Contains(script, frag) {
-			t.Errorf("the install script of a udp-only node should not contain mimic fragment %q, but it appeared", frag)
+			t.Errorf("the install script of a udp-only node should not contain mimic provisioning fragment %q, but it appeared", frag)
 		}
+	}
+	if !strings.Contains(script, "Stopping stale mimic unit") {
+		t.Errorf("the unconditional Phase-0 mimic teardown should be present even on a udp-only node (rc.4)")
 	}
 }
 
