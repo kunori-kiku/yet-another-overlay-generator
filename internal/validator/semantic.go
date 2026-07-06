@@ -509,6 +509,13 @@ func validateMimicTransport(topo *model.Topology, nodeMap map[string]*model.Node
 			continue
 		}
 
+		// mimic (fake-TCP) needs a DIRECT L3/L4 path: an L7 / UDP-accelerator relay (a relay-path edge)
+		// terminates + re-originates the connection, so the fake-TCP can't traverse it end to end (the
+		// reverse leg RSTs). Advise udp for a relayed edge — a WARNING (deploy is not blocked).
+		if edge.Type == "relay-path" {
+			result.AddWarning(fmt.Sprintf("edges[%d].transport", i), CodeEdgeMimicRelayPath, P{"id", edge.ID})
+		}
+
 		fromNode := nodeMap[edge.FromNodeID]
 		toNode := nodeMap[edge.ToNodeID]
 

@@ -80,6 +80,7 @@ export const Code = {
   EdgeTypeInvalid: 'validation_edge_type_invalid',
   EdgeTransportInvalid: 'validation_edge_transport_invalid',
   EdgeMimicFallbackInvalid: 'validation_edge_mimic_fallback_invalid',
+  EdgeMimicRelayPath: 'validation_edge_mimic_relay_path',
   EdgeEndpointHostIllegalChars: 'validation_edge_endpoint_host_illegal_chars',
   EdgeEndpointPortInvalid: 'validation_edge_endpoint_port_invalid',
   EdgeEndpointPortWithoutHost: 'validation_edge_endpoint_port_without_host',
@@ -1202,6 +1203,12 @@ function validateMimicTransport(topo: Topology, nodeMap: Map<string, Node>, resu
     }
     if (edge.transport !== 'tcp') {
       continue;
+    }
+    // mimic (fake-TCP) needs a DIRECT L3/L4 path: an L7 / UDP-accelerator relay (a relay-path edge)
+    // terminates + re-originates the connection, so the fake-TCP can't traverse it end to end (the
+    // reverse leg RSTs). Advise udp for a relayed edge — a WARNING (deploy is not blocked).
+    if (edge.type === 'relay-path') {
+      addWarning(result, `edges[${i}].transport`, Code.EdgeMimicRelayPath, { k: 'id', v: edge.id });
     }
     const fromNode = nodeMap.get(edge.from_node_id);
     const toNode = nodeMap.get(edge.to_node_id);
