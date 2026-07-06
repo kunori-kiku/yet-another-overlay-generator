@@ -90,5 +90,5 @@ export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number }
 // endpoint/IP/key material, but a load average frozen at persist time is stale (honesty), so it is
 // live-only for the same reason as wireguardPeers.
 export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
-  return { ...node, wireguardPeers: undefined, resource: undefined, nativeXDP: undefined };
+  return { ...node, wireguardPeers: undefined, resource: undefined, nativeXDP: undefined, mimicCapability: undefined };
 }

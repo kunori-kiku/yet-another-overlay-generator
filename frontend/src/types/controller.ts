@@ -63,6 +63,12 @@ export interface ControllerNode {
   // Observability/advisory only; no endpoint/IP/key material. Optional — absent for a pre-plan-4 agent
   // or before the first heartbeat.
   nativeXDP?: NativeXDP;
+  // mimicCapability is the node's "can this node build/load the mimic kernel module" heuristic (plan-3
+  // metrics["mimic_capability"]) — a PRE-DEPLOY advisory so the panel can warn before an operator sets
+  // transport=tcp on a node whose stale kernel can't build the DKMS module (the exact fleet case).
+  // Live-only (stripped before the persisted cache, like resource). Advisory only; no endpoint/IP/key
+  // material. Optional — absent for a pre-plan-3 agent or before the first heartbeat.
+  mimicCapability?: MimicCapability;
 }
 
 // WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
@@ -94,6 +100,15 @@ export interface NodeResource {
 export interface NativeXDP {
   capability: 'supported' | 'conditional' | 'unsupported' | 'unknown';
   driver: string;
+  kernel: string;
+}
+
+// MimicCapability is the node's "can this node run mimic" heuristic (plan-3), projected from the
+// agent's metrics["mimic_capability"]. Pure filesystem inspection (module loaded/built + kernel-headers
+// present — no shell, no build); the DEFINITIVE answer stays the deploy-time `mimic` Node Condition.
+// "unbuildable" is the stale-kernel case (headers pruned → the module can't build). No key material.
+export interface MimicCapability {
+  capability: 'ready' | 'buildable' | 'unbuildable';
   kernel: string;
 }
 

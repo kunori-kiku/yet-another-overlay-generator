@@ -514,6 +514,7 @@ export const en = {
   'nodeEditor.nativeXdp.conditional': "Native XDP on this NIC ({driver}) isn't guaranteed (e.g. virtio needs a recent kernel + multiple queues); it auto-downgrades to skb if the attach fails.",
   'nodeEditor.nativeXdp.unsupported': "This node's NIC ({driver}) reports NO native XDP support — it will auto-downgrade to skb.",
   'nodeEditor.nativeXdp.unknown': "Native XDP support for this NIC ({driver}) is unknown; it auto-downgrades to skb if unsupported.",
+  'nodeEditor.mimicCapability.unbuildable': "This node's kernel ({kernel}) can't build the mimic module — its linux-headers aren't installed (a stale kernel whose headers were pruned). A transport=tcp link here falls back per its Mimic fallback policy; reboot into the current kernel to enable mimic.",
   'nodeEditor.noLANPrefixesConfigured': "No LAN prefixes configured",
   'nodeEditor.noPublicAddressesConfigured': "No public addresses configured",
   'nodeEditor.nodeProperties': "Node Properties",

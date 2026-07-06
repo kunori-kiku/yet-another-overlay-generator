@@ -19,7 +19,11 @@
   release rc.3. Posture: detect + honor policy + clear "reboot into the current kernel" guidance —
   install.sh NEVER auto-swaps a kernel. Plan folder:
   [`implementation_plans/mimic-runtime-reliability-2026_07_06/`](implementation_plans/mimic-runtime-reliability-2026_07_06/outline.md).
-  **NEXT = plan-1** (`fix/mimic-module-verify`). Owner unblock handed off (udp fallback / reboot).
+  plan-1 (#235, the fleet-critical module gate + honor-policy + lock cleanup) MERGED. plan-3 (the
+  owner-flagged native-XDP always-visible fix + the pre-deploy "can this node run mimic" capability
+  probe — an agent `mimic_capability` sampler + NodeEditor warning) IN REVIEW. **NEXT after plan-3 =
+  plan-2** (egress override), then plan-4 (docs), plan-5 (rc.3). Owner unblock handed off (udp
+  fallback / reboot into the current kernel).
 
 - **🎯 `v2.0.0-rc.1` RELEASED — GitHub *Latest* (2026-07-03; tag on `f4c4389`; beta.18 demoted;
   self-promoted via the `make_latest` belt exactly as gated).** The rc promotes the soaked
