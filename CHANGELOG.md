@@ -9,6 +9,43 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.3] - 2026-07-06
+
+**Release candidate.** Fixes the mimic (`transport: tcp`) **runtime** defect the `v2.0.0-rc.2` soak
+surfaced on the live fleet: after rc.2's two-package install fix, a `transport: tcp` link on a
+stale-kernel node still failed — `mimic run` looped on exit 22 (`is the Mimic kernel module loaded?`)
+because the `mimic-dkms` module was never built (the node's kernel is behind its repo's point release,
+so `linux-headers-$(uname -r)` was pruned and DKMS stayed at `added`). Root cause: `_mimic_provision`
+declared success on `command -v mimic` (the userspace **binary**) alone, never verifying the DKMS
+**kernel module** built/loaded — so it proceeded to a broken start, and on a `mimic_fallback: udp` link
+the false-success silently skipped the UDP fallback. Four reviewed plans (PRs #235–#238), each
+independently reviewed and adversarially verified before merge.
+
+### Fixed
+- **mimic module build/load verification.** `_mimic_provision`'s success gate is now that the DKMS
+  kernel module is genuinely loadable (`lsmod` / `modprobe` / a `dkms autoinstall` retry), not merely
+  that the `mimic` binary exists. When the module can't be built/loaded (the stale-kernel /
+  pruned-headers case) the installer classifies a distinct `module_unavailable` outcome and honors the
+  link's `mimic_fallback` policy — `udp` degrades to plain UDP, `none` fails closed with a clear
+  *"reboot into the current kernel"* message — instead of the cryptic exit-22 loop. This also closes
+  the silent no-degrade on `udp`-policy links (the false-success used to skip the fallback). (#235)
+- **Orphaned-lock cleanup.** Before `systemctl restart mimic@<egress>`, the installer clears a wedged
+  unit (`stop` + `rm -f /run/mimic/*.lock` + `reset-failed` + `modprobe`), so an orphaned `/run/mimic`
+  lock from an uncleanly-exited prior instance (a `failed to lock … File exists` → exit-17 loop) can't
+  wedge the restart. (#235)
+
+### Added
+- **`ModuleUnavailable` mimic Node Condition** (a `warn` with a reboot hint) + the `module_unavailable`
+  breadcrumb outcome, so the panel shows *why* mimic is down. (#235)
+- **Pre-deploy "can this node run mimic" probe.** A pure-sysfs agent heuristic
+  (`metrics["mimic_capability"]` → ready / buildable / unbuildable) warns in the node editor when a
+  node's kernel can't build the module — before you deploy, not after a failed apply. (#236)
+- **Native-XDP support is now always-visible** in the node editor (not only once `native` is
+  selected), so you can see whether a NIC supports native before choosing it. (#236)
+- **Per-node egress-interface override** (`Node.mimic_egress_interface`, e.g. `wan0`; empty =
+  auto-detect) for multi-homed / policy-routing nodes where the WireGuard egress isn't the default
+  route. The override rides the signed `install.sh`; a schema validator guards the interface name. (#237)
+
 ## [2.0.0-rc.2] - 2026-07-04
 
 **Release candidate.** Fixes the mimic (`transport: tcp`) install defect the `v2.0.0-rc.1` soak
@@ -936,6 +973,7 @@ PRs #59–#65.
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
 [Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...HEAD
+[2.0.0-rc.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...v2.0.0-rc.1
 [2.0.0-beta.18]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...v2.0.0-beta.18
