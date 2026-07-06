@@ -53,8 +53,12 @@ the `.HasMimic` block), so a node on a distro that does not yet package mimic st
    The provisioning block is a shell **function that returns non-zero on any failure** (no `set -e`
    abort inside), so the caller honors the link's `mimic_fallback` policy — degrade to plain UDP
    (`udp`) or fail closed with a categorized breadcrumb (`none`) — instead of aborting the whole
-   node apply before the fallback logic runs. Every download is SHA-256-verified before dpkg; no
-   unverified `.deb` is ever installed. A non-apt distro without the package errors out clearly.
+   node apply before the fallback logic runs. Success is gated on the DKMS **kernel module actually
+   loading** (`lsmod` / `modprobe`, with a `dkms autoinstall` retry) — **not** merely on the `mimic`
+   binary existing — so a node whose module never built (the stale-kernel case above) is classified
+   `module_unavailable` and honors policy, instead of proceeding to a cryptic `mimic run` exit-22 loop.
+   Every download is SHA-256-verified before dpkg; no unverified `.deb` is ever installed. A non-apt
+   distro without the package errors out clearly.
 
    `mimic@<egress>` is then `enable`d (for boot) and **`restart`ed** (not a no-op `enable --now`
    start), so a redeploy RE-APPLIES the freshly-written `/etc/mimic/<egress>.conf` — WireGuard is
@@ -189,23 +193,36 @@ shipped `"none"`); the compiler resolves the effective per-link value into `Peer
   link forces fail-closed for the whole node, so a `"none"` link is never silently de-cloaked by a
   sibling `"udp"` link.
 - **Failure categories.** The installer detects, with explicit checks: `kernel_too_old` (no
-  eBPF/bpffs), `ebpf_load_failed` (`mimic@<egress>` failed to start), `install_failed` (the
-  two-package `.deb` install — distro or pinned GitHub — could not complete: a missing pin, a failed
-  download/checksum, an unsatisfiable `Depends: mimic-modules`, or a DKMS build failure on a stale
-  kernel), `egress_unresolved` (no routable default-route source IP — empty or loopback — so a
-  `local=` filter could never match), `native_downgraded_skb` (a requested `xdp_mode=native` attach
-  failed → auto-retried and active in **skb** mode; see below), and `fell_back_to_udp` (skipped mimic,
-  link up as UDP); the success case is `active`. A `.deb` whose SHA-256 verify FAILS is **never
-  installed** (integrity is absolute); the OUTCOME then follows the link's policy — `udp` degrades to
-  plain UDP, `none` fails closed — but a corrupt/tampered `.deb` is never dpkg'd either way.
+  eBPF/bpffs), `install_failed` (the two-package `.deb` install — distro or pinned GitHub — could not
+  complete: a missing pin, a failed download/checksum, an unsatisfiable `Depends: mimic-modules`),
+  `module_unavailable` (the `.deb` installed the `mimic` **binary** but the DKMS **kernel module** did
+  not build/load for the running kernel — the dominant real case is a **stale kernel** whose
+  `linux-headers-$(uname -r)` were pruned from the repo, so DKMS is stuck at `added`). Provisioning's
+  success gate is that the module is genuinely loadable (`lsmod` / `modprobe` / a `dkms autoinstall`
+  retry), **not** merely that `command -v mimic` succeeds — the binary-only check was the rc.2 defect
+  that let a node with an unbuilt module proceed to a cryptic `mimic run` exit-22 loop. Also
+  `egress_unresolved` (no routable default-route source IP — empty or loopback — so a `local=` filter
+  could never match), `native_downgraded_skb` (a requested `xdp_mode=native` attach failed →
+  auto-retried and active in **skb** mode; see below), and `fell_back_to_udp` (skipped mimic, link up
+  as UDP); the success case is `active`. A `.deb` whose SHA-256 verify FAILS is **never installed**
+  (integrity is absolute); every failure (including `module_unavailable`) then follows the link's
+  policy — `udp` degrades to plain UDP, `none` fails closed — but a corrupt/tampered `.deb` is never
+  dpkg'd either way.
 - **Breadcrumb → Node Condition.** The installer writes the outcome to a small JSON marker at
   `/var/lib/yaog-agent/mimic-status.json` (`model.MimicBreadcrumbPath`), keyed by the closed Go
   constants `model.MimicOutcome*` — never raw stderr. The agent reads it each cycle and emits a
-  structured `mimic` Node Condition (`KernelTooOld` / `EbpfLoadFailed` / `InstallFailed` /
-  `EgressUnresolved` / `FellBackToUDP` / `NativeDowngradedSkb` / `Active`) with a curated one-line
-  message, so the panel shows *why* mimic is down (or in skb) without a log dump. A UDP fallback is a
-  `warn` condition (it de-cloaks the link — surface it); `NativeDowngradedSkb` is `ok` (mimic IS
-  active — only the requested XDP mode changed).
+  structured `mimic` Node Condition (`KernelTooOld` / `InstallFailed` / `ModuleUnavailable` /
+  `EbpfLoadFailed` / `EgressUnresolved` / `FellBackToUDP` / `NativeDowngradedSkb` / `Active`) with a
+  curated one-line message, so the panel shows *why* mimic is down (or in skb) without a log dump. A
+  UDP fallback is a `warn` condition (it de-cloaks the link — surface it); `ModuleUnavailable` is a
+  `warn` with a *"reboot into the current kernel, or set mimic_fallback=udp"* hint (a stale kernel
+  can't build the module); `NativeDowngradedSkb` is `ok` (mimic IS active — only the requested XDP mode
+  changed).
+- **Robust (re)start.** Before `systemctl restart mimic@<egress>`, the installer clears a wedged unit
+  (`systemctl stop` + `rm -f /run/mimic/*.lock` + `systemctl reset-failed` + `modprobe mimic`) so an
+  **orphaned `/run/mimic` lock** from an uncleanly-exited prior instance (a `failed to lock … File
+  exists` → exit-17 loop, systemd rate-limiting the retries) can't wedge the restart. A node has
+  exactly one mimic egress, so clearing all `/run/mimic` locks while the unit is stopped is safe.
 - **Deployable in both branches.** On fallback the link comes up as plain UDP (endpoint/port are
   mimic-independent; the MTU−12 conf is conservative-safe for UDP), and any half-applied mimic filter
   is de-provisioned so no orphaned shaping survives.
@@ -222,13 +239,33 @@ selects it (`""`/`"skb"` → skb; `"native"` → native), written into `/etc/mim
   `native_downgraded_skb` breadcrumb → the `NativeDowngradedSkb` Node Condition (status `ok`). Because
   `mimic@` is `restart`ed each deploy (not a no-op start), the downgrade RE-EVALUATES every deploy, so
   the on-disk config never drifts back to a stale `native` a reboot would start from and fail.
-- **Pre-deploy capability heuristic.** The agent reports a best-effort native-XDP capability for the
-  egress NIC (`metrics["native_xdp"]` = `{capability, driver, kernel}`) via pure sysfs reads
-  (`/proc/net/route` egress iface → `/sys/class/net/<if>/device/driver` → `/proc/sys/kernel/osrelease`;
-  no shell, no live-NIC attach): `supported` / `unsupported` / `conditional` (virtio_net) / `unknown`.
-  The panel's node editor warns when `native` is selected on a NIC that reports it unsupported, so the
-  operator sees it **before** deploying. The DEFINITIVE answer stays the deploy-time achieved-mode
-  condition; the heuristic is advisory.
+- **Pre-deploy capability heuristics (always-visible).** The agent reports two best-effort,
+  pure-inspection signals (no shell, no build, no live-NIC attach) so the panel can warn **before** a
+  deploy rather than after a failed apply:
+  - `metrics["native_xdp"]` = `{capability, driver, kernel}` — the egress NIC's native-XDP capability
+    (`/proc/net/route` iface → `/sys/class/net/<if>/device/driver` → `/proc/sys/kernel/osrelease`):
+    `supported` / `unsupported` / `conditional` (virtio_net) / `unknown`. The node editor shows it
+    **always** (not only once `native` is selected), so an operator sees support up front.
+  - `metrics["mimic_capability"]` = `{capability, kernel}` — whether this node can build/load the mimic
+    module at all (`/proc/modules` loaded → `/lib/modules/<k>/modules.dep` built →
+    `/lib/modules/<k>/build` headers present): `ready` / `buildable` / `unbuildable`. `unbuildable` (a
+    stale kernel with pruned headers — the fleet case) warns in the node editor when the node has a tcp
+    link, foreseeing the `module_unavailable` outcome before deploy.
+  The DEFINITIVE answers stay the deploy-time conditions (`ModuleUnavailable` / the achieved XDP mode);
+  the heuristics are advisory.
+
+## Egress interface (auto-detect + per-node override)
+
+mimic binds to the node's **egress interface** — by default auto-detected as the default-route NIC
+(`ip route show default … dev`), with the egress IP from `ip route get 1.1.1.1 … src`.
+`Node.mimic_egress_interface` overrides it (empty = auto-detect, byte-identical to today): set it (e.g.
+`wan0`) on a multi-homed / policy-routing node where the WireGuard egress is NOT the default route.
+When overridden the installer binds that interface (shq-escaped) and derives the egress IP from it
+(`ip -o -4 addr show dev <iface>`); the Phase-0 cleanup uses the same override so it stops the right
+`mimic@<iface>` unit. A schema validator rejects an implausible name (`^[A-Za-z0-9._-]{1,15}$`, Go +
+TS byte-equal). The value is a design-time input rendered into the **signed** `install.sh` (covered by
+`checksums.sha256` → `bundle.sig` → keystone), so it cannot be tampered without failing the signature
+(`TestExport_EgressOverrideIsSigned`).
 
 ## Verification
 

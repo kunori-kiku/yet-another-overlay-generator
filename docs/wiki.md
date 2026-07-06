@@ -580,15 +580,23 @@ it). **Discover from release** lists a GitHub release's `.deb` assets and **pair
 the proxy misses a sidecar, retries the direct GitHub URL). The install downloads, verifies each
 against its signed pin, and installs **both** together before `dpkg`.
 
-If a node's kernel is too old to build the module (its exact `linux-headers` are no longer in the
-repo), reboot it into the current kernel first — until then the link falls back per its **Mimic
-fallback** policy (Fall back to UDP / Fail closed).
+If a node's kernel is too old to build the module (its exact `linux-headers` are no longer in the repo
+— common on a VPS booted months ago), the node editor **warns you up front** ("this kernel can't build
+the mimic module — reboot into the current kernel"), and until you reboot the link falls back per its
+**Mimic fallback** policy: *Fall back to UDP* brings it up as plain UDP, *Fail closed* keeps it down
+with a clear `mimic` health chip — never a silent break. To fix it, on the node run
+`apt-get update && apt-get install -y linux-image-cloud-amd64 linux-headers-cloud-amd64 && reboot`,
+then redeploy.
 
 **XDP mode (native vs skb).** A mimic link uses generic **skb** XDP by default (works on any NIC). You
-can opt a node into **native** XDP (faster) in the node editor — but many VPS NICs don't support it,
-so YAOG auto-downgrades to skb if the native attach fails (the link still comes up), and the node
-editor warns you up front when the NIC reports no native support. The node's `mimic` health chip shows
-the mode actually achieved.
+can opt a node into **native** XDP (faster) in the node editor — but many VPS NICs don't support it, so
+YAOG auto-downgrades to skb if the native attach fails (the link still comes up). The node editor shows
+each node's native-XDP support **always** (so you can see it before choosing native), and the `mimic`
+health chip shows the mode actually achieved.
+
+**Egress interface.** By default mimic binds to the node's default-route NIC (auto-detected). On a
+multi-homed / policy-routing node where the WireGuard egress isn't the default route, set the node's
+**Mimic egress interface** (e.g. `wan0`) in the node editor; blank = auto-detect.
 
 ### 5.10 Configuration reference
 
