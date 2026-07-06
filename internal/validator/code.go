@@ -71,6 +71,7 @@ const (
 	CodeEdgeTypeInvalid                    Code = "validation_edge_type_invalid"
 	CodeEdgeTransportInvalid               Code = "validation_edge_transport_invalid"
 	CodeEdgeMimicFallbackInvalid           Code = "validation_edge_mimic_fallback_invalid"
+	CodeEdgeMimicRelayPath                 Code = "validation_edge_mimic_relay_path"
 	CodeEdgeEndpointHostIllegalChars       Code = "validation_edge_endpoint_host_illegal_chars"
 	CodeEdgeEndpointPortInvalid            Code = "validation_edge_endpoint_port_invalid"
 	CodeEdgeEndpointPortWithoutHost        Code = "validation_edge_endpoint_port_without_host"
@@ -190,6 +191,7 @@ var registry = map[Code]string{
 	CodeEdgeTypeInvalid:                    "Invalid edge type: {type}. Allowed values: direct, public-endpoint, relay-path, candidate.",
 	CodeEdgeTransportInvalid:               "Invalid transport protocol: {transport}. Allowed values: udp, tcp.",
 	CodeEdgeMimicFallbackInvalid:           "Invalid mimic_fallback policy: {policy}. Allowed values: udp, none (empty = inherit fleet default).",
+	CodeEdgeMimicRelayPath:                 "Edge {id}: mimic (transport=tcp) needs a direct path; a relay-path edge goes through a relay that can't carry the fake-TCP end to end — use transport=udp for relayed edges.",
 	CodeEdgeEndpointHostIllegalChars:       "endpoint_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), brackets ([ ]), and hyphen (-) are allowed; whitespace and metacharacters are forbidden because the host is written into the WireGuard configuration deployed on the node.",
 	CodeEdgeEndpointPortInvalid:            "Invalid endpoint port: {port}.",
 	CodeEdgeEndpointPortWithoutHost:        "This link sets an endpoint port override but no endpoint host. A port cannot be dialed without a host — set an explicit endpoint host, or clear the port to use the default.",

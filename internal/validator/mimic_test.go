@@ -147,6 +147,45 @@ func TestValidate_UdpEdge_UnaffectedByMimic(t *testing.T) {
 // TestValidate_XDPModeEnum covers per-node xdp_mode enum validation:
 // empty / "skb" / "native" are valid (no xdp_mode error); other values (including wrong casing)
 // should error at the schema stage.
+// TestValidate_MimicRelayPathWarning covers the rc.4 relay-path advisory: a transport=tcp edge whose
+// type is relay-path gets a WARNING (mimic needs a direct path — an L7 relay can't carry the fake-TCP
+// end to end), but NOT an error (deploy is not blocked). A direct tcp edge and a udp relay-path edge
+// do not warn.
+func TestValidate_MimicRelayPathWarning(t *testing.T) {
+	hasRelay := func(findings []ValidationError) bool {
+		for _, f := range findings {
+			if f.Code == string(CodeEdgeMimicRelayPath) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// tcp + relay-path -> a warning, never an error.
+	tcpRelay := mimicTransportTopology("tcp", "debian", "debian")
+	tcpRelay.Edges[0].Type = "relay-path"
+	r := ValidateSemantic(tcpRelay)
+	if !hasRelay(r.Warnings) {
+		t.Errorf("tcp + relay-path should produce a relay-path warning")
+	}
+	if hasRelay(r.Errors) {
+		t.Errorf("the relay-path advisory must be a WARNING, not an error (deploy is not blocked)")
+	}
+
+	// tcp + direct -> no relay warning.
+	tcpDirect := mimicTransportTopology("tcp", "debian", "debian") // Type defaults to "direct"
+	if hasRelay(ValidateSemantic(tcpDirect).Warnings) {
+		t.Errorf("tcp + direct should not warn about relay-path")
+	}
+
+	// udp + relay-path -> no relay warning (only tcp edges use mimic).
+	udpRelay := mimicTransportTopology("udp", "debian", "debian")
+	udpRelay.Edges[0].Type = "relay-path"
+	if hasRelay(ValidateSemantic(udpRelay).Warnings) {
+		t.Errorf("udp + relay-path should not warn (no mimic on a udp edge)")
+	}
+}
+
 func TestValidate_XDPModeEnum(t *testing.T) {
 	hasXDPErr := func(r *ValidationResult) bool {
 		for _, e := range r.Errors {

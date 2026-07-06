@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import type { Topology } from '../types/topology';
-import { Code, validateSchema } from './validator';
+import { Code, validate, validateSchema } from './validator';
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 
@@ -216,5 +216,32 @@ describe('validateSchema finding shape', () => {
     // The {mode} placeholder is substituted with the offending value.
     expect(finding!.message).toContain('ospf');
     expect(finding!.params).toEqual({ mode: 'ospf' });
+  });
+});
+
+// rc.4 relay-path advisory: mimic (transport=tcp) needs a direct path; a relay-path edge (through an
+// L7/UDP-accelerator relay that can't carry the fake-TCP) gets a WARNING, not an error.
+describe('validate mimic relay-path warning (rc.4)', () => {
+  const topo = (transport: string, type: string): Topology =>
+    ({
+      project: { id: 'p', name: 'P' },
+      domains: [{ id: 'd1', name: 'net', cidr: '10.55.0.0/24', allocation_mode: 'auto', routing_mode: 'babel' }],
+      nodes: [
+        { id: 'a', name: 'a', platform: 'debian', role: 'router', domain_id: 'd1', capabilities: { can_accept_inbound: true, can_forward: true, has_public_ip: true }, public_endpoints: [{ id: 'ae', host: 'a.example', port: 51820 }] },
+        { id: 'b', name: 'b', platform: 'debian', role: 'router', domain_id: 'd1', capabilities: { can_accept_inbound: true, can_forward: true, has_public_ip: true }, public_endpoints: [{ id: 'be', host: 'b.example', port: 51820 }] },
+      ],
+      edges: [{ id: 'e1', from_node_id: 'a', to_node_id: 'b', type, transport, is_enabled: true }],
+    }) as unknown as Topology;
+  const warns = (transport: string, type: string): boolean =>
+    validate(topo(transport, type)).warnings.some((w) => w.code === Code.EdgeMimicRelayPath);
+
+  it('warns on a tcp + relay-path edge', () => {
+    expect(warns('tcp', 'relay-path')).toBe(true);
+  });
+  it('does not warn on tcp + direct', () => {
+    expect(warns('tcp', 'direct')).toBe(false);
+  });
+  it('does not warn on udp + relay-path (no mimic on a udp edge)', () => {
+    expect(warns('udp', 'relay-path')).toBe(false);
   });
 });
