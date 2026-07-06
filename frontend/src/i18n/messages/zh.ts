@@ -502,6 +502,7 @@ export const zh: Record<keyof typeof en, string> = {
   'nodeEditor.nativeXdp.conditional': "此网卡（{driver}）的 native XDP 不保证可用（如 virtio 需较新内核 + 多队列）；attach 失败时会自动回退到 skb。",
   'nodeEditor.nativeXdp.unsupported': "此节点网卡（{driver}）不支持 native XDP——将自动回退到 skb。",
   'nodeEditor.nativeXdp.unknown': "此网卡（{driver}）的 native XDP 支持情况未知；若不支持会自动回退到 skb。",
+  'nodeEditor.mimicCapability.unbuildable': "此节点的内核（{kernel}）无法构建 mimic 模块——其 linux-headers 未安装（内核过旧、头文件已从仓库中移除）。此处的 transport=tcp 链路会按其 Mimic 回退策略降级；请重启进入当前内核以启用 mimic。",
   'nodeEditor.noLANPrefixesConfigured': "尚未配置局域网网段",
   'nodeEditor.noPublicAddressesConfigured': "尚未配置公网地址",
   'nodeEditor.nodeProperties': "节点属性",

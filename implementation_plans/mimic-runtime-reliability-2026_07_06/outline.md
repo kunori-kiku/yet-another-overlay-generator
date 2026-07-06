@@ -68,9 +68,9 @@ release can't build the module until it reboots into the current kernel") — un
 
 | # | Plan | Status | PR |
 |---|------|--------|-----|
-| 1 | Module build/load verification + honor-policy + lock cleanup + modprobe (fleet-critical core) | pending | — |
+| 1 | Module build/load verification + honor-policy + lock cleanup + modprobe (fleet-critical core) | ✅ merged | #235 |
 | 2 | Per-node egress-interface override | pending | — |
-| 3 | Pre-deploy "can this node run mimic" capability probe + panel warning | pending | — |
+| 3 | Native-XDP always-visible fix + pre-deploy "can this node run mimic" capability probe + panel warning | in review | (this PR) |
 | 4 | Docs (mimic.md + bilingual wiki) + behavioral proof | pending | — |
 | 5 | Release v2.0.0-rc.3 | pending | — |
 

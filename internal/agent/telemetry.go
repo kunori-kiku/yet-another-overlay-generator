@@ -104,8 +104,9 @@ func (s conditionSampler) Sample(now time.Time) ([]model.Condition, map[string]a
 func BuildTelemetry(stateDir string) *Telemetry {
 	return &Telemetry{samplers: []Sampler{
 		conditionSampler{stateDir: stateDir},
-		wireguardPeersSampler{}, // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
-		resourceSampler{},       // host load + memory → metrics["resource"] (node detail readout)
-		nativeXDPSampler{},      // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
+		wireguardPeersSampler{},  // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
+		resourceSampler{},        // host load + memory → metrics["resource"] (node detail readout)
+		nativeXDPSampler{},       // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
+		mimicCapabilitySampler{}, // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
 	}}
 }

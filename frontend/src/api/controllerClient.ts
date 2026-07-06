@@ -18,6 +18,7 @@ import type {
   WireGuardPeer,
   NodeResource,
   NativeXDP,
+  MimicCapability,
 } from '../types/controller';
 import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
@@ -292,7 +293,7 @@ interface NodeJSON {
   conditions?: ConditionWire[];
   // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
   // known wireguard_peers + resource keys; other keys are ignored here.
-  telemetry?: { wireguard_peers?: WireGuardPeerWire[]; resource?: ResourceMetricWire; native_xdp?: NativeXDPWire } | null;
+  telemetry?: { wireguard_peers?: WireGuardPeerWire[]; resource?: ResourceMetricWire; native_xdp?: NativeXDPWire; mimic_capability?: MimicCapabilityWire } | null;
 }
 
 // ResourceMetricWire mirrors the agent's host resource metric (snake_case wire shape under
@@ -310,6 +311,13 @@ interface ResourceMetricWire {
 interface NativeXDPWire {
   capability?: string;
   driver?: string;
+  kernel?: string;
+}
+
+// MimicCapabilityWire mirrors the agent's "can this node run mimic" heuristic (snake_case wire shape
+// under telemetry.mimic_capability), mapped to MimicCapability at the boundary. All fields optional.
+interface MimicCapabilityWire {
+  capability?: string;
   kernel?: string;
 }
 
@@ -717,6 +725,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
     resource: mapResource(n.telemetry?.resource),
     nativeXDP: mapNativeXDP(n.telemetry?.native_xdp),
+    mimicCapability: mapMimicCapability(n.telemetry?.mimic_capability),
   };
 }
 
@@ -743,6 +752,16 @@ export function mapNativeXDP(w: NativeXDPWire | undefined): NativeXDP | undefine
   const cap = w.capability;
   if (cap !== 'supported' && cap !== 'conditional' && cap !== 'unsupported' && cap !== 'unknown') return undefined;
   return { capability: cap, driver: w.driver ?? '', kernel: w.kernel ?? '' };
+}
+
+// mapMimicCapability projects the agent's "can this node run mimic" heuristic (snake_case) to
+// MimicCapability. Defensive: a missing metric or a capability outside the closed set yields undefined
+// so the panel renders no warning (a pre-plan-3 agent / before the first heartbeat); kernel defaults to "".
+export function mapMimicCapability(w: MimicCapabilityWire | undefined): MimicCapability | undefined {
+  if (!w) return undefined;
+  const cap = w.capability;
+  if (cap !== 'ready' && cap !== 'buildable' && cap !== 'unbuildable') return undefined;
+  return { capability: cap, kernel: w.kernel ?? '' };
 }
 
 // mapWireGuardPeers projects the agent's per-peer link telemetry (snake_case) to WireGuardPeer[].

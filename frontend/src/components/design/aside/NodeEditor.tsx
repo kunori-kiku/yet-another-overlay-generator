@@ -5,7 +5,8 @@ import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapa
 import { uuid } from '../../../lib/uuid';
 
 // NATIVE_XDP_KEY maps the fleet node's reported native-XDP capability (plan-4) to a localized hint
-// shown when xdp_mode=native is selected — closed set, so a garbled value renders nothing.
+// shown as an ALWAYS-VISIBLE per-node indicator (a pre-decision aid: you can see whether the NIC
+// supports native BEFORE selecting it, not only after) — closed set, so a garbled value renders nothing.
 const NATIVE_XDP_KEY: Record<'supported' | 'conditional' | 'unsupported' | 'unknown', MessageKey> = {
   supported: 'nodeEditor.nativeXdp.supported',
   conditional: 'nodeEditor.nativeXdp.conditional',
@@ -28,6 +29,9 @@ export function NodeEditor() {
   // agent reports it via /telemetry). Drives the warning below when native is selected on a NIC that
   // reports it unsupported/conditional. Undefined in local mode / before the first heartbeat.
   const nativeXDP = useControllerStore((s) => s.nodes.find((n) => n.nodeId === selectedNodeId)?.nativeXDP);
+  // mimicCapability (plan-3): can this node build/load the mimic kernel module. "unbuildable" warns
+  // that a transport=tcp link here will fall back per policy (the stale-kernel case). Live-only.
+  const mimicCapability = useControllerStore((s) => s.nodes.find((n) => n.nodeId === selectedNodeId)?.mimicCapability);
   // fixed_private_key is a LOCAL/air-gap custody primitive: it tells the client-side compiler to
   // generate-and-persist a node's WireGuard private key into the design (+ localStorage).
   // Controller mode is zero-knowledge — the agent owns the private key, the server never sees it,
@@ -249,7 +253,7 @@ export function NodeEditor() {
             <option value="native">{t(language, 'nodeEditor.nativeFasterNeedsNIC')}</option>
           </select>
           <p className="mt-1 text-xs text-[var(--content-muted)]">{t(language, 'xdpModeHint')}</p>
-          {selectedNode.xdp_mode === 'native' && nativeXDP && (
+          {nativeXDP && (
             <p
               data-testid="node-native-xdp-hint"
               className={`mt-1 text-xs ${
@@ -261,6 +265,11 @@ export function NodeEditor() {
               }`}
             >
               {t(language, NATIVE_XDP_KEY[nativeXDP.capability], { driver: nativeXDP.driver || '?' })}
+            </p>
+          )}
+          {mimicCapability?.capability === 'unbuildable' && (
+            <p data-testid="node-mimic-capability-hint" className="mt-1 text-xs text-[var(--warning)]">
+              {t(language, 'nodeEditor.mimicCapability.unbuildable', { kernel: mimicCapability.kernel || '?' })}
             </p>
           )}
         </div>
