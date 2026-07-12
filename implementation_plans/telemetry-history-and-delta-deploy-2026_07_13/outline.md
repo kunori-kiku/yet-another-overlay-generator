@@ -70,7 +70,7 @@
 | # | Plan | Status | PR |
 |---|------|--------|-----|
 | 1 | Agent `cpu_pct` (stateful /proc/stat delta) + current-value panel row | ✅ merged | #249 |
-| 1.5 | Unify observability on the sampler heartbeat (post-apply kick) + freshness guards | pending | — |
+| 1.5 | Unify observability on the sampler heartbeat (post-apply kick) + freshness guards | ✅ merged | #250 |
 | 2 | Controller history store (ring + periodic flush + configurable cap) | pending | — |
 | 3 | History query API (server-side aggregation, operator-gated) | pending | — |
 | 4 | Recharts reusable `TimeSeriesChart` + node-detail charts + granularity picker | pending | — |

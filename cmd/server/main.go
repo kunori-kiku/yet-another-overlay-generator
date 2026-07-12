@@ -176,6 +176,8 @@ func serveController(server *api.Server, addr, agentAddr, stateDir, tenant strin
 	if err != nil {
 		return err
 	}
+	store.Start()       // plan-2: launch the resource-history background flusher
+	defer store.Close() // stop the flusher + do a final drain on any return path
 
 	// Surface a clear startup warning if NEITHER a break-glass token NOR any operator
 	// account exists: operator routes would be inaccessible until one is created. The
