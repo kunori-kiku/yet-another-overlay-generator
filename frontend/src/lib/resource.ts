@@ -21,6 +21,21 @@ export function memSeverity(pct: number | null): 'ok' | 'warn' | 'danger' {
   return 'ok';
 }
 
+// cpuSeverity buckets CPU utilization for coloring, consistent with memSeverity (danger >90%, warn
+// >75%). undefined (a pre-plan-1 agent, or the first beat before a delta exists) → ok: unknown CPU must
+// not raise a false alarm.
+export function cpuSeverity(pct: number | undefined): 'ok' | 'warn' | 'danger' {
+  if (pct === undefined) return 'ok';
+  if (pct > 90) return 'danger';
+  if (pct > 75) return 'warn';
+  return 'ok';
+}
+
+// formatPct renders a CPU percent to one decimal (matching the agent's 0.1 resolution).
+export function formatPct(pct: number): string {
+  return pct.toFixed(1) + '%';
+}
+
 // formatLoad renders a load average to two decimals.
 export function formatLoad(n: number): string {
   return n.toFixed(2);

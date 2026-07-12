@@ -447,6 +447,7 @@ export const en = {
   'fleetNodeDetailPage.lastSynced': "Last synced",
   'fleetNodeDetailPage.status': "Status",
   'resourcePanel.heading': "Host resources",
+  'resourcePanel.cpu': "CPU",
   'resourcePanel.load': "Load (1/5/15m)",
   'resourcePanel.memory': "Memory",
   'resourcePanel.memUsed': "{used} / {total} ({pct}%)",

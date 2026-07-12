@@ -105,7 +105,7 @@ func BuildTelemetry(stateDir string) *Telemetry {
 	return &Telemetry{samplers: []Sampler{
 		conditionSampler{stateDir: stateDir},
 		wireguardPeersSampler{},  // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
-		resourceSampler{},        // host load + memory → metrics["resource"] (node detail readout)
+		&resourceSampler{},       // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)
 		nativeXDPSampler{},       // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
 		mimicCapabilitySampler{}, // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
 	}}

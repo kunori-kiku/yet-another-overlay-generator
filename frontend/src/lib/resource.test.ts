@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { memUsedPercent, memSeverity, formatLoad, formatKB } from './resource';
+import { memUsedPercent, memSeverity, cpuSeverity, formatLoad, formatKB, formatPct } from './resource';
 import type { NodeResource } from '../types/controller';
 
 const res = (over: Partial<NodeResource> = {}): NodeResource => ({
@@ -29,6 +29,23 @@ describe('memSeverity', () => {
     expect(memSeverity(80)).toBe('warn');
     expect(memSeverity(50)).toBe('ok');
     expect(memSeverity(null)).toBe('ok');
+  });
+});
+
+describe('cpuSeverity', () => {
+  it('buckets CPU utilization; undefined is ok (no false alarm for an old agent / first beat)', () => {
+    expect(cpuSeverity(95)).toBe('danger');
+    expect(cpuSeverity(80)).toBe('warn');
+    expect(cpuSeverity(50)).toBe('ok');
+    expect(cpuSeverity(undefined)).toBe('ok');
+  });
+});
+
+describe('formatPct', () => {
+  it('renders to one decimal with a % suffix', () => {
+    expect(formatPct(40)).toBe('40.0%');
+    expect(formatPct(3.14159)).toBe('3.1%');
+    expect(formatPct(100)).toBe('100.0%');
   });
 });
 

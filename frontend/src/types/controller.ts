@@ -86,6 +86,10 @@ export interface WireGuardPeer {
 // metrics["resource"] telemetry. Memory is in kB (as /proc/meminfo reports); mem fields are 0 when the
 // kernel did not report MemAvailable. No endpoint/IP/key material.
 export interface NodeResource {
+  // cpuPct is host CPU utilization percent (0..100), a /proc/stat delta between heartbeats. OPTIONAL:
+  // absent for a pre-plan-1 agent, the first beat after agent start (no delta yet), or a wrapped
+  // counter — the panel renders a gap, never a fake 0.
+  cpuPct?: number;
   load1: number;
   load5: number;
   load15: number;
