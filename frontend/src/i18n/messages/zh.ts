@@ -435,6 +435,7 @@ export const zh: Record<keyof typeof en, string> = {
   'fleetNodeDetailPage.lastSynced': "上次同步",
   'fleetNodeDetailPage.status': "状态",
   'resourcePanel.heading': "主机资源",
+  'resourcePanel.cpu': "CPU",
   'resourcePanel.load': "负载 (1/5/15分钟)",
   'resourcePanel.memory': "内存",
   'resourcePanel.memUsed': "{used} / {total} ({pct}%)",

@@ -299,6 +299,7 @@ interface NodeJSON {
 // ResourceMetricWire mirrors the agent's host resource metric (snake_case wire shape under
 // telemetry.resource), mapped to NodeResource at the boundary. All fields optional (defensive).
 interface ResourceMetricWire {
+  cpu_pct?: number;
   load1?: number;
   load5?: number;
   load15?: number;
@@ -735,13 +736,19 @@ function mapNode(n: NodeJSON): ControllerNode {
 function mapResource(r: ResourceMetricWire | undefined): NodeResource | undefined {
   if (!r || typeof r.load1 !== 'number') return undefined;
   const num = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-  return {
+  const out: NodeResource = {
     load1: num(r.load1),
     load5: num(r.load5),
     load15: num(r.load15),
     memTotalKB: num(r.mem_total_kb),
     memAvailableKB: num(r.mem_available_kb),
   };
+  // cpu_pct is OPTIONAL — map it ONLY when the agent reported it (a real number). Never default to 0:
+  // absent means "unknown" (old agent / first beat / wrapped counter), which the panel shows as a gap.
+  if (typeof r.cpu_pct === 'number' && Number.isFinite(r.cpu_pct)) {
+    out.cpuPct = r.cpu_pct;
+  }
+  return out;
 }
 
 // mapNativeXDP projects the agent's egress-NIC native-XDP capability heuristic (snake_case) to
