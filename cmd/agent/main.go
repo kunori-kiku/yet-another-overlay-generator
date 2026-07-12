@@ -816,12 +816,15 @@ func runControllerMode(o controllerModeOpts) int {
 		}
 		lastAppliedGen = resumeGen // advance on success, idle skip, or rekey wake; unchanged on a timed-out poll
 
-		// Kick the heartbeat after a completed cycle so the panel reflects the JUST-applied state within
-		// a round-trip (closing the <=interval blind window that historically forced /report to carry
-		// conditions) and history/metrics gain a sample at the deploy instant. Reached only when
-		// err == nil (the error path continues above), so State is freshly persisted when the beat's
-		// samplers read it. tryKick is non-blocking + coalescing, so a busy loop never stalls on a beat.
-		tryKick(telemetryKick)
+		// Kick the heartbeat after an actual APPLY so the panel reflects the just-applied state within a
+		// round-trip (closing the <=interval blind window that historically forced /report to carry
+		// conditions) and history/metrics gain a sample at the deploy instant. Gated on `applied` so an
+		// idle poll-timeout or a rekey/idle wake does NOT inflate the beat rate — the 30s ticker already
+		// covers steady-state liveness. State is freshly persisted (recordSuccess ran inside cycle) when
+		// the beat's samplers read it. tryKick is non-blocking + coalescing, so the loop never stalls.
+		if applied {
+			tryKick(telemetryKick)
+		}
 
 		// Deferred self-update retry (plan-8): re-attempt a self-update that a prior cycle deferred
 		// (e.g. a gh-proxy download timeout) WITHOUT waiting for a new generation. Idle cycles only —
