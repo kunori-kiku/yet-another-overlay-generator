@@ -24,6 +24,17 @@ import (
 // Sampler produces one monitoring signal: a set of conditions and/or a map of named metrics. Sample is
 // called once per heartbeat tick; it must be cheap and self-contained (it runs best-effort under a
 // recover guard, so a panic in one probe never crashes the daemon). Either return may be nil.
+//
+// FRESHNESS CONTRACT (plan-1.5): a Sampler MUST re-measure the LIVE system on each call — it must NEVER
+// cache a value captured at apply/deploy time and re-emit it unchanged. A sampler that reads a
+// deploy-time artifact (a breadcrumb file, a persisted apply outcome) MUST reconcile it against live
+// state (see readMimicCondition's `systemctl is-active` reconcile) or it re-emits a FROZEN value
+// forever — which reads as "works at deploy, then goes stale," the exact recurring defect this
+// framework exists to prevent. Registering a signal HERE (a Sampler in BuildTelemetry) is now the SOLE
+// wiring needed: the daemon beats every interval AND on a post-apply kick (cmd/agent runHeartbeat), so a
+// registered signal fires at deploy AND live by construction — there is no second apply-path list to
+// keep in parity. telemetry_liveness_test.go asserts the freshness contract for the injectable samplers
+// (mutate the input → the output must change).
 type Sampler interface {
 	Name() string
 	Sample(now time.Time) (conditions []model.Condition, metrics map[string]any)
@@ -101,6 +112,13 @@ func (s conditionSampler) Sample(now time.Time) ([]model.Condition, map[string]a
 // BuildTelemetry constructs the daemon's Telemetry with the default samplers registered. A future
 // monitoring probe is added HERE (e.g. append a latencySampler) — the heartbeat transport, wire shape,
 // and controller endpoint already carry whatever it emits.
+// NewTelemetryForTest builds a Telemetry from explicit samplers, for CROSS-PACKAGE tests (e.g. cmd/agent
+// exercising runHeartbeat) that need a deterministic emit without the real /proc-reading samplers.
+// Production always uses BuildTelemetry.
+func NewTelemetryForTest(samplers ...Sampler) *Telemetry {
+	return &Telemetry{samplers: samplers}
+}
+
 func BuildTelemetry(stateDir string) *Telemetry {
 	return &Telemetry{samplers: []Sampler{
 		conditionSampler{stateDir: stateDir},

@@ -56,12 +56,21 @@
 5. Shape accepted as-is (8 plans, two tracks, ONE subject, ships as `v2.0.0-rc.5`).
 6. **Plans-only at draft** (owner budget); execution on go. Plans PR merges on CI without the
    multi-agent review (docs-only); the full review regime applies to every execution PR.
+7. **plan-1.5 INSERTED during execution (2026-07-13, owner-prompted).** The owner flagged that
+   "new telemetry only fires at deployment" has RECURRED and been patched one signal at a time, and
+   asked for the deeper framework defect. A 3-trace Opus investigation
+   (`framework-finding-telemetry-dual-path.md`) found the root cause: TWO observability emitters
+   (apply `/report` conditions-only vs the heartbeat `/telemetry` sampler set) with nothing forcing
+   parity/freshness. Fix = a post-apply KICK unifying to one path (apply triggers a live sampler
+   beat). Scoped AGENT-ONLY (the custody-wire cleanup + durable-metrics + merge-semantics deferred as
+   custody-sensitive / plan-2-owned). Sequenced BEFORE plan-2 (history gains a deploy-instant sample).
 
 ## Plan status
 
 | # | Plan | Status | PR |
 |---|------|--------|-----|
-| 1 | Agent `cpu_pct` (stateful /proc/stat delta) + current-value panel row | pending | — |
+| 1 | Agent `cpu_pct` (stateful /proc/stat delta) + current-value panel row | ✅ merged | #249 |
+| 1.5 | Unify observability on the sampler heartbeat (post-apply kick) + freshness guards | pending | — |
 | 2 | Controller history store (ring + periodic flush + configurable cap) | pending | — |
 | 3 | History query API (server-side aggregation, operator-gated) | pending | — |
 | 4 | Recharts reusable `TimeSeriesChart` + node-detail charts + granularity picker | pending | — |

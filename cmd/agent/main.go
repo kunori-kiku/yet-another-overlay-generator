@@ -58,7 +58,15 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
+
+// telemetryPoster is the subset of *agent.ControllerClient that runHeartbeat needs — indirected so a
+// test injects a counting fake (no controller) and drives the kick/tick loop directly. *ControllerClient
+// satisfies it via its Telemetry method.
+type telemetryPoster interface {
+	Telemetry(conditions []model.Condition, metrics map[string]any) error
+}
 
 // BuildVersion is the agent's build version, overwritten at release link time via
 // -ldflags "-X main.BuildVersion=<tag>" (see RELEASING.md). A non-release build reports "dev".
@@ -775,8 +783,10 @@ func runControllerMode(o controllerModeOpts) int {
 	// lock. It is daemon-only (a single-shot run's one /report still carries apply-time conditions). No
 	// context/cancel is needed: the daemon loop below never returns, and a self-update swap is
 	// syscall.Exec (which replaces the whole process image and destroys this goroutine with it).
+	var telemetryKick chan struct{}
 	if o.telemetryInterval > 0 {
-		go runHeartbeat(client, agent.BuildTelemetry(o.stateDir), o.telemetryInterval, os.Stderr)
+		telemetryKick = make(chan struct{}, 1) // buffered+coalescing: the apply loop kicks non-blocking
+		go runHeartbeat(client, agent.BuildTelemetry(o.stateDir), o.telemetryInterval, telemetryKick, nil, os.Stderr)
 	}
 
 	// lastSelfUpdateRetry paces the deferred-self-update retry (plan-8): a download that failed on a
@@ -806,6 +816,13 @@ func runControllerMode(o controllerModeOpts) int {
 		}
 		lastAppliedGen = resumeGen // advance on success, idle skip, or rekey wake; unchanged on a timed-out poll
 
+		// Kick the heartbeat after a completed cycle so the panel reflects the JUST-applied state within
+		// a round-trip (closing the <=interval blind window that historically forced /report to carry
+		// conditions) and history/metrics gain a sample at the deploy instant. Reached only when
+		// err == nil (the error path continues above), so State is freshly persisted when the beat's
+		// samplers read it. tryKick is non-blocking + coalescing, so a busy loop never stalls on a beat.
+		tryKick(telemetryKick)
+
 		// Deferred self-update retry (plan-8): re-attempt a self-update that a prior cycle deferred
 		// (e.g. a gh-proxy download timeout) WITHOUT waiting for a new generation. Idle cycles only —
 		// an apply already ran the post-apply attempt (agent.go step 7) — paced by the interval, on
@@ -824,14 +841,34 @@ func runControllerMode(o controllerModeOpts) int {
 }
 
 // runHeartbeat is the daemon's LIVE health heartbeat loop (beta9-smoke-hardening plan-1). It samples
-// the registered telemetry probes and POSTs the result to /telemetry every `interval`, plus once
-// immediately so a node's current health shows within a round-trip rather than after a full interval.
+// the registered telemetry probes and POSTs the result to /telemetry every `interval`, once
+// immediately at start, AND on every `kick` (plan-1.5: the apply loop kicks after each completed cycle
+// so a just-applied state + fresh metrics surface within a round-trip instead of after a full interval,
+// and so history/cpu_pct gain a sample at the deploy instant). The kick makes the deploy emission a
+// REAL sampler beat — so a signal authored as a Sampler fires at deploy AND on the interval by
+// construction, ending the "new telemetry only fires at deploy, then goes stale" recurrence at its
+// framework root (see the subject's framework-finding doc). `done` is test-only clean shutdown;
+// production passes nil so the loop runs until the process exits/exec's.
 // Best-effort: a transport error is logged and swallowed (never disturbs the running overlay / poll
 // loop). It skips a post when there is nothing to report — a never-applied node, or a transient
 // State-read failure — so a momentary empty sample never WIPES the node's last-known conditions
 // (the controller replaces the set wholesale; an applied node always yields at least the configapply
 // condition, so this only ever skips genuinely-empty samples). Runs until the process exits/exec's.
-func runHeartbeat(client *agent.ControllerClient, tel *agent.Telemetry, interval time.Duration, stderr io.Writer) {
+// tryKick delivers a non-blocking, COALESCING nudge to the heartbeat: if a kick is already pending
+// (the buffered-size-1 channel is full) it is a no-op, so a busy apply loop never blocks on a slow
+// beat, and a burst of cycles collapses to at most one extra beat. Nil channel (heartbeat disabled) is
+// a safe no-op.
+func tryKick(ch chan<- struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func runHeartbeat(poster telemetryPoster, tel *agent.Telemetry, interval time.Duration, kick, done <-chan struct{}, stderr io.Writer) {
 	beat := func() {
 		// A panic anywhere in a beat (a sampler outside its own guard, the merge, or the POST) must
 		// NOT kill this goroutine — it is the ONLY thing that refreshes Last Seen after apply time, so
@@ -846,15 +883,29 @@ func runHeartbeat(client *agent.ControllerClient, tel *agent.Telemetry, interval
 		if len(conds) == 0 && len(metrics) == 0 {
 			return
 		}
-		if err := client.Telemetry(conds, metrics); err != nil {
+		if err := poster.Telemetry(conds, metrics); err != nil {
 			fmt.Fprintf(stderr, "agent: telemetry heartbeat: %v\n", err)
 		}
 	}
 	beat()
 	t := time.NewTicker(interval)
 	defer t.Stop()
-	for range t.C {
-		beat()
+	for {
+		select {
+		case <-done:
+			// Test-only clean shutdown; production passes a nil done (this case never fires) so the
+			// loop runs until the process exits/exec's, exactly as before.
+			return
+		case <-t.C:
+			beat()
+		case <-kick:
+			// A post-apply kick (or any external nudge): beat NOW so the just-applied state and its
+			// fresh metrics reach the controller within a round-trip instead of after up to a full
+			// interval — and history/cpu_pct gain a sample at the deploy instant. The SAME beat() on the
+			// SAME single goroutine over the SAME Telemetry instance, so resourceSampler's cpu delta and
+			// the "no locking needed" invariant stay intact.
+			beat()
+		}
 	}
 }
 
