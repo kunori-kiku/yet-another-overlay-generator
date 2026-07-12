@@ -1,8 +1,24 @@
 # STATUS
 <!-- regenerated: 2026-07-04 -->
-<!-- by: hand — v2.0.0-rc.4 = GitHub Latest; mimic-fleet-robustness DELIVERED + archived -->
+<!-- by: hand — v2.0.0-rc.4 = GitHub Latest; NEW subject telemetry-history-and-delta-deploy DRAFTED (plans-only) -->
 
 ## Active work
+
+- **📝 SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DRAFTED 2026-07-13 (plans-only per
+  owner budget; execution starts on the owner's go); ships as `v2.0.0-rc.5`.** Two owner-requested
+  features, assessed in code: **(A) CPU/RAM history as charts** — `RecordTelemetry` is memory-only BY
+  DESIGN (heartbeats never force disk writes, `filestore.go:751-758`), so history = a new bounded
+  path: per-node ring → periodic flush → raw JSONL + a CONFIGURABLE hard cap (fleet setting);
+  query API aggregates server-side at any step; agent gains true `cpu_pct` (/proc/stat delta);
+  panel charts via **Recharts wrapped in a series-generic `TimeSeriesChart`** (owner: reusable — ping
+  data later). **(B) delta deploy** — ROOT CAUSE verified: the agent already skips equal checksums but
+  only at gen ≤ cursor (`cycle.go:159-178`); Deploy stages EVERY node at a new generation → all
+  refresh. Fix = controller-side per-node skip (digest = `hex(sha256(checksums.sha256))`, already the
+  off-host identity; bundles per-node `Generation`) + Force (per-node/fleet) + pre-deploy preview.
+  DANGER ZONE: keystone promote/serve with mixed generations (plan-5 proves the seam first;
+  plan-5.5 = STOP-LOSS). 8 plans:
+  [`implementation_plans/telemetry-history-and-delta-deploy-2026_07_13/`](implementation_plans/telemetry-history-and-delta-deploy-2026_07_13/outline.md).
+  **NEXT = plan-1 (`feat/telemetry-cpu-pct`) on the owner's go.**
 
 - **✅ SUBJECT `mimic-fleet-robustness-2026_07_07` — DELIVERED as `v2.0.0-rc.4` (GitHub *Latest*,
   2026-07-07; tag on `cbe0735`; rc.3 demoted; self-promoted); CLOSED + archived to `_completed/`.**
