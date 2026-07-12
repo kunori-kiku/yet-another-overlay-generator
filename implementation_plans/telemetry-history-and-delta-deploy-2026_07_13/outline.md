@@ -78,8 +78,12 @@
   isolation).
 - **Deploy correctness over cleverness:** the skip decision uses the digest that is ALREADY the
   off-host trust identity; when in doubt (missing/corrupt prior bundle, digest unreadable) → stage
-  normally (fail open to a redeploy, never to a stale config). Rekey/trust-list/keystone flows must
-  force content changes through naturally (new keys ⇒ new digest).
+  normally (fail open to a redeploy, never to a stale config). **Keystone rotation/first-pin change
+  ZERO bundle bytes yet require a full re-stage (the promote flips the served trust-list only when
+  something is staged) → the skip is keystone-aware and disables itself for that stage (plan-5, the
+  review blocker).** Rekey-all safety is PEER-driven (a rekeyed node's own digest never changes —
+  its private key is a placeholder spliced at run time; its pubkey lives in PEERS' bundles), so
+  rekey re-stages flow through peers naturally; a future per-node rekey must Force the rekeyed node.
 - **Agent untouched in Track B:** `cycle.go` apply semantics do not change; the single-shot
   force-reapply workflow keeps working byte-for-byte.
 - **Observability stays live-only client-side:** charts fetch history on view; `stripLiveTelemetry`
@@ -100,9 +104,10 @@
 
 ## Risks (stop-losses)
 
-- **Keystone mixed-generation serving** (plan-5): if the served/staged split can't safely serve
-  old-generation bundles beside a new trust-list, STOP and re-design with the owner (plan-5.5)
-  before any skip ships.
+- **Keystone mixed-generation serving + zero-byte re-sign flows** (plan-5): if the served/staged
+  split can't safely serve old-generation bundles beside a new trust-list, OR the keystone-aware
+  skip-disable can't cleanly detect rotation/first-pin at stage time, STOP and re-design with the
+  owner (plan-5.5) before any skip ships.
 - **Recharts bundle/SCA**: if the security scan flags it or the bundle grows unacceptably, fall back
   to uPlot (owner said reusable matters, not the specific lib) — a plan-4.5 decision.
 - **Raw-log growth**: hard cap enforced at flush time; a fleet that never tunes it stays bounded by
