@@ -247,7 +247,7 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 4 | Flip WASM default + soak | ✅ merged | #270 |
 | 5 | Delete the TS twin (deps + conformance re-home) | ✅ merged | #271 |
 | 5b | Pure-core splits (semantic.go→5, peers.go→3, orientation extracted) | ✅ merged | this PR |
-| 6 | Go-only renderer hygiene (ShellToken seam) | 🔄 in review | this PR |
+| 6 | Go-only renderer hygiene (ShellToken seam) | ✅ merged | #273 |
 | 7 | Error framework (handler adapter + sentinel→code table) | ✅ merged | #265 |
 | 8 | Store behavioral core (KEYSTONE, last) | ✅ merged | #269 |
 | 9 | Airgap-server retirement (gated) | pending | — |
