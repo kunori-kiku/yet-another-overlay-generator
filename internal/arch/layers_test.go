@@ -49,18 +49,38 @@ var forbidden = []string{
 // import-direction test; see framework-refactor plan-1.)
 var allow = map[string]bool{}
 
-// TestPureCoreImportsNothingStateful walks each pure-core package's full transitive
-// dependency set (via `go list -deps`) and fails on any edge into a forbidden stateful
-// package that is not in the shrink-only allow-list.
+// buildTagSets are the build-tag contexts the ratchet evaluates. The pure core must hold
+// the boundary under BOTH the default build AND the //go:build airgap build (the
+// two-deployment split), so a future airgap-tagged pure-core file can never evade the check
+// via a build context that `go list -deps` would otherwise skip. The forbidden-edge check
+// runs over the UNION of the two dependency sets.
+var buildTagSets = [][]string{
+	nil,        // default build context
+	{"airgap"}, // //go:build airgap build context
+}
+
+// TestPureCoreImportsNothingStateful walks each pure-core package's transitive dependency
+// set — under both the default and the airgap build contexts (unioned) — and fails on any
+// edge into a forbidden stateful package that is not in the shrink-only allow-list.
 func TestPureCoreImportsNothingStateful(t *testing.T) {
 	for _, pkg := range pureCore {
 		full := modulePath + "/" + pkg
-		out, err := exec.Command("go", "list", "-deps", full).CombinedOutput()
-		if err != nil {
-			t.Fatalf("go list -deps %s: %v\n%s", full, err, out)
+		deps := map[string]bool{}
+		for _, tags := range buildTagSets {
+			args := []string{"list", "-deps"}
+			if len(tags) > 0 {
+				args = append(args, "-tags", strings.Join(tags, ","))
+			}
+			args = append(args, full)
+			out, err := exec.Command("go", args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				deps[strings.TrimSpace(dep)] = true
+			}
 		}
-		for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			dep = strings.TrimSpace(dep)
+		for dep := range deps {
 			if !strings.HasPrefix(dep, modulePath+"/") {
 				continue // stdlib or external dep — not our concern here
 			}
