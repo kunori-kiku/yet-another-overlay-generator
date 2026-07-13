@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // Compile-time assertion that *MemStore satisfies the Store interface.
@@ -200,7 +200,7 @@ func (s *MemStore) ListNodes(ctx context.Context, t TenantID) ([]Node, error) {
 // set). Returns ErrNotFound if the node does not exist. An empty agentVersion (a legacy
 // agent) leaves the stored version untouched so a previously-known version is not wiped;
 // conditions are server-stamped with observedAt and a nil/empty slice clears the set.
-func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error {
+func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []runtimecontract.Condition, observedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)
@@ -222,7 +222,7 @@ func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID 
 // RecordTelemetry writes a LIVE health heartbeat: conditions + last-seen (+ agent version when
 // non-empty). It is a strict subset of SetAppliedGeneration — it does NOT touch AppliedGeneration /
 // LastChecksum / LastHealth / DesiredGeneration, so a heartbeat never affects deploy custody.
-func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
+func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := s.tenant(t)

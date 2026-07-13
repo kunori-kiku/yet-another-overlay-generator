@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // fakePoster counts Telemetry POSTs (the beats that actually had something to send).
 type fakePoster struct{ n int64 }
 
-func (f *fakePoster) Telemetry(_ []model.Condition, _ map[string]any) error {
+func (f *fakePoster) Telemetry(_ []runtimecontract.Condition, _ map[string]any) error {
 	atomic.AddInt64(&f.n, 1)
 	return nil
 }
@@ -22,7 +22,7 @@ func (f *fakePoster) Telemetry(_ []model.Condition, _ map[string]any) error {
 type alwaysSampler struct{}
 
 func (alwaysSampler) Name() string { return "test" }
-func (alwaysSampler) Sample(time.Time) ([]model.Condition, map[string]any) {
+func (alwaysSampler) Sample(time.Time) ([]runtimecontract.Condition, map[string]any) {
 	return nil, map[string]any{"test": 1}
 }
 

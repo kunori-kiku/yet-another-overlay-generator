@@ -1,4 +1,8 @@
-package model
+// Package runtimecontract holds the stateful agent<->controller runtime-report types — the
+// wire contract by which a live agent reports facts about itself to the controller. These are
+// NOT topology-schema types (those live in internal/model, the pure leaf); they are runtime
+// state, so they are homed here, outside the pure compile core.
+package runtimecontract
 
 // Condition is one structured, curated feedback fact an agent reports about itself, in the
 // Kubernetes-conditions shape. It REPLACES brittle free-form-health string-matching (the panel
@@ -10,9 +14,9 @@ package model
 // code) per Type, and Message is a SINGLE length-capped human line produced by a classify() mapping
 // — NEVER the raw stderr / LastError dump. Message is for an operator tooltip, not a log sink.
 //
-// Type and Status are plain strings (matching the package idiom — Edge.Transport, Node.XDPMode are
-// likewise plain strings); the exported constants below are the closed value sets every consumer
-// references so there is one source of truth.
+// Type and Status are plain strings (matching the model-package idiom — Edge.Transport,
+// Node.XDPMode are likewise plain strings); the exported constants below are the closed value sets
+// every consumer references so there is one source of truth.
 type Condition struct {
 	// Type is the condition kind ("configapply", "selfupdate", "wireguard", "mimic"). Stable,
 	// machine-readable; the panel may render a richer chip for known types and a generic strip for

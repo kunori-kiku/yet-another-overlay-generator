@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // mimicCapabilityMetricKey carries the PRE-DEPLOY "can this node run mimic" heuristic (plan-3 of
@@ -58,7 +58,7 @@ type mimicCapabilitySampler struct{}
 
 func (mimicCapabilitySampler) Name() string { return "mimic-capability" }
 
-func (mimicCapabilitySampler) Sample(_ time.Time) ([]model.Condition, map[string]any) {
+func (mimicCapabilitySampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	kRaw, kerr := kernelReleaseFn()
 	if kerr != nil {
 		return nil, nil // no /proc/sys/kernel/osrelease (non-Linux) → no signal

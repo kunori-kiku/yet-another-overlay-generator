@@ -4,19 +4,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // fakeSampler is a test Sampler with canned output (or a panic, to prove the recover guard).
 type fakeSampler struct {
 	name    string
-	conds   []model.Condition
+	conds   []runtimecontract.Condition
 	metrics map[string]any
 	panics  bool
 }
 
 func (f fakeSampler) Name() string { return f.name }
-func (f fakeSampler) Sample(now time.Time) ([]model.Condition, map[string]any) {
+func (f fakeSampler) Sample(now time.Time) ([]runtimecontract.Condition, map[string]any) {
 	if f.panics {
 		panic("sampler boom")
 	}
@@ -29,14 +29,14 @@ func (f fakeSampler) Sample(now time.Time) ([]model.Condition, map[string]any) {
 // output — a probe must never take the daemon down.
 func TestTelemetryCollect_MergeRecover(t *testing.T) {
 	now := time.Now().UTC()
-	wgDown := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusWarn, Reason: "LinkDown"}
-	wgUp := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp"}
-	cfg := model.Condition{Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK, Reason: "Applied"}
+	wgDown := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusWarn, Reason: "LinkDown"}
+	wgUp := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "AllPeersUp"}
+	cfg := runtimecontract.Condition{Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK, Reason: "Applied"}
 
 	tel := &Telemetry{samplers: []Sampler{
-		fakeSampler{name: "a", conds: []model.Condition{cfg, wgDown}, metrics: map[string]any{"x": 1, "y": 2}},
+		fakeSampler{name: "a", conds: []runtimecontract.Condition{cfg, wgDown}, metrics: map[string]any{"x": 1, "y": 2}},
 		fakeSampler{name: "panicky", panics: true}, // recovered → contributes nothing
-		fakeSampler{name: "b", conds: []model.Condition{wgUp}, metrics: map[string]any{"y": 9, "z": 3}},
+		fakeSampler{name: "b", conds: []runtimecontract.Condition{wgUp}, metrics: map[string]any{"y": 9, "z": 3}},
 	}}
 
 	conds, metrics := tel.Collect(now)
@@ -46,10 +46,10 @@ func TestTelemetryCollect_MergeRecover(t *testing.T) {
 	if len(conds) != 2 {
 		t.Fatalf("len(conds) = %d, want 2 (configapply + merged wireguard); got %+v", len(conds), conds)
 	}
-	if conds[0].Type != model.ConditionTypeConfigApply {
+	if conds[0].Type != runtimecontract.ConditionTypeConfigApply {
 		t.Fatalf("conds[0].Type = %q, want configapply (stable first-seen order)", conds[0].Type)
 	}
-	if conds[1].Type != model.ConditionTypeWireGuard || conds[1].Reason != "AllPeersUp" {
+	if conds[1].Type != runtimecontract.ConditionTypeWireGuard || conds[1].Reason != "AllPeersUp" {
 		t.Fatalf("conds[1] = %+v, want wireguard/AllPeersUp (last-writer-wins by Type)", conds[1])
 	}
 	if metrics["x"] != 1 || metrics["y"] != 9 || metrics["z"] != 3 {
@@ -97,10 +97,10 @@ func TestConditionSampler(t *testing.T) {
 	}
 	var haveConfig, haveWGUp bool
 	for _, c := range conds {
-		if c.Type == model.ConditionTypeConfigApply && c.Status == model.ConditionStatusOK {
+		if c.Type == runtimecontract.ConditionTypeConfigApply && c.Status == runtimecontract.ConditionStatusOK {
 			haveConfig = true
 		}
-		if c.Type == model.ConditionTypeWireGuard && c.Reason == reasonWGAllPeersUp {
+		if c.Type == runtimecontract.ConditionTypeWireGuard && c.Reason == reasonWGAllPeersUp {
 			haveWGUp = true
 		}
 	}

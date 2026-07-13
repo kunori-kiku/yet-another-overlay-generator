@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TenantID scopes every Store operation. It is the structural tenant-isolation
@@ -127,11 +128,11 @@ type Node struct {
 }
 
 // NodeCondition is one stored agent condition with a SERVER-stamped ObservedAt. It embeds the
-// reported model.Condition verbatim (type/status/reason/message/since) and adds the controller's
+// reported runtimecontract.Condition verbatim (type/status/reason/message/since) and adds the controller's
 // authoritative receipt time, so the panel orders/ages conditions by a clock the node cannot spoof
 // (the wire Since is advisory only). Persisted by both Store impls on the whole-Node write.
 type NodeCondition struct {
-	model.Condition
+	runtimecontract.Condition
 	// ObservedAt is the controller wall-clock time SetAppliedGeneration recorded this condition.
 	ObservedAt time.Time `json:"observed_at"`
 }
@@ -142,12 +143,12 @@ type NodeCondition struct {
 // caller — present or future — can drive an unbounded allocation here.
 const maxStoredConditions = 64
 
-// stampConditions wraps each reported model.Condition with the controller's authoritative
+// stampConditions wraps each reported runtimecontract.Condition with the controller's authoritative
 // ObservedAt. A nil/empty report clears the stored set (the latest report is the truth: an agent
 // that no longer reports a condition has it removed). The wire Since is carried through unchanged
 // (advisory); ObservedAt is the server clock. Shared by both Store impls so the server-stamp logic
 // is not duplicated.
-func stampConditions(conditions []model.Condition, observedAt time.Time) []NodeCondition {
+func stampConditions(conditions []runtimecontract.Condition, observedAt time.Time) []NodeCondition {
 	if len(conditions) == 0 {
 		return nil
 	}
@@ -508,7 +509,7 @@ type Store interface {
 	// reported build version — "" from a legacy agent leaves the stored version unchanged —
 	// and the structured conditions set, server-stamped with observedAt; a nil/empty
 	// conditions slice clears the stored set).
-	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error
+	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []runtimecontract.Condition, observedAt time.Time) error
 	// RecordTelemetry records a LIVE health heartbeat (beta9-smoke-hardening plan-1): it writes ONLY
 	// the node's structured conditions (server-stamped with observedAt; nil/empty clears the set), the
 	// extensible metrics map (replaced wholesale; nil clears it), its last-seen time, and — when
@@ -516,7 +517,7 @@ type Store interface {
 	// DELIBERATELY does NOT touch AppliedGeneration / LastChecksum / LastHealth / DesiredGeneration:
 	// telemetry is observability, kept strictly separate from deploy custody, so a heartbeat can never
 	// advance or regress a node's applied generation. Returns ErrNotFound if the node does not exist.
-	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error
+	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 	// QueryTelemetryHistory returns the node's retained resource-history samples within [from, to]

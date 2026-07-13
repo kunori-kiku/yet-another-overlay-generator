@@ -3,7 +3,7 @@ package agent
 import (
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // telemetry.go is the agent's LIVE monitoring framework (beta9-smoke-hardening plan-1). The Node
@@ -37,7 +37,7 @@ import (
 // (mutate the input → the output must change).
 type Sampler interface {
 	Name() string
-	Sample(now time.Time) (conditions []model.Condition, metrics map[string]any)
+	Sample(now time.Time) (conditions []runtimecontract.Condition, metrics map[string]any)
 }
 
 // Telemetry aggregates the registered Samplers into a single heartbeat payload. It is constructed once
@@ -52,7 +52,7 @@ type Telemetry struct {
 // controller's wholesale per-report replace), preserving first-seen order for a stable display.
 // Metrics are unioned (later keys win). A panicking sampler contributes nothing and is skipped; the
 // others still produce output (best-effort observability must never take the daemon down).
-func (t *Telemetry) Collect(now time.Time) (conditions []model.Condition, metrics map[string]any) {
+func (t *Telemetry) Collect(now time.Time) (conditions []runtimecontract.Condition, metrics map[string]any) {
 	condIdx := make(map[string]int) // Condition.Type -> position in conditions (stable order, last-value-wins)
 	for _, s := range t.samplers {
 		conds, m := sampleGuarded(s, now)
@@ -76,7 +76,7 @@ func (t *Telemetry) Collect(now time.Time) (conditions []model.Condition, metric
 
 // sampleGuarded runs one Sampler under a recover so a panicking probe yields (nil, nil) instead of
 // crashing the heartbeat goroutine (and with it the daemon process).
-func sampleGuarded(s Sampler, now time.Time) (conds []model.Condition, metrics map[string]any) {
+func sampleGuarded(s Sampler, now time.Time) (conds []runtimecontract.Condition, metrics map[string]any) {
 	defer func() {
 		if r := recover(); r != nil {
 			conds, metrics = nil, nil
@@ -96,7 +96,7 @@ type conditionSampler struct {
 
 func (conditionSampler) Name() string { return "conditions" }
 
-func (s conditionSampler) Sample(now time.Time) ([]model.Condition, map[string]any) {
+func (s conditionSampler) Sample(now time.Time) ([]runtimecontract.Condition, map[string]any) {
 	prev, err := LoadState(s.stateDir)
 	if err != nil || prev == nil || prev.LastResult == "" {
 		// No state file, a transient read error, OR a node that has never completed an apply cycle

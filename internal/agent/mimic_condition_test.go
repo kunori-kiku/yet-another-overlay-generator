@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TestClassifyMimic is the curated-reason CONTRACT (perpetual): every closed outcome token maps to a
@@ -19,16 +20,16 @@ func TestClassifyMimic(t *testing.T) {
 		reason  string
 		status  string
 	}{
-		{model.MimicOutcomeActive, mimicReasonActive, model.ConditionStatusOK},
-		{model.MimicOutcomeKernelTooOld, mimicReasonKernelTooOld, model.ConditionStatusWarn},
-		{model.MimicOutcomeEbpfLoad, mimicReasonEbpfLoadFailed, model.ConditionStatusWarn},
-		{model.MimicOutcomeInstallFailed, mimicReasonInstallFailed, model.ConditionStatusWarn},
-		{model.MimicOutcomeFellBackToUDP, mimicReasonFellBackToUDP, model.ConditionStatusWarn},
-		{model.MimicOutcomeEgressUnresolved, mimicReasonEgressUnresolved, model.ConditionStatusWarn},
-		{model.MimicOutcomeNativeDowngraded, mimicReasonNativeDowngraded, model.ConditionStatusOK},
-		{model.MimicOutcomeModuleUnavailable, mimicReasonModuleUnavailable, model.ConditionStatusWarn},
-		{"some_future_token", mimicReasonUnknown, model.ConditionStatusWarn},
-		{"", mimicReasonUnknown, model.ConditionStatusWarn},
+		{model.MimicOutcomeActive, mimicReasonActive, runtimecontract.ConditionStatusOK},
+		{model.MimicOutcomeKernelTooOld, mimicReasonKernelTooOld, runtimecontract.ConditionStatusWarn},
+		{model.MimicOutcomeEbpfLoad, mimicReasonEbpfLoadFailed, runtimecontract.ConditionStatusWarn},
+		{model.MimicOutcomeInstallFailed, mimicReasonInstallFailed, runtimecontract.ConditionStatusWarn},
+		{model.MimicOutcomeFellBackToUDP, mimicReasonFellBackToUDP, runtimecontract.ConditionStatusWarn},
+		{model.MimicOutcomeEgressUnresolved, mimicReasonEgressUnresolved, runtimecontract.ConditionStatusWarn},
+		{model.MimicOutcomeNativeDowngraded, mimicReasonNativeDowngraded, runtimecontract.ConditionStatusOK},
+		{model.MimicOutcomeModuleUnavailable, mimicReasonModuleUnavailable, runtimecontract.ConditionStatusWarn},
+		{"some_future_token", mimicReasonUnknown, runtimecontract.ConditionStatusWarn},
+		{"", mimicReasonUnknown, runtimecontract.ConditionStatusWarn},
 	}
 	for _, tc := range cases {
 		reason, status, message := classifyMimic(tc.outcome)
@@ -63,20 +64,20 @@ func TestReadMimicCondition(t *testing.T) {
 	}
 	write(`{"outcome":"fell_back_to_udp","egress":"eth0","ts":"2026-06-22T12:59:00Z"}`)
 	c, has := readMimicCondition(path, now)
-	if !has || c.Type != model.ConditionTypeMimic || c.Reason != mimicReasonFellBackToUDP || c.Status != model.ConditionStatusWarn {
+	if !has || c.Type != runtimecontract.ConditionTypeMimic || c.Reason != mimicReasonFellBackToUDP || c.Status != runtimecontract.ConditionStatusWarn {
 		t.Fatalf("fell_back_to_udp: has=%v cond=%+v", has, c)
 	}
 	if c.Since != "2026-06-22T12:59:00Z" {
 		t.Errorf("Since = %q, want the breadcrumb ts 2026-06-22T12:59:00Z", c.Since)
 	}
-	if c.Message == "" || len([]rune(c.Message)) > model.ConditionMessageMax {
+	if c.Message == "" || len([]rune(c.Message)) > runtimecontract.ConditionMessageMax {
 		t.Errorf("message must be a curated, capped line, got %q", c.Message)
 	}
 
 	// Malformed JSON ⇒ a generic warn (Unknown), not a crash.
 	write(`{not json`)
 	c, has = readMimicCondition(path, now)
-	if !has || c.Reason != mimicReasonUnknown || c.Status != model.ConditionStatusWarn {
+	if !has || c.Reason != mimicReasonUnknown || c.Status != runtimecontract.ConditionStatusWarn {
 		t.Fatalf("malformed breadcrumb must yield a generic warn, got has=%v cond=%+v", has, c)
 	}
 }
@@ -98,7 +99,7 @@ func TestReadMimicCondition_LiveReconcile(t *testing.T) {
 	// active breadcrumb + unit NOT active -> live Stopped (warn).
 	mimicUnitActiveFn = func(string) bool { return false }
 	write("active", "eth0")
-	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonStopped || c.Status != model.ConditionStatusWarn {
+	if c, _ := readMimicCondition(path, now); c.Reason != mimicReasonStopped || c.Status != runtimecontract.ConditionStatusWarn {
 		t.Errorf("active breadcrumb + stopped unit = (%s,%s), want (%s,warn)", c.Reason, c.Status, mimicReasonStopped)
 	}
 
@@ -145,7 +146,7 @@ func TestCollectConditions_IncludesMimic(t *testing.T) {
 
 	// wgShowFn is stubbed hermetic by TestMain; selfUpdate has nothing (nil prev fields).
 	got := collectConditions(&State{}, true, now)
-	if _, ok := findCond(got, model.ConditionTypeMimic); !ok {
+	if _, ok := findCond(got, runtimecontract.ConditionTypeMimic); !ok {
 		t.Fatalf("collectConditions did not include the mimic condition: %+v", got)
 	}
 }

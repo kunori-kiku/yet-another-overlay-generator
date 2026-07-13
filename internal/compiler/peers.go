@@ -1126,7 +1126,7 @@ func gapFillLinkLocalPair(usedLinkLocals map[string]bool) (string, string) {
 // only at deploy time. node is still needed for the error message (node.Name) and for
 // per-node deduplication (node.ID).
 func lowestFreePort(node *model.Node, usedPorts map[string]map[int]bool) (int, error) {
-	const base = 51820
+	const base = allocconst.WGListenPortBase
 	used := usedPorts[node.ID]
 	for port := base; port <= 65535; port++ {
 		if used == nil || !used[port] {
@@ -1357,8 +1357,8 @@ func DeriveClientConfigs(topo *model.Topology, keys map[string]KeyPair, allocati
 			appendCIDR(transitCIDR)
 		}
 
-		// Client listen port (fixed base 51820; per-node listen_port has been removed).
-		listenPort := 51820
+		// Client listen port (fixed base WGListenPortBase, 51820; per-node listen_port has been removed).
+		listenPort := allocconst.WGListenPortBase
 
 		// mimic-ness is taken from the transport of the client's single outbound edge
 		// (docs/spec/data-model/edge.md §TCP transport); the MTU is derived from the

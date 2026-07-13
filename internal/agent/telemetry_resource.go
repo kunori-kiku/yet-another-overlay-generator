@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // resourceMetricKey is the telemetry metrics-map key carrying host resource utilization (load + memory).
@@ -52,7 +52,7 @@ type resourceSampler struct {
 
 func (*resourceSampler) Name() string { return "resource" }
 
-func (s *resourceSampler) Sample(_ time.Time) ([]model.Condition, map[string]any) {
+func (s *resourceSampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	loadRaw, err := loadavgFn()
 	if err != nil {
 		return nil, nil

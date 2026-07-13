@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TestNodeLimiter: the per-node request-rate limiter (F1) admits exactly maxNodeRequestsPerWindow
@@ -94,10 +94,10 @@ func TestHandleTelemetryBounds(t *testing.T) {
 	env := newCtlTestEnv(t)
 	token := env.enrollNode(t, "node-1")
 
-	manyConds := func(n int) []model.Condition {
-		out := make([]model.Condition, n)
+	manyConds := func(n int) []runtimecontract.Condition {
+		out := make([]runtimecontract.Condition, n)
 		for i := range out {
-			out[i] = model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "R", Message: "ok"}
+			out[i] = runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "R", Message: "ok"}
 		}
 		return out
 	}
@@ -116,7 +116,7 @@ func TestHandleTelemetryBounds(t *testing.T) {
 	}
 	// Over-long condition Message → 400.
 	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token,
-		telemetryRequestJSON{Conditions: []model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Message: strings.Repeat("x", model.ConditionMessageMax+1)}}}, nil); status != http.StatusBadRequest {
+		telemetryRequestJSON{Conditions: []runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Message: strings.Repeat("x", runtimecontract.ConditionMessageMax+1)}}}, nil); status != http.StatusBadRequest {
 		t.Fatalf("over-long message: status %d, want 400", status)
 	}
 	// Over-count metrics → 400.
@@ -136,7 +136,7 @@ func TestHandleTelemetryBounds(t *testing.T) {
 	}
 	// Over-size condition Reason (a non-Message field) → 400.
 	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token,
-		telemetryRequestJSON{Conditions: []model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: strings.Repeat("x", maxConditionBytes+1)}}}, nil); status != http.StatusBadRequest {
+		telemetryRequestJSON{Conditions: []runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: strings.Repeat("x", maxConditionBytes+1)}}}, nil); status != http.StatusBadRequest {
 		t.Fatalf("over-size condition Reason: status %d, want 400", status)
 	}
 	// At-limit conditions succeed.
@@ -152,9 +152,9 @@ func TestHandleReportBounds(t *testing.T) {
 	env := newCtlTestEnv(t)
 	token := env.enrollNode(t, "node-1")
 
-	over := make([]model.Condition, maxReportedConditions+1)
+	over := make([]runtimecontract.Condition, maxReportedConditions+1)
 	for i := range over {
-		over[i] = model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK}
+		over[i] = runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK}
 	}
 	if status := doJSON(t, http.MethodPost, env.agentURL("report"), token,
 		reportRequestJSON{AppliedGeneration: 1, Checksum: "c", Health: "applied", Conditions: over}, nil); status != http.StatusBadRequest {
@@ -162,7 +162,7 @@ func TestHandleReportBounds(t *testing.T) {
 	}
 	if status := doJSON(t, http.MethodPost, env.agentURL("report"), token,
 		reportRequestJSON{AppliedGeneration: 1, Checksum: "c", Health: "applied",
-			Conditions: []model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Message: "ok"}}}, nil); status != http.StatusOK {
+			Conditions: []runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Message: "ok"}}}, nil); status != http.StatusOK {
 		t.Fatalf("/report normal: status %d, want 200", status)
 	}
 }

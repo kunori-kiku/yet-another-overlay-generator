@@ -58,14 +58,14 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // telemetryPoster is the subset of *agent.ControllerClient that runHeartbeat needs — indirected so a
 // test injects a counting fake (no controller) and drives the kick/tick loop directly. *ControllerClient
 // satisfies it via its Telemetry method.
 type telemetryPoster interface {
-	Telemetry(conditions []model.Condition, metrics map[string]any) error
+	Telemetry(conditions []runtimecontract.Condition, metrics map[string]any) error
 }
 
 // BuildVersion is the agent's build version, overwritten at release link time via
