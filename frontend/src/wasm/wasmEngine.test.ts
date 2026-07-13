@@ -56,7 +56,12 @@ beforeAll(async () => {
   const go = new GoCtor();
   const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), go.importObject);
   void go.run(instance); // registers globalThis.yaog synchronously, then parks on select{}
-});
+  // A COLD `GOOS=js GOARCH=wasm` build (CI, where web/yaog.wasm is gitignored and thus absent) takes
+  // well over vitest's default 10s hook budget, so the build-on-demand above needs a generous timeout
+  // — otherwise the whole suite times out in beforeAll (the conformance job caught exactly this). CI
+  // also pre-builds the wasm so existsSync short-circuits the build; the timeout is the local/anywhere
+  // safety net.
+}, 180_000);
 
 describe('wasmEngine (in-browser Go/WASM local engine)', () => {
   it('registers the yaog API on globalThis after instantiation', () => {
