@@ -4,6 +4,27 @@ import { defineConfig, devices } from '@playwright/test'
 // desktop-only. One regex, used by both the ignore (functional project) and match (device projects).
 const RESPONSIVE_MATCH = /responsive\/.*\.spec\.ts$/
 
+// The WASM multi-browser soak (framework-refactor plan-4): the wasm-design flow — the only local
+// compute path that runs the in-browser Go/WASM engine end-to-end — fans out across the two
+// non-Chromium engines so the manual multi-browser soak becomes an automated per-browser check
+// (chromium runs it as the perpetual guard via the functional project's testIgnore below; these
+// two run ONLY this spec, to stay fast + targeted). WebKit is the headline target: a
+// WebKit-specific WASM quirk is exactly what the soak adds over the headless node gate.
+const WASM_DESIGN_MATCH = /wasm-design\.spec\.ts$/
+
+// The soak projects are OPT-IN (YAOG_WASM_SOAK=1) so the required frontend-e2e CI job — which
+// installs ONLY Chromium — can never go red on an uninstalled browser: the projects simply do not
+// exist unless opted in. CI keeps the Chromium perpetual guard; a local run (or a CI that first
+// `npx playwright install webkit firefox`) enables the soak with the env flag. This is the
+// automated multi-browser soak evidence gating plan-5 (the TS-twin deletion).
+const wasmSoakProjects =
+  process.env.YAOG_WASM_SOAK === '1'
+    ? [
+        { name: 'webkit', testMatch: WASM_DESIGN_MATCH, use: { ...devices['Desktop Safari'] } },
+        { name: 'firefox', testMatch: WASM_DESIGN_MATCH, use: { ...devices['Desktop Firefox'] } },
+      ]
+    : []
+
 // Playwright config for the YAOG browser E2E layer (plan-13 / milestone 3.1) — the first
 // browser end-to-end tests the project has had. It runs the REAL built panel (served by a
 // test-mode Go controller, EnableStatic) against a live controller + a real agent fixture.
@@ -64,5 +85,8 @@ export default defineConfig({
     // breadth. Chromium engine (not iPad Mini's default WebKit — CI installs only Chromium) at a
     // 768-wide touch viewport; the layout crossover, not the rendering engine, is what this asserts.
     { name: 'tablet', testMatch: RESPONSIVE_MATCH, use: { ...devices['Desktop Chrome'], viewport: { width: 768, height: 1024 }, hasTouch: true, isMobile: true } },
+    // The plan-4 WASM cross-engine soak (webkit + firefox), scoped to the wasm-design flow. Present
+    // only under YAOG_WASM_SOAK=1 (see wasmSoakProjects above) so CI's Chromium-only install is safe.
+    ...wasmSoakProjects,
   ],
 })

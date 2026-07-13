@@ -18,8 +18,8 @@ afterEach(() => {
 });
 
 describe('deployMode() descriptor', () => {
-  it('both flags unset ⇒ default all-in-one controller build, in-browser TS engine', () => {
-    expect(deployMode()).toEqual({ localOnly: false, localEngine: 'ts' });
+  it('both flags unset ⇒ default all-in-one controller build, in-browser WASM engine', () => {
+    expect(deployMode()).toEqual({ localOnly: false, localEngine: 'wasm' });
   });
 
   describe('localOnly (VITE_LOCAL_ONLY truthiness)', () => {
@@ -34,14 +34,19 @@ describe('deployMode() descriptor', () => {
     });
   });
 
-  describe('localEngine (VITE_YAOG_LOCAL_ENGINE selector, default-ON)', () => {
-    it('unset ⇒ ts (in-browser compiler)', () => {
-      expect(deployMode().localEngine).toBe('ts');
+  describe('localEngine (VITE_YAOG_LOCAL_ENGINE selector, default-ON WASM since plan-4)', () => {
+    it('unset ⇒ wasm (the default in-browser Go/WASM engine)', () => {
+      expect(deployMode().localEngine).toBe('wasm');
     });
 
-    it("'local' ⇒ ts (in-browser compiler)", () => {
+    it("'local' ⇒ wasm (the default in-browser engine)", () => {
       vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
-      expect(deployMode().localEngine).toBe('ts');
+      expect(deployMode().localEngine).toBe('wasm');
+    });
+
+    it('a stray value ⇒ wasm (runtime belt-and-suspenders default)', () => {
+      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'nonsense');
+      expect(deployMode().localEngine).toBe('wasm');
     });
 
     it("only the exact 'backend' ⇒ backend (the Go air-gap escape hatch)", () => {
@@ -49,13 +54,23 @@ describe('deployMode() descriptor', () => {
       expect(deployMode().localEngine).toBe('backend');
     });
 
-    it("'wasm' ⇒ wasm (the opt-in in-browser Go/WASM engine, plan-3)", () => {
+    it("the exact 'ts' ⇒ ts (the retained in-browser TS fallback, invariant [9])", () => {
+      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
+      expect(deployMode().localEngine).toBe('ts');
+    });
+
+    it("'wasm' ⇒ wasm (explicit)", () => {
       vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'wasm');
       expect(deployMode().localEngine).toBe('wasm');
     });
 
     it("'wasm' keeps localEngineEnabled() true (browser path, not the air-gap escape hatch)", () => {
       vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'wasm');
+      expect(localEngineEnabled()).toBe(true);
+    });
+
+    it("'ts' keeps localEngineEnabled() true (browser path, not the air-gap escape hatch)", () => {
+      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
       expect(localEngineEnabled()).toBe(true);
     });
   });

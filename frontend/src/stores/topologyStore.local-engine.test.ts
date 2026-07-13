@@ -2,14 +2,21 @@
 //
 // topologyStore.local-engine.test.ts — the FIRST store-level vitest suite (plan-6, milestone
 // 1.6; report §7: "FRONTEND HAS ZERO AUTOMATED TESTS"). It pins the local-engine SEAM: that
-// in LOCAL mode with the flag unset or set to 'local' (default-ON, plan-7 Phase 0.5) the four
-// compute actions (validate/compile/exportArtifacts/downloadDeployScript) run the in-browser
-// plan-4 TS compiler and never fetch; that ONLY the explicit 'backend' opt-out makes them POST
-// to the backend (the retained escape-hatch path, LOCAL-mode-only); that the CONTROLLER-mode
-// boundary keeps verify off the wire (validate runs the in-browser validator — browser-local
-// verify — and never calls /api/validate, even under the 'backend' flag; compile/export/deploy
-// refuse); that an in-flight controller mode-flip drops a local compile's reconstructed private
-// keys; and that the local CompileResponse is the exact air-gap shape downstream consumers expect.
+// in LOCAL mode with an in-browser engine selected the four compute actions
+// (validate/compile/exportArtifacts/downloadDeployScript) run client-side and never fetch; that
+// ONLY the explicit 'backend' opt-out makes them POST to the backend (the retained escape-hatch
+// path, LOCAL-mode-only); that the CONTROLLER-mode boundary keeps verify off the wire (validate
+// runs the in-browser validator — browser-local verify — and never calls /api/validate, even
+// under the 'backend' flag; compile/export/deploy refuse); that an in-flight controller mode-flip
+// drops a local compile's reconstructed private keys; and that the local CompileResponse is the
+// exact air-gap shape downstream consumers expect.
+//
+// POST-plan-4 (WASM flip): the DEFAULT local engine is now the in-browser Go/WASM pipeline (unset
+// ⇒ 'wasm'). The real wasm needs an instantiated Go instance, so this fast pure-node suite pins
+// the TS FALLBACK seam by selecting it explicitly (VITE_YAOG_LOCAL_ENGINE='ts') — the one-flag
+// fallback that MUST keep working throughout the soak (invariant [9]). The default-is-wasm routing
+// is asserted at the predicate level in 6.1; the wasm engine's OUTPUT parity is pinned separately
+// by wasmEngine.test.ts + the permanent three-way WASM-vs-golden gate.
 //
 // The suite uses the REAL compiler (no compiler mock) so the parity groups (6.4/6.5/6.6) pin
 // the actual library output, and uses a node environment with a minimal DOM stub for the
@@ -21,6 +28,8 @@ import { useTopologyStore } from './topologyStore';
 import { useControllerStore } from './controllerStore';
 import * as compilerIndex from '../compiler/index';
 import { resolveNodeInterfaces } from '../lib/compiledInterfaces';
+import { deployMode } from '../lib/deployMode';
+import { localEngineEnabled } from '../compiler/localEngine';
 import type { Topology } from '../types/topology';
 
 // A minimal but VALID 2-node topology carrying real WireGuard private keys (so the AirGap
@@ -179,10 +188,10 @@ afterEach(() => {
 
 // ── 6.1 — seam routing (default-ON + explicit opt-out) ──
 describe('6.1 seam routing', () => {
-  it('with the flag = local, all four actions run the TS compiler and never fetch', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+  it('with the flag = ts (the retained fallback), all four actions run the TS compiler and never fetch', async () => {
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     const fetchSpy = vi.fn(async () => {
-      throw new Error('fetch must not be called when the local engine is on');
+      throw new Error('fetch must not be called when an in-browser engine is on');
     });
     vi.stubGlobal('fetch', fetchSpy);
 
@@ -201,28 +210,17 @@ describe('6.1 seam routing', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(0);
   });
 
-  it('with the flag unset (default-ON), all four actions run the TS compiler and never fetch', async () => {
-    // No stubEnv ⇒ VITE_YAOG_LOCAL_ENGINE undefined ⇒ default-ON (plan-7 Phase 0.5) ⇒ the
-    // in-browser compiler runs; nothing POSTs to the backend.
-    const fetchSpy = vi.fn(async () => {
-      throw new Error('fetch must not be called when the local engine is default-ON');
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-
-    await useTopologyStore.getState().validate();
-    expect(useTopologyStore.getState().validateResult).not.toBeNull();
-    expect(useTopologyStore.getState().validateResult?.valid).toBe(true);
-
-    await useTopologyStore.getState().compile();
-    expect(useTopologyStore.getState().compileResult).not.toBeNull();
-    expect(useTopologyStore.getState().error).toBeNull();
-
-    await useTopologyStore.getState().exportArtifacts();
-    await useTopologyStore.getState().downloadDeployScript('sh');
-
-    // Default-ON: the single localEngineEnabled() predicate gates all four actions identically,
-    // so each runs the client-side compiler and none falls through to a backend route.
-    expect(fetchSpy).toHaveBeenCalledTimes(0);
+  it('with the flag unset, the DEFAULT local engine is wasm (plan-4 flip) and stays in-browser (not the air-gap fetch)', () => {
+    // Post-plan-4 the default flips from the TS compiler to the in-browser Go/WASM engine: with
+    // VITE_YAOG_LOCAL_ENGINE unset, deployMode().localEngine === 'wasm'. The seam's
+    // browser-vs-air-gap decision is UNCHANGED — localEngineEnabled() stays true (only the exact
+    // 'backend' opts out to the fetch path) — so no consumer's fetch/no-fetch behavior changes.
+    // The wasm engine's compute is exercised end-to-end by wasmEngine.test.ts (a real instance),
+    // the e2e wasm-design flow, and the permanent three-way WASM-vs-golden gate; the TS FALLBACK's
+    // seam behavior (still one flag away — invariant [9]) is pinned by the rest of this suite via
+    // the explicit 'ts' selector.
+    expect(deployMode().localEngine).toBe('wasm');
+    expect(localEngineEnabled()).toBe(true);
   });
 
   it("with the flag = backend (explicit opt-out), local-mode actions still fetch", async () => {
@@ -259,7 +257,7 @@ describe('6.2 controller-mode boundary', () => {
     // The shipped controller 404s /api/validate (plan-7 gates the air-gap routes off the default
     // build), and validate is key-free, so controller mode does browser-local verify — the
     // controller neither serves nor calls the route, keeping its attack surface minimal.
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     useControllerStore.setState({
       mode: 'controller',
       sessionToken: 'sess-abc',
@@ -301,7 +299,7 @@ describe('6.2 controller-mode boundary', () => {
   });
 
   it('controller compile/export/deploy refuse — no compiler call, no fetch', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     useControllerStore.setState({ mode: 'controller' });
     const fetchSpy = vi.fn(async () => {
       throw new Error('controller refusal must not fetch');
@@ -326,7 +324,7 @@ describe('6.2 controller-mode boundary', () => {
 // ── 6.3 — in-flight mode-flip guard ──
 describe('6.3 in-flight mode-flip guard', () => {
   it('a local compile that flips to controller mid-flight drops the result', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -362,7 +360,7 @@ describe('6.3 in-flight mode-flip guard', () => {
 // ── 6.4 — reconciliation parity + air-gap shape ──
 describe('6.4 reconciliation parity + air-gap shape', () => {
   it('a local compile pushes history, writes back alloc version, produces wg configs, and leaves skipped_unenrolled undefined', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -410,7 +408,7 @@ describe('6.4 reconciliation parity + air-gap shape', () => {
 // ── 6.5 — router_id round-trip (F2) ──
 describe('6.5 router_id round-trip', () => {
   it('a pinned router_id survives a local compile (no GenerateRouterID regeneration)', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -433,7 +431,7 @@ describe('6.5 router_id round-trip', () => {
 // ── 6.6 — export-filename parity ──
 describe('6.6 export-filename parity', () => {
   it('a local export downloads `${project.id}-artifacts.zip`', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -446,7 +444,7 @@ describe('6.6 export-filename parity', () => {
   });
 
   it('with project.id === "" the name is "-artifacts.zip" (no || "project" fallback, mirroring handler.go:240)', async () => {
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
+    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {

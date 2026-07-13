@@ -157,6 +157,15 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci --legacy-peer-deps
+      # Build the in-browser Go/WASM engine BEFORE the panel build (framework-refactor plan-4: WASM
+      # is the default local engine). build:wasm compiles web/yaog.wasm + refreshes web/wasm_exec.js
+      # from the CI toolchain and copies BOTH into frontend/public/, so the `vite build` below stamps
+      # them into dist/ — which the boots serve as real static files. The wasm-design spec (the
+      # chromium perpetual guard, plan-4) then instantiates the engine IN-BROWSER; without this step
+      # /yaog.wasm 404s and that spec fails loudly. Go is set up above (used for the bring-up binaries).
+      - name: Build WASM for the e2e panel
+        working-directory: frontend
+        run: npm run build:wasm
       # Build the panel the boots serve from (EnableStatic). globalSetup resolves dist at
       # frontend/dist by default. VITE_E2E=1 compiles in the test-only ErrorBoundary render-throw
       # probe (App.tsx) for the adversarial error-render spec; it is dead-code-eliminated from the
