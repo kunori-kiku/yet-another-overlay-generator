@@ -1,5 +1,14 @@
 package controller
 
+// store_compat_test.go — the cross-backend STORAGE-CONFORMANCE suite. Its historical purpose was to
+// police DRIFT between two hand-mirrored Store impls; after the plan-8 collapse there is ONE behavioral
+// core (storecore.go) over two thin backends, so the anti-drift purpose is retired. What remains is
+// still load-bearing: running each behavioral scenario against BOTH the memkv and filekv backends proves
+// the single core behaves identically over in-memory maps and over the on-disk JSON layout (round-trip,
+// stable list order, generation counter, crash shapes). The rule-level invariants have their canonical
+// home in storecore_test.go; the filekv-only durability/crash cases + the M1/M2/M3 overlay
+// characterizations round out the perpetual net.
+
 import (
 	"bytes"
 	"context"
@@ -232,98 +241,6 @@ func TestStoreTopologyVersioning(t *testing.T) {
 			}
 			if string(cur.JSON) != `{"v":2}` {
 				t.Fatalf("GetTopology JSON = %q, want %q", cur.JSON, `{"v":2}`)
-			}
-		})
-	}
-}
-
-// TestStoreRecordTelemetry covers RecordTelemetry (beta9-smoke-hardening plan-1): a LIVE health
-// heartbeat updates ONLY the node's conditions + last-seen (+ agent version), and CRUCIALLY leaves
-// the deploy-custody fields (AppliedGeneration / LastChecksum / LastHealth) UNCHANGED — the property
-// that lets the heartbeat carry no generation and never regress the applied state. Perpetual: this is
-// the custody-separation invariant the whole /telemetry channel rests on.
-func TestStoreRecordTelemetry(t *testing.T) {
-	for _, impl := range storeImpls() {
-		impl := impl
-		t.Run(impl.name, func(t *testing.T) {
-			ctx := context.Background()
-			s := impl.factory(t)
-
-			// ErrNotFound for an absent node.
-			if err := s.RecordTelemetry(ctx, tenant, "missing", nil, nil, "", time.Now()); !errors.Is(err, ErrNotFound) {
-				t.Fatalf("RecordTelemetry(missing) = %v, want ErrNotFound", err)
-			}
-
-			if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
-				t.Fatalf("UpsertNode: %v", err)
-			}
-			// Establish a deploy-status baseline via the apply path.
-			applyAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
-			applyCond := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusWarn, Reason: "LinkDown", Message: "0/2 peers", Since: "2026-06-23T12:00:00Z"}
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 9, "checksum-9", "applied", "v2.0.0-beta.9", []runtimecontract.Condition{applyCond}, applyAt); err != nil {
-				t.Fatalf("SetAppliedGeneration: %v", err)
-			}
-
-			// A telemetry heartbeat with FRESH conditions + an extensible metrics map + a new version
-			// + a later observed-at.
-			beatAt := time.Date(2026, 6, 23, 12, 0, 30, 0, time.UTC)
-			liveCond := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
-			metrics := map[string]json.RawMessage{
-				"wireguard_peers": json.RawMessage(`[{"peer":"bravo","interface":"wg-bravo","last_handshake":1782820825,"status":"up"}]`),
-			}
-			if err := s.RecordTelemetry(ctx, tenant, "alpha", []runtimecontract.Condition{liveCond}, metrics, "v2.0.0-beta.10", beatAt); err != nil {
-				t.Fatalf("RecordTelemetry: %v", err)
-			}
-			got, err := s.GetNode(ctx, tenant, "alpha")
-			if err != nil {
-				t.Fatalf("GetNode: %v", err)
-			}
-			// Conditions replaced wholesale (live source), server-stamped with the heartbeat's observed-at.
-			if len(got.Conditions) != 1 || got.Conditions[0].Reason != "AllPeersUp" {
-				t.Fatalf("Conditions = %+v, want the live AllPeersUp set", got.Conditions)
-			}
-			if !got.Conditions[0].ObservedAt.Equal(beatAt) {
-				t.Fatalf("condition ObservedAt = %v, want %v (server-stamped with the heartbeat clock)", got.Conditions[0].ObservedAt, beatAt)
-			}
-			if !got.LastSeen.Equal(beatAt) {
-				t.Fatalf("LastSeen = %v, want %v", got.LastSeen, beatAt)
-			}
-			// The extensible metrics map round-trips (the per-peer detail behind the panel). The
-			// FileStore pretty-prints on disk (re-indents the embedded RawMessage), so assert
-			// format-agnostically on the payload's content, not exact bytes.
-			if raw, ok := got.Telemetry["wireguard_peers"]; !ok || !bytes.Contains(raw, []byte("bravo")) {
-				t.Fatalf("Telemetry[wireguard_peers] = %s (ok=%v), want the per-peer payload persisted", raw, ok)
-			}
-			if got.LastAgentVersion != "v2.0.0-beta.10" {
-				t.Fatalf("LastAgentVersion = %q, want v2.0.0-beta.10", got.LastAgentVersion)
-			}
-			// CUSTODY: the deploy-status fields are UNTOUCHED by the heartbeat.
-			if got.AppliedGeneration != 9 {
-				t.Fatalf("AppliedGeneration = %d, want 9 (telemetry must NOT advance/regress it)", got.AppliedGeneration)
-			}
-			if got.LastChecksum != "checksum-9" {
-				t.Fatalf("LastChecksum = %q, want checksum-9 (untouched)", got.LastChecksum)
-			}
-			if got.LastHealth != "applied" {
-				t.Fatalf("LastHealth = %q, want applied (untouched)", got.LastHealth)
-			}
-
-			// An empty-version heartbeat keeps the stored version; nil conditions + nil metrics clear them.
-			if err := s.RecordTelemetry(ctx, tenant, "alpha", nil, nil, "", beatAt.Add(time.Minute)); err != nil {
-				t.Fatalf("RecordTelemetry(nil conds): %v", err)
-			}
-			got, _ = s.GetNode(ctx, tenant, "alpha")
-			if got.Conditions != nil {
-				t.Fatalf("Conditions = %+v, want nil after a nil-conditions heartbeat", got.Conditions)
-			}
-			if got.Telemetry != nil {
-				t.Fatalf("Telemetry = %+v, want nil after a nil-metrics heartbeat", got.Telemetry)
-			}
-			if got.LastAgentVersion != "v2.0.0-beta.10" {
-				t.Fatalf("LastAgentVersion = %q, want unchanged on an empty-version heartbeat", got.LastAgentVersion)
-			}
-			if got.AppliedGeneration != 9 {
-				t.Fatalf("AppliedGeneration = %d, want still 9", got.AppliedGeneration)
 			}
 		})
 	}

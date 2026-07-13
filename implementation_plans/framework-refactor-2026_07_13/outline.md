@@ -248,6 +248,6 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 5 | Delete the TS twin + shed deps + free pure-core splits | pending | — |
 | 6 | Go-only renderer hygiene (ShellToken seam) | pending | — |
 | 7 | Error framework (handler adapter + sentinel→code table) | ✅ merged | #265 |
-| 8 | Store behavioral core (KEYSTONE, last) | pending | — |
+| 8 | Store behavioral core (KEYSTONE, last) | 🔄 in review | this PR |
 | 9 | Airgap-server retirement (gated) | pending | — |
 | 10 | FE polish + drift lock-in | pending | — |
