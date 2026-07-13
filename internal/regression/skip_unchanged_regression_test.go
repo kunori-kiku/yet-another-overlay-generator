@@ -161,6 +161,47 @@ func TestRegression_SkipDisabled_OnKeystoneRotation(t *testing.T) {
 	}
 }
 
+// (f) A lingering staged bundle from a prior stage-WITHOUT-promote (a normal off-host sign-wait state)
+// must NOT survive a later all-unchanged (zero-changed) deploy — otherwise a subsequent /promote would
+// flip the reverted/retracted config LIVE (the beta.4-6 stale-config custody class; the plan-5 review
+// blocker). The zero-changed short-circuit must purge it.
+func TestRegression_ZeroChanged_PurgesLingeringStaged(t *testing.T) {
+	topo := twoNodeTopo()
+	e := newRegEnv(t, topo, "node-1", "node-2")
+
+	// Baseline deploy (non-keystone → clean promote path), both nodes served at gen 1.
+	if _, err := controller.CompileAndStage(e.ctx, e.store, tenant, time.Now()); err != nil {
+		t.Fatalf("CompileAndStage (baseline): %v", err)
+	}
+	if _, err := controller.PromoteStaged(e.ctx, e.store, tenant); err != nil {
+		t.Fatalf("PromoteStaged (baseline): %v", err)
+	}
+
+	// Stage a change to node-1 but DO NOT promote (the sign-wait / mid-deploy window).
+	topo.Nodes[0].ExtraPrefixes = []string{"10.99.0.0/24"}
+	e.putTopo(topo)
+	if res, err := controller.CompileAndStage(e.ctx, e.store, tenant, time.Now()); err != nil {
+		t.Fatalf("CompileAndStage (stage change): %v", err)
+	} else if len(res.Staged) != 1 || res.Staged[0] != "node-1" {
+		t.Fatalf("expected node-1 staged, got %v", res.Staged)
+	}
+
+	// REVERT the change and re-deploy: every node now compiles == served → zero-changed short-circuit.
+	topo.Nodes[0].ExtraPrefixes = nil
+	e.putTopo(topo)
+	if res, err := controller.CompileAndStage(e.ctx, e.store, tenant, time.Now()); err != nil {
+		t.Fatalf("CompileAndStage (revert): %v", err)
+	} else if len(res.Staged) != 0 {
+		t.Fatalf("reverted zero-changed deploy must stage 0, got %v", res.Staged)
+	}
+
+	// The lingering node-1 staged bundle (the reverted-away change) MUST have been purged — so a promote
+	// now has nothing to flip and never resurrects the reverted config.
+	if _, err := controller.PromoteStaged(e.ctx, e.store, tenant); !errors.Is(err, controller.ErrNoStagedBundle) {
+		t.Fatalf("a zero-changed deploy must purge the lingering staged bundle (promote=ErrNoStagedBundle), got %v", err)
+	}
+}
+
 // (e-first-pin) Enabling keystone on an already-deployed (non-keystone) fleet must DISABLE the skip so
 // the first keystone deploy stages every node and the promote SEEDS the served trust-list — even though
 // the bundle content is unchanged (so the digest-only skip would otherwise skip everything and seed

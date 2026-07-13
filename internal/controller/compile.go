@@ -417,12 +417,23 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		staged = append(staged, node.ID)
 	}
 
-	// (plan-5) ZERO-CHANGED short-circuit: every enrolled node was unchanged (delta-skip active), so
-	// nothing was staged. There is nothing to promote — do NOT create an empty staged generation, do NOT
-	// purge (that would drop an unrelated pending staged bundle), and do NOT re-stage the manifest. The
-	// served config stays exactly as-is; agents see no new generation and never re-apply. (Reached only
-	// when the skip is enabled — a keystone rotation/first-pin disables it and always stages every node.)
+	// (plan-5) ZERO-CHANGED short-circuit: every enrolled node compiled byte-identical to its SERVED
+	// bundle (delta-skip active), so nothing was staged. Do NOT re-stage the manifest and do NOT report a
+	// new generation — nothing is promotable. But we MUST still PURGE any lingering staged bundle: when
+	// len(staged)==0 every enrolled node matches served, so a bundle left staged by a prior
+	// stage-without-promote (e.g. an off-host sign-wait) is a SUPERSEDED design — leaving it would let the
+	// next /promote flip a reverted/retracted config LIVE (the beta.4-6 stale-config custody bug; a review
+	// finding). `staged` is empty here, so this purges ALL staged bundles, exactly as the empty-subgraph
+	// path does for the same reason. (Reached only when the skip is enabled — a keystone rotation/first-pin
+	// disables it and always stages every node.)
 	if len(staged) == 0 {
+		purged, pruneErr := store.PruneStagedBundles(ctx, t, staged)
+		for _, nodeID := range purged {
+			appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
+		}
+		if pruneErr != nil {
+			return StageResult{}, fmt.Errorf("controller: purging staged bundles on a zero-changed stage: %w", pruneErr)
+		}
 		appendStageAudit(ctx, store, t, now, "stage-unchanged", "")
 		return StageResult{
 			UnchangedNodeIDs:  unchanged,
