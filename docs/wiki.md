@@ -499,6 +499,30 @@ to a not-yet-enrolled peer reappears in both bundles when the far end enrolls an
 Allocation pins (overlay IPs, transit IPs, ports — never key material) are persisted back after each
 stage, so incremental enrollment never renumbers already-live nodes.
 
+**Delta deploy — only changed nodes re-stage.** A Deploy skips any node whose freshly compiled bundle
+is **byte-identical** to the one it is already serving, leaving unchanged nodes completely alone. The
+identity is a SHA-256 over the bundle's `checksums.sha256` (which covers `install.sh` and every config
+file, but **not** the manifest's volatile `compiled_at`), so it is stable across recompiles whenever
+the real config is unchanged and moves the instant any rendered byte does. A skipped node **keeps its
+current generation** — its agent never sees a newer generation and never re-fetches — so the fleet
+settles at a **mixed generation** where only the changed nodes advance, and a per-link re-handshake
+happens only on the links whose endpoints actually changed (no more fleet-wide churn on a no-op
+Deploy). The skip **fails open**: if the controller can't read a node's currently-served bundle it
+treats the node as changed and re-stages it, never skipping on doubt.
+
+**Pre-deploy preview.** The Deploy dialog shows a preview computed over your **current canvas** —
+"N updated, M unchanged" — as a read-only dry-run that **stages nothing**. It shares the exact skip
+decision and identity the real Deploy uses, so the count matches the actual outcome. If the preview
+can't be fetched (e.g. a newer panel talking to an older controller), the panel surfaces the error but
+still lets you **Deploy anyway** — the preview never hard-blocks a deploy.
+
+**Force redeploy.** You can override the skip: **Force redeploy** re-stages a node (or the whole fleet)
+even when unchanged, and a per-node **Force redeploy this node** sits on the node-detail page. Force is
+for **on-host drift / rescue only** — a node whose local config was tampered with or lost and must be
+re-pushed. It is **not** needed for ordinary changes (a real config change re-stages itself) and
+**not** needed for keystone key-rotation or the first signed deploy, both of which auto-force a full
+re-stage so the signed trust-list re-pins every node.
+
 **Safety rails.** A Deploy that would empty the design or drop ≥ 50% of nodes requires typing the
 project name to confirm. The controller keeps the **last 10 topology versions** for recovery, and an
 append-only, hash-chained **audit log** records every enroll/revoke/stage/promote/rekey (the
@@ -576,6 +600,27 @@ rides the heartbeat's `metrics["wireguard_peers"]` map (peer / interface / endpo
 status — no key material). This telemetry is **live-only**: it is fetched fresh on refresh and
 deliberately **not** persisted to the browser (a frozen handshake age would mislead, and the raw
 endpoint is fleet-confidential).
+
+**Host-resource metrics (`resource`).** Every heartbeat also carries a `resource` metric: `cpu_pct`
+(optional), the `load1` / `load5` / `load15` load averages, and total / available memory. `cpu_pct` is
+CPU utilisation measured as a **delta between consecutive heartbeats**, so the **first** beat after an
+agent (re)starts carries **no** CPU value — a deliberate gap, not a `0` (a real 0 % and "not yet
+measured" must never look alike); every later beat has it.
+
+**CPU / RAM / load history charts.** The controller retains a bounded per-node **history** of the
+`resource` metric, and the node-detail page charts it over time: CPU %, memory-used %, and the load
+averages. You pick a **time range** and a **granularity** (step); the server aggregates the raw samples
+into buckets (average / min / max per bucket) and **omits empty buckets** — a gap in the data (node
+offline, history just enabled) stays a gap on the chart, never a fabricated zero. Very fine steps are
+floored (≈ 1s), and a too-fine step over a large range is automatically widened so the chart stays
+bounded; the effective step is echoed back, so the axis is labelled with what you actually got.
+
+**Retention is configurable.** A per-node sample cap in controller **Settings** bounds the history; the
+default is ≈ 20160 samples ≈ **7 days at the 30s heartbeat**. Setting the cap to **0 disables**
+history — the charts then show a "history off" state. History is append-only and **never blocks the
+heartbeat** (a heartbeat never writes to disk). It is also never frozen: a just-deployed node's charts
+update **promptly** (not only at deploy time), because the heartbeat is the single source and the agent
+nudges a fresh sample right after each apply.
 
 ### 5.9 Mimic `.deb` catalog
 

@@ -346,6 +346,23 @@ showed a stale worst case.)
   no model change. Relatedly, the aggregate `wireguard` condition now distinguishes **all** peers down
   (`LinkDown`) from **some** down (`SomePeersDown`), so one offline mesh peer no longer flags the whole
   node as down.
+- **The `resource` sampler + `cpu_pct`.** `resourceSampler` (`internal/agent/telemetry_resource.go`)
+  emits `metrics["resource"]` = `{cpu_pct?, load1, load5, load15, mem_total_kb, mem_available_kb}` (no key
+  material). It is **stateful**: `cpu_pct` is the delta of `/proc/stat` busy-vs-total jiffies between
+  consecutive heartbeats, so the **first** beat after daemon start carries **no** `cpu_pct` (a gap, never
+  a fabricated 0). The controller retains a bounded per-node history of this metric and serves it as the
+  node-detail CPU/RAM/load charts — see [../operations/telemetry-history.md](../operations/telemetry-history.md).
+- **Freshness — metrics ride the heartbeat + a post-apply kick.** The Sampler heartbeat is the **sole**
+  producer of `metrics`: the apply-time `/report` carries **conditions only, never metrics**, so a
+  metric like `resource` exists *only* on the heartbeat path and can no longer be a frozen apply-time
+  snapshot. **Conditions**, by contrast, remain **dual-write** (above) — `/report` still stamps them at
+  apply-time and the heartbeat refreshes them live, last-writer-wins (dropping the `/report` conditions
+  emission is deferred as custody-sensitive). To keep a just-deployed node from waiting up to a full
+  interval for that live refresh, the agent's apply loop sends a non-blocking, coalescing **kick** to the
+  heartbeat loop after each applied cycle, so a fresh heartbeat (carrying the just-applied state, metrics
+  included) posts immediately and promptly supersedes the apply-time conditions snapshot. This is the
+  structural fix for the recurring "a new metric only ever fires at deploy time, then freezes" class: a
+  new metric is emitted by a `Sampler` on the heartbeat, never bolted onto `/report`.
 - **Response** — `200` (`{"status": "ok"}`).
 
 ### `POST /update-topology` — operator stores the topology
