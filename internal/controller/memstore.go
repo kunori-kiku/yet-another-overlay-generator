@@ -1,957 +1,237 @@
 package controller
 
+// memstore.go — memkv, the in-memory kvBackend, plus the thin MemStore wrapper. memkv holds ONLY
+// storage (a per-tenant, per-collection byte map, the generation counter + its sync.Cond wake, and the
+// slice-backed audit log); every business rule lives in the shared storeCore (storecore.go). Records
+// round-trip as JSON bytes exactly like filekv, so the JSON marshal/unmarshal is the isolation boundary
+// (no hand-written clone helpers) and MemStore exercises the identical shipping path, telemetry overlay
+// included. MemStore is the CI-exercised reference impl and the long-poll primitive.
+
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"sync"
-	"time"
-
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
-// Compile-time assertion that *MemStore satisfies the Store interface.
-var _ Store = (*MemStore)(nil)
+// memkv is the in-memory backend. All state is partitioned by TenantID. data holds tenant → collection
+// → key → raw JSON bytes; gen holds the per-tenant generation counter; audit holds the slice-backed
+// hash-chained log. mu serializes every operation and backs cond (the WaitForGeneration wake).
+type memkv struct {
+	mu    sync.Mutex
+	cond  *sync.Cond
+	data  map[TenantID]map[string]map[string][]byte
+	gen   map[TenantID]int64
+	audit map[TenantID]*memAuditLog
+}
 
-// tenantState holds all of one tenant's in-memory control-plane state. Every field
-// is guarded by MemStore.mu (the per-tenant state is never accessed without it).
-type tenantState struct {
-	// nodes is the registry, keyed by NodeID.
-	nodes map[string]Node
-	// topology is the current stored topology (nil until the first PutTopology).
-	topology *TopologyRecord
-	// topoVersion is the last assigned topology Version; PutTopology pre-increments it.
-	topoVersion int64
-	// topoHistory retains the last TopologyHistoryLimit stored records, oldest
-	// first (the FileStore analogue is topology-history/<version>.json).
-	topoHistory []TopologyRecord
-	// staged maps NodeID -> the node's staged (not-yet-current) bundle.
-	staged map[string]SignedBundle
-	// current maps NodeID -> the node's current (promoted) bundle.
-	current map[string]SignedBundle
-	// tokens maps an enrollment token's hash -> the EnrollmentToken record. The
-	// plaintext token is never stored; only its hash keys this map.
-	tokens map[string]EnrollmentToken
-	// loginChallenges maps a passkey login challenge's hash -> the LoginChallenge
-	// record. The plaintext challenge is never stored; only its hash keys this map
-	// (the login-challenge analogue of tokens). Single-use is enforced under s.mu.
-	loginChallenges map[string]LoginChallenge
-	// apiTokens is the reverse index for per-node bearer auth: a node API token's
-	// hash -> the owning NodeID. IssueNodeAPIToken populates it, RevokeNodeAPIToken
-	// deletes the entry, and LookupNodeByAPIToken resolves it. The plaintext token
-	// is never stored; only its hash keys this map.
-	apiTokens map[string]string
-	// generation is the tenant's current generation (0 before any promote).
-	generation int64
-	// operatorCred is the tenant's pinned off-host operator signing credential, or nil
-	// when none is pinned (keystone OFF). The keystone trust anchor.
-	operatorCred *OperatorCredential
-	// signedTrustList is the tenant's STAGED membership trust-list (the to-be-signed / just-signed
-	// manifest of the pending generation), or nil when none is staged. NOT what /config serves.
-	signedTrustList *StoredTrustList
-	// servedTrustList is the tenant's SERVED (last-promoted) signed membership trust-list — what
-	// /config hands to nodes — or nil when nothing has been promoted under a keystone. PromoteStaged
-	// copies signedTrustList here once its signature has verified, so STAGING a new deploy never
-	// clobbers the live fleet's served manifest (a re-stage used to 500 every /config).
-	servedTrustList *StoredTrustList
-	// operators maps an operator Username -> the Operator account (argon2id PHC hash;
-	// never a plaintext password). Operator login, plan-5.2.
-	operators map[string]Operator
-	// sessions maps a session token's hash -> the Session record. The plaintext token
-	// is never stored; only its hash keys this map (the operator-side analogue of
-	// apiTokens).
-	sessions map[string]Session
-	// settings is the tenant's saved controller settings (bootstrap), or nil when none
-	// has been saved (the caller applies DefaultSettings).
-	settings *ControllerSettings
-	// signingAnchor is the tenant's pinned bundle-signing public key, or nil when none is
-	// pinned (never-signed fleet / pre-first-signed-stage). See SigningAnchor.
-	signingAnchor *SigningAnchor
-	// audit is the append-only, hash-chained audit log in Seq order.
-	audit []AuditEntry
-	// lastHash is the Hash of the most recent audit entry ("" if none yet).
+// memAuditLog is one tenant's in-memory audit log: the entries plus the tail (next Seq + last Hash) to
+// chain and bound-check without rescanning.
+type memAuditLog struct {
+	entries  []AuditEntry
+	nextSeq  int64
 	lastHash string
-	// nextSeq is the Seq to assign to the next appended audit entry (starts at 1).
-	nextSeq int64
 }
 
-func newTenantState() *tenantState {
-	return &tenantState{
-		nodes:           make(map[string]Node),
-		staged:          make(map[string]SignedBundle),
-		current:         make(map[string]SignedBundle),
-		tokens:          make(map[string]EnrollmentToken),
-		loginChallenges: make(map[string]LoginChallenge),
-		apiTokens:       make(map[string]string),
-		operators:       make(map[string]Operator),
-		sessions:        make(map[string]Session),
-		nextSeq:         1,
+var _ kvBackend = (*memkv)(nil)
+
+func newMemkv() *memkv {
+	m := &memkv{
+		data:  make(map[TenantID]map[string]map[string][]byte),
+		gen:   make(map[TenantID]int64),
+		audit: make(map[TenantID]*memAuditLog),
 	}
+	m.cond = sync.NewCond(&m.mu)
+	return m
 }
 
-// MemStore is an in-memory, mutex-guarded Store implementation. It is the
-// CI-exercised reference impl and the long-poll primitive backing
-// WaitForGeneration. All state is partitioned by TenantID so one tenant's data is
-// never visible to another. SignedBundle.Files and all returned slices are
-// deep-copied on store and on return so callers cannot mutate internal state.
-type MemStore struct {
-	mu sync.Mutex
-	// cond is broadcast whenever any tenant's generation advances (PromoteStaged)
-	// or a WaitForGeneration ctx-watcher fires; it shares mu so all generation
-	// reads/writes and waits are serialized.
-	cond    *sync.Cond
-	tenants map[TenantID]*tenantState
-	// history is the in-memory resource-sample history (plan-2). MemStore is dev/test only, so the
-	// history has no durable dir — the capped in-memory buffer IS the history.
-	history *telemetryHistory
-}
-
-// NewMemStore returns an empty, ready-to-use in-memory Store.
-func NewMemStore() *MemStore {
-	s := &MemStore{
-		tenants: make(map[TenantID]*tenantState),
-		history: newTelemetryHistory("", DefaultTelemetryHistoryCap, nil), // in-memory; no persisted-settings seed needed
+// collMap returns the (tenant, collection) key→bytes map, creating the path when create is set.
+func (m *memkv) collMap(t TenantID, coll string, create bool) map[string][]byte {
+	byColl := m.data[t]
+	if byColl == nil {
+		if !create {
+			return nil
+		}
+		byColl = make(map[string]map[string][]byte)
+		m.data[t] = byColl
 	}
-	s.cond = sync.NewCond(&s.mu)
-	return s
-}
-
-// tenant returns the tenant's state, creating it on first access. Caller must hold mu.
-func (s *MemStore) tenant(t TenantID) *tenantState {
-	ts := s.tenants[t]
-	if ts == nil {
-		ts = newTenantState()
-		s.tenants[t] = ts
+	byKey := byColl[coll]
+	if byKey == nil {
+		if !create {
+			return nil
+		}
+		byKey = make(map[string][]byte)
+		byColl[coll] = byKey
 	}
-	return ts
+	return byKey
 }
 
-// --- deep-copy helpers ---
+// withLock runs fn while holding mu, so the core can compose several primitives atomically.
+func (m *memkv) withLock(fn func() error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return fn()
+}
 
-// cloneFiles returns a deep copy of a bundle's Files map (and its byte slices) so
-// stored/returned bundles share no backing arrays with the caller.
-func cloneFiles(in map[string][]byte) map[string][]byte {
-	if in == nil {
-		return nil
+// get/put/del/list — caller holds withLock. Bytes are copied in and out so a stored record shares no
+// backing array with the caller (parity with filekv's file round-trip).
+func (m *memkv) get(t TenantID, coll, key string) ([]byte, error) {
+	byKey := m.collMap(t, coll, false)
+	if byKey == nil {
+		return nil, errKVNotFound
 	}
-	out := make(map[string][]byte, len(in))
-	for k, v := range in {
-		cp := make([]byte, len(v))
-		copy(cp, v)
-		out[k] = cp
+	v, ok := byKey[key]
+	if !ok {
+		return nil, errKVNotFound
 	}
-	return out
+	return append([]byte(nil), v...), nil
 }
 
-// cloneBundle returns a deep copy of a SignedBundle (copying its Files).
-func cloneBundle(b SignedBundle) SignedBundle {
-	b.Files = cloneFiles(b.Files)
-	return b
-}
-
-// cloneTopology returns a deep copy of a TopologyRecord (copying its JSON bytes).
-func cloneTopology(r TopologyRecord) TopologyRecord {
-	if r.JSON != nil {
-		cp := make([]byte, len(r.JSON))
-		copy(cp, r.JSON)
-		r.JSON = cp
-	}
-	return r
-}
-
-// --- Registry ---
-
-// UpsertNode creates or updates a node registry record (matched by NodeID).
-func (s *MemStore) UpsertNode(ctx context.Context, t TenantID, n Node) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.nodes[n.NodeID] = n
+func (m *memkv) put(t TenantID, coll, key string, val []byte) error {
+	byKey := m.collMap(t, coll, true)
+	byKey[key] = append([]byte(nil), val...)
 	return nil
 }
 
-// GetNode returns the node, or ErrNotFound.
-func (s *MemStore) GetNode(ctx context.Context, t TenantID, nodeID string) (Node, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	n, ok := ts.nodes[nodeID]
-	if !ok {
-		return Node{}, ErrNotFound
-	}
-	return n, nil
-}
-
-// ListNodes returns all nodes for the tenant in stable order by NodeID.
-func (s *MemStore) ListNodes(ctx context.Context, t TenantID) ([]Node, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	out := make([]Node, 0, len(ts.nodes))
-	for _, n := range ts.nodes {
-		out = append(out, n)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
-	return out, nil
-}
-
-// SetAppliedGeneration records what an agent reported applying (generation,
-// checksum, health, the reported agent build version, and the structured conditions
-// set). Returns ErrNotFound if the node does not exist. An empty agentVersion (a legacy
-// agent) leaves the stored version untouched so a previously-known version is not wiped;
-// conditions are server-stamped with observedAt and a nil/empty slice clears the set.
-func (s *MemStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []runtimecontract.Condition, observedAt time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	n, ok := ts.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	n.AppliedGeneration = gen
-	n.LastChecksum = checksum
-	n.LastHealth = health
-	if agentVersion != "" {
-		n.LastAgentVersion = agentVersion
-	}
-	n.Conditions = stampConditions(conditions, observedAt)
-	ts.nodes[nodeID] = n
-	return nil
-}
-
-// RecordTelemetry writes a LIVE health heartbeat: conditions + last-seen (+ agent version when
-// non-empty). It is a strict subset of SetAppliedGeneration — it does NOT touch AppliedGeneration /
-// LastChecksum / LastHealth / DesiredGeneration, so a heartbeat never affects deploy custody.
-func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	n, ok := ts.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	if agentVersion != "" {
-		n.LastAgentVersion = agentVersion
-	}
-	n.Conditions = stampConditions(conditions, observedAt)
-	n.Telemetry = metrics
-	n.LastSeen = observedAt
-	ts.nodes[nodeID] = n
-	if sample, ok := resourceSampleFromMetrics(metrics, observedAt); ok {
-		s.history.append(t, nodeID, sample) // plan-2: in-memory history (own mutex)
+func (m *memkv) del(t TenantID, coll, key string) error {
+	if byKey := m.collMap(t, coll, false); byKey != nil {
+		delete(byKey, key)
 	}
 	return nil
 }
 
-// QueryTelemetryHistory returns the node's in-memory resource-history samples within [from, to],
-// bounded by the operator's per-node cap (plan-2). MemStore has no durable backing, so this is the
-// capped in-memory buffer.
-func (s *MemStore) QueryTelemetryHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func (m *memkv) list(t TenantID, coll string) ([]kvRecord, error) {
+	byKey := m.collMap(t, coll, false)
+	if byKey == nil {
+		return nil, nil
 	}
-	return s.history.query(t, nodeID, from, to)
-}
-
-// TouchLastSeen records that the agent for nodeID checked in at the given time.
-// Returns ErrNotFound if the node does not exist.
-func (s *MemStore) TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	n, ok := ts.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
+	keys := make([]string, 0, len(byKey))
+	for k := range byKey {
+		keys = append(keys, k)
 	}
-	n.LastSeen = at
-	ts.nodes[nodeID] = n
-	return nil
-}
-
-// --- Topology (public-keys-only) ---
-
-// PutTopology stores a new topology version and returns the stored record with its
-// assigned (incrementing) Version. The version is also retained in the bounded
-// history (TopologyHistoryLimit, oldest pruned).
-func (s *MemStore) PutTopology(ctx context.Context, t TenantID, json []byte) (TopologyRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.topoVersion++
-	// Store a private copy so later caller mutations of json don't leak in.
-	stored := make([]byte, len(json))
-	copy(stored, json)
-	rec := TopologyRecord{
-		Version:   ts.topoVersion,
-		JSON:      stored,
-		UpdatedAt: time.Now().UTC(),
-	}
-	ts.topology = &rec
-	ts.topoHistory = append(ts.topoHistory, cloneTopology(rec))
-	if over := len(ts.topoHistory) - TopologyHistoryLimit; over > 0 {
-		ts.topoHistory = append([]TopologyRecord(nil), ts.topoHistory[over:]...)
-	}
-	return cloneTopology(rec), nil
-}
-
-// GetTopology returns the current topology, or ErrNotFound.
-func (s *MemStore) GetTopology(ctx context.Context, t TenantID) (TopologyRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if ts.topology == nil {
-		return TopologyRecord{}, ErrNotFound
-	}
-	return cloneTopology(*ts.topology), nil
-}
-
-// ListTopologyVersions returns the retained versions, newest first.
-func (s *MemStore) ListTopologyVersions(ctx context.Context, t TenantID) ([]TopologyVersionInfo, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	out := make([]TopologyVersionInfo, 0, len(ts.topoHistory))
-	for i := len(ts.topoHistory) - 1; i >= 0; i-- {
-		rec := ts.topoHistory[i]
-		out = append(out, TopologyVersionInfo{
-			Version:   rec.Version,
-			UpdatedAt: rec.UpdatedAt,
-			Bytes:     len(rec.JSON),
-		})
+	sort.Strings(keys)
+	out := make([]kvRecord, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, kvRecord{key: k, val: append([]byte(nil), byKey[k]...)})
 	}
 	return out, nil
 }
 
-// GetTopologyVersion returns one retained version, or ErrNotFound (unknown or
-// already pruned).
-func (s *MemStore) GetTopologyVersion(ctx context.Context, t TenantID, version int64) (TopologyRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	for _, rec := range ts.topoHistory {
-		if rec.Version == version {
-			return cloneTopology(rec), nil
-		}
+// exists is the self-synchronizing heartbeat existence probe (called OUTSIDE withLock).
+func (m *memkv) exists(t TenantID, coll, key string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byKey := m.collMap(t, coll, false)
+	if byKey == nil {
+		return false, nil
 	}
-	return TopologyRecord{}, ErrNotFound
+	_, ok := byKey[key]
+	return ok, nil
 }
 
-// --- Bundles + generation ---
+// generation reads / setGeneration writes the counter — caller holds withLock. setGeneration wakes any
+// WaitForGeneration waiters via the shared cond (Broadcast under the held mu, so a wakeup is never lost
+// in the gap between a waiter's predicate check and its cond.Wait).
+func (m *memkv) generation(t TenantID) (int64, error) {
+	return m.gen[t], nil
+}
 
-// StageBundle stores a node's bundle as the staged (not-yet-current) version,
-// replacing any prior staged bundle for that node.
-func (s *MemStore) StageBundle(ctx context.Context, t TenantID, b SignedBundle) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	b.IsStaged = true
-	b.IsCurrent = false
-	ts.staged[b.NodeID] = cloneBundle(b)
+func (m *memkv) setGeneration(t TenantID, gen int64) error {
+	m.gen[t] = gen
+	m.cond.Broadcast()
 	return nil
 }
 
-// PruneStagedBundles deletes staged bundles whose NodeID is not in keep and
-// returns the purged node IDs in stable order. Current bundles are never touched.
-func (s *MemStore) PruneStagedBundles(ctx context.Context, t TenantID, keep []string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	keepSet := make(map[string]bool, len(keep))
-	for _, id := range keep {
-		keepSet[id] = true
-	}
-	var purged []string
-	for nodeID := range ts.staged {
-		if !keepSet[nodeID] {
-			delete(ts.staged, nodeID)
-			purged = append(purged, nodeID)
-		}
-	}
-	sort.Strings(purged)
-	return purged, nil
-}
+// awaitGenerationChange blocks until the tenant generation is strictly greater than afterGen, or ctx is
+// done. A watcher goroutine broadcasts on ctx.Done() (under mu, so the wakeup can never race into the
+// gap before the waiter parks in cond.Wait) so a cancelled wait is woken promptly.
+func (m *memkv) awaitGenerationChange(ctx context.Context, t TenantID, afterGen int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-// PromoteStaged atomically flips the currently staged bundles to current,
-// increments the tenant's generation, sets each promoted node's DesiredGeneration
-// to the new generation, wakes WaitForGeneration waiters, and returns the new
-// generation. Returns ErrNoStagedBundle when nothing (current) is staged.
-//
-// Scoping (plan-3): only bundles staged at the generation being promoted
-// (generation+1) flip; a bundle whose provisional generation was invalidated by an
-// interleaved BumpGeneration/promote is stale and stays staged until a re-stage
-// refreshes it (or purge-on-stage removes it).
-func (s *MemStore) PromoteStaged(ctx context.Context, t TenantID) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	newGen := ts.generation + 1
-	flipped := 0
-	for nodeID, b := range ts.staged {
-		if b.Generation != newGen {
-			continue // stale provisional generation — not part of the stage being promoted
-		}
-		b.IsStaged = false
-		b.IsCurrent = true
-		// Replacing ts.current[nodeID] clears the prior current for that node.
-		ts.current[nodeID] = b
-		delete(ts.staged, nodeID)
-		// Bump the node's DesiredGeneration to the new generation.
-		if n, ok := ts.nodes[nodeID]; ok {
-			n.DesiredGeneration = newGen
-			ts.nodes[nodeID] = n
-		}
-		flipped++
-	}
-	if flipped == 0 {
-		return 0, ErrNoStagedBundle
-	}
-	ts.generation = newGen
-	// Promote the staged trust-list to the SERVED slot ATOMICALLY with the bundle flip (same lock),
-	// so /config always serves a (bundle, manifest) pair from one generation. Only a SIGNED staged
-	// manifest is promoted (the controller PromoteStaged gate verified it before calling this); an
-	// unsigned/absent staged slot leaves the prior served manifest intact (keystone OFF, or a raw
-	// store-level promote in a test).
-	if ts.signedTrustList != nil && len(ts.signedTrustList.SignatureJSON) > 0 {
-		ts.servedTrustList = cloneStoredTrustList(ts.signedTrustList)
-	}
-	// Wake all WaitForGeneration waiters across tenants; each rechecks its predicate.
-	s.cond.Broadcast()
-	return newGen, nil
-}
-
-// GetCurrentBundle returns the node's current (promoted) bundle, or ErrNotFound.
-func (s *MemStore) GetCurrentBundle(ctx context.Context, t TenantID, nodeID string) (SignedBundle, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	b, ok := ts.current[nodeID]
-	if !ok {
-		return SignedBundle{}, ErrNotFound
-	}
-	return cloneBundle(b), nil
-}
-
-// CurrentGeneration returns the tenant's current generation (0 if none promoted).
-func (s *MemStore) CurrentGeneration(ctx context.Context, t TenantID) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tenant(t).generation, nil
-}
-
-// BumpGeneration increments the tenant's generation and broadcasts to wake any
-// WaitForGeneration waiters, WITHOUT touching any bundle (current/staged are left
-// untouched, so GetCurrentBundle keeps returning the last promoted bundle). It uses
-// the same ts.generation++ + s.cond.Broadcast() pattern as PromoteStaged, so a parked
-// agent's long-poll fires; the agent then Fetches /config and acts on the (unchanged-
-// bundle) signal rather than re-applying. Returns the new generation.
-func (s *MemStore) BumpGeneration(ctx context.Context, t TenantID) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.generation++
-	// Wake all WaitForGeneration waiters across tenants; each rechecks its predicate.
-	s.cond.Broadcast()
-	return ts.generation, nil
-}
-
-// WaitForGeneration blocks until the tenant's generation is strictly greater than
-// afterGen (returning it), or until ctx is done (returning 0, ctx.Err()). It uses
-// the shared sync.Cond plus a watcher goroutine that broadcasts on ctx.Done() so a
-// cancelled wait is woken promptly even if no promote occurs.
-func (s *MemStore) WaitForGeneration(ctx context.Context, t TenantID, afterGen int64) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Fast path: already satisfied or already cancelled.
-	if g := s.tenant(t).generation; g > afterGen {
+	if g := m.gen[t]; g > afterGen {
 		return g, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 
-	// Watcher goroutine: when ctx is done, broadcast so the Wait below re-evaluates
-	// and observes ctx.Err(). It is stopped via the local done channel once we exit
-	// the loop, so it never leaks past this call.
 	watchDone := make(chan struct{})
 	defer close(watchDone)
 	go func() {
 		select {
 		case <-ctx.Done():
-			// Broadcast under the lock: this forces the watcher to wait until the
-			// waiter has parked inside cond.Wait (which releases mu), so the wakeup
-			// can never be lost in the gap between the waiter's predicate check and
-			// its cond.Wait call. A lockless Broadcast here can race into that gap
-			// and be dropped, hanging the waiter until an unrelated promote.
-			s.mu.Lock()
-			s.cond.Broadcast()
-			s.mu.Unlock()
+			m.mu.Lock()
+			m.cond.Broadcast()
+			m.mu.Unlock()
 		case <-watchDone:
 		}
 	}()
 
 	for {
-		if g := s.tenant(t).generation; g > afterGen {
+		if g := m.gen[t]; g > afterGen {
 			return g, nil
 		}
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		// Cond.Wait atomically unlocks mu, sleeps until Broadcast, and relocks mu.
-		s.cond.Wait()
+		m.cond.Wait()
 	}
 }
 
-// --- Enrollment tokens ---
-
-// cloneToken returns a deep copy of an EnrollmentToken, copying the ConsumedAt
-// pointer's pointee so stored/returned tokens share no *time.Time with the caller.
-func cloneToken(tok EnrollmentToken) EnrollmentToken {
-	if tok.ConsumedAt != nil {
-		c := *tok.ConsumedAt
-		tok.ConsumedAt = &c
+// auditLogLocked returns the tenant's audit log, creating it (nextSeq starts at 1). Caller holds mu.
+func (m *memkv) auditLogLocked(t TenantID) *memAuditLog {
+	log := m.audit[t]
+	if log == nil {
+		log = &memAuditLog{nextSeq: 1}
+		m.audit[t] = log
 	}
-	return tok
+	return log
 }
 
-// cloneOperator deep-copies an Operator's pointer fields (its *LoginCredential) so the
-// store never shares mutable state with a caller — a GetOperator caller that mutates the
-// returned credential, or a PutOperator caller that retains its pointer, cannot reach
-// into the stored map. LoginCredential has no nested reference types, so a shallow copy
-// of the pointee suffices.
-func cloneOperator(op Operator) Operator {
-	if op.LoginCredential != nil {
-		lc := *op.LoginCredential
-		op.LoginCredential = &lc
-	}
-	return op
-}
-
-// CreateEnrollmentToken stores a single-use, node-scoped, TTL token keyed by its
-// TokenHash within the tenant. A later CreateEnrollmentToken with the same hash
-// overwrites the prior record (parity with the registry's upsert semantics).
-func (s *MemStore) CreateEnrollmentToken(ctx context.Context, t TenantID, tok EnrollmentToken) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.tokens[tok.TokenHash] = cloneToken(tok)
-	return nil
-}
-
-// ConsumeEnrollmentToken atomically validates and burns a token under the lock:
-// it returns ErrTokenInvalid if no token matches tokenHash for the tenant, if its
-// NodeID != nodeID, or if now is at/after ExpiresAt; ErrTokenConsumed if it was
-// already burned; otherwise it sets ConsumedAt=now and returns nil. The whole
-// check-and-burn runs under s.mu so two concurrent enrollments cannot both succeed.
-func (s *MemStore) ConsumeEnrollmentToken(ctx context.Context, t TenantID, tokenHash, nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	tok, ok := ts.tokens[tokenHash]
-	if !ok || tok.NodeID != nodeID || !now.Before(tok.ExpiresAt) {
-		return ErrTokenInvalid
-	}
-	if tok.ConsumedAt != nil {
-		return ErrTokenConsumed
-	}
-	consumed := now
-	tok.ConsumedAt = &consumed
-	ts.tokens[tokenHash] = tok
-	return nil
-}
-
-// PurgeEnrollmentTokensForNode deletes every token scoped to nodeID under the lock,
-// returning the count removed. Absent tokens yield (0, nil).
-func (s *MemStore) PurgeEnrollmentTokensForNode(ctx context.Context, t TenantID, nodeID string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	n := 0
-	for h, tok := range ts.tokens {
-		if tok.NodeID == nodeID {
-			delete(ts.tokens, h)
-			n++
-		}
-	}
-	return n, nil
-}
-
-// --- Passkey login challenges (plan-5.2) ---
-
-func (s *MemStore) CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	// LoginChallenge has no reference fields, so the map stores a full value copy.
-	ts.loginChallenges[lc.ChallengeHash] = lc
-	return nil
-}
-
-// ConsumeLoginChallenge atomically validates and burns a login challenge under the lock
-// by DELETING it: it returns ErrChallengeInvalid if no challenge matches challengeHash, if
-// its Operator != operator, or if now is at/after ExpiresAt; otherwise it deletes the
-// record and returns nil. The check-and-delete runs under s.mu so a captured assertion
-// cannot be replayed (the record is gone) and two concurrent logins cannot both win. An
-// expired record is deleted (lazy GC); a wrong-operator record is left intact.
-func (s *MemStore) ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	lc, ok := ts.loginChallenges[challengeHash]
-	if !ok {
-		return ErrChallengeInvalid
-	}
-	if !now.Before(lc.ExpiresAt) {
-		delete(ts.loginChallenges, challengeHash) // expired: lazy GC
-		return ErrChallengeInvalid
-	}
-	if lc.Operator != operator {
-		return ErrChallengeInvalid // not the caller's challenge to burn
-	}
-	delete(ts.loginChallenges, challengeHash) // success: single-use consume
-	return nil
-}
-
-// --- Node API tokens (per-node bearer auth) ---
-
-// IssueNodeAPIToken stamps tokenHash onto the node's APITokenHash and writes the
-// reverse index apiTokens[hash]=nodeID, all under s.mu. It returns ErrNotFound if
-// no node record exists for nodeID. Rotation is self-cleaning: if the node already
-// carried a different APITokenHash, that prior reverse-index entry is deleted before
-// the new one is written, so a rotated (stale) token leaves no orphan in the index.
-func (s *MemStore) IssueNodeAPIToken(ctx context.Context, t TenantID, nodeID, tokenHash string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	n, ok := ts.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	// Drop any prior reverse-index entry for this node's old token so a rotated
-	// token can never linger and resolve to the node.
-	if n.APITokenHash != "" && n.APITokenHash != tokenHash {
-		delete(ts.apiTokens, n.APITokenHash)
-	}
-	n.APITokenHash = tokenHash
-	ts.nodes[nodeID] = n
-	ts.apiTokens[tokenHash] = nodeID
-	return nil
-}
-
-// LookupNodeByAPIToken resolves a presented token's hash to its Node via the
-// reverse index, self-consistently: it returns ErrTokenInvalid unless the index
-// resolves to a live node whose own APITokenHash still equals tokenHash AND whose
-// Status is NodeApproved. This rejects an unmapped hash, a vanished node, a
-// stale/orphaned index entry that no longer matches the node's current token, and
-// any non-approved (pending or revoked) node.
-func (s *MemStore) LookupNodeByAPIToken(ctx context.Context, t TenantID, tokenHash string) (Node, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	nodeID, ok := ts.apiTokens[tokenHash]
-	if !ok {
-		return Node{}, ErrTokenInvalid
-	}
-	n, ok := ts.nodes[nodeID]
-	if !ok || n.APITokenHash != tokenHash || n.Status != NodeApproved {
-		return Node{}, ErrTokenInvalid
-	}
-	return n, nil
-}
-
-// RevokeNodeAPIToken clears the node's APITokenHash and deletes its reverse index
-// entry, immediately invalidating the bearer token. It is idempotent: a missing
-// node or a node with no issued token is a no-op success (no ErrNotFound).
-func (s *MemStore) RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if n, ok := ts.nodes[nodeID]; ok && n.APITokenHash != "" {
-		delete(ts.apiTokens, n.APITokenHash)
-		n.APITokenHash = ""
-		ts.nodes[nodeID] = n
-	}
-	return nil
-}
-
-// --- Keystone: operator credential + signed trust-list ---
-
-// SetOperatorCredential pins (or replaces) the tenant's off-host operator signing
-// credential. A private copy is stored so a later caller mutation cannot leak in.
-func (s *MemStore) SetOperatorCredential(ctx context.Context, t TenantID, c OperatorCredential) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	cp := c
-	ts.operatorCred = &cp
-	return nil
-}
-
-// GetOperatorCredential returns the tenant's pinned operator credential, or
-// ErrNotFound when none is pinned.
-func (s *MemStore) GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if ts.operatorCred == nil {
-		return OperatorCredential{}, ErrNotFound
-	}
-	return *ts.operatorCred, nil
-}
-
-// PutSignedTrustList stores (replacing any prior) the operator-signed membership
-// trust-list. The byte slices are deep-copied so the stored record shares no backing
-// arrays with the caller.
-func (s *MemStore) PutSignedTrustList(ctx context.Context, t TenantID, sl StoredTrustList) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.signedTrustList = cloneStoredTrustList(&sl)
-	return nil
-}
-
-// GetCurrentSignedTrustList returns the tenant's STAGED signed trust-list, or ErrNotFound when none
-// is staged. A deep copy is returned. (Historical name; this is the staged slot — see the Store
-// interface doc. The served manifest is GetServedTrustList.)
-func (s *MemStore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if ts.signedTrustList == nil {
-		return StoredTrustList{}, ErrNotFound
-	}
-	return *cloneStoredTrustList(ts.signedTrustList), nil
-}
-
-// GetServedTrustList returns the tenant's SERVED (last-promoted) signed trust-list, or ErrNotFound
-// when nothing has been promoted under a keystone. A deep copy is returned.
-func (s *MemStore) GetServedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if ts.servedTrustList == nil {
-		return StoredTrustList{}, ErrNotFound
-	}
-	return *cloneStoredTrustList(ts.servedTrustList), nil
-}
-
-// GetServedConfig atomically snapshots what /config serves nodeID: its current bundle, whether the
-// keystone is ON (a credential is pinned), and the served signed trust-list when present — all
-// under one lock, so a concurrent PromoteStaged can never expose a torn (old-bundle, new-manifest)
-// pair. ErrNotFound when the node has no current bundle.
-func (s *MemStore) GetServedConfig(ctx context.Context, t TenantID, nodeID string) (ServedConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	b, ok := ts.current[nodeID]
-	if !ok {
-		return ServedConfig{}, ErrNotFound
-	}
-	sc := ServedConfig{Bundle: cloneBundle(b), KeystoneOn: ts.operatorCred != nil}
-	if sc.KeystoneOn && ts.servedTrustList != nil && len(ts.servedTrustList.SignatureJSON) > 0 {
-		sc.TrustList = *cloneStoredTrustList(ts.servedTrustList)
-		sc.HasTrustList = true
-	}
-	return sc, nil
-}
-
-// cloneStoredTrustList returns a deep copy of a StoredTrustList, copying its byte
-// slices so stored/returned records share no backing arrays with the caller.
-func cloneStoredTrustList(in *StoredTrustList) *StoredTrustList {
-	out := StoredTrustList{Epoch: in.Epoch}
-	if in.TrustListJSON != nil {
-		out.TrustListJSON = append([]byte(nil), in.TrustListJSON...)
-	}
-	if in.SignatureJSON != nil {
-		out.SignatureJSON = append([]byte(nil), in.SignatureJSON...)
-	}
-	return &out
-}
-
-// --- Operators + sessions (operator login, plan-5.2) ---
-
-// PutOperator creates or replaces an operator account (matched by Username). Operator
-// is a value type with no reference fields, so the stored copy is independent.
-func (s *MemStore) PutOperator(ctx context.Context, t TenantID, op Operator) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.operators[op.Username] = cloneOperator(op)
-	return nil
-}
-
-// GetOperator returns the operator account, or ErrNotFound.
-func (s *MemStore) GetOperator(ctx context.Context, t TenantID, username string) (Operator, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	op, ok := ts.operators[username]
-	if !ok {
-		return Operator{}, ErrNotFound
-	}
-	return cloneOperator(op), nil
-}
-
-// ListOperators returns all operator accounts for the tenant, stably ordered by
-// Username.
-func (s *MemStore) ListOperators(ctx context.Context, t TenantID) ([]Operator, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	out := make([]Operator, 0, len(ts.operators))
-	for _, op := range ts.operators {
-		out = append(out, cloneOperator(op))
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
-	return out, nil
-}
-
-// DeleteOperator removes an operator account. Idempotent (a missing account is a
-// no-op success). Sessions are not cascaded (they expire on their own TTL).
-func (s *MemStore) DeleteOperator(ctx context.Context, t TenantID, username string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	delete(ts.operators, username)
-	return nil
-}
-
-// AdvanceTOTPStep atomically bumps the operator's TOTP replay watermark to step iff
-// step > the stored value (the whole check-and-set under one lock). See the Store doc.
-func (s *MemStore) AdvanceTOTPStep(ctx context.Context, t TenantID, username string, step int64) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	op, ok := ts.operators[username]
-	if !ok {
-		return false, ErrNotFound
-	}
-	if step <= op.TOTPLastUsedStep {
-		return false, nil
-	}
-	op.TOTPLastUsedStep = step
-	ts.operators[username] = op
-	return true, nil
-}
-
-// CreateSession stores a minted operator session, keyed by its TokenHash.
-func (s *MemStore) CreateSession(ctx context.Context, t TenantID, sess Session) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	ts.sessions[sess.TokenHash] = sess
-	return nil
-}
-
-// LookupSession resolves a session token's hash to its Session, returning
-// ErrTokenInvalid if absent OR expired (now at/after ExpiresAt). An expired session
-// encountered here is lazily deleted so abandoned-but-presented sessions self-clean.
-func (s *MemStore) LookupSession(ctx context.Context, t TenantID, tokenHash string, now time.Time) (Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	sess, ok := ts.sessions[tokenHash]
-	if !ok {
-		return Session{}, ErrTokenInvalid
-	}
-	if !now.Before(sess.ExpiresAt) {
-		delete(ts.sessions, tokenHash)
-		return Session{}, ErrTokenInvalid
-	}
-	return sess, nil
-}
-
-// DeleteSession removes a session (logout / revoke). Idempotent.
-func (s *MemStore) DeleteSession(ctx context.Context, t TenantID, tokenHash string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	delete(ts.sessions, tokenHash)
-	return nil
-}
-
-// --- Controller settings (bootstrap, plan-5.2) ---
-
-// GetSettings returns the tenant's saved settings, or ErrNotFound when none saved.
-func (s *MemStore) GetSettings(ctx context.Context, t TenantID) (ControllerSettings, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if ts.settings == nil {
-		return ControllerSettings{}, ErrNotFound
-	}
-	s.history.setCap(t, ts.settings.EffectiveHistoryCap()) // keep the history cap cache in sync
-	// Return a deep copy so a caller cannot mutate the stored map/pointer through the shared
-	// reference (ControllerSettings now carries a MimicDebs map + a Translucency pointer).
-	return ts.settings.Clone(), nil
-}
-
-// PutSettings stores (replacing) the tenant's settings. ControllerSettings carries reference
-// fields (the MimicDebs map, the Translucency pointer), so it is deep-copied (Clone) before
-// storing — the stored value is then independent of the caller's, matching the FileStore's
-// JSON-round-trip isolation.
-func (s *MemStore) PutSettings(ctx context.Context, t TenantID, cs ControllerSettings) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	cp := cs.Clone()
-	ts.settings = &cp
-	s.history.setCap(t, cp.EffectiveHistoryCap()) // track the operator's cap without reading on append
-	return nil
-}
-
-// GetSigningAnchor returns the tenant's pinned signing public key, or ErrNotFound when none.
-func (s *MemStore) GetSigningAnchor(ctx context.Context, t TenantID) (SigningAnchor, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	if ts.signingAnchor == nil {
-		return SigningAnchor{}, ErrNotFound
-	}
-	return *ts.signingAnchor, nil // SigningAnchor is a flat value type; a copy fully isolates it
-}
-
-// PutSigningAnchor pins (replacing any prior) the tenant's signing public key.
-func (s *MemStore) PutSigningAnchor(ctx context.Context, t TenantID, a SigningAnchor) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	cp := a
-	ts.signingAnchor = &cp
-	return nil
-}
-
-// --- Audit (append-only, hash-chained) ---
-
-// AppendAudit appends an entry, chaining its PrevHash/Hash to the tenant's prior
-// entry and assigning a monotonic Seq. The caller-provided Timestamp is preserved.
-// Returns the stored entry with Seq/PrevHash/Hash set.
-func (s *MemStore) AppendAudit(ctx context.Context, t TenantID, e AuditEntry) (AuditEntry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	e.Seq = ts.nextSeq
-	entry := chainAudit(e, ts.lastHash)
-	ts.audit = append(ts.audit, entry)
-	ts.lastHash = entry.Hash
-	ts.nextSeq++
-	// Bound the in-memory log (plan-6): once it reaches auditRotateAt, keep only the most
-	// recent auditRetain. Copy into a fresh slice so the dropped prefix's backing array is
-	// released rather than pinned by a re-slice. Seq/lastHash keep advancing — the retained
-	// window stays a valid chain under the FIRST-entry anchoring in VerifyAuditChain.
-	if len(ts.audit) > auditRotateAt {
-		ts.audit = append([]AuditEntry(nil), ts.audit[len(ts.audit)-auditRetain:]...)
+// appendAudit chains and appends an entry, bounding the log (trim to auditRetain past auditRotateAt).
+// Self-synchronizing (standalone). Seq/lastHash keep advancing so the retained window stays a valid
+// chain under VerifyAuditChain's first-entry anchoring.
+func (m *memkv) appendAudit(t TenantID, e AuditEntry) (AuditEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	log := m.auditLogLocked(t)
+	e.Seq = log.nextSeq
+	entry := chainAudit(e, log.lastHash)
+	log.entries = append(log.entries, entry)
+	log.lastHash = entry.Hash
+	log.nextSeq++
+	if len(log.entries) > auditRotateAt {
+		log.entries = append([]AuditEntry(nil), log.entries[len(log.entries)-auditRetain:]...)
 	}
 	return entry, nil
 }
 
-// ListAudit returns the tenant's audit entries in Seq order.
-func (s *MemStore) ListAudit(ctx context.Context, t TenantID) ([]AuditEntry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts := s.tenant(t)
-	out := make([]AuditEntry, len(ts.audit))
-	copy(out, ts.audit)
+// listAudit returns the tenant's audit entries in Seq order. Self-synchronizing.
+func (m *memkv) listAudit(t TenantID) ([]AuditEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	log := m.audit[t]
+	if log == nil {
+		return []AuditEntry{}, nil
+	}
+	out := make([]AuditEntry, len(log.entries))
+	copy(out, log.entries)
 	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
 	return out, nil
+}
+
+// MemStore is the in-memory Store: a storeCore over a memkv, with an in-memory (dir-less)
+// resource-history buffer. All state is partitioned by TenantID.
+type MemStore struct {
+	*storeCore
+}
+
+// Compile-time assertion that *MemStore satisfies the Store interface.
+var _ Store = (*MemStore)(nil)
+
+// NewMemStore returns an empty, ready-to-use in-memory Store.
+func NewMemStore() *MemStore {
+	// in-memory history (dir==""); no persisted-settings cap seed needed.
+	hist := newTelemetryHistory("", DefaultTelemetryHistoryCap, nil)
+	return &MemStore{storeCore: newStoreCore(newMemkv(), hist)}
 }
