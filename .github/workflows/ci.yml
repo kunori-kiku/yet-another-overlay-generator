@@ -91,6 +91,12 @@ jobs:
         run: go test ./internal/conformance/ -run TestCoverageFloor -v
         env:
           YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
+      # Pre-build the wasm so wasmEngine.test.ts's beforeAll LOADS it instead of building it inside the
+      # hook — a cold GOOS=js GOARCH=wasm build exceeds vitest's hook budget (it timed out the suite
+      # before this pre-build + the hook-timeout bump). Go is set up above and its build cache is warm
+      # from the conformance run, so this is quick; web/ already exists (wasm_exec.js is committed).
+      - name: Build WASM for the conformance roundtrip
+        run: GOOS=js GOARCH=wasm go build -o web/yaog.wasm ./cmd/wasm
       # (c) The vitest heal pin: the TS healCollidingPins (frontend/src/lib/normalizeEdges.ts)
       #     must byte-equal the Go normalize.HealCollidingPins over the shared corpus. A
       #     deliberate divergence of the TS linkKey/pinKey reds this step.
@@ -99,6 +105,32 @@ jobs:
         run: |
           npm ci --legacy-peer-deps
           npm run conformance
+
+  # The PERMANENT three-way conformance gate (framework-refactor plan-3, invariant [1]: "parity is
+  # proven by execution + a permanent gate, never by construction"). Build the pure Go pipeline to
+  # GOOS=js GOARCH=wasm, then EXECUTE web/yaog.wasm's buildManifest over the FULL success corpus and
+  # assert it byte-equals the frozen Go golden. The golden IS the Go oracle ⇒ this proves WASM == Go;
+  # the `conformance` job above proves TS == Go; together they pin WASM == Go == TS forever (the
+  # equality plan-4/5's flip + TS-twin deletion depend on). It also pins web/wasm_exec.js to the
+  # building toolchain (rebuild+diff). A red here is a GOARCH=wasm determinism quirk to characterize
+  # (plan-3.5), NEVER a golden -update. The gate is pure Node stdlib — no frontend deps needed.
+  wasm-conformance:
+    name: WASM conformance gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # web/yaog.wasm is gitignored (rebuilt here from the same toolchain the gate pins
+      # web/wasm_exec.js against); the committed web/wasm_exec.js is asserted by the gate.
+      - name: Build yaog.wasm
+        run: GOOS=js GOARCH=wasm go build -o web/yaog.wasm ./cmd/wasm
+      - name: WASM-vs-golden three-way gate
+        run: node scripts/wasm-conformance-gate.mjs
 
   frontend-e2e:
     name: Frontend E2E (Playwright)

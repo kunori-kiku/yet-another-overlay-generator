@@ -48,6 +48,16 @@ describe('deployMode() descriptor', () => {
       vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'backend');
       expect(deployMode().localEngine).toBe('backend');
     });
+
+    it("'wasm' ⇒ wasm (the opt-in in-browser Go/WASM engine, plan-3)", () => {
+      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'wasm');
+      expect(deployMode().localEngine).toBe('wasm');
+    });
+
+    it("'wasm' keeps localEngineEnabled() true (browser path, not the air-gap escape hatch)", () => {
+      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'wasm');
+      expect(localEngineEnabled()).toBe(true);
+    });
   });
 
   it('the two flags are independent (localOnly + backend engine compose)', () => {
