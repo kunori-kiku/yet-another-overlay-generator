@@ -180,58 +180,45 @@ func (h *ControllerHandler) verifyLoginAssertion(ctx context.Context, tenant con
 // --- passkey management (operator-authed) ---
 
 // HandlePasskeyStatus (GET) reports whether the current operator has a login passkey.
-func (h *ControllerHandler) HandlePasskeyStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
+// Routed through the op() adapter (method guard + structural identity()).
+func (h *ControllerHandler) HandlePasskeyStatus(ctx context.Context, tenant controller.TenantID, actor string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
-	op, _, ok := h.currentOperator(w, r)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, passkeyStatusResponseJSON{Registered: op.PasskeyEnabled()})
+	return passkeyStatusResponseJSON{Registered: op.PasskeyEnabled()}, nil
 }
 
 // HandlePasskeyRegister (POST) registers (or replaces) the current operator's login
 // passkey. The credential MUST be a WebAuthn algorithm (a raw Ed25519 has no assertion to
 // verify at login) and its PEM must parse, with a non-empty rpid (an empty rpid disables
 // relying-party binding — the verifier rejects it). Only the PUBLIC half is stored.
-func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	op, tenant, ok := h.currentOperator(w, r)
-	if !ok {
-		return
+func (h *ControllerHandler) HandlePasskeyRegister(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
 	var req passkeyRegisterRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	switch trustlist.Alg(req.Alg) {
 	case trustlist.AlgWebAuthnES256:
 		if _, err := trustlist.ParseES256Pin([]byte(req.PublicKeyPEM)); err != nil {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err)
 		}
 	case trustlist.AlgWebAuthnEdDSA:
 		if _, err := trustlist.ParseEd25519PinPEM([]byte(req.PublicKeyPEM)); err != nil {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err)
 		}
 	default:
-		writeAPIError(w, apierr.New(apierr.CodeReqUnsupportedAlg).With("alg", req.Alg))
-		return
+		return nil, apierr.New(apierr.CodeReqUnsupportedAlg).With("alg", req.Alg)
 	}
 	if strings.TrimSpace(req.CredentialID) == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "credential_id"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "credential_id")
 	}
 	if strings.TrimSpace(req.RPID) == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "rpid"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "rpid")
 	}
 	// B3 (plan-8 Phase 7): a LOGIN passkey MUST carry a non-empty Origin so that the verifier's
 	// advisory origin gate (webauthn.go: `if pin.Origin != ""`) is authoritative for the panel
@@ -241,8 +228,7 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 	// VerifyAssertion is left untouched (the node keystone path intentionally pins an empty
 	// Origin, because a node cannot prove which browser origin a user used months earlier).
 	if strings.TrimSpace(req.Origin) == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "origin"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "origin")
 	}
 	now := time.Now().UTC()
 	op.LoginCredential = &controller.LoginCredential{
@@ -253,14 +239,13 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 		Origin:       req.Origin,
 	}
 	op.UpdatedAt = now
-	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now, Actor: "operator:" + op.Username, Action: "passkey-registered",
 	})
-	writeJSON(w, http.StatusOK, passkeyStatusResponseJSON{Registered: true})
+	return passkeyStatusResponseJSON{Registered: true}, nil
 }
 
 // HandlePasskeyDisable (POST) removes the current operator's login passkey, requiring a
@@ -268,55 +253,45 @@ func (h *ControllerHandler) HandlePasskeyRegister(w http.ResponseWriter, r *http
 // (mirrors TOTP-disable-requires-a-code). Two legs: an empty body issues a challenge
 // (200 with challenge+allowCredentials); a body carrying the assertion verifies it and
 // removes the credential. Idempotent when no passkey is registered.
-func (h *ControllerHandler) HandlePasskeyDisable(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	op, tenant, ok := h.currentOperator(w, r)
-	if !ok {
-		return
+func (h *ControllerHandler) HandlePasskeyDisable(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
 	if op.LoginCredential == nil {
-		writeJSON(w, http.StatusOK, passkeyStatusResponseJSON{Registered: false})
-		return
+		return passkeyStatusResponseJSON{Registered: false}, nil
 	}
 	var req passkeyDisableRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	now := time.Now().UTC()
 	if req.Passkey == nil {
 		// Leg 1: issue a re-auth challenge for the registered credential.
-		challenge, err := h.issueLoginChallenge(r.Context(), op.Username, now)
+		challenge, err := h.issueLoginChallenge(ctx, op.Username, now)
 		if err != nil {
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
+			return nil, codedErr(apierr.CodeInternalStorage, err)
 		}
-		writeJSON(w, http.StatusOK, passkeyChallengeResponseJSON{
+		return passkeyChallengeResponseJSON{
 			Challenge:        challenge,
 			AllowCredentials: allowCredentialsFor(op.LoginCredential),
 			RPID:             op.LoginCredential.RPID,
 			Alg:              op.LoginCredential.Alg,
-		})
-		return
+		}, nil
 	}
 	// Leg 2: verify the fresh assertion, then remove the credential.
-	if err := h.verifyLoginAssertion(r.Context(), tenant, op, *req.Passkey, now); err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeAuthPasskeyVerifyFailed))
-		return
+	if err := h.verifyLoginAssertion(ctx, tenant, op, *req.Passkey, now); err != nil {
+		return nil, apierr.New(apierr.CodeAuthPasskeyVerifyFailed)
 	}
 	op.LoginCredential = nil
 	op.UpdatedAt = now
-	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now, Actor: "operator:" + op.Username, Action: "passkey-disabled",
 	})
-	writeJSON(w, http.StatusOK, passkeyStatusResponseJSON{Registered: false})
+	return passkeyStatusResponseJSON{Registered: false}, nil
 }
 
 // --- passwordless passkey login (unauthenticated) ---

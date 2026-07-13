@@ -2,8 +2,11 @@ package api
 
 // handler_enrollment.go holds the operator fleet-registry handlers: mint an enrollment
 // token, list nodes, and revoke a node (plus the mapConditions/topologyHasNode helpers used only here).
+// All three are routed through the op() adapter (routes_controller.go), which applies the method
+// guard + structural identity() check before the body runs.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -38,29 +41,18 @@ func mapConditions(cs []controller.NodeCondition) []conditionJSON {
 
 // HandleNodes lists the fleet registry for the operator panel (operator-only). It
 // returns a []nodeJSON view that carries fleet state but NO key material.
-func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-	nodes, err := h.store.ListNodes(r.Context(), tenant)
+func (h *ControllerHandler) HandleNodes(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	nodes, err := h.store.ListNodes(ctx, tenant)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	// Compute agent self-update rollout membership ONCE for the whole list (one settings load +
 	// one membership pass): the per-node in_rollout flag the panel's update-status chip reads.
 	// An absent settings record (most fleets never configure a rollout) is a benign no-op — the
 	// zero ControllerSettings yields an empty rollout set (every node not-targeted).
-	cs, err := h.store.GetSettings(r.Context(), tenant)
+	cs, err := h.store.GetSettings(ctx, tenant)
 	if err != nil && !errors.Is(err, controller.ErrNotFound) {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	rollout := controller.AgentRolloutNodeIDs(cs, nodes)
 	out := make([]nodeJSON, 0, len(nodes))
@@ -82,7 +74,7 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 			Telemetry:         n.Telemetry,
 		})
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 // HandleRevoke evicts a node from the fleet (operator-only). It flips the node's
@@ -91,36 +83,23 @@ func (h *ControllerHandler) HandleNodes(w http.ResponseWriter, r *http.Request) 
 // (LookupNodeByAPIToken no longer maps it to an approved node). It is the operator
 // counterpart to enrollment: 404 when the node is unknown, otherwise it records a
 // "revoke" audit entry and returns {node_id, revoked:true}.
-func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, operator, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+func (h *ControllerHandler) HandleRevoke(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req revokeRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if req.NodeID == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id")
 	}
 
 	// Load the existing record so we can preserve every field while flipping Status;
 	// an unknown node is a 404 (there is nothing to revoke).
-	node, err := h.store.GetNode(r.Context(), tenant, req.NodeID)
+	node, err := h.store.GetNode(ctx, tenant, req.NodeID)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
 	// Flip to revoked, preserving all other fields. Also clear any pending rekey flag:
@@ -129,63 +108,47 @@ func (h *ControllerHandler) HandleRevoke(w http.ResponseWriter, r *http.Request)
 	// subgraph anyway). UpsertNode matches by NodeID.
 	node.Status = controller.NodeRevoked
 	node.RekeyRequested = false
-	if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.UpsertNode(ctx, tenant, node); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	// Clear the API token + reverse index so the bearer credential stops resolving
 	// immediately (idempotent: a no-op success if the node had no token).
-	if err := h.store.RevokeNodeAPIToken(r.Context(), tenant, req.NodeID); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.RevokeNodeAPIToken(ctx, tenant, req.NodeID); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	// Invalidate any outstanding enrollment tokens for this node so a still-valid token
 	// cannot resurrect the revoked node (S5; defense in depth with the Enroll
 	// NodeRevoked guard). Idempotent: a node with no outstanding tokens purges zero.
-	if _, err := h.store.PurgeEnrollmentTokensForNode(r.Context(), tenant, req.NodeID); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if _, err := h.store.PurgeEnrollmentTokensForNode(ctx, tenant, req.NodeID); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
-		Actor:     "operator:" + operator,
+		Actor:     "operator:" + actor,
 		Action:    "revoke",
 		NodeID:    req.NodeID,
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, revokeResponseJSON{NodeID: req.NodeID, Revoked: true})
+	return revokeResponseJSON{NodeID: req.NodeID, Revoked: true}, nil
 }
 
 // HandleEnrollmentToken mints a single-use, node-scoped enrollment token
 // (operator-only) and returns its plaintext ONCE. The controller stores only the
 // token hash (CreateEnrollmentToken), so the plaintext cannot be recovered later.
-func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+func (h *ControllerHandler) HandleEnrollmentToken(ctx context.Context, tenant controller.TenantID, _ string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req enrollmentTokenRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if req.NodeID == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id")
 	}
 	// A node must never be granted an enrollment token AS the operator (the operator
 	// identity is reserved; enrolling under it is rejected at /enroll, but reject the
 	// token mint too for a clear, early error).
 	if h.isReservedNodeID(req.NodeID) {
-		writeAPIError(w, apierr.New(apierr.CodeNodeIDReserved))
-		return
+		return nil, apierr.New(apierr.CodeNodeIDReserved)
 	}
 	// Bound the TTL server-side: an enrollment token is a one-shot node bring-up
 	// credential, not a standing capability. Without an upper cap an operator could mint
@@ -193,24 +156,21 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 	// resurrection vector (S6).
 	const maxEnrollmentTokenTTLSeconds = 7 * 24 * 60 * 60 // 7 days
 	if req.TTLSeconds <= 0 || req.TTLSeconds > maxEnrollmentTokenTTLSeconds {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "ttl_seconds"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "ttl_seconds")
 	}
 
 	now := time.Now()
 	plaintext, tok := controller.NewEnrollmentToken(req.NodeID, time.Duration(req.TTLSeconds)*time.Second, now)
-	if err := h.store.CreateEnrollmentToken(r.Context(), tenant, tok); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.CreateEnrollmentToken(ctx, tenant, tok); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now,
 		Actor:     "operator:" + h.operatorName,
 		Action:    "enrollment-token",
 		NodeID:    req.NodeID,
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	// Design-membership advisory (plan-6, warn-not-block): if the stored design has
 	// no node with this id, the token mints fine but the node will be skipped at
@@ -221,10 +181,10 @@ func (h *ControllerHandler) HandleEnrollmentToken(w http.ResponseWriter, r *http
 	// transient store error must not produce a false alarm — the advisory fails safe
 	// to silent, never blocks the mint.
 	resp := enrollmentTokenResponseJSON{Token: plaintext}
-	if rec, err := h.store.GetTopology(r.Context(), tenant); err == nil && !topologyHasNode(rec.JSON, req.NodeID) {
+	if rec, err := h.store.GetTopology(ctx, tenant); err == nil && !topologyHasNode(rec.JSON, req.NodeID) {
 		resp.Warning = "node-id not present in the stored design; it will be skipped at stage until added"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, nil
 }
 
 // topologyHasNode reports whether the stored topology JSON contains a node with the

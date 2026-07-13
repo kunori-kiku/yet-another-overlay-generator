@@ -1,8 +1,11 @@
 package api
 
-// handler_audit.go holds the operator audit-chain handler.
+// handler_audit.go holds the operator audit-chain handler. It is routed through the op()
+// adapter (routes_controller.go), which applies the method guard + structural identity()
+// check before the body runs.
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -11,20 +14,10 @@ import (
 
 // HandleAudit returns the tenant's audit chain plus whether it verifies intact
 // (operator-only). verified is true when VerifyAuditChain finds no break.
-func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-	entries, err := h.store.ListAudit(r.Context(), tenant)
+func (h *ControllerHandler) HandleAudit(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	entries, err := h.store.ListAudit(ctx, tenant)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	out := make([]auditEntryJSON, len(entries))
 	for i, e := range entries {
@@ -36,8 +29,8 @@ func (h *ControllerHandler) HandleAudit(w http.ResponseWriter, r *http.Request) 
 			NodeID:    e.NodeID,
 		}
 	}
-	writeJSON(w, http.StatusOK, auditResponseJSON{
+	return auditResponseJSON{
 		Entries:  out,
 		Verified: controller.VerifyAuditChain(entries) == -1,
-	})
+	}, nil
 }

@@ -1,9 +1,12 @@
 package api
 
 // handler_rekey.go holds the operator fleet key-rotation handlers: request a fleet-wide
-// rekey (rekey-all) and clear a single node stuck rekey flag (clear-rekey).
+// rekey (rekey-all) and clear a single node stuck rekey flag (clear-rekey). Both are routed
+// through the op() adapter (routes_controller.go), which applies the method guard + structural
+// identity() check before the body runs.
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -20,56 +23,40 @@ import (
 // cleared:false and writes no audit entry. It is best-effort against a racing in-flight /rekey — an
 // agent that already saw rekey_requested may still complete its rotation, which is benign (the agent
 // holds the new key, so the swap stays consistent); the operator can clear again.
-func (h *ControllerHandler) HandleClearRekey(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, operator, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+func (h *ControllerHandler) HandleClearRekey(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req revokeRequestJSON // {node_id} — same shape as revoke
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if req.NodeID == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id")
 	}
-	node, err := h.store.GetNode(r.Context(), tenant, req.NodeID)
+	node, err := h.store.GetNode(ctx, tenant, req.NodeID)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
 		// Reserved for a persistent Store; MemStore only ever returns ErrNotFound from GetNode.
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	// Idempotent no-op: nothing pending, so no mutation and no (misleading) audit entry.
 	if !node.RekeyRequested {
-		writeJSON(w, http.StatusOK, clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: false})
-		return
+		return clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: false}, nil
 	}
 	// Clear ONLY the flag, preserving every other field (mirrors the revoke path's preserve-and-set).
 	node.RekeyRequested = false
-	if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.UpsertNode(ctx, tenant, node); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
-		Actor:     "operator:" + operator,
+		Actor:     "operator:" + actor,
 		Action:    "rekey-clear",
 		NodeID:    req.NodeID,
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: true})
+	return clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: true}, nil
 }
 
 // HandleRekeyAll requests a fleet-wide WireGuard key rotation (operator-only). It
@@ -86,20 +73,10 @@ func (h *ControllerHandler) HandleClearRekey(w http.ResponseWriter, r *http.Requ
 // re-registers the new PUBLIC key via /rekey (which clears the flag). This is the
 // ROUTINE security tier: rolling EXISTING members' keys never adds or removes a
 // member, so the operator token authorizes it in v1. Returns {requested:<count>}.
-func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, operator, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-	nodes, err := h.store.ListNodes(r.Context(), tenant)
+func (h *ControllerHandler) HandleRekeyAll(ctx context.Context, tenant controller.TenantID, actor string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	nodes, err := h.store.ListNodes(ctx, tenant)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	requested := 0
 	for _, n := range nodes {
@@ -108,19 +85,17 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 		}
 		// Re-read under the same shape as /revoke so a concurrent mutation does not
 		// clobber a field; flip the flag while preserving everything else.
-		node, err := h.store.GetNode(r.Context(), tenant, n.NodeID)
+		node, err := h.store.GetNode(ctx, tenant, n.NodeID)
 		if err != nil {
 			if errors.Is(err, controller.ErrNotFound) {
 				// The node vanished between the list and the read; skip it.
 				continue
 			}
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
+			return nil, codedErr(apierr.CodeInternalStorage, err)
 		}
 		node.RekeyRequested = true
-		if err := h.store.UpsertNode(r.Context(), tenant, node); err != nil {
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
+		if err := h.store.UpsertNode(ctx, tenant, node); err != nil {
+			return nil, codedErr(apierr.CodeInternalStorage, err)
 		}
 		requested++
 	}
@@ -130,17 +105,15 @@ func (h *ControllerHandler) HandleRekeyAll(w http.ResponseWriter, r *http.Reques
 	// agent skip-applies on the rekey signal instead of treating it as a deploy. Done
 	// even when requested==0 so the bump is unconditional and idempotent (a no-op-flag
 	// rekey-all still records the audit entry below).
-	if _, err := h.store.BumpGeneration(r.Context(), tenant); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if _, err := h.store.BumpGeneration(ctx, tenant); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
-		Actor:     "operator:" + operator,
+		Actor:     "operator:" + actor,
 		Action:    "rekey-request",
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, rekeyAllResponseJSON{Requested: requested})
+	return rekeyAllResponseJSON{Requested: requested}, nil
 }

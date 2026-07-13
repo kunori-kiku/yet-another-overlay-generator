@@ -56,36 +56,19 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 		WGPublicKey: req.WGPublicKey,
 	}, time.Now())
 	if err != nil {
-		// Token errors are an authorization failure (bad/expired/consumed token);
-		// everything else here is a malformed request. We map token errors to 401 and
-		// the rest to 400 so a caller can distinguish "your token is no good" from a
-		// malformed request.
-		if errors.Is(err, controller.ErrTokenInvalid) || errors.Is(err, controller.ErrTokenConsumed) {
-			writeAPIError(w, apierr.New(apierr.CodeEnrollmentTokenInvalid).Wrap(err))
-			return
-		}
-		// Revoked node-id re-enroll attempt (S4): a VALID token was burned (the guard runs
-		// post-consume), so refund the throttle slot (not a token guess) and surface a 409 —
-		// the operator must delete the node before its id can be reused.
-		if errors.Is(err, controller.ErrNodeRevoked) {
+		// Refund the throttle slot for the two burned-VALID-token conflicts: the revoked-id
+		// re-enroll guard (S4) and the duplicate-WG-key dedupe (plan-6) both run POST-consume,
+		// so a real token was already spent — these are legitimate-operator conflicts, not
+		// token-guesses. (Exactly the two sentinels the hand-rolled branches refunded on.)
+		if errors.Is(err, controller.ErrNodeRevoked) || errors.Is(err, controller.ErrDuplicateWGKey) {
 			h.enrollLimiter.succeed(ipKey)
-			writeAPIError(w, apierr.New(apierr.CodeEnrollNodeRevoked).Wrap(err))
-			return
 		}
-		// Malformed WireGuard public key: rejected up front (before the token is burned), so it is a
-		// plain bad request — not a token-guess and not a duplicate conflict.
-		if errors.Is(err, controller.ErrInvalidWGKey) {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err))
-			return
-		}
-		// Duplicate WG pubkey under another node-id (plan-6): a conflict the operator
-		// must resolve (revoke the other node or reuse its id), not a malformed request.
-		if errors.Is(err, controller.ErrDuplicateWGKey) {
-			// This path is reached only AFTER a VALID enrollment token was burned (the dedupe
-			// check runs post-consume), so it is a legitimate-operator conflict, not a
-			// token-guess — refund the throttle slot rather than counting it toward lockout.
-			h.enrollLimiter.succeed(ipKey)
-			writeAPIError(w, apierr.New(apierr.CodeDuplicateWGKey).Wrap(err))
+		// Token + WG-key sentinels map through the central table (errmap.go): ErrTokenInvalid/
+		// ErrTokenConsumed → enrollment_token_invalid (401), ErrNodeRevoked → enroll_node_revoked
+		// (409), ErrInvalidWGKey → req_field_invalid{wg_public_key} (400), ErrDuplicateWGKey →
+		// duplicate_wg_key (409). Anything else here is a malformed request (400).
+		if ae := mapControllerErr(err); ae != nil {
+			writeAPIError(w, ae)
 			return
 		}
 		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
@@ -388,16 +371,15 @@ func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) 
 	// and enforces the SAME identity invariant as enroll (plan-6 review: the rekey
 	// write path must not be able to create a duplicate the enroll dedupe forbids).
 	if err := controller.Rekey(r.Context(), h.store, tenant, node, req.WGPublicKey, time.Now()); err != nil {
+		// Context-specific: an unknown node is a 404 here (kept out of the central table).
 		if errors.Is(err, controller.ErrNotFound) {
 			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
 			return
 		}
-		if errors.Is(err, controller.ErrInvalidWGKey) {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err))
-			return
-		}
-		if errors.Is(err, controller.ErrDuplicateWGKey) {
-			writeAPIError(w, apierr.New(apierr.CodeDuplicateWGKey).Wrap(err))
+		// Context-free WG-key sentinels (ErrInvalidWGKey → req_field_invalid{wg_public_key};
+		// ErrDuplicateWGKey → duplicate_wg_key) map through the central table (errmap.go).
+		if ae := mapControllerErr(err); ae != nil {
+			writeAPIError(w, ae)
 			return
 		}
 		writeCodedOr(w, apierr.CodeInternalStorage, err)

@@ -2,8 +2,12 @@ package api
 
 // handler_topology.go holds the operator topology-store handlers: store a new version
 // (update-topology), read the current or a retained version, and list retained versions.
+// They are routed through the op()/opRaw() adapter (routes_controller.go), which applies the
+// method guard + structural identity() check before the body runs. HandleTopology uses opRaw
+// because it writes the stored bytes VERBATIM (its own Content-Type), not a JSON-marshaled value.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,20 +27,10 @@ import (
 // fail-closed — the panel strips client-side; a key reaching this handler means a
 // custody bug upstream and must blow up loudly, never be stored). The tenant is the
 // configured one.
-func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, operator, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+func (h *ControllerHandler) HandleUpdateTopology(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	body, err := readControllerBody(w, r)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	// Custody gate: unmarshal into the model (not a substring match, which would
 	// false-positive on names/notes) and refuse any private key material. Bodies are
@@ -48,16 +42,13 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 	if err := json.Unmarshal(body, &topo); err != nil {
 		var syn *json.SyntaxError
 		if errors.As(err, &syn) {
-			writeAPIError(w, apierr.New(apierr.CodeReqInvalidBody).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeReqInvalidBody).Wrap(err)
 		}
-		writeAPIError(w, apierr.New(apierr.CodeReqInvalidBody).Wrap(err))
-		return
+		return nil, apierr.New(apierr.CodeReqInvalidBody).Wrap(err)
 	}
 	for _, n := range topo.Nodes {
 		if n.WireGuardPrivateKey != "" {
-			writeAPIError(w, apierr.New(apierr.CodeCustodyPrivateKey))
-			return
+			return nil, apierr.New(apierr.CodeCustodyPrivateKey)
 		}
 	}
 	// Heal colliding allocation pins on the write path: an incremental-enrollment compile could once
@@ -74,69 +65,53 @@ func (h *ControllerHandler) HandleUpdateTopology(w http.ResponseWriter, r *http.
 	// bug — and they are dropped here rather than persisted unchecked.
 	canonical, err := json.Marshal(topo)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
-	rec, err := h.store.PutTopology(r.Context(), tenant, canonical)
+	rec, err := h.store.PutTopology(ctx, tenant, canonical)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	// Post-commit audit is best-effort: the version is already stored, and converting
 	// an audit-write hiccup into a 500 would tell the operator the action failed when
 	// it committed (the retry would mint a duplicate version). Same convention as the
 	// settings/login audits.
-	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
-		Actor:     "operator:" + operator,
+		Actor:     "operator:" + actor,
 		Action:    "update-topology",
 	})
-	writeJSON(w, http.StatusOK, map[string]int64{"version": rec.Version})
+	return map[string]int64{"version": rec.Version}, nil
 }
 
 // HandleTopology returns stored topology JSON (operator-only). With no query it
 // returns the CURRENT record; `?version=N` returns one retained history version
 // (plan-2, D7 — the recovery substrate for a bad overwrite). The stored bytes are
 // public-keys-only and returned verbatim. 404 before the first update-topology, or
-// for an unknown/pruned version.
-func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-
+// for an unknown/pruned version. Routed through opRaw: it writes the stored bytes with
+// its OWN "application/json; charset=utf-8" Content-Type, which writeJSON cannot reproduce.
+func (h *ControllerHandler) HandleTopology(ctx context.Context, tenant controller.TenantID, _ string, w http.ResponseWriter, r *http.Request) *apierr.Error {
 	var rec controller.TopologyRecord
 	var err error
 	if vq := r.URL.Query().Get("version"); vq != "" {
 		version, perr := strconv.ParseInt(vq, 10, 64)
 		if perr != nil || version <= 0 {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "version"))
-			return
+			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "version")
 		}
-		rec, err = h.store.GetTopologyVersion(r.Context(), tenant, version)
+		rec, err = h.store.GetTopologyVersion(ctx, tenant, version)
 		if err != nil {
 			if errors.Is(err, controller.ErrNotFound) {
-				writeAPIError(w, apierr.New(apierr.CodeTopologyVersionNotFound))
-				return
+				return apierr.New(apierr.CodeTopologyVersionNotFound)
 			}
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
+			return codedErr(apierr.CodeInternalStorage, err)
 		}
 	} else {
-		rec, err = h.store.GetTopology(r.Context(), tenant)
+		rec, err = h.store.GetTopology(ctx, tenant)
 		if err != nil {
 			if errors.Is(err, controller.ErrNotFound) {
-				writeAPIError(w, apierr.New(apierr.CodeNoTopologyStored))
-				return
+				return apierr.New(apierr.CodeNoTopologyStored)
 			}
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
+			return codedErr(apierr.CodeInternalStorage, err)
 		}
 	}
 	// The stored JSON is returned verbatim (it is already valid JSON, validated at
@@ -144,28 +119,19 @@ func (h *ControllerHandler) HandleTopology(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rec.JSON)
+	return nil
 }
 
 // HandleTopologyVersions lists the retained topology versions, newest first
 // (operator-only; metadata only — fetch a payload via GET /topology?version=N).
-func (h *ControllerHandler) HandleTopologyVersions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-	infos, err := h.store.ListTopologyVersions(r.Context(), tenant)
+func (h *ControllerHandler) HandleTopologyVersions(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	infos, err := h.store.ListTopologyVersions(ctx, tenant)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	out := make([]topologyVersionJSON, len(infos))
 	for i, v := range infos {
 		out[i] = topologyVersionJSON{Version: v.Version, UpdatedAt: v.UpdatedAt, Bytes: v.Bytes}
 	}
-	writeJSON(w, http.StatusOK, topologyVersionsResponseJSON{Versions: out, Limit: controller.TopologyHistoryLimit})
+	return topologyVersionsResponseJSON{Versions: out, Limit: controller.TopologyHistoryLimit}, nil
 }

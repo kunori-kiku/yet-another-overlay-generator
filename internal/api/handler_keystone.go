@@ -271,29 +271,18 @@ func (h *ControllerHandler) auditKeystone(ctx context.Context, w http.ResponseWr
 // the panel signs challenge = SHA256(decoded bytes). Each member carries its bundle
 // digest, so the off-host signature covers what RUNS (install.sh + every config), not
 // only the member list. 404 when nothing has been staged yet (stage a deploy first).
-func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-	canonical, epoch, err := h.stagedManifest(r.Context(), tenant)
+func (h *ControllerHandler) HandleTrustList(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	canonical, epoch, err := h.stagedManifest(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNoStagedManifest))
-			return
+			return nil, apierr.New(apierr.CodeNoStagedManifest)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, trustListResponseJSON{
+	return trustListResponseJSON{
 		TrustListJSON: base64.StdEncoding.EncodeToString(canonical),
 		Epoch:         epoch,
-	})
+	}, nil
 }
 
 // HandleTrustListSignature accepts the operator's off-host signature over the staged
@@ -305,96 +294,74 @@ func (h *ControllerHandler) HandleTrustList(w http.ResponseWriter, r *http.Reque
 // stores the signature onto the staged manifest record (keeping its canonical bytes +
 // epoch), records a "sign-trustlist" audit entry, and returns 200. A 412 is returned
 // when no operator credential is pinned; a 404 when nothing has been staged.
-func (h *ControllerHandler) HandleTrustListSignature(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, operator, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+func (h *ControllerHandler) HandleTrustListSignature(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req trustListSignatureRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 
 	// A signature is meaningless without a pinned credential to verify it against.
-	cred, err := h.store.GetOperatorCredential(r.Context(), tenant)
+	cred, err := h.store.GetOperatorCredential(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNoPinnedCredential))
-			return
+			return nil, apierr.New(apierr.CodeNoPinnedCredential)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
 	// (a) Re-derive the staged manifest canonical bytes from the store.
-	canonical, epoch, err := h.stagedManifest(r.Context(), tenant)
+	canonical, epoch, err := h.stagedManifest(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNoStagedManifest))
-			return
+			return nil, apierr.New(apierr.CodeNoStagedManifest)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
 	// (b) Substitution guard: the operator must have signed EXACTLY these bytes.
 	submitted, err := base64.StdEncoding.DecodeString(req.TrustListJSON)
 	if err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "trustlist_json"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "trustlist_json")
 	}
 	if !bytes.Equal(submitted, canonical) {
-		writeAPIError(w, apierr.New(apierr.CodeStagedManifestMismatch))
-		return
+		return nil, apierr.New(apierr.CodeStagedManifestMismatch)
 	}
 
 	// Parse the staged manifest so trustlist.Verify checks the signature over its exact
 	// canonical bytes (Verify re-canonicalizes the parsed value internally).
 	var manifest trustlist.TrustList
 	if err := json.Unmarshal(canonical, &manifest); err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeInternalStorage).Wrap(err))
-		return
+		return nil, apierr.New(apierr.CodeInternalStorage).Wrap(err)
 	}
 
 	// (c) Verify the off-host signature against the PINNED credential.
 	pin, err := pinFromCredential(cred)
 	if err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeInternalStorage).Wrap(err))
-		return
+		return nil, apierr.New(apierr.CodeInternalStorage).Wrap(err)
 	}
 	if err := trustlist.Verify(manifest, req.Signed, pin); err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeManifestSignatureInvalid).Wrap(err))
-		return
+		return nil, apierr.New(apierr.CodeManifestSignatureInvalid).Wrap(err)
 	}
 
 	// (d) Store the signature onto the staged manifest record (canonical bytes + epoch
 	// unchanged) and audit it.
 	signedJSON, err := json.Marshal(req.Signed)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	if err := h.store.PutSignedTrustList(r.Context(), tenant, controller.StoredTrustList{
+	if err := h.store.PutSignedTrustList(ctx, tenant, controller.StoredTrustList{
 		TrustListJSON: canonical,
 		SignatureJSON: signedJSON,
 		Epoch:         epoch,
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
-		Actor:     "operator:" + operator,
+		Actor:     "operator:" + actor,
 		Action:    "sign-trustlist",
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "epoch": epoch})
+	return map[string]any{"ok": true, "epoch": epoch}, nil
 }

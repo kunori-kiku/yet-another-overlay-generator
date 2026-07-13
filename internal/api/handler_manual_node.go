@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,21 +24,13 @@ import (
 
 // HandleManualNodeBundle returns a manual node's promoted bundle as a downloadable ZIP. Operator-only
 // (registered under the operator mux). The node id is the `node` query param. It is restricted to
-// manual nodes: a managed node's bundle is delivered to its agent via /config, not here.
-func (h *ControllerHandler) HandleManualNodeBundle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+// manual nodes: a managed node's bundle is delivered to its agent via /config, not here. Routed
+// through opRaw: it writes a ZIP with its OWN Content-Type/Content-Disposition, which writeJSON
+// cannot reproduce (the op()/opRaw() adapter still applies the method guard + structural identity()).
+func (h *ControllerHandler) HandleManualNodeBundle(ctx context.Context, tenant controller.TenantID, _ string, w http.ResponseWriter, r *http.Request) *apierr.Error {
 	nodeID := r.URL.Query().Get("node")
 	if nodeID == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqInvalidBody).With("detail", "missing required query parameter: node"))
-		return
+		return apierr.New(apierr.CodeReqInvalidBody).With("detail", "missing required query parameter: node")
 	}
 
 	// Manual-only: confirm the requested node is a manual node in the stored topology. A non-manual
@@ -45,25 +38,21 @@ func (h *ControllerHandler) HandleManualNodeBundle(w http.ResponseWriter, r *htt
 	// /config. This also keeps the endpoint from being a generic any-node bundle reader.
 	manual, err := h.nodeIsManual(r, tenant, nodeID)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return codedErr(apierr.CodeInternalStorage, err)
 	}
 	if !manual {
-		writeAPIError(w, apierr.New(apierr.CodeConfigNotFound).With("detail", "no manual node with that id (a managed node's config is pulled by its agent)"))
-		return
+		return apierr.New(apierr.CodeConfigNotFound).With("detail", "no manual node with that id (a managed node's config is pulled by its agent)")
 	}
 
 	// Serve the SAME atomic snapshot the agent /config path serves: the node's promoted bundle plus,
 	// when the keystone is on, the off-host-signed membership trust-list. A manual node that has not
 	// been staged+promoted yet has no served config → 404.
-	sc, err := h.store.GetServedConfig(r.Context(), tenant, nodeID)
+	sc, err := h.store.GetServedConfig(ctx, tenant, nodeID)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeConfigNotFound).Wrap(err))
-			return
+			return apierr.New(apierr.CodeConfigNotFound).Wrap(err)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return codedErr(apierr.CodeInternalStorage, err)
 	}
 
 	files := make(map[string][]byte, len(sc.Bundle.Files)+2)
@@ -74,8 +63,7 @@ func (h *ControllerHandler) HandleManualNodeBundle(w http.ResponseWriter, r *htt
 		// Fail closed if the served snapshot somehow lacks the signed manifest (a promote cannot
 		// occur without one, so this should be unreachable) — never hand out an unattested bundle.
 		if !sc.HasTrustList {
-			writeAPIError(w, apierr.New(apierr.CodeKeystoneNoSignedManifest))
-			return
+			return apierr.New(apierr.CodeKeystoneNoSignedManifest)
 		}
 		files["trustlist.json"] = sc.TrustList.TrustListJSON
 		files["trustlist.sig"] = sc.TrustList.SignatureJSON
@@ -83,13 +71,13 @@ func (h *ControllerHandler) HandleManualNodeBundle(w http.ResponseWriter, r *htt
 
 	buf, err := zipBundleFiles(files)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return codedErr(apierr.CodeInternalStorage, err)
 	}
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", nodeID+"-bundle.zip"))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(buf.Bytes())
+	return nil
 }
 
 // nodeIsManual reports whether the stored topology carries a node with id nodeID whose deployment_mode

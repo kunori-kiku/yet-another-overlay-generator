@@ -2,13 +2,16 @@ package api
 
 // handler_totp.go is the operator TOTP-2FA management surface (plan-5.2): enroll,
 // confirm, disable, and status. All routes are operator-authenticated and act on the
-// CURRENTLY LOGGED-IN operator's account (resolved from the request identity).
+// CURRENTLY LOGGED-IN operator's account (resolved from the request identity the op()
+// adapter established). They are routed through the op() adapter (routes_controller.go),
+// which applies the method guard + structural identity() check before the body runs.
 //
 // TOTP gates the panel login only — it is never a keystone signing mechanism (it is
 // symmetric and time-based, not an asymmetric content-bound signature). See totp.go and
 // docs/spec/controller/operator-auth.md.
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -35,128 +38,99 @@ type totpStatusResponseJSON struct {
 	Enabled bool `json:"enabled"`
 }
 
-// currentOperator resolves the logged-in operator's account from the request identity.
-// It returns ok=false (after writing an error) when the caller is not a real operator
-// account — e.g. authenticated via the break-glass token, which has no account and so
-// cannot manage 2FA.
-func (h *ControllerHandler) currentOperator(w http.ResponseWriter, r *http.Request) (controller.Operator, controller.TenantID, bool) {
-	tenant, name, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return controller.Operator{}, "", false
-	}
-	op, err := h.store.GetOperator(r.Context(), tenant, name)
+// currentOperatorAccount resolves the logged-in operator's stored account from the identity
+// the op() adapter already established (tenant + operator name). It returns a coded
+// CodeTotpRequiresLogin error when the caller is not a real operator account — e.g.
+// authenticated via the break-glass token, which has no account and so cannot manage 2FA /
+// passkeys. Shared by the TOTP and passkey-management handlers.
+func (h *ControllerHandler) currentOperatorAccount(ctx context.Context, tenant controller.TenantID, name string) (controller.Operator, *apierr.Error) {
+	op, err := h.store.GetOperator(ctx, tenant, name)
 	if err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeTotpRequiresLogin).Wrap(err))
-		return controller.Operator{}, "", false
+		return controller.Operator{}, apierr.New(apierr.CodeTotpRequiresLogin).Wrap(err)
 	}
-	return op, tenant, true
+	return op, nil
 }
 
 // HandleTOTPStatus (GET) reports whether the current operator has 2FA enrolled.
-func (h *ControllerHandler) HandleTOTPStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
+func (h *ControllerHandler) HandleTOTPStatus(ctx context.Context, tenant controller.TenantID, actor string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
-	op, _, ok := h.currentOperator(w, r)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, totpStatusResponseJSON{Enabled: op.TOTPEnabled()})
+	return totpStatusResponseJSON{Enabled: op.TOTPEnabled()}, nil
 }
 
 // HandleTOTPEnroll (POST) mints a fresh TOTP secret + otpauth URI for the operator to
 // add to an authenticator app. The secret is NOT saved here — the operator proves they
 // can generate codes via /totp/confirm before it is activated.
-func (h *ControllerHandler) HandleTOTPEnroll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	op, tenant, ok := h.currentOperator(w, r)
-	if !ok {
-		return
+func (h *ControllerHandler) HandleTOTPEnroll(ctx context.Context, tenant controller.TenantID, actor string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
 	secret := controller.GenerateTOTPSecret()
 	uri := controller.TOTPProvisioningURI(secret, op.Username, "YAOG ("+string(tenant)+")")
-	writeJSON(w, http.StatusOK, totpEnrollResponseJSON{Secret: secret, URI: uri})
+	return totpEnrollResponseJSON{Secret: secret, URI: uri}, nil
 }
 
 // HandleTOTPConfirm (POST) activates 2FA: it verifies a code against the just-issued
 // secret (proving the authenticator is set up) and then persists the secret. Only on a
 // valid code is TOTP turned on.
-func (h *ControllerHandler) HandleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	op, tenant, ok := h.currentOperator(w, r)
-	if !ok {
-		return
+func (h *ControllerHandler) HandleTOTPConfirm(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
 	var req totpConfirmRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if strings.TrimSpace(req.Secret) == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "secret"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "secret")
 	}
 	now := time.Now().UTC()
 	totpOK, step := controller.VerifyTOTP(req.Secret, req.Code, now, 0)
 	if !totpOK {
-		writeAPIError(w, apierr.New(apierr.CodeTotpInvalidCode))
-		return
+		return nil, apierr.New(apierr.CodeTotpInvalidCode)
 	}
 	op.TOTPSecret = req.Secret
 	op.TOTPLastUsedStep = step
 	op.UpdatedAt = now
-	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now, Actor: "operator:" + op.Username, Action: "totp-enabled",
 	})
-	writeJSON(w, http.StatusOK, totpStatusResponseJSON{Enabled: true})
+	return totpStatusResponseJSON{Enabled: true}, nil
 }
 
 // HandleTOTPDisable (POST) turns 2FA off, requiring a current code so a hijacked session
 // cannot trivially disable the second factor. Idempotent if already disabled.
-func (h *ControllerHandler) HandleTOTPDisable(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	op, tenant, ok := h.currentOperator(w, r)
-	if !ok {
-		return
+func (h *ControllerHandler) HandleTOTPDisable(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
+	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
+	if aerr != nil {
+		return nil, aerr
 	}
 	if !op.TOTPEnabled() {
-		writeJSON(w, http.StatusOK, totpStatusResponseJSON{Enabled: false})
-		return
+		return totpStatusResponseJSON{Enabled: false}, nil
 	}
 	var req totpDisableRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	now := time.Now().UTC()
 	if totpOK, _ := controller.VerifyTOTP(op.TOTPSecret, req.Code, now, op.TOTPLastUsedStep); !totpOK {
-		writeAPIError(w, apierr.New(apierr.CodeTotpInvalidCode))
-		return
+		return nil, apierr.New(apierr.CodeTotpInvalidCode)
 	}
 	op.TOTPSecret = ""
 	op.TOTPLastUsedStep = 0
 	op.UpdatedAt = now
-	if err := h.store.PutOperator(r.Context(), tenant, op); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now, Actor: "operator:" + op.Username, Action: "totp-disabled",
 	})
-	writeJSON(w, http.StatusOK, totpStatusResponseJSON{Enabled: false})
+	return totpStatusResponseJSON{Enabled: false}, nil
 }
