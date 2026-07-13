@@ -240,7 +240,7 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 |---|------|--------|-----|
 | 0 | Ratchet + zero-behavior hygiene | ✅ merged | #260 |
 | 1 | Pre-WASM contract hardening | ✅ merged | #261 |
-| 1.5 | Single-source the export bundle file-set (custody) | pending | — |
+| 1.5 | Single-source the export bundle file-set (custody) | ✅ merged | #262 |
 | 1.6 | Lock the air-gap handler pre-heal (regression test) | pending | — |
 | 2 | Stateful god-file splits (no logic change) | pending | — |
 | 3 | WASM add-alongside + PERMANENT gate | pending | — |
