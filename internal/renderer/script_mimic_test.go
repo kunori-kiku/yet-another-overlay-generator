@@ -589,10 +589,12 @@ func TestCollectMimicRemotes(t *testing.T) {
 		{Mimic: false, Endpoint: "198.51.100.1:51820"}, // non-mimic -> skipped
 	}
 	got := collectMimicRemotes(peers)
+	// Host is a ShellToken: the collector dedups/sorts on the raw host, then wraps each as a
+	// single-quoted token (ShellQuoted) for the template's remote= filter lines.
 	want := []MimicEndpoint{
-		{Host: "2001:db8::1", Port: 51900},
-		{Host: "203.0.113.1", Port: 51820},
-		{Host: "203.0.113.9", Port: 51820},
+		{Host: ShellQuoted("2001:db8::1"), Port: 51900},
+		{Host: ShellQuoted("203.0.113.1"), Port: 51820},
+		{Host: ShellQuoted("203.0.113.9"), Port: 51820},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("collectMimicRemotes returned %d entries, want %d: %+v", len(got), len(want), got)
