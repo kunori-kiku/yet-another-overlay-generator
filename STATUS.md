@@ -1,8 +1,24 @@
 # STATUS
 <!-- regenerated: 2026-07-13 -->
-<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; subject telemetry-history-and-delta-deploy DELIVERED + archived -->
+<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; NEW subject framework-refactor DRAFTED (plans-only) -->
 
 ## Active work
+
+- **📝 SUBJECT `framework-refactor-2026_07_13` — DRAFTED 2026-07-13 (plans-only; execution on the owner's
+  go). The "WASM-Unified Core + Machine-Gated Paydown" program from a 24-agent repo-wide debt sweep +
+  a 21-agent judged design panel** (full rationale:
+  [`docs/design/framework-refactor-proposal-2026_07_13.md`](docs/design/framework-refactor-proposal-2026_07_13.md)).
+  Radical at the root, incremental in execution: (spine) compile the *existing* pure Go pipeline to
+  `GOOS=js GOARCH=wasm` and run it in the browser — deleting the ~17K-LOC hand-mirrored Go/TS compiler +
+  `internal/conformance/` + `@noble`/`jszip` — with parity gated FOREVER by a headless WASM-vs-golden
+  check (**feasibility VERIFIED: the pure pipeline builds clean to js/wasm today**); (law) convert every
+  remaining boundary from convention to a machine-gate (arch-test import ratchet, `ShellToken` shell seam,
+  wire-DTO/`omitempty` drift gate, single-source lists); (paydown) split the god-files along existing
+  seams, `Store` behavioral core LAST. **11 plans (plan-0 … plan-10)**, ordered by debt-eliminated ÷ risk;
+  the WASM strategic-bet gate is after plan-2 (0–2 stand alone). Owner decisions locked: Phase 9
+  airgap-server retirement PROCEEDS (build/test-only); `Node.ID` stable-identity DEFERRED. Folder:
+  [`implementation_plans/framework-refactor-2026_07_13/`](implementation_plans/framework-refactor-2026_07_13/outline.md).
+  **NEXT = plan-0 (`refactor/plan-0-ratchet-hygiene`) on the owner's go.**
 
 - **✅ SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DELIVERED as `v2.0.0-rc.5` (GitHub
   *Latest*, 2026-07-13; annotated tag on `ac3d660`; rc.4 demoted; self-promoted; 29 assets);
@@ -353,6 +369,17 @@
 - No code blockers. `main` is green.
 
 ## Next actions
+
+**Two independent tracks, both owner-paced:**
+
+**Track 1 — the `framework-refactor` program (DRAFTED, awaiting the owner's go).** Execute `plan-0`
+(`refactor/plan-0-ratchet-hygiene`): the near-zero-risk enforcement spine + hygiene (arch-test import
+ratchet; fix lying file names; delete the `sysctl.go` CJK fragments shipped to hosts + false doc headers;
+`deployMode.ts` + kill the dead FE fetch-branch; recursive vitest glob; merge the double golden corpus)
+— zero behavior change. plan-0 → plan-2 stand alone even if the WASM bet (plan-3+) is never taken. Each
+phase per the full per-PR review regime. See the outline for the phase-status table + insertion points.
+
+**Track 2 — the rc line to GA.**
 
 **`v2.0.0-rc.5` is GitHub Latest (the `telemetry-history-and-delta-deploy` subject). The road to GA
 (all owner-paced):**
