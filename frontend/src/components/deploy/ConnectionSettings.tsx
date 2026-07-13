@@ -1,6 +1,7 @@
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore } from '../../stores/controllerStore';
 import { t } from '../../i18n';
+import { Field } from '../../ui/Field';
 
 // ConnectionSettings is the controller connection settings (the Connection section of /settings). As
 // of plan-4, login/identity/break-glass moved out of the full-screen LoginPage (D2) and the UserMenu
@@ -23,45 +24,28 @@ export function ConnectionSettings() {
         {t(language, 'connectionSettings.controllerConnection')}
       </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">
-            {t(language, 'connectionSettings.operatorBaseURL')}
-          </label>
-          <input
-            type="text"
-            value={baseURL}
-            onChange={(e) => setConfig({ baseURL: e.target.value })}
-            placeholder="http://localhost:8080"
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">
-            {t(language, 'connectionSettings.secretPathPrefixOptional')}
-          </label>
-          <input
-            type="text"
-            value={pathPrefix}
-            onChange={(e) => setConfig({ pathPrefix: e.target.value })}
-            placeholder="/s3cr3t"
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
-            {t(language, 'connectionSettings.mustMatchTheServer')}
-          </p>
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">
-            {t(language, 'connectionSettings.agentBaseURL')}
-          </label>
-          <input
-            type="text"
-            value={agentBaseURL}
-            onChange={(e) => setConfig({ agentBaseURL: e.target.value })}
-            placeholder="http://localhost:9090"
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
+        <Field
+          label={t(language, 'connectionSettings.operatorBaseURL')}
+          type="text"
+          value={baseURL}
+          onChange={(e) => setConfig({ baseURL: e.target.value })}
+          placeholder="http://localhost:8080"
+        />
+        <Field
+          label={t(language, 'connectionSettings.secretPathPrefixOptional')}
+          type="text"
+          value={pathPrefix}
+          onChange={(e) => setConfig({ pathPrefix: e.target.value })}
+          placeholder="/s3cr3t"
+          hint={t(language, 'connectionSettings.mustMatchTheServer')}
+        />
+        <Field
+          label={t(language, 'connectionSettings.agentBaseURL')}
+          type="text"
+          value={agentBaseURL}
+          onChange={(e) => setConfig({ agentBaseURL: e.target.value })}
+          placeholder="http://localhost:9090"
+        />
       </div>
       <p className="text-[10px] text-[var(--content-muted)]">
         {t(language, 'connectionSettings.signInHappensOn')}

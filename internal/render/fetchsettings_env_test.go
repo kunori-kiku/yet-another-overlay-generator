@@ -24,6 +24,17 @@ const sampleCatalogJSON = `{
   "agent": {}
 }`
 
+// hasCatalog reports whether fs configures any external artifact at the FLEET level (mimic or agent).
+// It is a TEST-ONLY predicate: these LoadFetchSettings cases assert the "is anything configured at
+// all" answer. It lived in the production render package (artifacts_json.go) until framework-refactor
+// plan-10's dead-code sweep found it had no production caller (plan-9 retired the air-gap loader that
+// once used it) and moved it here beside its only consumers. The per-NODE emit decision is
+// buildArtifactsJSON's, which additionally gates the agent block on rollout membership.
+func hasCatalog(fs FetchSettings) bool {
+	return fs.MimicVersion != "" || len(fs.MimicDebs) > 0 ||
+		fs.AgentVersion != "" || len(fs.AgentBins) > 0
+}
+
 // TestLoadFetchSettings_Empty pins the D4 air-gap default: with no catalog/proxy/version the
 // result is the zero FetchSettings (no catalog ⇒ no artifacts.json ⇒ byte-identical bundle).
 func TestLoadFetchSettings_Empty(t *testing.T) {

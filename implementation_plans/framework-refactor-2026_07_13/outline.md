@@ -251,4 +251,4 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 7 | Error framework (handler adapter + sentinel→code table) | ✅ merged | #265 |
 | 8 | Store behavioral core (KEYSTONE, last) | ✅ merged | #269 |
 | 9 | Airgap-server retirement (one build) | ✅ merged | #274 |
-| 10 | FE polish + drift lock-in | pending | — |
+| 10 | FE polish + drift lock-in | 🔄 in review | this PR |

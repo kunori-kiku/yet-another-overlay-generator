@@ -3,6 +3,7 @@ import { emptyControllerSettings, type ControllerSettings } from '../../api/cont
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type UILanguage } from '../../i18n';
+import { Field } from '../../ui/Field';
 
 // Bootstrap settings (plan-5.2): the server-persisted public agent URL / GitHub proxy / agent release
 // base URL. They are baked into the defaults of the one-shot install script returned by GET
@@ -79,17 +80,14 @@ function SettingsForm({
     placeholder: string,
     hint: string,
   ) => (
-    <div>
-      <label className="text-xs text-[var(--content-muted)]">{label}</label>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => set(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-      />
-      <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{hint}</p>
-    </div>
+    <Field
+      label={label}
+      type="text"
+      value={value}
+      onChange={(e) => set(e.target.value)}
+      placeholder={placeholder}
+      hint={hint}
+    />
   );
 
   return (

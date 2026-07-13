@@ -192,14 +192,6 @@ type PeerInfo struct {
 	MTU int
 }
 
-// deriveAllowedIPs computes AllowedIPs (a retained compatibility function).
-func deriveAllowedIPs(node *model.Node) []string {
-	if node.OverlayIP == "" {
-		return []string{}
-	}
-	return []string{node.OverlayIP + "/32"}
-}
-
 // wgInterfaceName generates a WireGuard interface name (a thin wrapper).
 // The canonical implementation has been moved up to internal/naming (Spec D,
 // docs/spec/artifacts/naming.md), shared across the renderer, compiler, and validator

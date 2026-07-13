@@ -3,6 +3,7 @@ import { useControllerStore } from '../../../stores/controllerStore';
 import { t, type MessageKey } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
 import { uuid } from '../../../lib/uuid';
+import { Field, FIELD_SELECT_CLASS } from '../../../ui/Field';
 
 // NATIVE_XDP_KEY maps the fleet node's reported native-XDP capability (plan-4) to a localized hint
 // shown as an ALWAYS-VISIBLE per-node indicator (a pre-decision aid: you can see whether the NIC
@@ -128,32 +129,25 @@ export function NodeEditor() {
         {t(language, 'nodeEditor.nodeProperties')}
       </h2>
       <div className="space-y-2">
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.name')}</label>
-          <input
-            type="text"
-            value={selectedNode.name}
-            onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
-            pattern="^[A-Za-z0-9 ._-]+$"
-            title={t(language, 'nodeEditor.onlyLettersDigitsSpace')}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.hostnameOptional')}</label>
-          <input
-            type="text"
-            value={selectedNode.hostname || ''}
-            onChange={(e) =>
-              updateNode(selectedNode.id, {
-                hostname: e.target.value || undefined,
-              })
-            }
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.role')}</label>
+        <Field
+          label={t(language, 'nodeEditor.name')}
+          type="text"
+          value={selectedNode.name}
+          onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
+          pattern="^[A-Za-z0-9 ._-]+$"
+          title={t(language, 'nodeEditor.onlyLettersDigitsSpace')}
+        />
+        <Field
+          label={t(language, 'nodeEditor.hostnameOptional')}
+          type="text"
+          value={selectedNode.hostname || ''}
+          onChange={(e) =>
+            updateNode(selectedNode.id, {
+              hostname: e.target.value || undefined,
+            })
+          }
+        />
+        <Field label={t(language, 'nodeEditor.role')}>
           <select
             value={selectedNode.role}
             onChange={(e) => {
@@ -168,7 +162,7 @@ export function NodeEditor() {
                 capabilities: deriveCapabilitiesFromRole(newRole, operatorHasPublicIP),
               });
             }}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
+            className={FIELD_SELECT_CLASS}
           >
             <option value="peer">Peer</option>
             <option value="router">Router</option>
@@ -176,7 +170,7 @@ export function NodeEditor() {
             <option value="gateway">Gateway</option>
             <option value="client">Client</option>
           </select>
-        </div>
+        </Field>
         {/* Deployment mode (controller only): a MANUAL node is hand-deployed (no agent). It carries its
             own pre-known public key + endpoint in the design (mixed-controller-local-mode plan-6). */}
         {mode === 'controller' && (
@@ -211,40 +205,33 @@ export function NodeEditor() {
             )}
           </div>
         )}
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.domain')}</label>
+        <Field label={t(language, 'nodeEditor.domain')}>
           <select
             value={selectedNode.domain_id}
             onChange={(e) => updateNode(selectedNode.id, { domain_id: e.target.value })}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
+            className={FIELD_SELECT_CLASS}
           >
             {domains.map((d) => (
               <option key={d.id} value={d.id}>{d.name}</option>
             ))}
           </select>
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.overlayIPEmptyFor')}</label>
-          <input
-            type="text"
-            value={selectedNode.overlay_ip || ''}
-            onChange={(e) => updateNode(selectedNode.id, { overlay_ip: e.target.value || undefined })}
-            placeholder={t(language, 'nodeEditor.autoAssigned')}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.mtuEmptyForDefault')}</label>
-          <input
-            type="number"
-            min={576}
-            max={65535}
-            value={selectedNode.mtu || ''}
-            onChange={(e) => updateNode(selectedNode.id, { mtu: parseInt(e.target.value) || undefined })}
-            placeholder="1420"
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
+        </Field>
+        <Field
+          label={t(language, 'nodeEditor.overlayIPEmptyFor')}
+          type="text"
+          value={selectedNode.overlay_ip || ''}
+          onChange={(e) => updateNode(selectedNode.id, { overlay_ip: e.target.value || undefined })}
+          placeholder={t(language, 'nodeEditor.autoAssigned')}
+        />
+        <Field
+          label={t(language, 'nodeEditor.mtuEmptyForDefault')}
+          type="number"
+          min={576}
+          max={65535}
+          value={selectedNode.mtu || ''}
+          onChange={(e) => updateNode(selectedNode.id, { mtu: parseInt(e.target.value) || undefined })}
+          placeholder="1420"
+        />
         {/* mimic XDP mode: only takes effect when this node has a transport=tcp link. Defaults to
             skb (generic, compatible with VPS NICs that do not support native); the operator can
             pick native for better performance once they confirm the NIC supports it. */}
@@ -292,18 +279,15 @@ export function NodeEditor() {
           <p className="mt-1 text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.mimicEgressHint')}</p>
         </div>
         {selectedNode.role !== 'client' && (
-          <div>
-            <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.routerIdLabel')}</label>
-            <input
-              type="text"
-              value={selectedNode.router_id || ''}
-              onChange={(e) => updateNode(selectedNode.id, { router_id: e.target.value || undefined })}
-              placeholder={t(language, 'nodeEditor.routerIdPlaceholder')}
-              pattern="^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(\d{1,3}\.){3}\d{1,3})$"
-              title={t(language, 'nodeEditor.routerIdHint')}
-              className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-            />
-          </div>
+          <Field
+            label={t(language, 'nodeEditor.routerIdLabel')}
+            type="text"
+            value={selectedNode.router_id || ''}
+            onChange={(e) => updateNode(selectedNode.id, { router_id: e.target.value || undefined })}
+            placeholder={t(language, 'nodeEditor.routerIdPlaceholder')}
+            pattern="^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(\d{1,3}\.){3}\d{1,3})$"
+            title={t(language, 'nodeEditor.routerIdHint')}
+          />
         )}
         {selectedNode.role !== 'client' && (
           <label className="flex items-center gap-2 text-sm">
@@ -488,89 +472,72 @@ export function NodeEditor() {
             {t(language, 'nodeEditor.sshConnectionAutoDeploy')}
           </summary>
           <div className="mt-2 space-y-2">
-            <div>
-              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshAliasSshConfig')}</label>
-              <input
-                type="text"
-                value={selectedNode.ssh_alias || ''}
-                onChange={(e) =>
-                  updateNode(selectedNode.id, {
-                    ssh_alias: e.target.value || undefined,
-                  })
-                }
-                pattern="^[A-Za-z0-9._:@-]+$"
-                title={t(language, 'nodeEditor.onlyLettersDigitsAre')}
-                placeholder={t(language, 'nodeEditor.eGMyServer')}
-                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-              />
-              <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
-                {t(language, 'nodeEditor.ifSetOverridesManual')}
-              </p>
-            </div>
-            <div>
-              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshHost')}</label>
-              <input
-                type="text"
-                value={selectedNode.ssh_host || ''}
-                onChange={(e) =>
-                  updateNode(selectedNode.id, {
-                    ssh_host: e.target.value || undefined,
-                  })
-                }
-                pattern="^[A-Za-z0-9._:@-]+$"
-                title={t(language, 'nodeEditor.onlyLettersDigitsAre_2')}
-                placeholder={t(language, 'nodeEditor.ipOrHostname')}
-                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-              />
-            </div>
+            <Field
+              label={t(language, 'nodeEditor.sshAliasSshConfig')}
+              type="text"
+              value={selectedNode.ssh_alias || ''}
+              onChange={(e) =>
+                updateNode(selectedNode.id, {
+                  ssh_alias: e.target.value || undefined,
+                })
+              }
+              pattern="^[A-Za-z0-9._:@-]+$"
+              title={t(language, 'nodeEditor.onlyLettersDigitsAre')}
+              placeholder={t(language, 'nodeEditor.eGMyServer')}
+              hint={t(language, 'nodeEditor.ifSetOverridesManual')}
+            />
+            <Field
+              label={t(language, 'nodeEditor.sshHost')}
+              type="text"
+              value={selectedNode.ssh_host || ''}
+              onChange={(e) =>
+                updateNode(selectedNode.id, {
+                  ssh_host: e.target.value || undefined,
+                })
+              }
+              pattern="^[A-Za-z0-9._:@-]+$"
+              title={t(language, 'nodeEditor.onlyLettersDigitsAre_2')}
+              placeholder={t(language, 'nodeEditor.ipOrHostname')}
+            />
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshPort')}</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={selectedNode.ssh_port || ''}
-                  onChange={(e) =>
-                    updateNode(selectedNode.id, {
-                      ssh_port: parseInt(e.target.value) || undefined,
-                    })
-                  }
-                  placeholder="22"
-                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshUser')}</label>
-                <input
-                  type="text"
-                  value={selectedNode.ssh_user || ''}
-                  onChange={(e) =>
-                    updateNode(selectedNode.id, {
-                      ssh_user: e.target.value || undefined,
-                    })
-                  }
-                  pattern="^[A-Za-z0-9._:@-]+$"
-                  title={t(language, 'nodeEditor.onlyLettersDigitsAre_3')}
-                  placeholder="root"
-                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.sshKeyPath')}</label>
-              <input
-                type="text"
-                value={selectedNode.ssh_key_path || ''}
+              <Field
+                label={t(language, 'nodeEditor.sshPort')}
+                type="number"
+                min={1}
+                max={65535}
+                value={selectedNode.ssh_port || ''}
                 onChange={(e) =>
                   updateNode(selectedNode.id, {
-                    ssh_key_path: e.target.value || undefined,
+                    ssh_port: parseInt(e.target.value) || undefined,
                   })
                 }
-                placeholder={t(language, 'nodeEditor.eGSshId')}
-                className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+                placeholder="22"
+              />
+              <Field
+                label={t(language, 'nodeEditor.sshUser')}
+                type="text"
+                value={selectedNode.ssh_user || ''}
+                onChange={(e) =>
+                  updateNode(selectedNode.id, {
+                    ssh_user: e.target.value || undefined,
+                  })
+                }
+                pattern="^[A-Za-z0-9._:@-]+$"
+                title={t(language, 'nodeEditor.onlyLettersDigitsAre_3')}
+                placeholder="root"
               />
             </div>
+            <Field
+              label={t(language, 'nodeEditor.sshKeyPath')}
+              type="text"
+              value={selectedNode.ssh_key_path || ''}
+              onChange={(e) =>
+                updateNode(selectedNode.id, {
+                  ssh_key_path: e.target.value || undefined,
+                })
+              }
+              placeholder={t(language, 'nodeEditor.eGSshId')}
+            />
           </div>
         </details>
         )}

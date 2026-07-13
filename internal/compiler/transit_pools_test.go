@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/linkid"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
@@ -80,9 +81,11 @@ func TestPerCIDRTransitPools_IndependentAllocation(t *testing.T) {
 		t.Fatalf("domain B's /30 pool counting independently should fit its sole pair, but DerivePeers errored: %v", err)
 	}
 
-	bAlloc := allocations["b-one->b-two"]
+	// Look up by the canonical link key (linkid.PinKey folds the node pair, direction-agnostic).
+	// The former directed "b-one->b-two" alias was removed in plan-10's dead-code sweep.
+	bAlloc := allocations[linkid.PinKey("b-one", "b-two")]
 	if bAlloc == nil {
-		t.Fatalf("a pairAllocation should be generated for b-one->b-two")
+		t.Fatalf("a pairAllocation should be generated for b-one|b-two")
 	}
 	// Domain B's pool starts at index 0: the usable hosts of a /30 are exactly .1 and .2.
 	wantPair := map[string]bool{"10.20.0.1": true, "10.20.0.2": true}
@@ -92,9 +95,9 @@ func TestPerCIDRTransitPools_IndependentAllocation(t *testing.T) {
 	}
 
 	// Domain A's pool should also start at index 0 (default 10.10.0.0/24): the first edge is .1/.2, unaffected by domain B.
-	aAlloc := allocations["a-hub->a-spoke-a"]
+	aAlloc := allocations[linkid.PinKey("a-hub", "a-spoke-a")]
 	if aAlloc == nil {
-		t.Fatalf("a pairAllocation should be generated for a-hub->a-spoke-a")
+		t.Fatalf("a pairAllocation should be generated for a-hub|a-spoke-a")
 	}
 	wantAPair := map[string]bool{"10.10.0.1": true, "10.10.0.2": true}
 	if !wantAPair[aAlloc.localTransit] || !wantAPair[aAlloc.remoteTransit] {

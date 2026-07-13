@@ -262,9 +262,6 @@ func (e *Error) With(k, v string) *Error { e.params[k] = v; return e }
 // Wrap attaches the underlying cause (for logs + errors.Is/As); it is never serialized.
 func (e *Error) Wrap(cause error) *Error { e.cause = cause; return e }
 
-// WithStatus overrides the registry default HTTP status (rare).
-func (e *Error) WithStatus(s int) *Error { e.status = s; return e }
-
 func (e *Error) Error() string { return e.Message() }
 func (e *Error) Unwrap() error { return e.cause }
 func (e *Error) Code() Code    { return e.code }
