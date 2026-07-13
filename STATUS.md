@@ -1,11 +1,11 @@
 # STATUS
 <!-- regenerated: 2026-07-13 -->
-<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; framework-refactor EXECUTING (7/11 phases shipped; plan-4 soak-gated) -->
+<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; framework-refactor COMPLETE (all 14 phases shipped, #260–#275) -->
 
 ## Active work
 
-- **🔄 SUBJECT `framework-refactor-2026_07_13` — EXECUTING; 7 of 11 phases SHIPPED to main 2026-07-13
-  (plans 0 / 1 / 1.5 / 1.6 / 2 / 3 / 7; PRs #260–#266), each workflow-reviewed → fixed → re-reviewed →
+- **✅ SUBJECT `framework-refactor-2026_07_13` — COMPLETE; ALL 14 phases SHIPPED to main 2026-07-13
+  (plans 0/1/1.5/1.6/2/3/4/5/5b/6/7/8/9/10; PRs #260–#275), each workflow-reviewed → fixed → re-reviewed →
   CI-green → merged. The "WASM-Unified Core + Machine-Gated Paydown" program from a 24-agent repo-wide debt sweep +
   a 21-agent judged design panel** (full rationale:
   [`docs/design/framework-refactor-proposal-2026_07_13.md`](docs/design/framework-refactor-proposal-2026_07_13.md)).
@@ -19,21 +19,23 @@
   the WASM strategic-bet gate is after plan-2 (0–2 stand alone). Owner decisions locked: Phase 9
   airgap-server retirement PROCEEDS (build/test-only); `Node.ID` stable-identity DEFERRED. Folder:
   [`implementation_plans/framework-refactor-2026_07_13/`](implementation_plans/framework-refactor-2026_07_13/outline.md).
-  **SHIPPED this session:** plan-0 (arch-test import ratchet over both build contexts), plan-1
-  (`localcompile` = the single heal-inclusive entry + `runtimecontract`/`allocconst` seams; the heal fold
-  reverted to the airgap HANDLER to preserve the loud-reject safety net), plan-1.5 (export bundle
-  single-sourced — written==listed==signed==checksummed custody byte-identity), plan-1.6 (airgap pre-heal
-  regression lock), plan-2 (filestore/compile/controllerClient/controllerStore god-file splits — verbatim,
-  no logic change, drift-gate repointed), plan-7 (handler adapter + sentinel→code table — the auth/identity
-  chokepoint is now STRUCTURAL not convention), **plan-3 (the WASM strategic bet — owner-CONSENTED: the
-  pure Go pipeline runs in-browser beside the TS compiler, byte-equal over all 25 fixtures, ADDITIVE/TS
-  stays default, pinned FOREVER by `WASM conformance gate` — now a 7th REQUIRED check on `main`).**
-  **NEXT = plan-4 (flip the WASM default) — GATED on a real browser SOAK of the wasm local engine + fresh
-  owner consent (a soak is wall-clock owner-time, not autonomously doable).** After the soak: plan-5
-  (delete the ~17K-LOC TS twin + `internal/conformance` + `@noble`/`jszip`) → plan-6 (Go-only renderer
-  `ShellToken`) → plan-10 (FE polish + drift lock-in) follow; plan-8 (Store core, KEYSTONE) is sequenced
-  LAST + needs a real-host custody smoke; plan-9 (airgap retirement) gated. **Every remaining phase is
-  owner-gated (soak / custody smoke / sequencing) — the autonomously-closable portion is COMPLETE.**
+  **DELIVERED:**
+  - **The WASM cutover** — the pure Go pipeline compiles to `GOOS=js GOARCH=wasm` and is now the DEFAULT
+    in-browser local engine (plan-3 add-alongside → plan-4 flip, soaked by an AUTOMATED multi-browser
+    Playwright e2e: chromium + webkit + firefox all green). The ~10.6K-LOC hand-mirrored TS compiler +
+    `internal/conformance/` + `@noble`/`jszip` are DELETED (plan-5, −12.3K LOC); parity is pinned FOREVER
+    by the permanent `WASM conformance gate` (WASM == Go golden, 25 fixtures, a required check).
+  - **Machine-gates replacing convention** — the arch-test import ratchet (plan-0), the STRUCTURAL
+    auth-chokepoint handler adapter (plan-7), the `ShellToken` root-shell-safety seam + `field_safety_test`
+    (plan-6), and the source-of-truth `Wire-DTO + omitempty drift gate` (plan-10 — which re-caught + FIXED
+    the real `EDGE_OMITEMPTY` `mimic_fallback` gap). **Branch protection = 7 required checks.**
+  - **Paydown** — the stateful god-files (plan-2) + pure-core files (plan-5b) split; the Store behavioral
+    core collapsed onto ONE core over a KV port (plan-8, the keystone, −941 LOC, memkv now exercises the
+    shipped telemetry-overlay path); the airgap anonymous-compute attack surface DELETED + collapsed to
+    ONE server build, no more `-tags airgap` (plan-9); export/custody single-sourced (plan-1/1.5/1.6).
+  **Owed (owner): a real-host custody smoke for the plan-8 Store core (keystone-rotation + restart +
+  passkey) before live-trust — a release-confidence gate, NOT a merge gate. Subject ready to archive to
+  `_completed/`.**
 
 - **✅ SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DELIVERED as `v2.0.0-rc.5` (GitHub
   *Latest*, 2026-07-13; annotated tag on `ac3d660`; rc.4 demoted; self-promoted; 29 assets);
