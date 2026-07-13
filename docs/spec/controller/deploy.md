@@ -94,6 +94,87 @@ not staged, exactly like an unenrolled node, and activates on a later deploy onc
 This keeps render-what's-ready honest for clients — a client enrolling before its router never fails
 the whole stage.
 
+## Delta deploy — skip unchanged nodes
+
+Render-what's-ready decides **which nodes are eligible** to stage; the **delta-skip** (plan-5) decides
+which of those eligible nodes actually **need** re-staging. Without it, every Deploy re-staged every
+enrolled node at a new generation, so every agent re-fetched and re-applied an **identical** bundle —
+a needless fleet-wide churn (and a brief per-link re-handshake) even when nothing about a node changed.
+The delta-skip makes a Deploy touch only the nodes whose config actually differs.
+
+**The content identity — the served-bundle digest.** For each freshly compiled node bundle the
+controller computes `bundleSHA256 = hex(sha256(checksums.sha256))`, and `checksums.sha256` covers
+`install.sh` + **every config file** — but **not** the manifest's volatile `compiled_at`. So the digest
+is **byte-stable across recompiles** when the node's actual configuration is unchanged, and changes the
+moment any rendered byte does. This is the **same** digest the keystone manifest binds (§Zero-knowledge
+custody / [signing.md](signing.md)), reused as the change-detection identity — no second hashing scheme.
+
+**The per-node decision.** For each enrolled node, `CompileAndStage` compares the freshly compiled
+`bundleSHA256` against `servedBundleDigest(node)` — `hex(sha256(...))` of the node's **currently served
+(promoted) bundle**. If they are **equal** (and the node is not force-listed, and the skip is enabled —
+below), the node is **unchanged**: it is **not** re-staged and **keeps its current generation**. It is
+reported in `StageResult.UnchangedNodeIDs`; the nodes that did change are `StageResult.Staged`. Together
+they are the full enrolled set for a normal deploy.
+
+**Why keeping the generation is what avoids the re-fetch.** `PromoteStaged` stamps a new
+`DesiredGeneration` only on the nodes it actually promotes. An unchanged node was never staged, so its
+`DesiredGeneration` is untouched, so its agent's `/poll` never sees a newer generation and **never
+re-fetches** — the fleet ends up at a **mixed generation** (changed nodes advanced, unchanged nodes held
+back), which is correct: each node's generation is independent, and a node only advances when its own
+config changes. A brief per-link re-handshake now happens **only** on the links whose endpoints actually
+changed, not fleet-wide.
+
+**FAIL OPEN.** `servedBundleDigest` returns `ok = false` on **any** uncertainty — the node was never
+promoted (no served bundle), its `checksums.sha256` is missing, or the store read errored. In every such
+case the node is treated as **changed** and **staged**. The skip is a pure optimisation; it never risks
+stranding a node on stale config by skipping on doubt.
+
+**Keystone-aware — the skip disables itself when a promote must re-pin the trust-list.** `stageSkipEnabled`
+gates the whole delta-skip, and returns **false** (force a full re-stage of every node) for the two
+keystone cases that change **zero** bundle bytes yet still require the promote to flip the **served
+trust-list**:
+
+- **First pin** — the keystone is on but there is **no served trust-list yet** (`GetServedTrustList` →
+  `ErrNotFound`). The very first signed deploy must stage every node so the initial manifest binds them
+  all.
+- **Rotation** — `KeystoneRedeployRequired` (the served trust-list is signed under a rotated-away
+  credential). The re-signed manifest must re-pin every node.
+
+In both cases a per-node skip would leave the regenerated/re-signed trust-list bound to only the handful
+of content-changed nodes, **stranding** the served trust-list for the rest — so the skip stands down and
+the manifest binds the whole enrolled set (`digests` is populated for **all** nodes, changed or not,
+whenever the keystone is on). A non-keystone tenant, or a healthy keystone past its first pin with no
+pending rotation, runs the skip normally. `stageSkipEnabled` is **shared** by `CompileAndStage` and
+`DeployPreview`, so a preview can never disagree with what a real Deploy would do.
+
+**The zero-changed short-circuit MUST purge.** When **every** enrolled node matches its served bundle,
+nothing is staged and there is no new promotable generation — `CompileAndStage` returns the **current**
+generation with the whole set in `UnchangedNodeIDs`, and does **not** re-stage the manifest. But it must
+still **purge any lingering staged bundle**: a bundle left staged by a prior *stage-without-promote*
+(e.g. an off-host keystone sign-wait) is a **superseded** design, and leaving it would let the next
+`/promote` flip a reverted/retracted config **live** (the beta.4–6 stale-config custody class). Because
+the stage set is empty here, `PruneStagedBundles(…, staged=∅)` purges **all** staged bundles (each
+audited `purge-staged`), exactly as the empty-subgraph path does. A `stage-unchanged` audit entry records
+the no-op deploy.
+
+**Force — the operator escape hatch.** `CompileAndStage` takes variadic `StageOption`s:
+`WithForceAll()` re-stages **every** enrolled node even if unchanged; `WithForceNodes(ids…)` re-stages
+the **named** nodes. Force is for **on-host drift / rescue only** — a node whose local config was
+tampered with or lost and needs its bundle re-pushed at a fresh generation. It is **not** needed for the
+ordinary cases: a genuine config change re-stages naturally (its digest moved), and keystone
+rotation / first-pin auto-force a full re-stage. The per-node force is also reachable from the
+node-detail page (`forceRedeployNode`), which reuses the same `deploy(force_nodes:[id])` path.
+
+**Pre-deploy preview — a read-only dry-run.** `DeployPreview` compiles the operator's **current canvas**
+(the same public-keys-only topology a Deploy pushes and stages, healed for pin collisions) and reports,
+per enrolled node, whether an **unforced** Deploy **would** re-stage it (`Changed`) or skip it, plus a
+`KeystoneFullRestage` flag when the skip is disabled — **without** staging anything. It shares the
+**same** `stageSkipEnabled` decision and the **same** `bundleSHA256`-vs-`servedBundleDigest` identity as
+the real stage, so "N updated, M unchanged" in the Deploy dialog matches the actual outcome. It is
+**fail-open** (a node whose served digest can't be read previews as `Changed`) and, in the panel,
+**best-effort**: a preview that fails (e.g. a newer panel against an older controller with no
+`deploy-preview` route) surfaces the error but never blocks the operator from deploying anyway.
+
 ## Reusing the frozen pipeline
 
 `CompileAndStage` **reuses** the existing, tested pipeline end-to-end and reimplements **none** of it.
@@ -250,6 +331,13 @@ controller with one.
 
 - A deploy is **compile+stage** (mechanical, reversible) then operator-gated **promote** (commits a new
   generation, wakes agents).
+- **Delta-skip**: a node whose freshly compiled `bundleSHA256` (of `checksums.sha256`, excluding the
+  volatile `compiled_at`) equals its **served** bundle is **not** re-staged and **keeps its generation**,
+  so its agent never re-fetches — a Deploy touches only changed nodes (mixed-generation fleet).
+  **Fail-open**; **disabled** for keystone first-pin / rotation (which must re-pin the whole trust-list);
+  the zero-changed path **purges** lingering staged bundles. `WithForceAll` / `WithForceNodes` override
+  it for on-host drift/rescue; `DeployPreview` is the read-only "N updated, M unchanged" dry-run over the
+  current canvas.
 - **Fleet-wide key rotation** is `POST /rekey-all` (flag approved nodes **+** `BumpGeneration` to WAKE the
   fleet, a generation advance with NO bundle change) → each agent **rotates + re-registers + skips apply**
   (advancing its watermark past the wake) → the operator **waits for every badge to clear** → **one** normal

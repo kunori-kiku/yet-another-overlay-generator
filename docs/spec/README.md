@@ -55,6 +55,8 @@ docs/spec/
 │   ├── ci-cd.md                   # Release workflow, deployment scripts
 │   ├── deployment-topology.md     # Two deployments (static-local site vs controller),
 │   │                              #   the //go:build airgap boundary, security delta
+│   ├── telemetry-history.md       # Retained per-node resource history + node-detail
+│   │                              #   CPU/RAM/load charts; the /node-history query API
 │   └── examples.md                # Example topologies
 ├── security/
 │   └── security.md                # Security considerations
