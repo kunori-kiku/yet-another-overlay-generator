@@ -15,17 +15,17 @@ import { uuid } from '../lib/uuid';
 import { healCollidingPins, sanitizeLinkDirection } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
 import { parseContentDispositionFilename, triggerBrowserDownload } from '../lib/download';
-// The local-engine seam (plan-6, milestone 1.6). localEngineEnabled() is the SINGLE decision
-// point this store consults; the four adapters bridge the air-gap action shapes onto the
-// plan-4 TS compiler (drift-pinned by the plan-5 conformance harness). See the seam docstring
-// below ALLOCATION_PIN_FIELDS.
+// The local-engine seam. localEngineEnabled() is the SINGLE decision point this store consults; the
+// four adapters bridge the air-gap action shapes onto the in-browser Go/WASM engine (web/yaog.wasm,
+// proven byte-equal to the Go controller pipeline by the permanent WASM-vs-golden gate). See the seam
+// docstring below ALLOCATION_PIN_FIELDS.
 import {
   localEngineEnabled,
   localValidate,
   localCompile,
   localExport,
   localDeployScripts,
-} from '../compiler/localEngine';
+} from '../lib/localEngine';
 // useControllerStore is read LAZILY (getState() inside actions, never at module
 // init) so the controller↔topology store cycle stays runtime-only — symmetric to how
 // controllerStore reads useTopologyStore.getState(). Needed for mode-aware import

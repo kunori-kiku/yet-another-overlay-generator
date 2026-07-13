@@ -1,13 +1,13 @@
 // Link-identity authority — the single source of truth for how an Edge maps to a stable link key.
 //
 // This is the TypeScript mirror of internal/linkid/linkid.go (PinKey :28, LinkKey :53, IsBackup :64).
-// Allocation, validator grouping, and write-back all agree on what counts as "the same link" — there
-// is exactly one place that encodes the rule, byte-identical to the Go oracle.
+// It survives the plan-5 TS-compiler deletion because it is FE heal logic, NOT the compiler: the
+// browser-side normalizeEdges.healCollidingPins needs the SAME link identity the Go allocator/heal
+// use, so this one place encodes the rule, byte-identical to the Go oracle.
 //
-// It also subsumes the historical pinKey/linkKey that lived in ../lib/normalizeEdges.ts:36-51 — those
-// were a hand-mirror of the same rule; normalizeEdges.ts now imports them from here (the duplicate is
-// retired). The plan-5 heal-conformance canary (../lib/heal.conformance.test.ts) pins this byte-equal
-// to the Go heal.
+// It subsumes the historical pinKey/linkKey that lived inline in ./normalizeEdges.ts — those were a
+// hand-mirror of the same rule; normalizeEdges.ts imports them from here (the duplicate is retired).
+// The heal-conformance canary (./heal.conformance.test.ts) pins this byte-equal to the Go heal.
 
 import type { Edge } from '../types/topology';
 

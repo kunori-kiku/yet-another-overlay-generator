@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deployMode } from './deployMode';
 import { localOnly } from './localOnly';
-import { localEngineEnabled } from '../compiler/localEngine';
+import { localEngineEnabled } from './localEngine';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -54,9 +54,12 @@ describe('deployMode() descriptor', () => {
       expect(deployMode().localEngine).toBe('backend');
     });
 
-    it("the exact 'ts' ⇒ ts (the retained in-browser TS fallback, invariant [9])", () => {
+    it("the retired 'ts' literal ⇒ wasm (an unknown value floors to the default, no crash)", () => {
+      // 'ts' selected the hand-mirrored TS compiler, deleted in framework-refactor plan-5. A stored
+      // VITE_YAOG_LOCAL_ENGINE='ts' from before the deletion must degrade gracefully to the wasm
+      // default rather than crash — the same flooring any stray value gets.
       vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
-      expect(deployMode().localEngine).toBe('ts');
+      expect(deployMode().localEngine).toBe('wasm');
     });
 
     it("'wasm' ⇒ wasm (explicit)", () => {
@@ -69,7 +72,7 @@ describe('deployMode() descriptor', () => {
       expect(localEngineEnabled()).toBe(true);
     });
 
-    it("'ts' keeps localEngineEnabled() true (browser path, not the air-gap escape hatch)", () => {
+    it("the retired 'ts' literal keeps localEngineEnabled() true (floors to wasm, not the air-gap escape hatch)", () => {
       vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
       expect(localEngineEnabled()).toBe(true);
     });

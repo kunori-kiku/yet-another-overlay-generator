@@ -25,15 +25,13 @@
     "noUncheckedSideEffectImports": true
   },
   "include": ["src"],
-  // Conformance vitest specs (plan-5 step 7) and the compiler unit tests (plan-4: src/compiler/**/*.test.ts)
-  // are test-only: they import 'vitest' + Node fs/path and read fixtures from disk, none of which belong
-  // to the production app's type surface (types: ["vite/client"]). Excluding them keeps `tsc -b` /
-  // `vite build` green; vitest type-checks them at run time against its own config. The production logic
-  // they pin (src/lib/normalizeEdges.ts, src/compiler/*.ts, src/stores/topologyStore.ts) stays fully
-  // type-checked by the app build.
+  // Conformance vitest specs and the store/lib unit tests are test-only: they import 'vitest' + Node
+  // fs/path and read fixtures from disk, none of which belong to the production app's type surface
+  // (types: ["vite/client"]). Excluding them keeps `tsc -b` / `vite build` green; vitest type-checks
+  // them at run time against its own config. The production logic they pin (src/lib/normalizeEdges.ts,
+  // src/lib/linkid.ts, src/stores/topologyStore.ts) stays fully type-checked by the app build.
   "exclude": [
     "src/**/*.conformance.test.ts",
-    "src/compiler/**/*.test.ts",
     "src/stores/**/*.test.ts",
     "src/lib/**/*.test.ts"
   ]

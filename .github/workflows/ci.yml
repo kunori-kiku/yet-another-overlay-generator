@@ -37,6 +37,18 @@ jobs:
         run: go vet -tags airgap ./...
       - name: Test (airgap profile)
         run: go test -tags airgap ./...
+      # Per-package coverage FLOOR over the local-compile pipeline packages, re-homed from the deleted
+      # `conformance` job (framework-refactor plan-5). The frozen floors live in
+      # internal/localcompile/testdata/coverage_floor.json; TestCoverageFloor shells out to `go test
+      # -coverprofile` per package and reds if any drops below its floor. It is gated via
+      # YAOG_CONFORMANCE_COVERAGE_FLOOR so the `go test -race ./...` above (which does NOT set it)
+      # skips it rather than nesting a per-package coverage run inside every package. A child
+      # `go test ./internal/localcompile/` never recurses — packageCoverage strips the gate var from
+      # the child env. Re-baseline by editing that JSON (see docs/spec/compiler/conformance-manifest-schema.md).
+      - name: Per-package coverage floor
+        run: go test ./internal/localcompile/ -run TestCoverageFloor -v
+        env:
+          YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
 
   frontend:
     name: Frontend lint + build
@@ -46,6 +58,12 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      # Go is needed for the wasm pre-build AND for wasmEngine.test.ts (it reads the toolchain's
+      # wasm_exec.js via `go env GOROOT`). The FE unit/conformance vitest suite + the wasm roundtrip
+      # moved here from the deleted `conformance` job (framework-refactor plan-5).
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -57,54 +75,18 @@ jobs:
         run: npm run lint
       - name: Build
         run: npm run build
-
-  conformance:
-    name: Go↔TS conformance + coverage floor
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      # (a) Go oracle + golden + drift + KAT + the cross-package codes-catalog sync.
-      #     A plain `go test` (NOT -update) asserts every golden/drift snapshot against the
-      #     committed frozen oracle. TestCoverageFloor is excluded here (it has its own step,
-      #     below) so a coverage drop is reported distinctly from a golden/drift divergence.
-      - name: Go oracle + golden + drift + KAT + catalog-sync
-        run: |
-          go test ./internal/conformance/ \
-            -run 'TestGolden|TestGoldenFail|TestGoldenFail_SpansBothChannels|TestGolden_Deterministic|TestConformanceComparator_SelfCompare|TestDrift|TestKeygenKAT'
-          go test ./internal/ -run TestI18nCatalogSync
-          go test ./internal/ -run TestI18nCatalogParity
-      # (b) Per-package coverage FLOOR over the local-compile pipeline packages. The frozen
-      #     floors live in internal/conformance/coverage_floor.json; TestCoverageFloor shells
-      #     out to `go test -coverprofile` per package and reds if any drops below its floor.
-      #     Re-baseline by editing that JSON (see docs/spec/compiler/conformance-manifest-schema.md).
-      #     It is gated to this job via YAOG_CONFORMANCE_COVERAGE_FLOOR so the main `go` job's
-      #     `go test ./...` does not re-run every pipeline suite nested inside it.
-      - name: Per-package coverage floor
-        run: go test ./internal/conformance/ -run TestCoverageFloor -v
-        env:
-          YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
-      # Pre-build the wasm so wasmEngine.test.ts's beforeAll LOADS it instead of building it inside the
-      # hook — a cold GOOS=js GOARCH=wasm build exceeds vitest's hook budget (it timed out the suite
-      # before this pre-build + the hook-timeout bump). Go is set up above and its build cache is warm
-      # from the conformance run, so this is quick; web/ already exists (wasm_exec.js is committed).
-      - name: Build WASM for the conformance roundtrip
+      # Pre-build web/yaog.wasm so wasmEngine.test.ts's beforeAll LOADS it instead of doing a cold
+      # GOOS=js GOARCH=wasm build inside the vitest hook (which exceeds the hook budget). Runs from the
+      # repo root (cmd/wasm + web/ live there), overriding this job's frontend working-directory.
+      - name: Build WASM for the vitest roundtrip
+        working-directory: ${{ github.workspace }}
         run: GOOS=js GOARCH=wasm go build -o web/yaog.wasm ./cmd/wasm
-      # (c) The vitest heal pin: the TS healCollidingPins (frontend/src/lib/normalizeEdges.ts)
-      #     must byte-equal the Go normalize.HealCollidingPins over the shared corpus. A
-      #     deliberate divergence of the TS linkKey/pinKey reds this step.
-      - name: Frontend conformance (vitest heal pin)
-        working-directory: frontend
-        run: |
-          npm ci --legacy-peer-deps
-          npm run conformance
+      # The FE unit + conformance vitest suite (`npm run conformance` = `vitest run`): the wasmEngine
+      # load/roundtrip pin, deployMode, the FE-heal-vs-Go-heal canary, the controller-client DTO
+      # conformance, and the pure-lib pins. The Go oracle/golden/fail/KAT/coverage tests it used to sit
+      # beside now run in the `go` job (re-homed into internal/localcompile).
+      - name: Unit + conformance tests (vitest)
+        run: npm run conformance
 
   # The PERMANENT three-way conformance gate (framework-refactor plan-3, invariant [1]: "parity is
   # proven by execution + a permanent gate, never by construction"). Build the pure Go pipeline to
@@ -296,8 +278,9 @@ jobs:
           node-version: '20'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      # ADVISORY: JS/npm SCA over the frontend production deps (the new @noble/curves + @noble/hashes +
-      # JSZip supply chain that Go-only govulncheck cannot see). Threshold/blocking status: see RC1-GATE.md.
+      # ADVISORY: JS/npm SCA over the frontend production deps that Go-only govulncheck cannot see.
+      # (The @noble/curves + @noble/hashes + JSZip supply chain was dropped in framework-refactor
+      # plan-5 with the TS compiler.) Threshold/blocking status: see RC1-GATE.md.
       - name: npm audit (ADVISORY — frontend supply chain)
         continue-on-error: true
         working-directory: frontend

@@ -245,7 +245,7 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 2 | Stateful god-file splits (no logic change) | ✅ merged | #264 |
 | 3 | WASM add-alongside + PERMANENT gate | ✅ merged | #266 |
 | 4 | Flip WASM default + soak | ✅ merged | #270 |
-| 5 | Delete the TS twin + shed deps + free pure-core splits | pending | — |
+| 5 | Delete the TS twin (deps + conformance re-home) | 🔄 in review | this PR |
 | 6 | Go-only renderer hygiene (ShellToken seam) | pending | — |
 | 7 | Error framework (handler adapter + sentinel→code table) | ✅ merged | #265 |
 | 8 | Store behavioral core (KEYSTONE, last) | ✅ merged | #269 |
