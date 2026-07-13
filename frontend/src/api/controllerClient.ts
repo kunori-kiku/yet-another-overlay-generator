@@ -23,6 +23,7 @@ import type {
 import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
 import { parseContentDispositionFilename } from '../lib/download';
+import { historyQueryString, parseNodeHistory, type NodeHistory } from '../lib/telemetryHistory';
 
 // ControllerError is thrown for any non-2xx controller response. It preserves the parsed coded
 // error envelope on .body so the store can localize it via tError; .status is the HTTP status and
@@ -854,6 +855,11 @@ export interface ControllerSettings {
   mimicDebs: Record<string, MimicDebPin>;
   // Fleet-wide mimic→UDP fallback policy a tcp link inherits ('' / 'udp' / 'none'). plan-4; UI in plan-6.
   mimicFallbackDefault: string;
+  // Per-node resource-history sample cap (telemetry-history plan-2). null ⇒ server default
+  // (DefaultTelemetryHistoryCap, 20160 ≈ 7 days at 30s beats); 0 ⇒ history disabled; N ⇒ cap N. A
+  // nullable number mirroring the Go *int (nil pointer omitted on the wire → default; an explicit 0
+  // disables). Validated >= 0 and <= 1_000_000 client-side (server authoritative).
+  telemetryHistoryCap: number | null;
 }
 
 // SettingsJSON mirrors settingsJSON in internal/api/handler_bootstrap.go. The rollout + mimic
@@ -873,6 +879,8 @@ interface SettingsJSON {
   mimic_release_base?: string;
   mimic_debs?: Record<string, MimicDebPinJSON>;
   mimic_fallback_default?: string;
+  // Go *int with omitempty: absent (nil) ⇒ default; an explicit number (incl. 0 = disabled) present.
+  telemetry_history_cap?: number;
 }
 
 // mapMimicDebs / mimicDebsToJSON convert the two-package mimic catalog between the camelCase UI type
@@ -914,6 +922,8 @@ export function mapSettings(d: SettingsJSON): ControllerSettings {
     mimicReleaseBase: d.mimic_release_base ?? '',
     mimicDebs: mapMimicDebs(d.mimic_debs),
     mimicFallbackDefault: d.mimic_fallback_default ?? '',
+    // A number (incl. 0) is honored; an absent field (nil *int on the wire) maps to null ⇒ default.
+    telemetryHistoryCap: typeof d.telemetry_history_cap === 'number' ? d.telemetry_history_cap : null,
   };
 }
 
@@ -938,6 +948,7 @@ export function emptyControllerSettings(): ControllerSettings {
     mimicReleaseBase: '',
     mimicDebs: {},
     mimicFallbackDefault: '',
+    telemetryHistoryCap: null,
   };
 }
 
@@ -961,6 +972,9 @@ export function toSettingsJSON(s: ControllerSettings): SettingsJSON {
     mimic_release_base: s.mimicReleaseBase,
     mimic_debs: mimicDebsToJSON(s.mimicDebs),
     mimic_fallback_default: s.mimicFallbackDefault,
+    // Omit the cap when null (server keeps its default via a nil *int); send the number otherwise
+    // (0 rides through as an explicit "disabled"). The full-replace contract holds either way.
+    ...(s.telemetryHistoryCap !== null ? { telemetry_history_cap: s.telemetryHistoryCap } : {}),
   };
 }
 
@@ -1070,6 +1084,23 @@ export async function getNodes(cfg: ControllerConfig): Promise<ControllerNode[]>
   const res = await request(cfg, 'nodes', { method: 'GET' });
   const data = (await res.json()) as NodeJSON[] | null;
   return (data ?? []).map(mapNode);
+}
+
+// nodeHistory fetches a node's resource history (telemetry-history plan-3/4): GET
+// node-history?node=<id>&from=<RFC3339>&to=<RFC3339>[&step=<Go-duration>]. Operator-only,
+// credentialed like every other operator read. LIVE-ONLY by contract: the caller renders the result
+// and NEVER persists it (no store/localStorage write) — the same custody rule as stripLiveTelemetry.
+// The wire buckets are parsed into a typed NodeHistory at the boundary (parseNodeHistory is defensive
+// so a garbled bucket never throws). Omitting `step` lets the server pick a step that fits the window.
+export async function nodeHistory(
+  cfg: ControllerConfig,
+  nodeId: string,
+  from: string,
+  to: string,
+  step?: string,
+): Promise<NodeHistory> {
+  const res = await request(cfg, `node-history?${historyQueryString(nodeId, from, to, step)}`);
+  return parseNodeHistory(await res.json());
 }
 
 // getAudit fetches the audit chain together with whether it is complete and verifiable

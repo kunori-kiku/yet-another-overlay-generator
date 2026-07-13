@@ -8,6 +8,7 @@ import { ConnectionSettings } from '../deploy/ConnectionSettings';
 import { BootstrapSettings } from '../deploy/BootstrapSettings';
 import { AgentUpdateSettings } from '../deploy/AgentUpdateSettings';
 import { MimicCatalogSettings } from '../deploy/MimicCatalogSettings';
+import { TelemetryHistorySettings } from '../deploy/TelemetryHistorySettings';
 
 // /settings — Mode (local/controller) · Connection (endpoints + sign-in) ·
 // Bootstrap · Appearance. Mode persistence + the Appearance controls land in P4.
@@ -164,6 +165,7 @@ export function SettingsPage() {
           <BootstrapSettings />
           <AgentUpdateSettings />
           <MimicCatalogSettings />
+          <TelemetryHistorySettings />
         </>
       )}
 

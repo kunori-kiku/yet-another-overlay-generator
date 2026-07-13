@@ -12,8 +12,10 @@ import type {
   TOTPEnrollment,
   MintTokenResult,
 } from '../api/controllerClient';
+import type { NodeHistory } from '../lib/telemetryHistory';
 import {
   getNodes,
+  nodeHistory as ctlNodeHistory,
   getAudit,
   mintEnrollmentToken,
   updateTopology,
@@ -423,6 +425,12 @@ interface ControllerState {
   // loading/error; the caller surfaces its own busy/localError. Throws ControllerError on a coded
   // failure.
   fetchReleaseAssets: (body: ReleaseAssetsRequest) => Promise<ReleaseAssetsResult>;
+  // fetchNodeHistory runs the operator node-history read (GET node-history) over the current
+  // controller config and RETURNS the parsed series for a component to render. LIVE-ONLY: it neither
+  // sets store state nor persists (the fetched history must never enter localStorage — the
+  // stripLiveTelemetry custody rule); it does NOT touch global loading/error (the caller owns its own
+  // busy/empty/error state). Throws ControllerError on a coded failure.
+  fetchNodeHistory: (nodeId: string, from: string, to: string, step?: string) => Promise<NodeHistory>;
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -794,6 +802,11 @@ export const useControllerStore = create<ControllerState>()(
       // Convenience asset-discovery for the mimic catalog card: wraps the client over the current
       // auth config and rethrows so the card localizes its own error. No global state side effects.
       fetchReleaseAssets: (body) => ctlFetchReleaseAssets(configOf(get()), body),
+
+      // Node resource-history read for the node-detail charts: wraps the client over the current auth
+      // config and returns the parsed series. Live-only — no set()/persist (custody), no global
+      // loading/error (the NodeResourceHistory card owns its own state); rethrows for local handling.
+      fetchNodeHistory: (nodeId, from, to, step) => ctlNodeHistory(configOf(get()), nodeId, from, to, step),
 
       // Operator password login (plan-5.2): POST /login to obtain a session token, held in memory
       // only. On success, immediately refresh the fleet view. The session takes precedence over a

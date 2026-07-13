@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
@@ -9,6 +9,12 @@ import { NodeConditions } from '../deploy/NodeConditions';
 import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
 import { ResourcePanel } from '../deploy/ResourcePanel';
 import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
+
+// NodeResourceHistory is lazy-loaded so its recharts dependency (~105 kB gzip) is code-split into its
+// own chunk and never bloats the initial bundle — it loads only when a node-detail page is viewed.
+const NodeResourceHistory = lazy(() =>
+  import('../deploy/NodeResourceHistory').then((m) => ({ default: m.NodeResourceHistory })),
+);
 
 // last_seen / enrolled_at are RFC3339 strings; the zero value ("0001-01-01T00:00:00Z") is
 // displayed as "—".
@@ -113,6 +119,14 @@ export function FleetNodeDetailPage() {
               would crash on a reload after upgrade. The panel itself renders nothing for an empty list. */}
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
           <ResourcePanel resource={node.resource} language={language} />
+          {/* Historical CPU/RAM/load charts (plan-4). Live-only: the fetched history is never
+              persisted (custody), so it fetches on view + on range/granularity change. Keyed on the
+              node id so navigating to a different node remounts it with a fresh loading state. */}
+          <Suspense
+            fallback={<div className="h-40" data-testid="history-chunk-loading" aria-hidden="true" />}
+          >
+            <NodeResourceHistory key={node.nodeId} nodeId={node.nodeId} />
+          </Suspense>
         </section>
       )}
     </div>
