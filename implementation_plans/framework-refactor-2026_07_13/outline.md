@@ -250,5 +250,5 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 6 | Go-only renderer hygiene (ShellToken seam) | ✅ merged | #273 |
 | 7 | Error framework (handler adapter + sentinel→code table) | ✅ merged | #265 |
 | 8 | Store behavioral core (KEYSTONE, last) | ✅ merged | #269 |
-| 9 | Airgap-server retirement (one build) | 🔄 in review | this PR |
+| 9 | Airgap-server retirement (one build) | ✅ merged | #274 |
 | 10 | FE polish + drift lock-in | pending | — |
