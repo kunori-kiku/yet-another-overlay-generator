@@ -124,10 +124,16 @@ export interface ControllerAuditEntry {
   nodeId: string;
 }
 
-// Result of /stage: the nodes compiled into this generation, the nodes skipped because they are not enrolled, and the staged generation number.
-// Mirrors stageResponseJSON in handler_controller.go.
+// Result of /stage: the nodes compiled into this generation, the nodes DELTA-SKIPPED because their
+// digest was unchanged (plan-5 — they keep their current generation, no re-apply), the nodes skipped
+// because they are not enrolled, and the staged generation number.
+// Mirrors stageResponseJSON in handler_deploy.go.
 export interface StageResult {
   staged: string[];
+  // unchanged is the delta-skipped set (plan-5): nodes whose config was identical to what they are
+  // served, so a Deploy kept their generation rather than re-staging. Empty when a full/forced
+  // stage touched everyone. The result area surfaces "staged N / unchanged M".
+  unchanged: string[];
   skippedUnenrolled: string[];
   generation: number;
 }

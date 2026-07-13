@@ -32,6 +32,7 @@ test('keystone-OFF deploy: stage→promote, then post-deploy + post-refresh cust
   await expect(page.getByText('Not enrolled')).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByText(router, { exact: false })).toBeVisible()
 
@@ -84,6 +85,7 @@ test('keystone-OFF F1: getTrustlist on a cookie-only session is 404 (not 401) an
     { timeout: 30_000 },
   )
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy
 
   // F1: getTrustlist goes through request() (credentials:include) on the cookie-only session. On
   // keystone-OFF it 404s (no operator credential) → deploy promotes. The PRE-FIX raw fetch dropped

@@ -215,7 +215,38 @@ func AgentRolloutNodeIDs(cs ControllerSettings, nodes []Node) map[string]bool {
 //
 // Bundles are signed iff YAOG_BUNDLE_SIGNING_KEY is set — that tier-1 signing happens
 // inside artifacts.Export (the Phase-0 env path), not here.
-func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time) (StageResult, error) {
+// StageOption configures a CompileAndStage run. The only knob today is FORCE — re-staging a node even
+// when its bundle digest is unchanged (the operator escape hatch for on-host drift/rescue; the delta-skip
+// otherwise leaves an unchanged node alone).
+type StageOption func(*stageConfig)
+
+type stageConfig struct {
+	forceAll   bool
+	forceNodes map[string]bool
+}
+
+// WithForceAll re-stages EVERY enrolled node even if unchanged (fleet-wide force redeploy).
+func WithForceAll() StageOption { return func(c *stageConfig) { c.forceAll = true } }
+
+// WithForceNodes re-stages the named nodes even if unchanged (per-node force redeploy).
+func WithForceNodes(ids ...string) StageOption {
+	return func(c *stageConfig) {
+		if c.forceNodes == nil {
+			c.forceNodes = make(map[string]bool, len(ids))
+		}
+		for _, id := range ids {
+			c.forceNodes[id] = true
+		}
+	}
+}
+
+func (c stageConfig) forced(nodeID string) bool { return c.forceAll || c.forceNodes[nodeID] }
+
+func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time, opts ...StageOption) (StageResult, error) {
+	var cfg stageConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	// Serialize the whole stage against any concurrent stage/promote for this
 	// tenant (review finding): the sequence below is many individual Store calls,
 	// and a promote landing mid-loop would flip a PARTIAL fresh stage set and
@@ -305,30 +336,13 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		return StageResult{}, fmt.Errorf("controller: loading operator credential to stage: %w", err)
 	}
 
-	// (plan-5) Decide whether the per-node DELTA-SKIP is enabled for this stage. Normally ON: a node
-	// whose freshly compiled bundle digest equals its served bundle is NOT re-staged, so it keeps its
-	// generation and its agent never re-applies. It is DISABLED (full re-stage of every node) for the two
-	// keystone cases that change ZERO bundle bytes yet REQUIRE the promote to flip the served trust-list —
-	// a skipped deploy would promote nothing (ErrNoStagedBundle fires before the served-trust-list copy)
-	// and strand the fleet on the old credential:
-	//   - ROTATION: the served trust-list is signed under a rotated-away credential (KeystoneRedeployRequired).
-	//   - FIRST-PIN: keystone is on but nothing is served yet (no served trust-list) — the first deploy
-	//     must stage every node so the promote seeds the served slot.
-	skipEnabled := true
-	if keystoneOn {
-		if _, tlErr := store.GetServedTrustList(ctx, t); errors.Is(tlErr, ErrNotFound) {
-			skipEnabled = false // first-pin
-		} else if tlErr != nil {
-			return StageResult{}, fmt.Errorf("controller: loading served trust-list to decide delta-skip: %w", tlErr)
-		} else {
-			redeploy, rErr := KeystoneRedeployRequired(ctx, store, t, opCred)
-			if rErr != nil {
-				return StageResult{}, rErr
-			}
-			if redeploy {
-				skipEnabled = false // rotation: the promote must flip the served trust-list under the new key
-			}
-		}
+	// (plan-5) The per-node DELTA-SKIP: a node whose freshly compiled bundle digest equals its served
+	// bundle is NOT re-staged (it keeps its generation, its agent never re-applies) — UNLESS a keystone
+	// rotation/first-pin forces a full re-stage. The same decision drives the plan-6 pre-deploy preview,
+	// so it lives in the shared stageSkipEnabled.
+	skipEnabled, err := stageSkipEnabled(ctx, store, t, keystoneOn, opCred)
+	if err != nil {
+		return StageResult{}, err
 	}
 
 	// Persist the compiled allocation pins back into the FULL stored topology so a later
@@ -400,7 +414,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		// StageBundle, so PromoteStaged never bumps its DesiredGeneration and its agent never re-applies.
 		// FAIL OPEN — any doubt (skip disabled, no digest, no served bundle, unreadable served checksums,
 		// or a mismatch) stages normally; never leave a node on a stale config.
-		if skipEnabled && newDigest != "" {
+		if skipEnabled && !cfg.forced(node.ID) && newDigest != "" {
 			if servedDigest, ok := servedBundleDigest(ctx, store, t, node.ID); ok && servedDigest == newDigest {
 				unchanged = append(unchanged, node.ID)
 				continue
@@ -492,6 +506,123 @@ func servedBundleDigest(ctx context.Context, store Store, t TenantID, nodeID str
 		return "", false
 	}
 	return bundleSHA256(checks), true
+}
+
+// stageSkipEnabled reports whether the per-node delta-skip may run for this stage/preview. It is DISABLED
+// (a full re-stage) for the two keystone cases that change ZERO bundle bytes yet require the promote to
+// flip the served trust-list: FIRST-PIN (keystone on, no served trust-list yet) and ROTATION
+// (KeystoneRedeployRequired — the served trust-list is signed under a rotated-away credential). A
+// non-keystone tenant, or a healthy keystone, is enabled. Shared by CompileAndStage + DeployPreview so
+// the preview can never disagree with what a real Deploy would do.
+func stageSkipEnabled(ctx context.Context, store Store, t TenantID, keystoneOn bool, opCred OperatorCredential) (bool, error) {
+	if !keystoneOn {
+		return true, nil
+	}
+	if _, err := store.GetServedTrustList(ctx, t); errors.Is(err, ErrNotFound) {
+		return false, nil // first-pin: no served trust-list yet
+	} else if err != nil {
+		return false, fmt.Errorf("controller: loading served trust-list to decide delta-skip: %w", err)
+	}
+	redeploy, err := KeystoneRedeployRequired(ctx, store, t, opCred)
+	if err != nil {
+		return false, err
+	}
+	return !redeploy, nil // rotation → disabled
+}
+
+// NodeDeployChange is one node's entry in a deploy preview: whether an (unforced) Deploy would RE-STAGE
+// it (its bundle content changed vs served, or a keystone full-restage is pending).
+type NodeDeployChange struct {
+	NodeID  string
+	Name    string
+	Changed bool
+}
+
+// DeployPreviewResult is the plan-6 dry-run of what a Deploy (CompileAndStage) WOULD do, without staging.
+type DeployPreviewResult struct {
+	// KeystoneFullRestage is true when a keystone rotation/first-pin pends: the delta-skip is disabled, so
+	// EVERY node will re-stage regardless of content.
+	KeystoneFullRestage bool
+	// Nodes is the per-enrolled-node changed/unchanged verdict (subgraph order).
+	Nodes []NodeDeployChange
+	// SkippedUnenrolled are topology nodes not yet enrolled (excluded from the compile).
+	SkippedUnenrolled []string
+}
+
+// DeployPreview is the READ-ONLY dry-run of CompileAndStage (plan-6): it compiles + exports the PASSED
+// design (the operator's current canvas — a Deploy pushes the canvas via update-topology THEN stages, so
+// previewing the STORED design would misreport the blast radius whenever the canvas has unsaved edits),
+// computes each enrolled node's bundle digest, and reports whether an unforced Deploy would re-stage it —
+// WITHOUT staging, persisting pins, or writing the audit log. Zero-knowledge like HandleCompilePreview:
+// keys come from the enrolled registry via CompileSubgraph (AgentHeld placeholders); the canvas key
+// fields are ignored. It shares the digest identity (servedBundleDigest) and the keystone skip decision
+// (stageSkipEnabled) with CompileAndStage, so the preview cannot disagree with the real stage of the same
+// design. Force is an operator override applied at Deploy time, so the preview reports the UNFORCED
+// baseline. Heal the colliding pins a save/stage would, so the previewed digests match a real Deploy.
+func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Topology) (DeployPreviewResult, error) {
+	normalize.HealCollidingPins(topo)
+
+	nodes, err := store.ListNodes(ctx, t)
+	if err != nil {
+		return DeployPreviewResult{}, fmt.Errorf("controller: listing nodes to preview: %w", err)
+	}
+	cs, err := store.GetSettings(ctx, t)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return DeployPreviewResult{}, fmt.Errorf("controller: loading settings to preview: %w", err)
+	}
+	fs := BuildFetchSettings(cs.WithDefaults())
+	fs.AgentRolloutNodeIDs = AgentRolloutNodeIDs(cs, nodes)
+	result, subgraph, skipped, err := CompileSubgraph(ctx, topo, nodes, fs)
+	if err != nil {
+		return DeployPreviewResult{}, err
+	}
+	if len(subgraph.Nodes) == 0 {
+		return DeployPreviewResult{SkippedUnenrolled: skipped}, nil
+	}
+
+	keystoneOn := false
+	var opCred OperatorCredential
+	if cred, cerr := store.GetOperatorCredential(ctx, t); cerr == nil {
+		keystoneOn = true
+		opCred = cred
+	} else if !errors.Is(cerr, ErrNotFound) {
+		return DeployPreviewResult{}, fmt.Errorf("controller: loading operator credential to preview: %w", cerr)
+	}
+	skipEnabled, err := stageSkipEnabled(ctx, store, t, keystoneOn, opCred)
+	if err != nil {
+		return DeployPreviewResult{}, err
+	}
+
+	tmp, err := os.MkdirTemp("", "yaog-preview-")
+	if err != nil {
+		return DeployPreviewResult{}, fmt.Errorf("controller: creating preview temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+	if _, err := artifacts.Export(result, tmp); err != nil {
+		return DeployPreviewResult{}, fmt.Errorf("controller: exporting bundles to preview: %w", err)
+	}
+
+	out := DeployPreviewResult{
+		KeystoneFullRestage: !skipEnabled,
+		SkippedUnenrolled:   skipped,
+		Nodes:               make([]NodeDeployChange, 0, len(subgraph.Nodes)),
+	}
+	for _, node := range subgraph.Nodes {
+		files, err := readBundleDir(filepath.Join(tmp, node.Name))
+		if err != nil {
+			return DeployPreviewResult{}, fmt.Errorf("controller: reading bundle for node %s: %w", node.ID, err)
+		}
+		changed := true // fail toward "will change" (matches CompileAndStage's fail-open staging)
+		if skipEnabled {
+			if checks, ok := files["checksums.sha256"]; ok {
+				if servedDigest, ok := servedBundleDigest(ctx, store, t, node.ID); ok && servedDigest == bundleSHA256(checks) {
+					changed = false
+				}
+			}
+		}
+		out.Nodes = append(out.Nodes, NodeDeployChange{NodeID: node.ID, Name: node.Name, Changed: changed})
+	}
+	return out, nil
 }
 
 // appendStageAudit appends one best-effort audit entry for a stage-path action

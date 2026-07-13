@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -104,7 +105,22 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
-	result, err := controller.CompileAndStage(r.Context(), h.store, tenant, time.Now())
+	// Optional force override (plan-6): an empty body = no force; force_all re-stages every node,
+	// force_nodes re-stages named nodes even when unchanged — the drift/rescue escape hatch for the
+	// delta-skip. A non-empty malformed body is a 400.
+	var req stageRequestJSON
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	var opts []controller.StageOption
+	if req.ForceAll {
+		opts = append(opts, controller.WithForceAll())
+	}
+	if len(req.ForceNodes) > 0 {
+		opts = append(opts, controller.WithForceNodes(req.ForceNodes...))
+	}
+	result, err := controller.CompileAndStage(r.Context(), h.store, tenant, time.Now(), opts...)
 	if err != nil {
 		// CompileAndStage wraps source-coded errors (%w), so writeCodedOr surfaces each at its
 		// OWN status — compile constraints stay 422, but a keygen error (e.g. an AgentHeld node
@@ -116,8 +132,49 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, stageResponseJSON{
 		Staged:            result.Staged,
+		Unchanged:         result.UnchangedNodeIDs,
 		SkippedUnenrolled: result.SkippedUnenrolled,
 		Generation:        result.Generation,
+	})
+}
+
+// HandleDeployPreview is the plan-6 read-only dry-run: it reports which enrolled nodes a Deploy WOULD
+// re-stage (changed vs served) vs skip (unchanged), plus the keystone-full-restage flag — WITHOUT
+// staging. It compiles the POSTed CURRENT canvas (what a Deploy pushes+stages), not the stored copy.
+// The Deploy dialog calls it on open so the operator sees "N updated, M unchanged" (and any pending
+// keystone full-restage) before deploying.
+func (h *ControllerHandler) HandleDeployPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
+		return
+	}
+	tenant, _, ok := identity(r.Context())
+	if !ok {
+		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
+		return
+	}
+	// Preview the POSTed CURRENT canvas (what a Deploy will push+stage), NOT the stored copy — a Deploy
+	// pushes the canvas via update-topology then stages, so previewing the stored design would misreport
+	// the blast radius with unsaved edits. Public-keys-only + zero-knowledge (CompileSubgraph emits
+	// placeholder private keys); the POSTed key fields are never trusted.
+	topo, err := readTopology(w, r)
+	if err != nil {
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	pv, err := controller.DeployPreview(r.Context(), h.store, tenant, topo)
+	if err != nil {
+		writeCodedOr(w, apierr.CodeInternal, err)
+		return
+	}
+	nodes := make([]deployPreviewNodeJSON, 0, len(pv.Nodes))
+	for _, n := range pv.Nodes {
+		nodes = append(nodes, deployPreviewNodeJSON{NodeID: n.NodeID, Name: n.Name, Changed: n.Changed})
+	}
+	writeJSON(w, http.StatusOK, deployPreviewResponseJSON{
+		KeystoneFullRestage: pv.KeystoneFullRestage,
+		Nodes:               nodes,
+		SkippedUnenrolled:   pv.SkippedUnenrolled,
 	})
 }
 

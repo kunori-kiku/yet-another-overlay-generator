@@ -284,6 +284,7 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"passkey/disable", op(h.HandlePasskeyDisable))
 	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
 	mux.HandleFunc(base+"stage", op(h.HandleStage))
+	mux.HandleFunc(base+"deploy-preview", op(h.HandleDeployPreview))
 	// Read-only, server-authoritative compile preview (the controller "Compile" button):
 	// renders the enrolled subgraph WITHOUT staging/persisting, returning configs + skipped.
 	mux.HandleFunc(base+"compile-preview", op(h.HandleCompilePreview))

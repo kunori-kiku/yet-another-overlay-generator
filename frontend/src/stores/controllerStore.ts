@@ -13,6 +13,7 @@ import type {
   MintTokenResult,
 } from '../api/controllerClient';
 import type { NodeHistory } from '../lib/telemetryHistory';
+import type { DeployPreview, DeployForceArg } from '../lib/deployPreview';
 import {
   getNodes,
   nodeHistory as ctlNodeHistory,
@@ -20,6 +21,7 @@ import {
   mintEnrollmentToken,
   updateTopology,
   stage,
+  deployPreview as ctlDeployPreview,
   compilePreview as ctlCompilePreview,
   promote,
   revoke,
@@ -286,6 +288,23 @@ interface ControllerState {
   auditVerified: boolean;
   lastDeploy: StageResult | null;
 
+  // Pre-deploy preview (plan-6): the read-only dry-run fetched when the operator initiates a Deploy
+  // (POST /deploy-preview with the current canvas). Non-null ⇒ the confirmation dialog is open showing
+  // "N update / M unchanged" + the per-node Force surface. TRANSIENT + never persisted (not in the
+  // partialize allowlist) — a preview is a one-shot operator action, and it carries live digest
+  // verdicts that are stale on reload (the same custody rule as the live telemetry). deployPreviewing
+  // is the fetch-in-flight flag (distinct from the global loading, so an unrelated op does not flip it).
+  deployPreview: DeployPreview | null;
+  deployPreviewing: boolean;
+  // deployPreviewError (plan-6 best-effort): the preview fetch FAILED — e.g. a newer panel POSTs the
+  // deploy-preview route to an OLDER controller that only served the GET form (405) or lacks the route
+  // entirely (404). Because the Deploy button now only OPENS the preview dialog (which renders only
+  // after a successful preview), a dead preview endpoint would otherwise leave the operator unable to
+  // deploy at all. Non-null ⇒ the DeployBar shows this error AND a "Deploy anyway" fallback that
+  // deploys with no preview. Cleared when a deploy starts, on cancel, and on a fresh preview attempt.
+  // TRANSIENT + never persisted (same custody rule as deployPreview).
+  deployPreviewError: string | null;
+
   // bootstrap settings (plan-5.2, server-persisted): public agent URL / GitHub proxy / agent
   // release base. null means not yet loaded from the server (fetched on refresh).
   settings: ControllerSettings | null;
@@ -321,6 +340,10 @@ interface ControllerState {
     confirmPhrase: string;
     snapshot: Topology;
     stripped: number;
+    // Force argument (plan-6) captured with the held deploy, so the confirmed-shrink continuation
+    // (deploy({confirmedShrink:true})) re-stages with the SAME force the operator chose in the
+    // preview dialog rather than silently dropping it. undefined ⇒ a plain (unforced) deploy.
+    force?: DeployForceArg;
   } | null;
 
   // KEYSTONE (plan-5.1d): the pinned off-host operator signing credential (passkey / YubiKey).
@@ -479,11 +502,26 @@ interface ControllerState {
   // operator can see them and adjust the NAT ip:port accordingly, then Save persists and Deploy
   // reuses them stickily.
   compilePreview: () => Promise<void>;
-  // deploy uploads the current canvas (private keys stripped first) → stage → (keystone
-  // signing) → promote. When a deploy would shrink the server design substantially, unless
-  // confirmedShrink it sets pendingShrink and holds the deploy (awaiting the typed project-name
-  // confirmation).
-  deploy: (opts?: { confirmedShrink?: boolean }) => Promise<void>;
+  // openDeployPreview (plan-6): POST the CURRENT canvas (private keys stripped, exactly what deploy()
+  // pushes) to /deploy-preview and set deployPreview so the DeployBar renders the confirmation dialog.
+  // It is what the Deploy button now triggers (instead of deploying immediately) — the operator reviews
+  // "N update / M unchanged" + picks any Force, then confirms. Best-effort: a fetch failure sets
+  // deployPreviewError (not the global `error`) so the DeployBar can offer a "Deploy anyway" fallback
+  // instead of leaving Deploy dead when the preview endpoint is unavailable.
+  openDeployPreview: () => Promise<void>;
+  // cancelDeployPreview clears the preview dialog / error banner (the operator dismissed it without
+  // deploying).
+  cancelDeployPreview: () => void;
+  // deploy uploads the current canvas (private keys stripped first) → stage(force) → (keystone
+  // signing) → promote. force (plan-6) re-stages nodes even when unchanged (forceAll / forceNodes),
+  // chosen in the preview dialog. When a deploy would shrink the server design substantially, unless
+  // confirmedShrink it sets pendingShrink (carrying the force) and holds the deploy (awaiting the
+  // typed project-name confirmation).
+  deploy: (opts?: { confirmedShrink?: boolean; force?: DeployForceArg }) => Promise<void>;
+  // forceRedeployNode (plan-6) re-stages ONE node even if unchanged, then promotes — the node-detail
+  // escape hatch (clear-rekey precedent). It reuses deploy() with force_nodes:[nodeId] so the
+  // keystone sign step is not reimplemented; the current design is what gets deployed.
+  forceRedeployNode: (nodeId: string) => Promise<void>;
   // Cancel a pending shrink-confirm deploy (the user clicked cancel in the confirm dialog).
   cancelShrinkConfirm: () => void;
   // Controller-mode lightweight "save" (plan-10 / T2): strip private keys → update-topology
@@ -683,6 +721,9 @@ export const useControllerStore = create<ControllerState>()(
       audit: [],
       auditVerified: false,
       lastDeploy: null,
+      deployPreview: null,
+      deployPreviewing: false,
+      deployPreviewError: null,
       settings: null,
 
       hydrationNotice: false,
@@ -1009,6 +1050,11 @@ export const useControllerStore = create<ControllerState>()(
           nodes: [],
           audit: [],
           auditVerified: false,
+          // Drop any open preview dialog / in-flight preview / preview-error banner: it is a
+          // transient, session-scoped operator action and must never survive a session change.
+          deployPreview: null,
+          deployPreviewing: false,
+          deployPreviewError: null,
           // Clear settings too, so a different operator signing in re-fetches them
           // (the guarded loadSettings effect re-fires on settings===null).
           settings: null,
@@ -1426,6 +1472,43 @@ export const useControllerStore = create<ControllerState>()(
       //     needed).
       // If keystone is ON but no operator credential is enrolled locally yet, give an actionable
       // error (enroll the signing key first).
+      // openDeployPreview (plan-6): fetch the read-only dry-run and open the confirmation dialog.
+      // Guarded so a re-click while previewing / deploying / dialog-open does not re-fetch. Live-only:
+      // deployPreview is never persisted (see the partialize note).
+      openDeployPreview: async () => {
+        if (get().deployPreviewing || get().loading || get().deployPreview) return;
+        // Clear any prior preview-error banner so a retry starts clean (do NOT guard on it — the
+        // Deploy button must be able to re-attempt the preview after a failure).
+        set({ deployPreviewing: true, error: null, deployPreviewError: null });
+        try {
+          // Preview EXACTLY the canvas a Deploy will push+stage: deploy() reads the same
+          // getTopology(), strips private keys, then update-topology's it before staging — so we POST
+          // the identically-stripped canvas here. Previewing the stored server design instead would
+          // misreport the blast radius whenever the canvas has unsaved edits (the plan-6 defect). The
+          // controller canvas is already key-free; the strip is the zero-knowledge fail-safe (mirrors
+          // compilePreview / deploy()).
+          const current = useTopologyStore.getState().getTopology();
+          const { topo: clean } = stripPrivateKeys(current);
+          const preview = await ctlDeployPreview(configOf(get()), JSON.stringify(clean));
+          set({ deployPreview: preview, deployPreviewing: false });
+        } catch (err) {
+          // Best-effort (plan-6): the preview endpoint may be unavailable (a newer panel POSTs the
+          // deploy-preview route to an OLDER controller — 405 GET-only / 404 no route). Record the
+          // failure in deployPreviewError (NOT the global `error`) so the DeployBar surfaces it beside
+          // a "Deploy anyway" fallback, rather than leaving Deploy permanently dead.
+          set({ deployPreviewError: localizeError(err, 'error.generic'), deployPreviewing: false });
+        }
+      },
+
+      cancelDeployPreview: () => set({ deployPreview: null, deployPreviewError: null }),
+
+      // forceRedeployNode (plan-6): re-stage ONE node even if unchanged, then the usual promote path.
+      // It reuses deploy() with force_nodes:[nodeId] (so the keystone sign step is not reimplemented);
+      // the current server-authoritative canvas is what gets deployed. Any error surfaces in `error`.
+      forceRedeployNode: async (nodeId) => {
+        await get().deploy({ force: { forceNodes: [nodeId] } });
+      },
+
       deploy: async (opts) => {
         // Idempotency guard (plan-16 / 3.4): a deploy is a multi-request fleet mutation
         // (update-topology → stage → sign → promote). The Deploy button is disabled while
@@ -1434,7 +1517,9 @@ export const useControllerStore = create<ControllerState>()(
         // shrink re-call is unaffected: the shrink-confirm branch sets loading:false before
         // returning, so deploy({confirmedShrink:true}) runs with loading already cleared.
         if (get().loading) return;
-        set({ loading: true, error: null });
+        // Clear the preview-error banner too: a deploy (whether from the dialog Confirm or the
+        // "Deploy anyway" fallback) supersedes any stale preview-fetch failure.
+        set({ loading: true, error: null, deployPreviewError: null });
         try {
           const cfg = configOf(get());
 
@@ -1444,11 +1529,16 @@ export const useControllerStore = create<ControllerState>()(
           // canvas); otherwise we strip the live canvas now.
           let cleanTopo: Topology;
           let stripped: number;
+          // Force (plan-6): from opts on a fresh deploy, or carried in pendingShrink on a
+          // confirmed-shrink continuation so the force the operator chose survives the shrink gate.
+          let force: DeployForceArg | undefined;
           const confirming = opts?.confirmedShrink ? get().pendingShrink : null;
           if (confirming) {
             cleanTopo = confirming.snapshot;
             stripped = confirming.stripped;
+            force = confirming.force;
           } else {
+            force = opts?.force;
             // Custody strip (plan-5, D4): never send a private key to the server (the
             // client mirror of the server's update-topology 400). In controller mode
             // the hydrated design is already key-free, but a locally-compiled/imported
@@ -1489,7 +1579,11 @@ export const useControllerStore = create<ControllerState>()(
                     confirmPhrase: cleanTopo.project.name || cleanTopo.project.id || 'DELETE',
                     snapshot: cleanTopo,
                     stripped,
+                    force,
                   },
+                  // Close the preview dialog: the typed-confirm shrink modal now takes over (both
+                  // render in DeployBar; the shrink gate is the stricter of the two).
+                  deployPreview: null,
                   loading: false,
                 });
                 return; // wait for the typed confirmation, then deploy({confirmedShrink:true})
@@ -1526,7 +1620,7 @@ export const useControllerStore = create<ControllerState>()(
           // design once stage's allocation has been read back (and is the fallback baseline
           // if that read fails).
           set({ lastSyncedSnapshot: canonicalDesign(cleanTopo), lastSyncedTopology: cleanTopo });
-          const result = await stage(cfg);
+          const result = await stage(cfg, force);
           // When there are no enrolled nodes, stage produces no bundle (staged is empty), and
           // promote would then return 409 ErrNoStagedBundle — that is not an error but "no node
           // has joined the network yet". Just show skippedUnenrolled and skip promote (and
@@ -1619,9 +1713,16 @@ export const useControllerStore = create<ControllerState>()(
           } catch {
             // best-effort (see comment above) — never fail an otherwise-successful deploy on it.
           }
-          // Clear any pending shrink-confirm (a confirmed deploy consumes it) and
-          // surface how many private keys were stripped before upload (0 = no notice).
-          set({ lastDeploy: result, loading: false, pendingShrink: null, lastStrippedKeys: stripped });
+          // Clear any pending shrink-confirm (a confirmed deploy consumes it) + the preview dialog
+          // (the deploy it authorized is done) and surface how many private keys were stripped before
+          // upload (0 = no notice). lastDeploy now carries the unchanged (delta-skipped) set too.
+          set({
+            lastDeploy: result,
+            loading: false,
+            pendingShrink: null,
+            deployPreview: null,
+            lastStrippedKeys: stripped,
+          });
           await get().refresh();
         } catch (err) {
           // Clear pendingShrink on failure too: a CONFIRMED-shrink deploy
@@ -1637,13 +1738,16 @@ export const useControllerStore = create<ControllerState>()(
             loading: false,
             signing: false,
             pendingShrink: null,
+            // Close the preview dialog on failure too, so the error surfaces in the DeployBar
+            // (unoccluded by the modal) and the operator can retry Deploy, which re-previews.
+            deployPreview: null,
           });
         }
       },
 
       cancelShrinkConfirm: () => set({ pendingShrink: null }),
       dismissStripNotice: () => set({ lastStrippedKeys: 0 }),
-      clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null }),
+      clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null, deployPreview: null }),
 
       // The single controller→local switch path (plan-10 / T1). The security fork is identical to
       // the login gate LoginPage's:

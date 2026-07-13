@@ -47,6 +47,7 @@ test('Roll-keys + agent rekey clears the actor; Cancel-rekey releases a straggle
   await importDesignViaUI(page, target.panel, designPath)
   await page.goto(`${target.panel}/deploy`)
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
 
   // (a) Roll-keys: flags every approved node for rotation + bumps the generation. Await the

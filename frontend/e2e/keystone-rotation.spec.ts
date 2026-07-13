@@ -134,6 +134,7 @@ async function deploySigned(page: import('@playwright/test').Page): Promise<void
     { timeout: 30_000 },
   )
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy
   expect((await sigP).status(), 'the Go verifier accepts the browser signature').toBe(200)
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
 }

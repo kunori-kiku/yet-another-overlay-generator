@@ -1,9 +1,10 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useControllerStore } from '../../stores/controllerStore';
+import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useFleetLiveRefresh } from '../../hooks/useFleetLiveRefresh';
 import { t } from '../../i18n';
+import { BTN_CTA } from '../shell/styles';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 import { NodeConditions } from '../deploy/NodeConditions';
 import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
@@ -43,6 +44,26 @@ export function FleetNodeDetailPage() {
   const refresh = useControllerStore((s) => s.refresh);
   const loading = useControllerStore((s) => s.loading);
   const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
+  // Force redeploy this node (plan-6): re-stage it even if unchanged, then the usual promote path
+  // (reuses controllerStore.deploy with force_nodes). Disabled without auth (a mutating action).
+  const forceRedeployNode = useControllerStore((s) => s.forceRedeployNode);
+  // deploy() (which forceRedeployNode delegates to) uploads the whole canvas first, so a canvas that
+  // is much smaller than the server design trips the majority-shrink guard and parks the deploy on
+  // pendingShrink. The type-to-confirm modal that resolves it lives only in the DeployBar (Deploy
+  // page). Without surfacing pendingShrink here, a per-node Force from this deep-linked page would
+  // silently no-op; instead we render a notice pointing the operator to Deploy (where a fleet-wide
+  // shrink belongs) or to cancel. (plan-6 re-review finding.)
+  const pendingShrink = useControllerStore((s) => s.pendingShrink);
+  const cancelShrinkConfirm = useControllerStore((s) => s.cancelShrinkConfirm);
+  const noAuth = !useControllerStore(selectHasAuth);
+  const onForceRedeploy = () => {
+    if (!node) return;
+    // The current server-authoritative design is what gets deployed; a redeploy re-stages every
+    // changed node plus this one — confirm so a click on a deep-linked page is deliberate.
+    if (window.confirm(t(language, 'fleetNodeDetailPage.forceRedeployConfirm'))) {
+      void forceRedeployNode(node.nodeId);
+    }
+  };
   // Refresh-on-mount + the opt-in Live poll (beta.16): this deep-linked route previously rendered a
   // FROZEN cache snapshot (no refresh-on-mount), so an operator watching a node saw stale status that
   // never advanced. Shared with /fleet via the hook so the two stay behaviorally identical.
@@ -113,6 +134,60 @@ export function FleetNodeDetailPage() {
               {node.rekeyRequested ? t(language, 'fleetNodeDetailPage.yes') : t(language, 'fleetNodeDetailPage.no')}
             </Field>
           </dl>
+          {/* Force redeploy this node (plan-6): a per-node escape hatch beside the registry actions
+              (clear-rekey precedent). It re-stages this node even if its config is unchanged, then
+              promotes via the usual deploy path. Errors surface in the ControllerErrorBanner above;
+              the node's applied/desired generation updates on the post-deploy refresh. */}
+          <div className="flex flex-col gap-1 border-t border-[var(--hairline)] pt-3">
+            <button
+              type="button"
+              data-testid="node-force-redeploy"
+              onClick={onForceRedeploy}
+              disabled={loading || noAuth}
+              className={`self-start rounded px-3 py-2 text-sm font-medium ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]`}
+            >
+              {loading
+                ? t(language, 'fleetNodeDetailPage.forceRedeploying')
+                : t(language, 'fleetNodeDetailPage.forceRedeploy')}
+            </button>
+            <p className="text-xs text-[var(--content-muted)]">
+              {t(language, 'fleetNodeDetailPage.forceRedeployHint')}
+            </p>
+            {/* pendingShrink is parked here when the current canvas is much smaller than the server
+                design: the whole-canvas upload deploy() performs would substantially shrink the fleet.
+                The typed-confirm modal lives in the DeployBar, so route the operator to Deploy (or let
+                them cancel) rather than leaving the Force click a silent no-op. */}
+            {pendingShrink && (
+              <div
+                data-testid="node-force-shrink-notice"
+                className="mt-1 rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] p-2 text-xs text-[var(--content)]"
+              >
+                <p>
+                  {t(language, 'fleetNodeDetailPage.forceRedeployShrink', {
+                    server: pendingShrink.serverNodeCount,
+                    canvas: pendingShrink.canvasNodeCount,
+                  })}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Link
+                    to="/deploy"
+                    data-testid="node-force-shrink-goto-deploy"
+                    className={`rounded px-2 py-1 font-medium ${BTN_CTA}`}
+                  >
+                    {t(language, 'fleetNodeDetailPage.forceRedeployShrinkGoToDeploy')}
+                  </Link>
+                  <button
+                    type="button"
+                    data-testid="node-force-shrink-cancel"
+                    onClick={cancelShrinkConfirm}
+                    className="rounded border border-[var(--hairline)] px-2 py-1 text-[var(--content)] hover:bg-[var(--control-hover)]"
+                  >
+                    {t(language, 'fleetNodeDetailPage.forceRedeployShrinkCancel')}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           {/* Unconditional + nullish-coerced: a node persisted by a pre-beta.12 panel (in
               localStorage) has no wireguardPeers key, and the refresh-on-mount above completes
               asynchronously (the first paint is the cache), so guarding on node.wireguardPeers.length

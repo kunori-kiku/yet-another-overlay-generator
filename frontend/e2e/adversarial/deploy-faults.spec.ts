@@ -46,6 +46,7 @@ test('fault at update-topology (torn connection): error surfaced, Deploy re-enab
   const faults = await installFaults(page, [{ route: 'update-topology', method: 'POST', abort: true }])
 
   await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy chain
 
   // The abort throws inside deploy() before stage; the catch sets the generic localized error and
   // clears loading. No bundle was staged or promoted.
@@ -66,6 +67,7 @@ test('fault at getTrustlist (500, not 404): deploy aborts BEFORE promote, no hal
   const faults = await installFaults(page, [{ route: 'trustlist', method: 'GET', status: 500 }])
 
   await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy chain
 
   await expect(errorBanner(page)).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText('Last deploy')).toBeHidden()
@@ -87,6 +89,7 @@ test('POSITIVE: getTrustlist 404 on keystone-OFF → promote proceeds and deploy
     { timeout: 20_000 },
   )
   await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy chain
   await promoteP
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
   expect(faults.count('promote', 'POST'), 'keystone-OFF 404 must let promote proceed').toBeGreaterThanOrEqual(1)
@@ -100,6 +103,7 @@ test('fault at promote (500): error surfaced, deploy does not report success', a
   const faults = await installFaults(page, [{ route: 'promote', method: 'POST', status: 500 }])
 
   await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy chain
 
   await expect(errorBanner(page)).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText('Last deploy')).toBeHidden()
@@ -118,10 +122,37 @@ test('fault at post-deploy reconcile (topology GET after promote): deploy STILL 
   await installFaults(page, [{ route: 'topology', method: 'GET', after: 'promote', status: 500 }])
 
   await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy chain
 
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
   // No error banner: the reconcile is best-effort, so its failure is swallowed.
   await expect(errorBanner(page)).toBeHidden()
+})
+
+test('POSITIVE: deploy-preview endpoint fault → "Deploy anyway" fallback keeps deploy reachable', async (
+  { page, context },
+  testInfo,
+) => {
+  await seedEnrolledOnDeploy(page, context, testInfo)
+  // Simulate a preview endpoint an OLDER controller cannot serve (a newer panel POSTs the brand-new
+  // deploy-preview route; a GET-only controller answers 405, one without it 404). openDeployPreview()
+  // then throws — the confirmation dialog must NOT open. The plan-6 best-effort fallback instead
+  // surfaces a "Deploy anyway" button so the operator is never left unable to deploy.
+  const faults = await installFaults(page, [{ route: 'deploy-preview', method: 'POST', status: 405 }])
+
+  const promoteP = page.waitForResponse(
+    (r) => r.url().includes('/operator/promote') && r.request().method() === 'POST',
+    { timeout: 20_000 },
+  )
+  await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  // Preview POST faulted → no dialog; the fallback appears instead.
+  await expect(page.getByTestId('deploy-anyway')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('deploy-preview')).toBeHidden()
+  // Deploy anyway → the real (keystone-OFF) deploy chain runs and promote proceeds.
+  await page.getByTestId('deploy-anyway').click()
+  await promoteP
+  await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
+  expect(faults.count('deploy-preview', 'POST'), 'the preview POST was attempted').toBeGreaterThanOrEqual(1)
 })
 
 // NOTE on the keystone-ON trustlist-signature step: a fault there drives the SAME deploy() catch as

@@ -80,6 +80,7 @@ test('keystone-ON: enroll signing key, deploy signs the manifest, Go verifier ac
   )
 
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the deploy
 
   // F1 fix: getTrustlist goes through request() (credentials:include) — it must NOT 401 (the
   // pre-fix raw fetch dropped credentials and 401'd a cookie-only operator on a keystone-ON deploy).
