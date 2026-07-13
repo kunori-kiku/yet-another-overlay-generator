@@ -110,7 +110,7 @@ type MemStore struct {
 func NewMemStore() *MemStore {
 	s := &MemStore{
 		tenants: make(map[TenantID]*tenantState),
-		history: newTelemetryHistory("", DefaultTelemetryHistoryCap),
+		history: newTelemetryHistory("", DefaultTelemetryHistoryCap, nil), // in-memory; no persisted-settings seed needed
 	}
 	s.cond = sync.NewCond(&s.mu)
 	return s

@@ -89,18 +89,41 @@ type telemetryHistory struct {
 	capMu       sync.RWMutex
 	capByTenant map[TenantID]int
 	defaultCap  int
+	// capLoader reads a tenant's persisted cap from settings (FileStore: GetSettings→EffectiveHistoryCap;
+	// nil for MemStore). It is called ONLY from the flusher (off the heartbeat path) to SEED an unseen
+	// tenant's cap on its first flush — so a tenant that persisted cap=0 (history disabled) is honored
+	// across a controller restart (the in-memory cache starts empty; without this seed the flush would
+	// use defaultCap>0 and write to disk data the operator disabled). append never calls it.
+	capLoader func(TenantID) int
 
 	stop    chan struct{}
 	stopped chan struct{}
 }
 
-func newTelemetryHistory(dir string, defaultCap int) *telemetryHistory {
+func newTelemetryHistory(dir string, defaultCap int, capLoader func(TenantID) int) *telemetryHistory {
 	return &telemetryHistory{
 		nodes:       map[TenantID]map[string]*nodeHist{},
 		dir:         dir,
 		capByTenant: map[TenantID]int{},
 		defaultCap:  defaultCap,
+		capLoader:   capLoader,
 	}
+}
+
+// ensureSeeded seeds a tenant's cap from persisted settings once, on its first flush (off the heartbeat
+// path). No-op once seeded or when there is no loader (MemStore). This is what makes an operator's
+// persisted cap=0 (disable) survive a controller restart.
+func (h *telemetryHistory) ensureSeeded(t TenantID) {
+	if h.capLoader == nil {
+		return
+	}
+	h.capMu.RLock()
+	_, ok := h.capByTenant[t]
+	h.capMu.RUnlock()
+	if ok {
+		return
+	}
+	h.setCap(t, h.capLoader(t)) // capLoader reads settings (disk) — flusher only, never append
 }
 
 // capFor returns the cached per-node sample cap for a tenant (defaultCap until the store seeds one). No
@@ -212,9 +235,10 @@ func (h *telemetryHistory) flushOnce() {
 	h.mu.Unlock()
 
 	for _, j := range jobs {
+		h.ensureSeeded(j.t) // seed a restarted-controller's cap from settings before deciding to write
 		cap := h.capFor(j.t)
 		if cap <= 0 {
-			continue // history disabled while draining: drop the samples
+			continue // history disabled (incl. persisted cap=0 across restart): drop, no disk write
 		}
 		if err := h.writeJSONL(j.t, j.nodeID, j.samples, cap); err != nil {
 			h.requeueFront(j.t, j.nodeID, j.samples, cap)

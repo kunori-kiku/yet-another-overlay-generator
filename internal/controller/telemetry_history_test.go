@@ -54,7 +54,7 @@ func TestResourceSampleFromMetrics(t *testing.T) {
 }
 
 func TestHistory_MemRingCapEvicts(t *testing.T) {
-	h := newTelemetryHistory("", 3) // in-memory, cap 3
+	h := newTelemetryHistory("", 3, nil) // in-memory, cap 3
 	base := time.Unix(0, 0).UTC()
 	for i := 0; i < 5; i++ {
 		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
@@ -69,7 +69,7 @@ func TestHistory_MemRingCapEvicts(t *testing.T) {
 }
 
 func TestHistory_Disabled(t *testing.T) {
-	h := newTelemetryHistory("", 0) // cap 0 = disabled
+	h := newTelemetryHistory("", 0, nil) // cap 0 = disabled
 	h.append("tn", "n1", ResourceSample{TS: time.Unix(1, 0), Load1: 1})
 	got, err := h.query("tn", "n1", time.Unix(0, 0), time.Unix(100, 0))
 	if err != nil || len(got) != 0 {
@@ -77,9 +77,30 @@ func TestHistory_Disabled(t *testing.T) {
 	}
 }
 
+// TestHistory_DisabledCapSeededAcrossRestart covers the review fix: a tenant that persisted cap=0
+// (history disabled) must NOT get samples written to disk after a controller restart, even though the
+// in-memory cap cache starts empty. append buffers optimistically (defaultCap), but the flusher SEEDS
+// the cap from settings (capLoader, off the heartbeat path) and drops the samples before any write.
+func TestHistory_DisabledCapSeededAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	loaderCalls := 0
+	h := newTelemetryHistory(dir, DefaultTelemetryHistoryCap, func(TenantID) int {
+		loaderCalls++
+		return 0 // operator persisted cap=0 (history disabled)
+	})
+	h.append("tn", "n1", ResourceSample{TS: time.Unix(1, 0), Load1: 1}) // empty cache → defaultCap → buffered
+	h.flushOnce()                                                       // seeds cap=0 → drops → no file
+	if loaderCalls == 0 {
+		t.Fatal("the flusher must consult the cap loader to seed an unseen tenant")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tn", "n1.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("a persisted cap=0 (disabled) tenant must NOT get a history file after restart, err=%v", err)
+	}
+}
+
 func TestHistory_FlushAndQueryRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	h := newTelemetryHistory(dir, 100)
+	h := newTelemetryHistory(dir, 100, nil)
 	base := time.Unix(1000, 0).UTC()
 	for i := 0; i < 10; i++ {
 		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
@@ -92,7 +113,7 @@ func TestHistory_FlushAndQueryRoundTrip(t *testing.T) {
 		t.Fatalf("post-flush query = %d, want 10 (from JSONL)", len(got))
 	}
 	// A NEW history instance over the SAME dir (a controller restart) loads history from disk.
-	h2 := newTelemetryHistory(dir, 100)
+	h2 := newTelemetryHistory(dir, 100, nil)
 	got, err := h2.query("tn", "n1", base, base.Add(time.Hour))
 	if err != nil || len(got) != 10 || got[0].Load1 != 0 || got[9].Load1 != 9 {
 		t.Fatalf("cross-restart query = %d (%v), want 10 in order", len(got), err)
@@ -104,7 +125,7 @@ func TestHistory_FlushAndQueryRoundTrip(t *testing.T) {
 
 func TestHistory_CompactOverCap(t *testing.T) {
 	dir := t.TempDir()
-	h := newTelemetryHistory(dir, 5) // cap 5; the FILE compacts once it passes cap*slack=10 lines
+	h := newTelemetryHistory(dir, 5, nil) // cap 5; the FILE compacts once it passes cap*slack=10 lines
 	base := time.Unix(0, 0).UTC()
 	ts := 0
 	appendN := func(n int) {
@@ -137,7 +158,7 @@ func TestHistory_FlushFailureRequeues(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tn"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h := newTelemetryHistory(dir, 100)
+	h := newTelemetryHistory(dir, 100, nil)
 	h.append("tn", "n1", ResourceSample{TS: time.Unix(1, 0), Load1: 1})
 	h.flushOnce() // MkdirAll(dir/tn) fails (dir/tn is a file) → writeJSONL errors → requeue
 	// Assert the buffer directly (the same bad path would fail query's read too — this isolates the
@@ -152,7 +173,7 @@ func TestHistory_FlushFailureRequeues(t *testing.T) {
 
 func TestHistory_ConcurrentAppendFlush(t *testing.T) {
 	dir := t.TempDir()
-	h := newTelemetryHistory(dir, 10000)
+	h := newTelemetryHistory(dir, 10000, nil)
 	base := time.Unix(0, 0).UTC()
 	var wg sync.WaitGroup
 	wg.Add(2)

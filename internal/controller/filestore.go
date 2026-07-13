@@ -128,7 +128,17 @@ func NewFileStore(root string) (*FileStore, error) {
 		return nil, fmt.Errorf("controller: create filestore root: %w", err)
 	}
 	fs := &FileStore{root: root, auditTails: make(map[TenantID]*auditTail)}
-	fs.history = newTelemetryHistory(filepath.Join(root, "telemetry-history"), DefaultTelemetryHistoryCap)
+	// The cap loader lets the flusher seed a tenant's cap from persisted settings on first flush (off
+	// the heartbeat path), so an operator's cap=0 (disable history) is honored across a controller
+	// restart — the in-memory cache starts empty otherwise.
+	fs.history = newTelemetryHistory(filepath.Join(root, "telemetry-history"), DefaultTelemetryHistoryCap,
+		func(t TenantID) int {
+			cs, err := fs.GetSettings(context.Background(), t)
+			if err != nil {
+				return DefaultTelemetryHistoryCap // no settings / read error → default
+			}
+			return cs.EffectiveHistoryCap()
+		})
 	return fs, nil
 }
 
