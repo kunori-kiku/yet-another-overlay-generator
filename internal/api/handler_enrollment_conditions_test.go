@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TestMapConditions is the table test for the pure projection helper (plan-2): nil/empty in => nil
@@ -23,12 +23,12 @@ func TestMapConditions(t *testing.T) {
 
 	obs := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 	in := []controller.NodeCondition{
-		{Condition: model.Condition{
-			Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK,
+		{Condition: runtimecontract.Condition{
+			Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK,
 			Reason: "Applied", Message: "configuration applied", Since: "2026-06-22T11:59:00Z",
 		}, ObservedAt: obs},
-		{Condition: model.Condition{
-			Type: model.ConditionTypeMimic, Status: model.ConditionStatusWarn,
+		{Condition: runtimecontract.Condition{
+			Type: runtimecontract.ConditionTypeMimic, Status: runtimecontract.ConditionStatusWarn,
 			Reason: "FellBackToUDP", Message: "mimic unavailable; running plain UDP", Since: "",
 		}, ObservedAt: obs},
 	}
@@ -58,12 +58,12 @@ func TestHandleNodes_EmitsConditions(t *testing.T) {
 	env.enrollNode(t, "node-bare")
 
 	obs := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
-	cond := model.Condition{
-		Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK,
+	cond := runtimecontract.Condition{
+		Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK,
 		Reason: "Applied", Message: "configuration applied", Since: "2026-06-22T11:59:00Z",
 	}
 	if err := env.store.SetAppliedGeneration(context.Background(), testTenant, "node-cond",
-		1, "cafebabe", "applied", "v2.0.0-beta.9", []model.Condition{cond}, obs); err != nil {
+		1, "cafebabe", "applied", "v2.0.0-beta.9", []runtimecontract.Condition{cond}, obs); err != nil {
 		t.Fatalf("SetAppliedGeneration(node-cond): %v", err)
 	}
 

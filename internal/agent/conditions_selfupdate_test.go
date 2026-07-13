@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TestRecordSelfUpdateBlocked pins the custody invariant: recording the (observability-only)
@@ -126,24 +126,24 @@ func TestSelfUpdateCondition(t *testing.T) {
 		{"nil state", nil, false, "", ""},
 		{"no activity", &State{Health: "applied"}, false, "", ""},
 		{"in flight (not confirmed)", &State{PendingUpdate: &PendingUpdate{To: "v2.0.0-beta.9", Attempts: 1}},
-			true, reasonSelfUpdateActive, model.ConditionStatusWarn},
+			true, reasonSelfUpdateActive, runtimecontract.ConditionStatusWarn},
 		{"probationary (confirmed)", &State{PendingUpdate: &PendingUpdate{To: "v2.0.0-beta.9", Confirmed: true}},
-			true, reasonSelfUpdateProbationary, model.ConditionStatusWarn},
+			true, reasonSelfUpdateProbationary, runtimecontract.ConditionStatusWarn},
 		{"abandoned (durable)", &State{AbandonedAgentVersion: "v2.0.0-beta.9"},
-			true, reasonSelfUpdateAbandoned, model.ConditionStatusError},
+			true, reasonSelfUpdateAbandoned, runtimecontract.ConditionStatusError},
 		{"updated (transient Health marker)", &State{Health: "self-updated to v2.0.0-beta.9"},
-			true, reasonSelfUpdateUpdated, model.ConditionStatusOK},
+			true, reasonSelfUpdateUpdated, runtimecontract.ConditionStatusOK},
 		// Precedence: an in-flight breadcrumb wins over a stale abandoned-target memory (operator retargeted).
 		{"in-flight beats abandoned", &State{PendingUpdate: &PendingUpdate{To: "v3"}, AbandonedAgentVersion: "v2"},
-			true, reasonSelfUpdateActive, model.ConditionStatusWarn},
+			true, reasonSelfUpdateActive, runtimecontract.ConditionStatusWarn},
 		// Blocked: a stalled rollout (pin/version mismatch) surfaces so the panel shows WHY a node lags.
 		{"blocked (deferred refusal)", &State{Health: "applied", SelfUpdateBlocked: "the fetched agent binary does not match the rollout target version"},
-			true, reasonSelfUpdateBlocked, model.ConditionStatusWarn},
+			true, reasonSelfUpdateBlocked, runtimecontract.ConditionStatusWarn},
 		// Precedence: Blocked is LOWEST — an in-flight swap or a durable abandonment outranks it.
 		{"in-flight beats blocked", &State{PendingUpdate: &PendingUpdate{To: "v3"}, SelfUpdateBlocked: "mismatch"},
-			true, reasonSelfUpdateActive, model.ConditionStatusWarn},
+			true, reasonSelfUpdateActive, runtimecontract.ConditionStatusWarn},
 		{"abandoned beats blocked", &State{AbandonedAgentVersion: "v2", SelfUpdateBlocked: "mismatch"},
-			true, reasonSelfUpdateAbandoned, model.ConditionStatusError},
+			true, reasonSelfUpdateAbandoned, runtimecontract.ConditionStatusError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,7 +154,7 @@ func TestSelfUpdateCondition(t *testing.T) {
 			if !has {
 				return
 			}
-			if got.Type != model.ConditionTypeSelfUpdate || got.Reason != tc.wantReason || got.Status != tc.wantStatus {
+			if got.Type != runtimecontract.ConditionTypeSelfUpdate || got.Reason != tc.wantReason || got.Status != tc.wantStatus {
 				t.Fatalf("got {type:%s reason:%s status:%s}, want {selfupdate %s %s}",
 					got.Type, got.Reason, got.Status, tc.wantReason, tc.wantStatus)
 			}
@@ -175,7 +175,7 @@ func TestSelfUpdateConditionAbandonedReason(t *testing.T) {
 		AbandonedAgentVersion: "v9",
 		AbandonedReason:       "the updated binary failed its post-update health check and was rolled back",
 	}, now)
-	if !has || withReason.Status != model.ConditionStatusError {
+	if !has || withReason.Status != runtimecontract.ConditionStatusError {
 		t.Fatalf("abandoned+reason: has=%v status=%s, want has+error", has, withReason.Status)
 	}
 	if !strings.Contains(withReason.Message, "failed its post-update health check") {
@@ -183,7 +183,7 @@ func TestSelfUpdateConditionAbandonedReason(t *testing.T) {
 	}
 	// Legacy state (no reason) → generic line, still Error, no fabricated reason.
 	legacy, _ := selfUpdateCondition(&State{AbandonedAgentVersion: "v9"}, now)
-	if legacy.Status != model.ConditionStatusError || !strings.Contains(legacy.Message, "abandoned") {
+	if legacy.Status != runtimecontract.ConditionStatusError || !strings.Contains(legacy.Message, "abandoned") {
 		t.Errorf("legacy abandoned: status=%s msg=%q", legacy.Status, legacy.Message)
 	}
 	if strings.Contains(legacy.Message, "health check") {

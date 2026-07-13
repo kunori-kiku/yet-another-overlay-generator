@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // nativeXDPMetricKey carries the PRE-DEPLOY native-XDP capability heuristic (mimic-provisioning
@@ -54,7 +54,7 @@ type nativeXDPSampler struct{}
 
 func (nativeXDPSampler) Name() string { return "native-xdp" }
 
-func (nativeXDPSampler) Sample(_ time.Time) ([]model.Condition, map[string]any) {
+func (nativeXDPSampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	routeRaw, err := procNetRouteFn()
 	if err != nil {
 		return nil, nil // no /proc/net/route (non-Linux / restricted) → no signal

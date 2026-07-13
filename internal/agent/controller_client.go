@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // controllerHTTPTimeout bounds non-poll controller requests (enroll/config/report).
@@ -100,7 +100,7 @@ type reportRequestWire struct {
 	AgentVersion string `json:"agent_version,omitempty"`
 	// Conditions is the structured feedback set (plan-1), omitempty so a build/agent that reports
 	// none round-trips as an absent field (an old controller ignores it; a new controller stores nil).
-	Conditions []model.Condition `json:"conditions,omitempty"`
+	Conditions []runtimecontract.Condition `json:"conditions,omitempty"`
 }
 
 // telemetryRequestWire is the POST /telemetry body (beta9-smoke-hardening plan-1): a LIVE health
@@ -110,9 +110,9 @@ type reportRequestWire struct {
 // Metrics is the framework's extension slot (a future probe writes named values here); it is
 // omitempty and ignored by the current controller, so adding a probe needs no wire change.
 type telemetryRequestWire struct {
-	Conditions   []model.Condition `json:"conditions,omitempty"`
-	Metrics      map[string]any    `json:"metrics,omitempty"`
-	AgentVersion string            `json:"agent_version,omitempty"`
+	Conditions   []runtimecontract.Condition `json:"conditions,omitempty"`
+	Metrics      map[string]any              `json:"metrics,omitempty"`
+	AgentVersion string                      `json:"agent_version,omitempty"`
 }
 
 // EnrollResult is what a successful Enroll hands back to the caller (cmd/agent):
@@ -397,7 +397,7 @@ func (c *ControllerClient) Report(nodeID string, payload []byte) error {
 // single report transport shared by the Reporter interface (Report) and any explicit
 // caller. It is best-effort: a transport or non-2xx error is returned to the caller
 // (which logs it) but must not fail an otherwise-applied bundle.
-func (c *ControllerClient) postReport(gen int64, checksum, health string, conditions []model.Condition) error {
+func (c *ControllerClient) postReport(gen int64, checksum, health string, conditions []runtimecontract.Condition) error {
 	reqBody, err := json.Marshal(reportRequestWire{
 		AppliedGeneration: gen,
 		Checksum:          checksum,
@@ -431,7 +431,7 @@ func (c *ControllerClient) postReport(gen int64, checksum, health string, condit
 // baseURL / AgentVersion) + the goroutine-safe http.Client, and carries NO generation, so it never
 // touches the poll loop's mutable cursor fields and needs no lock. Best-effort: a transport or non-2xx
 // error is returned to the caller (which logs+swallows it) and must never disturb the running overlay.
-func (c *ControllerClient) Telemetry(conditions []model.Condition, metrics map[string]any) error {
+func (c *ControllerClient) Telemetry(conditions []runtimecontract.Condition, metrics map[string]any) error {
 	reqBody, err := json.Marshal(telemetryRequestWire{
 		Conditions:   conditions,
 		Metrics:      metrics,

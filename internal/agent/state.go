@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // compiledAtLayout is the timestamp format the export path writes into
@@ -93,7 +93,7 @@ type State struct {
 	// rebuilt on every apply by collectConditions and rides the /report payload (omitempty: a build
 	// with no conditions, or an old persisted state, round-trips as nil). It is observability that
 	// recordSuccess/recordFailure regenerate each cycle — NOT load-bearing custody state.
-	Conditions []model.Condition `json:"conditions,omitempty"`
+	Conditions []runtimecontract.Condition `json:"conditions,omitempty"`
 }
 
 // PendingUpdate is the self-update breadcrumb (plan-9): the swap that was attempted and how

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TestHandleTelemetry covers the controller side of the LIVE health heartbeat (beta9-smoke-hardening
@@ -29,8 +29,8 @@ func TestHandleTelemetry(t *testing.T) {
 	// Happy path: a heartbeat with fresh conditions + a new agent version.
 	body := telemetryRequestJSON{
 		AgentVersion: "v-new",
-		Conditions: []model.Condition{{
-			Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK,
+		Conditions: []runtimecontract.Condition{{
+			Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK,
 			Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z",
 		}},
 	}

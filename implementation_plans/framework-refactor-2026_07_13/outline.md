@@ -163,8 +163,17 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 - **plan-1 — Pre-WASM contract hardening.** Fold `normalize.HealCollidingPins` INTO `localcompile.Compile`
   (close the confirmed airgap silent-heal gap; + a colliding-pin fixture); evict **`model.Condition` only**
   into `internal/runtimecontract` (the mimic types stay in `model` — the pure-core renderer consumes them);
-  hoist `51820` into `allocconst`; single-source `artifacts/export.go` into one `BundleFileSet`. **Low–med
-  risk.**
+  hoist `51820` into `allocconst`. **Low–med risk.** (The `artifacts/export.go` single-source was split to
+  **plan-1.5** during execution — a distinct custody concern.)
+- **plan-1.5 — Single-source the export bundle file-set (custody).** Make `export.go`'s written / listed /
+  checksummed / signed all derive from ONE `BundleFiles` source (a `bundleFileMode` helper + iterate the
+  map + `allFiles` = sorted keys), so a member can never ship written-but-unlisted (unsigned). Checksummed
+  set byte-identical; `manifest.json`'s `files` becomes deterministically sorted. **Low risk.**
+- **plan-1.6 — Lock the air-gap handler pre-heal (regression test).** A handler-level regression test
+  proving the plan-1 air-gap `airGapRequest` pre-heal actually heals a colliding-pin topology to a
+  SUCCESS (vs the loud rejection the compiler's safety net gives), so the fix cannot silently regress to
+  the original divergence. (The conformance fail-fixture `heal-collision-reenable` already locks the
+  compiler's loud-reject half — unchanged.) **Low risk.**
 - **plan-2 — Stateful god-file splits (no logic change).** `filestore.go` → io/audit/telemetry;
   `compile.go` → stage/promote/subgraph/preview/manualnode; api handlers → real homes;
   `controllerStore.ts` → slices (persist.ts = ONE custody gate); `controllerClient.ts` → per-domain
@@ -229,8 +238,10 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 
 | # | Plan | Status | PR |
 |---|------|--------|-----|
-| 0 | Ratchet + zero-behavior hygiene | pending | — |
-| 1 | Pre-WASM contract hardening | pending | — |
+| 0 | Ratchet + zero-behavior hygiene | ✅ merged | #260 |
+| 1 | Pre-WASM contract hardening | 🔄 in review | this PR |
+| 1.5 | Single-source the export bundle file-set (custody) | pending | — |
+| 1.6 | Lock the air-gap handler pre-heal (regression test) | pending | — |
 | 2 | Stateful god-file splits (no logic change) | pending | — |
 | 3 | WASM add-alongside + PERMANENT gate | pending | — |
 | 4 | Flip WASM default + soak | pending | — |

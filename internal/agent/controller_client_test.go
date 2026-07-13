@@ -44,6 +44,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/api"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -321,8 +322,8 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 		Health:       "applied",
 		// plan-1: the structured condition set rides the same /report payload; assert it round-trips
 		// end to end (State -> reportRequestWire -> reportRequestJSON -> store -> Node.Conditions).
-		Conditions: []model.Condition{{
-			Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK,
+		Conditions: []runtimecontract.Condition{{
+			Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK,
 			Reason: "Applied", Message: "configuration applied", Since: "2026-06-22T10:00:00Z",
 		}},
 	})
@@ -353,7 +354,7 @@ func TestControllerClient_EnrollPollFetchVerifyReport(t *testing.T) {
 	if len(node.Conditions) != 1 {
 		t.Fatalf("GetNode conditions length %d, want 1", len(node.Conditions))
 	}
-	if c := node.Conditions[0]; c.Type != model.ConditionTypeConfigApply || c.Status != model.ConditionStatusOK ||
+	if c := node.Conditions[0]; c.Type != runtimecontract.ConditionTypeConfigApply || c.Status != runtimecontract.ConditionStatusOK ||
 		c.Reason != "Applied" || c.Since != "2026-06-22T10:00:00Z" {
 		t.Fatalf("GetNode condition not preserved: %+v", node.Conditions[0])
 	}
@@ -383,8 +384,8 @@ func TestControllerClient_Telemetry(t *testing.T) {
 		t.Fatalf("NewControllerClient(bearer): %v", err)
 	}
 	agentClient.AgentVersion = "v-new"
-	liveCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
-	if err := agentClient.Telemetry([]model.Condition{liveCond}, map[string]any{"sample": "metric"}); err != nil {
+	liveCond := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
+	if err := agentClient.Telemetry([]runtimecontract.Condition{liveCond}, map[string]any{"sample": "metric"}); err != nil {
 		t.Fatalf("Telemetry: %v", err)
 	}
 
@@ -416,7 +417,7 @@ func TestControllerClient_Telemetry(t *testing.T) {
 
 	// Best-effort: a wrong-token client's Telemetry returns an error (server 401), never a panic.
 	bad, _ := agent.NewControllerClient(env.agentSrv.URL, "wrong-token")
-	if err := bad.Telemetry([]model.Condition{liveCond}, nil); err == nil {
+	if err := bad.Telemetry([]runtimecontract.Condition{liveCond}, nil); err == nil {
 		t.Fatalf("Telemetry(bad token): err = nil, want a best-effort non-2xx error")
 	}
 }

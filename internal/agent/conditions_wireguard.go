@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // conditions_wireguard.go is the best-effort WireGuard link-health sampler (plan-3). It probes
 // `wg show all dump` cheaply once per apply cycle and classifies it into a single wireguard condition
-// (model.ConditionTypeWireGuard). BEST-EFFORT is load-bearing: a probe error (wg absent, not root, no
+// (runtimecontract.ConditionTypeWireGuard). BEST-EFFORT is load-bearing: a probe error (wg absent, not root, no
 // interfaces) yields NO condition and NEVER fails a cycle (PRINCIPLES — deployable configs /
 // keep-last-good). The dump is parsed in Go and re-shelled nowhere (root-script safety).
 
@@ -47,18 +47,18 @@ var wgShowFn = func() ([]byte, error) {
 
 // sampleWireGuardCondition probes link health via `wg show all dump` and classifies it into one
 // wireguard condition. The bool is false on any probe error (best-effort) or when there is nothing
-// meaningful to report; "no condition" is the (model.Condition{}, false) sentinel, never a nil
+// meaningful to report; "no condition" is the (runtimecontract.Condition{}, false) sentinel, never a nil
 // pointer. The message is a curated peer count, never a raw dump.
-func sampleWireGuardCondition(now time.Time) (model.Condition, bool) {
+func sampleWireGuardCondition(now time.Time) (runtimecontract.Condition, bool) {
 	out, err := wgShowFn()
 	if err != nil {
-		return model.Condition{}, false // best-effort: no probe, no condition, no cycle failure
+		return runtimecontract.Condition{}, false // best-effort: no probe, no condition, no cycle failure
 	}
 	reason, status, msg := classifyWGDump(out, now)
 	if reason == "" {
-		return model.Condition{}, false
+		return runtimecontract.Condition{}, false
 	}
-	return classify(model.ConditionTypeWireGuard, status, reason, msg, now), true
+	return classify(runtimecontract.ConditionTypeWireGuard, status, reason, msg, now), true
 }
 
 // classifyWGDump is the PURE classifier over `wg show all dump` output (table-tested). The dump is a
@@ -103,20 +103,20 @@ func classifyWGDump(dump []byte, now time.Time) (reason, status, msg string) {
 	}
 	switch {
 	case interfaces == 0:
-		return reasonWGNoInterfaces, model.ConditionStatusWarn, "no WireGuard interfaces up"
+		return reasonWGNoInterfaces, runtimecontract.ConditionStatusWarn, "no WireGuard interfaces up"
 	case peers == 0:
 		return "", "", "" // interfaces but no peers: nothing meaningful to flag
 	case never == peers:
-		return reasonWGLinkDown, model.ConditionStatusWarn,
+		return reasonWGLinkDown, runtimecontract.ConditionStatusWarn,
 			"all " + strconv.Itoa(peers) + " peers down (no handshake)"
 	case never > 0:
-		return reasonWGSomePeersDown, model.ConditionStatusWarn,
+		return reasonWGSomePeersDown, runtimecontract.ConditionStatusWarn,
 			strconv.Itoa(never) + "/" + strconv.Itoa(peers) + " peers down (no handshake)"
 	case stale > 0:
-		return reasonWGPeerHandshakeStale, model.ConditionStatusWarn,
+		return reasonWGPeerHandshakeStale, runtimecontract.ConditionStatusWarn,
 			strconv.Itoa(stale) + "/" + strconv.Itoa(peers) + " peers stale (handshake aged)"
 	default:
-		return reasonWGAllPeersUp, model.ConditionStatusOK,
+		return reasonWGAllPeersUp, runtimecontract.ConditionStatusOK,
 			strconv.Itoa(peers) + "/" + strconv.Itoa(peers) + " peers up"
 	}
 }
@@ -192,7 +192,7 @@ type wireguardPeersSampler struct{}
 
 func (wireguardPeersSampler) Name() string { return "wireguard-peers" }
 
-func (wireguardPeersSampler) Sample(now time.Time) ([]model.Condition, map[string]any) {
+func (wireguardPeersSampler) Sample(now time.Time) ([]runtimecontract.Condition, map[string]any) {
 	out, err := wgShowFn()
 	if err != nil {
 		return nil, nil

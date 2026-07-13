@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // mimic_condition.go reads the mimic-provisioning breadcrumb install.sh writes
@@ -19,7 +20,7 @@ import (
 
 // mimicReason* are the closed set of CamelCase reason codes returned by classifyMimic — the curated
 // classification of install.sh's breadcrumb outcome (plain string constants; classifyMimic returns
-// string, matching the model.ConditionStatus*/ConditionType* idiom).
+// string, matching the runtimecontract.ConditionStatus*/ConditionType* idiom).
 const (
 	mimicReasonActive            = "Active"
 	mimicReasonKernelTooOld      = "KernelTooOld"
@@ -73,41 +74,41 @@ type mimicBreadcrumb struct {
 func classifyMimic(outcome string) (reason, status, message string) {
 	switch outcome {
 	case model.MimicOutcomeActive:
-		return mimicReasonActive, model.ConditionStatusOK, "mimic TCP-shaping active"
+		return mimicReasonActive, runtimecontract.ConditionStatusOK, "mimic TCP-shaping active"
 	case model.MimicOutcomeKernelTooOld:
-		return mimicReasonKernelTooOld, model.ConditionStatusWarn, "Mimic unavailable: kernel lacks eBPF"
+		return mimicReasonKernelTooOld, runtimecontract.ConditionStatusWarn, "Mimic unavailable: kernel lacks eBPF"
 	case model.MimicOutcomeEbpfLoad:
-		return mimicReasonEbpfLoadFailed, model.ConditionStatusWarn, "Mimic eBPF load failed"
+		return mimicReasonEbpfLoadFailed, runtimecontract.ConditionStatusWarn, "Mimic eBPF load failed"
 	case model.MimicOutcomeInstallFailed:
-		return mimicReasonInstallFailed, model.ConditionStatusWarn, "Mimic install failed"
+		return mimicReasonInstallFailed, runtimecontract.ConditionStatusWarn, "Mimic install failed"
 	case model.MimicOutcomeFellBackToUDP:
-		return mimicReasonFellBackToUDP, model.ConditionStatusWarn, "Mimic: fell back to plain UDP"
+		return mimicReasonFellBackToUDP, runtimecontract.ConditionStatusWarn, "Mimic: fell back to plain UDP"
 	case model.MimicOutcomeEgressUnresolved:
-		return mimicReasonEgressUnresolved, model.ConditionStatusWarn, "Mimic: no routable egress IP"
+		return mimicReasonEgressUnresolved, runtimecontract.ConditionStatusWarn, "Mimic: no routable egress IP"
 	case model.MimicOutcomeNativeDowngraded:
 		// mimic IS active (skb mode) — not a degradation of function, only of the requested XDP mode;
 		// OK status (the link works) with a distinct reason so the operator sees native did not take.
-		return mimicReasonNativeDowngraded, model.ConditionStatusOK, "Mimic active (skb; native XDP unsupported on this NIC)"
+		return mimicReasonNativeDowngraded, runtimecontract.ConditionStatusOK, "Mimic active (skb; native XDP unsupported on this NIC)"
 	case model.MimicOutcomeModuleUnavailable:
 		// The .deb installed but the DKMS kernel module isn't built/loadable for the running kernel
 		// (e.g. a stale kernel whose linux-headers were pruned). mimic can't run; honor-policy handled
 		// it in install.sh (udp degraded / none failed closed) — surface WHY with a reboot hint.
-		return mimicReasonModuleUnavailable, model.ConditionStatusWarn, "Mimic: kernel module unavailable (reboot into the current kernel, or set mimic_fallback=udp)"
+		return mimicReasonModuleUnavailable, runtimecontract.ConditionStatusWarn, "Mimic: kernel module unavailable (reboot into the current kernel, or set mimic_fallback=udp)"
 	default:
-		return mimicReasonUnknown, model.ConditionStatusWarn, "Mimic status unrecognized"
+		return mimicReasonUnknown, runtimecontract.ConditionStatusWarn, "Mimic status unrecognized"
 	}
 }
 
-// readMimicCondition reads the breadcrumb at path and returns the `mimic` model.Condition the report
-// should carry, or (model.Condition{}, false) when the breadcrumb is absent (no tcp link / never
+// readMimicCondition reads the breadcrumb at path and returns the `mimic` runtimecontract.Condition the report
+// should carry, or (runtimecontract.Condition{}, false) when the breadcrumb is absent (no tcp link / never
 // provisioned). A malformed/garbled breadcrumb yields a generic warn condition (not a crash). The
-// Condition is built via classify() (plan-1) so the message is capped at model.ConditionMessageMax at
+// Condition is built via classify() (plan-1) so the message is capped at runtimecontract.ConditionMessageMax at
 // the single chokepoint; Since is the breadcrumb ts when parseable, else now. path is injectable so
 // tests never touch /var/lib.
-func readMimicCondition(path string, now time.Time) (model.Condition, bool) {
+func readMimicCondition(path string, now time.Time) (runtimecontract.Condition, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return model.Condition{}, false // ENOENT (no mimic link) or unreadable → no condition
+		return runtimecontract.Condition{}, false // ENOENT (no mimic link) or unreadable → no condition
 	}
 	var bc mimicBreadcrumb
 	// A garbled breadcrumb is classified as an unknown outcome (generic warn), never a crash.
@@ -118,7 +119,7 @@ func readMimicCondition(path string, now time.Time) (model.Condition, bool) {
 	// live-down state instead of a stale "active" — so `systemctl stop mimic@` or a runtime crash
 	// surfaces in the panel rather than a frozen apply-time snapshot.
 	if bc.Egress != "" && expectsMimicRunning(bc.Outcome) && !mimicUnitActiveFn(bc.Egress) {
-		reason, status, message = mimicReasonStopped, model.ConditionStatusWarn, "Mimic unit not running (was active at deploy)"
+		reason, status, message = mimicReasonStopped, runtimecontract.ConditionStatusWarn, "Mimic unit not running (was active at deploy)"
 	}
 	since := now
 	if bc.TS != "" {
@@ -126,5 +127,5 @@ func readMimicCondition(path string, now time.Time) (model.Condition, bool) {
 			since = t
 		}
 	}
-	return classify(model.ConditionTypeMimic, status, reason, message, since), true
+	return classify(runtimecontract.ConditionTypeMimic, status, reason, message, since), true
 }

@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -61,7 +61,7 @@ type reportRequestJSON struct {
 	// AgentVersion is the reporting agent's build version (omitempty; "" from a legacy agent).
 	AgentVersion string `json:"agent_version,omitempty"`
 	// Conditions is the structured feedback set (plan-1); omitempty — absent from a legacy agent.
-	Conditions []model.Condition `json:"conditions,omitempty"`
+	Conditions []runtimecontract.Condition `json:"conditions,omitempty"`
 }
 
 // telemetryRequestJSON is the POST /telemetry body (beta9-smoke-hardening plan-1): a LIVE health
@@ -71,9 +71,9 @@ type reportRequestJSON struct {
 // Metrics is the framework's extension slot (e.g. wireguard_peers — the per-peer link detail);
 // RecordTelemetry persists it wholesale and HandleNodes serves it verbatim under node.telemetry.
 type telemetryRequestJSON struct {
-	Conditions   []model.Condition          `json:"conditions,omitempty"`
-	Metrics      map[string]json.RawMessage `json:"metrics,omitempty"`
-	AgentVersion string                     `json:"agent_version,omitempty"`
+	Conditions   []runtimecontract.Condition `json:"conditions,omitempty"`
+	Metrics      map[string]json.RawMessage  `json:"metrics,omitempty"`
+	AgentVersion string                      `json:"agent_version,omitempty"`
 }
 
 // stageResponseJSON is the wire form of a stage result.
@@ -124,7 +124,7 @@ type topologyVersionsResponseJSON struct {
 }
 
 // conditionJSON is the operator-facing view of one structured Node Condition (plan-1's
-// model.Condition + the controller's server stamp). It is the curated channel that replaces panel
+// runtimecontract.Condition + the controller's server stamp). It is the curated channel that replaces panel
 // string-matching of the free-form last_health line: status drives the badge color, reason is the
 // closed CamelCase code, message is the single length-capped human line (NEVER a raw stderr dump).
 // observed_at is the controller's receive stamp (server truth, not agent-clock). All plain data; no

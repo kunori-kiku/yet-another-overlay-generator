@@ -5,17 +5,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // findCond returns the first condition of the given type, or false.
-func findCond(conds []model.Condition, typ string) (model.Condition, bool) {
+func findCond(conds []runtimecontract.Condition, typ string) (runtimecontract.Condition, bool) {
 	for _, c := range conds {
 		if c.Type == typ {
 			return c, true
 		}
 	}
-	return model.Condition{}, false
+	return runtimecontract.Condition{}, false
 }
 
 // TestCollectConditions_Funnel proves collectConditions fans in all three sources through the single
@@ -33,7 +33,7 @@ func TestCollectConditions_Funnel(t *testing.T) {
 	if len(bare) != 1 {
 		t.Fatalf("bare cycle: len = %d, want 1 (configapply only): %+v", len(bare), bare)
 	}
-	if _, ok := findCond(bare, model.ConditionTypeConfigApply); !ok {
+	if _, ok := findCond(bare, runtimecontract.ConditionTypeConfigApply); !ok {
 		t.Fatalf("bare cycle missing configapply: %+v", bare)
 	}
 
@@ -43,13 +43,13 @@ func TestCollectConditions_Funnel(t *testing.T) {
 	prev := &State{PendingUpdate: &PendingUpdate{To: "v2.0.0-beta.9", Confirmed: true}}
 	full := collectConditions(prev, false, now)
 
-	if ca, ok := findCond(full, model.ConditionTypeConfigApply); !ok || ca.Reason != "DegradedKeepingLastGood" {
+	if ca, ok := findCond(full, runtimecontract.ConditionTypeConfigApply); !ok || ca.Reason != "DegradedKeepingLastGood" {
 		t.Fatalf("expected degraded configapply, got %+v", full)
 	}
-	if su, ok := findCond(full, model.ConditionTypeSelfUpdate); !ok || su.Reason != reasonSelfUpdateProbationary {
+	if su, ok := findCond(full, runtimecontract.ConditionTypeSelfUpdate); !ok || su.Reason != reasonSelfUpdateProbationary {
 		t.Fatalf("expected selfupdate/Probationary, got %+v", full)
 	}
-	if wg, ok := findCond(full, model.ConditionTypeWireGuard); !ok || wg.Reason != reasonWGAllPeersUp {
+	if wg, ok := findCond(full, runtimecontract.ConditionTypeWireGuard); !ok || wg.Reason != reasonWGAllPeersUp {
 		t.Fatalf("expected wireguard/AllPeersUp, got %+v", full)
 	}
 }

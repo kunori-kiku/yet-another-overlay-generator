@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // FileStore is a JSON-on-disk Store implementation, durable for the single-tenant
@@ -647,7 +647,7 @@ func (fs *FileStore) listNodesLocked(dir string) ([]Node, error) {
 // checksum, health, the reported agent build version, and the structured conditions
 // set). An empty agentVersion (a legacy agent) leaves the stored version untouched;
 // conditions are server-stamped with observedAt and a nil/empty slice clears the set.
-func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []model.Condition, observedAt time.Time) error {
+func (fs *FileStore) SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []runtimecontract.Condition, observedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -783,7 +783,7 @@ func cloneMetrics(in map[string]json.RawMessage) map[string]json.RawMessage {
 // vector). Node existence is confirmed with a metadata-only os.Stat (a corrupt-but-present record no
 // longer fails a heartbeat, which is strictly better — telemetry never writes the file). A monotonic
 // writtenAt guard drops a stale write so a concurrent /report's fresher conditions win.
-func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
+func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

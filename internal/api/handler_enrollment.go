@@ -15,7 +15,7 @@ import (
 )
 
 // mapConditions projects the stored controller.NodeCondition slice onto the operator wire view
-// (plan-2). nil/empty in => nil out (omitempty drops the field). It reads the embedded model.Condition
+// (plan-2). nil/empty in => nil out (omitempty drops the field). It reads the embedded runtimecontract.Condition
 // fields plus the wrapper's server-stamped ObservedAt, copying verbatim — the curation/length-cap
 // already happened at ingest (handler_agent), so this is pure projection, no re-classification.
 func mapConditions(cs []controller.NodeCondition) []conditionJSON {

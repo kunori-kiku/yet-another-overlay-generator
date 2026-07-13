@@ -30,9 +30,9 @@ var pureCore = []string{
 }
 
 // forbidden are the stateful package roots the pure core must never import. Each match is
-// a boundary violation. internal/runtimecontract does not exist yet (framework-refactor
-// plan-1 creates it, to which model.Condition is evicted); it is listed now so a future
-// pure-core -> runtimecontract edge is a red build the moment it appears.
+// a boundary violation. internal/runtimecontract holds model.Condition (evicted from the
+// pure model leaf by framework-refactor plan-1); it is listed so a pure-core -> runtimecontract
+// edge is a red build the moment one appears.
 var forbidden = []string{
 	"internal/controller",
 	"internal/api",

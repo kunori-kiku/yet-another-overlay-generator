@@ -11,7 +11,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // HandleEnroll runs the node-enrollment ceremony. It requires NO bearer token (it
@@ -235,13 +235,13 @@ const (
 // Message longer than the model cap, or any single condition whose total field bytes exceed the cap is
 // rejected (the agent enforces these, but the server must not trust the client). Returns nil when
 // within bounds.
-func validateConditions(conds []model.Condition) *apierr.Error {
+func validateConditions(conds []runtimecontract.Condition) *apierr.Error {
 	if len(conds) > maxReportedConditions {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
 	}
 	for i := range conds {
 		c := conds[i]
-		if len([]rune(c.Message)) > model.ConditionMessageMax {
+		if len([]rune(c.Message)) > runtimecontract.ConditionMessageMax {
 			return apierr.New(apierr.CodeReqFieldInvalid).With("field", "conditions")
 		}
 		if len(c.Type)+len(c.Status)+len(c.Reason)+len(c.Message)+len(c.Since) > maxConditionBytes {

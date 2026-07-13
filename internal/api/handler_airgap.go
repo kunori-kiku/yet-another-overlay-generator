@@ -38,6 +38,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
@@ -261,6 +262,18 @@ func (h *Handler) HandleDeployScript(w http.ResponseWriter, r *http.Request) {
 // path carries no HTTP deadline); the allocator's per-node scan budget remains the DoS
 // bound for an over-large CIDR.
 func (h *Handler) airGapRequest(topo *model.Topology) (localcompile.CompileRequest, error) {
+	// Pre-heal any cross-link pin collision BEFORE compiling — mirroring the controller's
+	// CompileAndStage pre-heal (internal/controller/compile.go) — so the anonymous air-gap routes
+	// (/api/compile, /api/export, /api/deploy-script) converge on the SAME healed compile the
+	// controller produces, closing the divergence where the air-gap path skipped heal (a
+	// colliding-pin design compiled differently on the anonymous vs controller path). Heal is
+	// applied at the KNOWN entry points (controller stage + update-topology save + canvas load +
+	// here); localcompile's semantic validator DELIBERATELY stays the LOUD safety net for any
+	// un-healed corruption that reaches the compiler by another path (the C2 design —
+	// docs/spec/rc1/3.4-findings.md; internal/edgecase/c2_reenable_test.go). The air-gap topology
+	// is parsed fresh from the request body, so healing it in place is confined to this request.
+	normalize.HealCollidingPins(topo)
+
 	fetch, err := render.FetchSettingsFromEnv()
 	if err != nil {
 		return localcompile.CompileRequest{}, err

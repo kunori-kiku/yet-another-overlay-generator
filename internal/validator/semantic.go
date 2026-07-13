@@ -269,7 +269,7 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 // defaultListenPort is the single base port for per-peer interface allocation; it must match
 // peers.go's lowestFreePort base (51820). per-node listen_port has been removed -- it is meaningless
 // under the per-peer model.
-const defaultListenPort = 51820
+const defaultListenPort = allocconst.WGListenPortBase
 
 // effectivePortRange describes the listen-port range a node actually occupies under the per-peer
 // interface model.

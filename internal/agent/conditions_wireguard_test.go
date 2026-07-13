@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // ifaceLine / peerLine build `wg show all dump` rows (tab-separated, interface-prefixed): an interface
@@ -30,19 +30,19 @@ func TestClassifyWGDump(t *testing.T) {
 		wantReason string
 		wantStatus string
 	}{
-		{"no interfaces", "", reasonWGNoInterfaces, model.ConditionStatusWarn},
+		{"no interfaces", "", reasonWGNoInterfaces, runtimecontract.ConditionStatusWarn},
 		{"interface, no peers", ifaceLine("wg-a"), "", ""},
-		{"single peer never handshaked (all down)", ifaceLine("wg-a") + "\n" + peerLine("wg-a", 0), reasonWGLinkDown, model.ConditionStatusWarn},
+		{"single peer never handshaked (all down)", ifaceLine("wg-a") + "\n" + peerLine("wg-a", 0), reasonWGLinkDown, runtimecontract.ConditionStatusWarn},
 		{"ALL peers never handshaked", ifaceLine("wg-a") + "\n" + peerLine("wg-a", 0) + "\n" + ifaceLine("wg-b") + "\n" + peerLine("wg-b", 0),
-			reasonWGLinkDown, model.ConditionStatusWarn},
-		{"peer stale", ifaceLine("wg-a") + "\n" + peerLine("wg-a", stale), reasonWGPeerHandshakeStale, model.ConditionStatusWarn},
-		{"all peers up", ifaceLine("wg-a") + "\n" + peerLine("wg-a", fresh), reasonWGAllPeersUp, model.ConditionStatusOK},
+			reasonWGLinkDown, runtimecontract.ConditionStatusWarn},
+		{"peer stale", ifaceLine("wg-a") + "\n" + peerLine("wg-a", stale), reasonWGPeerHandshakeStale, runtimecontract.ConditionStatusWarn},
+		{"all peers up", ifaceLine("wg-a") + "\n" + peerLine("wg-a", fresh), reasonWGAllPeersUp, runtimecontract.ConditionStatusOK},
 		// One offline peer among up peers must NOT flip the whole node to LinkDown — it is SomePeersDown.
 		{"some peers down (one never, one up)", ifaceLine("wg-a") + "\n" + peerLine("wg-a", 0) + "\n" + ifaceLine("wg-b") + "\n" + peerLine("wg-b", fresh),
-			reasonWGSomePeersDown, model.ConditionStatusWarn},
+			reasonWGSomePeersDown, runtimecontract.ConditionStatusWarn},
 		// never (partial) outranks stale.
 		{"some-never beats stale", ifaceLine("wg-a") + "\n" + peerLine("wg-a", 0) + "\n" + ifaceLine("wg-b") + "\n" + peerLine("wg-b", stale),
-			reasonWGSomePeersDown, model.ConditionStatusWarn},
+			reasonWGSomePeersDown, runtimecontract.ConditionStatusWarn},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,7 +137,7 @@ func TestSampleWireGuardCondition_BestEffort(t *testing.T) {
 	dump := ifaceLine("wg-a") + "\n" + peerLine("wg-a", now.Add(-10*time.Second).Unix())
 	wgShowFn = func() ([]byte, error) { return []byte(dump), nil }
 	c, has := sampleWireGuardCondition(now)
-	if !has || c.Type != model.ConditionTypeWireGuard || c.Reason != reasonWGAllPeersUp || c.Status != model.ConditionStatusOK {
+	if !has || c.Type != runtimecontract.ConditionTypeWireGuard || c.Reason != reasonWGAllPeersUp || c.Status != runtimecontract.ConditionStatusOK {
 		t.Fatalf("good dump: has=%v cond=%+v, want wireguard/AllPeersUp/ok", has, c)
 	}
 }

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // tokenHash returns the hex SHA-256 of a plaintext, matching the on-the-wire
@@ -259,19 +259,19 @@ func TestStoreRecordTelemetry(t *testing.T) {
 			}
 			// Establish a deploy-status baseline via the apply path.
 			applyAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
-			applyCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusWarn, Reason: "LinkDown", Message: "0/2 peers", Since: "2026-06-23T12:00:00Z"}
-			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 9, "checksum-9", "applied", "v2.0.0-beta.9", []model.Condition{applyCond}, applyAt); err != nil {
+			applyCond := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusWarn, Reason: "LinkDown", Message: "0/2 peers", Since: "2026-06-23T12:00:00Z"}
+			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 9, "checksum-9", "applied", "v2.0.0-beta.9", []runtimecontract.Condition{applyCond}, applyAt); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 
 			// A telemetry heartbeat with FRESH conditions + an extensible metrics map + a new version
 			// + a later observed-at.
 			beatAt := time.Date(2026, 6, 23, 12, 0, 30, 0, time.UTC)
-			liveCond := model.Condition{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
+			liveCond := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 peers up", Since: "2026-06-23T12:00:25Z"}
 			metrics := map[string]json.RawMessage{
 				"wireguard_peers": json.RawMessage(`[{"peer":"bravo","interface":"wg-bravo","last_handshake":1782820825,"status":"up"}]`),
 			}
-			if err := s.RecordTelemetry(ctx, tenant, "alpha", []model.Condition{liveCond}, metrics, "v2.0.0-beta.10", beatAt); err != nil {
+			if err := s.RecordTelemetry(ctx, tenant, "alpha", []runtimecontract.Condition{liveCond}, metrics, "v2.0.0-beta.10", beatAt); err != nil {
 				t.Fatalf("RecordTelemetry: %v", err)
 			}
 			got, err := s.GetNode(ctx, tenant, "alpha")
@@ -742,12 +742,12 @@ func TestStoreAgentReports(t *testing.T) {
 			}
 
 			obsAt := time.Date(2026, 6, 8, 15, 29, 0, 0, time.UTC)
-			cond := model.Condition{
-				Type: model.ConditionTypeConfigApply, Status: model.ConditionStatusOK,
+			cond := runtimecontract.Condition{
+				Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK,
 				Reason: "Applied", Message: "configuration applied", Since: "2026-06-08T15:28:00Z",
 			}
 			if err := s.SetAppliedGeneration(ctx, tenant, "alpha", 7, "checksum-7", "healthy", "v2.0.0-beta.1",
-				[]model.Condition{cond}, obsAt); err != nil {
+				[]runtimecontract.Condition{cond}, obsAt); err != nil {
 				t.Fatalf("SetAppliedGeneration: %v", err)
 			}
 			seen := time.Date(2026, 6, 8, 15, 30, 0, 0, time.UTC)
@@ -780,7 +780,7 @@ func TestStoreAgentReports(t *testing.T) {
 				t.Fatalf("Conditions length = %d, want 1", len(got.Conditions))
 			}
 			gc := got.Conditions[0]
-			if gc.Type != model.ConditionTypeConfigApply || gc.Status != model.ConditionStatusOK ||
+			if gc.Type != runtimecontract.ConditionTypeConfigApply || gc.Status != runtimecontract.ConditionStatusOK ||
 				gc.Reason != "Applied" || gc.Message != "configuration applied" || gc.Since != "2026-06-08T15:28:00Z" {
 				t.Fatalf("Condition payload not preserved: %+v", gc)
 			}

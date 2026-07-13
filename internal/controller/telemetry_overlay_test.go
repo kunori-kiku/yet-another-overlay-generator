@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // TestStoreTelemetryOverlay (plan-5 F3) pins the telemetry channel across BOTH Store impls: a heartbeat
@@ -34,7 +34,7 @@ func TestStoreTelemetryOverlay(t *testing.T) {
 				t.Fatalf("UpsertNode: %v", err)
 			}
 
-			conds := []model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 up"}}
+			conds := []runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 up"}}
 			metrics := map[string]json.RawMessage{"resource": json.RawMessage(`{"load1":0.5}`)}
 			if err := s.RecordTelemetry(ctx, tenant, "node-1", conds, metrics, "v-new", base); err != nil {
 				t.Fatalf("RecordTelemetry: %v", err)
@@ -126,7 +126,7 @@ func TestFileStoreTelemetryNoFsync(t *testing.T) {
 
 	base := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	if err := s.RecordTelemetry(ctx, tenant, "node-1",
-		[]model.Condition{{Type: model.ConditionTypeWireGuard, Status: model.ConditionStatusOK, Message: "up"}},
+		[]runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Message: "up"}},
 		map[string]json.RawMessage{"resource": json.RawMessage(`{"load1":1}`)}, "v-new", base); err != nil {
 		t.Fatalf("RecordTelemetry: %v", err)
 	}

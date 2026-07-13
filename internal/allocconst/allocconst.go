@@ -35,8 +35,15 @@ const DefaultTransitCIDR = "10.10.0.0/24"
 // docs/spec/artifacts/babel.md (Link cost resolution).
 const BackupDefaultLinkCost = 384
 
+// WGListenPortBase is the fixed base port from which per-peer WireGuard listen ports are
+// auto-allocated (the lowest candidate; the allocator skips used values upward). Per-node
+// listen_port has been removed, so this base is uniform across the fleet. It is the single
+// value the compiler's port allocator and the validator's pin/port checks MUST agree on —
+// hoisted here (framework-refactor plan-1) so the two can no longer drift a hardcoded 51820.
+const WGListenPortBase = 51820
+
 // MinPinnedPort is the lower bound for an OPERATOR-CHOSEN pinned listen port
-// (PR7). Auto-allocation still starts at the default listen port (51820), but a
+// (PR7). Auto-allocation still starts at the default listen port (WGListenPortBase, 51820), but a
 // port-restricted NAT VPS often only forwards a fixed range below 51820 (e.g.
 // 30000-30100), and the internal listen port must fall inside that range for
 // the external->internal forward to work — so a manual pin may legitimately go

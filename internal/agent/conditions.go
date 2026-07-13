@@ -4,25 +4,26 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 // conditions.go is the agent-side condition collector (plan-1). It turns the per-cycle apply
-// outcome into the structured model.Condition set the agent reports about itself. The single
+// outcome into the structured runtimecontract.Condition set the agent reports about itself. The single
 // classify() chokepoint enforces the curation + message-cap invariant so every emitter (plan-1
 // configapply, plan-3 selfupdate/wireguard, plan-5 mimic) funnels through one place.
 
-// classify maps a (type, status, reason, detail) tuple into a curated model.Condition with a
+// classify maps a (type, status, reason, detail) tuple into a curated runtimecontract.Condition with a
 // SINGLE, length-capped Message — never a raw multi-line stderr dump (the curation invariant, HIGH
 // for this subject). It is the one chokepoint every condition emitter funnels through, so the
 // curation + message-cap invariant is enforced in ONE place. detail is the human line the caller
 // already curated (e.g. "kernel lacks eBPF"); classify never reads err.Error() itself — it caps and
 // stamps what it is given.
-func classify(condType, status, reason, detail string, since time.Time) model.Condition {
+func classify(condType, status, reason, detail string, since time.Time) runtimecontract.Condition {
 	msg := detail
-	if r := []rune(msg); len(r) > model.ConditionMessageMax {
-		msg = string(r[:model.ConditionMessageMax])
+	if r := []rune(msg); len(r) > runtimecontract.ConditionMessageMax {
+		msg = string(r[:runtimecontract.ConditionMessageMax])
 	}
-	return model.Condition{
+	return runtimecontract.Condition{
 		Type:    condType,
 		Status:  status,
 		Reason:  reason,
@@ -37,12 +38,12 @@ func classify(condType, status, reason, detail string, since time.Time) model.Co
 //
 // Every detail string is a Go-emitted constant — never prev.LastError / err.Error() (the curation
 // invariant).
-func configApplyCondition(ok bool, now time.Time) model.Condition {
+func configApplyCondition(ok bool, now time.Time) runtimecontract.Condition {
 	if ok {
-		return classify(model.ConditionTypeConfigApply, model.ConditionStatusOK,
+		return classify(runtimecontract.ConditionTypeConfigApply, runtimecontract.ConditionStatusOK,
 			"Applied", "configuration applied", now)
 	}
-	return classify(model.ConditionTypeConfigApply, model.ConditionStatusWarn,
+	return classify(runtimecontract.ConditionTypeConfigApply, runtimecontract.ConditionStatusWarn,
 		"DegradedKeepingLastGood", "keeping last-good configuration", now)
 }
 
@@ -53,8 +54,8 @@ func configApplyCondition(ok bool, now time.Time) model.Condition {
 // apply outcome (ok), the selfupdate condition is derived from prev (whose Health still holds a
 // terminal marker the new state resets — see selfUpdateCondition), and the wireguard condition is a
 // best-effort `wg show` sample that yields nothing on a probe error (never fails a cycle).
-func collectConditions(prev *State, ok bool, now time.Time) []model.Condition {
-	conds := []model.Condition{configApplyCondition(ok, now)}
+func collectConditions(prev *State, ok bool, now time.Time) []runtimecontract.Condition {
+	conds := []runtimecontract.Condition{configApplyCondition(ok, now)}
 	if c, has := selfUpdateCondition(prev, now); has {
 		conds = append(conds, c)
 	}
