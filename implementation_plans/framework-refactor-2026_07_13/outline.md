@@ -243,7 +243,7 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 1.5 | Single-source the export bundle file-set (custody) | ✅ merged | #262 |
 | 1.6 | Lock the air-gap handler pre-heal (regression test) | ✅ merged | #263 |
 | 2 | Stateful god-file splits (no logic change) | ✅ merged | #264 |
-| 3 | WASM add-alongside + PERMANENT gate | 🔄 in review | this PR |
+| 3 | WASM add-alongside + PERMANENT gate | ✅ merged | #266 |
 | 4 | Flip WASM default + soak | pending | — |
 | 5 | Delete the TS twin + shed deps + free pure-core splits | pending | — |
 | 6 | Go-only renderer hygiene (ShellToken seam) | pending | — |
