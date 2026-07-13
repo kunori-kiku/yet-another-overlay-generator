@@ -1,24 +1,32 @@
 # STATUS
-<!-- regenerated: 2026-07-04 -->
-<!-- by: hand — v2.0.0-rc.4 = GitHub Latest; NEW subject telemetry-history-and-delta-deploy DRAFTED (plans-only) -->
+<!-- regenerated: 2026-07-13 -->
+<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; subject telemetry-history-and-delta-deploy DELIVERED + archived -->
 
 ## Active work
 
-- **📝 SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DRAFTED 2026-07-13 (plans-only per
-  owner budget; execution starts on the owner's go); ships as `v2.0.0-rc.5`.** Two owner-requested
-  features, assessed in code: **(A) CPU/RAM history as charts** — `RecordTelemetry` is memory-only BY
-  DESIGN (heartbeats never force disk writes, `filestore.go:751-758`), so history = a new bounded
-  path: per-node ring → periodic flush → raw JSONL + a CONFIGURABLE hard cap (fleet setting);
-  query API aggregates server-side at any step; agent gains true `cpu_pct` (/proc/stat delta);
-  panel charts via **Recharts wrapped in a series-generic `TimeSeriesChart`** (owner: reusable — ping
-  data later). **(B) delta deploy** — ROOT CAUSE verified: the agent already skips equal checksums but
-  only at gen ≤ cursor (`cycle.go:159-178`); Deploy stages EVERY node at a new generation → all
-  refresh. Fix = controller-side per-node skip (digest = `hex(sha256(checksums.sha256))`, already the
-  off-host identity; bundles per-node `Generation`) + Force (per-node/fleet) + pre-deploy preview.
-  DANGER ZONE: keystone promote/serve with mixed generations (plan-5 proves the seam first;
-  plan-5.5 = STOP-LOSS). 8 plans:
-  [`implementation_plans/telemetry-history-and-delta-deploy-2026_07_13/`](implementation_plans/telemetry-history-and-delta-deploy-2026_07_13/outline.md).
-  **NEXT = plan-1 (`feat/telemetry-cpu-pct`) on the owner's go.**
+- **✅ SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DELIVERED as `v2.0.0-rc.5` (GitHub
+  *Latest*, 2026-07-13; annotated tag on `ac3d660`; rc.4 demoted; self-promoted; 29 assets);
+  CLOSED + archived to `_completed/`.** All 8 plans merged (PRs #249–#257), each independently
+  workflow-reviewed → fixed → re-reviewed → CI-green → merged. **(A) Resource history + charts** — agent
+  `cpu_pct` (stateful `/proc/stat` jiffies delta; first-beat gap, never a fabricated 0); controller
+  keeps a bounded per-node history (in-memory O(1) append — the heartbeat NEVER fsyncs — + a 5-min
+  off-heartbeat flusher → append-only per-node JSONL with amortized compaction; configurable cap
+  `TelemetryHistoryCap` nil⇒20160≈7d/0⇒off, a persisted 0 surviving restart via `capLoader`); operator
+  `node-history` query aggregates server-side (avg/min/max, gaps omitted, step floor 1s/widen ≤1000);
+  panel charts via lazy Recharts behind a reusable series-generic `TimeSeriesChart`. **(B) Delta deploy**
+  — per-node skip on `hex(sha256(checksums.sha256))` (excludes volatile `compiled_at`) → unchanged node
+  keeps its generation → its agent never re-fetches (mixed-gen fleet); FAIL-OPEN; keystone-aware disable
+  on first-pin/rotation; zero-changed short-circuit PURGES lingering staged bundles; `WithForceAll`/
+  `WithForceNodes` (drift/rescue) + `DeployPreview` (canvas dry-run, best-effort "Deploy anyway").
+  **(plan-1.5) Telemetry-freshness FRAMEWORK fix** for the recurring "a new metric only fires at deploy
+  time, then freezes" class: metrics ride the `Sampler` heartbeat as the SOLE producer (`/report` =
+  conditions only) + a coalescing post-apply kick; conditions stay dual-write. Review caught 3 real
+  defects pre-merge (plan-5 zero-changed custody blocker; plan-6 preview-vs-canvas mismatch + hard-block;
+  plan-7 doc "single producer of conditions" overstatement). Memory:
+  `telemetry-history-and-delta-deploy-shipped.md`. **Owed (owner): update the controller to rc.5 +
+  browser-smoke the charts (granularities + cap incl. 0=off) and delta deploy (unchanged topology →
+  "0 updated, N unchanged", NO node refresh; change one → only it refreshes; Force redeploys an unchanged
+  node). A defect during the rc.5 soak → rc.6 under the same gate rules.**
 
 - **✅ SUBJECT `mimic-fleet-robustness-2026_07_07` — DELIVERED as `v2.0.0-rc.4` (GitHub *Latest*,
   2026-07-07; tag on `cbe0735`; rc.3 demoted; self-promoted); CLOSED + archived to `_completed/`.**
@@ -346,46 +354,53 @@
 
 ## Next actions
 
-**rc.1 is out. The road to GA (all owner-paced):**
-1. **Soak `v2.0.0-rc.1` on the live fleet** — it is Latest; agents self-update on the next
-   rollout re-arm. Any confirmed defect during the soak → fix → `v2.0.0-rc.2` (a red required
-   gate or a new blocker never tags over — the gate doc's rules stand).
-2. **rc.2 backlog (deliberate deferrals, unchanged):** FileStore host-loss SPOF
-   (backup/restore/HA — see the persisted encrypted-object-storage plan), bootstrap-TOFU
-   first-fetch pinning + operator-cred OOB delivery, the pinned-endpoint anti-roaming re-assert
-   option (owner decision open), the `EDGE_OMITEMPTY` `mimic_fallback` canonicalization gap, the
-   CHANGELOG footer's missing beta.10–16 compare links (cosmetic), and the Dockerfile-vs-go.mod
-   toolchain alignment note.
-3. **GA when the rc line has soaked clean** — per `RELEASING.md`'s ramp.
+**`v2.0.0-rc.5` is GitHub Latest (the `telemetry-history-and-delta-deploy` subject). The road to GA
+(all owner-paced):**
+1. **Soak `v2.0.0-rc.5` on the live fleet.** Owner owes: update the controller to rc.5 + browser-smoke
+   the new surfaces — the node-detail CPU/RAM/load charts (several granularities + the retention cap
+   incl. `0`=off) and delta deploy (deploy an UNCHANGED topology → "0 updated, N unchanged" with NO node
+   refresh / `wg show` handshakes undisturbed; change one node → only it re-stages; Force redeploys an
+   unchanged node). Any confirmed defect during the soak → fix → `v2.0.0-rc.6` (a red required gate or a
+   new blocker never tags over — the gate doc's rules stand).
+2. **STILL owed from rc.4:** update the controller + redeploy the affected fleet nodes (the mimic
+   build-dep fix — `bubblewrap`+`dwarves` — is in the rendered `install.sh`, NOT the agent binary) + set
+   L7-relay edges to `transport: udp`. The same controller-update covers rc.5's smoke.
+3. **rc.x backlog (deliberate deferrals, unchanged):** FileStore host-loss SPOF (backup/restore/HA — see
+   the persisted encrypted-object-storage plan), bootstrap-TOFU first-fetch pinning + operator-cred OOB
+   delivery, the pinned-endpoint anti-roaming re-assert option (owner decision open), the `EDGE_OMITEMPTY`
+   `mimic_fallback` canonicalization gap, the CHANGELOG footer's missing beta.10–16 compare links
+   (cosmetic), the auto-coordinated mimic fallback (deferred), and the Dockerfile-vs-go.mod toolchain
+   alignment note.
+4. **GA when the rc line has soaked clean** — per `RELEASING.md`'s ramp.
 
 Operational note (unchanged): a CI job display-name change silently orphans its required
 branch-protection context — update protection in the same PR as any `name:` edit in `ci.yml`.
 
-Separate from the release: the owner's live WireGuard-endpoint symptom is a fleet **NAT/roaming**
-matter — the deterministic in-product fix is the `link-directionality` subject above (single-link
-the edge so the reverse peer can never race the relay); operational alternatives remain (a)
-advertise the accelerator as the node's `public_endpoints`
-so BOTH link directions ride the relay (an L7 connection-terminating relay needs a local UDP-over-its-
-transport wrapper + WG endpoint = `127.0.0.1:<port>`), and (b) confirm the agent is actually applying
-deploys (`applied` vs `desired` generation; `install.sh` DOES full down→up WG then restart babeld, so a
-stale interface means the apply didn't run, not that deploy skips the restart). A `journalctl -u
-yaog-agent` slice would pin which. Any resulting apply-path fix is a post-beta.17 change.
+Historical (rc.1 shipped 2026-07-03, GitHub Latest at the time): the pre-rc.1 program (Subjects 1–4,
+PRs #137–#159), the rc.1 go/no-go gate ([`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md), closed
+GO with zero exceptions), and the `link-directionality` NAT/roaming fix (single-link the accelerator
+edge so the reverse peer can't race the relay; folded into rc.1) are all delivered + archived. The
+release line has since advanced preview → beta → rc through **rc.5**.
 
-**Subjects 1–4 are all delivered + merged (PRs #137–#158).** The rc.1 gate is authored and every
-*automatable* criterion is GREEN in CI (`go` incl. `-race`, `frontend`, `conformance`, `frontend-e2e`
-incl. the `@security` specs, `realtunnel`, `security-scan` incl. govulncheck). The remaining steps are
-**owner-only**, tracked in [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md):
+## Recently closed subjects (most recent first)
 
-0. ✅ DONE — `realtunnel-bakein` 20/20 + negative proof green on CI (run 27881474085, 2026-06-21).
-1. Run the three irreducible hardware smokes (`docs/spec/rc1/RUNBOOK.md` §C1 authenticator / §C2
-   real-NAT-box / §C3 mimic eBPF ≥6.1) + owed-smoke #5 (rollout UI) — pass-or-accept-risk.
-2. Set branch protection to require `go`, `frontend`, `conformance`, `frontend-e2e`, `realtunnel`.
-3. Sign the go/no-go in RC1-GATE.md, then execute the release runbook (CHANGELOG roll → annotated tag →
-   `--latest` publish → verify). rc.1 ships as GitHub **Latest** (beta.8 demoted — the 2026-06-18 owner
-   override).
-
-## Recently closed subjects (last 3)
-
+- `telemetry-history-and-delta-deploy-2026_07_13` (2026-07-13) — **8 plans, `v2.0.0-rc.5` (GitHub
+  Latest, PRs #249–#257; annotated tag on `ac3d660`; rc.4 demoted; 29 assets).** (A) per-node resource
+  history + node-detail CPU/RAM/load charts (`cpu_pct` /proc/stat delta; bounded never-fsync in-mem →
+  JSONL store; configurable cap; server-side aggregated `node-history` query; reusable `TimeSeriesChart`)
+  + (B) delta deploy (per-node `sha256(checksums.sha256)` skip → kept-generation/mixed-gen fleet;
+  fail-open; keystone-aware disable on first-pin/rotation; zero-changed PURGE; Force + best-effort canvas
+  preview) + (plan-1.5) the telemetry-freshness FRAMEWORK fix (metrics = sole heartbeat producer +
+  post-apply kick; conditions stay dual-write). Each PR workflow-reviewed → fixed → re-reviewed → green;
+  review caught 3 real defects pre-merge (plan-5 zero-changed custody blocker, plan-6 preview-vs-canvas +
+  hard-block, plan-7 doc "single producer" overstatement). Owed: owner controller-update + browser smoke.
+- `mimic-fleet-robustness-2026_07_07` (2026-07-07) — **5 plans, `v2.0.0-rc.4` (GitHub Latest at the time,
+  PRs #241–#245; tag on `cbe0735`).** Fixed the rc.3-soak mimic fleet findings: build deps
+  (`bubblewrap`+`dwarves`, which mimic-dkms's DKMS build needs but declares neither) in the provisioning
+  step AND the module-build retry; unconditional Phase-0 teardown so `tcp→udp` de-provisions the stale
+  `mimic@`; a live `mimic` condition (re-probes `systemctl is-active` each heartbeat); the
+  `validation_edge_mimic_relay_path` warning (mimic needs a direct L3/L4 path, no L7 relay). Owed: owner
+  controller-update + fleet redeploy + set L7-relay edges to `transport: udp`.
 - `mimic-runtime-reliability-2026_07_06` (2026-07-06) — **5 plans, `v2.0.0-rc.3` (GitHub Latest, PRs
   #235–#239; tag on `2ad18f2`).** Fixed the rc.2-soak mimic RUNTIME defect (a stale-kernel node looped
   on mimic exit-22 because the DKMS module was never built): module build/load VERIFICATION (not just
