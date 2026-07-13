@@ -11,9 +11,9 @@ package controller
 //   - REUSE the frozen pipeline, do not reimplement it. The compiler, renderer,
 //     and exporter stay frozen and dependency-minimal (see
 //     docs/spec/controller/persistence.md §The quarantine boundary). This step
-//     drives them exactly as the air-gap CLI/API does — render.GenerateKeys (in
-//     AgentHeld custody) → compiler.Compile → render.All → artifacts.Export — and
-//     reads the export back through a temp directory.
+//     drives them through the single shared localcompile façade (the one compile
+//     authority) — exactly as the air-gap callers do, keeping the controller's rendered
+//     bundles byte-identical — and reads the export back through a temp directory.
 //
 //   - RENDER WHAT'S READY. Only the enrolled subgraph is compiled: a topology node
 //     is included iff its registry record is NodeApproved with a non-empty

@@ -33,16 +33,18 @@ import type {
   Topology,
   ValidateResponse,
 } from '../types/topology';
+import { deployMode } from '../lib/deployMode';
 
 // localEngineEnabled reports whether LOCAL-mode compute should run in the browser via the
 // plan-4 TS compiler instead of POSTing to the Go air-gap routes. Default-ON (plan-7 Phase
 // 0.5): local mode is browser-resident unless VITE_YAOG_LOCAL_ENGINE is explicitly 'backend'
 // — unset / 'local' / anything else ⇒ true ⇒ in-browser compiler; only the exact literal
 // 'backend' opts back out to the air-gap fetch path (functional only against a `-tags airgap`
-// server). The flag is typed as 'local' | 'backend' in vite-env.d.ts so this comparison is a
-// type-checked union narrowing under `tsc -b`.
+// server). The flag now flows through the shared deploy-mode descriptor (lib/deployMode.ts, the
+// single source of truth): 'backend' ⇒ descriptor.localEngine === 'backend' ⇒ this returns false.
+// Behaviour-identical to the former direct `!== 'backend'` read.
 export function localEngineEnabled(): boolean {
-  return import.meta.env.VITE_YAOG_LOCAL_ENGINE !== 'backend';
+  return deployMode().localEngine !== 'backend';
 }
 
 // The compiler library is loaded via a dynamic `import()` so a controller-mode-only

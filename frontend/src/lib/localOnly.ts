@@ -9,21 +9,24 @@
 // by the //go:build airgap tag, and this flag is the matching frontend pin so the static
 // site never offers a path that depends on a controller backend (R7).
 //
-// This module is the ONE place that reads the flag, so both the store (mode default + the
-// setMode/switchToController guards) and the chrome (nav/mode-toggle visibility) share a
-// SINGLE decision point rather than each re-reading import.meta.env (the same single-seam
-// discipline as localEngine.ts's localEngineEnabled()). Keeping it out of controllerStore
-// also lets nav.ts and the Sidebar read it without importing the store (no cycle).
+// localOnly() is the store/chrome-facing projection of the shared deploy-mode descriptor
+// (lib/deployMode.ts is now the ONE place that reads import.meta.env for the build flags). Both
+// the store (mode default + the setMode/switchToController guards) and the chrome (nav/mode-toggle
+// visibility) call localOnly() for a SINGLE decision point rather than each re-reading
+// import.meta.env (the same single-seam discipline as localEngine.ts's localEngineEnabled()).
+// Keeping it out of controllerStore also lets nav.ts and the Sidebar read it without importing
+// the store (no cycle).
 //
 // The DEFAULT build (flag unset) is the all-in-one controller panel — unchanged: localOnly()
 // is false, mode is operator-selectable, and the controller affordances render exactly as
 // before. Only an explicit VITE_LOCAL_ONLY=1 build flips this.
 
-// localOnly reports whether this build is the static-local-design SPA (VITE_LOCAL_ONLY set).
-// Truthiness of the literal env value decides it: '1'/'true'/any non-empty string ⇒ true;
-// unset or empty ⇒ false (the default controller all-in-one panel). The flag is typed in
-// vite-env.d.ts so this read is a checked contract under `tsc -b`.
+import { deployMode } from './deployMode';
+
+// localOnly reports whether this build is the static-local-design SPA (VITE_LOCAL_ONLY truthy).
+// The exact truthiness rule ('1'/'true'/any non-empty non-'0'/'false' literal ⇒ true; unset, '',
+// '0', 'false' ⇒ false = the default all-in-one controller panel) now lives in deployMode.ts; this
+// is a thin projection of descriptor.localOnly, behaviour-identical to the former direct read.
 export function localOnly(): boolean {
-  const v = import.meta.env.VITE_LOCAL_ONLY;
-  return v !== undefined && v !== '' && v !== '0' && v !== 'false';
+  return deployMode().localOnly;
 }

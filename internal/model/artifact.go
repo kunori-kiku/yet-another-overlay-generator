@@ -3,11 +3,10 @@ package model
 // Artifact is one fetchable, integrity-pinned file: its release asset name and the
 // SHA-256 the downloader must verify the bytes against before use. It is the shared
 // pin type carried by render.FetchSettings (mimic .debs, agent binaries) and, here,
-// by InstallFetch for the install.sh GitHub-.deb mimic fallback. Defined in package
-// renderer (the lowest consumer — the install-script template) so render can reference
-// it without the render -> renderer -> render import cycle that would arise if it lived
-// in render. Zero value (both fields empty) means "no pin", which callers treat as
-// absent.
+// by InstallFetch for the install.sh GitHub-.deb mimic fallback. It lives in package
+// model (a pure zero-import leaf) so render, renderer, and the controller/agent can all
+// reference it without an import cycle. Zero value (both fields empty) means "no pin",
+// which callers treat as absent.
 type Artifact struct {
 	Asset  string `json:"asset"`
 	SHA256 string `json:"sha256"`
