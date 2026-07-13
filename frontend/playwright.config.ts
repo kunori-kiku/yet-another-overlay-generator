@@ -29,8 +29,8 @@ const wasmSoakProjects =
 // browser end-to-end tests the project has had. It runs the REAL built panel (served by a
 // test-mode Go controller, EnableStatic) against a live controller + a real agent fixture.
 //
-// globalSetup boots THREE cmd/e2eserver processes (--mode controller ×2 for the keystone-OFF and
-// keystone-ON tenants, + --mode airgap) on OS-assigned :0 ports and writes their resolved ports +
+// globalSetup boots TWO cmd/e2eserver processes (--mode controller ×2 for the keystone-OFF and
+// keystone-ON tenants) on OS-assigned :0 ports and writes their resolved ports +
 // enrollment tokens to a handoff file the specs read (e2e/fixtures/harness.ts). It is NOT the
 // default webServer.url wait — that checks a single fixed port and cannot capture the other boots'
 // ports or the enroll tokens. globalTeardown kills the children and removes the temp state dirs.
