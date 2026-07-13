@@ -8,14 +8,14 @@
 // the union (project memory: bare `tsc --noEmit` misses TS2352; the `tsc -b` CI path is
 // the strict gate this declaration must satisfy).
 interface ImportMetaEnv {
-  // Local-engine selector. Default-ON (plan-7 Phase 0.5): unset or any value other than
-  // 'backend' / 'wasm' (incl. 'local') ⇒ the in-browser TS compiler runs LOCAL-mode compute.
-  // 'backend' opts out to the Go air-gap fetch path (functional only against a `-tags airgap`
-  // server, since plan-7 gates those routes off the default controller build). 'wasm' selects
-  // the opt-in in-browser Go pipeline compiled to GOOS=js GOARCH=wasm (framework-refactor
-  // plan-3, added alongside the TS engine; requires web/yaog.wasm — see scripts/build-wasm.sh).
-  // See localEngine.ts (localEngineEnabled) and topologyStore.ts's local-engine seam.
-  readonly VITE_YAOG_LOCAL_ENGINE?: 'local' | 'backend' | 'wasm';
+  // Local-engine selector. Default-ON: unset or any value other than 'backend' / 'ts' (incl.
+  // 'local' / 'wasm') ⇒ the in-browser Go/WASM pipeline runs LOCAL-mode compute (the DEFAULT
+  // since framework-refactor plan-4; requires web/yaog.wasm — see scripts/build-wasm.sh). 'ts'
+  // selects the retained in-browser TS compiler (a one-flag fallback kept for the WASM soak —
+  // invariant [9]). 'backend' opts out to the Go air-gap fetch path (functional only against a
+  // `-tags airgap` server, since plan-7 gates those routes off the default controller build).
+  // See localEngine.ts (localEngineEnabled / wasmEngineSelected) and topologyStore.ts's seam.
+  readonly VITE_YAOG_LOCAL_ENGINE?: 'local' | 'ts' | 'backend' | 'wasm';
 
   // Static-local-design build pin (plan-7 Phase 3). When set (any truthy literal, e.g. '1'),
   // the panel ships as a backend-free LOCAL-design SPA: mode is forced to 'local', the mode
