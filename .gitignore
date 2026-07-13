@@ -19,6 +19,12 @@ CLAUDE.md
 # TEST-ONLY E2E bring-up binaries (plan-13): built into .e2e-bin/ by the verify step / the
 # frontend-e2e CI job; resolved by the Playwright globalSetup. Never committed.
 /.e2e-bin/
+# WASM local engine (framework-refactor plan-3): the built wasm blob + the Vite static-asset
+# copies are rebuilt by scripts/build-wasm.sh + the wasm-conformance CI job. Only the pinned
+# runtime web/wasm_exec.js is committed (the gate asserts it matches the building toolchain).
+/web/yaog.wasm
+/frontend/public/yaog.wasm
+/frontend/public/wasm_exec.js
 # private key material must never be committed (bundle signing key, TLS, etc.)
 *.pem
 *.key

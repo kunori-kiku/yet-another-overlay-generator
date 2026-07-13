@@ -26,10 +26,11 @@
 // changes semantics. The two former predicates (localOnly(), localEngineEnabled()) now merely
 // project fields off this descriptor, so every downstream caller is behaviour-identical.
 
-// LocalEngine enumerates the two compute back-ends the build can select. There is deliberately NO
-// 'wasm' member: the codebase ships only the in-browser TS compiler ('ts') and the retained Go
-// air-gap escape hatch ('backend'). Add 'wasm' here ONLY once a wasm engine actually exists.
-export type LocalEngine = 'ts' | 'backend';
+// LocalEngine enumerates the compute back-ends the build can select. 'ts' is the in-browser TS
+// compiler (the DEFAULT), 'backend' is the retained Go air-gap escape hatch, and 'wasm' is the
+// opt-in in-browser Go pipeline compiled to GOOS=js GOARCH=wasm (framework-refactor plan-3 —
+// added alongside the TS engine, which stays default; selected via VITE_YAOG_LOCAL_ENGINE='wasm').
+export type LocalEngine = 'ts' | 'backend' | 'wasm';
 
 export interface DeployMode {
   // true ⇒ the static-local-design SPA (VITE_LOCAL_ONLY truthy); controller mode is unreachable.
@@ -46,11 +47,15 @@ function localOnlyFlag(v: string | undefined): boolean {
   return v !== undefined && v !== '' && v !== '0' && v !== 'false';
 }
 
-// localEngineFlag mirrors the former localEngineEnabled() decision, projected onto the union: ONLY
-// the exact literal 'backend' selects the Go air-gap path; unset / 'local' / anything else stays
-// on the in-browser TS compiler (default-ON).
-function localEngineFlag(v: 'local' | 'backend' | undefined): LocalEngine {
-  return v === 'backend' ? 'backend' : 'ts';
+// localEngineFlag projects the raw VITE_YAOG_LOCAL_ENGINE literal onto the LocalEngine union: the
+// exact literal 'backend' selects the Go air-gap path, 'wasm' selects the opt-in in-browser Go/WASM
+// pipeline (plan-3), and unset / 'local' / anything else stays on the in-browser TS compiler
+// (default-ON). The 'ts' default (not 'backend' and not 'wasm') keeps localEngineEnabled() true for
+// both browser engines, so the store's browser-vs-air-gap decision is unchanged.
+function localEngineFlag(v: 'local' | 'backend' | 'wasm' | undefined): LocalEngine {
+  if (v === 'backend') return 'backend';
+  if (v === 'wasm') return 'wasm';
+  return 'ts';
 }
 
 // deployMode reads both flags from import.meta.env and returns the validated descriptor. It is the

@@ -60,11 +60,36 @@ function loadCompiler(): Promise<CompilerModule> {
   return compilerModulePromise;
 }
 
+// The opt-in in-browser Go/WASM engine (framework-refactor plan-3), selected ONLY when
+// VITE_YAOG_LOCAL_ENGINE === 'wasm'. It is loaded via a SEPARATE dynamic import() so its bytes
+// (the wasm glue + JSZip) are code-split out of both the default bundle AND the TS-compiler chunk:
+// a TS-default operator never fetches it. TS stays the DEFAULT — this is an add-alongside, so each
+// adapter below checks the flag and delegates to the wasm engine only when it is explicitly set;
+// otherwise the existing TS path runs unchanged.
+type WasmEngineModule = typeof import('../wasm/wasmEngine');
+let wasmEngineModulePromise: Promise<WasmEngineModule> | null = null;
+function loadWasmEngine(): Promise<WasmEngineModule> {
+  if (wasmEngineModulePromise === null) {
+    wasmEngineModulePromise = import('../wasm/wasmEngine');
+  }
+  return wasmEngineModulePromise;
+}
+
+// wasmEngineSelected reports whether the opt-in WASM engine is the active local engine. It is the
+// single flag read the four adapters share (behaviour-identical to inlining
+// `deployMode().localEngine === 'wasm'` at each site).
+function wasmEngineSelected(): boolean {
+  return deployMode().localEngine === 'wasm';
+}
+
 // localValidate mirrors POST /api/validate: schema-then-semantic over the topology,
 // returning the exact ValidateResponse ({ valid, errors, warnings }) the store assigns into
 // `validateResult` with no shape translation. The compiler's validate() is pure (never
 // mutates the caller's topology).
 export async function localValidate(topo: Topology): Promise<ValidateResponse> {
+  if (wasmEngineSelected()) {
+    return (await loadWasmEngine()).validate(topo);
+  }
   const m = await loadCompiler();
   return m.validate(topo);
 }
@@ -77,6 +102,9 @@ export async function localValidate(topo: Topology): Promise<ValidateResponse> {
 // and, critically, leaves `skipped_unenrolled` UNDEFINED (air-gap shape — topology.ts:156;
 // that field is controller-compile-preview-only and is never read on this path).
 export async function localCompile(topo: Topology): Promise<CompileResponse> {
+  if (wasmEngineSelected()) {
+    return (await loadWasmEngine()).compile(topo);
+  }
   const m = await loadCompiler();
   return m.toCompileResponse(m.compile(topo));
 }
@@ -86,6 +114,9 @@ export async function localCompile(topo: Topology): Promise<CompileResponse> {
 // (`${project.id}-artifacts.zip`, mirroring handler.go:240) on the local path, so no
 // Content-Disposition is involved.
 export async function localExport(topo: Topology): Promise<Blob> {
+  if (wasmEngineSelected()) {
+    return (await loadWasmEngine()).exportArtifacts(topo);
+  }
   const m = await loadCompiler();
   return m.exportArtifacts(topo);
 }
@@ -98,6 +129,9 @@ export async function localExport(topo: Topology): Promise<Blob> {
 export async function localDeployScripts(
   topo: Topology,
 ): Promise<{ sh: string; ps1: string }> {
+  if (wasmEngineSelected()) {
+    return (await loadWasmEngine()).deployScripts(topo);
+  }
   const m = await loadCompiler();
   return { sh: m.deployScript(topo, 'sh'), ps1: m.deployScript(topo, 'ps1') };
 }
