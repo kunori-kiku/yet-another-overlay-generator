@@ -128,7 +128,7 @@ type topologyVersionsResponseJSON struct {
 // string-matching of the free-form last_health line: status drives the badge color, reason is the
 // closed CamelCase code, message is the single length-capped human line (NEVER a raw stderr dump).
 // observed_at is the controller's receive stamp (server truth, not agent-clock). All plain data; no
-// key material. Pure DTO — the projection from controller.NodeCondition lives in handler_deploy.go.
+// key material. Pure DTO — the projection from controller.NodeCondition lives in handler_enrollment.go.
 type conditionJSON struct {
 	Type       string    `json:"type"`
 	Status     string    `json:"status"`
@@ -169,7 +169,7 @@ type nodeJSON struct {
 	// Conditions is the node's structured feedback channel (plan-1/2). omitempty: a legacy agent /
 	// a node that has reported none round-trips with the field absent, and the panel renders no
 	// strip — byte-identical served JSON to the pre-conditions shape. Curated + length-capped at
-	// ingest (handler_agent); this view re-serializes only (see mapConditions in handler_deploy.go).
+	// ingest (handler_agent); this view re-serializes only (see mapConditions in handler_enrollment.go).
 	Conditions []conditionJSON `json:"conditions,omitempty"`
 	// Telemetry is the agent's extensible metrics map from the last /telemetry heartbeat (e.g.
 	// wireguard_peers — the per-peer link detail behind a collapsible panel). Opaque JSON served

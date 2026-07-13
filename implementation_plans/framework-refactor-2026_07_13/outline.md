@@ -157,8 +157,9 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 
 - **plan-0 — Ratchet + zero-behavior hygiene.** Install the enforcement spine (arch-test import ratchet +
   FE `no-restricted-import`, allow-list only shrinks) and clear actively-harmful debt (lying file names,
-  false doc headers, the `sysctl.go` CJK fragments shipped to hosts, `deployMode.ts` unifying the engine
-  flags, the green-by-invisibility vitest dir-allowlist). Zero behavior change. **Near-zero risk.**
+  false Go doc/header comments, `deployMode.ts` unifying the engine flags, the green-by-invisibility
+  vitest dir-allowlist). Zero behavior change / zero golden diff. **Near-zero risk.** (The `sysctl.go` CJK
+  comment cleanup — a RENDERED-output change — moved to plan-6, which makes it Go-only + cheap.)
 - **plan-1 — Pre-WASM contract hardening.** Fold `normalize.HealCollidingPins` INTO `localcompile.Compile`
   (close the confirmed airgap silent-heal gap; + a colliding-pin fixture); evict **`model.Condition` only**
   into `internal/runtimecontract` (the mimic types stay in `model` — the pure-core renderer consumes them);
@@ -180,7 +181,8 @@ and stop-loss. Every phase is independently shippable + green + pausable.
   PR that removes the conformance job. **Med, irreversible — after WASM soaked.**
 - **plan-6 — Go-only renderer hygiene.** `go:embed` the install/uninstall/deploy templates as
   `render/templates/*.sh.tmpl`; reduce `script.go`/`deploy.go` to config-struct builders; introduce the
-  `ShellToken` seam (`ShellQuoted`/`ShellRaw` + `field_safety_test`); restore `shellcheck`. **Low–med.**
+  `ShellToken` seam (`ShellQuoted`/`ShellRaw` + `field_safety_test`); restore `shellcheck`; clean the
+  deferred `sysctl.go` CJK comment fragments. **Low–med.**
 - **plan-7 — Error framework.** `api/adapter.go` (method-guard + auto-`identity()` + coded return) +
   `api/errmap.go` (central sentinel→`apierr.Code` table); migrate the 40 handlers + top controller/agent
   relay sites onto coded-at-source errors. **Low risk.**
