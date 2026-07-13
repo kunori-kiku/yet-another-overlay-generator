@@ -1,11 +1,12 @@
 # STATUS
 <!-- regenerated: 2026-07-13 -->
-<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; NEW subject framework-refactor DRAFTED (plans-only) -->
+<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; framework-refactor EXECUTING (7/11 phases shipped; plan-4 soak-gated) -->
 
 ## Active work
 
-- **📝 SUBJECT `framework-refactor-2026_07_13` — DRAFTED 2026-07-13 (plans-only; execution on the owner's
-  go). The "WASM-Unified Core + Machine-Gated Paydown" program from a 24-agent repo-wide debt sweep +
+- **🔄 SUBJECT `framework-refactor-2026_07_13` — EXECUTING; 7 of 11 phases SHIPPED to main 2026-07-13
+  (plans 0 / 1 / 1.5 / 1.6 / 2 / 3 / 7; PRs #260–#266), each workflow-reviewed → fixed → re-reviewed →
+  CI-green → merged. The "WASM-Unified Core + Machine-Gated Paydown" program from a 24-agent repo-wide debt sweep +
   a 21-agent judged design panel** (full rationale:
   [`docs/design/framework-refactor-proposal-2026_07_13.md`](docs/design/framework-refactor-proposal-2026_07_13.md)).
   Radical at the root, incremental in execution: (spine) compile the *existing* pure Go pipeline to
@@ -18,7 +19,21 @@
   the WASM strategic-bet gate is after plan-2 (0–2 stand alone). Owner decisions locked: Phase 9
   airgap-server retirement PROCEEDS (build/test-only); `Node.ID` stable-identity DEFERRED. Folder:
   [`implementation_plans/framework-refactor-2026_07_13/`](implementation_plans/framework-refactor-2026_07_13/outline.md).
-  **NEXT = plan-0 (`refactor/plan-0-ratchet-hygiene`) on the owner's go.**
+  **SHIPPED this session:** plan-0 (arch-test import ratchet over both build contexts), plan-1
+  (`localcompile` = the single heal-inclusive entry + `runtimecontract`/`allocconst` seams; the heal fold
+  reverted to the airgap HANDLER to preserve the loud-reject safety net), plan-1.5 (export bundle
+  single-sourced — written==listed==signed==checksummed custody byte-identity), plan-1.6 (airgap pre-heal
+  regression lock), plan-2 (filestore/compile/controllerClient/controllerStore god-file splits — verbatim,
+  no logic change, drift-gate repointed), plan-7 (handler adapter + sentinel→code table — the auth/identity
+  chokepoint is now STRUCTURAL not convention), **plan-3 (the WASM strategic bet — owner-CONSENTED: the
+  pure Go pipeline runs in-browser beside the TS compiler, byte-equal over all 25 fixtures, ADDITIVE/TS
+  stays default, pinned FOREVER by `WASM conformance gate` — now a 7th REQUIRED check on `main`).**
+  **NEXT = plan-4 (flip the WASM default) — GATED on a real browser SOAK of the wasm local engine + fresh
+  owner consent (a soak is wall-clock owner-time, not autonomously doable).** After the soak: plan-5
+  (delete the ~17K-LOC TS twin + `internal/conformance` + `@noble`/`jszip`) → plan-6 (Go-only renderer
+  `ShellToken`) → plan-10 (FE polish + drift lock-in) follow; plan-8 (Store core, KEYSTONE) is sequenced
+  LAST + needs a real-host custody smoke; plan-9 (airgap retirement) gated. **Every remaining phase is
+  owner-gated (soak / custody smoke / sequencing) — the autonomously-closable portion is COMPLETE.**
 
 - **✅ SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DELIVERED as `v2.0.0-rc.5` (GitHub
   *Latest*, 2026-07-13; annotated tag on `ac3d660`; rc.4 demoted; self-promoted; 29 assets);
