@@ -418,6 +418,20 @@ type ControllerSettings struct {
 	// an explicit false: WithDefaults() fills nil with true, preserving the default-on
 	// appearance after an upgrade instead of silently reading false.
 	Translucency *bool `json:"translucency,omitempty"`
+	// TelemetryHistoryCap is the per-node hard cap on retained resource-history samples (plan-2), a
+	// POINTER so a legacy record predating the field (nil) is distinguishable from an explicit 0
+	// (disable history): nil ⇒ DefaultTelemetryHistoryCap, an explicit value (incl. 0) is honored. See
+	// EffectiveHistoryCap. NON-SECRET (a retention count); not baked into the bootstrap script.
+	TelemetryHistoryCap *int `json:"telemetry_history_cap,omitempty"`
+}
+
+// EffectiveHistoryCap resolves the per-node telemetry-history sample cap: a nil field (legacy / unset)
+// means the default; an explicit value (including 0 = history disabled) is honored verbatim.
+func (cs ControllerSettings) EffectiveHistoryCap() int {
+	if cs.TelemetryHistoryCap == nil {
+		return DefaultTelemetryHistoryCap
+	}
+	return *cs.TelemetryHistoryCap
 }
 
 // Clone returns a deep copy of cs: the MimicDebs map and the Translucency pointer are duplicated
@@ -447,6 +461,10 @@ func (cs ControllerSettings) Clone() ControllerSettings {
 	if cs.Translucency != nil {
 		v := *cs.Translucency
 		out.Translucency = &v
+	}
+	if cs.TelemetryHistoryCap != nil {
+		v := *cs.TelemetryHistoryCap
+		out.TelemetryHistoryCap = &v
 	}
 	return out
 }
@@ -501,6 +519,12 @@ type Store interface {
 	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []model.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
+	// QueryTelemetryHistory returns the node's retained resource-history samples within [from, to]
+	// (inclusive), sorted by time (plan-2). Bounded by the operator's configured per-node cap; an empty
+	// result when history is disabled (cap 0) or the node has no samples. Observability only — the
+	// samples carry no endpoint/IP/key material. Distinct from RecordTelemetry (the live overlay): this
+	// is the durable, bounded backing for the node-detail CPU/RAM charts.
+	QueryTelemetryHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error)
 
 	// --- Topology (public-keys-only) ---
 

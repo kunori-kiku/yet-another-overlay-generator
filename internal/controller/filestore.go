@@ -86,6 +86,10 @@ type FileStore struct {
 	// it never holds custody fields (AppliedGeneration/LastChecksum/LastHealth/DesiredGeneration/keys),
 	// which stay on the durable temp+fsync+rename path. Guarded by telemetryMu; lazily populated.
 	telemetry map[TenantID]map[string]*volatileTelemetry
+	// history is the bounded per-(tenant,node) resource-sample history backing the node-detail charts
+	// (plan-2). RecordTelemetry appends IN-MEMORY (no disk on the heartbeat path); a background flusher
+	// (Start/Close) drains to append-only JSONL under <root>/telemetry-history. Its own mutex.
+	history *telemetryHistory
 }
 
 // volatileTelemetry is the in-memory-only overlay of a node's observability fields, written by the
@@ -123,7 +127,31 @@ func NewFileStore(root string) (*FileStore, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, fmt.Errorf("controller: create filestore root: %w", err)
 	}
-	return &FileStore{root: root, auditTails: make(map[TenantID]*auditTail)}, nil
+	fs := &FileStore{root: root, auditTails: make(map[TenantID]*auditTail)}
+	// The cap loader lets the flusher seed a tenant's cap from persisted settings on first flush (off
+	// the heartbeat path), so an operator's cap=0 (disable history) is honored across a controller
+	// restart — the in-memory cache starts empty otherwise.
+	fs.history = newTelemetryHistory(filepath.Join(root, "telemetry-history"), DefaultTelemetryHistoryCap,
+		func(t TenantID) int {
+			cs, err := fs.GetSettings(context.Background(), t)
+			if err != nil {
+				return DefaultTelemetryHistoryCap // no settings / read error → default
+			}
+			return cs.EffectiveHistoryCap()
+		})
+	return fs, nil
+}
+
+// Start launches the resource-history background flusher (plan-2). The server calls it once after
+// construction; tests that exercise durable flush call it explicitly (and Close). Idempotent-safe to
+// omit (the buffer still fills; nothing is flushed until Start).
+func (fs *FileStore) Start() {
+	fs.history.start()
+}
+
+// Close stops the history flusher and does a final drain. The server calls it on graceful shutdown.
+func (fs *FileStore) Close() {
+	fs.history.close()
 }
 
 // --- path helpers -----------------------------------------------------------
@@ -787,6 +815,13 @@ func (fs *FileStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID str
 		ent.writtenAt = observedAt
 		if agentVersion != "" {
 			ent.agentVersion = agentVersion
+		}
+		// plan-2: retain a resource-history sample (in-memory append; a background flusher persists it
+		// off the heartbeat path). Gated on the same monotonic freshness as the overlay, so history holds
+		// only in-order samples. history has its OWN mutex; lock order telemetryMu -> history.mu is
+		// consistent (nothing takes telemetryMu while holding history.mu), so this cannot deadlock.
+		if s, ok := resourceSampleFromMetrics(metrics, observedAt); ok {
+			fs.history.append(t, nodeID, s)
 		}
 	}
 	return nil
@@ -2105,6 +2140,7 @@ func (fs *FileStore) GetSettings(ctx context.Context, t TenantID) (ControllerSet
 		}
 		return ControllerSettings{}, err
 	}
+	fs.history.setCap(t, cs.EffectiveHistoryCap()) // keep the history cap cache in sync (no disk on append)
 	return cs, nil
 }
 
@@ -2121,7 +2157,21 @@ func (fs *FileStore) PutSettings(ctx context.Context, t TenantID, cs ControllerS
 	if err != nil {
 		return err
 	}
-	return writeJSONAtomic(filepath.Join(dir, "settings.json"), cs)
+	if err := writeJSONAtomic(filepath.Join(dir, "settings.json"), cs); err != nil {
+		return err
+	}
+	fs.history.setCap(t, cs.EffectiveHistoryCap()) // track the operator's cap without reading on append
+	return nil
+}
+
+// QueryTelemetryHistory returns the node's retained resource-history samples within [from, to]
+// (durable JSONL + the not-yet-flushed in-memory buffer), sorted by time and bounded by the operator's
+// per-node cap (plan-2).
+func (fs *FileStore) QueryTelemetryHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return fs.history.query(t, nodeID, from, to)
 }
 
 // GetSigningAnchor reads the tenant's pinned signing public key from signing-anchor.json, or

@@ -101,12 +101,16 @@ type MemStore struct {
 	// reads/writes and waits are serialized.
 	cond    *sync.Cond
 	tenants map[TenantID]*tenantState
+	// history is the in-memory resource-sample history (plan-2). MemStore is dev/test only, so the
+	// history has no durable dir — the capped in-memory buffer IS the history.
+	history *telemetryHistory
 }
 
 // NewMemStore returns an empty, ready-to-use in-memory Store.
 func NewMemStore() *MemStore {
 	s := &MemStore{
 		tenants: make(map[TenantID]*tenantState),
+		history: newTelemetryHistory("", DefaultTelemetryHistoryCap, nil), // in-memory; no persisted-settings seed needed
 	}
 	s.cond = sync.NewCond(&s.mu)
 	return s
@@ -233,7 +237,20 @@ func (s *MemStore) RecordTelemetry(ctx context.Context, t TenantID, nodeID strin
 	n.Telemetry = metrics
 	n.LastSeen = observedAt
 	ts.nodes[nodeID] = n
+	if sample, ok := resourceSampleFromMetrics(metrics, observedAt); ok {
+		s.history.append(t, nodeID, sample) // plan-2: in-memory history (own mutex)
+	}
 	return nil
+}
+
+// QueryTelemetryHistory returns the node's in-memory resource-history samples within [from, to],
+// bounded by the operator's per-node cap (plan-2). MemStore has no durable backing, so this is the
+// capped in-memory buffer.
+func (s *MemStore) QueryTelemetryHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.history.query(t, nodeID, from, to)
 }
 
 // TouchLastSeen records that the agent for nodeID checked in at the given time.
@@ -863,6 +880,7 @@ func (s *MemStore) GetSettings(ctx context.Context, t TenantID) (ControllerSetti
 	if ts.settings == nil {
 		return ControllerSettings{}, ErrNotFound
 	}
+	s.history.setCap(t, ts.settings.EffectiveHistoryCap()) // keep the history cap cache in sync
 	// Return a deep copy so a caller cannot mutate the stored map/pointer through the shared
 	// reference (ControllerSettings now carries a MimicDebs map + a Translucency pointer).
 	return ts.settings.Clone(), nil
@@ -878,6 +896,7 @@ func (s *MemStore) PutSettings(ctx context.Context, t TenantID, cs ControllerSet
 	ts := s.tenant(t)
 	cp := cs.Clone()
 	ts.settings = &cp
+	s.history.setCap(t, cp.EffectiveHistoryCap()) // track the operator's cap without reading on append
 	return nil
 }
 

@@ -29,6 +29,10 @@ import (
 )
 
 // settingsJSON is the wire form of the operator-editable controller settings.
+// maxTelemetryHistoryCap bounds the operator-settable per-node resource-history sample cap (plan-2) so a
+// typo cannot request an effectively unbounded history file. 1e6 samples ≈ 347 days at a 30s heartbeat.
+const maxTelemetryHistoryCap = 1_000_000
+
 type settingsJSON struct {
 	PublicAgentURL      string `json:"public_agent_url"`
 	GithubProxy         string `json:"github_proxy"`
@@ -55,6 +59,10 @@ type settingsJSON struct {
 	AgentBins             map[string]model.Artifact `json:"agent_bins,omitempty"`
 	AgentCanaryNodeIDs    []string                  `json:"agent_canary_node_ids,omitempty"`
 	AgentRolloutFleetWide bool                      `json:"agent_rollout_fleet_wide,omitempty"`
+	// TelemetryHistoryCap is the per-node resource-history sample cap (plan-2). A POINTER: nil ⇒ use the
+	// default, an explicit value (incl. 0 = disable history) is honored. Validated >= 0 and <= a sanity
+	// bound on POST.
+	TelemetryHistoryCap *int `json:"telemetry_history_cap,omitempty"`
 }
 
 // settingsResponse builds the wire view of cs: the stored settings plus the
@@ -77,6 +85,7 @@ func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) s
 		AgentBins:             cs.AgentBins,
 		AgentCanaryNodeIDs:    cs.AgentCanaryNodeIDs,
 		AgentRolloutFleetWide: cs.AgentRolloutFleetWide,
+		TelemetryHistoryCap:   cs.TelemetryHistoryCap,
 	}
 }
 
@@ -134,6 +143,7 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 			AgentBins:             req.AgentBins,
 			AgentCanaryNodeIDs:    req.AgentCanaryNodeIDs,
 			AgentRolloutFleetWide: req.AgentRolloutFleetWide,
+			TelemetryHistoryCap:   req.TelemetryHistoryCap,
 		}.WithDefaults()
 		if cs.PublicAgentURL != "" {
 			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
@@ -158,6 +168,14 @@ func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Reques
 		default:
 			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_fallback_default"))
 			return
+		}
+		// plan-2: the resource-history cap must be >= 0 (0 = disable) and within a sanity bound, so a
+		// typo cannot request an effectively unbounded per-node history file.
+		if req.TelemetryHistoryCap != nil {
+			if c := *req.TelemetryHistoryCap; c < 0 || c > maxTelemetryHistoryCap {
+				writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "telemetry_history_cap"))
+				return
+			}
 		}
 		if err := validateMimicCatalog(cs); err != nil {
 			writeAPIError(w, err)
