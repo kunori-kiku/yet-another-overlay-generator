@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { nodeNameMap, nodeDisplayName } from '../../lib/nodeName';
 import { useFleetLiveRefresh } from '../../hooks/useFleetLiveRefresh';
 import { t } from '../../i18n';
 import { BTN_CTA } from '../shell/styles';
@@ -39,6 +40,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 export function FleetNodeDetailPage() {
   const { id } = useParams();
   const language = useTopologyStore((s) => s.language);
+  // The fleet is keyed by node_id, but the operator reads the friendly design name (id fallback when
+  // no design is loaded / the node is an orphan / the name is blank).
+  const nameByNodeId = nodeNameMap(useTopologyStore((s) => s.nodes));
   const node = useControllerStore((s) => s.nodes.find((n) => n.nodeId === id));
   const settings = useControllerStore((s) => s.settings);
   const refresh = useControllerStore((s) => s.refresh);
@@ -110,7 +114,15 @@ export function FleetNodeDetailPage() {
         <p className="text-sm text-[var(--content-muted)]">{t(language, 'fleetNodeNotFound')}</p>
       ) : (
         <section className="max-w-2xl space-y-3 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-4">
-          <h2 className="break-all font-mono text-lg font-semibold text-[var(--info)]">{node.nodeId}</h2>
+          <div className="space-y-0.5">
+            <h2 className="break-all text-lg font-semibold text-[var(--info)]">
+              {nodeDisplayName(node.nodeId, nameByNodeId)}
+            </h2>
+            {/* The node_id stays visible (muted) as the operational identity when a name replaced it. */}
+            {nodeDisplayName(node.nodeId, nameByNodeId) !== node.nodeId && (
+              <p className="break-all font-mono text-xs text-[var(--content-muted)]">{node.nodeId}</p>
+            )}
+          </div>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <Field label={t(language, 'fleetNodeDetailPage.status')}>{node.status}</Field>
             <Field label={t(language, 'fleetNodeDetailPage.genAppliedDesired')}>

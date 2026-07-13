@@ -5,6 +5,7 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type MessageKey } from '../../i18n';
 import type { ControllerNode, ControllerNodeStatus } from '../../types/controller';
 import type { Node } from '../../types/topology';
+import { nodeNameMap, nodeDisplayName } from '../../lib/nodeName';
 import { UpdateStatusChip } from './UpdateStatusChip';
 import { NodeConditions } from './NodeConditions';
 
@@ -166,8 +167,10 @@ export function NodeRegistry() {
   const statusByNodeId = new Map<string, ControllerNodeStatus>(
     ctlNodes.map((n) => [n.nodeId, n.status]),
   );
-  // Topology node-name lookup (edge readiness shows names so the operator can match them up).
-  const nameByNodeId = new Map<string, string>(topoNodes.map((n) => [n.id, n.name]));
+  // Topology node-name lookup. The fleet registry is keyed by node_id (the enrolled identity), but the
+  // operator reads the friendly design name — nodeDisplayName resolves id→name with an id fallback
+  // (orphan / no design / blank name). The node labels and the edge-readiness list share this one map.
+  const nameByNodeId = nodeNameMap(topoNodes);
   // The set of node ids in the current design: a node-id present in the registry but absent from the
   // design is an "orphan" — it is still in the fleet (holds a valid token, fetches config) but no
   // longer belongs to the current design (plan-6, identity reconciliation).
@@ -267,12 +270,20 @@ export function NodeRegistry() {
               <tbody>
                 {ctlNodes.map((n) => (
                   <tr key={n.nodeId} className="border-b border-[var(--hairline)]">
-                    <td className="py-2 pr-3 font-mono break-all">
+                    <td className="py-2 pr-3 break-all">
                       <Link
                         to={`/fleet/nodes/${encodeURIComponent(n.nodeId)}`}
+                        data-testid={`fleet-node-${n.nodeId}`}
                         className="text-[var(--info)] hover:underline"
                       >
-                        {n.nodeId}
+                        <span className="font-medium">{nodeDisplayName(n.nodeId, nameByNodeId)}</span>
+                        {/* Keep the node_id visible as a muted reference — it is the identity the operator
+                            uses to revoke / troubleshoot — but only when a friendly name replaced it. */}
+                        {nodeDisplayName(n.nodeId, nameByNodeId) !== n.nodeId && (
+                          <span className="ml-2 font-mono text-xs text-[var(--content-muted)]">
+                            {n.nodeId}
+                          </span>
+                        )}
                       </Link>
                     </td>
                     {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
@@ -299,9 +310,13 @@ export function NodeRegistry() {
               >
                 <Link
                   to={`/fleet/nodes/${encodeURIComponent(n.nodeId)}`}
-                  className="block font-mono text-sm text-[var(--info)] hover:underline break-all"
+                  data-testid={`fleet-node-${n.nodeId}`}
+                  className="block text-sm text-[var(--info)] hover:underline break-all"
                 >
-                  {n.nodeId}
+                  <span className="font-medium">{nodeDisplayName(n.nodeId, nameByNodeId)}</span>
+                  {nodeDisplayName(n.nodeId, nameByNodeId) !== n.nodeId && (
+                    <span className="ml-2 font-mono text-xs text-[var(--content-muted)]">{n.nodeId}</span>
+                  )}
                 </Link>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
                   {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
@@ -391,8 +406,8 @@ export function NodeRegistry() {
         ) : (
           <ul className="space-y-1">
             {edges.map((e) => {
-              const fromName = nameByNodeId.get(e.from_node_id) || e.from_node_id;
-              const toName = nameByNodeId.get(e.to_node_id) || e.to_node_id;
+              const fromName = nodeDisplayName(e.from_node_id, nameByNodeId);
+              const toName = nodeDisplayName(e.to_node_id, nameByNodeId);
               const ready = edgeReady(e.from_node_id, e.to_node_id);
               return (
                 <li
