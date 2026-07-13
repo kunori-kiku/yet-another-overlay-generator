@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "build:local": "tsc -b && VITE_LOCAL_ONLY=1 vite build --outDir dist-local",
     "build:wasm": "cd .. && ./scripts/build-wasm.sh",
+    "dev:wasm": "npm run build:wasm && VITE_YAOG_LOCAL_ENGINE=wasm vite",
+    "preview:wasm": "npm run build:wasm && VITE_YAOG_LOCAL_ENGINE=wasm npm run build && vite preview",
     "conformance": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
