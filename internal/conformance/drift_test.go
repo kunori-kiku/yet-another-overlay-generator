@@ -53,9 +53,11 @@ const (
 	apierrCodeSrcRel    = "../apierr/apierr.go"
 
 	// FE files live two levels up from internal/conformance/.
-	feNormalizeEdges  = "../../frontend/src/lib/normalizeEdges.ts"
-	feTopologyStore   = "../../frontend/src/stores/topologyStore.ts"
-	feControllerStore = "../../frontend/src/stores/controllerStore.ts"
+	feNormalizeEdges = "../../frontend/src/lib/normalizeEdges.ts"
+	feTopologyStore  = "../../frontend/src/stores/topologyStore.ts"
+	// The controller-store *_OMITEMPTY field lists live in the store's helpers module after the
+	// framework-refactor plan-2 split of controllerStore.ts (the lists themselves are unchanged).
+	feControllerHelpers = "../../frontend/src/stores/controller/helpers.ts"
 )
 
 // rendererTemplates is the set of scoped renderer template BLOCKS the manifest hashes. These are the
@@ -248,11 +250,11 @@ func buildDriftManifest(t *testing.T) DriftManifest {
 	fe := map[string][]string{
 		"PIN_FIELDS":                feArrayElements(t, feNormalizeEdges, "PIN_FIELDS"),
 		"ALLOCATION_PIN_FIELDS":     feArrayElements(t, feTopologyStore, "ALLOCATION_PIN_FIELDS"),
-		"PROJECT_OMITEMPTY":         feArrayElements(t, feControllerStore, "PROJECT_OMITEMPTY"),
-		"DOMAIN_OMITEMPTY":          feArrayElements(t, feControllerStore, "DOMAIN_OMITEMPTY"),
-		"NODE_OMITEMPTY":            feArrayElements(t, feControllerStore, "NODE_OMITEMPTY"),
-		"EDGE_OMITEMPTY":            feArrayElements(t, feControllerStore, "EDGE_OMITEMPTY"),
-		"PUBLIC_ENDPOINT_OMITEMPTY": feArrayElements(t, feControllerStore, "PUBLIC_ENDPOINT_OMITEMPTY"),
+		"PROJECT_OMITEMPTY":         feArrayElements(t, feControllerHelpers, "PROJECT_OMITEMPTY"),
+		"DOMAIN_OMITEMPTY":          feArrayElements(t, feControllerHelpers, "DOMAIN_OMITEMPTY"),
+		"NODE_OMITEMPTY":            feArrayElements(t, feControllerHelpers, "NODE_OMITEMPTY"),
+		"EDGE_OMITEMPTY":            feArrayElements(t, feControllerHelpers, "EDGE_OMITEMPTY"),
+		"PUBLIC_ENDPOINT_OMITEMPTY": feArrayElements(t, feControllerHelpers, "PUBLIC_ENDPOINT_OMITEMPTY"),
 	}
 
 	return DriftManifest{
