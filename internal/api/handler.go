@@ -146,10 +146,5 @@ func writeAPIError(w http.ResponseWriter, e *apierr.Error) {
 // never the legacy shim. A relay seam should pass the most precise bucket that fits
 // (e.g. apierr.CodeRenderFailed); apierr.CodeInternal is the generic safety net.
 func writeCodedOr(w http.ResponseWriter, fallback apierr.Code, err error) {
-	var ae *apierr.Error
-	if errors.As(err, &ae) {
-		writeAPIError(w, ae)
-		return
-	}
-	writeAPIError(w, apierr.New(fallback).Wrap(err))
+	writeAPIError(w, codedErr(fallback, err))
 }

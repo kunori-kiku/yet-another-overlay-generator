@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -140,44 +141,31 @@ func aggregateHistory(samples []controller.ResourceSample, from time.Time, step 
 	return out
 }
 
-// HandleNodeHistory serves GET ?node=<id>&from=<RFC3339>&to=<RFC3339>&step=<duration>. Operator-gated.
-func (h *ControllerHandler) HandleNodeHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, _, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+// HandleNodeHistory serves GET ?node=<id>&from=<RFC3339>&to=<RFC3339>&step=<duration>. Operator-gated
+// (routed through the op() adapter, which applies the method guard + structural identity() check).
+func (h *ControllerHandler) HandleNodeHistory(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	q := r.URL.Query()
 	nodeID := q.Get("node")
 	if nodeID == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "node"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "node")
 	}
 	from, err := time.Parse(time.RFC3339, q.Get("from"))
 	if err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "from"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "from")
 	}
 	to, err := time.Parse(time.RFC3339, q.Get("to"))
 	if err != nil {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "to"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "to")
 	}
 	if !to.After(from) || to.Sub(from) > maxHistoryRange {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "to"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "to")
 	}
 	// step is optional; default to a sensible granularity that fits the window under the bucket cap.
 	step := to.Sub(from) / maxHistoryBuckets
 	if raw := q.Get("step"); raw != "" {
 		d, perr := time.ParseDuration(raw)
 		if perr != nil || d <= 0 {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "step"))
-			return
+			return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "step")
 		}
 		step = d
 	}
@@ -190,34 +178,29 @@ func (h *ControllerHandler) HandleNodeHistory(w http.ResponseWriter, r *http.Req
 	}
 
 	// Unknown node → 404 (nothing to chart).
-	if _, err := h.store.GetNode(r.Context(), tenant, nodeID); err != nil {
+	if _, err := h.store.GetNode(ctx, tenant, nodeID); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
 	// History disabled (cap 0) → 200 with a flag + empty buckets (the panel shows a "history off" hint).
 	cs, err := h.loadSettings(r)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	if cs.EffectiveHistoryCap() == 0 {
-		writeJSON(w, http.StatusOK, historyResponse{Step: step.String(), Disabled: true, Buckets: []historyBucket{}})
-		return
+		return historyResponse{Step: step.String(), Disabled: true, Buckets: []historyBucket{}}, nil
 	}
 
-	samples, err := h.store.QueryTelemetryHistory(r.Context(), tenant, nodeID, from, to)
+	samples, err := h.store.QueryTelemetryHistory(ctx, tenant, nodeID, from, to)
 	if err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	buckets := aggregateHistory(samples, from, step)
 	if buckets == nil {
 		buckets = []historyBucket{}
 	}
-	writeJSON(w, http.StatusOK, historyResponse{Step: step.String(), Buckets: buckets})
+	return historyResponse{Step: step.String(), Buckets: buckets}, nil
 }

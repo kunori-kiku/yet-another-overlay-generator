@@ -13,6 +13,7 @@ package api
 // not browser-reachable and must not gain an ambient-credential surface.
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -144,22 +145,16 @@ type sessionResponseJSON struct {
 
 // HandleSession reports the current operator session (operator-authed via Bearer OR
 // the session cookie). It is the panel's refresh-time probe: a 200 means "still logged
-// in" (and reveals the operator + expiry); operatorAuth answers 401/403 otherwise.
-func (h *ControllerHandler) HandleSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	_, operator, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+// in" (and reveals the operator + expiry); operatorAuth answers 401/403 otherwise. Routed
+// through the op() adapter, which applies the method guard + structural identity() check;
+// the operator identity arrives as `actor`. It reads its tenant from h.tenant (the pinned
+// single-tenant), so the adapter's tenant arg is unused.
+func (h *ControllerHandler) HandleSession(ctx context.Context, _ controller.TenantID, actor string, _ http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	// Best-effort expiry: only a cookie/session bearer resolves to a stored session with
 	// an ExpiresAt (the break-glass token has none). A lookup miss just omits the field.
 	expiresAt := ""
 	if tok, ok := bearerOrCookieToken(r); ok {
-		if sess, err := h.store.LookupSession(r.Context(), h.tenant, controller.HashToken(tok), time.Now().UTC()); err == nil {
+		if sess, err := h.store.LookupSession(ctx, h.tenant, controller.HashToken(tok), time.Now().UTC()); err == nil {
 			expiresAt = sess.ExpiresAt.Format(time.RFC3339)
 		}
 	}
@@ -169,7 +164,7 @@ func (h *ControllerHandler) HandleSession(w http.ResponseWriter, r *http.Request
 	if c, err := r.Cookie(csrfCookieName); err == nil {
 		csrf = c.Value
 	}
-	writeJSON(w, http.StatusOK, sessionResponseJSON{Operator: operator, ExpiresAt: expiresAt, CSRFToken: csrf, ControllerVersion: h.version})
+	return sessionResponseJSON{Operator: actor, ExpiresAt: expiresAt, CSRFToken: csrf, ControllerVersion: h.version}, nil
 }
 
 // bearerOrCookieToken returns the operator credential from the Authorization header if

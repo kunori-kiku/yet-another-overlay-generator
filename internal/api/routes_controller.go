@@ -257,71 +257,82 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 // operatorAuth (the shared operator bearer token).
 func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	base := h.OperatorBasePath()
-	op := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
+	// secure wraps an operator route with the shared MIDDLEWARE — cors + operatorAuth (the
+	// bearer/session/CSRF chokepoint that pins the identity onto the context). The typed
+	// operator handlers are additionally wrapped by the op()/opRaw() ADAPTER (adapter.go),
+	// which adds the per-handler method guard + structural identity() check ONCE so no
+	// handler body can forget it (invariant 4). Handlers that are multi-method with an
+	// identity-free leg (settings, operator-credential) or need no identity (login/logout,
+	// release-pins/assets) are NOT routed through the adapter and keep their hand-rolled
+	// shape — the adapter is never weakened to fit them.
+	secure := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
 	// Operator login (plan-5.2): /login is UNAUTHENTICATED (reachable before the
 	// operator has a session) — cors-wrapped but NOT operatorAuth; it verifies a
 	// password and mints a session. /logout is authenticated and revokes the
 	// presented session.
 	mux.HandleFunc(base+"login", h.cors(h.HandleLogin))
-	mux.HandleFunc(base+"logout", op(h.HandleLogout))
+	mux.HandleFunc(base+"logout", secure(h.HandleLogout))
 	// Session probe (panel-appshell P5): the panel calls GET /session on mount to derive
 	// login state from the httpOnly cookie after a refresh (no token read in JS).
-	mux.HandleFunc(base+"session", op(h.HandleSession))
+	mux.HandleFunc(base+"session", secure(h.op(http.MethodGet, h.HandleSession)))
 	// Passwordless passkey login (plan-5.2): UNAUTHENTICATED (reachable before a session),
 	// cors-wrapped but NOT operatorAuth. begin issues a single-use random challenge for a
 	// username; finish verifies the WebAuthn assertion and mints a session (no password).
 	mux.HandleFunc(base+"login/passkey/begin", h.cors(h.HandlePasskeyLoginBegin))
 	mux.HandleFunc(base+"login/passkey/finish", h.cors(h.HandlePasskeyLoginFinish))
 	// TOTP login 2FA (plan-5.2): manage the current operator's optional second factor.
-	mux.HandleFunc(base+"totp/status", op(h.HandleTOTPStatus))
-	mux.HandleFunc(base+"totp/enroll", op(h.HandleTOTPEnroll))
-	mux.HandleFunc(base+"totp/confirm", op(h.HandleTOTPConfirm))
-	mux.HandleFunc(base+"totp/disable", op(h.HandleTOTPDisable))
+	mux.HandleFunc(base+"totp/status", secure(h.op(http.MethodGet, h.HandleTOTPStatus)))
+	mux.HandleFunc(base+"totp/enroll", secure(h.op(http.MethodPost, h.HandleTOTPEnroll)))
+	mux.HandleFunc(base+"totp/confirm", secure(h.op(http.MethodPost, h.HandleTOTPConfirm)))
+	mux.HandleFunc(base+"totp/disable", secure(h.op(http.MethodPost, h.HandleTOTPDisable)))
 	// Passkey login management (plan-5.2): register/disable the current operator's login
 	// passkey (the password+passkey 2FA factor and the passwordless credential).
-	mux.HandleFunc(base+"passkey/status", op(h.HandlePasskeyStatus))
-	mux.HandleFunc(base+"passkey/register", op(h.HandlePasskeyRegister))
-	mux.HandleFunc(base+"passkey/disable", op(h.HandlePasskeyDisable))
-	mux.HandleFunc(base+"update-topology", op(h.HandleUpdateTopology))
-	mux.HandleFunc(base+"stage", op(h.HandleStage))
-	mux.HandleFunc(base+"deploy-preview", op(h.HandleDeployPreview))
+	mux.HandleFunc(base+"passkey/status", secure(h.op(http.MethodGet, h.HandlePasskeyStatus)))
+	mux.HandleFunc(base+"passkey/register", secure(h.op(http.MethodPost, h.HandlePasskeyRegister)))
+	mux.HandleFunc(base+"passkey/disable", secure(h.op(http.MethodPost, h.HandlePasskeyDisable)))
+	mux.HandleFunc(base+"update-topology", secure(h.op(http.MethodPost, h.HandleUpdateTopology)))
+	mux.HandleFunc(base+"stage", secure(h.op(http.MethodPost, h.HandleStage)))
+	mux.HandleFunc(base+"deploy-preview", secure(h.op(http.MethodPost, h.HandleDeployPreview)))
 	// Read-only, server-authoritative compile preview (the controller "Compile" button):
 	// renders the enrolled subgraph WITHOUT staging/persisting, returning configs + skipped.
-	mux.HandleFunc(base+"compile-preview", op(h.HandleCompilePreview))
-	mux.HandleFunc(base+"promote", op(h.HandlePromote))
-	mux.HandleFunc(base+"nodes", op(h.HandleNodes))
-	mux.HandleFunc(base+"node-history", op(h.HandleNodeHistory))
+	mux.HandleFunc(base+"compile-preview", secure(h.op(http.MethodPost, h.HandleCompilePreview)))
+	mux.HandleFunc(base+"promote", secure(h.op(http.MethodPost, h.HandlePromote)))
+	mux.HandleFunc(base+"nodes", secure(h.op(http.MethodGet, h.HandleNodes)))
+	mux.HandleFunc(base+"node-history", secure(h.op(http.MethodGet, h.HandleNodeHistory)))
 	// Manual-node bundle download (mixed-controller-local-mode plan-3): a MANUAL (agent-less) node has
 	// no agent to pull /config, so the operator downloads its promoted, off-host-signed bundle as a ZIP
 	// (?node=<id>) and installs it by hand. Manual-only; the bundle carries the key placeholder, never
-	// real key material.
-	mux.HandleFunc(base+"manual-node-bundle", op(h.HandleManualNodeBundle))
-	mux.HandleFunc(base+"revoke", op(h.HandleRevoke))
-	mux.HandleFunc(base+"audit", op(h.HandleAudit))
-	mux.HandleFunc(base+"topology", op(h.HandleTopology))
+	// real key material. opRaw: it writes a ZIP with its own Content-Type/Content-Disposition.
+	mux.HandleFunc(base+"manual-node-bundle", secure(h.opRaw(http.MethodGet, h.HandleManualNodeBundle)))
+	mux.HandleFunc(base+"revoke", secure(h.op(http.MethodPost, h.HandleRevoke)))
+	mux.HandleFunc(base+"audit", secure(h.op(http.MethodGet, h.HandleAudit)))
+	// opRaw: /topology writes the stored bytes verbatim with its own charset Content-Type.
+	mux.HandleFunc(base+"topology", secure(h.opRaw(http.MethodGet, h.HandleTopology)))
 	// Topology version history (plan-2, D7): list retained versions; a specific
 	// version's payload is served by GET /topology?version=N above.
-	mux.HandleFunc(base+"topology/versions", op(h.HandleTopologyVersions))
-	mux.HandleFunc(base+"enrollment-token", op(h.HandleEnrollmentToken))
-	mux.HandleFunc(base+"rekey-all", op(h.HandleRekeyAll))
-	mux.HandleFunc(base+"clear-rekey", op(h.HandleClearRekey))
-	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL.
-	mux.HandleFunc(base+"settings", op(h.HandleSettings))
+	mux.HandleFunc(base+"topology/versions", secure(h.op(http.MethodGet, h.HandleTopologyVersions)))
+	mux.HandleFunc(base+"enrollment-token", secure(h.op(http.MethodPost, h.HandleEnrollmentToken)))
+	mux.HandleFunc(base+"rekey-all", secure(h.op(http.MethodPost, h.HandleRekeyAll)))
+	mux.HandleFunc(base+"clear-rekey", secure(h.op(http.MethodPost, h.HandleClearRekey)))
+	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL. Multi-method
+	// (GET reads without an identity; POST needs one) so it stays hand-rolled, not adapter-routed.
+	mux.HandleFunc(base+"settings", secure(h.HandleSettings))
 	// Assisted release-pin fetch (controller-panel-rollout-ui plan-1): fetch the per-asset
 	// .sha256 sidecars for agent/mimic release assets through the gh-proxy and return Artifact
 	// pins for operator REVIEW. A convenience only — trust stays the keystone-signed
 	// artifacts.json the agent verifies against (see release_pins.go custody note).
-	mux.HandleFunc(base+"release-pins", op(h.HandleReleasePins))
+	mux.HandleFunc(base+"release-pins", secure(h.HandleReleasePins))
 	// Assisted release-ASSET discovery (beta9-smoke-hardening plan-4): list a GitHub release's
 	// .deb asset names (hitting the GitHub REST API directly, not the gh-proxy) so the mimic catalog
 	// offers a pick-from checklist instead of hand-typed filenames. Convenience only — the SHA-256
 	// pin is still fetched + saved separately (see release_assets.go custody note).
-	mux.HandleFunc(base+"release-assets", op(h.HandleReleaseAssets))
+	mux.HandleFunc(base+"release-assets", secure(h.HandleReleaseAssets))
 	// Keystone (plan-5.1b): pin the off-host operator credential, fetch the canonical
-	// trust-list bytes to sign, and submit the off-host signature.
-	mux.HandleFunc(base+"operator-credential", op(h.HandleOperatorCredential))
-	mux.HandleFunc(base+"trustlist", op(h.HandleTrustList))
-	mux.HandleFunc(base+"trustlist-signature", op(h.HandleTrustListSignature))
+	// trust-list bytes to sign, and submit the off-host signature. operator-credential is
+	// multi-method (GET status / POST pin) so it stays hand-rolled, not adapter-routed.
+	mux.HandleFunc(base+"operator-credential", secure(h.HandleOperatorCredential))
+	mux.HandleFunc(base+"trustlist", secure(h.op(http.MethodGet, h.HandleTrustList)))
+	mux.HandleFunc(base+"trustlist-signature", secure(h.op(http.MethodPost, h.HandleTrustListSignature)))
 }
 
 // normalizePathPrefix normalizes a configured secret path prefix to "" (no prefix)
