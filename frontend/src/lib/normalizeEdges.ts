@@ -1,4 +1,4 @@
-import { linkKey } from '../compiler/linkid';
+import { linkKey } from './linkid';
 import type { Edge, Node } from '../types/topology';
 
 // healCollidingPins repairs the "pin occupied by two different links" corruption: an edge whose
@@ -38,10 +38,10 @@ const PIN_FIELDS = [
   'pinned_to_link_local',
 ] as const;
 
-// pinKey / linkKey are the canonical link-identity functions, now lifted to ../compiler/linkid.ts
-// (the single source of truth mirroring internal/linkid). This module imports linkKey from there;
-// the prior in-file duplicates were retired. pinKey is no longer referenced here directly (linkKey
-// folds it in), so it is not re-imported.
+// pinKey / linkKey are the canonical link-identity functions, lifted to ./linkid.ts (the single
+// source of truth mirroring internal/linkid). This module imports linkKey from there; the prior
+// in-file duplicates were retired. pinKey is no longer referenced here directly (linkKey folds it
+// in), so it is not re-imported.
 
 // canonicalIP mirrors Go's net.IP.String() (used by the validator + Go heal's canonicalIP) so the
 // browser heal detects the SAME address collisions regardless of spelling — e.g. "FE80::1" and

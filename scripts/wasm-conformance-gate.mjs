@@ -1,16 +1,18 @@
 #!/usr/bin/env node
-// wasm-conformance-gate.mjs — the PERMANENT three-way conformance gate
+// wasm-conformance-gate.mjs — the PERMANENT WASM-vs-golden conformance gate
 // (framework-refactor plan-3, invariant [1]: "parity is proven by execution + a permanent
-// gate, never by construction").
+// gate, never by construction"). Since plan-5 deleted the hand-mirrored TS compiler, this is
+// the SOLE fail-closed oracle for the render/success path (WASM runs the same Go code).
 //
 // It EXECUTES the built web/yaog.wasm (the pure Go pipeline compiled to GOOS=js GOARCH=wasm)
 // and asserts, byte-for-byte, that its conformance manifest equals the frozen Go golden over
 // the FULL success corpus:
 //
-//   golden  == the Go oracle (internal/conformance TestGolden freezes conformance.BuildManifest)
+//   golden  == the Go oracle (internal/localcompile TestGolden freezes localcompile.BuildManifest)
 //   WASM    == this gate (runs the SAME BuildManifest inside yaog.wasm) == golden   ⇒  WASM == Go
-//   TS      == golden (the existing vitest conformance)                             ⇒  TS   == Go
-//   ∴ WASM == Go == TS  (the three-way equality the flip in plan-4/5 depends on)
+//
+// (The two-channel fail/verdict corpus is asserted by the Go TestGoldenFail in
+// internal/localcompile — it has no wasm-gate counterpart.)
 //
 // A WASM-vs-golden divergence is a GOARCH=wasm determinism quirk to CHARACTERIZE (plan-3.5) —
 // it is NEVER a reason to `-update` the golden. This script therefore only READS the goldens.
@@ -32,7 +34,11 @@ import vm from 'node:vm';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const CORPUS_DIR = join(repoRoot, 'internal/localcompile/testdata/contract/topologies');
-const GOLDEN_DIR = join(repoRoot, 'internal/conformance/testdata/golden');
+// The BuildManifest success goldens, re-homed from internal/conformance into localcompile
+// (framework-refactor plan-5, TS-twin deletion). The golden/fail/ subset is out of this gate's
+// scope (the readdir .json filter skips the fail/ subdir); the fail goldens are asserted by the Go
+// TestGoldenFail in internal/localcompile.
+const GOLDEN_DIR = join(repoRoot, 'internal/localcompile/testdata/golden');
 const SIGNING_PEM = join(repoRoot, 'internal/localcompile/testdata/contract/signing/test-signing-key.pem');
 const WASM_PATH = join(repoRoot, 'web/yaog.wasm');
 const COMMITTED_WASM_EXEC = join(repoRoot, 'web/wasm_exec.js');
@@ -117,7 +123,7 @@ const mismatches = [];
 for (const file of corpusFiles) {
   const raw = readFileSync(join(CORPUS_DIR, file), 'utf8');
   const parsed = JSON.parse(raw);
-  // Golden key mirrors conformance/golden_test.go parseFixture: the fixture's `name` field,
+  // Golden key mirrors localcompile's parseFixture (manifest_golden_test.go): the fixture's `name`,
   // falling back to the file basename when empty. (The corpus files are numbered, e.g.
   // 01-single-primary-link.json, but the golden is keyed by name: single-primary-link.json.)
   const name = parsed.name && parsed.name.length > 0 ? parsed.name : basename(file, '.json');

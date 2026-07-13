@@ -60,7 +60,9 @@ test('WASM local engine: design → validate → compile → export → deploy-s
     if (m.type() === 'error' && isWasmText(m.text())) wasmConsoleErrors.push(m.text())
   })
   page.on('response', (r) => {
-    if (isWasmAsset(r.url()) && !r.ok()) wasmAssetFailures.push(`${r.status()} ${r.url()}`)
+    // A real serve failure is a 4xx/5xx — NOT a 304 Not Modified (a legitimate cache revalidation
+    // the browser issues on a repeat navigation, which .ok() rejects and would flake this guard).
+    if (isWasmAsset(r.url()) && r.status() >= 400) wasmAssetFailures.push(`${r.status()} ${r.url()}`)
   })
   page.on('requestfailed', (r) => {
     if (isWasmAsset(r.url())) wasmAssetFailures.push(`failed ${r.url()}`)

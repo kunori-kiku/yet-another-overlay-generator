@@ -6,10 +6,12 @@
 // it in place of the TS compiler. It is PREVIEW-ONLY (invariant [4]): local WASM mode never
 // deploys or stages — controller compute stays server-side.
 //
-// ADDITIVE: the TypeScript compiler stays the DEFAULT local engine. This module is reached
-// ONLY when VITE_YAOG_LOCAL_ENGINE === 'wasm' (see compiler/localEngine.ts), and it is loaded
-// via a dynamic import() so its bytes (JSZip + the wasm glue) are code-split out of the
-// default bundle — a TS-default / controller-only operator never pays for it.
+// Since framework-refactor plan-5 deleted the hand-mirrored TS compiler, this IS the local engine
+// (reached whenever local-mode compute is enabled — see lib/localEngine.ts). It is loaded via a
+// dynamic import() so its bytes (the wasm glue) are code-split out of the default bundle — a
+// controller-only operator who never enables the local engine does not pay for it. The export ZIP is
+// now built inside the wasm (cmd/wasm exportZip via archive/zip), so this module carries NO JS zip
+// dependency.
 //
 // The bridge to the wasm shim (cmd/wasm/main.go): every call marshals its argument to a JSON
 // STRING, calls the matching function the shim registered on globalThis.yaog (a synchronous
@@ -23,17 +25,16 @@
 // (a prior load, or a Node test harness that instantiated the wasm itself) ensureWasm() reuses
 // it and skips the browser fetch — which is what keeps this module unit-testable off the DOM.
 
-import JSZip from 'jszip';
 import type { CompileResponse, Topology, ValidateResponse } from '../types/topology';
 
 // YaogWasmApi is the JSON-string API cmd/wasm/main.go registers on globalThis.yaog. Each method
 // takes/returns strings; the JSON shapes match the air-gap HTTP responses (CompileResponse /
-// ValidateResponse) and the raw per-node file map.
+// ValidateResponse); exportZip returns the preview ZIP bytes as a base64 string.
 interface YaogWasmApi {
   compile(topoJSON: string): string;
   validate(topoJSON: string): string;
   deployScript(topoJSON: string, format: 'sh' | 'ps1'): string;
-  exportFiles(topoJSON: string): string;
+  exportZip(topoJSON: string): string;
   buildManifest(fixtureJSON: string, signingKeyPEM: string): string;
 }
 
@@ -127,25 +128,19 @@ export async function deployScripts(topo: Topology): Promise<{ sh: string; ps1: 
   return { sh: await deployScript(topo, 'sh'), ps1: await deployScript(topo, 'ps1') };
 }
 
-// exportArtifacts mirrors the TS engine's exportArtifacts(): a downloadable ZIP Blob. The shim
-// returns the raw per-node bundle file set { nodeID: { relpath: content } } and this builds a
-// plain per-node-folder ZIP client-side. NOTE (preview-only, invariant [4]): this differs from
-// the TS/air-gap export, which wraps each node in a self-extracting installer; the WASM engine is
-// a design PREVIEW and never deploys, so it ships the raw config files rather than replicating the
-// installer wrapper (which lives behind //go:build airgap and is out of the wasm shim's scope).
+// exportArtifacts returns a downloadable ZIP Blob. The shim (cmd/wasm exportZip) builds the archive
+// inside the wasm via Go's archive/zip over the per-node bundle file set and returns it as base64, so
+// no JS zip library is needed. NOTE (preview-only, invariant [4]): this differs from the air-gap
+// export, which wraps each node in a self-extracting installer; the WASM engine is a design PREVIEW
+// and never deploys, so it ships the raw config files rather than replicating the installer wrapper
+// (which lives behind //go:build airgap and is out of the wasm shim's scope). A base64 string never
+// begins with '{', so throwIfErrorEnvelope distinguishes it from the {"error":...} envelope.
 export async function exportArtifacts(topo: Topology): Promise<Blob> {
   const api = await ensureWasm();
-  const files = parseResult<Record<string, Record<string, string>>>(
-    api.exportFiles(JSON.stringify(topo)),
-    'export',
-  );
-  const zip = new JSZip();
-  for (const [nodeID, nodeFiles] of Object.entries(files)) {
-    for (const [relpath, content] of Object.entries(nodeFiles)) {
-      zip.file(`${nodeID}/${relpath}`, content);
-    }
-  }
-  return zip.generateAsync({ type: 'blob' });
+  const out = api.exportZip(JSON.stringify(topo));
+  throwIfErrorEnvelope(out, 'export');
+  const bytes = Uint8Array.from(atob(out), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: 'application/zip' });
 }
 
 // parseResult JSON-parses a shim result string, throwing if it is the {"error":"..."} envelope.

@@ -21,23 +21,28 @@
 // object `{"error":"<code-or-message>"}` on failure — a shape wasmEngine.ts detects.
 //
 // The shim adds ZERO Go dependencies (invariant [4]/[6]): it imports only the pure-core
-// packages already in the module (localcompile/compiler/render/validator/model/bundlesig)
-// plus the test-support conformance oracle, which BuildManifest/Marshal live in as ordinary
-// (non-test-tagged) code. It performs NO file I/O — the gate feeds the fixture JSON and the
-// signing PEM as string arguments — so the js/wasm os shim is never exercised.
+// packages already in the module (localcompile/compiler/render/validator/model/bundlesig).
+// The conformance manifest oracle (BuildManifest/Marshal) is re-homed into localcompile as
+// ordinary non-test code (framework-refactor plan-5, TS-twin deletion), so the shim links it
+// directly. It performs NO file I/O — the gate feeds the fixture JSON and the signing PEM as
+// string arguments, and exportZip returns the ZIP bytes as base64 — so the js/wasm os shim is
+// never exercised.
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"syscall/js"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/conformance"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/render"
@@ -51,7 +56,7 @@ func main() {
 	yaog.Set("compile", js.FuncOf(wasmCompile))
 	yaog.Set("validate", js.FuncOf(wasmValidate))
 	yaog.Set("deployScript", js.FuncOf(wasmDeployScript))
-	yaog.Set("exportFiles", js.FuncOf(wasmExportFiles))
+	yaog.Set("exportZip", js.FuncOf(wasmExportZip))
 	yaog.Set("buildManifest", js.FuncOf(wasmBuildManifest))
 	js.Global().Set("yaog", yaog)
 
@@ -87,9 +92,9 @@ type validateResponse struct {
 	Warnings []validator.ValidationError `json:"warnings,omitempty"`
 }
 
-// onDiskFixture is the JSON shape of a plan-3 contract fixture — kept byte-identical to the
-// loader in internal/conformance/golden_test.go (onDiskFixture) so the SAME corpus file
-// resolves the SAME Fixture on the wasm side. buildManifest consumes it.
+// onDiskFixture is the JSON shape of a contract fixture — kept byte-identical to the localcompile
+// contract loader's `fixture` shape (internal/localcompile/contract_golden_test.go) so the SAME
+// corpus file resolves the SAME Fixture on the wasm side. buildManifest consumes it.
 type onDiskFixture struct {
 	Name     string          `json:"name"`
 	Doc      string          `json:"doc"`
@@ -102,7 +107,7 @@ type onDiskFixture struct {
 // inject so the display-only manifest.compiled_at is deterministic. It reuses the oracle's
 // pinned instant (compiled_at is OUT of the conformance byte set, so this coupling changes
 // no gated bytes) — invariant [2].
-var fixedPreviewClock = conformance.FixedCompiledAt
+var fixedPreviewClock = localcompile.FixedCompiledAt
 
 // previewRequest builds the CompileRequest the browser-preview paths (compile / deployScript /
 // exportFiles) share: AirGap custody (local mode reconstructs private keys into the result
@@ -179,9 +184,15 @@ func wasmDeployScript(_ js.Value, args []js.Value) any {
 	return result.DeployScripts[name]
 }
 
-// wasmExportFiles returns the per-node bundle file set {nodeID:{relpath:content}} from the
-// canonical CompileArtifacts, so wasmEngine.ts can build the preview ZIP client-side.
-func wasmExportFiles(_ js.Value, args []js.Value) any {
+// wasmExportZip compiles the topology and returns a preview ZIP of the per-node bundle file set
+// (entries keyed "<nodeID>/<relpath>") as a base64 string, so wasmEngine.ts hands the browser a Blob
+// with no JS zip library (the jszip dependency is dropped — framework-refactor plan-5). The archive
+// is built with archive/zip over a DETERMINISTIC ordering (nodeIDs + relpaths sorted, a fixed entry
+// modtime): export bytes are a design PREVIEW and are NOT part of the conformance byte set (the gate
+// uses buildManifest, not export), so determinism here is a nicety, not a gated contract. A base64
+// string never begins with '{', so wasmEngine.ts distinguishes it from the {"error":...} envelope
+// exactly as it does for the deploy-script body.
+func wasmExportZip(_ js.Value, args []js.Value) any {
 	var topo model.Topology
 	if err := json.Unmarshal([]byte(args[0].String()), &topo); err != nil {
 		return errEnvelope(err)
@@ -190,21 +201,51 @@ func wasmExportFiles(_ js.Value, args []js.Value) any {
 	if err != nil {
 		return errEnvelope(err)
 	}
-	return mustJSON(art.Files)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	nodeIDs := make([]string, 0, len(art.Files))
+	for id := range art.Files {
+		nodeIDs = append(nodeIDs, id)
+	}
+	sort.Strings(nodeIDs)
+	for _, id := range nodeIDs {
+		files := art.Files[id]
+		relpaths := make([]string, 0, len(files))
+		for rel := range files {
+			relpaths = append(relpaths, rel)
+		}
+		sort.Strings(relpaths)
+		for _, rel := range relpaths {
+			fh := &zip.FileHeader{Name: id + "/" + rel, Method: zip.Deflate}
+			fh.Modified = fixedPreviewClock
+			w, err := zw.CreateHeader(fh)
+			if err != nil {
+				return errEnvelope(err)
+			}
+			if _, err := w.Write([]byte(files[rel])); err != nil {
+				return errEnvelope(err)
+			}
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return errEnvelope(err)
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 // wasmBuildManifest is THE GATE ENTRY (invariant [1]). It resolves an on-disk contract
-// fixture into a conformance.Fixture EXACTLY as internal/conformance/golden_test.go's
-// parseFixture/loadTestSigner do — custody string -> render.KeyCustody, and, for a signing
-// fixture, the throwaway test signer built from the PEM the second argument carries — then
-// runs conformance.BuildManifest and returns conformance.Marshal's canonical bytes. That
-// output is byte-identical to the frozen golden iff WASM == Go.
+// fixture into a localcompile.Fixture EXACTLY as localcompile's parseFixture/loadTestSigner do —
+// custody string -> render.KeyCustody, and, for a signing fixture, the throwaway test signer built
+// from the PEM the second argument carries — then runs localcompile.BuildManifest and returns
+// localcompile.Marshal's canonical bytes. That output is byte-identical to the frozen golden iff
+// WASM == Go.
 func wasmBuildManifest(_ js.Value, args []js.Value) any {
 	var od onDiskFixture
 	if err := json.Unmarshal([]byte(args[0].String()), &od); err != nil {
 		return errEnvelope(err)
 	}
-	fx := conformance.Fixture{Name: od.Name}
+	fx := localcompile.Fixture{Name: od.Name}
 	if err := json.Unmarshal(od.Topology, &fx.Topology); err != nil {
 		return errEnvelope(err)
 	}
@@ -226,11 +267,11 @@ func wasmBuildManifest(_ js.Value, args []js.Value) any {
 			PubKeyPEM: bundlesig.MarshalPublicKeyPEM(priv.Public().(ed25519.PublicKey)),
 		}
 	}
-	m, err := conformance.BuildManifest(fx)
+	m, err := localcompile.BuildManifest(fx)
 	if err != nil {
 		return errEnvelope(err)
 	}
-	out, err := conformance.Marshal(m)
+	out, err := localcompile.Marshal(m)
 	if err != nil {
 		return errEnvelope(err)
 	}

@@ -1,4 +1,4 @@
-package conformance
+package localcompile
 
 import (
 	"crypto/ecdh"
@@ -8,23 +8,22 @@ import (
 	"testing"
 )
 
-// keygen_kat_test.go — X25519 known-answer test (step 4 of plan-5 / 1.5).
+// keygen_kat_test.go — X25519 known-answer test, re-homed from internal/conformance
+// (framework-refactor plan-5).
 //
-// It pins the WireGuard key-derivation definition the whole conformance program rests on:
-// the public key is X25519(private, basepoint), base64.StdEncoding-encoded. The test derives
-// public keys here by calling crypto/ecdh X25519 DIRECTLY — the SAME stdlib derivation
-// internal/localcompile.ecdhKeygen.DerivePublic wraps. ecdhKeygen is unexported (a deliberate
-// reference/test implementation not wired into production), so the KAT cannot call it across the
-// package boundary; calling ecdh.X25519().NewPrivateKey(raw).PublicKey() reproduces its derivation
-// byte-for-byte (ecdhKeygen IS that one line plus base64). plan-3 proved ecdhKeygen byte-equal to
-// the default wgtypesKeygen (the production path) over 10k inputs, so this single definition is the
-// anchor plans 3, 4, and 5 all pin: the harness here, plan-4's @noble/curves port (which asserts
-// against testdata/keygen_kat.json), and the live pipeline.
+// It pins the WireGuard key-derivation definition the whole conformance program rests on: the public
+// key is X25519(private, basepoint), base64.StdEncoding-encoded. The test derives public keys here by
+// calling crypto/ecdh X25519 DIRECTLY — the SAME stdlib derivation this package's ecdhKeygen.
+// DerivePublic wraps. ecdhKeygen is unexported (a deliberate reference/test implementation), so
+// calling ecdh.X25519().NewPrivateKey(raw).PublicKey() reproduces its derivation byte-for-byte
+// (ecdhKeygen IS that one line plus base64). plan-3 proved ecdhKeygen byte-equal to the default
+// wgtypesKeygen (the production path) over 10k inputs (keygen_equivalence_test.go), so this single
+// definition is the anchor the live pipeline + this KAT both pin.
 //
 // crypto/ecdh's X25519 clamps the scalar internally during the multiplication (exactly as
-// curve25519.ScalarBaseMult does inside wgtypes' Key.PublicKey), so an UNCLAMPED private key and
-// its clamped form derive the identical public key — the clamp_equivalence group asserts that
-// boundary property a TS port must reproduce.
+// curve25519.ScalarBaseMult does inside wgtypes' Key.PublicKey), so an UNCLAMPED private key and its
+// clamped form derive the identical public key — the clamp_equivalence group asserts that boundary
+// property.
 
 // keygenKAT is the on-disk testdata/keygen_kat.json shape.
 type keygenKAT struct {
@@ -44,12 +43,10 @@ type keygenKAT struct {
 	} `json:"clamp_equivalence"`
 }
 
-// derivePublicB64 reproduces internal/localcompile.ecdhKeygen.DerivePublic: decode the base64
-// X25519 private key, derive the public half via crypto/ecdh (which clamps internally), re-encode
-// base64.StdEncoding. Keeping this one-liner local (rather than importing the unexported ecdhKeygen)
-// is what makes the KAT a SECOND independent witness of the derivation — if ecdhKeygen ever drifts
-// from the X25519 definition, the equivalence test in localcompile catches it there and this KAT
-// catches it here.
+// derivePublicB64 reproduces ecdhKeygen.DerivePublic: decode the base64 X25519 private key, derive the
+// public half via crypto/ecdh (which clamps internally), re-encode base64.StdEncoding. Keeping this
+// one-liner local (rather than importing the unexported ecdhKeygen) is what makes the KAT a SECOND
+// independent witness of the derivation.
 func derivePublicB64(t *testing.T, privB64 string) string {
 	t.Helper()
 	raw, err := base64.StdEncoding.DecodeString(privB64)

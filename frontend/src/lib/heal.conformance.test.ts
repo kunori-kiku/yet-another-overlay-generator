@@ -6,17 +6,17 @@ import { describe, expect, it } from 'vitest'
 import type { Edge, Node, Topology } from '../types/topology'
 import { healCollidingPins } from './normalizeEdges'
 
-// Conformance canary (plan-5 step 7): pin the hand-mirrored FE heal (src/lib/normalizeEdges.ts
-// healCollidingPins) byte-for-byte against the Go heal (internal/normalize.HealCollidingPins +
-// internal/linkid) over the SHARED fixture corpus.
+// Conformance canary: pin the FE heal (src/lib/normalizeEdges.ts healCollidingPins) byte-for-byte
+// against the Go heal (internal/normalize.HealCollidingPins + internal/linkid) over the SHARED
+// fixture corpus. It survives the framework-refactor plan-5 TS-compiler deletion because its subject
+// — the FE healCollidingPins — is FE canvas/save heal logic, NOT the deleted compiler.
 //
-// The Go oracle (internal/conformance) freezes, for every corpus fixture, a canonical manifest whose
-// `healed_edges` field is `normalize.HealCollidingPins` run over the fixture's INPUT topology,
-// projected to {id + compiled_port + the six pinned_* fields} and sorted by id. This test re-runs the
-// FE healCollidingPins over the SAME inputs and asserts the SAME projection — so a divergence in the
-// FE linkKey / pinKey / PIN_FIELDS / canonicalIP mirror reds `npm run conformance`. This is the only
-// pipeline layer TS has today; plan-4 subsumes it as it lands each TS layer behind the full manifest
-// diff.
+// The Go oracle (internal/localcompile BuildManifest, re-homed from internal/conformance in plan-5)
+// freezes, for every corpus fixture, a canonical manifest whose `healed_edges` field is
+// `normalize.HealCollidingPins` run over the fixture's INPUT topology, projected to {id +
+// compiled_port + the six pinned_* fields} and sorted by id. This test re-runs the FE
+// healCollidingPins over the SAME inputs and asserts the SAME projection — so a divergence in the FE
+// linkKey / pinKey / PIN_FIELDS / canonicalIP mirror reds the vitest run.
 
 // Repo layout: this file lives at <repo>/frontend/src/lib/heal.conformance.test.ts, so the repo root
 // is three directories up from frontend/, i.e. ../../.. from src/lib.
@@ -32,16 +32,16 @@ const corpora = [
   {
     label: 'success',
     fixturesDir: join(repoRoot, 'internal/localcompile/testdata/contract/topologies'),
-    goldenDir: join(repoRoot, 'internal/conformance/testdata/golden'),
+    goldenDir: join(repoRoot, 'internal/localcompile/testdata/golden'),
   },
   {
     label: 'fail',
-    fixturesDir: join(repoRoot, 'internal/conformance/testdata/fail'),
-    goldenDir: join(repoRoot, 'internal/conformance/testdata/golden/fail'),
+    fixturesDir: join(repoRoot, 'internal/localcompile/testdata/fail'),
+    goldenDir: join(repoRoot, 'internal/localcompile/testdata/golden/fail'),
   },
 ] as const
 
-// HealedEdge mirrors internal/conformance.HealedEdge: the edge identity plus the seven pin fields the
+// HealedEdge mirrors internal/localcompile.HealedEdge: the edge identity plus the seven pin fields the
 // heal strips/keeps. The Go manifest emits zero values (0 / "") for absent pins; the FE Edge type has
 // them optional, so projectEdge fills the same zero values to make the two byte-comparable.
 interface HealedEdge {

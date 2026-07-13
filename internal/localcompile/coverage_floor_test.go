@@ -1,4 +1,4 @@
-package conformance
+package localcompile
 
 import (
 	"encoding/json"
@@ -11,32 +11,37 @@ import (
 	"testing"
 )
 
-// coverage_floor_test.go — the per-package statement-coverage FLOOR (plan-5 step 8).
+// coverage_floor_test.go — the per-package statement-coverage FLOOR, re-homed from
+// internal/conformance (framework-refactor plan-5).
 //
-// This is the load-bearing answer to the skeptic's "coverage is unbounded by construction": a
-// frozen floor over every package of the local-compile pipeline, enforced on every CI run by the
-// conformance job. Dropping a fixture, deleting a test, or adding an un-exercised Go branch that
-// pushes a package below its floor reds the build, naming the package and the gap.
+// This is the load-bearing answer to the skeptic's "coverage is unbounded by construction": a frozen
+// floor over every package of the local-compile pipeline. Dropping a fixture, deleting a test, or
+// adding an un-exercised Go branch that pushes a package below its floor reds the build, naming the
+// package and the gap.
 //
-// Mechanism: for each package in coverage_floor.json the test shells out to
+// Mechanism: for each package in testdata/coverage_floor.json the test shells out to
 //
 //	go test -count=1 -coverprofile=<tmp> ./internal/<pkg>/
 //
-// from the repo root, then reads the total statement coverage out of the profile and compares it
-// to the frozen floor. It shells out (rather than relying on the parent `go test`'s own -cover) so
-// the floor is self-contained: a single `go test ./internal/conformance/` enforces the whole
-// pipeline's floor, exactly as the CI job invokes it, with no -coverpkg juggling in the workflow.
+// from the repo root, then reads the total statement coverage out of the profile and compares it to
+// the frozen floor. It shells out (rather than relying on the parent `go test`'s own -cover) so the
+// floor is self-contained: a single gated `go test` run enforces the whole pipeline's floor.
+//
+// RECURSION GUARD (plan-5): TestCoverageFloor now lives in internal/localcompile, and localcompile is
+// ITSELF one of the floored packages. The shelled-out `go test ./internal/localcompile/` would
+// otherwise inherit YAOG_CONFORMANCE_COVERAGE_FLOOR from the parent env and re-run TestCoverageFloor,
+// which would shell out again — an unbounded fork. packageCoverage STRIPS that env var from every
+// child invocation so the coverage run never recurses, regardless of which package hosts the test.
 //
 // internal/model is pure type / json-tag declarations with NO executable statements, so its profile
 // is just `mode: set` with no per-statement lines and `go test -cover` prints `[no statements]`. The
 // parser treats a profile with zero counted statements as a vacuous 100% (it cannot regress), which
-// passes its floor of 0 — the package is still LISTED so a future executable statement landing in it
-// without a test is visible, and the floor can be raised in the same edit.
+// passes its floor of 0.
 //
 // RE-BASELINE: this test has no -update path on purpose — the floor is a deliberate, reviewed value,
 // not a snapshot to be silently refreshed. After an intentional coverage change, run
-// `go test -cover ./internal/<pkg>/` for each package, edit coverage_floor.json to a couple points
-// below the new measurement, and commit the diff.
+// `go test -cover ./internal/<pkg>/` for each package, edit testdata/coverage_floor.json to a couple
+// points below the new measurement, and commit the diff.
 
 // coverageFloors is the on-disk coverage_floor.json shape.
 type coverageFloors struct {
@@ -44,9 +49,9 @@ type coverageFloors struct {
 	Floors map[string]float64 `json:"floors"`
 }
 
-const coverageFloorPath = "coverage_floor.json"
+const coverageFloorPath = "testdata/coverage_floor.json"
 
-// repoRoot resolves the module root (two levels up from internal/conformance/) so the shelled-out
+// repoRoot resolves the module root (two levels up from internal/localcompile/) so the shelled-out
 // `go test ./internal/<pkg>/` patterns and the coverprofile temp files resolve against the real
 // module, independent of where the parent test process set its working directory.
 func repoRoot(t *testing.T) string {
@@ -76,6 +81,21 @@ func loadCoverageFloors(t *testing.T) coverageFloors {
 	return cf
 }
 
+// childEnvWithoutFloorGate returns the current environment with YAOG_CONFORMANCE_COVERAGE_FLOOR
+// removed, so a shelled-out `go test ./internal/<pkg>/` (including localcompile, which hosts this
+// test) does not re-trigger TestCoverageFloor and recurse.
+func childEnvWithoutFloorGate() []string {
+	base := os.Environ()
+	out := make([]string, 0, len(base))
+	for _, kv := range base {
+		if strings.HasPrefix(kv, envCoverageFloor+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // packageCoverage runs `go test -count=1 -coverprofile` for one pipeline package from the repo root
 // and returns its total statement-coverage percent. A package with no executable statements (e.g.
 // internal/model — pure type declarations) yields a profile with no counted statements; that is a
@@ -89,8 +109,9 @@ func packageCoverage(t *testing.T, root, pkg string) float64 {
 	cmd := exec.Command("go", "test", "-count=1", "-coverprofile="+profile, pattern)
 	cmd.Dir = root
 	// Inherit the environment (GOPROXY/GOSUMDB/PATH from CI or the local shell) so the child go
-	// invocation resolves modules exactly as the parent did.
-	cmd.Env = os.Environ()
+	// invocation resolves modules exactly as the parent did — but WITHOUT the coverage-floor gate var,
+	// so a child `go test ./internal/localcompile/` never re-runs this test (see the recursion guard).
+	cmd.Env = childEnvWithoutFloorGate()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go test %s failed (cannot measure coverage):\n%s", pattern, out)
 	}
@@ -135,8 +156,8 @@ func parseProfileTotal(t *testing.T, profile, pkg string) float64 {
 		}
 	}
 	if total == 0 {
-		// No executable statements (pure declarations): coverage cannot regress, so it is a
-		// vacuous pass against any floor.
+		// No executable statements (pure declarations): coverage cannot regress, so it is a vacuous
+		// pass against any floor.
 		return 100.0
 	}
 	return float64(covered) / float64(total) * 100.0
@@ -148,16 +169,16 @@ func parseProfileTotal(t *testing.T, profile, pkg string) float64 {
 // against silently un-exercised Go branches and dropped fixtures.
 //
 // Because it re-runs the entire pipeline test suite once per package (shelling out to `go test
-// -coverprofile`), it would otherwise fire on every `go test ./...` — including the main `go` CI
-// job and local inner-loop runs — double-running every pipeline suite. So it is GATED to the
-// dedicated conformance job: it runs only when YAOG_CONFORMANCE_COVERAGE_FLOOR is set (the CI
-// conformance-job step sets it), and is skipped everywhere else. To run it locally:
-// `YAOG_CONFORMANCE_COVERAGE_FLOOR=1 go test ./internal/conformance/ -run TestCoverageFloor`.
+// -coverprofile`), it would otherwise fire on every `go test ./...` — including the main `go` CI job
+// and local inner-loop runs — double-running every pipeline suite. So it is GATED: it runs only when
+// YAOG_CONFORMANCE_COVERAGE_FLOOR is set (the CI `go` job's dedicated floor step sets it), and is
+// skipped everywhere else. To run it locally:
+// `YAOG_CONFORMANCE_COVERAGE_FLOOR=1 go test ./internal/localcompile/ -run TestCoverageFloor`.
 const envCoverageFloor = "YAOG_CONFORMANCE_COVERAGE_FLOOR"
 
 func TestCoverageFloor(t *testing.T) {
 	if os.Getenv(envCoverageFloor) == "" {
-		t.Skipf("coverage floor re-runs every pipeline package's tests; set %s=1 to run (the CI conformance job does)", envCoverageFloor)
+		t.Skipf("coverage floor re-runs every pipeline package's tests; set %s=1 to run (the CI go job's floor step does)", envCoverageFloor)
 	}
 	cf := loadCoverageFloors(t)
 	root := repoRoot(t)

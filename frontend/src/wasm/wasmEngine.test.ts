@@ -67,7 +67,7 @@ describe('wasmEngine (in-browser Go/WASM local engine)', () => {
   it('registers the yaog API on globalThis after instantiation', () => {
     const api = (globalThis as unknown as { yaog?: Record<string, unknown> }).yaog;
     expect(api).toBeDefined();
-    for (const fn of ['compile', 'validate', 'deployScript', 'exportFiles', 'buildManifest']) {
+    for (const fn of ['compile', 'validate', 'deployScript', 'exportZip', 'buildManifest']) {
       expect(typeof api?.[fn]).toBe('function');
     }
   });
