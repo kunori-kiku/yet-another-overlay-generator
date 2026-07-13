@@ -9,6 +9,60 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.5] - 2026-07-13
+
+**Release candidate.** Adds two operator-facing capabilities over `v2.0.0-rc.4`: **per-node resource
+history with node-detail CPU / RAM / load charts**, and **delta deploy** — a Deploy now re-stages only
+the nodes whose config actually changed instead of churning the whole fleet. It also fixes the
+underlying telemetry-framework defect behind the recurring "a new metric only fires at deploy time, then
+freezes" class. Eight reviewed plans (PRs #249–#256), each independently reviewed and adversarially
+verified before merge.
+
+### Added
+- **Node-detail CPU / RAM / load history charts.** The node-detail page charts each node's host-resource
+  history over a chosen **time range** and **granularity**: CPU %, memory-used %, and the load averages.
+  Built on a reusable, series-generic `TimeSeriesChart` (Recharts, lazy-loaded so the ~105 kB charting
+  dependency is code-split out of the initial bundle and loads only when a node-detail page is viewed).
+  (#253)
+- **`cpu_pct` host-resource metric.** The agent's `/telemetry` heartbeat now reports CPU utilisation as a
+  stateful `/proc/stat` jiffies delta between consecutive beats. The first beat after an agent (re)starts
+  carries no `cpu_pct` — a deliberate gap, never a fabricated `0`. (#249)
+- **Retained resource history + query API.** The controller keeps a bounded, append-only per-node history
+  of the `resource` metric (in-memory append on the heartbeat path — never a disk write — with an
+  off-heartbeat flush to per-node JSONL and amortized compaction). An operator-gated `node-history` query
+  aggregates raw samples server-side into bucketed avg/min/max, omitting empty buckets (gaps stay gaps),
+  flooring the step at ~1 s and widening it so a response never exceeds 1000 buckets. Retention is
+  configurable: a per-node sample cap (default ≈ 20160 ≈ 7 days at the 30 s heartbeat; `0` disables
+  history, which the charts render as a "history off" state; a persisted `0` survives a controller
+  restart). (#251, #252)
+- **Delta deploy — skip unchanged nodes.** A Deploy skips any enrolled node whose freshly compiled bundle
+  is byte-identical to the one it is already serving (identity = SHA-256 of `checksums.sha256`, which
+  excludes the volatile `compiled_at`). A skipped node keeps its current generation, so its agent never
+  re-fetches and the fleet settles at a mixed generation where only changed nodes advance — a per-link
+  re-handshake now happens only on links whose endpoints changed, not fleet-wide. Fail-open (a node whose
+  served bundle can't be read re-stages), and disabled for keystone first-pin / rotation (which must
+  re-pin the whole trust-list). (#254)
+- **Force redeploy + pre-deploy preview.** A pre-deploy preview shows "N updated, M unchanged" computed
+  over the current canvas as a read-only dry-run (it stages nothing) and never hard-blocks a deploy — a
+  preview that can't be fetched (e.g. a newer panel against an older controller) surfaces the error but
+  still lets you Deploy anyway. **Force redeploy** (per-node and fleet-wide, plus a per-node "Force
+  redeploy this node" on the node-detail page) overrides the skip for on-host drift / rescue. (#255)
+
+### Fixed
+- **Telemetry freshness — the framework defect behind "only fires at deploy time".** Observability now
+  has a single metrics producer: `metrics` ride the `Sampler` **heartbeat** (the apply-time `/report`
+  carries conditions only, never metrics), and the agent's apply loop sends a coalescing **post-apply
+  kick** so a fresh heartbeat lands immediately after each apply rather than up to a full interval later.
+  A new metric can no longer be bolted onto `/report` and then freeze between deploys. (Conditions remain
+  dual-write — `/report` at apply-time + the heartbeat live, last-writer-wins — which the kick keeps
+  fresh.) (#250)
+
+### Documentation
+- New `docs/spec/operations/telemetry-history.md` (the sampler, the retention store + its
+  heartbeat-never-writes-disk invariant, the query API), delta-deploy sections in the controller deploy
+  spec, the `resource`/`cpu_pct` + post-apply-kick notes in the controller-api spec, and bilingual wiki
+  coverage (§5.5 delta deploy / preview / Force, §5.8 resource metric + history charts). (#256)
+
 ## [2.0.0-rc.4] - 2026-07-07
 
 **Release candidate.** Fixes the mimic fleet issues the `v2.0.0-rc.3` soak surfaced during live
@@ -1009,7 +1063,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.4...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.5...HEAD
+[2.0.0-rc.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.4...v2.0.0-rc.5
 [2.0.0-rc.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.3...v2.0.0-rc.4
 [2.0.0-rc.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.1...v2.0.0-rc.2
