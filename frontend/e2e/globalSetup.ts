@@ -11,12 +11,19 @@ import {
   type HarnessState,
 } from './fixtures/harness'
 
-// globalSetup boots the full stack once for the whole Playwright run: a controller
-// cmd/e2eserver (operator + enrollment token + agent port + the built panel) AND an
-// air-gap cmd/e2eserver (built panel + unauthenticated /api/compile). Both bind :0, so it
-// parses each boot's E2E_READY line to learn the OS-assigned ports (and the controller's
-// enrollment token), asserts exactly one of each mode, and writes the handoff state.json
-// the specs + teardown read. Readiness is gated on the READY line — never a sleep.
+// globalSetup boots the full stack once for the whole Playwright run: TWO controller
+// cmd/e2eserver boots (the keystone-OFF and keystone-ON tenants — each with an operator +
+// enrollment token + agent port + the built panel). Both bind :0, so it parses each boot's
+// E2E_READY line to learn the OS-assigned ports (and each controller's enrollment token),
+// asserts both report controller mode, and writes the handoff state.json the specs +
+// teardown read. Readiness is gated on the READY line — never a sleep.
+//
+// framework-refactor plan-9 retired the third (air-gap) boot: WASM is the proven in-browser
+// local engine, so the anonymous /api/compile compute oracle it served is deleted. The
+// local-mode design specs (wasm-design, link-direction) now serve the SPA + wasm static
+// assets from the keystone-OFF controller boot (EnableStatic is identical across boots) and
+// run entirely in-browser — they never touch a server API, so seedLocalMode's client-side
+// mode='local' bypasses the controller login gate for order-independence.
 
 // READY_TIMEOUT_MS bounds how long we wait for a boot to print E2E_READY before failing the
 // whole run loudly (a hung/missing binary must not hang CI).
@@ -105,7 +112,7 @@ async function globalSetup(): Promise<void> {
   const webDir = process.env.E2E_WEB_DIR ?? path.join(frontendDir, 'dist')
 
   for (const [label, p, hint] of [
-    ['e2eserver', serverBin, 'go build -tags airgap -o .e2e-bin/e2eserver ./cmd/e2eserver'],
+    ['e2eserver', serverBin, 'go build -o .e2e-bin/e2eserver ./cmd/e2eserver'],
     ['e2eagent', agentBin, 'go build -o .e2e-bin/e2eagent ./cmd/e2eagent'],
     ['panel dist', webDir, 'cd frontend && npm run build'],
   ] as const) {
@@ -132,19 +139,14 @@ async function globalSetup(): Promise<void> {
     '--secure-cookie=false',
   ]
 
-  // Boot three servers: the keystone-OFF controller (no credential ever pinned), the keystone-ON
-  // controller (its own state dir — keystone specs pin a signing credential here), and the
-  // air-gap compute boot. allSettled (not Promise.all) so a single boot failure still leaves the
-  // others reachable for cleanup — Playwright does NOT run globalTeardown when globalSetup throws,
-  // so this function must clean up after itself (DoD #2 / hermeticity).
+  // Boot two servers: the keystone-OFF controller (no credential ever pinned) and the keystone-ON
+  // controller (its own state dir — keystone specs pin a signing credential here). allSettled (not
+  // Promise.all) so a single boot failure still leaves the others reachable for cleanup — Playwright
+  // does NOT run globalTeardown when globalSetup throws, so this function must clean up after itself
+  // (DoD #2 / hermeticity).
   const settled = await Promise.allSettled([
     spawnBoot(serverBin, controllerArgs(offDir), 'controller-OFF boot'),
     spawnBoot(serverBin, controllerArgs(onDir), 'controller-ON boot'),
-    spawnBoot(
-      serverBin,
-      ['--mode', 'airgap', '--web-dir', webDir, '--addr', '127.0.0.1:0'],
-      'airgap boot',
-    ),
   ])
 
   // Kill every successfully-spawned child and remove the temp dirs — the failure-path cleanup.
@@ -172,14 +174,13 @@ async function globalSetup(): Promise<void> {
     // Re-raise the first boot failure (with its diagnostic) after cleaning up the survivors.
     const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
     if (failed) throw failed.reason
-    // All fulfilled; allSettled preserves input order: [controllerOff, controllerOn, airgap].
-    const [controllerOff, controllerOn, airgap] = spawned
+    // All fulfilled; allSettled preserves input order: [controllerOff, controllerOn].
+    const [controllerOff, controllerOn] = spawned
 
     // Assert exactly the expected modes so a flag regression fails loudly here, not downstream.
     for (const [label, boot, mode] of [
       ['controller-OFF', controllerOff, 'controller'],
       ['controller-ON', controllerOn, 'controller'],
-      ['airgap', airgap, 'airgap'],
     ] as const) {
       if (boot.ready.mode !== mode) {
         throw new Error(`${label} boot reported mode=${boot.ready.mode}, want ${mode}`)
@@ -205,7 +206,6 @@ async function globalSetup(): Promise<void> {
         agent: controllerOn.ready.agent!,
         enrollToken: controllerOn.ready.enroll!,
       },
-      airgap: { panel: airgap.ready.panel },
       agentBin,
       pids: spawned.map((s) => s.proc.pid).filter((p): p is number => typeof p === 'number'),
       tmpDirs,

@@ -3,8 +3,8 @@
 // builds explicit targets only (./cmd/server, ./cmd/compiler, ./cmd/agent), so this main
 // is excluded from shipped binaries by construction.
 //
-// It boots the REAL internal/api server (same handlers/routes/auth as cmd/server) in one
-// of two modes, reusing the production seams — never a reimplementation:
+// It boots the REAL internal/api server (same handlers/routes/auth as cmd/server) in
+// CONTROLLER mode, reusing the production seams — never a reimplementation:
 //
 //	--mode controller   mirrors cmd/server's serveController: a FileStore-backed
 //	                    ControllerHandler with a seeded operator account (the shared
@@ -12,30 +12,22 @@
 //	                    token, EnableController, and the built panel served from the same
 //	                    origin (EnableStatic). Serves the operator/panel mux and the agent
 //	                    mux on two ports.
-//	--mode airgap       mirrors cmd/server's air-gap boot: NewServer + EnableStatic, NO
-//	                    EnableController (so Server.operatorAuth stays nil and the air-gap
-//	                    compute routes — /api/{validate,compile,export,deploy-script} — are
-//	                    reachable UNauthenticated via gateAirgap's passthrough). Serves one
-//	                    port. This proves the local-mode panel's compute round-trip.
 //
-// BUILD TAG: this binary MUST be built with `-tags airgap`. The four air-gap compute
-// routes live behind //go:build airgap (plan-7 / 1.7): only the -tags airgap build of
-// internal/api links + registers them, so a default build's --mode airgap boot would 404
-// /api/compile. The binary itself references only exported api.Server methods present in
-// BOTH builds, so it compiles either way; the tag is what makes the air-gap boot real.
-//
-// Why two boots from ONE binary instead of env-tweaking cmd/server: EnableController
-// arms Server.operatorAuth UNCONDITIONALLY (server.go), which gates the air-gap compute
-// routes (401 without auth). A single controller boot therefore cannot also serve the
-// UNauthenticated /api/compile the local-mode panel sends. The two boots make that split
-// observable (DoD #5: air-gap boot 200 unauth, controller boot 401 unauth).
+// framework-refactor plan-9 retired the former --mode airgap boot. WASM is the proven
+// in-browser local engine, so the anonymous /api/compile compute oracle that boot served
+// was deleted, collapsing internal/api to ONE build (no more -tags airgap — this binary
+// now builds with a plain `go build ./cmd/e2eserver`). The local-mode design E2E specs
+// (wasm-design, link-direction) now serve the SPA + wasm static assets from a controller
+// boot (EnableStatic is byte-identical across boots) and run their compute entirely
+// in-browser, so they never touch a server API; seedLocalMode's client-side mode='local'
+// bypasses the controller login gate for order-independence.
 //
 // Ports default to 127.0.0.1:0 (loopback, OS-assigned) for hermetic parallel-safe runs.
-// Each boot binds its listener(s) FIRST, then prints exactly one machine-readable line so
-// the Playwright globalSetup can parse the resolved ports (and the controller's enrollment
-// token) without a fixed-port assumption:
+// The boot binds its listeners FIRST, then prints exactly one machine-readable line so
+// the Playwright globalSetup can parse the resolved ports (and the enrollment token)
+// without a fixed-port assumption:
 //
-//	E2E_READY mode=<mode> panel=<host:port> [agent=<host:port>] [enroll=<token>]
+//	E2E_READY mode=controller panel=<host:port> agent=<host:port> enroll=<token>
 package main
 
 import (
@@ -56,7 +48,7 @@ import (
 const enrollTokenTTL = time.Hour
 
 func main() {
-	mode := flag.String("mode", "controller", "boot mode: controller | airgap")
+	mode := flag.String("mode", "controller", "boot mode: controller (the only supported mode)")
 	stateDir := flag.String("state-dir", "", "controller FileStore root (controller mode; required)")
 	tenant := flag.String("tenant", "e2e", "tenant id (controller mode)")
 	operatorUser := flag.String("operator-user", "e2e-operator", "operator account username to seed (controller mode)")
@@ -70,10 +62,6 @@ func main() {
 	flag.Parse()
 
 	switch *mode {
-	case "airgap":
-		if err := serveAirgap(*webDir, *addr); err != nil {
-			log.Fatalf("e2eserver: airgap: %v", err)
-		}
 	case "controller":
 		if err := serveController(controllerConfig{
 			stateDir:      *stateDir,
@@ -90,26 +78,9 @@ func main() {
 			log.Fatalf("e2eserver: controller: %v", err)
 		}
 	default:
-		log.Fatalf("e2eserver: unknown --mode %q (want controller | airgap)", *mode)
+		log.Fatalf("e2eserver: unknown --mode %q (only \"controller\" is supported since "+
+			"framework-refactor plan-9 retired --mode airgap)", *mode)
 	}
-}
-
-// serveAirgap boots the air-gap server: NewServer (which, under -tags airgap, registers
-// the four anonymous compute routes) + the optional panel SPA, served on one port with
-// Server.operatorAuth nil so gateAirgap is a passthrough. It binds first, prints READY,
-// then serves (blocking).
-func serveAirgap(webDir, addr string) error {
-	server := api.NewServer()
-	if webDir != "" {
-		server.EnableStatic(webDir)
-	}
-
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("bind panel listener: %w", err)
-	}
-	fmt.Printf("E2E_READY mode=airgap panel=%s\n", ln.Addr().String())
-	return http.Serve(ln, server.Handler())
 }
 
 // controllerConfig groups the controller-boot inputs (kept as a struct so main's flag

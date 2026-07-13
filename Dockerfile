@@ -24,11 +24,10 @@ ARG TARGETARCH=amd64
 # BUILD_VERSION stamps the binary's `version` subcommand; pass --build-arg BUILD_VERSION=<tag> from
 # the image build (the docker workflow forwards the release tag). EXTENDS the existing -s -w flags.
 ARG BUILD_VERSION=dev
-# DEFAULT (controller-only) build — NO `-tags airgap` (plan-7 / 1.7): the four anonymous
-# air-gap compute routes (/api/validate|compile|export|deploy-script) are gated behind the
-# //go:build airgap tag, so this controller image neither registers nor links them — no
-# unauthenticated path reaches the compile pipeline in the shipped controller. The local-design
-# oracle is a SEPARATE `-tags airgap` build (not this image); see docs/spec/operations/deployment-topology.md.
+# Controller server build (framework-refactor plan-9 collapsed the server to a single build).
+# There is no anonymous compute surface — the four /api/{validate,compile,export,deploy-script}
+# routes were deleted — so no unauthenticated path reaches the compile pipeline. See
+# docs/spec/operations/deployment-topology.md.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w -X main.BuildVersion=${BUILD_VERSION}" -o /out/yaog-server ./cmd/server
 
@@ -46,7 +45,7 @@ ENV YAOG_WEB_DIR=/app/web \
     YAOG_CONTROLLER_STATE_DIR=/data
 EXPOSE 8080 9090
 # Liveness probe: hit the public, unauthenticated /api/health on the operator/panel port
-# (registered ungated in BOTH the default controller build and the `-tags airgap` build).
+# (the one ungated route in the server build).
 # busybox wget (in the alpine base) exits
 # non-zero on connection failure or an HTTP error, which marks the container unhealthy so
 # an orchestrator can restart/replace it. start-period covers the brief startup window.

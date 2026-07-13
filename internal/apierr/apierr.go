@@ -48,11 +48,12 @@ const (
 	CodeKeygenPinnedNoPrivkey Code = "keygen_pinned_pubkey_no_privkey"
 	CodeKeygenGenerateFailed  Code = "keygen_generate_failed"
 
-	// Compile-time constraints (plan-3.5b) — surfaced to the operator via HandleCompile/
-	// HandleExport/HandleDeployScript as 422 (the topology is the thing to change). These are
-	// coded at the SOURCE in internal/compiler + internal/allocator and flow through the
-	// writeCodedOr relay; CodeCompileFailed is the relay's 422 fallback for any compile error
-	// not coded at the source (e.g. a schema/semantic validation failure reaching compile).
+	// Compile-time constraints (plan-3.5b) — surfaced as 422 (the topology is the thing to
+	// change) by the compile/export/deploy-script paths: the controller's HandleCompilePreview/
+	// HandleStage and the in-browser WASM engine. These are coded at the SOURCE in
+	// internal/compiler + internal/allocator and flow through the writeCodedOr relay;
+	// CodeCompileFailed is the relay's 422 fallback for any compile error not coded at the source
+	// (e.g. a schema/semantic validation failure reaching compile).
 	CodeCompileFailed             Code = "compile_failed"
 	CodeTransitPoolExhausted      Code = "compile_transit_pool_exhausted"
 	CodeTransitCIDRInvalid        Code = "compile_transit_cidr_invalid"

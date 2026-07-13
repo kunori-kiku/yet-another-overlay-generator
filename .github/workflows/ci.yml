@@ -29,14 +29,6 @@ jobs:
       # FileStore/tenantlock mutex paths. A surfaced race is a NEW rc.1 blocker (criterion A2).
       - name: Test
         run: go test -race ./...
-      # The air-gap compute routes/handlers live behind //go:build airgap (plan-7): the default
-      # `go test ./...` above does NOT compile or exercise them, so also build+vet+test the
-      # `-tags airgap` profile to keep the retained local-design oracle (the plan-13/21 boot
-      # target) from silently rotting.
-      - name: Vet (airgap profile)
-        run: go vet -tags airgap ./...
-      - name: Test (airgap profile)
-        run: go test -tags airgap ./...
       # Per-package coverage FLOOR over the local-compile pipeline packages, re-homed from the deleted
       # `conformance` job (framework-refactor plan-5). The frozen floors live in
       # internal/localcompile/testdata/coverage_floor.json; TestCoverageFloor shells out to `go test
@@ -128,13 +120,13 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       # Build the TEST-ONLY bring-up binaries PREBUILT (not `go run` — offline-module
-      # determinism). cmd/e2eserver MUST be -tags airgap: the air-gap boot's /api/compile
-      # lives behind //go:build airgap (plan-7). They land in .e2e-bin/ — the default path
+      # determinism). framework-refactor plan-9 retired the air-gap boot, so cmd/e2eserver is a
+      # plain controller-only build (no -tags airgap). They land in .e2e-bin/ — the default path
       # the Playwright globalSetup resolves (no env override needed).
       - name: Build E2E bring-up binaries
         run: |
           mkdir -p .e2e-bin
-          go build -tags airgap -o .e2e-bin/e2eserver ./cmd/e2eserver
+          go build -o .e2e-bin/e2eserver ./cmd/e2eserver
           go build -o .e2e-bin/e2eagent ./cmd/e2eagent
       - name: Install dependencies
         working-directory: frontend
@@ -252,13 +244,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      # REQUIRED: reachable-vuln scan over both build profiles (the default controller + the -tags
-      # airgap oracle). A reachable vuln fails the job; allowlist an accepted advisory with a rationale.
+      # REQUIRED: reachable-vuln scan over the build (framework-refactor plan-9 collapsed the two
+      # build profiles to ONE). A reachable vuln fails the job; allowlist an accepted advisory with a rationale.
       - name: govulncheck (REQUIRED)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
-          "$(go env GOPATH)/bin/govulncheck" -tags airgap ./...
       # ADVISORY: gosec static analysis. continue-on-error keeps it non-blocking (a baseline of
       # pre-existing findings is recorded in docs/spec/rc1/4.2-verdict.md; the job surfaces the current
       # set each run for a reviewer to diff). -no-fail makes gosec exit 0; continue-on-error is belt+braces.

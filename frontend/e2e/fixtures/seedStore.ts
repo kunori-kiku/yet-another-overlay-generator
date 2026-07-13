@@ -48,8 +48,9 @@ export async function seedTheme(context: BrowserContext, theme: 'light' | 'dark'
 }
 
 // seedLocalMode forces local (no-controller) mode so the panel renders without the login
-// gate — used by the air-gap design canary for order-independence (it must not depend on a
-// prior spec having left local mode in storage).
+// gate — used by the local-mode design specs (wasm-design, link-direction) for order-
+// independence (they must not depend on a prior spec having left local mode in storage), and
+// so a local-mode flow served from the controller boot never hits the controller login gate.
 export async function seedLocalMode(context: BrowserContext): Promise<void> {
   await context.addInitScript((key) => {
     localStorage.setItem(key, JSON.stringify({ state: { mode: 'local' }, version: 0 }))

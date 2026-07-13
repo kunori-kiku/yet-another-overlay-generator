@@ -1,12 +1,13 @@
 // @vitest-environment node
 //
-// deployMode.test.ts — pins the flag-combo → descriptor mapping for lib/deployMode.ts (plan-0, FE
-// ratchet-hygiene). deployMode() is the single source of truth collapsing the two build-time env
-// flags VITE_LOCAL_ONLY + VITE_YAOG_LOCAL_ENGINE. This suite locks the EXACT truthiness/normalization
-// rules (behaviour-identical to the former localOnly()/localEngineEnabled() predicates) AND that the
-// two rewired projections agree with the descriptor. vi.stubEnv sets/clears the flags per-test — the
-// same mechanism the local-only and local-engine seam suites use — so a memoize-at-module-load
-// regression (which would break vi.stubEnv) is caught here.
+// deployMode.test.ts — pins the flag → descriptor mapping for lib/deployMode.ts (plan-0, FE
+// ratchet-hygiene). deployMode() is the single source of truth for the deployment-shaping build
+// flags. This suite locks the EXACT VITE_LOCAL_ONLY truthiness rule (behaviour-identical to the
+// former localOnly() predicate) AND that descriptor.localEngine is fixed to 'wasm' — framework-
+// refactor plan-9 retired the Go air-gap `backend` escape hatch, so local-mode compute is always
+// the in-browser WASM engine (no engine choice). vi.stubEnv sets/clears flags per-test — the same
+// mechanism the local-only and local-engine seam suites use — so a memoize-at-module-load regression
+// (which would break vi.stubEnv) is caught here.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deployMode } from './deployMode';
@@ -34,73 +35,37 @@ describe('deployMode() descriptor', () => {
     });
   });
 
-  describe('localEngine (VITE_YAOG_LOCAL_ENGINE selector, default-ON WASM since plan-4)', () => {
-    it('unset ⇒ wasm (the default in-browser Go/WASM engine)', () => {
+  describe('localEngine is fixed to wasm (the sole engine since plan-9 retired the backend hatch)', () => {
+    it('unset ⇒ wasm (the in-browser Go/WASM engine)', () => {
       expect(deployMode().localEngine).toBe('wasm');
     });
 
-    it("'local' ⇒ wasm (the default in-browser engine)", () => {
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'local');
-      expect(deployMode().localEngine).toBe('wasm');
-    });
-
-    it('a stray value ⇒ wasm (runtime belt-and-suspenders default)', () => {
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'nonsense');
-      expect(deployMode().localEngine).toBe('wasm');
-    });
-
-    it("only the exact 'backend' ⇒ backend (the Go air-gap escape hatch)", () => {
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'backend');
-      expect(deployMode().localEngine).toBe('backend');
-    });
-
-    it("the retired 'ts' literal ⇒ wasm (an unknown value floors to the default, no crash)", () => {
-      // 'ts' selected the hand-mirrored TS compiler, deleted in framework-refactor plan-5. A stored
-      // VITE_YAOG_LOCAL_ENGINE='ts' from before the deletion must degrade gracefully to the wasm
-      // default rather than crash — the same flooring any stray value gets.
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
-      expect(deployMode().localEngine).toBe('wasm');
-    });
-
-    it("'wasm' ⇒ wasm (explicit)", () => {
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'wasm');
-      expect(deployMode().localEngine).toBe('wasm');
-    });
-
-    it("'wasm' keeps localEngineEnabled() true (browser path, not the air-gap escape hatch)", () => {
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'wasm');
+    it('localEngineEnabled() is always true — local-mode compute is always in-browser WASM', () => {
       expect(localEngineEnabled()).toBe(true);
     });
 
-    it("the retired 'ts' literal keeps localEngineEnabled() true (floors to wasm, not the air-gap escape hatch)", () => {
-      vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'ts');
-      expect(localEngineEnabled()).toBe(true);
-    });
-  });
-
-  it('the two flags are independent (localOnly + backend engine compose)', () => {
-    vi.stubEnv('VITE_LOCAL_ONLY', '1');
-    vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', 'backend');
-    expect(deployMode()).toEqual({ localOnly: true, localEngine: 'backend' });
+    // A stale VITE_YAOG_LOCAL_ENGINE from before plan-9 (the retired 'backend', the older 'ts', or
+    // any stray value) is IGNORED — the selector is no longer read, so local-mode compute stays
+    // WASM and never crashes on an unknown value. This also guards against a regression that
+    // re-introduces a read of that flag and flips the engine.
+    it.each(['backend', 'ts', 'local', 'wasm', 'nonsense'])(
+      'a stale VITE_YAOG_LOCAL_ENGINE=%j is ignored ⇒ wasm + enabled',
+      (v) => {
+        vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', v);
+        expect(deployMode().localEngine).toBe('wasm');
+        expect(localEngineEnabled()).toBe(true);
+      },
+    );
   });
 
   // Rewire guard: the two former predicates must project the descriptor EXACTLY, so every existing
-  // caller of localOnly()/localEngineEnabled() is behaviour-identical after the collapse.
-  describe('projections agree with the descriptor (behaviour-identical rewire)', () => {
-    const combos: ReadonlyArray<[string | undefined, 'local' | 'backend' | undefined]> = [
-      [undefined, undefined],
-      ['1', undefined],
-      [undefined, 'backend'],
-      ['1', 'backend'],
-      ['0', 'local'],
-    ];
-
-    it.each(combos)('VITE_LOCAL_ONLY=%j VITE_YAOG_LOCAL_ENGINE=%j', (lo, eng) => {
+  // caller of localOnly()/localEngineEnabled() is behaviour-identical.
+  describe('projections agree with the descriptor', () => {
+    it.each<string | undefined>(['1', '0', undefined])('VITE_LOCAL_ONLY=%j', (lo) => {
       if (lo !== undefined) vi.stubEnv('VITE_LOCAL_ONLY', lo);
-      if (eng !== undefined) vi.stubEnv('VITE_YAOG_LOCAL_ENGINE', eng);
       const d = deployMode();
       expect(localOnly()).toBe(d.localOnly);
-      expect(localEngineEnabled()).toBe(d.localEngine !== 'backend');
+      expect(localEngineEnabled()).toBe(d.localEngine === 'wasm');
     });
   });
 });

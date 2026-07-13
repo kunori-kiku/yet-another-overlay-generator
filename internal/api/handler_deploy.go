@@ -90,7 +90,7 @@ func (h *ControllerHandler) HandleDeployPreview(ctx context.Context, tenant cont
 // Zero-knowledge: it drives controller.CompileSubgraph, whose render.GenerateKeys runs in
 // AgentHeld custody — every [Interface] PrivateKey is PRIVATEKEY_PLACEHOLDER, never real key
 // material — so the rendered text is safe to return to an authenticated operator. It MUST NOT
-// reuse the air-gap HandleCompile (render.AirGap reconstructs real private keys).
+// run the AirGap custody compile path (render.AirGap reconstructs real private keys).
 func (h *ControllerHandler) HandleCompilePreview(ctx context.Context, tenant controller.TenantID, _ string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	// Compile the POSTed CURRENT design (the canvas the operator is editing) — NOT the stored
 	// copy — so the operator can compile before saving ("Compile → adjust the NAT ip:port →

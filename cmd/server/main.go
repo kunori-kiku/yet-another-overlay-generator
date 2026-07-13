@@ -26,7 +26,9 @@ const controllerShutdownGrace = 25 * time.Second
 // Controller-mode environment gates. When BOTH the state dir and the tenant id are
 // set, cmd/server builds the controller dependencies (FileStore) and serves the
 // controller on two PLAIN-HTTP ports (operator/panel + agent). When either is unset,
-// the server is EXACTLY as before: air-gap HTTP only, no controller routes.
+// the binary FAILS LOUD: it is controller-only (framework-refactor plan-9 retired the
+// anonymous air-gap compute surface it used to fall back to), so there is nothing to
+// serve without the controller env.
 //
 // In controller mode the operator token is OPTIONAL break-glass (plan-5.2): operator
 // routes are authenticated PRIMARILY by password-login sessions (operators created via
@@ -99,41 +101,34 @@ func main() {
 		return
 	}
 
-	addr := flag.String("addr", ":8080", "operator/panel + air-gap listen address (plain HTTP)")
+	addr := flag.String("addr", ":8080", "operator/panel listen address (plain HTTP)")
 	agentAddr := flag.String("agent-addr", "", "controller agent listen address (plain HTTP); default :9090 or YAOG_CONTROLLER_AGENT_ADDR")
 	flag.Parse()
 
 	stateDir := os.Getenv(envControllerStateDir)
 	tenant := os.Getenv(envTenantID)
 
+	// Controller env not configured (state dir and/or tenant id unset). This binary is a
+	// CONTROLLER and links no anonymous compute surface — framework-refactor plan-9 retired the
+	// four air-gap /api/{validate,compile,export,deploy-script} routes, so there is nothing to
+	// serve without the controller env. FAIL LOUD and name the fix rather than stand up a
+	// do-nothing health-only listener that silently masks the misconfiguration. For offline
+	// topology compilation use the standalone static-local-design site (the in-browser WASM
+	// compiler, no backend) or the cmd/compiler CLI.
+	if stateDir == "" || tenant == "" {
+		log.Fatalf("server: controller env not configured: set %s and %s to run the controller. "+
+			"This binary is controller-only; it links no anonymous compute routes. For offline "+
+			"topology compilation use the standalone static-local-design site (the in-browser WASM "+
+			"compiler, no backend) or the cmd/compiler CLI", envControllerStateDir, envTenantID)
+	}
+
 	server := api.NewServer()
 
 	// Optionally serve the built panel SPA from YAOG_WEB_DIR on the operator/panel port
-	// (the Docker image sets this so one container serves panel + API). Applies in both
-	// air-gap and controller mode; the /api/* routes take precedence over the SPA "/".
+	// (the Docker image sets this so one container serves panel + API). The /api/* routes
+	// take precedence over the SPA "/".
 	if webDir := os.Getenv(envWebDir); webDir != "" {
 		server.EnableStatic(webDir)
-	}
-
-	// Controller env not configured (state dir and/or tenant id unset). The fate of this
-	// branch is build-tagged (plan-7 / 1.7, LOCKED build-tag mechanism):
-	//
-	//   - DEFAULT (controller-only) build: serveAirgap FAILS LOUD. The default binary is a
-	//     CONTROLLER and has no air-gap compute surface linked (the four anonymous
-	//     /api/{validate,compile,export,deploy-script} routes live behind //go:build airgap),
-	//     so booting a "serve exactly as before" air-gap server here would stand up a panel/
-	//     health-only listener that silently does nothing useful. Refusing names the fix:
-	//     set the controller env, or use the -tags airgap local-design build / the standalone
-	//     static-local-design site / cmd/compiler for offline compilation.
-	//   - -tags airgap build: serveAirgap boots the air-gap server (server.ListenAndServe),
-	//     the local-design oracle and the --mode airgap boot target for plan-13's E2E.
-	//
-	// Both implementations live in build-tagged files (boot_default.go / boot_airgap.go).
-	if stateDir == "" || tenant == "" {
-		if err := serveAirgap(server, *addr); err != nil {
-			log.Fatalf("server: %v", err)
-		}
-		return
 	}
 
 	// Controller mode: resolve the agent address (flag > env > default).

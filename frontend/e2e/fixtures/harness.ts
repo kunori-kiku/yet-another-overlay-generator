@@ -24,7 +24,6 @@ export interface HarnessState {
   // controllerOn is a SEPARATE tenant (own state dir) where the keystone specs pin an operator
   // signing credential — isolated so pinning never flips the keystone-OFF boot to ON.
   controllerOn: { panel: string; agent: string; enrollToken: string }
-  airgap: { panel: string }
   // Absolute path to the prebuilt cmd/e2eagent binary, so a spec can spawn it as a child.
   agentBin: string
   // Child PIDs + the temp controller state dirs, for globalTeardown.

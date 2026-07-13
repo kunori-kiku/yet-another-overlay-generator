@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// handler_test.go — the DEFAULT (controller-only) build's handler tests. It covers only the
-// surface present in BOTH builds: GET /api/health (liveness probe) and its CORS wrapper. The
-// validate/compile/export handler tests and the validTopologyJSON helper moved behind
-// //go:build airgap (handler_airgap_test.go) with the handlers they drive (plan-7 / 1.7).
+// handler_test.go — the server handler tests. It covers the public liveness surface:
+// GET /api/health and its CORS wrapper. The former validate/compile/export handler tests were
+// deleted with the anonymous air-gap compute handlers they drove (framework-refactor plan-9);
+// no_anonymous_compute_test.go now pins that those routes stay absent.
 
 func TestHandleHealth(t *testing.T) {
 	server := NewServer()

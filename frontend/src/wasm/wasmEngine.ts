@@ -130,10 +130,10 @@ export async function deployScripts(topo: Topology): Promise<{ sh: string; ps1: 
 
 // exportArtifacts returns a downloadable ZIP Blob. The shim (cmd/wasm exportZip) builds the archive
 // inside the wasm via Go's archive/zip over the per-node bundle file set and returns it as base64, so
-// no JS zip library is needed. NOTE (preview-only, invariant [4]): this differs from the air-gap
-// export, which wraps each node in a self-extracting installer; the WASM engine is a design PREVIEW
-// and never deploys, so it ships the raw config files rather than replicating the installer wrapper
-// (which lives behind //go:build airgap and is out of the wasm shim's scope). A base64 string never
+// no JS zip library is needed. NOTE (preview-only, invariant [4]): this ships the raw per-node
+// config files rather than wrapping each node in a self-extracting installer; the WASM engine is a
+// design PREVIEW and never deploys, so it does not replicate the installer wrapper (that wrapper
+// lives in the deploy-time artifacts path, internal/artifacts / cmd/compiler). A base64 string never
 // begins with '{', so throwIfErrorEnvelope distinguishes it from the {"error":...} envelope.
 export async function exportArtifacts(topo: Topology): Promise<Blob> {
   const api = await ensureWasm();

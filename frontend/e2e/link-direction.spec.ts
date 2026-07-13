@@ -5,8 +5,9 @@ import { seedLocalMode, seedCanvasTopology } from './fixtures/seedStore'
 // Link-direction UX (plan-2 of link-directionality, D11): the EdgeEditor's direction select,
 // the single-linked canvas chip, the explicit "to(A)" edge FLIP (swap from/to, mirror pins,
 // clear stale dial fields, prefill the new target's public host), and the loud in-browser
-// validation for a single-linked edge without a dial host. Runs on the air-gap boot in local
-// mode — validation is the in-browser TS validator, no server round-trip.
+// validation for a single-linked edge without a dial host. Runs on the keystone-OFF controller
+// boot in local mode (framework-refactor plan-9 retired the air-gap boot) — validation is the
+// in-browser Go/WASM validator, no server round-trip.
 //
 // Feature locators are data-testid (project lesson: color/class locators broke on the theme
 // refactor): edge-label-<id> (the label pill — a true selection-equivalent to the edge path: it
@@ -70,7 +71,7 @@ test('direction select: both shows the reverse-dial readout; forward persists + 
   context,
 }) => {
   const h = readHarness()
-  const panel = httpURL(h.airgap.panel)
+  const panel = httpURL(h.controller.panel)
   await seedLocalMode(context)
   await seedCanvasTopology(context, dirTopology)
   await openEdgeEditor(page, panel)
@@ -116,7 +117,7 @@ test('a single-linked edge without a dial host warns inline and fails Validate l
   context,
 }) => {
   const h = readHarness()
-  const panel = httpURL(h.airgap.panel)
+  const panel = httpURL(h.controller.panel)
   await seedLocalMode(context)
   await seedCanvasTopology(context, dirTopology)
   await openEdgeEditor(page, panel)

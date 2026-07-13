@@ -49,19 +49,19 @@ var forbidden = []string{
 // import-direction test; see framework-refactor plan-1.)
 var allow = map[string]bool{}
 
-// buildTagSets are the build-tag contexts the ratchet evaluates. The pure core must hold
-// the boundary under BOTH the default build AND the //go:build airgap build (the
-// two-deployment split), so a future airgap-tagged pure-core file can never evade the check
-// via a build context that `go list -deps` would otherwise skip. The forbidden-edge check
-// runs over the UNION of the two dependency sets.
+// buildTagSets are the build-tag contexts the ratchet evaluates. framework-refactor plan-9
+// collapsed internal/api to ONE build (retiring the //go:build airgap two-deployment split),
+// so there is a single default context today. The slice + UNION machinery is retained as a
+// generic seam: if a build tag is ever (re)introduced, adding it here re-checks the boundary
+// under that context too, so a pure-core file can never evade the check via a build context
+// `go list -deps` would otherwise skip.
 var buildTagSets = [][]string{
-	nil,        // default build context
-	{"airgap"}, // //go:build airgap build context
+	nil, // default build context
 }
 
 // TestPureCoreImportsNothingStateful walks each pure-core package's transitive dependency
-// set — under both the default and the airgap build contexts (unioned) — and fails on any
-// edge into a forbidden stateful package that is not in the shrink-only allow-list.
+// set (over every build context in buildTagSets, unioned) and fails on any edge into a
+// forbidden stateful package that is not in the shrink-only allow-list.
 func TestPureCoreImportsNothingStateful(t *testing.T) {
 	for _, pkg := range pureCore {
 		full := modulePath + "/" + pkg

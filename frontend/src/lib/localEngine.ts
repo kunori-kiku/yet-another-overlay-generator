@@ -1,42 +1,36 @@
 // localEngine.ts — the local-engine seam.
 //
-// This is the ONE place that (a) decides whether LOCAL-mode compute runs in the browser (the
-// in-browser Go/WASM pipeline) or hits the Go air-gap routes, and (b) bridges the store's air-gap
-// action shapes onto the WASM engine's public surface (../wasm/wasmEngine). The store consults one
-// predicate — `localEngineEnabled()` — alongside the controller/local mode, in ONE documented
-// decision shape (the seam docstring in topologyStore.ts), and calls exactly these four adapters —
-// never four scattered branches that could drift. The two action kinds differ only in their
-// controller-mode behavior: validate() is key-free and dispatches in-browser in controller mode too
-// (browser-local verify); compile/export/deploy need private keys and refuse in controller mode
-// (controller compute is server-side, on Deploy).
+// This is the ONE place that (a) reports whether LOCAL-mode compute runs in the browser and (b)
+// bridges the store's compute action shapes onto the WASM engine's public surface
+// (../wasm/wasmEngine). The store consults one predicate — `localEngineEnabled()` — alongside the
+// controller/local mode, in ONE documented decision shape (the seam docstring in topologyStore.ts),
+// and calls exactly these four adapters — never four scattered branches that could drift. The two
+// action kinds differ only in their controller-mode behavior: validate() is key-free and dispatches
+// in-browser in controller mode too (browser-local verify); compile/export/deploy need private keys
+// and refuse in controller mode (controller compute is server-side, on Deploy).
 //
-// Since framework-refactor plan-5 deleted the hand-mirrored TS compiler, local mode is ALWAYS the
-// in-browser Go/WASM engine (web/yaog.wasm) when enabled — there is no longer an engine choice. The
-// permanent WASM-vs-golden gate (scripts/wasm-conformance-gate.mjs) proves it byte-equals the Go
-// controller pipeline. `localEngineEnabled()` is true unless VITE_YAOG_LOCAL_ENGINE is explicitly
-// 'backend'; 'backend' is the explicit opt-out escape hatch that makes the store POST to the Go
-// air-gap routes (/api/validate|compile|export|deploy-script), functional ONLY against a
-// `-tags airgap` server. The store retains the air-gap fetch branches solely as that escape-hatch
-// path.
+// Since framework-refactor plan-5 deleted the hand-mirrored TS compiler and plan-9 retired the Go
+// air-gap `backend` escape hatch (with the anonymous /api/{validate,compile,export,deploy-script}
+// routes it POSTed to), local mode is ALWAYS the in-browser Go/WASM engine (web/yaog.wasm) — there
+// is no longer an engine choice. The permanent WASM-vs-golden gate (scripts/wasm-conformance-gate.mjs)
+// proves it byte-equals the Go controller pipeline, so `localEngineEnabled()` is always true.
 //
 // Controller mode reaches this module for VALIDATE only: validate() is key-free, so in controller
 // mode it runs the in-browser validator (localValidate) here too — browser-local verify, so the
-// controller never serves nor calls /api/validate (minimizing its attack surface). The
+// controller never serves nor calls a validate endpoint (minimizing its attack surface). The
 // compile/export/deploy controller-mode refusal guards still run before any local-engine dispatch and
 // never call localCompile/localExport/localDeployScripts (controller compute is server-side).
 
 import type { CompileResponse, Topology, ValidateResponse } from '../types/topology';
 import { deployMode } from './deployMode';
 
-// localEngineEnabled reports whether LOCAL-mode compute should run in the browser (the WASM engine)
-// instead of POSTing to the Go air-gap routes. Default-ON: local mode is browser-resident unless
-// VITE_YAOG_LOCAL_ENGINE is explicitly 'backend' — unset / 'local' / 'wasm' / anything else ⇒ true ⇒
-// the in-browser engine; only the exact literal 'backend' opts back out to the air-gap fetch path
-// (functional only against a `-tags airgap` server). The flag flows through the shared deploy-mode
-// descriptor (lib/deployMode.ts, the single source of truth): 'backend' ⇒ descriptor.localEngine ===
-// 'backend' ⇒ this returns false.
+// localEngineEnabled reports whether LOCAL-mode compute runs in the browser (the WASM engine). Since
+// framework-refactor plan-9 retired the Go air-gap `backend` escape hatch, local-mode compute is
+// ALWAYS the in-browser Go/WASM pipeline — so this is always true. It still projects the shared
+// deploy-mode descriptor (lib/deployMode.ts, the single source of truth, where descriptor.localEngine
+// is fixed to 'wasm') so the store keeps ONE browser-vs-server decision seam.
 export function localEngineEnabled(): boolean {
-  return deployMode().localEngine !== 'backend';
+  return deployMode().localEngine === 'wasm';
 }
 
 // The WASM engine (web/yaog.wasm) is loaded via a dynamic import() so a controller-mode-only operator
