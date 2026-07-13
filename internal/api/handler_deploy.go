@@ -139,9 +139,10 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 }
 
 // HandleDeployPreview is the plan-6 read-only dry-run: it reports which enrolled nodes a Deploy WOULD
-// re-stage (changed vs served) vs skip (unchanged), plus the keystone-full-restage flag and the topology
-// version it compiled — WITHOUT staging. The Deploy dialog calls it on open so the operator sees "N
-// updated, M unchanged" (and any pending keystone full-restage) before deploying.
+// re-stage (changed vs served) vs skip (unchanged), plus the keystone-full-restage flag — WITHOUT
+// staging. It compiles the POSTed CURRENT canvas (what a Deploy pushes+stages), not the stored copy.
+// The Deploy dialog calls it on open so the operator sees "N updated, M unchanged" (and any pending
+// keystone full-restage) before deploying.
 func (h *ControllerHandler) HandleDeployPreview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))

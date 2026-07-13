@@ -47,6 +47,14 @@ export function FleetNodeDetailPage() {
   // Force redeploy this node (plan-6): re-stage it even if unchanged, then the usual promote path
   // (reuses controllerStore.deploy with force_nodes). Disabled without auth (a mutating action).
   const forceRedeployNode = useControllerStore((s) => s.forceRedeployNode);
+  // deploy() (which forceRedeployNode delegates to) uploads the whole canvas first, so a canvas that
+  // is much smaller than the server design trips the majority-shrink guard and parks the deploy on
+  // pendingShrink. The type-to-confirm modal that resolves it lives only in the DeployBar (Deploy
+  // page). Without surfacing pendingShrink here, a per-node Force from this deep-linked page would
+  // silently no-op; instead we render a notice pointing the operator to Deploy (where a fleet-wide
+  // shrink belongs) or to cancel. (plan-6 re-review finding.)
+  const pendingShrink = useControllerStore((s) => s.pendingShrink);
+  const cancelShrinkConfirm = useControllerStore((s) => s.cancelShrinkConfirm);
   const noAuth = !useControllerStore(selectHasAuth);
   const onForceRedeploy = () => {
     if (!node) return;
@@ -145,6 +153,40 @@ export function FleetNodeDetailPage() {
             <p className="text-xs text-[var(--content-muted)]">
               {t(language, 'fleetNodeDetailPage.forceRedeployHint')}
             </p>
+            {/* pendingShrink is parked here when the current canvas is much smaller than the server
+                design: the whole-canvas upload deploy() performs would substantially shrink the fleet.
+                The typed-confirm modal lives in the DeployBar, so route the operator to Deploy (or let
+                them cancel) rather than leaving the Force click a silent no-op. */}
+            {pendingShrink && (
+              <div
+                data-testid="node-force-shrink-notice"
+                className="mt-1 rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] p-2 text-xs text-[var(--content)]"
+              >
+                <p>
+                  {t(language, 'fleetNodeDetailPage.forceRedeployShrink', {
+                    server: pendingShrink.serverNodeCount,
+                    canvas: pendingShrink.canvasNodeCount,
+                  })}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Link
+                    to="/deploy"
+                    data-testid="node-force-shrink-goto-deploy"
+                    className={`rounded px-2 py-1 font-medium ${BTN_CTA}`}
+                  >
+                    {t(language, 'fleetNodeDetailPage.forceRedeployShrinkGoToDeploy')}
+                  </Link>
+                  <button
+                    type="button"
+                    data-testid="node-force-shrink-cancel"
+                    onClick={cancelShrinkConfirm}
+                    className="rounded border border-[var(--hairline)] px-2 py-1 text-[var(--content)] hover:bg-[var(--control-hover)]"
+                  >
+                    {t(language, 'fleetNodeDetailPage.forceRedeployShrinkCancel')}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           {/* Unconditional + nullish-coerced: a node persisted by a pre-beta.12 panel (in
               localStorage) has no wireguardPeers key, and the refresh-on-mount above completes
