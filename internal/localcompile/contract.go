@@ -121,7 +121,8 @@ type CompileArtifacts struct {
 	Topology *model.Topology
 
 	// Files is the per-node bundle file set: nodeID -> relpath -> content. The relpath
-	// keys mirror the canonical bundleFiles map artifacts.Export builds (export.go:155-175):
+	// keys mirror the canonical bundleFiles map artifacts.BundleFiles builds (the single source both
+	// artifacts.Export's on-disk writes and its checksums.sha256 derive from):
 	//
 	//	wireguard/<iface>.conf   (one per per-peer interface; the client role's single wg0
 	//	                          is wireguard/wg0.conf)
