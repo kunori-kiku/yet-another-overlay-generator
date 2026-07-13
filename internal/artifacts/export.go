@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -36,12 +37,15 @@ type ExportResult struct {
 // non-empty content (the D4 guard — an empty catalog omits the file so the air-gap bundle
 // stays byte-identical).
 //
-// This is the SINGLE source for that set: Export writes these files plus their
-// checksums.sha256 to disk, and localcompile.ArtifactsFromResult reshapes the identical set in
-// memory for the frozen contract — both call here, so the on-disk bundle and the in-memory
-// CompileArtifacts can never drift. bundle.sig, signing-pubkey.pem and manifest.json are NOT
-// members (they are the authenticity/metadata layer over this set, not part of the checksummed
-// bytes).
+// This is the SINGLE source for that set. Within Export the same map drives every view of
+// the bundle: the files WRITTEN to disk, the checksums.sha256 that COVER them, the
+// manifest.json "files" that LIST them, and (when signing is on) the bundle.sig that SIGNS
+// them all derive from these keys — so a member can never be written-but-unlisted (shipped
+// UNSIGNED/UNCHECKSUMMED) nor listed-but-unwritten (fails sha256sum -c on the node).
+// localcompile.ArtifactsFromResult reshapes the identical set in memory for the frozen
+// contract — it too calls here, so the on-disk bundle and the in-memory CompileArtifacts can
+// never drift. bundle.sig, signing-pubkey.pem and manifest.json are NOT members (they are the
+// authenticity/metadata layer over this set, not part of the checksummed bytes).
 func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]string {
 	bundleFiles := make(map[string]string)
 	for configKey, wgConf := range result.WireGuardConfigs {
@@ -66,6 +70,23 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 	return bundleFiles
 }
 
+// bundleFileMode derives a bundle member's file mode from its slash-separated relative path.
+// It is the ONE place a member's mode is defined, so the mode a file is WRITTEN with can never
+// drift from the member set: install.sh is the root-executed trust anchor (0o755);
+// wireguard/<iface>.conf carries a private key (0o600); every other member —
+// babel/babeld.conf, sysctl/99-overlay.conf, artifacts.json — is world-readable config
+// (0o644). This reproduces exactly the per-file modes the pre-single-source write-loop used.
+func bundleFileMode(rel string) os.FileMode {
+	switch {
+	case rel == "install.sh":
+		return 0o755
+	case strings.HasPrefix(rel, "wireguard/"):
+		return 0o600
+	default:
+		return 0o644
+	}
+}
+
 // Export writes the rendered configuration artifacts for every node to outputDir.
 //
 // Export is the DISK-WRITE TAIL of the local compile pipeline (plan-3 Phase 6). The
@@ -77,10 +98,14 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 // step). It keeps its *compiler.CompileResult signature so those callers stay call-
 // compatible, and its output is byte-for-byte identical to the pre-façade exporter.
 //
-// The per-node checksummed bundle set Export writes is built by BundleFiles, the SAME helper
-// the contract's localcompile.ArtifactsFromResult calls to re-shape the set in memory — one
-// source of truth, so the on-disk bundle and the in-memory CompileArtifacts can never drift
-// (the localcompile golden corpus + lossless-wrapper test pin the result on top of that). The
+// The per-node bundle set is built ONCE by BundleFiles and drives every downstream view
+// within Export: the files WRITTEN to disk, the checksums.sha256 that cover them, the
+// manifest.json "files" that list them, and (when signing is on) the bundle.sig that signs
+// them — so a member is never written-but-unlisted (shipped unsigned) nor listed-but-unwritten
+// (fails sha256sum -c). BundleFiles is also the SAME helper the contract's
+// localcompile.ArtifactsFromResult calls to re-shape the set in memory — one source of truth,
+// so the on-disk bundle and the in-memory CompileArtifacts can never drift (the localcompile
+// golden corpus + lossless-wrapper test pin the result on top of that). The
 // shared helper lives here rather than in the façade because artifacts is a sink package
 // (apierr/bundlesig/compiler only): localcompile imports it freely, whereas the reverse would
 // cycle (render's tests depend on this package, and localcompile depends on render).
@@ -123,113 +148,59 @@ func Export(result *compiler.CompileResult, outputDir string) (*ExportResult, er
 		nodeDir := filepath.Join(outputDir, node.Name)
 		isClient := node.Role == "client"
 
-		// Create directories.
-		dirs := []string{
-			filepath.Join(nodeDir, "wireguard"),
-			filepath.Join(nodeDir, "sysctl"),
-		}
-		if !isClient {
-			dirs = append(dirs, filepath.Join(nodeDir, "babel"))
-		}
-		for _, dir := range dirs {
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("create dir %s: %w", dir, err))
-			}
-		}
-
-		// Write the per-peer WireGuard configs.
-		// WireGuardConfigs keys have the format "nodeID:interfaceName".
-		var wgFiles []string
-		for configKey, wgConf := range result.WireGuardConfigs {
-			// Parse the key.
-			parts := strings.SplitN(configKey, ":", 2)
-			if len(parts) != 2 || parts[0] != node.ID {
-				continue
-			}
-			ifaceName := parts[1]
-			confFileName := ifaceName + ".conf"
-			path := filepath.Join(nodeDir, "wireguard", confFileName)
-			if err := os.WriteFile(path, []byte(wgConf), 0600); err != nil {
-				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write wireguard config: %w", err))
-			}
-			wgFiles = append(wgFiles, "wireguard/"+confFileName)
-		}
-
-		// Write the Babel config.
-		if babelConf, ok := result.BabelConfigs[node.ID]; ok {
-			path := filepath.Join(nodeDir, "babel", "babeld.conf")
-			if err := os.WriteFile(path, []byte(babelConf), 0644); err != nil {
-				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write babel config: %w", err))
-			}
-		}
-
-		// Write the sysctl config.
-		if sysctlConf, ok := result.SysctlConfigs[node.ID]; ok {
-			path := filepath.Join(nodeDir, "sysctl", "99-overlay.conf")
-			if err := os.WriteFile(path, []byte(sysctlConf), 0644); err != nil {
-				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write sysctl config: %w", err))
-			}
-		}
-
-		// Write the install script.
-		if script, ok := result.InstallScripts[node.ID]; ok {
-			path := filepath.Join(nodeDir, "install.sh")
-			if err := os.WriteFile(path, []byte(script), 0755); err != nil {
-				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write install script: %w", err))
-			}
-		}
-
-		// Write artifacts.json (populated by render.All only when a mimic/agent catalog is
-		// configured). It is a signed bundleFiles member that carries mimic's GitHub-.deb pin
-		// (asset+sha256); the install script reads the pin only after passing the integrity
-		// check. No catalog configured => empty content => the whole file is omitted, keeping
-		// the air-gap bundle byte-for-byte unchanged (D4).
-		artifactsJSON, hasArtifacts := result.ArtifactsJSON[node.ID]
-		hasArtifacts = hasArtifacts && artifactsJSON != ""
-		if hasArtifacts {
-			path := filepath.Join(nodeDir, "artifacts.json")
-			if err := os.WriteFile(path, []byte(artifactsJSON), 0644); err != nil {
-				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write artifacts.json: %w", err))
-			}
-		}
-
-		// The canonical bundle file set as a path->content map, then bundlesig.Canonicalize
-		// emits the checksums.sha256 content. The output is SORTED by path and deterministic
-		// across runs; sha256sum -c is order insensitive, so sorting is safe. BundleFiles is the
-		// single source for this set (shared with the contract's localcompile.ArtifactsFromResult),
-		// so the on-disk checksums.sha256 and the in-memory CompileArtifacts.Checksums never
-		// diverge.
-		//
-		// The set matches the rest of the bundle exactly: every per-peer wireguard/<iface>.conf,
-		// babel/babeld.conf (non-client only), sysctl/99-overlay.conf, and install.sh — written
-		// above before this point so the hashes describe the same bytes that landed on disk.
-		// install.sh is the root-executed trust anchor and was historically the only artifact not
-		// covered by checksums.sha256 (audit item D24). manifest.json is still deliberately
-		// excluded: it carries compile-time timestamps (compiled_at, etc.) and is out of
-		// integrity-check scope (see docs/spec/security/security.md). bundle.sig and
-		// signing-pubkey.pem (when signing is enabled) are also excluded by construction:
-		// bundle.sig signs this very content and the pubkey is the verification anchor, so neither
-		// can self-reference. (artifacts.json joins the set so its pins inherit the bundle's
-		// Ed25519 signature + keystone digest binding — no new trust primitive; omitted when
-		// absent, D4.)
+		// Write the node's bundle. BundleFiles is the SINGLE source of the member set, so
+		// the files WRITTEN here are EXACTLY the set checksummed below, listed in
+		// manifest.json, and (when signing is on) signed — a member can never be
+		// written-but-unlisted (shipped unsigned) nor listed-but-unwritten (fails
+		// sha256sum -c). Each member's mode derives from its slash path via bundleFileMode
+		// (wireguard/* 0600, install.sh 0755, else 0644) and its parent dir is created on
+		// demand. Members are written in sorted order so the run is deterministic; that same
+		// sorted key list is reused verbatim as manifest.json's "files" below (replacing the
+		// old wg-map-ordered — non-reproducible — list).
 		bundleFiles := BundleFiles(result, node.ID)
+		members := make([]string, 0, len(bundleFiles))
+		for rel := range bundleFiles {
+			members = append(members, rel)
+		}
+		sort.Strings(members)
+		for _, rel := range members {
+			abs := filepath.Join(nodeDir, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("create dir %s: %w", filepath.Dir(abs), err))
+			}
+			if err := os.WriteFile(abs, []byte(bundleFiles[rel]), bundleFileMode(rel)); err != nil {
+				return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write bundle file %s: %w", rel, err))
+			}
+		}
 
+		// bundlesig.Canonicalize emits the checksums.sha256 content from the SAME bundleFiles
+		// map just written to disk. The output is SORTED by path and deterministic across
+		// runs; sha256sum -c is order insensitive, so sorting is safe. BundleFiles is the
+		// single source for this set (shared with the contract's
+		// localcompile.ArtifactsFromResult), so the on-disk checksums.sha256 and the in-memory
+		// CompileArtifacts.Checksums never diverge.
+		//
+		// The set matches the rest of the bundle exactly — it IS the set written just above:
+		// every per-peer wireguard/<iface>.conf, babel/babeld.conf (non-client only),
+		// sysctl/99-overlay.conf, and install.sh. install.sh is the root-executed trust anchor
+		// and was historically the only artifact not covered by checksums.sha256 (audit item
+		// D24). manifest.json is still deliberately excluded: it carries compile-time
+		// timestamps (compiled_at, etc.) and is out of integrity-check scope (see
+		// docs/spec/security/security.md). bundle.sig and signing-pubkey.pem (when signing is
+		// enabled) are also excluded by construction: bundle.sig signs this very content and
+		// the pubkey is the verification anchor, so neither can self-reference. (artifacts.json
+		// joins the set so its pins inherit the bundle's Ed25519 signature + keystone digest
+		// binding — no new trust primitive; omitted when absent, D4.)
 		canonical := bundlesig.Canonicalize(bundleFiles)
 		checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
 		if err := os.WriteFile(checksumsPath, canonical, 0644); err != nil {
 			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(fmt.Errorf("write checksums.sha256: %w", err))
 		}
 
-		// Build the file list.
-		var allFiles []string
-		allFiles = append(allFiles, wgFiles...)
-		if !isClient {
-			allFiles = append(allFiles, "babel/babeld.conf")
-		}
-		allFiles = append(allFiles, "sysctl/99-overlay.conf", "install.sh")
-		if hasArtifacts {
-			allFiles = append(allFiles, "artifacts.json")
-		}
+		// The manifest's file list IS the member set (sorted): LISTED == WRITTEN ==
+		// checksummed. The signing block below appends bundle.sig/signing-pubkey.pem — the
+		// authenticity layer over this set, not members of it.
+		allFiles := append([]string(nil), members...)
 
 		// When signing is enabled, sign the canonical checksums and write the
 		// detached signature (base64) plus the verifying public key (PKIX PEM)

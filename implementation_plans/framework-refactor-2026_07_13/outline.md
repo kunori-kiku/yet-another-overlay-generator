@@ -239,7 +239,7 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | # | Plan | Status | PR |
 |---|------|--------|-----|
 | 0 | Ratchet + zero-behavior hygiene | ✅ merged | #260 |
-| 1 | Pre-WASM contract hardening | 🔄 in review | this PR |
+| 1 | Pre-WASM contract hardening | ✅ merged | #261 |
 | 1.5 | Single-source the export bundle file-set (custody) | pending | — |
 | 1.6 | Lock the air-gap handler pre-heal (regression test) | pending | — |
 | 2 | Stateful god-file splits (no logic change) | pending | — |
