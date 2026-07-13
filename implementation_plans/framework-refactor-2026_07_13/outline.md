@@ -241,8 +241,8 @@ and stop-loss. Every phase is independently shippable + green + pausable.
 | 0 | Ratchet + zero-behavior hygiene | ✅ merged | #260 |
 | 1 | Pre-WASM contract hardening | ✅ merged | #261 |
 | 1.5 | Single-source the export bundle file-set (custody) | ✅ merged | #262 |
-| 1.6 | Lock the air-gap handler pre-heal (regression test) | pending | — |
-| 2 | Stateful god-file splits (no logic change) | pending | — |
+| 1.6 | Lock the air-gap handler pre-heal (regression test) | ✅ merged | #263 |
+| 2 | Stateful god-file splits (no logic change) | 🔄 in review | this PR |
 | 3 | WASM add-alongside + PERMANENT gate | pending | — |
 | 4 | Flip WASM default + soak | pending | — |
 | 5 | Delete the TS twin + shed deps + free pure-core splits | pending | — |
