@@ -74,7 +74,7 @@
 | 2 | Controller history store (ring + periodic flush + configurable cap) | ✅ merged | #251 |
 | 3 | History query API (server-side aggregation, operator-gated) | ✅ merged | #252 |
 | 4 | Recharts reusable `TimeSeriesChart` + node-detail charts + granularity picker | ✅ merged | #253 |
-| 5 | Staging skip-unchanged (per-node digest compare; keystone-seam regression proofs) | pending | — |
+| 5 | Staging skip-unchanged (per-node digest compare; keystone-seam regression proofs) | ✅ merged | #254 |
 | 6 | Force redeploy (per-node + fleet) + pre-deploy preview dialog | pending | — |
 | 7 | Docs (spec + bilingual wiki) | pending | — |
 | 8 | Release v2.0.0-rc.5 | pending | — |

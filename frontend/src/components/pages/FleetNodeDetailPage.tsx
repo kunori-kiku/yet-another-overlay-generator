@@ -1,9 +1,10 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useControllerStore } from '../../stores/controllerStore';
+import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useFleetLiveRefresh } from '../../hooks/useFleetLiveRefresh';
 import { t } from '../../i18n';
+import { BTN_CTA } from '../shell/styles';
 import { UpdateStatusChip } from '../deploy/UpdateStatusChip';
 import { NodeConditions } from '../deploy/NodeConditions';
 import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
@@ -43,6 +44,18 @@ export function FleetNodeDetailPage() {
   const refresh = useControllerStore((s) => s.refresh);
   const loading = useControllerStore((s) => s.loading);
   const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
+  // Force redeploy this node (plan-6): re-stage it even if unchanged, then the usual promote path
+  // (reuses controllerStore.deploy with force_nodes). Disabled without auth (a mutating action).
+  const forceRedeployNode = useControllerStore((s) => s.forceRedeployNode);
+  const noAuth = !useControllerStore(selectHasAuth);
+  const onForceRedeploy = () => {
+    if (!node) return;
+    // The current server-authoritative design is what gets deployed; a redeploy re-stages every
+    // changed node plus this one — confirm so a click on a deep-linked page is deliberate.
+    if (window.confirm(t(language, 'fleetNodeDetailPage.forceRedeployConfirm'))) {
+      void forceRedeployNode(node.nodeId);
+    }
+  };
   // Refresh-on-mount + the opt-in Live poll (beta.16): this deep-linked route previously rendered a
   // FROZEN cache snapshot (no refresh-on-mount), so an operator watching a node saw stale status that
   // never advanced. Shared with /fleet via the hook so the two stay behaviorally identical.
@@ -113,6 +126,26 @@ export function FleetNodeDetailPage() {
               {node.rekeyRequested ? t(language, 'fleetNodeDetailPage.yes') : t(language, 'fleetNodeDetailPage.no')}
             </Field>
           </dl>
+          {/* Force redeploy this node (plan-6): a per-node escape hatch beside the registry actions
+              (clear-rekey precedent). It re-stages this node even if its config is unchanged, then
+              promotes via the usual deploy path. Errors surface in the ControllerErrorBanner above;
+              the node's applied/desired generation updates on the post-deploy refresh. */}
+          <div className="flex flex-col gap-1 border-t border-[var(--hairline)] pt-3">
+            <button
+              type="button"
+              data-testid="node-force-redeploy"
+              onClick={onForceRedeploy}
+              disabled={loading || noAuth}
+              className={`self-start rounded px-3 py-2 text-sm font-medium ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]`}
+            >
+              {loading
+                ? t(language, 'fleetNodeDetailPage.forceRedeploying')
+                : t(language, 'fleetNodeDetailPage.forceRedeploy')}
+            </button>
+            <p className="text-xs text-[var(--content-muted)]">
+              {t(language, 'fleetNodeDetailPage.forceRedeployHint')}
+            </p>
+          </div>
           {/* Unconditional + nullish-coerced: a node persisted by a pre-beta.12 panel (in
               localStorage) has no wireguardPeers key, and the refresh-on-mount above completes
               asynchronously (the first paint is the cache), so guarding on node.wireguardPeers.length

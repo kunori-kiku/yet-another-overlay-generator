@@ -40,15 +40,19 @@ test('a re-entrant Deploy during an in-flight deploy produces a single update-to
   // Hold the first update-topology in flight so the second click lands during the loading window.
   const faults = await installFaults(page, [{ route: 'update-topology', method: 'POST', delayMs: 1500 }])
 
-  // Locate the Deploy button by its stable data-testid: its accessible NAME flips to "Deploying…"
-  // while loading, so a name-based locator cannot see it mid-flight.
-  const button = page.getByTestId('deploy')
+  // plan-6: the Deploy button now opens a pre-deploy preview dialog; the dialog's Confirm button is
+  // what fires deploy(). Open the dialog, then probe re-entrancy on Confirm — it stays mounted
+  // through the in-flight deploy (the preview clears only on completion), so a synthetic re-click can
+  // reach it. Located by its stable data-testid (its accessible NAME flips to "Deploying…" while
+  // loading, so a name-based locator cannot see it mid-flight).
+  await page.getByTestId('deploy').click()
+  const button = page.getByTestId('deploy-preview-confirm')
   await button.click() // fires deploy(); loading:true; update-topology now pending for ~1.5s
   await expect(button).toBeDisabled() // the visual guard engages
 
-  // Re-entrancy probe: dispatch a synthetic click straight to the (disabled) button. This bubbles
-  // to React's onClick and re-invokes deploy(). A correctly idempotent deploy() early-returns on
-  // loading; a re-entrant one issues a SECOND update-topology POST.
+  // Re-entrancy probe: dispatch a synthetic click straight to the (disabled) Confirm button. This
+  // bubbles to React's onClick and re-invokes deploy(). A correctly idempotent deploy() early-returns
+  // on loading; a re-entrant one issues a SECOND update-topology POST.
   await button.dispatchEvent('click')
   await button.dispatchEvent('click')
 

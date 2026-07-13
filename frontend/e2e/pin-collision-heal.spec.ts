@@ -64,6 +64,7 @@ test('a colliding topology heals on import and deploys without a duplicate-pin e
     { timeout: 20_000 },
   )
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog → runs the stage
   const stageResp = await stageP
   expect(stageResp.status(), 'stage must not 4xx on a duplicate-pin error (the heal repaired it)').toBe(200)
 

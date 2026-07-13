@@ -167,10 +167,12 @@ export async function selectNodeAndRename(page: Page, panelURL: string, nodeId: 
   await nameInput.blur()
 }
 
-// runDeploy clicks Deploy on /deploy and waits for the Last-deploy block (a successful
-// stage→(sign)→promote). It does NOT navigate away after.
+// runDeploy clicks Deploy on /deploy, confirms the plan-6 pre-deploy preview dialog, and waits for
+// the Last-deploy block (a successful stage→(sign)→promote). It does NOT navigate away after.
 export async function runDeploy(page: Page, target: ControllerTarget): Promise<void> {
   await page.goto(`${target.panel}/deploy`)
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  // plan-6: Deploy now opens a preview dialog first — confirm it to run the actual deploy.
+  await page.getByTestId('deploy-preview-confirm').click()
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
 }

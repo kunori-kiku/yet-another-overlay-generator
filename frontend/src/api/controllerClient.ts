@@ -24,6 +24,7 @@ import type { CompileResponse } from '../types/topology';
 import { mapNodeConditions, type ConditionWire } from '../lib/nodeConditions';
 import { parseContentDispositionFilename } from '../lib/download';
 import { historyQueryString, parseNodeHistory, type NodeHistory } from '../lib/telemetryHistory';
+import type { DeployPreview, DeployPreviewNode, DeployForceArg } from '../lib/deployPreview';
 
 // ControllerError is thrown for any non-2xx controller response. It preserves the parsed coded
 // error envelope on .body so the store can localize it via tError; .status is the HTTP status and
@@ -347,8 +348,26 @@ interface AuditResponseJSON {
 
 interface StageResponseJSON {
   staged: string[] | null;
+  // unchanged (plan-5): delta-skipped nodes that kept their generation. omitempty/absent from an
+  // older controller → mapped to [] so the result type field is always present.
+  unchanged: string[] | null;
   skipped_unenrolled: string[] | null;
   generation: number;
+}
+
+// deployPreviewNodeJSON / deployPreviewResponseJSON mirror the plan-6 dry-run wire shape
+// (deployPreviewResponseJSON in wire_controller.go). changed=true ⇒ an unforced Deploy re-stages it.
+interface deployPreviewNodeJSON {
+  node_id: string;
+  name: string;
+  changed: boolean;
+}
+
+interface deployPreviewResponseJSON {
+  topology_version: number;
+  keystone_full_restage: boolean;
+  nodes: deployPreviewNodeJSON[] | null;
+  skipped_unenrolled: string[] | null;
 }
 
 interface GenerationResponseJSON {
@@ -1173,14 +1192,49 @@ export async function compilePreview(
   return (await res.json()) as CompileResponse;
 }
 
-// stage compiles the enrolled subgraph and stages it into the next generation (operator-only).
-export async function stage(cfg: ControllerConfig): Promise<StageResult> {
-  const res = await postJSON(cfg, 'stage', '');
+// stage compiles the enrolled subgraph and stages it into the next generation (operator-only). An
+// OPTIONAL force argument (plan-6) re-stages nodes even when their digest is unchanged: forceAll
+// re-stages the whole fleet, forceNodes re-stages named nodes — the escape hatch around the plan-5
+// delta-skip. No force (the default) ⇒ an empty body (a plain delta stage). The result now carries
+// the delta-skipped `unchanged` set alongside `staged`.
+export async function stage(cfg: ControllerConfig, force?: DeployForceArg): Promise<StageResult> {
+  // Empty body when no force is requested (the backend decodes an empty body as "no force"); only a
+  // real force serializes the force_all / force_nodes body.
+  let body = '';
+  if (force?.forceAll) {
+    body = JSON.stringify({ force_all: true });
+  } else if (force?.forceNodes && force.forceNodes.length > 0) {
+    body = JSON.stringify({ force_nodes: force.forceNodes });
+  }
+  const res = await postJSON(cfg, 'stage', body);
   const data = (await res.json()) as StageResponseJSON;
   return {
     staged: data.staged ?? [],
+    unchanged: data.unchanged ?? [],
     skippedUnenrolled: data.skipped_unenrolled ?? [],
     generation: data.generation,
+  };
+}
+
+// deployPreview is the plan-6 read-only dry-run (GET .../deploy-preview, operator-only): it reports
+// which enrolled nodes a Deploy WOULD re-stage (changed) vs skip (unchanged), the keystone
+// full-restage flag, and the topology version it compiled — WITHOUT staging or any side effect. The
+// deploy dialog calls it on open so the operator sees "N update / M unchanged" (and any pending
+// keystone full restage) before confirming. Live-only by contract: the caller renders it and NEVER
+// persists it (a transient operator action — the stripLiveTelemetry custody rule).
+export async function deployPreview(cfg: ControllerConfig): Promise<DeployPreview> {
+  const res = await request(cfg, 'deploy-preview', { method: 'GET' });
+  const d = (await res.json()) as deployPreviewResponseJSON;
+  const nodes: DeployPreviewNode[] = (d.nodes ?? []).map((n) => ({
+    nodeId: n.node_id,
+    name: n.name,
+    changed: n.changed,
+  }));
+  return {
+    topologyVersion: d.topology_version,
+    keystoneFullRestage: d.keystone_full_restage,
+    nodes,
+    skippedUnenrolled: d.skipped_unenrolled ?? [],
   };
 }
 

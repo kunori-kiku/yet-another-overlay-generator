@@ -79,8 +79,29 @@ type telemetryRequestJSON struct {
 // stageResponseJSON is the wire form of a stage result.
 type stageResponseJSON struct {
 	Staged            []string `json:"staged"`
+	Unchanged         []string `json:"unchanged"` // delta-skipped nodes (plan-5): kept their generation, no re-apply
 	SkippedUnenrolled []string `json:"skipped_unenrolled"`
 	Generation        int64    `json:"generation"`
+}
+
+// stageRequestJSON is the OPTIONAL POST body for Deploy (plan-6 Force). Empty body = no force.
+type stageRequestJSON struct {
+	ForceAll   bool     `json:"force_all,omitempty"`   // re-stage every node even if unchanged (fleet)
+	ForceNodes []string `json:"force_nodes,omitempty"` // re-stage named nodes even if unchanged (per-node)
+}
+
+// deployPreviewNodeJSON / deployPreviewResponseJSON are the plan-6 pre-deploy preview wire form.
+type deployPreviewNodeJSON struct {
+	NodeID  string `json:"node_id"`
+	Name    string `json:"name"`
+	Changed bool   `json:"changed"` // true = an unforced Deploy would re-stage this node
+}
+
+type deployPreviewResponseJSON struct {
+	TopologyVersion     int64                   `json:"topology_version"`
+	KeystoneFullRestage bool                    `json:"keystone_full_restage"`
+	Nodes               []deployPreviewNodeJSON `json:"nodes"`
+	SkippedUnenrolled   []string                `json:"skipped_unenrolled"`
 }
 
 // generationResponseJSON is the wire form of a promote result.

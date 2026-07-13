@@ -238,3 +238,94 @@ func TestRegression_SkipDisabled_OnKeystoneFirstPin(t *testing.T) {
 		}
 	}
 }
+
+// (g) FORCE re-stages an UNCHANGED node (plan-6 drift/rescue escape hatch): a per-node force stages that
+// node despite an unchanged digest, and a fleet force stages every node.
+func TestRegression_ForceRestagesUnchanged(t *testing.T) {
+	e := newRegEnv(t, twoNodeTopo(), "node-1", "node-2")
+	ks := newKeystone(t)
+	e.pinKeystone(ks)
+	e.deploy(ks)
+
+	// Per-node force: node-1 re-stages despite being unchanged; node-2 is still skipped.
+	res, err := controller.CompileAndStage(e.ctx, e.store, tenant, time.Now(), controller.WithForceNodes("node-1"))
+	if err != nil {
+		t.Fatalf("CompileAndStage force node-1: %v", err)
+	}
+	if len(res.Staged) != 1 || res.Staged[0] != "node-1" || len(res.UnchangedNodeIDs) != 1 || res.UnchangedNodeIDs[0] != "node-2" {
+		t.Fatalf("force node-1 must re-stage node-1 and skip node-2, got staged=%v unchanged=%v", res.Staged, res.UnchangedNodeIDs)
+	}
+	e.signStaged(ks)
+	if _, err := controller.PromoteStaged(e.ctx, e.store, tenant); err != nil {
+		t.Fatalf("promote (force node-1): %v", err)
+	}
+
+	// Fleet force: BOTH re-stage despite unchanged content.
+	res2, err := controller.CompileAndStage(e.ctx, e.store, tenant, time.Now(), controller.WithForceAll())
+	if err != nil {
+		t.Fatalf("CompileAndStage force all: %v", err)
+	}
+	if len(res2.Staged) != 2 || len(res2.UnchangedNodeIDs) != 0 {
+		t.Fatalf("force all must re-stage every node, got staged=%v unchanged=%v", res2.Staged, res2.UnchangedNodeIDs)
+	}
+}
+
+// (h) DeployPreview reports which nodes a Deploy WOULD change, WITHOUT staging, and flags a pending
+// keystone full-restage.
+func TestRegression_DeployPreview(t *testing.T) {
+	topo := twoNodeTopo()
+	e := newRegEnv(t, topo, "node-1", "node-2")
+	ks := newKeystone(t)
+	e.pinKeystone(ks)
+	e.deploy(ks)
+
+	// Unchanged → both unchanged, no keystone full-restage, and NOTHING staged.
+	pv, err := controller.DeployPreview(e.ctx, e.store, tenant)
+	if err != nil {
+		t.Fatalf("DeployPreview: %v", err)
+	}
+	if pv.KeystoneFullRestage {
+		t.Fatalf("a healthy keystone must not report a full restage")
+	}
+	changed := 0
+	for _, n := range pv.Nodes {
+		if n.Changed {
+			changed++
+		}
+	}
+	if len(pv.Nodes) != 2 || changed != 0 {
+		t.Fatalf("unchanged preview must show 2 nodes, 0 changed, got %d nodes %d changed", len(pv.Nodes), changed)
+	}
+	if _, err := controller.PromoteStaged(e.ctx, e.store, tenant); !errors.Is(err, controller.ErrNoStagedBundle) {
+		t.Fatalf("DeployPreview must NOT stage (promote should be ErrNoStagedBundle), got %v", err)
+	}
+
+	// Change node-1 → the preview shows node-1 changed, node-2 unchanged.
+	topo.Nodes[0].ExtraPrefixes = []string{"10.99.0.0/24"}
+	e.putTopo(topo)
+	pv2, err := controller.DeployPreview(e.ctx, e.store, tenant)
+	if err != nil {
+		t.Fatalf("DeployPreview (changed): %v", err)
+	}
+	for _, n := range pv2.Nodes {
+		if want := n.NodeID == "node-1"; n.Changed != want {
+			t.Errorf("preview node %s changed=%v, want %v", n.NodeID, n.Changed, want)
+		}
+	}
+
+	// Rotate the keystone → the preview flags a full restage (every node changed).
+	ks2 := newKeystone(t)
+	e.pinKeystone(ks2)
+	pv3, err := controller.DeployPreview(e.ctx, e.store, tenant)
+	if err != nil {
+		t.Fatalf("DeployPreview (rotation): %v", err)
+	}
+	if !pv3.KeystoneFullRestage {
+		t.Fatalf("a keystone rotation must set KeystoneFullRestage in the preview")
+	}
+	for _, n := range pv3.Nodes {
+		if !n.Changed {
+			t.Errorf("under a keystone full-restage every node must be changed, %s is not", n.NodeID)
+		}
+	}
+}

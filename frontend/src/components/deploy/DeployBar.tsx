@@ -7,8 +7,19 @@ import {
   selectHasAuth,
 } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
-import { t } from '../../i18n';
+import { t, type UILanguage } from '../../i18n';
 import { BTN_CTA } from '../shell/styles';
+import {
+  emptyForceSelection,
+  setForceAll,
+  toggleForceNode,
+  summarizeDeployPreview,
+  deployPreviewRows,
+  resolveDeployForce,
+  type ForceSelection,
+  type DeployPreview,
+  type DeployForceArg,
+} from '../../lib/deployPreview';
 
 // DeployBar publishes the current topology to the fleet. controllerStore.deploy() chains
 // update-topology → stage → (KEYSTONE signing) → promote → refresh, the whole promote-to-fleet flow.
@@ -22,6 +33,11 @@ export function DeployBar() {
 
   const deploy = useControllerStore((s) => s.deploy);
   const rollKeys = useControllerStore((s) => s.rollKeys);
+  // Pre-deploy preview (plan-6): Deploy now opens a dry-run confirmation dialog before deploying.
+  const openDeployPreview = useControllerStore((s) => s.openDeployPreview);
+  const cancelDeployPreview = useControllerStore((s) => s.cancelDeployPreview);
+  const deployPreview = useControllerStore((s) => s.deployPreview);
+  const deployPreviewing = useControllerStore((s) => s.deployPreviewing);
   const enrollOperator = useControllerStore((s) => s.enrollOperator);
   const loading = useControllerStore((s) => s.loading);
   const signing = useControllerStore((s) => s.signing);
@@ -95,7 +111,9 @@ export function DeployBar() {
       );
       if (!ok) return;
     }
-    deploy();
+    // Open the pre-deploy preview dialog (plan-6): fetch the dry-run, then the operator reviews the
+    // changed/unchanged split + picks any Force and confirms. The actual deploy fires from the dialog.
+    void openDeployPreview();
   };
 
   // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
@@ -127,7 +145,7 @@ export function DeployBar() {
           <button
             data-testid="deploy"
             onClick={onDeploy}
-            disabled={loading || noAuth}
+            disabled={loading || noAuth || deployPreviewing}
             title={
               anyRekeying
                 ? t(language, 'deployBar.rekeyingTitle', { count: rekeyingCount })
@@ -304,6 +322,17 @@ export function DeployBar() {
               </p>
             )}
           </div>
+          {/* plan-6: the delta-skipped (unchanged) set — nodes that kept their generation. */}
+          {lastDeploy.unchanged.length > 0 && (
+            <div>
+              <p className="text-xs text-[var(--content-muted)]">
+                {t(language, 'deployBar.unchangedNodes')} ({lastDeploy.unchanged.length})
+              </p>
+              <p className="text-xs text-[var(--content-muted)] font-mono break-all">
+                {lastDeploy.unchanged.join(', ')}
+              </p>
+            </div>
+          )}
           {lastDeploy.skippedUnenrolled.length > 0 && (
             <div>
               <p className="text-xs text-[var(--content-muted)]">
@@ -341,6 +370,21 @@ export function DeployBar() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Pre-deploy preview dialog (plan-6): a read-only dry-run of what a Deploy would do — the
+          changed/unchanged split, a per-node Force checkbox (re-stage an unchanged node), and a
+          fleet Force-all toggle. When a keystone rotation/first-pin pends, EVERY node re-stages, so
+          the per-node force is moot and a rotation note replaces the counts. Confirm deploys with the
+          chosen Force; the dialog stays up (showing "Deploying…") until the deploy settles. */}
+      {deployPreview && (
+        <DeployPreviewDialog
+          preview={deployPreview}
+          loading={loading}
+          language={language}
+          onCancel={cancelDeployPreview}
+          onConfirm={(force) => void deploy({ force })}
+        />
       )}
 
       {/* Type-to-confirm guard for a shrinking/emptying deploy (plan-5): this publish would sharply
@@ -398,5 +442,136 @@ export function DeployBar() {
         </div>
       )}
     </section>
+  );
+}
+
+// DeployPreviewDialog is the plan-6 pre-deploy confirmation surface. It is mounted ONLY while a
+// preview is open (DeployBar renders it conditionally on deployPreview), so its Force-selection
+// state starts fresh on every open with no reset effect. It stays mounted through the in-flight
+// deploy (the store clears the preview on completion), so a re-entrant Confirm hits deploy()'s
+// in-flight guard rather than double-POSTing. All display text is theme-tokenized + i18n-keyed; the
+// pure changed/unchanged/force logic lives in ../../lib/deployPreview.
+function DeployPreviewDialog({
+  preview,
+  loading,
+  language,
+  onCancel,
+  onConfirm,
+}: {
+  preview: DeployPreview;
+  loading: boolean;
+  language: UILanguage;
+  onCancel: () => void;
+  onConfirm: (force: DeployForceArg) => void;
+}) {
+  const [forceSel, setForceSel] = useState<ForceSelection>(emptyForceSelection());
+  const rows = deployPreviewRows(preview, forceSel);
+  const summary = summarizeDeployPreview(preview);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      data-testid="deploy-preview"
+    >
+      <div className="w-full max-w-lg space-y-4 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-5">
+        <h4 className="text-base font-semibold text-[var(--accent)]">
+          {t(language, 'deployBar.reviewDeploy')}
+        </h4>
+
+        {preview.keystoneFullRestage ? (
+          <p
+            data-testid="deploy-keystone-restage"
+            className="rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-sm text-[var(--warning)]"
+          >
+            {t(language, 'deployBar.keystoneRestagePending')}
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-[var(--content)]">
+              {t(language, 'deployBar.previewSummary', {
+                changed: summary.changed,
+                unchanged: summary.unchanged,
+              })}
+            </p>
+            <label className="flex items-center gap-2 text-sm text-[var(--content)]">
+              <input
+                type="checkbox"
+                data-testid="deploy-force-all"
+                checked={forceSel.forceAll}
+                onChange={(e) => setForceSel((s) => setForceAll(s, e.target.checked))}
+              />
+              {t(language, 'deployBar.forceAll')}
+            </label>
+          </>
+        )}
+
+        {rows.length === 0 ? (
+          <p className="text-sm italic text-[var(--content-muted)]">
+            {t(language, 'deployBar.previewNoNodes')}
+          </p>
+        ) : (
+          <ul className="max-h-64 space-y-1 overflow-y-auto">
+            {rows.map((r) => (
+              <li
+                key={r.nodeId}
+                data-testid={`deploy-preview-node-${r.nodeId}`}
+                className="flex items-center justify-between gap-2 rounded bg-[var(--surface-sunken)] px-2 py-1"
+              >
+                <span className="break-all font-mono text-xs text-[var(--content)]">{r.name}</span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span
+                    className={`text-xs ${r.willStage ? 'text-[var(--success)]' : 'text-[var(--content-muted)]'}`}
+                  >
+                    {r.changed
+                      ? t(language, 'deployBar.previewWillUpdate')
+                      : t(language, 'deployBar.previewUnchanged')}
+                  </span>
+                  {r.forceable && (
+                    <label className="flex items-center gap-1 text-xs text-[var(--content-muted)]">
+                      <input
+                        type="checkbox"
+                        data-testid={`deploy-force-node-${r.nodeId}`}
+                        checked={r.forced}
+                        onChange={() => setForceSel((s) => toggleForceNode(s, r.nodeId))}
+                      />
+                      {t(language, 'deployBar.forceNode')}
+                    </label>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {preview.skippedUnenrolled.length > 0 && (
+          <p className="text-xs text-[var(--warning)]">
+            {t(language, 'deployBar.skippedUnenrolled')} ({preview.skippedUnenrolled.length}):{' '}
+            <span className="break-all font-mono">{preview.skippedUnenrolled.join(', ')}</span>
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="rounded border border-[var(--hairline)] px-3 py-2 text-sm text-[var(--content)] hover:bg-[var(--control-hover)] disabled:text-[var(--content-muted)]"
+          >
+            {t(language, 'deployBar.cancel')}
+          </button>
+          <button
+            type="button"
+            data-testid="deploy-preview-confirm"
+            onClick={() => onConfirm(resolveDeployForce(forceSel))}
+            disabled={loading}
+            className={`rounded px-3 py-2 text-sm font-medium ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]`}
+          >
+            {loading ? t(language, 'deployBar.deploying') : t(language, 'deployBar.confirmDeploy')}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

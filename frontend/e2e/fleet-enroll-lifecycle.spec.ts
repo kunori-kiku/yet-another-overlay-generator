@@ -45,6 +45,7 @@ test('enroll → deploy → real poll/fetch/verify/report the applied generation
   await importDesignViaUI(page, target.panel, designPath)
   await page.goto(`${target.panel}/deploy`)
   await page.getByRole('button', { name: '🚀 Deploy' }).click()
+  await page.getByTestId('deploy-preview-confirm').click() // plan-6 preview dialog
   await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
 
   // The router does a REAL check-in (reusing its bearer): poll the promoted generation, fetch its
