@@ -14,13 +14,13 @@ export interface DeployPreviewNode {
   changed: boolean;
 }
 
-// DeployPreview is the read-only dry-run of what a Deploy WOULD do (GET .../deploy-preview), with
-// no side effects. keystoneFullRestage=true ⇒ a keystone rotation / first-pin pends, so EVERY node
-// re-stages regardless of its digest (the per-node Force is then moot — see keystoneFullRestage in
-// deployPreviewRows). topologyVersion binds the preview to the design version it was computed
-// against (a since-changed design re-previews; the deploy itself never blocks on it).
+// DeployPreview is the read-only dry-run of what a Deploy WOULD do (POST .../deploy-preview with the
+// CURRENT canvas as the body), with no side effects. keystoneFullRestage=true ⇒ a keystone rotation /
+// first-pin pends, so EVERY node re-stages regardless of its digest (the per-node Force is then moot —
+// see keystoneFullRestage in deployPreviewRows). The preview compiles EXACTLY the canvas a Deploy would
+// push (update-topology) then stage, so an unsaved canvas edit is reflected in the changed/unchanged
+// split — the preview can never lie about the blast radius against a stale stored design.
 export interface DeployPreview {
-  topologyVersion: number;
   keystoneFullRestage: boolean;
   nodes: DeployPreviewNode[];
   skippedUnenrolled: string[];

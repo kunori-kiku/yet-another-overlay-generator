@@ -309,6 +309,8 @@ export const en = {
   'deployBar.forceAll': "Force all — re-stage every node (even unchanged)",
   'deployBar.forceNode': "Force",
   'deployBar.keystoneRestagePending': "Keystone rotation pending — a full redeploy will be staged for every node.",
+  'deployBar.previewUnavailable': "Couldn't load the deploy preview (the controller may be an older version).",
+  'deployBar.deployAnyway': "Deploy anyway",
   'deployBar.unchangedNodes': "Unchanged (kept config)",
   'deployBar.dismissNotice': "Dismiss notice",
   'deployBar.enrollSigningKeyPasskey': "🔐 Enroll signing key (passkey / YubiKey)",

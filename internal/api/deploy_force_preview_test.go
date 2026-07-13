@@ -6,21 +6,27 @@ import (
 )
 
 // TestHandleDeployPreview_Wiring verifies the plan-6 preview endpoint HTTP wiring (the changed/unchanged
-// LOGIC is proven end-to-end in internal/regression). Operator-gated GET only.
+// LOGIC is proven end-to-end in internal/regression). Operator-gated POST of the current canvas.
 func TestHandleDeployPreview_Wiring(t *testing.T) {
 	env := newCtlTestEnv(t)
-	// Auth GET → 200 (no stored topology → an empty preview, still 200).
+	// A minimal valid canvas (public-keys-only). No enrolled nodes → an empty preview, still 200.
+	body := map[string]any{
+		"project": map[string]any{"id": "p", "name": "P"},
+		"domains": []any{map[string]any{"id": "d1", "name": "net", "cidr": "10.0.0.0/24", "allocation_mode": "auto", "routing_mode": "babel"}},
+		"nodes":   []any{},
+		"edges":   []any{},
+	}
 	var pv deployPreviewResponseJSON
-	if status := doJSON(t, http.MethodGet, env.opURL("deploy-preview"), testOperatorToken, nil, &pv); status != http.StatusOK {
-		t.Fatalf("deploy-preview auth GET: status %d, want 200", status)
+	if status := doJSON(t, http.MethodPost, env.opURL("deploy-preview"), testOperatorToken, body, &pv); status != http.StatusOK {
+		t.Fatalf("deploy-preview auth POST: status %d, want 200", status)
 	}
 	// No token → 401 (operator-gated).
-	if status := doJSON(t, http.MethodGet, env.opURL("deploy-preview"), "", nil, nil); status != http.StatusUnauthorized {
+	if status := doJSON(t, http.MethodPost, env.opURL("deploy-preview"), "", body, nil); status != http.StatusUnauthorized {
 		t.Errorf("deploy-preview no-token: status %d, want 401", status)
 	}
-	// Wrong method → 405.
-	if status := doJSON(t, http.MethodPost, env.opURL("deploy-preview"), testOperatorToken, nil, nil); status != http.StatusMethodNotAllowed {
-		t.Errorf("deploy-preview POST: status %d, want 405", status)
+	// Wrong method (GET) → 405.
+	if status := doJSON(t, http.MethodGet, env.opURL("deploy-preview"), testOperatorToken, nil, nil); status != http.StatusMethodNotAllowed {
+		t.Errorf("deploy-preview GET: status %d, want 405", status)
 	}
 }
 

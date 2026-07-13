@@ -98,7 +98,6 @@ type deployPreviewNodeJSON struct {
 }
 
 type deployPreviewResponseJSON struct {
-	TopologyVersion     int64                   `json:"topology_version"`
 	KeystoneFullRestage bool                    `json:"keystone_full_restage"`
 	Nodes               []deployPreviewNodeJSON `json:"nodes"`
 	SkippedUnenrolled   []string                `json:"skipped_unenrolled"`

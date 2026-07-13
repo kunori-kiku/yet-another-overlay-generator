@@ -143,8 +143,8 @@ func (h *ControllerHandler) HandleStage(w http.ResponseWriter, r *http.Request) 
 // version it compiled — WITHOUT staging. The Deploy dialog calls it on open so the operator sees "N
 // updated, M unchanged" (and any pending keystone full-restage) before deploying.
 func (h *ControllerHandler) HandleDeployPreview(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
+	if r.Method != http.MethodPost {
+		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
 		return
 	}
 	tenant, _, ok := identity(r.Context())
@@ -152,7 +152,16 @@ func (h *ControllerHandler) HandleDeployPreview(w http.ResponseWriter, r *http.R
 		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
-	pv, err := controller.DeployPreview(r.Context(), h.store, tenant)
+	// Preview the POSTed CURRENT canvas (what a Deploy will push+stage), NOT the stored copy — a Deploy
+	// pushes the canvas via update-topology then stages, so previewing the stored design would misreport
+	// the blast radius with unsaved edits. Public-keys-only + zero-knowledge (CompileSubgraph emits
+	// placeholder private keys); the POSTed key fields are never trusted.
+	topo, err := readTopology(w, r)
+	if err != nil {
+		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
+		return
+	}
+	pv, err := controller.DeployPreview(r.Context(), h.store, tenant, topo)
 	if err != nil {
 		writeCodedOr(w, apierr.CodeInternal, err)
 		return
@@ -162,7 +171,6 @@ func (h *ControllerHandler) HandleDeployPreview(w http.ResponseWriter, r *http.R
 		nodes = append(nodes, deployPreviewNodeJSON{NodeID: n.NodeID, Name: n.Name, Changed: n.Changed})
 	}
 	writeJSON(w, http.StatusOK, deployPreviewResponseJSON{
-		TopologyVersion:     pv.TopologyVersion,
 		KeystoneFullRestage: pv.KeystoneFullRestage,
 		Nodes:               nodes,
 		SkippedUnenrolled:   pv.SkippedUnenrolled,

@@ -129,6 +129,32 @@ test('fault at post-deploy reconcile (topology GET after promote): deploy STILL 
   await expect(errorBanner(page)).toBeHidden()
 })
 
+test('POSITIVE: deploy-preview endpoint fault → "Deploy anyway" fallback keeps deploy reachable', async (
+  { page, context },
+  testInfo,
+) => {
+  await seedEnrolledOnDeploy(page, context, testInfo)
+  // Simulate a preview endpoint an OLDER controller cannot serve (a newer panel POSTs the brand-new
+  // deploy-preview route; a GET-only controller answers 405, one without it 404). openDeployPreview()
+  // then throws — the confirmation dialog must NOT open. The plan-6 best-effort fallback instead
+  // surfaces a "Deploy anyway" button so the operator is never left unable to deploy.
+  const faults = await installFaults(page, [{ route: 'deploy-preview', method: 'POST', status: 405 }])
+
+  const promoteP = page.waitForResponse(
+    (r) => r.url().includes('/operator/promote') && r.request().method() === 'POST',
+    { timeout: 20_000 },
+  )
+  await page.getByRole(deployButton.role, { name: deployButton.name }).click()
+  // Preview POST faulted → no dialog; the fallback appears instead.
+  await expect(page.getByTestId('deploy-anyway')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('deploy-preview')).toBeHidden()
+  // Deploy anyway → the real (keystone-OFF) deploy chain runs and promote proceeds.
+  await page.getByTestId('deploy-anyway').click()
+  await promoteP
+  await expect(page.getByText('Last deploy')).toBeVisible({ timeout: 20_000 })
+  expect(faults.count('deploy-preview', 'POST'), 'the preview POST was attempted').toBeGreaterThanOrEqual(1)
+})
+
 // NOTE on the keystone-ON trustlist-signature step: a fault there drives the SAME deploy() catch as
 // the getTrustlist-500 leg above (abort BEFORE promote, coherent error, Deploy re-enabled) — `signing`
 // is already cleared by the inner finally before the signature POST, so there is no signing-flag-

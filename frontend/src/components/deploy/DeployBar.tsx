@@ -38,6 +38,10 @@ export function DeployBar() {
   const cancelDeployPreview = useControllerStore((s) => s.cancelDeployPreview);
   const deployPreview = useControllerStore((s) => s.deployPreview);
   const deployPreviewing = useControllerStore((s) => s.deployPreviewing);
+  // Best-effort preview (plan-6): non-null when the dry-run fetch failed (e.g. an older controller
+  // 404s/405s the POST route). We then show the error + a "Deploy anyway" fallback rather than a dead
+  // Deploy button.
+  const deployPreviewError = useControllerStore((s) => s.deployPreviewError);
   const enrollOperator = useControllerStore((s) => s.enrollOperator);
   const loading = useControllerStore((s) => s.loading);
   const signing = useControllerStore((s) => s.signing);
@@ -114,6 +118,19 @@ export function DeployBar() {
     // Open the pre-deploy preview dialog (plan-6): fetch the dry-run, then the operator reviews the
     // changed/unchanged split + picks any Force and confirms. The actual deploy fires from the dialog.
     void openDeployPreview();
+  };
+
+  // "Deploy anyway" fallback (plan-6 best-effort): the preview fetch failed, so the confirmation
+  // dialog never opened. Deploy directly (no preview, no Force — a plain delta deploy) so the operator
+  // is never stuck. It still honors the same advisory rekeying confirm as onDeploy.
+  const onDeployAnyway = () => {
+    if (anyRekeying) {
+      const ok = window.confirm(
+        t(language, 'deployBar.deployWhileRekeyingConfirm', { count: rekeyingCount }),
+      );
+      if (!ok) return;
+    }
+    void deploy();
   };
 
   // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
@@ -369,6 +386,37 @@ export function DeployBar() {
               </ul>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Best-effort preview fallback (plan-6): the dry-run fetch failed (e.g. a newer panel POSTs the
+          deploy-preview route to an older controller that 404s/405s it). The Deploy button only opens
+          the preview dialog, so without this the operator could not deploy at all — surface the error
+          and a "Deploy anyway" that deploys with no preview (a plain delta deploy). Dismissible. */}
+      {deployPreviewError && (
+        <div className="space-y-2 rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2">
+          <div className="flex items-start justify-between gap-2 text-xs text-[var(--warning)]">
+            <span className="break-all">
+              {t(language, 'deployBar.previewUnavailable')} {deployPreviewError}
+            </span>
+            <button
+              type="button"
+              onClick={cancelDeployPreview}
+              aria-label={t(language, 'deployBar.dismissNotice')}
+              className="shrink-0 px-1 text-[var(--warning)] hover:text-[var(--warning)]"
+            >
+              ✕
+            </button>
+          </div>
+          <button
+            type="button"
+            data-testid="deploy-anyway"
+            onClick={onDeployAnyway}
+            disabled={loading}
+            className={`px-4 py-2 text-sm ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded font-medium`}
+          >
+            {loading ? t(language, 'deployBar.deploying') : t(language, 'deployBar.deployAnyway')}
+          </button>
         </div>
       )}
 

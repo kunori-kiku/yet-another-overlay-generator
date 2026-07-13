@@ -280,7 +280,7 @@ func TestRegression_DeployPreview(t *testing.T) {
 	e.deploy(ks)
 
 	// Unchanged → both unchanged, no keystone full-restage, and NOTHING staged.
-	pv, err := controller.DeployPreview(e.ctx, e.store, tenant)
+	pv, err := controller.DeployPreview(e.ctx, e.store, tenant, topo)
 	if err != nil {
 		t.Fatalf("DeployPreview: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestRegression_DeployPreview(t *testing.T) {
 	// Change node-1 → the preview shows node-1 changed, node-2 unchanged.
 	topo.Nodes[0].ExtraPrefixes = []string{"10.99.0.0/24"}
 	e.putTopo(topo)
-	pv2, err := controller.DeployPreview(e.ctx, e.store, tenant)
+	pv2, err := controller.DeployPreview(e.ctx, e.store, tenant, topo)
 	if err != nil {
 		t.Fatalf("DeployPreview (changed): %v", err)
 	}
@@ -316,7 +316,7 @@ func TestRegression_DeployPreview(t *testing.T) {
 	// Rotate the keystone → the preview flags a full restage (every node changed).
 	ks2 := newKeystone(t)
 	e.pinKeystone(ks2)
-	pv3, err := controller.DeployPreview(e.ctx, e.store, tenant)
+	pv3, err := controller.DeployPreview(e.ctx, e.store, tenant, topo)
 	if err != nil {
 		t.Fatalf("DeployPreview (rotation): %v", err)
 	}

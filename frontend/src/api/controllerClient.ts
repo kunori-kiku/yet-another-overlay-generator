@@ -364,7 +364,6 @@ interface deployPreviewNodeJSON {
 }
 
 interface deployPreviewResponseJSON {
-  topology_version: number;
   keystone_full_restage: boolean;
   nodes: deployPreviewNodeJSON[] | null;
   skipped_unenrolled: string[] | null;
@@ -1216,14 +1215,18 @@ export async function stage(cfg: ControllerConfig, force?: DeployForceArg): Prom
   };
 }
 
-// deployPreview is the plan-6 read-only dry-run (GET .../deploy-preview, operator-only): it reports
-// which enrolled nodes a Deploy WOULD re-stage (changed) vs skip (unchanged), the keystone
-// full-restage flag, and the topology version it compiled — WITHOUT staging or any side effect. The
-// deploy dialog calls it on open so the operator sees "N update / M unchanged" (and any pending
+// deployPreview is the plan-6 read-only dry-run (POST .../deploy-preview, operator-only): it POSTs the
+// CURRENT canvas (public-keys-only, EXACTLY what a Deploy pushes via update-topology then stages) and
+// reports which enrolled nodes a Deploy WOULD re-stage (changed) vs skip (unchanged), plus the keystone
+// full-restage flag — WITHOUT staging or any side effect. Previewing the POSTed canvas rather than the
+// stored design means an unsaved edit is reflected, so the preview never lies about the blast radius.
+// The deploy dialog calls it on open so the operator sees "N update / M unchanged" (and any pending
 // keystone full restage) before confirming. Live-only by contract: the caller renders it and NEVER
-// persists it (a transient operator action — the stripLiveTelemetry custody rule).
-export async function deployPreview(cfg: ControllerConfig): Promise<DeployPreview> {
-  const res = await request(cfg, 'deploy-preview', { method: 'GET' });
+// persists it (a transient operator action — the stripLiveTelemetry custody rule). topoJSON is the
+// serialized public-keys-only model.Topology, posted verbatim exactly like compilePreview /
+// updateTopology (the caller strips private keys first).
+export async function deployPreview(cfg: ControllerConfig, topoJSON: string): Promise<DeployPreview> {
+  const res = await postJSON(cfg, 'deploy-preview', topoJSON);
   const d = (await res.json()) as deployPreviewResponseJSON;
   const nodes: DeployPreviewNode[] = (d.nodes ?? []).map((n) => ({
     nodeId: n.node_id,
@@ -1231,7 +1234,6 @@ export async function deployPreview(cfg: ControllerConfig): Promise<DeployPrevie
     changed: n.changed,
   }));
   return {
-    topologyVersion: d.topology_version,
     keystoneFullRestage: d.keystone_full_restage,
     nodes,
     skippedUnenrolled: d.skipped_unenrolled ?? [],

@@ -540,9 +540,6 @@ type NodeDeployChange struct {
 
 // DeployPreviewResult is the plan-6 dry-run of what a Deploy (CompileAndStage) WOULD do, without staging.
 type DeployPreviewResult struct {
-	// TopologyVersion is the stored topology version the preview compiled — the caller binds its Deploy to
-	// it so it deploys what was previewed.
-	TopologyVersion int64
 	// KeystoneFullRestage is true when a keystone rotation/first-pin pends: the delta-skip is disabled, so
 	// EVERY node will re-stage regardless of content.
 	KeystoneFullRestage bool
@@ -552,25 +549,18 @@ type DeployPreviewResult struct {
 	SkippedUnenrolled []string
 }
 
-// DeployPreview is the READ-ONLY dry-run of CompileAndStage (plan-6): it compiles + exports the STORED
-// topology exactly as a Deploy would, computes each enrolled node's bundle digest, and reports whether an
-// unforced Deploy would re-stage it — WITHOUT staging, persisting pins, or writing the audit log. It
-// shares the digest identity (servedBundleDigest) and the keystone skip decision (stageSkipEnabled) with
-// CompileAndStage, so the preview cannot disagree with the real stage. Force is an operator override
-// applied at Deploy time, so the preview reports the UNFORCED baseline.
-func DeployPreview(ctx context.Context, store Store, t TenantID) (DeployPreviewResult, error) {
-	rec, err := store.GetTopology(ctx, t)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return DeployPreviewResult{}, nil
-		}
-		return DeployPreviewResult{}, fmt.Errorf("controller: loading topology to preview: %w", err)
-	}
-	var topo model.Topology
-	if err := json.Unmarshal(rec.JSON, &topo); err != nil {
-		return DeployPreviewResult{}, fmt.Errorf("controller: parsing stored topology: %w", err)
-	}
-	normalize.HealCollidingPins(&topo)
+// DeployPreview is the READ-ONLY dry-run of CompileAndStage (plan-6): it compiles + exports the PASSED
+// design (the operator's current canvas — a Deploy pushes the canvas via update-topology THEN stages, so
+// previewing the STORED design would misreport the blast radius whenever the canvas has unsaved edits),
+// computes each enrolled node's bundle digest, and reports whether an unforced Deploy would re-stage it —
+// WITHOUT staging, persisting pins, or writing the audit log. Zero-knowledge like HandleCompilePreview:
+// keys come from the enrolled registry via CompileSubgraph (AgentHeld placeholders); the canvas key
+// fields are ignored. It shares the digest identity (servedBundleDigest) and the keystone skip decision
+// (stageSkipEnabled) with CompileAndStage, so the preview cannot disagree with the real stage of the same
+// design. Force is an operator override applied at Deploy time, so the preview reports the UNFORCED
+// baseline. Heal the colliding pins a save/stage would, so the previewed digests match a real Deploy.
+func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Topology) (DeployPreviewResult, error) {
+	normalize.HealCollidingPins(topo)
 
 	nodes, err := store.ListNodes(ctx, t)
 	if err != nil {
@@ -582,12 +572,12 @@ func DeployPreview(ctx context.Context, store Store, t TenantID) (DeployPreviewR
 	}
 	fs := BuildFetchSettings(cs.WithDefaults())
 	fs.AgentRolloutNodeIDs = AgentRolloutNodeIDs(cs, nodes)
-	result, subgraph, skipped, err := CompileSubgraph(ctx, &topo, nodes, fs)
+	result, subgraph, skipped, err := CompileSubgraph(ctx, topo, nodes, fs)
 	if err != nil {
 		return DeployPreviewResult{}, err
 	}
 	if len(subgraph.Nodes) == 0 {
-		return DeployPreviewResult{TopologyVersion: rec.Version, SkippedUnenrolled: skipped}, nil
+		return DeployPreviewResult{SkippedUnenrolled: skipped}, nil
 	}
 
 	keystoneOn := false
@@ -613,7 +603,6 @@ func DeployPreview(ctx context.Context, store Store, t TenantID) (DeployPreviewR
 	}
 
 	out := DeployPreviewResult{
-		TopologyVersion:     rec.Version,
 		KeystoneFullRestage: !skipEnabled,
 		SkippedUnenrolled:   skipped,
 		Nodes:               make([]NodeDeployChange, 0, len(subgraph.Nodes)),

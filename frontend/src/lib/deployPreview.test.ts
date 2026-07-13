@@ -14,7 +14,6 @@ import {
 
 function preview(over: Partial<DeployPreview> = {}): DeployPreview {
   return {
-    topologyVersion: 7,
     keystoneFullRestage: false,
     nodes: [
       { nodeId: 'n1', name: 'router', changed: true },

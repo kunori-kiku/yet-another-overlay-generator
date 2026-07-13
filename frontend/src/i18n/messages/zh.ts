@@ -297,6 +297,8 @@ export const zh: Record<keyof typeof en, string> = {
   'deployBar.forceAll': "强制全部 —— 重新下发每个节点（即使未变化）",
   'deployBar.forceNode': "强制",
   'deployBar.keystoneRestagePending': "密钥基石正在轮换 —— 将对每个节点进行完整重新下发。",
+  'deployBar.previewUnavailable': "无法加载部署预览（控制器版本可能较旧）。",
+  'deployBar.deployAnyway': "仍然部署",
   'deployBar.unchangedNodes': "未变化（保留原配置）",
   'deployBar.dismissNotice': "关闭提示",
   'deployBar.enrollSigningKeyPasskey': "🔐 注册签名密钥（passkey / YubiKey）",

@@ -289,13 +289,21 @@ interface ControllerState {
   lastDeploy: StageResult | null;
 
   // Pre-deploy preview (plan-6): the read-only dry-run fetched when the operator initiates a Deploy
-  // (GET /deploy-preview). Non-null ⇒ the confirmation dialog is open showing "N update / M
-  // unchanged" + the per-node Force surface. TRANSIENT + never persisted (not in the partialize
-  // allowlist) — a preview is a one-shot operator action, and it carries live digest verdicts that
-  // are stale on reload (the same custody rule as the live telemetry). deployPreviewing is the
-  // fetch-in-flight flag (distinct from the global loading, so an unrelated op does not flip it).
+  // (POST /deploy-preview with the current canvas). Non-null ⇒ the confirmation dialog is open showing
+  // "N update / M unchanged" + the per-node Force surface. TRANSIENT + never persisted (not in the
+  // partialize allowlist) — a preview is a one-shot operator action, and it carries live digest
+  // verdicts that are stale on reload (the same custody rule as the live telemetry). deployPreviewing
+  // is the fetch-in-flight flag (distinct from the global loading, so an unrelated op does not flip it).
   deployPreview: DeployPreview | null;
   deployPreviewing: boolean;
+  // deployPreviewError (plan-6 best-effort): the preview fetch FAILED — e.g. a newer panel POSTs the
+  // deploy-preview route to an OLDER controller that only served the GET form (405) or lacks the route
+  // entirely (404). Because the Deploy button now only OPENS the preview dialog (which renders only
+  // after a successful preview), a dead preview endpoint would otherwise leave the operator unable to
+  // deploy at all. Non-null ⇒ the DeployBar shows this error AND a "Deploy anyway" fallback that
+  // deploys with no preview. Cleared when a deploy starts, on cancel, and on a fresh preview attempt.
+  // TRANSIENT + never persisted (same custody rule as deployPreview).
+  deployPreviewError: string | null;
 
   // bootstrap settings (plan-5.2, server-persisted): public agent URL / GitHub proxy / agent
   // release base. null means not yet loaded from the server (fetched on refresh).
@@ -494,13 +502,15 @@ interface ControllerState {
   // operator can see them and adjust the NAT ip:port accordingly, then Save persists and Deploy
   // reuses them stickily.
   compilePreview: () => Promise<void>;
-  // openDeployPreview (plan-6): fetch the read-only dry-run (GET /deploy-preview) and set
-  // deployPreview so the DeployBar renders the confirmation dialog. It is what the Deploy button
-  // now triggers (instead of deploying immediately) — the operator reviews "N update / M unchanged"
-  // + picks any Force, then confirms. Best-effort: a fetch failure surfaces in `error` and leaves
-  // the dialog closed.
+  // openDeployPreview (plan-6): POST the CURRENT canvas (private keys stripped, exactly what deploy()
+  // pushes) to /deploy-preview and set deployPreview so the DeployBar renders the confirmation dialog.
+  // It is what the Deploy button now triggers (instead of deploying immediately) — the operator reviews
+  // "N update / M unchanged" + picks any Force, then confirms. Best-effort: a fetch failure sets
+  // deployPreviewError (not the global `error`) so the DeployBar can offer a "Deploy anyway" fallback
+  // instead of leaving Deploy dead when the preview endpoint is unavailable.
   openDeployPreview: () => Promise<void>;
-  // cancelDeployPreview clears the preview dialog (the operator dismissed it without deploying).
+  // cancelDeployPreview clears the preview dialog / error banner (the operator dismissed it without
+  // deploying).
   cancelDeployPreview: () => void;
   // deploy uploads the current canvas (private keys stripped first) → stage(force) → (keystone
   // signing) → promote. force (plan-6) re-stages nodes even when unchanged (forceAll / forceNodes),
@@ -713,6 +723,7 @@ export const useControllerStore = create<ControllerState>()(
       lastDeploy: null,
       deployPreview: null,
       deployPreviewing: false,
+      deployPreviewError: null,
       settings: null,
 
       hydrationNotice: false,
@@ -1039,10 +1050,11 @@ export const useControllerStore = create<ControllerState>()(
           nodes: [],
           audit: [],
           auditVerified: false,
-          // Drop any open preview dialog / in-flight preview: it is a transient, session-scoped
-          // operator action and must never survive a session change.
+          // Drop any open preview dialog / in-flight preview / preview-error banner: it is a
+          // transient, session-scoped operator action and must never survive a session change.
           deployPreview: null,
           deployPreviewing: false,
+          deployPreviewError: null,
           // Clear settings too, so a different operator signing in re-fetches them
           // (the guarded loadSettings effect re-fires on settings===null).
           settings: null,
@@ -1465,16 +1477,30 @@ export const useControllerStore = create<ControllerState>()(
       // deployPreview is never persisted (see the partialize note).
       openDeployPreview: async () => {
         if (get().deployPreviewing || get().loading || get().deployPreview) return;
-        set({ deployPreviewing: true, error: null });
+        // Clear any prior preview-error banner so a retry starts clean (do NOT guard on it — the
+        // Deploy button must be able to re-attempt the preview after a failure).
+        set({ deployPreviewing: true, error: null, deployPreviewError: null });
         try {
-          const preview = await ctlDeployPreview(configOf(get()));
+          // Preview EXACTLY the canvas a Deploy will push+stage: deploy() reads the same
+          // getTopology(), strips private keys, then update-topology's it before staging — so we POST
+          // the identically-stripped canvas here. Previewing the stored server design instead would
+          // misreport the blast radius whenever the canvas has unsaved edits (the plan-6 defect). The
+          // controller canvas is already key-free; the strip is the zero-knowledge fail-safe (mirrors
+          // compilePreview / deploy()).
+          const current = useTopologyStore.getState().getTopology();
+          const { topo: clean } = stripPrivateKeys(current);
+          const preview = await ctlDeployPreview(configOf(get()), JSON.stringify(clean));
           set({ deployPreview: preview, deployPreviewing: false });
         } catch (err) {
-          set({ error: localizeError(err, 'error.generic'), deployPreviewing: false });
+          // Best-effort (plan-6): the preview endpoint may be unavailable (a newer panel POSTs the
+          // deploy-preview route to an OLDER controller — 405 GET-only / 404 no route). Record the
+          // failure in deployPreviewError (NOT the global `error`) so the DeployBar surfaces it beside
+          // a "Deploy anyway" fallback, rather than leaving Deploy permanently dead.
+          set({ deployPreviewError: localizeError(err, 'error.generic'), deployPreviewing: false });
         }
       },
 
-      cancelDeployPreview: () => set({ deployPreview: null }),
+      cancelDeployPreview: () => set({ deployPreview: null, deployPreviewError: null }),
 
       // forceRedeployNode (plan-6): re-stage ONE node even if unchanged, then the usual promote path.
       // It reuses deploy() with force_nodes:[nodeId] (so the keystone sign step is not reimplemented);
@@ -1491,7 +1517,9 @@ export const useControllerStore = create<ControllerState>()(
         // shrink re-call is unaffected: the shrink-confirm branch sets loading:false before
         // returning, so deploy({confirmedShrink:true}) runs with loading already cleared.
         if (get().loading) return;
-        set({ loading: true, error: null });
+        // Clear the preview-error banner too: a deploy (whether from the dialog Confirm or the
+        // "Deploy anyway" fallback) supersedes any stale preview-fetch failure.
+        set({ loading: true, error: null, deployPreviewError: null });
         try {
           const cfg = configOf(get());
 
