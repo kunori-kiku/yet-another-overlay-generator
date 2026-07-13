@@ -6,8 +6,10 @@ import { t, type UILanguage } from '../../i18n';
 
 // TelemetryHistorySettings (telemetry-history plan-4): the fleet card for the per-node resource-
 // history sample cap (plan-2 backend field telemetry_history_cap). One numeric knob that rides the
-// existing full-replace /settings contract, mirroring the config-card pattern (BootstrapSettings /
-// MimicCatalogSettings): a keyed controlled form initialized from the server value on (re)mount.
+// existing full-replace /settings contract. The form is keyed only on whether settings have LOADED
+// (empty→loaded) so it initializes from the server value once; it deliberately does NOT remount when a
+// save mutates settings (that would reset the "Saved." notice) — the form owns the operator's edits
+// after load, matching MimicCatalogSettings/AgentUpdateSettings (the notice-bearing cards).
 //
 // Semantics mirror the Go *int: blank ⇒ default (DefaultTelemetryHistoryCap), 0 ⇒ history disabled
 // (the node-detail charts then show a "history off" hint), N ⇒ retain N samples per node.
@@ -44,7 +46,7 @@ export function TelemetryHistorySettings() {
         </p>
       ) : (
         <CapForm
-          key={settings ? JSON.stringify(settings) : 'empty'}
+          key={settings ? 'loaded' : 'empty'}
           initial={settings ?? emptyControllerSettings()}
           loading={loading}
           language={language}
