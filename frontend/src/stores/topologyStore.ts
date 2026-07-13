@@ -14,13 +14,12 @@ import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } fro
 import { uuid } from '../lib/uuid';
 import { healCollidingPins, sanitizeLinkDirection } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
-import { parseContentDispositionFilename, triggerBrowserDownload } from '../lib/download';
-// The local-engine seam. localEngineEnabled() is the SINGLE decision point this store consults; the
-// four adapters bridge the air-gap action shapes onto the in-browser Go/WASM engine (web/yaog.wasm,
-// proven byte-equal to the Go controller pipeline by the permanent WASM-vs-golden gate). See the seam
-// docstring below ALLOCATION_PIN_FIELDS.
+import { triggerBrowserDownload } from '../lib/download';
+// The local-engine seam: these four adapters bridge the compute action shapes onto the in-browser
+// Go/WASM engine (web/yaog.wasm, proven byte-equal to the Go controller pipeline by the permanent
+// WASM-vs-golden gate). It is the ONLY local engine — there is no server-fetch fallback (see the seam
+// docstring below ALLOCATION_PIN_FIELDS).
 import {
-  localEngineEnabled,
   localValidate,
   localCompile,
   localExport,
@@ -48,28 +47,27 @@ export const ALLOCATION_PIN_FIELDS = [
   'pinned_to_link_local',
 ] as const;
 
-// ── The local-engine seam (plan-6, milestone 1.6) ──
+// ── The local-engine seam ──
 //
 // The four compute actions below — validate(), compile(), exportArtifacts(),
-// downloadDeployScript() — share ONE decision shape, deliberately NOT four scattered
-// branches (which is how F3-class drift creeps in). They split into two kinds:
+// downloadDeployScript() — run the in-browser Go/WASM engine (web/yaog.wasm) via the localEngine
+// adapters (localValidate / localCompile / localExport / localDeployScripts), byte-pinned to the Go
+// controller pipeline by the permanent WASM-vs-golden gate. They split into two kinds:
 //
-//   - validate() is KEY-FREE (schema + semantic only), so it runs the in-browser TS validator
-//     (localValidate) ALWAYS in controller mode — browser-local verify, the controller never calls
-//     /api/validate — and in local mode whenever `localEngineEnabled()`. It has no controller-mode
-//     refusal guard, because a public-keys-only canvas validates identically.
+//   - validate() is KEY-FREE (schema + semantic only), so it runs the in-browser validator in BOTH
+//     controller and local mode — browser-local verify: the controller neither serves nor calls a
+//     validate endpoint, which keeps its attack surface minimal. It has no controller-mode refusal
+//     guard, because a public-keys-only canvas validates identically.
 //   - compile() / exportArtifacts() / downloadDeployScript() need PRIVATE keys (key generation /
 //     bundling), so they keep a controller-mode REFUSAL guard FIRST (controller mode is
 //     zero-knowledge — the controller compiles server-side on Deploy), then the local-engine arm.
 //
-// `localEngineEnabled()` (default-ON, plan-7 Phase 0.5 — true unless the typed VITE_YAOG_LOCAL_ENGINE
-// flag is explicitly 'backend') ⇒ call the localEngine adapter (localValidate / localCompile /
-// localExport / localDeployScripts), running the plan-4 TS compiler in the browser, byte-pinned to
-// the Go pipeline by the green plan-5 conformance harness. The air-gap fetch branches survive ONLY as
-// the explicit 'backend' escape hatch and ONLY in LOCAL mode — functional solely against a
-// `-tags airgap` oracle, since plan-7 gates those routes off the default controller build (a shipped
-// controller 404s /api/validate). Controller mode keeps its verify off the wire entirely: no
-// anonymous server-side validation endpoint is reachable, minimizing the controller's attack surface.
+// There is NO server-fetch fallback: framework-refactor plan-5 deleted the hand-mirrored TS compiler
+// and plan-9 retired the Go air-gap server (with the anonymous /api/{validate,compile,export,
+// deploy-script} routes), so local-mode compute is ALWAYS the in-browser WASM engine
+// (localEngineEnabled() is unconditionally true — see lib/localEngine.ts). Plan-10's dead-code sweep
+// removed the now-unreachable air-gap fetch branches these actions used to carry as a 'backend'
+// escape hatch.
 
 interface TopologyState {
   // Data
@@ -253,43 +251,14 @@ function makeDefaultDomains(): Domain[] {
 
 const defaultLanguage: UILanguage = detectSystemLanguage();
 
-// readApiErrorMessage extracts a LOCALIZED human message from a non-OK API response,
-// tolerating a body that is NOT the JSON error envelope — e.g. an HTML 502/504 from a
-// reverse proxy, a CSRF/auth redirect, or an empty body. A raw `await res.json()` threw
-// a SyntaxError on such bodies, which the outer catch then masked behind a generic
-// fallback, hiding the real HTTP status. Read the body once as text; if it is JSON with
-// an `error` field, localize it through tError (shape-tolerant: today's {error:string}
-// AND the coded {error:{code,message,params}} envelope plan-2 introduces); otherwise
-// fall back to a status-qualified message.
-async function readApiErrorMessage(res: Response, fallbackKey: MessageKey, lang: UILanguage): Promise<string> {
-  const text = await res.text().catch(() => '');
-  if (text) {
-    try {
-      const data = JSON.parse(text);
-      if (data && (data as { error?: unknown }).error !== undefined) {
-        return tError(data, lang);
-      }
-    } catch {
-      // Body is not JSON (proxy HTML, plain text, truncated) — fall through.
-    }
-  }
-  // Non-JSON body: a localized per-action fallback (keyed, so it respects the UI
-  // language) qualified by the HTTP status.
-  const status = res.status ? `${res.status}${res.statusText ? ' ' + res.statusText : ''}` : '';
-  const base = t(lang, fallbackKey);
-  return status ? `${base} (${status})` : base;
-}
-
-// localEngineErrorMessage produces a LOCALIZED message for an error surfaced by a compute
-// action (plan-6, R6), so the LOCAL-engine message is identical to the server path for the
-// same failure. The TS compiler throws a CompileError whose `code`/`params` mirror the Go
-// apierr codes byte-for-byte; wrapping it in the coded `{ error: { code, message, params } }`
-// envelope routes it through the SAME tError → 'error.<code>' catalog the server response
-// would have hit (so e.g. a transit-pool-exhausted local compile reads identically to the
-// server's). An error WITHOUT a string `code` (notably the Error thrown on the backend-fetch
-// path, whose message is already the localized readApiErrorMessage output) is passed through
-// verbatim, leaving the proven server path byte-unchanged; a code-less, message-less error
-// falls back to the keyed per-action message.
+// localEngineErrorMessage produces a LOCALIZED message for an error surfaced by a compute action, so
+// a WASM-engine failure reads identically to the same failure on the Go controller pipeline. The
+// engine throws a coded error whose `code`/`params` mirror the Go apierr codes byte-for-byte; wrapping
+// it in the coded `{ error: { code, message, params } }` envelope routes it through the SAME
+// tError → 'error.<code>' catalog the server response would have hit (so e.g. a transit-pool-exhausted
+// local compile reads identically to the server's). An error WITHOUT a string `code` (an engine
+// load/glue failure, or any thrown non-coded Error) falls back to its own message, else the keyed
+// per-action message.
 function localEngineErrorMessage(err: unknown, fallbackKey: MessageKey, lang: UILanguage): string {
   const code = (err as { code?: unknown } | null | undefined)?.code;
   if (typeof code === 'string' && code) {
@@ -767,35 +736,14 @@ export const useTopologyStore = create<TopologyState>()(
     set({ isValidating: true, error: null });
     try {
       const topo = get().getTopology();
-      const cs = useControllerStore.getState();
       // Validation is purely STRUCTURAL — schema + semantic checks over the topology, no private keys,
-      // no server state — and the in-browser TS validator is byte-pinned to the Go pipeline by the
-      // conformance harness. So in CONTROLLER mode it ALWAYS runs in-browser (browser-local verify):
-      // the controller neither serves nor calls /api/validate. That is a security choice as much as a
-      // correctness one — the shipped controller gates the air-gap compute routes off (plan-7,
-      // //go:build airgap → 404), and keeping the controller's verify path off the wire keeps its
-      // attack surface minimal (no anonymous server-side validation endpoint to reach). A controller
-      // (public-keys-only) canvas validates identically — the validator never touches a private key —
-      // so validate has no controller-mode refusal guard (unlike compile/export/deploy). In LOCAL
-      // mode it runs in-browser too whenever localEngineEnabled() (default-ON); only the explicit
-      // VITE_YAOG_LOCAL_ENGINE='backend' opt-out falls through to the air-gap /api/validate fetch.
-      if (cs.mode === 'controller' || localEngineEnabled()) {
-        const data = await localValidate(topo);
-        set({ validateResult: data, isValidating: false });
-        return;
-      }
-      // LOCAL-mode 'backend' opt-out only: the retained /api/validate fetch, hitting the anonymous
-      // air-gap oracle (a -tags airgap server). No auth headers — controller mode never reaches here
-      // (it returned above), and the air-gap oracle is anonymous by design.
-      const res = await fetch('/api/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(topo),
-      });
-      if (!res.ok) {
-        throw new Error(await readApiErrorMessage(res, 'error.validateFailed', get().language));
-      }
-      const data: ValidateResponse = await res.json();
+      // no server state — and the in-browser WASM validator is byte-pinned to the Go pipeline by the
+      // permanent WASM-vs-golden gate. So it runs in-browser in BOTH controller and local mode
+      // (browser-local verify): the controller neither serves nor calls a validate endpoint, which
+      // keeps its attack surface minimal. A controller (public-keys-only) canvas validates identically
+      // — the validator never touches a private key — so validate has no controller-mode refusal guard
+      // (unlike compile/export/deploy).
+      const data = await localValidate(topo);
       set({ validateResult: data, isValidating: false });
     } catch (err) {
       set({
@@ -807,8 +755,8 @@ export const useTopologyStore = create<TopologyState>()(
 
   // API: compile
   compile: async () => {
-    // Defense-in-depth: /api/compile is the air-gap path — it generates/reconstructs WireGuard
-    // keys client-side and needs private keys in the design. Controller mode is zero-knowledge
+    // Defense-in-depth: local compile runs the in-browser WASM engine, which generates/reconstructs
+    // WireGuard keys and needs private keys in the design. Controller mode is zero-knowledge
     // (public-keys-only; the controller compiles server-side during Deploy), so a local compile
     // there fails on every node. The Compile button is already hidden in controller mode
     // (CanvasToolbar); this guard makes the store action itself refuse rather than emit a
@@ -824,26 +772,11 @@ export const useTopologyStore = create<TopologyState>()(
     set({ isCompiling: true, error: null });
     try {
       const topo = get().getTopology();
-      let data: CompileResponse;
-      // Local-engine seam: in LOCAL mode compile in the browser via the plan-4 TS compiler
-      // (default-ON). localCompile runs the full AirGap pipeline, so data.topology.nodes
-      // carries reconstructed private keys (local export/deploy bundles need them) and
-      // data.skipped_unenrolled is UNDEFINED (air-gap shape) — exactly the /api/compile shape
-      // the post-compile reconciliation below consumes. Only the explicit 'backend' opt-out
-      // makes local mode fall through to the /api/compile fetch (the retained escape-hatch path).
-      if (localEngineEnabled()) {
-        data = await localCompile(topo);
-      } else {
-        const res = await fetch('/api/compile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(topo),
-        });
-        if (!res.ok) {
-          throw new Error(await readApiErrorMessage(res, 'error.compileFailed', get().language));
-        }
-        data = await res.json();
-      }
+      // Compile in the browser via the WASM engine. localCompile runs the full AirGap pipeline, so
+      // data.topology.nodes carries reconstructed private keys (local export/deploy bundles need them)
+      // and data.skipped_unenrolled is UNDEFINED (the air-gap CompileResponse shape) — exactly what the
+      // post-compile reconciliation below consumes.
+      const data: CompileResponse = await localCompile(topo);
 
       // In-flight mode-flip guard: the front-door check above only rejects FRESH
       // invocations. If the operator switched to controller mode while this compile was in
@@ -888,12 +821,12 @@ export const useTopologyStore = create<TopologyState>()(
 
   // API: export
   exportArtifacts: async () => {
-    // Defense-in-depth, parity with compile(): /api/export is an air-gap path that
-    // generates WireGuard keys server-side from the design and bundles them into the
-    // downloaded ZIP. Controller mode is zero-knowledge (public-keys-only), so an
-    // export there fails on every node — and shipping keys for a controller design is
-    // a category error. The button is local-mode-only in the UI; this guard makes the
-    // action refuse rather than emit a confusing key-generation error if ever invoked.
+    // Defense-in-depth, parity with compile(): local export runs the in-browser WASM engine,
+    // which generates WireGuard keys from the design and bundles them into the downloaded ZIP.
+    // Controller mode is zero-knowledge (public-keys-only), so an export there fails on every
+    // node — and shipping keys for a controller design is a category error. The button is
+    // local-mode-only in the UI; this guard makes the action refuse rather than emit a confusing
+    // key-generation error if ever invoked.
     if (useControllerStore.getState().mode === 'controller') {
       set({
         error:
@@ -903,33 +836,13 @@ export const useTopologyStore = create<TopologyState>()(
     }
     try {
       const topo = get().getTopology();
-      let blob: Blob;
-      let filename: string;
-      // Local-engine seam: in LOCAL mode build the per-node bundle ZIP in the browser via the
-      // plan-4 TS compiler (default-ON) — no fetch — and name the download locally, VERBATIM
-      // mirroring handler.go:240's `fmt.Sprintf("%s-artifacts.zip", topo.Project.ID)`
-      // with NO `|| 'project'` fallback: an empty project.id yields `-artifacts.zip` on BOTH
-      // paths (a fallback here would be a silent F3-class divergence; defaultProject.id is
-      // 'project-1' so the empty case is unreachable today, but parity holds unconditionally).
-      // Only the explicit 'backend' opt-out makes local mode fall through to the /api/export
-      // fetch (the retained escape-hatch path), which carries the server's Content-Disposition
-      // filename.
-      if (localEngineEnabled()) {
-        blob = await localExport(topo);
-        filename = `${topo.project.id}-artifacts.zip`;
-      } else {
-        const res = await fetch('/api/export', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(topo),
-        });
-        if (!res.ok) {
-          throw new Error(await readApiErrorMessage(res, 'error.exportFailed', get().language));
-        }
-
-        blob = await res.blob();
-        filename = parseContentDispositionFilename(res, 'artifacts.zip');
-      }
+      // Build the per-node bundle ZIP in the browser via the WASM engine and name the download
+      // locally, VERBATIM mirroring the Go export handler's `fmt.Sprintf("%s-artifacts.zip",
+      // topo.Project.ID)` with NO `|| 'project'` fallback: an empty project.id yields
+      // `-artifacts.zip` (a fallback here would be a silent divergence; defaultProject.id is
+      // 'project-1', so the empty case is unreachable today, but parity holds unconditionally).
+      const blob = await localExport(topo);
+      const filename = `${topo.project.id}-artifacts.zip`;
 
       triggerBrowserDownload(blob, filename);
     } catch (err) {
@@ -943,10 +856,10 @@ export const useTopologyStore = create<TopologyState>()(
 
   // API: download deploy script
   downloadDeployScript: async (format: 'sh' | 'ps1') => {
-    // Defense-in-depth, parity with compile()/exportArtifacts(): /api/deploy-script is
-    // an air-gap path that compiles the design (key generation included) server-side.
-    // Controller mode is public-keys-only, so it fails there; deployment in controller
-    // mode goes through the server (stage/promote), not a downloaded script.
+    // Defense-in-depth, parity with compile()/exportArtifacts(): local deploy-script generation
+    // runs the in-browser WASM engine, which compiles the design (key generation included).
+    // Controller mode is public-keys-only, so it fails there; deployment in controller mode goes
+    // through the server (stage/promote), not a downloaded script.
     if (useControllerStore.getState().mode === 'controller') {
       set({
         error:
@@ -956,29 +869,14 @@ export const useTopologyStore = create<TopologyState>()(
     }
     try {
       const topo = get().getTopology();
-      let blob: Blob;
-      // Local-engine seam: in LOCAL mode render the project-level deploy script in the browser
-      // via the plan-4 TS compiler (default-ON) — no fetch — and wrap it in a Blob to reuse the
-      // same object-URL download below. localDeployScripts returns both formats; pick by
-      // `format`. Only the explicit 'backend' opt-out makes local mode fall through to the
-      // /api/deploy-script fetch (the retained escape-hatch path).
-      if (localEngineEnabled()) {
-        const { sh, ps1 } = await localDeployScripts(topo);
-        const script = format === 'ps1' ? ps1 : sh;
-        blob = new Blob([script], { type: 'text/plain' });
-      } else {
-        const res = await fetch(`/api/deploy-script?format=${format}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(topo),
-        });
-        if (!res.ok) {
-          throw new Error(await readApiErrorMessage(res, 'error.deployScriptFailed', get().language));
-        }
-        blob = await res.blob();
-      }
+      // Render the project-level deploy script in the browser via the WASM engine and wrap it in a
+      // Blob to reuse the object-URL download below. localDeployScripts returns both formats; pick by
+      // `format`.
+      const { sh, ps1 } = await localDeployScripts(topo);
+      const script = format === 'ps1' ? ps1 : sh;
+      const blob = new Blob([script], { type: 'text/plain' });
 
-      // Filenames match handler.go:298/:302 (deploy-all.ps1 / deploy-all.sh) on both paths.
+      // Filenames match the Go deploy handler (deploy-all.ps1 / deploy-all.sh).
       const filename = format === 'ps1' ? 'deploy-all.ps1' : 'deploy-all.sh';
       triggerBrowserDownload(blob, filename);
     } catch (err) {

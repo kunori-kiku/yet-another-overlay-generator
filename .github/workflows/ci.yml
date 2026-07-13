@@ -42,6 +42,27 @@ jobs:
         env:
           YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
 
+  # The wire-DTO / omitempty drift gate (framework-refactor plan-10, invariant [5] — the fail-closed
+  # guarantee EXTENDED). It cross-checks the ungated hand-mirrored contracts against their Go source
+  # of truth: the five frontend *_OMITEMPTY lists MUST equal their model struct's omitempty json tags,
+  # the FE PIN_FIELDS / ALLOCATION_PIN_FIELDS MUST be model.Edge json tags, and each agent `...Wire`
+  # DTO MUST match its api `...JSON` DTO's json-tag signature. A Go field rename OR a missing omitempty
+  # entry (the recorded EDGE_OMITEMPTY mimic_fallback class of bug) is a RED BUILD here — not a runtime
+  # round-trip failure. The test also runs inside the `go` job's `go test ./...`; this dedicated job
+  # exists so branch protection has a STABLE, individually-registerable required check
+  # ("Wire-DTO + omitempty drift gate"). Pure go/ast + regexp over source — no build, no deps.
+  # See internal/wiredrift/drift_test.go.
+  drift-gate:
+    name: Wire-DTO + omitempty drift gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Drift gate
+        run: go test ./internal/wiredrift/ -v
+
   frontend:
     name: Frontend lint + build
     runs-on: ubuntu-latest

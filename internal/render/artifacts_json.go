@@ -51,15 +51,6 @@ type artifactsAgent struct {
 	Bins       map[string]model.Artifact `json:"bins,omitempty"`
 }
 
-// hasCatalog reports whether fs configures any external artifact at the FLEET level (mimic or
-// agent). It answers the air-gap "is anything configured at all" question (used by the air-gap
-// loader/tests); the per-NODE emit decision is buildArtifactsJSON's, which additionally gates the
-// agent block on rollout membership.
-func hasCatalog(fs FetchSettings) bool {
-	return fs.MimicVersion != "" || len(fs.MimicDebs) > 0 ||
-		fs.AgentVersion != "" || len(fs.AgentBins) > 0
-}
-
 // buildArtifactsJSON serializes the artifacts.json content for ONE node, or returns "" when that
 // node gets neither a mimic nor an agent block (the D4 air-gap-omit / non-rollout case → export
 // omits the file). The MIMIC block is fleet-wide (every node with a mimic catalog gets the same

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { t, type UILanguage } from '../../i18n';
+import { Field, FIELD_INPUT_CLASS } from '../../ui/Field';
 import { type ControllerSettings } from '../../api/controllerClient';
 import { deriveKey, deriveSlot, collidingKeys, type MimicSlot } from '../../lib/mimicDiscover';
 
@@ -360,55 +361,52 @@ function MimicCatalogForm({ initial, language }: { initial: ControllerSettings; 
     <div className="space-y-4">
       {/* Version + release base */}
       <div className="space-y-2">
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.versionLabel')}</label>
-          <input
-            type="text"
-            value={version}
-            onChange={(e) => {
-              setVersion(e.target.value);
-              // Drop any open discover checklist when the form is edited, so "Add selected" can't
-              // append rows from a now-superseded discovery. (Discovery keys off the base, not this
-              // version field — but clearing on any edit keeps the checklist from going stale.)
-              setDiscovered(null);
-              dirty();
-            }}
-            placeholder="v1.4.0"
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'mimicCatalog.versionHint')}</p>
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.releaseBaseLabel')}</label>
-          <input
-            type="text"
-            value={releaseBase}
-            onChange={(e) => {
-              setReleaseBase(e.target.value);
-              setDiscovered(null); // invalidate a checklist discovered against the old base
-              dirty();
-            }}
-            placeholder="https://github.com/hack3ric/mimic/releases/latest/download"
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'mimicCatalog.releaseBaseHint')}</p>
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'mimicCatalog.fallbackDefaultLabel')}</label>
+        <Field
+          label={t(language, 'mimicCatalog.versionLabel')}
+          type="text"
+          value={version}
+          onChange={(e) => {
+            setVersion(e.target.value);
+            // Drop any open discover checklist when the form is edited, so "Add selected" can't
+            // append rows from a now-superseded discovery. (Discovery keys off the base, not this
+            // version field — but clearing on any edit keeps the checklist from going stale.)
+            setDiscovered(null);
+            dirty();
+          }}
+          placeholder="v1.4.0"
+          mono
+          hint={t(language, 'mimicCatalog.versionHint')}
+        />
+        <Field
+          label={t(language, 'mimicCatalog.releaseBaseLabel')}
+          type="text"
+          value={releaseBase}
+          onChange={(e) => {
+            setReleaseBase(e.target.value);
+            setDiscovered(null); // invalidate a checklist discovered against the old base
+            dirty();
+          }}
+          placeholder="https://github.com/hack3ric/mimic/releases/latest/download"
+          mono
+          hint={t(language, 'mimicCatalog.releaseBaseHint')}
+        />
+        <Field
+          label={t(language, 'mimicCatalog.fallbackDefaultLabel')}
+          hint={t(language, 'mimicCatalog.fallbackDefaultHint')}
+        >
           <select
             value={fallbackDefault}
             onChange={(e) => {
               setFallbackDefault(e.target.value);
               dirty();
             }}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+            className={FIELD_INPUT_CLASS}
           >
             <option value="">{t(language, 'mimicCatalog.fallbackDefaultUnset')}</option>
             <option value="udp">{t(language, 'mimicCatalog.fallbackDefaultUdp')}</option>
             <option value="none">{t(language, 'mimicCatalog.fallbackDefaultNone')}</option>
           </select>
-          <p className="text-[10px] text-[var(--content-muted)] mt-0.5">{t(language, 'mimicCatalog.fallbackDefaultHint')}</p>
-        </div>
+        </Field>
       </div>
 
       {/* Per-distro .deb rows */}

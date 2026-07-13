@@ -3,6 +3,7 @@ import { emptyControllerSettings, type ControllerSettings } from '../../api/cont
 import { useControllerStore, selectHasAuth } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type UILanguage } from '../../i18n';
+import { Field } from '../../ui/Field';
 
 // TelemetryHistorySettings (telemetry-history plan-4): the fleet card for the per-node resource-
 // history sample cap (plan-2 backend field telemetry_history_cap). One numeric knob that rides the
@@ -90,28 +91,23 @@ function CapForm({
 
   return (
     <div className="space-y-2">
-      <div>
-        <label className="text-xs text-[var(--content-muted)]">
-          {t(language, 'telemetryHistorySettings.capLabel')}
-        </label>
-        <input
-          type="number"
-          min={0}
-          max={MAX_CAP}
-          step={1}
-          value={cap}
-          onChange={(e) => {
-            setCap(e.target.value);
-            setSaved(false);
-          }}
-          placeholder={String(DEFAULT_CAP)}
-          data-testid="telemetry-history-cap"
-          className="w-40 px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-        />
-        <p className="text-[10px] text-[var(--content-muted)] mt-0.5">
-          {t(language, 'telemetryHistorySettings.capHint', { default: DEFAULT_CAP, max: MAX_CAP })}
-        </p>
-      </div>
+      <Field
+        label={t(language, 'telemetryHistorySettings.capLabel')}
+        type="number"
+        min={0}
+        max={MAX_CAP}
+        step={1}
+        value={cap}
+        onChange={(e) => {
+          setCap(e.target.value);
+          setSaved(false);
+        }}
+        placeholder={String(DEFAULT_CAP)}
+        data-testid="telemetry-history-cap"
+        // Fixed-width numeric field (w-40, not the default w-full), so pass the control class explicitly.
+        className="w-40 px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+        hint={t(language, 'telemetryHistorySettings.capHint', { default: DEFAULT_CAP, max: MAX_CAP })}
+      />
 
       {invalid && (
         <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded" data-testid="telemetry-history-cap-invalid">

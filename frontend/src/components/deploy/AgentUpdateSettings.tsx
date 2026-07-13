@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { Field } from '../../ui/Field';
 import {
   useControllerStore,
   selectHasAuth,
@@ -283,16 +284,7 @@ function AgentUpdateForm({ initial, language }: { initial: ControllerSettings; l
   const proxyText = initial.githubProxy.trim() || t(language, 'agentUpdate.proxyNone');
 
   const field = (label: string, value: string, set: (v: string) => void, placeholder: string) => (
-    <div>
-      <label className="text-xs text-[var(--content-muted)]">{label}</label>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => set(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm font-mono border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-      />
-    </div>
+    <Field label={label} type="text" value={value} onChange={(e) => set(e.target.value)} placeholder={placeholder} mono />
   );
 
   return (

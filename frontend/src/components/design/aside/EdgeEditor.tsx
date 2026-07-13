@@ -2,6 +2,7 @@ import { useTopologyStore } from '../../../stores/topologyStore';
 import { t } from '../../../i18n';
 import { resolveEdgeInterface } from '../../../lib/compiledInterfaces';
 import { flipEdge, reverseDialSource } from '../../../lib/edgeDirection';
+import { Field, FIELD_SELECT_CLASS } from '../../../ui/Field';
 
 // MIN_PINNED_PORT mirrors the backend's minPinnedPort (validator) — the lower bound for an
 // operator-chosen pinned listen port. Auto-allocation still starts at 51820, but a port-
@@ -176,8 +177,7 @@ export function EdgeEditor() {
         {t(language, 'edgeEditor.edgeProperties')}
       </h2>
       <div className="space-y-2">
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.type')}</label>
+        <Field label={t(language, 'edgeEditor.type')}>
           <select
             value={selectedEdge.type}
             onChange={(e) =>
@@ -187,14 +187,14 @@ export function EdgeEditor() {
                 compiled_port: undefined,
               })
             }
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
+            className={FIELD_SELECT_CLASS}
           >
             <option value="direct">{t(language, 'edgeEditor.typeDirect')}</option>
             <option value="public-endpoint">{t(language, 'edgeEditor.typePublicEndpoint')}</option>
             <option value="relay-path">{t(language, 'edgeEditor.typeRelayPath')}</option>
             <option value="candidate">{t(language, 'edgeEditor.typeCandidate')}</option>
           </select>
-        </div>
+        </Field>
         {/* Endpoint IP — pick from target's public IPs or manual */}
         <div>
           <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.endpointIPFromTarget')}</label>
@@ -478,62 +478,49 @@ export function EdgeEditor() {
             </p>
           )}
         </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">
-            {t(language, 'edgeEditor.priorityDrivesBabelLink')}
-          </label>
-          <input
-            type="number"
-            value={selectedEdge.priority ?? ''}
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (raw === '') {
-                updateEdge(selectedEdge.id, { priority: undefined });
-                return;
-              }
-              const parsed = parseInt(raw, 10);
-              if (!isNaN(parsed)) {
-                updateEdge(selectedEdge.id, { priority: parsed });
-              }
-            }}
-            placeholder={t(language, 'edgeEditor.default_2')}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">
-            {t(language, 'edgeEditor.weightDrivesBabelLink')}
-          </label>
-          <input
-            type="number"
-            value={selectedEdge.weight ?? ''}
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (raw === '') {
-                updateEdge(selectedEdge.id, { weight: undefined });
-                return;
-              }
-              const parsed = parseInt(raw, 10);
-              if (!isNaN(parsed)) {
-                updateEdge(selectedEdge.id, { weight: parsed });
-              }
-            }}
-            placeholder={t(language, 'edgeEditor.default_3')}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-[var(--content-muted)]">{t(language, 'edgeEditor.notes')}</label>
-          <input
-            type="text"
-            value={selectedEdge.notes || ''}
-            onChange={(e) =>
-              updateEdge(selectedEdge.id, { notes: e.target.value || undefined })
+        <Field
+          label={t(language, 'edgeEditor.priorityDrivesBabelLink')}
+          type="number"
+          value={selectedEdge.priority ?? ''}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === '') {
+              updateEdge(selectedEdge.id, { priority: undefined });
+              return;
             }
-            placeholder={t(language, 'edgeEditor.notesOptional')}
-            className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
-          />
-        </div>
+            const parsed = parseInt(raw, 10);
+            if (!isNaN(parsed)) {
+              updateEdge(selectedEdge.id, { priority: parsed });
+            }
+          }}
+          placeholder={t(language, 'edgeEditor.default_2')}
+        />
+        <Field
+          label={t(language, 'edgeEditor.weightDrivesBabelLink')}
+          type="number"
+          value={selectedEdge.weight ?? ''}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === '') {
+              updateEdge(selectedEdge.id, { weight: undefined });
+              return;
+            }
+            const parsed = parseInt(raw, 10);
+            if (!isNaN(parsed)) {
+              updateEdge(selectedEdge.id, { weight: parsed });
+            }
+          }}
+          placeholder={t(language, 'edgeEditor.default_3')}
+        />
+        <Field
+          label={t(language, 'edgeEditor.notes')}
+          type="text"
+          value={selectedEdge.notes || ''}
+          onChange={(e) =>
+            updateEdge(selectedEdge.id, { notes: e.target.value || undefined })
+          }
+          placeholder={t(language, 'edgeEditor.notesOptional')}
+        />
         {/* Add backup link (edge.md parallel links): derive a parallel edge with role=backup from
             the current (primary) link; the store's addBackupEdge copies from/to/type/transport/
             endpoint_host (but not ports or pins) and auto-selects it. Hidden when either source/

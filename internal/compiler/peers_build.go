@@ -108,7 +108,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 	// topology's current pins and on unpinned links with a smaller pinKey, independent
 	// of array position and of the link's own delete/re-add history, which guarantees
 	// delete/re-add idempotence (I9/G1).
-	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge) (plus the primary link's bidirectional "from->to" alias, see end of Pass 1 phase 4)
+	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge)
 
 	// Fold each enabled edge into a link entity per the unify rule (spec:
 	// docs/spec/compiler/allocation-stability.md "Link identity with parallel edges" /
@@ -353,22 +353,14 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			alloc.remoteLL = remoteLL
 		}
 
-		// The link allocation uses linkid.LinkKey as its canonical key (spec I3: the
-		// per-peer allocation identity is the linkKey). Pass 2 / write-back /
-		// DeriveClientConfigs all look up by linkid.LinkKey(edge).
+		// The link allocation is keyed ONLY by linkid.LinkKey (spec I3: the per-peer
+		// allocation identity is the linkKey). Pass 2 / write-back / DeriveClientConfigs all
+		// look up by linkid.LinkKey(edge). The old bidirectional "from->to" directed-key alias
+		// was removed in framework-refactor plan-10's dead-code sweep: production never read the
+		// map by a directed key (its "old callers" no longer exist); only a transit-pool test
+		// queried it, now updated to look up by linkid.PinKey. Removing the redundant key changes
+		// no allocation value — every reader already uses the linkKey.
 		allocations[link.linkKey] = alloc
-
-		// Additionally register a bidirectional "from->to" alias for the primary-class
-		// link (backward compatibility: old callers and existing tests still query
-		// allocations by directed key). The primary link's directed key is unambiguous
-		// and matches behavior before the change; backup links each own their linkKey
-		// exclusively and register no directed alias (to avoid same-direction backups
-		// overwriting each other). The linkKey (containing "|"/"#") and the directed key
-		// (containing "->") have disjoint character sets and never collide.
-		if !link.backup {
-			allocations[fromNode.ID+"->"+toNode.ID] = alloc
-			allocations[toNode.ID+"->"+fromNode.ID] = alloc
-		}
 	}
 
 	// ======== Pass 2: build PeerInfo using the pre-allocated ports ========

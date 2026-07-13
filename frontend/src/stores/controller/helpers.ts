@@ -62,7 +62,13 @@ export function stableStringify(value: unknown): string {
 // if the client drops them too. NON-omitempty fields (ids/names, capabilities bools,
 // is_enabled, public_endpoint.port, domain cidr/modes) are PRESERVED even when zero. Listed
 // per-slice because `role` collides (Node.role is required, Edge.role is omitempty) — a flat
-// name set would wrongly drop a node's role. KEEP IN SYNC with the model's json tags.
+// name set would wrongly drop a node's role.
+//
+// Each list MUST equal, exactly, its model struct's set of `,omitempty` json tags — the
+// internal/wiredrift drift gate (a REQUIRED CI check) reds the build on any divergence, in
+// EITHER direction (a model omitempty field absent here, or a stale entry the model does not
+// mark omitempty). A missing entry phantoms a save-conflict; an extra entry wrongly drops a
+// required field. So a new model omitempty field is added here in the SAME change.
 const PROJECT_OMITEMPTY = ['description', 'version'];
 const DOMAIN_OMITEMPTY = ['description', 'reserved_ranges', 'transit_cidr'];
 const NODE_OMITEMPTY = [
@@ -72,7 +78,7 @@ const NODE_OMITEMPTY = [
 ];
 const EDGE_OMITEMPTY = [
   'endpoint_host', 'endpoint_port', 'compiled_port', 'priority', 'weight', 'role', 'transport',
-  'link_direction', 'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip',
+  'mimic_fallback', 'link_direction', 'notes', 'pinned_from_port', 'pinned_to_port', 'pinned_from_transit_ip',
   'pinned_to_transit_ip', 'pinned_from_link_local', 'pinned_to_link_local',
 ];
 // PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
