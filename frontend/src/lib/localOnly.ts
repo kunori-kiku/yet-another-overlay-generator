@@ -3,11 +3,11 @@
 // VITE_LOCAL_ONLY pins the panel to a backend-free LOCAL-design site: a build produced with
 // the flag set ships ONLY the local (in-browser) design workflow, with controller mode
 // unreachable — no "connect to controller" affordance, no mode toggle, no controller-only
-// nav. This is the SPA half of the two-deployment story plan-7 establishes (the standalone
-// static site vs. the all-in-one controller image); the controller routes
-// (/api/validate|compile|export|deploy-script) are gated off the default Go controller build
-// by the //go:build airgap tag, and this flag is the matching frontend pin so the static
-// site never offers a path that depends on a controller backend (R7).
+// nav. This is the SPA half of the two-deployment story (the standalone static site vs. the
+// all-in-one controller image). The former anonymous compute routes
+// (/api/{validate,compile,export,deploy-script}) were deleted in framework-refactor plan-9, so
+// LOCAL design compiles in-browser (the WASM engine) on both deployments; this flag keeps the
+// static site from offering any controller affordance that depends on a backend (R7).
 //
 // localOnly() is the store/chrome-facing projection of the shared deploy-mode descriptor
 // (lib/deployMode.ts is now the ONE place that reads import.meta.env for the build flags). Both

@@ -13,9 +13,9 @@ import (
 // dos_repro_test.go — the DoS regression oracle (plan-16 / 3.4, Phase 4, DURABLE Go-API tier).
 // Consumer: plan-8/1.8 (the S1 cap/context owner) and the post-rc.1 S2/S3 hardening roadmap.
 //
-// THREE reproductions, all measured directly against compiler.Compile (the durable tier survives
-// the Subject-1 TS cutover that removes the anonymous /api/compile route; the today-only HTTP tier
-// lives in dos_repro_http_test.go behind //go:build airgap):
+// THREE reproductions, all measured directly against compiler.Compile (the durable tier; the
+// former HTTP tier that POSTed to the anonymous /api/compile route was retired with that route in
+// framework-refactor plan-9):
 //
 //   - S1 allocator-cidr-reserved-cpu-blowup — a /8 domain has ~16.7M host candidates, over the
 //     per-node scan budget. plan-8's cap (internal/allocator/ip.go: maxOverlayScanBudget = 1<<20)

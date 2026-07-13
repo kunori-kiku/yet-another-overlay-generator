@@ -23,10 +23,15 @@ import { seedLocalMode, seedCanvasTopology } from './fixtures/seedStore'
 //
 // PREREQ (invariant [9] / plan-4 change 4): the served build must INCLUDE web/yaog.wasm +
 // wasm_exec.js. `npm run build:wasm` builds them into frontend/public/ so `vite build` copies them
-// into dist/, which the air-gap cmd/e2eserver boot serves as real static files (/yaog.wasm,
+// into dist/, which the controller cmd/e2eserver boot serves as real static files (/yaog.wasm,
 // /wasm_exec.js — the SPA handler serves real files directly, only falling back to index.html for
 // client routes). If they are absent, the compute assertions below fail loudly (the wasm 404s),
 // which is the correct signal that the build step was skipped.
+//
+// framework-refactor plan-9 retired the air-gap boot; this local-mode flow now serves from the
+// keystone-OFF controller boot. EnableStatic is identical across boots, and the flow runs entirely
+// in-browser (no server API), so seedLocalMode's client-side mode='local' bypasses the controller
+// login gate — order-independence is preserved without a dedicated boot.
 
 const seedTopology = JSON.parse(
   fs.readFileSync(path.join(e2eDir, 'fixtures', 'seed-topology.json'), 'utf8'),
@@ -43,8 +48,9 @@ test('WASM local engine: design → validate → compile → export → deploy-s
 }) => {
   const h = readHarness()
   // Local mode serves the SPA (and the wasm static assets from dist) from any boot; use the
-  // air-gap boot for order-independence (no controller login gate).
-  const panel = httpURL(h.airgap.panel)
+  // keystone-OFF controller boot (seedLocalMode makes the client-side mode 'local', so no login
+  // gate — the flow is fully in-browser and never calls the controller API).
+  const panel = httpURL(h.controller.panel)
 
   // Capture any WASM-instantiation / console error and any failure to serve the wasm assets —
   // registered BEFORE navigation so a load-time failure cannot slip past. The store CATCHES a

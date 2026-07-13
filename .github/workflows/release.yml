@@ -12,8 +12,8 @@ jobs:
   # Release gate: a tag must never ship untested code. Normally the tagged commit
   # already passed PR CI on main, but tags can point anywhere — re-verify here
   # before any bundle is built. A true step-by-step mirror of ci.yml's gate
-  # BEHAVIOR (plan-22 / 4.3): gofmt-drift + go test -race + the //go:build airgap
-  # profile, npm run build (tsc -b), the required frontend-e2e Playwright job, and
+  # BEHAVIOR (plan-22 / 4.3): gofmt-drift + go test -race, npm run build (tsc -b),
+  # the required frontend-e2e Playwright job, and
   # the realtunnel netns gate (gate-realtunnel). (setup-go here adds check-latest;
   # the resolved toolchain is identical — go.mod pins toolchain go1.26.4.)
   gate-go:
@@ -46,15 +46,6 @@ jobs:
 
       - name: Test
         run: go test -race ./...
-
-      # Mirror ci.yml: also exercise the -tags airgap profile (the air-gap compute routes /
-      # local-design oracle live behind //go:build airgap and are not compiled by the default
-      # build above).
-      - name: Vet (airgap profile)
-        run: go vet -tags airgap ./...
-
-      - name: Test (airgap profile)
-        run: go test -tags airgap ./...
 
   gate-frontend:
     name: Gate — Frontend lint
@@ -103,7 +94,7 @@ jobs:
       - name: Build E2E bring-up binaries
         run: |
           mkdir -p .e2e-bin
-          go build -tags airgap -o .e2e-bin/e2eserver ./cmd/e2eserver
+          go build -o .e2e-bin/e2eserver ./cmd/e2eserver
           go build -o .e2e-bin/e2eagent ./cmd/e2eagent
       - name: Install dependencies
         working-directory: frontend
@@ -313,28 +304,20 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/.tmp/bin"
           # EXTEND the existing "-s -w" ldflags with the build-version stamp; do not replace it.
           LDFLAGS="-s -w -X main.BuildVersion=${BUILD_VERSION}"
-          # DEFAULT (controller-only) server — NO `-tags airgap` (plan-7 / 1.7): the four
-          # anonymous air-gap compute routes are gated off this binary at link time. This is
-          # the PRIMARY server artifact shipped in the bundle + the controller image.
+          # The controller server — the single server build (framework-refactor plan-9 retired
+          # the -tags airgap variant). It is the PRIMARY server artifact shipped in the bundle +
+          # the controller image; it links no anonymous compute routes.
           go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server${{ matrix.target.exe_ext }}" ./cmd/server
           go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-compiler${{ matrix.target.exe_ext }}" ./cmd/compiler
           # yaog-agent is the node-side binary the one-shot bootstrap downloads (plan-5.2).
           go build -trimpath -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-agent${{ matrix.target.exe_ext }}" ./cmd/agent
-          # `-tags airgap` server — the local-design ORACLE + the boot target for plan-13's
-          # --mode airgap E2E and plan-21's DAST (plan-7 / 1.7). It RETAINS the four air-gap
-          # compute routes; published as a SEPARATE standalone asset (yaog-server-airgap-*),
-          # never the bundle's primary server, so it is opt-in for local/E2E use only.
-          go build -trimpath -tags airgap -ldflags "$LDFLAGS" -o "$GITHUB_WORKSPACE/.tmp/bin/yaog-server-airgap${{ matrix.target.exe_ext }}" ./cmd/server
 
       - name: Assemble Bundle Directory
         run: |
           set -euo pipefail
           mkdir -p .tmp/bundle/bin .tmp/bundle/frontend
-          # Ship the DEFAULT controller-only server + compiler + agent in the bundle. The
-          # `-tags airgap` server (yaog-server-airgap*) is DELIBERATELY excluded — it is a
-          # separate opt-in asset (staged below), never the bundle's primary server, so the
-          # all-in-one bundle stays controller-only (plan-7 / 1.7).
-          find .tmp/bin -maxdepth 1 -type f ! -name 'yaog-server-airgap*' -exec cp {} .tmp/bundle/bin/ \;
+          # Ship the controller server + compiler + agent in the bundle.
+          find .tmp/bin -maxdepth 1 -type f -exec cp {} .tmp/bundle/bin/ \;
           cp -R .tmp/frontend-dist/. .tmp/bundle/frontend/
 
       - name: Create Bundle Archive
@@ -374,22 +357,6 @@ jobs:
           path: |
             yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}
             yaog-agent-${{ matrix.target.id }}${{ matrix.target.exe_ext }}.sha256
-          if-no-files-found: error
-
-      # Publish the `-tags airgap` server as a STANDALONE per-arch asset (plan-7 / 1.7): the
-      # local-design oracle + plan-13/plan-21 boot target. It RE-EXPOSES the four air-gap compute
-      # routes, so it is opt-in (NOT in the bundle, NOT the controller image) and clearly named.
-      - name: Stage Standalone Air-Gap Server Binary
-        run: |
-          set -euo pipefail
-          SRV="yaog-server-airgap-${{ matrix.target.id }}${{ matrix.target.exe_ext }}"
-          cp ".tmp/bin/yaog-server-airgap${{ matrix.target.exe_ext }}" "$SRV"
-
-      - name: Upload Standalone Air-Gap Server Binary Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: yaog-server-airgap-${{ matrix.target.id }}
-          path: yaog-server-airgap-${{ matrix.target.id }}${{ matrix.target.exe_ext }}
           if-no-files-found: error
 
   # Package the static-local-design SPA (VITE_LOCAL_ONLY build) into a single standalone,
@@ -445,7 +412,6 @@ jobs:
             yaog-bundle-*.zip
             yaog-agent-linux-*
             yaog-agent-windows-*
-            yaog-server-airgap-*
             yaog-local-design-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

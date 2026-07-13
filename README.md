@@ -34,7 +34,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Local generator (air-gap).** Design a topology and export deployable bundles. **Local design compiles entirely in the browser** — a TypeScript port of the Go compiler, pinned byte-for-byte to the Go oracle by a CI conformance gate — so no backend is involved. You only need the frontend; see [Quick Start](#1-quick-start) below.
 - **Controller (agent-pull).** Run YAOG as a long-lived service where each node **pulls** its own keystone-signed config and reports live health back. The Go backend is the **controller**; see [Controller Mode (Docker)](#controller-mode-docker).
 
-> The `cmd/server` **default build is controller-only**: running it without the controller env (`YAOG_CONTROLLER_STATE_DIR` + `YAOG_TENANT_ID`) **exits with a loud error** rather than standing up an anonymous compute listener — the air-gap compute routes (`/api/{validate,compile,export,deploy-script}`) are gated behind `//go:build airgap`. For offline compilation use the in-browser generator, the `cmd/compiler` CLI, or the `-tags airgap` local-design oracle.
+> The `cmd/server` binary is **controller-only** (a single build): running it without the controller env (`YAOG_CONTROLLER_STATE_DIR` + `YAOG_TENANT_ID`) **exits with a loud error** rather than standing up a purposeless listener. There is no anonymous compute surface — the `/api/{validate,compile,export,deploy-script}` routes were removed (framework-refactor plan-9). For offline compilation use the in-browser generator (the WASM engine) or the `cmd/compiler` CLI.
 
 ### Prerequisites
 
@@ -63,14 +63,11 @@ npm run dev          # Vite dev server on :5173 — open http://localhost:5173
 
 ### 2. Running the Go backend
 
-The `cmd/server` binary is the **controller** (or, built `-tags airgap`, the local-design oracle):
+The `cmd/server` binary is the **controller** (a single build; there is no air-gap variant):
 
 ```bash
 # Controller — set the controller env first (or just use Docker; see Controller Mode below):
 YAOG_CONTROLLER_STATE_DIR=./data YAOG_TENANT_ID=default go run ./cmd/server/
-
-# Air-gap local-design oracle — serves the anonymous /api/{validate,compile,export,deploy-script} routes:
-go run -tags airgap ./cmd/server/
 ```
 
 The CLI compiler reads a topology JSON and writes `output/` with no server at all:

@@ -67,11 +67,10 @@ func main() {
 }
 
 // compileResponse mirrors internal/api.CompileResponse's wire shape (the direct field-map off
-// *compiler.CompileResult that handler_airgap.go:121 emits) so wasmEngine.ts and the FE
-// CompileResponse type consume the wasm output with no translation. It is redeclared here
-// (not imported) because api.CompileResponse's sibling ValidateResponse lives behind
-// //go:build airgap and the shim links the DEFAULT profile; keeping both response shapes
-// local also keeps the wasm binary lean.
+// *compiler.CompileResult) so wasmEngine.ts and the FE CompileResponse type consume the wasm
+// output with no translation. It is redeclared here rather than imported: the wasm shim stays
+// lean and does not pull in the stateful internal/api package (the arch boundary), and keeping
+// both response shapes local keeps that same rule for the sibling validateResponse.
 type compileResponse struct {
 	Topology         *model.Topology             `json:"topology"`
 	WireGuardConfigs map[string]string           `json:"wireguard_configs"`
@@ -83,9 +82,9 @@ type compileResponse struct {
 	Manifest         compiler.CompileManifest    `json:"manifest"`
 }
 
-// validateResponse mirrors the air-gap ValidateResponse ({valid, errors, warnings}) so the
-// wasm validate() matches the FE ValidateResponse type; wasmEngine.ts normalizes the omitted
-// (empty) error/warning slices back to arrays.
+// validateResponse is the {valid, errors, warnings} validate shape the FE ValidateResponse type
+// expects, so the wasm validate() output needs no translation; wasmEngine.ts normalizes the
+// omitted (empty) error/warning slices back to arrays.
 type validateResponse struct {
 	Valid    bool                        `json:"valid"`
 	Errors   []validator.ValidationError `json:"errors,omitempty"`
@@ -111,7 +110,7 @@ var fixedPreviewClock = localcompile.FixedCompiledAt
 
 // previewRequest builds the CompileRequest the browser-preview paths (compile / deployScript /
 // exportFiles) share: AirGap custody (local mode reconstructs private keys into the result
-// topology, as the air-gap server does), no fetch catalog (the zero FetchSettings keeps the
+// topology, as the cmd/compiler CLI does), no fetch catalog (the zero FetchSettings keeps the
 // bundle byte-identical), the default keygen (nil), and the fixed preview clock.
 func previewRequest(topo model.Topology) localcompile.CompileRequest {
 	return localcompile.CompileRequest{
@@ -146,9 +145,10 @@ func wasmCompile(_ js.Value, args []js.Value) any {
 	})
 }
 
-// wasmValidate mirrors POST /api/validate: schema-then-semantic over the topology, returning
-// {valid, errors, warnings}. Mirrors HandleValidate's error/warning collection exactly (fresh
-// slices so the schema result's backing array is never aliased).
+// wasmValidate runs schema-then-semantic validation over the topology, returning
+// {valid, errors, warnings} — the canonical in-browser validate the panel drives in local and
+// controller mode. It collects errors/warnings into fresh slices so the schema result's backing
+// array is never aliased.
 func wasmValidate(_ js.Value, args []js.Value) any {
 	var topo model.Topology
 	if err := json.Unmarshal([]byte(args[0].String()), &topo); err != nil {

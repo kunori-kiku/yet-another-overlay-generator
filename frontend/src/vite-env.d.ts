@@ -1,22 +1,15 @@
 /// <reference types="vite/client" />
 
-// Typed Vite env contract (plan-6, R8). Today the only env typing is tsconfig.app.json's
-// `types: ["vite/client"]`, which leaves every VITE_* key as `string | undefined` —
-// untyped and undiscoverable. Declaring VITE_YAOG_LOCAL_ENGINE here as a literal union
-// makes the local-engine flag a first-class contract enforced under `tsc -b`: a typo or a
-// stray value is a build error, and localEngine.ts's `=== 'local'` check narrows against
-// the union (project memory: bare `tsc --noEmit` misses TS2352; the `tsc -b` CI path is
-// the strict gate this declaration must satisfy).
+// Typed Vite env contract (plan-6, R8). tsconfig.app.json's `types: ["vite/client"]` leaves every
+// VITE_* key as `string | undefined` — untyped and undiscoverable. Declaring the build flags here
+// makes them a first-class contract enforced under `tsc -b` (project memory: bare `tsc --noEmit`
+// misses TS2352; the `tsc -b` CI path is the strict gate these declarations satisfy).
+//
+// The former VITE_YAOG_LOCAL_ENGINE local-engine selector was removed: framework-refactor plan-5
+// deleted the hand-mirrored TS compiler and plan-9 retired the Go air-gap `backend` escape hatch,
+// so local-mode compute is always the in-browser Go/WASM pipeline (see lib/deployMode.ts and
+// lib/localEngine.ts). A stale VITE_YAOG_LOCAL_ENGINE value in a build env is simply ignored.
 interface ImportMetaEnv {
-  // Local-engine selector. Default-ON: unset or any value other than 'backend' (incl. 'local' /
-  // 'wasm') ⇒ the in-browser Go/WASM pipeline runs LOCAL-mode compute (the DEFAULT and sole
-  // in-browser engine since framework-refactor plan-5 deleted the TS compiler; requires
-  // web/yaog.wasm — see scripts/build-wasm.sh). 'backend' opts out to the Go air-gap fetch path
-  // (functional only against a `-tags airgap` server, since plan-7 gates those routes off the
-  // default controller build). See lib/localEngine.ts (localEngineEnabled) and topologyStore.ts's
-  // seam.
-  readonly VITE_YAOG_LOCAL_ENGINE?: 'local' | 'backend' | 'wasm';
-
   // Static-local-design build pin (plan-7 Phase 3). When set (any truthy literal, e.g. '1'),
   // the panel ships as a backend-free LOCAL-design SPA: mode is forced to 'local', the mode
   // toggle + the "connect to controller" affordances are hidden, and setMode/switchToController

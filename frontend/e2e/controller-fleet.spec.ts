@@ -12,10 +12,10 @@ import { OPERATOR_USER, OPERATOR_PASS, ENROLL_NODE } from './fixtures/config'
 // server-truth panel refresh. A node checks in and the Fleet page shows it. Depth (deploy /
 // rekey / revoke) is plan-14's job; this keeps assertions minimal.
 //
-// It also pins the NEGATIVE half of DoD #5's two-boot split at the HTTP layer: the controller
-// boot GATES /api/compile (401 without auth), complementing airgap-design.spec.ts's positive
-// 200 half. (The authoritative server-level assertion is the required Go gate test
-// internal/api/airgap_auth_gate_test.go; this makes the split E2E-observable in both directions.)
+// It also pins, at the HTTP layer, that the shipped controller exposes NO anonymous compute
+// surface: framework-refactor plan-9 retired the air-gap /api/compile route entirely, so a POST
+// to it returns 404 (route absent) — the E2E echo of the perpetual Go guard
+// internal/api/no_anonymous_compute_test.go.
 
 const execFileP = promisify(execFile)
 
@@ -39,11 +39,12 @@ test('controller boot: operator login + agent check-in makes the node appear in 
   // (1) The controller-mode panel gates on login. Sign in with the seeded operator account.
   await page.goto(`${panel}/`)
 
-  // Two-boot split, negative half: on the controller boot, /api/compile is operator-gated.
-  // Before login there is no session cookie, so an unauthenticated POST is rejected (401) —
-  // the inverse of the air-gap boot's open 200 (airgap-design.spec.ts).
-  const gated = await page.request.post(`${panel}/api/compile`, { data: seedTopology })
-  expect(gated.status()).toBe(401)
+  // No anonymous compute surface: framework-refactor plan-9 deleted the air-gap /api/compile
+  // route, so the shipped controller registers no such handler. The SPA static handler 404s any
+  // unmatched /api/ path, so an (unauthenticated) POST returns 404 — the E2E echo of the
+  // perpetual Go guard internal/api/no_anonymous_compute_test.go.
+  const absent = await page.request.post(`${panel}/api/compile`, { data: seedTopology })
+  expect(absent.status()).toBe(404)
 
   await page.locator('#login-username').fill(OPERATOR_USER)
   await page.locator('#login-password').fill(OPERATOR_PASS)
@@ -75,13 +76,13 @@ test('controller boot: operator login + agent check-in makes the node appear in 
   })
 })
 
-// Controller-mode Validate is browser-local verify: the panel runs the in-browser TS validator
-// and NEVER calls /api/validate (the shipped controller 404s that air-gap route; keeping verify
-// off the wire minimizes the controller's attack surface — no anonymous server-side validation
-// endpoint to reach). This guard is CLIENT-SIDE on purpose: the air-gap e2e controller boot DOES
-// register /api/validate and answers 200 when authed, so only asserting that the panel JS never
-// issues the request captures the shipped-controller behavior (the authoritative server-side 404
-// lives in the !airgap Go test internal/api/airgap_routes_removed_test.go).
+// Controller-mode Validate is browser-local verify: the panel runs the in-browser Go/WASM
+// validator and NEVER calls /api/validate. framework-refactor plan-9 deleted that anonymous
+// air-gap route from every build, so no server-side validation endpoint exists to reach —
+// keeping verify off the wire minimizes the controller's attack surface. This guard is
+// CLIENT-SIDE on purpose (assert the panel JS never issues the request); the authoritative
+// server-side proof that /api/validate is absent lives in the perpetual Go test
+// internal/api/no_anonymous_compute_test.go.
 test('controller-mode Validate runs the in-browser validator and never calls /api/validate', async ({
   page,
   context,
@@ -117,6 +118,6 @@ test('controller-mode Validate runs the in-browser validator and never calls /ap
 
   // The in-browser validator populated a result (the seed topology is valid) …
   await expect(page.getByText('Topology validation passed')).toBeVisible({ timeout: 15_000 })
-  // … and the panel never touched the air-gap validate route.
+  // … and the panel never issued a server validate request.
   expect(validateCalls).toBe(0)
 })

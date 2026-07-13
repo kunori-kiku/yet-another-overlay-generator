@@ -14,8 +14,8 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 
 	// DoS / forward-compat guard (plan-6): short-circuit BEFORE the O(n²) collision and
 	// NAT-reachability passes so they never run on an oversized or future-format topology.
-	// ValidateSchema is the canonical reporter of these root errors (HandleValidate runs
-	// both passes and concatenates their errors, so re-reporting here would duplicate them);
+	// ValidateSchema is the canonical reporter of these root errors (the validate entry point
+	// runs both passes and concatenates their errors, so re-reporting here would duplicate them);
 	// this guard only protects the expensive work.
 	if topologyExceedsBounds(topo) {
 		return result

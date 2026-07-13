@@ -15,12 +15,10 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
 
-// Handler serves the controller liveness probe (GET /api/health) in BOTH builds. Under
-// -tags airgap it additionally serves the four anonymous air-gap compute routes (validate,
-// compile, export, deploy-script) — those handlers live in handler_airgap.go behind the build
-// tag (plan-7 / 1.7), so the DEFAULT (controller-only) build neither registers nor links them.
-// The air-gap compile path (generate keys → compile → render) lives behind the localcompile
-// façade, so the handler holds no per-request compile state of its own.
+// Handler serves the controller liveness probe (GET /api/health). framework-refactor plan-9
+// deleted the four anonymous air-gap compute routes (validate/compile/export/deploy-script), so
+// this is the only route Handler serves; the operator-gated compile path is on ControllerHandler.
+// Handler holds no per-request state (the compile pipeline lives behind the localcompile façade).
 type Handler struct{}
 
 // NewHandler constructs a Handler. It is stateless: each request builds its own

@@ -12,11 +12,10 @@ import (
 // TestRequestBodySizeCap_Returns413 verifies that a POST request body exceeding the 4 MiB
 // cap is rejected by http.MaxBytesReader and mapped to 413 Payload Too Large (D34).
 //
-// plan-7 / 1.7: the body cap lives in readTopology, which is shared by the operator-only
-// HandleCompilePreview (default build) and the air-gap compute routes (-tags airgap). With the
-// air-gap routes gated out of the default build, this test retargets the cap assertion onto
-// HandleCompilePreview (operator route /api/v1/operator/compile-preview) so it keeps guarding the
-// readTopology body cap in the default suite. The oversized body is a single huge run of bytes, so
+// The body cap lives in readTopology, now used only by the operator-only HandleCompilePreview
+// (framework-refactor plan-9 deleted the anonymous air-gap compute routes that also shared it).
+// This test asserts the cap on HandleCompilePreview (operator route /api/v1/operator/compile-preview)
+// so it keeps guarding the readTopology body cap. The oversized body is a single huge run of bytes, so
 // http.MaxBytesReader trips on the cap during the read phase, before any JSON parse — and before
 // CompileSubgraph — proving the cap is what rejects.
 func TestRequestBodySizeCap_Returns413(t *testing.T) {
