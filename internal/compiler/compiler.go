@@ -222,21 +222,7 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 		// struct's "canonical from"; if it matches this edge's FromNodeID, take values forward,
 		// otherwise mirror them.
 		isForward := alloc.fromNodeID == edge.FromNodeID
-		if isForward {
-			edge.PinnedFromPort = alloc.fromPort
-			edge.PinnedToPort = alloc.toPort
-			edge.PinnedFromTransitIP = alloc.localTransit
-			edge.PinnedToTransitIP = alloc.remoteTransit
-			edge.PinnedFromLinkLocal = alloc.localLL
-			edge.PinnedToLinkLocal = alloc.remoteLL
-		} else {
-			edge.PinnedFromPort = alloc.toPort
-			edge.PinnedToPort = alloc.fromPort
-			edge.PinnedFromTransitIP = alloc.remoteTransit
-			edge.PinnedToTransitIP = alloc.localTransit
-			edge.PinnedFromLinkLocal = alloc.remoteLL
-			edge.PinnedToLinkLocal = alloc.localLL
-		}
+		edge.PinnedFromPort, edge.PinnedToPort, edge.PinnedFromTransitIP, edge.PinnedToTransitIP, edge.PinnedFromLinkLocal, edge.PinnedToLinkLocal = alloc.oriented(isForward)
 
 		// CompiledPort: written back only for edges with endpoint_host (matching the rendered
 		// Endpoint port).
