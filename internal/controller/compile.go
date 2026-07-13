@@ -61,8 +61,15 @@ import (
 // staged generation (CurrentGeneration+1); it becomes current only when the
 // operator calls PromoteStaged.
 type StageResult struct {
-	// Staged holds the node IDs that were compiled and staged this generation.
+	// Staged holds the node IDs that were compiled and staged this generation — the UPDATED nodes whose
+	// bundle content changed (or every enrolled node when the delta-skip is disabled/inapplicable).
 	Staged []string
+	// UnchangedNodeIDs holds the enrolled nodes SKIPPED this deploy because their freshly compiled bundle
+	// digest equals their currently-served bundle (plan-5 delta-skip): they keep their current generation,
+	// so their agents see no new generation and never re-apply. Empty when the skip is disabled (keystone
+	// rotation / first-pin) or every node changed. Staged + UnchangedNodeIDs together are the full
+	// enrolled set for a normal deploy.
+	UnchangedNodeIDs []string
 	// SkippedUnenrolled holds the node IDs present in the topology but excluded
 	// from the render because they are not yet enrolled (not NodeApproved, or no
 	// WGPublicKey). Each fills in on a later deploy once it enrolls.
@@ -290,10 +297,38 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// the keystone gate to STAGE is intentionally weak: we build + store the manifest,
 	// but DO NOT require a signature here (the signature gate is in PromoteStaged).
 	keystoneOn := false
-	if _, err := store.GetOperatorCredential(ctx, t); err == nil {
+	var opCred OperatorCredential
+	if cred, err := store.GetOperatorCredential(ctx, t); err == nil {
 		keystoneOn = true
+		opCred = cred
 	} else if !errors.Is(err, ErrNotFound) {
 		return StageResult{}, fmt.Errorf("controller: loading operator credential to stage: %w", err)
+	}
+
+	// (plan-5) Decide whether the per-node DELTA-SKIP is enabled for this stage. Normally ON: a node
+	// whose freshly compiled bundle digest equals its served bundle is NOT re-staged, so it keeps its
+	// generation and its agent never re-applies. It is DISABLED (full re-stage of every node) for the two
+	// keystone cases that change ZERO bundle bytes yet REQUIRE the promote to flip the served trust-list —
+	// a skipped deploy would promote nothing (ErrNoStagedBundle fires before the served-trust-list copy)
+	// and strand the fleet on the old credential:
+	//   - ROTATION: the served trust-list is signed under a rotated-away credential (KeystoneRedeployRequired).
+	//   - FIRST-PIN: keystone is on but nothing is served yet (no served trust-list) — the first deploy
+	//     must stage every node so the promote seeds the served slot.
+	skipEnabled := true
+	if keystoneOn {
+		if _, tlErr := store.GetServedTrustList(ctx, t); errors.Is(tlErr, ErrNotFound) {
+			skipEnabled = false // first-pin
+		} else if tlErr != nil {
+			return StageResult{}, fmt.Errorf("controller: loading served trust-list to decide delta-skip: %w", tlErr)
+		} else {
+			redeploy, rErr := KeystoneRedeployRequired(ctx, store, t, opCred)
+			if rErr != nil {
+				return StageResult{}, rErr
+			}
+			if redeploy {
+				skipEnabled = false // rotation: the promote must flip the served trust-list under the new key
+			}
+		}
 	}
 
 	// Persist the compiled allocation pins back into the FULL stored topology so a later
@@ -335,7 +370,8 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	nextGen := cur + 1
 
 	var staged []string
-	digests := make(map[string]string, len(subgraph.Nodes)) // nodeID -> bundleSHA256
+	var unchanged []string
+	digests := make(map[string]string, len(subgraph.Nodes)) // nodeID -> bundleSHA256 (ALL nodes, for the manifest)
 	pubKeys := make(map[string]string, len(subgraph.Nodes)) // nodeID -> wg public key (stamped on the subgraph node: enrollment registry for a managed node, topology for a manual node)
 	for _, node := range subgraph.Nodes {
 		nodeDir := filepath.Join(tmp, node.Name)
@@ -343,13 +379,32 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		if err != nil {
 			return StageResult{}, fmt.Errorf("controller: reading bundle for node %s: %w", node.ID, err)
 		}
+		checks, hasChecks := files["checksums.sha256"]
+		if keystoneOn && !hasChecks {
+			return StageResult{}, fmt.Errorf("controller: staged bundle for node %s has no checksums.sha256 to bind", node.ID)
+		}
+		// The content identity for BOTH the delta-skip and the keystone binding: hex(sha256(checksums.sha256)),
+		// which excludes the volatile compiled_at, so an UNCHANGED node recompiles to the same digest.
+		newDigest := ""
+		if hasChecks {
+			newDigest = bundleSHA256(checks)
+		}
 		if keystoneOn {
-			checks, ok := files["checksums.sha256"]
-			if !ok {
-				return StageResult{}, fmt.Errorf("controller: staged bundle for node %s has no checksums.sha256 to bind", node.ID)
-			}
-			digests[node.ID] = bundleSHA256(checks)
+			// Bind EVERY enrolled node's digest (updated AND skipped) into the manifest — a skipped node's
+			// newDigest equals its served digest, so the regenerated trust-list still binds the right value
+			// and never DROPS the skipped node (which would break its served bundle's verification).
+			digests[node.ID] = newDigest
 			pubKeys[node.ID] = node.WireGuardPublicKey
+		}
+		// (plan-5) SKIP a node whose freshly compiled bundle is byte-identical to its SERVED bundle: no
+		// StageBundle, so PromoteStaged never bumps its DesiredGeneration and its agent never re-applies.
+		// FAIL OPEN — any doubt (skip disabled, no digest, no served bundle, unreadable served checksums,
+		// or a mismatch) stages normally; never leave a node on a stale config.
+		if skipEnabled && newDigest != "" {
+			if servedDigest, ok := servedBundleDigest(ctx, store, t, node.ID); ok && servedDigest == newDigest {
+				unchanged = append(unchanged, node.ID)
+				continue
+			}
 		}
 		if err := store.StageBundle(ctx, t, SignedBundle{
 			NodeID:     node.ID,
@@ -360,6 +415,31 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 			return StageResult{}, fmt.Errorf("controller: staging bundle for node %s: %w", node.ID, err)
 		}
 		staged = append(staged, node.ID)
+	}
+
+	// (plan-5) ZERO-CHANGED short-circuit: every enrolled node compiled byte-identical to its SERVED
+	// bundle (delta-skip active), so nothing was staged. Do NOT re-stage the manifest and do NOT report a
+	// new generation — nothing is promotable. But we MUST still PURGE any lingering staged bundle: when
+	// len(staged)==0 every enrolled node matches served, so a bundle left staged by a prior
+	// stage-without-promote (e.g. an off-host sign-wait) is a SUPERSEDED design — leaving it would let the
+	// next /promote flip a reverted/retracted config LIVE (the beta.4-6 stale-config custody bug; a review
+	// finding). `staged` is empty here, so this purges ALL staged bundles, exactly as the empty-subgraph
+	// path does for the same reason. (Reached only when the skip is enabled — a keystone rotation/first-pin
+	// disables it and always stages every node.)
+	if len(staged) == 0 {
+		purged, pruneErr := store.PruneStagedBundles(ctx, t, staged)
+		for _, nodeID := range purged {
+			appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
+		}
+		if pruneErr != nil {
+			return StageResult{}, fmt.Errorf("controller: purging staged bundles on a zero-changed stage: %w", pruneErr)
+		}
+		appendStageAudit(ctx, store, t, now, "stage-unchanged", "")
+		return StageResult{
+			UnchangedNodeIDs:  unchanged,
+			SkippedUnenrolled: skipped,
+			Generation:        cur, // unchanged — no new generation
+		}, nil
 	}
 
 	// (5b) Purge staged bundles that are NOT part of this stage set (plan-3): a
@@ -392,9 +472,26 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 
 	return StageResult{
 		Staged:            staged,
+		UnchangedNodeIDs:  unchanged,
 		SkippedUnenrolled: skipped,
 		Generation:        nextGen,
 	}, nil
+}
+
+// servedBundleDigest returns hex(sha256(checksums.sha256)) of a node's SERVED (promoted) bundle, or
+// ok=false when there is no served bundle (never promoted) or its checksums are missing — the caller
+// then stages (fail open). This is the identity the delta-skip compares the freshly compiled bundle
+// against; it is byte-stable for an unchanged node because it excludes the volatile compiled_at.
+func servedBundleDigest(ctx context.Context, store Store, t TenantID, nodeID string) (string, bool) {
+	b, err := store.GetCurrentBundle(ctx, t, nodeID)
+	if err != nil {
+		return "", false
+	}
+	checks, ok := b.Files["checksums.sha256"]
+	if !ok {
+		return "", false
+	}
+	return bundleSHA256(checks), true
 }
 
 // appendStageAudit appends one best-effort audit entry for a stage-path action
