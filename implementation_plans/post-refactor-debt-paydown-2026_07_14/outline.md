@@ -4,9 +4,12 @@
 > for code/doc that are stale or whose logic is not clean that makes the development of this repo hard
 > or understanding of this repo hard with workflows, and draft a subject that refactors. The production
 > logic is also a thing to be considered.").
-> **DRAFTED, plans-only at draft time — execution starts on the owner's go**, per-PR: build →
-> independent workflow review (correctness / completeness / hygiene / structure) → fix → re-review →
-> CI green → merge.
+> **EXECUTED autonomously to closure (2026-07-14).** 13 of 14 plans merged to `main` (PRs #277–#292,
+> each built → independently workflow-reviewed → fixed → re-reviewed → CI-green → merged); **plan-6
+> (WebAuthn UV) is HELD as draft PR #282 pending an owner decision** (see Decisions log #7). The
+> 10-agent adversarial review-at-last returned GO-WITH-FIXES; both findings were fixed (#291, #292)
+> and the review loop is closed. Per-PR cadence used throughout: build → independent workflow review
+> (correctness / completeness / hygiene / structure) → fix → re-review → CI green → merge.
 >
 > **This subject is the direct successor to `framework-refactor-2026_07_13`** (which shipped the
 > WASM-unified core + machine-gates + god-file splits, PRs #260–#275). It targets what that program
@@ -195,6 +198,20 @@ same PR; no `--no-verify`, no amends, no force-push.
      pointers); coverage orphans pinned (localEngine vestige → plan-11; field_safety recursion → plan-3;
      orphan i18n key + `edgeDirection.ts` stale citations → plan-10/plan-13). A ci.yml ship-assertion that
      adds a required check needs the same-PR branch-protection PATCH (full list, `app_id:15368`).
+7. **EXECUTION COMPLETE (2026-07-14): 13/14 merged, plan-6 held.** Executed per-PR with the full
+   review regime; mechanical-heavy plans (3/5/7/8/9/10/11/12/13/14) were delegated to focused
+   general-purpose agents and each diff independently re-verified by hand (byte-identity gate for the
+   plan-8 peers split; `-race` for plan-4/5/7; the non-vacuity mutation test for the plan-10 drift gate;
+   golden-diff-empty for the behavior-preserving splits). The 10-agent **review-at-last** (workflow,
+   GO-WITH-FIXES) surfaced two real findings — a stray `./wasm` binary accidentally committed by a bare
+   `go build ./cmd/wasm` (fixed #291, `/wasm` gitignored) and a client+tcp mimic-teardown gap in
+   `deploy.go` (fixed #292, `HasMimic` derived from the topology edge for clients) — both fixed and
+   re-verified; the loop is closed. **plan-6 remains HELD** per decision 3: `verifyAssertion` also runs
+   node-side in `VerifyMembership` on every config fetch, so hard-enforcing the UV flag fleet-bricks
+   config fetches if any signed manifest was not UV-signed — SAFE only if every enrolled operator
+   authenticator does UV; the owner must confirm before #282 merges, else the fix routes through
+   plan-6.5 (per-credential enforce + re-enroll). **The subject is deliberately NOT archived to
+   `_completed/` while plan-6 is owed.**
 
 ## Milestones (one plan file each — ordered by payoff-per-risk: fixes → paydown → hygiene)
 
@@ -350,34 +367,50 @@ same PR; no `--no-verify`, no amends, no force-push.
 
 ## Closure criteria
 
-- [ ] All 14 plans merged (or the owner explicitly parks a tier), each workflow-reviewed → fixed →
-      re-reviewed → CI-green.
-- [ ] The 4 confirmed defects are fixed + regression-pinned; the WASM engine ships (red-build asserted);
-      the UV decision gate resolved with the owner.
-- [ ] `deploy.go` is template-based behind `ShellToken`; `cmd/agent/main.go`, `derivePeersWithDomains`,
-      and `handler_bootstrap.go` are decomposed; the camelCase DTO drift gate + finished `Field`
-      adoption are green.
-- [ ] The 6 stale subjects are archived; STATUS/MEMORY/CHANGELOG reconciled; no doc references a deleted
+- [x] **13 of 14 plans merged**, each workflow-reviewed → fixed → re-reviewed → CI-green (#277–#290,
+      +#291/#292 review follow-ups). plan-6 (WebAuthn UV) is **the owner-parked tier** — HELD as draft
+      #282 pending the UV-capability decision (decision 3/7).
+- [x] **The confirmed correctness/security defects are fixed + regression-pinned** (standalone
+      `install.sh` signed-set guard; the self-update semver wedge; the trust-list-sign custody lock;
+      the `deploy.go` mimic/SNAT teardown); **the WASM engine ships**, red-build asserted in both the
+      release and Docker pipelines. ⏸ **The UV decision gate is the one open item** (plan-6, owner).
+- [x] `deploy.go`'s teardown correctness landed (mimic teardown + CIDR-agnostic SNAT in both shells;
+      the go:embed/`ShellToken` **templating half** is carried to plan-3.5 — PowerShell has no
+      `ShellToken` constructor yet); `cmd/agent/main.go` (→ `ControllerLoop`), `derivePeersWithDomains`
+      (byte-identical split), and `handler_bootstrap.go` are decomposed; the wire-DTO drift gate +
+      finished `Field` adoption are green.
+- [x] The 6 stale subjects are archived; STATUS/MEMORY/CHANGELOG reconciled; no doc references a deleted
       airgap route / TS-compiler file / rotted citation as live.
-- [ ] Every hard invariant above is demonstrably preserved (goldens byte-verified; no fleet regression;
-      no security regression).
-- [ ] STATUS + memory closeout; subject archived to `_completed/`.
+- [x] Every hard invariant above is demonstrably preserved (goldens byte-verified; no fleet regression;
+      no security regression — the review found NO trust-root bypass / key leak / shipped CVE).
+- [x] STATUS + memory closeout done. **Subject NOT archived to `_completed/` yet — deliberately held
+      in `implementation_plans/` until plan-6 (WebAuthn UV) resolves with the owner** (then plan-6
+      merges or plan-6.5 is drafted, and the subject archives per the close-phase ritual).
 
 ## Plan status table
 
 | # | Plan | Tier | Status | PR |
 |---|------|------|--------|-----|
-| 1 | Standalone-verifier signed-set hardening | 1 | pending | — |
-| 2 | WASM ship-everywhere + fault-tolerant load | 1 | pending | — |
-| 3 | deploy.go teardown correctness + plan-6.5 templating | 1 | pending | — |
-| 4 | Agent self-update correctness + durability | 1 | pending | — |
-| 5 | Controller store + keystone-sign serialization | 1 | pending | — |
-| 6 | WebAuthn UV enforcement (decision gate) | 1 | pending | — |
-| 7 | Agent daemon decomposition + loop tests | 2 | pending | — |
-| 8 | Compiler: split derivePeersWithDomains | 2 | pending | — |
-| 9 | api dedup + handler_bootstrap split + agent-mux adapter | 2 | pending | — |
-| 10 | camelCase DTO drift gate + bidirectional gates | 3 | pending | — |
-| 11 | Finish Field adoption + pin-collision dup | 3 | pending | — |
-| 12 | implementation_plans/ + STATUS archival reconcile | 4 | pending | — |
-| 13 | Purge airgap/TS-compiler prose + rotted citations | 4 | pending | — |
-| 14 | Release/Docker pipeline hygiene + misc | 4 | pending | — |
+| 1 | Standalone-verifier signed-set hardening | 1 | ✅ merged | #277 |
+| 2 | WASM ship-everywhere + fault-tolerant load | 1 | ✅ merged | #278 |
+| 3 | deploy.go teardown correctness (→ plan-3.5 templating) | 1 | ✅ merged | #279 (+#292 client-mimic follow-up) |
+| 4 | Agent self-update correctness + durability | 1 | ✅ merged | #280 |
+| 5 | Controller store + keystone-sign serialization | 1 | ✅ merged | #281 |
+| 6 | WebAuthn UV enforcement (decision gate) | 1 | ⏸ **HELD** — owner gate | #282 (draft, OPEN) |
+| 7 | Agent daemon decomposition + loop tests | 2 | ✅ merged | #283 |
+| 8 | Compiler: split derivePeersWithDomains | 2 | ✅ merged | #284 |
+| 9 | api dedup + handler_bootstrap split + agent-mux adapter | 2 | ✅ merged | #285 |
+| 10 | Wire-DTO drift gate + i18n orphan + name honesty | 3 | ✅ merged | #286 |
+| 11 | Finish Field adoption + pin-collision dup | 3 | ✅ merged | #287 |
+| 12 | implementation_plans/ + STATUS archival reconcile | 4 | ✅ merged | #288 |
+| 13 | Purge airgap/TS-compiler prose + rotted citations | 4 | ✅ merged | #289 |
+| 14 | Release/Docker pipeline hygiene + misc | 4 | ✅ merged | #290 |
+
+> **Post-execution follow-ups (final-review findings, both merged):** #291 removed a stray `./wasm`
+> build binary a bare `go build ./cmd/wasm` had dropped at the repo root + gitignored `/wasm`; #292
+> tore down a **client + tcp** node's mimic on `--uninstall` (peerMap carries no client PeerInfo, so
+> `RenderDeployScripts` now derives the client's `HasMimic` from the topology edge). See the plan-3.5
+> insertion marker for the deferred PowerShell templating half.
+>
+> **13 of 14 plans merged; plan-6 HELD for the owner's WebAuthn-UV decision.** The subject stays in
+> `implementation_plans/` (NOT archived to `_completed/`) until plan-6 resolves — see Closure criteria.
