@@ -90,9 +90,9 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 
 		// Collect WireGuard interface names from peer map. HasMimic is derived the same way the
 		// install-script renderer derives it (collectMimicPorts / len(mimicPorts) > 0): a node has mimic
-		// iff any of its peers rides transport=="tcp" (PeerInfo.Mimic). NOTE: a client node carries no
-		// PeerInfo in peerMap (its wg0 lives in ClientConfigs, which is not passed here), so a
-		// client+tcp node's HasMimic cannot be observed on this path — see docs note in the return.
+		// iff any of its peers rides transport=="tcp" (PeerInfo.Mimic). A client node carries no PeerInfo
+		// in peerMap (its wg0 lives in ClientConfigs, not passed here), so for clients HasMimic is instead
+		// derived from the topology edges below.
 		if peers, ok := peerMap[node.ID]; ok {
 			for _, p := range peers {
 				info.WgInterfaces = append(info.WgInterfaces, p.InterfaceName)
@@ -103,6 +103,17 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 		}
 		if info.IsClient {
 			info.WgInterfaces = []string{"wg0"}
+			// A client's wg0 mimic can't be seen from peerMap (empty for clients), so derive HasMimic from
+			// the topology: a client whose enabled wg0 link is transport=="tcp" has mimic provisioned, and
+			// deploy-all --uninstall must tear it down. The teardown is idempotent (disable --now ... ||
+			// true), so deriving from the raw edge (pre-mimic_fallback) is safe — an over-derive runs a
+			// no-op teardown; a MISS orphans the boot-persistent mimic@<egress> unit (the plan-3 review gap).
+			for i := range topo.Edges {
+				if e := &topo.Edges[i]; e.IsEnabled && e.Transport == "tcp" && (e.FromNodeID == node.ID || e.ToNodeID == node.ID) {
+					info.HasMimic = true
+					break
+				}
+			}
 		}
 
 		// mimic egress-NIC override (operator-supplied): empty means auto-detect from the default route
