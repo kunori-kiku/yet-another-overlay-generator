@@ -57,7 +57,7 @@ func TestRequestBodySizeCap_Returns413(t *testing.T) {
 // http.HandlerFunc that deliberately panics, once wrapped by the middleware, should return
 // 500 with a {"error": ...} JSON body rather than tearing the connection (D60).
 // TestRecovered_MuxPanicReturns500JSON pins B1: recovered() — the top-level wrapper applied
-// to BOTH the operator and agent muxes (not just the air-gap routes) — converts a handler
+// to BOTH the operator and agent muxes — converts a handler
 // panic into a coded 500 JSON instead of a torn connection. The operator/agent routes had no
 // per-route recovery before this, so a panic in a fleet/agent handler degraded the
 // controller in exactly the mode rc.1 gates on.

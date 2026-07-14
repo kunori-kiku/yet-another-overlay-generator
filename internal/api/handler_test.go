@@ -48,8 +48,8 @@ func TestHandleHealth_WrongMethod(t *testing.T) {
 }
 
 // TestCORS_Preflight verifies the CORS preflight (OPTIONS → 204 + Access-Control-Allow-Origin)
-// on /api/health — the route present in BOTH builds (retargeted off /api/compile in plan-7 / 1.7,
-// since the air-gap compute routes are no longer registered in the default build). The OPTIONS
+// on /api/health — the sole always-registered public route (retargeted off /api/compile in plan-7 / 1.7,
+// since the air-gap compute routes are no longer registered). The OPTIONS
 // short-circuit lives in the shared cors() middleware that wraps /api/health via wrap().
 func TestCORS_Preflight(t *testing.T) {
 	server := NewServer()

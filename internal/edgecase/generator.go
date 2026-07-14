@@ -1,8 +1,8 @@
 // Package edgecase is a TEST-ONLY adversarial-input layer (plan-16 / 3.4, Engine B). It lives
 // beside internal/regression and is imported by no cmd binary, so it ships in nothing. It builds
 // pathological / degenerate / adversarial topologies, drives them through the real compile path
-// (compiler.Compile + render.All), and is the source of the class-tagged corpus that plan-5's
-// conformance harness and plan-18's real-tunnel bring-up reuse.
+// (compiler.Compile + render.All), and is the source of the class-tagged corpus that the
+// plan-18 real-tunnel netns bring-up reuses.
 //
 // generator.go holds the programmatic builders + the compile/render helpers; the *_test.go files
 // hold the FuzzCompile target, the no-panic / idempotent / order-independent invariants, the

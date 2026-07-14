@@ -134,7 +134,7 @@ is produced) pins the signing **public** key per tenant as a non-secret `Signing
 **Rotation / recovery:** `YAOG_BUNDLE_SIGNING_KEY_ROTATE` (truthy) lets one stage RE-PIN the anchor to
 the current key — an intentional rotation, or recovery after the prior key was lost. Set it for one
 deploy, then **unset** it (leaving it on disables the change-detection guard). This is controller-only:
-the air-gap export path (`cmd/compiler`, `/api/export`) has no persistent state, so it is unchanged —
+the air-gap export path (`cmd/compiler`) has no persistent state, so it is unchanged —
 it still signs iff the env key is set.
 
 ## At-rest protection of the signing key (operator requirement)
@@ -210,7 +210,7 @@ behaves exactly as today: hash-only `sha256sum -c`. Full ordering in
 
 ## Second signed object — the self-extracting installer wrapper
 
-The `/api/export` ZIP wraps each node bundle in a **self-extracting installer** (a bash script with a
+The exported bundle ZIP wraps each node bundle in a **self-extracting installer** (a bash script with a
 base64 tar.gz payload appended; see [../artifacts/deploy-scripts.md](../artifacts/deploy-scripts.md)).
 When signing is enabled, the wrapper carries a **second, independent** Ed25519 signature — over the
 **raw tar.gz payload bytes**, not the `checksums.sha256` digest. The same `YAOG_BUNDLE_SIGNING_KEY`

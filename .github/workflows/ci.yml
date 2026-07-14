@@ -261,7 +261,7 @@ jobs:
 
   # Subject-4 security tooling (plan-21 / 4.2 Task 7): institutionalize the dependency + static scans
   # the round-1 audit found ABSENT from CI. govulncheck is the one REQUIRED scan (reachable-only, low
-  # false-positive); gosec + the frontend npm SCA (the @noble/JSZip supply chain — 4.1 N4) are ADVISORY
+  # false-positive); gosec + the frontend npm SCA (the FE dependency supply chain — 4.1 N4) are ADVISORY
   # (continue-on-error). plan-22 / 4.3 ratifies which become tag-blocking; the recommended toggles live
   # in RC1-GATE.md. (-race is NOT here — plan-22 owns it on the `go` job.)
   security-scan:

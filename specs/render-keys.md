@@ -13,7 +13,7 @@ Prepare each node's WireGuard key material under the selected custody model (Air
 - `internal/renderer/script.go:1-1353` — install.sh templates for per-peer nodes (`script.go:76-734`) and clients (`script.go:926-1296`), incl. signature-verify, mimic provisioning, SNAT rules, and the AgentHeld key-splice block.
 
 ## Inputs
-- `*model.Topology` + custody mode → `GenerateKeys(topo, custody) (map[string]compiler.KeyPair, error)` (`internal/render/render.go:70`). Callers: air-gap CLI `cmd/compiler/main.go:47` and HTTP API `internal/api/handler.go:138,186,251` pass `AirGap` (see specs/airgap-api.md); the controller stage pipeline passes `AgentHeld` (`internal/controller/compile.go:180`, see specs/controller-stage-promote.md).
+- `*model.Topology` + custody mode → `GenerateKeys(topo, custody) (map[string]compiler.KeyPair, error)` (`internal/render/render.go`). Callers: the air-gap CLI `cmd/compiler` and the in-browser WASM engine pass `AirGap`; the controller stage pipeline passes `AgentHeld` (`internal/controller/compile.go`, see specs/controller-stage-promote.md).
 - `*compiler.CompileResult` (PeerMap, ClientConfigs, Topology) from `compiler.Compile` plus the `keys` map → `All(result, keys) error` (`internal/render/render.go:147`); `compiler.KeyPair` is `{PrivateKey, PublicKey string}` (`internal/compiler/peers.go:64-67`). See specs/compiler-allocation.md.
 - Optional Ed25519 signer from env `YAOG_BUNDLE_SIGNING_KEY` via `bundlesig.LoadConfigSignerFromEnv` (`internal/render/render.go:185-192`, `internal/bundlesig/bundlesig.go:36`). See specs/artifacts-signing.md.
 

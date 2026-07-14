@@ -4,7 +4,7 @@ This spec is the authoritative field-by-field parity contract between the three 
 topology: the Go model (`internal/model/topology.go`), the TypeScript type
 (`frontend/src/types/topology.ts`), and the frontend editor surfaces (Zustand store +
 canvas/form components). It also fixes the round-trip rules every field MUST obey across a
-`POST /api/compile` cycle.
+compile cycle.
 
 A "wire" here is any boundary a topology crosses: serialized to JSON for an API request, returned in
 a `CompileResponse`, persisted to `localStorage`, or exported/imported as a project file. Drift
@@ -19,7 +19,7 @@ Related specs: [edge.md](../data-model/edge.md) (port ownership), [node.md](../d
 
 ## Core round-trip rule
 
-> **R0 — Every topology field returned by `/api/compile` MUST round-trip through the store.**
+> **R0 — Every topology field returned by a compile MUST round-trip through the store.**
 > The compile response carries `topology` back to the frontend. The store MUST rehydrate every
 > top-level topology field it sends so that compiler-stamped values (overlay IPs, compiled ports,
 > and — once landed — sticky-pin fields) survive into the next request and into `localStorage`. A
@@ -163,7 +163,7 @@ The compile response deliberately blanks WireGuard private and public keys for *
 This is by design, not a bug — the keys are an out-of-band secret that MUST NOT be persisted into the
 browser's `localStorage` or re-sent in plaintext on every request.
 
-- For a node whose key is NOT fixed, `/api/compile` MUST return that node with
+- For a node whose key is NOT fixed, a compile MUST return that node with
   `wireguard_private_key` and `wireguard_public_key` blanked in the response `topology`. The real
   key pair lives only in the ephemeral render map used to produce that response's configs.
 - For a node whose key IS fixed, the returned node carries its public key (and private key) so the

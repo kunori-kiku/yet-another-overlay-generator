@@ -44,7 +44,7 @@ type Fixture struct {
 // match.
 //
 //   - The VALIDATOR channel runs validator.ValidateSchema + validator.ValidateSemantic DIRECTLY on
-//     the fixture topology (exactly as /api/validate does) and collects the sorted Code set from
+//     the fixture topology (the same schema + semantic passes the validator runs) and collects the sorted Code set from
 //     BOTH errors[] and warnings[] across both passes. This channel is populated for every fixture
 //     independent of whether the compile succeeds.
 //   - The rest runs the localcompile façade (CompileResult + ArtifactsFromResult — the same bytes
@@ -133,7 +133,7 @@ func BuildManifest(fx Fixture) (Manifest, error) {
 	return m, nil
 }
 
-// validatorVerdict runs the schema + semantic passes directly (the /api/validate channel) and
+// validatorVerdict runs the schema + semantic passes directly (the validator channel) and
 // returns (a) the sorted, deduplicated set of finding Codes across BOTH errors and warnings of BOTH
 // passes — the verdict.validator channel — and (b) whether ANY error-level finding was emitted. The
 // boolean is what lets BuildManifest tell a deliberate validation-FAIL fixture (the compile

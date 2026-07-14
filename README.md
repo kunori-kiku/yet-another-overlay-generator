@@ -5,7 +5,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 ## Features
 
 - **Visual Topology Builder:** Drag-and-drop React Flow interface to design your network nodes and connect their links. Color-coded per-peer interface handles appear after compilation.
-- **In-Browser Compiler (no backend for local design):** Local design compiles entirely in the browser — a TypeScript port of the Go compiler, pinned **byte-for-byte** to the Go output by a CI conformance gate. The Go backend's job is the controller (the air-gap compute routes are gated behind a build tag), so the classic "design → compile → export bundle" flow needs only the static frontend.
+- **In-Browser Compiler (no backend for local design):** Local design compiles entirely in the browser via a WebAssembly build of the Go compiler — the same authoritative Go pipeline, so there is no second implementation to keep in sync. The Go backend's job is the controller, so the classic "design → compile → export bundle" flow needs only the static frontend.
 - **Per-Peer WireGuard Interfaces:** Each peer connection gets a dedicated WireGuard interface with an independently allocated listen port, compatible with Babel dynamic routing.
 - **Parallel Links & Babel Failover:** A node pair can carry a primary link plus backup links, each its own WireGuard interface; Babel picks by per-link cost and fails over automatically (e.g. a plain-UDP primary with a `TCP (mimic)` backup). See [`docs/spec/data-model/edge.md`](docs/spec/data-model/edge.md).
 - **TCP-Shaping Transport (mimic):** Set an edge's transport to **`TCP (mimic)`** to wrap its WireGuard traffic with [mimic](https://github.com/hack3ric/mimic) (an eBPF UDP→fake-TCP shaper) so the link traverses networks that throttle (UDP QoS) or block UDP ports. The install script provisions mimic from the node's distribution and configures it automatically; MTU is auto-lowered and both endpoints must be Linux with eBPF. This is a connectivity/performance feature for UDP-restricted networks — **not** a censorship/DPI-circumvention tool. See [`docs/spec/artifacts/mimic.md`](docs/spec/artifacts/mimic.md).
@@ -31,7 +31,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 
 ### Two ways to run YAOG
 
-- **Local generator (air-gap).** Design a topology and export deployable bundles. **Local design compiles entirely in the browser** — a TypeScript port of the Go compiler, pinned byte-for-byte to the Go oracle by a CI conformance gate — so no backend is involved. You only need the frontend; see [Quick Start](#1-quick-start) below.
+- **Local generator (air-gap).** Design a topology and export deployable bundles. **Local design compiles entirely in the browser** — a WebAssembly build of the Go compiler (the same authoritative Go pipeline) — so no backend is involved. You only need the frontend; see [Quick Start](#1-quick-start) below.
 - **Controller (agent-pull).** Run YAOG as a long-lived service where each node **pulls** its own keystone-signed config and reports live health back. The Go backend is the **controller**; see [Controller Mode (Docker)](#controller-mode-docker).
 
 > The `cmd/server` binary is **controller-only** (a single build): running it without the controller env (`YAOG_CONTROLLER_STATE_DIR` + `YAOG_TENANT_ID`) **exits with a loud error** rather than standing up a purposeless listener. There is no anonymous compute surface — the `/api/{validate,compile,export,deploy-script}` routes were removed (framework-refactor plan-9). For offline compilation use the in-browser generator (the WASM engine) or the `cmd/compiler` CLI.
@@ -39,7 +39,7 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 ### Prerequisites
 
 - Node.js `v20+` (LTS recommended) — all you need for local design
-- Go `1.25+` (the module pins `toolchain go1.26.4`, fetched automatically) — only to build the backend / CLI
+- Go `1.25+` (the module pins `toolchain go1.26.5`, fetched automatically) — only to build the backend / CLI
 
 ### 1. Quick Start
 

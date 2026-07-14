@@ -13,8 +13,8 @@ import (
 // -update to (re)write internal/edgecase/corpus/<name>.json from Corpus(); run without it (the CI
 // default) to assert the committed JSON still matches what the generator emits, so the corpus and
 // the builders can never silently drift apart. The committed JSON is the load-bearing artifact:
-// plan-5/1.5's conformance harness and plan-15/3.6's netns bring-up both read these files and
-// select fixtures by the `class` field, so the file shape (full Fixture incl. class, not bare
+// plan-15/3.6's netns real-tunnel bring-up reads these files and selects fixtures by the `class`
+// field, so the file shape (full Fixture incl. class, not bare
 // Topology) is part of the contract.
 
 var update = flag.Bool("update", false, "rewrite internal/edgecase/corpus/*.json from Corpus()")

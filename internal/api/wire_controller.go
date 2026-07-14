@@ -320,7 +320,7 @@ type trustListSignatureRequestJSON struct {
 }
 
 // compilePreviewResponseJSON is the read-only compile-preview wire shape. It promotes the
-// same fields as the air-gap CompileResponse (so the panel reuses CompilePreview/EdgeEditor
+// same fields as CompileResponse (so the panel reuses CompilePreview/EdgeEditor
 // verbatim) and adds skipped_unenrolled — the node IDs present in the topology but dropped
 // from the render because they are not yet enrolled. The embedded *CompileResponse is nil
 // when nothing is enrolled, so its fields are absent and only skipped_unenrolled is sent.

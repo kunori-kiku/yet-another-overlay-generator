@@ -1,21 +1,23 @@
 # Conformance Manifest Schema
 
-> The canonical content document the Go↔TS conformance harness freezes per fixture
-> (`internal/conformance/`, program plan-5 / milestone 1.5). This doc is the schema of record; the
-> code of record is `internal/conformance/manifest.go` (the struct + canonical serializer) and
-> `internal/conformance/oracle.go` (`BuildManifest`, the Go oracle that produces it).
+> The canonical content document the **WASM conformance gate** freezes per fixture. This doc is the
+> schema of record; the code of record is `internal/localcompile` (`BuildManifest` — the struct +
+> canonical serializer — and the Go oracle that produces it, frozen by the golden test) and
+> `scripts/wasm-conformance-gate.mjs` (the WASM-vs-golden comparator). The Go↔TS harness that once
+> lived in `internal/conformance/` was removed in the framework-refactor when WASM became the
+> in-browser engine; the manifest concept moved into `internal/localcompile`.
 
 ## Go is the spec
 
 The Go compiler pipeline is the **authoritative oracle**. The harness runs a fixed-key fixture
 corpus through the production compile path and freezes the resulting manifest as committed goldens
-(`internal/conformance/testdata/golden/`). The TypeScript reimplementation of the local-compile
-pipeline (plan-4) does not get its own spec — it must produce a **byte-identical** manifest for the
-same fixture, asserted by `FirstDivergence` (the conformance-mode comparator, which reports the byte
-offset + line/column + a context window of the first mismatch). When Go and TS disagree, **Go is
-right by definition** and the TS port is the bug. A change to the Go pipeline that legitimately
-moves bytes is re-frozen with `go test ./internal/conformance/ -update` (reviewed in the diff), and
-the TS port is then obligated to match the new bytes.
+(`internal/localcompile/testdata/golden/`). The in-browser Go/WASM engine does not get its own spec —
+it must produce a **byte-identical** manifest for the same fixture, since it runs the **same**
+`BuildManifest` inside `web/yaog.wasm`, asserted by `scripts/wasm-conformance-gate.mjs`. When the WASM
+output and the frozen Go golden disagree, **the Go golden is right by definition** and the divergence
+is a `GOARCH=wasm` determinism quirk to characterize — never a reason to re-`-update`. A change to the
+Go pipeline that legitimately moves bytes is re-frozen with `go test ./internal/localcompile/ -update`
+(reviewed in the diff).
 
 The exclusion set — what the byte assertion deliberately does NOT cover — is **not re-authored
 here**. It is owned upstream by [`io-contract.md`](./io-contract.md) §7 (the IN / OUT conformance
@@ -63,7 +65,7 @@ validation failure from a compile-resource failure:
 
 - **`validator`** — the sorted, de-duplicated set of `validator.Code` strings collected by running
   `validator.ValidateSchema` + `validator.ValidateSemantic` directly on the fixture topology
-  (exactly as `/api/validate` does), across BOTH `errors[]` and `warnings[]`. Populated for every
+  (the same schema + semantic passes the validator runs), across BOTH `errors[]` and `warnings[]`. Populated for every
   fixture: a green fixture carries whatever warnings the validator emits; a validator-FAIL fixture
   additionally carries its error code(s).
 - **`apierr`** — the sorted set of `apierr.Code` strings from the compile error envelope. **Empty
@@ -81,10 +83,9 @@ neither channel is ever left untested.
 ### `topology` — the post-write-back compiled model
 
 The full `model.Topology` after the compile write-back: allocated `OverlayIP` per node, the seven
-pinned `*` edge fields + `CompiledPort`, derived router-ids/keys. This is the model the TS port must
-reproduce field-for-field — a TS `Node` that drops `router_id` reds the `router-id-pinned` fixture
-here (adding `router_id?` to the TS `Node` is plan-4/plan-6's job; this corpus only makes its
-absence mechanically visible). **`null` on a fail fixture** (no compiled topology exists).
+pinned `*` edge fields + `CompiledPort`, derived router-ids/keys. This is the model the WASM engine
+reproduces field-for-field — it runs the same Go write-back inside `web/yaog.wasm`, so a dropped field
+would red the corresponding fixture here. **`null` on a fail fixture** (no compiled topology exists).
 
 ### `allocations` — the keyed allocator write-back projection
 
@@ -163,7 +164,7 @@ no `-update` path — the floor is a reviewed value, not a snapshot).
 
 ## Local-mode export divergence
 
-In **local mode** the compile runs entirely client-side (the TS port, plan-4/plan-6), and the
+In **local mode** the compile runs entirely client-side (the WASM engine), and the
 browser cannot generate WireGuard private keys with the same source of randomness the Go server uses
 — nor should it: local mode is zero-knowledge by design. The conformance contract therefore asserts
 **derivation, not generation** (see Excluded, above): a fixture pins fixed per-node private keys as
@@ -180,6 +181,7 @@ what the manifest freezes and what the cross-language gate enforces.
   byte-exclusion set (§7) this doc mirrors; the keygen seam (§6); the four cross-language authorities
   (§4).
 - [`allocation-stability.md`](./allocation-stability.md) — the I1–I10 determinism invariants the
-  corpus exercises; the conformance harness is their mechanized drift guard.
-- `internal/conformance/manifest.go`, `oracle.go`, `golden_test.go`, `drift_test.go`,
-  `keygen_kat_test.go`, `coverage_floor_test.go` — the code of record.
+  corpus exercises; the WASM conformance gate is their mechanized drift guard.
+- `internal/localcompile/manifest.go`, `oracle.go` (`BuildManifest` + the canonical serializer), the
+  golden / coverage-floor / keygen tests in `internal/localcompile/`, and
+  `scripts/wasm-conformance-gate.mjs` — the code of record.

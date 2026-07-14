@@ -31,8 +31,8 @@ import (
 // KeyCustody selects how GenerateKeys treats a node's WireGuard key material.
 //
 // It is the code half of the zero-knowledge custody decision (see
-// docs/spec/controller/key-custody.md). The air-gap path (compiler CLI, the
-// existing HTTP API) uses AirGap; only the controller renders in AgentHeld.
+// docs/spec/controller/key-custody.md). The compiler CLI uses AirGap; only the
+// controller renders in AgentHeld.
 type KeyCustody int
 
 const (
@@ -61,8 +61,8 @@ const PrivateKeyPlaceholder = "PRIVATEKEY_PLACEHOLDER"
 // import the localcompile façade (localcompile imports render, so the reverse
 // edge would be a cycle); the localcompile.Keygen contract member has the same
 // method set, and localcompile's wgtypesKeygen/ecdhKeygen satisfy this interface
-// structurally. The conformance harness (plan-5) asserts public-key DERIVATION
-// only — never private-key material (zero-knowledge custody, principle P2).
+// structurally. This seam pins public-key DERIVATION only — never private-key
+// material (zero-knowledge custody, principle P2).
 type Keygen interface {
 	// DerivePublic returns the base64 public key for a base64 X25519 private key.
 	// It covers the AgentHeld pub-from-private derivation and the air-gap
@@ -119,7 +119,7 @@ func (wgtypesKeygen) ParseAndNormalize(privB64 string) (string, error) {
 //
 // custody selects the custody model:
 //
-//   - AirGap (default for the air-gap CLI/API): private keys round-trip through
+//   - AirGap (default for the air-gap compiler CLI): private keys round-trip through
 //     the topology JSON. Key handling branches on the node's two key fields:
 //     (a) wireguard_private_key non-empty: parse that private key, derive the
 //     public key from it, and reuse both; write the derived public key back,

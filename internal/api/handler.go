@@ -48,8 +48,9 @@ type HealthResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// CompileResponse is the JSON body returned by /api/compile: the compiled topology, the
-// rendered per-node configs and scripts, any non-fatal warnings, and the compile manifest.
+// CompileResponse is the JSON body carrying a full compile result: the compiled topology, the
+// rendered per-node configs and scripts, any non-fatal warnings, and the compile manifest. It is
+// reused by the controller compile-preview wire shape (see compilePreviewResponseJSON).
 type CompileResponse struct {
 	Topology         *model.Topology   `json:"topology"`
 	WireGuardConfigs map[string]string `json:"wireguard_configs"`

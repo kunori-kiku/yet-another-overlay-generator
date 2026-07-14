@@ -28,13 +28,19 @@ Frontend types in `types/topology.ts` mirror the Go backend model exactly. Key r
 - `CompileResponse`: `{ topology, wireguard_configs, babel_configs, sysctl_configs, install_scripts, deploy_scripts, manifest }`
 - `CompileHistoryEntry`: Stores up to 5 recent compilation snapshots
 
-## API Integration
+## Compute integration
 
-All API calls are made from the Zustand store actions:
-- `validate()` → `POST /api/validate`
-- `compile()` → `POST /api/compile` (updates topology state from response, saves to history)
-- `exportArtifacts()` → `POST /api/export` (downloads ZIP via blob URL)
-- `downloadDeployScript(format)` → `POST /api/deploy-script?format=sh|ps1`
+Design compute is invoked from the Zustand store actions. In **local mode** these run entirely in the
+browser on the Go/WASM engine (`frontend/src/lib/localEngine.ts` → `frontend/src/wasm/`) — there is no
+backend round-trip and no anonymous compute route (the four `/api/{validate,compile,export,deploy-script}`
+routes were removed; see [../operations/deployment-topology.md](../operations/deployment-topology.md)):
+- `validate()` — schema + semantic validation
+- `compile()` — full compile (updates topology state from the result, saves to history)
+- `exportArtifacts()` — export ZIP (downloads via blob URL)
+- `downloadDeployScript(format)` — deploy script (`sh` | `ps1`)
+
+In **controller mode**, design compute is the operator-gated controller path (`HandleCompilePreview` /
+`HandleStage`); LOCAL design still runs in-browser on the WASM engine.
 
 ### Consume compiled names — never reconstruct them
 

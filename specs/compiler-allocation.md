@@ -15,7 +15,7 @@ Deterministically transform a validated topology plus a key map into a compiled 
 ## Inputs
 - `*model.Topology` — draft topology with optional sticky state riding on it: node `OverlayIP`, edge `pinned_from/to_port|transit_ip|link_local` (internal/model/topology.go:178-187). Validation runs inside `Compile` itself (compiler.go:80-89); rules live in the validator — see specs/model-validation.md.
 - `keys map[string]KeyPair` (`{PrivateKey, PublicKey}` strings, peers.go:64-67) — produced by `render.GenerateKeys` (internal/render/render.go:70); see specs/render-keys.md.
-- Callers: air-gap HTTP handlers (internal/api/handler.go:145,192,257 — see specs/airgap-api.md), controller stage compile on a per-node subgraph (internal/controller/compile.go:184 — see specs/controller-stage-promote.md), CLI `cmd/compiler/main.go:55`.
+- Callers: the controller stage compile on a per-node subgraph (internal/controller/compile.go — see specs/controller-stage-promote.md), the CLI `cmd/compiler`, and the in-browser WASM engine (the anonymous air-gap HTTP handlers were removed).
 
 Entry signature: `func (c *Compiler) Compile(topo *model.Topology, keys map[string]KeyPair) (*CompileResult, error)` (compiler.go:78).
 

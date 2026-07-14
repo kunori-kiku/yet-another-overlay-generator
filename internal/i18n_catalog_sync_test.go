@@ -12,9 +12,9 @@
 // so adding a Go code without localizing it in BOTH catalogs reds the build. It is a subset (⊆),
 // not an equality, on purpose: the catalog legitimately carries extra keys (e.g. error.generic, the
 // shape-agnostic fallback, and forward-declared codes), and the relation must keep holding as the
-// catalog grows. This is the SINGLE FE-side code-name list the design keeps — plan-4's proposed
-// frontend/src/compiler/codes.ts is SUPERSEDED here (a fourth mirror would defeat the SSOT bar), and
-// no //go:generate is introduced.
+// catalog grows. This is the SINGLE FE-side code-name list the design keeps — no TypeScript
+// compiler mirror exists (that path was deleted; the FE runs the Go codes via WASM), so a fourth
+// mirror would defeat the SSOT bar, and no //go:generate is introduced.
 //
 // The two Go registries are unexported (var registry), so this package (internal, distinct from
 // validator/apierr) reads the SSOT the structure-aware way: it parses the const declarations of the

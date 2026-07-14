@@ -12,12 +12,12 @@ Define the canonical topology JSON data model and reject invalid topologies in t
 - `internal/validator/semantic.go:1-1161` — Pass 2: cross-object checks — references, uniqueness, port ranges, client rules, parallel-link rules, allocation-pin rules, mimic platform rules.
 
 ## Inputs
-- `*model.Topology` deserialized from operator-authored topology JSON. Producers: the panel editor (see specs/panel-design.md), the air-gap HTTP API (`internal/api/handler.go:95-108`, see specs/airgap-api.md), and the controller compile path (see specs/controller-stage-promote.md).
+- `*model.Topology` deserialized from operator-authored topology JSON. Producers: the panel editor (see specs/panel-design.md), the in-browser WASM engine, and the controller compile path (see specs/controller-stage-promote.md).
 - Entry points: `ValidateSchema(topo *model.Topology) *ValidationResult` (internal/validator/schema.go:67) and `ValidateSemantic(topo *model.Topology) *ValidationResult` (internal/validator/semantic.go:15).
 - Shared link-identity semantics from `internal/linkid` (`LinkKey`/`PinKey`/`IsBackup`, semantic.go:596-601) and name normalization from `internal/naming` (semantic.go:240,252).
 
 ## Outputs
-- `*ValidationResult` with `Errors`/`Warnings`; `IsValid()` (schema.go:61-63) gates compilation: the compiler runs both validators as Pass 1/2 and aborts on errors (`internal/compiler/compiler.go:80-89`, see specs/compiler-allocation.md); `/api/validate` returns the merged result without aborting (internal/api/handler.go:106-118, see specs/airgap-api.md).
+- `*ValidationResult` with `Errors`/`Warnings`; `IsValid()` (schema.go) gates compilation: the compiler runs both validators as Pass 1/2 and aborts on errors (`internal/compiler/compiler.go`, see specs/compiler-allocation.md); validation-only callers (the panel, the in-browser WASM engine) surface the merged result without aborting.
 - Normalization writebacks that mutate the input topology: empty `routing_mode` → `"babel"` (schema.go:145-147), empty `transport` → `"udp"` (schema.go:333-335) — iteration is by index/pointer so the writeback persists and round-trips (schema.go:100-103,306-308).
 - `model.Topology` itself is the lingua-franca type consumed downstream by compiler-allocation, render-keys, controller-store, and the agent (see those specs).
 

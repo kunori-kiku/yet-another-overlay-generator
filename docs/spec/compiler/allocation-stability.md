@@ -348,10 +348,10 @@ and deploy-selection mechanics are tracked separately.
 ## Mechanized determinism / drift guard
 
 The byte-stability and determinism this spec asserts (I1–I10) are not left to manual review: they are
-mechanically enforced by the **Go↔TS conformance harness** (`internal/conformance/`, program
-plan-5 / milestone 1.5). A fixed-key fixture corpus is run through the production compile path and
-its canonical-JSON manifest frozen as committed goldens; `TestGolden_Deterministic` proves the oracle
-is pure (the same fixture built twice is byte-identical), and the golden assertion would have caught
+mechanically enforced by the **WASM conformance gate** (`scripts/wasm-conformance-gate.mjs`) over the
+`internal/localcompile` golden corpus. A fixed-key fixture corpus is run through the production compile
+path and its canonical-JSON manifest frozen as committed goldens; the localcompile golden test proves
+the oracle is pure (the same fixture built twice is byte-identical), and the golden assertion would have caught
 the beta.5–beta.7 pin-drift regressions. The corpus spans the surfaces these invariants govern —
 superset stability, order independence (the edge-reorder pair), pinned-pin round-trips (I7),
 delete/re-add idempotence, parallel links, multi-domain transit — so a change that breaks an

@@ -241,9 +241,9 @@ func marshalGolden(t *testing.T, g goldenArtifacts) []byte {
 
 // TestContractGolden is the authoritative byte-freeze: each fixture is run through the
 // pure façade with the stdlib ecdhKeygen + a fixed clock, and its masked artifacts must
-// byte-equal the committed golden. This is the substrate plan-4 (the TS port) and plan-5
-// (the conformance harness) target — a byte regression here is exactly the cross-language
-// drift the migration track exists to prevent.
+// byte-equal the committed golden. This is the substrate the WASM engine (web/yaog.wasm)
+// and the WASM conformance gate target — a byte regression here is exactly the drift the
+// golden freeze exists to prevent.
 func TestContractGolden(t *testing.T) {
 	if err := os.MkdirAll(goldenDir, 0o755); err != nil {
 		t.Fatalf("ensure golden dir: %v", err)

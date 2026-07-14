@@ -8,8 +8,8 @@
 // fetch settings, the compile clock, and the controller subgraph's reserved
 // allocations.
 //
-// The contract is the substrate the TypeScript reimplementation (plan-4) and the
-// Go↔TS conformance harness (plan-5) consume; its canonical schema lives in
+// The contract is the substrate the in-browser Go/WASM engine and the WASM
+// conformance gate consume; its canonical schema lives in
 // docs/spec/compiler/io-contract.md. This package introduces NO intentional byte
 // change to either the air-gap or the controller rendered output — it wraps the
 // existing pipeline rather than relocating it (the wrap-not-move discipline,
@@ -28,8 +28,8 @@ import (
 
 // Keygen is the WireGuard key-derivation seam — the one input lifted out of the
 // pipeline that decouples key derivation from wgtypes/wgctrl (the browser/WASM blocker).
-// It is part of the frozen contract: the TypeScript reimplementation (plan-4) mirrors
-// this seam, and the conformance harness (plan-5) asserts public-key DERIVATION only
+// It is part of the frozen contract: the WASM engine shares this seam, and the WASM
+// conformance gate asserts public-key DERIVATION only
 // (never private-key material — zero-knowledge custody, principle P2).
 //
 // This phase (plan-3 Phase 1) declares the seam so CompileRequest can name it; the
@@ -63,9 +63,9 @@ type CompileRequest struct {
 	// Topology is the only required input.
 	Topology model.Topology
 
-	// Custody selects how WireGuard key material is treated: AirGap (the local/CLI and
-	// existing HTTP API path — private keys round-trip through the topology JSON) or
-	// AgentHeld (the controller path — zero-knowledge custody, only public keys persist;
+	// Custody selects how WireGuard key material is treated: AirGap (the local/CLI path —
+	// private keys round-trip through the topology JSON) or AgentHeld (the controller
+	// path — zero-knowledge custody, only public keys persist;
 	// see docs/spec/controller/key-custody.md).
 	Custody render.KeyCustody
 

@@ -118,9 +118,9 @@ func (c *Compiler) WithMimicFallbackDefault(policy string) *Compiler {
 // any validation stage fails. ctx bounds the IP-allocation pass (Pass 3): an over-large domain
 // CIDR is rejected fast (CodeOverlayScanBudgetExceeded) and a long scan is abortable on request
 // cancellation. The request context reaches here through localcompile.CompileResultCtx — the
-// air-gap HTTP handlers pass r.Context() and the controller subgraph compile passes its request
-// ctx; the air-gap CLI and the pure façade entry points pass context.Background(). (plan-8
-// consumes ctx in the allocator scan; plan-3's façade threads the live callers' ctx in.)
+// controller subgraph compile passes its request ctx; the air-gap CLI and the pure façade entry
+// points pass context.Background(). (plan-8 consumes ctx in the allocator scan; plan-3's façade
+// threads the live caller's ctx in.)
 //
 // Compile is the byte-identical shim that delegates to CompileAt with time.Now() — the clock
 // is the only impurity it injects, so every existing caller stays unchanged.
@@ -131,7 +131,7 @@ func (c *Compiler) Compile(ctx context.Context, topo *model.Topology, keys map[s
 // CompileAt is Compile with the compile clock made explicit: compiledAt is stamped into
 // CompileManifest.CompiledAt instead of reading the wall clock internally. This is the seam the
 // localcompile façade (plan-3) injects so the local compile path is a pure function — no internal
-// time.Now() — which lets the conformance harness (plan-5) run a fixture with a fixed clock and get
+// time.Now() — which lets the WASM conformance gate run a fixture with a fixed clock and get
 // a reproducible result. compiledAt feeds ONLY manifest.json's compiled_at, which is OUT of the
 // conformance byte set (display-only); the rendered configs do not depend on it. See
 // docs/spec/compiler/io-contract.md (the IN/OUT conformance list).
@@ -275,9 +275,9 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 // It hashes fmt.Sprintf("%v", topo), whose output depends on Go's struct/map
 // formatting and map iteration order, so it is neither stable across Go
 // versions nor reproducible by a non-Go implementation. It is therefore
-// explicitly OUT OF SCOPE for plan-5's Go<->TS conformance harness — the
-// TypeScript local-mode compiler port cannot and should not attempt to
-// reproduce this value. Do not promote it to a security or equivalence anchor.
+// explicitly OUT OF SCOPE for the WASM conformance gate's byte set — a
+// non-Go implementation cannot and should not attempt to reproduce this
+// value. Do not promote it to a security or equivalence anchor.
 func computeChecksum(topo *model.Topology) string {
 	h := sha256.New()
 	h.Write([]byte(fmt.Sprintf("%v", topo)))

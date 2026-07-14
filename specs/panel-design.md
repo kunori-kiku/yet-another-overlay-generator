@@ -25,7 +25,7 @@ Holds the editable topology (project/domains/nodes/edges) as a zustand store per
 
 ## Inputs
 - Types `Topology`/`ValidateResponse`/`CompileResponse`/`CompileHistoryEntry` from `frontend/src/types/topology.ts:3-156` (wire contract: `docs/spec/api/wire-contract.md`).
-- HTTP responses from `POST /api/validate|/api/compile|/api/export|/api/deploy-script` (routes `internal/api/server.go:62-65`; see specs/airgap-api.md, specs/model-validation.md, specs/compiler-allocation.md).
+- Compile/validate/export results — in local mode from the in-browser WASM engine, in controller mode from the operator-gated controller compile path (the four anonymous `/api/*` compute routes were removed); see specs/model-validation.md, specs/compiler-allocation.md.
 - Rehydrated state from localStorage key `topology-storage` (`frontend/src/stores/topologyStore.ts:565`); imported project JSON files (`:339-370`).
 - Shared resolvers: `resolveNodeInterfaces` / `resolveEdgeInterface` (`frontend/src/lib/compiledInterfaces.ts:48,103`) map compiled `wireguard_configs` back to edges via pinned ports; `deriveCapabilitiesFromRole` (`frontend/src/lib/roleCapabilities.ts:11`) mirrors backend role inference.
 - Mounted under a route-scoped `ReactFlowProvider` in `frontend/src/App.tsx:32-34` (see specs/panel-shell.md).

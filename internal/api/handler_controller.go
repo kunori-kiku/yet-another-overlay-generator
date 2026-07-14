@@ -41,8 +41,8 @@ const defaultPollDeadline = 55 * time.Second
 
 // controllerMaxBodyBytes caps controller request bodies. Controller payloads
 // (enroll request, report, topology JSON) are small; the same MaxBytesReader
-// discipline as the air-gap handlers guards against unbounded io.ReadAll (D34).
-// Topology can be larger than a report, so this reuses the air-gap topology cap.
+// discipline guards against unbounded io.ReadAll (D34). Topology can be larger
+// than a report, so this reuses the shared maxRequestBodyBytes topology cap.
 const controllerMaxBodyBytes = maxRequestBodyBytes
 
 // errBodyEmpty marks an empty request body where one is required. It is a coded

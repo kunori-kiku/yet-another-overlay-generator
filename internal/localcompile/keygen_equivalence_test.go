@@ -16,9 +16,9 @@ import (
 //     (the air-gap case-a re-write that is persisted back onto
 //     the node).
 //
-// This pins the determinism / byte-identity Principle (P1/P5) across the language
-// boundary that plan-4 (@noble/curves TS) and plan-5 (cross-language conformance)
-// depend on: a divergence here would silently corrupt every checksum, bundle
+// This pins the determinism / byte-identity Principle (P1/P5) that the WASM engine's
+// stdlib key derivation (ecdhKeygen) depends on: a divergence here would silently
+// corrupt every checksum, bundle
 // signature, and keystone digest. wgtypesKeygen is the byte-for-byte production
 // default; ecdhKeygen is the wgctrl-free reference proven equal to it here.
 func TestKeygenEquivalence_WgtypesVsEcdh(t *testing.T) {
