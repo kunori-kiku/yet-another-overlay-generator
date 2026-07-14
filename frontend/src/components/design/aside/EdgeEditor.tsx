@@ -2,6 +2,7 @@ import { useTopologyStore } from '../../../stores/topologyStore';
 import { t } from '../../../i18n';
 import { resolveEdgeInterface } from '../../../lib/compiledInterfaces';
 import { flipEdge, reverseDialSource } from '../../../lib/edgeDirection';
+import { clearedPinFields } from '../../../lib/normalizeEdges';
 import { Field, FIELD_SELECT_CLASS } from '../../../ui/Field';
 
 // MIN_PINNED_PORT mirrors the backend's minPinnedPort (validator) — the lower bound for an
@@ -452,15 +453,12 @@ export function EdgeEditor() {
             value={selectedEdge.role || ''}
             onChange={(e) => {
               const value = e.target.value;
+              // Changing the role re-keys the link identity, so all allocation pins bound to the
+              // old identity are stale and must clear together (see the safety comment above). The
+              // pin-clear set is single-sourced via clearedPinFields (lib/normalizeEdges).
               updateEdge(selectedEdge.id, {
                 role: value === '' ? undefined : (value as 'primary' | 'backup'),
-                compiled_port: undefined,
-                pinned_from_port: undefined,
-                pinned_to_port: undefined,
-                pinned_from_transit_ip: undefined,
-                pinned_to_transit_ip: undefined,
-                pinned_from_link_local: undefined,
-                pinned_to_link_local: undefined,
+                ...clearedPinFields(),
               });
             }}
             className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
@@ -629,15 +627,9 @@ export function EdgeEditor() {
             )}
             <button
               onClick={() =>
-                updateEdge(selectedEdge.id, {
-                  pinned_from_port: undefined,
-                  pinned_to_port: undefined,
-                  pinned_from_transit_ip: undefined,
-                  pinned_to_transit_ip: undefined,
-                  pinned_from_link_local: undefined,
-                  pinned_to_link_local: undefined,
-                  compiled_port: undefined,
-                })
+                // Unpin: drop every allocation pin so the edge re-allocates fresh on the next
+                // compile. Single-sourced via clearedPinFields (lib/normalizeEdges).
+                updateEdge(selectedEdge.id, clearedPinFields())
               }
               className="w-full py-1 bg-[var(--danger-solid)] text-[var(--danger-solid-fg)] rounded text-xs"
             >
