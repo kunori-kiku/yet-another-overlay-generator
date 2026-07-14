@@ -4,6 +4,29 @@
 
 ## Active work
 
+- **📋 SUBJECT `post-refactor-debt-paydown-2026_07_14` — DRAFTED 2026-07-14 (plans-only; execution on
+  the owner's go).** The successor to `framework-refactor`, from a fresh **30-agent repo-wide debt sweep
+  + a 7-agent security-correctness gap-pass** (both briefed to NOT re-report shipped work) → **14 plans
+  in 4 tiers**: correctness/security fixes → structural paydown → machine-gate/FE → doc/state hygiene.
+  Folder:
+  [`implementation_plans/post-refactor-debt-paydown-2026_07_14/`](implementation_plans/post-refactor-debt-paydown-2026_07_14/outline.md)
+  (+ `ASSESSMENT.md` evidence base). **Headline confirmed defects (independently re-verified by hand):**
+  (1) the WASM engine is the default+only in-browser local engine but is NEVER built in the release/Docker
+  pipelines → every shipped panel 404s on `/yaog.wasm`, local design dead-on-arrival, CI-invisible (CI
+  pre-builds the wasm only for the conformance gate); (2) standalone `install.sh` installs an attacker
+  `.deb` as **root** despite a valid bundle signature — an unlisted `artifacts.json` passes `bundle.sig`
+  + `sha256sum -c` (the controller/agent path is guarded at `verify.go:225`, the shell mirror is not);
+  (3) the WebAuthn server never enforces the **User-Verified** flag → passwordless operator login/2FA/
+  keystone-signing degrades to possession-only; (4) the self-update **exact-vs-semver** comparator
+  permanently wedges the update channel on a `v`-less target; (5) `deploy.go --uninstall` **orphans
+  mimic** (root eBPF XDP) + drifts on the SNAT delete. **Negative evidence: NO trust-root bypass, NO
+  key leak, NO shipped CVE — the controller/agent-managed paths are sound in every audited area.** Owner
+  scope decisions taken **PROVISIONALLY** (owner away during the scoping questions): comprehensive/
+  all-4-tiers · fix-ship-breaker-first-no-out-of-band-release · ran-the-security-pass ·
+  name `post-refactor-debt-paydown` — **CONFIRM on return**. plan-6 (WebAuthn UV) STOPS for an owner gate
+  (any enrolled UV-incapable authenticators?). Draft is **uncommitted** (working tree) pending owner
+  review.
+
 - **✅ SUBJECT `framework-refactor-2026_07_13` — COMPLETE; ALL 14 phases SHIPPED to main 2026-07-13
   (plans 0/1/1.5/1.6/2/3/4/5/5b/6/7/8/9/10; PRs #260–#275), each workflow-reviewed → fixed → re-reviewed →
   CI-green → merged. The "WASM-Unified Core + Machine-Gated Paydown" program from a 24-agent repo-wide debt sweep +
