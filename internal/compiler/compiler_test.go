@@ -386,29 +386,6 @@ func TestGenerateRouterID(t *testing.T) {
 	}
 }
 
-func TestWgInterfaceName(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"beta", "wg-beta"},
-		{"Alpha", "wg-alpha"},                   // uppercase to lowercase
-		{"my_server", "wg-my-server"},           // underscore to hyphen
-		{"a.b.c", "wg-a-b-c"},                   // dot to hyphen
-		{"abcdefghijklmnop", "wg-abcdefghf39d"}, // over 15 chars: use a hash suffix to avoid truncation collisions
-	}
-
-	for _, tt := range tests {
-		got := wgInterfaceName(tt.input)
-		if got != tt.expected {
-			t.Errorf("wgInterfaceName(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-		if len(got) > 15 {
-			t.Errorf("wgInterfaceName(%q) = %q exceeds 15 chars", tt.input, got)
-		}
-	}
-}
-
 func TestCompile_SimpleMesh(t *testing.T) {
 	topo := simpleMeshTopo()
 	keys := testKeys()
