@@ -68,6 +68,24 @@ var (
 	// revoked: a revoked node-id must not be silently resurrected by a still-valid
 	// enrollment token. The operator deletes the node to reuse the id.
 	ErrNodeRevoked = errors.New("controller: node id is revoked; delete it before re-enrolling")
+	// ErrNoPinnedCredential is returned by InstallTrustListSignature when no operator
+	// credential is pinned (keystone OFF), so there is no anchor to verify a signature
+	// against. The api layer maps it to CodeNoPinnedCredential (412).
+	ErrNoPinnedCredential = errors.New("controller: no operator credential is pinned")
+	// ErrNoStagedManifest is returned by InstallTrustListSignature when nothing has been
+	// staged yet (no manifest to sign). The api layer maps it to CodeNoStagedManifest (404).
+	ErrNoStagedManifest = errors.New("controller: no membership manifest is staged")
+	// ErrStagedManifestMismatch is returned by InstallTrustListSignature when the submitted
+	// canonical bytes do not byte-equal the CURRENTLY-staged manifest — a re-stage moved the
+	// staged manifest since the operator fetched it, so the submitted signature is over stale
+	// bytes. Rejecting here (under the tenant op lock) is the substitution guard that stops a
+	// signed M_old from ever pairing with a freshly staged B_new. Mapped to
+	// CodeStagedManifestMismatch (409).
+	ErrStagedManifestMismatch = errors.New("controller: submitted manifest does not match the staged manifest")
+	// ErrManifestSignatureInvalid is returned (wrapped) by InstallTrustListSignature when the
+	// off-host signature does not verify against the pinned credential. Mapped to
+	// CodeManifestSignatureInvalid (400).
+	ErrManifestSignatureInvalid = errors.New("controller: manifest signature does not verify against the pinned credential")
 )
 
 // NodeStatus is the lifecycle state of a registry node.
@@ -500,8 +518,17 @@ type Store interface {
 
 	// UpsertNode creates or updates a node registry record (matched by NodeID).
 	UpsertNode(ctx context.Context, t TenantID, n Node) error
-	// GetNode returns the node, or ErrNotFound.
+	// GetNode returns the node with the live telemetry overlay merged, or ErrNotFound. This
+	// is the READ path for fleet views (conditions/metrics/last-seen/agent-version are shown
+	// live). A read-modify-write CUSTODY caller that will UpsertNode the result MUST use
+	// GetNodeRecord instead, so the volatile overlay is never baked into the durable record.
 	GetNode(ctx context.Context, t TenantID, nodeID string) (Node, error)
+	// GetNodeRecord returns the DURABLE node registry record WITHOUT the volatile telemetry
+	// overlay, or ErrNotFound. It is the read a custody read-modify-write MUST use before
+	// UpsertNode: a heartbeat's live conditions/metrics — which GetNode merges for fleet
+	// views — would otherwise be persisted into the durable record (a possibly-dead node
+	// would bake in stale "healthy" telemetry). GetNode stays the overlay-merged read.
+	GetNodeRecord(ctx context.Context, t TenantID, nodeID string) (Node, error)
 	// ListNodes returns all nodes for the tenant (stable order by NodeID).
 	ListNodes(ctx context.Context, t TenantID) ([]Node, error)
 	// SetAppliedGeneration records what an agent reported applying (the applied
