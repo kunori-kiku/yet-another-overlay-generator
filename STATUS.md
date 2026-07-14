@@ -1,6 +1,6 @@
 # STATUS
 <!-- regenerated: 2026-07-14 -->
-<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; framework-refactor SHIPPED + archived to _completed/; post-refactor-debt-paydown EXECUTED (13/14 merged, plan-6 WebAuthn-UV HELD for owner) -->
+<!-- by: hand — v2.0.0-rc.6 = GitHub Latest (post-refactor-debt-paydown delta); framework-refactor SHIPPED + archived to _completed/; post-refactor-debt-paydown EXECUTED (13/14 merged, plan-6 WebAuthn-UV HELD for owner) -->
 
 ## Active work
 
@@ -296,17 +296,26 @@ owes:**
 
 **Track 2 — the rc line to GA.**
 
-**`v2.0.0-rc.5` is GitHub Latest (the `telemetry-history-and-delta-deploy` subject). The road to GA
+**`v2.0.0-rc.6` is GitHub Latest (2026-07-14; annotated tag on `91fcb71`; rc.5 demoted; self-promoted;
+22 assets — the 7 `yaog-server-airgap-*` binaries are intentionally gone, one server build post
+framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277–#292). The road to GA
 (all owner-paced):**
-1. **Soak `v2.0.0-rc.5` on the live fleet.** Owner owes: update the controller to rc.5 + browser-smoke
-   the new surfaces — the node-detail CPU/RAM/load charts (several granularities + the retention cap
-   incl. `0`=off) and delta deploy (deploy an UNCHANGED topology → "0 updated, N unchanged" with NO node
-   refresh / `wg show` handshakes undisturbed; change one node → only it re-stages; Force redeploys an
-   unchanged node). Any confirmed defect during the soak → fix → `v2.0.0-rc.6` (a red required gate or a
-   new blocker never tags over — the gate doc's rules stand).
-2. **STILL owed from rc.4:** update the controller + redeploy the affected fleet nodes (the mimic
-   build-dep fix — `bubblewrap`+`dwarves` — is in the rendered `install.sh`, NOT the agent binary) + set
-   L7-relay edges to `transport: udp`. The same controller-update covers rc.5's smoke.
+1. **Soak `v2.0.0-rc.6` on the live fleet.** Owner owes: update the controller to rc.6 + browser-smoke
+   the fixes — (a) **local in-browser design now actually loads** (the shipped panel finally contains
+   `yaog.wasm`: design → Validate → compile → export with no backend — the headline fix); (b) deploy a
+   `transport: tcp` node then run the deploy-script `--uninstall` → the `mimic@` unit is stopped/disabled
+   and the overlay SNAT rules are gone (incl. a non-default transit CIDR); (c) `install.sh` still installs
+   a legit bundle cleanly (the new signed-set guard only rejects a *tampered* unlisted `artifacts.json`);
+   (d) self-update across the rc.5→rc.6 boundary reconciles (no channel wedge). The install.sh +
+   deploy-script fixes ride the rendered scripts, so **update the controller and redeploy** to apply.
+   Release cut hit a real `release.yml` E2E-gate gap (it wasn't building the wasm before the E2E panel
+   build — fixed #295, tag moved to the fixed commit); the published rc.6 is correct. Any confirmed
+   defect during the soak → fix → `v2.0.0-rc.7` (a red required gate or a new blocker never tags over).
+2. **rc.5 surfaces to also smoke** (carried, not yet owner-confirmed): the node-detail CPU/RAM/load
+   charts (granularities + retention cap incl. `0`=off) and delta deploy (unchanged topology →
+   "0 updated, N unchanged", no node refresh; change one → only it re-stages; Force redeploys an
+   unchanged node). **STILL owed from rc.4:** set L7-relay edges to `transport: udp`. The single
+   controller-update + redeploy covers rc.4/rc.5/rc.6 at once.
 3. **rc.x backlog (deliberate deferrals, unchanged):** FileStore host-loss SPOF (backup/restore/HA — see
    the persisted encrypted-object-storage plan), bootstrap-TOFU first-fetch pinning + operator-cred OOB
    delivery, the pinned-endpoint anti-roaming re-assert option (owner decision open), the `EDGE_OMITEMPTY`
