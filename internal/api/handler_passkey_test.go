@@ -42,14 +42,14 @@ func pkixPEM(t *testing.T, pub any) string {
 }
 
 // buildAssertion forges a valid WebAuthn assertion over `challenge` (the RAW nonce
-// bytes) signed by priv: authenticatorData = sha256(rpid)||UP-flag||counter(0), and the
+// bytes) signed by priv: authenticatorData = sha256(rpid)||UP|UV flags||counter(0), and the
 // signature covers authData || sha256(clientDataJSON), exactly as the verifier checks.
 func buildAssertion(t *testing.T, alg trustlist.Alg, rpid, origin string, challenge []byte, credID, pubPEM string, priv any) trustlist.SignedTrustList {
 	t.Helper()
 	rpHash := sha256.Sum256([]byte(rpid))
 	authData := make([]byte, 0, 37)
 	authData = append(authData, rpHash[:]...)
-	authData = append(authData, 0x01)       // flags: User-Present
+	authData = append(authData, 0x01|0x04)  // flags: User-Present | User-Verified (both ceremonies pin UV=required)
 	authData = append(authData, 0, 0, 0, 0) // signature counter (0 — synced passkeys do this)
 	cData := []byte(fmt.Sprintf(`{"type":"webauthn.get","challenge":%q,"origin":%q}`,
 		base64.RawURLEncoding.EncodeToString(challenge), origin))

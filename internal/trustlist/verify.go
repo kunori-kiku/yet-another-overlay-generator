@@ -28,6 +28,10 @@ var (
 	// ErrMissingPin: the pinned credential lacks the public key required for its
 	// algorithm.
 	ErrMissingPin = errors.New("trustlist: pinned credential missing public key")
+	// ErrUserVerification: a WebAuthn assertion has User-Present set but NOT User-Verified.
+	// Both YAOG ceremonies pin userVerification:"required", so the server enforces UV — a
+	// possession-only (touch/presence, no PIN/biometric) assertion is refused (see verifyAssertion).
+	ErrUserVerification = errors.New("trustlist: webauthn User-Verified flag not set (userVerification required)")
 )
 
 // Verify is the ONE function nodes embed. It is fail-closed: it returns nil
