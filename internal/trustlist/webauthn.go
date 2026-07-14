@@ -20,6 +20,12 @@ const authDataMinLen = 37
 // (authData[33:37]) because synced passkeys legitimately emit a counter of 0.
 const flagUserPresent = 0x01
 
+// flagUserVerified is the User-Verified (UV) bit. We require it too: both ceremonies pin
+// userVerification:"required" client-side, so the SERVER — the sole enforcement authority — must
+// enforce UV. A User-Present-only assertion otherwise degrades the declared "user-verified" factor
+// to mere possession. Unlike the counter, a UV-capable authenticator DOES set this under UV=required.
+const flagUserVerified = 0x04
+
 // verifyWebAuthn verifies a WebAuthn (FIDO2) assertion over a trust list, stdlib
 // only, and binds the assertion to THIS trust list's CONTENT: the expected challenge
 // is Challenge(tl) = SHA256(Canonical(tl)). It is a thin content-bound wrapper over
@@ -164,6 +170,18 @@ func verifyAssertion(art SignedTrustList, pin PinnedCredential, wantChallenge []
 	//    NOT checked — synced passkeys emit 0.)
 	if authData[32]&flagUserPresent == 0 {
 		return fmt.Errorf("trustlist: User-Present flag not set in authenticator_data")
+	}
+
+	// 7b. User-Verified flag must ALSO be set — the ONE gate shared by operator login, 2FA, and
+	//     keystone off-host signing (webauthn.ts runAssertion pins userVerification:"required" for
+	//     all). The server is the sole enforcement authority; a User-Present-ONLY assertion (a PIN-less
+	//     authenticator, or a tampered client requesting UV=discouraged) would otherwise mint a full
+	//     operator session / sign a manifest with mere "touch", collapsing the "user-verified" factor
+	//     to possession. A UV-capable authenticator sets this under UV=required, so honest ceremonies
+	//     are unaffected. (This gate ALSO runs node-side in VerifyMembership — the operator's manifest
+	//     signature must carry UV — so a live fleet's existing manifests must have been UV-signed.)
+	if authData[32]&flagUserVerified == 0 {
+		return ErrUserVerification
 	}
 
 	// Advisory origin check (not authoritative on a node).

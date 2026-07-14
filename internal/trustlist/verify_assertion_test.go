@@ -24,7 +24,7 @@ func TestVerifyAssertionRandomChallenge(t *testing.T) {
 	challenge := []byte("0123456789abcdef0123456789abcdef") // 32 bytes of "random" nonce
 	challengeB64 := base64.RawURLEncoding.EncodeToString(challenge)
 
-	authData := buildAuthData(rpid, flagUserPresent)
+	authData := buildAuthData(rpid, flagUserPresent|flagUserVerified)
 	clientData := buildClientData(t, "webauthn.get", challengeB64, origin)
 	sig := ed25519.Sign(priv, signedMessage(authData, clientData))
 	art := SignedTrustList{
@@ -64,5 +64,17 @@ func TestVerifyAssertionRandomChallenge(t *testing.T) {
 	rawArt.Alg, rawPin.Alg = AlgEd25519, AlgEd25519
 	if err := VerifyAssertion(rawArt, rawPin, challenge); !errors.Is(err, ErrUnsupportedAlg) {
 		t.Fatalf("VerifyAssertion(raw ed25519) = %v, want ErrUnsupportedAlg", err)
+	}
+
+	// User-Present-ONLY (UV cleared): a possession-only assertion is REJECTED. Both ceremonies pin
+	// userVerification:"required", so the server must enforce UV — a PIN-less authenticator, or a
+	// tampered client requesting UV=discouraged, must not mint a session / sign a manifest. (Before the
+	// fix, this test's own "valid" case used a UP-only assertion and PASSED — the live vulnerability.)
+	upOnlyAuth := buildAuthData(rpid, flagUserPresent) // UV bit cleared
+	upOnly := art
+	upOnly.AuthenticatorData = base64.RawURLEncoding.EncodeToString(upOnlyAuth)
+	upOnly.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, signedMessage(upOnlyAuth, clientData)))
+	if err := VerifyAssertion(upOnly, pin, challenge); !errors.Is(err, ErrUserVerification) {
+		t.Fatalf("VerifyAssertion(User-Present only) = %v, want ErrUserVerification", err)
 	}
 }
