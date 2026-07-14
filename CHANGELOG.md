@@ -9,6 +9,61 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.6] - 2026-07-15
+
+**Release candidate.** A correctness, security, and structural-debt release over `v2.0.0-rc.5` — no new
+features. It closes the residual and newly-introduced debt the framework-refactor left behind, led by a
+**ship-breaker fix**: the WASM local engine (the default in-browser design engine) was never built into
+the release or Docker pipelines, so a shipped panel had no `yaog.wasm` and local design failed to load.
+Thirteen reviewed plans (PRs #277–#292), each independently reviewed and adversarially verified before
+merge; assessed by a repo-wide debt sweep + a focused security-correctness pass whose **negative
+evidence** is the reassuring headline — **no trust-root bypass, no key leak, no shipped CVE**; the
+defects lived in the mirrors and edges, not the controller/agent-managed trust paths.
+
+### Security
+- **Standalone `install.sh` signed-set hardening.** The self-extracting installer verified the bundle
+  signature and `sha256sum -c`'d the checksum list, but did not reject a **present-but-unlisted
+  `artifacts.json`** before reading the `.deb` pins from it — so an attacker-injected catalog could steer
+  a root `.deb` install despite a valid bundle signature. The installer now mirrors the agent verifier's
+  coverage guard (fail-closed, and only when an `artifacts.json` is present — a legitimately-signed
+  no-catalog bundle is unaffected). (#277)
+
+### Fixed
+- **WASM local engine now ships in every artifact (ship-breaker).** `yaog.wasm` + `wasm_exec.js` are now
+  built into both the release pipeline and the Docker image (previously CI built the wasm only for the
+  conformance gate, so no shipped `dist` contained it and in-browser local design 404'd on load). A
+  red-build assertion now fails the release if the wasm is missing from `dist`/`dist-local`, and the
+  panel's wasm loader resets its load promise on failure so a transient load error can be retried instead
+  of wedging. (#278)
+- **`deploy.go --uninstall` tears down mimic and no longer drifts on the SNAT delete.** The SSH deploy
+  scripts' uninstall path now stops/disables the `mimic@` unit and removes its config (previously it
+  orphaned the boot-persistent mimic unit + its root eBPF program), and deletes the overlay SNAT rules by
+  matching the live rule set instead of a hard-coded `10.10.0.0/24` (so a non-default transit CIDR is torn
+  down correctly). Both the bash and PowerShell renderers are covered, including a client node whose sole
+  link is `transport: tcp`. (#279, #292)
+- **Agent self-update compares versions by semver, not exact string.** A `v`-less operator target (e.g.
+  `2.0.0` against a released `v2.0.0`) could pass the swap and then permanently wedge the update channel;
+  reconciliation now routes through the same semver comparator the self-test uses, and the artifact
+  download is bounded by a size cap. (#280)
+- **Trust-list signing is serialized under one tenant lock.** Installing an operator trust-list signature
+  now holds a single tenant-ops lock across read → substitution-guard → verify → write, closing a window
+  where a concurrent re-stage could pair a stale signed manifest with fresh bundles; controller store
+  reads that must be durable no longer read through the volatile telemetry overlay. (#281)
+
+### Changed
+- **Structural debt paydown (behavior-preserving, no rendered-output change).** The agent controller-mode
+  daemon was extracted into a testable `ControllerLoop`; the ~580-line `derivePeersWithDomains` was split
+  into named helpers **byte-identically** (goldens + allocation-stability + the WASM conformance gate
+  unchanged); `handler_bootstrap.go` was split and the agent request mux routed through the structural
+  auth adapter; the controller wire DTOs gained a non-vacuous drift gate (Go ↔ TS snake_case parity, run
+  under `go test`); the `Field` form primitive adoption was finished; and the release/Docker pipelines
+  were aligned to the go1.26 toolchain with a dead-code sweep. (#283–#287, #290)
+
+### Documentation
+- Archived six delivered-but-unarchived subjects and reconciled `STATUS.md` / `CHANGELOG` / mixed-mode
+  planning state; purged retired air-gap and deleted-TS-compiler prose plus rotted line-number citations
+  from the README, `CLAUDE.md`, and the specs, and renamed a mislabeled test. (#288, #289)
+
 ## [2.0.0-rc.5] - 2026-07-13
 
 **Release candidate.** Adds two operator-facing capabilities over `v2.0.0-rc.4`: **per-node resource
@@ -1063,7 +1118,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.5...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...HEAD
+[2.0.0-rc.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.5...v2.0.0-rc.6
 [2.0.0-rc.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.4...v2.0.0-rc.5
 [2.0.0-rc.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.3...v2.0.0-rc.4
 [2.0.0-rc.3]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.2...v2.0.0-rc.3
