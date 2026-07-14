@@ -180,10 +180,26 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # Go is REQUIRED here: the in-browser local engine (framework-refactor plan-4 made Go/WASM the
+      # default+only local engine) is compiled by npm run build:wasm below. Resolve the go.mod toolchain
+      # (go1.26.5) via check-latest; do NOT pin GOTOOLCHAIN=local (that could ship a wasm built by an
+      # older toolchain against the committed 1.26.5 web/wasm_exec.js).
+      - name: Setup Go (WASM local engine)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
       - name: Build Frontend
         working-directory: ./frontend
         run: |
           npm ci --legacy-peer-deps
+          # The in-browser Go/WASM local engine: build:wasm compiles web/yaog.wasm + refreshes
+          # web/wasm_exec.js from the toolchain and copies BOTH into frontend/public/, so the vite
+          # builds below stamp them into dist/ + dist-local/. Without this, every shipped panel 404s
+          # on /yaog.wasm and in-browser local design is dead-on-arrival (CI's e2e job builds the wasm
+          # separately, so the gap was invisible until now).
+          npm run build:wasm
           # The all-in-one controller panel (default build → frontend/dist), shipped inside
           # every platform bundle + the controller image.
           npm run build
@@ -191,6 +207,10 @@ jobs:
           # mode locked to local, controller affordances hidden, no backend dependency — packaged
           # as a SEPARATE standalone release asset (yaog-local-design-<version>.zip) below.
           npm run build:local
+          # SHIP GATE (plan-2): a build-frontend regression that drops the WASM engine must FAIL the
+          # release here, not 404 at runtime on the fleet. BOTH shipped panels must carry it.
+          test -f dist/yaog.wasm && test -f dist/wasm_exec.js
+          test -f dist-local/yaog.wasm && test -f dist-local/wasm_exec.js
 
       - name: Upload Frontend Dist Artifact
         uses: actions/upload-artifact@v4

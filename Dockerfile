@@ -31,6 +31,14 @@ ARG BUILD_VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w -X main.BuildVersion=${BUILD_VERSION}" -o /out/yaog-server ./cmd/server
 
+# Build the in-browser Go/WASM local engine (framework-refactor plan-4 made Go/WASM the default+only
+# local engine). The frontend stage (node:alpine) has no Go, so the wasm is built HERE and COPYed into
+# the served web root in the final stage. GOOS=js GOARCH=wasm resolves the go.mod toolchain (go1.26.5,
+# the same toolchain that produced the committed web/wasm_exec.js) via GOTOOLCHAIN=auto — do NOT pin
+# GOTOOLCHAIN=local. web/wasm_exec.js is the committed, toolchain-pinned runtime (COPY . . above).
+RUN GOOS=js GOARCH=wasm go build -trimpath -o /out/web/yaog.wasm ./cmd/wasm \
+    && cp web/wasm_exec.js /out/web/wasm_exec.js
+
 # --- final image ---
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata \
@@ -39,6 +47,10 @@ RUN apk add --no-cache ca-certificates tzdata \
     && chown -R yaog:yaog /data
 COPY --from=backend /out/yaog-server /usr/local/bin/yaog-server
 COPY --from=frontend --chown=yaog:yaog /app/frontend/dist /app/web
+# The WASM local engine (plan-2): the panel fetches /yaog.wasm + /wasm_exec.js from the web root. The
+# node:alpine frontend stage cannot build the wasm, so it comes from the Go backend stage — COPYed AFTER
+# the dist so it lands in the served /app/web root. Without it, in-browser local design 404s.
+COPY --from=backend --chown=yaog:yaog /out/web/yaog.wasm /out/web/wasm_exec.js /app/web/
 
 # The server serves the panel from here, persists state here, and listens on both ports.
 ENV YAOG_WEB_DIR=/app/web \

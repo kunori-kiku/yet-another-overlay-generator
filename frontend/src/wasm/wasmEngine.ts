@@ -2,8 +2,8 @@
 //
 // This is the FE drop-in that runs the pure Go compile pipeline (compiled to GOOS=js
 // GOARCH=wasm as web/yaog.wasm) directly in the browser, mirroring the TS engine's public
-// surface (compile / validate / deployScript / export) so compiler/localEngine.ts can select
-// it in place of the TS compiler. It is PREVIEW-ONLY (invariant [4]): local WASM mode never
+// surface (compile / validate / deployScript / export) that lib/localEngine.ts dispatches local-mode
+// compute onto. It is PREVIEW-ONLY (invariant [4]): local WASM mode never
 // deploys or stages — controller compute stays server-side.
 //
 // Since framework-refactor plan-5 deleted the hand-mirrored TS compiler, this IS the local engine
@@ -46,9 +46,10 @@ interface GoInstance {
 type GoConstructor = new () => GoInstance;
 type GlobalWithGo = typeof globalThis & { yaog?: YaogWasmApi; Go?: GoConstructor };
 
-// Vite serves these from frontend/public/ (copied from web/ by scripts/build-wasm.sh). They are
-// runtime fetches — a missing asset only 404s when the wasm engine is actually enabled, so the
-// default (TS) build never depends on them being present.
+// Vite serves these from frontend/public/ (copied from web/ by scripts/build-wasm.sh — run in CI AND
+// the release/Docker ship pipelines, plan-2). They are runtime fetches loaded lazily on first
+// local-engine use, so a controller-only operator never pays for them; but a SHIPPED panel MUST carry
+// them (build:wasm runs in every ship pipeline) or in-browser local design 404s.
 const WASM_URL = '/yaog.wasm';
 const WASM_EXEC_URL = '/wasm_exec.js';
 
@@ -59,7 +60,13 @@ let loadPromise: Promise<YaogWasmApi> | null = null;
 // exported so callers (or a test) can pre-warm the engine; every public method awaits it.
 export function ensureWasm(): Promise<YaogWasmApi> {
   if (loadPromise === null) {
-    loadPromise = loadWasm();
+    // Reset on rejection so a transient failure (a fetch blip, an asset not-yet-served) does NOT
+    // permanently brick local compute for the whole session — the next call re-attempts the load.
+    // (The sibling module-load promise in lib/localEngine.ts carries the same guard.)
+    loadPromise = loadWasm().catch((err: unknown) => {
+      loadPromise = null;
+      throw err;
+    });
   }
   return loadPromise;
 }

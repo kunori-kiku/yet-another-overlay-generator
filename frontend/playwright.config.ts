@@ -14,9 +14,10 @@ const WASM_DESIGN_MATCH = /wasm-design\.spec\.ts$/
 
 // The soak projects are OPT-IN (YAOG_WASM_SOAK=1) so the required frontend-e2e CI job — which
 // installs ONLY Chromium — can never go red on an uninstalled browser: the projects simply do not
-// exist unless opted in. CI keeps the Chromium perpetual guard; a local run (or a CI that first
-// `npx playwright install webkit firefox`) enables the soak with the env flag. This is the
-// automated multi-browser soak evidence gating plan-5 (the TS-twin deletion).
+// exist unless opted in. CI keeps the Chromium perpetual guard; the scheduled
+// .github/workflows/wasm-soak.yml job (weekly + manual dispatch) installs webkit+firefox and runs these
+// with YAOG_WASM_SOAK=1 — the automated multi-browser soak that gated deleting the TS twin (plan-5) and
+// now guards the WASM engine ongoing (post-refactor-debt-paydown plan-2 made it a real scheduled job).
 const wasmSoakProjects =
   process.env.YAOG_WASM_SOAK === '1'
     ? [

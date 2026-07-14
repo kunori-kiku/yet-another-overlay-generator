@@ -41,7 +41,13 @@ type WasmEngineModule = typeof import('../wasm/wasmEngine');
 let wasmEngineModulePromise: Promise<WasmEngineModule> | null = null;
 function loadWasmEngine(): Promise<WasmEngineModule> {
   if (wasmEngineModulePromise === null) {
-    wasmEngineModulePromise = import('../wasm/wasmEngine');
+    // Reset on rejection so a transient dynamic-import failure (a chunk-fetch blip) does NOT
+    // permanently brick the local engine for the whole session — the next local-engine action
+    // re-attempts the import. (wasmEngine.ts's ensureWasm carries the same guard for the wasm load.)
+    wasmEngineModulePromise = import('../wasm/wasmEngine').catch((err: unknown) => {
+      wasmEngineModulePromise = null;
+      throw err;
+    });
   }
   return wasmEngineModulePromise;
 }
