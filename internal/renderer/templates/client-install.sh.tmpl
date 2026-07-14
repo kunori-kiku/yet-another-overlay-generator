@@ -191,7 +191,17 @@ if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
         exit 1
     fi
     echo "Checksum validation passed."
-    cd - >/dev/null
+{{ if .HasMimic }}    # SIGNED-SET COVERAGE GUARD (mirrors internal/agent/verify.go): sha256sum -c above
+    # only verifies files LISTED in checksums.sha256 — it never flags an extra, unlisted file. The mimic
+    # fallback below reads artifacts.json for the .deb pins it installs as ROOT, so a present-but-unlisted
+    # artifacts.json (added without re-signing) would smuggle in attacker-chosen pins that still pass the
+    # signature + sha256sum -c checks. Refuse it before any pin is read. (A LISTED artifacts.json is
+    # already content-verified above.)
+    if [ -f "$SCRIPT_DIR/artifacts.json" ] && ! grep -qE '^[0-9a-f]{64}  artifacts\.json$' "$SCRIPT_DIR/checksums.sha256"; then
+        echo "ERROR: artifacts.json is present but not covered by the signed checksums.sha256; refusing" >&2
+        exit 1
+    fi
+{{ end }}    cd - >/dev/null
 fi
 
 # Check root
@@ -269,7 +279,8 @@ ensure_cmd openssl  openssl
 {{ if .HasMimic -}}
 # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): the client wg0 link uses
 # transport="tcp". YAOG ships no mimic binary. Distro-first, else a SHA-256-PINNED GitHub .deb
-# whose pin lives in the integrity-verified artifacts.json (mirrors the per-peer install.sh).
+# whose pin lives in a bundle member (artifacts.json) — verified present-and-COVERED by the signed
+# checksums.sha256 above (the coverage guard refuses an unlisted copy), mirroring the per-peer install.sh.
 GH_PROXY={{ .GithubProxy }}
 # mimic-provisioning outcome breadcrumb (plan-5): a small Go-constant-keyed JSON marker the agent
 # reads to emit the mimic Node Condition. Only the OUTCOME token (a fixed shell literal from a Go

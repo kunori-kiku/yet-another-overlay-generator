@@ -278,7 +278,17 @@ if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
         exit 1
     fi
     echo "Checksum validation passed."
-    cd - >/dev/null
+{{ if .HasMimic }}    # SIGNED-SET COVERAGE GUARD (mirrors internal/agent/verify.go): sha256sum -c above
+    # only verifies files LISTED in checksums.sha256 — it never flags an extra, unlisted file. The mimic
+    # fallback below reads artifacts.json for the .deb pins it installs as ROOT, so a present-but-unlisted
+    # artifacts.json (added without re-signing) would smuggle in attacker-chosen pins that still pass the
+    # signature + sha256sum -c checks. Refuse it before any pin is read. (A LISTED artifacts.json is
+    # already content-verified above.)
+    if [ -f "$SCRIPT_DIR/artifacts.json" ] && ! grep -qE '^[0-9a-f]{64}  artifacts\.json$' "$SCRIPT_DIR/checksums.sha256"; then
+        echo "ERROR: artifacts.json is present but not covered by the signed checksums.sha256; refusing" >&2
+        exit 1
+    fi
+{{ end }}    cd - >/dev/null
 fi
 
 # Check root
@@ -365,8 +375,9 @@ ensure_cmd babeld babeld
 # mimic TCP-shaping transport (docs/spec/artifacts/mimic.md): a link uses transport="tcp".
 # YAOG ships no mimic binary. Prefer the distro package (Debian 13+, AUR, ...); on Debian 12 /
 # Ubuntu 24.04, where mimic is not yet packaged, fall back to a SHA-256-PINNED .deb from GitHub.
-# The pin lives in artifacts.json (a controller-signed bundle member, already integrity-verified
-# above), so reading it here is not a trust boundary; the download is verified against that pin
+# The pin lives in a controller-signed bundle member (artifacts.json), verified present-and-COVERED by
+# the signed checksums.sha256 above — the coverage guard after checksum validation refuses an unlisted
+# copy — so reading it here is not a trust boundary; the download is verified against that pin
 # and FAILS CLOSED under set -e. GH_PROXY is shell-escaped (shq) at generation time.
 GH_PROXY={{ .GithubProxy }}
 # mimic-provisioning outcome breadcrumb (plan-5): a small Go-constant-keyed JSON marker the agent
