@@ -1071,6 +1071,13 @@ PRs #59–#65.
 [2.0.0-rc.1]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.18...v2.0.0-rc.1
 [2.0.0-beta.18]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.17...v2.0.0-beta.18
 [2.0.0-beta.17]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.16...v2.0.0-beta.17
+[2.0.0-beta.16]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.15...v2.0.0-beta.16
+[2.0.0-beta.15]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.14...v2.0.0-beta.15
+[2.0.0-beta.14]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.13...v2.0.0-beta.14
+[2.0.0-beta.13]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.12...v2.0.0-beta.13
+[2.0.0-beta.12]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.11...v2.0.0-beta.12
+[2.0.0-beta.11]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.10...v2.0.0-beta.11
+[2.0.0-beta.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.9...v2.0.0-beta.10
 [2.0.0-beta.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.8...v2.0.0-beta.9
 [2.0.0-beta.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.7...v2.0.0-beta.8
 [2.0.0-beta.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-beta.6...v2.0.0-beta.7

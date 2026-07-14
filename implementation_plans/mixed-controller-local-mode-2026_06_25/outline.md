@@ -55,13 +55,14 @@ beta after owner smokes.
   `peers.go` renders any node that has a pubkey (in the `keys` map) + an endpoint. **`peers.go` needs
   ZERO change.**
 - The single chokepoint that excludes a non-enrolled node (and drops every edge to it) is
-  `enrolledSubgraph` (`internal/controller/compile.go:477-532`): admission `:480-485`, node drop
-  `:513-522`, edge drop `:524-529`.
+  `enrolledSubgraph` (`internal/controller/compile_subgraph.go`, since the framework-refactor
+  god-file split — admission, node drop, and edge drop live there).
 - Pre-known-identity hooks already exist but are stripped/barred in controller mode:
   `Node.FixedPrivateKey`/`WireGuardPublicKey` (`internal/model/topology.go:95-99`),
   `Node.PublicEndpoints` (`:101-121`), `Edge.EndpointHost/Port` (`:150-151`); UI-gated to local mode
   (`NodeForm.tsx:42,128`, `NodeEditor.tsx:18-22`), dropped on controller import (`custody.ts:45-67`),
-  and the update-topology API refuses private keys (`handler_deploy.go:54-59`, `CodeCustodyPrivateKey`).
+  and the update-topology API refuses private keys (`internal/api/handler_topology.go:51`,
+  `CodeCustodyPrivateKey`).
 - Enrollment is the only writer of `NodeApproved`+`WGPublicKey` (`enrollment.go:215-224`); dedupe via
   `CheckWGKeyUnique` (`:256-281`); `NodeStatus` is `pending|approved|revoked` only (`store.go:67-91`).
 
@@ -146,11 +147,15 @@ is file-disjoint and ships in plan-7's release because it gates the rollout of e
 
 | Plan | Status |
 |------|--------|
-| plan-1 | drafted |
-| plan-2 | drafted |
-| plan-3 | drafted |
-| plan-4 | drafted |
-| plan-5 | drafted |
-| plan-6 | pt.1 merged (#200); panel remainder pending |
-| plan-7 | drafted |
-| plan-8 | drafted (self-update reliability rider, owner-folded 2026-06-26) |
+| plan-1 | merged (#196) — `Node.deployment_mode` + compiler admits manual nodes |
+| plan-2 | merged (#197) — validate manual-node identity at stage time (bidirectional cross-source dedupe) |
+| plan-3 | merged (#198) — operator download of a manual node's signed bundle |
+| plan-4 | merged (#199) — on-box `yaog-agent kit` (keygen → descriptor → register → private-key splice) |
+| plan-5 | **pending** — optional telemetry-only reporter for manual nodes |
+| plan-6 | merged (#200 pt.1 + #202 panel remainder) — deployment-mode editor + custody relax + manual-node panel UX |
+| plan-7 | **pending** — release the mixed-mode beta + owner smoke closure |
+| plan-8 | merged (#201) — self-update reliability rider (retry-without-restart + dual-source download) |
+
+Six of eight plans (1/2/3/4/6/8) are MERGED and shipped in **`v2.0.0-beta.15`** (CHANGELOG roll #203).
+**Remaining before this subject can close: plan-5 (telemetry-only reporter) + plan-7 (release + owner
+smoke).** The subject stays ACTIVE (not archived) until those two land.

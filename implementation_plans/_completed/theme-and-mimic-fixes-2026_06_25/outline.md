@@ -109,6 +109,8 @@ green.
 
 | Plan | Status |
 |------|--------|
-| plan-1 | drafted |
-| plan-2 | drafted |
-| plan-3 | drafted |
+| plan-1 | merged (#193) — theme stragglers (node-condition chips, canvas neutral-map + `ROLE_HUE`, `--cta` family) |
+| plan-2 | merged (#194) — mimic `local=`/additive `remote=` correctness + loopback-egress guard + Go test ladder |
+| plan-3 | merged (#195) — released `v2.0.0-beta.14` (GitHub Latest) + owner real-host mimic smoke runbook |
+
+All three plans merged and SHIPPED as `v2.0.0-beta.14`; subject delivered — archived to `_completed/`.
