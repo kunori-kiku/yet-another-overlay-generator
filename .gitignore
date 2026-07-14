@@ -25,6 +25,9 @@ CLAUDE.md
 /web/yaog.wasm
 /frontend/public/yaog.wasm
 /frontend/public/wasm_exec.js
+# A bare `go build ./cmd/wasm` (no -o) drops a ./wasm binary at the repo root — a build
+# artifact, never committed.
+/wasm
 # private key material must never be committed (bundle signing key, TLS, etc.)
 *.pem
 *.key
