@@ -207,7 +207,7 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 		return after, false, fmt.Errorf("run: %w", runErr) // keep-last-good
 	}
 	if res != nil {
-		printAppliedTo(stderr, res)
+		PrintAppliedTo(stderr, res)
 	}
 	// Resume from the generation actually FETCHED and applied, not the one the poll
 	// observed: a promote landing between Poll returning gen N and Fetch returning gen
@@ -219,10 +219,10 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 	return appliedGen, true, nil
 }
 
-// printAppliedTo logs a one-line apply summary to w (the cycle's stderr). It mirrors
-// cmd/agent's printApplied so the daemon/single-shot loops can move into the agent
-// package without dragging the formatting helper along.
-func printAppliedTo(w io.Writer, res *RunResult) {
+// PrintAppliedTo logs a one-line apply summary to w (the cycle's stderr). It is the single apply-summary
+// formatter for both the in-package cycle and cmd/agent's configured-source `run` path (plan-7 collapsed
+// cmd/agent's duplicate printApplied into this exported helper).
+func PrintAppliedTo(w io.Writer, res *RunResult) {
 	signed := false
 	count := 0
 	if res.Verify != nil {

@@ -58,15 +58,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
-
-// telemetryPoster is the subset of *agent.ControllerClient that runHeartbeat needs — indirected so a
-// test injects a counting fake (no controller) and drives the kick/tick loop directly. *ControllerClient
-// satisfies it via its Telemetry method.
-type telemetryPoster interface {
-	Telemetry(conditions []runtimecontract.Condition, metrics map[string]any) error
-}
 
 // BuildVersion is the agent's build version, overwritten at release link time via
 // -ldflags "-X main.BuildVersion=<tag>" (see RELEASING.md). A non-release build reports "dev".
@@ -576,7 +568,7 @@ func runRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent: run: %v\n", err)
 		return 1
 	}
-	printApplied(res)
+	agent.PrintAppliedTo(os.Stderr, res)
 	return 0
 }
 
@@ -708,24 +700,19 @@ func runControllerMode(o controllerModeOpts) int {
 	}
 	agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
 
-	// Resume from the supplied cursor so a re-run does not re-fetch an already-applied
-	// generation: long-poll for anything strictly newer than --after. (The agent State
-	// keys anti-rollback on the manifest compiled_at string, not the controller's int64
-	// generation, so the cursor is a flag here; a daemon advances it per cycle.)
-	lastAppliedGen := o.after
-
-	// cycle runs ONE poll->apply->report iteration from the current watermark via the
-	// testable agent.RunControllerCycle (the deterministic unit the daemon loops over).
-	// It returns the generation to resume from (the applied/fetched generation on
-	// success, the polled wake generation on a rekey wake (so the stale pre-rekey bundle is
-	// never re-applied, or the unchanged watermark on a timed-out long-poll) and whether
-	// a new generation was applied. On error it returns the unchanged watermark
-	// (keep-last-good: the running overlay is untouched, so the caller never advances
-	// past a failed apply).
-	cycle := func() (resumeGen int64, applied bool, err error) {
+	// cycle runs ONE poll->apply->report iteration from the given watermark via the testable
+	// agent.RunControllerCycle (the deterministic unit the daemon loops over). It returns the generation
+	// to resume from (the applied/fetched generation on success, the polled wake generation on a rekey
+	// wake — so the stale pre-rekey bundle is never re-applied — or the unchanged watermark on a
+	// timed-out long-poll) and whether a new generation was applied. On error it returns the unchanged
+	// watermark (keep-last-good: the running overlay is untouched, so the caller never advances past a
+	// failed apply). The resume cursor starts at --after (o.after); the loop advances it per cycle. (The
+	// agent State keys anti-rollback on the manifest compiled_at string, not the controller's int64
+	// generation, so the cursor is a flag here.)
+	cycle := func(after int64) (resumeGen int64, applied bool, err error) {
 		return agent.RunControllerCycle(client, agent.CycleConfig{
 			NodeID:          o.nodeID,
-			After:           lastAppliedGen,
+			After:           after,
 			PinnedPubPEM:    pinned,
 			OperatorCredPEM: operatorCred,
 			OperatorCredAlg: o.operatorCredAlg,
@@ -740,176 +727,36 @@ func runControllerMode(o controllerModeOpts) int {
 		})
 	}
 
+	// The daemon loop, the single-shot cycle, the post-apply heartbeat kick, the boot self-update
+	// finalize, and the deferred-self-update retry live in agent.ControllerLoop (plan-7 decompose) so the
+	// loop SEQUENCING is unit-tested. This wrapper only wires the seams from the flags/client/pinned key
+	// built above; BuildVersion (the release-injected -ldflags var) rides into the Finalize /
+	// RetryDeferred closures and the cycle's SelfUpdate, so the ldflags injection seam stays in cmd/agent.
+	loop := &agent.ControllerLoop{
+		Cycle:    cycle,
+		Finalize: func() { agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr) },
+		RetryDeferred: func() (bool, error) {
+			return agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, membershipVerifiedFetch, os.Stderr)
+		},
+		After:             o.after,
+		ErrBackoff:        5 * time.Second,
+		RetryInterval:     o.selfUpdateRetryInterval,
+		Poster:            client,
+		Telemetry:         agent.BuildTelemetry(o.stateDir),
+		TelemetryInterval: o.telemetryInterval,
+		NodeID:            o.nodeID,
+		Stderr:            os.Stderr,
+	}
+
 	if !o.daemon {
-		// Single-shot: one cycle (deterministic — the unit the daemon loops over).
-		resumeGen, applied, err := cycle()
-		// FINALIZE a probationary self-update: the cycle returned, proving this (possibly
-		// just-swapped) binary can actually RUN a full cycle, not merely pass `version`+verify.
-		// No-op unless a Confirmed breadcrumb for this build exists.
-		agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent: %v\n", err)
-			return 1
-		}
-		if !applied && resumeGen == lastAppliedGen {
-			// A timed-out long-poll (no advance). A rekey wake advances resumeGen and is
-			// logged by RunControllerCycle, so do not print "nothing to do" over a rotation.
-			fmt.Fprintf(os.Stderr, "agent: no new generation (still at %d); nothing to do\n", resumeGen)
-		}
-		return 0
+		// Single-shot: one poll->apply->report cycle (deterministic — the unit the daemon loops over).
+		return loop.RunOnce()
 	}
-
-	// Daemon: loop the cycle for continuous, near-real-time updates. The long-poll
-	// returns within a round-trip of a promote (so this is push-like without a new
-	// transport); a timed-out poll simply re-polls with no busy-wait. On a transport or
-	// apply error we keep last-good and retry after a short backoff — never tearing down
-	// the running overlay. On a rekey wake the watermark advances to the polled wake
-	// generation (so the stale pre-rekey bundle is never re-applied); the next applied
-	// generation is the operator's post-rekey Deploy.
-	//
-	// A cycle that advanced the watermark WITHOUT applying (a rekey wake, or the
-	// plan-3 idle skip when the served bundle is already applied — the orphaned-node
-	// shape) also sleeps the backoff: both await an operator action, and the pause
-	// bounds the wake-fetch rate even if the tenant generation is advancing rapidly
-	// for OTHER nodes. install.sh never runs in those cycles.
-	const errBackoff = 5 * time.Second
-	fmt.Fprintf(os.Stderr, "agent: controller daemon started (node %s, resume @%d)\n", o.nodeID, lastAppliedGen)
-
-	// LIVE health heartbeat (beta9-smoke-hardening plan-1): a DEDICATED goroutine re-samples the node's
-	// conditions on an interval and POSTs them to /telemetry, so the panel reflects CURRENT health
-	// instead of the frozen apply-time snapshot (a pre-handshake wireguard:LinkDown, a mid-probation
-	// selfupdate). It is decoupled from the poll loop — it reads only the agent's persisted State + a
-	// read-only `wg show`, and the client's immutable fields, carrying no generation — so it needs no
-	// lock. It is daemon-only (a single-shot run's one /report still carries apply-time conditions). No
-	// context/cancel is needed: the daemon loop below never returns, and a self-update swap is
-	// syscall.Exec (which replaces the whole process image and destroys this goroutine with it).
-	var telemetryKick chan struct{}
-	if o.telemetryInterval > 0 {
-		telemetryKick = make(chan struct{}, 1) // buffered+coalescing: the apply loop kicks non-blocking
-		go runHeartbeat(client, agent.BuildTelemetry(o.stateDir), o.telemetryInterval, telemetryKick, nil, os.Stderr)
-	}
-
-	// lastSelfUpdateRetry paces the deferred-self-update retry (plan-8): a download that failed on a
-	// stable generation is re-attempted on idle cycles every selfUpdateRetryInterval, so a stalled
-	// rollout recovers without a new generation or a manual restart. Initialized to now so the first
-	// retry waits one interval after start (the apply path already made the initial attempt).
-	lastSelfUpdateRetry := time.Now()
-	finalizedSelfUpdate := false
-	for {
-		resumeGen, applied, err := cycle()
-		// FINALIZE a probationary self-update after the FIRST completed cycle (once): the cycle
-		// returning proves this (possibly just-swapped) binary RUNS its daemon loop, not merely
-		// that `version`+verify pass — so a daemon-only crash AFTER the health gate cannot brick
-		// (it reboots Confirmed-but-unfinalized and rolls back). No-op without a Confirmed
-		// breadcrumb for this build.
-		if !finalizedSelfUpdate {
-			agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr)
-			finalizedSelfUpdate = true
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent: %v (keeping last-good; retrying in %s)\n", err, errBackoff)
-			time.Sleep(errBackoff)
-			continue
-		}
-		if !applied && resumeGen > lastAppliedGen {
-			time.Sleep(errBackoff) // idle/rekey wake: pace before re-polling
-		}
-		lastAppliedGen = resumeGen // advance on success, idle skip, or rekey wake; unchanged on a timed-out poll
-
-		// Kick the heartbeat after an actual APPLY so the panel reflects the just-applied state within a
-		// round-trip (closing the <=interval blind window that historically forced /report to carry
-		// conditions) and history/metrics gain a sample at the deploy instant. Gated on `applied` so an
-		// idle poll-timeout or a rekey/idle wake does NOT inflate the beat rate — the 30s ticker already
-		// covers steady-state liveness. State is freshly persisted (recordSuccess ran inside cycle) when
-		// the beat's samplers read it. tryKick is non-blocking + coalescing, so the loop never stalls.
-		if applied {
-			tryKick(telemetryKick)
-		}
-
-		// Deferred self-update retry (plan-8): re-attempt a self-update that a prior cycle deferred
-		// (e.g. a gh-proxy download timeout) WITHOUT waiting for a new generation. Idle cycles only —
-		// an apply already ran the post-apply attempt (agent.go step 7) — paced by the interval, on
-		// the MAIN thread so a swap (syscall.Exec) never interrupts a mid-flight apply. A no-op unless
-		// State.SelfUpdateBlocked is armed, so calling it past the backoff is cheap when nothing is due.
-		// (selfUpdate is always non-nil in controller daemon mode; RetryDeferredSelfUpdate is nil-safe
-		// regardless, so the interval gate is the only guard needed here.)
-		if o.selfUpdateRetryInterval > 0 && !applied &&
-			time.Since(lastSelfUpdateRetry) >= o.selfUpdateRetryInterval {
-			lastSelfUpdateRetry = time.Now()
-			if _, suErr := agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, membershipVerifiedFetch, os.Stderr); suErr != nil {
-				fmt.Fprintf(os.Stderr, "agent: deferred self-update retry: %v (will retry)\n", suErr)
-			}
-		}
-	}
-}
-
-// runHeartbeat is the daemon's LIVE health heartbeat loop (beta9-smoke-hardening plan-1). It samples
-// the registered telemetry probes and POSTs the result to /telemetry every `interval`, once
-// immediately at start, AND on every `kick` (plan-1.5: the apply loop kicks after each completed cycle
-// so a just-applied state + fresh metrics surface within a round-trip instead of after a full interval,
-// and so history/cpu_pct gain a sample at the deploy instant). The kick makes the deploy emission a
-// REAL sampler beat — so a signal authored as a Sampler fires at deploy AND on the interval by
-// construction, ending the "new telemetry only fires at deploy, then goes stale" recurrence at its
-// framework root (see the subject's framework-finding doc). `done` is test-only clean shutdown;
-// production passes nil so the loop runs until the process exits/exec's.
-// Best-effort: a transport error is logged and swallowed (never disturbs the running overlay / poll
-// loop). It skips a post when there is nothing to report — a never-applied node, or a transient
-// State-read failure — so a momentary empty sample never WIPES the node's last-known conditions
-// (the controller replaces the set wholesale; an applied node always yields at least the configapply
-// condition, so this only ever skips genuinely-empty samples). Runs until the process exits/exec's.
-// tryKick delivers a non-blocking, COALESCING nudge to the heartbeat: if a kick is already pending
-// (the buffered-size-1 channel is full) it is a no-op, so a busy apply loop never blocks on a slow
-// beat, and a burst of cycles collapses to at most one extra beat. Nil channel (heartbeat disabled) is
-// a safe no-op.
-func tryKick(ch chan<- struct{}) {
-	if ch == nil {
-		return
-	}
-	select {
-	case ch <- struct{}{}:
-	default:
-	}
-}
-
-func runHeartbeat(poster telemetryPoster, tel *agent.Telemetry, interval time.Duration, kick, done <-chan struct{}, stderr io.Writer) {
-	beat := func() {
-		// A panic anywhere in a beat (a sampler outside its own guard, the merge, or the POST) must
-		// NOT kill this goroutine — it is the ONLY thing that refreshes Last Seen after apply time, so
-		// a silent death would freeze the controller's view of a live node. Recover, log, and let the
-		// next tick try again (beta.16 heartbeat-resilience hardening).
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Fprintf(stderr, "agent: telemetry heartbeat: recovered from panic: %v\n", r)
-			}
-		}()
-		conds, metrics := tel.Collect(time.Now().UTC())
-		if len(conds) == 0 && len(metrics) == 0 {
-			return
-		}
-		if err := poster.Telemetry(conds, metrics); err != nil {
-			fmt.Fprintf(stderr, "agent: telemetry heartbeat: %v\n", err)
-		}
-	}
-	beat()
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-done:
-			// Test-only clean shutdown; production passes a nil done (this case never fires) so the
-			// loop runs until the process exits/exec's, exactly as before.
-			return
-		case <-t.C:
-			beat()
-		case <-kick:
-			// A post-apply kick (or any external nudge): beat NOW so the just-applied state and its
-			// fresh metrics reach the controller within a round-trip instead of after up to a full
-			// interval — and history/cpu_pct gain a sample at the deploy instant. The SAME beat() on the
-			// SAME single goroutine over the SAME Telemetry instance, so resourceSampler's cpu delta and
-			// the "no locking needed" invariant stay intact.
-			beat()
-		}
-	}
+	// Daemon: continuous, near-real-time updates. RunForever spawns the live health heartbeat and never
+	// returns — a self-update swap is a syscall.Exec that destroys this process image, and any other exit
+	// is a crash systemd Restart=always relaunches.
+	loop.RunForever()
+	return 0 // unreachable: RunForever never returns
 }
 
 // trimToken strips surrounding whitespace/newlines from a token file's contents so
@@ -962,22 +809,4 @@ func readOperatorCred(path, alg string) ([]byte, error) {
 		return nil, fmt.Errorf("read operator credential %s: %w", path, err)
 	}
 	return data, nil
-}
-
-// printApplied logs a one-line apply summary to stderr.
-func printApplied(res *agent.RunResult) {
-	signed := false
-	if res.Verify != nil {
-		signed = res.Verify.Signed
-	}
-	fmt.Fprintf(os.Stderr, "agent: applied generation compiled_at=%s checksum=%s signed=%t files=%d\n",
-		res.CompiledAt, res.Checksum, signed, verifyFileCount(res))
-}
-
-// verifyFileCount returns the number of files verified (0 when unavailable).
-func verifyFileCount(res *agent.RunResult) int {
-	if res.Verify == nil {
-		return 0
-	}
-	return res.Verify.FileCount
 }
