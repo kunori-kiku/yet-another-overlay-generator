@@ -92,9 +92,10 @@ func (h *ControllerHandler) HandleRevoke(ctx context.Context, tenant controller.
 		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id")
 	}
 
-	// Load the existing record so we can preserve every field while flipping Status;
-	// an unknown node is a 404 (there is nothing to revoke).
-	node, err := h.store.GetNode(ctx, tenant, req.NodeID)
+	// Load the DURABLE record so we can preserve every field while flipping Status; an unknown node
+	// is a 404 (there is nothing to revoke). GetNodeRecord (not GetNode) so this read-modify-write
+	// writeback never bakes the volatile telemetry overlay into the persisted record.
+	node, err := h.store.GetNodeRecord(ctx, tenant, req.NodeID)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)

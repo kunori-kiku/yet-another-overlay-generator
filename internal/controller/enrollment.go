@@ -310,7 +310,10 @@ func Rekey(ctx context.Context, store Store, t TenantID, nodeID, newPubKey strin
 		return fmt.Errorf("%w: %q", ErrInvalidWGKey, newPubKey)
 	}
 
-	rec, err := store.GetNode(ctx, t, nodeID)
+	// Durable read for the read-modify-write: this record is written back below (WGPublicKey +
+	// RekeyRequested), so use GetNodeRecord — GetNode would merge the volatile telemetry overlay and
+	// bake a possibly-dead node's stale live conditions/metrics into the durable record on UpsertNode.
+	rec, err := store.GetNodeRecord(ctx, t, nodeID)
 	if err != nil {
 		return err // ErrNotFound mapped by the caller
 	}

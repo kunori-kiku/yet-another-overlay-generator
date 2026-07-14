@@ -1,10 +1,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -31,10 +29,10 @@ func (h *ControllerHandler) stagedManifest(ctx context.Context, t controller.Ten
 
 // pinFromParts builds the trustlist.PinnedCredential the verifier checks against from a
 // credential's raw fields, parsing the PEM by algorithm and carrying through the WebAuthn
-// RPID/Origin binding values. It is shared by the keystone membership credential
-// (pinFromCredential) and the per-operator passkey LOGIN credential
-// (pinFromLoginCredential, handler_passkey.go) — the same WebAuthn verification, two
-// callers.
+// RPID/Origin binding values. It backs the per-operator passkey LOGIN credential
+// (pinFromLoginCredential, handler_passkey.go). The keystone MEMBERSHIP pin lives in the
+// controller layer (controller.pinFromOperatorCredential, used by the promote gate and the
+// trust-list signature install) so the trust-critical verify stays inside the store lock.
 func pinFromParts(alg, credentialID, publicKeyPEM, rpid, origin string) (trustlist.PinnedCredential, error) {
 	pin := trustlist.PinnedCredential{
 		Alg:          trustlist.Alg(alg),
@@ -59,12 +57,6 @@ func pinFromParts(alg, credentialID, publicKeyPEM, rpid, origin string) (trustli
 		return trustlist.PinnedCredential{}, errors.New("unsupported operator credential algorithm")
 	}
 	return pin, nil
-}
-
-// pinFromCredential builds the trustlist.PinnedCredential the verifier checks against
-// from a stored keystone OperatorCredential.
-func pinFromCredential(c controller.OperatorCredential) (trustlist.PinnedCredential, error) {
-	return pinFromParts(c.Alg, c.CredentialID, c.PublicKeyPEM, c.RPID, c.Origin)
 }
 
 // HandleOperatorCredential is the keystone-credential resource (operator-only): GET reports the
@@ -286,76 +278,47 @@ func (h *ControllerHandler) HandleTrustList(ctx context.Context, tenant controll
 }
 
 // HandleTrustListSignature accepts the operator's off-host signature over the staged
-// membership manifest (operator-only). It (a) re-derives the staged manifest canonical
-// bytes server-side from the store; (b) rejects a submitted trustlist_json that does not
-// byte-equal them (409 substitution guard — the operator must sign exactly what was
-// staged); (c) builds the pinned credential from the stored OperatorCredential and
-// verifies the signature with trustlist.Verify (400 on any verification failure); (d)
-// stores the signature onto the staged manifest record (keeping its canonical bytes +
-// epoch), records a "sign-trustlist" audit entry, and returns 200. A 412 is returned
-// when no operator credential is pinned; a 404 when nothing has been staged.
+// membership manifest (operator-only). It decodes the submitted canonical bytes (the
+// substitution-guard input) and delegates the trust-critical read-verify-write to
+// controller.InstallTrustListSignature, which runs the WHOLE critical section — re-read the
+// staged manifest, the byte-equality substitution guard, the signature verification against
+// the pinned credential, and the write-back — under ONE tenant op-lock acquisition. That
+// serialization against any concurrent stage/promote is the custody fix: a re-stage can no
+// longer land between the manifest read and the signed-manifest write and desync a stale
+// signed manifest from the freshly staged bundles. The handler only maps typed errors:
+// 412 (no pinned credential), 404 (nothing staged), 409 (submission does not match the
+// staged manifest), 400 (base64 or signature invalid); on success it audits and returns 200.
 func (h *ControllerHandler) HandleTrustListSignature(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req trustListSignatureRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 
-	// A signature is meaningless without a pinned credential to verify it against.
-	cred, err := h.store.GetOperatorCredential(ctx, tenant)
-	if err != nil {
-		if errors.Is(err, controller.ErrNotFound) {
-			return nil, apierr.New(apierr.CodeNoPinnedCredential)
-		}
-		return nil, codedErr(apierr.CodeInternalStorage, err)
-	}
-
-	// (a) Re-derive the staged manifest canonical bytes from the store.
-	canonical, epoch, err := h.stagedManifest(ctx, tenant)
-	if err != nil {
-		if errors.Is(err, controller.ErrNotFound) {
-			return nil, apierr.New(apierr.CodeNoStagedManifest)
-		}
-		return nil, codedErr(apierr.CodeInternalStorage, err)
-	}
-
-	// (b) Substitution guard: the operator must have signed EXACTLY these bytes.
+	// Decode the submitted canonical bytes (the substitution-guard input). A base64 fault is a
+	// client error; the guard itself, verification, and install happen atomically below.
 	submitted, err := base64.StdEncoding.DecodeString(req.TrustListJSON)
 	if err != nil {
 		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "trustlist_json")
 	}
-	if !bytes.Equal(submitted, canonical) {
-		return nil, apierr.New(apierr.CodeStagedManifestMismatch)
-	}
 
-	// Parse the staged manifest so trustlist.Verify checks the signature over its exact
-	// canonical bytes (Verify re-canonicalizes the parsed value internally).
-	var manifest trustlist.TrustList
-	if err := json.Unmarshal(canonical, &manifest); err != nil {
-		return nil, apierr.New(apierr.CodeInternalStorage).Wrap(err)
-	}
-
-	// (c) Verify the off-host signature against the PINNED credential.
-	pin, err := pinFromCredential(cred)
+	epoch, err := controller.InstallTrustListSignature(ctx, h.store, tenant, submitted, req.Signed)
 	if err != nil {
-		return nil, apierr.New(apierr.CodeInternalStorage).Wrap(err)
-	}
-	if err := trustlist.Verify(manifest, req.Signed, pin); err != nil {
-		return nil, apierr.New(apierr.CodeManifestSignatureInvalid).Wrap(err)
+		switch {
+		case errors.Is(err, controller.ErrNoPinnedCredential):
+			return nil, apierr.New(apierr.CodeNoPinnedCredential)
+		case errors.Is(err, controller.ErrNoStagedManifest):
+			return nil, apierr.New(apierr.CodeNoStagedManifest)
+		case errors.Is(err, controller.ErrStagedManifestMismatch):
+			return nil, apierr.New(apierr.CodeStagedManifestMismatch)
+		case errors.Is(err, controller.ErrManifestSignatureInvalid):
+			return nil, apierr.New(apierr.CodeManifestSignatureInvalid).Wrap(err)
+		default:
+			return nil, codedErr(apierr.CodeInternalStorage, err)
+		}
 	}
 
-	// (d) Store the signature onto the staged manifest record (canonical bytes + epoch
-	// unchanged) and audit it.
-	signedJSON, err := json.Marshal(req.Signed)
-	if err != nil {
-		return nil, codedErr(apierr.CodeInternalStorage, err)
-	}
-	if err := h.store.PutSignedTrustList(ctx, tenant, controller.StoredTrustList{
-		TrustListJSON: canonical,
-		SignatureJSON: signedJSON,
-		Epoch:         epoch,
-	}); err != nil {
-		return nil, codedErr(apierr.CodeInternalStorage, err)
-	}
+	// Audit the successful sign (post-commit, like the other keystone audits — a store hiccup here is
+	// surfaced so an un-auditable trust transition is never reported as a clean success).
 	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
 		Actor:     "operator:" + actor,

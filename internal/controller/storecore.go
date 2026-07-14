@@ -99,8 +99,26 @@ func (c *storeCore) UpsertNode(ctx context.Context, t TenantID, n Node) error {
 	})
 }
 
-// GetNode returns the node with the live telemetry overlay merged, or ErrNotFound.
+// GetNode returns the node with the live telemetry overlay merged, or ErrNotFound. This is the READ
+// path for fleet views. A read-modify-write custody caller that persists the result must use
+// GetNodeRecord (below), so the volatile overlay is never baked into the durable record.
 func (c *storeCore) GetNode(ctx context.Context, t TenantID, nodeID string) (Node, error) {
+	return c.getNode(ctx, t, nodeID, true)
+}
+
+// GetNodeRecord returns the DURABLE node record WITHOUT the telemetry overlay, or ErrNotFound. It is
+// the read for a read-modify-write writeback (rekey flag, revoke, key rotation): reading durable truth
+// means the subsequent UpsertNode persists exactly the custody fields — never a possibly-dead node's
+// stale "healthy" live conditions/metrics/last-seen/agent-version baked in from the volatile overlay.
+func (c *storeCore) GetNodeRecord(ctx context.Context, t TenantID, nodeID string) (Node, error) {
+	return c.getNode(ctx, t, nodeID, false)
+}
+
+// getNode is the shared reader for GetNode/GetNodeRecord: it loads the durable record and, when
+// withOverlay is set, merges the volatile telemetry overlay under telemetryMu, nested in the backend
+// lock (matching the mu → telemetryMu order) so the (durable record, overlay) pair is a single
+// snapshot. withOverlay=false returns the durable record verbatim (the RMW-writeback read).
+func (c *storeCore) getNode(ctx context.Context, t TenantID, nodeID string, withOverlay bool) (Node, error) {
 	if err := ctx.Err(); err != nil {
 		return Node{}, err
 	}
@@ -109,9 +127,9 @@ func (c *storeCore) GetNode(ctx context.Context, t TenantID, nodeID string) (Nod
 		if err := c.loadJSON(t, collNodes, nodeID, &n); err != nil {
 			return err
 		}
-		// Merge the volatile overlay under telemetryMu, nested in the backend lock (matching the
-		// mu → telemetryMu order) so the (durable record, overlay) pair is a single snapshot.
-		c.applyTelemetryOverlay(t, &n)
+		if withOverlay {
+			c.applyTelemetryOverlay(t, &n)
+		}
 		return nil
 	})
 	if err != nil {
@@ -467,7 +485,19 @@ func (c *storeCore) PromoteStaged(ctx context.Context, t TenantID) (int64, error
 			return err
 		}
 
-		// Commit the generation LAST (and wake waiters).
+		// Commit the generation LAST (and wake waiters) — the crash-atomicity invariant, documented
+		// here because the ordering is load-bearing. Every bundle flip (collCurrent), each promoted
+		// node's DesiredGeneration bump, and the served trust-list copy (collServedTL) are written
+		// ABOVE, BEFORE this line. The generation counter is the single commit point the fleet keys
+		// off: WaitForGeneration wakes parked agents ONLY on an advance, and it advances ONLY here. So
+		// a process crash BEFORE this setGeneration leaves the prior generation as the served config —
+		// the counter never runs ahead of a half-written promote, so no agent is woken to a torn
+		// generation — and a re-run of PromoteStaged re-drives the flip. In-process the whole body runs
+		// under one kv lock, so a concurrent GetServedConfig reader can never observe a torn
+		// (old-bundle, new-manifest) pair. (A transient on-disk torn pair after a FileStore crash is
+		// fail-closed at the agent's offline digest binding and self-repairing — see ServedConfig. This
+		// is a DOC of the existing ordering, deliberately NOT a new atomic-snapshot / promote-in-progress
+		// marker: generation-tagging the served slot would be wrong, per ServedConfig.)
 		return c.kv.setGeneration(t, newGen)
 	})
 	if err != nil {

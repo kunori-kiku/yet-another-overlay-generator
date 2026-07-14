@@ -31,22 +31,19 @@ func (h *ControllerHandler) HandleClearRekey(ctx context.Context, tenant control
 	if req.NodeID == "" {
 		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "node_id")
 	}
-	node, err := h.store.GetNode(ctx, tenant, req.NodeID)
+	// Clear the flag under the tenant op lock (controller.ClearNodeRekey): a durable read-modify-write
+	// serialized against a concurrent enrollment.Rekey so this flag flip can never clobber a freshly
+	// rotated WireGuard key, and the volatile telemetry overlay is never baked into the record.
+	cleared, err := controller.ClearNodeRekey(ctx, h.store, tenant, req.NodeID)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
-		// Reserved for a persistent Store; MemStore only ever returns ErrNotFound from GetNode.
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	// Idempotent no-op: nothing pending, so no mutation and no (misleading) audit entry.
-	if !node.RekeyRequested {
+	// Idempotent no-op: nothing was pending, so no mutation and no (misleading) audit entry.
+	if !cleared {
 		return clearRekeyResponseJSON{NodeID: req.NodeID, Cleared: false}, nil
-	}
-	// Clear ONLY the flag, preserving every other field (mirrors the revoke path's preserve-and-set).
-	node.RekeyRequested = false
-	if err := h.store.UpsertNode(ctx, tenant, node); err != nil {
-		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: time.Now(),
@@ -60,9 +57,10 @@ func (h *ControllerHandler) HandleClearRekey(ctx context.Context, tenant control
 }
 
 // HandleRekeyAll requests a fleet-wide WireGuard key rotation (operator-only). It
-// flags every APPROVED node with RekeyRequested=true (read-modify-write via
-// GetNode/UpsertNode so every other field is preserved); pending/revoked nodes are
-// left untouched. After flagging, it calls Store.BumpGeneration to WAKE every parked
+// flags every APPROVED node with RekeyRequested=true via controller.FlagFleetRekey — a
+// durable read-modify-write serialized under the tenant op lock so every other field is
+// preserved and a concurrent key rotation is never lost; pending/revoked nodes are left
+// untouched. After flagging, it calls Store.BumpGeneration to WAKE every parked
 // daemon agent: those agents long-poll WaitForGeneration, which fires ONLY on a
 // generation advance, so without the bump a flagged agent would never wake to see
 // rekey_requested (the deadlock this fixes). The bump changes NO bundle — /config
@@ -74,30 +72,13 @@ func (h *ControllerHandler) HandleClearRekey(ctx context.Context, tenant control
 // ROUTINE security tier: rolling EXISTING members' keys never adds or removes a
 // member, so the operator token authorizes it in v1. Returns {requested:<count>}.
 func (h *ControllerHandler) HandleRekeyAll(ctx context.Context, tenant controller.TenantID, actor string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
-	nodes, err := h.store.ListNodes(ctx, tenant)
+	// Flag every approved node under the tenant op lock (controller.FlagFleetRekey): the whole
+	// read-modify-write loop is serialized against a concurrent enrollment.Rekey, so this flag flip
+	// cannot lose a freshly rotated WireGuard key, and each node is read durably (no telemetry overlay
+	// baked into the persisted record).
+	requested, err := controller.FlagFleetRekey(ctx, h.store, tenant)
 	if err != nil {
 		return nil, codedErr(apierr.CodeInternalStorage, err)
-	}
-	requested := 0
-	for _, n := range nodes {
-		if n.Status != controller.NodeApproved {
-			continue
-		}
-		// Re-read under the same shape as /revoke so a concurrent mutation does not
-		// clobber a field; flip the flag while preserving everything else.
-		node, err := h.store.GetNode(ctx, tenant, n.NodeID)
-		if err != nil {
-			if errors.Is(err, controller.ErrNotFound) {
-				// The node vanished between the list and the read; skip it.
-				continue
-			}
-			return nil, codedErr(apierr.CodeInternalStorage, err)
-		}
-		node.RekeyRequested = true
-		if err := h.store.UpsertNode(ctx, tenant, node); err != nil {
-			return nil, codedErr(apierr.CodeInternalStorage, err)
-		}
-		requested++
 	}
 	// WAKE the fleet: bump the generation so parked daemon agents (blocked in
 	// WaitForGeneration, which only wakes on an advance) wake, Fetch /config, and see

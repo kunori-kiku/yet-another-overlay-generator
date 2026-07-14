@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -293,11 +294,17 @@ func (h *telemetryHistory) writeJSONL(t TenantID, nodeID string, samples []Resou
 		return err
 	}
 	if _, werr := f.Write(batch.Bytes()); werr != nil {
+		// The append FAILED (possibly partially): the batch did NOT durably land, so returning the
+		// error lets flushOnce requeue and retry — correct here.
 		f.Close()
 		return werr
 	}
+	// The batch is now durably appended. A Close() error must NOT be reported as a flush failure: it
+	// would make flushOnce requeue and DUPLICATE these already-written lines on the next flush. Log and
+	// continue — the fileLines bookkeeping below still runs on the appended lines (they are on disk), so
+	// the running count and the compaction trigger stay correct.
 	if cerr := f.Close(); cerr != nil {
-		return cerr
+		log.Printf("controller: telemetry history: close after append to %s: %v (batch already durable; continuing)", p, cerr)
 	}
 
 	h.mu.Lock()
