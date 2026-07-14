@@ -1,6 +1,6 @@
 # STATUS
-<!-- regenerated: 2026-07-13 -->
-<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; framework-refactor COMPLETE (all 14 phases shipped, #260–#275) -->
+<!-- regenerated: 2026-07-14 -->
+<!-- by: hand — v2.0.0-rc.5 = GitHub Latest; framework-refactor SHIPPED + archived to _completed/; post-refactor-debt-paydown DRAFTED (the active subject) -->
 
 ## Active work
 
@@ -27,38 +27,17 @@
   (any enrolled UV-incapable authenticators?). Draft is **uncommitted** (working tree) pending owner
   review.
 
-- **✅ SUBJECT `framework-refactor-2026_07_13` — COMPLETE; ALL 14 phases SHIPPED to main 2026-07-13
-  (plans 0/1/1.5/1.6/2/3/4/5/5b/6/7/8/9/10; PRs #260–#275), each workflow-reviewed → fixed → re-reviewed →
-  CI-green → merged. The "WASM-Unified Core + Machine-Gated Paydown" program from a 24-agent repo-wide debt sweep +
-  a 21-agent judged design panel** (full rationale:
-  [`docs/design/framework-refactor-proposal-2026_07_13.md`](docs/design/framework-refactor-proposal-2026_07_13.md)).
-  Radical at the root, incremental in execution: (spine) compile the *existing* pure Go pipeline to
-  `GOOS=js GOARCH=wasm` and run it in the browser — deleting the ~17K-LOC hand-mirrored Go/TS compiler +
-  `internal/conformance/` + `@noble`/`jszip` — with parity gated FOREVER by a headless WASM-vs-golden
-  check (**feasibility VERIFIED: the pure pipeline builds clean to js/wasm today**); (law) convert every
-  remaining boundary from convention to a machine-gate (arch-test import ratchet, `ShellToken` shell seam,
-  wire-DTO/`omitempty` drift gate, single-source lists); (paydown) split the god-files along existing
-  seams, `Store` behavioral core LAST. **11 plans (plan-0 … plan-10)**, ordered by debt-eliminated ÷ risk;
-  the WASM strategic-bet gate is after plan-2 (0–2 stand alone). Owner decisions locked: Phase 9
-  airgap-server retirement PROCEEDS (build/test-only); `Node.ID` stable-identity DEFERRED. Folder:
-  [`implementation_plans/framework-refactor-2026_07_13/`](implementation_plans/framework-refactor-2026_07_13/outline.md).
-  **DELIVERED:**
-  - **The WASM cutover** — the pure Go pipeline compiles to `GOOS=js GOARCH=wasm` and is now the DEFAULT
-    in-browser local engine (plan-3 add-alongside → plan-4 flip, soaked by an AUTOMATED multi-browser
-    Playwright e2e: chromium + webkit + firefox all green). The ~10.6K-LOC hand-mirrored TS compiler +
-    `internal/conformance/` + `@noble`/`jszip` are DELETED (plan-5, −12.3K LOC); parity is pinned FOREVER
-    by the permanent `WASM conformance gate` (WASM == Go golden, 25 fixtures, a required check).
-  - **Machine-gates replacing convention** — the arch-test import ratchet (plan-0), the STRUCTURAL
-    auth-chokepoint handler adapter (plan-7), the `ShellToken` root-shell-safety seam + `field_safety_test`
-    (plan-6), and the source-of-truth `Wire-DTO + omitempty drift gate` (plan-10 — which re-caught + FIXED
-    the real `EDGE_OMITEMPTY` `mimic_fallback` gap). **Branch protection = 7 required checks.**
-  - **Paydown** — the stateful god-files (plan-2) + pure-core files (plan-5b) split; the Store behavioral
-    core collapsed onto ONE core over a KV port (plan-8, the keystone, −941 LOC, memkv now exercises the
-    shipped telemetry-overlay path); the airgap anonymous-compute attack surface DELETED + collapsed to
-    ONE server build, no more `-tags airgap` (plan-9); export/custody single-sourced (plan-1/1.5/1.6).
-  **Owed (owner): a real-host custody smoke for the plan-8 Store core (keystone-rotation + restart +
-  passkey) before live-trust — a release-confidence gate, NOT a merge gate. Subject ready to archive to
-  `_completed/`.**
+- **📋 SUBJECT `mixed-controller-local-mode-2026_06_25` — PARTIALLY SHIPPED; still ACTIVE (plans 5 + 7
+  pending).** The owner-chosen **Hybrid Kit (Option C)**: mark individual nodes `deployment_mode: manual`
+  (no agent) inside a controller-managed topology — the controller compiles + signs their bundle exactly
+  like any managed node, the operator installs it by hand, and a one-shot on-box `yaog-agent kit` does
+  keygen → descriptor → register → private-key splice. Zero-knowledge custody stays inviolable; manual
+  nodes are signed-membership members (D4) and appear "manual/unmonitored", excluded from convergence
+  (D3). **Six of eight plans MERGED** (plan-1/2/3/4/6/8; PRs #196–#202 — the self-update reliability
+  rider plan-8 = #201), all shipped in **`v2.0.0-beta.15`** (CHANGELOG roll #203). **Remaining before
+  this subject closes: plan-5 (optional telemetry-only reporter for manual nodes) + plan-7 (release +
+  owner two-node-with-one-manual smoke).** Folder:
+  [`implementation_plans/mixed-controller-local-mode-2026_06_25/`](implementation_plans/mixed-controller-local-mode-2026_06_25/outline.md).
 
 - **✅ SUBJECT `telemetry-history-and-delta-deploy-2026_07_13` — DELIVERED as `v2.0.0-rc.5` (GitHub
   *Latest*, 2026-07-13; annotated tag on `ac3d660`; rc.4 demoted; self-promoted; 29 assets);
@@ -201,136 +180,6 @@
   - **OWED: owner fleet smoke of beta.17**, then **plan-11** (refresh `docs/spec/rc1/RC1-GATE.md` + cut
     `v2.0.0-rc.1`). Owner chose "beta.17 now → smoke → rc.1".
 
-- **TWO new subjects DRAFTED (2026-06-25), from three owner-reported items while running the live
-  fleet; both foldered under `implementation_plans/` with full per-plan detail. Latest shipped is
-  `v2.0.0-beta.13` (GitHub Latest).**
-  1. **`theme-and-mimic-fixes-2026_06_25/`** (ships first as a fixes beta — split-release D8):
-     **plan-1** theme stragglers (node-condition chips illegible in light mode → tokens; canvas grid +
-     edge labels not theme-aware → neutral-map + `ROLE_HUE` dedup; Deploy button grey in dark →
-     new `--cta` token family). **plan-2** the mimic "using local, did not work" bug — root cause:
-     the eBPF filter `local=${MIMIC_EGRESS_IP}:<port>` is pinned to `ip route get 1.1.1.1`'s src
-     (`internal/renderer/script.go:788,811`), matched by exact hash with no fallback → diverges from
-     WG's real on-the-wire source (multi-homing / secondary IPs / policy routing) or resolves to
-     `lo`/`127.0.0.1` → silent drop to plain UDP. Fix = route-independent per-peer `remote=` filter +
-     reject loopback egress + Go test ladder (the compile-time guard was deferred — it can't see the
-     runtime egress IP; see the plan-2 outline decision; data-plane confirmation is an owner real-host
-     smoke, not feasible in-sandbox). **plan-3** release.
-  2. **`mixed-controller-local-mode-2026_06_25/`** (ships separately after smokes — the larger
-     feature, owner chose **Hybrid Kit / Option C**): per-node `deployment_mode: manual` lets a node
-     be deployed by hand (no agent) inside a controller topology. Single chokepoint is
-     `enrolledSubgraph` (`internal/controller/compile.go:477-532`); `peers.go` needs ZERO change.
-     7 plans: model+compiler admission → registration+custody+keystone membership → signed manual
-     bundle+download → on-box kit (keygen→descriptor→register→splice) → optional telemetry-only
-     reporter → frontend → release. Zero-knowledge custody inviolable; manual nodes are signed
-     membership members (D4); shown "manual/unmonitored", excluded from convergence (D3).
-  - **NEXT = execute `theme-and-mimic-fixes` plan-1 + plan-2 (file-disjoint, parallelizable), each
-    per-PR workflow-reviewed → fixed → re-reviewed → merged, then plan-3 release.**
-
-- **`v2.0.0-beta.11` — published to GitHub Latest (2026-06-23, PR #183; beta.10 demoted).** A fast
-  follow-up fixing two findings the owner hit smoking beta.10 on the live fleet (both reproduced
-  against the real `hack3ric/mimic` upstream + a real `gh-proxy.com`): (1) **mimic "Discover from
-  release" failed** because discovery routed the GitHub REST API through the gh-proxy, whose shared
-  API token is globally rate-limited (403) — fixed by hitting `api.github.com` **directly** (egress
-  guard + host-pin retained; `.deb` downloads still proxied), a forgiving+normalizing release-base
-  parser, and dropping the version field from discovery; (2) **a stalled self-update rollout was
-  invisible** — a deferred update (target bumped but pins still resolve to the old binary → the
-  self-test correctly refuses, no brick) now surfaces as a `selfupdate: Blocked` condition (live via
-  `/telemetry`), observability-only + self-clearing. Reviewed (4-lens, security-weighted) → caught a
-  real **major** (the Blocked-record path could wipe custody floors on a corrupt state.json → fixed
-  to bail, with a regression test) + nits → re-reviewed PASS → CI green. **Owed:** owner re-smoke of
-  Discover (now direct) + the self-update re-arm (re-fetch beta.11 pins → redeploy → nodes advance).
-
-- **SUBJECT beta9-smoke-hardening — DELIVERED (2026-06-23); `v2.0.0-beta.10` published to GitHub
-  Latest.** All 5 plans merged (PRs #176 spine, #177–#181). Fixed the defects + UX gaps surfaced while
-  smoking `v2.0.0-beta.9` on a live ~9-node fleet, foldered in
-  [`implementation_plans/beta9-smoke-hardening-2026_06_23/`](implementation_plans/beta9-smoke-hardening-2026_06_23/outline.md).
-  **Headline fix:** the beta.9 Node Conditions channel sampled conditions ONLY at apply time (false
-  `wireguard: LinkDown` pre-handshake, stuck `selfupdate: HealthConfirmedProbationary`) and froze that
-  worst-case snapshot while idle — made honest by a **dedicated, extensible `POST /telemetry`
-  heartbeat** (agent `Sampler` framework; default 30s; carries conditions + a metrics map but NO
-  applied_generation/checksum — observability split from deploy custody; plan-1 #177). Plus:
-  controller-mode Validate runs the in-browser validator — browser-local verify, the controller never
-  serves nor calls `/api/validate` (plan-2 #178); off-host signing-handle auto-recovery — the
-  controller serves the non-secret public descriptor so a cleared browser re-prompts the authenticator
-  instead of a fleet-stranding re-pin (plan-3 #179); mimic catalog discover-and-pick (`/release-assets`,
-  SSRF-guarded; pick-from checklist, empty-SHA rows; plan-4 #180); CHANGELOG + release (plan-5 #181).
-  Each PR independently 4-lens workflow-reviewed (security-weighted for plan-3/4) → fixed at root →
-  re-reviewed → CI green → merged; full local verify (both build profiles, `-race`, airgap, FE) green
-  before the tag. `release.yml` + `docker.yml` green; release promoted to **GitHub Latest**
-  (`releases/latest` → beta.10; beta.9 demoted). **Process note:** a review workflow's agents ran
-  `git checkout` in the shared tree and discarded uncommitted plan-3 edits → recovered via isolated
-  **git worktrees** per branch + made all review workflows **checkout-free** (`git show <ref>:<path>`).
-  **Owed (gating rc.1, not merge):** owner browser smoke — the live telemetry heartbeat un-freezing
-  conditions on a node; controller-mode Validate; signing-handle recovery on a cleared/fresh browser
-  (enroll A → clear → fresh B → Deploy prompts a tap, no re-pin); mimic Discover against the real
-  upstream. **Follow-up (non-blocking):** visual-corpus baseline regen for the new mimic Discover UI.
-
-- **SUBJECT agent-feedback-and-version-aware-rollout — DELIVERED (2026-06-23); `v2.0.0-beta.9`
-  published.** All ten plans done. The reusable structured agent→panel **Node Conditions** channel
-  (plan-1/2/3), **mimic→UDP per-link fallback** (plan-4/5/6), **version-aware rollout** — panel knows +
-  displays its own version, "Update all" → panel version, refuse a target newer than the panel
-  (plan-7/8), and **default release URLs / working "Assist from release"** (plan-9). Each PR
-  independently workflow-reviewed (4 lenses) → fixed at root → re-reviewed clean → CI green → merged
-  (PRs #162–#173). plan-10 rolled the CHANGELOG (#171; the review caught that the beta.9 delta is the
-  whole pre-rc.1 program PRs #137–#171, so the notes carry a full `Security` section + the air-gap
-  boundary change) and **published `v2.0.0-beta.9`**, then promoted it to **GitHub Latest** at the
-  owner's request (easier deploy — the `releases/latest/download` alias now resolves to beta.9;
-  promoting a release to Latest clears its prerelease flag, so beta.9 is a non-prerelease Latest and
-  beta.8 is demoted). The first tag push exposed a real **release.yml gate bug** (gate-e2e ran the
-  non-blocking visual corpus AND built the panel without `VITE_E2E=1`, so the required ErrorBoundary
-  spec deterministically failed) — fixed in **#173** (gate-e2e now mirrors ci.yml's required job), tag
-  re-cut from the green tip, `release.yml` + `docker.yml` green, all 29 assets present (7 bundles, 7
-  airgap servers, agent linux/windows binaries **+ `.sha256` sidecars**, local-design zip). Smokes:
-  published `yaog-server`/`yaog-agent` `version` → `v2.0.0-beta.9`; agent `.sha256` verifies the
-  binary; `DefaultMimicReleaseBase` (hack3ric/mimic) reachable. **Owed:** owner browser+two-node smoke
-  of the new panel features (the agent-feedback subject's UI) — beta.9 was cut so the owner can smoke.
-  **Follow-up (non-blocking):** regenerate the visual-corpus baselines for the new settings UI via a
-  reviewed `--update-snapshots` run (the corpus is `continue-on-error` until that determinism pass).
-
-- **PRE-RC.1 PROGRAM COMPLETE (authorable scope) — all 22 plans across Subjects 1–4 merged (PRs
-  #137–#159, 2026-06-19/21).** Every CI-gated rc.1 criterion is GREEN. The remaining steps to cut
-  `v2.0.0-rc.1` are **owner-only** and tracked in [`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md)
-  (the single-source-of-truth go/no-go) — see **Next actions**.
-
-- **SUBJECT 1 (refactor + security) COMPLETE — all 9 plans merged to `main` (2026-06-19).** The
-  local-mode→browser migration shipped: plan-1 CJK→English hygiene (#137), plan-2 god-file splits
-  (#139), plan-9 FE↔Go drift (#138), plan-8 residual security + compiler-correctness (#140), plan-3
-  `internal/localcompile` façade + frozen I/O contract + golden corpus (#141), plan-5 Go↔TS
-  conformance harness + required CI gate (#142 — caught + fixed a real F3 heal drift on its first
-  run), plan-4 the full **TypeScript compiler** byte-exact vs the Go oracle (#143), plan-6 store rewire
-  to the in-browser compiler (#144), plan-7 backend shrink — air-gap compute behind `//go:build airgap`,
-  controller-only default, local mode **default-ON** (#145). Each: independent multi-lens workflow review
-  → fix at root (no shims) → re-review GO → CI green → merge. Both Go build profiles (default +
-  `-tags airgap`) are CI-gated; the conformance harness pins TS==Go byte-for-byte.
-- **SUBJECT 2 (phone UX) COMPLETE — all 3 plans merged to `main` (2026-06-19, PR #147).** One combined
-  branch `feat/phone-ux-subject2`: plan-11 reusable off-canvas `Drawer` primitive + `useMediaQuery`
-  (Contingency B — owns the primitive AND the sidebar consumer), plan-10 descriptor-spine responsive
-  operator surfaces (desktop table / mobile cards), plan-12 small-screen read-only design-canvas gate
-  (editing hard-disabled below `lg`; the store cannot be mutated from the gated canvas). Frontend-only;
-  no backend/contract change. Independent 3-lens review (correctness/no-desktop-regression ·
-  completeness/Contingency-B-scope · hygiene/adversarial) → GO/0-blockers → 3 non-blocking findings
-  fixed at root (gate-scrim-before-drawer; aria-label key rename) → CI green → merged.
-- **IN PROGRESS: SUBJECT 3 (full-stack E2E simulation / pitfall-hunt, plans 13–19).** Delivered to
-  main: plan-13 (harness, PR #149), plan-14 (operator flow, #150), plan-15 (adversarial/edge, #152),
-  plan-16 (edge-case & adversarial hunt — Go fuzz/DoS corpus + browser fault-injection, #153). plan-17
-  (phone-UX device-emulation — the **responsive verification layer**: `frontend/e2e/responsive/` device
-  matrix + 8 behavior smokes + a visual-regression corpus; verifies Subject 2) IN PROGRESS. Remaining:
-  plan-18 (3.6 real-tunnel netns/containers — MANDATORY before rc.1; likely needs a privileged host),
-  plan-19 (3.7 closure). Then Subject 4 (security re-audit, plans 20–21 + plan-22 cuts rc.1). rc.1 is
-  NOT cut until all four subjects are done.
-- Decision (2026-06-19, in the outline decisions log): local-engine **default-ON** folded into plan-7
-  (the real-world soak gate is waived — replaced by the green conformance harness); the
-  `VITE_YAOG_LOCAL_ENGINE=backend` escape hatch is retained (works against a `-tags airgap` server).
-- **SUBJECT 3 COMPLETE — plans 13–19 merged (2026-06-19/20, PRs #149–#156).** plan-18 (3.6 real-tunnel
-  netns gate, PR #155) green-and-required on CI (`ubuntu-latest` boots nested systemd-nspawn); plan-19
-  (3.7 closure, PR #156) authored `docs/spec/rc1/RUNBOOK.md` (9 owed smokes → 3 irreducible hardware
-  legs) + the criterion-C1 owed-smoke ledger in `RC1-GATE.md`.
-- **IN PROGRESS: SUBJECT 4 (security re-audit, the LAST subject before rc.1).** plan-20 (4.1) authored
-  the post-refactor **re-audit charter** at `docs/spec/rc1/plans/4.1-reaudit-charter.md` (11-surface
-  inventory: O1–O7 re-verify + N1–N4 new; the two-lens workflow; the 14+B1–B4 baseline disposition map;
-  the exit bar — amended to include `realtunnel` + conformance green-and-required; the owner sign-off
-  path). plan-21 (4.2) EXECUTES it (→ `docs/spec/rc1/4.2-verdict.md`); plan-22 (4.3) cuts rc.1.
-
 ### Prior release history
 
 - **Released:** **`v2.0.0-beta.8`** (GitHub *latest*) — pre-rc.1 blocker hotfix (PR #136). Fast-tracked six
@@ -339,7 +188,7 @@
   resurrection guard, S5 enrollment-token purge-on-revoke, S6 TTL cap). Independent review GO (0 findings)
   → CI + Release + Docker green.
 - **Drafted (awaiting execution + owner sign-off on 3 pending decisions):** the **pre-rc.1 program** —
-  `implementation_plans/pre-rc1-2026_06_18/` (outline + 22 plan files across 4 subjects: refactor+security →
+  `implementation_plans/_completed/pre-rc1-2026_06_18/` (outline + 22 plan files across 4 subjects: refactor+security →
   phone UX → full-stack simulation → security audit again → rc.1). Built via the `draft-implementation-plan`
   skill from a 55-agent investigation → adversarial critique → coherence reconciliation. Pending owner
   decisions: air-gap removal mechanism (build-tag vs delete), transit-CIDR const home, rc.1 `--prerelease`.
@@ -412,12 +261,14 @@
 
 **Two independent tracks, both owner-paced:**
 
-**Track 1 — the `framework-refactor` program (DRAFTED, awaiting the owner's go).** Execute `plan-0`
-(`refactor/plan-0-ratchet-hygiene`): the near-zero-risk enforcement spine + hygiene (arch-test import
-ratchet; fix lying file names; delete the `sysctl.go` CJK fragments shipped to hosts + false doc headers;
-`deployMode.ts` + kill the dead FE fetch-branch; recursive vitest glob; merge the double golden corpus)
-— zero behavior change. plan-0 → plan-2 stand alone even if the WASM bet (plan-3+) is never taken. Each
-phase per the full per-PR review regime. See the outline for the phase-status table + insertion points.
+**Track 1 — execute `post-refactor-debt-paydown-2026_07_14` (DRAFTED, awaiting the owner's go).** The
+successor to the shipped-and-archived `framework-refactor` program: 14 plans in 4 tiers (correctness/
+security fixes → structural paydown → machine-gate/FE → doc/state hygiene), ship-breakers first (the WASM
+engine never built into release/Docker → local design 404s; standalone `install.sh` root-installs an
+unlisted `.deb`; WebAuthn User-Verified not enforced; the self-update exact-vs-semver wedge; `deploy.go
+--uninstall` orphans mimic). Full detail + the confirmed defects + the PROVISIONAL owner scope decisions
+(CONFIRM on return) are in the Active-work entry above; plan-6 (WebAuthn UV) STOPS for an owner gate. Each
+phase per the full per-PR review regime. See the outline for the tier/plan-status table.
 
 **Track 2 — the rc line to GA.**
 
@@ -451,6 +302,16 @@ release line has since advanced preview → beta → rc through **rc.5**.
 
 ## Recently closed subjects (most recent first)
 
+- `framework-refactor-2026_07_13` (2026-07-13) — **14 phases (plans 0/1/1.5/1.6/2/3/4/5/5b/6/7/8/9/10;
+  PRs #260–#275); the "WASM-Unified Core + Machine-Gated Paydown" program.** WASM is now the DEFAULT
+  in-browser local engine (multi-browser Playwright e2e: chromium + webkit + firefox); the ~10.6K-LOC
+  hand-mirrored TS compiler + `internal/conformance` + `@noble`/`jszip` DELETED (−12.3K LOC); the Store
+  keystone collapsed onto ONE core over a KV port (−941 LOC); the airgap anonymous-compute surface
+  DELETED (one server build, no `-tags airgap`); convention → machine-gates (arch-ratchet / auth-adapter
+  / `ShellToken` / Wire-DTO+omitempty drift gate — 7 required checks). Each PR workflow-reviewed → fixed →
+  re-reviewed → green → merged. Memory: `framework-refactor-shipped.md`. Owed: owner real-host custody
+  smoke of the plan-8 Store core (keystone-rotation + restart + passkey) before live-trust — a release
+  gate, not a merge gate.
 - `telemetry-history-and-delta-deploy-2026_07_13` (2026-07-13) — **8 plans, `v2.0.0-rc.5` (GitHub
   Latest, PRs #249–#257; annotated tag on `ac3d660`; rc.4 demoted; 29 assets).** (A) per-node resource
   history + node-detail CPU/RAM/load charts (`cpu_pct` /proc/stat delta; bounded never-fsync in-mem →
@@ -489,6 +350,20 @@ release line has since advanced preview → beta → rc through **rc.5**.
 - `pre-rc1-hardening-2026_07_02` (2026-07-02/03) — **11 plans, `v2.0.0-beta.17` (PRs #208–#218) +
   the `v2.0.0-rc.1` cut (#226); the CRITICAL self-update keystone bypass + the audited security
   scopes + the rc.1 gate closed GO with zero exceptions; branch protection set.**
+- `beta16-smoke-hardening-2026_06_27` (2026-06-27) — **3 fixes, `v2.0.0-beta.16` (PRs #204–#206).** A
+  smoke-hardening of beta.15: a node could report stale status (sticky `selfupdate: Blocked` + frozen
+  `Last Seen`) though it had successfully self-updated. fix-A (panel): the node-detail page refreshes
+  (was a frozen cache snapshot; #204). fix-B (agent): clear sticky `selfupdate: Blocked` on
+  `FinalizeSelfUpdate` + bound the `wg show` timeout + a top-level heartbeat `recover()` (#205); CHANGELOG
+  #206. Each PR reviewed → fixed → re-reviewed → green.
+- `theme-and-mimic-fixes-2026_06_25` (2026-06-25) — **3 plans, `v2.0.0-beta.14` (GitHub Latest at the
+  time; PRs #193–#195).** Two owner-reported live-fleet defects fixed at root: the beta.13 theme
+  stragglers (node-condition chips illegible in light mode → tokens; canvas grid + edge labels →
+  neutral-map + `ROLE_HUE` dedup; Deploy button grey in dark → a new `--cta` token family) and the mimic
+  "using local" bug (the `local=` filter pinned to `ip route get 1.1.1.1`'s src diverged from WG's real
+  on-the-wire source → an additive route-independent `remote=` filter + a loopback-egress guard + a Go
+  test ladder). Each PR 4-lens + security reviewed → fixed → re-reviewed → green. Owed: owner real-host
+  mimic smoke.
 - `beta9-smoke-hardening-2026_06_23` (2026-06-23) — **5 plans, `v2.0.0-beta.10` → GitHub Latest (PRs
   #176–#181).** Live-fleet smoke fixes: a dedicated `/telemetry` heartbeat + `Sampler` framework that
   makes Node Conditions honest (no more frozen apply-time snapshot); controller-mode Validate →
@@ -496,6 +371,12 @@ release line has since advanced preview → beta → rc through **rc.5**.
   non-secret descriptor → no fleet-stranding re-pin); mimic catalog discover-and-pick (SSRF-guarded
   `/release-assets`). Each PR 4-lens-reviewed → fixed → merged; review workflows made checkout-free
   after a shared-tree clobber; isolated git worktrees per branch.
+- `agent-feedback-and-version-aware-rollout-2026_06_22` (2026-06-23) — **10 plans, `v2.0.0-beta.9` (PRs
+  #162–#175).** The reusable structured agent→panel Node Conditions channel, mimic→UDP per-link fallback,
+  and version-aware rollout (panel knows/displays its own version; "Update all" → panel version; refuse a
+  target newer than the panel) + default release URLs / working "Assist from release". Each PR
+  4-lens-reviewed → fixed → re-reviewed → green; #173 fixed a real release.yml gate bug (gate-e2e now
+  mirrors ci.yml's required job).
 - `pre-rc1-2026_06_18` (2026-06-19/21) — **the full pre-rc.1 program: 22 plans across 4 subjects (PRs
   #137–#159).** Subject 1 refactor+security (TS browser compiler, controller-only backend, plan-8
   fixes), Subject 2 phone UX, Subject 3 full-stack E2E sim + the MANDATORY real-tunnel netns gate,
