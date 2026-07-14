@@ -99,6 +99,16 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci --legacy-peer-deps
+      # Build the in-browser Go/WASM engine BEFORE the panel build — MUST mirror ci.yml's frontend-e2e
+      # job exactly (the release E2E gate's contract is "build the panel the same way CI does"). WASM is
+      # the default local engine; build:wasm compiles web/yaog.wasm + refreshes wasm_exec.js from the
+      # release toolchain and copies BOTH into frontend/public/, so the `vite build` below stamps them
+      # into dist/. Without this step /yaog.wasm 404s and every in-browser-validate spec (wasm-design,
+      # controller-fleet Validate, link-direction Validate) times out — which is exactly what a tag push
+      # surfaced when this step was missing here but present in ci.yml. Go is set up above.
+      - name: Build WASM for the e2e panel
+        working-directory: frontend
+        run: npm run build:wasm
       # VITE_E2E=1 (matching ci.yml's frontend-e2e Build panel) compiles in the test-only
       # ErrorBoundary render-throw probe (App.tsx, gated on import.meta.env.VITE_E2E, else DCE'd).
       # The REQUIRED adversarial spec e2e/adversarial/error-render.spec.ts drives it, so without this
@@ -106,6 +116,11 @@ jobs:
       - name: Build panel
         working-directory: frontend
         run: VITE_E2E=1 npm run build
+      # Mirror ci.yml's per-PR ship assertion: the panel build must stamp the WASM engine into dist/ so
+      # the boots serve /yaog.wasm as a real static file (the in-browser engine instantiates from it).
+      - name: Assert WASM engine shipped in dist
+        working-directory: frontend
+        run: test -f dist/yaog.wasm && test -f dist/wasm_exec.js
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
