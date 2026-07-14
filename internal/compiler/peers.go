@@ -6,7 +6,6 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
 // transitCIDRForNode resolves the transit CIDR ownership for a link (or for an
@@ -190,16 +189,6 @@ type PeerInfo struct {
 	// mimic: ((node.MTU>0 ? node.MTU : 1420) − 12), subtracting mimic's 12-byte overhead
 	// (docs/spec/artifacts/mimic.md "MTU −12").
 	MTU int
-}
-
-// wgInterfaceName generates a WireGuard interface name (a thin wrapper).
-// The canonical implementation has been moved up to internal/naming (Spec D,
-// docs/spec/artifacts/naming.md), shared across the renderer, compiler, and validator
-// layers, eliminating the prior duplicate implementations and breaking the import
-// cycle. This unexported name is retained only so in-package callers and existing
-// tests can keep using it; its behavior is identical to naming.WgInterfaceName.
-func wgInterfaceName(remoteName string) string {
-	return naming.WgInterfaceName(remoteName)
 }
 
 // formatEndpoint formats an endpoint address.

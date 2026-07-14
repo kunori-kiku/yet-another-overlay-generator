@@ -51,13 +51,47 @@ type pairAllocation struct {
 	remoteLL      string
 }
 
-// derivePeersWithDomains is the core derivation logic (a two-pass algorithm).
-// Pass 1: pre-allocate the ports and address resources for all node pairs.
-// Pass 2: build PeerInfo using the pre-allocated ports (ensuring endpoint port =
-// remote interface listen port).
-func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain, reserved *ReservedAllocations, mimicFallbackDefault string) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
-	peerMap := make(map[string][]PeerInfo)
+// linkEntity folds one or more enabled edges of a node pair into a single routing
+// link per the unify rule (spec docs/spec/compiler/allocation-stability.md "Link
+// identity with parallel edges" / "Reserve-all-pins-first"):
+//   - PRIMARY CLASS: all "non-backup" edges (linkid.IsBackup==false) of the same
+//     node pair fold into a single bidirectional link. primaryEdge = the first
+//     enabled primary-class edge in topo.Edges order (keeping the old rule: it
+//     decides the pairAllocation's from/to orientation); any extra same-direction
+//     primary-class edge is an "accidental duplicate" that still maps to this
+//     unified link for write-back (historical behavior; the validator warns
+//     separately).
+//   - Each role=="backup" edge becomes its own independent link: primaryEdge = it
+//     itself, and its linkKey carries a "#edgeID" suffix to distinguish it from the
+//     node pair's primary link.
+//
+// Link identity = linkid.LinkKey(primaryEdge): a primary link reduces to its pinKey
+// (in a single-edge pair linkKey==pinKey, and the gap-fill order and values are
+// byte-identical to before the parallel-link change — the zero-drift guarantee for
+// existing fleets).
+type linkEntity struct {
+	linkKey     string
+	backup      bool
+	primaryEdge *model.Edge // decides from/to orientation, interface name suffix and LinkCost
+	fromNode    *model.Node
+	toNode      *model.Node
+	transitCIDR string // resolved transit CIDR (per-pool key)
+}
 
+// derivePeersWithDomains is the core derivation logic (a two-pass algorithm),
+// decomposed into named per-phase helpers so each phase is independently reviewable
+// against the allocation-stability invariants (I1-I9):
+//
+//   - groupLinks               folds enabled edges into unified links (Pass 1 phase 1);
+//   - preallocateLinkResources reserves pins then gap-fills ports / transit IPs /
+//     link-locals (Pass 1 phases 2.5/3/4 — the allocation-critical core);
+//   - buildPeerInfo            builds each link's forward + reverse PeerInfo, ensuring
+//     the endpoint port equals the remote interface's listen port (Pass 2).
+//
+// The decomposition is PURE MOTION: the produced allocations, ordering and rendered
+// bytes are identical to the previous single-function form (the golden corpus and
+// allocation_stability_test are the byte gates).
+func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domainMap map[string]*model.Domain, reserved *ReservedAllocations, mimicFallbackDefault string) (map[string][]PeerInfo, map[string]*pairAllocation, error) {
 	// Node index
 	nodeMap := make(map[string]*model.Node)
 	for i := range topo.Nodes {
@@ -65,30 +99,24 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 	}
 
 	// Initialize each node's peer list
+	peerMap := make(map[string][]PeerInfo)
 	for _, node := range topo.Nodes {
 		peerMap[node.ID] = []PeerInfo{}
 	}
 
-	// Pre-scan all enabled "primary class" edge directions, used for the keepalive
-	// decision. Count only non-backup edges (linkid.IsBackup==false): reverse
-	// reachability is a property of the unified primary link, and a backup edge forms
-	// its own independent link and never acts as a node pair's "reverse primary"
-	// (unify rule: reverse resolution considers only the opposite-direction
-	// primary-class edge of the same node pair). In a single-edge pair that edge is
-	// the primary class, so the behavior is unchanged.
-	enabledEdgeDirections := make(map[string]bool)
-	for i := range topo.Edges {
-		edge := &topo.Edges[i]
-		if edge.IsEnabled && !linkid.IsBackup(edge) {
-			enabledEdgeDirections[edge.FromNodeID+"->"+edge.ToNodeID] = true
-		}
-	}
-
-	// Build the edge reverse-lookup index: key="fromNodeID->toNodeID" -> Edge.
-	// Likewise record only primary-class edges: the unified primary link's reverse
-	// endpoint resolution may only hit the opposite-direction primary-class edge, never
-	// a backup (spec: Reverse-edge resolution considers ONLY primary-class
-	// opposite-direction edges).
+	// Build the primary-class edge reverse-lookup index: key="fromNodeID->toNodeID" ->
+	// Edge, recording ONLY enabled primary-class edges (skip backups). Pass 2 reads it two
+	// ways, both restricted to the primary class by design:
+	//   - to resolve an explicit reverse edge's endpoint — the unified primary link's
+	//     reverse endpoint resolution may only hit the opposite-direction primary-class
+	//     edge, never a backup (spec: Reverse-edge resolution considers ONLY primary-class
+	//     opposite-direction edges);
+	//   - as the "does a reverse primary edge exist?" test in the keepalive decision —
+	//     reverse reachability is a property of the unified primary link, and a backup edge
+	//     forms its own independent link and never acts as a node pair's "reverse primary".
+	// Its key set is exactly the set of enabled non-backup edge directions, so a key's
+	// PRESENCE in edgeMap is the byte-identical replacement for the previous separate
+	// enabledEdgeDirections bool set (which scanned the same edges for the same keys).
 	edgeMap := make(map[string]*model.Edge)
 	for i := range topo.Edges {
 		e := &topo.Edges[i]
@@ -97,47 +125,35 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 	}
 
-	// ======== Pass 1: pre-allocate resources (reserve-then-gap-fill, Spec B) ========
-	//
-	// Order-independence (I2) is guaranteed by construction: first reserve all pins in
-	// the topology into the resource pools, then gap-fill the unpinned links. As a
-	// result a new link never takes a value already occupied by an existing link, and
-	// existing links' values never move (I1/I3/I4). gap-fill iterates sorted by pinKey
-	// and picks the lowest free slot within a pool (the pinKey-deterministic order
-	// required by Spec B): the reservation set a link sees depends only on the
-	// topology's current pins and on unpinned links with a smaller pinKey, independent
-	// of array position and of the link's own delete/re-add history, which guarantees
-	// delete/re-add idempotence (I9/G1).
-	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge)
+	// ======== Pass 1 phase 1: fold enabled edges into unified links ========
+	links, linkByKey := groupLinks(topo, nodeMap, domainMap)
 
-	// Fold each enabled edge into a link entity per the unify rule (spec:
-	// docs/spec/compiler/allocation-stability.md "Link identity with parallel edges" /
-	// "Reserve-all-pins-first"):
-	//   - PRIMARY CLASS: all "non-backup" edges (linkid.IsBackup==false) of the same
-	//     node pair fold into a single bidirectional link. primaryEdge = the first
-	//     enabled primary-class edge in topo.Edges order (keeping the old rule: it
-	//     decides the pairAllocation's from/to orientation); any extra same-direction
-	//     primary-class edge is an "accidental duplicate" that still maps to this
-	//     unified link for write-back (historical behavior; the validator warns
-	//     separately).
-	//   - Each role=="backup" edge becomes its own independent link: primaryEdge = it
-	//     itself, and its linkKey carries a "#edgeID" suffix to distinguish it from the
-	//     node pair's primary link.
-	// Link identity = linkid.LinkKey(primaryEdge): a primary link reduces to its pinKey
-	// (in a single-edge pair linkKey==pinKey, and the gap-fill order and values are
-	// byte-identical to before the parallel-link change — the zero-drift guarantee for
-	// existing fleets).
-	type linkEntity struct {
-		linkKey     string
-		backup      bool
-		primaryEdge *model.Edge // decides from/to orientation, interface name suffix and LinkCost
-		fromNode    *model.Node
-		toNode      *model.Node
-		transitCIDR string // resolved transit CIDR (per-pool key)
+	// ======== Pass 1 phases 2.5/3/4: reserve pins, then gap-fill the rest ========
+	allocations, err := preallocateLinkResources(links, reserved)
+	if err != nil {
+		return nil, nil, err
 	}
-	links := make([]*linkEntity, 0, len(topo.Edges))
-	linkByKey := make(map[string]*linkEntity) // linkKey -> link entity (Pass 2 / write-back look up by LinkKey)
 
+	// ======== Pass 2: build PeerInfo using the pre-allocated resources ========
+	buildPeerInfo(topo, keys, nodeMap, linkByKey, allocations, edgeMap, mimicFallbackDefault, peerMap)
+
+	return peerMap, allocations, nil
+}
+
+// forEachEnabledEdge iterates topo.Edges in slice order and invokes fn once per
+// enabled, non-dangling edge (both endpoints resolvable in nodeMap), passing the edge,
+// its resolved endpoints and its linkid.LinkKey. It single-sources the "skip-disabled /
+// resolve-endpoints / skip-dangling / compute-linkKey" preamble shared by Pass 1's link
+// grouping (groupLinks) and Pass 2's PeerInfo construction (buildPeerInfo); each caller
+// applies its own linkKey dedup inside fn. Iteration order and the surviving edge set
+// are identical to the previous inline loops, so the produced allocations/bytes are
+// unchanged.
+//
+// NOTE: the cross-package validator grouping loops (semantic_ports.go /
+// semantic_edges.go) repeat this same enabled+resolve+linkKey preamble and are a future
+// consolidation opportunity — deliberately left out of this package-local dedup to
+// avoid a cross-package coupling and any allocation-byte risk.
+func forEachEnabledEdge(topo *model.Topology, nodeMap map[string]*model.Node, fn func(edge *model.Edge, fromNode, toNode *model.Node, lk string)) {
 	for i := range topo.Edges {
 		edge := &topo.Edges[i]
 		if !edge.IsEnabled {
@@ -148,15 +164,29 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		if fromNode == nil || toNode == nil {
 			continue
 		}
+		fn(edge, fromNode, toNode, linkid.LinkKey(edge))
+	}
+}
 
-		lk := linkid.LinkKey(edge)
+// groupLinks folds every enabled, non-dangling edge into a linkEntity (Pass 1 phase
+// 1), returning the entities in first-occurrence order plus a linkKey index. Multiple
+// edges of the same node pair in the primary class share one linkKey: the first
+// occurrence builds the entity, and subsequent edges (including the reverse and
+// same-direction duplicates) fold into the same entity without rebuilding. A backup
+// edge's linkKey carries a "#edgeID" suffix and is naturally unique, so each backup
+// builds its own entity.
+func groupLinks(topo *model.Topology, nodeMap map[string]*model.Node, domainMap map[string]*model.Domain) ([]*linkEntity, map[string]*linkEntity) {
+	links := make([]*linkEntity, 0, len(topo.Edges))
+	linkByKey := make(map[string]*linkEntity) // linkKey -> link entity (Pass 2 / write-back look up by LinkKey)
+
+	forEachEnabledEdge(topo, nodeMap, func(edge *model.Edge, fromNode, toNode *model.Node, lk string) {
 		// Multiple edges of the same node pair in the primary class share one linkKey:
 		// the first occurrence builds the entity, and subsequent edges (including the
 		// reverse and same-direction duplicates) fold into the same entity without
 		// rebuilding. A backup edge's linkKey carries a "#edgeID" suffix and is
 		// naturally unique, so each backup builds its own entity.
 		if _, seen := linkByKey[lk]; seen {
-			continue
+			return
 		}
 
 		// Resolve the transit CIDR of the domain this link belongs to (empty falls back
@@ -177,7 +207,29 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		}
 		links = append(links, link)
 		linkByKey[lk] = link
-	}
+	})
+
+	return links, linkByKey
+}
+
+// preallocateLinkResources runs Pass 1's reserve-then-gap-fill (Spec B) over the
+// grouped links and returns the per-link allocation map keyed by linkid.LinkKey.
+//
+// Order-independence (I2) is guaranteed by construction: first reserve all pins in the
+// topology into the resource pools, then gap-fill the unpinned links. As a result a
+// new link never takes a value already occupied by an existing link, and existing
+// links' values never move (I1/I3/I4). gap-fill iterates sorted by linkKey and picks
+// the lowest free slot within a pool (the pinKey-deterministic order required by Spec
+// B): the reservation set a link sees depends only on the topology's current pins and
+// on unpinned links with a smaller pinKey, independent of array position and of the
+// link's own delete/re-add history, which guarantees delete/re-add idempotence
+// (I9/G1). reserved carries the pins of edges OUTSIDE this subgraph; a full compile
+// passes nil, making the phase-2.5 reservation a no-op (I1, byte-identical to before).
+//
+// This function sorts links in place (Pass 1 phase 4's linkKey ordering). The caller's
+// Pass 2 keys off linkByKey (a map), so the reordering is contained here.
+func preallocateLinkResources(links []*linkEntity, reserved *ReservedAllocations) (map[string]*pairAllocation, error) {
+	allocations := make(map[string]*pairAllocation) // key: linkid.LinkKey(edge)
 
 	// ---- Reservation sets ----
 	// Ports keyed by node; transit IPs stored verbatim as IP strings per CIDR pool (no
@@ -313,7 +365,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			if !isFromClient {
 				fromPort, err := lowestFreePort(fromNode, usedPorts)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 				markPort(fromNode.ID, fromPort)
 				alloc.fromPort = fromPort
@@ -321,7 +373,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			if !isToClient {
 				toPort, err := lowestFreePort(toNode, usedPorts)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 				markPort(toNode.ID, toPort)
 				alloc.toPort = toPort
@@ -335,7 +387,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			if err != nil {
 				// Propagate the inner coded error (CodeTransit*); the English wrapper adds
 				// node context for logs/CLI only — errors.As still surfaces the inner code.
-				return nil, nil, fmt.Errorf("transit address allocation failed for %s<->%s: %w", fromNode.Name, toNode.Name, err)
+				return nil, fmt.Errorf("transit address allocation failed for %s<->%s: %w", fromNode.Name, toNode.Name, err)
 			}
 			markTransit(link.transitCIDR, localTransit)
 			markTransit(link.transitCIDR, remoteTransit)
@@ -363,43 +415,34 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		allocations[link.linkKey] = alloc
 	}
 
-	// ======== Pass 2: build PeerInfo using the pre-allocated ports ========
-	// Each "link" produces exactly one pair of PeerInfo (forward + reverse),
-	// deduplicated by linkid.LinkKey:
-	//   - all edges of the same node pair in the primary class share one linkKey →
-	//     folded into one pair of PeerInfo (the first primary-class edge in topo.Edges
-	//     order drives creation, keeping the old "first-edge orientation" semantics);
-	//   - each backup edge carries a unique linkKey → each produces its own independent
-	//     pair of PeerInfo.
-	// We still iterate by edge but gate on linkKey (an equivalent implementation
-	// permitted by the spec); in a single-edge pair the behavior matches before the change.
+	return allocations, nil
+}
+
+// buildPeerInfo runs Pass 2: for each unified link it appends the forward + reverse
+// PeerInfo (or, for a client link, only the router-side PeerInfo) into peerMap. It
+// iterates edges but gates on linkKey (addedLinks) so a node pair's multiple
+// primary-class edges fold into ONE pair of PeerInfo (the first primary-class edge in
+// topo.Edges order drives creation, keeping the old "first-edge orientation"
+// semantics), while each backup edge — carrying a unique linkKey — produces its own
+// independent pair. In a single-edge pair the behavior matches before the change.
+// peerMap is mutated in place.
+func buildPeerInfo(topo *model.Topology, keys map[string]KeyPair, nodeMap map[string]*model.Node, linkByKey map[string]*linkEntity, allocations map[string]*pairAllocation, edgeMap map[string]*model.Edge, mimicFallbackDefault string, peerMap map[string][]PeerInfo) {
 	addedLinks := make(map[string]bool) // linkKey -> whether PeerInfo has been produced for this link
 
-	for i := range topo.Edges {
-		edge := &topo.Edges[i]
-		if !edge.IsEnabled {
-			continue
-		}
-
-		fromNode := nodeMap[edge.FromNodeID]
-		toNode := nodeMap[edge.ToNodeID]
-		if fromNode == nil || toNode == nil {
-			continue
-		}
-
-		// The link identity this edge belongs to. primary-class edge → pinKey; backup edge → pinKey#edgeID.
-		lk := linkid.LinkKey(edge)
+	forEachEnabledEdge(topo, nodeMap, func(edge *model.Edge, fromNode, toNode *model.Node, lk string) {
+		// lk is this edge's link identity (primary-class edge → pinKey; backup edge →
+		// pinKey#edgeID); gate on it so each unified link produces its PeerInfo pair once.
 		if addedLinks[lk] {
-			continue
+			return
 		}
 
 		link := linkByKey[lk]
 		if link == nil {
-			continue
+			return
 		}
 		alloc := allocations[lk]
 		if alloc == nil {
-			continue
+			return
 		}
 
 		// A client node creates no PeerInfo in peerMap (the client uses a single wg0,
@@ -442,11 +485,20 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				peerMap[toNode.ID] = append(peerMap[toNode.ID], routerPeer)
 			}
 			addedLinks[lk] = true
-			continue
+			return
 		}
 
-		// Determine whether the current edge's direction matches alloc's direction
+		// In Pass 2 the producing edge is ALWAYS the first enabled edge of this linkKey —
+		// the same representative/primary edge that set alloc.fromNodeID in Pass 1 (both
+		// passes iterate topo.Edges in order under identical skip-disabled / skip-dangling
+		// filters and gate on the linkKey). So the edge's direction always matches alloc's
+		// canonical from/to: isForward is invariantly true here. The panic documents and
+		// guards that invariant; the reverse-orientation reads below (oriented(!isForward))
+		// intentionally mirror to the OTHER endpoint and are NOT a live variable direction.
 		isForward := alloc.fromNodeID == fromNode.ID
+		if !isForward {
+			panic("compiler: Pass-2 producing edge must match alloc orientation (isForward invariant violated)")
+		}
 
 		toKey, _ := keys[toNode.ID]
 		fromKey, _ := keys[fromNode.ID]
@@ -464,19 +516,20 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 				// The user specified a NAT/port-forwarding override port
 				portToUse = edge.EndpointPort
 			} else {
-				// Auto-allocate: use the remote interface's allocated listen port
-				if isForward {
-					portToUse = alloc.toPort
-				} else {
-					portToUse = alloc.fromPort
-				}
+				// Auto-allocate: use the remote (dialed) interface's allocated listen port.
+				// isForward is invariantly true in Pass 2 (asserted above), so the remote end
+				// is always the to-side: alloc.toPort.
+				portToUse = alloc.toPort
 			}
 			endpoint = formatEndpoint(edge.EndpointHost, portToUse)
 		}
 
 		// === Compute PersistentKeepalive ===
+		// A reverse primary edge existing == its from->to key being present in edgeMap
+		// (edgeMap's key set is exactly the enabled non-backup edge directions), so this is
+		// the byte-identical replacement for the retired enabledEdgeDirections bool set.
 		keepalive := 0
-		hasReverseEdge := enabledEdgeDirections[toNode.ID+"->"+fromNode.ID]
+		_, hasReverseEdge := edgeMap[toNode.ID+"->"+fromNode.ID]
 		if !fromNode.Capabilities.CanAcceptInbound || !hasReverseEdge {
 			keepalive = 25
 		}
@@ -540,7 +593,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 		// === Auto-generate the reverse peer (skip the client's reverse — the client side uses wg0) ===
 		if isToClient {
 			addedLinks[lk] = true
-			continue
+			return
 		}
 
 		// PeerInfo has been produced for this link: gate on linkKey to ensure the node
@@ -558,11 +611,10 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 			// keeps the same edgeID + backup flag.
 			reverseIfaceName := naming.WgInterfaceNameForEdge(fromNode.Name, link.primaryEdge.ID, link.backup)
 
-			// fromNode interface's allocated listen port (used when the reverse peer dials back to fromNode)
+			// fromNode interface's allocated listen port (used when the reverse peer dials
+			// back to fromNode). isForward is invariantly true in Pass 2 (asserted above),
+			// so fromNode is alloc's from-side and its listen port is alloc.fromPort.
 			fromSideListenPort := alloc.fromPort
-			if !isForward {
-				fromSideListenPort = alloc.toPort
-			}
 
 			// Resolve the reverse peer's endpoint:
 			//  0. A "forward" single-linked edge suppresses the reverse dial ENTIRELY (both the
@@ -622,9 +674,7 @@ func derivePeersWithDomains(topo *model.Topology, keys map[string]KeyPair, domai
 
 			peerMap[toNode.ID] = append(peerMap[toNode.ID], reversePeer)
 		}
-	}
-
-	return peerMap, allocations, nil
+	})
 }
 
 // allocateTransitPair allocates a pair of transit IPv4 addresses by index and transitCIDR.
