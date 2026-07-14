@@ -1,16 +1,20 @@
 package api
 
 // handler_bootstrap.go is the one-shot agent bootstrap surface (plan-5.2):
-//   - operator routes GET/POST /settings  — read/update the server-persisted
-//     controller settings (public agent URL, GitHub proxy, agent release URL).
-//   - agent route    GET  /bootstrap      — serve the bash install+enroll+apply
-//     script (unauthenticated; the script is generic, the enrollment token is a flag).
+//   - agent route GET /bootstrap — serve the bash install+enroll+apply script
+//     (unauthenticated; the script is generic, the enrollment token is a flag).
 //
 // The bootstrap script downloads the per-arch yaog-agent binary (GitHub proxy applied
 // when configured), installs it, enrolls with the operator-supplied single-use token,
 // and either installs a systemd daemon (default — so every future Deploy auto-applies)
 // or applies once (--once). When the keystone is ON, the controller bakes the pinned
 // off-host operator credential into the script so the node enforces membership.
+//
+// It also holds the operator-set-field format validators the /settings POST runs
+// (validateAbsoluteHTTPURL / validateMimicCatalog / validateAgentRollout /
+// validateOperatorCredentialBinding): they gate values baked into this root-executed
+// script, so they live next to the renderer. The /settings read/write API itself moved
+// out to handler_settings.go (plan-9).
 
 import (
 	"errors"
@@ -20,186 +24,12 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/version"
 )
-
-// settingsJSON is the wire form of the operator-editable controller settings.
-// maxTelemetryHistoryCap bounds the operator-settable per-node resource-history sample cap (plan-2) so a
-// typo cannot request an effectively unbounded history file. 1e6 samples ≈ 347 days at a 30s heartbeat.
-const maxTelemetryHistoryCap = 1_000_000
-
-type settingsJSON struct {
-	PublicAgentURL      string `json:"public_agent_url"`
-	GithubProxy         string `json:"github_proxy"`
-	AgentReleaseBaseURL string `json:"agent_release_base_url"`
-	// Translucency is the panel's appearance preference (P5). It round-trips through
-	// GET/POST /settings but is NOT injected into the bootstrap script.
-	Translucency bool `json:"translucency"`
-	// AgentPathPrefix is READ-ONLY: the server's normalized agent secret path prefix
-	// (YAOG_AGENT_PATH_PREFIX, "" or "/<seg>"), reported so the panel composes
-	// agent-facing URLs (the bootstrap one-liner, the manual enroll command)
-	// server-authoritatively instead of mirroring a second env by hand. It is
-	// env-derived, not a stored setting — POST ignores any submitted value.
-	AgentPathPrefix string `json:"agent_path_prefix"`
-	// Mimic GitHub-.deb catalog (plan-3). All NON-SECRET pins. Empty = distro-only mimic.
-	MimicVersion     string                       `json:"mimic_version,omitempty"`
-	MimicReleaseBase string                       `json:"mimic_release_base,omitempty"`
-	MimicDebs        map[string]model.MimicDebPin `json:"mimic_debs,omitempty"`
-	// MimicFallbackDefault is the fleet-wide mimic→UDP fallback policy ("" / "udp" / "none"). plan-4.
-	MimicFallbackDefault string `json:"mimic_fallback_default,omitempty"`
-	// Signed agent self-update (plan-9, canary-then-fleet). All NON-SECRET pins; the agent
-	// release base is the existing AgentReleaseBaseURL above. Empty target ⇒ no self-update.
-	TargetAgentVersion    string                    `json:"target_agent_version,omitempty"`
-	MinAgentVersion       string                    `json:"min_agent_version,omitempty"`
-	AgentBins             map[string]model.Artifact `json:"agent_bins,omitempty"`
-	AgentCanaryNodeIDs    []string                  `json:"agent_canary_node_ids,omitempty"`
-	AgentRolloutFleetWide bool                      `json:"agent_rollout_fleet_wide,omitempty"`
-	// TelemetryHistoryCap is the per-node resource-history sample cap (plan-2). A POINTER: nil ⇒ use the
-	// default, an explicit value (incl. 0 = disable history) is honored. Validated >= 0 and <= a sanity
-	// bound on POST.
-	TelemetryHistoryCap *int `json:"telemetry_history_cap,omitempty"`
-}
-
-// settingsResponse builds the wire view of cs: the stored settings plus the
-// server-derived read-only fields (agent path prefix). Both HandleSettings branches
-// MUST respond through this single constructor so a field added for GET cannot be
-// forgotten for POST (which would make it flicker empty right after every save).
-func (h *ControllerHandler) settingsResponse(cs controller.ControllerSettings) settingsJSON {
-	return settingsJSON{
-		PublicAgentURL:        cs.PublicAgentURL,
-		GithubProxy:           cs.GithubProxy,
-		AgentReleaseBaseURL:   cs.AgentReleaseBaseURL,
-		Translucency:          cs.Translucency != nil && *cs.Translucency,
-		AgentPathPrefix:       h.agentPrefix,
-		MimicVersion:          cs.MimicVersion,
-		MimicReleaseBase:      cs.MimicReleaseBase,
-		MimicDebs:             cs.MimicDebs,
-		MimicFallbackDefault:  cs.MimicFallbackDefault,
-		TargetAgentVersion:    cs.TargetAgentVersion,
-		MinAgentVersion:       cs.MinAgentVersion,
-		AgentBins:             cs.AgentBins,
-		AgentCanaryNodeIDs:    cs.AgentCanaryNodeIDs,
-		AgentRolloutFleetWide: cs.AgentRolloutFleetWide,
-		TelemetryHistoryCap:   cs.TelemetryHistoryCap,
-	}
-}
-
-// loadSettings returns the tenant's settings with defaults applied (so an absent or
-// partially-saved record still yields a usable agent release URL).
-func (h *ControllerHandler) loadSettings(r *http.Request) (controller.ControllerSettings, error) {
-	cs, err := h.store.GetSettings(r.Context(), h.tenant)
-	if err != nil {
-		if errors.Is(err, controller.ErrNotFound) {
-			return controller.DefaultSettings(), nil
-		}
-		return controller.ControllerSettings{}, err
-	}
-	return cs.WithDefaults(), nil
-}
-
-// HandleSettings serves GET (read current settings, defaults applied) and POST (save
-// settings). Operator-authenticated. POST validates a non-empty PublicAgentURL is an
-// absolute http(s) URL and audits the update.
-func (h *ControllerHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		cs, err := h.loadSettings(r)
-		if err != nil {
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, h.settingsResponse(cs))
-
-	case http.MethodPost:
-		tenant, actor, ok := identity(r.Context())
-		if !ok {
-			writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-			return
-		}
-		var req settingsJSON
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-			return
-		}
-		// A POST always carries an explicit translucency bool (the panel sends it), so pin
-		// it as a non-nil pointer; WithDefaults only fills a nil (legacy-load) value.
-		translucency := req.Translucency
-		cs := controller.ControllerSettings{
-			PublicAgentURL:        strings.TrimSpace(req.PublicAgentURL),
-			GithubProxy:           strings.TrimSpace(req.GithubProxy),
-			AgentReleaseBaseURL:   strings.TrimSpace(req.AgentReleaseBaseURL),
-			Translucency:          &translucency,
-			MimicVersion:          strings.TrimSpace(req.MimicVersion),
-			MimicReleaseBase:      strings.TrimSpace(req.MimicReleaseBase),
-			MimicDebs:             req.MimicDebs,
-			MimicFallbackDefault:  strings.TrimSpace(req.MimicFallbackDefault),
-			TargetAgentVersion:    strings.TrimSpace(req.TargetAgentVersion),
-			MinAgentVersion:       strings.TrimSpace(req.MinAgentVersion),
-			AgentBins:             req.AgentBins,
-			AgentCanaryNodeIDs:    req.AgentCanaryNodeIDs,
-			AgentRolloutFleetWide: req.AgentRolloutFleetWide,
-			TelemetryHistoryCap:   req.TelemetryHistoryCap,
-		}.WithDefaults()
-		if cs.PublicAgentURL != "" {
-			if err := validateAbsoluteHTTPURL(cs.PublicAgentURL); err != nil {
-				writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_agent_url").Wrap(err))
-				return
-			}
-		}
-		if cs.GithubProxy != "" {
-			if err := validateAbsoluteHTTPURL(cs.GithubProxy); err != nil {
-				writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "github_proxy").Wrap(err))
-				return
-			}
-		}
-		if err := validateAbsoluteHTTPURL(cs.AgentReleaseBaseURL); err != nil {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "agent_release_base_url").Wrap(err))
-			return
-		}
-		// Fleet-wide mimic-fallback default enum (plan-4): the raw submitted value must be ""
-		// (inherit→WithDefaults fills "none") / "udp" / "none". A typo is rejected, not silently floored.
-		switch strings.TrimSpace(req.MimicFallbackDefault) {
-		case "", "udp", "none":
-		default:
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "mimic_fallback_default"))
-			return
-		}
-		// plan-2: the resource-history cap must be >= 0 (0 = disable) and within a sanity bound, so a
-		// typo cannot request an effectively unbounded per-node history file.
-		if req.TelemetryHistoryCap != nil {
-			if c := *req.TelemetryHistoryCap; c < 0 || c > maxTelemetryHistoryCap {
-				writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "telemetry_history_cap"))
-				return
-			}
-		}
-		if err := validateMimicCatalog(cs); err != nil {
-			writeAPIError(w, err)
-			return
-		}
-		if err := validateAgentRollout(cs, h.version); err != nil {
-			writeAPIError(w, err)
-			return
-		}
-		if err := h.store.PutSettings(r.Context(), tenant, cs); err != nil {
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
-		}
-		_, _ = h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
-			Timestamp: time.Now().UTC(),
-			Actor:     "operator:" + actor,
-			Action:    "settings-update",
-		})
-		writeJSON(w, http.StatusOK, h.settingsResponse(cs))
-
-	default:
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET, POST"))
-	}
-}
 
 // HandleBootstrap serves the bash one-shot bootstrap script (agent port, NO auth).
 // It bakes the server-side settings (controller URL incl. the secret path prefix, the
@@ -252,7 +82,7 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 func validateAbsoluteHTTPURL(s string) error {
 	// Reject whitespace/control characters: these URLs are baked into the bootstrap
 	// bash script, and a space would word-split an (unquoted) systemd ExecStart token
-	// even though the assignment itself is shQuote-safe. A real http(s) URL has none.
+	// even though the assignment itself is shellSingleQuote-safe. A real http(s) URL has none.
 	if strings.ContainsAny(s, " \t\r\n\v\f") {
 		return errors.New("must not contain whitespace")
 	}
@@ -434,12 +264,15 @@ func validateAgentRollout(cs controller.ControllerSettings, controllerVersion st
 	return nil
 }
 
-// shQuote single-quotes s for safe inclusion in the bootstrap bash script: the value
-// is wrapped in single quotes (which preserve newlines and disable all expansion) and
-// any embedded single quote is escaped as '\”. The injected values are operator-
-// configured settings + the public operator credential, never request input, but
-// quoting keeps a stray metacharacter from breaking the script.
-func shQuote(s string) string {
+// shellSingleQuote POSIX single-quote-escapes s so it can be spliced into the bootstrap
+// bash script as one inert shell word: the whole value is wrapped in single quotes '…'
+// (which preserve newlines and disable ALL shell expansion) and every embedded single
+// quote is rewritten as the '\” idiom (close the quote, emit an escaped literal ', reopen).
+// It is a self-contained api-local primitive — internal/api does NOT import internal/renderer,
+// so the renderer's ShellToken seam is deliberately not reused here. The injected values are
+// operator-configured settings + the public operator credential (never request input), but
+// quoting keeps a stray metacharacter from breaking the emitted assignment.
+func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
@@ -456,13 +289,22 @@ func renderBootstrapScript(controllerBase, ghProxy, releaseBase string, agentBin
 	b.WriteString("#   bash <(curl -fsSL <public-agent-url>/api/v1/agent/bootstrap) --token <T> --node-id <ID>\n")
 	b.WriteString("set -euo pipefail\n\n")
 	b.WriteString("# --- server-injected defaults (operator settings; flags below override) ---\n")
-	fmt.Fprintf(&b, "CONTROLLER=%s\n", shQuote(controllerBase))
-	fmt.Fprintf(&b, "GH_PROXY=%s\n", shQuote(ghProxy))
-	fmt.Fprintf(&b, "RELEASE_BASE=%s\n", shQuote(releaseBase))
-	fmt.Fprintf(&b, "OPERATOR_CRED_ALG=%s\n", shQuote(credAlg))
-	fmt.Fprintf(&b, "OPERATOR_RPID=%s\n", shQuote(credRPID))
-	fmt.Fprintf(&b, "OPERATOR_ORIGIN=%s\n", shQuote(credOrigin))
-	fmt.Fprintf(&b, "OPERATOR_CRED_PEM=%s\n\n", shQuote(credPEM))
+	fmt.Fprintf(&b, "CONTROLLER=%s\n", shellSingleQuote(controllerBase))
+	fmt.Fprintf(&b, "GH_PROXY=%s\n", shellSingleQuote(ghProxy))
+	fmt.Fprintf(&b, "RELEASE_BASE=%s\n", shellSingleQuote(releaseBase))
+	fmt.Fprintf(&b, "OPERATOR_CRED_ALG=%s\n", shellSingleQuote(credAlg))
+	// OP_FLAGS unquoted-by-design: OPERATOR_RPID / OPERATOR_ORIGIN are single-quoted at THIS
+	// assignment (assignment integrity — an embedded quote can't break the line), but UNLIKE the
+	// other fields they are re-expanded UNQUOTED downstream: bootstrapScriptBody splices them into
+	// the OP_FLAGS accumulator ("--operator-rpid ${OPERATOR_RPID} …") which is then word-split at the
+	// unquoted ${OP_FLAGS} expansion (ExecStart / --once) into separate argv flags. That splice is a
+	// THIRD shell context where single-quoting the VALUE would collapse the two flags into one
+	// argument and break enrollment — so it is NOT single-quoted there, by design. Their injection-
+	// safety is enforced at PIN time by validateOperatorCredentialBinding (rejecting whitespace + shell
+	// metacharacters), NOT by quoting. Do NOT try to further quote them (here or at the splice).
+	fmt.Fprintf(&b, "OPERATOR_RPID=%s\n", shellSingleQuote(credRPID))
+	fmt.Fprintf(&b, "OPERATOR_ORIGIN=%s\n", shellSingleQuote(credOrigin))
+	fmt.Fprintf(&b, "OPERATOR_CRED_PEM=%s\n\n", shellSingleQuote(credPEM))
 	// Bake the per-arch agent-binary pins (SHA-256 + asset) the operator configured, as shell-safe vars
 	// the body verifies before install (plan-6). Sorted for determinism. The keys are already
 	// charset-validated at settings-save (agentBinKeyPattern = linux-<arch>) and re-checked here
@@ -480,8 +322,8 @@ func renderBootstrapScript(controllerBase, ghProxy, releaseBase string, agentBin
 				continue
 			}
 			varSuffix := strings.ReplaceAll(k, "-", "_")
-			fmt.Fprintf(&b, "AGENT_SHA_%s=%s\n", varSuffix, shQuote(art.SHA256))
-			fmt.Fprintf(&b, "AGENT_ASSET_%s=%s\n", varSuffix, shQuote(art.Asset))
+			fmt.Fprintf(&b, "AGENT_SHA_%s=%s\n", varSuffix, shellSingleQuote(art.SHA256))
+			fmt.Fprintf(&b, "AGENT_ASSET_%s=%s\n", varSuffix, shellSingleQuote(art.Asset))
 		}
 		b.WriteString("\n")
 	}

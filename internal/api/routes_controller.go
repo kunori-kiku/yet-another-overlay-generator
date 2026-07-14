@@ -236,14 +236,25 @@ func (h *ControllerHandler) isReservedNodeID(id string) bool {
 // machine-to-machine JSON, with no browser CORS concern.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	base := h.AgentBasePath()
+	// /enroll is PRE-AUTH (reachable before the node has a token) and STAYS hand-rolled: it reserves a
+	// per-IP rate-limit slot BEFORE decoding the body and has no identity() to assert, so it must not be
+	// routed through the op()/opRaw() adapter (which rejects a request that reached it without an identity).
 	mux.HandleFunc(base+"enroll", h.HandleEnroll)
-	mux.HandleFunc(base+"config", h.requireNode(h.HandleConfig))
-	mux.HandleFunc(base+"poll", h.requireNode(h.HandlePoll))
-	mux.HandleFunc(base+"report", h.requireNode(h.HandleReport))
+	// config/poll/report/telemetry/rekey run under requireNode (the per-node bearer chokepoint that pins
+	// the identity onto the context) AND are additionally wrapped by the op()/opRaw() ADAPTER (adapter.go),
+	// which runs the per-handler method guard + structural identity() check ONCE so no handler body can
+	// forget it (invariant 4), matching the operator mux. This is STRUCTURAL HYGIENE, not a security fix:
+	// each handler's old in-body identity() check was already-dead defense-in-depth behind requireNode
+	// (which cannot dispatch without an identity) — the adapter just makes that guarantee structural rather
+	// than a per-handler convention. /poll uses opRaw because it writes its OWN response (the bodyless 204
+	// long-poll-deadline reply op's writeJSON(200,result) contract cannot express); the rest use op.
+	mux.HandleFunc(base+"config", h.requireNode(h.op(http.MethodGet, h.HandleConfig)))
+	mux.HandleFunc(base+"poll", h.requireNode(h.opRaw(http.MethodGet, h.HandlePoll)))
+	mux.HandleFunc(base+"report", h.requireNode(h.op(http.MethodPost, h.HandleReport)))
 	// /telemetry is the LIVE health heartbeat (beta9-smoke-hardening plan-1): per-node bearer auth like
 	// /report, but observability-only — it updates conditions + last_seen and never touches deploy custody.
-	mux.HandleFunc(base+"telemetry", h.requireNode(h.HandleTelemetry))
-	mux.HandleFunc(base+"rekey", h.requireNode(h.HandleRekey))
+	mux.HandleFunc(base+"telemetry", h.requireNode(h.op(http.MethodPost, h.HandleTelemetry)))
+	mux.HandleFunc(base+"rekey", h.requireNode(h.op(http.MethodPost, h.HandleRekey)))
 	// Bootstrap (plan-5.2): the one-shot install script, served WITHOUT auth (it is
 	// generic; the single-use enrollment token is a flag the operator supplies).
 	mux.HandleFunc(base+"bootstrap", h.HandleBootstrap)

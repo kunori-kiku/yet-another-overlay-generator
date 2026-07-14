@@ -86,41 +86,31 @@ func (h *ControllerHandler) HandleEnroll(w http.ResponseWriter, r *http.Request)
 
 // HandleConfig returns the CALLER's current bundle (the node taken from the bearer
 // token, never the request). 404 before the first promote for that node. It also
-// TouchLastSeen-s the node so the registry reflects the check-in.
-func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, node, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
-
+// TouchLastSeen-s the node so the registry reflects the check-in. Routed through the
+// op() adapter (routes_controller.go), which runs the method guard + structural
+// identity() check before this body — so the node/tenant arrive already resolved.
+func (h *ControllerHandler) HandleConfig(ctx context.Context, tenant controller.TenantID, node string, _ http.ResponseWriter, _ *http.Request) (any, *apierr.Error) {
 	// One ATOMIC snapshot of what this node is served: its current promoted bundle plus,
 	// when the keystone is ON, the SERVED (last-promoted) signed trust-list — read under a
 	// single store lock so a concurrent PromoteStaged can never hand the node a torn
 	// (old-bundle, new-manifest) pair that would spuriously fail its bundle-digest binding.
-	sc, err := h.store.GetServedConfig(r.Context(), tenant, node)
+	sc, err := h.store.GetServedConfig(ctx, tenant, node)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeConfigNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeConfigNotFound).Wrap(err)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 
 	// Best-effort check-in stamp; a failed touch must not deny the node its config.
-	_ = h.store.TouchLastSeen(r.Context(), tenant, node, time.Now())
+	_ = h.store.TouchLastSeen(ctx, tenant, node, time.Now())
 
 	// Read the caller's registry record so the response can carry its
 	// RekeyRequested flag (the agent reacts to it by regenerating + re-registering
 	// its WireGuard key). A failed read must not deny the node its config — the flag
 	// then defaults to false and the agent re-learns it on a later fetch.
 	rekeyRequested := false
-	if n, err := h.store.GetNode(r.Context(), tenant, node); err == nil {
+	if n, err := h.store.GetNode(ctx, tenant, node); err == nil {
 		rekeyRequested = n.RekeyRequested
 	}
 
@@ -139,18 +129,17 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 	// has one to serve; we still fail closed (HasTrustList false) if it is somehow absent.
 	if sc.KeystoneOn {
 		if !sc.HasTrustList {
-			writeAPIError(w, apierr.New(apierr.CodeKeystoneNoSignedManifest))
-			return
+			return nil, apierr.New(apierr.CodeKeystoneNoSignedManifest)
 		}
 		files["trustlist.json"] = base64.StdEncoding.EncodeToString(sc.TrustList.TrustListJSON)
 		files["trustlist.sig"] = base64.StdEncoding.EncodeToString(sc.TrustList.SignatureJSON)
 	}
 
-	writeJSON(w, http.StatusOK, configResponseJSON{
+	return configResponseJSON{
 		Generation:     sc.Bundle.Generation,
 		Files:          files,
 		RekeyRequested: rekeyRequested,
-	})
+	}, nil
 }
 
 // HandlePoll long-polls for a generation strictly greater than ?after=N. It blocks
@@ -158,43 +147,39 @@ func (h *ControllerHandler) HandleConfig(w http.ResponseWriter, r *http.Request)
 // context. On advance it returns {generation}; on the deadline it returns 204 so the
 // agent re-polls. The node identity comes from the bearer token (TouchLastSeen the
 // caller).
-func (h *ControllerHandler) HandlePoll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "GET"))
-		return
-	}
-	tenant, node, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+//
+// Routed through opRaw() (NOT op()): opRaw applies the SAME structural method-guard +
+// identity() preamble as op but lets the handler write its OWN response, which HandlePoll
+// requires — the deadline branch emits a bodyless 204 that op's writeJSON(200, result)
+// contract cannot express (a 200-null would break the agent's re-poll loop). So this stays
+// a raw writer, but the auth preamble is now structural rather than hand-rolled.
+func (h *ControllerHandler) HandlePoll(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) *apierr.Error {
 	after, err := parseAfter(r.URL.Query().Get("after"))
 	if err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return codedErr(apierr.CodeReqInvalidBody, err)
 	}
 
 	// Best-effort check-in stamp on each poll.
-	_ = h.store.TouchLastSeen(r.Context(), tenant, node, time.Now())
+	_ = h.store.TouchLastSeen(ctx, tenant, node, time.Now())
 
 	deadline := h.pollDeadline
 	if deadline <= 0 {
 		deadline = defaultPollDeadline
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), deadline)
+	pollCtx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 
-	gen, err := h.store.WaitForGeneration(ctx, tenant, after)
+	gen, err := h.store.WaitForGeneration(pollCtx, tenant, after)
 	if err != nil {
 		// Deadline/cancellation → no advance within the window → 204, re-poll.
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			w.WriteHeader(http.StatusNoContent)
-			return
+			return nil
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return codedErr(apierr.CodeInternalStorage, err)
 	}
 	writeJSON(w, http.StatusOK, pollResponseJSON{Generation: gen})
+	return nil
 }
 
 const (
@@ -252,49 +237,37 @@ func validateMetrics(metrics map[string]json.RawMessage) *apierr.Error {
 
 // HandleReport records an agent's apply outcome for ITSELF: SetAppliedGeneration +
 // TouchLastSeen + an audit entry. The node is the bearer token's node; the report
-// body carries only the applied generation, checksum, and a health string.
-func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, node, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+// body carries only the applied generation, checksum, and a health string. Routed
+// through op() (routes_controller.go): the adapter runs the method guard + structural
+// identity() check before this body.
+func (h *ControllerHandler) HandleReport(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req reportRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if ae := validateConditions(req.Conditions); ae != nil {
-		writeAPIError(w, ae)
-		return
+		return nil, ae
 	}
 
 	now := time.Now()
 	// Server-stamp the conditions' ObservedAt with the controller clock (inside the store): a node
 	// clock cannot be trusted for ordering/ageing, so req.Conditions carry only the advisory Since.
-	if err := h.store.SetAppliedGeneration(r.Context(), tenant, node, req.AppliedGeneration, req.Checksum, req.Health, req.AgentVersion, req.Conditions, now); err != nil {
+	if err := h.store.SetAppliedGeneration(ctx, tenant, node, req.AppliedGeneration, req.Checksum, req.Health, req.AgentVersion, req.Conditions, now); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	_ = h.store.TouchLastSeen(r.Context(), tenant, node, now)
-	if _, err := h.store.AppendAudit(r.Context(), tenant, controller.AuditEntry{
+	_ = h.store.TouchLastSeen(ctx, tenant, node, now)
+	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now,
 		Actor:     "agent:" + node,
 		Action:    "report",
 		NodeID:    node,
 	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	return map[string]string{"status": "ok"}, nil
 }
 
 // HandleTelemetry records a LIVE health heartbeat from the CALLER (the node from the bearer token,
@@ -306,39 +279,26 @@ func (h *ControllerHandler) HandleReport(w http.ResponseWriter, r *http.Request)
 // asymmetry by adding an audit entry here. Conditions are server-stamped with the controller clock
 // inside the store (a node clock cannot be trusted for ageing). The metrics map (the framework's
 // extension slot — e.g. wireguard_peers) is persisted wholesale and served under node.telemetry.
-// Returns {status:"ok"}.
-func (h *ControllerHandler) HandleTelemetry(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, node, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+// Returns {status:"ok"}. Routed through op() (routes_controller.go): the adapter runs the method
+// guard + structural identity() check before this body.
+func (h *ControllerHandler) HandleTelemetry(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req telemetryRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if ae := validateConditions(req.Conditions); ae != nil {
-		writeAPIError(w, ae)
-		return
+		return nil, ae
 	}
 	if ae := validateMetrics(req.Metrics); ae != nil {
-		writeAPIError(w, ae)
-		return
+		return nil, ae
 	}
-	if err := h.store.RecordTelemetry(r.Context(), tenant, node, req.Conditions, req.Metrics, req.AgentVersion, time.Now()); err != nil {
+	if err := h.store.RecordTelemetry(ctx, tenant, node, req.Conditions, req.Metrics, req.AgentVersion, time.Now()); err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	return map[string]string{"status": "ok"}, nil
 }
 
 // HandleRekey re-registers the CALLER's rotated WireGuard PUBLIC key (the node from
@@ -346,44 +306,31 @@ func (h *ControllerHandler) HandleTelemetry(w http.ResponseWriter, r *http.Reque
 // node record and clears RekeyRequested, all via GetNode/UpsertNode so every other
 // field is preserved. It is the agent's response to a rekey_requested=true /config:
 // the controller never sees a private key (zero-knowledge custody). An empty
-// wg_public_key is a 400. Returns {ok:true}.
-func (h *ControllerHandler) HandleRekey(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, apierr.New(apierr.CodeMethodNotAllowed).With("method", "POST"))
-		return
-	}
-	tenant, node, ok := identity(r.Context())
-	if !ok {
-		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
-		return
-	}
+// wg_public_key is a 400. Returns {ok:true}. Routed through op() (routes_controller.go):
+// the adapter runs the method guard + structural identity() check before this body.
+func (h *ControllerHandler) HandleRekey(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req rekeyRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
-		return
+		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	if req.WGPublicKey == "" {
-		writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", "wg_public_key"))
-		return
+		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "wg_public_key")
 	}
 
 	// controller.Rekey swaps the key + clears the flag under the per-tenant op lock
 	// and enforces the SAME identity invariant as enroll (plan-6 review: the rekey
 	// write path must not be able to create a duplicate the enroll dedupe forbids).
-	if err := controller.Rekey(r.Context(), h.store, tenant, node, req.WGPublicKey, time.Now()); err != nil {
+	if err := controller.Rekey(ctx, h.store, tenant, node, req.WGPublicKey, time.Now()); err != nil {
 		// Context-specific: an unknown node is a 404 here (kept out of the central table).
 		if errors.Is(err, controller.ErrNotFound) {
-			writeAPIError(w, apierr.New(apierr.CodeNodeNotFound).Wrap(err))
-			return
+			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
 		// Context-free WG-key sentinels (ErrInvalidWGKey → req_field_invalid{wg_public_key};
 		// ErrDuplicateWGKey → duplicate_wg_key) map through the central table (errmap.go).
 		if ae := mapControllerErr(err); ae != nil {
-			writeAPIError(w, ae)
-			return
+			return nil, ae
 		}
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
+		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
-	writeJSON(w, http.StatusOK, rekeyResponseJSON{OK: true})
+	return rekeyResponseJSON{OK: true}, nil
 }
