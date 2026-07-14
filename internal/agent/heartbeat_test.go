@@ -1,4 +1,4 @@
-package main
+package agent
 
 import (
 	"io"
@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
@@ -43,12 +42,12 @@ func waitForCount(t *testing.T, n *int64, want int64, what string) {
 // only beats are the startup one and the kick-driven ones.
 func TestRunHeartbeat_Kick(t *testing.T) {
 	poster := &fakePoster{}
-	tel := agent.NewTelemetryForTest(alwaysSampler{})
+	tel := NewTelemetryForTest(alwaysSampler{})
 	kick := make(chan struct{}, 1)
 	done := make(chan struct{})
 	defer close(done)
 
-	go runHeartbeat(poster, tel, time.Hour, kick, done, io.Discard)
+	go RunHeartbeat(poster, tel, time.Hour, kick, done, io.Discard)
 
 	waitForCount(t, &poster.n, 1, "startup beat")
 	kick <- struct{}{}
@@ -61,10 +60,10 @@ func TestRunHeartbeat_Kick(t *testing.T) {
 // second kick against a full buffer is a no-op (not a block), and a nil channel is a safe no-op.
 func TestTryKick_NonBlocking(t *testing.T) {
 	ch := make(chan struct{}, 1)
-	tryKick(ch) // fills the buffer
-	tryKick(ch) // buffer full → coalesced no-op, MUST NOT block
+	TryKick(ch) // fills the buffer
+	TryKick(ch) // buffer full → coalesced no-op, MUST NOT block
 	if len(ch) != 1 {
-		t.Fatalf("tryKick should coalesce to 1 pending, got %d", len(ch))
+		t.Fatalf("TryKick should coalesce to 1 pending, got %d", len(ch))
 	}
-	tryKick(nil) // nil channel (heartbeat disabled) → no-op, no panic
+	TryKick(nil) // nil channel (heartbeat disabled) → no-op, no panic
 }
