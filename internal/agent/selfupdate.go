@@ -36,6 +36,21 @@ import (
 // the reconcile abandons it (rolls back to the prior binary). It is the crash-loop ceiling.
 const maxSelfUpdateAttempts = 3
 
+// maxSelfUpdateArtifactBytes caps the UNTRUSTED self-update download (the agent binary or a mimic .deb)
+// as defense-in-depth against a malicious/buggy mirror streaming an unbounded body onto the node's disk.
+// It is sized generously for a real Go agent binary + margin — far above the 32<<20 config-response cap
+// (controller_client.go) since this is a BINARY, not small JSON — while still bounding exhaustion. The
+// signed-pin verification AFTER the download is the actual integrity gate.
+const maxSelfUpdateArtifactBytes = 256 << 20 // 256 MiB
+
+// sameVersion reports whether two version strings denote the SAME release, using the SemVer comparator
+// (version.Compare via compareVersions) rather than a raw string ==. BuildVersion is the released git
+// tag (e.g. "v2.0.0-beta.2") while an operator's TargetAgentVersion may omit the leading "v" — an
+// exact-equality reconcile check would then treat a successfully-swapped binary as "not applied" and
+// WEDGE the update channel (the floor never advances, the in-flight guard blocks every future update).
+// The pre-swap self-test already compares with compareVersions; reconcile/finalize/rollback must too.
+func sameVersion(a, b string) bool { return compareVersions(a, b) == 0 }
+
 // Download bounds. A binary self-update over a slow GitHub proxy is a large, slow-but-progressing
 // transfer, so a single TOTAL deadline (the historic http.Client.Timeout) wrongly trips on the body
 // read of a ~10–15 MB binary (the live "context deadline exceeded while reading body" failure). The
@@ -311,7 +326,12 @@ func ReconcileSelfUpdateEarly(stateDir, buildVersion string, stderr io.Writer) {
 	}
 	pu := st.PendingUpdate
 	pu.Attempts++
-	_ = SaveState(stateDir, st)
+	if err := SaveState(stateDir, st); err != nil {
+		// If the attempt bump can't be persisted (e.g. the state dir went read-only), the crash-loop
+		// ceiling can't advance across boots — surface it loudly rather than swallowing the error, so an
+		// unbounded restart loop on an unwritable node is diagnosable instead of silent.
+		fmt.Fprintf(stderr, "agent: WARNING: could not persist self-update attempt %d/%d (%v); the crash-loop brick-bound will not advance while the state dir is unwritable\n", pu.Attempts, maxSelfUpdateAttempts, err)
+	}
 	if pu.Attempts > maxSelfUpdateAttempts {
 		rollbackAndAbandon(stateDir, buildVersion, pu, fmt.Sprintf("attempt cap %d exceeded", maxSelfUpdateAttempts), stderr)
 	}
@@ -335,7 +355,7 @@ func ReconcileSelfUpdatePromote(stateDir, buildVersion string, healthCheck func(
 		return
 	}
 	pu := st.PendingUpdate
-	if buildVersion != pu.To {
+	if !sameVersion(buildVersion, pu.To) {
 		// Swap/exec never took effect (or we are mid-rollback): Phase A bounds it via Attempts.
 		fmt.Fprintf(stderr, "agent: pending self-update to %s not applied (running %s, attempt %d/%d)\n",
 			pu.To, buildVersion, pu.Attempts, maxSelfUpdateAttempts)
@@ -374,7 +394,7 @@ func FinalizeSelfUpdate(stateDir, buildVersion string, stderr io.Writer) {
 		return
 	}
 	pu := st.PendingUpdate
-	if !pu.Confirmed || buildVersion != pu.To {
+	if !pu.Confirmed || !sameVersion(buildVersion, pu.To) {
 		return
 	}
 	self, _ := osExecutable()
@@ -412,7 +432,7 @@ func rollbackAndAbandon(stateDir, buildVersion string, pu *PendingUpdate, reason
 	bak := self + ".bak"
 
 	rolledBack := false
-	if buildVersion == pu.To {
+	if sameVersion(buildVersion, pu.To) {
 		if _, e := os.Stat(bak); e == nil {
 			if e := os.Rename(bak, self); e == nil { // restore the good binary FIRST
 				rolledBack = true
@@ -498,7 +518,10 @@ func downloadTo(parent context.Context, url, path string) error {
 		return err
 	}
 	sr := newStallReader(resp.Body, selfUpdateStallTimeout, cancel)
-	_, copyErr := io.Copy(f, sr)
+	// Cap the UNTRUSTED body (defense-in-depth vs a mirror streaming an unbounded download → disk
+	// exhaustion; the signed-pin verify AFTER this is the integrity gate). The +1 lets an over-cap body
+	// be DISTINGUISHED as a hard error rather than silently truncated into a pin mismatch.
+	n, copyErr := io.Copy(f, io.LimitReader(sr, maxSelfUpdateArtifactBytes+1))
 	sr.stop()
 	closeErr := f.Close()
 	if copyErr != nil {
@@ -510,6 +533,9 @@ func downloadTo(parent context.Context, url, path string) error {
 			return fmt.Errorf("download stalled: no data for %s", selfUpdateStallTimeout)
 		}
 		return copyErr
+	}
+	if n > maxSelfUpdateArtifactBytes {
+		return fmt.Errorf("download exceeds the %d-byte cap; refusing the untrusted oversized body", maxSelfUpdateArtifactBytes)
 	}
 	return closeErr
 }
