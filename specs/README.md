@@ -33,8 +33,7 @@ flowchart TD
     MODE -->|controller| AUTH[panel-auth<br/>password + TOTP / passkey login]
     AUTH --> DESIGN
 
-    DESIGN -->|validate · compile · export| AIRGAP[airgap-api<br/>open design endpoints]
-    AIRGAP --> VALID[model-validation<br/>schema + semantic checks]
+    DESIGN -->|validate · compile · export in-browser WASM| VALID[model-validation<br/>schema + semantic checks]
     VALID --> COMPILE[compiler-allocation<br/>IPs · ports · pins · peer derivation]
     COMPILE --> CUSTODY{key custody}
     CUSTODY -->|AirGap: keys round-trip| RENDER[render-keys<br/>wg / babel / sysctl / install.sh]
@@ -72,7 +71,6 @@ zero-knowledge placeholder spliced with the node's locally-held key).
 | panel-auth | Touching login flows (password/TOTP/passkey), client session/CSRF state | `panel-auth.md` |
 | panel-design | Touching the canvas, topology store, localStorage persistence, import/export | `panel-design.md` |
 | panel-deploy-fleet | Touching the deploy flow, fleet UI, enrollment UI, connection/bootstrap settings | `panel-deploy-fleet.md` |
-| airgap-api | Touching the open validate/compile/export endpoints or SPA hosting | `airgap-api.md` |
 | model-validation | Touching the topology model or validation rules | `model-validation.md` |
 | compiler-allocation | Touching IP/port allocation, pins, stability, peer derivation | `compiler-allocation.md` |
 | render-keys | Touching key generation/custody or config/script rendering | `render-keys.md` |

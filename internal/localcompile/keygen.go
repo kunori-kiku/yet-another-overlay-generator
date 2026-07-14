@@ -56,9 +56,9 @@ func (wgtypesKeygen) ParseAndNormalize(privB64 string) (string, error) {
 }
 
 // ecdhKeygen is the stdlib reference Keygen: it derives X25519 public keys through
-// crypto/ecdh instead of wgtypes/wgctrl, giving plan-5 (conformance) and plan-4
-// (the TypeScript port) a wgctrl-free, stdlib-anchored definition of the key
-// derivation and unblocking a future js/wasm Go oracle. It is proven byte-equal to
+// crypto/ecdh instead of wgtypes/wgctrl, a wgctrl-free, stdlib-anchored definition
+// of the key derivation that unblocks the js/wasm Go build (which cannot import
+// wgctrl's netlink paths). It is proven byte-equal to
 // wgtypesKeygen over 10k inputs (keygen_equivalence_test.go) on DerivePublic and
 // ParseAndNormalize.
 //

@@ -5,15 +5,16 @@ semantic validation, IP allocation, capability inference, peer derivation, the r
 `render.All`, and the artifacts byte set that `artifacts.Export` writes to disk — all behind
 the single Go façade `internal/localcompile.Compile`.
 
-This document is the **authority** the TypeScript reimplementation (plan-4, `frontend/src/compiler/`)
-mirrors and the Go↔TS conformance harness (plan-5, `internal/conformance/`) enforces. Its golden
-corpus (`internal/localcompile/testdata/contract/`) is the **authoritative byte-freeze**: the
-exact bytes today's pipeline emits for a fixed set of fixtures with fixed keys and a fixed clock.
+This document is the **authority** the in-browser Go/WASM engine builds on (the same
+`internal/localcompile.Compile` façade compiled to `web/yaog.wasm`) and the **WASM conformance gate**
+(`scripts/wasm-conformance-gate.mjs`) enforces. Its golden corpus
+(`internal/localcompile/testdata/contract/`) is the **authoritative byte-freeze**: the exact bytes
+today's pipeline emits for a fixed set of fixtures with fixed keys and a fixed clock.
 
 > Scope: this contract **freezes current behavior**. It defines no new semantics. In particular it
 > does **not** define or change `router_id` semantics (owned by plan-9) — it only freezes the
 > `RouterID` write-back the pipeline already performs. It introduces **no intentional byte change**:
-> every existing caller (the air-gap CLI, the air-gap HTTP API, the controller subgraph compile) is
+> every existing caller (the air-gap CLI, the WASM engine, the controller subgraph compile) is
 > byte-identical before and after the extraction.
 
 ---
@@ -34,9 +35,9 @@ pipeline's in-place write-backs never touch the caller's `req.Topology` — the 
 (`TestCompile_InputTopologyUnmutated`).
 
 **Context is orthogonal to the contract.** The frozen `CompileRequest` carries no Go `context`
-(the TS port mirrors a context-free seam), and the pure `Compile(req)` / `CompileResult(req)`
-entry points compile under `context.Background()`. The live Go callers that want a request-bounded,
-cancellable allocator scan (the air-gap HTTP handlers, the controller subgraph compile) use the
+(the WASM engine shares the same context-free seam), and the pure `Compile(req)` / `CompileResult(req)`
+entry points compile under `context.Background()`. The live Go caller that wants a request-bounded,
+cancellable allocator scan (the controller subgraph compile) uses the
 `CompileResultCtx(ctx, req)` sibling — `ctx` affects neither the allocated values nor the rendered
 bytes, so it is deliberately not a request field.
 
@@ -45,7 +46,7 @@ bytes, so it is deliberately not a request field.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `Topology` | `model.Topology` | The only required input. |
-| `Custody` | `render.KeyCustody` | `AirGap` (local/CLI + air-gap HTTP API — private keys round-trip through the topology JSON) or `AgentHeld` (controller — zero-knowledge custody, only public keys persist; see `docs/spec/controller/key-custody.md`). |
+| `Custody` | `render.KeyCustody` | `AirGap` (local/CLI — private keys round-trip through the topology JSON) or `AgentHeld` (controller — zero-knowledge custody, only public keys persist; see `docs/spec/controller/key-custody.md`). |
 | `Keygen` | `localcompile.Keygen` | The WireGuard key-derivation seam (see §6). `nil` ⇒ the default `wgtypesKeygen` (byte-identical to today). |
 | `SigningKey` | `bundlesig.ConfigSigner` | The optional tier-1 bundle signer. It is the **interface** (not a `*bundlesig.Signing` pointer) — a `nil` interface means "unsigned", the byte-identical no-signing path; the interface avoids Go's typed-nil gotcha so a plain `SigningKey == nil` test is safe. **Never read from `YAOG_BUNDLE_SIGNING_KEY` by the façade** (that would break purity); the caller constructs the signer and injects it. |
 | `Fetch` | `render.FetchSettings` | The typed channel of install-time fetch pins (mimic GitHub-`.deb` fallback, agent self-update catalog). Its **zero value** means "no catalog configured", which MUST leave `install.sh` and the signed bundle byte-identical. Replaces the in-pipeline `FetchSettingsFromEnv` read. |
@@ -74,7 +75,7 @@ not contract** (`artifacts.Export` is a thin adapter over `CompileArtifacts`).
 
 The single authority for per-node bundle integrity is `internal/bundlesig.Canonicalize(files
 map[string]string) []byte` (`internal/bundlesig/bundlesig.go`). It is the byte-exact content of a
-node's `checksums.sha256` file and the message that `bundle.sig` signs. The TS port MUST reproduce
+node's `checksums.sha256` file and the message that `bundle.sig` signs. Every consumer reproduces
 it byte-for-byte:
 
 1. For every `(path, content)` pair, compute `sha256(content)`.
@@ -118,8 +119,8 @@ depends on `render`.)
 
 ## 4. The four cross-language authorities
 
-The TS port re-implements each of these by-name; the conformance harness (plan-5) asserts the TS
-output is byte-equal, and the FE drift-guard pins the existing `normalizeEdges.ts` against them.
+The WASM engine compiles these from the same Go source; the **WASM conformance gate** asserts the
+in-browser (`web/yaog.wasm`) output is byte-equal to the frozen Go golden.
 
 ### 4.1 `internal/linkid` — link identity
 
@@ -192,9 +193,9 @@ by `InterfaceName`, consumed by both emission loops). The peer slice is *built* 
 edge-array order (`peers.go` Pass 2); the **renderer's sort** is what makes the output depend on link
 identity, not edge-array position.
 
-**The TS babel renderer MUST sort the peer slice by the identical `InterfaceName` key before
-emitting.** This chains the babel ordering to the `naming` cross-language authority so the harness
-and the TS port agree byte-for-byte. Pinned by `internal/renderer/babel_test.go`
+**The babel renderer sorts the peer slice by the `InterfaceName` key before emitting.** This chains
+the babel ordering to the `naming` cross-language authority so the output is byte-stable under an
+edge reorder. Pinned by `internal/renderer/babel_test.go`
 `TestRenderBabelConfig_StableUnderPeerReorder` (renderer-level) and by the compiler-level
 edge-reorder fixture pair in the golden corpus (full-pipeline).
 
@@ -227,8 +228,8 @@ type Keygen interface {
 - **`wgtypesKeygen`** (default) wraps today's exact `wgtypes` calls — production stays byte-identical.
 - **`ecdhKeygen`** is the stdlib `crypto/ecdh` X25519 reference implementation, proven byte-equal to
   `wgtypesKeygen` over 10k random inputs on `DerivePublic` and `ParseAndNormalize`
-  (`keygen_equivalence_test.go`). It gives the TS port (`@noble/curves`) and the harness a
-  `wgctrl`-free, stdlib-anchored definition and unblocks a future `js/wasm` Go oracle.
+  (`keygen_equivalence_test.go`). It gives the in-browser WASM engine a `wgctrl`-free,
+  stdlib-anchored definition — the `js/wasm` Go build the browser runs.
 
 **Fixed-key requirement for conformance.** Random private-key material can never be byte-asserted, so
 the conformance corpus pins **only public-key *derivation***: every fixture ships **fixed per-node

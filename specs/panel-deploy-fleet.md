@@ -52,7 +52,7 @@ Routes registered in `frontend/src/App.tsx:38-40`. `AuditLog`, `TwoFactorSetting
 - **Fleet mutations** — `revoke(cfg, nodeId)`, `rekeyAll(cfg)`, `mintEnrollmentToken(cfg, nodeId, ttlSeconds): Promise<string>` (`frontend/src/api/controllerClient.ts:690,700,646`).
 - **Operator credential pin** — `postOperatorCredential(cfg, OperatorCredentialBody)` turns the keystone ON (`frontend/src/api/controllerClient.ts:754-769`).
 - **Commands for node holders** — one-shot bootstrap (`bash <(curl …/bootstrap) --token … --node-id …`) and `agent enroll …` strings (`frontend/src/components/deploy/EnrollmentFlow.tsx:26-40`); consumed by specs/agent.md via specs/controller-agent-api.md. Depth: `docs/spec/controller/bootstrap.md`, `docs/spec/controller/enrollment.md`.
-- **Air-gap downloads** — browser POSTs to `/api/compile`, `/api/export` (ZIP), `/api/deploy-script?format=sh|ps1` (`frontend/src/stores/topologyStore.ts:456-562`); see specs/airgap-api.md and `docs/spec/artifacts/export-bundle.md`, `docs/spec/artifacts/deploy-scripts.md`.
+- **Local downloads** — the in-browser WASM engine compiles/exports client-side (no backend; the four anonymous `/api/*` compute routes were removed); see `docs/spec/artifacts/export-bundle.md`, `docs/spec/artifacts/deploy-scripts.md`.
 - **Fleet view state** — `nodes`/`audit`/`lastDeploy` consumed by NodeRegistry, FleetNodeDetailPage, DeployBar, AuditLog.
 
 ## Decision points

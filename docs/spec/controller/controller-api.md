@@ -5,7 +5,7 @@ This document defines the controller's **networked surface**: the audience-split
 the **per-node bearer-token + operator-token** model that authenticates them, the **single auth
 chokepoint** that derives `tenant:node` from a presented token, the **two-port split** (an
 operator/panel port and an agent control-channel port), and the **env-gated controller mode** of
-`cmd/server` that turns the whole thing on **beside** the untouched air-gap endpoints. It is the
+`cmd/server` that turns the whole networked surface on. It is the
 wire-facing layer in front of the controller core: it serves the registry/topology/bundle state of
 [persistence.md](persistence.md), runs the `Enroll` ceremony of [enrollment.md](enrollment.md), and
 drives the `CompileAndStage` step of [deploy.md](deploy.md). Everything here is **stdlib only**
@@ -34,26 +34,26 @@ and the parent [plan-4-2026_06_08.md](../../../implementation_plans/controller-p
 
 ## The env-gated controller mode
 
-`cmd/server` runs in **one of two modes**, selected by environment at startup:
+`cmd/server` is **controller-only** — one build, no `-tags airgap` variant, and **no anonymous compute
+surface**. The four former anonymous routes (`/api/validate`, `/api/compile`, `/api/export`,
+`/api/deploy-script`) were **removed** in framework-refactor plan-9; only `GET /api/health` is public
+(see [../operations/deployment-topology.md](../operations/deployment-topology.md)). Its startup
+behavior is selected by environment:
 
-- **Air-gap mode (default — unchanged).** When the controller env is **not** set, `cmd/server` is
-  **exactly** the server it is today: it serves the air-gap `/api/health`, `/api/validate`,
-  `/api/compile`, `/api/export`, `/api/deploy-script` endpoints over plain HTTP via `NewServer()` and
-  `ListenAndServe`, with the existing panic-recovery + CORS + timeout middleware
-  ([../api/http-api.md](../api/http-api.md)). Nothing about the air-gap path changes — same routes,
-  same bytes, same behavior.
-- **Controller mode (env-gated).** When the controller env **is** set, `cmd/server` additionally builds
-  the controller dependencies (a durable `FileStore` over the state dir, the `ControllerHandler`),
-  registers the operator routes on the **operator/panel port** and the agent routes on a **separate
-  agent control-channel port**, and serves **both over plain HTTP**. The air-gap routes stay registered
-  on the operator/panel mux and remain reachable; the controller routes are layered on, not a
-  replacement.
+- **Controller env set.** When the controller env **is** set, `cmd/server` builds the controller
+  dependencies (a durable `FileStore` over the state dir, the `ControllerHandler`), registers the
+  operator routes on the **operator/panel port** and the agent routes on a **separate agent
+  control-channel port**, and serves **both over plain HTTP** with the existing panic-recovery + CORS +
+  timeout middleware ([../api/http-api.md](../api/http-api.md)).
+- **Controller env unset.** When it is **not** set, `cmd/server` **fails loud** (`cmd/server/main.go`)
+  and exits — it links no anonymous compute surface to fall back to, so it names the fix (set the
+  controller env, or use the standalone static-local-design site / `cmd/compiler` for offline
+  compilation) instead of standing up a do-nothing listener.
 
 **The gate.** Controller mode is on iff **both** `YAOG_CONTROLLER_STATE_DIR` **and** `YAOG_TENANT_ID`
-are set (`cmd/server`: `if stateDir == "" || tenant == "" { air-gap }`). When it is on, the operator
+are set (`cmd/server`: `if stateDir == "" || tenant == "" { fail loud }`). When it is on, the operator
 token is **mandatory**: `cmd/server` **fails to start** (`log.Fatal`) if `YAOG_CONTROLLER_OPERATOR_TOKEN`
-is empty — there is no anonymous-operator fallback. If the gate is off the server is exactly the air-gap
-server and the operator-token requirement does not apply.
+is empty — there is no anonymous-operator fallback.
 
 | Env var                          | Meaning                                                                            |
 | -------------------------------- | --------------------------------------------------------------------------------- |
@@ -63,9 +63,9 @@ server and the operator-token requirement does not apply.
 | `YAOG_CONTROLLER_AGENT_ADDR`     | Listen address for the **agent control-channel** port (default `:9090`); `-agent-addr` flag overrides. |
 | `YAOG_BUNDLE_SIGNING_KEY`        | Optional Phase-0 bundle-signing key, read by `CompileAndStage`'s `Export`.         |
 
-The constant env names are defined once in the server package. Leaving the gate env unset is the explicit
-way to keep a deployment air-gap-only — the controller code is compiled in but dormant, so an operator
-who never opts in is never exposed to the networked surface.
+The constant env names are defined once in the server package. Leaving the gate env unset makes
+`cmd/server` **fail loud** and exit rather than stand up a listener — there is no anonymous compute
+surface, so offline compilation is the standalone static-local-design site or `cmd/compiler`.
 
 ## Plain HTTP + proxy TLS (the transport decision)
 
@@ -76,7 +76,7 @@ proxy's** job:
 ```
                     ┌──────────────────────── operator / panel (TLS) ──────────────────────────┐
   operator ──TLS──▶ │  nginx / caddy  ──plain HTTP──▶  cmd/server  -addr  (default :8080)        │
-                    │                                   • OPEN air-gap endpoints (/api/*)         │
+                    │                                   • GET /api/health (open liveness probe)   │
                     │                                   • operator routes (operatorAuth)          │
                     └──────────────────────────────────────────────────────────────────────────┘
                     ┌──────────────────────── agent control channel (TLS) ─────────────────────┐
@@ -107,12 +107,12 @@ directions.
 
 Controller mode serves **two** muxes on **two** addresses, both plain HTTP:
 
-- **Operator / panel port** (`-addr`, default `:8080`) — `s.mux`. Carries **both** the **open,
-  unauthenticated air-gap endpoints** (`/api/health|validate|compile|export|deploy-script`) **and** the
-  operator routes (`/update-topology`, `/stage`, `/promote`, `/nodes`, `/audit`, `/topology`,
-  `/enrollment-token`, all behind `operatorAuth`). This is the port a human operator and the frontend
-  panel talk to. The air-gap endpoints stay **open** here exactly as in air-gap mode — Mode A
-  ("download install script") keeps working — and are **not** gated by `operatorAuth`.
+- **Operator / panel port** (`-addr`, default `:8080`) — `s.mux`. Carries the **open, unauthenticated
+  liveness probe** (`GET /api/health`) **and** the operator routes (`/update-topology`, `/stage`,
+  `/promote`, `/nodes`, `/audit`, `/topology`, `/enrollment-token`, all behind `operatorAuth`). This is
+  the port a human operator and the frontend panel talk to. There is **no** anonymous compute route —
+  the four `/api/{validate,compile,export,deploy-script}` endpoints were removed (plan-9); LOCAL design
+  compiles in-browser on the WASM engine.
 - **Agent control-channel port** (`-agent-addr` / `YAOG_CONTROLLER_AGENT_ADDR`, default `:9090`) —
   `s.agentMux`. Carries only the agent routes: `/enroll` (no auth — the bootstrap), and `/config`,
   `/poll`, `/report` (each behind `requireNode`). Nothing else lives here.
@@ -202,7 +202,7 @@ node token (it is not in the per-node index, so `authenticateNode` returns 401).
 Agent/node routes live under `/api/v1/agent/` (agent port) and operator/panel routes under
 `/api/v1/operator/` (operator port) — distinct namespaces so the two surfaces never collide by
 path. All accept and return **JSON** (`Content-Type:
-application/json`), and carry the error-body convention of the air-gap API
+application/json`), and carry the JSON error-body convention of the HTTP API
 ([../api/http-api.md](../api/http-api.md)): a failure returns `{"error": "<message>"}` with the
 appropriate status. Byte-valued bundle files are transported **base64-encoded** in JSON.
 
@@ -470,14 +470,15 @@ its own plain-HTTP listener.
 
 ## Summary
 
-- `cmd/server` is **env-gated**: with `YAOG_CONTROLLER_STATE_DIR` / `YAOG_TENANT_ID` unset it is the
-  air-gap server exactly as today; with them set it additionally serves the controller routes — and
-  **requires** `YAOG_CONTROLLER_OPERATOR_TOKEN` (it `log.Fatal`s without it). The air-gap endpoints are
-  **unchanged** and stay **open** on the operator/panel port in both modes.
+- `cmd/server` is **controller-only** and **env-gated**: with `YAOG_CONTROLLER_STATE_DIR` /
+  `YAOG_TENANT_ID` unset it **fails loud** and exits; with them set it serves the controller routes — and
+  **requires** `YAOG_CONTROLLER_OPERATOR_TOKEN` (it `log.Fatal`s without it). There is **no** anonymous
+  compute surface — only `GET /api/health` is open on the operator/panel port; the four
+  `/api/{validate,compile,export,deploy-script}` routes were removed (plan-9).
 - **No TLS in-app.** Both ports speak **plain HTTP**; TLS is delegated to a reverse proxy (nginx/caddy).
   The controller imports neither `crypto/tls` nor `crypto/x509`.
-- **Two ports**: an **operator/panel** port (`-addr`, default `:8080`) carrying the open air-gap
-  endpoints + the `operatorAuth` operator routes, and an **agent** control-channel port (`-agent-addr` /
+- **Two ports**: an **operator/panel** port (`-addr`, default `:8080`) carrying the open `/api/health`
+  probe + the `operatorAuth` operator routes, and an **agent** control-channel port (`-agent-addr` /
   `YAOG_CONTROLLER_AGENT_ADDR`, default `:9090`) carrying `/enroll` (no auth) + the `requireNode` agent
   routes. Served concurrently over one error channel.
 - A **single auth chokepoint** in `auth_controller.go`: `authenticateNode` resolves a node bearer token

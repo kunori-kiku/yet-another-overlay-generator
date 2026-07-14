@@ -13,8 +13,8 @@ import (
 )
 
 // Compile runs the local compile path behind a single façade and returns the canonical
-// artifacts-out result. It is the seam the TypeScript reimplementation (plan-4) and the
-// conformance harness (plan-5) target.
+// artifacts-out result. It is the seam the in-browser Go/WASM engine (cmd/wasm → web/yaog.wasm)
+// and the WASM conformance gate target.
 //
 // As of plan-3 Phase 4 the façade is a PURE function: every non-deterministic and
 // environment-coupled input is taken from the request, never read from the process —
@@ -37,11 +37,11 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 // *compiler.CompileResult — the SINGLE place the GenerateKeys → CompileAt → AllWith
 // sequence lives (plan-3 Phase 6). Compile wraps it and re-shapes the result into the
 // canonical CompileArtifacts; the live callers that still consume the
-// *compiler.CompileResult shape directly — the air-gap HTTP handlers (CompileResponse /
-// the deploy-script teardown that needs result.PeerMap), artifacts.Export's disk write,
-// and the controller subgraph compile (preview + stage) — call this entry point instead
-// of re-running the sequence themselves, so the façade is the single compile authority
-// without forcing those callers to re-shape into CompileArtifacts.
+// *compiler.CompileResult shape directly — the oracle's BuildManifest (which needs
+// result.PeerMap), artifacts.Export's disk write, and the controller subgraph compile
+// (preview + stage) — call this entry point instead of re-running the sequence themselves,
+// so the façade is the single compile authority without forcing those callers to re-shape
+// into CompileArtifacts.
 //
 // It is pure for the same reasons Compile is: every impurity (keygen, clock, signer,
 // fetch, reserved) comes from req, never from the process, and it compiles under
@@ -53,12 +53,12 @@ func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 
 // CompileResultCtx is CompileResult with an explicit context for the live Go callers. ctx
 // bounds the IP-allocation pass: the allocator polls ctx.Err() per candidate and aborts a
-// long scan on cancellation (plan-8 S1), so the air-gap HTTP handlers pass r.Context() and
-// the controller subgraph compile passes its request ctx — a client disconnect stops the
-// scan rather than running it to the budget cap. ctx affects NEITHER the allocated values
-// NOR the rendered bytes, so it is deliberately not a member of the frozen CompileRequest:
-// the TS-mirrored contract stays context-free, and the pure CompileResult(req)/Compile(req)
-// entry points pass context.Background(). cmd/compiler likewise has no request ctx.
+// long scan on cancellation (plan-8 S1), so the controller subgraph compile passes its request
+// ctx — a client disconnect stops the scan rather than running it to the budget cap. ctx affects
+// NEITHER the allocated values NOR the rendered bytes, so it is deliberately not a member of the
+// frozen CompileRequest: the WASM-mirrored contract stays context-free, and the pure
+// CompileResult(req)/Compile(req) entry points pass context.Background(). cmd/compiler likewise
+// has no request ctx.
 func CompileResultCtx(ctx context.Context, req CompileRequest) (*compiler.CompileResult, error) {
 	// Compile on a copy of the topology's Node/Edge slices so the façade never mutates the
 	// caller's input: render.GenerateKeysWith writes the derived WireGuard keys onto nodes in

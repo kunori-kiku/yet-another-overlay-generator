@@ -14,7 +14,7 @@ Materialize each compiled node's config bundle as an on-disk directory (configs 
 ## Inputs
 - `*compiler.CompileResult` from the render pipeline (see specs/compiler-allocation.md, specs/render-keys.md): `WireGuardConfigs` keyed `"nodeID:interfaceName"` (internal/artifacts/export.go:84-97), `BabelConfigs`, `SysctlConfigs`, `InstallScripts` per node ID, `DeployScripts` per filename, and `Manifest` metadata (internal/artifacts/export.go:202-215).
 - Env var `YAOG_BUNDLE_SIGNING_KEY` (internal/bundlesig/bundlesig.go:36): path to an Ed25519 private key in PKCS#8 PEM (`openssl genpkey -algorithm ed25519`); unset/empty means signing is off.
-- Callers of `Export`: the CLI (cmd/compiler/main.go:85), the air-gap export endpoint (internal/api/handler.go:211, see specs/airgap-api.md), and controller staging (internal/controller/compile.go:207, see specs/controller-stage-promote.md).
+- Callers of `Export`: the CLI (`cmd/compiler`), the in-browser WASM engine, and controller staging (`internal/controller/compile.go`, see specs/controller-stage-promote.md).
 
 ## Outputs
 - Per-node directory `<outputDir>/<nodeName>/` containing `wireguard/<iface>.conf` (0600), `babel/babeld.conf` (non-client only), `sysctl/99-overlay.conf`, `install.sh` (0755), `checksums.sha256`, `manifest.json`, `README.txt` (internal/artifacts/export.go:64-235); plus project-level deploy scripts at the export root (internal/artifacts/export.go:241-250). Layout documented in docs/spec/artifacts/export-bundle.md.

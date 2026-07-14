@@ -54,7 +54,7 @@ docs/spec/
 │   ├── development-workflow.md    # dev.sh, manual start, CLI compiler, tests
 │   ├── ci-cd.md                   # Release workflow, deployment scripts
 │   ├── deployment-topology.md     # Two deployments (static-local site vs controller),
-│   │                              #   the //go:build airgap boundary, security delta
+│   │                              #   no anonymous compute surface, security delta
 │   ├── telemetry-history.md       # Retained per-node resource history + node-detail
 │   │                              #   CPU/RAM/load charts; the /node-history query API
 │   └── examples.md                # Example topologies
@@ -84,7 +84,7 @@ docs/spec/
 2. `data-model/` — the shapes the compiler consumes
 3. `roles/` — node role semantics
 4. `compiler/` — the compilation pipeline (the core of the system); `compiler/io-contract.md`
-   is the frozen `localcompile.Compile` input→output contract the TS port + conformance harness target
+   is the frozen `localcompile.Compile` input→output contract the WASM engine + conformance gate target
 5. `artifacts/` — what gets rendered and deployed
 6. `api/`, `frontend/` — the interfaces around the compiler
 7. `operations/`, `security/`, `glossary.md` — supporting material

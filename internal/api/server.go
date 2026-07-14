@@ -206,8 +206,8 @@ func (s *Server) ListenAndServe(addr string) error {
 }
 
 // ListenAndServeAgent serves the agent-facing controller routes (s.agentMux) on a
-// separate port as PLAIN HTTP. It uses the same Slowloris timeouts as the air-gap
-// path (D33) but a longer WriteTimeout to accommodate the /poll long-poll (~55s)
+// separate port as PLAIN HTTP. It uses the same Slowloris timeouts as the operator/panel
+// HTTP server (D33) but a longer WriteTimeout to accommodate the /poll long-poll (~55s)
 // without the server tearing the connection down mid-wait (90s leaves margin). TLS
 // is delegated to a reverse proxy (plan-4.5).
 func (s *Server) ListenAndServeAgent(addr string) error {

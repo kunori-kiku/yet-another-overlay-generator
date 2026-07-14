@@ -44,7 +44,7 @@ import (
 // so the harness can tell a validation failure from a transport/compile-resource failure.
 //
 //   - Validator carries the sorted set of validator.Code strings collected by running
-//     validator.ValidateSchema + ValidateSemantic DIRECTLY (exactly as /api/validate does), over
+//     validator.ValidateSchema + ValidateSemantic DIRECTLY (the same schema + semantic passes the validator runs), over
 //     BOTH errors[] and warnings[]. It is populated for every fixture — a green fixture has whatever
 //     warnings the validator emits; a validator-FAIL fixture additionally has its error code(s) here.
 //   - Apierr carries the sorted set of apierr.Code strings from the compile error envelope. It is

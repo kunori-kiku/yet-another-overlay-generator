@@ -1,5 +1,5 @@
 {
-  "note": "X25519 known-answer test (KAT) vectors for the WireGuard key-derivation definition the conformance harness pins. public_b64 is the base64.StdEncoding form of X25519(private, basepoint) = the WireGuard public key, derived stdlib-side via crypto/ecdh X25519 — the SAME definition internal/localcompile.ecdhKeygen.DerivePublic wraps (proven byte-equal to the default wgtypesKeygen over 10k inputs in keygen_equivalence_test.go). plan-4 asserts @noble/curves against THIS file, so plans 3/4/5 all pin one X25519 derivation. keygen_kat_test.go is the Go anchor.",
+  "note": "X25519 known-answer test (KAT) vectors for the WireGuard key-derivation definition the WASM engine + golden pin. public_b64 is the base64.StdEncoding form of X25519(private, basepoint) = the WireGuard public key, derived stdlib-side via crypto/ecdh X25519 — the SAME definition internal/localcompile.ecdhKeygen.DerivePublic wraps (proven byte-equal to the default wgtypesKeygen over 10k inputs in keygen_equivalence_test.go). The in-browser WASM engine runs this same Go derivation, so one X25519 derivation is pinned everywhere. keygen_kat_test.go is the Go anchor.",
   "vectors": [
     {
       "name": "rfc7748_6.1_alice",
@@ -35,7 +35,7 @@
   "clamp_equivalence": [
     {
       "name": "all_ones_raw_vs_clamped",
-      "doc": "A raw private key and its X25519-clamped form (key[0] &= 248; key[31] &= 127; key[31] |= 64) MUST derive the IDENTICAL public key, because X25519 clamps the scalar internally. This is the property a TS @noble port must reproduce: do NOT pre-clamp before deriving, or do so identically.",
+      "doc": "A raw private key and its X25519-clamped form (key[0] &= 248; key[31] &= 127; key[31] |= 64) MUST derive the IDENTICAL public key, because X25519 clamps the scalar internally. This is the property the WASM engine's X25519 derivation must preserve: do NOT pre-clamp before deriving, or do so identically.",
       "raw_b64": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
       "clamped_b64": "AAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAUE=",
       "public_b64": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="

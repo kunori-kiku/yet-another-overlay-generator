@@ -15,7 +15,7 @@ jobs:
   # BEHAVIOR (plan-22 / 4.3): gofmt-drift + go test -race, npm run build (tsc -b),
   # the required frontend-e2e Playwright job, and
   # the realtunnel netns gate (gate-realtunnel). (setup-go here adds check-latest;
-  # the resolved toolchain is identical — go.mod pins toolchain go1.26.4.)
+  # the resolved toolchain is identical — go.mod pins toolchain go1.26.5.)
   gate-go:
     name: Gate — Go vet + test
     runs-on: ubuntu-latest

@@ -1,18 +1,16 @@
 //go:build js && wasm
 
 // Command wasm is the browser/Node WebAssembly shim over the pure Go compile pipeline
-// (framework-refactor plan-3, "WASM add-alongside"). Built with GOOS=js GOARCH=wasm into
-// web/yaog.wasm, it registers a small JSON-string API on the JS global `yaog` and then
-// blocks forever, so the SAME pure pipeline the controller runs in Go executes IN the
-// browser (the opt-in local design engine, VITE_YAOG_LOCAL_ENGINE='wasm') and IN the
-// permanent headless three-way conformance gate.
+// (framework-refactor). Built with GOOS=js GOARCH=wasm into web/yaog.wasm, it registers a
+// small JSON-string API on the JS global `yaog` and then blocks forever, so the SAME pure
+// pipeline the controller runs in Go executes IN the browser (the DEFAULT local design
+// engine) and IN the permanent headless WASM conformance gate.
 //
-// ADDITIVE phase: the TypeScript compiler stays the DEFAULT local engine; this wasm engine
-// is opt-in behind a flag. Nothing is deleted. The `buildManifest` entry is the
+// WASM is the DEFAULT (and only) in-browser local engine — the hand-mirrored TypeScript
+// compiler twin was deleted in the framework-refactor. The `buildManifest` entry is the
 // load-bearing one — invariant [1] "parity by execution + a permanent gate": the
 // WASM-vs-golden gate (scripts/wasm-conformance-gate.mjs) executes it over the success
-// corpus and asserts byte-equality against the frozen Go golden, proving WASM == Go. The
-// existing vitest conformance proves TS == Go, so the two together prove WASM == Go == TS.
+// corpus and asserts byte-equality against the frozen Go golden, proving WASM == Go.
 //
 // Every registered function takes and returns JSON STRINGS: JS passes a string argument,
 // the shim json.Unmarshals it, runs the pure pipeline, and json.Marshals the result back to

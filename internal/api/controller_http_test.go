@@ -453,12 +453,13 @@ func TestControllerHTTP_NodeActsOnlyAsItself(t *testing.T) {
 	}
 }
 
-// TestControllerHTTP_AirGapOpen confirms the air-gap routes stay OPEN and
-// UNAUTHENTICATED even when controller mode is enabled: they live on the operator
-// mux (s.mux) and are never gated by the operator token. Here we drive the full
-// Server (not a bare mux) so the air-gap routes are registered, enable the
-// controller, and confirm /api/health responds with no Authorization header.
-func TestControllerHTTP_AirGapOpen(t *testing.T) {
+// TestControllerHTTP_HealthOpenOperatorGated confirms that enabling controller mode keeps the
+// public liveness probe (/api/health) OPEN and UNAUTHENTICATED while the operator routes on the
+// SAME mux (s.mux) stay gated by the operator token. (The four anonymous compute routes are gone
+// entirely — that deletion is proven separately by no_anonymous_compute_test.go.) Here we drive the
+// full Server (not a bare mux), enable the controller, and confirm /api/health responds with no
+// Authorization header while an operator route without a token is 401.
+func TestControllerHTTP_HealthOpenOperatorGated(t *testing.T) {
 	srv := NewServer()
 	ch := NewControllerHandler(controller.NewMemStore(), testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
 	srv.EnableController(ch)
@@ -466,9 +467,9 @@ func TestControllerHTTP_AirGapOpen(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	// Air-gap health: no token, must be 200.
+	// Health probe: no token, must be 200.
 	if status := doJSON(t, http.MethodGet, ts.URL+"/api/health", "", nil, nil); status != http.StatusOK {
-		t.Fatalf("air-gap /api/health: status %d, want 200 (must stay open)", status)
+		t.Fatalf("public /api/health: status %d, want 200 (must stay open)", status)
 	}
 	// The operator route on the SAME mux still requires the operator token (401 absent).
 	if status := doJSON(t, http.MethodGet, ts.URL+"/api/v1/operator/nodes", "", nil, nil); status != http.StatusUnauthorized {
