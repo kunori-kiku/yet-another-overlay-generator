@@ -162,6 +162,39 @@ same PR; no `--no-verify`, no amends, no force-push.
    first-fetch pinning, the pinned-endpoint anti-roaming option.
 5. **Plans-only at draft;** execution on the owner's go. This plans PR merges on CI (docs-only); the
    full multi-agent review regime applies to every EXECUTION PR.
+6. **Pre-execution review COMPLETE (workflow `wld2zgik5`, 2026-07-14): verdict GO-WITH-FIXES.** All 14
+   plans target real HEAD-confirmed defects (nothing flawed); plan-1/plan-2 sound; the other 12 corrected
+   per [`REVIEW-CORRECTIONS.md`](REVIEW-CORRECTIONS.md) (AUTHORITATIVE — supersedes drafted specifics on
+   conflict). Locked resolutions:
+   - **plan-3** (BLOCKER): fix ALL FOUR `10.10.0.0/24` exact-match SNAT delete sites
+     (`deploy.go:310/370/482/568`) + add mimic teardown to BOTH `renderBashDeploy` AND `renderPS1Deploy`
+     (a `HasMimic` flag from `peerMap`, placed OUTSIDE the `!IsClient` block); MIRROR `install.sh.tmpl:35-42`
+     VERBATIM (no invented `bpftool`/XDP-detach — that is a THIRD divergent teardown, the exact drift this
+     plan kills); capture a `RenderDeployScripts` characterization golden as a RED gate BEFORE the templating
+     half; restore the `field_safety_test` `reflect.Map`/`reflect.Interface` recursion hardening (T4); the
+     PowerShell templating half defers to **plan-3.5**.
+   - **plan-5** (BLOCKER): a NEW `internal/controller` sign method holding ONE `lockTenantOps` acquisition
+     spanning read+substitution-guard+Verify+`PutSignedTrustList` (`lockTenantOps` is unexported to
+     `internal/api`; serializing only the write leaves the `(M_old,B_new)` read-vs-restage window open);
+     promote crash-atomicity → **DOC-NOTE** (skeptic disposition); member-2 → implement a durable-only
+     `GetNodeRecord` read (do NOT relabel the real leak "keep it volatile"); `writeJSONL` LOG-and-continue
+     on a post-`Write` `Close()` error (never early-return).
+   - **plan-9** (BLOCKER): `field_safety` coverage of bootstrap fields is INFEASIBLE (`renderBootstrapScript`
+     is an imperative `fmt.Fprintf` in `internal/api`, no struct/template; `internal/api` does not import
+     `internal/renderer`) → descope to an api-local `renderer.ShellQuoted()` primitive-share + a unit test,
+     DROP the field_safety claim; per-handler adapter disposition (`HandlePoll` keeps `opRaw` + the 204
+     long-poll contract; `HandleEnroll` stays pre-auth hand-rolled); frame the agent-mux change as
+     structural hygiene, NOT a security fix. Sequence AFTER plan-3 (shared `shelltoken.go`); **plan-9.5**
+     marker for the `OP_FLAGS` unquoted-word fields.
+   - **plan-10** step-2 → a SCOPED i18n orphan-sweep ONLY (delete the confirmed-dead
+     `error.ts_topology_validation_failed`; NO naive bidirectional assertion — the `⊆` is deliberate; drop
+     the "arch allow-list" item). Retarget the drift gate to the snake_case `*JSON`/`*Wire` interfaces (NOT
+     camelCase `types/controller.ts`); enumerate ALL Go DTO sources (incl. `settingsJSON`).
+   - **Sequencing/ownership:** plan-14 AFTER plan-2; plan-9 AFTER plan-3; the `TestControllerHTTP_AirGapOpen`
+     rename + the `release.yml:18` toolchain comment are owned SOLELY by plan-13 (plan-10/plan-14 are pure
+     pointers); coverage orphans pinned (localEngine vestige → plan-11; field_safety recursion → plan-3;
+     orphan i18n key + `edgeDirection.ts` stale citations → plan-10/plan-13). A ci.yml ship-assertion that
+     adds a required check needs the same-PR branch-protection PATCH (full list, `app_id:15368`).
 
 ## Milestones (one plan file each — ordered by payoff-per-risk: fixes → paydown → hygiene)
 
@@ -306,6 +339,9 @@ same PR; no `--no-verify`, no amends, no force-push.
 - **plan-8.5** if the `derivePeersWithDomains` split surfaces a golden byte-diff that is NOT a split
   bug but a latent ordering dependency — STOP, characterize, reconcile with the owner before touching a
   fixture (allocation stability is HIGH).
+- **plan-9.5** if the bootstrap `OP_FLAGS` RPID/Origin fields (spliced UNQUOTED by design, word-split into
+  flags) need a shell-context seam the `ShellQuoted`/`ShellRaw` quoted-arg constructors cannot model —
+  characterize the third context before forcing a lossy conversion.
 - **plan-12.5** if archiving a subject folder reveals its tests were never migrated per the close ritual
   — migrate them first; do not `git mv` over a test-migration gap.
 
