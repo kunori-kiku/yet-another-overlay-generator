@@ -25,14 +25,16 @@
     "noUncheckedSideEffectImports": true
   },
   "include": ["src"],
-  // Conformance vitest specs and the store/lib unit tests are test-only: they import 'vitest' + Node
-  // fs/path and read fixtures from disk, none of which belong to the production app's type surface
-  // (types: ["vite/client"]). Excluding them keeps `tsc -b` / `vite build` green; vitest type-checks
-  // them at run time against its own config. The production logic they pin (src/lib/normalizeEdges.ts,
-  // src/lib/linkid.ts, src/stores/topologyStore.ts) stays fully type-checked by the app build.
+  // The vitest specs (formerly split as *.conformance.test.ts + the store/lib/api unit tests, all now
+  // plain *.test.ts(x)) are test-only: they import 'vitest' + Node fs/path and read fixtures from disk,
+  // none of which belong to the production app's type surface (types: ["vite/client"]). Excluding
+  // EVERY test file — the same recursive glob vitest.config.ts INCLUDES — keeps `tsc -b` / `vite build`
+  // green; vitest type-checks them at run time against its own config. The production logic they pin
+  // (src/lib/normalizeEdges.ts, src/lib/linkid.ts, src/stores/topologyStore.ts) stays fully
+  // type-checked by the app build. Kept in lockstep with vitest's include so a renamed/added test can
+  // never silently re-enter the app build.
   "exclude": [
-    "src/**/*.conformance.test.ts",
-    "src/stores/**/*.test.ts",
-    "src/lib/**/*.test.ts"
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx"
   ]
 }

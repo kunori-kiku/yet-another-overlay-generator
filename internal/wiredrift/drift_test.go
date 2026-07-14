@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -39,9 +40,25 @@ import (
 //     must have a server `<base>JSON` counterpart with an IDENTICAL json-tag signature set
 //     (field name + options, so an omitempty drift reds too). A field renamed on one side but not
 //     the other silently breaks agent↔controller round-trip today; here it is a red build.
-//     (The third, camelCase-mapped mirror — frontend/src/types/controller.ts + the api/controller/*
-//     mappers — is NOT a json-tag copy and is gated separately by the FE *.conformance.test.ts
-//     suite; see the report note.)
+//
+//  4. The OPERATOR-panel controller wire DTOs (post-refactor-debt-paydown plan-10). The server
+//     response/request structs the panel consumes (settingsJSON, nodeJSON, the stage / deploy-preview
+//     / audit / fleet / keystone DTOs across the whole internal/api package) are hand-mirrored by
+//     snake_case `*JSON` / `*Wire` interfaces in frontend/src/api/controller/*.ts (+ lib/nodeConditions.ts).
+//     TestControllerWireDTOsMirrorFE cross-checks the Go json-tag NAME set against the FE interface
+//     field-NAME set (snake_case ↔ snake_case — the wire is snake_case, so no lossy camel↔snake
+//     transform is involved): bidirectional for the full mirrors, FE⊆Go for a documented projection
+//     (the audit view drops the server-only `seq`). This closes the gap ASSESSMENT.md flagged — a Go
+//     field rename that silently degrades the panel to blank/0/undefined through its defensive `??`
+//     mappers is now a RED build. The internal/api package is walked by SYMBOL (structsOfDir parses
+//     every non-test file) so it is robust to which file a DTO lives in. See controllerWireCases for
+//     the covered set and the DTOs left as documented follow-ups (auth/session, the operator-credential
+//     inline response types, the nested release-pin result, telemetry-history — each a structural,
+//     non-flat-mirror shape whose FE side is not a named snake_case interface).
+//
+//     (The camelCase RUNTIME mirror — frontend/src/types/controller.ts + the api/controller/* boundary
+//     mappers — is NOT a json-tag copy; gating it directly needs the lossy camel↔snake transform the
+//     assessment warned against, so it stays covered by the FE unit suite under src/api/ + src/lib/.)
 //
 // FAIL-CLOSED (invariant [5]): this gate only EXTENDS the guarantee. There is deliberately no
 // allowlist / escape hatch — a legitimately new omitempty field or wire field MUST be reflected in
@@ -51,8 +68,10 @@ import (
 //
 // Non-vacuity: authored against the live tree, this gate first reddened on the pre-existing
 // EDGE_OMITEMPTY mimic_fallback gap (model.Edge tags mimic_fallback omitempty; the list omitted it);
-// plan-10 fixes that gap so the gate is green, and TestGateIsNonVacuous proves a mutated Go tag /
-// list entry reds it.
+// framework-refactor plan-10 fixed that gap so the gate is green, and TestGateIsNonVacuous proves a
+// mutated Go tag / list entry reds it. The controller Go↔FE half [4] is proven the same way: the
+// non-vacuity test runs the full pipeline (structsOfDir → feInterfaceFields → comparator) against a
+// real pair and asserts a seeded FE-side rename reds (both a server-only miss and an FE-only extra).
 
 // Source paths, relative to this package directory (internal/wiredrift/).
 const (
@@ -329,6 +348,236 @@ func TestWireDTOsMirror(t *testing.T) {
 	}
 }
 
+// --- [4] the operator-panel controller wire DTO ↔ FE snake_case mirror gate (plan-10) ---
+
+// FE snake_case controller wire-mirror sources (the *JSON / *Wire interfaces the operator panel maps
+// at its transport boundary). apiDir is walked as a PACKAGE (every non-test .go file) so a DTO is
+// found by SYMBOL regardless of which file defines it — settingsJSON has moved between
+// handler_bootstrap.go / handler_settings.go across merges, so hardcoding a file would be brittle.
+const (
+	apiDir           = "../api"
+	feCtlSettings    = "../../frontend/src/api/controller/settings.ts"
+	feCtlFleet       = "../../frontend/src/api/controller/fleet.ts"
+	feCtlDeploy      = "../../frontend/src/api/controller/deploy.ts"
+	feCtlKeystone    = "../../frontend/src/api/controller/keystone.ts"
+	feNodeConditions = "../../frontend/src/lib/nodeConditions.ts"
+)
+
+// wireMirrorMode selects how strict the Go↔FE field-name comparison is for one DTO.
+type wireMirrorMode int
+
+const (
+	// wireExact: the FE interface mirrors the FULL server DTO — bidirectional name-set equality, so
+	// a field added/removed/renamed on EITHER side reds.
+	wireExact wireMirrorMode = iota
+	// wireFEProjection: the FE view is a documented PROJECTION consuming a SUBSET of the server
+	// fields. Every FE field MUST still be a real server json tag (the drift that silently blanks
+	// the panel via a `??` mapper), but the server MAY carry fields the panel never renders. This is
+	// NOT an escape hatch — it is the structural fact that the panel's audit row is a projection; it
+	// keeps the load-bearing direction (FE⊆Go) fail-closed, only relaxing the reverse.
+	wireFEProjection
+)
+
+// controllerWireCases is the covered set: each controller wire DTO (internal/api, found by symbol)
+// and its FE snake_case mirror interface. Every pair here matches on the live tree.
+//
+// DOCUMENTED FOLLOW-UPS (deliberately NOT covered — each is a non-flat-mirror whose FE side is not a
+// named snake_case interface this parser can pin, so a robust gate over the core beats a brittle one
+// over everything; see the assessment's "cover the CORE robustly + list the rest"):
+//   - auth/session: LoginResponseJSON, SessionResponseJSON, passkeyChallengeJSON, TOTPStatusJSON,
+//     TOTPEnrollJSON (frontend/src/api/controller/auth.ts) ↔ handler_login.go / cookie_session.go /
+//     handler_passkey.go / handler_totp.go — some carry nested inline object types.
+//   - keystone operator-credential: operatorCredentialPinResultJSON / operatorCredentialStatusJSON —
+//     the panel consumes these via INLINE anonymous response types (keystone.ts), no named interface.
+//   - release pins: releasePinRequestJSON / releasePinResponseJSON (release_pins.go) — release.ts maps
+//     them to a camelCase result with a NESTED `data` object, not a flat snake_case interface.
+//   - telemetry-history: historyResponse / historyBucket / metricAgg (telemetry_history.go) — parsed by
+//     lib/telemetryHistory.ts (a defensive parseNodeHistory), again no named snake_case interface.
+//   - the agent↔controller `...Wire` / `...JSON` pairs are already covered by TestWireDTOsMirror above.
+//   - the map-value types AgentPin (↔ renderer.Artifact) and MimicDebPinJSON (↔ model.MimicDebPin) are
+//     nested inside agent_bins / mimic_debs; their enclosing map fields ARE gated here.
+var controllerWireCases = []struct {
+	goStruct string // the internal/api DTO struct name (located by symbol via the package walk)
+	feName   string // the FE mirror interface name
+	fePath   string // the FE file it lives in
+	mode     wireMirrorMode
+	note     string // for a projection: the server-only fields the panel legitimately drops
+}{
+	{"settingsJSON", "SettingsJSON", feCtlSettings, wireExact, ""},
+	{"nodeJSON", "NodeJSON", feCtlFleet, wireExact, ""},
+	{"conditionJSON", "ConditionWire", feNodeConditions, wireExact, ""},
+	{"auditEntryJSON", "AuditEntryJSON", feCtlFleet, wireFEProjection, "seq (audit-chain bookkeeping the panel never renders)"},
+	{"auditResponseJSON", "AuditResponseJSON", feCtlFleet, wireExact, ""},
+	{"enrollmentTokenResponseJSON", "EnrollmentTokenResponseJSON", feCtlFleet, wireExact, ""},
+	{"revokeResponseJSON", "RevokeResponseJSON", feCtlFleet, wireExact, ""},
+	{"rekeyAllResponseJSON", "RekeyAllResponseJSON", feCtlFleet, wireExact, ""},
+	{"clearRekeyResponseJSON", "ClearRekeyResponseJSON", feCtlFleet, wireExact, ""},
+	{"stageResponseJSON", "StageResponseJSON", feCtlDeploy, wireExact, ""},
+	{"deployPreviewNodeJSON", "deployPreviewNodeJSON", feCtlDeploy, wireExact, ""},
+	{"deployPreviewResponseJSON", "deployPreviewResponseJSON", feCtlDeploy, wireExact, ""},
+	{"generationResponseJSON", "GenerationResponseJSON", feCtlDeploy, wireExact, ""},
+	{"trustListResponseJSON", "TrustListResponseJSON", feCtlKeystone, wireExact, ""},
+}
+
+// TestControllerWireDTOsMirrorFE cross-checks each covered controller wire DTO (Go json tags) against
+// its hand-mirrored FE snake_case interface (field names). It closes the ASSESSMENT.md gap: the panel
+// data layer is a hand-mirror held only by discipline, and a Go field rename would silently degrade
+// the panel to blank/0/undefined via its defensive `??` mappers with no red build. Here it reds.
+func TestControllerWireDTOsMirrorFE(t *testing.T) {
+	api := structsOfDir(t, apiDir)
+	for _, c := range controllerWireCases {
+		t.Run(c.goStruct, func(t *testing.T) {
+			fields, ok := api[c.goStruct]
+			if !ok {
+				t.Fatalf("controller DTO %s not found in the %s package walk — it was renamed/removed, or the "+
+					"package layout changed (this gate finds it by SYMBOL, not by file)", c.goStruct, apiDir)
+			}
+			goNames := fieldNames(fields)
+			feNames := feInterfaceFields(t, c.fePath, c.feName)
+			missing, extra := diffSets(goNames, feNames) // missing = server-only; extra = FE-only
+			switch c.mode {
+			case wireExact:
+				if len(missing) > 0 || len(extra) > 0 {
+					t.Errorf("controller wire DTO %s (Go) drifted from %s (%s).\n"+
+						"  in %s json tags but NOT the FE interface (add it to the FE mirror): %v\n"+
+						"  in the FE interface but NOT %s json tags (a Go rename orphaned it — the panel now "+
+						"reads undefined via its ?? mapper): %v\n"+
+						"  These snake_case contracts MUST match field-for-field.",
+						c.goStruct, c.feName, c.fePath, c.goStruct, missing, c.goStruct, extra)
+				}
+			case wireFEProjection:
+				if len(extra) > 0 {
+					t.Errorf("FE interface %s (%s) references %v, which is NOT a %s json tag — a Go rename "+
+						"orphaned an FE-consumed field (the panel reads undefined via its ?? mapper).\n"+
+						"  (%s is a documented projection; server-only fields it legitimately drops: %s.)",
+						c.feName, c.fePath, extra, c.goStruct, c.feName, c.note)
+				}
+			}
+		})
+	}
+}
+
+// fieldNames returns the sorted set of every json field name on a struct.
+func fieldNames(fields []jsonField) []string {
+	var out []string
+	for _, f := range fields {
+		out = append(out, f.name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// structsOfDir parses EVERY non-test .go file in dir and merges their struct maps, so a DTO can be
+// located by SYMBOL regardless of which file in the package defines it. Go forbids duplicate type
+// names within one package, so the merge is unambiguous. Reads SOURCE like structsOf — no import edge
+// to the package it guards, immune to the very drift it polices.
+func structsOfDir(t *testing.T, dir string) map[string][]jsonField {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %s: %v", dir, err)
+	}
+	out := map[string][]jsonField{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		for k, v := range structsOf(t, filepath.Join(dir, name)) {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no structs parsed from %s — the package walk found nothing (layout changed?)", dir)
+	}
+	return out
+}
+
+// feInterfaceFields extracts the top-level field names of a TS `interface <name> { ... }`. It
+// locates the declaration, then single-pass scans from the opening brace tracking brace depth while
+// blanking // and /* */ comments and string / template literals; only characters at depth 1 enter a
+// "skeleton", so an inline object-type field (e.g. `telemetry?: { wireguard_peers?: ... }`) never
+// leaks its nested members. In the skeleton, every top-level `ident` / `ident?` that precedes a `:`
+// is a field name. Sorted, so a reordering (not a contract change) never reds. Source-read like
+// feArrayElements — no import edge; robust to the multi-field-per-line and inline-object shapes the
+// live FE interfaces use.
+func feInterfaceFields(t *testing.T, path, name string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	src := string(raw)
+
+	declRE := regexp.MustCompile(`(?:export\s+)?interface\s+` + regexp.QuoteMeta(name) + `\b[^{]*\{`)
+	loc := declRE.FindStringIndex(src)
+	if loc == nil {
+		t.Fatalf("%s: interface %s not found", path, name)
+	}
+	rest := src[loc[1]-1:] // start AT the opening brace so the depth counter opens on it
+
+	var sk strings.Builder // depth-1 skeleton: comments, strings, and depth>=2 content removed
+	depth := 0
+	for i := 0; i < len(rest); i++ {
+		c := rest[i]
+		switch {
+		case c == '/' && i+1 < len(rest) && rest[i+1] == '/':
+			for i < len(rest) && rest[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(rest) && rest[i+1] == '*':
+			i += 2
+			for i+1 < len(rest) && !(rest[i] == '*' && rest[i+1] == '/') {
+				i++
+			}
+			i++ // consume the closing '/'
+		case c == '\'' || c == '"' || c == '`':
+			q := c
+			i++
+			for i < len(rest) && rest[i] != q {
+				if rest[i] == '\\' {
+					i++ // skip an escaped char
+				}
+				i++
+			}
+		case c == '{':
+			depth++ // the outer brace opens depth 1; an inline object opens depth 2 (not written)
+		case c == '}':
+			depth--
+			if depth == 0 {
+				i = len(rest) // matched the interface's closing brace — stop
+			}
+		default:
+			if depth == 1 {
+				sk.WriteByte(c)
+			}
+		}
+	}
+
+	// At depth 1 the only `ident:` occurrences are member names (type-internal identifiers are
+	// followed by `[`, `<`, `,`, `|`, `>` or whitespace — never `:` — and inline objects are blanked).
+	fieldRE := regexp.MustCompile(`(?:^|[;,\n])\s*([A-Za-z_$][\w$]*)\s*\??\s*:`)
+	var fields []string
+	for _, m := range fieldRE.FindAllStringSubmatch(sk.String(), -1) {
+		fields = append(fields, m[1])
+	}
+	if len(fields) == 0 {
+		t.Fatalf("%s: interface %s parsed zero fields — the extractor or the interface shape changed", path, name)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+// containsStr reports whether xs contains want.
+func containsStr(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestGateIsNonVacuous proves the gate's comparators actually red on drift (guards against a gate
 // that passes because a parser returned nothing or a comparator is inert). It mutates in-memory
 // copies of the parsed authorities — NOT the source — and asserts each seeded drift is detected.
@@ -362,5 +611,34 @@ func TestGateIsNonVacuous(t *testing.T) {
 	mutated[0] = mutated[0] + ",omitempty-DRIFT"
 	if missing, extra := diffSets(base, mutated); len(missing) == 0 && len(extra) == 0 {
 		t.Error("non-vacuity FAIL: a mutated wire tag signature was NOT detected")
+	}
+
+	// (d) The controller Go↔FE snake_case comparison [4] must red on a one-sided drift, exercising the
+	// FULL pipeline (structsOfDir → feInterfaceFields → comparator), not just diffSets in isolation.
+	// Parse a real pair, assert the parser is non-vacuous + the pair currently matches, then seed a
+	// FE-side rename and assert BOTH a server-only miss AND an FE-only extra are flagged.
+	feSettings := feInterfaceFields(t, feCtlSettings, "SettingsJSON")
+	if len(feSettings) < 5 {
+		t.Fatalf("non-vacuity FAIL: feInterfaceFields(SettingsJSON) parsed %d fields — the TS parser is vacuous", len(feSettings))
+	}
+	if !containsStr(feSettings, "public_agent_url") {
+		t.Errorf("non-vacuity FAIL: feInterfaceFields did not extract the known wire field public_agent_url from %v", feSettings)
+	}
+	goSettings := fieldNames(structsOfDir(t, apiDir)["settingsJSON"])
+	if m, e := diffSets(goSettings, feSettings); len(m) != 0 || len(e) != 0 {
+		t.Fatalf("fixture assumption broke: settingsJSON ↔ SettingsJSON should match exactly (server-only %v, FE-only %v)", m, e)
+	}
+	renamedFE := make([]string, 0, len(feSettings))
+	for _, f := range feSettings {
+		if f == "public_agent_url" {
+			renamedFE = append(renamedFE, "public_agent_uri") // seed a one-field rename on the FE side
+			continue
+		}
+		renamedFE = append(renamedFE, f)
+	}
+	sort.Strings(renamedFE)
+	if m, e := diffSets(goSettings, renamedFE); len(m) == 0 || len(e) == 0 {
+		t.Errorf("non-vacuity FAIL: a renamed controller wire field was NOT detected by the comparator "+
+			"(server-only=%v, FE-only=%v; both must be non-empty)", m, e)
 	}
 }
