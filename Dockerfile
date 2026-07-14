@@ -14,7 +14,12 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- build the server (static, CGO-free) ---
-FROM golang:1.25-alpine AS backend
+# Base image golang:1.26-alpine (floating minor, matching the node:20-alpine / alpine:3.20 convention):
+# its bundled toolchain satisfies the go.mod `toolchain go1.26.5` floor, so neither the server build
+# below NOR the GOOS=js wasm build force-downloads a toolchain at image-build time (default
+# GOTOOLCHAIN=auto uses the local toolchain because it is >= the floor). Keep this >= the go.mod
+# toolchain minor on future bumps so the download-at-build-time regression does not return.
+FROM golang:1.26-alpine AS backend
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

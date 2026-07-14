@@ -14,16 +14,6 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 )
 
-// NodeArtifact holds the rendered configuration artifacts for a single node.
-type NodeArtifact struct {
-	NodeID        string
-	NodeName      string
-	WireGuardConf string
-	BabelConf     string
-	SysctlConf    string
-	InstallScript string
-}
-
 // ExportResult reports the outcome of an export run.
 type ExportResult struct {
 	OutputDir string

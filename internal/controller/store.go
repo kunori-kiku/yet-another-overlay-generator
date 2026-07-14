@@ -453,41 +453,6 @@ func (cs ControllerSettings) EffectiveHistoryCap() int {
 	return *cs.TelemetryHistoryCap
 }
 
-// Clone returns a deep copy of cs: the MimicDebs map and the Translucency pointer are duplicated
-// so a value handed to or returned from an in-memory store cannot be mutated through a shared
-// reference (the FileStore is naturally isolated by its JSON round-trip; MemStore uses this to
-// match). model.MimicDebPin is itself a value type with no nested references, so a shallow map
-// copy fully isolates the entries.
-func (cs ControllerSettings) Clone() ControllerSettings {
-	out := cs
-	if cs.MimicDebs != nil {
-		m := make(map[string]model.MimicDebPin, len(cs.MimicDebs))
-		for k, v := range cs.MimicDebs {
-			m[k] = v
-		}
-		out.MimicDebs = m
-	}
-	if cs.AgentBins != nil {
-		m := make(map[string]model.Artifact, len(cs.AgentBins))
-		for k, v := range cs.AgentBins {
-			m[k] = v
-		}
-		out.AgentBins = m
-	}
-	if cs.AgentCanaryNodeIDs != nil {
-		out.AgentCanaryNodeIDs = append([]string(nil), cs.AgentCanaryNodeIDs...)
-	}
-	if cs.Translucency != nil {
-		v := *cs.Translucency
-		out.Translucency = &v
-	}
-	if cs.TelemetryHistoryCap != nil {
-		v := *cs.TelemetryHistoryCap
-		out.TelemetryHistoryCap = &v
-	}
-	return out
-}
-
 // SigningAnchor is the per-tenant pinned bundle-signing PUBLIC key. It is NON-SECRET (a public key)
 // and persists two facts a controller redeploy must not silently lose: THAT this fleet's bundles
 // are signed, and WHICH key signs them. With it stored, a redeploy that drops or swaps

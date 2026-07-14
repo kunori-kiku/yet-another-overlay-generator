@@ -49,7 +49,6 @@ export interface TimeSeriesChartProps {
   // ['auto','auto'] lets recharts fit the data.
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax'];
   language: UILanguage;
-  emptyLabel?: string;
 }
 
 // The default series color cycle — token families that already follow the theme. A series' own
@@ -129,7 +128,7 @@ function ChartTooltip(props: {
   );
 }
 
-export function TimeSeriesChart({ series, height, yDomain, language, emptyLabel }: TimeSeriesChartProps) {
+export function TimeSeriesChart({ series, height, yDomain, language }: TimeSeriesChartProps) {
   const rows = buildRows(series);
   const axisTick = { fill: 'var(--content-muted)', fontSize: 11 };
   const fmtTime = (v: number | string): string => {
@@ -152,59 +151,55 @@ export function TimeSeriesChart({ series, height, yDomain, language, emptyLabel 
           );
         })}
       </div>
-      {rows.length === 0 && emptyLabel ? (
-        <p className="py-6 text-center text-xs text-[var(--content-muted)]">{emptyLabel}</p>
-      ) : (
-        <ResponsiveContainer width="100%" height={height ?? 200}>
-          <ComposedChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
-            <CartesianGrid stroke="var(--hairline)" strokeDasharray="3 3" vertical={false} />
-            <XAxis
-              dataKey="t"
-              type="number"
-              scale="time"
-              domain={['dataMin', 'dataMax']}
-              tickFormatter={fmtTime}
-              tick={axisTick}
-              stroke="var(--hairline)"
-              minTickGap={40}
-            />
-            <YAxis domain={yDomain ?? ['auto', 'auto']} tick={axisTick} stroke="var(--hairline)" width={44} />
-            <Tooltip
-              cursor={{ stroke: 'var(--hairline)' }}
-              content={<ChartTooltip series={series} language={language} />}
-            />
-            {/* Bands first so the avg lines draw on top. */}
-            {series.map((s, i) =>
-              hasBand(s) ? (
-                <Area
-                  key={`${s.key}__band`}
-                  dataKey={`${s.key}__band`}
-                  stroke="none"
-                  fill={s.color ?? PALETTE[i % PALETTE.length]}
-                  fillOpacity={0.14}
-                  connectNulls={false}
-                  isAnimationActive={false}
-                  activeDot={false}
-                  legendType="none"
-                />
-              ) : null,
-            )}
-            {series.map((s, i) => (
-              <Line
-                key={`${s.key}__avg`}
-                type="monotone"
-                dataKey={`${s.key}__avg`}
-                name={s.label}
-                stroke={s.color ?? PALETTE[i % PALETTE.length]}
-                strokeWidth={2}
-                dot={false}
+      <ResponsiveContainer width="100%" height={height ?? 200}>
+        <ComposedChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
+          <CartesianGrid stroke="var(--hairline)" strokeDasharray="3 3" vertical={false} />
+          <XAxis
+            dataKey="t"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
+            tickFormatter={fmtTime}
+            tick={axisTick}
+            stroke="var(--hairline)"
+            minTickGap={40}
+          />
+          <YAxis domain={yDomain ?? ['auto', 'auto']} tick={axisTick} stroke="var(--hairline)" width={44} />
+          <Tooltip
+            cursor={{ stroke: 'var(--hairline)' }}
+            content={<ChartTooltip series={series} language={language} />}
+          />
+          {/* Bands first so the avg lines draw on top. */}
+          {series.map((s, i) =>
+            hasBand(s) ? (
+              <Area
+                key={`${s.key}__band`}
+                dataKey={`${s.key}__band`}
+                stroke="none"
+                fill={s.color ?? PALETTE[i % PALETTE.length]}
+                fillOpacity={0.14}
                 connectNulls={false}
                 isAnimationActive={false}
+                activeDot={false}
+                legendType="none"
               />
-            ))}
-          </ComposedChart>
-        </ResponsiveContainer>
-      )}
+            ) : null,
+          )}
+          {series.map((s, i) => (
+            <Line
+              key={`${s.key}__avg`}
+              type="monotone"
+              dataKey={`${s.key}__avg`}
+              name={s.label}
+              stroke={s.color ?? PALETTE[i % PALETTE.length]}
+              strokeWidth={2}
+              dot={false}
+              connectNulls={false}
+              isAnimationActive={false}
+            />
+          ))}
+        </ComposedChart>
+      </ResponsiveContainer>
     </div>
   );
 }

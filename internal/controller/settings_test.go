@@ -102,7 +102,8 @@ func TestStoreSettingsRoundTrip(t *testing.T) {
 				t.Fatalf("round-trip mismatch: got %+v want %+v", got, cs)
 			}
 			// Isolation: mutating the caller's MimicDebs map after Put must NOT change the stored
-			// value (the store deep-copies via Clone; the map is a shared reference otherwise).
+			// value (the store isolates via its JSON marshal/unmarshal round-trip; the map is a
+			// shared reference otherwise).
 			cs.MimicDebs["bookworm-amd64"] = model.MimicDebPin{Asset: "evil.deb", SHA256: "x"}
 			got2, _ := s.GetSettings(ctx, tn)
 			if got2.MimicDebs["bookworm-amd64"].Asset != "mimic_0.1.0_amd64.deb" {
