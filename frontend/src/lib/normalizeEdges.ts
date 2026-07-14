@@ -28,7 +28,11 @@ import type { Edge, Node } from '../types/topology';
 // Pure and idempotent: returns the SAME array reference when nothing needs healing (no React/zustand
 // churn), otherwise a new array with the offending edges' pins cleared.
 
-const PIN_FIELDS = [
+// PIN_FIELDS is the single source of truth for the seven per-link allocation-pin edge fields (the
+// compiled listen port + the three pinned pin PAIRS). healCollidingPins strips them on a collision;
+// clearedPinFields() (below) builds the "clear payload" from the SAME list so every deliberate
+// pin-reset site derives from one place instead of a hand-written literal enumeration.
+export const PIN_FIELDS = [
   'compiled_port',
   'pinned_from_port',
   'pinned_to_port',
@@ -37,6 +41,29 @@ const PIN_FIELDS = [
   'pinned_from_link_local',
   'pinned_to_link_local',
 ] as const;
+
+// clearedPinFields returns the pin-clear payload: an object mapping every PIN_FIELDS entry to
+// undefined (keys PRESENT with undefined values, so spreading it over an edge — or passing it to
+// updateEdge — actually resets those fields, exactly as the prior hand-written `{ compiled_port:
+// undefined, ... }` literals did). It is the ONE definition of "clear the allocation pins", routed
+// through by all three deliberate-reset sites (EdgeEditor's role-change clear + unpin clear, and the
+// store's purgeModeBoundaryState edge scrub), so adding a field to PIN_FIELDS clears it everywhere
+// automatically instead of drifting across three literals.
+//
+// SCOPE NOTE: this covers ONLY the seven EDGE-PIN fields. purgeModeBoundaryState ALSO scrubs
+// NODE-SECRET fields (wireguard_private_key, wireguard_public_key, fixed_private_key, overlay_ip) —
+// that is a SEPARATE concern and stays its own explicit list there; node secrets are intentionally
+// NOT folded into PIN_FIELDS. And edgeDirection.ts's flipEdge enumerates the same pin set as a SWAP
+// map (pinned_from_* ⇄ pinned_to_*) — a different shape (mirror, not clear), so it is intentionally
+// not expressed through this helper; if PIN_FIELDS grows, that swap map is the related site to revisit.
+export function clearedPinFields(): Partial<Edge> {
+  const cleared: Partial<Edge> = {};
+  // Assign (not delete) so the keys are PRESENT with an undefined value, matching the literals these
+  // sites used. Route the index through unknown — Edge does not structurally overlap Record<string,
+  // unknown> (tsc -b TS2352); the keys are the literal, all-optional PIN_FIELDS, so it is well-formed.
+  for (const f of PIN_FIELDS) (cleared as unknown as Record<string, unknown>)[f] = undefined;
+  return cleared;
+}
 
 // pinKey / linkKey are the canonical link-identity functions, lifted to ./linkid.ts (the single
 // source of truth mirroring internal/linkid). This module imports linkKey from there; the prior

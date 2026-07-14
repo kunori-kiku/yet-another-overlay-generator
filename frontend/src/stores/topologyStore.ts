@@ -12,7 +12,7 @@ import type {
 } from '../types/topology';
 import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
-import { healCollidingPins, sanitizeLinkDirection } from '../lib/normalizeEdges';
+import { clearedPinFields, healCollidingPins, sanitizeLinkDirection } from '../lib/normalizeEdges';
 import { dropAllKeys } from '../lib/custody';
 import { triggerBrowserDownload } from '../lib/download';
 // The local-engine seam: these four adapters bridge the compute action shapes onto the in-browser
@@ -648,9 +648,11 @@ export const useTopologyStore = create<TopologyState>()(
   // artifacts (compiled_port + all pinned_* allocations), the topology-level
   // alloc_schema_version, and compile history/results are all cleared. This way the next local
   // compile regenerates a clean, self-consistent set of keys and allocations, never leaving
-  // fleet-used keys behind in the browser. Fields are enumerated explicitly one by one (rather
-  // than by pattern match), so when a secret/pin field is added it must be updated here too
-  // (the scrub-list-completeness risk of the plan-5.5 insertion point).
+  // fleet-used keys behind in the browser. The NODE-SECRET scrub is enumerated explicitly one by
+  // one (rather than by pattern match), so when a secret field is added it must be updated here too
+  // (the scrub-list-completeness risk of the plan-5.5 insertion point); the EDGE-PIN scrub is
+  // single-sourced via clearedPinFields (lib/normalizeEdges) — a field added to PIN_FIELDS clears
+  // here automatically. The two lists are a deliberately SEPARATE concern (node secrets vs edge pins).
   purgeModeBoundaryState: () =>
     set((state) => ({
       nodes: state.nodes.map((n) => ({
@@ -660,16 +662,7 @@ export const useTopologyStore = create<TopologyState>()(
         fixed_private_key: undefined,
         overlay_ip: undefined,
       })),
-      edges: state.edges.map((e) => ({
-        ...e,
-        compiled_port: undefined,
-        pinned_from_port: undefined,
-        pinned_to_port: undefined,
-        pinned_from_transit_ip: undefined,
-        pinned_to_transit_ip: undefined,
-        pinned_from_link_local: undefined,
-        pinned_to_link_local: undefined,
-      })),
+      edges: state.edges.map((e) => ({ ...e, ...clearedPinFields() })),
       allocSchemaVersion: 0,
       history: [],
       validateResult: null,
