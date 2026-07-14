@@ -34,22 +34,33 @@ func TestTemplateConfigFieldsAreShellTokens(t *testing.T) {
 }
 
 // TestShellTokenGateCatchesBareString is the negative control that proves the gate is not vacuous: a
-// struct carrying a bare string field, a []string, and a nested-struct string is flagged, while a
-// ShellToken field and an int are not. If bareShellStrings ever stopped catching these, the seam above
-// would silently pass anything.
+// struct carrying a bare string field, a []string, a nested-struct string, a bare-string MAP value, and
+// an INTERFACE field is flagged, while a ShellToken field, a ShellToken-valued map, and an int are not.
+// The map and interface cases pin the recursion hardening (previously `default: return nil` silently
+// skipped both kinds). If bareShellStrings ever stopped catching these, the seam above would silently
+// pass anything.
 func TestShellTokenGateCatchesBareString(t *testing.T) {
 	type nested struct{ Raw string }
 	type sample struct {
-		OK     ShellToken // approved leaf — must NOT be flagged
-		Danger string     // bare string — MUST be flagged
-		List   []string   // slice of bare strings — MUST be flagged
-		Sub    nested     // nested bare string — MUST be flagged
-		Count  int        // non-string — must NOT be flagged
+		OK      ShellToken            // approved leaf — must NOT be flagged
+		Danger  string                // bare string — MUST be flagged
+		List    []string              // slice of bare strings — MUST be flagged
+		Sub     nested                // nested bare string — MUST be flagged
+		Count   int                   // non-string — must NOT be flagged
+		MapBare map[string]string     // bare-string map VALUES — MUST be flagged (recurse into value)
+		MapOK   map[string]ShellToken // ShellToken map values — must NOT be flagged (recursion sees the leaf)
+		Iface   interface{}           // opaque interface — MUST be flagged (fail-closed hole)
 	}
 	got := bareShellStrings("sample", reflect.TypeOf(sample{}), map[reflect.Type]bool{})
-	want := map[string]bool{"sample.Danger": true, "sample.List[]": true, "sample.Sub.Raw": true}
+	want := map[string]bool{
+		"sample.Danger":    true,
+		"sample.List[]":    true,
+		"sample.Sub.Raw":   true,
+		"sample.MapBare[]": true,
+		"sample.Iface":     true,
+	}
 	if len(got) != len(want) {
-		t.Fatalf("gate flagged %v, want exactly the three bare-string paths %v", got, want)
+		t.Fatalf("gate flagged %v, want exactly the bare-string/interface paths %v", got, want)
 	}
 	for _, p := range got {
 		if !want[p] {
@@ -72,6 +83,19 @@ func bareShellStrings(path string, typ reflect.Type, seen map[reflect.Type]bool)
 		return []string{path}
 	case reflect.Slice, reflect.Array, reflect.Pointer:
 		return bareShellStrings(path+"[]", typ.Elem(), seen)
+	case reflect.Map:
+		// A map's values are reachable from a template ({{ index .M k }} / {{ range .M }}), so recurse
+		// into the value type — a bare string hidden as a map value must be caught, and a ShellToken
+		// map value must pass. (Keys are conventionally identifiers, not spliced into the shell, so the
+		// value type is what the seam guards.) Without this the map was silently skipped by default.
+		return bareShellStrings(path+"[]", typ.Elem(), seen)
+	case reflect.Interface:
+		// An interface field is opaque to this STATIC type walk: its dynamic value could be any type,
+		// including a bare string that reaches the root shell, and reflect.Type has no element type to
+		// recurse into. Fail closed — surface it as a violation rather than silently skip it (the seam
+		// demands a concrete ShellToken, never an interface). No current config uses one; this is a
+		// forward guard so a future interface-typed template field cannot smuggle an unescaped value in.
+		return []string{path}
 	case reflect.Struct:
 		if seen[typ] {
 			return nil

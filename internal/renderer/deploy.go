@@ -21,6 +21,19 @@ type DeployNodeInfo struct {
 	WgInterfaces      []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
 	HasBabel          bool     // whether this node runs Babel
 	IsClient          bool     // client nodes use wg0 instead of per-peer interfaces
+	// HasMimic marks a node that has at least one transport=="tcp" link and therefore had mimic
+	// (eBPF UDP->fake-TCP shaping) provisioned by install.sh. The uninstall path must tear it down —
+	// otherwise an orphaned root eBPF program + a boot-persistent mimic@<egress> unit survive after
+	// the operator believes the overlay is gone. Gated on this (NOT on !IsClient): a client whose sole
+	// wg0 link is tcp also has mimic. See docs/spec/artifacts/mimic.md and install.sh.tmpl's teardown.
+	HasMimic bool
+	// MimicEgressInterface is the operator's egress-NIC override for mimic ("" = auto-detect from the
+	// default route). MimicEgressOverride is (MimicEgressInterface != "") — a precomputed gate so the
+	// teardown re-detects the egress the same way the installer did unless the operator pinned one.
+	// The value is operator-supplied free text spliced into a root shell, so the emitters quote it with
+	// bashSingleQuote (the mimic teardown runs on the REMOTE node inside a bash heredoc / here-string).
+	MimicEgressInterface string
+	MimicEgressOverride  bool
 }
 
 // DeployScriptConfig holds all nodes for one combined deploy script
@@ -75,15 +88,28 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 		}
 		info.SSHKeyPath = node.SSHKeyPath
 
-		// Collect WireGuard interface names from peer map
+		// Collect WireGuard interface names from peer map. HasMimic is derived the same way the
+		// install-script renderer derives it (collectMimicPorts / len(mimicPorts) > 0): a node has mimic
+		// iff any of its peers rides transport=="tcp" (PeerInfo.Mimic). NOTE: a client node carries no
+		// PeerInfo in peerMap (its wg0 lives in ClientConfigs, which is not passed here), so a
+		// client+tcp node's HasMimic cannot be observed on this path — see docs note in the return.
 		if peers, ok := peerMap[node.ID]; ok {
 			for _, p := range peers {
 				info.WgInterfaces = append(info.WgInterfaces, p.InterfaceName)
+				if p.Mimic {
+					info.HasMimic = true
+				}
 			}
 		}
 		if info.IsClient {
 			info.WgInterfaces = []string{"wg0"}
 		}
+
+		// mimic egress-NIC override (operator-supplied): empty means auto-detect from the default route
+		// in the teardown, exactly as install.sh.tmpl re-detects it. The raw value is carried through and
+		// quoted at the emit site (bashSingleQuote) — never spliced raw.
+		info.MimicEgressInterface = node.MimicEgressInterface
+		info.MimicEgressOverride = node.MimicEgressInterface != ""
 
 		// Check if this node runs Babel: use compiled configs if available,
 		// otherwise fall back to a domain-aware decision that mirrors
@@ -152,6 +178,37 @@ func buildSSHOpts(node DeployNodeInfo, quoteStyle string) (string, string) {
 	}
 	scpOpts := strings.Join(scpParts, " ")
 	return sshOpts, scpOpts
+}
+
+// mimicUninstallLines returns the per-node mimic teardown block for the uninstall path, mirroring
+// install.sh.tmpl's "Tear down mimic" block VERBATIM (docs/spec/artifacts/mimic.md): stop+disable the
+// boot-persistent mimic@<egress> unit and remove its config. Without it, deploy-all --uninstall leaves
+// an orphaned root eBPF program + a mimic@<egress> service after the operator believes the overlay is
+// gone. Emitted only when node.HasMimic (a client+tcp wg0 node has mimic too, hence the gate is
+// HasMimic, not !IsClient); returns "" otherwise so a non-mimic node's uninstall is byte-unchanged.
+//
+// The egress NIC is re-detected the same way the installer did (default-route interface) unless the
+// operator pinned an override. The block runs on the REMOTE node (inside the bash uninstall heredoc /
+// here-string that ssh pipes to `sudo bash -s`), so the operator-supplied override is quoted with
+// bashSingleQuote — the same remote-bash escaping the node-name echo lines use — and is NEVER spliced
+// raw. Only the two commands install.sh uses (disable --now + rm the conf); no bpftool/XDP-detach or
+// /run/mimic removal (that would be a third divergent teardown, the drift this mirrors away).
+func mimicUninstallLines(node DeployNodeInfo) string {
+	if !node.HasMimic {
+		return ""
+	}
+	egress := `"$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"`
+	if node.MimicEgressOverride {
+		egress = bashSingleQuote(node.MimicEgressInterface)
+	}
+	var b strings.Builder
+	b.WriteString("_mimic_egress_if=" + egress + "\n")
+	b.WriteString("if [ -n \"$_mimic_egress_if\" ]; then\n")
+	b.WriteString("    echo \"  Stopping mimic@$_mimic_egress_if...\"\n")
+	b.WriteString("    systemctl disable --now \"mimic@$_mimic_egress_if\" 2>/dev/null || true\n")
+	b.WriteString("    rm -f \"/etc/mimic/$_mimic_egress_if.conf\"\n")
+	b.WriteString("fi\n")
+	return b.String()
 }
 
 func renderBashDeploy(config DeployScriptConfig) (string, error) {
@@ -278,6 +335,9 @@ SKIPPED=$((SKIPPED + 1))
 		// single inert shell token.
 		var uninstallCmds strings.Builder
 		uninstallCmds.WriteString("set -uo pipefail\n")
+		// Tear down mimic FIRST (mirrors install.sh.tmpl), before WireGuard: stop the boot-persistent
+		// mimic@<egress> unit + remove its config so no orphaned root eBPF shaping survives an uninstall.
+		uninstallCmds.WriteString(mimicUninstallLines(node))
 		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on '%s'...'\n", nameQuoted))
 
 		// Stop and disable WireGuard interfaces
@@ -305,9 +365,14 @@ SKIPPED=$((SKIPPED + 1))
 		uninstallCmds.WriteString("sysctl --system > /dev/null 2>&1 || true\n")
 
 		if !node.IsClient {
-			// Remove overlay SNAT rule and service
+			// Remove overlay SNAT rule and service.
+			//
+			// D52: mirror install.sh.tmpl's robust teardown — delete each matching POSTROUTING SNAT rule
+			// WHOLE (order-independent, ignoring --to-source), so it also clears a stale rule left by an
+			// overlay-IP change. Match by wg interface + SNAT target only (no -s <CIDR>): CIDR-agnostic, so
+			// a node on a custom transit_cidr is cleared too (the prior hard-coded -s 10.10.0.0/24 missed it).
 			uninstallCmds.WriteString("nft delete table inet overlay-snat 2>/dev/null || true\n")
-			uninstallCmds.WriteString("iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source $(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \\K[^/]+' || echo 0.0.0.0) 2>/dev/null || true\n")
+			uninstallCmds.WriteString("iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del=\"${_snat_rule/#-A/-D}\"; iptables -t nat $_snat_del 2>/dev/null || true; done || true\n")
 			uninstallCmds.WriteString("systemctl disable overlay-snat.service 2>/dev/null || true\n")
 			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-snat.service\n")
 			// Remove dummy0 overlay interface
@@ -366,8 +431,7 @@ for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}'
 done
 rm -f /etc/wireguard/wg*.conf
 nft delete table inet overlay-snat 2>/dev/null || true
-_snat_ip=$(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \K[^/]+' || true)
-[ -n "$_snat_ip" ] && iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source "$_snat_ip" 2>/dev/null || true
+iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true
 systemctl disable overlay-snat.service 2>/dev/null || true
 rm -f /etc/systemd/system/overlay-snat.service
 CLEAN_EOF
@@ -479,7 +543,7 @@ if (-not [string]::IsNullOrEmpty($ArtifactsZip)) {
 }
 
 # Clean script sent to remote via stdin (single-quoted — no PS expansion)
-$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf; nft delete table inet overlay-snat 2>/dev/null || true; _snat_ip=$(ip -4 addr show dummy0 2>/dev/null | grep -oP ''inet \K[^/]+'' || true); [ -n "$_snat_ip" ] && iptables -t nat -D POSTROUTING -o ''wg-+'' -s 10.10.0.0/24 -j SNAT --to-source "$_snat_ip" 2>/dev/null || true; systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service'
+$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf; nft delete table inet overlay-snat 2>/dev/null || true; iptables-save -t nat 2>/dev/null | grep -E ''^-A POSTROUTING '' | grep -F -- ''-j SNAT'' | grep -F -- ''-o wg-+'' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true; systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service'
 
 try {
     if ($WorkDir) {
@@ -544,6 +608,10 @@ try {
 		// the bash single-quote context (D16/D43) via nameBashQuoted.
 		var uninstallCmds strings.Builder
 		uninstallCmds.WriteString("set -uo pipefail\n")
+		// Tear down mimic FIRST (mirrors install.sh.tmpl), before WireGuard. This body runs on the REMOTE
+		// node inside the @'...'@ here-string ssh pipes to `sudo bash -s`, so mimicUninstallLines quotes
+		// the egress override for the bash context (bashSingleQuote), same as the here-string's echo lines.
+		uninstallCmds.WriteString(mimicUninstallLines(node))
 		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 1/4] Stopping WireGuard interfaces on '%s'...'\n", nameBashQuoted))
 		for _, iface := range node.WgInterfaces {
 			uninstallCmds.WriteString(fmt.Sprintf("wg-quick down %s 2>/dev/null || true\n", iface))
@@ -563,9 +631,11 @@ try {
 		uninstallCmds.WriteString("rm -f /etc/sysctl.d/99-overlay.conf\n")
 		uninstallCmds.WriteString("sysctl --system > /dev/null 2>&1 || true\n")
 		if !node.IsClient {
+			// D52: CIDR-agnostic robust SNAT teardown, mirroring install.sh.tmpl — see the bash renderer's
+			// site above. Deletes each matching POSTROUTING SNAT rule whole (ignoring --to-source), so a
+			// stale rule from an overlay-IP change and a node on a custom transit_cidr are both cleared.
 			uninstallCmds.WriteString("nft delete table inet overlay-snat 2>/dev/null || true\n")
-			uninstallCmds.WriteString("_snat_ip=$(ip -4 addr show dummy0 2>/dev/null | grep -oP 'inet \\K[^/]+' || true)\n")
-			uninstallCmds.WriteString("[ -n \"$_snat_ip\" ] && iptables -t nat -D POSTROUTING -o 'wg-+' -s 10.10.0.0/24 -j SNAT --to-source \"$_snat_ip\" 2>/dev/null || true\n")
+			uninstallCmds.WriteString("iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del=\"${_snat_rule/#-A/-D}\"; iptables -t nat $_snat_del 2>/dev/null || true; done || true\n")
 			uninstallCmds.WriteString("systemctl disable overlay-snat.service 2>/dev/null || true\n")
 			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-snat.service\n")
 			uninstallCmds.WriteString("ip link del dummy0 2>/dev/null || true\n")
