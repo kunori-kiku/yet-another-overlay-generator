@@ -18,7 +18,7 @@ export const PERSIST_NAME = 'controller-storage';
 //
 // The non-secret cache P4 added (mode / nodes / settings / lastSyncedAt) is only for
 // "instant coloring" after a refresh. nodes carries only non-secret fields like
-// nodeId/status/codename/timestamps, no key material. The cache is advisory: the one place
+// nodeId/status/agentVersion/timestamps, no key material. The cache is advisory: the one place
 // nodes participates in gating (selectRekeyingCount → DeployBar disables Deploy while nodes
 // are rotating) is fail-closed — after a reload a stale cache at most "disables" Deploy,
 // never "lets through" a deploy that live state should have blocked; refresh() converges once

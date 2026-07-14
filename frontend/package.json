@@ -10,10 +10,9 @@
     "build:wasm": "cd .. && ./scripts/build-wasm.sh",
     "dev:wasm": "npm run build:wasm && VITE_YAOG_LOCAL_ENGINE=wasm vite",
     "preview:wasm": "npm run build:wasm && VITE_YAOG_LOCAL_ENGINE=wasm npm run build && vite preview",
-    "conformance": "vitest run --config vitest.config.ts",
+    "vitest": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:unit": "echo 'no unit specs yet (reserved for the sibling vitest unit-test plan; vitest already runs via the conformance script)'",
     "lint": "eslint .",
     "preview": "vite preview"
   },

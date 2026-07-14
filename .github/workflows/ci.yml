@@ -94,12 +94,12 @@ jobs:
       - name: Build WASM for the vitest roundtrip
         working-directory: ${{ github.workspace }}
         run: GOOS=js GOARCH=wasm go build -o web/yaog.wasm ./cmd/wasm
-      # The FE unit + conformance vitest suite (`npm run conformance` = `vitest run`): the wasmEngine
+      # The FE unit + conformance vitest suite (`npm run vitest` = `vitest run`): the wasmEngine
       # load/roundtrip pin, deployMode, the FE-heal-vs-Go-heal canary, the controller-client DTO
       # conformance, and the pure-lib pins. The Go oracle/golden/fail/KAT/coverage tests it used to sit
       # beside now run in the `go` job (re-homed into internal/localcompile).
       - name: Unit + conformance tests (vitest)
-        run: npm run conformance
+        run: npm run vitest
 
   # The PERMANENT three-way conformance gate (framework-refactor plan-3, invariant [1]: "parity is
   # proven by execution + a permanent gate, never by construction"). Build the pure Go pipeline to

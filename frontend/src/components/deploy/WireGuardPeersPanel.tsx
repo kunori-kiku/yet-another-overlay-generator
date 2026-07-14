@@ -10,9 +10,9 @@ import { handshakeAge, peerStatusCounts, type HandshakeAge } from '../../lib/wgP
 // node, or no peers). Observability only — no key material is shown.
 
 const STATUS_DOT: Record<WireGuardPeer['status'], string> = {
-  up: 'bg-green-400',
-  stale: 'bg-yellow-400',
-  never: 'bg-red-400',
+  up: 'bg-[var(--success)]',
+  stale: 'bg-[var(--warning)]',
+  never: 'bg-[var(--danger)]',
 };
 
 // fmtAge localizes the pure HandshakeAge bucket. now is held in state (not read impurely during

@@ -54,7 +54,11 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # `latest` mirrors release.yml's make_latest predicate (the owner-established self-promotion
+            # policy): a v* tag becomes `latest` UNLESS it is a -beta./-preview. prerelease (rc.N + final
+            # tags self-promote). There is no shared cross-workflow expression, so the predicate is
+            # duplicated inline here; keep it in sync with release.yml's make_latest.
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-preview.') }}
             # A manual (non-tag) run still produces a usable tag instead of an empty list.
             type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
 
