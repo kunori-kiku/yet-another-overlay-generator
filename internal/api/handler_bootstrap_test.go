@@ -17,18 +17,22 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
 
-// TestShQuote: values are single-quoted; embedded single quotes are escaped as '\”;
-// newlines are preserved (so a multiline PEM survives).
-func TestShQuote(t *testing.T) {
+// TestShellSingleQuote proves the POSIX single-quote escaping primitive (renamed from shQuote):
+// empty and no-quote values wrap verbatim; a single quote becomes the '\” idiom; adjacent quotes
+// each escape independently; newlines are preserved (so a multiline PEM survives); and a shell
+// metacharacter is inert inside the single quotes.
+func TestShellSingleQuote(t *testing.T) {
 	cases := map[string]string{
-		"abc":       "'abc'",
-		"a'b":       `'a'\''b'`,
-		"a\nb":      "'a\nb'",
-		";rm -rf /": "';rm -rf /'", // a metacharacter is inert inside single quotes
+		"":          "''",           // empty → an empty single-quoted word
+		"abc":       "'abc'",        // no quote → wrapped verbatim
+		"a'b":       `'a'\''b'`,     // one quote → close, escaped literal ', reopen
+		"a''b":      `'a'\'''\''b'`, // adjacent quotes → each escaped independently
+		"a\nb":      "'a\nb'",       // newline preserved (multiline PEM survives)
+		";rm -rf /": "';rm -rf /'",  // a metacharacter is inert inside single quotes
 	}
 	for in, want := range cases {
-		if got := shQuote(in); got != want {
-			t.Errorf("shQuote(%q) = %q, want %q", in, got, want)
+		if got := shellSingleQuote(in); got != want {
+			t.Errorf("shellSingleQuote(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -109,7 +113,7 @@ func TestRenderBootstrapScript_KeystoneOff(t *testing.T) {
 // is escaped, never breaking out of the single-quoted assignment.
 // TestRenderBootstrapScript_AgentPinning (plan-6): with AgentBins configured, the script bakes the
 // per-arch pin vars and verifies the downloaded binary against the SHA-256 (fail-closed) before
-// install; with no pins it warns loudly and proceeds. Pin values are shell-safe (shQuote).
+// install; with no pins it warns loudly and proceeds. Pin values are shell-safe (shellSingleQuote).
 func TestRenderBootstrapScript_AgentPinning(t *testing.T) {
 	bins := map[string]model.Artifact{
 		"linux-amd64": {Asset: "yaog-agent-linux-amd64", SHA256: strings.Repeat("a", 64)},
