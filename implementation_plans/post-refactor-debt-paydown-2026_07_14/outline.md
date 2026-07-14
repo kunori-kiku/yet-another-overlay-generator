@@ -330,16 +330,13 @@ same PR; no `--no-verify`, no amends, no force-push.
 
 ## Insertion-point markers (likely plan-N.5 triggers)
 
-- **plan-3.5** — the `deploy.go` follow-ups deferred by plan-3 (which shipped Part A, the teardown
-  *correctness* fix — all 4 SNAT sites + mimic teardown in both shells + the characterization golden +
-  the `field_safety` map/interface recursion): (a) the go:embed / `ShellToken` templating (Part B) — the
-  PowerShell shell context has no `ShellQuoted`/`ShellRaw` constructor yet, so characterize + extend the
-  seam rather than force a lossy conversion; and (b) **client+tcp mimic teardown** — `RenderDeployScripts`
-  receives only `peerMap` (a client's wg0 lives in `ClientConfigs`, not passed), so a client whose sole
-  link is `transport: tcp` cannot have its `HasMimic` observed on the deploy path (the node's own
-  `install.sh --uninstall` still tears its mimic down; only the operator `deploy-all --uninstall` misses
-  it). Fix by threading `result.ClientConfigs` into `RenderDeployScripts` (1 caller, `render.go:404`) and
-  deriving the client's `HasMimic` from the compiled (post-`mimic_fallback`) `ClientPeerInfo`.
+- **plan-3.5** — the `deploy.go` templating follow-up deferred by plan-3 (which shipped Part A, the
+  teardown *correctness* fix — all 4 SNAT sites + mimic teardown in both shells + the characterization
+  golden + the `field_safety` map/interface recursion; and, in the final-review follow-up, the **client+tcp
+  mimic derivation** — `RenderDeployScripts` now derives a client's `HasMimic` from the topology edge, since
+  peerMap holds no client PeerInfo): the go:embed / `ShellToken` templating (Part B) — the PowerShell shell
+  context has no `ShellQuoted`/`ShellRaw` constructor yet, so characterize + extend the seam rather than
+  force a lossy conversion.
 - **plan-6.5** if the owner reports an enrolled UV-incapable authenticator — draft the
   enforce-on-capable + re-enrollment migration rather than a blanket UV lockout.
 - **plan-8.5** if the `derivePeersWithDomains` split surfaces a golden byte-diff that is NOT a split
