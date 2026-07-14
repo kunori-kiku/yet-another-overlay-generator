@@ -745,11 +745,6 @@ export const en = {
   // Compile-time constraint codes (plan-3.5b) — 422s from /api/compile|export|deploy-script. The en
   // value mirrors the Go registry template verbatim (the English default + i18n fallback).
   'error.compile_failed': 'Compilation failed. Check the topology and try again.',
-  // Local-engine only (NOT a Go apierr code): the in-browser TS compiler throws this sentinel
-  // (compiler/errors.ts CompileCode.TopologyValidationFailed) when a local compile() rejects an
-  // invalid topology, so the local path localizes identically in spirit to the server's compile_failed.
-  'error.ts_topology_validation_failed':
-    'Compilation failed: the topology did not pass validation. Check the topology and try again.',
   'error.compile_transit_pool_exhausted': 'The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.',
   'error.compile_transit_cidr_invalid': 'The transit CIDR {cidr} is invalid: {detail}',
   'error.compile_transit_cidr_not_ipv4': 'The transit CIDR {cidr} must be IPv4.',
