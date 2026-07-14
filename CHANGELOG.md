@@ -9,6 +9,16 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+### Security
+- **WebAuthn User-Verification (UV) enforced server-side.** `verifyAssertion` now requires the UV flag
+  (not just User-Present) for operator passkey login, 2FA, and keystone trust-list signing — both
+  ceremonies already pin `userVerification:"required"` client-side, so the server becomes the enforcement
+  authority and a possession-only (PIN-less) authenticator is refused. Because the same core runs
+  **node-side** in `VerifyMembership` on every config fetch, a deployed UV-enforcing build requires every
+  served manifest to have been UV-signed: **on deploy, (re-)sign the trust-list with a UV-capable
+  authenticator** (platform passkey / PIN'd key). See `docs/spec/controller/operator-auth.md` §User-
+  Verification enforcement. (#282)
+
 ## [2.0.0-rc.6] - 2026-07-15
 
 **Release candidate.** A correctness, security, and structural-debt release over `v2.0.0-rc.5` — no new

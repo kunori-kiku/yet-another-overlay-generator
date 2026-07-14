@@ -145,6 +145,28 @@ iCloud Keychain, 1Password) needs no hardware key. **Honest limit:** passwordles
 reveals whether a username has a passkey (the `allow_credentials` is empty for none) — a
 low-value signal, and both `begin` and `finish` are rate-limited.
 
+### User-Verification (UV) enforcement
+
+Status: on `main` (post-refactor-debt-paydown plan-6, PR #282); **ships in `v2.0.0-rc.7`**, not
+rc.6. `verifyAssertion` (`internal/trustlist/webauthn.go`) requires the WebAuthn **User-Verified**
+flag (`flagUserVerified = 0x04`) in addition to User-Present, failing closed with
+`ErrUserVerification`. Both ceremonies already pin `userVerification:"required"` client-side, so the
+**server is the enforcement authority**: a possession-only assertion (touch/presence, no
+PIN/biometric) is refused. A UV-capable authenticator sets this bit under UV=required, so honest
+passkey login / 2FA / keystone signing are unaffected — but a bare, PIN-less security key is now
+rejected.
+
+**Fleet consequence (the reason this is behind a release, not a hotfix).** Because login, 2FA, and
+keystone signing share the one `VerifyAssertion` core, the UV gate **also runs node-side** in
+`VerifyMembership` on every config fetch — a node verifies the operator's trust-list signature
+before trusting a bundle. So once a build containing plan-6 is deployed, **every served manifest must
+have been UV-signed**, or nodes reject their config. **Operator action on deploy:** after updating to
+a UV-enforcing controller/agent build, **(re-)sign the trust-list with a UV-capable authenticator**
+(platform passkey / PIN'd key) so every served manifest carries UV before the new agent reaches
+nodes. If any enrolled operator authenticator cannot do UV, do NOT deploy a plan-6 build to the
+fleet as-is — the follow-up is per-credential enforcement + a re-enrollment path (tracked as
+plan-6.5). Merging plan-6 to `main` changed no deployed bytes; the gate takes effect only on deploy.
+
 ## Transport (hard requirement)
 
 `/login` carries a plaintext password. The controller speaks plain HTTP (TLS is delegated
