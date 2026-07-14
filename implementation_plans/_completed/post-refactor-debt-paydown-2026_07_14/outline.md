@@ -4,12 +4,13 @@
 > for code/doc that are stale or whose logic is not clean that makes the development of this repo hard
 > or understanding of this repo hard with workflows, and draft a subject that refactors. The production
 > logic is also a thing to be considered.").
-> **EXECUTED autonomously to closure (2026-07-14).** 13 of 14 plans merged to `main` (PRs #277–#292,
-> each built → independently workflow-reviewed → fixed → re-reviewed → CI-green → merged); **plan-6
-> (WebAuthn UV) is HELD as draft PR #282 pending an owner decision** (see Decisions log #7). The
-> 10-agent adversarial review-at-last returned GO-WITH-FIXES; both findings were fixed (#291, #292)
-> and the review loop is closed. Per-PR cadence used throughout: build → independent workflow review
-> (correctness / completeness / hygiene / structure) → fix → re-review → CI green → merge.
+> **EXECUTED autonomously to closure (2026-07-14) → COMPLETE (2026-07-15).** All 14 plans merged to
+> `main` (PRs #277–#292, each built → independently workflow-reviewed → fixed → re-reviewed → CI-green →
+> merged). plan-6 (WebAuthn UV) was HELD for an owner decision and **merged 2026-07-15 on the owner's
+> explicit go** (#282). The 10-agent adversarial review-at-last returned GO-WITH-FIXES; both findings
+> were fixed (#291, #292) and the review loop is closed. Per-PR cadence used throughout: build →
+> independent workflow review (correctness / completeness / hygiene / structure) → fix → re-review →
+> CI green → merge. Shipped as `v2.0.0-rc.6` (PRs 1–5, 7–14; #294 CHANGELOG roll); plan-6 rides rc.7.
 >
 > **This subject is the direct successor to `framework-refactor-2026_07_13`** (which shipped the
 > WASM-unified core + machine-gates + god-file splits, PRs #260–#275). It targets what that program
@@ -206,12 +207,18 @@ same PR; no `--no-verify`, no amends, no force-push.
    GO-WITH-FIXES) surfaced two real findings — a stray `./wasm` binary accidentally committed by a bare
    `go build ./cmd/wasm` (fixed #291, `/wasm` gitignored) and a client+tcp mimic-teardown gap in
    `deploy.go` (fixed #292, `HasMimic` derived from the topology edge for clients) — both fixed and
-   re-verified; the loop is closed. **plan-6 remains HELD** per decision 3: `verifyAssertion` also runs
-   node-side in `VerifyMembership` on every config fetch, so hard-enforcing the UV flag fleet-bricks
-   config fetches if any signed manifest was not UV-signed — SAFE only if every enrolled operator
-   authenticator does UV; the owner must confirm before #282 merges, else the fix routes through
-   plan-6.5 (per-credential enforce + re-enroll). **The subject is deliberately NOT archived to
-   `_completed/` while plan-6 is owed.**
+   re-verified; the loop is closed.
+8. **plan-6 MERGED on the owner's explicit go (2026-07-15, #282).** The owner directed "just merge it —
+   no bad thing would happen anyway", accepting the decision-3 precondition (every enrolled operator
+   authenticator does UV, so the node-side `VerifyMembership` UV gate cannot brick config fetches). Before
+   merging I re-reviewed the diff (correct: `flagUserVerified = 0x04`, fail-closed `ErrUserVerification`),
+   confirmed no conflict with the 15 commits that had landed (the change is isolated to `internal/trustlist`),
+   and locally verified `go build ./...` + `go test ./internal/trustlist/... ./internal/api/...` green
+   against current `main`. **Blast-radius note:** merging to `main` deploys nothing; UV enforcement ships
+   in the **next release (rc.7)** and reaches nodes only on a deploy of a plan-6-containing build — at which
+   point the operator must (re-)sign the trust-list with a UV-capable authenticator so every served manifest
+   carries UV. plan-6.5 (per-credential enforce + re-enroll) is now moot unless a UV-incapable authenticator
+   surfaces later. **All 14 plans merged → subject COMPLETE + archived to `_completed/`.**
 
 ## Milestones (one plan file each — ordered by payoff-per-risk: fixes → paydown → hygiene)
 
@@ -373,7 +380,8 @@ same PR; no `--no-verify`, no amends, no force-push.
 - [x] **The confirmed correctness/security defects are fixed + regression-pinned** (standalone
       `install.sh` signed-set guard; the self-update semver wedge; the trust-list-sign custody lock;
       the `deploy.go` mimic/SNAT teardown); **the WASM engine ships**, red-build asserted in both the
-      release and Docker pipelines. ⏸ **The UV decision gate is the one open item** (plan-6, owner).
+      release and Docker pipelines. ✅ **The UV decision gate is resolved** — owner approved, plan-6
+      merged (#282, 2026-07-15); ships in rc.7.
 - [x] `deploy.go`'s teardown correctness landed (mimic teardown + CIDR-agnostic SNAT in both shells;
       the go:embed/`ShellToken` **templating half** is carried to plan-3.5 — PowerShell has no
       `ShellToken` constructor yet); `cmd/agent/main.go` (→ `ControllerLoop`), `derivePeersWithDomains`
@@ -383,9 +391,11 @@ same PR; no `--no-verify`, no amends, no force-push.
       airgap route / TS-compiler file / rotted citation as live.
 - [x] Every hard invariant above is demonstrably preserved (goldens byte-verified; no fleet regression;
       no security regression — the review found NO trust-root bypass / key leak / shipped CVE).
-- [x] STATUS + memory closeout done. **Subject NOT archived to `_completed/` yet — deliberately held
-      in `implementation_plans/` until plan-6 (WebAuthn UV) resolves with the owner** (then plan-6
-      merges or plan-6.5 is drafted, and the subject archives per the close-phase ritual).
+- [x] STATUS + memory closeout done. **Subject COMPLETE (14/14) + archived to `_completed/`** —
+      plan-6 (WebAuthn UV) merged on the owner's go (#282, 2026-07-15), clearing the last blocker.
+      Deferred, non-blocking follow-ups remain tracked in the plan-3.5/6.5 insertion markers
+      (PowerShell deploy templating; per-credential UV re-enroll only if a UV-incapable authenticator
+      ever surfaces).
 
 ## Plan status table
 
@@ -396,7 +406,7 @@ same PR; no `--no-verify`, no amends, no force-push.
 | 3 | deploy.go teardown correctness (→ plan-3.5 templating) | 1 | ✅ merged | #279 (+#292 client-mimic follow-up) |
 | 4 | Agent self-update correctness + durability | 1 | ✅ merged | #280 |
 | 5 | Controller store + keystone-sign serialization | 1 | ✅ merged | #281 |
-| 6 | WebAuthn UV enforcement (decision gate) | 1 | ⏸ **HELD** — owner gate | #282 (draft, OPEN) |
+| 6 | WebAuthn UV enforcement (decision gate) | 1 | ✅ merged (owner-approved 2026-07-15) | #282 |
 | 7 | Agent daemon decomposition + loop tests | 2 | ✅ merged | #283 |
 | 8 | Compiler: split derivePeersWithDomains | 2 | ✅ merged | #284 |
 | 9 | api dedup + handler_bootstrap split + agent-mux adapter | 2 | ✅ merged | #285 |
@@ -412,5 +422,7 @@ same PR; no `--no-verify`, no amends, no force-push.
 > `RenderDeployScripts` now derives the client's `HasMimic` from the topology edge). See the plan-3.5
 > insertion marker for the deferred PowerShell templating half.
 >
-> **13 of 14 plans merged; plan-6 HELD for the owner's WebAuthn-UV decision.** The subject stays in
-> `implementation_plans/` (NOT archived to `_completed/`) until plan-6 resolves — see Closure criteria.
+> **All 14 plans merged.** plan-6 (WebAuthn UV) was HELD for an owner decision and **merged 2026-07-15
+> on the owner's explicit go** (#282) — the owner accepted the UV-capability precondition (every enrolled
+> operator authenticator does UV). UV enforcement rides the **next release (rc.7)**, not rc.6; merging to
+> `main` does not touch the running fleet. **Subject COMPLETE + archived to `_completed/`.**

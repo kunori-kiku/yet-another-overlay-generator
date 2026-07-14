@@ -1,12 +1,12 @@
 # STATUS
 <!-- regenerated: 2026-07-14 -->
-<!-- by: hand — v2.0.0-rc.6 = GitHub Latest (post-refactor-debt-paydown delta); framework-refactor SHIPPED + archived to _completed/; post-refactor-debt-paydown EXECUTED (13/14 merged, plan-6 WebAuthn-UV HELD for owner) -->
+<!-- by: hand — v2.0.0-rc.6 = GitHub Latest (post-refactor-debt-paydown delta); framework-refactor + post-refactor-debt-paydown both SHIPPED + archived to _completed/ (14/14; plan-6 WebAuthn-UV merged on owner's go, rides rc.7) -->
 
 ## Active work
 
-- **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — EXECUTED to closure 2026-07-14 (13/14 merged;
-  plan-6 WebAuthn-UV HELD for owner). NOT archived to `_completed/` while plan-6 is owed.** The
-  successor to `framework-refactor`, from a fresh **30-agent repo-wide debt sweep + a 7-agent
+- **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
+  `_completed/`). Shipped as `v2.0.0-rc.6`; plan-6 (WebAuthn UV) merged on the owner's explicit go and
+  rides rc.7.** The successor to `framework-refactor`, from a fresh **30-agent repo-wide debt sweep + a 7-agent
   security-correctness gap-pass** (both briefed to NOT re-report shipped work) → **14 plans in 4 tiers**:
   correctness/security fixes → structural paydown → machine-gate/FE → doc/state hygiene. Executed per-PR
   with the full review regime (build → independent workflow review → fix → re-review → CI-green → merge),
@@ -14,7 +14,7 @@
   code — plan-3 fixed 1/4 SNAT sites + invented a divergent teardown, plan-5's lockTenantOps unreachable,
   plan-9's field_safety infeasible) and a **10-agent adversarial review-at-last** (GO-WITH-FIXES; both
   findings fixed — #291 stray wasm, #292 client-mimic). Folder:
-  [`implementation_plans/post-refactor-debt-paydown-2026_07_14/`](implementation_plans/post-refactor-debt-paydown-2026_07_14/outline.md)
+  [`implementation_plans/_completed/post-refactor-debt-paydown-2026_07_14/`](implementation_plans/_completed/post-refactor-debt-paydown-2026_07_14/outline.md)
   (+ `ASSESSMENT.md` evidence base, `REVIEW-CORRECTIONS.md`). **Headline defects, all fixed at root +
   regression-pinned:** (1) the WASM engine (default+only in-browser local engine) was NEVER built in the
   release/Docker pipelines → every shipped panel 404s on `/yaog.wasm`, CI-invisible → **now built in both
@@ -31,14 +31,16 @@
   `Field` adoption #287, six-subject archive + reconcile #288, airgap/TS-compiler prose purge #289,
   pipeline/Docker hygiene #290). **Negative evidence: NO trust-root bypass, NO key leak, NO shipped CVE —
   the controller/agent-managed paths are sound; the defects lived in the mirrors/edges.** Owner scope
-  decisions were taken **PROVISIONALLY** during execution (owner away): comprehensive/all-4-tiers ·
-  fix-ship-breaker-first-no-out-of-band-release · ran-the-security-pass · name — **confirm on return**.
-  **⏸ plan-6 (WebAuthn UV, draft #282) STOPS for an owner gate:** `verifyAssertion` also runs node-side
-  in `VerifyMembership` on every config fetch, so hard-enforcing the UV flag **fleet-bricks config
-  fetches** if any signed manifest was not UV-signed — SAFE only if every enrolled operator authenticator
-  does UV; if any is UV-incapable, the fix routes through plan-6.5 (per-credential enforce + re-enroll).
-  Deferred, non-blocking: **plan-3.5** (go:embed/`ShellToken` PowerShell deploy templating — no PS1
-  `ShellToken` constructor yet) + a **bilingual-wiki airgap-prose refresh** + the net-new
+  decisions taken provisionally during execution now stand (comprehensive/all-4-tiers ·
+  fix-ship-breaker-first-no-out-of-band-release · ran-the-security-pass · name). **✅ plan-6 (WebAuthn UV,
+  #282) MERGED 2026-07-15 on the owner's explicit go** ("just merge it — no bad thing would happen") —
+  the owner accepted the precondition that every enrolled operator authenticator does UV (the node-side
+  `VerifyMembership` UV gate would otherwise brick config fetches on a non-UV manifest). Merging deployed
+  nothing; **UV enforcement rides the next release (rc.7)** and reaches nodes only on a deploy of a
+  plan-6-containing build, at which point the operator must (re-)sign the trust-list with a UV-capable
+  authenticator. plan-6.5 (per-credential enforce + re-enroll) is moot unless a UV-incapable authenticator
+  ever surfaces. Deferred, non-blocking: **plan-3.5** (go:embed/`ShellToken` PowerShell deploy templating —
+  no PS1 `ShellToken` constructor yet) + a **bilingual-wiki airgap-prose refresh** + the net-new
   `docs/spec/controller/agent.md` lifecycle sections. Memory: `post-refactor-debt-paydown-shipped.md`.
 
 - **📋 SUBJECT `mixed-controller-local-mode-2026_06_25` — PARTIALLY SHIPPED; still ACTIVE (plans 5 + 7
@@ -275,24 +277,16 @@
 
 **Two independent tracks, both owner-paced:**
 
-**Track 1 — `post-refactor-debt-paydown-2026_07_14` EXECUTED to closure; ONE owner decision owed.** All
-14 plans are implemented: **13 merged** to `main` (#277–#290, +#291/#292 review follow-ups), each
-workflow-reviewed → fixed → re-reviewed → CI-green. Full detail + the confirmed-and-fixed defects + the
-PROVISIONAL owner scope decisions (confirm on return) are in the ✅ Active-work entry above. **Owner
-owes:**
-1. **The plan-6 WebAuthn-UV decision (draft #282) — the one blocker to closing the subject.** Confirm
-   whether every enrolled operator authenticator does User-Verification (PIN/biometric). If YES →
-   `gh pr ready 282` + merge under the normal review regime. If ANY is a bare UV-incapable security key
-   → do NOT merge #282 as-is (it would fleet-brick config fetches, since `verifyAssertion` runs node-side
-   on every fetch); instead draft plan-6.5 (per-credential enforce + a re-enrollment path). Either way,
-   the subject then archives to `_completed/` per the close-phase ritual.
-2. **Confirm the 4 provisional scope decisions** (comprehensive/all-4-tiers · ship-breaker-first,
-   no out-of-band release · ran-the-security-pass · the subject name) — all recommended-option defaults
-   taken while away; re-ask only if still material.
-3. **Deferred, non-blocking** (each its own future unit of work, tracked in the plan-3.5/6.5 markers):
-   the go:embed/`ShellToken` PowerShell deploy templating (plan-3.5), a bilingual-wiki airgap-prose
-   refresh, and the net-new `docs/spec/controller/agent.md` self-update/keystone/telemetry lifecycle
-   sections. Nothing here ships in a release; they are cleanup that can ride any later docs PR.
+**Track 1 — `post-refactor-debt-paydown-2026_07_14` COMPLETE + archived to `_completed/`.** All 14 plans
+merged to `main` (#277–#290, +#291/#292 review follow-ups), each workflow-reviewed → fixed → re-reviewed →
+CI-green; shipped as `v2.0.0-rc.6`. **plan-6 (WebAuthn UV, #282) merged 2026-07-15 on the owner's explicit
+go** ("just merge it") — the owner accepted the UV-capability precondition; it deployed nothing (rides
+rc.7). Full detail is in the ✅ closed entry above. **Residual (non-blocking, each its own future unit,
+tracked in the plan-3.5/6.5 markers):** (a) when a plan-6-containing build is deployed, the operator must
+(re-)sign the trust-list with a UV-capable authenticator so every served manifest carries UV (else the
+node-side UV gate rejects it); (b) the go:embed/`ShellToken` PowerShell deploy templating (plan-3.5); (c) a
+bilingual-wiki airgap-prose refresh + the net-new `docs/spec/controller/agent.md` lifecycle sections. None
+ship in a release; they can ride any later docs PR.
 
 **Track 2 — the rc line to GA.**
 
@@ -335,6 +329,17 @@ release line has since advanced preview → beta → rc through **rc.5**.
 
 ## Recently closed subjects (most recent first)
 
+- `post-refactor-debt-paydown-2026_07_14` (2026-07-14 → complete 2026-07-15) — **14 plans, shipped as
+  `v2.0.0-rc.6` (PRs #277–#292).** The residual + security debt after framework-refactor, from a 30-agent
+  sweep + 7-agent security gap-pass → 18-agent pre-execution review (caught 3 blockers) → execution →
+  10-agent review-at-last (2 findings fixed: #291 stray wasm, #292 client-mimic). Tier-1: the standalone
+  install.sh signed-set bypass, the **WASM ship-breaker** (never built in release/Docker → shipped panels
+  404), deploy.go mimic-teardown + CIDR-agnostic SNAT, the self-update semver wedge, the trust-list-sign
+  custody race. Tier-2/3/4: agent `ControllerLoop`, byte-identical `derivePeersWithDomains` split,
+  `handler_bootstrap` split + agent-mux adapter, the non-vacuous wire-DTO drift gate, finished `Field`
+  adoption, doc/state hygiene. **plan-6 (WebAuthn UV, #282) merged on the owner's explicit go 2026-07-15**
+  (accepted the UV-capability precondition; rides rc.7, deployed nothing). NO trust-root bypass / key leak /
+  CVE. Memory: `post-refactor-debt-paydown-shipped.md`, `release-e2e-gate-mirrors-ci.md`.
 - `framework-refactor-2026_07_13` (2026-07-13) — **14 phases (plans 0/1/1.5/1.6/2/3/4/5/5b/6/7/8/9/10;
   PRs #260–#275); the "WASM-Unified Core + Machine-Gated Paydown" program.** WASM is now the DEFAULT
   in-browser local engine (multi-browser Playwright e2e: chromium + webkit + firefox); the ~10.6K-LOC
