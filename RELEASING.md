@@ -71,3 +71,25 @@ at link time, and a non-release build keeps `dev`. A `version` subcommand
 (`yaog-agent version`, `yaog-server version`, `yaog-compiler version`) prints it.
 This rail underpins the controller's per-node version reporting and the signed agent
 self-update floor.
+
+## Release-pipeline invariant: `release.yml` gates must mirror `ci.yml`
+
+`release.yml` re-runs the CI gate set (Go test, frontend lint/build, **frontend E2E**,
+real-tunnel netns) on the tag before it builds and publishes. Its `gate-e2e` job is a
+**separate copy** of `ci.yml`'s `frontend-e2e` job, and the two must build the panel
+**identically**. The trap: **the release E2E gate only runs on a tag push**, so any drift
+between the two E2E jobs stays invisible on PRs and first surfaces as a failed release build
+(which skips build + publish → no release).
+
+Concretely: whenever you add a build step to `ci.yml`'s `frontend-e2e` (dependency install,
+a codegen step, `VITE_E2E=1`, **`npm run build:wasm`**, a dist assertion), add the twin step
+to `release.yml`'s `gate-e2e` **in the same PR**. This has bitten releases twice — the
+`VITE_E2E` panel build (#173) and the WASM engine build (`v2.0.0-rc.6`: the release E2E panel
+had no `/yaog.wasm`, so every in-browser-validate spec timed out; fixed in #295, and the
+tag was moved to the fixed commit — moving a tag whose release never published is the correct
+recovery, not a force-push of published history). **A green PR does not prove the release
+pipeline is green.** Treat the first tag after any FE-build/CI change as a real risk.
+
+Related operational invariant: a CI job **display-name** change silently orphans its required
+branch-protection context — update branch protection in the same PR as any `name:` edit in
+`ci.yml`.
