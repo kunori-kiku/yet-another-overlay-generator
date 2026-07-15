@@ -9,6 +9,7 @@ import {
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type UILanguage } from '../../i18n';
 import { BTN_CTA } from '../shell/styles';
+import { WebAuthnEnrollmentNotice } from './WebAuthnEnrollmentNotice';
 import {
   emptyForceSelection,
   setForceAll,
@@ -56,12 +57,13 @@ export function DeployBar() {
   const serverOperatorAlg = useControllerStore((s) => s.serverOperatorAlg);
   const serverOperatorFingerprint = useControllerStore((s) => s.serverOperatorFingerprint);
   const serverRedeployRequired = useControllerStore((s) => s.serverRedeployRequired);
-  // A credential can be pinned on the server yet ABSENT from this browser (enrolled on another
-  // device / after a browser-data clear) — then the operator must sign on the enrolling device.
+  // A credential can be pinned on the server yet lack a usable browser invocation handle (for
+  // example, incomplete legacy status or a raw-Ed25519 off-host pin).
   const hasLocalSigningKey = useControllerStore(selectHasLocalSigningKey);
   // Pending rotate confirmation: arming this (instead of starting the ceremony) is how a re-pin of
   // an already-pinned keystone is gated behind an explicit acknowledgement.
   const pendingKeystoneRotate = useControllerStore((s) => s.pendingKeystoneRotate);
+  const pendingKeystoneEnrollment = useControllerStore((s) => s.pendingKeystoneEnrollment !== null);
   const cancelKeystoneRotate = useControllerStore((s) => s.cancelKeystoneRotate);
   // Post-deploy orphan list (plan-6): approved nodes still in the fleet registry but not in the
   // generation that was just published.
@@ -214,6 +216,7 @@ export function DeployBar() {
         <p className="text-xs text-[var(--content-muted)]">
           {t(language, 'deployBar.pinAnOffHost')}
         </p>
+        <WebAuthnEnrollmentNotice />
 
         {/* Rotated-but-not-redeployed: the served bundle is still signed under the OLD key, so every
             node is stranded until a fresh signed deploy lands. Surface it loudly. */}
@@ -223,8 +226,8 @@ export function DeployBar() {
           </p>
         )}
 
-        {/* Pinned on the server but this browser has no local signing key (enrolled elsewhere / after
-            a browser-data clear): you can't sign a deploy here — do it on the enrolling device. */}
+        {/* Pinned on the server but not browser-invocable: never nudge an operator toward an
+            accidental fleet-stranding re-pin merely to repair browser state. */}
         {serverOperatorPinned && !hasLocalSigningKey && (
           <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning-border)] px-2 py-1 rounded">
             {t(language, 'deployBar.keystonePinnedNoLocalKey')}
@@ -264,7 +267,9 @@ export function DeployBar() {
               ? t(language, 'deployBar.waitingForSecurityKey')
               : serverOperatorPinned
                 ? t(language, 'deployBar.rotateKeystone')
-                : t(language, 'deployBar.enrollSigningKeyPasskey')}
+                : pendingKeystoneEnrollment
+                  ? t(language, 'deployBar.retryKeystoneEnrollment')
+                  : t(language, 'deployBar.enrollSigningKeyPasskey')}
           </button>
         )}
         <p className="text-[10px] text-[var(--content-muted)]">
@@ -296,7 +301,12 @@ export function DeployBar() {
       )}
 
       {error && (
-        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">
+        <p
+          data-testid="deploy-error"
+          role="alert"
+          aria-live="assertive"
+          className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all"
+        >
           ⚠️ {error}
         </p>
       )}

@@ -3,8 +3,9 @@
 // This is the FE drop-in that runs the pure Go compile pipeline (compiled to GOOS=js
 // GOARCH=wasm as web/yaog.wasm) directly in the browser, mirroring the TS engine's public
 // surface (compile / validate / deployScript / export) that lib/localEngine.ts dispatches local-mode
-// compute onto. It is PREVIEW-ONLY (invariant [4]): local WASM mode never
-// deploys or stages — controller compute stays server-side.
+// compute onto. Local WASM never stages/promotes through a controller, but its exported bundle ZIP
+// and SSH helper are intentionally usable for operator-driven local deployment; controller compute
+// and managed-fleet deployment stay server-side.
 //
 // Since framework-refactor plan-5 deleted the hand-mirrored TS compiler, this IS the local engine
 // (reached whenever local-mode compute is enabled — see lib/localEngine.ts). It is loaded via a
@@ -135,13 +136,12 @@ export async function deployScripts(topo: Topology): Promise<{ sh: string; ps1: 
   return { sh: await deployScript(topo, 'sh'), ps1: await deployScript(topo, 'ps1') };
 }
 
-// exportArtifacts returns a downloadable ZIP Blob. The shim (cmd/wasm exportZip) builds the archive
-// inside the wasm via Go's archive/zip over the per-node bundle file set and returns it as base64, so
-// no JS zip library is needed. NOTE (preview-only, invariant [4]): this ships the raw per-node
-// config files rather than wrapping each node in a self-extracting installer; the WASM engine is a
-// design PREVIEW and never deploys, so it does not replicate the installer wrapper (that wrapper
-// lives in the deploy-time artifacts path, internal/artifacts / cmd/compiler). A base64 string never
-// begins with '{', so throwIfErrorEnvelope distinguishes it from the {"error":...} envelope.
+// exportArtifacts returns a downloadable, deployable ZIP Blob. The shim (cmd/wasm exportZip) builds
+// the archive inside the wasm via Go's archive/zip and returns it as base64, so no JS zip library is
+// needed. Each node-ID directory contains the rendered bundle plus its mandatory checksums.sha256;
+// deploy-all uploads that complete directory and install.sh verifies it before any host mutation.
+// A base64 string never begins with '{', so throwIfErrorEnvelope distinguishes it from the
+// {"error":...} envelope.
 export async function exportArtifacts(topo: Topology): Promise<Blob> {
   const api = await ensureWasm();
   const out = api.exportZip(JSON.stringify(topo));

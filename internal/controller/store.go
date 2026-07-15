@@ -44,16 +44,48 @@ var (
 	// BumpGeneration/promote (plan-3 scoping). The remedy is identical either
 	// way: stage (again), then promote.
 	ErrNoStagedBundle = errors.New("controller: nothing staged for the next generation; stage (again) before promoting")
+	// ErrIncompleteStagedSet is returned (wrapped together with ErrNoStagedBundle) when staged
+	// records exist but their durable staged-set seal is absent or no longer matches them. This is
+	// the fail-closed crash shape of ReplaceStagedSet: a partial candidate can remain on disk, but it
+	// is never promotable until a clean re-stage publishes a fresh seal last.
+	ErrIncompleteStagedSet = errors.New("controller: staged set is incomplete or does not match its seal")
 	// ErrTokenInvalid is returned by ConsumeEnrollmentToken when the token is
 	// unknown, scoped to a different node, or expired.
 	ErrTokenInvalid = errors.New("controller: enrollment token invalid or expired")
 	// ErrTokenConsumed is returned by ConsumeEnrollmentToken when the token was
 	// already burned (single-use).
 	ErrTokenConsumed = errors.New("controller: enrollment token already consumed")
-	// ErrChallengeInvalid is returned by ConsumeLoginChallenge when no challenge
-	// matches the hash for the operator, it is expired, or it was already consumed
+	// ErrChallengeInvalid is returned by ConsumeAssertionChallenge when no challenge
+	// matches the hash for the subject, it is expired, or it was already consumed
 	// (a consumed challenge is DELETED, so a replay simply finds nothing).
-	ErrChallengeInvalid = errors.New("controller: login challenge invalid or expired")
+	ErrChallengeInvalid = errors.New("controller: assertion challenge invalid or expired")
+	// ErrOperatorCredentialChanged is returned by CompareAndSetOperatorCredential when the
+	// keystone changed after the caller classified a pin/rotation request. The caller must
+	// refresh server truth and re-evaluate the transition; silently retrying could turn a first
+	// pin into a rotation without the required acknowledgement.
+	ErrOperatorCredentialChanged = errors.New("controller: operator credential changed concurrently")
+	// ErrLoginCredentialChanged is returned when a login passkey changed after a handler loaded
+	// the operator and before it attempted the field-scoped update. Retrying must re-authenticate
+	// against current state; a stale disable must never clear a newly-registered passkey.
+	ErrLoginCredentialChanged = errors.New("controller: login credential changed concurrently")
+	// ErrTOTPStateChanged is returned when a TOTP enrollment/disable ceremony was verified against
+	// a state that changed before its field-scoped write. Retrying must re-read and re-verify; a
+	// stale whole-account write must never resurrect or erase either TOTP or a login passkey.
+	ErrTOTPStateChanged = errors.New("controller: TOTP state changed concurrently")
+	// ErrPendingKeystoneTransitionConflict means a durable keystone transition marker names a
+	// target credential that is neither the current credential nor the marker's expected prior
+	// state. The protocol cannot safely infer whether an out-of-band writer skipped its recovery
+	// boundary, so it retains the marker and refuses another transition for manual diagnosis.
+	ErrPendingKeystoneTransitionConflict = errors.New("controller: pending keystone transition conflicts with current credential")
+	// ErrKeystoneAuditRequired is returned by the controller-level keystone transition boundary
+	// when a caller attempts a real trust-anchor mutation without the exact audit identity the
+	// write-ahead protocol requires. Only an exact compare-only no-op may omit the audit entry.
+	ErrKeystoneAuditRequired = errors.New("controller: a keystone credential mutation requires an audit entry")
+	// ErrUncommittedPromotion is returned when FileStore contains a live-state record written by
+	// an interrupted promotion whose generation commit marker has not landed yet. Agent-serving
+	// reads and unrelated stage/generation mutations fail closed until PromoteStaged is retried and
+	// generation.json commits.
+	ErrUncommittedPromotion = errors.New("controller: promoted configuration is not committed")
 	// ErrDuplicateWGKey is returned by Enroll when the presented WireGuard public
 	// key is already approved under a DIFFERENT node-id (plan-6: one approved WG
 	// pubkey ↔ one node-id — the duplicate-fleet-rows vector). Same-id re-enroll
@@ -227,8 +259,12 @@ type AuditEntry struct {
 	Actor     string
 	Action    string
 	NodeID    string
-	PrevHash  string
-	Hash      string
+	// EventID is an optional stable idempotency identity. Empty legacy/general entries retain the
+	// historical audit canonical encoding; durable keystone transitions set a random EventID so a
+	// retry can distinguish "append committed but returned an error" from "append never happened".
+	EventID  string `json:",omitempty"`
+	PrevHash string
+	Hash     string
 }
 
 // OperatorCredential is the pinned OFF-HOST signer the operator uses to sign the
@@ -247,16 +283,38 @@ type OperatorCredential struct {
 	Origin       string `json:"origin"`
 }
 
+// PendingKeystoneTransition is the durable write-ahead marker for one audited keystone pin or
+// rotation. Expected is nil for a first pin; Next is the credential the CAS intends to install;
+// Audit is the exact pre-chain entry, including a stable EventID and timestamp, that must appear
+// exactly once iff Next becomes current. It contains public credential material only.
+type PendingKeystoneTransition struct {
+	Expected *OperatorCredential `json:"expected,omitempty"`
+	Next     OperatorCredential  `json:"next"`
+	Audit    AuditEntry          `json:"audit"`
+}
+
 // StoredTrustList is the operator-signed membership trust-list at rest. TrustListJSON
 // is the canonical bytes the operator signed (trustlist.Canonical of the built
 // trust-list); SignatureJSON is the json.Marshal of the trustlist.SignedTrustList;
-// Epoch is the monotonic membership epoch those bytes were signed at. The compiler
-// embeds both byte fields verbatim into every node bundle so nodes verify membership
-// offline against their pinned credential.
+// Epoch is the monotonic membership epoch those bytes were signed at. The agent /config
+// response appends both byte fields alongside the promoted bundle so nodes verify membership
+// against their pinned credential before adopting the bundle.
 type StoredTrustList struct {
-	TrustListJSON []byte `json:"trustlist_json"`
-	SignatureJSON []byte `json:"signature_json"`
-	Epoch         int64  `json:"epoch"`
+	TrustListJSON      []byte `json:"trustlist_json"`
+	SignatureJSON      []byte `json:"signature_json"`
+	Epoch              int64  `json:"epoch"`
+	PromotedGeneration int64  `json:"promoted_generation,omitempty"`
+}
+
+// StagedSet is the complete candidate a compiler publishes before promotion. Generation is the
+// provisional generation (current+1), Bundles is the exact set of changed nodes to flip, and
+// TrustList is the optional keystone manifest binding the full ready fleet (including unchanged
+// nodes). ReplaceStagedSet persists the component records first and a durable seal last; a crash or
+// error before that final write leaves the candidate unpromotable.
+type StagedSet struct {
+	Generation int64
+	Bundles    []SignedBundle
+	TrustList  *StoredTrustList
 }
 
 // ServedConfig is the ATOMIC snapshot of what /config serves one node: its current promoted Bundle,
@@ -343,25 +401,35 @@ type LoginCredential struct {
 	Origin       string `json:"origin"`
 }
 
-// LoginChallenge is a single-use, short-TTL, operator-scoped random nonce issued for a
-// passkey login (plan-5.2). The plaintext challenge (base64url) is returned to the
-// browser to feed navigator.credentials.get; only ChallengeHash (hex SHA-256 of that
-// base64url string) is stored — the same hash-not-plaintext discipline as enrollment
-// and session tokens. It is the RANDOM-challenge analogue of the keystone's
-// content-bound manifest hash: its presence in the store proves the controller issued
-// it, and single-use consumption is the anti-replay.
+// TOTPState is the pair of account fields that forms the TOTP configuration and replay state. It is
+// used by CompareAndSetTOTPState so TOTP management can update those fields without writing a stale
+// whole Operator (which could otherwise undo a concurrent login-passkey change).
+type TOTPState struct {
+	Secret       string
+	LastUsedStep int64
+}
+
+// AssertionChallenge is a single-use, short-TTL random nonce issued for passkey login
+// (plan-5.2) or browser WebAuthn enrollment proof. The plaintext challenge (base64url)
+// is returned to the browser to feed navigator.credentials.get; only ChallengeHash
+// (hex SHA-256 of that base64url string) is stored — the same hash-not-plaintext
+// discipline as enrollment and session tokens. It is the RANDOM-challenge analogue of
+// the keystone's content-bound manifest hash: its presence in the store proves the
+// controller issued it, and single-use consumption is the anti-replay.
 //
-// Single-use is enforced by DELETION on consume (not a ConsumedAt flag), so a completed
-// or expired challenge leaves no residue — this caps store growth without a sweep. A
-// challenge carries no purpose discriminator beyond Operator: the /login 2FA leg,
-// passwordless begin, and the disable re-auth leg mint interchangeable per-operator
-// challenges. That is safe because every issuer is gated (the 2FA leg behind a correct
-// password, disable behind an authenticated session) and each only ever yields a login
-// or an already-authenticated disable — never a privilege escalation.
-type LoginChallenge struct {
-	ChallengeHash string    `json:"challenge_hash"`
-	Operator      string    `json:"operator"`
-	ExpiresAt     time.Time `json:"expires_at"`
+// Single-use is enforced by DELETION on consume (not a ConsumedAt flag). Creation purges
+// expired records, while browser enrollment uses ReplaceAssertionChallengeForSubject so only one
+// live challenge exists for an actor+purpose. Normal /login 2FA, passwordless begin, and disable
+// re-auth challenges carry the raw username in Subject and remain interchangeable for that
+// account. Browser credential enrollment instead places a synthesized purpose+actor value in
+// Subject, so a login-credential proof cannot be consumed by keystone enrollment (or by a
+// different actor).
+type AssertionChallenge struct {
+	ChallengeHash string `json:"challenge_hash"`
+	// Subject retains the historical "operator" JSON key so existing FileStore records load
+	// without migration. It is a username for login, or purpose+actor for enrollment.
+	Subject   string    `json:"operator"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // Session is a server-side operator session minted at a successful /login. The
@@ -544,6 +612,12 @@ type Store interface {
 	// StageBundle stores a node's bundle as the staged (not-yet-current) version.
 	// Staging replaces any prior staged bundle for that node.
 	StageBundle(ctx context.Context, t TenantID, b SignedBundle) error
+	// ReplaceStagedSet publishes one exact candidate set. It invalidates the prior durable seal
+	// before mutating any component record, replaces/prunes the staged bundles and optional
+	// keystone manifest, then writes the seal LAST. The returned purged IDs are stable-ordered.
+	// An empty set clears every active staged record and seal. This is the production staging
+	// primitive; StageBundle remains for focused/legacy store callers.
+	ReplaceStagedSet(ctx context.Context, t TenantID, set StagedSet) (purged []string, err error)
 	// PruneStagedBundles deletes staged bundles whose NodeID is NOT in keep and
 	// returns the purged node IDs (stable order). It is the stage-side half of
 	// promote scoping (plan-3): CompileAndStage calls it with the freshly staged
@@ -599,22 +673,27 @@ type Store interface {
 	// tokens are not an error (returns 0, nil).
 	PurgeEnrollmentTokensForNode(ctx context.Context, t TenantID, nodeID string) (int, error)
 
-	// --- Passkey login challenges (plan-5.2) ---
+	// --- WebAuthn assertion challenges (login + enrollment proof) ---
 
-	// CreateLoginChallenge stores a single-use, operator-scoped, TTL login challenge
-	// (by its hash). It is the controller-side step that issues a random nonce for a
-	// passkey login (the password+passkey 2FA leg, the passwordless begin, or a
-	// disable re-auth).
-	CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error
-	// ConsumeLoginChallenge atomically validates and burns a login challenge by DELETING
+	// CreateAssertionChallenge stores a single-use, subject-scoped, TTL assertion challenge
+	// (by its hash). It issues a random nonce for passkey login (the password+passkey
+	// 2FA leg, passwordless begin, or disable re-auth). Expired records are purged on every
+	// create so abandoned prompts do not accumulate indefinitely.
+	CreateAssertionChallenge(ctx context.Context, t TenantID, challenge AssertionChallenge, now time.Time) error
+	// ReplaceAssertionChallengeForSubject stores an assertion challenge after atomically deleting
+	// every prior challenge for the same subject (and every expired challenge). Browser WebAuthn
+	// enrollment uses this bounded form so repeated/cancelled attempts leave at most one live
+	// record per actor+purpose; ordinary login retains concurrent-challenge behavior.
+	ReplaceAssertionChallengeForSubject(ctx context.Context, t TenantID, challenge AssertionChallenge, now time.Time) error
+	// ConsumeAssertionChallenge atomically validates and burns an assertion challenge by DELETING
 	// it: it returns ErrChallengeInvalid if no challenge matches challengeHash, if its
-	// Operator != operator, or if it is expired (relative to now); otherwise it deletes
+	// Subject != subject, or if it is expired (relative to now); otherwise it deletes
 	// the record and returns nil. Single-use is enforced atomically by the delete under
 	// the store lock, so a captured assertion cannot be replayed (the record is gone) and
 	// two concurrent logins cannot both consume the same challenge. An expired record
-	// encountered here is also deleted (lazy GC); a wrong-operator record is left intact
-	// (it may be another operator's valid challenge — not the caller's to burn).
-	ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error
+	// encountered here is also deleted (lazy GC); a wrong-subject record is left intact
+	// (it may be another subject's valid challenge — not the caller's to burn).
+	ConsumeAssertionChallenge(ctx context.Context, t TenantID, challengeHash, subject string, now time.Time) error
 
 	// --- Node API tokens (per-node bearer auth) ---
 
@@ -649,22 +728,38 @@ type Store interface {
 
 	// --- Keystone: operator credential + signed trust-list (plan-5.1b) ---
 
-	// SetOperatorCredential pins (or replaces) the tenant's off-host operator signing
-	// credential — the trust anchor membership signatures are verified against. Pinning
-	// one turns KEYSTONE ON for the tenant.
-	SetOperatorCredential(ctx context.Context, t TenantID, c OperatorCredential) error
+	// CompareAndSetOperatorCredential conditionally pins/replaces the keystone under one store
+	// lock. expected==nil requires that no credential is pinned; otherwise the current record
+	// must exactly equal *expected. A mismatch returns ErrOperatorCredentialChanged without
+	// mutation. This is the write primitive for the handler's read/classify/write transition.
+	CompareAndSetOperatorCredential(ctx context.Context, t TenantID, expected *OperatorCredential, next OperatorCredential) error
 	// GetOperatorCredential returns the tenant's pinned operator credential, or
 	// ErrNotFound when none is pinned (keystone OFF — behave as today).
 	GetOperatorCredential(ctx context.Context, t TenantID) (OperatorCredential, error)
+	// CreatePendingKeystoneTransition durably creates the keystone transition write-ahead marker.
+	// It never overwrites a different unresolved event; an identical EventID/content retry is
+	// idempotent. CompareAndSetKeystoneCredential writes it before the credential CAS.
+	CreatePendingKeystoneTransition(ctx context.Context, t TenantID, pending PendingKeystoneTransition) error
+	// GetPendingKeystoneTransition returns the durable marker, or ErrNotFound.
+	GetPendingKeystoneTransition(ctx context.Context, t TenantID) (PendingKeystoneTransition, error)
+	// DeletePendingKeystoneTransition removes the marker after reconciliation only when its EventID
+	// matches. An already-absent marker is an idempotent success; a different event fails closed.
+	DeletePendingKeystoneTransition(ctx context.Context, t TenantID, eventID string) error
 	// PutSignedTrustList stores (replacing any prior) the STAGED membership trust-list — the
 	// to-be-signed manifest CompileAndStage builds and the operator signs off-host. It is NOT what
 	// /config serves; staging it must never disturb the live fleet (the served slot below).
 	PutSignedTrustList(ctx context.Context, t TenantID, s StoredTrustList) error
-	// GetCurrentSignedTrustList returns the tenant's STAGED trust-list (the to-be-signed / just-
-	// signed manifest of the pending generation), or ErrNotFound when none is staged. PromoteStaged
-	// copies it into the SERVED slot. (The name is historical; this is the staged slot — the served
-	// manifest is GetServedTrustList.)
+	// GetCurrentSignedTrustList returns the tenant's visible staged trust-list: normally the
+	// to-be-signed / just-signed manifest of the pending generation, and after promote/unchanged
+	// cleanup the last manifest behind an explicitly non-promotable historical seal. PromoteStaged
+	// copies only a non-historical exact candidate into the SERVED slot. (The name is historical;
+	// this is never the agent-served slot — that is GetServedTrustList.)
 	GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error)
+	// GetLastStagedTrustList returns the newest manifest ever fully written by a stage, whether or
+	// not it is still active. CompileAndStage uses this internal-history view only to preserve the
+	// monotonic keystone epoch across an abandoned/cleared stage. It is never served to agents and
+	// never authorizes promotion.
+	GetLastStagedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error)
 	// GetServedTrustList returns the tenant's SERVED (last-promoted) signed membership trust-list —
 	// the one /config hands to nodes — or ErrNotFound when nothing has been promoted under a
 	// keystone yet. It is updated ONLY by PromoteStaged (copied from the staged slot once its
@@ -682,6 +777,15 @@ type Store interface {
 	// the persistence step behind `yaog-server create-operator`. The plaintext password
 	// is never passed here — Operator carries only the argon2id PHC hash.
 	PutOperator(ctx context.Context, t TenantID, op Operator) error
+	// CompareAndSetLoginCredential updates only the operator's login-credential field (plus
+	// UpdatedAt) under one store lock. The current value must exactly match expected (nil-aware),
+	// otherwise ErrLoginCredentialChanged is returned without mutation. This avoids a long browser
+	// ceremony writing back a stale whole Operator and clobbering a concurrent password/TOTP change.
+	CompareAndSetLoginCredential(ctx context.Context, t TenantID, username string, expected, next *LoginCredential, now time.Time) error
+	// CompareAndSetTOTPState updates only the operator's TOTP secret/replay watermark (plus UpdatedAt)
+	// under one store lock. A mismatch returns ErrTOTPStateChanged without mutation. It preserves the
+	// password and login credential even when either changed during the TOTP ceremony.
+	CompareAndSetTOTPState(ctx context.Context, t TenantID, username string, expected, next TOTPState, now time.Time) error
 	// GetOperator returns the operator account, or ErrNotFound.
 	GetOperator(ctx context.Context, t TenantID, username string) (Operator, error)
 	// ListOperators returns all operator accounts for the tenant (stable order by

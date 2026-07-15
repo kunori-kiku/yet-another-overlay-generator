@@ -2,6 +2,7 @@ import { expect, type Page, type BrowserContext, type TestInfo } from '@playwrig
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
+import path from 'node:path'
 import { readHarness, httpURL, type HarnessState } from './harness'
 import { seedControllerMode } from './seedStore'
 import { OPERATOR_USER, OPERATOR_PASS } from './config'
@@ -88,7 +89,22 @@ export async function mintEnrollToken(
 // runE2eAgent invokes cmd/e2eagent with arbitrary args and returns its stdout (asserting exit 0).
 // The single entry point the lifecycle specs use to drive the agent's checkin/rekey/reprovision
 // modes; execFile rejects on a non-zero exit, which surfaces as a failed spec.
+export function secureE2eAgentKeyParent(args: readonly string[]): void {
+  // Playwright creates each per-test output directory with its process umask (commonly 0775).
+  // The real agent correctly refuses to put a private WireGuard key in such a directory, so make
+  // the explicitly supplied test-key parent private before invoking the fixture. chmod is
+  // intentional: mkdir's mode alone does not tighten an already-created Playwright output dir.
+  const keyFlag = args.lastIndexOf('--key')
+  const keyFile = keyFlag >= 0 ? args[keyFlag + 1] : undefined
+  if (keyFile && !keyFile.startsWith('--')) {
+    const keyDir = path.dirname(keyFile)
+    fs.mkdirSync(keyDir, { recursive: true, mode: 0o700 })
+    fs.chmodSync(keyDir, 0o700)
+  }
+}
+
 export async function runE2eAgent(h: HarnessState, args: string[]): Promise<string> {
+  secureE2eAgentKeyParent(args)
   const { stdout } = await execFileP(h.agentBin, args)
   return stdout
 }

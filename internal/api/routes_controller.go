@@ -230,10 +230,10 @@ func (h *ControllerHandler) isReservedNodeID(id string) bool {
 
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
 // on the agent port), under AgentBasePath() (the optional agent secret prefix + the
-// fixed /api/v1/agent/). /enroll is registered WITHOUT auth (reachable before the
-// node has an API token); /config,/poll,/report,/rekey go through requireNode (per-node
-// bearer token). recoverPanics/cors are NOT applied here — controller requests are
-// machine-to-machine JSON, with no browser CORS concern.
+// fixed /api/v1/agent/). /enroll and /bootstrap are registered WITHOUT bearer auth;
+// /config, /poll, /report, /telemetry, and /rekey go through requireNode. CORS is
+// not applied here because these are machine-to-machine requests; the Server applies
+// top-level panic recovery to the whole mux.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	base := h.AgentBasePath()
 	// /enroll is PRE-AUTH (reachable before the node has a token) and STAYS hand-rolled: it reserves a
@@ -261,21 +261,21 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
-// (served on the operator/panel port), under OperatorBasePath(). Each is wrapped with
-// cors() so the browser panel — served from a possibly different origin and pointed at
-// a configurable controller URL — can call it, and its CORS preflight (which carries no
-// Authorization header) is answered before operatorAuth. All routes go through
-// operatorAuth (the shared operator bearer token).
+// (served on the operator/panel port), under OperatorBasePath(). Every endpoint is
+// wrapped with credentialed CORS so a configured cross-origin panel can call it and
+// preflight can complete before authentication. Password and passkey login endpoints
+// are CORS-only pre-auth routes; all remaining endpoints go through operatorAuth
+// (named sessions or the optional break-glass bearer token).
 func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	base := h.OperatorBasePath()
 	// secure wraps an operator route with the shared MIDDLEWARE — cors + operatorAuth (the
 	// bearer/session/CSRF chokepoint that pins the identity onto the context). The typed
 	// operator handlers are additionally wrapped by the op()/opRaw() ADAPTER (adapter.go),
 	// which adds the per-handler method guard + structural identity() check ONCE so no
-	// handler body can forget it (invariant 4). Handlers that are multi-method with an
-	// identity-free leg (settings, operator-credential) or need no identity (login/logout,
-	// release-pins/assets) are NOT routed through the adapter and keep their hand-rolled
-	// shape — the adapter is never weakened to fit them.
+	// handler body can forget it (invariant 4). Multi-method handlers and handlers with
+	// response/method behavior outside the adapter's typed JSON shape (settings,
+	// operator-credential, login/logout, release-pins/assets) stay hand-rolled. Protected
+	// members of that group are still inside secure; bypassing the adapter does not bypass auth.
 	secure := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
 	// Operator login (plan-5.2): /login is UNAUTHENTICATED (reachable before the
 	// operator has a session) — cors-wrapped but NOT operatorAuth; it verifies a
@@ -299,6 +299,9 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// Passkey login management (plan-5.2): register/disable the current operator's login
 	// passkey (the password+passkey 2FA factor and the passwordless credential).
 	mux.HandleFunc(base+"passkey/status", secure(h.op(http.MethodGet, h.HandlePasskeyStatus)))
+	// Both browser WebAuthn enrollment paths begin here. The server-issued challenge is
+	// purpose+actor scoped and consumed by the corresponding credential-persistence handler.
+	mux.HandleFunc(base+"webauthn/enrollment/begin", secure(h.op(http.MethodPost, h.HandleWebAuthnEnrollmentBegin)))
 	mux.HandleFunc(base+"passkey/register", secure(h.op(http.MethodPost, h.HandlePasskeyRegister)))
 	mux.HandleFunc(base+"passkey/disable", secure(h.op(http.MethodPost, h.HandlePasskeyDisable)))
 	mux.HandleFunc(base+"update-topology", secure(h.op(http.MethodPost, h.HandleUpdateTopology)))
@@ -325,8 +328,8 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(base+"enrollment-token", secure(h.op(http.MethodPost, h.HandleEnrollmentToken)))
 	mux.HandleFunc(base+"rekey-all", secure(h.op(http.MethodPost, h.HandleRekeyAll)))
 	mux.HandleFunc(base+"clear-rekey", secure(h.op(http.MethodPost, h.HandleClearRekey)))
-	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL. Multi-method
-	// (GET reads without an identity; POST needs one) so it stays hand-rolled, not adapter-routed.
+	// Bootstrap settings (plan-5.2): public agent URL, GitHub proxy, agent release URL. GET and POST
+	// share one multi-method handler, so it stays hand-rolled rather than adapter-routed; both are secure.
 	mux.HandleFunc(base+"settings", secure(h.HandleSettings))
 	// Assisted release-pin fetch (controller-panel-rollout-ui plan-1): fetch the per-asset
 	// .sha256 sidecars for agent/mimic release assets through the gh-proxy and return Artifact
@@ -379,7 +382,7 @@ func (h *ControllerHandler) OperatorBasePath() string {
 // AgentBasePath is the route prefix for the agent endpoints: the optional agent
 // secret prefix followed by the fixed "/api/v1/agent/". Exported so cmd/server can
 // name the mounted base path in its startup log. Distinct from the operator path so
-// the public agent surface (enroll/config/poll/report/bootstrap) is unambiguous and
+// the agent surface (enroll/config/poll/report/telemetry/rekey/bootstrap) is unambiguous and
 // can be exposed publicly while the operator panel stays behind a VPN.
 func (h *ControllerHandler) AgentBasePath() string {
 	return h.agentPrefix + "/api/v1/agent/"

@@ -17,13 +17,24 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 		domainIDs[d.ID] = true
 	}
 
-	// Node IDs.
+	// Node IDs. Exact duplicates are invalid everywhere; case-folded duplicates are additionally
+	// invalid because the canonical bundle directories must survive Windows extraction unchanged.
 	nodeIDs := make(map[string]bool)
+	portableNodeIDs := make(map[string]string)
 	for i, n := range topo.Nodes {
 		if nodeIDs[n.ID] {
 			result.AddError(fmt.Sprintf("nodes[%d].id", i), CodeNodeIDDuplicate, P{"id", n.ID})
 		}
 		nodeIDs[n.ID] = true
+		if n.ID == "" {
+			continue
+		}
+		key := naming.PortableNodeIDKey(n.ID)
+		if firstID, exists := portableNodeIDs[key]; exists && firstID != n.ID {
+			result.AddError(fmt.Sprintf("nodes[%d].id", i), CodeNodeIDPortableCollision, P{"other", firstID}, P{"id", n.ID})
+		} else {
+			portableNodeIDs[key] = n.ID
+		}
 	}
 
 	// Edge IDs.
@@ -36,13 +47,11 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 	}
 }
 
-// validateNodeNameCollisions checks node-name collisions across three normalized forms (the N1-N3
-// invariants of Spec D).
+// validateNodeNameCollisions checks the two name-derived identities that remain in the artifact
+// contract. Bundle directories use node IDs and therefore need no phantom installer-filename rule.
 // If any two distinct nodes collide in any one of these forms, the name-derived artifacts will
 // overwrite one another or be silently skipped:
 //   - Raw name (N1): operators and every name-derived artifact cannot tell two same-named nodes apart.
-//   - Installer script filename SafeInstallerFileName (N2): identical install-bundle filenames cause
-//     silent skips and identity-confused deployments.
 //   - WireGuard interface name WgInterfaceName (N3): identical interface names let one WireGuard config
 //     and one Babel interface line overwrite another.
 //
@@ -51,7 +60,6 @@ func validateIDUniqueness(topo *model.Topology, result *ValidationResult) {
 func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) {
 	// Each map's key is a normalized form; the value is the first node name that used that key.
 	rawNames := make(map[string]string)       // raw name -> first node name
-	installerNames := make(map[string]string) // installer script filename -> first node name
 	interfaceNames := make(map[string]string) // WireGuard interface name -> first node name
 
 	for i, node := range topo.Nodes {
@@ -66,16 +74,6 @@ func validateNodeNameCollisions(topo *model.Topology, result *ValidationResult) 
 			result.AddError(prefix, CodeNodeNameDuplicate, P{"other", firstNode}, P{"node", node.Name}, P{"name", fmt.Sprintf("%q", node.Name)})
 		} else {
 			rawNames[node.Name] = node.Name
-		}
-
-		// N2: installer-filename collision (e.g. "Web 1" and "web-1" both normalize to web-1.install.sh).
-		installerName := naming.SafeInstallerFileName(node.Name)
-		if firstNode, exists := installerNames[installerName]; exists {
-			if firstNode != node.Name {
-				result.AddError(prefix, CodeNodeNameInstallerCollision, P{"other", firstNode}, P{"node", node.Name}, P{"name", fmt.Sprintf("%q", installerName)})
-			}
-		} else {
-			installerNames[installerName] = node.Name
 		}
 
 		// N3: WireGuard interface-name collision (e.g. "db.east" and "db-east" both normalize to wg-db-east).

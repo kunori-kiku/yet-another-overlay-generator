@@ -1,7 +1,7 @@
 // Package bundlesig is the single authority for canonical bundle
 // serialization and Ed25519 signing of per-node install bundles. It is a
 // leaf package depending only on the Go standard library, shared by the
-// export path and (in later phases) the controller and the node agent.
+// export path, controller, and node agent.
 //
 // The contract it enforces: a signature is always produced over the
 // canonical checksums byte string emitted by Canonicalize, and NEVER over
@@ -30,9 +30,9 @@ import (
 // Ed25519 private key in PKCS#8 PEM form (e.g. the output of
 // `openssl genpkey -algorithm ed25519`). When unset or empty, exports stay
 // hash-only — today's back-compatible default. This is the single source of
-// truth for the variable name; the export path, the install-script renderer,
-// and the self-extracting installer all read it through the ConfigSigner
-// constructor LoadConfigSignerFromEnv (which delegates to LoadSigningFromEnv).
+// truth for the variable name. Process-boundary callers load it through
+// LoadConfigSignerFromEnv (which delegates to LoadSigningFromEnv) and inject
+// the resulting ConfigSigner into the canonical compile/export path.
 const EnvSigningKey = "YAOG_BUNDLE_SIGNING_KEY"
 
 // EnvSigningKeyRotate, when truthy, lets a controller stage RE-PIN its persisted signing anchor to
@@ -53,11 +53,11 @@ func RotateRequested() bool {
 }
 
 // Signing carries loaded Ed25519 signing material: the private key used to sign
-// the canonical bundle digest (or the self-extracting payload) and the PKIX
-// public-key PEM that is pinned into install.sh / the wrapper for verification.
+// the canonical checksums.sha256 bytes and the PKIX public-key PEM that is
+// shipped with the bundle and pinned into install.sh for verification.
 // It is produced by LoadSigningFromEnv. A nil *Signing means signing is off.
 type Signing struct {
-	// Priv signs the canonical checksums (export) or the tar.gz payload (wrapper).
+	// Priv signs the canonical checksums.sha256 bytes.
 	Priv ed25519.PrivateKey
 	// PubKeyPEM is the verifying public key as a PKIX ("PUBLIC KEY") PEM block,
 	// identical for every node bundle. It is both shipped as signing-pubkey.pem
@@ -93,16 +93,15 @@ func LoadSigningFromEnv() (*Signing, error) {
 }
 
 // ConfigSigner is the tier-1 config-bundle signing seam: it produces a detached
-// Ed25519 signature over a message (the canonical checksums bytes for the export
-// path, or the self-extracting tar.gz payload for the installer wrapper) and
-// exposes the PKIX public-key PEM pinned into install.sh / the wrapper as the
+// Ed25519 signature over the canonical checksums.sha256 bytes and exposes the
+// PKIX public-key PEM shipped with the bundle and pinned into install.sh as the
 // verification anchor.
 //
 // The default implementation is *Signing — an in-process Ed25519 key loaded from
 // EnvSigningKey. A future host-isolated backend (HashiCorp Vault / OpenBao
 // transit, GCP Cloud KMS, a YubiHSM) plugs in by implementing this SAME interface
-// in its own package, with no change to the export / render / installer call
-// sites: only the constructor (LoadConfigSignerFromEnv, or a caller that injects a
+// in its own package, with no change to the compile / render / export call sites:
+// only the constructor (LoadConfigSignerFromEnv, or a caller that injects a
 // ConfigSigner) changes. The interface lives here — not in a package that pulls a
 // KMS SDK — so bundlesig keeps its stdlib-only contract; the heavy KMS clients
 // live in their own packages that import bundlesig for this seam.
@@ -140,8 +139,8 @@ var _ ConfigSigner = (*Signing)(nil)
 // (nil, nil) when signing is not configured (opt-in; bundles stay hash-only,
 // byte-for-byte today's output). Today the only backend is the in-process
 // Ed25519 signer loaded from EnvSigningKey; future KMS/HSM backends are selected
-// here (or injected by the caller) without touching the export / render /
-// installer call sites.
+// here (or injected by the caller) without touching the compile / render /
+// export call sites.
 //
 // It returns an explicit nil INTERFACE (never a non-nil interface wrapping a nil
 // *Signing) when signing is off, so callers can compare the result against nil

@@ -2,7 +2,7 @@ package controller
 
 // compile_stage.go — CompileAndStage (compile the enrolled subgraph, export, and stage
 // per-node bundles at the next generation) plus its force-option machinery and the
-// stage-path audit helper. Split from compile.go (plan-2); no logic change.
+// stage-path audit helper. Split from compile.go (plan-2).
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 )
@@ -31,13 +32,15 @@ import (
 //     empty result, no error.
 //  3. GenerateKeys(AgentHeld) → Compile → render.All on the subgraph.
 //  4. Export to a temp dir (removed on return) — WITHOUT any trust-list files.
-//  5. Read each enrolled node's exported dir back into a file map and StageBundle it.
-//  6. KEYSTONE ON: compute each staged node's bundle digest, assemble the manifest with
-//     the monotonic epoch, and store it as the staged (unsigned) manifest.
-//  7. Append one "stage" audit entry.
+//  5. Read every enrolled node's exported dir into memory and select the exact changed set.
+//  6. KEYSTONE ON: compute every ready node's bundle digest (including unchanged nodes
+//     retained by delta-skip) and assemble the unsigned monotonic-epoch manifest.
+//  7. ReplaceStagedSet writes/prunes all candidate records and publishes its durable seal LAST.
+//  8. Append one "stage" audit entry.
 //
-// Bundles are signed iff YAOG_BUNDLE_SIGNING_KEY is set — that tier-1 signing happens
-// inside artifacts.Export (the Phase-0 env path), not here.
+// Bundles are signed iff YAOG_BUNDLE_SIGNING_KEY is set. The key is resolved once per
+// stage and the same ConfigSigner is threaded through render, signing-anchor enforcement,
+// and artifacts.ExportWithSigner so a mid-stage key-file change cannot split trust.
 // StageOption configures a CompileAndStage run. The only knob today is FORCE — re-staging a node even
 // when its bundle digest is unchanged (the operator escape hatch for on-host drift/rescue; the delta-skip
 // otherwise leaves an unchanged node alone).
@@ -77,6 +80,9 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// the now-current one, so the scoped promote filter excludes them forever);
 	// two interleaved stages would purge each other's freshly staged bundles.
 	defer lockTenantOps(t)()
+	if err := reconcileKeystoneTrustBoundaryLocked(ctx, store, t); err != nil {
+		return StageResult{}, err
+	}
 
 	// (1) Load the stored, public-keys-only topology. No stored topology is a
 	// benign no-op: there is nothing to stage yet (and nothing can be staged —
@@ -101,8 +107,8 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	normalize.HealCollidingPins(&topo)
 
 	// (2)+(3) Build the enrolled subgraph and drive the frozen compile pipeline
-	// (AgentHeld keys → compile → render) via the shared CompileSubgraph helper.
-	// `result` is nil when no node is enrolled — handled by the empty path below.
+	// (AgentHeld keys → compile → render) via the shared CompileSubgraph helper. Readiness is
+	// preflighted below so the empty cleanup path runs before any signing-key dependency.
 	nodes, err := store.ListNodes(ctx, t)
 	if err != nil {
 		return StageResult{}, fmt.Errorf("controller: listing nodes to stage: %w", err)
@@ -117,27 +123,17 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	}
 	fs := BuildFetchSettings(cs.WithDefaults())
 	fs.AgentRolloutNodeIDs = AgentRolloutNodeIDs(cs, nodes)
-	result, subgraph, skipped, err := CompileSubgraph(ctx, &topo, nodes, fs)
+	// Project readiness before resolving the signer. An empty stage is a destructive cleanup
+	// operation: it must purge any superseded staged bundles even if an unrelated configured
+	// signing-key file is currently broken/unreadable.
+	ready, skipped, err := projectEnrolledSubgraph(&topo, nodes)
 	if err != nil {
 		return StageResult{}, err
 	}
-
-	// Nothing enrolled → nothing to render or stage. Report the skips so the caller
-	// can surface "no node has enrolled yet" — and leave an audit trace (plan-3):
-	// a stage that staged ZERO nodes is exactly the shape of a design-destroying
-	// deploy (every node silently skipped), so its occurrence must be visible in
-	// the audit log, not just in a transient HTTP response. Best-effort: the audit
-	// must not turn the benign no-op into an error.
-	//
-	// The purge MUST still run on this path (review finding): an empty stage is a
-	// stage — the previous stage's bundles keep their promotable provisional
-	// generation, so without the purge an operator who retracted the whole design
-	// and "cleared" it with an empty stage would have the retracted bundles flip
-	// LIVE on the next promote (running install.sh as root with a dead design).
-	if len(subgraph.Nodes) == 0 {
-		purged, err := store.PruneStagedBundles(ctx, t, nil)
+	if len(ready.Nodes) == 0 {
+		purged, err := store.ReplaceStagedSet(ctx, t, StagedSet{})
 		if err != nil {
-			return StageResult{}, fmt.Errorf("controller: purging staged bundles on empty stage: %w", err)
+			return StageResult{}, fmt.Errorf("controller: clearing staged set on empty stage: %w", err)
 		}
 		for _, nodeID := range purged {
 			appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
@@ -145,7 +141,17 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		appendStageAudit(ctx, store, t, now, "stage-empty", "")
 		return StageResult{SkippedUnenrolled: skipped}, nil
 	}
-
+	// Resolve the signer exactly once for this tenant-serialized stage. The same in-memory object
+	// feeds render, signing-anchor reconciliation, and export, so a key-file change mid-stage cannot
+	// produce an install script, pinned anchor, and signature from different keys.
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		return StageResult{}, fmt.Errorf("controller: loading bundle signing key: %w", err)
+	}
+	result, subgraph, skipped, err := CompileSubgraphWithSigner(ctx, &topo, nodes, fs, signer)
+	if err != nil {
+		return StageResult{}, err
+	}
 	// Is the keystone ON for this tenant? A pinned operator credential turns it on. We
 	// read it up front so a store failure (other than ErrNotFound) fails fast, but note
 	// the keystone gate to STAGE is intentionally weak: we build + store the manifest,
@@ -179,8 +185,8 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// Signing-anchor invariant: before producing any bundle, reconcile the configured bundle
 	// signing key against the per-tenant pinned anchor, so a redeploy that DROPPED or SWAPPED the
 	// key is caught here instead of silently shipping unsigned/differently-signed bundles. (The
-	// actual signing still happens inside artifacts.Export from the same env key.)
-	if err := enforceSigningAnchor(ctx, store, t, now); err != nil {
+	// actual signing happens in artifacts.ExportWithSigner using this same signer.)
+	if err := enforceSigningAnchorWithSigner(ctx, store, t, now, signer); err != nil {
 		return StageResult{}, err
 	}
 
@@ -193,7 +199,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		return StageResult{}, fmt.Errorf("controller: creating stage temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmp)
-	if _, err := artifacts.Export(result, tmp); err != nil {
+	if _, err := artifacts.ExportWithSigner(result, tmp, signer); err != nil {
 		return StageResult{}, fmt.Errorf("controller: exporting bundles to stage: %w", err)
 	}
 
@@ -207,11 +213,12 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	nextGen := cur + 1
 
 	var staged []string
+	var stagedBundles []SignedBundle
 	var unchanged []string
 	digests := make(map[string]string, len(subgraph.Nodes)) // nodeID -> bundleSHA256 (ALL nodes, for the manifest)
 	pubKeys := make(map[string]string, len(subgraph.Nodes)) // nodeID -> wg public key (stamped on the subgraph node: enrollment registry for a managed node, topology for a manual node)
 	for _, node := range subgraph.Nodes {
-		nodeDir := filepath.Join(tmp, node.Name)
+		nodeDir := filepath.Join(tmp, node.ID)
 		files, err := readBundleDir(nodeDir)
 		if err != nil {
 			return StageResult{}, fmt.Errorf("controller: reading bundle for node %s: %w", node.ID, err)
@@ -233,8 +240,9 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 			digests[node.ID] = newDigest
 			pubKeys[node.ID] = node.WireGuardPublicKey
 		}
-		// (plan-5) SKIP a node whose freshly compiled bundle is byte-identical to its SERVED bundle: no
-		// StageBundle, so PromoteStaged never bumps its DesiredGeneration and its agent never re-applies.
+		// (plan-5) SKIP a node whose freshly compiled bundle is byte-identical to its SERVED bundle: it
+		// is absent from the replacement candidate, so promote never bumps its DesiredGeneration and its
+		// agent never re-applies.
 		// FAIL OPEN — any doubt (skip disabled, no digest, no served bundle, unreadable served checksums,
 		// or a mismatch) stages normally; never leave a node on a stale config.
 		if skipEnabled && !cfg.forced(node.ID) && newDigest != "" {
@@ -243,14 +251,12 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 				continue
 			}
 		}
-		if err := store.StageBundle(ctx, t, SignedBundle{
+		stagedBundles = append(stagedBundles, SignedBundle{
 			NodeID:     node.ID,
 			Generation: nextGen,
 			Files:      files,
 			IsStaged:   true,
-		}); err != nil {
-			return StageResult{}, fmt.Errorf("controller: staging bundle for node %s: %w", node.ID, err)
-		}
+		})
 		staged = append(staged, node.ID)
 	}
 
@@ -264,12 +270,12 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// path does for the same reason. (Reached only when the skip is enabled — a keystone rotation/first-pin
 	// disables it and always stages every node.)
 	if len(staged) == 0 {
-		purged, pruneErr := store.PruneStagedBundles(ctx, t, staged)
+		purged, replaceErr := store.ReplaceStagedSet(ctx, t, StagedSet{})
 		for _, nodeID := range purged {
 			appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
 		}
-		if pruneErr != nil {
-			return StageResult{}, fmt.Errorf("controller: purging staged bundles on a zero-changed stage: %w", pruneErr)
+		if replaceErr != nil {
+			return StageResult{}, fmt.Errorf("controller: clearing staged set on a zero-changed stage: %w", replaceErr)
 		}
 		appendStageAudit(ctx, store, t, now, "stage-unchanged", "")
 		return StageResult{
@@ -279,31 +285,33 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		}, nil
 	}
 
-	// (5b) Purge staged bundles that are NOT part of this stage set (plan-3): a
-	// node removed from the design since the previous stage would otherwise leave
-	// its stale staged bundle behind, and the next promote would flip it live.
-	// One audit entry per purged node keeps the disappearance attributable —
-	// written BEFORE the error check, so a prune that failed partway still leaves
-	// an audit trace for everything it actually removed (review finding).
-	purged, pruneErr := store.PruneStagedBundles(ctx, t, staged)
+	// (6) KEYSTONE ON: build the off-host-signable manifest binding every ready node's
+	// bundle digest, including nodes retained at their served generation by delta-skip,
+	// without mutating the Store yet.
+	var stagedManifest *StoredTrustList
+	if keystoneOn {
+		manifest, err := buildStagedManifest(ctx, store, t, digests, pubKeys)
+		if err != nil {
+			return StageResult{}, err
+		}
+		stagedManifest = &manifest
+	}
+
+	// (7) Publish the exact candidate in one store operation. FileStore writes the seal LAST, after
+	// every bundle/prune/manifest mutation; any partial write after a crash remains unpromotable.
+	purged, replaceErr := store.ReplaceStagedSet(ctx, t, StagedSet{
+		Generation: nextGen,
+		Bundles:    stagedBundles,
+		TrustList:  stagedManifest,
+	})
 	for _, nodeID := range purged {
 		appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
 	}
-	if pruneErr != nil {
-		return StageResult{}, fmt.Errorf("controller: purging stale staged bundles: %w", pruneErr)
+	if replaceErr != nil {
+		return StageResult{}, fmt.Errorf("controller: replacing staged set: %w", replaceErr)
 	}
 
-	// (6) KEYSTONE ON: build the off-host-signable manifest binding each staged node's
-	// bundle digest, then STORE it as the staged (unsigned) manifest. Staging does not
-	// require a signature; PromoteStaged refuses to promote until a valid off-host
-	// signature over THESE exact bytes exists.
-	if keystoneOn {
-		if err := stageManifest(ctx, store, t, digests, pubKeys); err != nil {
-			return StageResult{}, err
-		}
-	}
-
-	// (7) One audit entry for the whole stage operation. Post-commit (the bundles
+	// (8) One audit entry for the whole stage operation. Post-commit (the bundles
 	// are staged), so best-effort like the other stage-path audits.
 	appendStageAudit(ctx, store, t, now, "stage", "")
 

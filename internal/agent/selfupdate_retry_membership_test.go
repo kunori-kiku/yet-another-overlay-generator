@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
@@ -64,6 +66,43 @@ func TestWithMembershipGate_PropagatesFetchError(t *testing.T) {
 		MembershipConfig{NodeID: "n1", OperatorCredPEM: operatorCredPEM(t)}, dir)()
 	if err != sentinel {
 		t.Fatalf("fetch error must propagate unchanged; got %v", err)
+	}
+}
+
+// A verified fetch can take long enough for local state I/O to fail afterward. The membership
+// wrapper must not silently reset the effective epoch to zero and return swap-authorizing files.
+func TestWithMembershipGate_StateReloadFailureIsFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveState(dir, &State{
+		NodeID:          "n1",
+		MembershipEpoch: 7,
+		PendingApply: &PendingApply{
+			CompiledAt:      "2026-07-16T04:00:00Z",
+			BundleSHA256:    strings.Repeat("a", 64),
+			Action:          LastActionApply,
+			MembershipEpoch: 8,
+			StartedAt:       "2026-07-16T04:01:00Z",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte("{ custody failed after verified fetch")
+	raw := func() (map[string][]byte, error) {
+		if err := os.WriteFile(statePath(dir), corrupt, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return armedArtifacts("https://example/v9.9.9", "9.9.9", "deadbeef"), nil
+	}
+	cfg := MembershipConfig{NodeID: "n1", OperatorCredPEM: operatorCredPEM(t), OperatorCredAlg: "ed25519"}
+	files, err := WithMembershipGate(raw, cfg, dir)()
+	if err == nil || !strings.Contains(err.Error(), "load membership anti-rollback state") {
+		t.Fatalf("state reload failure = %v, want fail-closed custody error", err)
+	}
+	if files != nil {
+		t.Fatalf("state reload failure returned %d swap-authorizing files", len(files))
+	}
+	if got, readErr := os.ReadFile(statePath(dir)); readErr != nil || string(got) != string(corrupt) {
+		t.Fatalf("membership reload failure rewrote custody state: %q, %v", got, readErr)
 	}
 }
 

@@ -11,16 +11,15 @@ import (
 
 // DeployNodeInfo holds per-node SSH and artifact info for deploy script generation
 type DeployNodeInfo struct {
-	NodeID            string // unique node ID; keys the remote upload path (/tmp/<NodeID>-install.sh)
-	NodeName          string
-	SafeInstallerName string // safe file name for the installer (e.g. "node-name.install.sh")
-	SSHTarget         string // ssh_alias or user@host
-	SSHPort           int
-	SSHKeyPath        string
-	HasSSH            bool
-	WgInterfaces      []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
-	HasBabel          bool     // whether this node runs Babel
-	IsClient          bool     // client nodes use wg0 instead of per-peer interfaces
+	NodeID       string // every exporter keys bundle directories by this stable identity
+	NodeName     string // display-only human name
+	SSHTarget    string // ssh_alias or user@host
+	SSHPort      int
+	SSHKeyPath   string
+	HasSSH       bool
+	WgInterfaces []string // WireGuard interface names (e.g. "wg-alpha", "wg-beta")
+	HasBabel     bool     // whether this node runs Babel
+	IsClient     bool     // client nodes use wg0 instead of per-peer interfaces
 	// HasMimic marks a node that has at least one transport=="tcp" link and therefore had mimic
 	// (eBPF UDP->fake-TCP shaping) provisioned by install.sh. The uninstall path must tear it down —
 	// otherwise an orphaned root eBPF program + a boot-persistent mimic@<egress> unit survive after
@@ -43,12 +42,25 @@ type DeployScriptConfig struct {
 }
 
 // RenderDeployScripts generates a bash deploy script and a PowerShell deploy script.
-// Both scripts iterate all nodes that have SSH details configured, SCP the
-// self-extracting installer to the remote, and execute it via sudo.
+// Both scripts iterate all nodes that have SSH details configured, locate the node's
+// complete bundle directory in the extracted archive, SCP that directory to a fresh
+// remote staging path, and execute its integrity-gated install.sh via sudo.
 // In uninstall mode, the scripts SSH in and run teardown commands directly
 // without uploading any installer.
 // Returns (bashScript, ps1Script, error).
 func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.PeerInfo, babelConfigs map[string]string) (string, string, error) {
+	return RenderDeployScriptsForCustody(topo, peerMap, babelConfigs, false)
+}
+
+// RenderDeployScriptsForCustody renders deploy helpers with an explicit key-custody boundary.
+// AgentHeld bundles must pass through yaog-agent so off-host membership and durable rollback state
+// are verified; a generic SSH helper cannot safely carry the operator credential/RP binding. Those
+// helpers therefore fail closed with actionable guidance instead of directly invoking install.sh.
+func RenderDeployScriptsForCustody(topo *model.Topology, peerMap map[string][]compiler.PeerInfo, babelConfigs map[string]string, agentHeld bool) (string, string, error) {
+	if agentHeld {
+		bash, ps1 := renderAgentHeldDeployGuidance(topo.Project.Name)
+		return bash, ps1, nil
+	}
 	config := DeployScriptConfig{
 		ProjectName: topo.Project.Name,
 	}
@@ -62,12 +74,14 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 
 	for i := range topo.Nodes {
 		node := topo.Nodes[i]
+		if err := validateDeployBundleDirSegment(node.ID); err != nil {
+			return "", "", fmt.Errorf("unsafe deploy bundle node id %q: %w", node.ID, err)
+		}
 		info := DeployNodeInfo{
-			NodeID:            node.ID,
-			NodeName:          node.Name,
-			SafeInstallerName: naming.SafeInstallerFileName(node.Name),
-			SSHPort:           22,
-			IsClient:          node.Role == "client",
+			NodeID:   node.ID,
+			NodeName: node.Name,
+			SSHPort:  22,
+			IsClient: node.Role == "client",
 		}
 
 		if node.SSHAlias != "" {
@@ -152,6 +166,46 @@ func RenderDeployScripts(topo *model.Topology, peerMap map[string][]compiler.Pee
 	return bash, ps1, nil
 }
 
+func renderAgentHeldDeployGuidance(projectName string) (string, string) {
+	project := deployCommentText(projectName)
+	bash := `#!/usr/bin/env bash
+# Deployment helper disabled for AgentHeld project: ` + project + `
+echo "ERROR: deploy-all is disabled for AgentHeld/controller bundles." >&2
+echo "Managed nodes must deploy through controller stage/promote and their enrolled agents." >&2
+echo "Manual nodes must use: sudo yaog-agent kit apply --bundle <ZIP-or-dir> --node-id <id> --operator-cred <trusted.pem> --operator-cred-alg <alg> [--operator-rpid <rp-id> --operator-origin <origin>]" >&2
+echo "Use the same verified kit apply path with --uninstall for removal." >&2
+exit 2
+`
+	ps1 := `# Deployment helper disabled for AgentHeld project: ` + project + `
+Write-Error "deploy-all is disabled for AgentHeld/controller bundles. Managed nodes must use controller stage/promote and their enrolled agents. Manual nodes must use yaog-agent kit apply with the separately provisioned operator credential (and RP ID/origin for WebAuthn); use that same verified path with --uninstall for removal."
+exit 2
+`
+	return bash, ps1
+}
+
+// validateDeployBundleDirSegment protects both local archive lookups and remote staging-name
+// construction. Topology validation already constrains IDs/names, but this renderer is also called
+// directly in tests and is a security boundary in its own right. In particular, "." and ".." are
+// syntactically simple yet escape the per-node directory contract.
+func validateDeployBundleDirSegment(value string) error {
+	if !naming.ValidPortableNodeID(value) {
+		return fmt.Errorf("must be a portable node-ID directory segment")
+	}
+	return nil
+}
+
+// deployCommentText keeps display-only topology text on one comment line in both generated shell
+// dialects. Project names are intentionally human-friendly and are not otherwise shell tokens; a
+// newline must not be able to terminate the comment and inject an operator-side command.
+func deployCommentText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || r == '\x00' {
+			return ' '
+		}
+		return r
+	}, value)
+}
+
 // buildSSHOpts returns (sshOpts, scpOpts) strings.
 // sshOpts has a leading space if non-empty (for "ssh%s target" formatting).
 // scpOpts has NO leading space (for "scp %s ..." formatting).
@@ -226,7 +280,7 @@ func renderBashDeploy(config DeployScriptConfig) (string, error) {
 	var b strings.Builder
 
 	b.WriteString(`#!/usr/bin/env bash
-# Auto-deploy script for project: ` + config.ProjectName + `
+# Auto-deploy script for project: ` + deployCommentText(config.ProjectName) + `
 # Generated by Overlay Network Config Orchestrator
 #
 # Usage:
@@ -258,6 +312,13 @@ for arg in "$@"; do
     esac
 done
 
+# Destructive layout cleanup is delegated to the candidate install.sh as --clean. That script
+# verifies its signature/checksums first; deploy-all must never mutate the remote host beforehand.
+INSTALL_ARGS=""
+if [ "$CLEAN" -eq 1 ]; then
+    INSTALL_ARGS=" --clean"
+fi
+
 if [ "$UNINSTALL" -eq 0 ] && [ -z "$ARTIFACTS_ZIP" ]; then
     echo "Usage: $0 [--clean] <path-to-artifacts.zip>"
     echo "       $0 --uninstall"
@@ -278,13 +339,99 @@ if [ -n "$ARTIFACTS_ZIP" ]; then
         exit 1
     fi
 
+    # Bound both the transport and the central-directory expansion before extraction. These
+    # limits match the manual kit's intentionally small configuration-bundle envelope.
+    ARCHIVE_MAX_BYTES=33554432
+    ARCHIVE_MAX_ENTRIES=512
+    ARCHIVE_MAX_FILE_BYTES=4194304
+    ARCHIVE_MAX_EXPANDED_BYTES=16777216
+    ARCHIVE_BYTES="$(wc -c < "$ARTIFACTS_ZIP" | tr -d '[:space:]')"
+    case "$ARCHIVE_BYTES" in
+        ''|*[!0-9]*) echo "ERROR: Could not determine artifacts ZIP size" >&2; exit 1 ;;
+    esac
+    if [ "$ARCHIVE_BYTES" -gt "$ARCHIVE_MAX_BYTES" ]; then
+        echo "ERROR: Artifacts ZIP exceeds the 32 MiB archive limit" >&2
+        exit 1
+    fi
+
     # Extract to a temp directory
     WORKDIR="$(mktemp -d -t overlay-deploy-XXXXXX)"
     cleanup() { rm -rf "$WORKDIR"; }
     trap cleanup EXIT
 
+    # Reject path aliases, traversal, duplicate names, and Unix special/symlink entries before
+    # extraction. SCP -r follows symlinks, so accepting one could copy arbitrary operator-host files.
+    ZIP_LIST="$WORKDIR/.zip-entries"
+    if ! unzip -Z1 "$ARTIFACTS_ZIP" > "$ZIP_LIST"; then
+        echo "ERROR: Failed to inspect artifacts ZIP: $ARTIFACTS_ZIP" >&2
+        exit 1
+    fi
+    ZIP_ENTRY_COUNT="$(wc -l < "$ZIP_LIST" | tr -d '[:space:]')"
+    case "$ZIP_ENTRY_COUNT" in
+        ''|*[!0-9]*) echo "ERROR: Could not determine artifacts ZIP entry count" >&2; exit 1 ;;
+    esac
+    if [ "$ZIP_ENTRY_COUNT" -gt "$ARCHIVE_MAX_ENTRIES" ]; then
+        echo "ERROR: Artifacts ZIP exceeds the 512-entry limit" >&2
+        exit 1
+    fi
+    # Info-ZIP's long listing reports each accepted regular/directory entry with its uncompressed
+    # byte length in column 4. Require the stats count to match -Z1 so an unknown entry type cannot
+    # evade the size accounting, then bound every file and the aggregate expanded payload.
+    if ! unzip -Z -l "$ARTIFACTS_ZIP" | LC_ALL=C awk \
+        -v expected="$ZIP_ENTRY_COUNT" \
+        -v max_file="$ARCHIVE_MAX_FILE_BYTES" \
+        -v max_total="$ARCHIVE_MAX_EXPANDED_BYTES" '
+            $1 ~ /^[-d]/ {
+                if ($4 !~ /^[0-9]+$/) bad=1
+                count++
+                size=$4+0
+                if (size > max_file) bad=1
+                total += size
+                if (total > max_total) bad=1
+            }
+            END { exit (bad || count != expected) ? 1 : 0 }
+        '; then
+        echo "ERROR: Artifacts ZIP has an unknown entry type or exceeds the 4 MiB per-file / 16 MiB expanded limits" >&2
+        exit 1
+    fi
+    if LC_ALL=C awk '{ key=tolower($0); if (seen[key]++) duplicate=1 } END { exit duplicate ? 0 : 1 }' "$ZIP_LIST"; then
+        echo "ERROR: Artifacts ZIP contains duplicate or case-colliding entry names" >&2
+        exit 1
+    fi
+    while IFS= read -r ZIP_ENTRY || [ -n "$ZIP_ENTRY" ]; do
+        ZIP_ENTRY_CHECK="${ZIP_ENTRY%/}"
+        case "$ZIP_ENTRY_CHECK" in
+            ""|/*|*\\*|*:* )
+                echo "ERROR: Unsafe artifacts ZIP entry: $ZIP_ENTRY" >&2
+                exit 1
+                ;;
+        esac
+        case "/$ZIP_ENTRY_CHECK/" in
+            *"/../"*|*"/./"*|*"//"*)
+                echo "ERROR: Non-canonical artifacts ZIP entry: $ZIP_ENTRY" >&2
+                exit 1
+                ;;
+        esac
+        if printf '%s' "$ZIP_ENTRY_CHECK" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+            echo "ERROR: Artifacts ZIP entry contains a control character" >&2
+            exit 1
+        fi
+    done < "$ZIP_LIST"
+    if unzip -Z -l "$ARTIFACTS_ZIP" | grep -Eq '^[lbcps]'; then
+        echo "ERROR: Artifacts ZIP contains a symlink or special-file entry" >&2
+        exit 1
+    fi
+    rm -f "$ZIP_LIST"
+
     echo "Extracting artifacts..."
-    unzip -q "$ARTIFACTS_ZIP" -d "$WORKDIR"
+    if ! unzip -q "$ARTIFACTS_ZIP" -d "$WORKDIR"; then
+        echo "ERROR: Failed to extract artifacts ZIP: $ARTIFACTS_ZIP" >&2
+        exit 1
+    fi
+    if find "$WORKDIR" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
+        echo "ERROR: Extracted artifacts contain a symlink or special file" >&2
+        exit 1
+    fi
 fi
 
 if [ "$UNINSTALL" -eq 1 ]; then
@@ -314,13 +461,11 @@ SUCCESS=0
 		targetQuoted := bashSingleQuote(node.SSHTarget)
 		nameQuoted := bashSingleQuote(node.NodeName)
 
-		// installerFile is the ZIP-entry / local-lookup name (canonical safe
-		// name). remoteInstaller is the remote upload path, keyed on the unique
-		// node ID so two nodes whose names sanitize identically cannot clobber
-		// each other's payload at /tmp (D31). The SCP destination, the ssh
-		// execute path, and the rm cleanup MUST all use remoteInstaller.
-		installerFile := node.SafeInstallerName
-		remoteInstaller := node.NodeID + "-install.sh"
+		// Every exporter keys the complete bundle directory by node ID. A single
+		// namespace prevents node A's ID from selecting node B's human name directory.
+		bundleIDQuoted := bashSingleQuote(node.NodeID)
+		remoteTemplate := bashSingleQuote("/tmp/yaog-" + node.NodeID + "-XXXXXXXX")
+		remotePrefix := bashSingleQuote("/tmp/yaog-" + node.NodeID + "-")
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`echo ""
 echo "=== "%s": SKIPPED (no SSH details configured) ==="
@@ -396,14 +541,10 @@ SKIPPED=$((SKIPPED + 1))
 		uninstallCmds.WriteString("systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }\n")
 		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from '%s'.'\n", nameQuoted))
 
-		// Every %s that carries SSHTarget is filled with targetQuoted (a
-		// single-quoted bash token), and every %s that carries NodeName is
-		// filled with nameQuoted. The echo lines break out of their surrounding
-		// double quotes ("...text..."<token>"...text...") so the spliced token
-		// stays single-quoted and inert; the ssh / scp argument sites take the
-		// token in place of the previously-bare target. The scp destination
-		// renders as 'target':/tmp/<id>-install.sh — the :/tmp suffix sits
-		// outside the closing quote, which is valid scp syntax.
+		// Every topology-derived shell value below is already a single-quoted inert
+		// token. Deploy mode uploads the complete candidate directory to a fresh
+		// mktemp path. install.sh then verifies its signature/checksum set before it
+		// observes --clean or performs any other root mutation.
 		b.WriteString(fmt.Sprintf(`echo ""
 if [ "$UNINSTALL" -eq 1 ]; then
     echo "=== Uninstalling from "%s" ("%s") ==="
@@ -423,41 +564,37 @@ UNINSTALL_EOF
     fi
 else
     echo "=== Deploying to "%s" ("%s") ==="
-    INSTALLER="$WORKDIR/%s"
-    if [ ! -f "$INSTALLER" ]; then
-        echo "  WARNING: Installer %s not found in archive, skipping."
+    BUNDLE_DIR=""
+    if [ -d "$WORKDIR"/%s ]; then
+        BUNDLE_DIR="$WORKDIR"/%s
+    fi
+    if [ -z "$BUNDLE_DIR" ] || [ ! -f "$BUNDLE_DIR/install.sh" ] || [ ! -f "$BUNDLE_DIR/checksums.sha256" ]; then
+        echo "  WARNING: Complete bundle directory for "%s" not found in archive, skipping."
         SKIPPED=$((SKIPPED + 1))
     else
-        # Test SSH connectivity first
         if ! ssh%s %s "echo ok" >/dev/null 2>&1; then
             echo "  ERROR: SSH connection to "%s" failed." >&2
             FAILED=$((FAILED + 1))
         else
-            # Clean previous WireGuard configs if requested
-            if [ "$CLEAN" -eq 1 ]; then
-                echo "  Cleaning existing WireGuard interfaces on "%s"..."
-                ssh%s %s sudo bash -s <<'CLEAN_EOF' 2>/dev/null || true
-for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
-    wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
-done
-rm -f /etc/wireguard/wg*.conf
-nft delete table inet overlay-snat 2>/dev/null || true
-iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true
-systemctl disable overlay-snat.service 2>/dev/null || true
-rm -f /etc/systemd/system/overlay-snat.service
-CLEAN_EOF
+            REMOTE_DIR="$(ssh%s %s "mktemp -d -- %s")"
+            REMOTE_PREFIX=%s
+            REMOTE_SUFFIX="${REMOTE_DIR#"$REMOTE_PREFIX"}"
+            if [ "$REMOTE_DIR" != "$REMOTE_PREFIX$REMOTE_SUFFIX" ] || ! [[ "$REMOTE_SUFFIX" =~ ^[A-Za-z0-9]{8}$ ]]; then
+                echo "  ERROR: Remote staging directory for "%s" was not created safely." >&2
+                FAILED=$((FAILED + 1))
+                REMOTE_DIR=""
             fi
-
-            if %s "$INSTALLER" %s:/tmp/%s; then
-                if ssh%s %s "sudo bash /tmp/%s && rm -f /tmp/%s"; then
+            if [ -n "$REMOTE_DIR" ] && %s -r "$BUNDLE_DIR" %s:"$REMOTE_DIR/bundle"; then
+                if ssh%s %s "sudo bash '$REMOTE_DIR/bundle/install.sh'$INSTALL_ARGS; _yaog_rc=\$?; rm -rf -- '$REMOTE_DIR' || { [ \$_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit \$_yaog_rc"; then
                     echo "  SUCCESS: "%s" deployed."
                     SUCCESS=$((SUCCESS + 1))
                 else
                     echo "  ERROR: Installation script failed on "%s" (exit code: $?)." >&2
                     FAILED=$((FAILED + 1))
                 fi
-            else
+            elif [ -n "$REMOTE_DIR" ]; then
                 echo "  ERROR: SCP upload to "%s" failed." >&2
+                ssh%s %s "rm -rf -- '$REMOTE_DIR'" >/dev/null 2>&1 || true
                 FAILED=$((FAILED + 1))
             fi
         fi
@@ -474,19 +611,20 @@ fi
 			nameQuoted,
 			// Deploy branch
 			nameQuoted, targetQuoted,
-			installerFile,
-			installerFile,
-			sshOpts, targetQuoted,
-			nameQuoted,
-			// Clean step
+			bundleIDQuoted, bundleIDQuoted,
 			nameQuoted,
 			sshOpts, targetQuoted,
-			// SCP + install (remote path keyed on node ID, D31)
-			scpCmd, targetQuoted, remoteInstaller,
-			sshOpts, targetQuoted, remoteInstaller, remoteInstaller,
+			nameQuoted,
+			sshOpts, targetQuoted, remoteTemplate,
+			remotePrefix,
+			nameQuoted,
+			// SCP + verified install from the fresh directory.
+			scpCmd, targetQuoted,
+			sshOpts, targetQuoted,
 			nameQuoted,
 			nameQuoted,
 			nameQuoted,
+			sshOpts, targetQuoted,
 		))
 		b.WriteString("\n")
 	}
@@ -512,7 +650,7 @@ fi
 func renderPS1Deploy(config DeployScriptConfig) (string, error) {
 	var b strings.Builder
 
-	b.WriteString(`# Auto-deploy script for project: ` + config.ProjectName + `
+	b.WriteString(`# Auto-deploy script for project: ` + deployCommentText(config.ProjectName) + `
 # Generated by Overlay Network Config Orchestrator
 #
 # Usage:
@@ -548,18 +686,90 @@ if (-not [string]::IsNullOrEmpty($ArtifactsZip)) {
         exit 1
     }
 
+    $ArchiveMaxBytes = [long]33554432
+    $ArchiveMaxEntries = 512
+    $ArchiveMaxFileBytes = [long]4194304
+    $ArchiveMaxExpandedBytes = [long]16777216
+    $ArchiveInfo = Get-Item -LiteralPath $ArtifactsZip -Force -ErrorAction Stop
+    if ($ArchiveInfo.PSIsContainer -or $ArchiveInfo.Length -gt $ArchiveMaxBytes) {
+        Write-Error "Artifacts ZIP is not a regular file or exceeds the 32 MiB archive limit"
+        exit 1
+    }
+
     # Extract to temp
     $WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("overlay-deploy-" + [System.Guid]::NewGuid().ToString("N").Substring(0,8))
     New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 }
 
-# Clean script sent to remote via stdin (single-quoted — no PS expansion)
-$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf; nft delete table inet overlay-snat 2>/dev/null || true; iptables-save -t nat 2>/dev/null | grep -E ''^-A POSTROUTING '' | grep -F -- ''-j SNAT'' | grep -F -- ''-o wg-+'' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true; systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service'
+# Destructive layout cleanup is delegated to the candidate install.sh as --clean. That script
+# verifies its signature/checksums first; deploy-all must never mutate the remote host beforehand.
+$InstallArgs = if ($Clean) { " --clean" } else { "" }
 
 try {
     if ($WorkDir) {
+        # Expand-Archive does not itself reject traversal aliases, duplicate/case-colliding names,
+        # Unix symlinks, or Windows reparse points. Validate the central directory first because a
+        # later recursive SCP must never follow an archive-provided link into the operator's host.
+        $Archive = $null
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            $Archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ArtifactsZip -ErrorAction Stop))
+            if ($Archive.Entries.Count -gt $ArchiveMaxEntries) {
+                throw "Artifacts ZIP exceeds the 512-entry limit"
+            }
+            $SeenEntries = @{}
+            [long]$ExpandedBytes = 0
+            foreach ($Entry in $Archive.Entries) {
+                $EntryName = $Entry.FullName
+                $EntryCheck = $EntryName.TrimEnd([char]'/')
+                if ([string]::IsNullOrEmpty($EntryCheck) -or
+                    $EntryCheck -match '(^/|\\|:|(^|/)(\.|\.\.)(/|$)|//|[\x00-\x1f\x7f])') {
+                    throw "Unsafe or non-canonical artifacts ZIP entry: $EntryName"
+                }
+                $EntryKey = $EntryName.ToUpperInvariant()
+                if ($SeenEntries.ContainsKey($EntryKey)) {
+                    throw "Duplicate or case-colliding artifacts ZIP entry: $EntryName"
+                }
+                $SeenEntries[$EntryKey] = $true
+
+                if ($Entry.Length -gt $ArchiveMaxFileBytes) {
+                    throw "Artifacts ZIP entry exceeds the 4 MiB per-file limit: $EntryName"
+                }
+                $ExpandedBytes += [long]$Entry.Length
+                if ($ExpandedBytes -gt $ArchiveMaxExpandedBytes) {
+                    throw "Artifacts ZIP exceeds the 16 MiB expanded limit"
+                }
+
+                $IsDirectory = $EntryName.EndsWith('/', [System.StringComparison]::Ordinal)
+                $UnixType = ($Entry.ExternalAttributes -shr 16) -band 0xF000
+                $HasReparsePoint = ($Entry.ExternalAttributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0
+                if ($HasReparsePoint -or
+                    ($UnixType -ne 0 -and
+                        (($IsDirectory -and $UnixType -ne 0x4000) -or
+                         (-not $IsDirectory -and $UnixType -ne 0x8000)))) {
+                    throw "Artifacts ZIP contains a symlink, reparse point, or special-file entry: $EntryName"
+                }
+            }
+        } catch {
+            Write-Host ("ERROR: Failed artifacts ZIP safety check: " + $_.Exception.Message) -ForegroundColor Red
+            exit 1
+        } finally {
+            if ($null -ne $Archive) { $Archive.Dispose() }
+        }
+
         Write-Host "Extracting artifacts..."
-        Expand-Archive -Path $ArtifactsZip -DestinationPath $WorkDir -Force
+        try {
+            Expand-Archive -LiteralPath $ArtifactsZip -DestinationPath $WorkDir -Force -ErrorAction Stop
+            $UnsafeExtractedEntry = Get-ChildItem -LiteralPath $WorkDir -Force -Recurse -ErrorAction Stop |
+                Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } |
+                Select-Object -First 1
+            if ($null -ne $UnsafeExtractedEntry) {
+                throw "extracted archive contains a reparse point: $($UnsafeExtractedEntry.FullName)"
+            }
+        } catch {
+            Write-Host ("ERROR: Failed to extract artifacts ZIP: " + $ArtifactsZip + " (" + $_.Exception.Message + ")") -ForegroundColor Red
+            exit 1
+        }
     }
 
     if ($Uninstall) {
@@ -575,13 +785,6 @@ try {
 `)
 
 	for _, node := range config.Nodes {
-		// installerFile is the ZIP-entry / local-lookup name (canonical safe
-		// name). remoteInstaller is the remote upload path, keyed on the unique
-		// node ID so identically-sanitizing names cannot clobber each other at
-		// /tmp (D31). SCP destination, ssh execute, and rm cleanup use it.
-		installerFile := node.SafeInstallerName
-		remoteInstaller := node.NodeID + "-install.sh"
-
 		// Shell-escaped forms for the two distinct quoting contexts of the PS1
 		// script. PowerShell contexts (the & ssh / & scp call-operator arguments
 		// and the Write-Host strings) take powerShellArgQuote: an unquoted target
@@ -589,12 +792,13 @@ try {
 		// site (D43). The bash here-string body (@'...'@ piped to ssh ... bash)
 		// is interpreted by the REMOTE shell, so NodeName interpolated into its
 		// single-quoted echo lines takes bashSingleQuote, same idiom as the bash
-		// renderer. scpDestPSArg wraps the whole "target:/tmp/<id>-install.sh"
-		// destination as one escaped PowerShell argument.
+		// renderer. Every export presentation uses NodeID for the bundle directory.
 		targetPSArg := powerShellArgQuote(node.SSHTarget)
 		namePSStr := powerShellArgQuote(node.NodeName)
 		nameBashQuoted := bashSingleQuote(node.NodeName)
-		scpDestPSArg := powerShellArgQuote(node.SSHTarget + ":/tmp/" + remoteInstaller)
+		bundleIDPSArg := powerShellArgQuote(node.NodeID)
+		remoteTemplatePSArg := powerShellArgQuote("mktemp -d -- " + bashSingleQuote("/tmp/yaog-"+node.NodeID+"-XXXXXXXX"))
+		remotePrefixPSArg := powerShellArgQuote("/tmp/yaog-" + node.NodeID + "-")
 
 		if !node.HasSSH {
 			b.WriteString(fmt.Sprintf(`    Write-Host ""
@@ -654,16 +858,13 @@ try {
 			uninstallCmds.WriteString("rm -f /etc/systemd/system/overlay-dummy.service\n")
 		}
 		uninstallCmds.WriteString(fmt.Sprintf("echo '[Stage 4/4] Reloading systemd on '%s'...'\n", nameBashQuoted))
-		uninstallCmds.WriteString("systemctl daemon-reload\n")
+		uninstallCmds.WriteString("systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }\n")
 		uninstallCmds.WriteString(fmt.Sprintf("echo 'Overlay removed from '%s'.'\n", nameBashQuoted))
 
-		// Each Write-Host line uses string concatenation (+) so the escaped
-		// PowerShell value (namePSStr / targetPSArg, both already double-quoted
-		// by powerShellArgQuote) is a complete sub-expression rather than text
-		// spliced inside another double-quoted string where its own quotes would
-		// collide. The & ssh / & scp call sites take targetPSArg in place of the
-		// previously-bare target, and the one scp destination takes the whole
-		// "target:/tmp/<id>-install.sh" pre-quoted as scpDestPSArg.
+		// Deploy mode mirrors the bash renderer: choose the ID-keyed bundle directory,
+		// upload the complete directory to a fresh remote mktemp path, then invoke the
+		// candidate's own integrity-gated install.sh. The dynamic SCP destination is
+		// assembled from an already-quoted constant target and a validated mktemp result.
 		b.WriteString(fmt.Sprintf(`    Write-Host ""
     if ($Uninstall) {
         Write-Host ("=== Uninstalling from " + %s + " (" + %s + ") ===")
@@ -674,20 +875,60 @@ try {
         } else {
             $uninstallScript = @'
 %s'@
-            $uninstallScript | & ssh%s %s sudo bash -s
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ("  ERROR: Uninstall failed on " + %s + ".") -ForegroundColor Red
-                $Failed++
-            } else {
-                Write-Host ("  SUCCESS: " + %s + " uninstalled.")
-                $Success++
+            # Windows PowerShell writes CRLF text to native-process stdin. Materialize an
+            # explicitly LF-normalized UTF-8 file and SCP it instead. This avoids both stray
+            # carriage returns and Windows' command-line-length limit for large topologies.
+            $crlf = ([string][char]13) + [char]10
+            $lf = [string][char]10
+            $cr = [string][char]13
+            $uninstallLF = $uninstallScript.Replace($crlf, $lf).Replace($cr, $lf)
+            $uninstallBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($uninstallLF)
+            $UninstallTemp = [System.IO.Path]::GetTempFileName()
+            try {
+                [System.IO.File]::WriteAllBytes($UninstallTemp, $uninstallBytes)
+                $RemoteOutput = & ssh%s %s %s 2>&1
+                $RemoteCreateExit = $LASTEXITCODE
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = %s
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($RemoteCreateExit -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote uninstall staging directory for " + %s + " was not created safely.") -ForegroundColor Red
+                    $Failed++
+                } else {
+                    $ScpDestination = %s + ":" + $RemoteDir + "/uninstall.sh"
+                    & %s $UninstallTemp $ScpDestination
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host ("  ERROR: Uninstall upload to " + %s + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh%s %s $CleanupCommand 2>$null | Out-Null
+                        $Failed++
+                    } else {
+                        $UninstallCommand = "sudo bash '$RemoteDir/uninstall.sh'" + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh%s %s $UninstallCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Uninstall failed on " + %s + ".") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + %s + " uninstalled.")
+                            $Success++
+                        }
+                    }
+                }
+            } finally {
+                Remove-Item -LiteralPath $UninstallTemp -Force -ErrorAction SilentlyContinue
             }
         }
     } else {
         Write-Host ("=== Deploying to " + %s + " (" + %s + ") ===")
-        $Installer = Join-Path $WorkDir "%s"
-        if (-not (Test-Path $Installer)) {
-            Write-Warning "Installer %s not found in archive, skipping."
+        $BundleDir = Join-Path $WorkDir %s
+        $InstallScript = Join-Path $BundleDir "install.sh"
+        $Checksums = Join-Path $BundleDir "checksums.sha256"
+        if (-not (Test-Path -LiteralPath $BundleDir -PathType Container) -or
+            -not (Test-Path -LiteralPath $InstallScript -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $Checksums -PathType Leaf)) {
+            Write-Warning ("Complete bundle directory for " + %s + " not found in archive, skipping.")
             $Skipped++
         } else {
             $sshTest = & ssh%s %s "echo ok" 2>&1
@@ -695,23 +936,33 @@ try {
                 Write-Host ("  ERROR: SSH connection to " + %s + " failed.") -ForegroundColor Red
                 $Failed++
             } else {
-                if ($Clean) {
-                    Write-Host ("  Cleaning existing WireGuard interfaces on " + %s + "...")
-                    $CleanScript | & ssh%s %s sudo bash -s 2>$null
-                }
-
-                & %s $Installer %s
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host ("  ERROR: SCP upload to " + %s + " failed.") -ForegroundColor Red
+                $RemoteOutput = & ssh%s %s %s 2>&1
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = %s
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote staging directory for " + %s + " was not created safely.") -ForegroundColor Red
                     $Failed++
                 } else {
-                    & ssh%s %s "sudo bash /tmp/%s && rm -f /tmp/%s"
+                    $ScpDestination = %s + ":" + $RemoteDir + "/bundle"
+                    & %s -r $BundleDir $ScpDestination
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Host ("  ERROR: Installation script failed on " + %s + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                        Write-Host ("  ERROR: SCP upload to " + %s + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh%s %s $CleanupCommand 2>$null | Out-Null
                         $Failed++
                     } else {
-                        Write-Host ("  SUCCESS: " + %s + " deployed.")
-                        $Success++
+                        $RemoteCommand = "sudo bash '$RemoteDir/bundle/install.sh'" + $InstallArgs + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh%s %s $RemoteCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Installation script failed on " + %s + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + %s + " deployed.")
+                            $Success++
+                        }
                     }
                 }
             }
@@ -723,22 +974,30 @@ try {
 			sshOpts, targetPSArg,
 			namePSStr,
 			uninstallCmds.String(),
+			sshOpts, targetPSArg, remoteTemplatePSArg,
+			remotePrefixPSArg,
+			namePSStr,
+			targetPSArg,
+			scpCmd,
+			namePSStr,
+			sshOpts, targetPSArg,
 			sshOpts, targetPSArg,
 			namePSStr,
 			namePSStr,
 			// Deploy branch
 			namePSStr, targetPSArg,
-			installerFile,
-			installerFile,
-			sshOpts, targetPSArg,
-			namePSStr,
-			// Clean step
+			bundleIDPSArg,
 			namePSStr,
 			sshOpts, targetPSArg,
-			// SCP + install (destination pre-quoted, remote path keyed on node ID, D31)
-			scpCmd, scpDestPSArg,
 			namePSStr,
-			sshOpts, targetPSArg, remoteInstaller, remoteInstaller,
+			sshOpts, targetPSArg, remoteTemplatePSArg,
+			remotePrefixPSArg,
+			namePSStr,
+			targetPSArg,
+			scpCmd,
+			namePSStr,
+			sshOpts, targetPSArg,
+			sshOpts, targetPSArg,
 			namePSStr,
 			namePSStr,
 		))

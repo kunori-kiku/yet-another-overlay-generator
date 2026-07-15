@@ -200,8 +200,8 @@ type clearRekeyResponseJSON struct {
 }
 
 // auditEntryJSON is the operator-facing wire form of one audit entry. It is an
-// explicit snake_case DTO (controller.AuditEntry has no json tags, so it would
-// otherwise serialize as PascalCase) that exposes only the operator-relevant fields —
+// explicit snake_case DTO (controller.AuditEntry's persisted field names are not the wire
+// contract, so direct serialization would expose PascalCase/internal fields) that exposes only the operator-relevant fields —
 // the chain internals (PrevHash/Hash) are NOT leaked; their integrity is conveyed by
 // auditResponseJSON.Verified.
 type auditEntryJSON struct {
@@ -260,11 +260,12 @@ type rekeyResponseJSON struct {
 // PEM; alg selects how it is parsed (ed25519 / webauthn-es256 / webauthn-eddsa);
 // rpid/origin are the WebAuthn relying-party binding values (empty for raw Ed25519).
 type operatorCredentialRequestJSON struct {
-	Alg          string `json:"alg"`
-	CredentialID string `json:"credential_id"`
-	PublicKeyPEM string `json:"public_key_pem"`
-	RPID         string `json:"rpid"`
-	Origin       string `json:"origin"`
+	Alg             string                     `json:"alg"`
+	CredentialID    string                     `json:"credential_id"`
+	PublicKeyPEM    string                     `json:"public_key_pem"`
+	RPID            string                     `json:"rpid"`
+	Origin          string                     `json:"origin"`
+	EnrollmentProof *trustlist.SignedTrustList `json:"enrollment_proof,omitempty"`
 	// Rotate acknowledges that this pin REPLACES a different already-pinned credential, which
 	// strands every enrolled node until each is re-provisioned out of band AND a fresh deploy is
 	// signed under the new key. Without it, a changed credential is refused (the anti-footgun

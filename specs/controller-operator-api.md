@@ -1,66 +1,79 @@
 # Controller operator API
 
-<!-- last-verified: 2026-06-15 -->
+<!-- last-verified: 2026-07-15 -->
 <!-- 2026-06-15 (extensible-i18n closeout): error responses now coded via the internal/apierr envelope {error:{code,message,params}} — English-default message + panel-localized by error.<code>; no endpoint/flow change. -->
 <!-- 2026-06-16 (controller-panel-rollout-ui): added the operator POST /release-pins endpoint (assisted .sha256 sidecar fetch through the gh-proxy, SSRF-guarded, agent + mimic) and an in_rollout bool on the nodes view (server-computed AgentRolloutNodeIDs membership). The agent self-update + mimic pins are now ALSO edited via the panel (specs/panel-deploy-fleet.md), but still through the same strictly-validated POST /settings. New apierr codes agent_release_*. -->
 
 ## Responsibility
-Authenticates operators (password + TOTP/passkey sessions in httpOnly cookies, plus an optional break-glass bearer token) and serves the operator-port HTTP routes that drive the fleet lifecycle: topology, stage/promote, nodes, revoke, audit, settings, **release-pins** (assisted release-`.sha256` fetch for the agent/mimic pin editors), enrollment tokens, rekey-all, and keystone signing.
+Authenticate operators through password sessions with optional TOTP or login-passkey factors, plus an optional break-glass bearer token, and serve the operator-port HTTP routes that drive controller state: topology/version history, compile/stage/promote, fleet state, enrollment/revocation/rekey, audit, settings and release assistance, login-factor management, and keystone enrollment/signing.
 
-> **controller-server-authority-redesign (plans 1/2/6):** `POST /update-topology`
-> enforces key custody — it rejects (400) any payload carrying a non-empty
-> `wireguard_private_key` and stores the canonical re-marshaled bytes — and appends an
-> `update-topology` audit entry; `promote` appends a `promote` entry (both gaps closed).
-> Topology is retained as bounded history (`GET /topology?version=N`,
-> `GET /topology/versions`, last 10). `POST /enrollment-token` returns a non-blocking
-> `warning` when the node-id is absent from the stored design (warn-not-block). The
-> operator/agent secret path prefixes are split (`YAOG_OPERATOR_PATH_PREFIX` /
-> `YAOG_AGENT_PATH_PREFIX`).
+The operator surface is distinct from both the agent port and the anonymous surface. `EnableController` mounts operator and agent routes on separate muxes; without it the panel mux exposes only `GET /api/health` (and an optional SPA). The former anonymous compute routes were removed, so no anonymous HTTP path reaches the compile pipeline (`internal/api/server.go:44-79,90-96`).
 
 ## Files
-- `internal/api/handler_controller.go:37-268` — `ControllerHandler` config (path prefix, panel-origin allowlist, secure cookie), `RegisterOperatorRoutes` route table (175-218), `SetPathPrefix`/`basePath` (223-235), `cors()` middleware (248-268)
-- `internal/api/handler_controller.go:646-1018` — operator action handlers: update-topology, stage, promote, nodes, revoke, audit, topology, enrollment-token, rekey-all
-- `internal/api/handler_controller.go:1084-1318` — keystone routes: operator-credential pin, GET trustlist, POST trustlist-signature (verification core: see specs/keystone-trustlist.md)
-- `internal/api/handler_login.go:1-243` — POST /login (password leg + TOTP/passkey second-factor legs), shared session-mint tail `mintSessionResponse` (171-200), POST /logout (222-242)
-- `internal/api/handler_passkey.go:1-407` — passkey register/disable/status, passwordless login begin/finish, shared `verifyLoginAssertion` (156-177)
-- `internal/api/handler_totp.go:1-161` — TOTP enroll/confirm/disable/status for the logged-in operator; `currentOperator` resolver (41-53)
-- `internal/api/cookie_session.go:1-176` — httpOnly `yaog_session` + readable `yaog_csrf` cookies, double-submit CSRF check (96-106), GET /session probe (142-167)
-- `internal/api/auth_controller.go:141-201` — `operatorAuth` middleware (bearer-or-cookie, CSRF gate) and `resolveOperator` (session lookup, then constant-time break-glass compare)
-- `internal/api/loginratelimit.go:1-145` — per-username + per-IP failed-login limiter with atomic check-and-reserve gate (73-116)
-- `internal/api/handler_bootstrap.go:49-123` — GET/POST /settings (operator half; GET /bootstrap is agent-port, see specs/controller-agent-api.md). The settings wire now carries the agent self-update pins (`target_agent_version`, `min_agent_version`, `agent_bins`, `agent_canary_node_ids`, `agent_rollout_fleet_wide`) + the mimic catalog (`mimic_version`, `mimic_release_base`, `mimic_debs`); `validateAgentRollout`/`validateMimicCatalog` gate them.
-- `internal/api/release_pins.go` — `HandleReleasePins` (`POST {operatorBase}release-pins`): fetches per-asset `.sha256` sidecars through the persisted gh-proxy with an egress-guarded client (bounded timeout + redirect cap + dial-time private-IP reject defeating DNS-rebind) and returns `renderer.Artifact` pins for operator REVIEW. Convenience only — never a trust anchor (custody stays the signed `artifacts.json`).
-- `internal/api/server.go:48-51` — `EnableController` mounts operator routes on the operator/panel mux (shared with the air-gap API)
-- `cmd/server/main.go:29-63,119-175` — env wiring: `YAOG_OPERATOR_PATH_PREFIX` / `YAOG_AGENT_PATH_PREFIX` (split per audience), `YAOG_PANEL_ORIGIN`, `YAOG_SECURE_COOKIE`, break-glass token hashed before handler construction; startup log names both mounted base paths
+- `internal/api/routes_controller.go:15-180,263-422` — `ControllerHandler` configuration, complete operator route table, independent operator/agent path prefixes, and credentialed-CORS behavior.
+- `internal/api/adapter.go:32-85` + `internal/api/helpers_controller.go:14-36` — typed `op`/`opRaw` adapters, structural identity check, method gate, and size-capped/unknown-field-rejecting JSON decoding.
+- `internal/api/handler_login.go:61-251`, `cookie_session.go:37-177`, `auth_controller.go:152-212` — password/TOTP/passkey login tail, cookie/CSRF session handling, bearer-or-cookie operator middleware, and break-glass resolution.
+- `internal/api/handler_passkey.go:100-400` — login-passkey status/register/disable and passwordless begin/finish. Registration and disable use field-scoped login-credential compare-and-set (`handler_passkey.go:193-301`); ordinary assertions use the shared UP/signature verifier (`handler_passkey.go:145-178`).
+- `internal/api/handler_webauthn_enrollment.go:22-122` — authenticated `POST /webauthn/enrollment/begin` and the shared enrollment-proof verifier: ten-minute, purpose+actor-scoped, replace-bounded challenge; exact-candidate UP+UV assertion; verify before atomic consume.
+- `internal/api/handler_keystone.go:63-270,290-359` — server-authoritative, recovery-aware keystone
+  status; first pin/idempotent pin/acknowledged rotation; staged-manifest read; and atomic signature
+  installation. `internal/controller/keystone_transition.go` supplies the durable credential-CAS/audit
+  protocol used by the status and mutation paths.
+- `internal/api/handler_topology.go:30-137`, `handler_deploy.go:22-177`, `handler_enrollment.go:44-205`, `handler_rekey.go:26-100`, `handler_audit.go:17-36` — domain-split topology, deploy, fleet-enrollment, rekey, and audit actions.
+- `internal/api/handler_settings.go:102-199`, `release_pins.go:272-432`, `release_assets.go:142-193` — persisted settings plus the two convenience-only release-assistance endpoints. Release pins are not a trust anchor.
+- `internal/api/wire_controller.go:80-330` — explicit snake_case controller DTOs, including node views, enrollment-token warnings, keystone status/pin bodies, and trust-list bodies.
+- `internal/controller/store.go:355-376,613-633,666-710` + `storecore.go:655-718,823-856,982-1005` — assertion-challenge lifecycle, keystone CAS, and field-scoped login-credential CAS shared by both store backends.
+- `cmd/server/main.go:26-87,109-144,149-256` — environment wiring for the tenant, split path prefixes, trusted proxies, panel origins, secure-cookie posture, build version, store, and both controller listeners.
 
 ## Inputs
-- Browser panel requests (see specs/panel-auth.md for the login UX, specs/panel-deploy-fleet.md for the deploy/fleet consumers): JSON bodies (size-capped, unknown-field-rejecting `decodeJSON`, `internal/api/handler_controller.go:1336-1345`), credential via `Authorization: Bearer` header or the `yaog_session` cookie + `X-CSRF-Token` header.
-- `controller.Store` (see specs/controller-store.md): `GetOperator`, `LookupSession`/`CreateSession`/`DeleteSession`, `PutTopology`, `ListNodes`, `AppendAudit`, `CreateEnrollmentToken`, `GetCurrentSignedTrustList`, etc.
-- Controller core operations `controller.CompileAndStage` / `controller.PromoteStaged` (see specs/controller-stage-promote.md), invoked at `internal/api/handler_controller.go:688,718`.
-- `trustlist.Verify` / `trustlist.VerifyAssertion` for keystone signatures and WebAuthn login assertions (see specs/keystone-trustlist.md), at `internal/api/handler_controller.go:1289` and `internal/api/handler_passkey.go:176`.
+- Browser requests under `OperatorBasePath()` (`/api/v1/operator/` plus the optional prefix), with JSON bodies capped and decoded strictly (`internal/api/routes_controller.go:373-380`; `internal/api/helpers_controller.go:26-36`).
+- Operator credentials: `Authorization: Bearer` takes precedence; otherwise the httpOnly `yaog_session` cookie is accepted and state-changing cookie requests must echo the readable `yaog_csrf` cookie in `X-CSRF-Token` (`internal/api/auth_controller.go:160-188`; `internal/api/cookie_session.go:86-118`).
+- Tenant and actor identities stamped into the request context by `operatorAuth`, then checked structurally by `op`/`opRaw` before a typed handler runs (`internal/api/auth_controller.go:181-188`; `internal/api/adapter.go:43-84`).
+- `controller.Store`, including topology/fleet/session/audit operations, assertion challenges, keystone state, and the two compare-and-set credential primitives (`internal/controller/store.go:613-710`).
+- Controller operations `CompileAndStage`, `CompileSubgraph`, `PromoteStaged`, and `InstallTrustListSignature`, invoked from the deploy/keystone handlers (`internal/api/handler_deploy.go:22-165`; `internal/api/handler_keystone.go:309-346`).
+- `trustlist.VerifyAssertion` for existing login assertions and `trustlist.VerifyUserVerifiedAssertion` only at the new-browser-credential enrollment boundary (`internal/api/handler_passkey.go:145-178`; `internal/api/handler_webauthn_enrollment.go:77-120`).
 
 ## Outputs
-- JSON DTOs to the panel (snake_case wire structs, `internal/api/handler_controller.go:270-437`); the node view exposes no key material — only `has_wg_public_key` (`internal/api/handler_controller.go:330-344`) — plus `in_rollout` (server-computed `controller.AgentRolloutNodeIDs` membership: one settings load + one pass per list call), which the panel's per-node update-status chip reads instead of re-deriving canary membership client-side.
-- `Set-Cookie` headers: httpOnly session + readable CSRF cookie, written before the body on every successful login path (`internal/api/cookie_session.go:48-69`, `internal/api/handler_login.go:188`).
-- Store mutations: sessions, operator records (TOTP/passkey fields), topology versions, settings, enrollment-token hashes, signed trust lists, and audit entries on every operator action.
-- Generation bumps (`HandleRekeyAll` → `BumpGeneration`, `internal/api/handler_controller.go:1005`; promote, 718) that wake agent `/poll` waiters — consumed by specs/controller-agent-api.md and specs/agent.md.
+- Explicit JSON DTOs. The fleet list exposes `has_wg_public_key`, not the key bytes or API-token hash, and exposes server-computed `in_rollout` rather than asking the panel to re-derive rollout membership (`internal/api/wire_controller.go:141-179`; `internal/api/handler_enrollment.go:44-84`).
+- A plaintext session token and CSRF token returned once at successful login, alongside `Set-Cookie` headers written before the response; only the session-token hash is stored (`internal/api/handler_login.go:175-208`; `internal/api/cookie_session.go:47-70`).
+- A plaintext node-enrollment token returned once, optionally with a non-blocking design-membership warning; only its hash is persisted (`internal/api/wire_controller.go:222-239`; `internal/api/handler_enrollment.go:140-201`).
+- WebAuthn enrollment nonces returned once while only their SHA-256 hashes are stored. Repeated begins replace the prior live nonce for the same actor+purpose, and creation also purges expired challenge records (`internal/controller/login_challenge.go:24-52`; `internal/controller/storecore.go:655-689`).
+- Scoped store mutations and audit records. Browser credential writes use CAS: keystone pin/rotation
+  compares the exact prior credential and durably couples a committed transition to one identified
+  audit event, while login-passkey register/disable changes only `LoginCredential` plus `UpdatedAt`,
+  preserving concurrent password/TOTP changes (`internal/api/handler_keystone.go`;
+  `internal/controller/keystone_transition.go`; `internal/api/handler_passkey.go:240-301`).
+- Promote/rekey generation changes that wake agent pollers (`internal/api/handler_deploy.go:148-177`; `internal/api/handler_rekey.go:63-100`).
 
 ## Decision points
-- **Credential path** (`internal/api/auth_controller.go:154-169`): Bearer header first (CSRF-exempt — a cross-site form cannot set it); else the session cookie, where state-changing methods (`internal/api/cookie_session.go:110-117`) must carry a valid double-submit CSRF token or get 403. Missing credential = 401; present-but-unrecognized = 403.
-- **Operator resolution** (`internal/api/auth_controller.go:191-201`): session lookup by token hash first, then constant-time compare against the break-glass token hash (empty hash disables break-glass entirely).
-- **CORS mode** (`internal/api/handler_controller.go:248-268`): allowlisted Origin → reflect exact origin + `Allow-Credentials: true`; otherwise wildcard `*` without credentials (Bearer-only fallback). `Vary: Origin` always.
-- **Second-factor precedence** (`internal/api/handler_login.go:113-158`): a registered passkey overrides TOTP; each is a two-leg 401-challenge flow. TOTP steps are atomically burned via `AdvanceTOTPStep` so a concurrent replay loses (139-157).
-- **SameSite** (`internal/api/cookie_session.go:38-43`): `None` only when a cross-origin allowlist is set AND cookies are Secure; otherwise `Lax`.
-- **Promote error mapping** (`internal/api/handler_controller.go:718-728`): empty staged set → 409; keystone gate (missing/invalid manifest signature) → 422; trustlist-signature substitution mismatch → 409 (1270-1273); no pinned credential → 412 (1243-1251).
-- **Rate-limit gate** (`internal/api/loginratelimit.go:73-116`): attempts are counted at the gate (before argon2 work) closing the check-then-record TOCTOU; only the lockout *transition* is audited (`internal/api/handler_login.go:207-216`).
+- **Credential path:** Bearer authentication is tried first and is CSRF-exempt; cookie authentication is the fallback and requires double-submit CSRF on state-changing methods. Missing credentials return 401; present but unresolved credentials return 403 (`internal/api/auth_controller.go:152-189`).
+- **Operator resolution:** a stored, unexpired session is tried before constant-time comparison with the optional break-glass token hash; an empty configured hash disables break-glass (`internal/api/auth_controller.go:192-212`).
+- **CORS/cookies:** an allowlisted browser origin is reflected with `Allow-Credentials: true`; other origins get the non-credentialed `*` fallback. `SameSite=None` is used only with a configured cross-origin allowlist and secure cookies; otherwise cookies are `Lax` (`internal/api/routes_controller.go:391-421`; `internal/api/cookie_session.go:37-45`).
+- **Second-factor precedence:** after password verification, a registered login passkey takes precedence over TOTP. Accepted TOTP steps advance atomically so concurrent reuse loses (`internal/api/handler_login.go:109-167`; `internal/controller/store.go:720-727`).
+- **Rate limiting:** username and resolved-client-IP slots are reserved atomically before slow password work; a successful login refunds them and only the lockout transition is audited. Forwarding headers are honored only when the direct peer is in `YAOG_TRUSTED_PROXIES` (`internal/api/loginratelimit.go:83-157,159-206`; `internal/api/handler_login.go:211-225`).
+- **Promote:** an empty staged set maps to 409. With keystone on, a missing, unsigned, corrupt, or non-verifying staged manifest is a 422 precondition failure; successful promote is audited best-effort after the generation flips (`internal/api/handler_deploy.go:148-177`; `internal/controller/compile_promote.go:12-70`).
+- **Browser-credential enrollment:** `login` and `keystone` challenges are not interchangeable. New login credentials and first/replacement/rotated WebAuthn keystones must prove an assertion from the exact candidate over the authenticated actor's server nonce with UP+UV. A raw Ed25519 keystone has no browser ceremony. An exact idempotent WebAuthn re-pin preserves the compatibility path: it performs a compare-only CAS and needs neither a new proof nor migration of grandfathered optional fields (`internal/api/handler_webauthn_enrollment.go:39-120`; `internal/api/handler_keystone.go:192-253`).
 
 ## Invariants
-- Plaintext credentials are returned at most once and stored only as SHA-256 hashes — session tokens (`internal/api/handler_login.go:179-183`), enrollment tokens (`internal/api/handler_controller.go:929-934`); operator views never expose WG keys or token hashes (PRINCIPLES.md "Key custody").
-- Handlers read tenant + operator identity only from the request context stamped by `operatorAuth` (`internal/api/handler_controller.go:1325-1332`); the tenant is pinned from `YAOG_TENANT_ID`, never request-supplied.
-- `Access-Control-Allow-Origin: *` is never emitted together with `Allow-Credentials` (`internal/api/handler_controller.go:256-261`), and cookies/CSRF/credentialed CORS apply to operator routes only — agent routes stay Bearer-only (`internal/api/cookie_session.go:10-13`).
+- Plaintext session and enrollment tokens are returned at most once and stored only as SHA-256 hashes (`internal/api/handler_login.go:175-208`; `internal/api/handler_enrollment.go:184-201`).
+- Tenant and operator identity come from authenticated context, never from an operator request body; typed handlers cannot run until the adapter's identity check succeeds (`internal/api/auth_controller.go:186-188`; `internal/api/adapter.go:43-84`).
+- `Access-Control-Allow-Origin: *` is never paired with `Allow-Credentials`, and cookies/CSRF apply only to operator routes; agent routes remain bearer-only (`internal/api/routes_controller.go:391-421`; `internal/api/cookie_session.go:3-13`).
+- Credential persistence is race-detecting, not last-writer-wins. A stale keystone transition returns `ErrOperatorCredentialChanged`; a stale login-passkey mutation returns `ErrLoginCredentialChanged` without changing current state (`internal/controller/store.go:57-65`; `internal/controller/storecore.go:823-856,982-1005`).
+- A keystone status read reconciles any pending credential-CAS/audit marker before returning. It can
+  therefore heal a POST whose credential write committed before an audit or cleanup error, while a
+  marker whose target never committed is discarded without producing an audit. An unrelated current
+  credential is a storage conflict and the marker is retained for diagnosis (`internal/controller/keystone_transition.go`).
 
 ## Gotchas
-- `operatorPrefix` (`YAOG_OPERATOR_PATH_PREFIX`) is drive-by-scanner obscurity, NOT a security boundary (`internal/api/handler_controller.go:76-87`); operator routes share the panel port's mux with the air-gap API and optional SPA (`internal/api/server.go:48-51`), while agent routes live on a separate port under their own independent `YAOG_AGENT_PATH_PREFIX`.
-- The limiter's per-IP key is `r.RemoteAddr`, which collapses to one bucket behind a reverse proxy (`internal/api/loginratelimit.go:14-17,139-145`); a failed second-factor leg keeps the reserved slot counted — only a fully successful login refunds it (`internal/api/handler_login.go:110-115`).
-- Logout with the break-glass token deletes no session yet still returns 204 and clears both cookies (`internal/api/handler_login.go:222-242`); TOTP/passkey management 403s under break-glass because that identity has no operator account (`internal/api/handler_totp.go:41-53`).
+- `YAOG_OPERATOR_PATH_PREFIX` is scanner obscurity, not an authentication boundary. The actual separation is operator middleware plus the distinct operator and agent muxes/ports (`internal/api/routes_controller.go:49-68,263-279`; `internal/api/server.go:16-28,59-79`).
+- A break-glass token resolves an operator identity but has no operator account. Login-passkey enrollment begin/status/manage therefore reject it; logout still clears cookies and returns 204 while deleting no stored break-glass credential (`internal/api/handler_webauthn_enrollment.go:46-63`; `internal/api/handler_passkey.go:183-203`; `internal/api/handler_login.go:227-251`).
+- Enrollment is the only server-side UV requirement. UV describes one ceremony, not an immutable capability of a credential. Ordinary login, keystone signing, controller promote verification, and node membership verification continue accepting a valid UP+signature assertion, preserving existing users and deployed fleets (`internal/trustlist/webauthn.go:23-25,43-95,118-203`).
+- The first-party UI prefers UV for later assertions, while the server remains compatibility-tolerant
+  of a valid UP-only result. The warning explains that a non-UV credential may be duplicable and that
+  any usable duplicate is sufficient for later possession-based use. Backup Eligibility/Backup State
+  are separate from UV, and because YAOG requests `attestation: "none"`, enrollment does not prove
+  hardware provenance, non-exportability, or that a custom authenticated client supplied a
+  hardware-backed key (`frontend/src/lib/webauthn.ts:241-268,303-334,391-465`;
+  `frontend/src/i18n/messages/en.ts:687`).
 
-Deep docs: `docs/spec/controller/operator-auth.md` (login/session/2FA design), `docs/spec/controller/controller-api.md` (two-port bearer model), `docs/spec/controller/signing.md` (keystone) — all claims above re-verified against live code.
+Deep docs: `docs/spec/controller/operator-auth.md` (login/session/2FA), `docs/spec/controller/controller-api.md` (two-port controller model), and `docs/spec/controller/signing.md` (keystone workflow).

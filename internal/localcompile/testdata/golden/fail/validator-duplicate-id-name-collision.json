@@ -7,7 +7,6 @@
       "validation_node_id_duplicate",
       "validation_node_interface_name_collision",
       "validation_node_name_duplicate",
-      "validation_node_name_installer_collision",
       "validation_node_name_interface_collision"
     ],
     "apierr": []

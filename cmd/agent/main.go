@@ -18,9 +18,16 @@
 //
 //	agent kit verify --bundle DIR|ZIP --node-id ID [--pubkey PEM] [--operator-cred FILE --operator-cred-alg ALG ...]
 //	    Verify an already-downloaded manual-node bundle (Ed25519 signature + per-file
-//	    SHA-256, then keystone membership) BEFORE running install.sh — the same fail-closed
-//	    gate a managed agent applies. Reads public material only; no controller contact.
+//	    SHA-256, then keystone membership). Reads public material only; no controller contact.
+//	    Legacy bundles without a keystone require --dangerously-allow-no-keystone.
 //	    Exit 0 verified / 1 verification failed / 2 usage or IO.
+//
+//	agent kit apply --bundle DIR|ZIP --node-id ID [--uninstall] [--state-dir DIR] [--pubkey PEM] [--operator-cred FILE --operator-cred-alg ALG ...]
+//	    Trusted manual-node apply: require an out-of-band operator credential whenever
+//	    trust-list files are present (and by default even if they were stripped), verify
+//	    the loaded snapshot, copy it into an owned temporary directory, and execute only
+//	    that copied install.sh. Legacy no-keystone bundles require the explicit dangerous
+//	    acknowledgement flag. Run with sudo; never invoke the downloaded script directly.
 //
 //	agent run --node-id ID --source dir:PATH|http(s)://... [--pubkey PEM] [flags]
 //	    pull -> verify -> anti-rollback -> apply -> report (configured-source mode).
@@ -54,7 +61,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/agent"
@@ -75,9 +84,15 @@ func main() {
 	case "keygen":
 		os.Exit(runKeygen(os.Args[2:]))
 	case "kit":
-		// `kit verify` is a sub-command: verify an already-downloaded bundle before running install.sh.
-		if len(os.Args) > 2 && os.Args[2] == "verify" {
-			os.Exit(runKitVerify(os.Args[3:]))
+		// Manual bundles are never executed from their downloaded path. `kit apply` loads and
+		// verifies a snapshot, stages that map in an owned temp dir, then invokes the copy.
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "verify":
+				os.Exit(runKitVerify(os.Args[3:]))
+			case "apply":
+				os.Exit(runKitApply(os.Args[3:]))
+			}
 		}
 		os.Exit(runKit(os.Args[2:]))
 	case "enroll":
@@ -103,7 +118,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agent <keygen|kit|enroll|reprovision-keystone|run> [flags]")
 	fmt.Fprintln(os.Stderr, "  keygen               ensure the local WireGuard private key exists and print its public key")
 	fmt.Fprintln(os.Stderr, "  kit                  provision a MANUAL (agent-less) node: ensure the key + print a descriptor to paste into the design")
-	fmt.Fprintln(os.Stderr, "  kit verify           verify a downloaded manual-node bundle (signature + checksums + keystone membership) BEFORE install.sh")
+	fmt.Fprintln(os.Stderr, "  kit verify           verify a downloaded manual-node bundle; never run the download directly")
+	fmt.Fprintln(os.Stderr, "  kit apply            verify a manual bundle, stage a trusted temp snapshot, then install/uninstall via its copied install.sh (use sudo)")
 	fmt.Fprintln(os.Stderr, "  enroll               enroll against the networked controller and persist the per-node bearer token")
 	fmt.Fprintln(os.Stderr, "  reprovision-keystone adopt a ROTATED off-host operator credential supplied out of band (rewrites the pinned PEM + restarts)")
 	fmt.Fprintln(os.Stderr, "  run                  pull -> verify -> anti-rollback -> apply -> report (configured-source or --controller mode)")
@@ -155,8 +171,9 @@ type manualNodeDescriptor struct {
 // endpoint} the operator pastes into the node's manual identity in the design. The private key NEVER
 // leaves the box and the kit does NOT contact the controller (it is not an enroll, mints no bearer
 // token, pulls no config). After pasting, the operator stages+promotes and downloads this node's
-// bundle (operator GET /manual-node-bundle?node=<id>); `sudo bash install.sh` then splices the on-box
-// key automatically. No splice step is needed here — install.sh already does it.
+// bundle (operator GET /manual-node-bundle?node=<id>), then runs `sudo yaog-agent kit apply` over
+// that download. The trusted apply path verifies, copies, and only then runs install.sh, whose
+// custody splice reads the on-box key automatically. No separate splice step is needed.
 func runKit(args []string) int {
 	fs := flag.NewFlagSet("kit", flag.ExitOnError)
 	nodeID := fs.String("node-id", "", "the node id this host will have in the controller design (required)")
@@ -189,7 +206,8 @@ func runKit(args []string) int {
 
 	// Guidance to stderr; the machine-parseable descriptor (public half only) to stdout.
 	fmt.Fprintln(os.Stderr, "agent: kit: paste this descriptor into the manual node's identity in the controller design,")
-	fmt.Fprintln(os.Stderr, "agent: kit: then stage + promote and download this node's bundle; `sudo bash install.sh` splices the local key.")
+	fmt.Fprintln(os.Stderr, "agent: kit: then stage + promote and download this node's bundle; do NOT run its install.sh directly.")
+	fmt.Fprintln(os.Stderr, "agent: kit: run `sudo yaog-agent kit apply --bundle <DIR|ZIP> --node-id <id> ...`; it verifies a temp snapshot before the local-key splice.")
 	out, err := json.MarshalIndent(manualNodeDescriptor{NodeID: *nodeID, PublicKey: wgPub, Endpoint: *endpoint}, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent: kit: %v\n", err)
@@ -208,20 +226,21 @@ type kitVerifyResult struct {
 	NodeIsMember bool  `json:"node_is_member"`
 }
 
-// runKitVerify implements `agent kit verify`: it runs the SAME fail-closed verification a managed agent
-// applies before install (VerifyBundle then VerifyMembership) over an already-DOWNLOADED manual-node
-// bundle, so a hand-installing operator can confirm a tampered install.sh / rotated keystone BEFORE
-// `sudo bash install.sh`. It never contacts the controller and reads only public material. Exit 0 =
-// verified, 1 = verification failed, 2 = usage/IO error.
+// runKitVerify implements `agent kit verify`: it runs the SAME fail-closed verification a managed
+// agent applies before install (materialization preflight, VerifyBundle, then VerifyMembership) over
+// an already-DOWNLOADED manual-node bundle, so an operator can audit a tampered install.sh / rotated
+// keystone before applying it with `kit apply`. It never contacts the controller and reads only
+// public material. Exit 0 = verified, 1 = verification failed, 2 = usage/IO error.
 func runKitVerify(args []string) int {
 	fs := flag.NewFlagSet("kit verify", flag.ExitOnError)
 	bundlePath := fs.String("bundle", "", "path to the downloaded bundle: a directory of extracted files OR a .zip (required)")
 	nodeID := fs.String("node-id", "", "this node's id (for the keystone membership + bundle-digest binding; required)")
 	pubkeyPath := fs.String("pubkey", "", "pinned bundle-signing public-key PEM (optional; absent = trust-on-first-supply, like the agent)")
-	credPath := fs.String("operator-cred", "", "off-host operator credential public-key PEM (optional; when set, the keystone membership gate is enforced)")
+	credPath := fs.String("operator-cred", "", "out-of-band operator credential public-key PEM (required by default; only legacy bundles may use --dangerously-allow-no-keystone)")
 	credAlg := fs.String("operator-cred-alg", "", "operator credential algorithm (ed25519 | webauthn-es256 | webauthn-eddsa) — required with --operator-cred")
 	credRPID := fs.String("operator-rpid", "", "operator credential WebAuthn relying-party ID (WebAuthn algs only)")
 	credOrigin := fs.String("operator-origin", "", "operator credential WebAuthn origin (WebAuthn algs only)")
+	allowNoKeystone := fs.Bool("dangerously-allow-no-keystone", false, "explicitly accept a legacy bundle with no off-host-signed membership (unsafe; rejected if trust-list files are present)")
 	_ = fs.Parse(args)
 
 	if *bundlePath == "" || *nodeID == "" {
@@ -233,6 +252,10 @@ func runKitVerify(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent: kit verify: %v\n", err)
 		return 2
 	}
+	if err := agent.PreflightBundleMaterialization(files); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit verify: bundle materialization preflight FAILED: %v\n", err)
+		return 1
+	}
 	pinned, err := readPinnedPubkey(*pubkeyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent: kit verify: %v\n", err)
@@ -243,7 +266,14 @@ func runKitVerify(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent: kit verify: %v\n", err)
 		return 2
 	}
-
+	if bundleCarriesTrustList(files) && len(operatorCred) == 0 {
+		fmt.Fprintln(os.Stderr, "agent: kit verify: bundle carries a keystone trust list; --operator-cred and --operator-cred-alg are required so membership is verified against an out-of-band credential")
+		return 2
+	}
+	if len(operatorCred) == 0 && !*allowNoKeystone {
+		fmt.Fprintln(os.Stderr, "agent: kit verify: an out-of-band --operator-cred and --operator-cred-alg are required by default; for a legacy bundle that has never used the keystone, explicitly acknowledge the downgrade with --dangerously-allow-no-keystone")
+		return 2
+	}
 	vr, err := agent.VerifyBundle(files, pinned)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent: kit verify: bundle verification FAILED: %v\n", err)
@@ -279,12 +309,191 @@ func runKitVerify(args []string) int {
 	return 0
 }
 
+// loadedKitBundleSource is an immutable in-memory Source for `kit apply`. loadBundleFiles has
+// already copied the untrusted DIR/ZIP into this map; Fetch returns another deep copy so agent.Run
+// can only stage and execute the captured snapshot, never reopen the attacker-controlled source
+// path after verification.
+type loadedKitBundleSource struct {
+	files map[string][]byte
+}
+
+func (s loadedKitBundleSource) Fetch(string) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(s.files))
+	for name, content := range s.files {
+		out[name] = append([]byte(nil), content...)
+	}
+	return out, nil
+}
+
+// runKitApply implements the trusted manual-node install path. Exit codes deliberately mirror
+// `kit verify`: 2 is a usage/input-IO problem, 1 means the loaded candidate failed verification or
+// its verified install.sh failed, and 0 means the verified temporary snapshot applied successfully.
+//
+// The command never passes the downloaded path to bash. It reads the complete candidate into
+// memory and requires an out-of-band operator credential by default, rather than trusting the
+// attacker-controlled presence of trust-list files (a never-keystoned legacy bundle needs the loud
+// opt-out). It preflights the captured path set, then delegates to agent.Run, which re-runs the
+// preflight before VerifyBundle -> VerifyMembership -> rollback check -> fresh-temp stage -> apply.
+// Only bytes from the verified map reach the root shell, and durable state is checked before and
+// after. The normal AgentHeld install.sh still performs the /etc/wireguard/agent.key placeholder
+// splice.
+func runKitApply(args []string) int {
+	return runKitApplyWithStateSaver(args, nil)
+}
+
+// runKitApplyWithStateSaver is runKitApply with the final state-persistence seam
+// exposed for focused failure testing. Production passes nil and uses agent.SaveState.
+func runKitApplyWithStateSaver(args []string, stateSaver func(string, *agent.State) error) int {
+	fs := flag.NewFlagSet("kit apply", flag.ExitOnError)
+	bundlePath := fs.String("bundle", "", "path to the downloaded bundle: a directory of extracted files OR a .zip (required; never executed in place)")
+	nodeID := fs.String("node-id", "", "this manual node's id (required; must match manifest and signed membership)")
+	pubkeyPath := fs.String("pubkey", "", "out-of-band pinned bundle-signing public-key PEM (recommended; when set, a signature is required)")
+	credPath := fs.String("operator-cred", "", "out-of-band operator credential public-key PEM (required by default; only never-keystoned legacy state may use --dangerously-allow-no-keystone)")
+	credAlg := fs.String("operator-cred-alg", "", "operator credential algorithm (ed25519 | webauthn-es256 | webauthn-eddsa) — required with --operator-cred")
+	credRPID := fs.String("operator-rpid", "", "operator credential WebAuthn relying-party ID (WebAuthn algs only)")
+	credOrigin := fs.String("operator-origin", "", "operator credential WebAuthn origin (WebAuthn algs only)")
+	stateDir := fs.String("state-dir", agent.DefaultStateDir, "durable directory for manual-apply anti-rollback state (must remain stable across applies)")
+	uninstall := fs.Bool("uninstall", false, "verify the bundle and signed membership, then invoke the verified copy as install.sh --uninstall")
+	allowNoKeystone := fs.Bool("dangerously-allow-no-keystone", false, "explicitly apply a legacy bundle with no off-host-signed membership (unsafe; rejected if trust-list files are present or this state has ever used the keystone)")
+	_ = fs.Parse(args)
+
+	if *bundlePath == "" || *nodeID == "" || strings.TrimSpace(*stateDir) == "" {
+		fmt.Fprintln(os.Stderr, "agent: kit apply: --bundle, --node-id, and a non-empty --state-dir are required")
+		return 2
+	}
+	files, err := loadBundleFiles(*bundlePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: %v\n", err)
+		return 2
+	}
+	if err := agent.PreflightBundleMaterialization(files); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: bundle materialization preflight FAILED: %v\n", err)
+		return 1
+	}
+	pinned, err := readPinnedPubkey(*pubkeyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: %v\n", err)
+		return 2
+	}
+	operatorCred, err := readOperatorCred(*credPath, *credAlg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: %v\n", err)
+		return 2
+	}
+	if bundleCarriesTrustList(files) && len(operatorCred) == 0 {
+		fmt.Fprintln(os.Stderr, "agent: kit apply: bundle carries a keystone trust list; --operator-cred and --operator-cred-alg are required so membership is verified against an out-of-band credential")
+		return 2
+	}
+	if len(operatorCred) == 0 && !*allowNoKeystone {
+		fmt.Fprintln(os.Stderr, "agent: kit apply: an out-of-band --operator-cred and --operator-cred-alg are required by default; for a legacy bundle that has never used the keystone, explicitly acknowledge the downgrade with --dangerously-allow-no-keystone")
+		return 2
+	}
+	if err := ensureKitStateWritable(*stateDir); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: anti-rollback state is not writable: %v\n", err)
+		return 2
+	}
+
+	// State is intentionally durable: agent.Run persists both compiled-at and signed-membership epoch
+	// floors here, so a later `kit apply` cannot replay an older authorized bundle. Leave StagingDir
+	// empty so Run still creates and removes its own trusted staging directory rather than reusing the
+	// download location. Run also refuses a state record belonging to another node identity.
+	var installArgs []string
+	if *uninstall {
+		installArgs = []string{"--uninstall"}
+	}
+
+	res, err := agent.Run(&agent.Config{
+		NodeID:          *nodeID,
+		Source:          loadedKitBundleSource{files: files},
+		PinnedPubPEM:    pinned,
+		OperatorCredPEM: operatorCred,
+		OperatorCredAlg: *credAlg,
+		OperatorRPID:    *credRPID,
+		OperatorOrigin:  *credOrigin,
+		StateDir:        *stateDir,
+		StateSaver:      stateSaver,
+		StagingDir:      "",
+		InstallArgs:     installArgs,
+		Stdout:          os.Stdout,
+		Stderr:          os.Stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: refused or failed: %v\n", err)
+		return 1
+	}
+	if err := verifyKitAppliedState(*stateDir, *nodeID, operatorCred, res); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: kit apply: install.sh completed, but durable anti-rollback state verification FAILED: %v; do not apply another bundle until the state directory is repaired\n", err)
+		return 1
+	}
+	agent.PrintAppliedTo(os.Stderr, res)
+	return 0
+}
+
+func ensureKitStateWritable(stateDir string) error {
+	if err := agent.EnsureSecureOwnedDir(stateDir); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(stateDir, ".yaog-kit-state-probe-*")
+	if err != nil {
+		return err
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Remove(name); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyKitAppliedState(stateDir, nodeID string, operatorCred []byte, res *agent.RunResult) error {
+	if res == nil || !res.Applied {
+		return fmt.Errorf("agent returned no successful apply result")
+	}
+	st, err := agent.LoadState(stateDir)
+	if err != nil {
+		return err
+	}
+	if st.NodeID != nodeID || st.LastResult != agent.LastResultOK || st.LastCompiledAt != res.CompiledAt || st.LastChecksum != res.Checksum {
+		return fmt.Errorf("state does not record the applied node/bundle")
+	}
+	if res.Action != "" && st.LastAction != res.Action {
+		return fmt.Errorf("state records action %q, want completed action %q", st.LastAction, res.Action)
+	}
+	if len(operatorCred) > 0 && (!st.MembershipVerified || st.MembershipEpoch < res.MembershipEpoch) {
+		return fmt.Errorf("state does not record verified membership epoch %d", res.MembershipEpoch)
+	}
+	return nil
+}
+
+func bundleCarriesTrustList(files map[string][]byte) bool {
+	_, hasManifest := files["trustlist.json"]
+	_, hasSignature := files["trustlist.sig"]
+	return hasManifest || hasSignature
+}
+
+// Manual bundles are small configuration artifacts, not software-distribution archives. Bound
+// every input dimension before materializing the map so a local/untrusted DIR or a compressed ZIP
+// cannot make a root-run `kit verify/apply` allocate unbounded memory. These ceilings leave orders
+// of magnitude of headroom over normal bundles while keeping worst-case capture below 16 MiB.
+const (
+	maxKitBundleEntries     = 512
+	maxKitBundleFileBytes   = 4 << 20
+	maxKitBundleTotal       = 16 << 20
+	maxKitBundleArchiveSize = 32 << 20
+)
+
 // loadBundleFiles reads a downloaded bundle into the filename->bytes map VerifyBundle/VerifyMembership
 // expect, from either a DIRECTORY of extracted files or a .zip archive. Most bundle files are top-level,
 // but some live in a subdir (wireguard/*.conf); each relative path / zip entry name is preserved as a
 // SLASH-separated key (filepath.ToSlash) so those subpaths survive — VerifyMembership matches the
 // "wireguard/" prefix and VerifyBundle's per-file checksums are keyed by these exact paths (so do NOT
 // collapse to filepath.Base). Entries are mapped in memory only; nothing is written to disk (no zip-slip).
+// Non-regular directory entries, entry-local unsafe/non-canonical names, and duplicate zip names are
+// rejected here. Cross-entry and cross-platform aliases are rejected by the shared agent
+// materialization preflight immediately after this capture returns.
 func loadBundleFiles(path string) (map[string][]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -292,50 +501,166 @@ func loadBundleFiles(path string) (map[string][]byte, error) {
 	}
 	files := map[string][]byte{}
 	if info.IsDir() {
-		walkErr := filepath.Walk(path, func(p string, fi os.FileInfo, e error) error {
-			if e != nil {
-				return e
-			}
-			if fi.IsDir() {
-				return nil
-			}
-			rel, relErr := filepath.Rel(path, p)
-			if relErr != nil {
-				return relErr
-			}
-			data, readErr := os.ReadFile(p)
-			if readErr != nil {
-				return readErr
-			}
-			files[filepath.ToSlash(rel)] = data
-			return nil
-		})
-		if walkErr != nil {
-			return nil, fmt.Errorf("read bundle directory: %w", walkErr)
-		}
-		return files, nil
+		return loadKitBundleDirectory(path)
+	}
+	if info.Size() > maxKitBundleArchiveSize {
+		return nil, fmt.Errorf("bundle archive is %d bytes; compressed archive limit is %d", info.Size(), maxKitBundleArchiveSize)
 	}
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, fmt.Errorf("open bundle zip %s: %w", path, err)
 	}
 	defer zr.Close()
+	var totalBytes int64
+	if len(zr.File) > maxKitBundleEntries {
+		return nil, fmt.Errorf("bundle zip has %d entries; limit is %d", len(zr.File), maxKitBundleEntries)
+	}
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
+		}
+		if !f.Mode().IsRegular() {
+			return nil, fmt.Errorf("zip entry %q is not a regular file", f.Name)
+		}
+		name, nErr := safeBundleEntryName(f.Name)
+		if nErr != nil {
+			return nil, nErr
+		}
+		if _, duplicate := files[name]; duplicate {
+			return nil, fmt.Errorf("zip contains duplicate bundle entry %q", name)
 		}
 		rc, oErr := f.Open()
 		if oErr != nil {
 			return nil, fmt.Errorf("open %s in zip: %w", f.Name, oErr)
 		}
-		data, rErr := io.ReadAll(rc)
-		rc.Close()
+		if f.UncompressedSize64 > uint64(maxKitBundleFileBytes) {
+			rc.Close()
+			return nil, fmt.Errorf("bundle entry %q is %d bytes; per-file limit is %d", name, f.UncompressedSize64, maxKitBundleFileBytes)
+		}
+		data, rErr := readKitBundleEntry(rc, name, int64(f.UncompressedSize64), &totalBytes)
+		closeErr := rc.Close()
 		if rErr != nil {
 			return nil, fmt.Errorf("read %s in zip: %w", f.Name, rErr)
 		}
-		files[filepath.ToSlash(f.Name)] = data
+		if closeErr != nil {
+			return nil, fmt.Errorf("close %s in zip: %w", f.Name, closeErr)
+		}
+		files[name] = data
 	}
 	return files, nil
+}
+
+// loadKitBundleDirectory walks in bounded batches rather than filepath.Walk/WalkDir: those helpers
+// sort an entire directory by first reading all names, which lets one enormous directory allocate
+// without giving the entry-count gate a chance to stop it. The explicit stack also avoids recursive
+// call depth; ReadDir(64) bounds name allocation before the 512-entry ceiling is enforced.
+func loadKitBundleDirectory(root string) (map[string][]byte, error) {
+	files := make(map[string][]byte)
+	dirs := []string{root}
+	entryCount := 0
+	var totalBytes int64
+
+	for len(dirs) > 0 {
+		current := dirs[len(dirs)-1]
+		dirs = dirs[:len(dirs)-1]
+		err := func() error {
+			d, err := os.Open(current)
+			if err != nil {
+				return err
+			}
+			defer d.Close()
+
+			for {
+				entries, readErr := d.ReadDir(64)
+				for _, entry := range entries {
+					entryCount++
+					if entryCount > maxKitBundleEntries {
+						return fmt.Errorf("bundle has more than %d entries", maxKitBundleEntries)
+					}
+					p := filepath.Join(current, entry.Name())
+					rel, err := filepath.Rel(root, p)
+					if err != nil {
+						return err
+					}
+					rel, err = safeBundleEntryName(filepath.ToSlash(rel))
+					if err != nil {
+						return err
+					}
+					fi, err := entry.Info()
+					if err != nil {
+						return err
+					}
+					if fi.IsDir() {
+						dirs = append(dirs, p)
+						continue
+					}
+					if !fi.Mode().IsRegular() {
+						return fmt.Errorf("bundle entry %s is not a regular file", p)
+					}
+					f, err := os.Open(p)
+					if err != nil {
+						return err
+					}
+					data, readFileErr := readKitBundleEntry(f, rel, fi.Size(), &totalBytes)
+					closeErr := f.Close()
+					if readFileErr != nil {
+						return readFileErr
+					}
+					if closeErr != nil {
+						return closeErr
+					}
+					files[rel] = data
+				}
+				if readErr == io.EOF {
+					return nil
+				}
+				if readErr != nil {
+					return readErr
+				}
+			}
+		}()
+		if err != nil {
+			return nil, fmt.Errorf("read bundle directory: %w", err)
+		}
+	}
+	return files, nil
+}
+
+func readKitBundleEntry(r io.Reader, name string, declaredSize int64, totalBytes *int64) ([]byte, error) {
+	if declaredSize < 0 || declaredSize > maxKitBundleFileBytes {
+		return nil, fmt.Errorf("bundle entry %q is %d bytes; per-file limit is %d", name, declaredSize, maxKitBundleFileBytes)
+	}
+	if declaredSize > int64(maxKitBundleTotal)-*totalBytes {
+		return nil, fmt.Errorf("bundle exceeds the %d-byte total decompressed limit at entry %q", maxKitBundleTotal, name)
+	}
+	remaining := int64(maxKitBundleTotal) - *totalBytes
+	limit := int64(maxKitBundleFileBytes)
+	if remaining < limit {
+		limit = remaining
+	}
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > int64(maxKitBundleFileBytes) {
+		return nil, fmt.Errorf("bundle entry %q exceeds the %d-byte per-file limit", name, maxKitBundleFileBytes)
+	}
+	if int64(len(data)) > remaining {
+		return nil, fmt.Errorf("bundle exceeds the %d-byte total decompressed limit at entry %q", maxKitBundleTotal, name)
+	}
+	*totalBytes += int64(len(data))
+	return data, nil
+}
+
+func safeBundleEntryName(name string) (string, error) {
+	if strings.Contains(name, `\`) {
+		return "", fmt.Errorf("unsafe bundle entry %q: backslash paths are not allowed", name)
+	}
+	clean := path.Clean(name)
+	if name == "" || strings.HasPrefix(name, "/") || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean != name {
+		return "", fmt.Errorf("unsafe or non-canonical bundle entry %q", name)
+	}
+	return clean, nil
 }
 
 // runEnroll implements `agent enroll`: the one-time ceremony that turns a single-use
@@ -427,7 +752,7 @@ func runReprovisionKeystone(args []string) int {
 	if *credPath == "-" {
 		newPEM, err = io.ReadAll(os.Stdin)
 	} else {
-		newPEM, err = os.ReadFile(*credPath)
+		newPEM, err = agent.ReadProtectedFile(*credPath)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent: reprovision-keystone: read credential: %v\n", err)
@@ -463,16 +788,11 @@ func runReprovisionKeystone(args []string) int {
 	return 0
 }
 
-// writeTokenFile persists the per-node bearer token to disk at mode 0600, creating
-// the parent dir 0700. The token is a secret; the file is world-unreadable.
+// writeTokenFile atomically persists the per-node bearer token at mode 0600,
+// creating the parent dir 0700. A private same-directory temp file prevents a
+// replacement token from being exposed through an existing permissive target.
 func writeTokenFile(path, token string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create token dir: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(token), 0600); err != nil {
-		return fmt.Errorf("write token: %w", err)
-	}
-	return nil
+	return agent.WritePrivateFileAtomic(path, []byte(token))
 }
 
 // runRun implements `agent run`. With --controller it runs controller mode (bearer
@@ -487,7 +807,7 @@ func runRun(args []string) int {
 	operatorRPID := fs.String("operator-rpid", "", "operator credential WebAuthn relying-party ID (WebAuthn algs only)")
 	operatorOrigin := fs.String("operator-origin", "", "operator credential WebAuthn origin (WebAuthn algs only; advisory on a node)")
 	stateDir := fs.String("state-dir", agent.DefaultStateDir, "directory for the agent's persisted state")
-	stagingDir := fs.String("staging-dir", "", "directory to materialize the verified bundle (default: a fresh temp dir)")
+	stagingDir := fs.String("staging-dir", "", "secure parent for a fresh verified-bundle directory retained for inspection (default: a temporary directory removed after apply)")
 	controller := fs.String("controller", "", "controller agent base URL (controller mode): http://host:port")
 	tokenPath := fs.String("token", defaultTokenPath, "path to the per-node bearer token file (controller mode)")
 	after := fs.Int64("after", 0, "controller mode: poll for a generation strictly greater than this (the last applied generation; a daemon advances it each cycle)")
@@ -621,9 +941,12 @@ func runControllerMode(o controllerModeOpts) int {
 	// crash-prone setup (token/client/pubkey reads) below. This is what bounds the systemd
 	// Restart=always loop even for a swapped binary that crashes during early init. No-op without a
 	// breadcrumb; re-execs the rolled-back binary on abandon (never returns in that case).
-	agent.ReconcileSelfUpdateEarly(o.stateDir, BuildVersion, os.Stderr)
+	if err := agent.ReconcileSelfUpdateEarly(o.stateDir, BuildVersion, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: early self-update reconciliation refused: %v\n", err)
+		return 1
+	}
 
-	tokenBytes, err := os.ReadFile(o.tokenPath)
+	tokenBytes, err := agent.ReadPrivateFile(o.tokenPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent: read controller token %s: %v\n", o.tokenPath, err)
 		fmt.Fprintln(os.Stderr, "agent: run enroll first to obtain a per-node bearer token")
@@ -698,7 +1021,13 @@ func runControllerMode(o controllerModeOpts) int {
 		_, err := verifiedFetch()
 		return err
 	}
-	agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
+	if err := agent.WithStateLock(o.stateDir, func() error {
+		agent.ReconcileSelfUpdatePromote(o.stateDir, BuildVersion, healthCheck, os.Stderr)
+		return nil
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: self-update reconciliation refused: %v\n", err)
+		return 1
+	}
 
 	// cycle runs ONE poll->apply->report iteration from the given watermark via the testable
 	// agent.RunControllerCycle (the deterministic unit the daemon loops over). It returns the generation
@@ -733,10 +1062,23 @@ func runControllerMode(o controllerModeOpts) int {
 	// built above; BuildVersion (the release-injected -ldflags var) rides into the Finalize /
 	// RetryDeferred closures and the cycle's SelfUpdate, so the ldflags injection seam stays in cmd/agent.
 	loop := &agent.ControllerLoop{
-		Cycle:    cycle,
-		Finalize: func() { agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr) },
+		Cycle: cycle,
+		Finalize: func() {
+			if err := agent.WithStateLock(o.stateDir, func() error {
+				agent.FinalizeSelfUpdate(o.stateDir, BuildVersion, os.Stderr)
+				return nil
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "agent: self-update finalize refused: %v\n", err)
+			}
+		},
 		RetryDeferred: func() (bool, error) {
-			return agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, membershipVerifiedFetch, os.Stderr)
+			var swapped bool
+			err := agent.WithStateLock(o.stateDir, func() error {
+				var retryErr error
+				swapped, retryErr = agent.RetryDeferredSelfUpdate(selfUpdate, o.nodeID, o.stateDir, membershipVerifiedFetch, os.Stderr)
+				return retryErr
+			})
+			return swapped, err
 		},
 		After:             o.after,
 		ErrBackoff:        5 * time.Second,
@@ -784,7 +1126,7 @@ func readPinnedPubkey(path string) ([]byte, error) {
 	if path == "" {
 		return nil, nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := agent.ReadProtectedFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read pinned pubkey %s: %w", path, err)
 	}
@@ -804,7 +1146,7 @@ func readOperatorCred(path, alg string) ([]byte, error) {
 	if alg == "" {
 		return nil, fmt.Errorf("--operator-cred-alg is required when --operator-cred is set")
 	}
-	data, err := os.ReadFile(path)
+	data, err := agent.ReadProtectedFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read operator credential %s: %w", path, err)
 	}

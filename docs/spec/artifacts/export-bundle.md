@@ -1,64 +1,103 @@
 # Export Bundle
 
-## Export Directory Structure
+## Filesystem export structure
 
-```
+The CLI/controller export adapter uses the node ID—not the human node name—as the canonical
+per-node directory key:
+
+```text
 <output>/
 ├── deploy-all.sh
 ├── deploy-all.ps1
-├── <node-name>/
+├── <node-id>/
 │   ├── wireguard/
 │   │   ├── wg-peer1.conf
 │   │   ├── wg-peer2.conf
 │   │   └── ...
 │   ├── babel/
-│   │   └── babeld.conf
+│   │   └── babeld.conf             # non-client nodes only
 │   ├── sysctl/
 │   │   └── 99-overlay.conf
 │   ├── install.sh
+│   ├── README.txt
+│   ├── artifacts.json              # only when a catalog produced content
 │   ├── checksums.sha256
-│   ├── bundle.sig          # only when signing is enabled
-│   ├── signing-pubkey.pem  # only when signing is enabled
-│   ├── manifest.json
-│   └── README.txt
+│   ├── bundle.sig                  # only when bundle signing is enabled
+│   ├── signing-pubkey.pem          # only when bundle signing is enabled
+│   └── manifest.json
 └── ...
 ```
 
-## Checksum
+There is no ID/name fallback and no flat self-extracting installer presentation. The same
+`<node-id>/` namespace is consumed by the CLI, controller stage reader, browser/WASM ZIP, and
+project deploy helpers. See [naming.md](./naming.md).
 
-SHA-256 of the string representation of the compiled topology, truncated to 16 hex characters.
-Written to manifest and verified by install scripts.
+## Canonical bundle members
 
-Per-node `checksums.sha256` covers the rendered wireguard/babel/sysctl config files **and
-`install.sh` itself** (D24, Plan 5 / PR #7) — the bytes checksummed are identical for client and
-non-client bundles; `manifest.json` (including `compiled_at`) is written separately and is not
-part of the checksum set.
+`internal/artifacts.BundleFiles` is the single source for the per-node member set. It contains:
 
-### Canonical `checksums.sha256` (Phase 0)
+- `wireguard/<iface>.conf` (including the client's `wireguard/wg0.conf`);
+- `babel/babeld.conf` for non-client nodes;
+- `sysctl/99-overlay.conf`;
+- `install.sh`;
+- `README.txt` (its custody-critical application guidance is integrity-bound); and
+- `artifacts.json` only when a configured catalog emits non-empty content.
 
-`checksums.sha256` is now **canonical, sorted, and deterministic**. Its content is produced by
-`internal/bundlesig.Canonicalize(bundleFiles)`: one `sha256sum`-format line per file
-(`<64-hex-lowercase-sha256><two spaces><path>`), **sorted by path in byte order**, LF-only, with a
-**trailing newline**. The same file set always yields the same bytes regardless of map-iteration
-order. The format is unchanged from `sha256sum`'s perspective, so `sha256sum -c checksums.sha256`
-still consumes it; it is simply now stable instead of nondeterministically ordered. This canonical
-byte string is the exact payload that gets signed (see below).
+Exactly those members are written to disk, listed as members in `manifest.json`, and covered by
+`checksums.sha256`. `bundle.sig` and `signing-pubkey.pem` are authenticity sidecars over that set;
+`checksums.sha256` is the digest list itself; `manifest.json` is compile metadata. Those four files
+are not members and cannot self-reference.
+
+WireGuard configuration files are written at mode `0600`; `install.sh` is `0755`; the remaining
+bundle files are `0644`. Export renders the complete result into a fresh sibling tree, rejects a
+symlink or special-file destination, and publishes the finished tree as a replacement. A failed
+validation, signature, or write therefore leaves the prior export untouched; a successful export is
+exact and cannot retain removed nodes, obsolete members, stale signing sidecars, or an older file's
+permissive mode.
+
+## The two checksum fields are different
+
+`manifest.json.checksum` is a short compiler summary derived from the compiled topology. It is
+display/provenance metadata only: install scripts and agents do **not** verify it, it is not a
+member hash, and it is never signed.
+
+The security-bearing integrity authority is the per-node `checksums.sha256`. Its bytes are produced
+by `internal/bundlesig.Canonicalize(bundleFiles)`:
+
+1. compute SHA-256 over each member's exact bytes;
+2. emit `<64-lowercase-hex><two spaces><slash-relative-path>\n`;
+3. sort entries by path in raw byte order; and
+4. retain one trailing LF.
+
+The output is deterministic and directly consumable by `sha256sum -c`. `install.sh` is mandatory
+and covered, so a modified root-executed script cannot pass with the original checksum list.
+`README.txt` is covered for the same reason: an untrusted delivery cannot rewrite AgentHeld safety
+instructions while retaining a valid bundle. `manifest.json`, including volatile `compiled_at`,
+remains deliberately outside this set.
 
 ## Signed bundles (opt-in)
 
-Signing is **opt-in** and off by default: with no signing key configured, bundles are hash-only and
-byte-identical to pre-Phase-0 output (apart from `checksums.sha256` now being sorted + trailing-LF).
-Signing is enabled by setting the **`YAOG_BUNDLE_SIGNING_KEY`** environment variable to the path of
-an Ed25519 PKCS#8 PEM private key at export time. When enabled, each per-node bundle additionally
-gets:
+Bundle signing is opt-in. `YAOG_BUNDLE_SIGNING_KEY` names an Ed25519 PKCS#8 PEM private key. When it
+is unset, AirGap exports remain hash-only. When it is set, each node directory additionally gets:
 
-- **`bundle.sig`** — `base64` of the raw 64-byte Ed25519 detached signature over the canonical
-  `checksums.sha256` bytes.
-- **`signing-pubkey.pem`** — the PKIX/SubjectPublicKeyInfo PEM public key, for `openssl`-based
-  verification (the same key is also embedded into `install.sh` as a Go-emitted constant).
+- `bundle.sig`: standard-base64 of the raw 64-byte Ed25519 signature over the **exact canonical
+  `checksums.sha256` bytes**; and
+- `signing-pubkey.pem`: the PKIX/SubjectPublicKeyInfo public key used for independent verification
+  (the same public key is embedded in the generated signed `install.sh`).
 
-The signed object is the canonical `checksums.sha256`, **never** the compiler's manifest `checksum`
-(`computeChecksum`, a truncated non-canonical `%v` hash). The full contract — canonical
-serialization, Ed25519 primitives, opt-in env var, the out-of-band-pin limitation, and the
-install-time verify ordering — lives in
+The signed object is never `manifest.json.checksum`. Production controller stage resolves the
+signer once and passes the same in-memory signer through rendering, anchor enforcement, and export,
+preventing a mid-stage key-file change from splitting the embedded key and detached signature. See
 [../controller/signing.md](../controller/signing.md).
+
+## Browser/WASM ZIP
+
+The local browser engine compiles through the same Go `internal/localcompile` façade. Its preview ZIP
+contains ID-keyed node directories with the canonical member set plus each node's matching
+`checksums.sha256`, and places the matching `deploy-all.sh` and `deploy-all.ps1` from that same compile
+at the ZIP root. The archive container bytes are presentation; the member contents, checksum bytes,
+and helper contents are the conformance surfaces.
+
+Local browser compilation uses AirGap custody. Controller/manual AgentHeld bundles must be applied
+through enrolled agents or `yaog-agent kit apply`, not by directly running their downloaded
+`install.sh`; see [deploy-scripts.md](./deploy-scripts.md).

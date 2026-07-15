@@ -1,36 +1,29 @@
 package api
 
-// auth_controller.go is the single authentication chokepoint for the networked
-// controller routes (plan-4.5). Every controller request that is not /enroll
-// passes through this middleware, which derives the calling identity from a
-// PER-NODE BEARER TOKEN presented in the Authorization header and rejects anything
-// that does not resolve to an active node (agent routes) or the operator token
-// (operator routes).
+// auth_controller.go is the authentication and identity chokepoint for the
+// networked controller's protected routes. Agent operations use per-node bearer
+// tokens; operator operations use named login sessions as the primary path and an
+// optional constant-time-compared break-glass bearer as the recovery path.
 //
-// Trust model. Authentication is a bearer token, NOT mTLS. The transport is plain
-// HTTP; confidentiality (against token replay on the wire) is delegated to a
-// reverse proxy's TLS (nginx/caddy) and is out of this app's scope — bearer tokens
-// are replayable if leaked, so the deployment MUST terminate TLS in front of the
-// controller. This is the conscious v1 model (plan-4.5).
+// The pre-auth routes deliberately bypass these wrappers: agent /enroll (authorized
+// by a single-use enrollment token) and /bootstrap, plus operator password/passkey
+// login endpoints. Route registration in routes_controller.go is the authoritative
+// list; every other agent/operator operation is wrapped by requireNode/operatorAuth.
 //
 // Identity. A node presents "Authorization: Bearer <token>". The middleware hashes
-// the presented token (controller.HashToken) and resolves it via
-// Store.LookupNodeByAPIToken to the owning Node — there is no tenant/node field in
-// the URL or body. The tenant is the configured one (single-tenant v1, pinned from
-// YAOG_TENANT_ID). A node acts ONLY as itself: the agent handlers read the node
-// from the request context, never from a URL/body field, so a node cannot fetch or
-// report for a different node.
+// the token and resolves it through Store.LookupNodeByAPIToken to an approved node.
+// Tenant and node are pinned into request context, never accepted as a target in an
+// agent request, so a node can act only as itself. Invalid, stale, and revoked node
+// credentials intentionally produce the same opaque unauthorized result.
 //
-// Roles. Two kinds of route:
-//   - agent routes (/config,/poll,/report): any token that resolves to an active
-//     (non-revoked) node is accepted (requireNode).
-//   - operator routes (/update-topology,/stage,/promote,/nodes,/revoke,/audit,
-//     /topology,/enrollment-token): the presented token's hash MUST equal the configured
-//     operator token hash (constant-time compare); a node token on an operator
-//     route is a 403 (operatorAuth).
+// Operator auth accepts a bearer header or the httpOnly session cookie. A
+// state-changing cookie request must pass the double-submit CSRF check; explicit
+// bearer auth is not ambient and is exempt. The context records session versus
+// break-glass auth separately from the display name so a name collision cannot give
+// recovery auth access to account-bound TOTP/passkey management.
 //
-// /enroll is NOT wrapped by this middleware at all (it must be reachable before the
-// node has any API token).
+// Transport is plain HTTP. Production must terminate TLS at a reverse proxy because
+// node, session, and break-glass bearer credentials are replayable if exposed.
 
 import (
 	"context"
@@ -51,6 +44,19 @@ type ctxKey int
 const (
 	ctxKeyTenant ctxKey = iota
 	ctxKeyNode
+	ctxKeyOperatorAuthKind
+)
+
+// operatorAuthKind preserves how an operator request authenticated. The display
+// identity alone is not enough: the configured break-glass identity may have the
+// same name as a real account, but recovery-token requests must still be barred
+// from account-bound TOTP and login-passkey management.
+type operatorAuthKind uint8
+
+const (
+	operatorAuthUnknown operatorAuthKind = iota
+	operatorAuthSession
+	operatorAuthBreakGlass
 )
 
 // tenantFromCtx returns the tenant pinned onto the request context by the auth
@@ -68,6 +74,11 @@ func tenantFromCtx(ctx context.Context) (controller.TenantID, bool) {
 func nodeFromCtx(ctx context.Context) (string, bool) {
 	n, ok := ctx.Value(ctxKeyNode).(string)
 	return n, ok
+}
+
+func operatorAuthKindFromCtx(ctx context.Context) (operatorAuthKind, bool) {
+	kind, ok := ctx.Value(ctxKeyOperatorAuthKind).(operatorAuthKind)
+	return kind, ok
 }
 
 // authResult carries the parsed, verified identity from a bearer token.
@@ -178,13 +189,14 @@ func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc
 			writeAPIError(w, apierr.New(apierr.CodeReqBearerRequired))
 			return
 		}
-		operator, ok := h.resolveOperator(r.Context(), tok)
+		operator, authKind, ok := h.resolveOperator(r.Context(), tok)
 		if !ok {
 			writeAPIError(w, apierr.New(apierr.CodeReqOperatorRequired))
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyTenant, h.tenant)
 		ctx = context.WithValue(ctx, ctxKeyNode, operator)
+		ctx = context.WithValue(ctx, ctxKeyOperatorAuthKind, authKind)
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -192,21 +204,24 @@ func (h *ControllerHandler) operatorAuth(next http.HandlerFunc) http.HandlerFunc
 // resolveOperator authenticates an operator bearer token, returning the operator
 // identity. It accepts EITHER a valid (unexpired) login session OR — when a
 // break-glass operator token is configured — that token (constant-time compared so a
-// timing side channel cannot leak it). It returns ("", false) when neither matches.
+// timing side channel cannot leak it). It returns ("", unknown, false) when neither
+// matches. The explicit kind must travel with the identity so an account whose name
+// collides with the configured break-glass actor does not turn recovery auth into a
+// login session.
 //
 // Both credentials are 256-bit unguessable secrets resolved by their hash, so the
 // session lookup needs no constant-time compare (a Go map/file lookup by a hashed key
 // does not leak the stored keys); only the break-glass compare against the pinned
 // secret is constant-time. On any store error the session is simply not accepted
 // (fail-closed) and the break-glass path is tried.
-func (h *ControllerHandler) resolveOperator(ctx context.Context, tok string) (string, bool) {
+func (h *ControllerHandler) resolveOperator(ctx context.Context, tok string) (string, operatorAuthKind, bool) {
 	hash := controller.HashToken(tok)
 	if sess, err := h.store.LookupSession(ctx, h.tenant, hash, time.Now().UTC()); err == nil {
-		return sess.Operator, true
+		return sess.Operator, operatorAuthSession, true
 	}
 	if h.operatorTokenHash != "" &&
 		subtle.ConstantTimeCompare([]byte(hash), []byte(h.operatorTokenHash)) == 1 {
-		return h.operatorName, true
+		return h.operatorName, operatorAuthBreakGlass, true
 	}
-	return "", false
+	return "", operatorAuthUnknown, false
 }

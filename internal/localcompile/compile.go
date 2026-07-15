@@ -16,15 +16,14 @@ import (
 // artifacts-out result. It is the seam the in-browser Go/WASM engine (cmd/wasm → web/yaog.wasm)
 // and the WASM conformance gate target.
 //
-// As of plan-3 Phase 4 the façade is a PURE function: every non-deterministic and
+// The façade is a PURE function: every non-deterministic and
 // environment-coupled input is taken from the request, never read from the process —
 // the keygen seam (req.Keygen, nil ⇒ the default wgtypesKeygen), the compile clock
 // (req.CompiledAt, injected via compiler.CompileAt), the bundle signer (req.SigningKey,
 // injected via render.AllWith; nil ⇒ unsigned), the install-time fetch settings
 // (req.Fetch), and the controller subgraph's reserved allocations (req.Reserved). There
 // is no env read, no time.Now, no filesystem access, and no global state, so an identical
-// request yields a byte-identical result (proven by the run-twice-assert-equal golden
-// sub-test in plan-3 Phase 5).
+// request yields a byte-identical result (proven by the run-twice golden test).
 func Compile(req CompileRequest) (CompileArtifacts, error) {
 	result, err := CompileResult(req)
 	if err != nil {
@@ -35,7 +34,7 @@ func Compile(req CompileRequest) (CompileArtifacts, error) {
 
 // CompileResult runs the local compile pipeline and returns the raw, fully-rendered
 // *compiler.CompileResult — the SINGLE place the GenerateKeys → CompileAt → AllWith
-// sequence lives (plan-3 Phase 6). Compile wraps it and re-shapes the result into the
+// sequence lives. Compile wraps it and re-shapes the result into the
 // canonical CompileArtifacts; the live callers that still consume the
 // *compiler.CompileResult shape directly — the oracle's BuildManifest (which needs
 // result.PeerMap), artifacts.Export's disk write, and the controller subgraph compile
@@ -53,7 +52,7 @@ func CompileResult(req CompileRequest) (*compiler.CompileResult, error) {
 
 // CompileResultCtx is CompileResult with an explicit context for the live Go callers. ctx
 // bounds the IP-allocation pass: the allocator polls ctx.Err() per candidate and aborts a
-// long scan on cancellation (plan-8 S1), so the controller subgraph compile passes its request
+// long scan on cancellation, so the controller subgraph compile passes its request
 // ctx — a client disconnect stops the scan rather than running it to the budget cap. ctx affects
 // NEITHER the allocated values NOR the rendered bytes, so it is deliberately not a member of the
 // frozen CompileRequest: the WASM-mirrored contract stays context-free, and the pure
@@ -102,6 +101,7 @@ func CompileResultCtx(ctx context.Context, req CompileRequest) (*compiler.Compil
 	if err := render.AllWith(result, keys, req.Fetch, req.SigningKey); err != nil {
 		return nil, err
 	}
+	result.AgentHeld = req.Custody == render.AgentHeld
 
 	return result, nil
 }
@@ -138,7 +138,7 @@ func ArtifactsFromResult(result *compiler.CompileResult, signer bundlesig.Config
 
 	for _, node := range result.Topology.Nodes {
 		// The per-node checksummed bundle file set — one source of truth (artifacts.BundleFiles)
-		// for the relpath keys and the set membership (incl. the artifacts.json D4 guard), shared
+		// for relpath keys and set membership (including README.txt and the artifacts.json guard), shared
 		// with the on-disk exporter so the two can never drift.
 		bundleFiles := artifacts.BundleFiles(result, node.ID)
 		out.Files[node.ID] = bundleFiles

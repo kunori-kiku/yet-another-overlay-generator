@@ -3,14 +3,15 @@
 // volatile flags (loading / error / sync baselines). Moved verbatim from the single
 // controllerStore.ts create() literal.
 
-import type { ControllerSet, ControllerGet } from './types';
+import type { ControllerSet, ControllerGet, ControllerState } from './types';
 import type { Topology } from '../../types/topology';
 import {
   getTopology as ctlGetTopology,
   updateTopology,
 } from '../../api/controllerClient';
 import {
-  configOf,
+  captureControllerActionContext,
+  controllerActionContextIsCurrent,
   localizeError,
   canonicalDesign,
   isDesignDirty,
@@ -25,6 +26,28 @@ import { useUiStore } from '../uiStore';
 import { localOnly } from '../../lib/localOnly';
 import { t } from '../../i18n';
 
+// Workflow-mode changes are controller-context boundaries even when the endpoint/session is
+// intentionally preserved for a later round-trip. Cancel only transient controller work here;
+// the dedicated switch functions below retain or purge topology/fleet state according to their
+// existing custody policy.
+const modeContextReset = {
+  loading: false,
+  saving: false,
+  previewing: false,
+  deployPreview: null,
+  deployPreviewing: false,
+  deployPreviewError: null,
+  pendingShrink: null,
+  signing: false,
+  enrolling: false,
+  loginCeremony: false,
+  totpRequired: false,
+  pendingLoginPasskeyEnrollment: null,
+  pendingKeystoneEnrollment: null,
+  pendingKeystoneRotate: false,
+  error: null,
+} as const satisfies Partial<ControllerState>;
+
 export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
   return {
     mode: 'local' as const,
@@ -38,15 +61,14 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
     saving: false,
     hydrationNotice: false,
 
-    // setMode is a guarded no-op toward controller mode in the static-local-design build
-    // (VITE_LOCAL_ONLY): that build has no controller backend, so switching to controller
-    // would only strand the user behind a login gate that can never authenticate. The
-    // affordances that call this are hidden in that build too, but the guard is the
-    // load-bearing lock (a deep link / programmatic call cannot escape local mode). The
-    // default all-in-one build is unaffected.
+    // Route every real mode transition through the custody-aware switch functions below; this
+    // prevents a programmatic setMode call from bypassing their canvas purge/context invalidation.
+    // The static-local build remains locked because switchToController carries the load-bearing
+    // localOnly guard.
     setMode: (mode: 'local' | 'controller') => {
-      if (localOnly() && mode === 'controller') return;
-      set({ mode });
+      if (mode === get().mode) return;
+      if (mode === 'controller') get().switchToController();
+      else get().switchToLocal();
     },
 
     // Server-authoritative hydration (plan-4, D1): the server's topology is the sole authority,
@@ -55,8 +77,10 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
     // hydration is a side action of login and a single fetch failure must not block login
     // itself; the next login/refresh retries.
     hydrateFromServer: async () => {
+      const context = captureControllerActionContext(get);
       try {
-        const raw = await ctlGetTopology(configOf(get()));
+        const raw = await ctlGetTopology(context.config);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         if (raw === null) {
           return; // Server has no topology yet (before the first deploy): keep the local canvas.
         }
@@ -97,6 +121,7 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         // must be wiped after logout (see topologyStore.canvasFromServer's security invariant).
         topoStore.loadTopology(topo, true);
       } catch {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // Fetch failed: keep the local canvas, do not block login (see the function comment).
       }
     },
@@ -114,12 +139,12 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
       // Drop a call that arrives while a save is already in flight (mirrors deploy()'s guard on
       // its own in-flight flag).
       if (get().saving) return;
+      const context = captureControllerActionContext(get);
       // loading = the global busy flag (consistent with other actions); saving = specific to
       // this save, driving the Save button / conflict dialog, so the global loading set by an
       // unrelated op does not light it up (plan-11 review #1). Both must be cleared at every exit.
       set({ loading: true, saving: true, error: null });
       try {
-        const cfg = configOf(get());
         // Zero-knowledge fail-safe: as in deploy(), strip private keys before upload (the
         // controller canvas has none anyway; this is the backstop).
         const current = useTopologyStore.getState().getTopology();
@@ -140,8 +165,10 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         let readOk = true;
         let serverNow: Topology | null = null;
         try {
-          serverNow = (await ctlGetTopology(cfg)) as Topology | null;
+          serverNow = (await ctlGetTopology(context.config)) as Topology | null;
+          if (!controllerActionContextIsCurrent(get, context)) return;
         } catch {
+          if (!controllerActionContextIsCurrent(get, context)) return;
           readOk = false;
         }
         // Client-side conflict detection (D13): unless force, ignore pin fields when comparing
@@ -180,7 +207,8 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
           clean = reread.topo;
           stripped = reread.stripped;
         }
-        await updateTopology(cfg, JSON.stringify(clean));
+        await updateTopology(context.config, JSON.stringify(clean));
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // The canvas is now the server-authoritative copy: mark it server-held (stop hitting
         // disk, wipe on logout/gate), refresh the sync snapshot (reset dirty) + the timestamp,
         // and record the stripped private-key count (0=no notice).
@@ -195,6 +223,7 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
           lastSyncedAt: Date.now(),
         });
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ error: localizeError(err, 'error.generic'), loading: false, saving: false });
       }
     },
@@ -202,9 +231,11 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
     dismissSaveConflict: () => set({ saveConflict: false }),
 
     importDesignToServer: async (file: File) => {
+      const context = captureControllerActionContext(get);
       set({ loading: true, error: null });
       try {
         const text = await file.text();
+        if (!controllerActionContextIsCurrent(get, context)) return;
         let topo: Topology;
         try {
           topo = JSON.parse(text) as Topology;
@@ -240,7 +271,8 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         // Write to the server: update-topology lands a version history entry and heals colliding
         // pins + normalizes at the write boundary. Never stage/promote — an import only updates
         // the authoritative design; reaching the fleet still needs a separate Deploy.
-        await updateTopology(configOf(get()), JSON.stringify(cleaned));
+        await updateTopology(context.config, JSON.stringify(cleaned));
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // Optimistic load (the already-healed imported design, fromServer=true so it does not
         // hit disk): even if the subsequent hydrateFromServer fails on a transient network
         // error, the canvas already reflects this import rather than staying on the pre-import
@@ -249,8 +281,10 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         // Then align the canvas and the sync baseline with the server-authoritative copy
         // (already healed + normalized); on success this overwrites the optimistic value above.
         await get().hydrateFromServer();
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ loading: false });
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ error: localizeError(err, 'error.generic'), loading: false });
       }
     },
@@ -294,7 +328,14 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
       // controller→local→controller round-trip does not trigger refresh (checkSession only
       // hydrates, does not fetch the fleet), so an empty fleet would show until a manual refresh
       // (plan-11 review #2/#3). So the cache is preserved.
-      set({ mode: 'local', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false });
+      set((state) => ({
+        ...modeContextReset,
+        mode: 'local',
+        authGeneration: state.authGeneration + 1,
+        lastSyncedSnapshot: null,
+        lastSyncedTopology: null,
+        saveConflict: false,
+      }));
     },
 
     // local→controller switch. Deliberately NOT a blanket key purge: the asymmetry vs switchToLocal
@@ -319,7 +360,14 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
       // placeholder-key configs.
       ts.setCompileResult(null);
       get().clearModeNotices();
-      set({ mode: 'controller' });
+      set((state) => ({
+        ...modeContextReset,
+        mode: 'controller',
+        authGeneration: state.authGeneration + 1,
+        lastSyncedSnapshot: null,
+        lastSyncedTopology: null,
+        saveConflict: false,
+      }));
     },
   };
 }

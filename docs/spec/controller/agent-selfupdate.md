@@ -65,7 +65,9 @@ any failure BEFORE the swap keeps the running binary (keep-last-good):
 4. **self-test** `<partial> version` must print EXACTLY `desired` — else refuse (catches a corrupt
    or wrong-arch binary that somehow matched a hash).
 5. **breadcrumb** `State.PendingUpdate{from, to, attempts:0, confirmed:false}` written crash-durably
-   (temp-rename) BEFORE the swap.
+   (temp-rename) BEFORE the swap. State is read once before download and re-read immediately before
+   this write; either read failing is a hard refusal. The update never falls back to a fresh
+   zero-value state that could erase an unresolved `PendingApply` or an anti-rollback floor.
 6. **swap (install-then-flip)** `copy(target → target.bak)` (the live binary stays in place), then
    atomically `rename(partial → target)`. A same-directory rename **replaces** the target, so the
    ExecStart path always names a valid executable across ANY crash point — there is never a window
@@ -73,6 +75,11 @@ any failure BEFORE the swap keeps the running binary (keep-last-good):
    rollback artifact. A cross-FS layout falls back to copy+fsync+rename.
 7. **re-exec** `syscall.Exec(target, os.Args, env)` — the new binary resumes as the daemon and the
    startup reconcile resolves the breadcrumb.
+
+Finalization and abandonment are ordered around the same durability boundary: the agent removes a
+`.bak` rollback artifact and reports a terminal state only after the corresponding state replacement
+has synced successfully. A read or final-save failure leaves the breadcrumb and available backup in
+place for a later recovery pass.
 
 `min_version` ordering (D3 — bumped ONLY on a bundle/wire-format break): a `forced` update runs
 AFTER verify+membership+anti-rollback but BEFORE apply, so an agent below the bundle's required

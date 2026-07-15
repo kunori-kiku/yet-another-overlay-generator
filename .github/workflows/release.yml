@@ -6,25 +6,64 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
+
+# Serialize every tag's publication transaction. Two otherwise-valid tags must not race while
+# moving the repository's mutable Latest pointers.
+concurrency:
+  group: yaog-release-publication
+  cancel-in-progress: false
 
 jobs:
-  # Release gate: a tag must never ship untested code. Normally the tagged commit
-  # already passed PR CI on main, but tags can point anywhere — re-verify here
-  # before any bundle is built. A true step-by-step mirror of ci.yml's gate
-  # BEHAVIOR (plan-22 / 4.3): gofmt-drift + go test -race, npm run build (tsc -b),
-  # the required frontend-e2e Playwright job, and
-  # the realtunnel netns gate (gate-realtunnel). (setup-go here adds check-latest;
+  validate-release-ref:
+    name: Validate release tag + current main tip
+    runs-on: ubuntu-latest
+    outputs:
+      release_commit: ${{ steps.validate.outputs.release_commit }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Require an annotated YAOG release tag at the current main tip
+        id: validate
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(preview|beta|rc)\.(0|[1-9][0-9]*))?$ ]]; then
+            echo "::error::unsupported release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if [ "$(git cat-file -t "$GITHUB_REF")" != "tag" ]; then
+            echo "::error::$RELEASE_TAG must be an annotated tag"
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF")"
+          main_commit="$(git rev-parse 'origin/main^{commit}')"
+          if [ "$tag_commit" != "$main_commit" ]; then
+            echo "::error::$RELEASE_TAG points to $tag_commit, not current origin/main $main_commit"
+            exit 1
+          fi
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$tag_commit"
+          echo "release_commit=$tag_commit" >>"$GITHUB_OUTPUT"
+
+  # Release gate: a tag must never ship untested code. The validator above restricts
+  # it to the current main tip, and these jobs independently re-verify the protected-branch
+  # contracts before any bundle is built. These seven jobs mirror ci.yml's required
+  # Go, wire-drift, frontend, WASM, Playwright, real-tunnel, and security behaviors.
+  # (setup-go here adds check-latest;
   # the resolved toolchain is identical — go.mod pins toolchain go1.26.5.)
   gate-go:
     name: Gate — Go vet + test
+    needs: validate-release-ref
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           check-latest: true
@@ -47,18 +86,48 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Generated PowerShell deploy contract
+        run: |
+          command -v pwsh
+          go test ./internal/renderer -run 'TestRenderDeployScripts_PowerShell' -count=1
+
+      - name: Per-package coverage floor
+        run: go test ./internal/localcompile/ -run TestCoverageFloor -v
+        env:
+          YAOG_CONFORMANCE_COVERAGE_FLOOR: "1"
+
+  gate-drift:
+    name: Gate — Wire-DTO + omitempty drift
+    needs: validate-release-ref
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Drift gate
+        run: go test ./internal/wiredrift/ -v
+
   gate-frontend:
-    name: Gate — Frontend lint
+    name: Gate — Frontend lint + build + test
+    needs: validate-release-ref
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
@@ -75,18 +144,61 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Build WASM for the vitest roundtrip
+        working-directory: ${{ github.workspace }}
+        run: GOOS=js GOARCH=wasm go build -o web/yaog.wasm ./cmd/wasm
+
+      - name: Unit + conformance tests (vitest)
+        run: npm run vitest
+
+  gate-wasm:
+    name: Gate — WASM conformance
+    needs: validate-release-ref
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - name: Build yaog.wasm
+        run: GOOS=js GOARCH=wasm go build -o web/yaog.wasm ./cmd/wasm
+      - name: WASM-vs-golden three-way gate
+        run: node scripts/wasm-conformance-gate.mjs
+
+  gate-security:
+    name: Gate — Security
+    needs: validate-release-ref
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: govulncheck (REQUIRED)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: DAST — live-wire exploit replay (REQUIRED)
+        run: go test -tags dast ./internal/dast/ -v -timeout 180s
+
   # Mirror ci.yml's required frontend-e2e job: a tag must not ship a panel that would have
   # failed the full-stack Playwright suite on PR CI (tests_ci.recommendations[2]).
   gate-e2e:
     name: Gate — Frontend E2E (Playwright)
+    needs: validate-release-ref
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           check-latest: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
@@ -135,7 +247,7 @@ jobs:
         run: npm run test:e2e -- --grep-invert "visual corpus"
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: |
@@ -150,10 +262,11 @@ jobs:
   # the 20x bake-in is the separate realtunnel-bakein workflow run as the rc.1 precondition.
   gate-realtunnel:
     name: Gate — Real-tunnel netns integration
+    needs: validate-release-ref
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           check-latest: true
@@ -173,7 +286,7 @@ jobs:
             || { echo "::error::TestSimpleMeshCanary SKIPPED — a prerequisite is missing on the runner"; exit 1; }
       - name: Upload realtunnel logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: realtunnel-release-logs
           path: /tmp/realtunnel-release.log
@@ -181,15 +294,15 @@ jobs:
 
   build-frontend:
     name: Build Frontend Dist
-    needs: [gate-go, gate-frontend, gate-e2e, gate-realtunnel]
+    needs: [gate-go, gate-drift, gate-frontend, gate-wasm, gate-e2e, gate-realtunnel, gate-security]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
@@ -200,7 +313,7 @@ jobs:
       # (go1.26.5) via check-latest; do NOT pin GOTOOLCHAIN=local (that could ship a wasm built by an
       # older toolchain against the committed 1.26.5 web/wasm_exec.js).
       - name: Setup Go (WASM local engine)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           check-latest: true
@@ -228,14 +341,14 @@ jobs:
           test -f dist-local/yaog.wasm && test -f dist-local/wasm_exec.js
 
       - name: Upload Frontend Dist Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: frontend-dist
           path: frontend/dist
           if-no-files-found: error
 
       - name: Upload Static-Local-Design Dist Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: frontend-dist-local
           path: frontend/dist-local
@@ -294,16 +407,16 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           check-latest: true
 
       - name: Download Frontend Dist Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: frontend-dist
           path: .tmp/frontend-dist
@@ -322,6 +435,16 @@ jobs:
           set -euo pipefail
 
           cd "$GITHUB_WORKSPACE"
+
+          # Downloaded frontend inputs live under .tmp. Ignore that job-local directory in
+          # Git's private exclude file so Go's VCS build info records the clean tagged tree,
+          # then prove no tracked or other untracked input can set vcs.modified=true.
+          printf '/.tmp/\n' >>.git/info/exclude
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "::error::release build worktree is modified"
+            git status --short
+            exit 1
+          fi
 
           if [ ! -f go.mod ]; then
             echo "go.mod not found in workspace root, searching for module root..."
@@ -358,13 +481,13 @@ jobs:
       - name: Create Bundle Archive
         run: |
           if [ "${{ matrix.target.archive }}" = "tar.gz" ]; then
-            tar -czf "yaog-bundle-${{ matrix.target.id }}.tar.gz" -C .tmp/bundle .
+            tar -czf "yaog-bundle-${{ matrix.target.id }}.tar.gz" -C .tmp/bundle bin frontend
           else
-            (cd .tmp/bundle && zip -r "$GITHUB_WORKSPACE/yaog-bundle-${{ matrix.target.id }}.zip" .)
+            (cd .tmp/bundle && zip -r "$GITHUB_WORKSPACE/yaog-bundle-${{ matrix.target.id }}.zip" bin frontend)
           fi
 
       - name: Upload Bundle Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: yaog-bundle-${{ matrix.target.id }}
           path: yaog-bundle-${{ matrix.target.id }}.${{ matrix.target.archive }}
@@ -386,7 +509,7 @@ jobs:
           sha256sum "$AGENT" | awk '{print $1}' > "$AGENT.sha256"
 
       - name: Upload Standalone Agent Binary Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: yaog-agent-${{ matrix.target.id }}
           path: |
@@ -403,7 +526,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Static-Local-Design Dist Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: frontend-dist-local
           path: .tmp/dist-local
@@ -413,40 +536,411 @@ jobs:
           set -euo pipefail
           # github.ref_name is the tag (e.g. v2.0.0-beta.9). Name the asset by version so it is
           # self-describing alongside the platform bundles.
-          (cd .tmp/dist-local && zip -r "$GITHUB_WORKSPACE/yaog-local-design-${{ github.ref_name }}.zip" .)
+          (cd .tmp/dist-local && zip -r "$GITHUB_WORKSPACE/yaog-local-design-${{ github.ref_name }}.zip" ./*)
 
       - name: Upload Static-Local-Design Archive Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: yaog-local-design
           path: yaog-local-design-${{ github.ref_name }}.zip
           if-no-files-found: error
 
-  release:
-    name: Create GitHub Release
-    needs: [build-bundles, package-local-design]
+  verify-release-assets:
+    name: Verify exact 22-file release set
+    needs: [validate-release-ref, build-bundles, package-local-design]
     runs-on: ubuntu-latest
     steps:
-      - name: Download All Release Artifacts
-        uses: actions/download-artifact@v4
+      - name: Checkout verification scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Go for structural and build-metadata verification
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: yaog-*
           merge-multiple: true
+          path: release-assets
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Run focused adversarial verifier tests
+        run: go test ./scripts
+
+      - name: Verify allowlist, safe archives, every binary target, and WASM
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REVISION: ${{ needs.validate-release-ref.outputs.release_commit }}
+        run: bash scripts/verify-release-assets.sh release-assets "$RELEASE_TAG" "$SOURCE_REVISION"
+
+  verify-release-windows:
+    name: Verify native Windows amd64 + 386 release versions
+    needs: verify-release-assets
+    runs-on: windows-latest
+    steps:
+      - name: Checkout verification scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download native Windows release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          # Deterministically promote rc.N and final vX.Y.Z to GitHub "Latest" while keeping
-          # -beta./-preview. tags OFF Latest, independent of operator timing (plan-22 / 4.3 Task 4b;
-          # closes the "Latest left to GitHub's newest-non-prerelease heuristic" defect). This encodes
-          # the EXPLICIT 2026-06-18 owner override of RELEASING.md's prerelease/not-latest default:
-          # rc.1 ships as Latest, beta.8 demoted. (The runbook's pre-create --latest is the suspenders.)
-          make_latest: ${{ !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-preview.') }}
+          pattern: yaog-*-windows-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Run native Windows version checks
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/verify-release-windows-amd64.ps1 -AssetDirectory release-assets -ReleaseTag $env:RELEASE_TAG
+
+  preflight-release-object:
+    name: Refuse public or misclassified release reuse
+    needs: [validate-release-ref, verify-release-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      # GitHub exposes draft releases only to a token with push-level repository access.
+      contents: write
+    steps:
+      - name: Checkout release-state verifier
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Require an absent or exactly classified draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ contains(github.ref_name, '-preview.') || contains(github.ref_name, '-beta.') }}
+        run: bash scripts/verify-github-release.sh preflight-state "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$EXPECTED_PRERELEASE"
+
+  # Publish and inspect the policy-non-overwritten container version before a public release exists.
+  # docker.yml deliberately does not move a mutable tag in this phase.
+  publish-versioned-container:
+    name: Publish verified versioned controller image
+    needs: [validate-release-ref, verify-release-assets, verify-release-windows, preflight-release-object]
+    uses: ./.github/workflows/docker.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ github.ref_name }}
+      source_revision: ${{ needs.validate-release-ref.outputs.release_commit }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  release:
+    name: Upload verified GitHub Release draft
+    needs: [validate-release-ref, publish-versioned-container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.select-draft.outputs.release_id }}
+    steps:
+      - name: Checkout verification scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go for publish-input verification
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: yaog-*
+          merge-multiple: true
+          path: release-assets
+
+      # Re-check the bytes downloaded on this runner so the create step cannot accidentally upload
+      # a different glob result from the artifact set approved by verify-release-assets.
+      - name: Re-verify publish input
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REVISION: ${{ needs.validate-release-ref.outputs.release_commit }}
+        run: |
+          bash scripts/verify-release-assets.sh release-assets "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+
+      - name: Preflight absent or same-byte recovery draft
+        id: preflight-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ contains(github.ref_name, '-preview.') || contains(github.ref_name, '-beta.') }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-github-release.sh preflight-upload \
+            "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$EXPECTED_PRERELEASE" release-assets \
+            | tee /tmp/yaog-release-preflight.outputs
+          cat /tmp/yaog-release-preflight.outputs >>"$GITHUB_OUTPUT"
+
+      - name: Select one exact private draft
+        id: select-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ contains(github.ref_name, '-preview.') || contains(github.ref_name, '-beta.') }}
+          PREFLIGHT_STATUS: ${{ steps.preflight-draft.outputs.release_status }}
+          PREFLIGHT_ID: ${{ steps.preflight-draft.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          if [ "$PREFLIGHT_STATUS" = absent ]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -F draft=true \
+              -F prerelease="$EXPECTED_PRERELEASE" \
+              -f make_latest=false > /tmp/yaog-created-draft.json
+            release_id=$(jq -er --arg tag "$RELEASE_TAG" --argjson prerelease "$EXPECTED_PRERELEASE" '
+              select(.tag_name == $tag and .draft == true and .prerelease == $prerelease)
+              | .id | select(type == "number")
+            ' /tmp/yaog-created-draft.json)
+          elif [ "$PREFLIGHT_STATUS" = draft ] && [[ "$PREFLIGHT_ID" =~ ^[0-9]+$ ]]; then
+            release_id=$PREFLIGHT_ID
+          else
+            echo "::error::invalid draft preflight result"
+            exit 1
+          fi
+          echo "release_id=$release_id" >>"$GITHUB_OUTPUT"
+
+      - name: Upload the exact allowlist to the selected draft
+        id: create-release
+        # softprops/action-gh-release v3.0.2. Pin the reviewed commit rather than a mutable tag.
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        with:
+          working_directory: release-assets
+          # Preview/beta are GitHub prereleases. Project policy treats RC/GA as normal releases, but
+          # every release remains a private draft until its final transaction job succeeds.
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-preview.') || contains(github.ref_name, '-beta.') }}
+          make_latest: false
+          fail_on_unmatched_files: true
+          overwrite_files: false
           files: |
-            yaog-bundle-*.tar.gz
-            yaog-bundle-*.zip
-            yaog-agent-linux-*
-            yaog-agent-windows-*
-            yaog-local-design-*.zip
+            yaog-bundle-linux-amd64.tar.gz
+            yaog-bundle-linux-arm64.tar.gz
+            yaog-bundle-linux-386.tar.gz
+            yaog-bundle-linux-armv7.tar.gz
+            yaog-bundle-windows-amd64.zip
+            yaog-bundle-windows-arm64.zip
+            yaog-bundle-windows-386.zip
+            yaog-agent-linux-amd64
+            yaog-agent-linux-amd64.sha256
+            yaog-agent-linux-arm64
+            yaog-agent-linux-arm64.sha256
+            yaog-agent-linux-386
+            yaog-agent-linux-386.sha256
+            yaog-agent-linux-armv7
+            yaog-agent-linux-armv7.sha256
+            yaog-agent-windows-amd64.exe
+            yaog-agent-windows-amd64.exe.sha256
+            yaog-agent-windows-arm64.exe
+            yaog-agent-windows-arm64.exe.sha256
+            yaog-agent-windows-386.exe
+            yaog-agent-windows-386.exe.sha256
+            yaog-local-design-${{ github.ref_name }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Seal uploaded draft metadata, names, sizes, and digests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION_RELEASE_ID: ${{ steps.create-release.outputs.id }}
+          RELEASE_ID: ${{ steps.select-draft.outputs.release_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ contains(github.ref_name, '-preview.') || contains(github.ref_name, '-beta.') }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] && [ "$ACTION_RELEASE_ID" = "$RELEASE_ID" ] \
+            || { echo "::error::release action selected $ACTION_RELEASE_ID, expected private draft $RELEASE_ID"; exit 1; }
+          bash scripts/verify-github-release.sh verify \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" true \
+            "$EXPECTED_PRERELEASE" release-assets ignore
+
+  # Preview/beta have no mutable image promotion. Publishing their verified draft is therefore the
+  # final transaction step; the typed API fields prevent an accidental normal/Latest release.
+  publish-prerelease:
+    name: Publish verified preview/beta draft
+    needs: [validate-release-ref, release]
+    if: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-preview.') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_ID: ${{ needs.release.outputs.release_id }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      SOURCE_REVISION: ${{ needs.validate-release-ref.outputs.release_commit }}
+    steps:
+      - name: Checkout release verifiers
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go for final publish-input verification
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Download exact release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: yaog-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Re-seal and idempotently publish as a non-Latest prerelease
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] \
+            || { echo "::error::release action did not return a valid release id"; exit 1; }
+          bash scripts/verify-release-assets.sh release-assets "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-github-release.sh publish \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" true release-assets must-not
+
+  # RC and GA converge optional Docker Hub, GHCR, and GitHub Latest to the same verified transaction.
+  # Those systems cannot update atomically, so every operation is retryable/idempotent and the job's
+  # final checks cover every configured pointer. Preview/beta skip mutable container promotion.
+  promote-latest:
+    name: Promote verified digest + GitHub Latest
+    needs: [validate-release-ref, publish-versioned-container, release]
+    if: ${{ !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-preview.') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GHCR_REF: ${{ needs.publish-versioned-container.outputs.ghcr_ref }}
+      DOCKERHUB_ENABLED: ${{ needs.publish-versioned-container.outputs.dockerhub_enabled }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      IMAGE_DIGEST: ${{ needs.publish-versioned-container.outputs.ghcr_digest }}
+      RELEASE_ID: ${{ needs.release.outputs.release_id }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      SOURCE_REVISION: ${{ needs.validate-release-ref.outputs.release_commit }}
+    steps:
+      - name: Checkout release verifiers
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go for final publish-input verification
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Download exact release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: yaog-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Set up QEMU for two-platform runtime verification
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Buildx manifest tooling
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub when configured
+        if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Verify final local input and release identity
+        run: |
+          set -euo pipefail
+          bash scripts/verify-release-assets.sh release-assets "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+
+      - name: Idempotently converge mutable container tags by verified digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::invalid versioned image digest"; exit 1; }
+
+          promote_ref() {
+            local version_ref=$1
+            local label=$2
+            local latest_ref=${version_ref%:*}:latest
+            local verified
+            verified=$(bash scripts/verify-controller-image.sh \
+              "$version_ref" "$RELEASE_TAG" "$SOURCE_REVISION" "$IMAGE_DIGEST")
+            [ "$verified" = "$IMAGE_DIGEST" ] \
+              || { echo "::error::$label version reference failed verification"; exit 1; }
+
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if docker buildx imagetools create --tag "$latest_ref" "$version_ref@$IMAGE_DIGEST"; then
+                if verified=$(bash scripts/verify-controller-image.sh \
+                  "$latest_ref" "$RELEASE_TAG" "$SOURCE_REVISION" "$IMAGE_DIGEST"); then
+                  [ "$verified" = "$IMAGE_DIGEST" ] && return 0
+                fi
+              fi
+              (( attempt == 5 )) || sleep $((attempt * 2))
+            done
+            echo "::error::could not converge $latest_ref to $IMAGE_DIGEST"
+            return 1
+          }
+
+          # Docker Hub is optional and is touched only when docker.yml verified the same version.
+          # Reconstruct its ref locally instead
+          # of exporting a secret-derived username through reusable-workflow outputs.
+          if [ "$DOCKERHUB_ENABLED" = true ]; then
+            [[ "$DOCKERHUB_USERNAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+              || { echo "::error::invalid configured Docker Hub username"; exit 1; }
+            dockerhub_ref="$DOCKERHUB_USERNAME/yaog-controller:${RELEASE_TAG#v}"
+            promote_ref "$dockerhub_ref" dockerhub
+          elif [ "$DOCKERHUB_ENABLED" != false ]; then
+            echo "::error::invalid Docker Hub publication state"
+            exit 1
+          fi
+          promote_ref "$GHCR_REF" ghcr
+
+      - name: Re-seal and idempotently publish the release as GitHub Latest
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] \
+            || { echo "::error::release action did not return a valid release id"; exit 1; }
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+          # This helper always seals exact metadata and all 22 remote sizes/digests
+          # before changing state. If a previous PATCH made the release public but
+          # did not leave it as Latest, a retry converges that pointer as well.
+          bash scripts/verify-github-release.sh publish \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" false release-assets must
+
+      - name: Verify all configured public pointers converged
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghcr_latest=${GHCR_REF%:*}:latest
+          [ "$(bash scripts/verify-controller-image.sh \
+            "$ghcr_latest" "$RELEASE_TAG" "$SOURCE_REVISION" "$IMAGE_DIGEST")" = "$IMAGE_DIGEST" ]
+          if [ "$DOCKERHUB_ENABLED" = true ]; then
+            dockerhub_latest="$DOCKERHUB_USERNAME/yaog-controller:latest"
+            [ "$(bash scripts/verify-controller-image.sh \
+              "$dockerhub_latest" "$RELEASE_TAG" "$SOURCE_REVISION" "$IMAGE_DIGEST")" = "$IMAGE_DIGEST" ]
+          elif [ "$DOCKERHUB_ENABLED" != false ]; then
+            echo "::error::invalid Docker Hub publication state"
+            exit 1
+          fi
+          bash scripts/verify-github-release.sh verify \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" false false release-assets must

@@ -63,7 +63,7 @@ func (h *ControllerHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	// store error must fail loud — silently emitting a keystone-OFF script when the
 	// keystone is actually ON would ship a node that does not verify membership.
 	var cred *controller.OperatorCredential
-	if oc, err := h.store.GetOperatorCredential(r.Context(), h.tenant); err == nil {
+	if oc, err := controller.GetKeystoneCredential(r.Context(), h.store, h.tenant); err == nil {
 		cred = &oc
 	} else if !errors.Is(err, controller.ErrNotFound) {
 		writeCodedOr(w, apierr.CodeInternalStorage, err)

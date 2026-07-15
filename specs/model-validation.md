@@ -1,44 +1,162 @@
-# Model & Validation
+# Model and validation
 
-<!-- last-verified: 2026-06-15 -->
-<!-- 2026-06-15 (extensible-i18n closeout): validation findings now carry Code+Params on the 200 ValidateResponse, panel-localized via tValidationError; English-default; no validation-logic change. -->
+<!-- last-verified: 2026-07-15 -->
 
 ## Responsibility
-Define the canonical topology JSON data model and reject invalid topologies in two passes (schema, then semantic) before any allocation, rendering, or deployment consumes them.
+
+Define the canonical topology JSON contract and reject undeployable or internally inconsistent
+designs before allocation, rendering, export, or deployment. Validation is split into structural
+schema checks and cross-object semantic checks; findings are coded data, not HTTP errors.
 
 ## Files
-- `internal/model/topology.go:1-203` — struct definitions: `Topology`, `Project`, `Domain`, `Node`, `Edge` (+ allocation pins), `RoutePolicy`, edge-role constants.
-- `internal/validator/schema.go:1-365` — Pass 1: per-object field/format/enum checks, charset guards, and normalization writebacks. Exports `ValidationError`/`ValidationResult` (schema.go:37-63).
-- `internal/validator/semantic.go:1-1161` — Pass 2: cross-object checks — references, uniqueness, port ranges, client rules, parallel-link rules, allocation-pin rules, mimic platform rules.
 
-## Inputs
-- `*model.Topology` deserialized from operator-authored topology JSON. Producers: the panel editor (see specs/panel-design.md), the in-browser WASM engine, and the controller compile path (see specs/controller-stage-promote.md).
-- Entry points: `ValidateSchema(topo *model.Topology) *ValidationResult` (internal/validator/schema.go:67) and `ValidateSemantic(topo *model.Topology) *ValidationResult` (internal/validator/semantic.go:15).
-- Shared link-identity semantics from `internal/linkid` (`LinkKey`/`PinKey`/`IsBackup`, semantic.go:596-601) and name normalization from `internal/naming` (semantic.go:240,252).
+- `internal/model/topology.go:3-282` defines `Topology`, project/domain/node/edge fields, deployment
+  modes, direction/parallel-link policy, allocation pins, and the supported allocation schema
+  version.
+- `internal/validator/code.go:20-335` defines stable validation codes, English templates,
+  parameterized findings, and `ValidationResult`.
+- `internal/validator/schema.go:13-554` owns safe WireGuard-key validation, topology resource bounds,
+  required fields, formats, ranges, enums, and normalization write-backs.
+- `internal/validator/semantic.go:10-89` orchestrates the semantic pass.
+- `internal/validator/semantic_{edges,naming,pins,ports}.go` contain the focused cross-object rule
+  groups; `internal/validator/nat.go` owns NAT reachability.
 
-## Outputs
-- `*ValidationResult` with `Errors`/`Warnings`; `IsValid()` (schema.go) gates compilation: the compiler runs both validators as Pass 1/2 and aborts on errors (`internal/compiler/compiler.go`, see specs/compiler-allocation.md); validation-only callers (the panel, the in-browser WASM engine) surface the merged result without aborting.
-- Normalization writebacks that mutate the input topology: empty `routing_mode` → `"babel"` (schema.go:145-147), empty `transport` → `"udp"` (schema.go:333-335) — iteration is by index/pointer so the writeback persists and round-trips (schema.go:100-103,306-308).
-- `model.Topology` itself is the lingua-franca type consumed downstream by compiler-allocation, render-keys, controller-store, and the agent (see those specs).
+## Canonical model
 
-## Decision points (if any)
-- **Routing mode**: only `"babel"` passes; `"static"`/`"none"` are reserved and rejected so a dead overlay never compiles (schema.go:150-159; docs/spec/compiler/routing-modes.md).
-- **route_policies are reserved**: any non-empty array is a hard error — no renderer consumes them (semantic.go:88-93).
-- **Domain CIDR**: must parse, be IPv4, and be no larger than /8 (schema.go:114-132); same IPv4 guard on `reserved_ranges` (schema.go:162-182) and node `extra_prefixes` (schema.go:276-286).
-- **Shell-injection charsets**: node names restricted to `[A-Za-z0-9 ._-]` (schema.go:16,195-200); `ssh_host`/`ssh_alias`/`ssh_user` restricted to `[A-Za-z0-9._:@-]` (schema.go:21,290-301).
-- **Client rules**: clients accept no inbound edges, dial only router/relay/gateway, need `endpoint_host`, and must have exactly one enabled outbound edge (semantic.go:454-521); backup edges may not touch clients (semantic.go:1056-1072).
-- **Parallel links**: empty/`"primary"` role collapses to one link per pair, each `"backup"` edge is its own link (topology.go:123-128); at most one explicit primary per pair (semantic.go:1029-1051); per-node WireGuard interface-name uniqueness, invariant N4 (semantic.go:942-1013); warnings for equal-cost parallel links and all-backup pairs (semantic.go:1091-1160); duplicate same-direction primary-class edges warn (semantic.go:865-884).
-- **Allocation pins** (invariant I7): per edge, each pinned resource must be pair-complete or absent, ports within `[node base, 65535]`, transit IPs inside the edge's resolved transit pool, no cross-link duplicates, and no per-peer pins on client edges (semantic.go:628-696 plus helpers 700-822).
-- **mimic (`transport=="tcp"`)**: both endpoints must be deployable Linux (debian/ubuntu or empty platform) (semantic.go:553-575); `xdp_mode` only `skb`/`native` (schema.go:226-232).
-- **Effective port ranges**: per-node `[base, base+interfaces-1]` may not exceed 65535 nor overlap with co-hosted nodes' ranges (semantic.go:330-428).
+`Topology` contains project metadata, domains, nodes, edges, reserved route policies, and
+`alloc_schema_version`. Nodes carry role, deployment mode, domain, optional compiler allocations,
+platform/render inputs, public endpoints, optional local WireGuard key fields, and SSH deployment
+metadata. Edges carry endpoints, transport and direction policy, primary/backup role, the compiled
+port echo, and paired sticky allocation pins (`internal/model/topology.go:13-282`).
 
-## Invariants
-- Pins are validated before any resource is reserved, and pin/cost/pool constants mirror the compiler exactly — `defaultListenPort` 51820 (semantic.go:291), `defaultTransitCIDR` 10.10.0.0/24 (semantic.go:580), `backupDefaultLinkCost` 384 (semantic.go:890) must stay in lock-step with `internal/compiler/peers.go`; this underwrites PRINCIPLES.md "Allocation stability (superset rule)" (docs/spec/compiler/allocation-stability.md).
-- Charset and range checks are the compile-time half of PRINCIPLES.md "Generated configs must be deployable" and "Generated scripts run as root" — names/SSH fields are interpolated into root-run scripts, MTU/ports/router-id outside accepted ranges would render undeployable artifacts (schema.go:12-34,248-271).
-- New model fields are `omitempty` so persisted topologies from prior releases keep loading (PRINCIPLES.md "Backward compatibility of persisted topologies"; e.g. topology.go:24,86-90,178-187).
+An empty node deployment mode means managed; `manual` means agent-less and operator-deployed. This
+is orthogonal to the five network roles (`peer`, `router`, `relay`, `gateway`, `client`). Empty link
+role is in the primary class; every backup edge is an independent link. Empty link direction means
+both directions; `forward` permits only the drawn from-to side to initiate.
 
-## Gotchas (optional)
-- `wireguard_private_key` (topology.go:89) round-trips through topology JSON **by design** on the air-gap path (docs/spec/data-model/node.md); neither validator rejects nor strips it. docs/spec/controller/persistence.md's "public-keys-only" claim is NOT enforced in the model or validators — only the controller's `enrolledSubgraph` projection clears it (internal/controller/compile.go:443-497, see specs/controller-stage-promote.md).
-- `fixed_private_key` (topology.go:86) is consumed by no Go code outside the struct declaration: key-handling branches on the *state* of the two key fields, not the flag (see specs/render-keys.md; docs/spec/data-model/node.md §key cases). The flag is only the panel's paste affordance.
-- `ValidateSemantic` also calls `validateNATReachability`, defined in `internal/validator/nat.go:36` — same package and pipeline, but outside this component's three named files.
-- Capability inference has NOT run at semantic-validation time, so NAT/reachability logic must special-case the relay role (internal/validator/nat.go:9-18); `alloc_schema_version` (topology.go:24) is stamped by the compiler (internal/compiler/compiler.go:113-115), not checked here.
+`model.CurrentAllocSchemaVersion` is currently `1`. The compiler stamps that version onto compiled
+topologies, and validation fails closed if input was written with a newer allocation-pin format
+(`internal/model/topology.go:3-11,30-35`). This prevents an older binary from interpreting future
+pins as current semantics.
+
+## Finding contract
+
+A finding contains `field`, stable `code`, optional string `params`, rendered English `message`,
+and `level`. `ValidationResult` keeps separate error and warning slices, and `IsValid` depends only
+on errors (`internal/validator/code.go:255-309`). Codes are registered in the validator package and
+map to frontend `error.<code>` catalog keys.
+
+This channel is intentionally separate from `internal/apierr`: validation findings normally ride
+a successful validation response and can be localized as a set, while an API error describes an
+HTTP operation failure. New rules must add a code/template and emit parameters rather than
+constructing user-facing prose at each call site.
+
+## Pass 1: schema and normalization
+
+`ValidateSchema` first applies root bounds before any per-entity or quadratic semantic work:
+
+- at most 2,000 nodes;
+- at most 10,000 edges;
+- at most 1,000 domains;
+- at most 1,000 reserved ranges per domain;
+- no allocation schema version newer than this build.
+
+Both validation passes short-circuit on this predicate; schema is the sole reporter so callers do
+not receive duplicate root findings (`internal/validator/schema.go:92-186` and
+`internal/validator/semantic.go:15-22`).
+
+The schema pass then checks, among other constraints:
+
+- required project/domain/node/edge identifiers and references-to-be-validated fields;
+- IPv4 CIDR syntax and allocation-safe sizes, including transit pools and reserved ranges;
+- role, deployment-mode, edge-type, transport, fallback, direction, and primary/backup enums;
+- safe node IDs/names, SSH values, endpoint hosts, key paths, and mimic interface names before
+  those strings reach config paths or root-run scripts;
+- WireGuard public keys using one strict 43-base64-characters-plus-padding pattern that rejects
+  whitespace/newline injection (`internal/validator/schema.go:13-27,375-381`);
+- MTU, SSH/endpoint ports, router IDs, XDP mode, extra prefixes, and self-loops.
+
+It normalizes empty `routing_mode` to `babel` and empty edge `transport` to `udp` by mutating the
+indexed object so the default round-trips (`internal/validator/schema.go:243-262,458-493`). `babel`
+is currently the only implemented routing mode; `static` and `none` are reserved and fail rather
+than compiling a route-less overlay.
+
+## Pass 2: semantic rules
+
+`ValidateSemantic` builds domain/node indexes and runs cross-object checks in an explicit order
+(`internal/validator/semantic.go:24-88`). The rule groups include:
+
+- domain/node/edge references, ID uniqueness, overlay-address membership and collisions;
+- normalized node-name and generated-interface-name collisions;
+- isolated-node and NAT/reachability warnings/errors;
+- client restrictions: no inbound edges, exactly one enabled outbound edge, a reachable
+  router/relay/gateway target, endpoint requirements, no backup/direction policy, and no Babel-only
+  fields;
+- mimic/TCP deployability, relay-path constraints, endpoint consistency, and direction viability;
+- primary folding, independent backups, redundant enabled edges, one explicit primary per pair,
+  per-node interface-name uniqueness, and cost/failover warnings;
+- rejection of non-empty `route_policies`, because no renderer implements them;
+- sticky allocation-pin integrity.
+
+For effective ports, the compiler uses a uniform base of `51820` and one port per deduplicated
+non-client link. Validation rejects only a range whose `base + interfaceCount - 1` exceeds `65535`
+(`internal/validator/semantic_ports.go:12-124`). It does **not** reject overlap between nodes said
+to be co-located: with one global base every non-empty node range overlaps by construction, so such
+a rule would reject all multi-node-host designs.
+
+## Allocation pins
+
+Pins are validated before the allocator reserves them. For each enabled non-client link:
+
+- from/to values for each resource must be both present or both absent;
+- operator-chosen ports must be in `[1024,65535]`; auto-allocation still begins at `51820`;
+- transit addresses must parse and fall inside the edge's resolved transit pool;
+- a node port, transit IP, or link-local address cannot belong to two distinct links;
+- forward/reverse primary-class edges may share their mirrored resources because they compile into
+  one link, while each backup edge has a distinct link identity.
+
+On client edges, port pins are errors and transit/link-local pins warn that they will be ignored
+(`internal/validator/semantic_pins.go:38-150`). The shared limits and fallback pool live in
+`internal/allocconst`; validator and allocator must not copy alternate literals.
+
+## Caller behavior
+
+The compiler runs schema first and aborts before semantic validation if schema errors exist. It
+then aborts on semantic errors and carries warnings from both passes into `CompileResult`
+(`internal/compiler/compiler.go:138-155`).
+
+The browser/WASM validation operation runs and merges both passes so the editor can present all
+applicable findings in one response (`cmd/wasm/main.go:146-163`). Local CLI, controller subgraph,
+and browser compile still converge on the same compiler validation path through
+`internal/localcompile`.
+
+## Custody-specific validation boundaries
+
+The shared model supports both local/air-gap and controller workflows, so not every custody rule
+belongs in generic schema validation:
+
+- A topology `wireguard_private_key` is legal for local `AirGap` compilation, where keys round-trip.
+  The controller's `update-topology` handler separately refuses any private key before storage and
+  canonicalizes the checked model (`internal/api/handler_topology.go:23-65`).
+- A WireGuard public key is optional at generic schema time. A new local node can have both key
+  fields empty and generate a pair during compile; a managed controller node receives its key from
+  enrollment. When a public key is present, it must be valid.
+- A controller manual node must already have a valid, unique public key because it never enrolls.
+  `internal/controller/compile_manualnode.go:19-79` enforces that admission rule for stage and
+  preview, including uniqueness against approved managed nodes.
+- Enrollment and rekey use the same `validator.ValidWGPublicKey` function, then enforce fleet
+  identity uniqueness in the controller layer.
+
+## Invariants and gotchas
+
+- `fixed_private_key` is a panel affordance, not a Go key-selection switch. Go key handling follows
+  the actual private/public field state: private present means reuse/derive, public-only is an
+  air-gap error, both empty generates a pair. Do not add validation that assumes the boolean is
+  authoritative without changing the key contract.
+- Capability inference occurs later in compilation. NAT semantics that need role behavior operate
+  on explicit role/model facts rather than inferred compiler capabilities.
+- Warnings are non-fatal and must survive compilation; errors stop allocation and rendering.
+- New optional persisted fields should preserve backward compatibility with `omitempty` and
+  explicit empty/default semantics.
+- Any rule mirrored for immediate frontend UX must remain subordinate to the Go validator and be
+  protected by conformance/wire tests; the TypeScript side is not a second authority.

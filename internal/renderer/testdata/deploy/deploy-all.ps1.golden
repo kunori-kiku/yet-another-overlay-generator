@@ -34,18 +34,90 @@ if (-not [string]::IsNullOrEmpty($ArtifactsZip)) {
         exit 1
     }
 
+    $ArchiveMaxBytes = [long]33554432
+    $ArchiveMaxEntries = 512
+    $ArchiveMaxFileBytes = [long]4194304
+    $ArchiveMaxExpandedBytes = [long]16777216
+    $ArchiveInfo = Get-Item -LiteralPath $ArtifactsZip -Force -ErrorAction Stop
+    if ($ArchiveInfo.PSIsContainer -or $ArchiveInfo.Length -gt $ArchiveMaxBytes) {
+        Write-Error "Artifacts ZIP is not a regular file or exceeds the 32 MiB archive limit"
+        exit 1
+    }
+
     # Extract to temp
     $WorkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("overlay-deploy-" + [System.Guid]::NewGuid().ToString("N").Substring(0,8))
     New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 }
 
-# Clean script sent to remote via stdin (single-quoted — no PS expansion)
-$CleanScript = 'for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: ''{print $2}'' | tr -d " "); do wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true; done; rm -f /etc/wireguard/wg*.conf; nft delete table inet overlay-snat 2>/dev/null || true; iptables-save -t nat 2>/dev/null | grep -E ''^-A POSTROUTING '' | grep -F -- ''-j SNAT'' | grep -F -- ''-o wg-+'' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true; systemctl disable overlay-snat.service 2>/dev/null || true; rm -f /etc/systemd/system/overlay-snat.service'
+# Destructive layout cleanup is delegated to the candidate install.sh as --clean. That script
+# verifies its signature/checksums first; deploy-all must never mutate the remote host beforehand.
+$InstallArgs = if ($Clean) { " --clean" } else { "" }
 
 try {
     if ($WorkDir) {
+        # Expand-Archive does not itself reject traversal aliases, duplicate/case-colliding names,
+        # Unix symlinks, or Windows reparse points. Validate the central directory first because a
+        # later recursive SCP must never follow an archive-provided link into the operator's host.
+        $Archive = $null
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            $Archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ArtifactsZip -ErrorAction Stop))
+            if ($Archive.Entries.Count -gt $ArchiveMaxEntries) {
+                throw "Artifacts ZIP exceeds the 512-entry limit"
+            }
+            $SeenEntries = @{}
+            [long]$ExpandedBytes = 0
+            foreach ($Entry in $Archive.Entries) {
+                $EntryName = $Entry.FullName
+                $EntryCheck = $EntryName.TrimEnd([char]'/')
+                if ([string]::IsNullOrEmpty($EntryCheck) -or
+                    $EntryCheck -match '(^/|\\|:|(^|/)(\.|\.\.)(/|$)|//|[\x00-\x1f\x7f])') {
+                    throw "Unsafe or non-canonical artifacts ZIP entry: $EntryName"
+                }
+                $EntryKey = $EntryName.ToUpperInvariant()
+                if ($SeenEntries.ContainsKey($EntryKey)) {
+                    throw "Duplicate or case-colliding artifacts ZIP entry: $EntryName"
+                }
+                $SeenEntries[$EntryKey] = $true
+
+                if ($Entry.Length -gt $ArchiveMaxFileBytes) {
+                    throw "Artifacts ZIP entry exceeds the 4 MiB per-file limit: $EntryName"
+                }
+                $ExpandedBytes += [long]$Entry.Length
+                if ($ExpandedBytes -gt $ArchiveMaxExpandedBytes) {
+                    throw "Artifacts ZIP exceeds the 16 MiB expanded limit"
+                }
+
+                $IsDirectory = $EntryName.EndsWith('/', [System.StringComparison]::Ordinal)
+                $UnixType = ($Entry.ExternalAttributes -shr 16) -band 0xF000
+                $HasReparsePoint = ($Entry.ExternalAttributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0
+                if ($HasReparsePoint -or
+                    ($UnixType -ne 0 -and
+                        (($IsDirectory -and $UnixType -ne 0x4000) -or
+                         (-not $IsDirectory -and $UnixType -ne 0x8000)))) {
+                    throw "Artifacts ZIP contains a symlink, reparse point, or special-file entry: $EntryName"
+                }
+            }
+        } catch {
+            Write-Host ("ERROR: Failed artifacts ZIP safety check: " + $_.Exception.Message) -ForegroundColor Red
+            exit 1
+        } finally {
+            if ($null -ne $Archive) { $Archive.Dispose() }
+        }
+
         Write-Host "Extracting artifacts..."
-        Expand-Archive -Path $ArtifactsZip -DestinationPath $WorkDir -Force
+        try {
+            Expand-Archive -LiteralPath $ArtifactsZip -DestinationPath $WorkDir -Force -ErrorAction Stop
+            $UnsafeExtractedEntry = Get-ChildItem -LiteralPath $WorkDir -Force -Recurse -ErrorAction Stop |
+                Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } |
+                Select-Object -First 1
+            if ($null -ne $UnsafeExtractedEntry) {
+                throw "extracted archive contains a reparse point: $($UnsafeExtractedEntry.FullName)"
+            }
+        } catch {
+            Write-Host ("ERROR: Failed to extract artifacts ZIP: " + $ArtifactsZip + " (" + $_.Exception.Message + ")") -ForegroundColor Red
+            exit 1
+        }
     }
 
     if ($Uninstall) {
@@ -99,23 +171,63 @@ ip link del dummy0 2>/dev/null || true
 systemctl disable overlay-dummy.service 2>/dev/null || true
 rm -f /etc/systemd/system/overlay-dummy.service
 echo '[Stage 4/4] Reloading systemd on ''alpha''...'
-systemctl daemon-reload
+systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }
 echo 'Overlay removed from ''alpha''.'
 '@
-            $uninstallScript | & ssh -p 22 "root@alpha.example.com" sudo bash -s
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ("  ERROR: Uninstall failed on " + "alpha" + ".") -ForegroundColor Red
-                $Failed++
-            } else {
-                Write-Host ("  SUCCESS: " + "alpha" + " uninstalled.")
-                $Success++
+            # Windows PowerShell writes CRLF text to native-process stdin. Materialize an
+            # explicitly LF-normalized UTF-8 file and SCP it instead. This avoids both stray
+            # carriage returns and Windows' command-line-length limit for large topologies.
+            $crlf = ([string][char]13) + [char]10
+            $lf = [string][char]10
+            $cr = [string][char]13
+            $uninstallLF = $uninstallScript.Replace($crlf, $lf).Replace($cr, $lf)
+            $uninstallBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($uninstallLF)
+            $UninstallTemp = [System.IO.Path]::GetTempFileName()
+            try {
+                [System.IO.File]::WriteAllBytes($UninstallTemp, $uninstallBytes)
+                $RemoteOutput = & ssh -p 22 "root@alpha.example.com" "mktemp -d -- '/tmp/yaog-alpha-XXXXXXXX'" 2>&1
+                $RemoteCreateExit = $LASTEXITCODE
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = "/tmp/yaog-alpha-"
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($RemoteCreateExit -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote uninstall staging directory for " + "alpha" + " was not created safely.") -ForegroundColor Red
+                    $Failed++
+                } else {
+                    $ScpDestination = "root@alpha.example.com" + ":" + $RemoteDir + "/uninstall.sh"
+                    & scp -P 22 $UninstallTemp $ScpDestination
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host ("  ERROR: Uninstall upload to " + "alpha" + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh -p 22 "root@alpha.example.com" $CleanupCommand 2>$null | Out-Null
+                        $Failed++
+                    } else {
+                        $UninstallCommand = "sudo bash '$RemoteDir/uninstall.sh'" + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh -p 22 "root@alpha.example.com" $UninstallCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Uninstall failed on " + "alpha" + ".") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + "alpha" + " uninstalled.")
+                            $Success++
+                        }
+                    }
+                }
+            } finally {
+                Remove-Item -LiteralPath $UninstallTemp -Force -ErrorAction SilentlyContinue
             }
         }
     } else {
         Write-Host ("=== Deploying to " + "alpha" + " (" + "root@alpha.example.com" + ") ===")
-        $Installer = Join-Path $WorkDir "alpha.install.sh"
-        if (-not (Test-Path $Installer)) {
-            Write-Warning "Installer alpha.install.sh not found in archive, skipping."
+        $BundleDir = Join-Path $WorkDir "alpha"
+        $InstallScript = Join-Path $BundleDir "install.sh"
+        $Checksums = Join-Path $BundleDir "checksums.sha256"
+        if (-not (Test-Path -LiteralPath $BundleDir -PathType Container) -or
+            -not (Test-Path -LiteralPath $InstallScript -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $Checksums -PathType Leaf)) {
+            Write-Warning ("Complete bundle directory for " + "alpha" + " not found in archive, skipping.")
             $Skipped++
         } else {
             $sshTest = & ssh -p 22 "root@alpha.example.com" "echo ok" 2>&1
@@ -123,23 +235,33 @@ echo 'Overlay removed from ''alpha''.'
                 Write-Host ("  ERROR: SSH connection to " + "alpha" + " failed.") -ForegroundColor Red
                 $Failed++
             } else {
-                if ($Clean) {
-                    Write-Host ("  Cleaning existing WireGuard interfaces on " + "alpha" + "...")
-                    $CleanScript | & ssh -p 22 "root@alpha.example.com" sudo bash -s 2>$null
-                }
-
-                & scp -P 22 $Installer "root@alpha.example.com:/tmp/alpha-install.sh"
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host ("  ERROR: SCP upload to " + "alpha" + " failed.") -ForegroundColor Red
+                $RemoteOutput = & ssh -p 22 "root@alpha.example.com" "mktemp -d -- '/tmp/yaog-alpha-XXXXXXXX'" 2>&1
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = "/tmp/yaog-alpha-"
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote staging directory for " + "alpha" + " was not created safely.") -ForegroundColor Red
                     $Failed++
                 } else {
-                    & ssh -p 22 "root@alpha.example.com" "sudo bash /tmp/alpha-install.sh && rm -f /tmp/alpha-install.sh"
+                    $ScpDestination = "root@alpha.example.com" + ":" + $RemoteDir + "/bundle"
+                    & scp -P 22 -r $BundleDir $ScpDestination
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Host ("  ERROR: Installation script failed on " + "alpha" + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                        Write-Host ("  ERROR: SCP upload to " + "alpha" + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh -p 22 "root@alpha.example.com" $CleanupCommand 2>$null | Out-Null
                         $Failed++
                     } else {
-                        Write-Host ("  SUCCESS: " + "alpha" + " deployed.")
-                        $Success++
+                        $RemoteCommand = "sudo bash '$RemoteDir/bundle/install.sh'" + $InstallArgs + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh -p 22 "root@alpha.example.com" $RemoteCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Installation script failed on " + "alpha" + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + "alpha" + " deployed.")
+                            $Success++
+                        }
                     }
                 }
             }
@@ -184,23 +306,63 @@ ip link del dummy0 2>/dev/null || true
 systemctl disable overlay-dummy.service 2>/dev/null || true
 rm -f /etc/systemd/system/overlay-dummy.service
 echo '[Stage 4/4] Reloading systemd on ''beta''...'
-systemctl daemon-reload
+systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }
 echo 'Overlay removed from ''beta''.'
 '@
-            $uninstallScript | & ssh "beta-alias" sudo bash -s
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ("  ERROR: Uninstall failed on " + "beta" + ".") -ForegroundColor Red
-                $Failed++
-            } else {
-                Write-Host ("  SUCCESS: " + "beta" + " uninstalled.")
-                $Success++
+            # Windows PowerShell writes CRLF text to native-process stdin. Materialize an
+            # explicitly LF-normalized UTF-8 file and SCP it instead. This avoids both stray
+            # carriage returns and Windows' command-line-length limit for large topologies.
+            $crlf = ([string][char]13) + [char]10
+            $lf = [string][char]10
+            $cr = [string][char]13
+            $uninstallLF = $uninstallScript.Replace($crlf, $lf).Replace($cr, $lf)
+            $uninstallBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($uninstallLF)
+            $UninstallTemp = [System.IO.Path]::GetTempFileName()
+            try {
+                [System.IO.File]::WriteAllBytes($UninstallTemp, $uninstallBytes)
+                $RemoteOutput = & ssh "beta-alias" "mktemp -d -- '/tmp/yaog-beta-XXXXXXXX'" 2>&1
+                $RemoteCreateExit = $LASTEXITCODE
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = "/tmp/yaog-beta-"
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($RemoteCreateExit -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote uninstall staging directory for " + "beta" + " was not created safely.") -ForegroundColor Red
+                    $Failed++
+                } else {
+                    $ScpDestination = "beta-alias" + ":" + $RemoteDir + "/uninstall.sh"
+                    & scp $UninstallTemp $ScpDestination
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host ("  ERROR: Uninstall upload to " + "beta" + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh "beta-alias" $CleanupCommand 2>$null | Out-Null
+                        $Failed++
+                    } else {
+                        $UninstallCommand = "sudo bash '$RemoteDir/uninstall.sh'" + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh "beta-alias" $UninstallCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Uninstall failed on " + "beta" + ".") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + "beta" + " uninstalled.")
+                            $Success++
+                        }
+                    }
+                }
+            } finally {
+                Remove-Item -LiteralPath $UninstallTemp -Force -ErrorAction SilentlyContinue
             }
         }
     } else {
         Write-Host ("=== Deploying to " + "beta" + " (" + "beta-alias" + ") ===")
-        $Installer = Join-Path $WorkDir "beta.install.sh"
-        if (-not (Test-Path $Installer)) {
-            Write-Warning "Installer beta.install.sh not found in archive, skipping."
+        $BundleDir = Join-Path $WorkDir "beta"
+        $InstallScript = Join-Path $BundleDir "install.sh"
+        $Checksums = Join-Path $BundleDir "checksums.sha256"
+        if (-not (Test-Path -LiteralPath $BundleDir -PathType Container) -or
+            -not (Test-Path -LiteralPath $InstallScript -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $Checksums -PathType Leaf)) {
+            Write-Warning ("Complete bundle directory for " + "beta" + " not found in archive, skipping.")
             $Skipped++
         } else {
             $sshTest = & ssh "beta-alias" "echo ok" 2>&1
@@ -208,23 +370,33 @@ echo 'Overlay removed from ''beta''.'
                 Write-Host ("  ERROR: SSH connection to " + "beta" + " failed.") -ForegroundColor Red
                 $Failed++
             } else {
-                if ($Clean) {
-                    Write-Host ("  Cleaning existing WireGuard interfaces on " + "beta" + "...")
-                    $CleanScript | & ssh "beta-alias" sudo bash -s 2>$null
-                }
-
-                & scp $Installer "beta-alias:/tmp/beta-install.sh"
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host ("  ERROR: SCP upload to " + "beta" + " failed.") -ForegroundColor Red
+                $RemoteOutput = & ssh "beta-alias" "mktemp -d -- '/tmp/yaog-beta-XXXXXXXX'" 2>&1
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = "/tmp/yaog-beta-"
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote staging directory for " + "beta" + " was not created safely.") -ForegroundColor Red
                     $Failed++
                 } else {
-                    & ssh "beta-alias" "sudo bash /tmp/beta-install.sh && rm -f /tmp/beta-install.sh"
+                    $ScpDestination = "beta-alias" + ":" + $RemoteDir + "/bundle"
+                    & scp -r $BundleDir $ScpDestination
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Host ("  ERROR: Installation script failed on " + "beta" + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                        Write-Host ("  ERROR: SCP upload to " + "beta" + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh "beta-alias" $CleanupCommand 2>$null | Out-Null
                         $Failed++
                     } else {
-                        Write-Host ("  SUCCESS: " + "beta" + " deployed.")
-                        $Success++
+                        $RemoteCommand = "sudo bash '$RemoteDir/bundle/install.sh'" + $InstallArgs + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh "beta-alias" $RemoteCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Installation script failed on " + "beta" + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + "beta" + " deployed.")
+                            $Success++
+                        }
                     }
                 }
             }
@@ -251,23 +423,63 @@ echo '[Stage 3/4] Removing overlay network configuration on ''gamma''...'
 rm -f /etc/sysctl.d/99-overlay.conf
 sysctl --system > /dev/null 2>&1 || true
 echo '[Stage 4/4] Reloading systemd on ''gamma''...'
-systemctl daemon-reload
+systemctl daemon-reload || { echo 'ERROR: systemctl daemon-reload failed' >&2; exit 1; }
 echo 'Overlay removed from ''gamma''.'
 '@
-            $uninstallScript | & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" sudo bash -s
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ("  ERROR: Uninstall failed on " + "gamma" + ".") -ForegroundColor Red
-                $Failed++
-            } else {
-                Write-Host ("  SUCCESS: " + "gamma" + " uninstalled.")
-                $Success++
+            # Windows PowerShell writes CRLF text to native-process stdin. Materialize an
+            # explicitly LF-normalized UTF-8 file and SCP it instead. This avoids both stray
+            # carriage returns and Windows' command-line-length limit for large topologies.
+            $crlf = ([string][char]13) + [char]10
+            $lf = [string][char]10
+            $cr = [string][char]13
+            $uninstallLF = $uninstallScript.Replace($crlf, $lf).Replace($cr, $lf)
+            $uninstallBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($uninstallLF)
+            $UninstallTemp = [System.IO.Path]::GetTempFileName()
+            try {
+                [System.IO.File]::WriteAllBytes($UninstallTemp, $uninstallBytes)
+                $RemoteOutput = & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" "mktemp -d -- '/tmp/yaog-gamma-XXXXXXXX'" 2>&1
+                $RemoteCreateExit = $LASTEXITCODE
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = "/tmp/yaog-gamma-"
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($RemoteCreateExit -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote uninstall staging directory for " + "gamma" + " was not created safely.") -ForegroundColor Red
+                    $Failed++
+                } else {
+                    $ScpDestination = "deploy@10.0.0.9" + ":" + $RemoteDir + "/uninstall.sh"
+                    & scp -P 2222 -i "/home/op/keys/id_ed25519" $UninstallTemp $ScpDestination
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host ("  ERROR: Uninstall upload to " + "gamma" + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" $CleanupCommand 2>$null | Out-Null
+                        $Failed++
+                    } else {
+                        $UninstallCommand = "sudo bash '$RemoteDir/uninstall.sh'" + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" $UninstallCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Uninstall failed on " + "gamma" + ".") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + "gamma" + " uninstalled.")
+                            $Success++
+                        }
+                    }
+                }
+            } finally {
+                Remove-Item -LiteralPath $UninstallTemp -Force -ErrorAction SilentlyContinue
             }
         }
     } else {
         Write-Host ("=== Deploying to " + "gamma" + " (" + "deploy@10.0.0.9" + ") ===")
-        $Installer = Join-Path $WorkDir "gamma.install.sh"
-        if (-not (Test-Path $Installer)) {
-            Write-Warning "Installer gamma.install.sh not found in archive, skipping."
+        $BundleDir = Join-Path $WorkDir "gamma"
+        $InstallScript = Join-Path $BundleDir "install.sh"
+        $Checksums = Join-Path $BundleDir "checksums.sha256"
+        if (-not (Test-Path -LiteralPath $BundleDir -PathType Container) -or
+            -not (Test-Path -LiteralPath $InstallScript -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $Checksums -PathType Leaf)) {
+            Write-Warning ("Complete bundle directory for " + "gamma" + " not found in archive, skipping.")
             $Skipped++
         } else {
             $sshTest = & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" "echo ok" 2>&1
@@ -275,23 +487,33 @@ echo 'Overlay removed from ''gamma''.'
                 Write-Host ("  ERROR: SSH connection to " + "gamma" + " failed.") -ForegroundColor Red
                 $Failed++
             } else {
-                if ($Clean) {
-                    Write-Host ("  Cleaning existing WireGuard interfaces on " + "gamma" + "...")
-                    $CleanScript | & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" sudo bash -s 2>$null
-                }
-
-                & scp -P 2222 -i "/home/op/keys/id_ed25519" $Installer "deploy@10.0.0.9:/tmp/gamma-install.sh"
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host ("  ERROR: SCP upload to " + "gamma" + " failed.") -ForegroundColor Red
+                $RemoteOutput = & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" "mktemp -d -- '/tmp/yaog-gamma-XXXXXXXX'" 2>&1
+                $RemoteDir = [string]($RemoteOutput | Select-Object -Last 1)
+                $RemoteDir = $RemoteDir.Trim()
+                $RemotePrefix = "/tmp/yaog-gamma-"
+                $RemotePattern = '^' + [regex]::Escape($RemotePrefix) + '[A-Za-z0-9]{8}$'
+                if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($RemoteDir) -or
+                    $RemoteDir -notmatch $RemotePattern) {
+                    Write-Host ("  ERROR: Remote staging directory for " + "gamma" + " was not created safely.") -ForegroundColor Red
                     $Failed++
                 } else {
-                    & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" "sudo bash /tmp/gamma-install.sh && rm -f /tmp/gamma-install.sh"
+                    $ScpDestination = "deploy@10.0.0.9" + ":" + $RemoteDir + "/bundle"
+                    & scp -P 2222 -i "/home/op/keys/id_ed25519" -r $BundleDir $ScpDestination
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Host ("  ERROR: Installation script failed on " + "gamma" + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                        Write-Host ("  ERROR: SCP upload to " + "gamma" + " failed.") -ForegroundColor Red
+                        $CleanupCommand = "rm -rf -- '$RemoteDir'"
+                        & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" $CleanupCommand 2>$null | Out-Null
                         $Failed++
                     } else {
-                        Write-Host ("  SUCCESS: " + "gamma" + " deployed.")
-                        $Success++
+                        $RemoteCommand = "sudo bash '$RemoteDir/bundle/install.sh'" + $InstallArgs + '; _yaog_rc=$?; rm -rf -- ' + "'$RemoteDir'" + ' || { [ $_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit $_yaog_rc'
+                        & ssh -p 2222 -i "/home/op/keys/id_ed25519" "deploy@10.0.0.9" $RemoteCommand
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host ("  ERROR: Installation script failed on " + "gamma" + " (exit code: $LASTEXITCODE).") -ForegroundColor Red
+                            $Failed++
+                        } else {
+                            Write-Host ("  SUCCESS: " + "gamma" + " deployed.")
+                            $Success++
+                        }
                     }
                 }
             }

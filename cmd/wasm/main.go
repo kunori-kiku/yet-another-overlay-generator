@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"syscall/js"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -182,14 +183,17 @@ func wasmDeployScript(_ js.Value, args []js.Value) any {
 	return result.DeployScripts[name]
 }
 
-// wasmExportZip compiles the topology and returns a preview ZIP of the per-node bundle file set
+// wasmExportZip compiles the topology and returns a usable preview ZIP of each per-node bundle
 // (entries keyed "<nodeID>/<relpath>") as a base64 string, so wasmEngine.ts hands the browser a Blob
-// with no JS zip library (the jszip dependency is dropped — framework-refactor plan-5). The archive
-// is built with archive/zip over a DETERMINISTIC ordering (nodeIDs + relpaths sorted, a fixed entry
-// modtime): export bytes are a design PREVIEW and are NOT part of the conformance byte set (the gate
-// uses buildManifest, not export), so determinism here is a nicety, not a gated contract. A base64
-// string never begins with '{', so wasmEngine.ts distinguishes it from the {"error":...} envelope
-// exactly as it does for the deploy-script body.
+// with no JS zip library (the jszip dependency is dropped — framework-refactor plan-5). In addition
+// to the canonical Files set, every directory carries its mandatory checksums.sha256. The installer
+// deliberately refuses to mutate a host without that manifest, so omitting it here would make the
+// browser's own Export Artifacts output undeployable. The archive is built with archive/zip over a
+// DETERMINISTIC ordering (nodeIDs + relpaths sorted, a fixed entry modtime): export bytes are a design
+// PREVIEW and are NOT part of the conformance byte set (the gate uses buildManifest, not export), so
+// determinism here is a nicety, not a gated contract. A base64 string never begins with '{', so
+// wasmEngine.ts distinguishes it from the {"error":...} envelope exactly as it does for the
+// deploy-script body.
 func wasmExportZip(_ js.Value, args []js.Value) any {
 	var topo model.Topology
 	if err := json.Unmarshal([]byte(args[0].String()), &topo); err != nil {
@@ -208,7 +212,11 @@ func wasmExportZip(_ js.Value, args []js.Value) any {
 	}
 	sort.Strings(nodeIDs)
 	for _, id := range nodeIDs {
-		files := art.Files[id]
+		files := make(map[string]string, len(art.Files[id])+1)
+		for rel, content := range art.Files[id] {
+			files[rel] = content
+		}
+		files["checksums.sha256"] = art.Checksums[id]
 		relpaths := make([]string, 0, len(files))
 		for rel := range files {
 			relpaths = append(relpaths, rel)
@@ -224,6 +232,28 @@ func wasmExportZip(_ js.Value, args []js.Value) any {
 			if _, err := w.Write([]byte(files[rel])); err != nil {
 				return errEnvelope(err)
 			}
+		}
+	}
+	// Keep the project-level deploy consumers in the same atomic ZIP as the exact topology and
+	// bundle bytes they target. The separate UI downloads remain conveniences, but this archive
+	// cannot be paired accidentally with scripts from a later compile.
+	deployNames := make([]string, 0, len(art.Deploy))
+	for name := range art.Deploy {
+		deployNames = append(deployNames, name)
+	}
+	sort.Strings(deployNames)
+	for _, name := range deployNames {
+		fh := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		fh.Modified = fixedPreviewClock
+		if strings.HasSuffix(name, ".sh") {
+			fh.SetMode(0755)
+		}
+		w, err := zw.CreateHeader(fh)
+		if err != nil {
+			return errEnvelope(err)
+		}
+		if _, err := w.Write([]byte(art.Deploy[name])); err != nil {
+			return errEnvelope(err)
 		}
 	}
 	if err := zw.Close(); err != nil {

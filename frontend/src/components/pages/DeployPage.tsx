@@ -20,7 +20,7 @@ export function DeployPage() {
 
   // Refresh-on-auth (controller mode): pull fresh fleet node state when the page is shown with a
   // valid session, so the DeployBar's rekeying advisory + orphan list reflect server truth rather
-  // than a stale persisted cache (the phantom "rekeying" Deploy gate). Mirrors FleetPage.
+  // than a stale persisted cache (which could otherwise show a phantom rekey warning). Mirrors FleetPage.
   useEffect(() => {
     if (mode === 'controller' && loggedIn) void refresh();
   }, [mode, loggedIn, refresh]);

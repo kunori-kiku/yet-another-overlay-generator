@@ -36,14 +36,8 @@ func (h *ControllerHandler) HandleUpdateTopology(ctx context.Context, tenant con
 	// false-positive on names/notes) and refuse any private key material. Bodies are
 	// always panel-produced model.Topology, so an unmarshal failure is equally a 400 —
 	// storing bytes we cannot custody-check would reopen the hole this gate closes.
-	// A *json.SyntaxError keeps the plain "not valid JSON" message (the old json.Valid
-	// pre-check, now folded into this single parse).
 	var topo model.Topology
 	if err := json.Unmarshal(body, &topo); err != nil {
-		var syn *json.SyntaxError
-		if errors.As(err, &syn) {
-			return nil, apierr.New(apierr.CodeReqInvalidBody).Wrap(err)
-		}
 		return nil, apierr.New(apierr.CodeReqInvalidBody).Wrap(err)
 	}
 	for _, n := range topo.Nodes {

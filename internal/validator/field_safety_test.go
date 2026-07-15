@@ -1,7 +1,10 @@
 package validator
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
@@ -22,6 +25,8 @@ func TestValidateSchema_NodeNameCharset(t *testing.T) {
 		{name: "semicolon command chaining", nodeName: "node; rm -rf /", expectError: true},
 		{name: "double-quote break-out", nodeName: `node"evil`, expectError: true},
 		{name: "single-quote break-out", nodeName: "node'evil", expectError: true},
+		{name: "current-directory segment", nodeName: ".", expectError: true},
+		{name: "parent-directory segment", nodeName: "..", expectError: true},
 		{name: "clean hyphenated name", nodeName: "node-alpha", expectError: false},
 		{name: "clean name with space, dot, underscore", nodeName: "Web 1.east_a", expectError: false},
 	}
@@ -93,6 +98,14 @@ func TestValidateSchema_NodeIDCharset(t *testing.T) {
 	}{
 		{name: "clean slug", nodeID: "node-alpha", expectError: false},
 		{name: "uuid-style with dot and underscore", nodeID: "node-8f3a1c2e.4b5d_6", expectError: false},
+		{name: "internal double dot is an ordinary segment", nodeID: "node..east", expectError: false},
+		{name: "current-directory segment", nodeID: ".", expectError: true},
+		{name: "parent-directory segment", nodeID: "..", expectError: true},
+		{name: "Windows reserved device", nodeID: "CON", expectError: true},
+		{name: "Windows reserved device with extension", nodeID: "com1.txt", expectError: true},
+		{name: "Windows trailing dot alias", nodeID: "node.", expectError: true},
+		{name: "project helper collision", nodeID: "DEPLOY-ALL.PS1", expectError: true},
+		{name: "remote staging component too long", nodeID: strings.Repeat("a", naming.MaxPortableNodeIDLength+1), expectError: true},
 		{name: "space", nodeID: "node alpha", expectError: true},
 		{name: "path traversal", nodeID: "../etc/passwd", expectError: true},
 		{name: "command substitution", nodeID: "node$(whoami)", expectError: true},

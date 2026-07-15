@@ -212,25 +212,20 @@ from the registry) to render the fleet from public keys alone. The registry hold
 ([persistence.md](persistence.md) §Zero-knowledge custody), and the subgraph builder clears any stray
 private key off a node before rendering, so a private key cannot reach a staged bundle even if an
 imported topology carried one. The agent splices its locally-held private key into the placeholder at
-install time ([key-custody.md](key-custody.md), [agent.md](agent.md)). **Signing** is the Phase-0
-env-var path **inside** `artifacts.Export`: when `YAOG_BUNDLE_SIGNING_KEY` is set, Export writes a
-`bundle.sig` + `signing-pubkey.pem` into each node dir ([signing.md](signing.md)); the controller does
-not sign separately.
+install time ([key-custody.md](key-custody.md), [agent.md](agent.md)). The stage resolves
+`YAOG_BUNDLE_SIGNING_KEY` once, then passes that same in-memory `ConfigSigner` through render,
+persisted-anchor reconciliation, and `artifacts.ExportWithSigner`. A mid-stage key-file replacement
+therefore cannot split the public key embedded in `install.sh`, the pinned anchor, and the detached
+`bundle.sig` ([signing.md](signing.md)).
 
-## The `node.Name` vs `node.ID` mapping (the 4.2 wart)
+## Canonical node identity
 
-There are **two** identifiers for a node, and they live in different layers:
-
-- **`node.Name`** is the topology node's human-facing name. The exporter names each node's directory
-  (`<outDir>/<node.Name>/`) by it, so it is the key the **filesystem round-trip** uses.
-- **`node.ID`** is the node's stable identity in the **registry** and the **agent** — it is what
-  `SignedBundle.NodeID`, `Store.StageBundle`, `Store.GetNode`, and the agent's pull are keyed by.
-
-This `Name`-vs-`ID` split is the **documented plan-4.2 wart**: the air-gap exporter predates the
-registry and keys by name, while the controller and agent key by ID. `CompileAndStage` **bridges** the
-two by mapping each enrolled node's exported directory (`node.Name`) back to its `node.ID` **via the
-topology** (the controller holds both fields on every `model.Node`), then staging the bundle under the
-ID. The bridge lives only in the controller; the frozen exporter is not changed to know about IDs.
+`node.ID` is the single identity for a per-node bundle directory, registry record, staged
+`SignedBundle`, agent pull, manual kit membership, and browser/WASM ZIP entry. The controller's
+temporary export round-trip reads only `<tmp>/<node.ID>/`; it never falls back to `node.Name` or
+bridges between two filesystem keys. `node.Name` remains display text and an input to WireGuard
+interface naming. Schema and semantic validation enforce the portable, case-fold-unique ID contract
+before the exporter runs; see [../artifacts/naming.md](../artifacts/naming.md).
 
 ## Audit
 

@@ -31,6 +31,13 @@ for arg in "$@"; do
     esac
 done
 
+# Destructive layout cleanup is delegated to the candidate install.sh as --clean. That script
+# verifies its signature/checksums first; deploy-all must never mutate the remote host beforehand.
+INSTALL_ARGS=""
+if [ "$CLEAN" -eq 1 ]; then
+    INSTALL_ARGS=" --clean"
+fi
+
 if [ "$UNINSTALL" -eq 0 ] && [ -z "$ARTIFACTS_ZIP" ]; then
     echo "Usage: $0 [--clean] <path-to-artifacts.zip>"
     echo "       $0 --uninstall"
@@ -51,13 +58,99 @@ if [ -n "$ARTIFACTS_ZIP" ]; then
         exit 1
     fi
 
+    # Bound both the transport and the central-directory expansion before extraction. These
+    # limits match the manual kit's intentionally small configuration-bundle envelope.
+    ARCHIVE_MAX_BYTES=33554432
+    ARCHIVE_MAX_ENTRIES=512
+    ARCHIVE_MAX_FILE_BYTES=4194304
+    ARCHIVE_MAX_EXPANDED_BYTES=16777216
+    ARCHIVE_BYTES="$(wc -c < "$ARTIFACTS_ZIP" | tr -d '[:space:]')"
+    case "$ARCHIVE_BYTES" in
+        ''|*[!0-9]*) echo "ERROR: Could not determine artifacts ZIP size" >&2; exit 1 ;;
+    esac
+    if [ "$ARCHIVE_BYTES" -gt "$ARCHIVE_MAX_BYTES" ]; then
+        echo "ERROR: Artifacts ZIP exceeds the 32 MiB archive limit" >&2
+        exit 1
+    fi
+
     # Extract to a temp directory
     WORKDIR="$(mktemp -d -t overlay-deploy-XXXXXX)"
     cleanup() { rm -rf "$WORKDIR"; }
     trap cleanup EXIT
 
+    # Reject path aliases, traversal, duplicate names, and Unix special/symlink entries before
+    # extraction. SCP -r follows symlinks, so accepting one could copy arbitrary operator-host files.
+    ZIP_LIST="$WORKDIR/.zip-entries"
+    if ! unzip -Z1 "$ARTIFACTS_ZIP" > "$ZIP_LIST"; then
+        echo "ERROR: Failed to inspect artifacts ZIP: $ARTIFACTS_ZIP" >&2
+        exit 1
+    fi
+    ZIP_ENTRY_COUNT="$(wc -l < "$ZIP_LIST" | tr -d '[:space:]')"
+    case "$ZIP_ENTRY_COUNT" in
+        ''|*[!0-9]*) echo "ERROR: Could not determine artifacts ZIP entry count" >&2; exit 1 ;;
+    esac
+    if [ "$ZIP_ENTRY_COUNT" -gt "$ARCHIVE_MAX_ENTRIES" ]; then
+        echo "ERROR: Artifacts ZIP exceeds the 512-entry limit" >&2
+        exit 1
+    fi
+    # Info-ZIP's long listing reports each accepted regular/directory entry with its uncompressed
+    # byte length in column 4. Require the stats count to match -Z1 so an unknown entry type cannot
+    # evade the size accounting, then bound every file and the aggregate expanded payload.
+    if ! unzip -Z -l "$ARTIFACTS_ZIP" | LC_ALL=C awk \
+        -v expected="$ZIP_ENTRY_COUNT" \
+        -v max_file="$ARCHIVE_MAX_FILE_BYTES" \
+        -v max_total="$ARCHIVE_MAX_EXPANDED_BYTES" '
+            $1 ~ /^[-d]/ {
+                if ($4 !~ /^[0-9]+$/) bad=1
+                count++
+                size=$4+0
+                if (size > max_file) bad=1
+                total += size
+                if (total > max_total) bad=1
+            }
+            END { exit (bad || count != expected) ? 1 : 0 }
+        '; then
+        echo "ERROR: Artifacts ZIP has an unknown entry type or exceeds the 4 MiB per-file / 16 MiB expanded limits" >&2
+        exit 1
+    fi
+    if LC_ALL=C awk '{ key=tolower($0); if (seen[key]++) duplicate=1 } END { exit duplicate ? 0 : 1 }' "$ZIP_LIST"; then
+        echo "ERROR: Artifacts ZIP contains duplicate or case-colliding entry names" >&2
+        exit 1
+    fi
+    while IFS= read -r ZIP_ENTRY || [ -n "$ZIP_ENTRY" ]; do
+        ZIP_ENTRY_CHECK="${ZIP_ENTRY%/}"
+        case "$ZIP_ENTRY_CHECK" in
+            ""|/*|*\\*|*:* )
+                echo "ERROR: Unsafe artifacts ZIP entry: $ZIP_ENTRY" >&2
+                exit 1
+                ;;
+        esac
+        case "/$ZIP_ENTRY_CHECK/" in
+            *"/../"*|*"/./"*|*"//"*)
+                echo "ERROR: Non-canonical artifacts ZIP entry: $ZIP_ENTRY" >&2
+                exit 1
+                ;;
+        esac
+        if printf '%s' "$ZIP_ENTRY_CHECK" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+            echo "ERROR: Artifacts ZIP entry contains a control character" >&2
+            exit 1
+        fi
+    done < "$ZIP_LIST"
+    if unzip -Z -l "$ARTIFACTS_ZIP" | grep -Eq '^[lbcps]'; then
+        echo "ERROR: Artifacts ZIP contains a symlink or special-file entry" >&2
+        exit 1
+    fi
+    rm -f "$ZIP_LIST"
+
     echo "Extracting artifacts..."
-    unzip -q "$ARTIFACTS_ZIP" -d "$WORKDIR"
+    if ! unzip -q "$ARTIFACTS_ZIP" -d "$WORKDIR"; then
+        echo "ERROR: Failed to extract artifacts ZIP: $ARTIFACTS_ZIP" >&2
+        exit 1
+    fi
+    if find "$WORKDIR" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
+        echo "ERROR: Extracted artifacts contain a symlink or special file" >&2
+        exit 1
+    fi
 fi
 
 if [ "$UNINSTALL" -eq 1 ]; then
@@ -124,41 +217,37 @@ UNINSTALL_EOF
     fi
 else
     echo "=== Deploying to "'alpha'" ("'root@alpha.example.com'") ==="
-    INSTALLER="$WORKDIR/alpha.install.sh"
-    if [ ! -f "$INSTALLER" ]; then
-        echo "  WARNING: Installer alpha.install.sh not found in archive, skipping."
+    BUNDLE_DIR=""
+    if [ -d "$WORKDIR"/'alpha' ]; then
+        BUNDLE_DIR="$WORKDIR"/'alpha'
+    fi
+    if [ -z "$BUNDLE_DIR" ] || [ ! -f "$BUNDLE_DIR/install.sh" ] || [ ! -f "$BUNDLE_DIR/checksums.sha256" ]; then
+        echo "  WARNING: Complete bundle directory for "'alpha'" not found in archive, skipping."
         SKIPPED=$((SKIPPED + 1))
     else
-        # Test SSH connectivity first
         if ! ssh -p 22 'root@alpha.example.com' "echo ok" >/dev/null 2>&1; then
             echo "  ERROR: SSH connection to "'alpha'" failed." >&2
             FAILED=$((FAILED + 1))
         else
-            # Clean previous WireGuard configs if requested
-            if [ "$CLEAN" -eq 1 ]; then
-                echo "  Cleaning existing WireGuard interfaces on "'alpha'"..."
-                ssh -p 22 'root@alpha.example.com' sudo bash -s <<'CLEAN_EOF' 2>/dev/null || true
-for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
-    wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
-done
-rm -f /etc/wireguard/wg*.conf
-nft delete table inet overlay-snat 2>/dev/null || true
-iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true
-systemctl disable overlay-snat.service 2>/dev/null || true
-rm -f /etc/systemd/system/overlay-snat.service
-CLEAN_EOF
+            REMOTE_DIR="$(ssh -p 22 'root@alpha.example.com' "mktemp -d -- '/tmp/yaog-alpha-XXXXXXXX'")"
+            REMOTE_PREFIX='/tmp/yaog-alpha-'
+            REMOTE_SUFFIX="${REMOTE_DIR#"$REMOTE_PREFIX"}"
+            if [ "$REMOTE_DIR" != "$REMOTE_PREFIX$REMOTE_SUFFIX" ] || ! [[ "$REMOTE_SUFFIX" =~ ^[A-Za-z0-9]{8}$ ]]; then
+                echo "  ERROR: Remote staging directory for "'alpha'" was not created safely." >&2
+                FAILED=$((FAILED + 1))
+                REMOTE_DIR=""
             fi
-
-            if scp -P 22 "$INSTALLER" 'root@alpha.example.com':/tmp/alpha-install.sh; then
-                if ssh -p 22 'root@alpha.example.com' "sudo bash /tmp/alpha-install.sh && rm -f /tmp/alpha-install.sh"; then
+            if [ -n "$REMOTE_DIR" ] && scp -P 22 -r "$BUNDLE_DIR" 'root@alpha.example.com':"$REMOTE_DIR/bundle"; then
+                if ssh -p 22 'root@alpha.example.com' "sudo bash '$REMOTE_DIR/bundle/install.sh'$INSTALL_ARGS; _yaog_rc=\$?; rm -rf -- '$REMOTE_DIR' || { [ \$_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit \$_yaog_rc"; then
                     echo "  SUCCESS: "'alpha'" deployed."
                     SUCCESS=$((SUCCESS + 1))
                 else
                     echo "  ERROR: Installation script failed on "'alpha'" (exit code: $?)." >&2
                     FAILED=$((FAILED + 1))
                 fi
-            else
+            elif [ -n "$REMOTE_DIR" ]; then
                 echo "  ERROR: SCP upload to "'alpha'" failed." >&2
+                ssh -p 22 'root@alpha.example.com' "rm -rf -- '$REMOTE_DIR'" >/dev/null 2>&1 || true
                 FAILED=$((FAILED + 1))
             fi
         fi
@@ -216,41 +305,37 @@ UNINSTALL_EOF
     fi
 else
     echo "=== Deploying to "'beta'" ("'beta-alias'") ==="
-    INSTALLER="$WORKDIR/beta.install.sh"
-    if [ ! -f "$INSTALLER" ]; then
-        echo "  WARNING: Installer beta.install.sh not found in archive, skipping."
+    BUNDLE_DIR=""
+    if [ -d "$WORKDIR"/'beta' ]; then
+        BUNDLE_DIR="$WORKDIR"/'beta'
+    fi
+    if [ -z "$BUNDLE_DIR" ] || [ ! -f "$BUNDLE_DIR/install.sh" ] || [ ! -f "$BUNDLE_DIR/checksums.sha256" ]; then
+        echo "  WARNING: Complete bundle directory for "'beta'" not found in archive, skipping."
         SKIPPED=$((SKIPPED + 1))
     else
-        # Test SSH connectivity first
         if ! ssh 'beta-alias' "echo ok" >/dev/null 2>&1; then
             echo "  ERROR: SSH connection to "'beta'" failed." >&2
             FAILED=$((FAILED + 1))
         else
-            # Clean previous WireGuard configs if requested
-            if [ "$CLEAN" -eq 1 ]; then
-                echo "  Cleaning existing WireGuard interfaces on "'beta'"..."
-                ssh 'beta-alias' sudo bash -s <<'CLEAN_EOF' 2>/dev/null || true
-for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
-    wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
-done
-rm -f /etc/wireguard/wg*.conf
-nft delete table inet overlay-snat 2>/dev/null || true
-iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true
-systemctl disable overlay-snat.service 2>/dev/null || true
-rm -f /etc/systemd/system/overlay-snat.service
-CLEAN_EOF
+            REMOTE_DIR="$(ssh 'beta-alias' "mktemp -d -- '/tmp/yaog-beta-XXXXXXXX'")"
+            REMOTE_PREFIX='/tmp/yaog-beta-'
+            REMOTE_SUFFIX="${REMOTE_DIR#"$REMOTE_PREFIX"}"
+            if [ "$REMOTE_DIR" != "$REMOTE_PREFIX$REMOTE_SUFFIX" ] || ! [[ "$REMOTE_SUFFIX" =~ ^[A-Za-z0-9]{8}$ ]]; then
+                echo "  ERROR: Remote staging directory for "'beta'" was not created safely." >&2
+                FAILED=$((FAILED + 1))
+                REMOTE_DIR=""
             fi
-
-            if scp "$INSTALLER" 'beta-alias':/tmp/beta-install.sh; then
-                if ssh 'beta-alias' "sudo bash /tmp/beta-install.sh && rm -f /tmp/beta-install.sh"; then
+            if [ -n "$REMOTE_DIR" ] && scp -r "$BUNDLE_DIR" 'beta-alias':"$REMOTE_DIR/bundle"; then
+                if ssh 'beta-alias' "sudo bash '$REMOTE_DIR/bundle/install.sh'$INSTALL_ARGS; _yaog_rc=\$?; rm -rf -- '$REMOTE_DIR' || { [ \$_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit \$_yaog_rc"; then
                     echo "  SUCCESS: "'beta'" deployed."
                     SUCCESS=$((SUCCESS + 1))
                 else
                     echo "  ERROR: Installation script failed on "'beta'" (exit code: $?)." >&2
                     FAILED=$((FAILED + 1))
                 fi
-            else
+            elif [ -n "$REMOTE_DIR" ]; then
                 echo "  ERROR: SCP upload to "'beta'" failed." >&2
+                ssh 'beta-alias' "rm -rf -- '$REMOTE_DIR'" >/dev/null 2>&1 || true
                 FAILED=$((FAILED + 1))
             fi
         fi
@@ -290,41 +375,37 @@ UNINSTALL_EOF
     fi
 else
     echo "=== Deploying to "'gamma'" ("'deploy@10.0.0.9'") ==="
-    INSTALLER="$WORKDIR/gamma.install.sh"
-    if [ ! -f "$INSTALLER" ]; then
-        echo "  WARNING: Installer gamma.install.sh not found in archive, skipping."
+    BUNDLE_DIR=""
+    if [ -d "$WORKDIR"/'gamma' ]; then
+        BUNDLE_DIR="$WORKDIR"/'gamma'
+    fi
+    if [ -z "$BUNDLE_DIR" ] || [ ! -f "$BUNDLE_DIR/install.sh" ] || [ ! -f "$BUNDLE_DIR/checksums.sha256" ]; then
+        echo "  WARNING: Complete bundle directory for "'gamma'" not found in archive, skipping."
         SKIPPED=$((SKIPPED + 1))
     else
-        # Test SSH connectivity first
         if ! ssh -p 2222 -i '/home/op/keys/id_ed25519' 'deploy@10.0.0.9' "echo ok" >/dev/null 2>&1; then
             echo "  ERROR: SSH connection to "'gamma'" failed." >&2
             FAILED=$((FAILED + 1))
         else
-            # Clean previous WireGuard configs if requested
-            if [ "$CLEAN" -eq 1 ]; then
-                echo "  Cleaning existing WireGuard interfaces on "'gamma'"..."
-                ssh -p 2222 -i '/home/op/keys/id_ed25519' 'deploy@10.0.0.9' sudo bash -s <<'CLEAN_EOF' 2>/dev/null || true
-for iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
-    wg-quick down "$iface" 2>/dev/null || ip link del "$iface" 2>/dev/null || true
-done
-rm -f /etc/wireguard/wg*.conf
-nft delete table inet overlay-snat 2>/dev/null || true
-iptables-save -t nat 2>/dev/null | grep -E '^-A POSTROUTING ' | grep -F -- '-j SNAT' | grep -F -- '-o wg-+' | while IFS= read -r _snat_rule; do _snat_del="${_snat_rule/#-A/-D}"; iptables -t nat $_snat_del 2>/dev/null || true; done || true
-systemctl disable overlay-snat.service 2>/dev/null || true
-rm -f /etc/systemd/system/overlay-snat.service
-CLEAN_EOF
+            REMOTE_DIR="$(ssh -p 2222 -i '/home/op/keys/id_ed25519' 'deploy@10.0.0.9' "mktemp -d -- '/tmp/yaog-gamma-XXXXXXXX'")"
+            REMOTE_PREFIX='/tmp/yaog-gamma-'
+            REMOTE_SUFFIX="${REMOTE_DIR#"$REMOTE_PREFIX"}"
+            if [ "$REMOTE_DIR" != "$REMOTE_PREFIX$REMOTE_SUFFIX" ] || ! [[ "$REMOTE_SUFFIX" =~ ^[A-Za-z0-9]{8}$ ]]; then
+                echo "  ERROR: Remote staging directory for "'gamma'" was not created safely." >&2
+                FAILED=$((FAILED + 1))
+                REMOTE_DIR=""
             fi
-
-            if scp -P 2222 -i '/home/op/keys/id_ed25519' "$INSTALLER" 'deploy@10.0.0.9':/tmp/gamma-install.sh; then
-                if ssh -p 2222 -i '/home/op/keys/id_ed25519' 'deploy@10.0.0.9' "sudo bash /tmp/gamma-install.sh && rm -f /tmp/gamma-install.sh"; then
+            if [ -n "$REMOTE_DIR" ] && scp -P 2222 -i '/home/op/keys/id_ed25519' -r "$BUNDLE_DIR" 'deploy@10.0.0.9':"$REMOTE_DIR/bundle"; then
+                if ssh -p 2222 -i '/home/op/keys/id_ed25519' 'deploy@10.0.0.9' "sudo bash '$REMOTE_DIR/bundle/install.sh'$INSTALL_ARGS; _yaog_rc=\$?; rm -rf -- '$REMOTE_DIR' || { [ \$_yaog_rc -ne 0 ] || _yaog_rc=1; }; exit \$_yaog_rc"; then
                     echo "  SUCCESS: "'gamma'" deployed."
                     SUCCESS=$((SUCCESS + 1))
                 else
                     echo "  ERROR: Installation script failed on "'gamma'" (exit code: $?)." >&2
                     FAILED=$((FAILED + 1))
                 fi
-            else
+            elif [ -n "$REMOTE_DIR" ]; then
                 echo "  ERROR: SCP upload to "'gamma'" failed." >&2
+                ssh -p 2222 -i '/home/op/keys/id_ed25519' 'deploy@10.0.0.9' "rm -rf -- '$REMOTE_DIR'" >/dev/null 2>&1 || true
                 FAILED=$((FAILED + 1))
             fi
         fi

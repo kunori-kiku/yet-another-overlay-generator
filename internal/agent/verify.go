@@ -93,8 +93,10 @@ func parsePinnedPublicKey(pemBytes []byte) (ed25519.PublicKey, error) {
 // pemBytes — the SAME basis the controller's KeystoneFingerprint uses, so a node's displayed
 // fingerprint is directly comparable to the value the controller computes and returns from GET
 // /operator-credential. It handles any PKIX key type (ed25519, ecdsa) since it re-marshals the
-// parsed key. It is INFORMATIONAL only (the trust decision is the signature check), so callers
-// treat an error as "unknown" rather than failing on it.
+// parsed key. Human-facing callers may treat an error as "unknown" because their fingerprint is
+// informational; custody callers such as PendingApply propagate errors and compare the canonical
+// fingerprint fail-closed to prevent a trust-anchor change during crash recovery. The signature
+// check remains the primary trust decision for each candidate bundle/assertion.
 func credFingerprint(pemBytes []byte) (string, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
@@ -234,9 +236,6 @@ func VerifyBundle(files map[string][]byte, pinnedPubPEM []byte) (*VerifyResult, 
 // MembershipConfig is the keystone (off-host trust-list) configuration
 // VerifyMembership needs: the pinned operator credential the node was provisioned
 // with out of band, and the node's own identity (to assert it is a signed member).
-//
-// When OperatorCredPEM is empty, keystone is OFF and VerifyMembership is a no-op:
-// the agent behaves exactly as before (no trust-list) — the opt-in contract.
 type MembershipConfig struct {
 	// NodeID is this agent's configured identity; it MUST appear in the signed
 	// trust-list's members or VerifyMembership fails closed.

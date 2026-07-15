@@ -1,179 +1,134 @@
-# Artifact Naming & Deploy Identity
+# Artifact Naming and Deploy Identity
 
-YAOG renders one bundle per node and one combined deploy script for the whole fleet. Both halves
-must agree, byte for byte, on the file name each node's installer carries: the deploy script SCPs a
-file by name and then runs it remotely, so a name written by the ZIP writer that the deploy renderer
-cannot reproduce results in a silent skip, and two nodes that resolve to the same name result in one
-node receiving the other node's keys, IPs, and config while the run reports success. This document
-defines the single naming function that both halves MUST use, the uniqueness invariants that make
-name collisions impossible, the remote upload path keyed on node identity, and the WireGuard
-interface-name algorithm that the frontend MUST consume rather than reimplement.
+YAOG renders one complete directory per node and two project-level deploy helpers. Every producer
+and consumer must agree on one identity namespace; otherwise one node can be silently skipped or,
+worse, consume another node's keys and configuration. The canonical bundle identity is the stable
+node ID. The human node name is display text and remains an input only to name-derived WireGuard
+interfaces.
 
-Related: [export-bundle.md](./export-bundle.md) (directory structure), [deploy-scripts.md](./deploy-scripts.md)
-(SCP + remote execution), [wireguard.md](./wireguard.md) (per-peer interface configs),
-[../compiler/peer-derivation.md](../compiler/peer-derivation.md) (where interface names are stamped),
-[../frontend/architecture.md](../frontend/architecture.md) (frontend must consume compiled names).
+The shared leaf package `internal/naming` owns the portable node-ID and WireGuard-interface naming
+rules. Validators, exporters, renderers, and compilers import that package rather than maintaining
+parallel sanitizers.
 
-## Canonical installer name
+Related: [export-bundle.md](./export-bundle.md), [deploy-scripts.md](./deploy-scripts.md),
+[wireguard.md](./wireguard.md), [../compiler/peer-derivation.md](../compiler/peer-derivation.md), and
+[../frontend/architecture.md](../frontend/architecture.md).
 
-There MUST be exactly one function that maps a node name to an installer file name, and it MUST be
-the single source of truth for **both** the ZIP entry name written by the export endpoint **and** the
-file name the deploy script looks up and uploads. The function is `safeInstallerFileName` and behaves
-as follows:
+## Canonical per-node directory
 
-1. Lowercase the node name.
-2. Map every rune outside `[a-z0-9-_]` to a hyphen (`-`).
-3. Collapse every run of two or more consecutive hyphens to a single hyphen.
-4. Trim leading and trailing hyphens.
-5. If the result is empty, substitute the literal `node`.
-6. Append the suffix `.install.sh`.
+Every export surface writes and reads the complete per-node bundle under:
 
-For example, `"Web 1"` and `"web-1"` both produce `web-1.install.sh`; `"  ***  "` produces
-`node.install.sh`.
-
-The ZIP entry name, the deploy-script `INSTALLER="$WORKDIR/<name>"` lookup, and the SCP source path
-MUST be produced by calling this one function on the same node name. Neither side may apply its own
-sanitization, truncation, or suffixing. The export ZIP writer and the deploy renderer MUST NOT carry
-divergent name derivations.
-
-> **Compliance:** the ZIP writer names the entry `nodeName + ".install.sh"` from the raw export
-> directory name — which is the raw `node.Name` — at `internal/api/handler.go:407` (directory created
-> at `internal/artifacts/export.go:42`), while the deploy renderer looks up and uploads
-> `safeInstallerFileName(node.Name)` at `internal/renderer/deploy.go:47,216,324`. Any node whose raw
-> name differs from its sanitized name (uppercase, space, or special character) is written under one
-> name and sought under another, so it is silently skipped. Closed by Plan 4 (PR #6).
-
-## Export directory naming
-
-Inside the export bundle each node owns a directory and the deploy script extracts the ZIP into a
-work directory before looking up installers by name. The per-node directory name and the installer
-name it yields MUST be derived such that the deploy renderer can reproduce the exact installer file
-name from the same node without consulting the filesystem.
-
-Because the canonical installer name is `safeInstallerFileName(node.Name)`, the export layout MUST
-guarantee that the installer file the deploy script seeks (`safeInstallerFileName(node.Name)`) is the
-file the ZIP writer actually emitted for that node. The directory name MAY remain a human-readable
-form of the node name, but the ZIP-level installer entry that the deploy script references MUST be the
-canonical installer name, not the raw directory name. The export directory writer MUST reject names
-that are unsafe as path components (empty, `.`, `..`, names containing path separators, absolute
-paths, or names containing `..`).
-
-> **Compliance:** path-component safety is enforced by `validateSafeName` at
-> `internal/artifacts/export.go:39,187-204`, but the installer ZIP entry is still keyed on the raw
-> directory name (`internal/api/handler.go:407`) rather than the canonical name. Closed by Plan 4
-> (PR #6).
-
-## Remote upload path keyed by node ID
-
-The deploy script uploads each node's installer to a path on the remote host, runs it under `sudo`,
-and removes it. That path MUST be keyed by the node's unique ID, not by any name-derived string:
-
-```
-/tmp/<node.ID>-install.sh
+```text
+<artifact-root>/<node.ID>/
 ```
 
-Node IDs are unique by construction (the semantic validator already rejects duplicate node IDs), so a
-node-ID-keyed upload path cannot collide even when two nodes share a name. Keying the upload path on
-the sanitized installer name instead lets two distinct nodes that sanitize to the same name overwrite
-each other's payload on the same remote path; on a self-deploy or co-hosted target this clobbers one
-node's installer with the other's.
+This applies to:
 
-> **Compliance:** the upload destination is currently `target:/tmp/<installerFile>` where
-> `installerFile` is the sanitized installer name, and the subsequent `sudo bash /tmp/<installerFile>`
-> reads the same name — `internal/renderer/deploy.go:324,325,358-359`. Two nodes whose names sanitize
-> identically share `/tmp/<name>.install.sh`. Closed by Plan 4 (PR #6).
+- `internal/artifacts.Export` (CLI files and the controller's temporary stage export);
+- `internal/localcompile.CompileArtifacts.Files` (`nodeID -> relpath -> content`);
+- the browser/WASM ZIP (`<nodeID>/<relpath>`);
+- the controller stage reader; and
+- AirGap `deploy-all.sh` / `deploy-all.ps1` lookups.
 
-## Uniqueness invariants
+Consumers must not fall back to `node.Name`, try an ID-then-name search, or derive a flat
+`<node>.install.sh` wrapper. Those retired presentations create multiple names for one authority and
+make collision behavior filesystem-dependent.
 
-A topology MUST fail semantic validation if any of the following name collisions exist across two
-distinct nodes. These checks make the de-collision rule below a defence-in-depth fallback rather than
-the primary guard:
+Project helpers share the artifact root with node directories, so `deploy-all.sh` and
+`deploy-all.ps1` are reserved node IDs.
 
-| # | Invariant | Rationale |
+## Portable node-ID contract
+
+`naming.ValidPortableNodeID` is the shared path-component predicate. A valid node ID:
+
+1. is non-empty and is neither `.` nor `..`;
+2. contains only ASCII letters, digits, `.`, `_`, and `-` (`[A-Za-z0-9._-]+`);
+3. is at most `naming.MaxPortableNodeIDLength` bytes (currently 240; IDs are ASCII);
+4. does not end with `.`;
+5. is not `deploy-all.sh` or `deploy-all.ps1`, ignoring ASCII letter case; and
+6. does not have a Windows device basename, ignoring case: `CON`, `PRN`, `AUX`, `NUL`,
+   `COM1`–`COM9`, or `LPT1`–`LPT9`. The basename rule also rejects extensions such as `con.txt`.
+
+The 240-byte ceiling leaves room for the AirGap remote staging component
+`yaog-<node-id>-XXXXXXXX` under the common 255-byte filesystem-component limit.
+
+Node IDs must also remain unique after ASCII case-folding. `Alpha` and `alpha` are distinct Go map
+keys and Linux paths but collide after extraction on case-insensitive Windows filesystems.
+`naming.PortableNodeIDKey` supplies the semantic validator's collision key.
+
+Schema validation reports non-portable IDs before compilation; semantic validation reports the
+second case-folding collision and names both IDs. Export and deploy rendering repeat the portable
+predicate as defence in depth because they are callable independently in tests and internal code.
+
+## Remote staging identity
+
+An operational AirGap deploy helper creates a fresh remote directory with:
+
+```text
+/tmp/yaog-<node.ID>-XXXXXXXX
+```
+
+It validates `mktemp`'s returned path against that exact prefix and eight-character suffix, uploads
+the whole local `<node.ID>/` directory to `<remote>/bundle`, executes the copied
+`bundle/install.sh`, and removes the fresh directory. The node ID—not a display name—therefore
+binds the local directory, remote path, and target node. A fresh directory avoids predictable-file
+replacement and concurrent-deploy clobbering.
+
+AgentHeld deploy helpers are fail-closed guidance stubs and never construct or execute a remote
+installer path; AgentHeld application goes through the enrolled agent or `yaog-agent kit apply`.
+
+## Name and interface uniqueness invariants
+
+Node names remain operator-facing identity and feed the remote-peer portion of WireGuard interface
+names. Validation enforces:
+
+| Invariant | Rule | Rationale |
 |---|---|---|
-| N1 | No two nodes share a **raw name** | Two raw-identical names are indistinguishable to operators and to any name-derived artifact |
-| N2 | No two nodes produce the same **sanitized installer name** (`safeInstallerFileName`) | Identical installer names cause silent skips and wrong-identity deploys |
-| N3 | No two nodes produce the same **`wgInterfaceName`** | Colliding interface names cause one WireGuard config and one Babel interface line to silently overwrite the other |
+| N1 | Two nodes cannot share the exact raw `node.Name` | Duplicate display identities are ambiguous to operators and every name-derived artifact. |
+| N2 | Node IDs remain unique after portable case-folding | ID-keyed directories must survive Windows extraction without aliasing. |
+| N3 | Two distinct remote node names cannot produce the same primary `WgInterfaceName` | A collision would overwrite a WireGuard config and Babel interface line. |
+| N4 | Every compiled interface name on one node is unique across primary and backup links | Parallel-link/hash collisions must fail before rendering. |
 
-Each violation MUST be reported as a semantic validation error naming both offending nodes, in the
-locale style used by the rest of the semantic validator.
-
-> **Compliance:** the semantic validator rejects duplicate node IDs and duplicate overlay IPs
-> (`internal/validator/semantic.go`) but performs none of N1–N3. Colliding `wg-<name>` interface
-> names overwrite each other at the renderer (`internal/compiler/peers.go:492-522`). Closed by Plan 4
-> (PR #6).
-
-## Deterministic de-collision
-
-Where a generated name could still collide after validation — for example two nodes whose names are
-distinct but truncate or sanitize to the same string — the generator MUST de-collide deterministically
-by appending a short hash suffix derived from the node's unique ID. Specifically, generated names
-(installer names and interface names) that would otherwise collide MUST incorporate a short hex slice
-of `sha256(node.ID)` so that the suffix is stable across recompiles and unique per node. De-collision
-MUST be deterministic: compiling the same topology twice MUST produce the same names.
-
-The uniqueness invariants (N1–N3) remain the primary contract; de-collision is the deterministic
-fallback that guarantees distinct artifacts even if a future name source is added that the validator
-does not yet cover.
+There is no sanitized-installer-name invariant: sanitized flat installers no longer exist. Bundle
+directory uniqueness comes entirely from the portable node-ID rules.
 
 ## WireGuard interface-name algorithm
 
-Each per-peer WireGuard interface is named from the **remote** peer's node name via `wgInterfaceName`.
-The Linux kernel limits interface names to 15 characters, so the algorithm has a short path and a
-hashed long path. It is the single authority for interface names; the backend stamps the result onto
-`PeerInfo.InterfaceName` during peer derivation, and every consumer (ZIP config file names, Babel
-interface lines, deploy teardown, frontend lookups) MUST use the stamped value.
+Each per-peer WireGuard interface is named from the **remote** peer's node name through
+`naming.WgInterfaceName`. Linux limits interface names to 15 bytes, so the function has a short and
+a hashed long path. The compiler stamps the result onto `PeerInfo.InterfaceName`; every downstream
+consumer must use that compiled value.
 
-The algorithm, given a remote node name `remoteName`:
+Given `remoteName`:
 
-1. `clean := lowercase(remoteName)`, then map every rune outside `[a-z0-9-]` to a hyphen.
-   (Note: unlike `safeInstallerFileName`, the interface cleaner does **not** preserve `_`; underscore
-   maps to a hyphen.)
+1. `clean := lowercase(remoteName)`, mapping every rune outside `[a-z0-9-]` to `-`.
+   Underscore is not preserved.
 2. `name := "wg-" + clean`.
-3. **Short path:** if `len(name) <= 15`, return `name`.
-4. **Long path (>15 chars):** return `"wg-" + clean[:8] + sha256(remoteName)[:4]`, i.e. the `wg-`
-   prefix, the first 8 cleaned characters, and the first 4 hex characters of `sha256(remoteName)`,
-   for a total of `3 + 8 + 4 = 15` characters. The 8-character clean slice is bounded by the actual
-   cleaned length when it is shorter than 8 (a defensive guard that does not arise on the long path).
+3. If `len(name) <= 15`, return `name`.
+4. Otherwise return `"wg-" + clean[:8] + sha256(remoteName)[:4]`, with the clean slice bounded by
+   its actual length.
 
-The hash suffix exists precisely so that two distinct names sharing a long common prefix do not
-truncate to the same interface name. Plain truncation (`name[:15]`) is therefore **wrong** for names
-longer than 12 characters and MUST NOT be used.
+The long form is exactly 15 bytes (`3 + 8 + 4`). The hash suffix prevents distinct long names with
+the same prefix from collapsing through plain truncation; a consumer must not substitute
+`name[:15]`.
 
-> **Compliance:** the algorithm is implemented at `internal/compiler/peers.go:492-522` and called on
-> the remote node name at `internal/compiler/peers.go:267,332,376`. The contract holds in the backend;
-> the deviation is in the frontend (below). Closed by Plan 4 (PR #6).
+### Edge-aware backup-link names
 
-### Edge-aware names for backup links (parallel links)
+Parallel links can put several interfaces toward the same remote peer on one node. The edge-aware
+authority is `naming.WgInterfaceNameForEdge(remoteName, edgeID, backup)`:
 
-With parallel links ([../data-model/edge.md](../data-model/edge.md) §Parallel links) a node can
-host several interfaces toward the SAME remote peer, so the remote name alone no longer
-identifies the interface. The naming authority gains an edge-aware variant:
+- `backup == false`: return `WgInterfaceName(remoteName)` byte-for-byte, preserving primary-link
+  names for existing fleets.
+- `backup == true`: always return
+  `"wg-" + clean[:8] + sha256(remoteName + "|" + edgeID)[:4]` (with the bounded clean slice).
 
-- **Primary link** (the pair's primary class): `WgInterfaceName(remoteName)` — byte-identical to
-  the algorithm above. Deployed fleets see zero interface renames.
-- **Backup link** (`role: "backup"`, always): `"wg-" + clean[:8] + sha256(remoteName + "|" + edge.ID)[:4]`
-  — the long-path shape with the edge ID folded into the hash input, applied UNCONDITIONALLY
-  (no short path), so two backups toward the same peer differ in their 4-hex suffix while staying
-  within the `3 + 8 + 4 = 15` budget. Stable across recompiles because the edge ID is stable.
+Folding the stable edge ID into the backup suffix makes parallel backup interfaces distinct and
+reproducible. The 16-bit suffix is not assumed collision-proof; invariant N4 turns a collision into
+a compile-blocking validation error with an actionable rename rather than an overwrite.
 
-The variant lives in the same single authority (`internal/naming`). Both the compiler and the
-validator MUST obtain backup-link names from it; per-node uniqueness across ALL of a node's peer
-interfaces (primary and backup, any remote) is a new invariant **N4**, validator-enforced as a
-compile-blocking error — the deterministic answer to a 16-bit hash collision is "rename one node",
-and the validator names the colliding pair.
+## Frontend consumption rule
 
-### The frontend MUST NOT reimplement this
-
-The frontend MUST NOT recompute interface names. It MUST read the compiled interface names out of the
-compile response (the per-peer config keys are `"<nodeID>:<interfaceName>"`) and use those verbatim.
-Any independent reconstruction of `wgInterfaceName` in the frontend is a contract violation, because
-the frontend cannot faithfully reproduce the hashed long path and will diverge for names longer than
-12 characters.
-
-> **Compliance:** the frontend reconstructs the interface name as
-> `` `wg-${toNode.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`.slice(0, 15) `` at
-> `frontend/src/components/layout/RightPanel.tsx:622`. This is plain truncation with no hash branch,
-> so the "Compiled values" lookup silently misses for any node name longer than 12 characters. The
-> normative consumption rule is stated in [../frontend/architecture.md](../frontend/architecture.md).
-> Closed by Plan 4 (PR #6).
+The frontend must not reconstruct interface names from node names. It reads the compiled names from
+the Go result (for example, WireGuard config keys of `"<nodeID>:<interfaceName>"`) and uses them
+verbatim. Local design runs the same Go naming and validation code through WASM, so there is no
+separate TypeScript artifact-name authority.

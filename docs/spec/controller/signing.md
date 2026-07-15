@@ -69,32 +69,39 @@ Ed25519 is chosen for being in the Go standard library, deterministic (no per-si
 to mis-handle), small (32-byte keys, 64-byte signatures), and verifiable by stock `openssl` on the
 node — no third-party crypto dependency on either side.
 
-### Signer seam (`ConfigSigner`)
+### Signer seam and operation snapshot (`ConfigSigner`)
 
-The export / install-script / self-extracting-installer paths do not call `Sign` directly; they
-resolve a `bundlesig.ConfigSigner` via `LoadConfigSignerFromEnv`:
+The render, anchor, and export layers do not reload signing state independently. A production
+compile/stage/preview/export operation resolves one `bundlesig.ConfigSigner` snapshot and threads
+that same interface through every phase:
 
 - `ConfigSigner.Sign(message []byte) ([]byte, error)` — a raw 64-byte Ed25519 detached signature
-  over `message` (the canonical `checksums.sha256` bytes for the export path, or the
-  self-extracting `tar.gz` payload for the installer wrapper).
+  over the canonical `checksums.sha256` bytes.
 - `ConfigSigner.PublicKeyPEM() []byte` — the PKIX public-key PEM pinned into `install.sh`.
 
-The default (and today's only) backend is the in-process Ed25519 key `*Signing` loaded from
+The default backend is the in-process Ed25519 key `*Signing` loaded from
 `YAOG_BUNDLE_SIGNING_KEY`. `LoadConfigSignerFromEnv` returns an **explicit nil interface** when
-signing is off (never a typed-nil `*Signing`), so call-site `!= nil` checks stay correct. The
-interface lives in `bundlesig` (stdlib-only), so a future **host-isolated backend** — HashiCorp
+signing is off (never a typed-nil `*Signing`), so call-site `!= nil` checks stay correct. Legacy
+entry points retain an environment-loading shim, while production callers use explicit-signer
+variants. This prevents a key-file rotation between render and export from embedding one public key
+in `install.sh` but signing with another. The interface lives in `bundlesig` (stdlib-only), so a
+future **host-isolated backend** — HashiCorp
 Vault / OpenBao transit (stdlib REST), GCP Cloud KMS, or a YubiHSM, all Ed25519-capable so the
 node-side `openssl` verify path stays unchanged — plugs in by implementing the same interface in
 its own package, with no change to the call sites. The `Sign` error return exists for such
-networked backends; the in-process signer's error is always nil. Because the off-host WebAuthn
-keystone (the operator's hardware-key-signed trust-list, plan 5.1) already bounds the
-network-takeover blast radius, this tier-1 key only needs exfiltration resistance, so the software
-default (protected at rest by `systemd-creds` / `0600`) is proportionate and a remote KMS is
-strictly optional.
+networked backends; the in-process signer's error is always nil. The off-controller keystone
+separately requires an operator-held signature over trust-list membership: a WebAuthn assertion for
+the browser path or a raw Ed25519 signature for the CLI-compatible path. The controller persists
+only that credential's non-secret descriptor/public key and receives signed proof rather than
+credential private-key material, which bounds a controller-only takeover. YAOG does not collect
+WebAuthn attestation or prove that a browser credential is hardware-backed or non-exportable;
+software and synced credentials may be copied by their provider. Within that threat model, this
+tier-1 bundle key needs exfiltration resistance, so the software default (protected at rest by
+`systemd-creds` / `0600`) is proportionate and a remote KMS is strictly optional.
 
 ## Opt-in configuration
 
-Signing is controlled by a single environment variable read at export time:
+Signing is controlled by one environment variable resolved once at operation start:
 
 - **`YAOG_BUNDLE_SIGNING_KEY`** — filesystem path to an Ed25519 **private** key in PKCS#8 PEM.
   - **Unset or empty** → no signing. Bundles are hash-only, byte-identical to pre-Phase-0 output
@@ -112,9 +119,9 @@ long-term custody model.
 
 ## Persisted signing anchor (controller — no silent downgrade)
 
-`YAOG_BUNDLE_SIGNING_KEY` is read fresh at export time, so on its own a controller redeploy that
-**drops or swaps** the env var would silently revert a previously-signed fleet to hash-only (or to a
-different key) with no signal — a downgrade the system should detect, not ignore. The **private** key
+If a later controller operation **drops or swaps** `YAOG_BUNDLE_SIGNING_KEY`, it could otherwise
+silently revert a previously signed fleet to hash-only (or to a different key) — a downgrade the
+system detects rather than ignores. The **private** key
 stays off the controller's persisted state by design (a server-state compromise must not be able to
 lift it; `internal/bundlesig`), but the **public** key is not secret, and persisting it strengthens
 the model rather than weakening it.
@@ -141,9 +148,11 @@ it still signs iff the env key is set.
 
 The file at `YAOG_BUNDLE_SIGNING_KEY` is a **private** Ed25519 key. Anyone who can read it can forge
 config bundles that pass the `install.sh` signature check, so it MUST be protected like any private
-key. The off-host WebAuthn keystone (plan 5.1) bounds the blast radius — a forged bundle still cannot
-alter the hardware-key-signed membership a node verifies — so this tier-1 key needs **exfiltration
-resistance**, not HSM-grade isolation. Concretely:
+key. The off-controller keystone bounds the blast radius — a forged bundle alone still cannot alter
+the credential-signed membership a node verifies — so this tier-1 key needs **exfiltration
+resistance**, not HSM-grade isolation. For the browser path, this statement assumes the operator's
+WebAuthn provider/account is not also compromised; YAOG does not attest that the credential is
+hardware-backed or non-exportable. Concretely:
 
 - **Permissions.** Own the file by the controller's service user and `chmod 600` (or `400`). It must
   never be group- or world-readable. Treat a key that has been on a loosely-permissioned path as
@@ -208,21 +217,14 @@ was expected. An `install.sh` rendered **without** signing (opt-in off) has no v
 behaves exactly as today: hash-only `sha256sum -c`. Full ordering in
 [../artifacts/install-script.md](../artifacts/install-script.md).
 
-## Second signed object — the self-extracting installer wrapper
+## Packaging does not add a second trust object
 
-The exported bundle ZIP wraps each node bundle in a **self-extracting installer** (a bash script with a
-base64 tar.gz payload appended; see [../artifacts/deploy-scripts.md](../artifacts/deploy-scripts.md)).
-When signing is enabled, the wrapper carries a **second, independent** Ed25519 signature — over the
-**raw tar.gz payload bytes**, not the `checksums.sha256` digest. The same `YAOG_BUNDLE_SIGNING_KEY`
-signs both. The wrapper embeds the base64 signature and base64 public-key PEM and verifies
-(`openssl pkeyutl -verify -pubin -rawin -sigfile <sig> -in <archive>`) **before** the existing
-`EXPECTED_PAYLOAD_SHA256` payload check, with the same fail-clear discipline.
-
-So a signed export has two signed objects at two layers: the **inner bundle** (`bundle.sig` over
-`checksums.sha256`, verified by `install.sh` after extraction) and the **outer wrapper** (over the
-tar.gz payload, verified before extraction). They are complementary — the outer rejects a tampered
-payload before anything is unpacked; the inner protects the bundle once it is on disk, including the
-air-gapped directory export, which has no wrapper.
+Current exports package complete per-node directories; the retired self-extracting tar wrapper is
+not part of the artifact contract. There is therefore one signed object per node:
+`bundle.sig` over the exact `checksums.sha256` bytes. Packaging a directory into a ZIP does not
+introduce another signing layer. `deploy-all` uploads the complete directory, and its inner
+`install.sh` performs the mandatory signature/checksum gates before host mutation. See
+[../artifacts/deploy-scripts.md](../artifacts/deploy-scripts.md).
 
 ## Honest limitation — Phase 0 authenticity is relative to an out-of-band pin
 
@@ -242,8 +244,9 @@ obtained through a separate trusted channel before running `install.sh`. For the
 operator-built** path this holds naturally: the operator built the bundle and configured
 `YAOG_BUNDLE_SIGNING_KEY` themselves, so the key is implicitly pinned.
 
-The **real out-of-band pin** — a trust anchor delivered with the agent at install time, independent
-of the bundle being verified — arrives in **Phase 1b/3** (the agent verifies against a key pinned at
-install, and membership-changing trust-list updates require a human hardware-key signature). Phase 0
-deliberately establishes the *signing mechanism* and *verification ordering* so those later phases
-only have to harden *where the trust anchor comes from*, not reinvent how signing works.
+The **real out-of-band pin** is a trust anchor delivered with the agent at install time, independent
+of the bundle being verified. The agent verifies against that pinned public credential, and
+membership-changing trust-list updates require an operator signature over the exact content — a
+WebAuthn assertion or raw Ed25519 signature, according to the pinned algorithm. Only the public
+descriptor/key and signed proof cross the controller API; this design does not claim a browser
+credential is hardware-backed or non-exportable.

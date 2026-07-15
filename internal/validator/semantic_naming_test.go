@@ -75,11 +75,11 @@ func nameCollisionTopology(firstName, secondName string) *model.Topology {
 	}
 }
 
-// TestValidateSemantic_NodeNameCollisions covers, table-driven, the three naming-uniqueness
+// TestValidateSemantic_NodeNameCollisions covers, table-driven, the two naming-uniqueness
 // invariants of Spec D:
-//   - install-script filename collision (N2): "Web 1" and "web-1" both normalize to web-1.install.sh.
 //   - raw-name collision (N1): two "Alpha" are exactly identical.
-//   - WireGuard interface-name collision (N3): "db.east" and "db-east" both normalize to wg-db-east.
+//   - WireGuard interface-name collision (N3): "Web 1"/"web-1" and "db.east"/"db-east" normalize
+//     to the same interface name.
 //   - two non-colliding names ("alpha" and "beta") should pass validation.
 func TestValidateSemantic_NodeNameCollisions(t *testing.T) {
 	cases := []struct {
@@ -89,7 +89,7 @@ func TestValidateSemantic_NodeNameCollisions(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:        "install-script filename collision",
+			name:        "WireGuard interface-name case collision",
 			firstName:   "Web 1",
 			secondName:  "web-1",
 			expectError: true,
@@ -131,5 +131,27 @@ func TestValidateSemantic_NodeNameCollisions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateSemantic_NodeIDPortableCollision(t *testing.T) {
+	topo := nameCollisionTopology("alpha", "beta")
+	topo.Nodes[0].ID = "Node-East"
+	topo.Nodes[1].ID = "node-east"
+	topo.Edges[0].FromNodeID = "Node-East"
+	topo.Edges[0].ToNodeID = "node-east"
+	topo.Edges[1].FromNodeID = "node-east"
+	topo.Edges[1].ToNodeID = "Node-East"
+
+	result := ValidateSemantic(topo)
+	assertHasError(t, result, "nodes[1].id")
+	found := false
+	for _, finding := range result.Errors {
+		if finding.Code == string(CodeNodeIDPortableCollision) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s, got %#v", CodeNodeIDPortableCollision, result.Errors)
 	}
 }

@@ -41,8 +41,8 @@ func TestTenantIsolation(t *testing.T) {
 			// Pin a keystone credential and a SIGNED staged trust-list under A before the promote, so
 			// the promote populates A's SERVED trust-list slot — letting B's served reads below assert
 			// the served slot is tenant-scoped too.
-			if err := s.SetOperatorCredential(ctx, tenantA, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub-a-keystone"}); err != nil {
-				t.Fatalf("SetOperatorCredential(A): %v", err)
+			if err := s.CompareAndSetOperatorCredential(ctx, tenantA, nil, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub-a-keystone"}); err != nil {
+				t.Fatalf("CompareAndSetOperatorCredential(A): %v", err)
 			}
 			if err := s.PutSignedTrustList(ctx, tenantA, StoredTrustList{
 				TrustListJSON: []byte(`{"epoch":1,"members":[{"node_id":"alpha"}]}` + "\n"),
@@ -61,6 +61,18 @@ func TestTenantIsolation(t *testing.T) {
 				NodeID:    "alpha",
 			}); err != nil {
 				t.Fatalf("AppendAudit(A): %v", err)
+			}
+			if err := s.CreatePendingKeystoneTransition(ctx, tenantA, PendingKeystoneTransition{
+				Expected: &OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub-a-keystone"},
+				Next:     OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub-a-next"},
+				Audit: AuditEntry{
+					Timestamp: time.Date(2026, 6, 8, 0, 1, 0, 0, time.UTC),
+					Actor:     "operator-a",
+					Action:    "rotate-operator-credential",
+					EventID:   "0000000000000000000000000000000a",
+				},
+			}); err != nil {
+				t.Fatalf("CreatePendingKeystoneTransition(A): %v", err)
 			}
 			if err := s.CreateEnrollmentToken(ctx, tenantA, EnrollmentToken{
 				TokenHash: tokenHash("a-secret"),
@@ -114,8 +126,14 @@ func TestTenantIsolation(t *testing.T) {
 			if _, err := s.GetOperatorCredential(ctx, tenantB); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetOperatorCredential(B): err = %v, want ErrNotFound", err)
 			}
+			if _, err := s.GetPendingKeystoneTransition(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetPendingKeystoneTransition(B): err = %v, want ErrNotFound", err)
+			}
 			if _, err := s.GetCurrentSignedTrustList(ctx, tenantB); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetCurrentSignedTrustList(B): err = %v, want ErrNotFound", err)
+			}
+			if _, err := s.GetLastStagedTrustList(ctx, tenantB); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetLastStagedTrustList(B): err = %v, want ErrNotFound", err)
 			}
 			if _, err := s.GetServedTrustList(ctx, tenantB); !errors.Is(err, ErrNotFound) {
 				t.Fatalf("GetServedTrustList(B): err = %v, want ErrNotFound", err)
@@ -187,6 +205,9 @@ func TestTenantIsolation(t *testing.T) {
 			}
 			if a, err := s.GetSigningAnchor(ctx, tenantA); err != nil || a.PubKeyPEM != "pub-a" {
 				t.Fatalf("GetSigningAnchor(A): got %+v err %v, want pub-a", a, err)
+			}
+			if _, err := s.GetPendingKeystoneTransition(ctx, tenantA); err != nil {
+				t.Fatalf("GetPendingKeystoneTransition(A): %v", err)
 			}
 			// ...and tenant A CAN resolve its own node API token to its node.
 			if n, err := s.LookupNodeByAPIToken(ctx, tenantA, tokenHash("a-api-secret")); err != nil {

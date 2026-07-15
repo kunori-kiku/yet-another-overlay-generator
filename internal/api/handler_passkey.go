@@ -70,15 +70,36 @@ type passkeyChallengeResponseJSON struct {
 }
 
 type passkeyStatusResponseJSON struct {
-	Registered bool `json:"registered"`
+	Registered   bool   `json:"registered"`
+	Alg          string `json:"alg,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
+	PublicKeyPEM string `json:"public_key_pem,omitempty"`
+	RPID         string `json:"rpid,omitempty"`
+	Origin       string `json:"origin,omitempty"`
+}
+
+func passkeyStatusFor(op controller.Operator) passkeyStatusResponseJSON {
+	if op.LoginCredential == nil {
+		return passkeyStatusResponseJSON{Registered: false}
+	}
+	cred := op.LoginCredential
+	return passkeyStatusResponseJSON{
+		Registered:   true,
+		Alg:          cred.Alg,
+		CredentialID: cred.CredentialID,
+		PublicKeyPEM: cred.PublicKeyPEM,
+		RPID:         cred.RPID,
+		Origin:       cred.Origin,
+	}
 }
 
 type passkeyRegisterRequestJSON struct {
-	Alg          string `json:"alg"`            // webauthn-es256 | webauthn-eddsa
-	CredentialID string `json:"credential_id"`  // base64url(rawId)
-	PublicKeyPEM string `json:"public_key_pem"` // PKIX "PUBLIC KEY" PEM
-	RPID         string `json:"rpid"`           // sha256(rpid) == authenticatorData[0:32]
-	Origin       string `json:"origin"`         // advisory
+	Alg             string                     `json:"alg"`              // webauthn-es256 | webauthn-eddsa
+	CredentialID    string                     `json:"credential_id"`    // base64url(rawId)
+	PublicKeyPEM    string                     `json:"public_key_pem"`   // PKIX "PUBLIC KEY" PEM
+	RPID            string                     `json:"rpid"`             // sha256(rpid) == authenticatorData[0:32]
+	Origin          string                     `json:"origin"`           // authoritative for panel login
+	EnrollmentProof *trustlist.SignedTrustList `json:"enrollment_proof"` // server-challenge UV assertion by this candidate
 }
 
 type passkeyDisableRequestJSON struct {
@@ -115,8 +136,8 @@ func allowCredentialsFor(lc *controller.LoginCredential) []allowCredentialJSON {
 // issueLoginChallenge mints a single-use random login challenge for operator, persists it
 // (hash only), and returns the plaintext (base64url) for the browser to sign over.
 func (h *ControllerHandler) issueLoginChallenge(ctx context.Context, operator string, now time.Time) (string, error) {
-	challenge, lc := controller.NewLoginChallenge(operator, loginChallengeTTL, now)
-	if err := h.store.CreateLoginChallenge(ctx, h.tenant, lc); err != nil {
+	challenge, record := controller.NewAssertionChallenge(operator, loginChallengeTTL, now)
+	if err := h.store.CreateAssertionChallenge(ctx, h.tenant, record, now); err != nil {
 		return "", err
 	}
 	return challenge, nil
@@ -167,7 +188,7 @@ func (h *ControllerHandler) verifyLoginAssertion(ctx context.Context, tenant con
 		return fmt.Errorf("decode assertion challenge: %w", err)
 	}
 	// Atomically burn the single-use challenge (must be ours, this operator, unexpired).
-	if err := h.store.ConsumeLoginChallenge(ctx, tenant, controller.HashToken(challengeStr), op.Username, now); err != nil {
+	if err := h.store.ConsumeAssertionChallenge(ctx, tenant, controller.HashToken(challengeStr), op.Username, now); err != nil {
 		return err
 	}
 	pin, err := pinFromLoginCredential(*op.LoginCredential)
@@ -186,13 +207,15 @@ func (h *ControllerHandler) HandlePasskeyStatus(ctx context.Context, tenant cont
 	if aerr != nil {
 		return nil, aerr
 	}
-	return passkeyStatusResponseJSON{Registered: op.PasskeyEnabled()}, nil
+	return passkeyStatusFor(op), nil
 }
 
 // HandlePasskeyRegister (POST) registers (or replaces) the current operator's login
 // passkey. The credential MUST be a WebAuthn algorithm (a raw Ed25519 has no assertion to
 // verify at login) and its PEM must parse, with a non-empty rpid (an empty rpid disables
-// relying-party binding — the verifier rejects it). Only the PUBLIC half is stored.
+// relying-party binding — the verifier rejects it). Before persistence, EnrollmentProof must
+// verify under this exact candidate key, carry the one-use server enrollment challenge, and set
+// UV. Only the PUBLIC half is stored.
 func (h *ControllerHandler) HandlePasskeyRegister(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	op, aerr := h.currentOperatorAccount(ctx, tenant, actor)
 	if aerr != nil {
@@ -203,14 +226,7 @@ func (h *ControllerHandler) HandlePasskeyRegister(ctx context.Context, tenant co
 		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
 	switch trustlist.Alg(req.Alg) {
-	case trustlist.AlgWebAuthnES256:
-		if _, err := trustlist.ParseES256Pin([]byte(req.PublicKeyPEM)); err != nil {
-			return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err)
-		}
-	case trustlist.AlgWebAuthnEdDSA:
-		if _, err := trustlist.ParseEd25519PinPEM([]byte(req.PublicKeyPEM)); err != nil {
-			return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err)
-		}
+	case trustlist.AlgWebAuthnES256, trustlist.AlgWebAuthnEdDSA:
 	default:
 		return nil, apierr.New(apierr.CodeReqUnsupportedAlg).With("alg", req.Alg)
 	}
@@ -224,28 +240,38 @@ func (h *ControllerHandler) HandlePasskeyRegister(ctx context.Context, tenant co
 	// advisory origin gate (webauthn.go: `if pin.Origin != ""`) is authoritative for the panel
 	// login path — a browser login can prove which origin issued the assertion, so binding it
 	// stops a credential phished/replayed from a different origin. This required-check, NOT a
-	// crypto change, is what makes the existing gate fire for login pins; the shared
-	// VerifyAssertion is left untouched (the node keystone path intentionally pins an empty
-	// Origin, because a node cannot prove which browser origin a user used months earlier).
+	// crypto change, is what makes the existing gate fire for login pins. The shared generic
+	// verifier remains unchanged because offline/node keystone verification treats origin as an
+	// advisory browser-enrollment attribute rather than a node-established security boundary.
 	if strings.TrimSpace(req.Origin) == "" {
 		return nil, apierr.New(apierr.CodeReqFieldRequired).With("field", "origin")
 	}
-	now := time.Now().UTC()
-	op.LoginCredential = &controller.LoginCredential{
+	candidate := controller.LoginCredential{
 		Alg:          req.Alg,
 		CredentialID: req.CredentialID,
 		PublicKeyPEM: req.PublicKeyPEM,
 		RPID:         req.RPID,
 		Origin:       req.Origin,
 	}
-	op.UpdatedAt = now
-	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+	pin, err := pinFromLoginCredential(candidate)
+	if err != nil {
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err)
+	}
+	if aerr := h.verifyWebAuthnEnrollmentProof(ctx, tenant, actor, webAuthnEnrollmentLogin, req.EnrollmentProof, pin); aerr != nil {
+		return nil, aerr
+	}
+
+	now := time.Now().UTC()
+	if err := h.store.CompareAndSetLoginCredential(ctx, tenant, op.Username, op.LoginCredential, &candidate, now); err != nil {
+		if errors.Is(err, controller.ErrLoginCredentialChanged) {
+			return nil, apierr.New(apierr.CodeLoginCredentialChanged)
+		}
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now, Actor: "operator:" + op.Username, Action: "passkey-registered",
 	})
-	return passkeyStatusResponseJSON{Registered: true}, nil
+	return passkeyStatusFor(controller.Operator{LoginCredential: &candidate}), nil
 }
 
 // HandlePasskeyDisable (POST) removes the current operator's login passkey, requiring a
@@ -283,9 +309,10 @@ func (h *ControllerHandler) HandlePasskeyDisable(ctx context.Context, tenant con
 	if err := h.verifyLoginAssertion(ctx, tenant, op, *req.Passkey, now); err != nil {
 		return nil, apierr.New(apierr.CodeAuthPasskeyVerifyFailed)
 	}
-	op.LoginCredential = nil
-	op.UpdatedAt = now
-	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+	if err := h.store.CompareAndSetLoginCredential(ctx, tenant, op.Username, op.LoginCredential, nil, now); err != nil {
+		if errors.Is(err, controller.ErrLoginCredentialChanged) {
+			return nil, apierr.New(apierr.CodeLoginCredentialChanged)
+		}
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
@@ -346,7 +373,7 @@ func (h *ControllerHandler) HandlePasskeyLoginBegin(w http.ResponseWriter, r *ht
 	}
 	// Decoy: a random (UNSTORED) challenge with empty allowCredentials. The finish will
 	// fail (no operator / no passkey / unconsumable challenge) with a uniform 401.
-	decoy, _ := controller.NewLoginChallenge(req.Username, loginChallengeTTL, now)
+	decoy, _ := controller.NewAssertionChallenge(req.Username, loginChallengeTTL, now)
 	writeJSON(w, http.StatusOK, passkeyChallengeResponseJSON{
 		Challenge:        decoy,
 		AllowCredentials: []allowCredentialJSON{},

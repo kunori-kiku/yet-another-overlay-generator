@@ -183,6 +183,46 @@ export function configOf(state: ControllerState): ControllerConfig {
   };
 }
 
+// ControllerActionContext binds an asynchronous controller action to the exact endpoint/auth
+// context that authorized its first request. `authGeneration` advances whenever that context is
+// replaced (endpoint/token change, login/logout, session loss, identity replacement, or workflow-
+// mode transition). Capturing the config alongside the generation also prevents a multi-step
+// action from accidentally issuing later legs against whatever target happens to be current after
+// an await.
+export interface ControllerActionContext {
+  readonly generation: number;
+  readonly config: ControllerConfig;
+}
+
+export function captureControllerActionContext(
+  get: () => ControllerState,
+): ControllerActionContext {
+  const state = get();
+  return {
+    generation: state.authGeneration,
+    config: configOf(state),
+  };
+}
+
+// The single stale-continuation guard for every controller slice. Store-owned background actions
+// use the boolean form and stop quietly; direct-return actions call requireControllerActionContext
+// so their caller cannot mistake an old target's result for current data.
+export function controllerActionContextIsCurrent(
+  get: () => ControllerState,
+  context: ControllerActionContext,
+): boolean {
+  return get().authGeneration === context.generation;
+}
+
+export function requireControllerActionContext(
+  get: () => ControllerState,
+  context: ControllerActionContext,
+): void {
+  if (!controllerActionContextIsCurrent(get, context)) {
+    throw new Error(tLocal('controllerStore.controllerContextChanged'));
+  }
+}
+
 // Security (controller server-authoritative): when the session probe fails and we are about to
 // fall back to the login gate, if the canvas is a server secret mirror (canvasFromServer), wipe
 // it — otherwise, while logged out, anyone with the browser could read the fleet's public IPs
@@ -245,10 +285,11 @@ export function selectKeystoneStatusKnown(state: ControllerState): boolean {
   return state.serverOperatorPinned !== null;
 }
 
-// selectHasLocalSigningKey reports whether THIS browser holds the local signing material (the
-// public-key PEM cache) the deploy() signing path needs. A credential can be enrolled on the
-// server (serverOperatorPinned) yet absent here — e.g. enrolled on another device or after a
-// browser-data clear — in which case the operator must sign on the enrolling device.
+// selectHasLocalSigningKey reports whether THIS browser has a complete public WebAuthn invocation
+// handle (credential ID, algorithm, and public-key PEM) for deploy(). It does not imply that
+// private-key material is browser-local or non-exportable: the authenticator/provider owns that
+// key and YAOG requests no attestation. A credential can be enrolled on the server yet lack a
+// usable handle here until authenticated status hydration restores the public tuple.
 export function selectHasLocalSigningKey(state: ControllerState): boolean {
   return (
     state.operatorCredentialId !== null &&
@@ -265,6 +306,9 @@ export function selectHasLocalSigningKey(state: ControllerState): boolean {
 export const serverKeystoneReset = {
   serverOperatorPinned: null,
   serverOperatorAlg: null,
+  serverOperatorRpId: null,
+  serverOperatorOrigin: null,
+  serverOperatorPublicKeyPEM: null,
   serverOperatorFingerprint: null,
   serverRedeployRequired: false,
   pendingKeystoneRotate: false,

@@ -17,13 +17,13 @@ import (
 
 // nonMemberSidecars are the files Export writes into a node dir that are NOT bundle
 // members: the checksum/signature metadata layer (checksums.sha256, bundle.sig,
-// signing-pubkey.pem), the compile-time manifest (manifest.json), and the human README.
+// signing-pubkey.pem) and the compile-time manifest (manifest.json). README.txt is deliberately
+// a member because its custody-critical application guidance must be integrity-bound.
 // Everything ELSE on disk under a node dir MUST be a BundleFiles member — that is the
 // custody invariant this test guards.
 var nonMemberSidecars = map[string]bool{
 	"checksums.sha256":   true,
 	"manifest.json":      true,
-	"README.txt":         true,
 	"bundle.sig":         true,
 	"signing-pubkey.pem": true,
 }
@@ -113,7 +113,7 @@ func TestExport_BundleFileSet_SingleSource(t *testing.T) {
 			}
 
 			for _, node := range result.Topology.Nodes {
-				nodeDir := filepath.Join(outDir, node.Name)
+				nodeDir := filepath.Join(outDir, node.ID)
 
 				// (B) sorted BundleFiles keys — the single source of truth.
 				want := sortedKeys(BundleFiles(result, node.ID))

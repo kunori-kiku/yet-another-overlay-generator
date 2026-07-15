@@ -1,45 +1,155 @@
-# Artifacts & Signing
+# Artifacts and signing
 
-<!-- last-verified: 2026-06-15 -->
-<!-- 2026-06-15 (extensible-i18n closeout): key-gen/export errors coded via internal/apierr; install scripts + self-extracting installer + CLI output Englishized; no artifact/signing-format change. -->
+<!-- last-verified: 2026-07-15 -->
 
 ## Responsibility
-Materialize each compiled node's config bundle as an on-disk directory (configs + `manifest.json` + canonical `checksums.sha256`) and, when a signing key is configured, attach a detached Ed25519 signature (`bundle.sig`) plus the verifying public key over that canonical checksum content.
+
+Define one canonical per-node bundle member set, materialize it on disk for CLI/controller callers,
+produce deterministic checksum bytes, and optionally attach an Ed25519 signature over those exact
+bytes. The exporter is a presentation sink; compilation and rendering happen earlier through
+`internal/localcompile`.
 
 ## Files
-- `internal/artifacts/export.go:40-253` — `Export(result *compiler.CompileResult, outputDir string) (*ExportResult, error)`: per-node dirs, file writes, checksums, manifest, optional signing, project-level deploy scripts.
-- `internal/artifacts/export.go:257-274` — `validateSafeName`: rejects node names that would enable path traversal (empty, `.`/`..`, separators, absolute).
-- `internal/bundlesig/bundlesig.go:1-221` — stdlib-only leaf package: `YAOG_BUNDLE_SIGNING_KEY` loading, `ConfigSigner` seam, `Canonicalize`, `Sign`/`Verify`, PEM marshal/parse.
 
-## Inputs
-- `*compiler.CompileResult` from the render pipeline (see specs/compiler-allocation.md, specs/render-keys.md): `WireGuardConfigs` keyed `"nodeID:interfaceName"` (internal/artifacts/export.go:84-97), `BabelConfigs`, `SysctlConfigs`, `InstallScripts` per node ID, `DeployScripts` per filename, and `Manifest` metadata (internal/artifacts/export.go:202-215).
-- Env var `YAOG_BUNDLE_SIGNING_KEY` (internal/bundlesig/bundlesig.go:36): path to an Ed25519 private key in PKCS#8 PEM (`openssl genpkey -algorithm ed25519`); unset/empty means signing is off.
-- Callers of `Export`: the CLI (`cmd/compiler`), the in-browser WASM engine, and controller staging (`internal/controller/compile.go`, see specs/controller-stage-promote.md).
+- `internal/artifacts/export.go:23-60` defines `BundleFiles`, the single member-set constructor
+  shared by disk export and the in-memory localcompile contract.
+- `internal/artifacts/export.go:63-77` maps member paths to file modes.
+- `internal/artifacts/export.go` renders node directories, checksum/signature metadata, manifests,
+  README files, and project-level deploy scripts into a fresh tree, then publishes that exact tree.
+- `internal/bundlesig/bundlesig.go:28-205` owns signing environment names, PKCS#8/PKIX parsing,
+  the `ConfigSigner` seam, canonicalization, and Ed25519 sign/verify.
+- `internal/localcompile/compile.go:109-173` reshapes rendered results into the in-memory artifact
+  contract using the same `BundleFiles` and checksum canonicalizer.
+- `internal/agent/verify.go:126-231` is the node-side fail-closed bundle verification gate.
 
-## Outputs
-- Per-node directory `<outputDir>/<nodeName>/` containing `wireguard/<iface>.conf` (0600), `babel/babeld.conf` (non-client only), `sysctl/99-overlay.conf`, `install.sh` (0755), `checksums.sha256`, `manifest.json`, `README.txt` (internal/artifacts/export.go:64-235); plus project-level deploy scripts at the export root (internal/artifacts/export.go:241-250). Layout documented in docs/spec/artifacts/export-bundle.md.
-- When signing is on: `bundle.sig` (base64 of the raw 64-byte Ed25519 signature over the exact `checksums.sha256` bytes) and `signing-pubkey.pem` (PKIX PEM) in each node dir (internal/artifacts/export.go:180-195).
-- `manifest.json` fields: node identity/role/domain, project id/name/version, `compiled_at`, compiler checksum, `architecture` (`per-peer-interface` vs `single-interface` for clients), and the `files` list (internal/artifacts/export.go:197-215).
-- Downstream consumers: controller staging reads each node dir back into a file map and binds the SHA-256 of `checksums.sha256` into the keystone manifest (internal/controller/compile.go:211-246, see specs/controller-store.md, specs/keystone-trustlist.md); the agent verifies `bundle.sig` with `bundlesig.Verify` against the pinned key (internal/agent/verify.go:148, see specs/agent.md); the air-gap API zips the dirs and signs self-extracting installer payloads through the same `ConfigSigner` seam (internal/api/handler.go:348, 457).
-- `bundlesig` primitives are also reused by the trust-list signer/verifier (internal/trustlist/ed25519.go:48-52, internal/trustlist/verify.go:82).
+## Canonical bundle members
 
-Load-bearing signatures:
-- `bundlesig.Canonicalize(files map[string]string) []byte` — sorted-by-path `sha256sum -c` lines, LF-terminated, deterministic regardless of map order (internal/bundlesig/bundlesig.go:155-172).
-- `bundlesig.LoadConfigSignerFromEnv() (ConfigSigner, error)` — `(nil, nil)` when unset; error on unreadable/unparsable key (internal/bundlesig/bundlesig.go:132-141).
-- `ConfigSigner { Sign(message []byte) ([]byte, error); PublicKeyPEM() []byte }` — the KMS/HSM swap seam (internal/bundlesig/bundlesig.go:99-105); docs/spec/controller/signing.md covers the tiering.
+`BundleFiles(result,nodeID)` returns only deployable, checksummed members:
 
-## Decision points (if any)
-- **Sign or hash-only:** signer resolved once before any node dir is touched; `nil` signer keeps the export byte-for-byte the pre-signing output, a malformed key fails the whole export early (internal/artifacts/export.go:52-56, internal/bundlesig/bundlesig.go:59-76).
-- **Client vs non-client:** clients get no `babel/` dir and the `single-interface` architecture label (internal/artifacts/export.go:65-74, 197-200).
-- **What is checksummed:** only the rendered artifacts — WireGuard confs, babeld.conf, sysctl, `install.sh`. `manifest.json` is excluded (carries `compiled_at` timestamps); `bundle.sig`/`signing-pubkey.pem` are excluded by construction (they sign/anchor the set, so cannot be members) (internal/artifacts/export.go:128-156).
-- **Trust-list files are never exported here:** the keystone manifest binds each node's `checksums.sha256` digest, so `trustlist.json`/`trustlist.sig` cannot live inside that checksum set; the controller appends them to the served file map at `/config` time (internal/artifacts/export.go:33-39, internal/controller/compile.go:198-201; see specs/controller-agent-api.md).
+- every `wireguard/<interface>.conf` belonging to the node;
+- `babel/babeld.conf` when the node has Babel output;
+- `sysctl/99-overlay.conf`;
+- `install.sh`;
+- `artifacts.json` only when release/mimic configuration produced non-empty content; and
+- `README.txt` with custody-aware operator instructions.
 
-## Invariants
-- Signatures are produced ONLY over `Canonicalize` output — never over the compiler's non-canonical `fmt.Sprintf("%v")` checksum (internal/bundlesig/bundlesig.go:6-13). `checksums.sha256` content and the signed message are the identical bytes (internal/artifacts/export.go:158-188).
-- Integrity anchors in Go-emitted constants, not in files the payload carries: `install.sh` is inside the checksummed set, and the verifying pubkey is pinned into `install.sh` at render time, not read from the bundle (PRINCIPLES.md "Generated scripts run as root on fleets"; internal/artifacts/export.go:130-136).
-- `bundlesig` stays a stdlib-only leaf package; KMS/HSM clients implement `ConfigSigner` in their own packages (internal/bundlesig/bundlesig.go:1-14, 84-98; PRINCIPLES.md "Minimal dependencies" scoped exception).
+That map is the source for all four views of membership: files written, paths listed in
+`manifest.json`, paths hashed into `checksums.sha256`, and bytes authenticated by `bundle.sig`.
+This prevents an executable/config member from being written outside the integrity set or listed
+without being shipped (`internal/artifacts/export.go:141-193`). Paths are sorted before writing and
+listing.
 
-## Gotchas (optional)
-- The pubkey pinning into `install.sh` does NOT happen in this subsystem: `render.All` reads the same env var independently and passes the PEM to `RenderInstallScriptSigned` / `RenderClientInstallScriptSigned` (internal/render/render.go:185-192, internal/renderer/script.go:774, 1316; see specs/render-keys.md). Export and render must therefore see the same `YAOG_BUNDLE_SIGNING_KEY` or the shipped `signing-pubkey.pem` and the script-pinned key diverge.
-- `bundle.sig` and `signing-pubkey.pem` ARE listed in `manifest.json`'s `files` array but are NOT in `checksums.sha256` (internal/artifacts/export.go:194) — tooling that equates the two lists will false-alarm on signed bundles.
-- The checksummed file set is rebuilt as a second in-memory map (internal/artifacts/export.go:140-156) mirroring the write loop above it (internal/artifacts/export.go:84-121); hashes describe the in-memory strings, not re-read disk bytes, and the two blocks must stay in lockstep. Tier-1 signing with an on-controller key proves internal consistency, not provenance — the off-host keystone manifest is the provenance layer (docs/spec/security/security.md:54-77, see specs/controller-stage-promote.md).
+Member modes are derived centrally: WireGuard configs are `0600`, `install.sh` is `0755`, and the
+remaining members are `0644`. Canonical bundle paths are validated before publication: they must be
+relative, clean slash-separated paths without aliases, control characters, or case-fold collisions.
+Export directories use portable, case-fold-unique node IDs only. The complete export is built in a
+fresh sibling tree and replaces only a real directory destination; symlink destinations are rejected,
+late failures leave the prior tree unchanged, and a successful re-export removes every stale node,
+member, and signing sidecar.
+
+## Checksums and signatures
+
+`bundlesig.Canonicalize` sorts member paths and emits one LF-terminated sha256sum line per member:
+
+```text
+<lowercase SHA-256><two spaces><relative path>\n
+```
+
+The returned bytes are written verbatim as `checksums.sha256`. Signing, when enabled, is Ed25519
+over those exact bytes—not the compiler manifest checksum and not a map serialization
+(`internal/bundlesig/bundlesig.go:160-205`).
+
+`YAOG_BUNDLE_SIGNING_KEY` points to an Ed25519 PKCS#8 PEM private key. Unset means a backward-
+compatible hash-only bundle. A malformed configured key fails before export begins. A signed node
+directory adds:
+
+- `bundle.sig` — standard-base64 raw Ed25519 signature plus a trailing newline;
+- `signing-pubkey.pem` — the corresponding PKIX public-key PEM.
+
+Those two files are listed in `manifest.json` but are not checksum members: they authenticate the
+checksum set and cannot self-reference. `ConfigSigner` is the injection seam for another signing
+backend; the current in-process implementation and `bundlesig` package remain standard-library
+only (`internal/bundlesig/bundlesig.go:95-158`).
+
+## Directory metadata
+
+Each node directory also contains two integrity metadata files:
+
+- `checksums.sha256` — canonical member hashes;
+- `manifest.json` — node/project metadata, architecture, compiler checksum, compile time, and the
+  member path list, plus signature/public-key paths when signed;
+
+`checksums.sha256` and `manifest.json` are not members of the checksum set and do not appear in the
+manifest's `files` array. The checksum file cannot hash itself, and `manifest.json` carries volatile
+`compiled_at`. `README.txt`, by contrast, is a canonical member: its instructions are listed in the
+manifest, hashed in `checksums.sha256`, and authenticated by `bundle.sig` when signing is enabled.
+Consumers must not equate “all files in the directory” with “manifest/checksum members.”
+
+Project-level `deploy-all.sh`/`deploy-all.ps1` outputs are written at the export root, outside every
+node bundle and its integrity set.
+
+## Callers
+
+The offline compiler runs the canonical localcompile path in `AirGap` custody, then calls
+`artifacts.Export` to write its output (`cmd/compiler/main.go:70-119`). Controller deploy preview
+and stage call the same exporter in a temporary directory so the store receives exactly the disk
+bundle shape (`internal/controller/compile_preview.go:81-108` and
+`internal/controller/compile_stage.go:187-255`).
+
+The browser/WASM path does not write a filesystem tree. `localcompile.Compile` calls
+`ArtifactsFromResult`, which uses the same `BundleFiles` and `Canonicalize` functions to expose
+per-node files, checksums, and optional signatures in memory
+(`internal/localcompile/compile.go:15-34,109-173`). The localcompile golden corpus pins that shape.
+
+There is no anonymous air-gap HTTP export API and no self-extracting installer endpoint. Local
+browser export is Go/WASM; the controller surface stages authenticated per-node bundles; the
+standalone CLI writes directories.
+
+## Verification and trust tiers
+
+Before running `install.sh`, the agent requires `checksums.sha256`, verifies a present signature,
+then verifies every listed file hash. A configured pinned bundle public key overrides the key
+carried in the bundle and makes an unsigned bundle a hard failure. With neither pin nor signature,
+hash-only bundles remain accepted for compatibility (`internal/agent/verify.go:126-215`).
+`install.sh` and, when present, `artifacts.json` receive explicit coverage checks so an attacker
+cannot add or omit them outside the listed set (`internal/agent/verify.go:207-229`).
+
+The controller adds two related but distinct controls:
+
+- A persisted bundle-signing anchor detects a later missing or unexpectedly changed
+  `YAOG_BUNDLE_SIGNING_KEY`; `YAOG_BUNDLE_SIGNING_KEY_ROTATE` is the explicit one-deploy re-pin
+  escape hatch (`internal/controller/keystone.go:67-123`).
+- Keystone's off-host-signed trust list binds `hex(sha256(checksums.sha256))` to a node identity and
+  WireGuard public key. `trustlist.json` and `trustlist.sig` therefore cannot be exported inside the
+  checksum set they bind; the controller appends them when serving config.
+
+Tier-1 bundle signing proves the checksum set was signed by the configured bundle key. Keystone is
+the separate off-host membership/provenance authority. Neither replaces per-file checksum
+verification.
+
+## Integration invariant
+
+The install-script renderer embeds a signing public key only when its `localcompile.CompileRequest`
+receives a `ConfigSigner`; export must use that same signer when it writes `bundle.sig`. The live
+disk-writing paths enforce this rather than relying on two environment reads:
+
+- controller stage and deploy preview resolve one signer and pass it through
+  `CompileSubgraphWithSigner` and `artifacts.ExportWithSigner`; stage also checks the persisted
+  signing anchor with that exact object;
+- the standalone compiler resolves one signer and passes it to both `localcompile.CompileResult`
+  and `artifacts.ExportWithSigner`;
+- `artifacts.Export` remains an environment-loading convenience for callers that do not render
+  with a pre-resolved signer.
+
+This keeps direct/manual `install.sh` verification aligned with the signature that managed agents
+pre-verify. Controller empty-stage cleanup is projected before signer resolution, so a malformed
+configured key cannot prevent stale staged bundles from being purged. Integration tests pin both
+the signer alignment and that cleanup ordering.
+
+Other invariants:
+
+- Hashes describe the exact in-memory strings written as members; `BundleFiles` keeps the two views
+  single-sourced.
+- Signed and unsigned exports never mix within one run because the signer is resolved before the
+  node loop.
+- Trust-list files remain outside bundle export and outside `checksums.sha256` by construction.

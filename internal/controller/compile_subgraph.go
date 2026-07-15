@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/localcompile"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -38,15 +39,30 @@ import (
 // bound for an over-large CIDR. The frozen contract itself stays context-free (the TS port
 // mirrors a context-free seam); ctx is the orthogonal Go-runtime param the live callers pass.
 func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs render.FetchSettings) (*compiler.CompileResult, model.Topology, []string, error) {
-	// Validate the operator-asserted identity of any MANUAL (hand-deployed, agent-less) node before it
-	// is admitted: a manual node carries its own pre-known public key (no enrollment proves it), so it
-	// must have one and it must be unique across the fleet. This runs on BOTH the stage and the compile
-	// -preview path (both call here), so a missing/colliding manual key is a LOUD error, not the silent
-	// exclusion enrolledSubgraph would otherwise apply.
-	if err := validateManualNodes(topo, nodes); err != nil {
+	subgraph, skipped, err := projectEnrolledSubgraph(topo, nodes)
+	if err != nil {
 		return nil, model.Topology{}, nil, err
 	}
-	subgraph, skipped := enrolledSubgraph(topo, nodes)
+	if len(subgraph.Nodes) == 0 {
+		return nil, subgraph, skipped, nil
+	}
+
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		return nil, model.Topology{}, nil, fmt.Errorf("controller: loading bundle signing key: %w", err)
+	}
+	return CompileSubgraphWithSigner(ctx, topo, nodes, fs, signer)
+}
+
+// CompileSubgraphWithSigner is CompileSubgraph with the optional tier-1 bundle signer already
+// resolved. Stage/preview callers use it together with artifacts.ExportWithSigner so the public
+// key embedded in install.sh and the detached signature sidecars are derived from one immutable
+// signer snapshot rather than two filesystem/environment reads.
+func CompileSubgraphWithSigner(ctx context.Context, topo *model.Topology, nodes []Node, fs render.FetchSettings, signer bundlesig.ConfigSigner) (*compiler.CompileResult, model.Topology, []string, error) {
+	subgraph, skipped, err := projectEnrolledSubgraph(topo, nodes)
+	if err != nil {
+		return nil, model.Topology{}, nil, err
+	}
 	if len(subgraph.Nodes) == 0 {
 		return nil, subgraph, skipped, nil
 	}
@@ -81,6 +97,7 @@ func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs
 		Topology:   subgraph,
 		Custody:    render.AgentHeld,
 		Fetch:      fs,
+		SigningKey: signer,
 		Reserved:   reserved,
 		CompiledAt: time.Now(),
 	})
@@ -88,6 +105,24 @@ func CompileSubgraph(ctx context.Context, topo *model.Topology, nodes []Node, fs
 		return nil, subgraph, skipped, fmt.Errorf("controller: compiling enrolled subgraph: %w", err)
 	}
 	return result, subgraph, skipped, nil
+}
+
+// projectEnrolledSubgraph performs the validation/readiness half without rendering. Stage uses
+// this preflight to preserve the security-critical empty-stage purge even when the configured
+// bundle-signing key is unreadable: no ready node means no signed bytes are needed, but stale
+// staged bundles must still be destroyed. CompileSubgraphWithSigner uses the same helper so the
+// preflight and actual compile cannot disagree about manual-node admission or readiness.
+func projectEnrolledSubgraph(topo *model.Topology, nodes []Node) (model.Topology, []string, error) {
+	// Validate the operator-asserted identity of any MANUAL (hand-deployed, agent-less) node before it
+	// is admitted: a manual node carries its own pre-known public key (no enrollment proves it), so it
+	// must have one and it must be unique across the fleet. This runs on BOTH the stage and the compile
+	// -preview path, so a missing/colliding manual key is a LOUD error, not the silent exclusion
+	// enrolledSubgraph would otherwise apply.
+	if err := validateManualNodes(topo, nodes); err != nil {
+		return model.Topology{}, nil, err
+	}
+	subgraph, skipped := enrolledSubgraph(topo, nodes)
+	return subgraph, skipped, nil
 }
 
 // enrolledSubgraph projects a stored topology down to its ready subgraph under the

@@ -20,10 +20,9 @@ const authDataMinLen = 37
 // (authData[33:37]) because synced passkeys legitimately emit a counter of 0.
 const flagUserPresent = 0x01
 
-// flagUserVerified is the User-Verified (UV) bit. We require it too: both ceremonies pin
-// userVerification:"required" client-side, so the SERVER — the sole enforcement authority — must
-// enforce UV. A User-Present-only assertion otherwise degrades the declared "user-verified" factor
-// to mere possession. Unlike the counter, a UV-capable authenticator DOES set this under UV=required.
+// flagUserVerified is the User-Verified (UV) bit. UV is a result of one ceremony, not an
+// immutable property of a credential. The generic assertion verifier intentionally ignores it;
+// VerifyUserVerifiedAssertion applies the bit check only to the server-issued enrollment proof.
 const flagUserVerified = 0x04
 
 // verifyWebAuthn verifies a WebAuthn (FIDO2) assertion over a trust list, stdlib
@@ -66,6 +65,36 @@ func VerifyAssertion(art SignedTrustList, pin PinnedCredential, challenge []byte
 	}
 }
 
+// VerifyUserVerifiedAssertion verifies a WebAuthn assertion exactly like VerifyAssertion and then
+// additionally requires that THIS ceremony performed user verification. It is deliberately a
+// separate entry point: YAOG uses it for the one-use, server-issued proof submitted while enrolling
+// a NEW browser credential. Login, 2FA, keystone signing, and node-side membership verification use
+// VerifyAssertion/Verify and therefore do not retroactively impose a new acceptance requirement on
+// existing credentials or already-served manifest signatures.
+//
+// The credential ID is normally informational to the signature verifier (the pinned public key is
+// authoritative), but an enrollment proof must name the same candidate credential being stored so
+// a valid UV assertion from some other credential cannot be spliced into the request.
+func VerifyUserVerifiedAssertion(art SignedTrustList, pin PinnedCredential, challenge []byte) error {
+	if pin.CredentialID == "" || art.CredentialID != pin.CredentialID {
+		return fmt.Errorf("trustlist: enrollment proof credential_id = %q, want %q", art.CredentialID, pin.CredentialID)
+	}
+	if err := VerifyAssertion(art, pin, challenge); err != nil {
+		return err
+	}
+	authData, err := base64.RawURLEncoding.DecodeString(art.AuthenticatorData)
+	if err != nil {
+		return fmt.Errorf("trustlist: decode authenticator_data: %w", err)
+	}
+	if len(authData) < authDataMinLen {
+		return fmt.Errorf("trustlist: authenticator_data too short: %d bytes, want >= %d", len(authData), authDataMinLen)
+	}
+	if authData[32]&flagUserVerified == 0 {
+		return ErrUserVerification
+	}
+	return nil
+}
+
 // AssertionChallenge extracts the base64url challenge string embedded in a WebAuthn
 // assertion's clientDataJSON. A caller that issued a RANDOM server-side challenge (e.g.
 // operator passkey login) uses it as the lookup key for the single-use challenge record
@@ -102,7 +131,8 @@ func AssertionChallenge(art SignedTrustList) (string, error) {
 //  5. challenge must equal base64url(wantChallenge) — the binding to the exact bytes
 //     the verifier expected (content hash for the keystone, random nonce for login).
 //  6. rpIdHash (authData[0:32]) must equal sha256(pin.RPID).
-//  7. User-Present flag must be set.
+//  7. User-Present flag must be set. UV is an enrollment policy checked by
+//     VerifyUserVerifiedAssertion, not by this generic verifier.
 //  8. signedMessage = authenticatorData || sha256(clientDataJSON).
 //  9. Decode the signature from base64url.
 //  10. Verify per pinned alg: ES256 -> ecdsa.VerifyASN1 over sha256(signed);
@@ -170,18 +200,6 @@ func verifyAssertion(art SignedTrustList, pin PinnedCredential, wantChallenge []
 	//    NOT checked — synced passkeys emit 0.)
 	if authData[32]&flagUserPresent == 0 {
 		return fmt.Errorf("trustlist: User-Present flag not set in authenticator_data")
-	}
-
-	// 7b. User-Verified flag must ALSO be set — the ONE gate shared by operator login, 2FA, and
-	//     keystone off-host signing (webauthn.ts runAssertion pins userVerification:"required" for
-	//     all). The server is the sole enforcement authority; a User-Present-ONLY assertion (a PIN-less
-	//     authenticator, or a tampered client requesting UV=discouraged) would otherwise mint a full
-	//     operator session / sign a manifest with mere "touch", collapsing the "user-verified" factor
-	//     to possession. A UV-capable authenticator sets this under UV=required, so honest ceremonies
-	//     are unaffected. (This gate ALSO runs node-side in VerifyMembership — the operator's manifest
-	//     signature must carry UV — so a live fleet's existing manifests must have been UV-signed.)
-	if authData[32]&flagUserVerified == 0 {
-		return ErrUserVerification
 	}
 
 	// Advisory origin check (not authoritative on a node).

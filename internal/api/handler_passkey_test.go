@@ -7,6 +7,7 @@ package api
 // so the trustlist verifier runs for real.
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -22,7 +23,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -41,15 +44,19 @@ func pkixPEM(t *testing.T, pub any) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
 }
 
-// buildAssertion forges a valid WebAuthn assertion over `challenge` (the RAW nonce
-// bytes) signed by priv: authenticatorData = sha256(rpid)||UP|UV flags||counter(0), and the
-// signature covers authData || sha256(clientDataJSON), exactly as the verifier checks.
+// buildAssertion forges a valid UV WebAuthn assertion over `challenge`. Enrollment uses this
+// shape; ordinary assertions may be presence-only under the enrollment-scoped UV policy.
 func buildAssertion(t *testing.T, alg trustlist.Alg, rpid, origin string, challenge []byte, credID, pubPEM string, priv any) trustlist.SignedTrustList {
+	t.Helper()
+	return buildAssertionWithFlags(t, alg, rpid, origin, challenge, credID, pubPEM, priv, 0x01|0x04)
+}
+
+func buildAssertionWithFlags(t *testing.T, alg trustlist.Alg, rpid, origin string, challenge []byte, credID, pubPEM string, priv any, flags byte) trustlist.SignedTrustList {
 	t.Helper()
 	rpHash := sha256.Sum256([]byte(rpid))
 	authData := make([]byte, 0, 37)
 	authData = append(authData, rpHash[:]...)
-	authData = append(authData, 0x01|0x04)  // flags: User-Present | User-Verified (both ceremonies pin UV=required)
+	authData = append(authData, flags)
 	authData = append(authData, 0, 0, 0, 0) // signature counter (0 — synced passkeys do this)
 	cData := []byte(fmt.Sprintf(`{"type":"webauthn.get","challenge":%q,"origin":%q}`,
 		base64.RawURLEncoding.EncodeToString(challenge), origin))
@@ -98,10 +105,80 @@ func es256Keypair(t *testing.T) (string, *ecdsa.PrivateKey) {
 	return pkixPEM(t, priv.Public()), priv
 }
 
-func registerPasskey(t *testing.T, srv *httptest.Server, tok, alg, credID, pubPEM string) {
+func beginWebAuthnEnrollment(t *testing.T, srv *httptest.Server, tok, purpose string) []byte {
 	t.Helper()
+	body, _ := json.Marshal(webAuthnEnrollmentBeginRequestJSON{Purpose: purpose})
+	r := authedJSON(t, srv, http.MethodPost, "webauthn/enrollment/begin", tok, string(body))
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("webauthn/enrollment/begin = %d (%s)", r.StatusCode, b)
+	}
+	var response webAuthnEnrollmentBeginResponseJSON
+	if err := json.NewDecoder(r.Body).Decode(&response); err != nil || response.Challenge == "" {
+		t.Fatalf("decode enrollment challenge = (%+v, %v)", response, err)
+	}
+	challenge, err := base64.RawURLEncoding.DecodeString(response.Challenge)
+	if err != nil {
+		t.Fatalf("decode enrollment challenge: %v", err)
+	}
+	return challenge
+}
+
+func TestWebAuthnEnrollmentBeginRequiresAuthAndKnownPurpose(t *testing.T) {
+	srv, _ := newLoginEnv(t, "")
+
+	unauthBody, _ := json.Marshal(webAuthnEnrollmentBeginRequestJSON{Purpose: webAuthnEnrollmentLogin})
+	resp, err := srv.Client().Post(srv.URL+ctlBase+"webauthn/enrollment/begin", "application/json", strings.NewReader(string(unauthBody)))
+	if err != nil {
+		t.Fatalf("unauthenticated enrollment begin: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated enrollment begin = %d, want 401", resp.StatusCode)
+	}
+
+	_, loginBody := doLogin(t, srv, "admin", "correct-password")
+	tok := sessionFrom(t, loginBody)
+	badBody, _ := json.Marshal(webAuthnEnrollmentBeginRequestJSON{Purpose: "unknown"})
+	bad := authedJSON(t, srv, http.MethodPost, "webauthn/enrollment/begin", tok, string(badBody))
+	bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown enrollment purpose = %d, want 400", bad.StatusCode)
+	}
+
+	if challenge := beginWebAuthnEnrollment(t, srv, tok, webAuthnEnrollmentLogin); len(challenge) != 32 {
+		t.Fatalf("enrollment challenge length = %d, want 32", len(challenge))
+	}
+}
+
+func TestWebAuthnLoginEnrollmentBeginRejectsBreakGlass(t *testing.T) {
+	srv, store := newLoginEnv(t, controller.HashToken("break-glass"))
+	// Exercise the dangerous name-collision case: the break-glass actor is named
+	// "operator", and a real login account with that same name exists. Authorization
+	// must depend on the authentication kind, not merely on the actor string.
+	op, err := controller.NewOperator(DefaultOperatorName, "operator-password", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("NewOperator(%q): %v", DefaultOperatorName, err)
+	}
+	if err := store.PutOperator(context.Background(), testTenant, op); err != nil {
+		t.Fatalf("PutOperator(%q): %v", DefaultOperatorName, err)
+	}
+	body, _ := json.Marshal(webAuthnEnrollmentBeginRequestJSON{Purpose: webAuthnEnrollmentLogin})
+	resp := authedJSON(t, srv, http.MethodPost, "webauthn/enrollment/begin", "break-glass", string(body))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("break-glass login enrollment begin = %d, want 403", resp.StatusCode)
+	}
+}
+
+func registerPasskey(t *testing.T, srv *httptest.Server, tok, alg, credID, pubPEM string, priv any) {
+	t.Helper()
+	proof := buildAssertion(t, trustlist.Alg(alg), testRPID, testOrigin,
+		beginWebAuthnEnrollment(t, srv, tok, webAuthnEnrollmentLogin), credID, pubPEM, priv)
 	body, _ := json.Marshal(passkeyRegisterRequestJSON{
 		Alg: alg, CredentialID: credID, PublicKeyPEM: pubPEM, RPID: testRPID, Origin: testOrigin,
+		EnrollmentProof: &proof,
 	})
 	r := authedJSON(t, srv, http.MethodPost, "passkey/register", tok, string(body))
 	defer r.Body.Close()
@@ -128,7 +205,7 @@ func TestPasskey2FALoginReplayAndPasswordless(t *testing.T) {
 
 	pubPEM, priv := edKeypair(t)
 	const credID = "login-cred-ed"
-	registerPasskey(t, srv, tok, string(trustlist.AlgWebAuthnEdDSA), credID, pubPEM)
+	registerPasskey(t, srv, tok, string(trustlist.AlgWebAuthnEdDSA), credID, pubPEM, priv)
 
 	// Status reflects registered.
 	r := authedJSON(t, srv, http.MethodGet, "passkey/status", tok, "")
@@ -137,6 +214,9 @@ func TestPasskey2FALoginReplayAndPasswordless(t *testing.T) {
 	r.Body.Close()
 	if !st.Registered {
 		t.Fatal("passkey/status not registered after register")
+	}
+	if st.Alg != string(trustlist.AlgWebAuthnEdDSA) || st.CredentialID != credID || st.PublicKeyPEM != pubPEM || st.RPID != testRPID || st.Origin != testOrigin {
+		t.Fatalf("passkey/status descriptor = %+v, want the registered public descriptor", st)
 	}
 
 	// 2FA leg 1: password alone -> 401 passkey_required + a challenge + allowCredentials.
@@ -163,7 +243,8 @@ func TestPasskey2FALoginReplayAndPasswordless(t *testing.T) {
 
 	// 2FA leg 2: sign the challenge -> 200 + session.
 	chal, _ := base64.RawURLEncoding.DecodeString(pr.Challenge)
-	art := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin, chal, credID, pubPEM, priv)
+	// Runtime verification is deliberately presence-only: UV was proven once at enrollment.
+	art := buildAssertionWithFlags(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin, chal, credID, pubPEM, priv, 0x01)
 	resp = doLoginPasskey(t, srv, "admin", "correct-password", art)
 	rb, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -192,7 +273,8 @@ func TestPasskey2FALoginReplayAndPasswordless(t *testing.T) {
 		t.Fatalf("begin response = %+v", cr)
 	}
 	cb, _ := base64.RawURLEncoding.DecodeString(cr.Challenge)
-	art2 := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin, cb, credID, pubPEM, priv)
+	// Ordinary passwordless login remains compatible with an existing UP-only credential.
+	art2 := buildAssertionWithFlags(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin, cb, credID, pubPEM, priv, 0x01)
 	finBody, _ := json.Marshal(passkeyLoginFinishRequestJSON{Username: "admin", Passkey: &art2})
 	fr, err := srv.Client().Post(srv.URL+ctlBase+"login/passkey/finish", "application/json", strings.NewReader(string(finBody)))
 	if err != nil {
@@ -215,7 +297,7 @@ func TestPasskeyLoginRejectsForgeries(t *testing.T) {
 
 	pubPEM, priv := es256Keypair(t)
 	const credID = "login-cred-es"
-	registerPasskey(t, srv, tok, string(trustlist.AlgWebAuthnES256), credID, pubPEM)
+	registerPasskey(t, srv, tok, string(trustlist.AlgWebAuthnES256), credID, pubPEM, priv)
 
 	getChallenge := func() []byte {
 		t.Helper()
@@ -289,17 +371,23 @@ func TestPasskeyRegisterRequiresOrigin(t *testing.T) {
 	_, body := doLogin(t, srv, "admin", "correct-password")
 	tok := sessionFrom(t, body)
 
-	pubPEM, _ := edKeypair(t)
+	pubPEM, priv := edKeypair(t)
 
 	register := func(origin string) (int, string, string) {
 		t.Helper()
-		reqBody, _ := json.Marshal(passkeyRegisterRequestJSON{
+		req := passkeyRegisterRequestJSON{
 			Alg:          string(trustlist.AlgWebAuthnEdDSA),
 			CredentialID: "login-cred-origin",
 			PublicKeyPEM: pubPEM,
 			RPID:         testRPID,
 			Origin:       origin,
-		})
+		}
+		if strings.TrimSpace(origin) != "" {
+			proof := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, origin,
+				beginWebAuthnEnrollment(t, srv, tok, webAuthnEnrollmentLogin), req.CredentialID, pubPEM, priv)
+			req.EnrollmentProof = &proof
+		}
+		reqBody, _ := json.Marshal(req)
 		r := authedJSON(t, srv, http.MethodPost, "passkey/register", tok, string(reqBody))
 		defer r.Body.Close()
 		var env struct {
@@ -326,6 +414,155 @@ func TestPasskeyRegisterRequiresOrigin(t *testing.T) {
 	}
 }
 
+// TestPasskeyRegisterRequiresUserVerifiedEnrollmentProof pins the new enrollment boundary: the
+// candidate is stored only after it signs a purpose/actor-scoped controller challenge with UV.
+// Missing, UP-only, credential-spliced, and replayed proofs all fail without mutating status.
+func TestPasskeyRegisterRequiresUserVerifiedEnrollmentProof(t *testing.T) {
+	srv, _ := newLoginEnv(t, "")
+	_, body := doLogin(t, srv, "admin", "correct-password")
+	tok := sessionFrom(t, body)
+	pubPEM, priv := edKeypair(t)
+	const credID = "login-cred-enrollment-proof"
+
+	base := passkeyRegisterRequestJSON{
+		Alg:          string(trustlist.AlgWebAuthnEdDSA),
+		CredentialID: credID,
+		PublicKeyPEM: pubPEM,
+		RPID:         testRPID,
+		Origin:       testOrigin,
+	}
+	post := func(req passkeyRegisterRequestJSON) int {
+		t.Helper()
+		body, _ := json.Marshal(req)
+		resp := authedJSON(t, srv, http.MethodPost, "passkey/register", tok, string(body))
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	registered := func() bool {
+		t.Helper()
+		resp := authedJSON(t, srv, http.MethodGet, "passkey/status", tok, "")
+		defer resp.Body.Close()
+		var status passkeyStatusResponseJSON
+		_ = json.NewDecoder(resp.Body).Decode(&status)
+		return status.Registered
+	}
+
+	if code := post(base); code != http.StatusBadRequest {
+		t.Fatalf("missing enrollment proof = %d, want 400", code)
+	}
+
+	// A valid proof over a challenge minted for the other enrollment purpose cannot be
+	// consumed here, even though it belongs to the same authenticated actor and candidate.
+	wrongPurposeChallenge := beginWebAuthnEnrollment(t, srv, tok, webAuthnEnrollmentKeystone)
+	wrongPurpose := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin,
+		wrongPurposeChallenge, credID, pubPEM, priv)
+	withWrongPurpose := base
+	withWrongPurpose.EnrollmentProof = &wrongPurpose
+	if code := post(withWrongPurpose); code != http.StatusBadRequest {
+		t.Fatalf("cross-purpose enrollment proof = %d, want 400", code)
+	}
+	if registered() {
+		t.Fatal("cross-purpose enrollment proof mutated passkey status")
+	}
+
+	upOnlyChallenge := beginWebAuthnEnrollment(t, srv, tok, webAuthnEnrollmentLogin)
+	upOnly := buildAssertionWithFlags(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin,
+		upOnlyChallenge, credID, pubPEM, priv, 0x01)
+	withUPOnly := base
+	withUPOnly.EnrollmentProof = &upOnly
+	if code := post(withUPOnly); code != http.StatusBadRequest {
+		t.Fatalf("UP-only enrollment proof = %d, want 400", code)
+	}
+	if registered() {
+		t.Fatal("failed UP-only enrollment proof mutated passkey status")
+	}
+
+	// The failed UP-only proof did not consume its challenge. Retrying the exact candidate with a
+	// valid UV assertion over that same nonce succeeds instead of forcing a new credential/challenge.
+	// Do this before beginning another same-subject enrollment, because begin intentionally replaces
+	// the actor's previous live challenge to bound abandoned ceremonies.
+	good := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin,
+		upOnlyChallenge, credID, pubPEM, priv)
+	withGood := base
+	withGood.EnrollmentProof = &good
+	if code := post(withGood); code != http.StatusOK {
+		t.Fatalf("valid UV enrollment proof = %d, want 200", code)
+	}
+	if !registered() {
+		t.Fatal("valid UV enrollment proof did not register passkey")
+	}
+	if code := post(withGood); code != http.StatusBadRequest {
+		t.Fatalf("replayed enrollment proof = %d, want 400", code)
+	}
+
+	splicedChallenge := beginWebAuthnEnrollment(t, srv, tok, webAuthnEnrollmentLogin)
+	spliced := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin,
+		splicedChallenge, "some-other-credential", pubPEM, priv)
+	withSplice := base
+	withSplice.EnrollmentProof = &spliced
+	if code := post(withSplice); code != http.StatusBadRequest {
+		t.Fatalf("credential-spliced enrollment proof = %d, want 400", code)
+	}
+	if !registered() {
+		t.Fatal("failed credential-spliced proof removed the registered passkey")
+	}
+}
+
+func TestPasskeyEnrollmentProofIsActorScopedAndExpires(t *testing.T) {
+	srv, store := newLoginEnv(t, "")
+	_, adminBody := doLogin(t, srv, "admin", "correct-password")
+	adminToken := sessionFrom(t, adminBody)
+
+	bob, err := controller.NewOperator("bob", "bob-password", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("NewOperator(bob): %v", err)
+	}
+	if err := store.PutOperator(context.Background(), testTenant, bob); err != nil {
+		t.Fatalf("PutOperator(bob): %v", err)
+	}
+	_, bobBody := doLogin(t, srv, "bob", "bob-password")
+	bobToken := sessionFrom(t, bobBody)
+
+	pubPEM, priv := edKeypair(t)
+	const credID = "actor-scoped-credential"
+	adminChallenge := beginWebAuthnEnrollment(t, srv, adminToken, webAuthnEnrollmentLogin)
+	adminProof := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin,
+		adminChallenge, credID, pubPEM, priv)
+	req := passkeyRegisterRequestJSON{
+		Alg: string(trustlist.AlgWebAuthnEdDSA), CredentialID: credID, PublicKeyPEM: pubPEM,
+		RPID: testRPID, Origin: testOrigin, EnrollmentProof: &adminProof,
+	}
+	post := func(token string, body passkeyRegisterRequestJSON) int {
+		raw, _ := json.Marshal(body)
+		resp := authedJSON(t, srv, http.MethodPost, "passkey/register", token, string(raw))
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status := post(bobToken, req); status != http.StatusBadRequest {
+		t.Fatalf("Bob consuming Admin enrollment proof = %d, want 400", status)
+	}
+
+	// Seed an already-expired challenge with the exact subject/hash to exercise the finish path's
+	// expiry check without sleeping through the production TTL.
+	now := time.Now().UTC()
+	encoded, expired := controller.NewAssertionChallenge(
+		webAuthnEnrollmentSubject("bob", webAuthnEnrollmentLogin), -time.Minute, now,
+	)
+	if err := store.CreateAssertionChallenge(context.Background(), testTenant, expired, now); err != nil {
+		t.Fatalf("seed expired challenge: %v", err)
+	}
+	challenge, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode seeded challenge: %v", err)
+	}
+	expiredProof := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin,
+		challenge, credID, pubPEM, priv)
+	req.EnrollmentProof = &expiredProof
+	if status := post(bobToken, req); status != http.StatusBadRequest {
+		t.Fatalf("expired enrollment proof = %d, want 400", status)
+	}
+}
+
 // TestPasskeyDisableRequiresAssertion: disable is two-phase — an empty body returns a
 // challenge, and only a valid assertion removes the credential.
 func TestPasskeyDisableRequiresAssertion(t *testing.T) {
@@ -335,7 +572,7 @@ func TestPasskeyDisableRequiresAssertion(t *testing.T) {
 
 	pubPEM, priv := edKeypair(t)
 	const credID = "login-cred-disable"
-	registerPasskey(t, srv, tok, string(trustlist.AlgWebAuthnEdDSA), credID, pubPEM)
+	registerPasskey(t, srv, tok, string(trustlist.AlgWebAuthnEdDSA), credID, pubPEM, priv)
 
 	// Leg 1: empty body -> a challenge to satisfy.
 	r := authedJSON(t, srv, http.MethodPost, "passkey/disable", tok, "{}")
@@ -348,7 +585,9 @@ func TestPasskeyDisableRequiresAssertion(t *testing.T) {
 
 	// Leg 2: a valid assertion removes the credential.
 	cb, _ := base64.RawURLEncoding.DecodeString(cr.Challenge)
-	art := buildAssertion(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin, cb, credID, pubPEM, priv)
+	// Passkey removal is an ordinary assertion too: UV is requested client-side when available,
+	// but an existing credential that returns only UP must not become impossible to remove.
+	art := buildAssertionWithFlags(t, trustlist.AlgWebAuthnEdDSA, testRPID, testOrigin, cb, credID, pubPEM, priv, 0x01)
 	disBody, _ := json.Marshal(passkeyDisableRequestJSON{Passkey: &art})
 	r = authedJSON(t, srv, http.MethodPost, "passkey/disable", tok, string(disBody))
 	var st passkeyStatusResponseJSON

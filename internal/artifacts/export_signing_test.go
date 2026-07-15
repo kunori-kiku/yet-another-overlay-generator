@@ -111,7 +111,7 @@ func TestExportSigned(t *testing.T) {
 		t.Fatalf("Export: %v", err)
 	}
 
-	for _, node := range []string{"alpha", "bravo"} {
+	for _, node := range []string{"n1", "n2"} {
 		nodeDir := filepath.Join(outDir, node)
 
 		checksums, err := os.ReadFile(filepath.Join(nodeDir, "checksums.sha256"))
@@ -165,7 +165,7 @@ func TestExportSignedDeterministic(t *testing.T) {
 		t.Fatalf("Export run 2: %v", err)
 	}
 
-	for _, node := range []string{"alpha", "bravo"} {
+	for _, node := range []string{"n1", "n2"} {
 		c1, err := os.ReadFile(filepath.Join(out1, node, "checksums.sha256"))
 		if err != nil {
 			t.Fatalf("%s: read checksums run 1: %v", node, err)
@@ -211,7 +211,7 @@ func TestExportUnsigned(t *testing.T) {
 		t.Fatalf("Export run 2: %v", err)
 	}
 
-	for _, node := range []string{"alpha", "bravo"} {
+	for _, node := range []string{"n1", "n2"} {
 		nodeDir := filepath.Join(out1, node)
 
 		if _, err := os.Stat(filepath.Join(nodeDir, "bundle.sig")); !os.IsNotExist(err) {

@@ -53,11 +53,11 @@ func TestInstallTrustListSignature_RejectsStaleAfterRestage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if err := store.SetOperatorCredential(ctx, tenant, OperatorCredential{
+	if err := store.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{
 		Alg:          string(trustlist.AlgEd25519),
 		PublicKeyPEM: string(bundlesig.MarshalPublicKeyPEM(pub)),
 	}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 	approveNode(t, ctx, store, tenant, "node-router", genWGPubKey(t))
 	approveNode(t, ctx, store, tenant, "node-peer", genWGPubKey(t))
@@ -133,11 +133,11 @@ func TestInstallTrustListSignature_ErrorMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if err := store.SetOperatorCredential(ctx, tenant, OperatorCredential{
+	if err := store.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{
 		Alg:          string(trustlist.AlgEd25519),
 		PublicKeyPEM: string(bundlesig.MarshalPublicKeyPEM(pub)),
 	}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 	if _, err := InstallTrustListSignature(ctx, store, tenant, []byte("{}"), trustlist.SignedTrustList{}); !errors.Is(err, ErrNoStagedManifest) {
 		t.Fatalf("nothing staged: err = %v, want ErrNoStagedManifest", err)

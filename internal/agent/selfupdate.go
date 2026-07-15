@@ -73,6 +73,10 @@ var execFn = syscall.Exec
 // temp file instead of the go-test binary. Production uses os.Executable.
 var osExecutable = os.Executable
 
+// saveSelfUpdateTerminalState is SaveState, indirected only so focused tests can prove that
+// finalize/abandon never destroy their rollback artifacts after a failed durable commit.
+var saveSelfUpdateTerminalState = SaveState
+
 // SelfUpdateParams enables signed self-update for a Run (controller mode). Nil ⇒ no self-update
 // (air-gap / DirSource): Run behaves exactly as before.
 type SelfUpdateParams struct {
@@ -202,8 +206,14 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 	// In-flight guard: if a breadcrumb is already pending, a swap is in progress (e.g. a prior
 	// re-exec failed and this daemon retried the cycle). Do NOT re-swap — that would overwrite the
 	// .bak rollback target with the already-installed new binary AND reset Attempts, defeating the
-	// crash-loop cap. Leave it for the next-boot reconcile to resolve.
-	if st, _ := LoadState(cfg.StateDir); st != nil && st.PendingUpdate != nil {
+	// crash-loop cap. Leave it for the next-boot reconcile to resolve. A read failure is also fatal:
+	// proceeding would let the later breadcrumb write replace an unreadable state with a stripped
+	// record and erase configuration/membership floors or a PendingApply intent.
+	st, err := LoadState(cfg.StateDir)
+	if err != nil {
+		return false, fmt.Errorf("load state before self-update: %w", err)
+	}
+	if st.PendingUpdate != nil {
 		return false, fmt.Errorf("self-update to %s already in flight; awaiting restart to reconcile", st.PendingUpdate.To)
 	}
 	key := "linux-" + arch
@@ -283,9 +293,17 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 	// Crash-durable breadcrumb BEFORE the swap: the next boot reconciles it (promote/rollback/
 	// abandon), which is what bounds the Restart=always loop. Confirmed=false — the swap is not
 	// trusted until it passes the startup health gate AND survives a full daemon cycle.
-	st, _ := LoadState(cfg.StateDir)
-	if st == nil {
-		st = &State{}
+	// Reload immediately before publishing the breadcrumb because download + self-test can be a
+	// long interval. Fail closed if custody state became unreadable; never fall back to &State{},
+	// which would erase an unresolved PendingApply and every durable anti-rollback floor. Re-check
+	// the in-flight guard as defense in depth for embedders that call this helper without the common
+	// state lease used by the production Run/retry paths.
+	st, err = LoadState(cfg.StateDir)
+	if err != nil {
+		return false, fmt.Errorf("reload state before self-update breadcrumb: %w", err)
+	}
+	if st.PendingUpdate != nil {
+		return false, fmt.Errorf("self-update to %s already in flight; awaiting restart to reconcile", st.PendingUpdate.To)
 	}
 	st.NodeID = cfg.NodeID
 	st.PendingUpdate = &PendingUpdate{From: running, To: cat.Version, Attempts: 0}
@@ -319,10 +337,30 @@ func performSelfUpdate(cfg *Config, cat *agentCatalog, running, ghProxy string, 
 // a no-op. Otherwise it bumps Attempts crash-durably FIRST (every boot counts toward the cap, even
 // an early-init panic), then ABANDONS at the cap (roll back to .bak, remember the target). It needs
 // only stateDir + buildVersion — no controller client.
-func ReconcileSelfUpdateEarly(stateDir, buildVersion string, stderr io.Writer) {
+//
+// It acquires the common state lease itself and returns a busy/custody error when
+// another operation owns that lease; callers must fail startup on that error.
+func ReconcileSelfUpdateEarly(stateDir, buildVersion string, stderr io.Writer) error {
+	err := WithStateLock(stateDir, func() error {
+		return reconcileSelfUpdateEarlyLocked(stateDir, buildVersion, stderr)
+	})
+	if err != nil {
+		return fmt.Errorf("agent: serialize early self-update reconciliation: %w", err)
+	}
+	return nil
+}
+
+// reconcileSelfUpdateEarlyLocked owns only the mutation itself. The exported
+// entrypoint acquires the common state lease so this load/bump/save transaction
+// cannot race Run, finalization, rekey, or a second startup reconcile. Keeping
+// this helper lock-free avoids recursive acquisition in rollbackAndAbandon.
+func reconcileSelfUpdateEarlyLocked(stateDir, buildVersion string, stderr io.Writer) error {
 	st, err := LoadState(stateDir)
-	if err != nil || st == nil || st.PendingUpdate == nil {
-		return
+	if err != nil {
+		return fmt.Errorf("load early self-update state: %w", err)
+	}
+	if st == nil || st.PendingUpdate == nil {
+		return nil
 	}
 	pu := st.PendingUpdate
 	pu.Attempts++
@@ -331,10 +369,12 @@ func ReconcileSelfUpdateEarly(stateDir, buildVersion string, stderr io.Writer) {
 		// ceiling can't advance across boots — surface it loudly rather than swallowing the error, so an
 		// unbounded restart loop on an unwritable node is diagnosable instead of silent.
 		fmt.Fprintf(stderr, "agent: WARNING: could not persist self-update attempt %d/%d (%v); the crash-loop brick-bound will not advance while the state dir is unwritable\n", pu.Attempts, maxSelfUpdateAttempts, err)
+		return fmt.Errorf("persist early self-update attempt: %w", err)
 	}
 	if pu.Attempts > maxSelfUpdateAttempts {
 		rollbackAndAbandon(stateDir, buildVersion, pu, fmt.Sprintf("attempt cap %d exceeded", maxSelfUpdateAttempts), stderr)
 	}
+	return nil
 }
 
 // ReconcileSelfUpdatePromote is PHASE B: once the controller client + pinned key exist, it
@@ -411,7 +451,13 @@ func FinalizeSelfUpdate(stateDir, buildVersion string, stderr io.Writer) {
 	// (recordSuccess) or a reachable idle retry — the beta.16 "sticky Blocked" smoke finding.
 	st.SelfUpdateBlocked = ""
 	st.Health = "self-updated to " + pu.To
-	_ = SaveState(stateDir, st)
+	if err := saveSelfUpdateTerminalState(stateDir, st); err != nil {
+		// The durable breadcrumb/floor may still describe the probationary update. Keep
+		// the rollback binary and report the failure instead of falsely claiming that
+		// finalization committed; a later clean cycle can retry safely.
+		fmt.Fprintf(stderr, "agent: WARNING: could not persist self-update finalization; retaining breadcrumb and rollback backup: %v\n", err)
+		return
+	}
 	_ = os.Remove(self + ".bak")
 	fmt.Fprintf(stderr, "agent: self-update to %s finalized after a clean cycle (floor=%s)\n", pu.To, pu.To)
 }
@@ -440,15 +486,33 @@ func rollbackAndAbandon(stateDir, buildVersion string, pu *PendingUpdate, reason
 		}
 	}
 
-	st, _ := LoadState(stateDir)
-	if st == nil {
-		st = &State{}
+	st, err := LoadState(stateDir)
+	if err != nil {
+		// The binary may already have been restored, but custody state must never be
+		// replaced with a stripped abandonment record after a read failure. Leave the
+		// PendingUpdate/PendingApply bytes untouched so the next clean boot can resume.
+		fmt.Fprintf(stderr, "agent: WARNING: self-update rollback could not read custody state; leaving its breadcrumb intact: %v\n", err)
+		if rolledBack {
+			fmt.Fprintf(stderr, "agent: self-update to %s failed (%s); rolled back to %s; re-exec\n", pu.To, reason, pu.From)
+			_ = execFn(self, os.Args, os.Environ())
+		}
+		return
 	}
 	st.PendingUpdate = nil // cleared AFTER the rename above
 	st.AbandonedAgentVersion = pu.To
 	st.AbandonedReason = curateAbandonReason(reason) // durable, curated (no raw stderr) — feeds the Abandoned condition
 	st.Health = "self-update to " + pu.To + " abandoned: " + reason
-	_ = SaveState(stateDir, st)
+	if err := saveSelfUpdateTerminalState(stateDir, st); err != nil {
+		// Do not delete the rollback artifact or pretend abandonment was recorded when
+		// the replacement is not durable. If the binary was restored, re-exec it while
+		// retaining the old breadcrumb for the next boot's bounded reconciliation.
+		fmt.Fprintf(stderr, "agent: WARNING: self-update rollback could not persist custody state; leaving its breadcrumb/backup intact: %v\n", err)
+		if rolledBack {
+			fmt.Fprintf(stderr, "agent: self-update to %s failed (%s); rolled back to %s; re-exec\n", pu.To, reason, pu.From)
+			_ = execFn(self, os.Args, os.Environ())
+		}
+		return
+	}
 
 	if rolledBack {
 		fmt.Fprintf(stderr, "agent: self-update to %s failed (%s); rolled back to %s; re-exec\n", pu.To, reason, pu.From)

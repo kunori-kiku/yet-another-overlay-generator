@@ -11,10 +11,9 @@ package api
 // per-IP stops one source spraying many usernames. State is in-process and ephemeral
 // (rate-limit state need not survive a restart) and pruned lazily.
 //
-// Proxy caveat: the source IP is taken from r.RemoteAddr. Behind a reverse proxy
-// that is the proxy's IP, so per-IP limiting collapses to one bucket for all clients;
-// a deployment fronting the controller should forward the real client IP (and/or rate-
-// limit at the proxy). Per-username limiting is unaffected.
+// Proxy handling is opt-in: without YAOG_TRUSTED_PROXIES only RemoteAddr is trusted.
+// Behind a configured trusted proxy, X-Forwarded-For is walked from the trusted edge and
+// X-Real-IP is accepted only when it contains a valid IP. Per-username limiting is unaffected.
 
 import (
 	"net"
@@ -185,8 +184,8 @@ func (h *ControllerHandler) clientIP(r *http.Request) string {
 			}
 		}
 	}
-	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
-		return xr // honored only because the direct peer is a trusted proxy
+	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(xr) != nil {
+		return xr // valid and honored only because the direct peer is a trusted proxy
 	}
 	return host
 }

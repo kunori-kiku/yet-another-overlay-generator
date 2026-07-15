@@ -8,10 +8,11 @@ import {
 } from '../fixtures/panel'
 import { installFaults } from './faults'
 
-// errorBanner locates DeployBar's error <p> (always prefixed "⚠️ "). The exact message varies by
+// errorBanner locates DeployBar's dedicated error <p> (always prefixed "⚠️ "). The exact message varies by
 // fault (a torn connection renders "Failed to fetch"; a coded 5xx renders the backend message), so
-// the coherence assertion is the banner's PRESENCE, not its text.
-const errorBanner = (page: Page) => page.locator('p').filter({ hasText: '⚠️' })
+// the coherence assertion is the banner's PRESENCE, not its text. Keep this scoped to DeployBar so
+// unrelated enrollment-risk notices cannot satisfy or invalidate the fault assertion.
+const errorBanner = (page: Page) => page.getByTestId('deploy-error')
 
 // deploy-faults.spec.ts (plan-16 / 3.4, Phase 6) — the deploy() step × fault matrix on the 3.1
 // keystone-OFF rig. Each test enrolls a fresh design, injects ONE call-count-keyed fault into the

@@ -108,10 +108,17 @@ func (e *regEnv) revoke(nodeID string) {
 
 func (e *regEnv) pinKeystone(ks keystone) {
 	e.t.Helper()
-	if err := e.store.SetOperatorCredential(e.ctx, tenant, controller.OperatorCredential{
+	var expected *controller.OperatorCredential
+	current, err := e.store.GetOperatorCredential(e.ctx, tenant)
+	if err == nil {
+		expected = &current
+	} else if !errors.Is(err, controller.ErrNotFound) {
+		e.t.Fatalf("GetOperatorCredential: %v", err)
+	}
+	if err := e.store.CompareAndSetOperatorCredential(e.ctx, tenant, expected, controller.OperatorCredential{
 		Alg: string(trustlist.AlgEd25519), PublicKeyPEM: string(ks.pubPEM),
 	}); err != nil {
-		e.t.Fatalf("SetOperatorCredential: %v", err)
+		e.t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 }
 

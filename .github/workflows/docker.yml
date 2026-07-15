@@ -1,79 +1,320 @@
 name: Docker
 
-# Build + publish the multi-arch controller image on a version tag (and on demand).
-# GHCR is always published (zero setup — uses the built-in GITHUB_TOKEN). Docker Hub is
-# additionally published only when the DOCKERHUB_USERNAME / DOCKERHUB_TOKEN repo secrets
-# exist, so the workflow is a no-op for Docker Hub until you add them.
+# Reusable controller-image publisher. Release versions are accepted only from release.yml;
+# workflow_dispatch is intentionally edge-only. Version references are policy-non-overwritten:
+# recovery may adopt matching bytes, but this workflow never replaces a mismatched version.
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        description: Validated release tag (for example v2.0.0-rc.7)
+        required: true
+        type: string
+      source_revision:
+        description: Full commit SHA peeled from the validated annotated tag
+        required: true
+        type: string
+    outputs:
+      ghcr_digest:
+        description: Digest read back from the final verified GHCR reference
+        value: ${{ jobs.publish.outputs.ghcr_digest }}
+      ghcr_ref:
+        description: Policy-non-overwritten GHCR version reference (without digest)
+        value: ${{ jobs.publish.outputs.ghcr_ref }}
+      dockerhub_enabled:
+        description: Whether the optional Docker Hub mirror was converged and verified
+        value: ${{ jobs.publish.outputs.dockerhub_enabled }}
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
+# A direct run can update only the mutable edge tag and is serialized with other edge runs.
+# Called release runs remain covered by release.yml's global publication concurrency group.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'yaog-controller-edge' || format('yaog-controller-called-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
   publish:
-    name: Build + push controller image
+    name: Build or recover + verify controller image
     runs-on: ubuntu-latest
+    outputs:
+      ghcr_digest: ${{ steps.converge.outputs.digest }}
+      ghcr_ref: ${{ steps.refs.outputs.ghcr_ref }}
+      dockerhub_enabled: ${{ steps.refs.outputs.dockerhub_enabled }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_USERNAME_SET: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+      DOCKERHUB_TOKEN_SET: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+      DOCKERHUB_ENABLED: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && 'edge' || inputs.version }}
+      SOURCE_REVISION: ${{ github.event_name == 'workflow_dispatch' && github.sha || inputs.source_revision }}
+      GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/yaog-controller
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate invocation and source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$DOCKERHUB_USERNAME_SET" = "$DOCKERHUB_TOKEN_SET" ] \
+            || { echo "::error::Docker Hub username/token must be configured together"; exit 1; }
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo "::error::source revision is not a full Git SHA"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$SOURCE_REVISION" ] \
+            || { echo "::error::checkout does not equal source revision $SOURCE_REVISION"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [ "$RELEASE_VERSION" = edge ] \
+              || { echo "::error::manual Docker runs are edge-only"; exit 1; }
+          else
+            [[ "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(preview|beta|rc)\.(0|[1-9][0-9]*))?$ ]] \
+              || { echo "::error::called release version is invalid"; exit 1; }
+            [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" = "$RELEASE_VERSION" ] \
+              || { echo "::error::release call is not running on its exact tag ref"; exit 1; }
+            [ "$(git cat-file -t "$GITHUB_REF")" = tag ] \
+              || { echo "::error::$RELEASE_VERSION is not annotated"; exit 1; }
+            [ "$(git rev-list -n 1 "$GITHUB_REF")" = "$SOURCE_REVISION" ] \
+              || { echo "::error::annotated tag no longer peels to $SOURCE_REVISION"; exit 1; }
+          fi
 
       - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Compute image tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/yaog-controller
-            ${{ env.DOCKERHUB_USERNAME != '' && format('{0}/yaog-controller', env.DOCKERHUB_USERNAME) || '' }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            # `latest` mirrors release.yml's make_latest predicate (the owner-established self-promotion
-            # policy): a v* tag becomes `latest` UNLESS it is a -beta./-preview. prerelease (rc.N + final
-            # tags self-promote). There is no shared cross-workflow expression, so the predicate is
-            # duplicated inline here; keep it in sync with release.yml's make_latest.
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-beta.') && !contains(github.ref_name, '-preview.') }}
-            # A manual (non-tag) run still produces a usable tag instead of an empty list.
-            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+      - name: Resolve image references
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_VERSION" = edge ]; then
+            image_tag=edge
+          else
+            image_tag=${RELEASE_VERSION#v}
+          fi
+          echo "ghcr_ref=$GHCR_IMAGE:$image_tag" >>"$GITHUB_OUTPUT"
+          echo "dockerhub_enabled=$DOCKERHUB_ENABLED" >>"$GITHUB_OUTPUT"
+          if [ "$DOCKERHUB_ENABLED" = true ]; then
+            [[ "$DOCKERHUB_USERNAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+              || { echo "::error::Docker Hub username is unsafe in an image reference"; exit 1; }
+            echo "dockerhub_ref=$DOCKERHUB_USERNAME/yaog-controller:$image_tag" >>"$GITHUB_OUTPUT"
+          elif [ "$DOCKERHUB_ENABLED" = false ]; then
+            echo "dockerhub_ref=" >>"$GITHUB_OUTPUT"
+          else
+            echo "::error::invalid Docker Hub enabled state"
+            exit 1
+          fi
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Probe policy-non-overwritten version references
+        id: probe
+        if: ${{ env.RELEASE_VERSION != 'edge' }}
+        shell: bash
+        env:
+          GHCR_REF: ${{ steps.refs.outputs.ghcr_ref }}
+          DOCKERHUB_REF: ${{ steps.refs.outputs.dockerhub_ref }}
+        run: |
+          set -euo pipefail
+          probe_ref() {
+            local ref=$1
+            local output=$2
+            set +e
+            bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION" >"$output"
+            local status=$?
+            set -e
+            case "$status" in
+              0) printf 'present' ;;
+              3) printf 'absent' ;;
+              *) exit "$status" ;;
+            esac
+          }
+
+          ghcr_status=$(probe_ref "$GHCR_REF" /tmp/yaog-ghcr-probe.digest)
+          dockerhub_status=disabled
+          if [ -n "$DOCKERHUB_REF" ]; then
+            dockerhub_status=$(probe_ref "$DOCKERHUB_REF" /tmp/yaog-dockerhub-probe.digest)
+          fi
+
+          digest=
+          source_ref=
+          if [ "$ghcr_status" = present ]; then
+            digest=$(</tmp/yaog-ghcr-probe.digest)
+            source_ref=$GHCR_REF
+          fi
+          if [ "$dockerhub_status" = present ]; then
+            mirror_digest=$(</tmp/yaog-dockerhub-probe.digest)
+            if [ -n "$digest" ] && [ "$mirror_digest" != "$digest" ]; then
+              echo "::error::existing version references disagree: $digest vs $mirror_digest"
+              exit 1
+            fi
+            digest=$mirror_digest
+            source_ref=$DOCKERHUB_REF
+          fi
+
+          if [ -n "$digest" ]; then
+            echo "mode=adopt" >>"$GITHUB_OUTPUT"
+            echo "digest=$digest" >>"$GITHUB_OUTPUT"
+            echo "source_ref=$source_ref" >>"$GITHUB_OUTPUT"
+          else
+            [ "$ghcr_status" = absent ] \
+              || { echo "::error::could not prove GHCR version absence"; exit 1; }
+            [ "$dockerhub_status" = absent ] || [ "$dockerhub_status" = disabled ] \
+              || { echo "::error::could not prove Docker Hub version absence"; exit 1; }
+            echo "mode=build" >>"$GITHUB_OUTPUT"
+            echo "digest=" >>"$GITHUB_OUTPUT"
+            echo "source_ref=" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mark edge for rebuild
+        id: edge-probe
+        if: ${{ env.RELEASE_VERSION == 'edge' }}
+        run: echo "mode=build" >>"$GITHUB_OUTPUT"
+
+      - name: Build and push absent refs
+        id: build
+        if: ${{ steps.probe.outputs.mode == 'build' || steps.edge-probe.outputs.mode == 'build' }}
+        continue-on-error: true
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Stamp the image's yaog-server build version with the release tag on a v* tag push;
-          # a manual workflow_dispatch run has no tag (github.ref_name is the branch), so report
-          # 'edge' rather than baking a branch name as the version.
+          tags: |
+            ${{ steps.refs.outputs.ghcr_ref }}
+            ${{ steps.refs.outputs.dockerhub_ref }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_REVISION }}
+            org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
           build-args: |
-            BUILD_VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'edge' }}
+            BUILD_VERSION=${{ env.RELEASE_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Adopt or converge both registry references
+        id: converge
+        shell: bash
+        env:
+          GHCR_REF: ${{ steps.refs.outputs.ghcr_ref }}
+          DOCKERHUB_REF: ${{ steps.refs.outputs.dockerhub_ref }}
+          PROBE_DIGEST: ${{ steps.probe.outputs.digest }}
+          PROBE_SOURCE_REF: ${{ steps.probe.outputs.source_ref }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          verify_ref() {
+            local ref=$1
+            local expected=${2:-}
+            set +e
+            if [ -n "$expected" ]; then
+              digest=$(bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION" "$expected")
+            else
+              digest=$(bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION")
+            fi
+            status=$?
+            set -e
+            case "$status" in
+              0) printf '%s' "$digest" ;;
+              3) return 3 ;;
+              *) return "$status" ;;
+            esac
+          }
+
+          copy_ref() {
+            local source_ref=$1
+            local target_ref=$2
+            local digest=$3
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if docker buildx imagetools create --tag "$target_ref" "$source_ref@$digest"; then
+                if verify_ref "$target_ref" "$digest" >/dev/null; then
+                  return 0
+                fi
+              fi
+              (( attempt == 5 )) || sleep $((attempt * 2))
+            done
+            echo "::error::could not converge $target_ref to $digest"
+            return 1
+          }
+
+          canonical_digest=$PROBE_DIGEST
+          canonical_ref=$PROBE_SOURCE_REF
+
+          set +e
+          ghcr_digest=$(verify_ref "$GHCR_REF")
+          ghcr_status=$?
+          set -e
+          dockerhub_status=3
+          dockerhub_digest=
+          if [ -n "$DOCKERHUB_REF" ]; then
+            set +e
+            dockerhub_digest=$(verify_ref "$DOCKERHUB_REF")
+            dockerhub_status=$?
+            set -e
+          fi
+
+          [ "$ghcr_status" -eq 0 ] || [ "$ghcr_status" -eq 3 ] \
+            || { echo "::error::GHCR verification failed"; exit 1; }
+          [ "$dockerhub_status" -eq 0 ] || [ "$dockerhub_status" -eq 3 ] \
+            || { echo "::error::Docker Hub verification failed"; exit 1; }
+
+          if [ "$ghcr_status" -eq 0 ]; then
+            canonical_digest=$ghcr_digest
+            canonical_ref=$GHCR_REF
+          fi
+          if [ "$dockerhub_status" -eq 0 ]; then
+            if [ -n "$canonical_digest" ] && [ "$dockerhub_digest" != "$canonical_digest" ]; then
+              echo "::error::registry version refs disagree: $canonical_digest vs $dockerhub_digest"
+              exit 1
+            fi
+            canonical_digest=$dockerhub_digest
+            canonical_ref=$DOCKERHUB_REF
+          fi
+          [[ "$canonical_digest" =~ ^sha256:[0-9a-f]{64}$ ]] && [ -n "$canonical_ref" ] \
+            || { echo "::error::build/recovery produced no verifiable registry reference"; exit 1; }
+          if [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$BUILD_DIGEST" != "$canonical_digest" ]; then
+            echo "::error::read-back digest $canonical_digest differs from build digest $BUILD_DIGEST"
+            exit 1
+          fi
+
+          if [ "$ghcr_status" -eq 3 ]; then
+            copy_ref "$canonical_ref" "$GHCR_REF" "$canonical_digest"
+          fi
+          if [ -n "$DOCKERHUB_REF" ] && [ "$dockerhub_status" -eq 3 ]; then
+            copy_ref "$canonical_ref" "$DOCKERHUB_REF" "$canonical_digest"
+          fi
+
+          final_ghcr=$(verify_ref "$GHCR_REF" "$canonical_digest")
+          [ "$final_ghcr" = "$canonical_digest" ] \
+            || { echo "::error::GHCR did not converge to $canonical_digest"; exit 1; }
+          if [ -n "$DOCKERHUB_REF" ]; then
+            final_dockerhub=$(verify_ref "$DOCKERHUB_REF" "$canonical_digest")
+            [ "$final_dockerhub" = "$canonical_digest" ] \
+              || { echo "::error::Docker Hub did not converge to $canonical_digest"; exit 1; }
+          fi
+
+          echo "digest=$canonical_digest" >>"$GITHUB_OUTPUT"

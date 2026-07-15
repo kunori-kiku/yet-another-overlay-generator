@@ -5,13 +5,15 @@
 This wiki is the full user guide for **YAOG** — it covers **both** ways the project runs:
 
 - **Local generator (air-gap):** design a topology in the browser, compile it **entirely in the
-  browser**, export deployable per-node bundles, and install them over SSH. No backend is involved.
+  browser**, export deployable per-node bundles, and install those locally trusted AirGap artifacts
+  directly or over SSH. No backend is involved.
 - **Controller (agent-pull):** run YAOG as a long-lived service where each node **pulls** its own
   keystone-signed config and reports live health back to an operator panel.
 
-Both modes share one compiler (the in-browser TypeScript port is pinned byte-for-byte to the Go
-implementation by a CI conformance gate), so the topology model, allocation, and rendered artifacts
-are identical between them. The architectural ground truth lives in [`docs/spec/`](spec/) — this wiki
+Both modes execute the same Go compilation path: the local panel loads it as Go/WebAssembly, while
+the controller and offline CLI call the same `internal/localcompile` facade natively. A required
+WASM-vs-golden gate checks the browser build against the Go corpus; there is no hand-maintained
+TypeScript compiler twin. The architectural ground truth lives in [`docs/spec/`](spec/) — this wiki
 is the narrative guide on top of it.
 
 ---
@@ -63,16 +65,16 @@ The system follows a **Design → Compile → Deploy** three-layer architecture:
 [Artifact exporter]              ← per-node bundles (local) or per-node signed bundles (controller)
         ▼
 [Target hosts]
-        └─ install.sh runs → the overlay comes up
+        └─ AirGap: trusted install.sh; AgentHeld: enrolled agent / verified kit apply
 ```
 
 Core principles:
 
 - **Topology as code.** The JSON topology is the single source of truth; every config is
   deterministically derived from it.
-- **Deterministic compilation.** The same topology always produces the same bytes (the compiler is a
-  pure function of its inputs — see [§6](#6-compiler-internals)). This is what lets the in-browser
-  TypeScript compiler be pinned byte-for-byte to the Go one.
+- **Deterministic compilation.** The same explicit inputs produce the same bytes (the compile facade
+  receives its clock, key generator, signer, and fetch settings — see [§6](#6-compiler-internals)).
+  This lets CI run the Go/WASM build against the same frozen golden corpus as native Go.
 - **Idempotent deployment.** Install scripts can be safely re-run; adding a node leaves unrelated
   nodes' bundles byte-stable.
 - **Keys stay where they belong.** In local mode keys are generated and held on your design host; in
@@ -255,17 +257,18 @@ algorithm in [spec/artifacts/naming.md](spec/artifacts/naming.md).
 
 ## 3. The two modes & the build boundary
 
-YAOG is built from one source tree but ships as **two distinct deployments**, plus a CLI. **Which
-compute surface exists depends on the build, not on runtime configuration** — this is a deliberate
-security boundary. The authority is [spec/operations/deployment-topology.md](spec/operations/deployment-topology.md).
+YAOG ships a static local-design site, one controller server build, and an offline CLI. The static
+site has no backend listener; `yaog-server` is always the controller and never turns into an
+anonymous compiler. The authority is
+[spec/operations/deployment-topology.md](spec/operations/deployment-topology.md).
 
 ### 3.1 Local generator (air-gap) — compute in the browser
 
-The local generator is a **pure-frontend bundle**: the panel runs entirely in the browser, and the
-**in-browser TypeScript compiler** (`frontend/src/compiler/`) performs validate / compile / export.
-It POSTs to no backend — there is no server listener at all, so you can host it on any static file
-server or CDN. The release ships a self-contained `yaog-local-design-<version>.zip` for this; you can
-also just run the frontend dev server (see [§4](#4-local-mode--design-compile-export-deploy)).
+The local generator is a **static frontend bundle**: the panel loads `yaog.wasm`, a Go/WebAssembly
+build of `cmd/wasm`, and uses the shared `internal/localcompile` pipeline for validate / compile /
+export. It POSTs to no backend — there is no server listener at all, so you can host it on any static
+file server or CDN. The release ships a self-contained `yaog-local-design-<version>.zip` for this;
+you can also just run the frontend dev server (see [§4](#4-local-mode--design-compile-export-deploy)).
 
 A build-time flag, `VITE_LOCAL_ONLY`, produces a **mode-locked** static site: controller mode is
 made unreachable (the toggle and controller-only nav are hidden, and a persisted controller mode is
@@ -273,22 +276,21 @@ coerced back to local). This is what the `yaog-local-design` asset is built with
 
 ### 3.2 Controller — the long-lived Go backend
 
-The default `go build ./...` produces `yaog-server`, the **controller** (panel + API). It serves the
+Building `./cmd/server/` produces `yaog-server`, the **controller** (panel + API). It serves the
 panel SPA, the public `GET /api/health` probe, the operator routes on `:8080`, and the agent routes on
 `:9090`. The controller's compile path is the **operator-gated** server-side render
 (`compile-preview` / `stage`), not an anonymous compute endpoint.
 
-> **The default binary is controller-only and fails loud.** Running `yaog-server` **without** both
+> **The single server binary is controller-only and fails loud.** Running `yaog-server` **without** both
 > `YAOG_CONTROLLER_STATE_DIR` and `YAOG_TENANT_ID` set **exits with a loud error** rather than
-> standing up an anonymous compute listener. This is the `//go:build airgap` boundary: the four
-> anonymous compute routes — `POST /api/{validate,compile,export,deploy-script}` — exist **only** in a
-> `go build -tags airgap` build. In the default (shipped) controller and Docker image they are not
-> linked and **return 404**. A regression test (`airgap_routes_removed_test.go`) pins this.
+> standing up an anonymous compute listener. The former
+> `POST /api/{validate,compile,export,deploy-script}` routes have been removed; they are absent from
+> every server build and return 404. Use the static Go/WASM site or `yaog-compiler` for offline work.
 
 ### 3.3 The third path — the `cmd/compiler` CLI
 
-`cmd/compiler` is the offline CLI and reference implementation. It reads a topology JSON and writes a
-bundle directory with no server at all, producing byte-identical output in either build profile:
+`cmd/compiler` is the offline CLI. It reads a topology JSON and writes a bundle directory with no
+server at all, using the same `internal/localcompile` facade as the browser and controller:
 
 ```bash
 go run ./cmd/compiler/ -input topology.json   # -input is required; -output defaults to ./output
@@ -298,14 +300,13 @@ go run ./cmd/compiler/ -input topology.json   # -input is required; -output defa
 
 | Artifact | Build | Compute surface |
 |---|---|---|
-| Static local-design site (`yaog-local-design-<ver>.zip`) | `npm run build:local` | In-browser TS compiler; **no** backend listener |
-| Controller `yaog-server` (shipped binary + Docker image) | `go build ./...` | `/api/health` + operator/agent routes; compile is the operator-gated server render. The 4 anonymous routes 404. Fails loud without the controller env. |
-| Local-design oracle `yaog-server-airgap-*` (dev/E2E/DAST only) | `go build -tags airgap ./...` | Retains the 4 anonymous `/api/{validate,compile,export,deploy-script}` + `/api/health` |
-| `cmd/compiler` CLI | either build | Offline `render → export`, byte-identical in both profiles |
+| Static local-design site (`yaog-local-design-<ver>.zip`) | `npm run build:local` | In-browser Go/WASM pipeline; **no** backend listener |
+| Controller `yaog-server` (shipped binary + Docker image) | `go build ./cmd/server/` | `/api/health` + operator/agent routes; compile is operator-authenticated. The retired anonymous routes remain absent. Fails loud without the controller env. |
+| `yaog-compiler` CLI | `go build ./cmd/compiler/` | Offline shared-Go `render → export`; no listener |
 
-The in-browser compiler is justified as the default by the **conformance gate**
-(`internal/conformance/`), a required green CI check that pins the TypeScript compiler byte-for-byte
-against the Go pipeline through the frozen `localcompile.Compile` I/O contract
+The required **WASM conformance gate** (`scripts/wasm-conformance-gate.mjs`) executes the compiled
+Go/WASM engine over the frozen `internal/localcompile` golden corpus and compares its manifest with
+native Go. This is parity by executing the same implementation, not by maintaining two compilers
 ([spec/compiler/io-contract.md](spec/compiler/io-contract.md)).
 
 ---
@@ -339,7 +340,8 @@ All editing happens on the **Design** page (the default landing in local mode):
    browser; no backend round-trip). The canvas then shows color-coded per-peer handles and each edge's
    read-only `compiled_port`.
 8. **Export & Deploy** — switch to the **Deploy** page to review the compiled artifacts and download
-   the artifact ZIP, plus the generated `deploy-all.sh` / `deploy-all.ps1`.
+   the artifact ZIP. Its root `deploy-all.sh` / `deploy-all.ps1` and all node bundles are emitted
+   atomically from that same in-browser compile.
 
 **UI layout:** the center canvas visualizes nodes and directed edges with color-coded per-peer
 handles; the canvas toolbar creates domains/nodes; the right-hand aside edits the selected
@@ -356,15 +358,20 @@ domain/node/edge; the bottom bar shows validation results.
 **Compilation** deterministically produces per-peer WireGuard configs, per-node Babel config, per-node
 sysctl params, per-node install scripts, and the project-level deploy scripts.
 
-**Export** packages per-node directories containing all config files, `install.sh`, `manifest.json`,
-and `checksums.sha256`. See [§7](#7-generated-artifacts) for the full layout and the install-script
-phases.
+**Export** packages complete, stable-node-ID-keyed directories containing all config files,
+`install.sh`, `manifest.json`, and `checksums.sha256`, plus the two matching project deploy helpers
+at the ZIP root. See [§7](#7-generated-artifacts) for the full layout and install-script phases.
 
 ### 4.3 Deploying the bundles
 
-Each node's bundle is self-contained — copy it to the host and run `sudo bash install.sh`. For
-fleets, the generated `deploy-all.sh` (Bash) / `deploy-all.ps1` (PowerShell) SSH into every
-SSH-configured node and run the installer for you; see [§7.5](#75-auto-deploy-scripts).
+This direct path is **AirGap-only**. For a locally trusted AirGap export, copy a complete node
+directory to the host and run `sudo bash install.sh`; for a fleet, the ZIP-root `deploy-all.sh`
+(Bash) / `deploy-all.ps1` (PowerShell) uploads each complete directory to every SSH-configured node.
+See [§7.5](#75-auto-deploy-scripts).
+
+Do not use those shortcuts for AgentHeld/controller artifacts. Managed nodes apply only through
+their enrolled agent. Manual AgentHeld nodes use `sudo yaog-agent kit apply` with the operator
+credential provisioned through a separate trusted channel; see [§5.4](#54-enroll-and-deploy-to-a-node-agent-pull).
 
 ---
 
@@ -481,21 +488,50 @@ atomically before** any identity is issued, so a token can never provision two n
 public key binds to exactly one node-id (a duplicate is refused, 409). Revoking a node clears its
 bearer token (it stops resolving on the very next call) and evicts it from every future render.
 
+**Manual nodes (AgentHeld, no daemon).** On the target host, run
+`yaog-agent kit --node-id <id>` and paste its public descriptor into a topology node whose deployment
+mode is **Manual**. After Deploy, download that node's bundle from **Fleet**. Provision the pinned
+operator public credential to the host through a separate trusted channel—never take the trust
+anchor from the downloaded bundle itself—then use the command matching its algorithm:
+
+```bash
+# Raw Ed25519 operator credential
+sudo yaog-agent kit apply --bundle <node-bundle.zip> --node-id <id> \
+  --operator-cred <trusted-public-key.pem> --operator-cred-alg ed25519
+
+# Browser/WebAuthn operator credential; preserve the exact enrolled RP binding
+sudo yaog-agent kit apply --bundle <node-bundle.zip> --node-id <id> \
+  --operator-cred <trusted-public-key.pem> \
+  --operator-cred-alg <webauthn-es256|webauthn-eddsa> \
+  --operator-rpid <rp-id> --operator-origin <origin>
+```
+
+`kit apply` captures the downloaded directory/ZIP, verifies the whole immutable snapshot and, when
+configured, its signed membership, stages a trusted temporary copy, and only then invokes that
+copy's `install.sh`. Use the same command with `--uninstall` for removal. A legacy fleet that has
+**never** enabled a
+keystone can instead pass `--dangerously-allow-no-keystone`; this explicit acknowledgement is
+rejected if trust-list files are present or the node's durable state records a previously verified
+keystone. Never run a downloaded AgentHeld `install.sh` directly, and do not use `deploy-all`—the
+generated AgentHeld helpers exit with fail-closed guidance.
+
 ### 5.5 The deploy lifecycle — compile → stage → promote
 
 A Deploy is a two-phase, operator-gated transition over a per-tenant monotonic **generation** counter:
 
 1. **Compile + stage** (`Deploy` → stage). The controller loads the stored topology, selects the
-   **enrolled subgraph**, runs the same frozen pipeline as local mode, and **stages** per-node signed
-   bundles at `generation + 1`. Staging is reversible and invisible to agents (not yet `current`).
+   **ready subgraph** (enrolled managed nodes plus valid manual nodes), runs the same frozen pipeline
+   as local mode, and **stages** per-node signed bundles at `generation + 1`. Staging is reversible
+   and invisible to agents (not yet `current`).
    Re-staging replaces the prior staged set; it does not advance the counter.
 2. **Promote** (the atomic flip). All staged bundles become `current`, the generation increments, and
    every parked agent long-poll is woken. The controller never self-promotes.
 
-**Render-what's-ready.** The controller renders only the **enrolled subgraph** — a node is included
-only if it is approved *and* has a registered public key; an edge is kept only if *both* endpoints are
-enrolled. This lets you design the whole fleet up front and bring nodes online incrementally; an edge
-to a not-yet-enrolled peer reappears in both bundles when the far end enrolls and you re-deploy.
+**Render-what's-ready.** A managed node is included only if it is approved and has an enrolled public
+key. A manual node is included from its operator-supplied public key (and never enrolls). An edge is
+kept only if both endpoints are ready. This lets you design the whole fleet up front and bring
+managed nodes online incrementally; an edge to a not-yet-enrolled peer reappears in both bundles when
+the far end enrolls and you re-deploy.
 Allocation pins (overlay IPs, transit IPs, ports — never key material) are persisted back after each
 stage, so incremental enrollment never renumbers already-live nodes.
 
@@ -549,6 +585,14 @@ The agent (`cmd/agent`) is a thin, verify-then-apply wrapper over `install.sh`, 
    which splices the locally-held private key into the placeholder in the copied configs (see
    [§8.3](#83-zero-knowledge-key-custody)).
 5. **report** — `POST /report` records the applied generation/checksum/health (best-effort).
+
+Before step 4, the Linux agent durably records the exact candidate/action/trust anchors in a separate
+`PendingApply` write-ahead record while retaining the previous last-known-good state. Its
+state-directory lease is inherited by an installer guardian, so killing the Go parent cannot let a
+restarted daemon or manual `kit apply` overlap a root script that is still running. A failed or
+interrupted script is recovered only by an exact re-synced retry or a strictly newer verified
+candidate; it cannot reset the membership/rollback floor or change trust anchors. Root application is
+Linux-only; Windows keeps portable verification/key commands but refuses `install.sh` execution.
 
 `run --controller` is single-shot by default (one poll→apply→report cycle); `--daemon` loops it
 continuously and is what the bootstrap installs. An anti-rollback high-water mark refuses a bundle
@@ -685,11 +729,11 @@ Full reference: [spec/controller/](spec/controller/) (start with `controller-api
 
 ## 6. Compiler internals
 
-The compiler is the same in both modes — the in-browser TypeScript port is pinned byte-for-byte to the
-Go implementation (`internal/compiler/compiler.go`) by the conformance gate. It is a **pure function**
-of its inputs: no clock reads, no filesystem, no global state (every non-deterministic input is lifted
-into the request). That purity is what makes the output reproducible and the two implementations
-comparable.
+The compiler is the same Go code in both modes. `internal/localcompile` owns the canonical
+`GenerateKeys → CompileAt → render.AllWith → artifacts` sequence; `cmd/wasm`, `cmd/compiler`,
+and the controller subgraph compiler all enter through that facade. It is a **pure function** of its
+explicit inputs: no clock reads, filesystem access, or global state occur inside the facade. That
+purity makes native and Go/WASM execution reproducible and directly comparable.
 
 ### 6.1 Compilation pipeline
 
@@ -712,7 +756,7 @@ The compiler processes the topology in passes:
    | Babel | `babeld.conf` per node | `internal/renderer/babel.go` |
    | sysctl | `99-overlay.conf` | `internal/renderer/sysctl.go` |
    | Install script | `install.sh` | `internal/renderer/script.go` |
-   | Deploy scripts | `deploy-all.sh` + `.ps1` | `internal/renderer/deploy.go` |
+   | Deploy scripts | AirGap `deploy-all.sh` + `.ps1`; AgentHeld fail-closed guidance | `internal/renderer/deploy.go` |
 
 5. **Artifact export** (`internal/artifacts/export.go`) — organizes everything into per-node
    directories with a manifest and checksums.
@@ -782,9 +826,9 @@ WireGuard keys are **persistent**, not regenerated on every compile.
   no private key is a hard error. Because the topology (and browser localStorage) carries live private
   keys, treat it as secret material.
 - **Controller (AgentHeld custody).** The controller renders from **public keys only** — each node's
-  `[Interface] PrivateKey =` line is rendered as a placeholder, and the agent splices its own
-  locally-held private key in at install time. The controller never sees a private key. See
-  [§8.3](#83-zero-knowledge-key-custody).
+  `[Interface] PrivateKey =` line is rendered as a placeholder, and the enrolled agent or verified
+  manual `kit apply` path splices the node's locally held private key in at install time. The
+  controller never sees a private key. See [§8.3](#83-zero-knowledge-key-custody).
 
 Full contract: [spec/data-model/node.md](spec/data-model/node.md) and
 [spec/compiler/allocation-stability.md](spec/compiler/allocation-stability.md).
@@ -795,25 +839,34 @@ Full contract: [spec/data-model/node.md](spec/data-model/node.md) and
 
 ### 7.1 Bundle directory structure
 
-Each node's deployment bundle contains everything needed to go live:
+An AirGap export uses the stable node ID as the single directory key across the CLI, browser/WASM
+ZIP, and deploy helper. The browser writes both project helpers into the **same ZIP and same
+compile** as the node directories:
 
 ```
-node-alpha/
-  ├── wireguard/
-  │   ├── wg-beta.conf       # WireGuard tunnel config to beta
-  │   └── wg-gamma.conf      # WireGuard tunnel config to gamma
-  ├── babel/
-  │   └── babeld.conf        # Babel routing daemon config
-  ├── sysctl/
-  │   └── 99-overlay.conf    # Kernel params (forwarding, rp_filter)
-  ├── install.sh             # One-click install script
-  ├── manifest.json          # Build metadata and file manifest
-  ├── checksums.sha256       # SHA-256 integrity verification
-  └── README.txt             # Quick-start instructions
+artifacts.zip/
+  ├── deploy-all.sh           # AirGap fleet helper; fail-closed guidance in AgentHeld
+  ├── deploy-all.ps1          # same compile as every directory below
+  └── node-alpha/             # stable node ID (not the display name)
+      ├── wireguard/
+      │   ├── wg-beta.conf    # WireGuard tunnel config to beta
+      │   └── wg-gamma.conf   # WireGuard tunnel config to gamma
+      ├── babel/
+      │   └── babeld.conf     # Babel routing daemon config
+      ├── sysctl/
+      │   └── 99-overlay.conf # Kernel params (forwarding, rp_filter)
+      ├── install.sh          # integrity-gated installer
+      ├── manifest.json       # build metadata and file manifest
+      ├── checksums.sha256    # SHA-256 integrity verification
+      └── README.txt          # custody-specific quick-start instructions
 ```
 
-In controller mode, signed bundles additionally carry `bundle.sig` + `signing-pubkey.pem` (when
-`YAOG_BUNDLE_SIGNING_KEY` is set) and `artifacts.json` (the self-update pins).
+The controller stores the same canonical per-node file set. Because the manual-node endpoint serves
+one selected node, its download is named `<node-id>-bundle.zip` and places that node's files at the
+archive root instead of adding a redundant outer directory. Optional bundle signing adds
+`bundle.sig` + `signing-pubkey.pem` when `YAOG_BUNDLE_SIGNING_KEY` is set; an AgentHeld served
+snapshot with the keystone on also carries `trustlist.json` + `trustlist.sig`; configured self-update
+pins live in `artifacts.json`. The agent/kit verifies each applicable layer before applying.
 
 ### 7.2 WireGuard config details
 
@@ -824,7 +877,7 @@ A per-peer config (server roles):
 # Node: node-alpha -> Peer: node-beta
 
 [Interface]
-PrivateKey = <private_key>          # placeholder in controller mode; spliced by the agent
+PrivateKey = <private_key>          # AgentHeld placeholder; spliced by agent / verified kit apply
 Address = 10.10.0.1/32
 Table = off
 ListenPort = 51820
@@ -851,7 +904,8 @@ Key design points:
 
 ### 7.3 Install script logic
 
-`install.sh` is an idempotent, phased deployment:
+`install.sh` is an idempotent, phased deployment. The following direct commands are only for a
+locally trusted **AirGap** directory:
 
 ```bash
 sudo bash install.sh              # install / upgrade overlay
@@ -877,9 +931,14 @@ the overlay SNAT rule and `overlay-snat.service`, restores sysctl defaults, remo
 - **Phase 3 — Activate & verify.** Apply sysctl; start each `wg-quick@<iface>`; install the babeld
   systemd override (depends on all WireGuard services); start/enable babeld; print a status summary.
 
-When the bundle is signed (controller mode with the keystone on), the script verifies the embedded
+AgentHeld bundles must reach this script through an enrolled agent or the verified manual
+`yaog-agent kit apply` path described in §5.4; direct execution would skip the off-host membership
+and durable rollback gates.
+
+When bundle signing is configured with `YAOG_BUNDLE_SIGNING_KEY`, the script verifies its embedded
 public key against `bundle.sig` **before** running `sha256sum -c`; a missing signature on a
-signed-build `install.sh` is treated as tamper and refused.
+signed-build `install.sh` is treated as tamper and refused. This bundle-signature layer is distinct
+from the AgentHeld keystone membership check performed by the agent/kit before the script runs.
 
 ### 7.4 dummy0 + Table=off + the SNAT fix
 
@@ -915,8 +974,10 @@ node's overlay IP substituted for `<overlay_ip>`.
 
 ### 7.5 Auto-deploy scripts
 
-Compilation generates two project-level deploy scripts: `deploy-all.sh` (Bash) and `deploy-all.ps1`
-(PowerShell).
+An **AirGap** compile generates two project-level deploy scripts: `deploy-all.sh` (Bash) and
+`deploy-all.ps1` (PowerShell). A browser/WASM export includes these exact scripts at the ZIP root
+with the complete node-ID-keyed directories they expect, so a later separate compile cannot make the
+helper and archive disagree.
 
 ```bash
 bash deploy-all.sh path/to/artifacts.zip            # deploy
@@ -930,10 +991,17 @@ bash deploy-all.sh --uninstall                      # tear down the overlay on a
 .\deploy-all.ps1 -Uninstall
 ```
 
-They extract the ZIP, then for each node with SSH details: SCP the self-extracting installer to
-`/tmp/`, run `sudo bash /tmp/<node>.install.sh`, clean up, and print a success/skipped/failed summary.
+They reject unsafe, ambiguous, symlink, and special-file ZIP entries before extraction. For each
+node with SSH details, the helper locates `<node-id>/install.sh` and the mandatory
+`<node-id>/checksums.sha256`, creates a fresh `/tmp/yaog-<node-id>-*` directory on the target,
+recursively uploads the **complete** bundle, invokes its integrity-gated installer, removes the
+staging directory, and records the result. `--clean` is forwarded to `install.sh` only after the
+candidate's signature/checksum gates; the helper never destroys the last-good layout first.
+
 Nodes without SSH config are skipped. SSH uses `ssh <alias>` if an alias is set, otherwise
-`ssh -p <port> -i <key> <user>@<host>`; password auth is not supported.
+`ssh -p <port> -i <key> <user>@<host>`; password auth is not supported. These helpers are deliberately
+disabled for AgentHeld/controller renders: managed nodes use stage/promote plus their agents, while
+manual nodes use verified `kit apply` (including `--uninstall`).
 
 ### 7.6 Canvas visualization
 
@@ -956,23 +1024,34 @@ panel only — it is **not** the network trust anchor. The authority is
 
 | | **Off-host deploy keystone** | **Bundle-signing key** (`YAOG_BUNDLE_SIGNING_KEY`) |
 |---|---|---|
-| Holder | The operator's **hardware/synced passkey** — the private key never touches the server | A **server-side** Ed25519 PEM file (or air-gap export host) |
-| Signs | The canonical **trust-list bytes** (who-is-trusted), via a content-bound WebAuthn assertion | Each per-node bundle's canonical `checksums.sha256` bytes |
+| Holder | An operator-held browser WebAuthn credential, or a raw Ed25519 CLI key | A **server-side** Ed25519 PEM file (or air-gap export host) |
+| Signs | The canonical **trust-list bytes** (who-is-trusted), via a content-bound WebAuthn assertion or raw Ed25519 signature | Each per-node bundle's canonical `checksums.sha256` bytes |
 | Threat closed | A compromised controller **alone cannot push membership** to the fleet | Authenticity/integrity of rendered bundles (given an out-of-band pin) |
 | Server persists | Only the **non-secret public** operator credential (descriptor + public PEM) | **Never** the private key — only the public key, as a per-tenant pin |
 
-Both use the same WebAuthn verifier; only the challenge differs (a content hash for the keystone, a
-random nonce for login passkeys).
+Browser keystones and login passkeys share the underlying WebAuthn assertion verifier: keystone uses
+a content hash, while login uses a random nonce. A raw Ed25519 CLI keystone and the bundle-signing
+key use Ed25519 instead of WebAuthn.
 
 ### 8.2 Off-host signing keystone
 
-Changing **who is trusted** (admitting, evicting, or rekeying a node) requires a human hardware-key
-signature over the *content of the change* — a hash of the canonical trust-list bytes plus a monotonic
-version. The private key never leaves the authenticator; the controller persists only the non-secret
-public credential, which is baked into the agent bootstrap script and passed as `--operator-cred`, so
-the **node verifies the signature before applying**. Result: a headless controller breach has **no
-autonomous capability** to change fleet membership. "Keystone ON vs OFF" is a deployment posture;
-keystone OFF means nodes don't enforce signed membership (dev only).
+Changing **who is trusted** (admitting, evicting, or rekeying a node) requires a signature over the
+*content of the change* — a hash of the canonical trust-list bytes plus a monotonic version. The
+panel produces a WebAuthn assertion; the CLI-compatible raw Ed25519 path produces a detached
+signature. The controller persists only the non-secret credential descriptor and public key, and
+receives signed proof rather than credential private-key material. That public credential is baked
+into the agent bootstrap script and passed as `--operator-cred`, so the **node verifies the signature
+before applying**. Result: a headless controller breach alone has **no autonomous capability** to
+change fleet membership. "Keystone ON vs OFF" is a deployment posture; keystone OFF means nodes
+don't enforce signed membership (dev only).
+
+> **Credential-custody limit.** YAOG does not receive WebAuthn attestation and cannot prove that a
+> credential is hardware-backed or non-exportable. A software or synced credential may be copied by
+> its provider. New browser login-passkey and browser-keystone enrollments require user verification
+> in a server-challenged proof and the panel warns about duplication risk; later login and signing
+> checks continue to accept valid user-presence assertions so existing enrolled credentials are not
+> locked out by a retroactive UV requirement. The raw Ed25519 CLI keystone has no browser ceremony
+> and is unchanged.
 
 ### 8.3 Zero-knowledge key custody
 
@@ -983,8 +1062,10 @@ registry stores **public keys only**. The render has two custody modes (`render.
   key stability. The topology and browser localStorage therefore carry private keys and must be
   treated as secret material.
 - **AgentHeld** (controller) — `GenerateKeys` never returns a real private key; each node's
-  `[Interface] PrivateKey =` is an intentionally-invalid placeholder, and the **agent splices its own
-  locally-held private key** in at install time. Everything else is byte-identical to AirGap.
+  `[Interface] PrivateKey =` is an intentionally-invalid placeholder, and the enrolled agent or
+  verified manual-kit path splices its locally held private key in at install time. Network configs
+  remain equivalent to AirGap, while custody-facing README/deploy guidance intentionally differs so
+  no project helper can bypass membership verification.
 
 Enforcement is belt-and-braces: the panel **strips private keys before every `update-topology` POST**,
 and the server **rejects (400)** any topology carrying a non-empty `wireguard_private_key`. Perpetual
@@ -1008,7 +1089,9 @@ test gates assert both.
 - **Passkeys** — a WebAuthn login credential (distinct from the keystone credential). Used as a 2FA
   factor (takes precedence over TOTP when both are registered) or for **passwordless** login; the
   challenge is a single-use, 5-minute, atomically-burned nonce. Synced passkeys (Bitwarden/iCloud/…)
-  need no hardware key.
+  need no hardware key and may be duplicable. New enrollment requires a separate, authenticated
+  server challenge and a user-verified assertion from the candidate credential; ordinary login
+  remains compatible with existing valid user-present credentials.
 - **Break-glass token** (`YAOG_CONTROLLER_OPERATOR_TOKEN`) — an optional recovery credential that
   authenticates operator routes directly as a Bearer token and bypasses `/login` (the escape hatch
   from a per-username lockout).
@@ -1040,36 +1123,25 @@ deploy, then unset). Keep the private key off the repo and protect it at rest (`
 
 ## 9. HTTP API reference
 
-The route surface differs sharply by build (see [§3](#3-the-two-modes--the-build-boundary)).
+`yaog-server` has one route profile (see [§3](#3-the-two-modes--the-build-boundary)).
 
-### 9.1 Always present (both builds)
+### 9.1 Public route
 
 - `GET /api/health` — ungated public liveness probe (`{status:"ok", timestamp}`); GET only, CORS- and
-  panic-wrapped. This is the **only** route in the default controller build's un-tagged server layer;
-  everything else comes from the controller handler.
+  panic-wrapped. It is the only anonymous route on the operator mux. The retired
+  `/api/{validate,compile,export,deploy-script}` compute routes are absent and return 404.
 
-### 9.2 Air-gap-only anonymous compute (present **only** with `-tags airgap`)
-
-```
-POST /api/validate         POST /api/compile
-POST /api/export           POST /api/deploy-script
-```
-
-> **Stale-doc warning.** Older docs (and earlier versions of this wiki) listed these as normal backend
-> endpoints. They exist **only** in the `go build -tags airgap` local-design oracle; in the **default
-> shipped controller and Docker image they return 404**. For offline compilation, use the in-browser
-> generator, the `cmd/compiler` CLI, or the `-tags airgap` oracle.
-
-### 9.3 Controller operator routes (`/api/v1/operator/...`, port `:8080`)
+### 9.2 Controller operator routes (`/api/v1/operator/...`, port `:8080`)
 
 Behind `operatorAuth` except the unauthenticated login surface. Highlights: `login` /
 `login/passkey/{begin,finish}` (unauth) / `logout` / `session`; `totp/*`, `passkey/*`;
+authenticated `webauthn/enrollment/begin` (purpose- and operator-scoped candidate proof);
 `update-topology`, `stage`, `compile-preview`, `promote`, `topology` (+ `?version=N`,
 `/topology/versions`); `nodes`, `revoke`, `audit`, `enrollment-token`, `rekey-all`, `clear-rekey`;
 `settings`, `release-pins`, `release-assets`; `operator-credential`, `trustlist`,
 `trustlist-signature`.
 
-### 9.4 Controller agent routes (`/api/v1/agent/...`, port `:9090`)
+### 9.3 Controller agent routes (`/api/v1/agent/...`, port `:9090`)
 
 Machine-to-machine JSON. `enroll` (no auth — single-use enrollment token) and `bootstrap` (no auth —
 generic installer) are open; `config`, `poll`, `report`, `telemetry`, `rekey` require the per-node
@@ -1127,7 +1199,8 @@ ip route show table main | grep -E "^10\."
 ip addr show dummy0                  # verify the overlay address
 ```
 
-**Install script fails.**
+**AirGap install script fails.** (For AgentHeld/manual nodes, run `yaog-agent kit apply` and diagnose
+the verification error; do not invoke the downloaded script directly.)
 
 ```bash
 sudo bash -x install.sh                       # verbose
@@ -1147,12 +1220,12 @@ sudo tcpdump -i eth0 udp port 51820  # WireGuard UDP
 
 ### 10.3 Controller-mode issues
 
-**`yaog-server` exits immediately.** The default build is controller-only; set both
+**`yaog-server` exits immediately.** The single server build is controller-only; set both
 `YAOG_CONTROLLER_STATE_DIR` and `YAOG_TENANT_ID` (Docker does this). Without them it fails loud by
 design — it does not fall back to an anonymous compute server.
 
-**`/api/validate` or `/api/compile` returns 404.** Expected on the shipped controller — those routes
-are air-gap-build-only. Use the in-browser generator or the `cmd/compiler` CLI. (In controller mode,
+**`/api/validate` or `/api/compile` returns 404.** Expected — those anonymous routes were removed from
+the server. Use the in-browser Go/WASM generator or the `cmd/compiler` CLI. (In controller mode,
 Validate runs in the browser and Compile runs server-side via the operator-gated Deploy/preview path.)
 
 **Passkey enrollment fails with "invalid domain."** You're on `http://127.0.0.1`; use the hostname
@@ -1193,7 +1266,7 @@ cat /etc/wireguard/agent-controller.token      # per-node bearer token (mode 060
 | **Generation** | The controller's monotonic deploy counter; bumped on each promote. |
 | **Stage / Promote** | Stage renders bundles invisibly at `gen+1`; promote flips them to current and bumps the generation. |
 | **Enrolled subgraph** | The approved, keyed nodes (and edges between them) the controller actually renders. |
-| **Keystone** | The operator's off-host hardware key that signs trust-list/membership changes. |
+| **Keystone** | An operator-held signing credential (browser WebAuthn or raw Ed25519 CLI) for trust-list/membership changes; YAOG stores public material only and does not attest WebAuthn hardware backing or non-exportability. |
 | **Node Condition** | A structured `{type,status,reason,message}` health item (`configapply`/`selfupdate`/`wireguard`/`mimic`). |
 | **AirGap vs AgentHeld** | Key-custody modes: private keys in the topology (local) vs held only by the node (controller). |
 | **mimic** | An eBPF UDP→fake-TCP shaper wrapping a link for UDP-hostile networks (transport `tcp`). |

@@ -33,6 +33,7 @@ interface CredBody {
   credential_id: string
   public_key_pem: string
   alg: string
+  enrollment_proof?: { credential_id: string }
 }
 
 test('keystone rotation: OLD-sign → acked rotate to NEW → node refuses-then-adopts; un-acked 409', async (
@@ -97,6 +98,8 @@ test('keystone rotation: OLD-sign → acked rotate to NEW → node refuses-then-
   expect(credBodies.length, 'captured the OLD pin + the NEW rotate credential bodies').toBeGreaterThanOrEqual(2)
   const oldCred = credBodies[0]
   const newCred = credBodies[credBodies.length - 1]
+  expect(oldCred.enrollment_proof?.credential_id).toBe(oldCred.credential_id)
+  expect(newCred.enrollment_proof?.credential_id).toBe(newCred.credential_id)
   expect(oldCred.public_key_pem).not.toBe(newCred.public_key_pem)
   const oldPem = testInfo.outputPath('old-cred.pem')
   const newPem = testInfo.outputPath('new-cred.pem')

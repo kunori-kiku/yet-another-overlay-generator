@@ -219,6 +219,13 @@ same PR; no `--no-verify`, no amends, no force-push.
    point the operator must (re-)sign the trust-list with a UV-capable authenticator so every served manifest
    carries UV. plan-6.5 (per-credential enforce + re-enroll) is now moot unless a UV-incapable authenticator
    surfaces later. **All 14 plans merged → subject COMPLETE + archived to `_completed/`.**
+9. **plan-6 POLICY SUPERSEDED BEFORE RELEASE (2026-07-15).** The blanket shared-verifier gate was
+   removed before rc.7 was cut. The replacement obtains an authenticated, purpose+actor-scoped,
+   one-use server challenge and requires a UV assertion from the exact candidate only when a login or
+   keystone browser credential is enrolled. Runtime login/signing/node membership remains generic
+   signature + binding + User-Presence verification, with an explicit possession/copy warning on both
+   enrollment surfaces. UV and passkey backup/sync state are documented as separate properties. No
+   rc.7 fleet migration or mandatory trust-list re-sign remains.
 
 ## Milestones (one plan file each — ordered by payoff-per-risk: fixes → paydown → hygiene)
 
@@ -423,6 +430,7 @@ same PR; no `--no-verify`, no amends, no force-push.
 > insertion marker for the deferred PowerShell templating half.
 >
 > **All 14 plans merged.** plan-6 (WebAuthn UV) was HELD for an owner decision and **merged 2026-07-15
-> on the owner's explicit go** (#282) — the owner accepted the UV-capability precondition (every enrolled
-> operator authenticator does UV). UV enforcement rides the **next release (rc.7)**, not rc.6; merging to
-> `main` does not touch the running fleet. **Subject COMPLETE + archived to `_completed/`.**
+> on the owner's explicit go** (#282). This remains the historical merge record; before the still-uncut
+> rc.7, its blanket runtime/node gate was superseded by enrollment-scoped UV proof for login and keystone
+> browser credentials. The replacement needs no fleet migration or trust-list re-sign. **Subject COMPLETE
+> + archived to `_completed/`.**

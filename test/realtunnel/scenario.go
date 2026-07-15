@@ -115,7 +115,11 @@ func bringUp(t *testing.T, rootfs, topoPath string) *scenario {
 			role:       n.Role,
 			overlayIP:  n.OverlayIP,
 			underlayIP: underlay[n.ID],
-			dir:        filepath.Join(out, n.Name),
+			// Export directories are keyed exclusively by the portable node ID. A
+			// display name is not a filesystem identity and may differ (as it does
+			// in simple-mesh), so binding the name-keyed path makes nspawn exit
+			// before machine registration because the host source does not exist.
+			dir: filepath.Join(out, n.ID),
 		}
 		nd.c = bootContainer(t, rootfs, machineName(n.Name), bootOpts{
 			bridge: bridge,

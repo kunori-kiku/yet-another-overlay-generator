@@ -8,6 +8,7 @@ import type { Node } from '../../types/topology';
 import { nodeNameMap, nodeDisplayName } from '../../lib/nodeName';
 import { UpdateStatusChip } from './UpdateStatusChip';
 import { NodeConditions } from './NodeConditions';
+import { ManualKitApplyGuide } from './ManualKitApplyGuide';
 
 // manualEndpoint formats a manual node's first public endpoint as host:port (port omitted when auto/0),
 // or "—" when none is set.
@@ -158,6 +159,22 @@ export function NodeRegistry() {
   const clearRekey = useControllerStore((s) => s.clearRekey);
   const downloadManualBundle = useControllerStore((s) => s.downloadManualNodeBundle);
   const loading = useControllerStore((s) => s.loading);
+  // Manual AgentHeld installs need the pinned operator PUBLIC descriptor through a channel
+  // independent of the candidate bundle. These values were already hydrated into controller
+  // state by the authenticated keystone-status probe; rendering/copying performs no ad-hoc fetch.
+  const serverOperatorPinned = useControllerStore((s) => s.serverOperatorPinned);
+  const serverOperatorAlg = useControllerStore((s) => s.serverOperatorAlg);
+  const serverOperatorRpId = useControllerStore((s) => s.serverOperatorRpId);
+  const serverOperatorOrigin = useControllerStore((s) => s.serverOperatorOrigin);
+  const serverOperatorPublicKeyPEM = useControllerStore((s) => s.serverOperatorPublicKeyPEM);
+  const serverOperatorFingerprint = useControllerStore((s) => s.serverOperatorFingerprint);
+  const manualKitTrust = {
+    pinned: serverOperatorPinned,
+    alg: serverOperatorAlg,
+    rpId: serverOperatorRpId,
+    origin: serverOperatorOrigin,
+    publicKeyPEM: serverOperatorPublicKeyPEM,
+  };
   // The configured rollout drives the per-node update-status chip (plan-5). null (settings not yet
   // loaded) ⇒ deriveUpdateState returns 'off' ⇒ a muted dash, never a misleading chip.
   const settings = useControllerStore((s) => s.settings);
@@ -344,6 +361,12 @@ export function NodeRegistry() {
           <p className="text-xs text-[var(--content-muted)] italic">
             {t(language, 'nodeRegistry.manualNodesHint')}
           </p>
+          <ManualKitApplyGuide
+            language={language}
+            nodes={manualNodes}
+            trust={manualKitTrust}
+            fingerprint={serverOperatorFingerprint}
+          />
           <ul className="space-y-2">
             {manualNodes.map((n) => (
               <li
@@ -393,8 +416,8 @@ export function NodeRegistry() {
         </div>
       )}
 
-      {/* Per-edge readiness: an edge is "ready" only when both endpoint nodes are approved (its link
-          can then be compiled into the fleet). */}
+      {/* Per-edge readiness: each endpoint qualifies when it is agent-approved OR manual; both ends
+          must qualify before their link can be compiled into the deploy subgraph. */}
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-[var(--content-muted)]">
           {t(language, 'nodeRegistry.edgeReadiness')}

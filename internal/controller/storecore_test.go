@@ -77,8 +77,8 @@ func TestStoreCore_ServedVsStaged(t *testing.T) {
 	if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
 		t.Fatalf("UpsertNode: %v", err)
 	}
-	if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub"}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+	if err := s.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub"}); err != nil {
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 
 	// Signed staged manifest → promoted to the served slot.
@@ -133,8 +133,8 @@ func TestStoreCore_AntiRollback(t *testing.T) {
 	if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
 		t.Fatalf("UpsertNode: %v", err)
 	}
-	if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub"}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+	if err := s.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "pub"}); err != nil {
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 
 	promoteSigned := func(gen int64, epoch int64) {

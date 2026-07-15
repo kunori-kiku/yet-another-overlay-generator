@@ -3,7 +3,12 @@
 // Moved verbatim from the single controllerStore.ts create() literal.
 
 import type { ControllerSet, ControllerGet } from './types';
-import { configOf, localizeError } from './helpers';
+import {
+  captureControllerActionContext,
+  controllerActionContextIsCurrent,
+  requireControllerActionContext,
+  localizeError,
+} from './helpers';
 import {
   getNodes,
   getAudit,
@@ -28,10 +33,14 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
     // fails, record the error and leave the existing view unchanged. A settings-fetch failure
     // does not affect nodes/audit (best-effort, caught separately).
     refresh: async () => {
+      const context = captureControllerActionContext(get);
       set({ loading: true, error: null });
       try {
-        const cfg = configOf(get());
-        const [nodes, audit] = await Promise.all([getNodes(cfg), getAudit(cfg)]);
+        const [nodes, audit] = await Promise.all([
+          getNodes(context.config),
+          getAudit(context.config),
+        ]);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({
           nodes,
           audit: audit.entries,
@@ -44,19 +53,23 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
         // so once fetched sync it to the appearance store (same as loadSettings), keeping the
         // settings-page checkbox from diverging from the server value.
         try {
-          const settings = await getSettings(cfg);
+          const settings = await getSettings(context.config);
+          if (!controllerActionContextIsCurrent(get, context)) return;
           set({ settings });
           if (get().mode === 'controller') {
             useUiStore.getState().applyServerTranslucency(settings.translucency);
           }
         } catch {
+          if (!controllerActionContextIsCurrent(get, context)) return;
           /* Settings fetch failed: keep the existing settings, do not overwrite the fleet view's success state. */
         }
         // Keystone status is server-authoritative (the panel's "enrolled" source); refresh it
         // alongside the fleet so the display + the rotated-but-not-redeployed banner stay current.
         // Best-effort (hydrateKeystoneStatus swallows its own errors).
+        if (!controllerActionContextIsCurrent(get, context)) return;
         await get().hydrateKeystoneStatus();
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({
           error: localizeError(err, 'error.generic'),
           loading: false,
@@ -67,12 +80,26 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
     // Node resource-history read for the node-detail charts: wraps the client over the current auth
     // config and returns the parsed series. Live-only — no set()/persist (custody), no global
     // loading/error (the NodeResourceHistory card owns its own state); rethrows for local handling.
-    fetchNodeHistory: (nodeId: string, from: string, to: string, step?: string) => ctlNodeHistory(configOf(get()), nodeId, from, to, step),
+    fetchNodeHistory: async (nodeId: string, from: string, to: string, step?: string) => {
+      const context = captureControllerActionContext(get);
+      const history = await ctlNodeHistory(context.config, nodeId, from, to, step).catch((err: unknown) => {
+        requireControllerActionContext(get, context);
+        throw err;
+      });
+      requireControllerActionContext(get, context);
+      return history;
+    },
 
     // Mint a one-time enrollment token for a node, returning the plaintext token (visible this
     // once only).
     mintToken: async (nodeId: string, ttl: number) => {
-      return mintEnrollmentToken(configOf(get()), nodeId, ttl);
+      const context = captureControllerActionContext(get);
+      const result = await mintEnrollmentToken(context.config, nodeId, ttl).catch((err: unknown) => {
+        requireControllerActionContext(get, context);
+        throw err;
+      });
+      requireControllerActionContext(get, context);
+      return result;
     },
 
     // Refresh the view after evicting a node.
@@ -80,12 +107,15 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
       // Idempotency guard (plan-16 / 3.4): drop a re-entrant revoke while one is in flight (the
       // Revoke button disables on `loading`, but a synthetic re-click bubbles past it).
       if (get().loading) return;
+      const context = captureControllerActionContext(get);
       set({ loading: true, error: null });
       try {
-        await revoke(configOf(get()), nodeId);
+        await revoke(context.config, nodeId);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ loading: false });
         await get().refresh();
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({
           error: localizeError(err, 'error.generic'),
           loading: false,
@@ -104,12 +134,15 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
       // Roll-keys button shares the SAME `loading`/disabled guard as Deploy, so the proven
       // synthetic-re-click-bubbles-past-disabled double-POST applies identically here.
       if (get().loading) return;
+      const context = captureControllerActionContext(get);
       set({ loading: true, error: null });
       try {
-        await rekeyAll(configOf(get()));
+        await rekeyAll(context.config);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ loading: false });
         await get().refresh();
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({
           error: localizeError(err, 'error.generic'),
           loading: false,
@@ -120,14 +153,17 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
     // Clear a single node's pending-rotation flag without evicting it (unlike revoke: it
     // preserves the approval status and bearer token), then refresh the view so the rekeying
     // badge/count converges. Used to release a stuck "Roll keys" straggler (a dead/offline node,
-    // or a mis-clicked full rotation) that would otherwise keep pinning the panel's Deploy gate.
+    // or a mis-clicked full rotation) that would otherwise leave a persistent deploy warning.
     clearRekey: async (nodeId: string) => {
+      const context = captureControllerActionContext(get);
       set({ loading: true, error: null });
       try {
-        await clearRekey(configOf(get()), nodeId);
+        await clearRekey(context.config, nodeId);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ loading: false });
         await get().refresh();
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({
           error: localizeError(err, 'error.generic'),
           loading: false,
@@ -139,12 +175,15 @@ export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
     // carrying PRIVATEKEY_PLACEHOLDER (install.sh splices the on-box key) — so zero-knowledge holds.
     // A 404 (node not yet staged+promoted, or not manual) surfaces as a localized error.
     downloadManualNodeBundle: async (nodeId: string) => {
+      const context = captureControllerActionContext(get);
       set({ loading: true, error: null });
       try {
-        const { blob, filename } = await downloadManualNodeBundle(configOf(get()), nodeId);
+        const { blob, filename } = await downloadManualNodeBundle(context.config, nodeId);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         triggerBrowserDownload(blob, filename);
         set({ loading: false });
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ error: localizeError(err, 'error.generic'), loading: false });
       }
     },

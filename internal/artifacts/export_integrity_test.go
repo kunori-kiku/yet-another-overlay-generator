@@ -21,7 +21,7 @@ func TestExport_ChecksumsCoversInstallScript(t *testing.T) {
 		t.Fatalf("Export failed: %v", err)
 	}
 
-	nodeDir := filepath.Join(outputDir, "alpha")
+	nodeDir := filepath.Join(outputDir, "n1")
 
 	// Read checksums.sha256 and parse out the hash recorded on the install.sh line.
 	checksumsPath := filepath.Join(nodeDir, "checksums.sha256")
@@ -63,7 +63,7 @@ func TestExport_EgressOverrideIsSigned(t *testing.T) {
 	if _, err := Export(result, outputDir); err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}
-	nodeDir := filepath.Join(outputDir, "alpha")
+	nodeDir := filepath.Join(outputDir, "n1")
 
 	installBytes := mustReadFileBytes(t, filepath.Join(nodeDir, "install.sh"))
 	if !strings.Contains(string(installBytes), "MIMIC_EGRESS_IF='wan0'") {

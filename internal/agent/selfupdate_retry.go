@@ -39,6 +39,12 @@ func RetryDeferredSelfUpdate(p *SelfUpdateParams, nodeID, stateDir string, verif
 	if st.PendingUpdate != nil {
 		return false, nil // a swap is in flight; the boot reconcile owns it, not the retry
 	}
+	if st.PendingApply != nil {
+		// Do not introduce a binary swap while a root-side configuration mutation is
+		// unresolved. The main cycle first retries/supersedes that verified operation;
+		// its successful commit clears PendingApply and re-derives any deferred update.
+		return false, nil
+	}
 
 	files, ferr := verifiedFetch()
 	if ferr != nil {
@@ -97,10 +103,14 @@ func WithMembershipGate(fetch func() (map[string][]byte, error), cfg MembershipC
 		if err != nil {
 			return nil, err
 		}
-		prevEpoch := int64(0)
-		if st, _ := LoadState(stateDir); st != nil {
-			prevEpoch = st.MembershipEpoch
+		st, stateErr := LoadState(stateDir)
+		if stateErr != nil {
+			// A self-update pin must never be accepted against a reset epoch after a
+			// mid-operation state read failure. Return no files so the swap caller fails
+			// closed and the existing custody state remains untouched.
+			return nil, fmt.Errorf("load membership anti-rollback state: %w", stateErr)
 		}
+		prevEpoch := effectiveMembershipFloor(st)
 		if _, err := VerifyMembership(files, cfg, prevEpoch); err != nil {
 			return nil, fmt.Errorf("membership: %w", err)
 		}

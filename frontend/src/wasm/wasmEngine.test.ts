@@ -15,7 +15,9 @@
 // (scripts/wasm-conformance-gate.mjs); this is the FE-integration half.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
@@ -37,15 +39,14 @@ function corpusTopology(name: string): Topology {
 }
 
 beforeAll(async () => {
-  // Build web/yaog.wasm on demand so the roundtrip runs anywhere Go is on PATH (the conformance
-  // CI job + local dev both have it); never skip.
-  if (!existsSync(wasmPath)) {
-    execFileSync('go', ['build', '-o', 'web/yaog.wasm', './cmd/wasm'], {
-      cwd: repoRoot,
-      env: { ...process.env, GOOS: 'js', GOARCH: 'wasm' },
-      stdio: 'inherit',
-    });
-  }
+  // Always rebuild: web/yaog.wasm is an ignored cache, and existence alone cannot prove that it
+  // contains the current shim/dependency bytes. A stale local cache could otherwise make this
+  // integration test green while exercising the previous export contract.
+  execFileSync('go', ['build', '-o', 'web/yaog.wasm', './cmd/wasm'], {
+    cwd: repoRoot,
+    env: { ...process.env, GOOS: 'js', GOARCH: 'wasm', GOSUMDB: 'sum.golang.org' },
+    stdio: 'inherit',
+  });
   // Instantiate the wasm via the toolchain's wasm_exec.js and set globalThis.yaog, so the module
   // under test reuses it (skipping its browser fetch loader).
   const goroot = execFileSync('go', ['env', 'GOROOT'], { encoding: 'utf8' }).trim();
@@ -56,11 +57,8 @@ beforeAll(async () => {
   const go = new GoCtor();
   const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), go.importObject);
   void go.run(instance); // registers globalThis.yaog synchronously, then parks on select{}
-  // A COLD `GOOS=js GOARCH=wasm` build (CI, where web/yaog.wasm is gitignored and thus absent) takes
-  // well over vitest's default 10s hook budget, so the build-on-demand above needs a generous timeout
-  // — otherwise the whole suite times out in beforeAll (the conformance job caught exactly this). CI
-  // also pre-builds the wasm so existsSync short-circuits the build; the timeout is the local/anywhere
-  // safety net.
+  // A cold `GOOS=js GOARCH=wasm` build takes well over vitest's default 10s hook budget, so the
+  // freshness-safe rebuild above needs a generous timeout.
 }, 180_000);
 
 describe('wasmEngine (in-browser Go/WASM local engine)', () => {
@@ -99,10 +97,46 @@ describe('wasmEngine (in-browser Go/WASM local engine)', () => {
     expect(ps1.length).toBeGreaterThan(0);
   });
 
-  it('exportArtifacts returns a non-empty ZIP Blob', async () => {
-    const blob = await exportArtifacts(corpusTopology('01-single-primary-link.json'));
+  it('exportArtifacts returns complete, checksummed node bundles', async () => {
+    const topology = corpusTopology('01-single-primary-link.json');
+    const deploy = await deployScripts(topology);
+    const blob = await exportArtifacts(topology);
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.size).toBeGreaterThan(0);
+
+    // Inspect the bytes produced by the real WASM shim, not a mocked bridge. The first node's
+    // install.sh and mandatory checksum manifest must share the node-ID directory deploy-all reads,
+    // and the manifest must cover the exact installer bytes. This closes the framework-refactor
+    // regression where the browser exported only Files and omitted checksums.sha256, making its own
+    // fail-closed installer undeployable.
+    const dir = mkdtempSync(join(tmpdir(), 'yaog-wasm-export-'));
+    const archive = join(dir, 'artifacts.zip');
+    try {
+      writeFileSync(archive, Buffer.from(await blob.arrayBuffer()));
+      const nodeID = topology.nodes[0].id;
+      const installEntry = `${nodeID}/install.sh`;
+      const checksumEntry = `${nodeID}/checksums.sha256`;
+      const entries = execFileSync('unzip', ['-Z1', archive], { encoding: 'utf8' })
+        .split('\n')
+        .filter(Boolean);
+      expect(entries).toContain(installEntry);
+      expect(entries).toContain(checksumEntry);
+      expect(entries).toContain('deploy-all.sh');
+      expect(entries).toContain('deploy-all.ps1');
+
+      const install = execFileSync('unzip', ['-p', archive, installEntry]);
+      const checksums = execFileSync('unzip', ['-p', archive, checksumEntry], {
+        encoding: 'utf8',
+      });
+      expect(install.length).toBeGreaterThan(0);
+      expect(checksums).toContain(`${createHash('sha256').update(install).digest('hex')}  install.sh`);
+      expect(execFileSync('unzip', ['-p', archive, 'deploy-all.sh'], { encoding: 'utf8' }))
+        .toBe(deploy.sh);
+      expect(execFileSync('unzip', ['-p', archive, 'deploy-all.ps1'], { encoding: 'utf8' }))
+        .toBe(deploy.ps1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('surfaces a compile error as a thrown Error (not a silent bad shape)', async () => {

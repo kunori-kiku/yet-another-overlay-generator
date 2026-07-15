@@ -25,6 +25,14 @@ const AllocationSchemaVersion = model.CurrentAllocSchemaVersion
 // CompileResult holds the output of a full compilation: the resolved topology, per-node peer
 // maps, all rendered configs and scripts, and the manifest.
 type CompileResult struct {
+	// AgentHeld records the key-custody presentation used to render this result. It is
+	// presentation metadata for downstream exporters: AgentHeld bundles contain a private-key
+	// placeholder and must direct a human through the membership-verifying agent path, while
+	// AirGap bundles contain locally generated key material and may document direct install.sh use.
+	// The compiler itself does not interpret this flag; the render custody boundary sets it from
+	// the actual key snapshot, and localcompile preserves that presentation metadata.
+	AgentHeld bool
+
 	// Topology is the compiled topology (with allocated IPs).
 	Topology *model.Topology
 

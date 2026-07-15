@@ -1,12 +1,28 @@
 import { test, expect } from '@playwright/test'
+import fs from 'node:fs'
+import path from 'node:path'
 import { totpNow } from './fixtures/totp'
 import { assertNoFleetSecrets, FIXTURE_SENTINELS, type PersistedStores } from './fixtures/leakOracle'
+import { secureE2eAgentKeyParent } from './fixtures/panel'
 
 // Phase-0 primitive self-checks (plan-14 DoD #9): prove the in-test helpers cannot silently
 // drift from their Go counterparts / the custody contract before any spec relies on them. Pure
 // (no page / harness) — they assert the primitives directly.
 
 test.describe('plan-14 fixture self-checks', () => {
+  test('agent key fixture makes an existing Playwright output parent private', () => {
+    test.skip(process.platform === 'win32', 'Unix custody mode check')
+    const testInfo = test.info()
+    const keyPath = testInfo.outputPath('agent-key', 'agent.key')
+    const keyDir = path.dirname(keyPath)
+    fs.mkdirSync(keyDir, { recursive: true, mode: 0o777 })
+    fs.chmodSync(keyDir, 0o777)
+
+    secureE2eAgentKeyParent(['--key', keyPath])
+
+    expect(fs.statSync(keyDir).mode & 0o777).toBe(0o700)
+  })
+
   test('totpNow matches the RFC-6238 SHA1 reference vector', () => {
     // RFC-6238 Appendix B: secret = ASCII "12345678901234567890", SHA1. At T=59s the 8-digit
     // value is 94287082, so the 6-digit TOTP is "287082". base32("12345678901234567890") =

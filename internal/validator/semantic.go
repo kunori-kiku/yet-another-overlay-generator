@@ -37,7 +37,7 @@ func ValidateSemantic(topo *model.Topology) *ValidationResult {
 	// ID uniqueness.
 	validateIDUniqueness(topo, result)
 
-	// Node name collisions (raw name, installer script filename, WireGuard interface name).
+	// Node name collisions (raw name and WireGuard interface name).
 	validateNodeNameCollisions(topo, result)
 
 	// Effective listen-port range: whether each node's base..base+(peer-interface-count-1) overflows.

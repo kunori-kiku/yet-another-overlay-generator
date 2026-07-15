@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,12 +33,15 @@ import (
 //	bundles/<nodeID>.staged.json        the node's staged SignedBundle (if any)
 //	bundles/<nodeID>.current.json       the node's current SignedBundle (if any)
 //	tokens/<tokenHash>.json             one EnrollmentToken record (keyed by hash)
-//	login-challenges/<hash>.json        one passkey LoginChallenge (keyed by hash)
+//	login-challenges/<hash>.json        one AssertionChallenge (historical directory name)
 //	apitokens/<hash>.json               node API token reverse index ({node_id}), keyed by hash
 //	generation.json                     the tenant's current generation counter
 //	audit.jsonl                         the append-only audit log (one AuditEntry per line, rotated)
 //	operator_credential.json            the pinned off-host operator credential (keystone)
+//	keystone-transition.json            pending audited keystone pin/rotation recovery marker
 //	signed_trustlist.json               the STAGED (to-be-signed/just-signed) membership manifest
+//	trustlist-history.json               last fully-written manifest (epoch history only; never served)
+//	staged-set.json                      exact candidate commit seal (or non-promotable history marker)
 //	served_trustlist.json               the SERVED (last-promoted) signed membership manifest
 //	operators/<username>.json           one operator account (argon2id PHC hash)
 //	sessions/<tokenHash>.json           one operator login session, keyed by token hash
@@ -58,13 +60,12 @@ type filekv struct {
 
 var _ kvBackend = (*filekv)(nil)
 
-// newFilekv returns a filekv rooted at base, creating it (0700) if absent.
+// newFilekv returns a filekv rooted at base, creating it (0700) if absent and
+// rejecting an unsafe pre-existing custody directory.
 func newFilekv(root string) (*filekv, error) {
-	if strings.TrimSpace(root) == "" {
-		return nil, errors.New("controller: filestore root must not be empty")
-	}
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, fmt.Errorf("controller: create filestore root: %w", err)
+	root, err := ensureSecureStoreRoot(root)
+	if err != nil {
+		return nil, err
 	}
 	return &filekv{root: root, auditTails: make(map[TenantID]*auditTail)}, nil
 }
@@ -83,21 +84,24 @@ type fileCollSpec struct {
 // fileColls is the FROZEN collection → on-disk-layout mapping (backward-compat: existing fleet state
 // lives at these exact paths).
 var fileColls = map[string]fileCollSpec{
-	collNodes:         {subdir: "nodes", suffix: ".json"},
-	collStaged:        {subdir: "bundles", suffix: ".staged.json"},
-	collCurrent:       {subdir: "bundles", suffix: ".current.json"},
-	collTokens:        {subdir: "tokens", suffix: ".json"},
-	collLoginChal:     {subdir: "login-challenges", suffix: ".json"},
-	collAPITokens:     {subdir: "apitokens", suffix: ".json"},
-	collOperators:     {subdir: "operators", suffix: ".json"},
-	collSessions:      {subdir: "sessions", suffix: ".json"},
-	collTopoHistory:   {subdir: "topology-history", suffix: ".json"},
-	collTopology:      {singleton: true, singletonFile: "topology.json"},
-	collOperatorCred:  {singleton: true, singletonFile: "operator_credential.json"},
-	collStagedTL:      {singleton: true, singletonFile: "signed_trustlist.json"},
-	collServedTL:      {singleton: true, singletonFile: "served_trustlist.json"},
-	collSettings:      {singleton: true, singletonFile: "settings.json"},
-	collSigningAnchor: {singleton: true, singletonFile: "signing-anchor.json"},
+	collNodes:              {subdir: "nodes", suffix: ".json"},
+	collStaged:             {subdir: "bundles", suffix: ".staged.json"},
+	collCurrent:            {subdir: "bundles", suffix: ".current.json"},
+	collTokens:             {subdir: "tokens", suffix: ".json"},
+	collLoginChal:          {subdir: "login-challenges", suffix: ".json"},
+	collAPITokens:          {subdir: "apitokens", suffix: ".json"},
+	collOperators:          {subdir: "operators", suffix: ".json"},
+	collSessions:           {subdir: "sessions", suffix: ".json"},
+	collTopoHistory:        {subdir: "topology-history", suffix: ".json"},
+	collTopology:           {singleton: true, singletonFile: "topology.json"},
+	collOperatorCred:       {singleton: true, singletonFile: "operator_credential.json"},
+	collKeystoneTransition: {singleton: true, singletonFile: "keystone-transition.json"},
+	collStagedTL:           {singleton: true, singletonFile: "signed_trustlist.json"},
+	collStagedTLHist:       {singleton: true, singletonFile: "trustlist-history.json"},
+	collStagedSeal:         {singleton: true, singletonFile: "staged-set.json"},
+	collServedTL:           {singleton: true, singletonFile: "served_trustlist.json"},
+	collSettings:           {singleton: true, singletonFile: "settings.json"},
+	collSigningAnchor:      {singleton: true, singletonFile: "signing-anchor.json"},
 }
 
 // pathFor resolves the on-disk path for (collection, key) under dir. A keyed collection sanitizes key
@@ -136,6 +140,9 @@ func (fs *filekv) get(t TenantID, coll, key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateSecureStoreDirIfExists(filepath.Dir(p)); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -169,8 +176,20 @@ func (fs *filekv) del(t TenantID, coll, key string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+	if err := validateSecureStoreDirIfExists(filepath.Dir(p)); err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return fmt.Errorf("controller: delete %s/%s: %w", coll, key, err)
+	}
+	// Deleting the staged-set seal is the crash-safety commit invalidation. Make the directory
+	// entry removal durable just like writeBytesDurable makes a rename durable, so a power loss
+	// cannot resurrect a seal whose component mutation only partially completed.
+	if err := syncStoreDirectory(filepath.Dir(p)); err != nil {
+		return fmt.Errorf("controller: sync directory after deleting %s/%s: %w", coll, key, err)
 	}
 	return nil
 }
@@ -188,6 +207,9 @@ func (fs *filekv) list(t TenantID, coll string) ([]kvRecord, error) {
 		return nil, err
 	}
 	d := filepath.Join(dir, spec.subdir)
+	if err := validateSecureStoreDirIfExists(d); err != nil {
+		return nil, err
+	}
 	ents, err := os.ReadDir(d)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -226,6 +248,9 @@ func (fs *filekv) exists(t TenantID, coll, key string) (bool, error) {
 	}
 	p, err := pathFor(dir, coll, key)
 	if err != nil {
+		return false, err
+	}
+	if err := validateSecureStoreDirIfExists(filepath.Dir(p)); err != nil {
 		return false, err
 	}
 	if _, err := os.Stat(p); err != nil {
@@ -334,7 +359,11 @@ func NewFileStore(root string) (*FileStore, error) {
 	// The cap loader lets the flusher seed a tenant's cap from persisted settings on first flush (off
 	// the heartbeat path), so an operator's cap=0 (disable history) survives a controller restart. It
 	// closes over core, which is assigned just below (the closure runs later, at flush time).
-	hist := newTelemetryHistory(filepath.Join(root, "telemetry-history"), DefaultTelemetryHistoryCap,
+	historyRoot, err := ensureSecureStoreChild(kv.root, "telemetry-history")
+	if err != nil {
+		return nil, fmt.Errorf("controller: prepare telemetry history custody: %w", err)
+	}
+	hist := newTelemetryHistory(historyRoot, DefaultTelemetryHistoryCap,
 		func(t TenantID) int {
 			cs, err := core.GetSettings(context.Background(), t)
 			if err != nil {

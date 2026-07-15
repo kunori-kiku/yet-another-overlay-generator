@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,10 +15,11 @@ import (
 // copied /etc/wireguard confs over the PRIVATEKEY_PLACEHOLDER sentinel.
 const DefaultKeyPath = "/etc/wireguard/agent.key"
 
-// EnsureKey is the idempotent key-generation step. If keyPath already holds a
-// valid WireGuard private key it is reused (so re-running keygen never rotates
-// the node's identity); otherwise a fresh key is generated with
-// wgtypes.GeneratePrivateKey and written mode 0600. The matching public key is
+// EnsureKey is the idempotent key-generation step. If keyPath already securely
+// holds a valid WireGuard private key it is reused (so re-running keygen never
+// rotates the node's identity); an unsafe or malformed existing file is rejected
+// without chmodding or trusting its contents. When absent, a fresh key is
+// generated with wgtypes.GeneratePrivateKey and written mode 0600. The matching public key is
 // returned (base64, wgtypes.Key.String() form) so the caller can print/register
 // it — that public key is what the controller renders the fleet from.
 //
@@ -28,8 +30,20 @@ func EnsureKey(keyPath string) (pubKey string, created bool, err error) {
 	if strings.TrimSpace(keyPath) == "" {
 		return "", false, fmt.Errorf("agent: empty key path")
 	}
+	dir := filepath.Dir(keyPath)
+	if err := EnsureSecureOwnedDir(dir); err != nil {
+		return "", false, fmt.Errorf("agent: secure key dir: %w", err)
+	}
+	// Key creation waits for an in-flight creator/rotation, then rechecks the
+	// installed key. Unlike the top-level agent operation lease, contention here
+	// is an ordinary short critical section rather than a competing host apply.
+	release, err := acquireExclusiveFileLock(keyPath+".lock", "WireGuard key", false)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = release() }()
 
-	if data, readErr := os.ReadFile(keyPath); readErr == nil {
+	if data, readErr := ReadPrivateFile(keyPath); readErr == nil {
 		// Existing key: parse and reuse. A corrupt file is a hard error rather
 		// than a silent rotate — rotating identity on corruption would orphan the
 		// node's registered public key and is never what an operator wants.
@@ -38,12 +52,12 @@ func EnsureKey(keyPath string) (pubKey string, created bool, err error) {
 			return "", false, fmt.Errorf("agent: existing key at %s is unparseable (refusing to overwrite): %w", keyPath, parseErr)
 		}
 		return key.PublicKey().String(), false, nil
-	} else if !os.IsNotExist(readErr) {
-		return "", false, fmt.Errorf("agent: read key %s: %w", keyPath, readErr)
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return "", false, fmt.Errorf("agent: read existing key %s: %w", keyPath, readErr)
 	}
 
 	// Generate and persist a new key.
-	pub, err := generateAndWriteKey(keyPath)
+	pub, err := generateAndWriteKeyLocked(keyPath)
 	if err != nil {
 		return "", false, err
 	}
@@ -65,30 +79,70 @@ func RegenerateKey(keyPath string) (pubKey string, err error) {
 	if strings.TrimSpace(keyPath) == "" {
 		return "", fmt.Errorf("agent: empty key path")
 	}
-	return generateAndWriteKey(keyPath)
+	dir := filepath.Dir(keyPath)
+	if err := EnsureSecureOwnedDir(dir); err != nil {
+		return "", fmt.Errorf("agent: secure key dir: %w", err)
+	}
+	release, err := acquireExclusiveFileLock(keyPath+".lock", "WireGuard key", false)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = release() }()
+	if info, statErr := os.Lstat(keyPath); statErr == nil {
+		if err := validateOwnedRegularFile(keyPath, info); err != nil {
+			return "", err
+		}
+	} else if !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("agent: inspect key %s: %w", keyPath, statErr)
+	}
+	return generateAndWriteKeyLocked(keyPath)
 }
 
 // generateAndWriteKey generates a fresh WireGuard private key and writes it to keyPath
 // (mode 0600, parent dir 0700), atomically via a temp file + rename so a crash mid-write
 // cannot leave a truncated key. It returns the corresponding public key. It is the shared
 // implementation behind EnsureKey's create path and RegenerateKey's unconditional rotate.
-func generateAndWriteKey(keyPath string) (pubKey string, err error) {
+func generateAndWriteKeyLocked(keyPath string) (pubKey string, err error) {
 	key, genErr := wgtypes.GeneratePrivateKey()
 	if genErr != nil {
 		return "", fmt.Errorf("agent: generate private key: %w", genErr)
 	}
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
-		return "", fmt.Errorf("agent: create key dir: %w", err)
+	dir := filepath.Dir(keyPath)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(keyPath)+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("agent: create key temp file: %w", err)
 	}
-	// Write the private key as wgtypes.Key.String() (base64), mode 0600. Write to
-	// a temp file then rename so a crash mid-write cannot leave a truncated key.
-	tmp := keyPath + ".tmp"
-	if err := os.WriteFile(tmp, []byte(key.String()+"\n"), 0600); err != nil {
+	tmp := tmpFile.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if err := tmpFile.Chmod(0600); err != nil {
+		_ = tmpFile.Close()
+		return "", fmt.Errorf("agent: protect key temp file: %w", err)
+	}
+	if _, err := tmpFile.Write([]byte(key.String() + "\n")); err != nil {
+		_ = tmpFile.Close()
 		return "", fmt.Errorf("agent: write key: %w", err)
 	}
-	if err := os.Rename(tmp, keyPath); err != nil {
-		_ = os.Remove(tmp)
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return "", fmt.Errorf("agent: sync key temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("agent: close key temp file: %w", err)
+	}
+	if err := replaceFileAtomic(tmp, keyPath); err != nil {
 		return "", fmt.Errorf("agent: install key: %w", err)
+	}
+	removeTemp = false
+	if err := os.Chmod(keyPath, 0600); err != nil {
+		return "", fmt.Errorf("agent: protect installed key: %w", err)
+	}
+	if err := syncDirectory(dir); err != nil {
+		return "", fmt.Errorf("agent: sync key directory: %w", err)
 	}
 	return key.PublicKey().String(), nil
 }

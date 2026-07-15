@@ -3,10 +3,117 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
+
+func TestEnsureKeyConcurrentCallersConverge(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "wg", "agent.key")
+	const callers = 16
+
+	type result struct {
+		pub     string
+		created bool
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan result, callers)
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			ready.Done()
+			<-start
+			pub, created, err := EnsureKey(keyPath)
+			results <- result{pub: pub, created: created, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	createdCount := 0
+	var expectedPub string
+	for i := 0; i < callers; i++ {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("EnsureKey caller %d: %v", i, got.err)
+		}
+		if got.created {
+			createdCount++
+		}
+		if expectedPub == "" {
+			expectedPub = got.pub
+		} else if got.pub != expectedPub {
+			t.Fatalf("caller %d returned public key %q, want converged key %q", i, got.pub, expectedPub)
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("created=true count = %d, want exactly 1", createdCount)
+	}
+
+	raw, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read final key: %v", err)
+	}
+	priv, err := wgtypes.ParseKey(trimNL(raw))
+	if err != nil {
+		t.Fatalf("parse final key: %v", err)
+	}
+	if got := priv.PublicKey().String(); got != expectedPub {
+		t.Fatalf("final private key public half = %q, want %q", got, expectedPub)
+	}
+}
+
+func TestEnsureKeyRejectsPermissiveExistingModeWithoutTrustingContents(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "agent.key")
+	key, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("generate seed key: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte(key.String()+"\n"), 0600); err != nil {
+		t.Fatalf("write seed key: %v", err)
+	}
+	if err := os.Chmod(keyPath, 0666); err != nil {
+		t.Fatalf("make seed key permissive: %v", err)
+	}
+
+	if _, _, err := EnsureKey(keyPath); err == nil {
+		t.Fatal("EnsureKey trusted a group/world-accessible existing secret")
+	}
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat key: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0666 {
+		t.Fatalf("key mode = %04o, want unsafe file to remain untouched", got)
+	}
+}
+
+func TestEnsureKeyRejectsSymlinkWithoutTouchingTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	keyPath := filepath.Join(dir, "agent.key")
+	original := []byte("do-not-touch")
+	if err := os.WriteFile(target, original, 0600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, keyPath); err != nil {
+		t.Fatalf("create key symlink: %v", err)
+	}
+
+	if _, _, err := EnsureKey(keyPath); err == nil {
+		t.Fatal("EnsureKey accepted a symlink key path")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("symlink target changed to %q", got)
+	}
+}
 
 // TestEnsureKeyIdempotent verifies that a second keygen keeps the same key (never
 // rotates identity) and that the key file is created mode 0600.

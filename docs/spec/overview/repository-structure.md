@@ -1,145 +1,204 @@
 # Repository Structure
 
-The backend is organized as 17 internal packages. The compilation/render core has two
-related packages worth calling out explicitly: **`render` is the orchestrator** (keygen,
-signing, install-bundle assembly, the `render -> renderer` entry point) and **`renderer` is
-the leaf** that holds the text/template emitters (wireguard / babel / script / deploy /
-sysctl). The dependency graph is strictly downward — `render` imports `renderer`, never the
-reverse.
+YAOG is one Go module with a React/Vite panel. The Go side uses the standard-library
+`net/http` stack rather than a web framework. Local browser compute is the same Go pipeline compiled
+to WebAssembly; the controller is the stateful network service, and the node agent owns each node's
+WireGuard private key.
 
-The 17 internal packages are: `agent`, `allocator`, `api`, `apierr`, `artifacts`,
-`bundlesig`, `compiler`, `controller`, `linkid`, `model`, `naming`, `normalize`,
-`regression`, `render`, `renderer`, `trustlist`, `validator`.
+## Package map
 
-```
+There are **25 direct package directories under `internal/`**:
+
+`agent`, `allocator`, `allocconst`, `api`, `apierr`, `arch`, `artifacts`, `bundlesig`, `compiler`,
+`controller`, `dast`, `edgecase`, `linkid`, `localcompile`, `model`, `naming`, `normalize`,
+`regression`, `render`, `renderer`, `runtimecontract`, `trustlist`, `validator`, `version`, and
+`wiredrift`.
+
+They divide into four structural groups:
+
+- **Pure compile core:** `model`, `allocconst`, `linkid`, `naming`, `allocator`, `validator`,
+  `compiler`, `render`, `renderer`, `artifacts`, `normalize`, and `localcompile`. The architecture
+  test walks their transitive imports and rejects any dependency on `controller`, `api`, `agent`, or
+  `runtimecontract`; its exception allowlist is empty (`internal/arch/layers_test.go:12-50,62-102`).
+- **Stateful runtime:** `controller` owns tenant-scoped persistence, staging, enrollment, operators,
+  audit, telemetry history, and trust transitions; `api` adapts those operations to HTTP; `agent`
+  enrolls, polls, verifies, applies, reports, and self-updates; `runtimecontract` holds stateful
+  agent-to-controller condition DTOs (`internal/runtimecontract/condition.go:1-35`).
+- **Cryptographic and contract leaves:** `bundlesig` owns canonical bundle signing; `trustlist` owns
+  keystone canonicalization/pins/WebAuthn verification; `apierr` owns stable coded errors; `version`
+  owns shared version ordering.
+- **Verification-only packages:** `arch`, `dast`, `edgecase`, `regression`, and `wiredrift` turn
+  architectural, HTTP-security, adversarial-input, anti-rollback, and Go/TypeScript wire-drift rules
+  into tests. The wire-drift gate reads both languages' source contracts and fails in both mismatch
+  directions (`internal/wiredrift/drift_test.go:17-67`).
+
+The compilation/render boundary is intentional: `render` is the key-custody and bundle-assembly
+orchestrator and imports `renderer`; `renderer` contains the text/template emitters and never imports
+`render` (`internal/render/render.go:1-29`). `localcompile` is the stable façade over the entire pure
+pipeline and the contract consumed by both the CLI/controller and WebAssembly shim
+(`internal/localcompile/contract.go:1-27`).
+
+## Source tree
+
+The tree below is representative of maintained source and contract directories; generated binaries,
+build outputs, caches, and fixture detail are omitted.
+
+```text
 yet-another-overlay-generator/
 ├── cmd/
-│   ├── agent/main.go               # Node agent entry point (keygen→pull→verify→apply)
-│   ├── compiler/main.go            # CLI compiler entry point
-│   └── server/main.go              # HTTP API + controller server entry point
+│   ├── agent/                 # Node-agent CLI
+│   ├── compiler/              # Local/AirGap compiler CLI
+│   ├── server/                # Controller-only HTTP service + operator admin CLI
+│   ├── wasm/                  # js/wasm bridge over internal/localcompile
+│   ├── e2eagent/              # Playwright controller-agent harness
+│   └── e2eserver/             # Playwright controller-server harness
 ├── internal/
-│   ├── agent/                      # Node agent: enroll, poll, verify, apply, self-update
-│   │   ├── agent.go                # Agent orchestration
-│   │   ├── controller_client.go    # Controller control-channel HTTP client
-│   │   ├── cycle.go                # Poll/apply lifecycle loop
-│   │   ├── keygen.go               # Per-node WireGuard key generation
-│   │   ├── reprovision.go          # Re-enroll / reprovision-keystone flow
-│   │   ├── selfupdate.go           # Signed agent self-update (canary→fleet)
-│   │   ├── source.go               # Update source (GitHub release assets)
-│   │   ├── state.go                # On-disk agent state
-│   │   ├── verify.go               # Verify-before-exec of pulled bundles
-│   │   └── version.go              # Agent version reporting
-│   ├── allocator/
-│   │   └── ip.go                   # Overlay IP auto-allocation from domain CIDRs
-│   ├── api/                        # HTTP handlers (api + controller modes)
-│   │   ├── handler.go              # Stateless API (health, validate, compile, export, deploy-script)
-│   │   ├── server.go               # HTTP server setup, routing, CORS
-│   │   ├── static.go               # Embedded panel static-asset serving
-│   │   ├── routes_controller.go    # ControllerHandler wiring, route registrars, CORS, path prefixes
-│   │   ├── wire_controller.go      # Controller HTTP wire structs (the FE controller.ts mirror)
-│   │   ├── handler_controller.go   # Thin: controller-handler package doc + residual glue
-│   │   ├── handler_agent.go        # Agent control channel: enroll, config, poll, report, rekey
-│   │   ├── handler_deploy.go       # Operator deploy/fleet: stage, compile-preview, promote, nodes, revoke, audit
-│   │   ├── handler_keystone.go     # Operator-credential + trust-list / manifest keystone handlers
-│   │   ├── helpers_controller.go   # Shared controller-handler helpers (identity, decodeJSON, parseAfter)
-│   │   ├── auth_controller.go      # Controller auth middleware (bearer token / operator session)
-│   │   ├── handler_login.go        # Operator password login
-│   │   ├── loginratelimit.go       # Login rate limiting
-│   │   ├── handler_totp.go         # Operator TOTP 2FA
-│   │   ├── handler_passkey.go      # Operator passkey (WebAuthn) login
-│   │   ├── cookie_session.go       # httpOnly cookie session + CSRF
-│   │   ├── handler_bootstrap.go    # Node bootstrap (self-extracting installer)
-│   │   └── release_pins.go         # Agent self-update release-pins endpoint (SSRF-guarded)
-│   ├── apierr/
-│   │   └── apierr.go               # Structured API error codes + JSON error responses
-│   ├── artifacts/
-│   │   └── export.go               # Filesystem export: per-node dirs, checksums, manifests
-│   ├── bundlesig/
-│   │   └── bundlesig.go            # Ed25519 bundle signing / verification primitives
-│   ├── compiler/
-│   │   ├── compiler.go             # Multi-pass compilation orchestrator
-│   │   ├── peers.go                # Peer derivation, transit IP/port allocation, key handling
-│   │   └── roles.go                # Role semantics (capabilities, Babel announce policies)
-│   ├── controller/                 # Controller domain: stores, staging, keystone engine
-│   │   ├── store.go                # Store interface + shared types
-│   │   ├── memstore.go             # In-memory Store impl
-│   │   ├── filestore.go            # On-disk Store impl
-│   │   ├── compile.go              # Staging/promote driver + allocation persistence
-│   │   ├── keystone.go             # Trust-list/manifest-membership/epoch + operator-credential identity engine
-│   │   ├── enrollment.go           # Enrollment ceremony (single-use token, PoP)
-│   │   ├── operator.go             # Operator account model
-│   │   ├── password.go             # Operator password hashing/verification
-│   │   ├── totp.go                 # Operator TOTP secret + replay watermark
-│   │   ├── login_challenge.go      # Passkey/login challenge state
-│   │   ├── settings.go             # Controller settings (signing keys, fetch settings)
-│   │   ├── tenantlock.go           # Per-tenant lock chokepoint
-│   │   └── audit.go                # Audit hash-chain writer
-│   ├── linkid/
-│   │   └── linkid.go               # Stable per-link identity / naming
-│   ├── model/                      # Shared leaf value types (no behavior)
-│   │   ├── topology.go             # Core data model (Topology, Domain, Node, Edge, etc.)
-│   │   └── artifact.go             # Artifact + InstallFetch install-bundle descriptors
-│   ├── naming/
-│   │   └── naming.go               # Canonical artifact naming, interface-name algorithm
-│   ├── normalize/
-│   │   └── pins.go                 # Pin normalization + HealCollidingPins self-heal
-│   ├── regression/                 # Non-release adversarial regression suite (test-only)
-│   │   └── *_test.go               # Keystone anti-rollback / served-vs-staged scenarios
-│   ├── render/                     # ORCHESTRATOR: keygen + signing + install-bundle assembly
-│   │   ├── render.go               # Render entry point (the render→renderer boundary)
-│   │   ├── artifacts_json.go       # artifacts.json manifest assembly
-│   │   └── fetchsettings_env.go    # Fetch-settings env materialization
-│   ├── renderer/                   # LEAF EMITTERS: text/template producers (imported by render)
-│   │   ├── babel.go                # Babel config renderer
-│   │   ├── babel_presets.go        # Per-role Babel tuning presets
-│   │   ├── deploy.go               # SSH deploy script renderer (bash + PowerShell)
-│   │   ├── escape.go               # Shell/template escaping helpers
-│   │   ├── fetch.go                # Fetch-settings rendering
-│   │   ├── script.go               # Install/uninstall script renderer (per-peer + client)
-│   │   ├── sysctl.go               # Sysctl config renderer (IP forwarding, rp_filter)
-│   │   └── wireguard.go            # WireGuard config renderer (per-peer + client wg0)
-│   ├── trustlist/                  # Operator trust-list / WebAuthn keystone primitives
-│   │   ├── canonical.go            # Canonical trust-list serialization
-│   │   ├── ed25519.go              # Ed25519 signature verification
-│   │   ├── pins.go                 # Credential pin model
-│   │   ├── types.go                # Trust-list data shapes
-│   │   ├── verify.go               # Trust-list signature verification
-│   │   └── webauthn.go             # WebAuthn attestation/assertion verification
-│   └── validator/
-│       ├── code.go                 # Validation error codes
-│       ├── nat.go                  # NAT reachability validation
-│       ├── schema.go               # Pass 1: structural/schema validation
-│       └── semantic.go             # Pass 2: semantic/cross-reference validation
+│   ├── model/                 # Pure topology/artifact value types
+│   ├── allocconst/            # Shared allocation constants (zero-import leaf)
+│   ├── linkid/                # Canonical stable link identity
+│   ├── naming/                # Canonical artifact/interface naming
+│   ├── allocator/             # Overlay/transit allocation
+│   ├── validator/             # Schema + semantic validation
+│   ├── compiler/              # Multi-pass topology compiler + peer derivation
+│   ├── render/                # Key custody, full render, artifact manifest assembly
+│   ├── renderer/              # WireGuard/Babel/sysctl/install/deploy emitters
+│   ├── artifacts/             # Bundle file set and export adapter
+│   ├── normalize/             # Persisted allocation-pin healing
+│   ├── localcompile/          # Pure pipeline façade + frozen WASM/Go contract
+│   ├── controller/
+│   │   ├── store.go              # Store interface + tenant/runtime types
+│   │   ├── storecore.go          # Shared locked store behavior
+│   │   ├── memstore.go           # In-memory implementation
+│   │   ├── filestore*.go         # Durable implementation and I/O/audit split
+│   │   ├── compile*.go           # Preview/subgraph/stage/promote/manual-node paths
+│   │   ├── enrollment.go         # One-use node enrollment
+│   │   ├── login_challenge.go    # Single-use assertion challenges
+│   │   ├── operator.go           # Operator + login credential model
+│   │   ├── keystone.go           # Pinned operator credential / membership state
+│   │   ├── trustlist_sign.go     # Stage-sign commit path
+│   │   ├── rekey.go              # Fleet/node rekey state
+│   │   └── telemetry_history.go  # Bounded resource-history storage
+│   ├── api/
+│   │   ├── server.go             # Two muxes, health route, lifecycle/timeouts
+│   │   ├── routes_controller.go  # Operator/agent registration and middleware
+│   │   ├── adapter.go            # Shared method + structural identity adapter
+│   │   ├── auth_controller.go    # Session/bearer/CSRF and node-auth chokepoints
+│   │   ├── handler.go            # Public health + common HTTP helpers/DTO
+│   │   ├── handler_{login,totp,passkey}.go
+│   │   ├── handler_webauthn_enrollment.go
+│   │   ├── handler_{deploy,keystone,topology}.go
+│   │   ├── handler_{agent,enrollment,rekey}.go
+│   │   ├── handler_{settings,bootstrap,manual_node}.go
+│   │   ├── handler_audit.go
+│   │   ├── release_{pins,assets}.go
+│   │   ├── telemetry_history.go
+│   │   ├── wire_controller.go    # Server-side JSON DTOs
+│   │   └── static.go             # Optional built-panel SPA serving
+│   ├── agent/                 # Pull/verify/apply loop, telemetry, self-update
+│   ├── runtimecontract/       # Curated agent condition wire types
+│   ├── bundlesig/             # Canonical per-node bundle signatures
+│   ├── trustlist/             # Keystone pins/canonical manifest/assertion verifier
+│   ├── apierr/                # Stable API error code registry
+│   ├── version/               # Shared SemVer-ish comparator
+│   └── {arch,dast,edgecase,regression,wiredrift}/  # Structural/test gates
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx                 # Root application component
-│   │   ├── main.tsx                # React entry point
-│   │   ├── i18n.ts                 # Internationalization (EN/ZH)
-│   │   ├── index.css               # Global styles
-│   │   ├── types/
-│   │   │   ├── topology.ts         # TypeScript types (mirrors Go model)
-│   │   │   └── controller.ts       # Controller wire types (mirrors api/wire_controller.go)
-│   │   ├── stores/                 # Zustand stores (topology + controller, single source of truth)
-│   │   └── components/             # React Flow canvas + panel/dashboard UI
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── tsconfig*.json
-├── examples/
-│   ├── nat-hub/topology.json
-│   ├── relay-topology/topology.json
-│   └── simple-mesh/topology.json
+│   │   ├── App.tsx               # Router + mode-aware deep-link guards
+│   │   ├── components/           # Shell, canvas, pages, deploy/fleet/security UI
+│   │   ├── stores/
+│   │   │   ├── topologyStore.ts      # Design/canvas + local WASM actions
+│   │   │   ├── controllerStore.ts    # Stable composed controller hook
+│   │   │   ├── controller/           # Auth/fleet/deploy/keystone/settings/sync slices
+│   │   │   └── uiStore.ts            # Shell/appearance UI state
+│   │   ├── api/
+│   │   │   ├── controllerClient.ts   # Stable re-export barrel
+│   │   │   └── controller/           # Per-domain client + shared transport
+│   │   ├── lib/                  # Custody, WebAuthn, normalization, derivations
+│   │   ├── wasm/                 # Browser loader/recovery wrapper
+│   │   ├── i18n/                 # Keyed EN/ZH catalogs and error localization
+│   │   ├── types/                # Topology + controller runtime types
+│   │   └── theme/ + ui/          # Appearance provider and shared fields
+│   └── e2e/                   # Playwright functional/security/adversarial specs
+├── docs/spec/                      # Maintained deep design specifications
+├── specs/                          # Cached per-component architectural reading layer
+├── implementation_plans/           # Active/completed foldered implementation plans
+├── test/realtunnel/                # Linux namespace/systemd real-tunnel gate
 ├── scripts/
-│   ├── deploy.sh                   # One-click YAOG deployment (bash)
-│   └── deploy.ps1                  # One-click YAOG deployment (PowerShell)
-├── docs/
-│   ├── wiki.md                     # English documentation
-│   ├── wiki-zh.md                  # Chinese documentation
-│   ├── DEVELOPMENT_SPEC.md         # Redirect stub → docs/spec/
-│   └── spec/                       # Development specification (this folder)
-├── .github/workflows/              # Release + Docker CI
-├── dev.sh                          # Dev helper (start/stop/restart/status/logs)
-├── go.mod
-├── go.sum
-└── README.md
+│   ├── build-wasm.sh
+│   ├── wasm-conformance-gate.mjs
+│   └── deploy.{sh,ps1}
+├── .github/workflows/              # CI, release, Docker, real-tunnel, WASM soak
+├── examples/                       # simple-mesh, nat-hub, relay-topology fixtures
+├── PRINCIPLES.md                   # Project invariants
+├── STATUS.md                       # Current delivery/release status
+└── RELEASING.md                    # Release procedure and verification ledger
 ```
+
+## HTTP framework and route topology
+
+The server constructs two `http.ServeMux` instances. The operator/panel mux always exposes
+`GET /api/health`; enabling the controller adds operator routes to that mux and agent routes to the
+second mux/port (`internal/api/server.go:44-80,90-95`). Both application listeners are plain HTTP;
+production confidentiality is delegated to a TLS-terminating reverse proxy
+(`cmd/server/main.go:26-42,149-152`).
+
+There is one controller build and no `airgap` build-tag variant. `cmd/server` is controller-only and
+fails when the controller state directory or tenant configuration is absent
+(`cmd/server/main.go:26-37`). The retired anonymous `/api/validate`, `/api/compile`, `/api/export`, and
+`/api/deploy-script` routes remain absent; local validation/compile/export/script generation execute
+the Go pipeline in browser WASM (`internal/api/server.go:90-95`;
+`cmd/wasm/main.go:3-27,50-64`).
+
+### Agent mux
+
+Agent routes mount under the optional `YAOG_AGENT_PATH_PREFIX` plus `/api/v1/agent/`:
+
+- `POST /enroll` — pre-auth single-use enrollment token, with its own IP rate limit.
+- `GET /bootstrap` — generic unauthenticated bootstrap script.
+- `GET /config`, `GET /poll`, `POST /report`, `POST /telemetry`, and `POST /rekey` — per-node bearer
+  authentication and rate limiting.
+
+The exact registrations and middleware composition are in
+`internal/api/routes_controller.go:231-260`.
+
+### Operator mux
+
+Operator routes mount under the optional `YAOG_OPERATOR_PATH_PREFIX` plus `/api/v1/operator/`.
+Only password login and passwordless passkey begin/finish are reachable before operator auth. Logout,
+session/account security, WebAuthn enrollment begin, topology/deploy/fleet, settings/release helpers,
+and keystone routes all pass through the named-session or break-glass auth/CSRF chokepoint
+(`internal/api/routes_controller.go:263-350`).
+
+Typed single-method routes use `op`/`opRaw`, which centralize the method guard and structural identity
+check before handler dispatch. Multi-method or identity-free-leg routes remain explicit rather than
+weakening the adapter contract (`internal/api/adapter.go:3-21,32-97`;
+`internal/api/routes_controller.go:271-278`).
+
+## Frontend framework boundaries
+
+- React Router owns the application shell routes; controller-only deep links are guarded even when
+  entered directly (`frontend/src/App.tsx:24-61`).
+- React Flow owns the visual graph canvas, but `topologyStore` owns the design state and local WASM
+  actions. `controllerStore` independently owns network/session/fleet/deploy state and is composed
+  from domain slices behind one persistence allowlist
+  (`frontend/src/stores/controllerStore.ts:1-50`).
+- The controller HTTP client follows the same domain split: `frontend/src/api/controllerClient.ts` is a stable barrel,
+  while auth/fleet/deploy/keystone/settings/release/telemetry and WebAuthn enrollment live under
+  `api/controller/` over one transport (`frontend/src/api/controllerClient.ts:1-30`).
+- Internationalization is a keyed EN/ZH catalog under `frontend/src/i18n/`; English is the complete
+  type authority and other catalogs fall back per key (`frontend/src/i18n/index.ts:4-45`).
+- Local compute has no TypeScript compiler twin or server fallback. `frontend/src/wasm/wasmEngine.ts` calls the
+  `cmd/wasm` JSON-string bridge, and the permanent conformance gate compares the WASM output with the
+  frozen Go oracle (`cmd/wasm/main.go:3-27`).
+
+## Structural hygiene gates
+
+- `internal/arch`: pure/stateful dependency ratchet, with no current exceptions.
+- `internal/wiredrift`: Go model/server/agent DTO versus frontend snake_case/omitempty drift gate.
+- `internal/dast`: authenticated and unauthenticated HTTP security checks.
+- `internal/edgecase` and `internal/regression`: adversarial compiler and keystone/stage regressions.
+- `scripts/wasm-conformance-gate.mjs`: byte-level Go/WASM parity.
+- `test/realtunnel`: Linux namespace/systemd integration of rendered bundles.
+- Frontend Vitest, Playwright security/adversarial suites, ESLint, Go vet/race/coverage, vulnerability
+  scanning, and formatting/drift checks are wired into CI/release workflows under
+  `.github/workflows/`.

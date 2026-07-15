@@ -3,7 +3,7 @@
 // verbatim from the single controllerStore.ts create() literal.
 
 import type { ControllerSet, ControllerGet } from './types';
-import type { ControllerConfig } from '../../api/controllerClient';
+import type { ControllerConfig, LoginPasskeyStatus } from '../../api/controllerClient';
 import { configOf, localizeError, tLocal, clearServerCanvasAtGate, serverKeystoneReset } from './helpers';
 import {
   login as ctlLogin,
@@ -19,12 +19,76 @@ import {
   disablePasskeyFinish,
   passkeyLoginBegin,
   passkeyLoginFinish,
+  beginWebAuthnEnrollment,
+  controllerErrorCode,
 } from '../../api/controllerClient';
-import { enrollOperatorCredential, assertLogin } from '../../lib/webauthn';
+import {
+  assertLogin,
+  createWebAuthnCredentialCandidate,
+  proveWebAuthnCredentialEnrollment,
+  type WebAuthnCredentialCandidate,
+} from '../../lib/webauthn';
 import { useTopologyStore } from '../topologyStore';
 import { useUiStore } from '../uiStore';
 
+function authGenerationIsCurrent(get: ControllerGet, generation: number): boolean {
+  return get().authGeneration === generation;
+}
+
+// Every successful authentication path establishes the same server-derived state. Keep the
+// ordered hydration and generation guards centralized so password, passkey-second-factor, and
+// passwordless login cannot drift as another account-scoped probe is added.
+async function hydrateAuthenticatedContext(get: ControllerGet, generation: number): Promise<void> {
+  if (!authGenerationIsCurrent(get, generation)) return;
+  await get().hydrateFromServer();
+  if (!authGenerationIsCurrent(get, generation)) return;
+  await get().refresh();
+  if (!authGenerationIsCurrent(get, generation)) return;
+  await get().loadTOTPStatus();
+  if (!authGenerationIsCurrent(get, generation)) return;
+  await get().loadPasskeyStatus();
+}
+
+// Account-scoped and ceremony-scoped state must never cross an authentication-context
+// boundary. Keeping this reset shape in one place prevents logout, session loss, identity
+// replacement, and controller-target changes from drifting apart as new flags are added.
+const authContextReset = {
+  totpRequired: false,
+  totpEnabled: null,
+  passkeyRegistered: null,
+  pendingLoginPasskeyEnrollment: null,
+  pendingKeystoneEnrollment: null,
+  loginCeremony: false,
+  enrolling: false,
+  signing: false,
+  loading: false,
+  saving: false,
+  previewing: false,
+  deployPreview: null,
+  deployPreviewing: false,
+  deployPreviewError: null,
+  pendingShrink: null,
+} as const;
+
+function loginPasskeyStatusMatchesCandidate(
+  status: LoginPasskeyStatus,
+  candidate: WebAuthnCredentialCandidate,
+): boolean {
+  return status.registered
+    && status.alg === candidate.alg
+    && status.credentialId === candidate.credentialId
+    && status.publicKeyPEM === candidate.publicKeyPEM
+    && status.rpId === candidate.rpId
+    && status.origin === candidate.origin;
+}
+
 export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
+  // Auth generation separates controller/account identities. These per-resource sequences order
+  // account-status probes inside one identity and are invalidated by successful mutations, so an
+  // older response cannot re-expose an enroll/replace action after newer server truth won.
+  let totpStatusRequestSequence = 0;
+  let passkeyStatusRequestSequence = 0;
+
   return {
     // Default connection config (see DESIGN: operator defaults to :8080, agent to :9090).
     baseURL: 'http://localhost:8080',
@@ -42,10 +106,64 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     totpRequired: false,
     totpEnabled: null,
     passkeyRegistered: null,
+    pendingLoginPasskeyEnrollment: null,
+
+    authGeneration: 0,
 
     loginCeremony: false,
 
-    setConfig: (partial: Partial<ControllerConfig & { agentBaseURL: string }>) => set(partial),
+    setConfig: (partial: Partial<ControllerConfig & { agentBaseURL: string }>) => {
+      const state = get();
+      const endpointChanged =
+        ('baseURL' in partial && partial.baseURL !== state.baseURL)
+        || ('pathPrefix' in partial && partial.pathPrefix !== state.pathPrefix);
+      const authTargetChanged = endpointChanged
+        || ('operatorToken' in partial && partial.operatorToken !== state.operatorToken);
+      if (!authTargetChanged) {
+        set(partial);
+        return;
+      }
+      set({
+        ...partial,
+        ...authContextReset,
+        authGeneration: state.authGeneration + 1,
+        // A browser session token/CSRF pair is scoped to its controller endpoint. Never send an
+        // old endpoint's bearer to a newly typed host/path; the cookie probe establishes the new
+        // target's identity. A simultaneously supplied replacement break-glass token is kept.
+        ...(endpointChanged ? {
+          sessionToken: '',
+          csrfToken: '',
+          loggedIn: false,
+          operatorName: null,
+          sessionExpiresAt: null,
+          controllerVersion: '',
+          operatorToken: partial.operatorToken ?? '',
+          operatorCredentialId: null,
+          operatorCredentialAlg: null,
+          operatorRpId: null,
+          operatorPublicKeyPEM: null,
+          nodes: [],
+          audit: [],
+          auditVerified: false,
+          settings: null,
+          lastDeploy: null,
+          lastSyncedAt: null,
+          lastSyncedSnapshot: null,
+          lastSyncedTopology: null,
+          saveConflict: false,
+          saving: false,
+          pendingShrink: null,
+          deployPreview: null,
+          deployPreviewing: false,
+          deployPreviewError: null,
+          ...serverKeystoneReset,
+        } : {}),
+      });
+      if (endpointChanged) {
+        clearServerCanvasAtGate(state.mode, state.lastSyncedSnapshot);
+        useUiStore.getState().restoreLocalTranslucency();
+      }
+    },
 
     // Operator password login (plan-5.2): POST /login to obtain a session token, held in memory
     // only. On success, immediately refresh the fleet view. The session takes precedence over a
@@ -56,13 +174,16 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
       // (the submit button disables on `loading`, but a synthetic re-click bubbles past it). A
       // duplicate login POST would otherwise burn a second rate-limit attempt.
       if (get().loading) return;
+      const authGeneration = get().authGeneration;
+      const cfg = configOf(get());
       set({ loading: true, error: null });
       try {
-        const outcome = await ctlLogin(configOf(get()), username, password, totp);
+        const outcome = await ctlLogin(cfg, username, password, totp);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         if (outcome.kind === 'passkey_required') {
           // Password correct but a passkey is required: pop the authenticator in place and
-          // resubmit with the assertion (the password is still in the closure). The signing
-          // flag drives the "touch your security key" prompt. The whole 2FA passkey step is
+          // resubmit with the assertion (the password is still in the closure). loginCeremony
+          // drives the "touch your security key" prompt. The whole 2FA passkey step is
           // transparent to the UI — the login form needs no passkey input, the store completes
           // the ceremony automatically.
           const ch = outcome.challenge;
@@ -78,28 +199,28 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
               ch.alg,
               ch.rpid || window.location.hostname,
             );
-            const after = await ctlLogin(configOf(get()), username, password, undefined, assertion);
+            if (!authGenerationIsCurrent(get, authGeneration)) return;
+            const after = await ctlLogin(cfg, username, password, undefined, assertion);
+            if (!authGenerationIsCurrent(get, authGeneration)) return;
             if (after.kind === 'success') {
               set({
+                ...authContextReset,
+                authGeneration: authGeneration + 1,
                 sessionToken: after.result.sessionToken,
                 csrfToken: after.result.csrfToken,
                 loggedIn: true,
                 operatorName: after.result.operator,
                 sessionExpiresAt: after.result.expiresAt,
                 controllerVersion: after.result.controllerVersion,
-                totpRequired: false,
-                loginCeremony: false,
-                loading: false,
               });
-              await get().hydrateFromServer();
-              await get().refresh();
-              await get().loadTOTPStatus();
-              await get().loadPasskeyStatus();
+              const establishedGeneration = get().authGeneration;
+              await hydrateAuthenticatedContext(get, establishedGeneration);
               return;
             }
             // A passkey resubmit should either succeed or throw; anything else is unexpected.
             set({ error: tLocal('controllerStore.passkeyDidNotComplete'), loginCeremony: false, loading: false });
           } catch (err) {
+            if (!authGenerationIsCurrent(get, authGeneration)) return;
             set({
               error: localizeError(err, 'error.generic'),
               loginCeremony: false,
@@ -126,22 +247,19 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           return;
         }
         set({
+          ...authContextReset,
+          authGeneration: authGeneration + 1,
           sessionToken: outcome.result.sessionToken,
           csrfToken: outcome.result.csrfToken,
           loggedIn: true,
           operatorName: outcome.result.operator,
           sessionExpiresAt: outcome.result.expiresAt,
           controllerVersion: outcome.result.controllerVersion,
-          totpRequired: false,
-          loading: false,
         });
-        await get().hydrateFromServer();
-        await get().refresh();
-        // Fetch this account's 2FA / passkey status (for the "account security" area to echo).
-        // A failure does not block login.
-        await get().loadTOTPStatus();
-        await get().loadPasskeyStatus();
+        const establishedGeneration = get().authGeneration;
+        await hydrateAuthenticatedContext(get, establishedGeneration);
       } catch (err) {
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         // Hard failure (wrong password / 429 lockout / network / 500, all thrown before
         // reaching "second-factor required"): reset totpRequired, back to a pure password form
         // — avoiding the mismatched prompt of "wrong username or password" while still showing
@@ -159,38 +277,27 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // code input's local value is cleared by the component.
     resetTOTPChallenge: () => set({ totpRequired: false }),
 
-    // Logout: best-effort POST /logout to revoke the server session, then clear the local
-    // session + fleet view regardless of success (local logout must take effect even if the
-    // network/server revocation fails).
+    // Logout clears the local session/fleet synchronously, then performs a best-effort server
+    // revocation. The network continuation owns no local state: a hung old-controller request
+    // cannot keep secrets visible or later erase a session established against a new endpoint.
     logout: async () => {
-      try {
-        // Whether there is an in-memory session or a cookie session (loggedIn), call the server
-        // revocation + clear the cookie.
-        if (get().sessionToken || get().loggedIn) {
-          await ctlLogout(configOf(get()));
-        }
-      } catch {
-        // A revocation failure does not block local logout (the session still expires on the
-        // server by its TTL).
-      }
-      // Capture the sync snapshot before clearing: the set() below sets lastSyncedSnapshot to
-      // null, and set is synchronous, so a later get().lastSyncedSnapshot would read null —
-      // then the gate's dirty check would treat any non-empty server canvas as dirty, so each
-      // logout would wrongly trigger a backup download (plan-10 review). Save the baseline first.
-      const snap = get().lastSyncedSnapshot;
-      set({
+      const prior = get();
+      const cfg = configOf(prior);
+      const hadSession = !!(prior.sessionToken || prior.loggedIn);
+      // Capture the sync snapshot before clearing: the reset sets lastSyncedSnapshot to null, and
+      // the gate needs the live baseline to avoid a spurious backup of an unchanged server canvas.
+      const snap = prior.lastSyncedSnapshot;
+      // Invalidate ceremonies and clear every session-derived view before the first await. Local
+      // logout is therefore immediate even when the revocation request hangs or the server is down.
+      set((state) => ({
+        ...authContextReset,
+        authGeneration: state.authGeneration + 1,
         sessionToken: '',
         csrfToken: '',
         loggedIn: false,
         operatorName: null,
         sessionExpiresAt: null,
         controllerVersion: '',
-        // Clear the 2FA session state: reset totpRequired, return totpEnabled to "unknown", so
-        // the next operator who logs in with a password re-fetches their own account's status
-        // (TwoFactorSettings's guarded effect re-fires when it is null).
-        totpRequired: false,
-        totpEnabled: null,
-        passkeyRegistered: null,
         nodes: [],
         audit: [],
         auditVerified: false,
@@ -211,7 +318,7 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
         // Server-authoritative keystone status is session-derived: reset to "unknown" on logout
         // so the next operator re-probes (never inherits a stale "enrolled" / redeploy banner).
         ...serverKeystoneReset,
-      });
+      }));
       // Security: if the post-logout canvas is a server secret mirror, wipe it immediately
       // (memory + persist also clears localStorage). Otherwise, while logged out, anyone could
       // read the fleet's public IPs and SSH targets out of the canvas/localStorage. Local
@@ -220,10 +327,20 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
       // partialize) use the same predicate rather than each expanding it. Pass the snap captured
       // before logout (not the already-nulled get().lastSyncedSnapshot) so the dirty check is
       // accurate.
-      clearServerCanvasAtGate(get().mode, snap);
+      clearServerCanvasAtGate(prior.mode, snap);
       // A3: the session ended, so the appearance returns to the local preference — the
       // server-pushed fleet translucency should not linger at the logout/login gate.
       useUiStore.getState().restoreLocalTranslucency();
+      try {
+        // Whether there was an in-memory bearer or only a cookie session, ask the original
+        // endpoint to revoke it and clear its cookie. This continuation deliberately performs no
+        // set(): a later auth context is outside its authority.
+        if (hadSession) {
+          await ctlLogout(cfg);
+        }
+      } catch {
+        // A revocation failure does not roll back local logout; the server session expires by TTL.
+      }
     },
 
     // Restore the logged-in state after a refresh (P5): GET /session probes the current session
@@ -233,21 +350,11 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // Restores only the logged-in state — does not proactively fetch the fleet (the persisted
     // cache colors it instantly; the user presses "connect / refresh" for live state).
     checkSession: async () => {
+      const authGeneration = get().authGeneration;
+      const cfg = configOf(get());
       try {
-        const info = await getSession(configOf(get()));
-        // Authed (a cookie session OR a break-glass token both answer 200): refresh the
-        // server-authoritative keystone status so the panel never renders a premature/false
-        // "Not enrolled" on mount. Best-effort; null info (401/403) leaves it unprobed.
-        if (info) {
-          // controllerVersion is server truth on every authed probe (genuine cookie session OR
-          // break-glass Bearer), so capture it here rather than in the login-only branch below.
-          // It is NOT cleared in the break-glass branch (empty csrf) below — break-glass is authed,
-          // just "not a login" — only on a genuine session loss (the `!info` else here / the catch).
-          set({ controllerVersion: info.controllerVersion });
-          await get().hydrateKeystoneStatus();
-        } else {
-          set({ controllerVersion: '' });
-        }
+        const info = await getSession(cfg);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         // Only a GENUINE cookie session counts as "logged in". GET /session also answers
         // 200 for a break-glass Bearer token (it authenticates operator routes), but
         // break-glass mints no session/CSRF cookie, so its probe returns an EMPTY
@@ -256,12 +363,27 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
         // "break-glass is not a login" invariant.
         if (info && info.csrfToken !== '') {
           const wasLoggedIn = get().loggedIn;
+          const identityChanged = !wasLoggedIn || get().operatorName !== info.operator;
           set({
+            ...(identityChanged ? {
+              ...authContextReset,
+              authGeneration: authGeneration + 1,
+              // If a cookie establishes a different identity, discard any in-memory bearer
+              // belonging to the prior one and continue on the cookie + fresh CSRF token.
+              sessionToken: '',
+              ...serverKeystoneReset,
+            } : {}),
             loggedIn: true,
             operatorName: info.operator,
             sessionExpiresAt: info.expiresAt || null,
             csrfToken: info.csrfToken,
+            controllerVersion: info.controllerVersion,
           });
+          const activeGeneration = get().authGeneration;
+          // Status belongs to the now-established identity. The action has its own generation
+          // check, so a concurrent logout cannot repopulate stale credential state.
+          await get().hydrateKeystoneStatus();
+          if (!authGenerationIsCurrent(get, activeGeneration)) return;
           // Server-authoritative hydration (D1): session restore overwrites the local canvas.
           // Two triggers:
           //   (1) the logged-in state goes false→true (mount / refresh restore) — a first entry
@@ -282,17 +404,45 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           // the gate uses the live baseline to judge dirty accurately.
           // Also flush the server-authoritative keystone status (lockstep with logout) so a stale
           // enrolled/redeploy status can't render before the next probe.
-          // NOTE: controllerVersion is NOT cleared here — this else also runs for a break-glass
-          // token (info present, empty csrf), which is authed and should keep the version. A
-          // genuine logout (info null) already cleared it in the `!info` branch above.
           const lostSnap = get().lastSyncedSnapshot;
-          set({ loggedIn: false, csrfToken: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
+          set((state) => ({
+            ...authContextReset,
+            authGeneration: state.authGeneration + 1,
+            sessionToken: '',
+            loggedIn: false,
+            operatorName: null,
+            sessionExpiresAt: null,
+            csrfToken: '',
+            controllerVersion: info?.controllerVersion ?? '',
+            lastSyncedSnapshot: null,
+            lastSyncedTopology: null,
+            saveConflict: false,
+            ...serverKeystoneReset,
+          }));
           clearServerCanvasAtGate(get().mode, lostSnap);
           useUiStore.getState().restoreLocalTranslucency(); // A3: back at the login gate, use the local appearance preference
+          // A configured break-glass bearer is authenticated for keystone recovery even though it
+          // is deliberately not a login session. Re-probe only after resetting the old account's
+          // status so this recovery context gets its own server truth.
+          if (info) await get().hydrateKeystoneStatus();
         }
       } catch {
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         const lostSnap = get().lastSyncedSnapshot;
-        set({ loggedIn: false, controllerVersion: '', lastSyncedSnapshot: null, lastSyncedTopology: null, saveConflict: false, ...serverKeystoneReset });
+        set((state) => ({
+          ...authContextReset,
+          authGeneration: state.authGeneration + 1,
+          sessionToken: '',
+          csrfToken: '',
+          loggedIn: false,
+          operatorName: null,
+          sessionExpiresAt: null,
+          controllerVersion: '',
+          lastSyncedSnapshot: null,
+          lastSyncedTopology: null,
+          saveConflict: false,
+          ...serverKeystoneReset,
+        }));
         clearServerCanvasAtGate(get().mode, lostSnap);
         useUiStore.getState().restoreLocalTranslucency();
       }
@@ -302,10 +452,20 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // network error, keep totpEnabled=null (the UI prompts "log in with a password to manage
     // 2FA" off it) without polluting the global error.
     loadTOTPStatus: async () => {
+      const authGeneration = get().authGeneration;
+      const requestSequence = ++totpStatusRequestSequence;
+      const cfg = configOf(get());
       try {
-        set({ totpEnabled: await getTOTPStatus(configOf(get())) });
+        const enabled = await getTOTPStatus(cfg);
+        if (
+          authGenerationIsCurrent(get, authGeneration)
+          && requestSequence === totpStatusRequestSequence
+        ) set({ totpEnabled: enabled });
       } catch {
-        set({ totpEnabled: null });
+        if (
+          authGenerationIsCurrent(get, authGeneration)
+          && requestSequence === totpStatusRequestSequence
+        ) set({ totpEnabled: null });
       }
     },
 
@@ -320,15 +480,23 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // totpEnabled=true. On failure (e.g. wrong code) the error is thrown to the caller and
     // displayed in place by the component.
     confirmTOTP: async (secret: string, code: string) => {
+      const authGeneration = get().authGeneration;
       await ctlConfirmTOTP(configOf(get()), secret, code);
-      set({ totpEnabled: true });
+      if (authGenerationIsCurrent(get, authGeneration)) {
+        totpStatusRequestSequence += 1;
+        set({ totpEnabled: true });
+      }
     },
 
     // Disable 2FA: requires the current code (to stop a hijacked session from removing the
     // second factor outright). On success totpEnabled=false.
     disableTOTP: async (code: string) => {
+      const authGeneration = get().authGeneration;
       await ctlDisableTOTP(configOf(get()), code);
-      set({ totpEnabled: false });
+      if (authGenerationIsCurrent(get, authGeneration)) {
+        totpStatusRequestSequence += 1;
+        set({ totpEnabled: false });
+      }
     },
 
     // Passwordless passkey login: begin gets the challenge → assertLogin pops the authenticator
@@ -336,10 +504,13 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // cancelled) it is displayed in place. On success, refresh the view + fetch the
     // account-security status.
     loginWithPasskey: async (username: string) => {
+      if (get().loading || get().loginCeremony) return;
+      const authGeneration = get().authGeneration;
+      const cfg = configOf(get());
       set({ loading: true, error: null });
       try {
-        const cfg = configOf(get());
         const ch = await passkeyLoginBegin(cfg, username);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         if (!ch.credentialId || !ch.alg) {
           // Empty allow_credentials = this username has no registered passkey (the backend
           // returns a decoy).
@@ -356,23 +527,25 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
             ch.rpid || window.location.hostname,
           );
         } finally {
-          set({ loginCeremony: false });
+          if (authGenerationIsCurrent(get, authGeneration)) set({ loginCeremony: false });
         }
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         const result = await passkeyLoginFinish(cfg, username, assertion);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         set({
+          ...authContextReset,
+          authGeneration: authGeneration + 1,
           sessionToken: result.sessionToken,
           csrfToken: result.csrfToken,
           loggedIn: true,
           operatorName: result.operator,
           sessionExpiresAt: result.expiresAt,
           controllerVersion: result.controllerVersion,
-          loading: false,
         });
-        await get().hydrateFromServer();
-        await get().refresh();
-        await get().loadTOTPStatus();
-        await get().loadPasskeyStatus();
+        const establishedGeneration = get().authGeneration;
+        await hydrateAuthenticatedContext(get, establishedGeneration);
       } catch (err) {
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         set({
           error: localizeError(err, 'error.generic'),
           loading: false,
@@ -384,35 +557,104 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // Fetch this account's login-passkey status. On a 403 (a break-glass token has no account)
     // or any error, keep it null.
     loadPasskeyStatus: async () => {
+      const authGeneration = get().authGeneration;
+      const requestSequence = ++passkeyStatusRequestSequence;
+      const cfg = configOf(get());
       try {
-        set({ passkeyRegistered: await getPasskeyStatus(configOf(get())) });
+        const status = await getPasskeyStatus(cfg);
+        if (
+          authGenerationIsCurrent(get, authGeneration)
+          && requestSequence === passkeyStatusRequestSequence
+        ) {
+          set({ passkeyRegistered: status.registered });
+        }
       } catch {
-        set({ passkeyRegistered: null });
+        if (
+          authGenerationIsCurrent(get, authGeneration)
+          && requestSequence === passkeyStatusRequestSequence
+        ) set({ passkeyRegistered: null });
       }
     },
 
-    // Register a login passkey: reuse the keystone's create() ceremony
-    // (enrollOperatorCredential gets the SPKI + alg), then POST /passkey/register to store the
-    // public key. Only the public key leaves the authenticator. loginCeremony drives the "touch
-    // your security key" prompt (does not trigger DeployBar's deploy banner). Errors are thrown
-    // to the caller, displayed in place by PasskeySettings (consistent with TwoFactorSettings's
-    // local errors).
+    // Register a login passkey: begin a server challenge, create the candidate when there is no
+    // pending one, then ask that exact candidate for the UV-bearing enrollment assertion before
+    // POST /passkey/register. If proof/persistence fails, keep the public descriptor in volatile
+    // state so the next click retries it rather than creating an orphan duplicate. loginCeremony
+    // drives the prompt without triggering DeployBar's deploy banner.
     registerPasskey: async () => {
+      // The button is disabled while a ceremony is active, but guard the action too: a synthetic
+      // re-entry must not mint two authenticator credentials before React can re-render.
+      if (get().loading || get().loginCeremony || get().passkeyRegistered === true) return;
+      const authGeneration = get().authGeneration;
+      const cfg = configOf(get());
       const rpId = window.location.hostname;
       const origin = window.location.origin;
+      let postAttempted = false;
+      let submittedCandidate: WebAuthnCredentialCandidate | null = null;
       set({ loginCeremony: true });
       try {
-        const cred = await enrollOperatorCredential(rpId, origin);
-        await ctlRegisterPasskey(configOf(get()), {
+        const challenge = await beginWebAuthnEnrollment(cfg, 'login');
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
+        let cred = get().pendingLoginPasskeyEnrollment;
+        if (!cred) {
+          cred = await createWebAuthnCredentialCandidate(rpId, origin, challenge);
+          if (!authGenerationIsCurrent(get, authGeneration)) return;
+          set({ pendingLoginPasskeyEnrollment: cred });
+        }
+        const enrollmentProof = await proveWebAuthnCredentialEnrollment(cred, cred.rpId, challenge);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
+        submittedCandidate = cred;
+        postAttempted = true;
+        await ctlRegisterPasskey(cfg, {
           alg: cred.alg,
           credentialId: cred.credentialId,
           publicKeyPEM: cred.publicKeyPEM,
-          rpId,
-          origin,
+          rpId: cred.rpId,
+          origin: cred.origin,
+          enrollmentProof,
         });
-        set({ passkeyRegistered: true, loginCeremony: false });
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
+        // The mutation result is newer than every status probe that began before it committed.
+        passkeyStatusRequestSequence += 1;
+        set({ passkeyRegistered: true, pendingLoginPasskeyEnrollment: null, loginCeremony: false });
       } catch (err) {
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         set({ loginCeremony: false });
+        const code = controllerErrorCode(err);
+        const shouldReconcile = code === 'login_credential_changed'
+          || (postAttempted && code === null && submittedCandidate !== null);
+        if (shouldReconcile) {
+          const requestSequence = ++passkeyStatusRequestSequence;
+          let status: LoginPasskeyStatus | null = null;
+          try {
+            status = await getPasskeyStatus(cfg);
+          } catch {
+            // The original registration error is the useful one; status is best-effort.
+          }
+          if (!authGenerationIsCurrent(get, authGeneration)) return;
+          const statusIsCurrent = requestSequence === passkeyStatusRequestSequence;
+
+          if (code === 'login_credential_changed') {
+            // A different tab/session won the compare-and-set race. Never retain this candidate
+            // as a one-click "retry": doing so would turn the next click into an unacknowledged
+            // replacement of the winner. Refresh what we can and require a fresh explicit flow.
+            set({
+              ...(statusIsCurrent ? { passkeyRegistered: status?.registered ?? null } : {}),
+              pendingLoginPasskeyEnrollment: null,
+            });
+          } else if (statusIsCurrent && status && submittedCandidate) {
+            set({ passkeyRegistered: status.registered });
+            if (loginPasskeyStatusMatchesCandidate(status, submittedCandidate)) {
+              set({ pendingLoginPasskeyEnrollment: null });
+              return; // exact public descriptor proves our POST committed despite response loss
+            }
+            if (status.registered) {
+              // Some other credential is now authoritative. Do not reuse this candidate as an
+              // implicit replacement even though the transport failure itself was uncoded.
+              set({ pendingLoginPasskeyEnrollment: null });
+            }
+          }
+        }
         throw err;
       }
     },
@@ -423,11 +665,15 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
     // no passkey to begin with (idempotent). Errors are thrown to the caller, displayed in place
     // by PasskeySettings.
     disablePasskey: async () => {
+      if (get().loading || get().loginCeremony) return;
+      const authGeneration = get().authGeneration;
+      const cfg = configOf(get());
       set({ loginCeremony: true });
       try {
-        const cfg = configOf(get());
         const begin = await disablePasskeyBegin(cfg);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         if (begin.kind === 'done') {
+          passkeyStatusRequestSequence += 1;
           set({ passkeyRegistered: false, loginCeremony: false });
           return;
         }
@@ -442,9 +688,13 @@ export function createAuthSlice(set: ControllerSet, get: ControllerGet) {
           ch.alg,
           ch.rpid || window.location.hostname,
         );
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         await disablePasskeyFinish(cfg, assertion);
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
+        passkeyStatusRequestSequence += 1;
         set({ passkeyRegistered: false, loginCeremony: false });
       } catch (err) {
+        if (!authGenerationIsCurrent(get, authGeneration)) return;
         set({ loginCeremony: false });
         throw err;
       }

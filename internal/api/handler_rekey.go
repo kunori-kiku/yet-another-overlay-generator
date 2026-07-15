@@ -17,7 +17,7 @@ import (
 
 // HandleClearRekey clears a node's pending RekeyRequested flag WITHOUT evicting it — the operator's
 // escape hatch for a "Roll keys" straggler (a dead/offline node, or a mis-clicked rekey-all) that
-// would otherwise keep the panel's rekeying gate stuck and force a revoke. Unlike HandleRevoke it
+// would otherwise keep the panel's rekey warning active and tempt an unnecessary revoke. Unlike HandleRevoke it
 // does NOT change Status, does NOT clear the API token, and does NOT BumpGeneration (it changes no
 // bundle, so there is nothing to wake). Idempotent: a node with no pending rekey returns 200 with
 // cleared:false and writes no audit entry. It is best-effort against a racing in-flight /rekey — an

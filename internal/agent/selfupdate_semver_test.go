@@ -76,10 +76,9 @@ func TestReconcileSelfUpdate_VlessTargetSemverMatch(t *testing.T) {
 	})
 }
 
-// TestReconcileSelfUpdateEarly_SurfacesUnpersistableAttempt proves the T5 brick-bound hardening: when
-// the crash-durable attempt bump cannot be persisted (a read-only state dir), the crash-loop ceiling
-// can't advance across boots — so the failure is SURFACED (logged) rather than swallowed by `_ =`, and
-// an unbounded restart loop on an unwritable node is diagnosable instead of silent.
+// TestReconcileSelfUpdateEarly_SurfacesUnpersistableAttempt proves the brick-bound hardening: even
+// with its stable lock inode available, a read-only state directory cannot persist the attempt bump,
+// so startup gets a returned error plus the targeted diagnostic instead of silently continuing.
 func TestReconcileSelfUpdateEarly_SurfacesUnpersistableAttempt(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses the read-only dir permission")
@@ -87,6 +86,15 @@ func TestReconcileSelfUpdateEarly_SurfacesUnpersistableAttempt(t *testing.T) {
 	dir := t.TempDir()
 	stateDir := filepath.Join(dir, "state")
 	mustSave(t, stateDir, &State{NodeID: "n1", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0"}})
+	// Seed the stable lock inode before making the directory read-only. Production
+	// already has this file because the update was armed under the same state lease.
+	release, err := acquireStateLock(stateDir)
+	if err != nil {
+		t.Fatalf("seed state lock: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release seeded state lock: %v", err)
+	}
 	// SaveState writes atomically (temp file + rename), so a read-only dir makes it fail.
 	if err := os.Chmod(stateDir, 0o500); err != nil {
 		t.Fatal(err)
@@ -94,8 +102,10 @@ func TestReconcileSelfUpdateEarly_SurfacesUnpersistableAttempt(t *testing.T) {
 	defer func() { _ = os.Chmod(stateDir, 0o700) }()
 
 	var log bytes.Buffer
-	ReconcileSelfUpdateEarly(stateDir, "1.0.0", &log)
+	if err := ReconcileSelfUpdateEarly(stateDir, "1.0.0", &log); err == nil {
+		t.Fatal("read-only state directory unexpectedly persisted its attempt bump")
+	}
 	if !strings.Contains(log.String(), "could not persist self-update attempt") {
-		t.Errorf("an unpersistable attempt bump must be surfaced, not swallowed; log=%q", log.String())
+		t.Errorf("failed durable attempt must be diagnosed before startup refuses; log=%q", log.String())
 	}
 }

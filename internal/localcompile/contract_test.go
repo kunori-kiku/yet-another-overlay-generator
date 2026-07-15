@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
@@ -84,31 +85,12 @@ func TestCompile_LosslessWrapper(t *testing.T) {
 	}
 
 	// 3. Rebuild the expected per-node Files / Checksums / Deploy from the direct
-	// result, mirroring artifacts.Export's bundleFiles build, and compare field by
-	// field. Signing is off in this test, so Signatures stays empty.
+	// result through the canonical bundle-member source, and compare field by field.
+	// Signing is off in this test, so Signatures stays empty.
 	wantFiles := make(map[string]map[string]string)
 	wantChecksums := make(map[string]string)
 	for _, node := range directResult.Topology.Nodes {
-		bundleFiles := make(map[string]string)
-		for configKey, wgConf := range directResult.WireGuardConfigs {
-			parts := strings.SplitN(configKey, ":", 2)
-			if len(parts) != 2 || parts[0] != node.ID {
-				continue
-			}
-			bundleFiles["wireguard/"+parts[1]+".conf"] = wgConf
-		}
-		if babelConf, ok := directResult.BabelConfigs[node.ID]; ok {
-			bundleFiles["babel/babeld.conf"] = babelConf
-		}
-		if sysctlConf, ok := directResult.SysctlConfigs[node.ID]; ok {
-			bundleFiles["sysctl/99-overlay.conf"] = sysctlConf
-		}
-		if script, ok := directResult.InstallScripts[node.ID]; ok {
-			bundleFiles["install.sh"] = script
-		}
-		if aj, ok := directResult.ArtifactsJSON[node.ID]; ok && aj != "" {
-			bundleFiles["artifacts.json"] = aj
-		}
+		bundleFiles := artifacts.BundleFiles(directResult, node.ID)
 		wantFiles[node.ID] = bundleFiles
 		wantChecksums[node.ID] = string(bundlesig.Canonicalize(bundleFiles))
 	}

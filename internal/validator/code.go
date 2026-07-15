@@ -43,6 +43,7 @@ const (
 	CodeDomainReservedAddressNotIPv4       Code = "validation_domain_reserved_address_not_ipv4"
 	CodeNodeIDRequired                     Code = "validation_node_id_required"
 	CodeNodeIDIllegalChars                 Code = "validation_node_id_illegal_chars"
+	CodeNodeIDNotPortable                  Code = "validation_node_id_not_portable"
 	CodeNodeNameRequired                   Code = "validation_node_name_required"
 	CodeNodeNameIllegalChars               Code = "validation_node_name_illegal_chars"
 	CodeNodeDomainIDRequired               Code = "validation_node_domain_id_required"
@@ -90,9 +91,9 @@ const (
 	CodeNodeOverlayIPConflict              Code = "validation_node_overlay_ip_conflict"
 	CodeDomainIDDuplicate                  Code = "validation_domain_id_duplicate"
 	CodeNodeIDDuplicate                    Code = "validation_node_id_duplicate"
+	CodeNodeIDPortableCollision            Code = "validation_node_id_portable_collision"
 	CodeEdgeIDDuplicate                    Code = "validation_edge_id_duplicate"
 	CodeNodeNameDuplicate                  Code = "validation_node_name_duplicate"
-	CodeNodeNameInstallerCollision         Code = "validation_node_name_installer_collision"
 	CodeNodeNameInterfaceCollision         Code = "validation_node_name_interface_collision"
 	CodeNodeEffectivePortRangeOverflow     Code = "validation_node_effective_port_range_overflow"
 	CodeNodeIsolated                       Code = "validation_node_isolated"
@@ -162,9 +163,10 @@ var registry = map[Code]string{
 	CodeDomainReservedRangeInvalid:         "Invalid reserved range format: {value}.",
 	CodeDomainReservedAddressNotIPv4:       "Reserved address must be IPv4: {ip} (IPv6 and other address families are not supported yet).",
 	CodeNodeIDRequired:                     "Node ID is required.",
-	CodeNodeIDIllegalChars:                 "Node ID {id} contains illegal characters: only letters, digits, dot (.), underscore (_), and hyphen (-) are allowed. A node ID is used as a filename and interface-name component, so spaces, slashes, and shell metacharacters are forbidden.",
+	CodeNodeIDIllegalChars:                 "Node ID {id} is not a safe path segment: use letters, digits, dot (.), underscore (_), and hyphen (-), but not the exact values `.` or `..`. A node ID is used as a directory and filename component, so spaces, slashes, and shell metacharacters are forbidden.",
+	CodeNodeIDNotPortable:                  "Node ID {id} is not a portable bundle-directory name: it must be at most {max} characters, must not end in a dot, and must not equal a Windows device name (CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9) or a project helper name (deploy-all.sh or deploy-all.ps1).",
 	CodeNodeNameRequired:                   "Node name is required.",
-	CodeNodeNameIllegalChars:               "Node name {name} contains illegal characters: only letters, digits, spaces, dot (.), underscore (_), and hyphen (-) are allowed; shell metacharacters such as quotes, backticks, $, and ; are forbidden.",
+	CodeNodeNameIllegalChars:               "Node name {name} is not safe for display and interface-name generation: use letters, digits, spaces, dot (.), underscore (_), and hyphen (-), but not the exact values `.` or `..`. Shell metacharacters such as quotes, backticks, $, and ; are forbidden.",
 	CodeNodeDomainIDRequired:               "Node must reference a Domain.",
 	CodeNodeRoleEmpty:                      "Node role must not be empty.",
 	CodeNodeRoleInvalid:                    "Invalid role: {role}. Allowed values: peer, router, relay, gateway, client.",
@@ -210,9 +212,9 @@ var registry = map[Code]string{
 	CodeNodeOverlayIPConflict:              "Overlay IP {cidr} conflicts: already used by node {other}, also assigned to node {node}",
 	CodeDomainIDDuplicate:                  "Duplicate Domain ID: {id}",
 	CodeNodeIDDuplicate:                    "Duplicate Node ID: {id}",
+	CodeNodeIDPortableCollision:            "Node IDs {other} and {id} differ only by letter case and would select the same bundle directory on Windows; use IDs that remain unique when case-folded.",
 	CodeEdgeIDDuplicate:                    "Duplicate Edge ID: {id}",
 	CodeNodeNameDuplicate:                  "Duplicate node name: node {other} and node {node} use the same name {name}",
-	CodeNodeNameInstallerCollision:         "Node names produce the same installer script filename: node {other} and node {node} both normalize to {name}, which will cause silent skips or identity mismatches during deployment",
 	CodeNodeNameInterfaceCollision:         "Node names produce the same WireGuard interface name: node {other} and node {node} both normalize to {name}, which will cause one interface configuration to overwrite the other",
 	CodeNodeEffectivePortRangeOverflow:     "Node {node} has an effective listen port range of {low}-{high} (base port {base} + {count} peer interfaces); the highest port {high} exceeds 65535 and will produce an undeployable WireGuard configuration",
 	CodeNodeIsolated:                       "Node {node} ({id}) is isolated and not connected to any enabled edge",

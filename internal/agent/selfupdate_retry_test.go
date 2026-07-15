@@ -60,6 +60,30 @@ func TestRetryDeferredSelfUpdate_NoopWhenInFlight(t *testing.T) {
 	}
 }
 
+// An unresolved root-side configuration mutation owns recovery before an unrelated
+// deferred binary swap. Even an old Blocked latch must not fetch or re-exec until the
+// main apply cycle has converged and cleared PendingApply.
+func TestRetryDeferredSelfUpdate_NoopWhileApplyPending(t *testing.T) {
+	dir := t.TempDir()
+	mustSave(t, dir, &State{
+		NodeID:            "n1",
+		SelfUpdateBlocked: "stale",
+		PendingApply: &PendingApply{
+			CompiledAt:      "2026-07-16T06:00:00Z",
+			BundleSHA256:    "0000000000000000000000000000000000000000000000000000000000000000",
+			Action:          LastActionApply,
+			MembershipEpoch: 7,
+			StartedAt:       "2026-07-16T06:00:01Z",
+		},
+	})
+	calls := 0
+	p := &SelfUpdateParams{RunningVersion: "1.0.0"}
+	attempted, err := RetryDeferredSelfUpdate(p, "n1", dir, countingFetch(nil, nil, &calls), io.Discard)
+	if attempted || err != nil || calls != 0 {
+		t.Errorf("a pending apply must block deferred self-update without fetching; attempted=%v err=%v calls=%d", attempted, err, calls)
+	}
+}
+
 // TestRetryDeferredSelfUpdate_FetchErrorKeepsBlocked: a fetch/verify failure keeps last-good — the
 // Blocked latch is preserved (retry next tick), not cleared.
 func TestRetryDeferredSelfUpdate_FetchErrorKeepsBlocked(t *testing.T) {

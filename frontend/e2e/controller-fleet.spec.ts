@@ -1,9 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readHarness, httpURL, e2eDir } from './fixtures/harness'
+import { runE2eAgent } from './fixtures/panel'
 import { seedControllerMode, seedCanvasTopology } from './fixtures/seedStore'
 import { OPERATOR_USER, OPERATOR_PASS, ENROLL_NODE } from './fixtures/config'
 
@@ -16,8 +15,6 @@ import { OPERATOR_USER, OPERATOR_PASS, ENROLL_NODE } from './fixtures/config'
 // surface: framework-refactor plan-9 retired the air-gap /api/compile route entirely, so a POST
 // to it returns 404 (route absent) — the E2E echo of the perpetual Go guard
 // internal/api/no_anonymous_compute_test.go.
-
-const execFileP = promisify(execFile)
 
 const seedTopology = JSON.parse(
   fs.readFileSync(path.join(e2eDir, 'fixtures', 'seed-topology.json'), 'utf8'),
@@ -57,7 +54,7 @@ test('controller boot: operator login + agent check-in makes the node appear in 
   // controller boot's READY line.
   // Write the throwaway WG key into Playwright's per-test output dir (under test-results/,
   // gitignored + wiped at the start of every run) so it never accumulates in /tmp.
-  const { stdout } = await execFileP(h.agentBin, [
+  const stdout = await runE2eAgent(h, [
     '--controller', httpURL(h.controller.agent),
     '--node-id', ENROLL_NODE,
     '--token', h.controller.enrollToken,

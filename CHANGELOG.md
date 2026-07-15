@@ -9,15 +9,96 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.7] - 2026-07-15
+
+**Release candidate.** A compatibility, custody, and release-integrity hardening release over
+`v2.0.0-rc.6`. New browser login and keystone credentials prove User Verification at enrollment,
+while ordinary assertions deliberately retain the existing signature + binding + User Presence
+contract so an upgrade cannot lock out existing operators or invalidate the fleet's served manifest.
+The same candidate closes adjacent crash-consistency, private-file custody, exact-artifact, browser
+concurrency, and publication-recovery gaps found during the structural and security review.
+
 ### Security
-- **WebAuthn User-Verification (UV) enforced server-side.** `verifyAssertion` now requires the UV flag
-  (not just User-Present) for operator passkey login, 2FA, and keystone trust-list signing — both
-  ceremonies already pin `userVerification:"required"` client-side, so the server becomes the enforcement
-  authority and a possession-only (PIN-less) authenticator is refused. Because the same core runs
-  **node-side** in `VerifyMembership` on every config fetch, a deployed UV-enforcing build requires every
-  served manifest to have been UV-signed: **on deploy, (re-)sign the trust-list with a UV-capable
-  authenticator** (platform passkey / PIN'd key). See `docs/spec/controller/operator-auth.md` §User-
-  Verification enforcement. (#282)
+- **WebAuthn User Verification (UV) is now proven server-side when a browser credential is enrolled.**
+  Login-passkey and keystone-passkey enrollment each begin with an authenticated, one-use challenge
+  scoped to the operator and purpose. After `navigator.credentials.create()`, the new credential
+  immediately signs that challenge in a second `navigator.credentials.get()` ceremony; the controller
+  verifies the signature, exact credential ID, RP/origin binding, and UV flag before storing the public
+  credential. The panel warns that an assertion without UV proves possession only, so someone holding
+  the authenticator or a usable copy can act as the operator; WebAuthn backup/sync eligibility is a
+  separate property from UV.
+- **The pre-release blanket UV assertion gate was removed before rc.7 to protect existing users.**
+  Existing credentials and trust-list signatures were enrolled or produced without a server-side UV
+  acceptance requirement; imposing one retroactively could lock an operator out and could make upgraded
+  nodes reject the fleet's currently served manifest. Ordinary login, 2FA, keystone signing, and
+  node-side membership verification therefore still require a valid signature, expected challenge,
+  RP/origin binding, and User Presence, but do not reject solely because an assertion lacks UV. The
+  browser requests UV as `preferred` for ordinary assertions and `required` only for enrollment proof;
+  new browser credentials prove UV during enrollment without changing the contract under existing users.
+  No fleet re-sign is required. (#282 follow-up)
+- **Controller and agent trust transitions are now crash-consistent and fail closed.** A staged deploy
+  is authorized by an exact durable set seal and commits its tenant generation last; interrupted
+  promotions cannot be served, replaced, or accidentally authorized by a later generation-only wake.
+  Keystone pin/rotation uses a durable transition marker and reconciles its exact audit event before
+  bootstrap, preview, stage, sign, promote, or status can use the new credential. On each node, a
+  cross-process state lease covers rekey/apply/self-update, custody files are descriptor-checked and
+  size-bounded, and a `PendingApply` write-ahead record makes the verified bundle, action, trust-anchor
+  bindings, compiled-at floor, and membership epoch durable before root `install.sh` may run. A crash
+  or final-state write failure therefore retains the prior last-known-good record while preventing a
+  rollback or same-version substitution on recovery. Exact retries re-sync the original intent, and a
+  Linux installer guardian retains the same filesystem lease after a Go-parent crash until the root
+  script exits, preventing a restarted daemon/manual kit from overlapping it. Self-update state reads
+  and terminal writes now fail closed without erasing a pending apply or prematurely deleting the
+  rollback binary. Windows keeps portable agent commands but explicitly refuses Linux `install.sh`
+  application instead of claiming an unsafe cross-process lock transfer.
+- **File-backed controller state now has an explicit local custody boundary.** FileStore rejects
+  symlink/non-directory roots and unsafe Unix ownership or write permissions, creates tenant and
+  collection directories privately, replaces records through random same-directory `0600` temporary
+  files, fsyncs file and directory commit points, and durably syncs deletes. Windows keeps equivalent
+  path/reparse and replace-through semantics while documenting that installation/service ACLs remain
+  the platform ownership boundary.
+- **Manual AgentHeld installs now have one verified execution path.** `yaog-agent kit apply` captures a
+  bounded directory/ZIP snapshot, rejects traversal, aliases, case-fold collisions, special files and
+  file/parent conflicts, verifies bundle integrity plus out-of-band keystone membership, materializes a
+  fresh trusted tree, and only then invokes its copied installer. `kit verify` shares the same
+  materialization preflight. The unsafe no-keystone path requires an explicit long acknowledgement and
+  is refused once node state has ever verified keystone membership.
+- **Release publication is provenance-checked and recoverable.** Tag builds require one annotated
+  SemVer tag at the approved `main` commit, re-run the full release gates, produce exactly 22 named
+  assets, and audit every archive member and binary target/version/VCS record before upload. Versioned
+  multi-architecture images are adopted only when their labels, runtime version, platforms, source
+  revision, and digest match. GitHub Release upload remains private until assets and images are sealed;
+  idempotent finalizers then converge the verified image digest and GitHub Latest pointer. Third-party
+  actions in the publication workflows and `govulncheck` are version/commit pinned.
+
+### Fixed
+- **Concurrent operator mutations and stale browser responses no longer overwrite newer state.** Login
+  passkey, TOTP, and keystone changes use field-scoped compare-and-set operations; the panel attaches
+  requests to an authentication/controller generation and applies only the latest authoritative status
+  response. A failed-but-committed enrollment is reconciled by exact public descriptor rather than
+  silently creating another credential.
+- **Artifact publication is an exact-tree transaction.** Export writes a validated sibling tree and
+  swaps it into place, so removed nodes and obsolete signing sidecars cannot survive a new export.
+  Failure before the swap preserves the prior tree; failure to delete the now-private old backup is
+  reported as a cleanup warning after a successful commit rather than a false export failure.
+- **Generated deployment helpers reject resource-exhaustion and path ambiguity before extraction.**
+  Bash and PowerShell enforce archive/member/expanded-size ceilings, canonical portable names, exact
+  member types, and duplicate/case-collision rules before copying a node-ID-keyed bundle.
+
+### Changed
+- **Portable node IDs are now the sole artifact-directory identity.** Validation rejects device names,
+  reserved helper names, trailing-dot aliases, overlong segments, and case-fold collisions before any
+  renderer or exporter can map two logical nodes onto one Windows/Unix path. Display names remain
+  presentation data rather than filesystem identity.
+- **Controller staging, persistence, agent custody, and release verification are split into focused
+  framework modules with shared primitives and adversarial compatibility tests.** This removes parallel
+  validation/write paths while preserving the canonical localcompile/render pipeline and existing
+  WebAuthn runtime acceptance contract.
+
+### Documentation
+- Reconciled the README, bilingual operator wiki, controller/agent/API specifications, architecture
+  cache, release runbook, and historical plan status with enrollment-only UV, verified manual apply,
+  durable promotion/audit/apply boundaries, portable artifact naming, and the exact release transaction.
 
 ## [2.0.0-rc.6] - 2026-07-15
 
@@ -1128,7 +1209,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.7...HEAD
+[2.0.0-rc.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.7
 [2.0.0-rc.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.5...v2.0.0-rc.6
 [2.0.0-rc.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.4...v2.0.0-rc.5
 [2.0.0-rc.4]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.3...v2.0.0-rc.4

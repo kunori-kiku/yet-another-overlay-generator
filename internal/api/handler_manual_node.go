@@ -17,10 +17,12 @@ import (
 
 // handler_manual_node.go serves the per-node bundle DOWNLOAD for a MANUAL (deployment_mode=manual,
 // hand-deployed, agent-less) node in a controller topology (mixed-controller-local-mode plan-3). A
-// managed node's agent pulls its config from GET /config; a manual node has no agent, so the operator
-// downloads the same SERVED (promoted, off-host-signed) bundle here and installs it by hand (the kit,
-// plan-4, splices the private key over the placeholder). The bundle carries the PRIVATEKEY_PLACEHOLDER,
-// never real key material, so it is safe to hand to an authenticated operator — zero-knowledge holds.
+// managed node's agent pulls its config from GET /config; a manual node has no daemon, so the operator
+// downloads the same SERVED bundle here and applies it with `yaog-agent kit apply`. That command checks
+// bundle integrity and any off-host-signed membership against the supplied out-of-band credential,
+// stages a verified temporary snapshot, and only then runs its copied install.sh; the downloaded source
+// path must never be executed directly. The bundle carries PRIVATEKEY_PLACEHOLDER, never real key
+// material, so it is safe to hand to an authenticated operator — zero-knowledge holds.
 
 // HandleManualNodeBundle returns a manual node's promoted bundle as a downloadable ZIP. Operator-only
 // (registered under the operator mux). The node id is the `node` query param. It is restricted to

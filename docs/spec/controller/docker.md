@@ -66,10 +66,10 @@ the keystone. Tracked as a follow-up.
 ## Where the image is published
 
 - **GHCR (zero setup):** `ghcr.io/kunori-kiku/yaog-controller:latest` (and `:<version>`).
-  Published automatically on every `v*` tag by `.github/workflows/docker.yml` using the
-  built-in `GITHUB_TOKEN` — nothing to configure.
-- **Docker Hub (opt-in):** the same workflow ALSO publishes to Docker Hub, but only once
-  you add the credentials. Until then those steps are skipped.
+  A `v*` tag starts `.github/workflows/release.yml`, which calls the reusable Docker workflow only
+  after the release gates and asset verification pass. The built-in `GITHUB_TOKEN` publishes GHCR.
+- **Docker Hub (opt-in):** the called Docker workflow also mirrors the same verified digest to Docker
+  Hub only when both credentials below exist. Until then the mirror steps are skipped.
 
 ### Enabling Docker Hub publishing
 
@@ -78,11 +78,17 @@ the keystone. Tracked as a follow-up.
 3. GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**, add:
    - `DOCKERHUB_USERNAME` = your Docker Hub username
    - `DOCKERHUB_TOKEN` = the access token from step 2
-4. The next `v*` tag (or a manual `workflow_dispatch` run) publishes to both registries:
+4. The next validated `v*` release transaction publishes to both registries:
    `docker.io/<username>/yaog-controller` and GHCR.
 
-(The workflow gates the Docker Hub login/tag on `DOCKERHUB_USERNAME` being non-empty, so a
-missing secret is a clean skip — never a failed build.)
+Both `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` must be non-empty. When both are absent the mirror is
+a clean skip; configuring only one is an error.
+A direct `workflow_dispatch` is intentionally **edge-only**; it cannot accept or publish a release
+version. Version references are policy-non-overwritten, not registry-immutable: recovery adopts one
+only after its source/version labels, runtime version, exact amd64/arm64 platform set, and digest all
+match. Different existing bytes fail closed. RC/GA `latest` pointers and the GitHub release are
+separate external updates, so a failed finalizer can temporarily leave verified pointers ahead or
+behind; rerunning only that finalizer converges and re-verifies the same transaction.
 
 ## Notes
 

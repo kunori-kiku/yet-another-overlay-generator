@@ -86,11 +86,11 @@ func keystoneSetup(t *testing.T) (context.Context, Store, *trustlist.Ed25519Sign
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if err := store.SetOperatorCredential(ctx, tenant, OperatorCredential{
+	if err := store.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{
 		Alg:          string(trustlist.AlgEd25519),
 		PublicKeyPEM: string(bundlesig.MarshalPublicKeyPEM(pub)),
 	}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 
 	approveNode(t, ctx, store, tenant, "node-router", genWGPubKey(t))
@@ -289,11 +289,11 @@ func TestCompileAndStage_KeystoneEpochAdvancesWithBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if err := store.SetOperatorCredential(ctx, tenant, OperatorCredential{
+	if err := store.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{
 		Alg:          string(trustlist.AlgEd25519),
 		PublicKeyPEM: string(bundlesig.MarshalPublicKeyPEM(pub)),
 	}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 	approveNode(t, ctx, store, tenant, "node-router", genWGPubKey(t))
 	approveNode(t, ctx, store, tenant, "node-peer", genWGPubKey(t))
@@ -366,13 +366,13 @@ func TestPromoteStaged_KeystoneOff(t *testing.T) {
 	}
 }
 
-// storedEpoch returns the tenant's currently stored manifest epoch (0 helpers fail the
-// test if none is stored).
+// storedEpoch returns the tenant's last fully-written manifest epoch. A zero-changed compile clears
+// the active staged set (there is nothing to sign/promote), while this history remains the epoch base.
 func storedEpoch(t *testing.T, ctx context.Context, store Store) int64 {
 	t.Helper()
-	stored, err := store.GetCurrentSignedTrustList(ctx, tenant)
+	stored, err := store.GetLastStagedTrustList(ctx, tenant)
 	if err != nil {
-		t.Fatalf("GetCurrentSignedTrustList (epoch): %v", err)
+		t.Fatalf("GetLastStagedTrustList (epoch): %v", err)
 	}
 	return stored.Epoch
 }
