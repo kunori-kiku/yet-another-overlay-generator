@@ -78,11 +78,13 @@ Container publication is an explicit transaction phase through reusable `.github
 it no longer triggers independently on a tag push. A manual Docker run can publish only `edge`.
 The called workflow publishes a version reference (the release tag without its leading `v`) under a
 non-overwrite policy, verifies its digest, exact runtime platforms (`linux/amd64` and `linux/arm64`),
-source/version labels, and embedded server version. A failed post-push run may adopt an existing
-reference only when both platform configs/runtimes and all of those properties match; a missing
-optional mirror is repaired from that
-verified digest, while any different existing bytes fail closed. GHCR is required. Docker Hub is
-included only when both credentials are configured.
+source/version labels, embedded server version, and the server ELF machine extracted from each exact
+child without executing it. The Dockerfile inherits BuildKit's automatic target arguments and asserts
+the built Go binary's OS/architecture metadata before the final image can be assembled. A failed
+post-push run may adopt an existing reference only when both platform configs/runtimes and all of those
+properties match; a missing optional mirror is repaired from that verified digest, while any different
+existing bytes fail closed. GHCR is required. Docker Hub is included only when both credentials are
+configured.
 
 GitHub upload accepts only an absent release or one exact private draft whose existing assets are a
 same-byte subset of the verified set. The pinned action fills that selected draft without overwriting
@@ -98,6 +100,7 @@ Maintainers can exercise the verifier independently with:
 ```bash
 go test ./scripts
 bash scripts/test-release-assets.sh
+docker buildx build --check .
 ```
 
 The focused Go tests synthesize traversal, repeated separators, case/prefix collisions, ZIP links,
@@ -156,8 +159,9 @@ fi
 The worktree must be clean, local `HEAD` must equal the verified `origin/main`, and both tag lookups
 must be empty for a new release. The GHCR version reference should also be absent. If it exists because
 a prior run crossed the push boundary, do not delete or overwrite it: the workflow will adopt it only
-after proving the exact source/version labels, runtime version, platform set, and digest. Confirm the
-successful `main` CI run refers to the same commit. The workflow requires the tag to equal the main tip
+after proving the exact source/version labels, runtime version, platform set, extracted server ELF
+machine, and digest. Confirm the successful `main` CI run refers to the same commit. The workflow
+requires the tag to equal the main tip
 at transaction start, records that commit, and revalidates that the annotated remote tag still peels to
 it before draft creation and final publication. `main` may advance while the long release run executes.
 
@@ -281,9 +285,26 @@ Verify, do not infer, the final state:
   bash scripts/verify-release-assets.sh "/tmp/yaog-release-$TAG" "$TAG" "$SOURCE_COMMIT"
   ```
 
-- Confirm the Release workflow and its called Docker job are green.
-- Inspect the GHCR manifest (and Docker Hub when configured): the policy-non-overwritten version must include
-  `linux/amd64` and `linux/arm64`; RC/GA must also have `latest`, while preview/beta must not move it.
+- Confirm the Release workflow and its called Docker job are green. Then repeat the content verifier
+  against the versioned image and, for RC/GA, GHCR `latest`; use the exact digest reported by the
+  successful Docker job. Repeat for Docker Hub when configured:
+
+  ```bash
+  IMAGE_VERSION=${TAG#v}
+  IMAGE_REF="ghcr.io/kunori-kiku/yaog-controller:$IMAGE_VERSION"
+  IMAGE_DIGEST=$(docker buildx imagetools inspect "$IMAGE_REF" --format '{{.Manifest.Digest}}')
+  [ "$(bash scripts/verify-controller-image.sh \
+      "$IMAGE_REF" "$TAG" "$SOURCE_COMMIT" "$IMAGE_DIGEST")" = "$IMAGE_DIGEST" ]
+  if [[ "$TAG" != *-preview.* && "$TAG" != *-beta.* ]]; then
+    [ "$(bash scripts/verify-controller-image.sh \
+        ghcr.io/kunori-kiku/yaog-controller:latest \
+        "$TAG" "$SOURCE_COMMIT" "$IMAGE_DIGEST")" = "$IMAGE_DIGEST" ]
+  fi
+  ```
+
+  This checks the index descriptors, child configs, exact entrypoint, extracted ELF machines, labels,
+  and runtime versions. A manifest-only `linux/amd64` + `linux/arm64` listing is useful diagnostic
+  output but is not architecture proof.
 - Confirm `CHANGELOG.md`, `STATUS.md`, release notes, tag target, and published asset set all describe
   the same commit and version.
 

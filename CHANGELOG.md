@@ -11,17 +11,25 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ### Fixed
 
-- **Multi-platform release-image verification now executes each exact child manifest digest.** The
-  rc.7 publication run exposed that reusing one parent index digest for sequential amd64/arm64
-  `docker run --platform` checks fails on Docker's classic image store even though both children are
-  valid. The verifier and its mock now require the platform-specific child digest, and a fail-closed
-  recovery workflow can finish an immutable post-boundary RC/GA transaction from its original verified
-  run, artifacts, tag, and image without rebuilding or overwriting the version.
+- **Controller images now contain a server built for each advertised platform.** The original
+  Dockerfile gave BuildKit's automatic `TARGETARCH` argument an `amd64` default, so every retained
+  `linux/arm64` controller image—including rc.6 and the withdrawn rc.7 candidate—combined an arm64
+  Alpine filesystem with an amd64 server. Build stages now run on `BUILDPLATFORM`, inherit the exact
+  target OS/architecture without masking defaults, and fail the build unless Go's embedded build
+  metadata matches that target. Release verification still addresses each exact child-manifest digest,
+  but now also extracts the server without executing it and requires the correct ELF machine before
+  checking its runtime version. The adversarial verifier fixture and a Dockerfile contract test reject
+  an arm64 manifest containing an amd64 entrypoint. The malformed, policy-non-overwritten rc.7 image is
+  preserved as failure evidence and will not be promoted or represented by a GitHub Release; the
+  corrected candidate uses the next release identity.
 
 ## [2.0.0-rc.7] - 2026-07-16
 
-**Release candidate.** A compatibility, custody, and release-integrity hardening release over
-`v2.0.0-rc.6`. New browser login and keystone credentials prove User Verification at enrollment,
+**Withdrawn before GitHub publication.** The policy-non-overwritten rc.7 GHCR version reference was
+found to carry an amd64 server inside its advertised arm64 child. No rc.7 GitHub Release was published,
+and neither GitHub Latest nor the GHCR `latest` pointer moved from rc.6. The version is preserved and must not be
+reused; this compatibility, custody, and release-integrity hardening candidate will be recut under the
+next release identity. New browser login and keystone credentials prove User Verification at enrollment,
 while ordinary assertions deliberately retain the existing signature + binding + User Presence
 contract so an upgrade cannot lock out existing operators or invalidate the fleet's served manifest.
 The same candidate closes adjacent crash-consistency, private-file custody, exact-artifact, browser
