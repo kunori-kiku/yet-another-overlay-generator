@@ -81,10 +81,7 @@ jobs:
               || { echo "::error::called release version is invalid"; exit 1; }
             [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" = "$RELEASE_VERSION" ] \
               || { echo "::error::release call is not running on its exact tag ref"; exit 1; }
-            [ "$(git cat-file -t "$GITHUB_REF")" = tag ] \
-              || { echo "::error::$RELEASE_VERSION is not annotated"; exit 1; }
-            [ "$(git rev-list -n 1 "$GITHUB_REF")" = "$SOURCE_REVISION" ] \
-              || { echo "::error::annotated tag no longer peels to $SOURCE_REVISION"; exit 1; }
+            bash scripts/verify-release-ref.sh "$RELEASE_VERSION" "$SOURCE_REVISION"
           fi
 
       - name: Set up QEMU (multi-arch)

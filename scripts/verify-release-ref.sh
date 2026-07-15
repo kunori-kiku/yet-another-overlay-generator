@@ -27,7 +27,13 @@ remote_commit=$(awk -v ref="refs/tags/$tag^{}" '$2 == ref {print $1}' "$remote")
 [[ "$remote_commit" == "$expected_commit" ]] \
   || { echo "release ref verification failed: $tag now peels to $remote_commit, expected $expected_commit" >&2; exit 1; }
 
-[[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] \
-  || { echo "release ref verification failed: local $tag is not annotated" >&2; exit 1; }
-[[ "$(git rev-list -n 1 "refs/tags/$tag")" == "$expected_commit" ]] \
-  || { echo "release ref verification failed: local $tag does not peel to $expected_commit" >&2; exit 1; }
+# actions/checkout@v4 fetches annotated tags at depth 0, then force-updates the
+# triggering refs/tags/<name> to github.sha (the peeled commit). Fetch the exact
+# remote tag into a private namespace so every job validates the tag object
+# itself without trusting or rewriting checkout's synthetic local ref.
+validation_ref="refs/yaog-release-tags/$tag"
+git fetch --force --no-tags origin "refs/tags/$tag:$validation_ref"
+[[ "$(git cat-file -t "$validation_ref")" == tag ]] \
+  || { echo "release ref verification failed: remote $tag is not annotated" >&2; exit 1; }
+[[ "$(git rev-list -n 1 "$validation_ref")" == "$expected_commit" ]] \
+  || { echo "release ref verification failed: fetched $tag does not peel to $expected_commit" >&2; exit 1; }

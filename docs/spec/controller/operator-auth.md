@@ -147,8 +147,9 @@ low-value signal, and both `begin` and `finish` are rate-limited.
 
 ### Enrollment-scoped User Verification (UV)
 
-Status: in the ready, still-uncut `v2.0.0-rc.7` candidate. This supersedes the blanket assertion gate
-from post-refactor-debt-paydown plan-6 / PR #282 before that gate reached a release.
+Status: implemented on `main` at `01ab037` in the ready, still-uncut and unpublished
+`v2.0.0-rc.7` release state. This supersedes the blanket assertion gate from
+post-refactor-debt-paydown plan-6 / PR #282 before that gate reached a release.
 
 **Compatibility is the reason for the enrollment boundary.** Existing operators enrolled their
 credentials under an acceptance contract that did not require the server-observed UV bit on every
