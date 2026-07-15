@@ -1,6 +1,11 @@
 # STATUS
 <!-- regenerated: 2026-07-16 -->
-<!-- by: hand — v2.0.0-rc.6 remains GitHub Latest; rc.7 is withdrawn and preserved after direct layer inspection proved that its advertised arm64 GHCR child contains an amd64 server; no rc.7 GitHub release or Latest promotion occurred, and the corrected build + embedded-ELF verifier are being prepared for rc.8 -->
+<!-- by: hand — v2.0.0-rc.6 remains GitHub Latest; rc.7 is withdrawn and preserved;
+edge run 29443985464 proved the fixed multi-platform controller from
+a73ce55aa05effbff7df6533b03c34e35427f0cd at parent
+sha256:f4ba48014fb57226b201002b290363b936b11d04b0189672a86721a1dc84fee1
+(amd64 child 3c6e11a1… / e_machine=62, arm64 child 6577ce85… / e_machine=183);
+rc.8 release state is prepared, but no rc.8 tag, version image, or GitHub Release exists yet -->
 
 ## Active work
 
@@ -58,8 +63,10 @@
   falsely passed because the x86 host can execute that mislabeled static binary. rc.7 is therefore
   preserved but withdrawn under the non-overwrite policy; neither Latest pointer moved. The fix inherits
   automatic target arguments, asserts Go build metadata, and verifies each extracted ELF machine before
-  runtime execution; it will be released as rc.8. No fleet re-sign is required and existing manifests
-  remain valid.**
+  runtime execution. Edge run `29443985464` at `a73ce55` built both native children and passed the
+  exact-child verifier (`amd64 e_machine=62`; `arm64 e_machine=183`); the corrected candidate is prepared
+  for the fresh rc.8 release transaction. No fleet re-sign is required and existing manifests remain
+  valid.**
   The merged implementation also reconciles the bilingual operator wiki and
   controller-agent lifecycle documentation. Deferred, non-blocking: **plan-3.5**
   (go:embed/`ShellToken` PowerShell deploy templating —
@@ -293,13 +300,13 @@
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
   a reliable *persistent* per-node `failed` update-state (would need a positive agent-reported field —
   the chip's `failed` is best-effort/transient today); the full wiki rewrite; a frontend test runner.
-- `main` contains the reviewed rc.7 application implementation, annotated-tag validator repair, and
-  fail-closed recovery tooling; exact-commit main CI runs `29434577226` (`01ab037`), `29436552114`
-  (`c3c5c25`), and `29440602388` (`54d79ee`) passed all seven required jobs. Its local gate mirror is
-  green across Go format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM
-  conformance, govulncheck, DAST, release-asset synthesis, workflow lint, cross-builds, and the
-  real-tunnel canary. The first tag-triggered Release run (`29434982352`) failed pre-boundary because
-  `actions/checkout` rewrote
+- `main` contains the reviewed rc.8 application candidate, annotated-tag validator repair, fail-closed
+  recovery tooling, native multi-platform Docker build, and extracted-ELF verifier. PR #302 merged as
+  `a73ce55aa05effbff7df6533b03c34e35427f0cd`; PR CI run `29443170939` and exact-main CI run
+  `29443580109` each passed all seven required jobs. The local gate mirror is green across Go
+  format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM conformance, govulncheck,
+  DAST, release-asset synthesis, workflow lint, cross-builds, and the real-tunnel canary. The first
+  tag-triggered Release run (`29434982352`) failed pre-boundary because `actions/checkout` rewrote
   the local annotated tag ref to the peeled commit. After PR #300 fixed that and the tag was lawfully
   recreated, run `29437046676` passed its validator, seven gates, seven platform builds, exact-22 seal,
   and native Windows amd64/386 execution. It pushed exact GHCR digest `sha256:7e71e286…`, then its new
@@ -308,9 +315,16 @@
   the amd64 child (`ELF e_machine=62`, not AArch64 `183`), a Dockerfile defect present since the first
   controller image and also affecting rc.6. GitHub has no rc.7 release object and both Latest pointers
   remain rc.6. Because the version-image boundary was crossed, neither tag nor image will move and the
-  recovery workflow must not be dispatched. The corrected Docker build, extracted-ELF verifier, and
-  regression contracts are under review for rc.8. Hardware-backed browser enrollment remains an
-  explicit owner smoke.
+  recovery workflow must not be dispatched. Edge run `29443985464` then built the correction from exact
+  `a73ce55`: parent digest `sha256:f4ba48014fb57226b201002b290363b936b11d04b0189672a86721a1dc84fee1`,
+  amd64 child `sha256:3c6e11a1c54affc513a7a4fc6a7d5c6708cfce2bfdf17ab45e3b4b1275f0904d`
+  (`e_machine=62`), and arm64 child
+  `sha256:6577ce8516a5e1fbeedc305aefd7ed146b56bdf9854f3e2c3e27ee17ad114af3`
+  (`e_machine=183`). Both configs reported the exact platform, revision, version, and
+  `/usr/local/bin/yaog-server` entrypoint; the QEMU-backed runtime checks passed, and local extraction
+  found different native binary hashes with no inspection containers left behind. The release-state
+  merge changes the source revision, so the mutable edge proof must run once more at the final tag target
+  before tagging. Hardware-backed browser enrollment remains an explicit owner smoke.
 
 ## Next actions
 
@@ -337,12 +351,13 @@ arm64 agents and release bundles are unaffected because they use the separate re
 GA (rc.7 is withdrawn; hardware-only checks remain owner-paced):**
 1. **Cut a fresh `v2.0.0-rc.8` transaction.** Preserve the rc.7 tag and malformed version image as
    failure evidence; do not dispatch `Recover Release`, overwrite that image, or reuse its artifacts.
-   Merge the target-argument/build-metadata fix and the exact-child extracted-ELF verifier, require
-   exact-main CI, then prove the complete multi-platform container through the mutable `edge` workflow.
-   Prepare rc.8 release state, create one annotated tag at the verified main tip, and use the ordinary
-   Release workflow to rebuild/re-stamp all assets and both image children. Promote Latest only after
-   amd64 `e_machine=62`, arm64 `e_machine=183`, runtime versions, labels, digest, exact 22 assets, and
-   native execution checks all pass.
+   The build correction and its initial complete multi-platform edge image are proven. Merge this
+   docs-only release-state commit, require exact-main CI, rerun `edge` at that final source revision, and
+   confirm that no rc.8 tag, version image, or GitHub Release exists. Then create one annotated tag at
+   the verified main tip and use the ordinary Release workflow to rebuild/re-stamp all assets and both
+   image children. Promote Latest only after amd64 `e_machine=62`, arm64 `e_machine=183`, runtime
+   versions, revision labels, sealed parent digest, exact 22 assets, and native execution checks all
+   pass.
 2. **Carry the rc.6 real-host/browser smokes as explicitly owed risk where hardware is unavailable.**
    Owner owes: update the controller to rc.6+ and browser-smoke
    the fixes — (a) **local in-browser design now actually loads** (the shipped panel finally contains

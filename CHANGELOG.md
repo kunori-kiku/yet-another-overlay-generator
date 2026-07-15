@@ -9,31 +9,16 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
-### Fixed
+## [2.0.0-rc.8] - 2026-07-16
 
-- **Controller images now contain a server built for each advertised platform.** The original
-  Dockerfile gave BuildKit's automatic `TARGETARCH` argument an `amd64` default, so every retained
-  `linux/arm64` controller image—including rc.6 and the withdrawn rc.7 candidate—combined an arm64
-  Alpine filesystem with an amd64 server. Build stages now run on `BUILDPLATFORM`, inherit the exact
-  target OS/architecture without masking defaults, and fail the build unless Go's embedded build
-  metadata matches that target. Release verification still addresses each exact child-manifest digest,
-  but now also extracts the server without executing it and requires the correct ELF machine before
-  checking its runtime version. The adversarial verifier fixture and a Dockerfile contract test reject
-  an arm64 manifest containing an amd64 entrypoint. The malformed, policy-non-overwritten rc.7 image is
-  preserved as failure evidence and will not be promoted or represented by a GitHub Release; the
-  corrected candidate uses the next release identity.
-
-## [2.0.0-rc.7] - 2026-07-16
-
-**Withdrawn before GitHub publication.** The policy-non-overwritten rc.7 GHCR version reference was
-found to carry an amd64 server inside its advertised arm64 child. No rc.7 GitHub Release was published,
-and neither GitHub Latest nor the GHCR `latest` pointer moved from rc.6. The version is preserved and must not be
-reused; this compatibility, custody, and release-integrity hardening candidate will be recut under the
-next release identity. New browser login and keystone credentials prove User Verification at enrollment,
-while ordinary assertions deliberately retain the existing signature + binding + User Presence
-contract so an upgrade cannot lock out existing operators or invalidate the fleet's served manifest.
-The same candidate closes adjacent crash-consistency, private-file custody, exact-artifact, browser
-concurrency, and publication-recovery gaps found during the structural and security review.
+**Release candidate.** Releases under a fresh identity the compatibility, custody, and
+release-integrity hardening carried by the withdrawn rc.7 candidate, now with a controller image that
+is verified to contain a native server for every advertised platform. New browser login and keystone
+credentials prove User Verification at enrollment, while ordinary assertions deliberately retain the
+existing signature + binding + User Presence contract so an upgrade cannot lock out existing operators
+or invalidate the fleet's served manifest. The candidate also closes adjacent crash-consistency,
+private-file custody, exact-artifact, browser-concurrency, and publication-recovery gaps found during
+the structural and security review.
 
 ### Security
 - **WebAuthn User Verification (UV) is now proven server-side when a browser credential is enrolled.**
@@ -44,7 +29,7 @@ concurrency, and publication-recovery gaps found during the structural and secur
   credential. The panel warns that an assertion without UV proves possession only, so someone holding
   the authenticator or a usable copy can act as the operator; WebAuthn backup/sync eligibility is a
   separate property from UV.
-- **The pre-release blanket UV assertion gate was removed before rc.7 to protect existing users.**
+- **The pre-release blanket UV assertion gate was removed before publication to protect existing users.**
   Existing credentials and trust-list signatures were enrolled or produced without a server-side UV
   acceptance requirement; imposing one retroactively could lock an operator out and could make upgraded
   nodes reject the fleet's currently served manifest. Ordinary login, 2FA, keystone signing, and
@@ -83,12 +68,25 @@ concurrency, and publication-recovery gaps found during the structural and secur
 - **Release publication is provenance-checked and recoverable.** Tag builds require one annotated
   SemVer tag at the approved `main` commit, re-run the full release gates, produce exactly 22 named
   assets, and audit every archive member and binary target/version/VCS record before upload. Versioned
-  multi-architecture images are adopted only when their labels, runtime version, platforms, source
-  revision, and digest match. GitHub Release upload remains private until assets and images are sealed;
-  idempotent finalizers then converge the verified image digest and GitHub Latest pointer. Third-party
-  actions in the publication workflows and `govulncheck` are version/commit pinned.
+  multi-architecture images are adopted only when their parent digest, exact child descriptors and
+  configs, source/version labels, entrypoint, extracted ELF machine, and runtime version all match.
+  GitHub Release upload remains private until assets and images are sealed; idempotent finalizers then
+  converge the verified image digest and GitHub Latest pointer. Third-party actions in the publication
+  workflows and `govulncheck` are version/commit pinned.
 
 ### Fixed
+- **Controller images now contain a server built for each advertised platform.** The original
+  Dockerfile gave BuildKit's automatic `TARGETARCH` argument an `amd64` default, so every retained
+  `linux/arm64` controller image—including rc.6 and the withdrawn rc.7 candidate—combined an arm64
+  Alpine filesystem with an amd64 server. Build stages now run on `BUILDPLATFORM`, inherit the exact
+  target OS/architecture without masking defaults, and fail the build unless Go's embedded build
+  metadata matches that target. Release verification addresses each exact child-manifest digest,
+  extracts the server without executing it, and requires the correct ELF machine before checking its
+  runtime version. The adversarial verifier fixture and a Dockerfile contract test reject an arm64
+  manifest containing an amd64 entrypoint. The malformed, policy-non-overwritten rc.7 image remains
+  preserved as failure evidence and was neither promoted nor represented by a GitHub Release. The
+  retained rc.6 and withdrawn rc.7 arm64 controller children must not be used; standalone arm64 agents
+  and release bundles are unaffected because they use the separate release matrix.
 - **Concurrent operator mutations and stale browser responses no longer overwrite newer state.** Login
   passkey, TOTP, and keystone changes use field-scoped compare-and-set operations; the panel attaches
   requests to an authentication/controller generation and applies only the latest authoritative status
@@ -116,6 +114,17 @@ concurrency, and publication-recovery gaps found during the structural and secur
 - Reconciled the README, bilingual operator wiki, controller/agent/API specifications, architecture
   cache, release runbook, and historical plan status with enrollment-only UV, verified manual apply,
   durable promotion/audit/apply boundaries, portable artifact naming, and the exact release transaction.
+
+## [2.0.0-rc.7] - 2026-07-16
+
+**Withdrawn after its versioned GHCR image was published and before GitHub Release publication.** The
+`2.0.0-rc.7` controller image at
+`sha256:7e71e286b40a651bc5720e3d5513b67a8bbbf971df449ea800be87530c72113d` advertises a
+`linux/arm64` child whose embedded server is actually amd64. No rc.7 GitHub Release object was created,
+and neither GitHub Latest nor the GHCR `latest` pointer moved from rc.6. The annotated tag targeting
+`c3c5c25d93542b17a3bd0fe868f6321c2d702776` and its version image are preserved under the non-overwrite
+policy: this identity must not be reused, overwritten, promoted, or sent through `Recover Release`.
+The correction is carried under the fresh `v2.0.0-rc.8` identity.
 
 ## [2.0.0-rc.6] - 2026-07-15
 
@@ -1226,7 +1235,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.7...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.8...HEAD
+[2.0.0-rc.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.8
 [2.0.0-rc.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.7
 [2.0.0-rc.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.5...v2.0.0-rc.6
 [2.0.0-rc.5]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.4...v2.0.0-rc.5
