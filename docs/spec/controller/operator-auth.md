@@ -147,10 +147,10 @@ low-value signal, and both `begin` and `finish` are rate-limited.
 
 ### Enrollment-scoped User Verification (UV)
 
-Status: included in the immutable `v2.0.0-rc.7` tag at `c3c5c25`; the versioned container exists, but
-the GitHub release remains unpublished while the exact-state release transaction is recovered. This
-supersedes the blanket assertion gate from
-post-refactor-debt-paydown plan-6 / PR #282 before that gate reached a release.
+Status: included in the withdrawn `v2.0.0-rc.7` tag at `c3c5c25`, but never published as a GitHub
+Release because that identity's arm64 controller image was malformed. The same compatibility-preserving
+implementation is carried forward for the corrected rc.8 candidate. This supersedes the blanket
+assertion gate from post-refactor-debt-paydown plan-6 / PR #282 before that gate reached a release.
 
 **Compatibility is the reason for the enrollment boundary.** Existing operators enrolled their
 credentials under an acceptance contract that did not require the server-observed UV bit on every
@@ -190,7 +190,7 @@ credential. Backup eligibility/state (`BE`/`BS`, which describes whether a crede
 or is currently backed up) is independent of UV: a synced passkey can perform UV, while a non-UV
 assertion does not by itself prove that the credential is copyable.
 
-There is no rc.7 fleet migration or mandatory trust-list re-sign. Existing credentials and manifest
+There is no rc.8 fleet migration or mandatory trust-list re-sign. Existing credentials and manifest
 signatures remain valid under the generic verifier, so deploying this change cannot lock out an
 existing operator or brick node config fetch merely because a historical assertion lacked UV.
 

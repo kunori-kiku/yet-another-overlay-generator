@@ -1,12 +1,13 @@
 # STATUS
 <!-- regenerated: 2026-07-16 -->
-<!-- by: hand — v2.0.0-rc.6 remains GitHub Latest; rc.7 is immutably tagged at c3c5c25 and its exact GHCR version image exists at sha256:7e71e286 after every release gate, exact-22 check, and native-Windows check passed, but a parent-index runtime-verifier defect stopped the transaction before any GitHub release object or Latest promotion; child-digest verification + an exact-state recovery workflow are underway -->
+<!-- by: hand — v2.0.0-rc.6 remains GitHub Latest; rc.7 is withdrawn and preserved after direct layer inspection proved that its advertised arm64 GHCR child contains an amd64 server; no rc.7 GitHub release or Latest promotion occurred, and the corrected build + embedded-ELF verifier are being prepared for rc.8 -->
 
 ## Active work
 
 - **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
   `_completed/`). Shipped as `v2.0.0-rc.6`; the independently reviewed, gate-green rc.7 implementation
-  is immutably tagged at `c3c5c25` and awaiting completion of its failed publication transaction, and
+  is immutably tagged at `c3c5c25`, but that release identity is withdrawn after its versioned image
+  crossed the non-overwrite boundary with a malformed arm64 child; the corrected candidate is rc.8, and
   carries enrollment-scoped WebAuthn UV proof instead of plan-6's blanket runtime/node gate.** The
   successor to `framework-refactor`, from
   a fresh **30-agent repo-wide debt sweep + a 7-agent security-correctness gap-pass** (both briefed to
@@ -47,11 +48,18 @@
   possession-only. WebAuthn backup/sync state is separate from UV. **The initial rc.7 tag run failed
   before publication because checkout flattened the local annotated tag; after the centralized fix and
   documented pre-boundary retag, Release run `29437046676` passed every gate, the exact-22 asset check,
-  and native Windows execution, then published immutable version image `sha256:7e71e286…`. Its new
+  and native Windows execution, then published the policy-non-overwritten version image at immutable
+  digest `sha256:7e71e286…`. Its new
   read-back verifier incorrectly reused the multi-arch parent digest across sequential amd64/arm64 runs
-  on Docker's classic image store, so no GitHub release object was created and Latest remains rc.6. The
-  image children, labels, and runtime versions are exact; the tag/image may not move, and an exact-state
-  automated recovery is underway. No fleet re-sign is required and existing manifests remain valid.**
+  on Docker's classic image store, so no GitHub release object was created and Latest remains rc.6.
+  Direct extraction then found the deeper, pre-existing build defect: `ARG TARGETARCH=amd64`, present
+  since the first controller image, masked BuildKit's automatic arm64 target and copied the same x86-64
+  server into both children (rc.6 is affected too). The attempted child-digest-only verifier would have
+  falsely passed because the x86 host can execute that mislabeled static binary. rc.7 is therefore
+  preserved but withdrawn under the non-overwrite policy; neither Latest pointer moved. The fix inherits
+  automatic target arguments, asserts Go build metadata, and verifies each extracted ELF machine before
+  runtime execution; it will be released as rc.8. No fleet re-sign is required and existing manifests
+  remain valid.**
   The merged implementation also reconciles the bilingual operator wiki and
   controller-agent lifecycle documentation. Deferred, non-blocking: **plan-3.5**
   (go:embed/`ShellToken` PowerShell deploy templating —
@@ -285,20 +293,24 @@
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
   a reliable *persistent* per-node `failed` update-state (would need a positive agent-reported field —
   the chip's `failed` is best-effort/transient today); the full wiki rewrite; a frontend test runner.
-- `main` contains the reviewed rc.7 implementation and annotated-tag validator repair; exact-commit
-  main CI runs `29434577226` (`01ab037`) and `29436552114` (`c3c5c25`) passed all seven required jobs.
-  Its local gate mirror is also green across Go
-  format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM conformance, govulncheck,
-  DAST, release-asset synthesis, workflow lint, cross-builds, and the real-tunnel canary. The first
-  first tag-triggered Release run (`29434982352`) failed pre-boundary because `actions/checkout` rewrote
+- `main` contains the reviewed rc.7 application implementation, annotated-tag validator repair, and
+  fail-closed recovery tooling; exact-commit main CI runs `29434577226` (`01ab037`), `29436552114`
+  (`c3c5c25`), and `29440602388` (`54d79ee`) passed all seven required jobs. Its local gate mirror is
+  green across Go format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM
+  conformance, govulncheck, DAST, release-asset synthesis, workflow lint, cross-builds, and the
+  real-tunnel canary. The first tag-triggered Release run (`29434982352`) failed pre-boundary because
+  `actions/checkout` rewrote
   the local annotated tag ref to the peeled commit. After PR #300 fixed that and the tag was lawfully
   recreated, run `29437046676` passed its validator, seven gates, seven platform builds, exact-22 seal,
   and native Windows amd64/386 execution. It pushed exact GHCR digest `sha256:7e71e286…`, then its new
   runtime verifier failed by reusing one parent index digest for sequential amd64/arm64 Docker runs.
-  Both exact child digests verify successfully; GitHub has no rc.7 release object and both Latest
-  pointers remain rc.6. Because the image boundary was crossed, neither tag nor image will move. The
-  child-digest fix and a fail-closed recovery transaction over the original artifacts are active.
-  Hardware-backed browser enrollment remains an explicit owner smoke.
+  Direct layer extraction then proved that the advertised arm64 child contains the same amd64 server as
+  the amd64 child (`ELF e_machine=62`, not AArch64 `183`), a Dockerfile defect present since the first
+  controller image and also affecting rc.6. GitHub has no rc.7 release object and both Latest pointers
+  remain rc.6. Because the version-image boundary was crossed, neither tag nor image will move and the
+  recovery workflow must not be dispatched. The corrected Docker build, extracted-ELF verifier, and
+  regression contracts are under review for rc.8. Hardware-backed browser enrollment remains an
+  explicit owner smoke.
 
 ## Next actions
 
@@ -306,29 +318,31 @@
 
 **Track 1 — `post-refactor-debt-paydown-2026_07_14` COMPLETE + archived to `_completed/`.** All 14 plans
 merged to `main` (#277–#290, +#291/#292 review follow-ups), each workflow-reviewed → fixed → re-reviewed →
-CI-green; shipped as `v2.0.0-rc.6`. **plan-6 (WebAuthn UV, #282) merged 2026-07-15; the merged rc.7
-implementation supersedes its blanket runtime/node gate before rc.7 is published.** The replacement
+CI-green; shipped as `v2.0.0-rc.6`. **plan-6 (WebAuthn UV, #282) merged 2026-07-15; the implementation
+in the withdrawn rc.7 tag and corrected rc.8 candidate supersedes its blanket runtime/node gate before
+that gate reaches a published release.** The replacement
 verifies a purpose+actor-scoped UV proof from the exact candidate only when a login or keystone browser
 credential is enrolled, with an explicit possession/copy warning in both panel surfaces. There is no
 node-side UV migration and no mandatory trust-list re-sign. Full detail is in the ✅ closed entry above.
 **Residual (non-blocking, its own future unit):** the go:embed/`ShellToken` PowerShell deploy templating
-(plan-3.5). The bilingual wiki and controller-agent lifecycle prose are reconciled in the merged rc.7
-implementation.
+(plan-3.5). The bilingual wiki and controller-agent lifecycle prose are reconciled in the candidate.
 
 **Track 2 — the rc line to GA.**
 
 **`v2.0.0-rc.6` is GitHub Latest (2026-07-14; annotated tag on `91fcb71`; rc.5 demoted; self-promoted;
 22 assets — the 7 `yaog-server-airgap-*` binaries are intentionally gone, one server build post
-framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277–#292). The road to GA
-(current rc.7 release recovery is active; hardware-only checks remain owner-paced):**
-1. **Complete the immutable `v2.0.0-rc.7` recovery transaction.** Tag `v2.0.0-rc.7` is fixed at
-   `c3c5c25`; versioned GHCR digest `sha256:7e71e286…` is fixed and must not be overwritten. The source
-   run's validator, seven gates, exact 22 assets, and native Windows checks are green, but its
-   parent-index runtime verifier prevented the draft/finalizer jobs from running. Merge the child-digest
-   verifier and reviewed `Recover Release` workflow, wait for exact-main CI, then dispatch it with the
-   immutable tag, source run, revision, and image digest. It must adopt—not rebuild—the version image;
-   re-download and re-seal the original artifact IDs; create one private draft; then converge
-   GHCR/GitHub Latest and verify both. Only post-publication verification may change this file to shipped.
+framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277–#292), but its advertised
+arm64 controller image is known malformed; use the amd64 image until rc.8 replaces Latest. Standalone
+arm64 agents and release bundles are unaffected because they use the separate release matrix. The road to
+GA (rc.7 is withdrawn; hardware-only checks remain owner-paced):**
+1. **Cut a fresh `v2.0.0-rc.8` transaction.** Preserve the rc.7 tag and malformed version image as
+   failure evidence; do not dispatch `Recover Release`, overwrite that image, or reuse its artifacts.
+   Merge the target-argument/build-metadata fix and the exact-child extracted-ELF verifier, require
+   exact-main CI, then prove the complete multi-platform container through the mutable `edge` workflow.
+   Prepare rc.8 release state, create one annotated tag at the verified main tip, and use the ordinary
+   Release workflow to rebuild/re-stamp all assets and both image children. Promote Latest only after
+   amd64 `e_machine=62`, arm64 `e_machine=183`, runtime versions, labels, digest, exact 22 assets, and
+   native execution checks all pass.
 2. **Carry the rc.6 real-host/browser smokes as explicitly owed risk where hardware is unavailable.**
    Owner owes: update the controller to rc.6+ and browser-smoke
    the fixes — (a) **local in-browser design now actually loads** (the shipped panel finally contains
@@ -339,9 +353,9 @@ framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277�
    (d) self-update across the rc.5→rc.6 boundary reconciles (no channel wedge). The install.sh +
    deploy-script fixes ride the rendered scripts, so **update the controller and redeploy** to apply.
    Release cut hit a real `release.yml` E2E-gate gap (it wasn't building the wasm before the E2E panel
-   build — fixed #295, tag moved to the fixed commit); the published rc.6 is correct. Any confirmed
-   defect before the rc.7 cut must be fixed first; a defect found after publication advances to rc.8 (a
-   red required gate or a new blocker never tags over).
+   build — fixed #295, tag moved to the fixed commit); rc.6's GitHub assets are correct, but its arm64
+   controller image is not. Any confirmed defect before the rc.8 cut must be fixed first; a defect found
+   after publication advances to rc.9 (a red required gate or a new blocker never tags over).
 3. **rc.5 surfaces to also smoke** (carried, not yet owner-confirmed): the node-detail CPU/RAM/load
    charts (granularities + retention cap incl. `0`=off) and delta deploy (unchanged topology →
    "0 updated, N unchanged", no node refresh; change one → only it re-stages; Force redeploys an
@@ -374,7 +388,7 @@ release line has since advanced preview → beta → rc through **rc.6**.
   custody race. Tier-2/3/4: agent `ControllerLoop`, byte-identical `derivePeersWithDomains` split,
   `handler_bootstrap` split + agent-mux adapter, the non-vacuous wire-DTO drift gate, finished `Field`
   adoption, doc/state hygiene. **plan-6 (WebAuthn UV, #282) merged 2026-07-15; its blanket runtime/node
-  gate is superseded in the merged, still-unpublished rc.7 implementation by server-verified,
+  gate is superseded in the withdrawn rc.7 / corrected rc.8 implementation by server-verified,
   enrollment-scoped UV proof for both browser credential types (no fleet re-sign).** NO trust-root bypass
   / key leak / CVE. Memory:
   `post-refactor-debt-paydown-shipped.md`, `release-e2e-gate-mirrors-ci.md`.

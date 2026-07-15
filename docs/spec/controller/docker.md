@@ -85,10 +85,17 @@ Both `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` must be non-empty. When both are
 a clean skip; configuring only one is an error.
 A direct `workflow_dispatch` is intentionally **edge-only**; it cannot accept or publish a release
 version. Version references are policy-non-overwritten, not registry-immutable: recovery adopts one
-only after its source/version labels, runtime version, exact amd64/arm64 platform set, and digest all
-match. Different existing bytes fail closed. RC/GA `latest` pointers and the GitHub release are
+only after its source/version labels, runtime version, exact amd64/arm64 platform set, extracted server
+ELF machine, and digest all match. The build inherits BuildKit's automatic target OS/architecture and
+checks the resulting Go binary metadata, so an arm64 image cannot silently carry an amd64 server.
+Different existing bytes fail closed. RC/GA `latest` pointers and the GitHub release are
 separate external updates, so a failed finalizer can temporarily leave verified pointers ahead or
 behind; rerunning only that finalizer converges and re-verifies the same transaction.
+
+> **Known arm64 warning:** the current `latest` / `2.0.0-rc.6` controller image advertises an arm64
+> child but contains an amd64 server in that child. Use its amd64 image only until rc.8 replaces
+> `latest`; the withdrawn `2.0.0-rc.7` version has the same defect and must not be used or promoted.
+> This Dockerfile defect does not affect the standalone arm64 agents or release bundles.
 
 ## Notes
 

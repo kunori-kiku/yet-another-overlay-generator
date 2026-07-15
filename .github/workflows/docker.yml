@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: Validated release tag (for example v2.0.0-rc.7)
+        description: Validated release tag (for example v2.0.0-rc.8)
         required: true
         type: string
       source_revision:

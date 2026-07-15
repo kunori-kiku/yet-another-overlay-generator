@@ -6,7 +6,7 @@
 # one-shot bootstrap; this image is the CONTROLLER only.
 
 # --- build the frontend (panel) ---
-FROM node:20-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --legacy-peer-deps
@@ -19,13 +19,15 @@ RUN npm run build
 # below NOR the GOOS=js wasm build force-downloads a toolchain at image-build time (default
 # GOTOOLCHAIN=auto uses the local toolchain because it is >= the floor). Keep this >= the go.mod
 # toolchain minor on future bumps so the download-at-build-time regression does not return.
-FROM golang:1.26-alpine AS backend
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# Inherit BuildKit's automatic target values. Defaults here would mask the
+# linux/arm64 target and silently cross-compile an amd64 server into that image.
+ARG TARGETOS
+ARG TARGETARCH
 # BUILD_VERSION stamps the binary's `version` subcommand; pass --build-arg BUILD_VERSION=<tag> from
 # the image build (the docker workflow forwards the release tag). EXTENDS the existing -s -w flags.
 ARG BUILD_VERSION=dev
@@ -33,8 +35,15 @@ ARG BUILD_VERSION=dev
 # There is no anonymous compute surface — the four /api/{validate,compile,export,deploy-script}
 # routes were deleted — so no unauthenticated path reaches the compile pipeline. See
 # docs/spec/operations/deployment-topology.md.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags "-s -w -X main.BuildVersion=${BUILD_VERSION}" -o /out/yaog-server ./cmd/server
+RUN set -eu; \
+    test -n "${TARGETOS}"; \
+    test -n "${TARGETARCH}"; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -trimpath -ldflags "-s -w -X main.BuildVersion=${BUILD_VERSION}" -o /out/yaog-server ./cmd/server; \
+    built_os="$(go version -m /out/yaog-server | awk '$1 == "build" && $2 ~ /^GOOS=/ { sub(/^GOOS=/, "", $2); print $2 }')"; \
+    built_arch="$(go version -m /out/yaog-server | awk '$1 == "build" && $2 ~ /^GOARCH=/ { sub(/^GOARCH=/, "", $2); print $2 }')"; \
+    test "${built_os}" = "${TARGETOS}"; \
+    test "${built_arch}" = "${TARGETARCH}"
 
 # Build the in-browser Go/WASM local engine (framework-refactor plan-4 made Go/WASM the default+only
 # local engine). The frontend stage (node:alpine) has no Go, so the wasm is built HERE and COPYed into

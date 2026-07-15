@@ -26,8 +26,12 @@ The release graph is:
    Go target/VCS/version metadata and agent byte identity, compares the complete frontend across
    bundles, executes Linux amd64 binaries, and is followed by native Windows amd64/386 execution.
 6. **Publish or recover the versioned controller image.** GHCR is required; Docker Hub is mirrored only
-   when both credentials are configured. The version reference is adopted only if its digest, exact
-   `linux/amd64` + `linux/arm64` platform set, source/version labels, and runtime version all match.
+   when both credentials are configured. BuildKit's automatic target OS/architecture values are
+   inherited without defaults, and the build checks the Go binary metadata before assembling each
+   target image. The version reference is adopted only if its digest, exact `linux/amd64` +
+   `linux/arm64` platform set, source/version labels, extracted server ELF machine, and runtime version
+   all match. Inspecting the executable is required because an image manifest can advertise arm64 while
+   containing an amd64 entrypoint.
 7. **Create or recover one private GitHub Release draft.** Only an absent release or an exactly
    classified private draft containing a same-byte subset of the verified assets is accepted. The
    workflow uploads without overwriting and re-seals all 22 remote names, sizes, and SHA-256 digests.
@@ -45,7 +49,8 @@ tagged workflow itself makes an ordinary rerun impossible. It is RC/GA- and GHCR
 same publication lock, and must be dispatched from the default branch with an explicit publication
 confirmation. It accepts only an exact failed tag-triggered Release graph, binds the supplied digest to
 the original successful image-build log, resolves the original unexpired artifact IDs, re-verifies all
-22 files and the immutable tag/image, and then runs the same private-draft seal and Latest finalizer. It
+22 files, the annotated tag, and the policy-non-overwritten version-image digest, and then runs the same
+private-draft seal and Latest finalizer. It
 cannot build or overwrite a version image. This path is not a substitute for ordinary failed-job reruns.
 
 ## Deployment Scripts

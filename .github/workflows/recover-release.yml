@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing annotated RC/GA tag to recover (for example v2.0.0-rc.7)
+        description: Existing annotated RC/GA tag to recover (for example v2.0.0-rc.8)
         required: true
         type: string
       source_revision:
@@ -76,6 +76,11 @@ jobs:
           # outside its authority. Accept only GA or numbered RC identities.
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]] \
             || { echo "::error::recovery tag is not an RC/GA release"; exit 1; }
+          if [ "$RELEASE_TAG" = v2.0.0-rc.7 ]; then
+            echo "::error::v2.0.0-rc.7 is withdrawn because its arm64 image contains an amd64 server"
+            echo "::error::preserve the withdrawn identity and advance to a fresh release number"
+            exit 1
+          fi
           [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]] \
             || { echo "::error::source revision is not a full Git SHA"; exit 1; }
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] \
