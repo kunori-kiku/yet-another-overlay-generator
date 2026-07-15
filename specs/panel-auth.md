@@ -1,6 +1,6 @@
 # Panel Auth — Operator Login UI + Client Auth State
 
-<!-- last-verified: 2026-07-15 -->
+<!-- last-verified: 2026-07-16 -->
 
 ## Responsibility
 
@@ -107,7 +107,7 @@ server-authoritative copy replaces it (`frontend/src/stores/controller/sync.ts:5
 - **Existing users remain compatible:** ordinary login and signing assertions ask the browser for
   `userVerification:'preferred'`, while the generic server/node verifier requires user presence and
   a valid signature but does not reject solely because UV is absent. This avoids retroactively
-  locking out credentials and already-deployed fleets that worked before rc.7
+  locking out credentials and already-deployed fleets accepted under earlier releases
   (`frontend/src/lib/webauthn.ts:358-407,410-465`; `internal/trustlist/webauthn.go:43-95,118-146`).
 - **Failed second phase retries the same credential:** after `create()` succeeds, the public
   candidate stays in volatile state if UV proof or persistence fails. A retry mints a fresh server
