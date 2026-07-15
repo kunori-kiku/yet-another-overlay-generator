@@ -1,14 +1,15 @@
 # STATUS
-<!-- regenerated: 2026-07-15 -->
-<!-- by: hand — v2.0.0-rc.6 = GitHub Latest; rc.7 is ready and uncut; its independently reviewed, locally gate-green candidate replaces plan-6's blanket WebAuthn-UV gate with enrollment-scoped server proof for login + keystone browser credentials, but is not yet merged -->
+<!-- regenerated: 2026-07-16 -->
+<!-- by: hand — v2.0.0-rc.6 = GitHub Latest; the independently reviewed rc.7 implementation is merged on main at 01ab037 with exact-commit main CI green, but remains uncut/unpublished after its first tag-triggered run stopped at annotated-tag validation before any gate or publication boundary; the checkout-ref fix is underway -->
 
 ## Active work
 
 - **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
-  `_completed/`). Shipped as `v2.0.0-rc.6`; the independently reviewed, locally gate-green, still-uncut
-  rc.7 candidate carries enrollment-scoped WebAuthn UV proof instead of plan-6's blanket runtime/node
-  gate.** The successor to `framework-refactor`, from a fresh **30-agent repo-wide debt sweep + a 7-agent
-  security-correctness gap-pass** (both briefed to NOT re-report shipped work) → **14 plans in 4 tiers**:
+  `_completed/`). Shipped as `v2.0.0-rc.6`; the independently reviewed, gate-green rc.7 implementation
+  is merged on `main` at `01ab037` but remains uncut/unpublished, and carries enrollment-scoped WebAuthn
+  UV proof instead of plan-6's blanket runtime/node gate.** The successor to `framework-refactor`, from
+  a fresh **30-agent repo-wide debt sweep + a 7-agent security-correctness gap-pass** (both briefed to
+  NOT re-report shipped work) → **14 plans in 4 tiers**:
   correctness/security fixes → structural paydown → machine-gate/FE → doc/state hygiene. Executed per-PR
   with the full review regime (build → independent workflow review → fix → re-review → CI-green → merge),
   gated by an **18-agent pre-execution plan review** (GO-WITH-FIXES; caught 3 real blockers before any
@@ -37,15 +38,17 @@
   #282) MERGED 2026-07-15, THEN SUPERSEDED BEFORE RELEASE:** a blanket runtime requirement would have
   changed the acceptance contract underneath existing users, potentially locking out credentials they
   had already enrolled and making upgraded nodes reject the fleet's currently served manifest. The rc.7
-  candidate verifies UV only while a new browser credential is enrolled: login and keystone enrollment each use an
-  authenticated, purpose+actor-scoped, one-use server challenge and a second assertion by the exact
-  candidate credential before persistence. Normal login/signing/membership remains signature + binding +
-  User-Presence verified; the first-party browser prefers UV for later assertions without requiring it,
-  and both enrollment surfaces warn that a later non-UV assertion is possession-only. WebAuthn
-  backup/sync state is separate from UV. **No
-  rc.7 bytes have been cut, no fleet re-sign is required, and existing manifests remain valid.** The candidate
-  also reconciles the bilingual operator wiki and controller-agent lifecycle documentation. Deferred,
-  non-blocking: **plan-3.5** (go:embed/`ShellToken` PowerShell deploy templating —
+  implementation verifies UV only while a new browser credential is enrolled: login and keystone
+  enrollment each use an authenticated, purpose+actor-scoped, one-use server challenge and a second
+  assertion by the exact candidate credential before persistence. Normal login/signing/membership
+  remains signature + binding + User-Presence verified; the first-party browser prefers UV for later
+  assertions without requiring it, and both enrollment surfaces warn that a later non-UV assertion is
+  possession-only. WebAuthn backup/sync state is separate from UV. **The first rc.7 tag-triggered
+  workflow run failed during annotated-tag validation before any build, image, release draft, or public
+  pointer existed; no rc.7 bytes have been published, no fleet re-sign is required, and existing
+  manifests remain valid.** The merged implementation also reconciles the bilingual operator wiki and
+  controller-agent lifecycle documentation. Deferred, non-blocking: **plan-3.5**
+  (go:embed/`ShellToken` PowerShell deploy templating —
   no PS1 `ShellToken` constructor yet). Memory: `post-refactor-debt-paydown-shipped.md`.
 
 - **📋 SUBJECT `mixed-controller-local-mode-2026_06_25` — PARTIALLY SHIPPED; still ACTIVE (plans 5 + 7
@@ -276,11 +279,16 @@
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
   a reliable *persistent* per-node `failed` update-state (would need a positive agent-reported field —
   the chip's `failed` is best-effort/transient today); the full wiki rewrite; a frontend test runner.
-- `main` remains the green rc.6 baseline. The rc.7 candidate is independently reviewed and locally green
-  across Go format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM conformance,
-  govulncheck, DAST, release-asset synthesis, workflow lint, cross-builds, and the real-tunnel canary.
-  It has not yet been committed, merged, tagged, or published. Hardware-backed browser enrollment and
-  native Windows execution remain explicit post-build/owner smokes; they are not represented as local passes.
+- `main` now contains the reviewed rc.7 implementation at `01ab037`; exact-commit main CI run
+  `29434577226` passed all seven required jobs. Its local gate mirror is also green across Go
+  format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM conformance, govulncheck,
+  DAST, release-asset synthesis, workflow lint, cross-builds, and the real-tunnel canary. The first
+  tag-triggered Release run (`29434982352`) failed in its initial validator because `actions/checkout`
+  rewrote the local annotated tag ref to the peeled commit. It crossed no publication boundary: the
+  versioned GHCR reference and GitHub release object were both absent when checked. The workflow fix is
+  underway; rc.7 remains uncut/unpublished. Hardware-backed browser enrollment remains an explicit
+  owner smoke; native Windows amd64/386 execution is required in the release workflow and has not yet run
+  for rc.7.
 
 ## Next actions
 
@@ -288,26 +296,30 @@
 
 **Track 1 — `post-refactor-debt-paydown-2026_07_14` COMPLETE + archived to `_completed/`.** All 14 plans
 merged to `main` (#277–#290, +#291/#292 review follow-ups), each workflow-reviewed → fixed → re-reviewed →
-CI-green; shipped as `v2.0.0-rc.6`. **plan-6 (WebAuthn UV, #282) merged 2026-07-15; the rc.7 candidate
-supersedes its blanket runtime/node gate before rc.7 is cut.** The replacement verifies a
-purpose+actor-scoped UV proof from the exact candidate only when a login or keystone browser credential
-is enrolled, with an explicit possession/copy warning in both panel surfaces. There is no node-side UV
-migration and no mandatory trust-list re-sign. Full detail is in the ✅ closed entry above. **Residual
-(non-blocking, its own future unit):** the go:embed/`ShellToken` PowerShell deploy templating
-(plan-3.5). The bilingual wiki and controller-agent lifecycle prose are reconciled in the rc.7 candidate.
+CI-green; shipped as `v2.0.0-rc.6`. **plan-6 (WebAuthn UV, #282) merged 2026-07-15; the merged rc.7
+implementation supersedes its blanket runtime/node gate before rc.7 is published.** The replacement
+verifies a purpose+actor-scoped UV proof from the exact candidate only when a login or keystone browser
+credential is enrolled, with an explicit possession/copy warning in both panel surfaces. There is no
+node-side UV migration and no mandatory trust-list re-sign. Full detail is in the ✅ closed entry above.
+**Residual (non-blocking, its own future unit):** the go:embed/`ShellToken` PowerShell deploy templating
+(plan-3.5). The bilingual wiki and controller-agent lifecycle prose are reconciled in the merged rc.7
+implementation.
 
 **Track 2 — the rc line to GA.**
 
 **`v2.0.0-rc.6` is GitHub Latest (2026-07-14; annotated tag on `91fcb71`; rc.5 demoted; self-promoted;
 22 assets — the 7 `yaog-server-airgap-*` binaries are intentionally gone, one server build post
 framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277–#292). The road to GA
-(current rc.7 work is active; hardware-only checks remain owner-paced):**
-1. **Finish and cut `v2.0.0-rc.7`.** The candidate's independent backend/structural/release findings
-   are closed and its local required-gate mirror is green. Commit and merge the reviewed implementation +
-   ready-and-uncut release state, wait for required `main` CI on the exact commit, then create the
-   annotated tag. The tag workflow must verify the exact
-   22-file asset allowlist and versioned GHCR image before publishing the GitHub release or moving Latest.
-   Only post-publication verification may change this file from ready/uncut to shipped.
+(current rc.7 release recovery is active; hardware-only checks remain owner-paced):**
+1. **Fix the tag validator and cut `v2.0.0-rc.7`.** The implementation and ready-and-uncut release state
+   are merged at `01ab037`, and exact-commit main CI is green. The first tag run failed before its gates
+   because checkout replaced the local annotated-tag object with the peeled commit; it created neither a
+   versioned image nor a GitHub release object. Merge the centralized remote-tag verification fix, wait
+   for required `main` CI on that exact commit, re-confirm that both publication boundaries are absent,
+   then replace the failed annotated tag under `RELEASING.md`'s pre-publication recovery rule. The new tag
+   workflow must verify the exact 22-file asset allowlist and versioned GHCR image before publishing the
+   GitHub release or moving Latest. Only post-publication verification may change this file from
+   ready/uncut to shipped.
 2. **Carry the rc.6 real-host/browser smokes as explicitly owed risk where hardware is unavailable.**
    Owner owes: update the controller to rc.6+ and browser-smoke
    the fixes — (a) **local in-browser design now actually loads** (the shipped panel finally contains
@@ -319,7 +331,8 @@ framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277�
    deploy-script fixes ride the rendered scripts, so **update the controller and redeploy** to apply.
    Release cut hit a real `release.yml` E2E-gate gap (it wasn't building the wasm before the E2E panel
    build — fixed #295, tag moved to the fixed commit); the published rc.6 is correct. Any confirmed
-   defect during the soak → fix → `v2.0.0-rc.7` (a red required gate or a new blocker never tags over).
+   defect before the rc.7 cut must be fixed first; a defect found after publication advances to rc.8 (a
+   red required gate or a new blocker never tags over).
 3. **rc.5 surfaces to also smoke** (carried, not yet owner-confirmed): the node-detail CPU/RAM/load
    charts (granularities + retention cap incl. `0`=off) and delta deploy (unchanged topology →
    "0 updated, N unchanged", no node refresh; change one → only it re-stages; Force redeploys an
@@ -339,7 +352,7 @@ Historical (rc.1 shipped 2026-07-03, GitHub Latest at the time): the pre-rc.1 pr
 PRs #137–#159), the rc.1 go/no-go gate ([`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md), closed
 GO with zero exceptions), and the `link-directionality` NAT/roaming fix (single-link the accelerator
 edge so the reverse peer can't race the relay; folded into rc.1) are all delivered + archived. The
-release line has since advanced preview → beta → rc through **rc.5**.
+release line has since advanced preview → beta → rc through **rc.6**.
 
 ## Recently closed subjects (most recent first)
 
@@ -352,8 +365,9 @@ release line has since advanced preview → beta → rc through **rc.5**.
   custody race. Tier-2/3/4: agent `ControllerLoop`, byte-identical `derivePeersWithDomains` split,
   `handler_bootstrap` split + agent-mux adapter, the non-vacuous wire-DTO drift gate, finished `Field`
   adoption, doc/state hygiene. **plan-6 (WebAuthn UV, #282) merged 2026-07-15; its blanket runtime/node
-  gate is superseded in the uncut rc.7 candidate by server-verified, enrollment-scoped UV proof for both
-  browser credential types (no fleet re-sign).** NO trust-root bypass / key leak / CVE. Memory:
+  gate is superseded in the merged, still-unpublished rc.7 implementation by server-verified,
+  enrollment-scoped UV proof for both browser credential types (no fleet re-sign).** NO trust-root bypass
+  / key leak / CVE. Memory:
   `post-refactor-debt-paydown-shipped.md`, `release-e2e-gate-mirrors-ci.md`.
 - `framework-refactor-2026_07_13` (2026-07-13) — **14 phases (plans 0/1/1.5/1.6/2/3/4/5/5b/6/7/8/9/10;
   PRs #260–#275); the "WASM-Unified Core + Machine-Gated Paydown" program.** WASM is now the DEFAULT

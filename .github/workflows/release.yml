@@ -34,17 +34,21 @@ jobs:
             echo "::error::unsupported release tag: $RELEASE_TAG"
             exit 1
           fi
-          if [ "$(git cat-file -t "$GITHUB_REF")" != "tag" ]; then
-            echo "::error::$RELEASE_TAG must be an annotated tag"
-            exit 1
-          fi
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          tag_commit="$(git rev-list -n 1 "$GITHUB_REF")"
+          tag_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          checkout_commit="$(git rev-parse 'HEAD^{commit}')"
           main_commit="$(git rev-parse 'origin/main^{commit}')"
-          if [ "$tag_commit" != "$main_commit" ]; then
-            echo "::error::$RELEASE_TAG points to $tag_commit, not current origin/main $main_commit"
+          if [ "$checkout_commit" != "$tag_commit" ]; then
+            echo "::error::checkout $checkout_commit does not equal tag event commit $tag_commit"
             exit 1
           fi
+          if [ "$tag_commit" != "$main_commit" ]; then
+            echo "::error::$RELEASE_TAG event commit $tag_commit is not current origin/main $main_commit"
+            exit 1
+          fi
+          # checkout@v4 force-updates the triggering tag ref to github.sha after fetching
+          # it. The shared verifier therefore reads the annotated object back from origin
+          # through an isolated ref instead of trusting the checkout-created local tag.
           bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$tag_commit"
           echo "release_commit=$tag_commit" >>"$GITHUB_OUTPUT"
 

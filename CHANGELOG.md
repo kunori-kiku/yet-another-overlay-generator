@@ -9,7 +9,7 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
-## [2.0.0-rc.7] - 2026-07-15
+## [2.0.0-rc.7] - 2026-07-16
 
 **Release candidate.** A compatibility, custody, and release-integrity hardening release over
 `v2.0.0-rc.6`. New browser login and keystone credentials prove User Verification at enrollment,
