@@ -120,6 +120,17 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 		return after, false, fmt.Errorf("fetch: %w", err) // keep-last-good
 	}
 
+	// Own the node's mutable state/key/apply boundary before choosing REKEY, IDLE, or APPLY.
+	// A manual `kit apply` and the daemon must never rotate/splice a key or run root scripts
+	// concurrently from the same state directory. Poll/fetch stay outside the lease so a quiet
+	// daemon does not monopolize it while waiting for work. The APPLY branch passes this exact
+	// lease to run, whose Unix install guardian inherits it across a Go-parent crash.
+	stateLease, err := acquireStateLease(cfg.StateDir)
+	if err != nil {
+		return after, false, err
+	}
+	defer func() { _ = stateLease.release() }()
+
 	// REKEY branch: the operator flagged this node for a WireGuard key rotation
 	// (zero-knowledge — the controller never sees the private key). Regenerate the LOCAL
 	// key, register the NEW public key via /rekey (which clears the flag), and SKIP
@@ -189,7 +200,7 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 	// fetched. agent.Run fetches the bundle (setting the fetched generation) and fires
 	// the auto-Report itself, since this client is a Reporter.
 	client.SetPriorGeneration(after)
-	res, runErr := Run(&Config{
+	res, runErr := run(&Config{
 		NodeID:          cfg.NodeID,
 		Source:          client,
 		PinnedPubPEM:    cfg.PinnedPubPEM,
@@ -202,7 +213,7 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 		Stdout:          cfg.Stdout,
 		Stderr:          cfg.Stderr,
 		SelfUpdate:      cfg.SelfUpdate,
-	})
+	}, stateLease)
 	if runErr != nil {
 		return after, false, fmt.Errorf("run: %w", runErr) // keep-last-good
 	}
@@ -219,9 +230,8 @@ func RunControllerCycle(client *ControllerClient, cfg CycleConfig) (resumeGen in
 	return appliedGen, true, nil
 }
 
-// PrintAppliedTo logs a one-line apply summary to w (the cycle's stderr). It is the single apply-summary
-// formatter for both the in-package cycle and cmd/agent's configured-source `run` path (plan-7 collapsed
-// cmd/agent's duplicate printApplied into this exported helper).
+// PrintAppliedTo logs a one-line successful action summary to w (the cycle's stderr).
+// The historical name is retained for callers, but an uninstall is labeled truthfully.
 func PrintAppliedTo(w io.Writer, res *RunResult) {
 	signed := false
 	count := 0
@@ -229,6 +239,10 @@ func PrintAppliedTo(w io.Writer, res *RunResult) {
 		signed = res.Verify.Signed
 		count = res.Verify.FileCount
 	}
-	fmt.Fprintf(w, "agent: applied generation compiled_at=%s checksum=%s signed=%t files=%d\n",
-		res.CompiledAt, res.Checksum, signed, count)
+	verb := "applied"
+	if res.Action == LastActionUninstall {
+		verb = "uninstalled"
+	}
+	fmt.Fprintf(w, "agent: %s generation compiled_at=%s checksum=%s signed=%t files=%d\n",
+		verb, res.CompiledAt, res.Checksum, signed, count)
 }

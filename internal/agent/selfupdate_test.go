@@ -146,6 +146,134 @@ func TestPerformSelfUpdate_Happy(t *testing.T) {
 	}
 }
 
+// TestPerformSelfUpdate_StateReadFailureIsFailClosed pins the custody boundary around the
+// self-update breadcrumb. The swap must never replace unreadable state with a fresh, stripped
+// record: that would erase PendingApply and the anti-rollback floors immediately before changing
+// the running binary.
+func TestPerformSelfUpdate_StateReadFailureIsFailClosed(t *testing.T) {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skipf("self-update scoped to amd64/arm64; arch is %s", runtime.GOARCH)
+	}
+	bin, sha := fakeBinary(t, "1.2.0")
+
+	t.Run("initial state read", func(t *testing.T) {
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			_, _ = w.Write(bin)
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		self := filepath.Join(dir, "yaog-agent")
+		if err := os.WriteFile(self, []byte("OLD"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stateDir := filepath.Join(dir, "state")
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		corrupt := []byte("{ unreadable custody state")
+		if err := os.WriteFile(statePath(stateDir), corrupt, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		execed, restore := stubSwap(t, self)
+		defer restore()
+		swapped, err := performSelfUpdate(
+			&Config{NodeID: "n1", StateDir: stateDir},
+			selfUpdateCatalog(t, srv, "1.2.0", sha),
+			"1.0.0", "", io.Discard,
+		)
+		if err == nil || !strings.Contains(err.Error(), "load state before self-update") {
+			t.Fatalf("initial state failure = (swapped=%v, err=%v), want fail-closed read error", swapped, err)
+		}
+		if swapped || *execed != "" || requests.Load() != 0 {
+			t.Fatalf("unreadable state reached download/swap: swapped=%v execed=%q requests=%d", swapped, *execed, requests.Load())
+		}
+		if got, readErr := os.ReadFile(statePath(stateDir)); readErr != nil || !bytes.Equal(got, corrupt) {
+			t.Fatalf("unreadable state was replaced: %q, %v", got, readErr)
+		}
+		if got, readErr := os.ReadFile(self); readErr != nil || string(got) != "OLD" {
+			t.Fatalf("binary changed despite unreadable state: %q, %v", got, readErr)
+		}
+	})
+
+	t.Run("reload after download", func(t *testing.T) {
+		requestStarted := make(chan struct{})
+		releaseDownload := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(requestStarted)
+			<-releaseDownload
+			_, _ = w.Write(bin)
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		self := filepath.Join(dir, "yaog-agent")
+		if err := os.WriteFile(self, []byte("OLD"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stateDir := filepath.Join(dir, "state")
+		prior := &State{
+			NodeID:            "n1",
+			LastCompiledAt:    "2026-07-16T03:00:00Z",
+			LastChecksum:      "last-good",
+			MembershipEpoch:   7,
+			AgentVersionFloor: "1.0.0",
+			PendingApply: &PendingApply{
+				CompiledAt:      "2026-07-16T04:00:00Z",
+				BundleSHA256:    strings.Repeat("a", 64),
+				Action:          LastActionApply,
+				StartedAt:       "2026-07-16T04:01:00Z",
+				MembershipEpoch: 8,
+			},
+		}
+		if err := SaveState(stateDir, prior); err != nil {
+			t.Fatal(err)
+		}
+
+		execed, restore := stubSwap(t, self)
+		defer restore()
+		type result struct {
+			swapped bool
+			err     error
+		}
+		done := make(chan result, 1)
+		go func() {
+			swapped, err := performSelfUpdate(
+				&Config{NodeID: "n1", StateDir: stateDir},
+				selfUpdateCatalog(t, srv, "1.2.0", sha),
+				"1.0.0", "", io.Discard,
+			)
+			done <- result{swapped: swapped, err: err}
+		}()
+		<-requestStarted
+		corrupt := []byte("{ custody failed during download")
+		if err := os.WriteFile(statePath(stateDir), corrupt, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		close(releaseDownload)
+
+		gotResult := <-done
+		if gotResult.err == nil || !strings.Contains(gotResult.err.Error(), "reload state before self-update breadcrumb") {
+			t.Fatalf("late state failure = (swapped=%v, err=%v), want fail-closed reload error", gotResult.swapped, gotResult.err)
+		}
+		if gotResult.swapped || *execed != "" {
+			t.Fatalf("late unreadable state reached swap: swapped=%v execed=%q", gotResult.swapped, *execed)
+		}
+		if got, readErr := os.ReadFile(statePath(stateDir)); readErr != nil || !bytes.Equal(got, corrupt) {
+			t.Fatalf("late unreadable state was replaced: %q, %v", got, readErr)
+		}
+		if got, readErr := os.ReadFile(self); readErr != nil || string(got) != "OLD" {
+			t.Fatalf("binary changed after late state failure: %q, %v", got, readErr)
+		}
+		if _, statErr := os.Stat(self + ".bak"); !os.IsNotExist(statErr) {
+			t.Fatalf("rollback backup created despite pre-swap refusal: %v", statErr)
+		}
+	})
+}
+
 // TestPerformSelfUpdate_HashMismatchRefused is the CUSTODY guard: a binary whose bytes do not
 // match the signed pin is NEVER swapped in or exec'd.
 func TestPerformSelfUpdate_HashMismatchRefused(t *testing.T) {
@@ -538,6 +666,50 @@ func TestFinalizeSelfUpdate_ClearsSelfUpdateBlocked(t *testing.T) {
 	}
 }
 
+// Finalization has two phases: persist the advanced floor/cleared breadcrumb, then delete .bak.
+// A failed first phase must retain both the old durable state and the only rollback artifact.
+func TestFinalizeSelfUpdate_StateCommitFailureRetainsBreadcrumbAndBackup(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	if err := os.WriteFile(self, []byte("NEW"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(self+".bak", []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(dir, "state")
+	if err := SaveState(stateDir, &State{
+		NodeID:            "n1",
+		AgentVersionFloor: "1.0.0",
+		PendingUpdate:     &PendingUpdate{From: "1.0.0", To: "1.1.0", Attempts: 1, Confirmed: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, restoreSwap := stubSwap(t, self)
+	defer restoreSwap()
+	originalSave := saveSelfUpdateTerminalState
+	saveSelfUpdateTerminalState = func(string, *State) error { return fmt.Errorf("injected finalization sync failure") }
+	t.Cleanup(func() { saveSelfUpdateTerminalState = originalSave })
+	var stderr strings.Builder
+	FinalizeSelfUpdate(stateDir, "1.1.0", &stderr)
+
+	st, err := LoadState(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PendingUpdate == nil || st.AgentVersionFloor != "1.0.0" {
+		t.Fatalf("failed finalization changed durable custody state: %+v", st)
+	}
+	if got, err := os.ReadFile(self + ".bak"); err != nil || string(got) != "OLD" {
+		t.Fatalf("failed finalization removed rollback backup: %q, %v", got, err)
+	}
+	if !strings.Contains(stderr.String(), "retaining breadcrumb and rollback backup") ||
+		!strings.Contains(stderr.String(), "injected finalization sync failure") {
+		t.Fatalf("finalization failure was not surfaced: %q", stderr.String())
+	}
+}
+
 // TestFinalizeSelfUpdate_NoopLeavesBlockedIntact pins the custody guard the beta.16 Blocked-clear sits
 // under: FinalizeSelfUpdate must be a NO-OP (latch + breadcrumb + floor untouched) when the breadcrumb
 // is not Confirmed, or the running build is not the target. A genuinely-blocked node that has NOT yet
@@ -617,6 +789,107 @@ func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
 	}
 }
 
+// A health check runs between the initial state read and rollback bookkeeping. If state becomes
+// unreadable in that interval, rollback may restore the binary but must not manufacture a fresh
+// state that erases configuration/membership floors or PendingApply.
+func TestReconcileSelfUpdatePromote_RollbackStateReloadFailureDoesNotWipeCustody(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	if err := os.WriteFile(self, []byte("NEW"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(self+".bak", []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(dir, "state")
+	if err := SaveState(stateDir, &State{
+		NodeID:            "n1",
+		LastCompiledAt:    "2026-07-16T03:00:00Z",
+		MembershipEpoch:   7,
+		AgentVersionFloor: "1.0.0",
+		PendingApply: &PendingApply{
+			CompiledAt:      "2026-07-16T04:00:00Z",
+			BundleSHA256:    strings.Repeat("a", 64),
+			Action:          LastActionApply,
+			MembershipEpoch: 8,
+			StartedAt:       "2026-07-16T04:01:00Z",
+		},
+		PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0", Attempts: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	execed, restore := stubSwap(t, self)
+	defer restore()
+	corrupt := []byte("{ custody failed during health check")
+	var stderr strings.Builder
+	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error {
+		if err := os.WriteFile(statePath(stateDir), corrupt, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Errorf("health check failed")
+	}, &stderr)
+
+	if got, readErr := os.ReadFile(statePath(stateDir)); readErr != nil || !bytes.Equal(got, corrupt) {
+		t.Fatalf("rollback replaced unreadable custody state: %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(self); readErr != nil || string(got) != "OLD" {
+		t.Fatalf("rollback did not restore prior binary: %q, %v", got, readErr)
+	}
+	if *execed != self {
+		t.Fatalf("restored binary was not re-execed: %q", *execed)
+	}
+	if !strings.Contains(stderr.String(), "could not read custody state") {
+		t.Fatalf("rollback state failure was not surfaced: %q", stderr.String())
+	}
+}
+
+// When abandonment cannot be committed, a backup that was not consumed by a rollback must remain
+// available and the pending breadcrumb must remain the durable source of truth for a later retry.
+func TestRollbackAndAbandon_StateCommitFailureRetainsBreadcrumbAndBackup(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "yaog-agent")
+	if err := os.WriteFile(self, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(self+".bak", []byte("ROLLBACK"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(dir, "state")
+	pu := &PendingUpdate{From: "0.9.0", To: "1.1.0", Attempts: 4}
+	if err := SaveState(stateDir, &State{
+		NodeID:            "n1",
+		AgentVersionFloor: "1.0.0",
+		PendingUpdate:     pu,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, restoreSwap := stubSwap(t, self)
+	defer restoreSwap()
+	originalSave := saveSelfUpdateTerminalState
+	saveSelfUpdateTerminalState = func(string, *State) error { return fmt.Errorf("injected abandonment sync failure") }
+	t.Cleanup(func() { saveSelfUpdateTerminalState = originalSave })
+	var stderr strings.Builder
+	// Running 1.0.0 is not the failed target 1.1.0, so this path must not consume .bak.
+	rollbackAndAbandon(stateDir, "1.0.0", pu, "attempt cap exceeded", &stderr)
+
+	st, err := LoadState(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PendingUpdate == nil || st.AbandonedAgentVersion != "" || st.AgentVersionFloor != "1.0.0" {
+		t.Fatalf("failed abandonment changed durable custody state: %+v", st)
+	}
+	if got, err := os.ReadFile(self + ".bak"); err != nil || string(got) != "ROLLBACK" {
+		t.Fatalf("failed abandonment removed rollback backup: %q, %v", got, err)
+	}
+	if !strings.Contains(stderr.String(), "leaving its breadcrumb/backup intact") ||
+		!strings.Contains(stderr.String(), "injected abandonment sync failure") {
+		t.Fatalf("abandonment failure was not surfaced: %q", stderr.String())
+	}
+}
+
 // TestReconcileSelfUpdatePromote_ProbationRebootResumes: a Confirmed binary that reboots before
 // finalizing RESUMES probation (it does NOT immediately roll back — a benign reboot must not
 // falsely abandon a healthy binary). A genuinely-crashing binary is bounded by the Attempts cap
@@ -663,7 +936,9 @@ func TestReconcileSelfUpdate_ProbationCrashLoopAbandons(t *testing.T) {
 	defer restore()
 	abandoned := false
 	for i := 0; i < maxSelfUpdateAttempts+2; i++ {
-		ReconcileSelfUpdateEarly(stateDir, "1.1.0", io.Discard) // Phase A bumps; abandons at cap
+		if err := ReconcileSelfUpdateEarly(stateDir, "1.1.0", io.Discard); err != nil { // Phase A bumps; abandons at cap
+			t.Fatalf("early reconcile attempt %d: %v", i, err)
+		}
 		st, _ := LoadState(stateDir)
 		if st.PendingUpdate == nil {
 			abandoned = true
@@ -695,7 +970,9 @@ func TestReconcileSelfUpdateEarly_AbandonAtCap(t *testing.T) {
 	defer restore()
 	cleared := false
 	for i := 0; i < maxSelfUpdateAttempts+2; i++ {
-		ReconcileSelfUpdateEarly(stateDir, "1.0.0", io.Discard)
+		if err := ReconcileSelfUpdateEarly(stateDir, "1.0.0", io.Discard); err != nil {
+			t.Fatalf("early reconcile attempt %d: %v", i, err)
+		}
 		st, _ := LoadState(stateDir)
 		if st.PendingUpdate == nil {
 			cleared = true
@@ -707,6 +984,45 @@ func TestReconcileSelfUpdateEarly_AbandonAtCap(t *testing.T) {
 	}
 	if !cleared {
 		t.Errorf("a never-applying update must be abandoned at the attempt cap, not loop forever")
+	}
+}
+
+func TestReconcileSelfUpdateEarlySerializesWithStateOwner(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	mustSave(t, stateDir, &State{
+		NodeID:        "n1",
+		PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0"},
+	})
+	release, err := acquireStateLock(stateDir)
+	if err != nil {
+		t.Fatalf("acquire competing state owner: %v", err)
+	}
+	if err := ReconcileSelfUpdateEarly(stateDir, "1.0.0", io.Discard); err == nil {
+		_ = release()
+		t.Fatal("early reconcile entered while the common state owner held the lease")
+	}
+	st, err := LoadState(stateDir)
+	if err != nil {
+		_ = release()
+		t.Fatalf("load state after refused reconcile: %v", err)
+	}
+	if st.PendingUpdate == nil || st.PendingUpdate.Attempts != 0 {
+		_ = release()
+		t.Fatalf("refused reconcile mutated pending update: %+v", st.PendingUpdate)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release competing state owner: %v", err)
+	}
+
+	if err := ReconcileSelfUpdateEarly(stateDir, "1.0.0", io.Discard); err != nil {
+		t.Fatalf("reconcile after lease release: %v", err)
+	}
+	st, err = LoadState(stateDir)
+	if err != nil {
+		t.Fatalf("load state after serialized reconcile: %v", err)
+	}
+	if st.PendingUpdate == nil || st.PendingUpdate.Attempts != 1 {
+		t.Fatalf("serialized reconcile attempts = %+v, want 1", st.PendingUpdate)
 	}
 }
 

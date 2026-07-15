@@ -288,7 +288,7 @@ export async function rekeyAll(cfg: ControllerConfig): Promise<{ requested: numb
 // clearRekey clears a single node's pending rekey mark (operator-only) without evicting it —
 // the node keeps its approval status and bearer credential (unlike revoke). It is used to
 // release a stuck "Roll keys" straggler (an offline/dead node, or a mistakenly triggered
-// fleet-wide rotation); otherwise the panel's rekeying gate keeps Deploy disabled. Idempotent:
+// fleet-wide rotation); otherwise the panel keeps warning on each deploy. Idempotent:
 // returns cleared:false when there is no pending rekey mark.
 export async function clearRekey(cfg: ControllerConfig, nodeId: string): Promise<{ cleared: boolean }> {
   const res = await postJSON(cfg, 'clear-rekey', JSON.stringify({ node_id: nodeId }));

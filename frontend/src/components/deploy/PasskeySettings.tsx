@@ -3,6 +3,8 @@ import { useTopologyStore } from '../../stores/topologyStore';
 import { useControllerStore, selectLoggedIn } from '../../stores/controllerStore';
 import { t } from '../../i18n';
 import { localizeError } from '../../lib/localizeError';
+import { WebAuthnEnrollmentNotice } from './WebAuthnEnrollmentNotice';
+import { shouldShowWebAuthnEnrollmentNotice } from './webauthnEnrollmentPolicy';
 
 // Login Passkey (plan-5.2): lets an operator who is logged in with a password register/remove a
 // WebAuthn login passkey — a phishing-resistant second factor that can also be used for passwordless
@@ -11,12 +13,11 @@ import { localizeError } from '../../lib/localizeError';
 // has no account (the backend returns 403), in which case passkeyRegistered stays null and the UI
 // prompts to "sign in with a password".
 //
-// Registration reuses navigator.credentials.create() (only the public key leaves the authenticator);
-// removal requires a fresh assertion (so a hijacked session cannot simply strip the factor). Both pop
-// the authenticator — the loginCeremony flag drives the "touch your security key" prompt (separate
-// from keystone's signing/enrolling, and it does not light up the DeployBar deploy banner). Errors are
-// shown in place (the store action throws here), consistent with the local errors in
-// TwoFactorSettings.
+// Registration gets a server nonce, creates the key, then asks that exact candidate for a UV-marked
+// assertion before persistence. YAOG receives only the public descriptor and signed assertions,
+// not plaintext private-key material; without attestation it makes no non-exportability claim.
+// Removal requires a fresh assertion. loginCeremony drives both prompts without lighting
+// DeployBar's banner; errors stay local like TwoFactorSettings.
 export function PasskeySettings() {
   const language = useTopologyStore((s) => s.language);
   const loggedIn = useControllerStore(selectLoggedIn);
@@ -25,6 +26,7 @@ export function PasskeySettings() {
   const registerPasskey = useControllerStore((s) => s.registerPasskey);
   const disablePasskey = useControllerStore((s) => s.disablePasskey);
   const loginCeremony = useControllerStore((s) => s.loginCeremony);
+  const pendingEnrollment = useControllerStore((s) => s.pendingLoginPasskeyEnrollment !== null);
 
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -62,6 +64,7 @@ export function PasskeySettings() {
       <p className="text-sm text-[var(--content-muted)]">
         {t(language, 'passkeySettings.registerAWebAuthnPasskey')}
       </p>
+      {shouldShowWebAuthnEnrollmentNotice(loggedIn, passkeyRegistered) && <WebAuthnEnrollmentNotice />}
 
       {!loggedIn ? (
         <p className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded">
@@ -95,12 +98,20 @@ export function PasskeySettings() {
         >
           {loginCeremony
             ? t(language, 'passkeySettings.touchYourSecurityKey_2')
-            : t(language, 'passkeySettings.registerALoginPasskey')}
+            : pendingEnrollment
+              ? t(language, 'passkeySettings.retryEnrollmentVerification')
+              : t(language, 'passkeySettings.registerALoginPasskey')}
         </button>
       )}
 
       {localError && (
-        <p className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all">⚠️ {localError}</p>
+        <p
+          role="alert"
+          aria-live="assertive"
+          className="text-xs text-[var(--danger)] bg-[var(--danger-bg)] px-2 py-1 rounded break-all"
+        >
+          ⚠️ {localError}
+        </p>
       )}
     </section>
   );

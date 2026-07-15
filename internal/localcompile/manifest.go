@@ -32,8 +32,9 @@ import (
 //
 // Excluded from the byte set (mirroring docs/spec/compiler/io-contract.md, NOT redefined here):
 // manifest.json's compiled_at (a timestamp), compiler.computeChecksum (the display-only
-// sha256(fmt.Sprintf("%v", topo)) with no cross-language counterpart), and the self-extracting
-// tar.gz wrapper bytes (the harness compares bundle CONTENTS + the per-node checksums only). The
+// sha256(fmt.Sprintf("%v", topo)) with no cross-language counterpart), and browser/WASM ZIP
+// container bytes (the harness compares canonical members, checksums, and matching root deploy
+// helpers rather than archive framing). The
 // signing private key NEVER appears — zero-knowledge custody (principle P2): fixtures pin fixed
 // per-node PRIVATE keys as INPUT and the harness asserts only the derived PUBLIC material that
 // surfaces inside the rendered files.

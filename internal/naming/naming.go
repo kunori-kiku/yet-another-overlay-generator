@@ -1,64 +1,59 @@
-// Package naming holds the canonical artifact-naming functions defined by
-// Spec D (docs/spec/artifacts/naming.md). It is a leaf package: it imports
-// ONLY the Go standard library.
-//
-// The reason this package exists is the import graph. The export ZIP writer
-// (internal/api + internal/artifacts), the deploy-script renderer
-// (internal/renderer), the peer-derivation compiler (internal/compiler), and
-// the semantic validator (internal/validator) all need to agree, byte for
-// byte, on the installer file name and the WireGuard interface name. The
-// compiler already imports the validator, so the validator cannot import the
-// compiler to reuse a name function living there — that would be an import
-// cycle. Hoisting the canonical name functions into this dependency-free leaf
-// package lets every layer import the single source of truth without any
-// cycle, eliminating the divergent duplicate implementations that Spec D's
-// uniqueness invariants (N1–N3) require to be impossible.
+// Package naming holds the portable node-ID and WireGuard interface naming
+// contracts defined by Spec D (docs/spec/artifacts/naming.md). It is a leaf
+// package: it imports only the Go standard library, so validators, exporters,
+// renderers, and compilers can share these rules without an import cycle.
 package naming
 
 import (
 	"crypto/sha256"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
-// multiHyphen collapses every run of two or more consecutive hyphens to one.
-var multiHyphen = regexp.MustCompile(`-{2,}`)
+// MaxPortableNodeIDLength leaves enough room for the deploy renderer's
+// "yaog-<id>-XXXXXXXX" remote staging component under the 255-byte component
+// limit common to Linux and Windows filesystems. Node IDs are ASCII by contract,
+// so byte and character length are identical here.
+const MaxPortableNodeIDLength = 240
 
-// SafeInstallerFileName maps a node name to the canonical installer file name.
-//
-// This is the single source of truth required by Spec D
-// (docs/spec/artifacts/naming.md, "Canonical installer name"): the ZIP entry
-// name written by the export endpoint and the file name the deploy script
-// looks up and uploads MUST both come from this one function applied to the
-// same node name. Neither side may apply its own sanitization, truncation, or
-// suffixing.
-//
-// The algorithm, in order:
-//  1. Lowercase the node name.
-//  2. Map every rune outside [a-z0-9-_] to a hyphen.
-//  3. Collapse every run of two or more consecutive hyphens to a single one.
-//  4. Trim leading and trailing hyphens.
-//  5. If the result is empty, substitute the literal "node".
-//  6. Append the suffix ".install.sh".
-//
-// For example, "Web 1" and "web-1" both produce "web-1.install.sh", and
-// "  ***  " produces "node.install.sh".
-func SafeInstallerFileName(nodeName string) string {
-	safe := strings.ToLower(nodeName)
-	safe = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '-'
-	}, safe)
-	// Collapse multiple consecutive hyphens
-	safe = multiHyphen.ReplaceAllString(safe, "-")
-	safe = strings.Trim(safe, "-")
-	if safe == "" {
-		safe = "node"
+// ValidPortableNodeID reports whether id is safe as the single canonical
+// per-node directory key on Linux and Windows. In addition to the restricted
+// ASCII charset, it rejects Windows device basenames and trailing dots, root
+// project-helper collisions, and IDs too long for the remote staging template.
+func ValidPortableNodeID(id string) bool {
+	if id == "" || id == "." || id == ".." || len(id) > MaxPortableNodeIDLength || strings.HasSuffix(id, ".") {
+		return false
 	}
-	return safe + ".install.sh"
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+
+	folded := PortableNodeIDKey(id)
+	// Project-level helpers share the export root with per-node directories.
+	if folded == "deploy-all.sh" || folded == "deploy-all.ps1" {
+		return false
+	}
+	base := folded
+	if dot := strings.IndexByte(base, '.'); dot >= 0 {
+		base = base[:dot]
+	}
+	switch base {
+	case "con", "prn", "aux", "nul":
+		return false
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "com") || strings.HasPrefix(base, "lpt")) && base[3] >= '1' && base[3] <= '9' {
+		return false
+	}
+	return true
+}
+
+// PortableNodeIDKey is the collision key for node directories on the supported
+// case-insensitive Windows export/deploy surface. IDs that share this key cannot
+// coexist even though a Linux map or filesystem could distinguish them.
+func PortableNodeIDKey(id string) string {
+	return strings.ToLower(id)
 }
 
 // WgInterfaceName maps a remote peer's node name to its WireGuard interface
@@ -72,8 +67,7 @@ func SafeInstallerFileName(nodeName string) string {
 // has a short path and a hashed long path. Given a remote node name
 // remoteName:
 //  1. clean := lowercase(remoteName), then map every rune outside [a-z0-9-]
-//     to a hyphen. Unlike SafeInstallerFileName, the interface cleaner does
-//     NOT preserve "_"; underscore maps to a hyphen.
+//     to a hyphen. The interface cleaner does not preserve "_"; underscore maps to a hyphen.
 //  2. name := "wg-" + clean.
 //  3. Short path: if len(name) <= 15, return name.
 //  4. Long path (>15 chars): return "wg-" + clean[:8] + sha256(remoteName)[:4],
@@ -150,9 +144,8 @@ func WgInterfaceNameForEdge(remoteName, edgeID string, backup bool) string {
 }
 
 // cleanInterfaceName applies the shared interface-name cleaner: lowercase the
-// name, then map every rune outside [a-z0-9-] to a hyphen. Unlike
-// SafeInstallerFileName, this cleaner does NOT preserve "_"; underscore maps to
-// a hyphen. It is the single rune map for both WgInterfaceName and
+// name, then map every rune outside [a-z0-9-] to a hyphen. It does not preserve
+// "_"; underscore maps to a hyphen. It is the single rune map for both WgInterfaceName and
 // WgInterfaceNameForEdge so the two never diverge.
 func cleanInterfaceName(remoteName string) string {
 	clean := strings.ToLower(remoteName)

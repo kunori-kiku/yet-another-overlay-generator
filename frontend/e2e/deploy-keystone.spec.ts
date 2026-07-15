@@ -53,16 +53,27 @@ test('keystone-ON: enroll signing key, deploy signs the manifest, Go verifier ac
   await enrollNodeViaAgent(h, target.agent, peer, pTok, testInfo.outputPath('p.key'))
   await importDesignViaUI(page, target.panel, designPath)
 
-  // (1.4) On /deploy: enroll the keystone operator signing credential (create() via the
-  // virtual authenticator) → POST /operator-credential → serverOperatorPinned true.
+  // (1.4) On /deploy: begin → create() → exact-candidate UV get() → POST the keystone pin.
   await page.goto(`${target.panel}/deploy`)
   await expect(page.getByText('Not enrolled')).toBeVisible({ timeout: 15_000 })
   const enrollRespP = page.waitForResponse(
     (r) => r.url().includes('operator-credential') && r.request().method() === 'POST',
     { timeout: 20_000 },
   )
+  const beginP = page.waitForRequest(
+    (r) => r.url().includes('/webauthn/enrollment/begin') && r.method() === 'POST',
+  )
   await page.getByRole('button', { name: /Enroll signing key/ }).click()
-  expect((await enrollRespP).status(), 'POST /operator-credential should pin the signing key').toBe(200)
+  const beginBody = (await beginP).postDataJSON() as { purpose: string }
+  const enrollResp = await enrollRespP
+  const enrollBody = enrollResp.request().postDataJSON() as {
+    credential_id: string
+    enrollment_proof: { credential_id: string }
+  }
+  expect(beginBody.purpose).toBe('keystone')
+  expect(enrollBody.enrollment_proof).toBeTruthy()
+  expect(enrollBody.enrollment_proof.credential_id).toBe(enrollBody.credential_id)
+  expect(enrollResp.status(), 'POST /operator-credential should pin the signing key').toBe(200)
   await expect(page.getByText(/^Enrolled \(/)).toBeVisible({ timeout: 20_000 })
 
   // (3.3) Deploy on the SAME /deploy page (no navigation since enroll, so the authenticator is

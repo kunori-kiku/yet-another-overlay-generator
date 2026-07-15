@@ -1,6 +1,7 @@
 // Frontend data model for the controller panel (plan-4.5 networked controller).
-// These types mirror the operator-facing JSON shapes in internal/api/handler_controller.go,
-// but uniformly use camelCase (mapped from the backend's snake_case; the mapping happens in controllerClient.ts).
+// These types mirror the operator-facing JSON shapes in internal/api/wire_controller.go,
+// but uniformly use camelCase. Per-domain modules under api/controller/ map the backend's
+// snake_case at the boundary; controllerClient.ts is their compatibility barrel.
 
 // Lifecycle status of a node in the controller registry. Mirrors controller.NodeStatus:
 // 'pending' (enrolled, awaiting operator approval) / 'approved' (included in the compile subgraph) /

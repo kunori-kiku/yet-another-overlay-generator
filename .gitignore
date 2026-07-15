@@ -1,5 +1,6 @@
 reference_materials/
 CLAUDE.md
+AGENTS.md
 # docker-compose bind-mounted controller state (./data) + optional caddy dirs
 /data/
 /caddy-data/

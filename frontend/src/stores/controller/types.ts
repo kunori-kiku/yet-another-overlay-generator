@@ -23,6 +23,7 @@ import type {
 import type { NodeHistory } from '../../lib/telemetryHistory';
 import type { DeployPreview, DeployForceArg } from '../../lib/deployPreview';
 import type { Topology } from '../../types/topology';
+import type { WebAuthnCredentialCandidate } from '../../lib/webauthn';
 
 // Controller panel (Mode B) state. It is the single source of truth for the controller
 // connection + fleet view, independent of topologyStore (which remains the sole source of
@@ -82,7 +83,7 @@ export interface ControllerState {
   // Login passkey (plan-5.2): whether the currently logged-in operator has registered a login
   // passkey (null=unknown/not fetched; a break-glass token has no account, so it stays null).
   // The passkey 2FA step needs no separate *Required flag: on receiving passkey_required,
-  // login() pops the authenticator in place and resubmits (the signing flag drives the UI).
+  // login() pops the authenticator in place and resubmits (loginCeremony drives the UI).
   passkeyRegistered: boolean | null;
 
   // fleet view
@@ -149,13 +150,12 @@ export interface ControllerState {
     force?: DeployForceArg;
   } | null;
 
-  // KEYSTONE (plan-5.1d): the pinned off-host operator signing credential (passkey / YubiKey).
-  // Only non-secret info is persisted — credential_id (base64url(rawId)), alg, rpId — none of it
-  // is key material (the private key never leaves the authenticator), but remembering it lets the
-  // panel drive later signatures across a refresh (allowCredentials) and echo "signing key
-  // registered". All three are null when not enrolled. The pinned PEM is NOT persisted in the
-  // browser: at signing time the public_key field is audit-only, and nodes trust only the
-  // server-pinned PEM — so there is no need to keep it on the frontend.
+  // KEYSTONE (plan-5.1d): the pinned operator-held signing credential (passkey / YubiKey).
+  // Only its public descriptor is persisted — credential_id (base64url(rawId)), alg, rpId — so
+  // the panel can drive later assertions across a refresh (allowCredentials) and echo "signing
+  // key registered". The browser/controller never receive plaintext private-key material, but
+  // YAOG requests no attestation and therefore does not claim the provider cannot export, back
+  // up, or synchronize it. All fields are null when not enrolled.
   operatorCredentialId: string | null;
   operatorCredentialAlg: WebAuthnAlg | null;
   operatorRpId: string | null;
@@ -174,6 +174,13 @@ export interface ControllerState {
   // Re-probed on connect/login/refresh via hydrateKeystoneStatus.
   serverOperatorPinned: boolean | null;
   serverOperatorAlg: string | null;
+  // Exact public descriptor returned by the authenticated server-authoritative status probe.
+  // These fields are held in memory (not persisted) for the manual AgentHeld kit workflow: the
+  // panel may copy/download this already-loaded PUBLIC credential, but must never infer trust from
+  // a candidate node bundle. WebAuthn uses rpId/origin; raw ed25519 leaves both null.
+  serverOperatorRpId: string | null;
+  serverOperatorOrigin: string | null;
+  serverOperatorPublicKeyPEM: string | null;
   serverOperatorFingerprint: string | null;
   serverRedeployRequired: boolean;
   // pendingKeystoneRotate gates the dangerous re-pin: when a credential is ALREADY pinned on the
@@ -181,6 +188,18 @@ export interface ControllerState {
   // the UI can demand an explicit rotate confirmation (the pinned key is already shown in the
   // enrolled chip); only enrollOperator({rotate:true}) proceeds. (Mirrors pendingShrink as a gate.)
   pendingKeystoneRotate: boolean;
+  // Volatile public descriptors retained only after create() and before successful server
+  // persistence. They let a cancelled/failed second phase retry the exact candidate rather than
+  // silently creating duplicate passkeys. Never persisted; cleared on logout/session loss.
+  pendingKeystoneEnrollment: WebAuthnCredentialCandidate | null;
+  pendingLoginPasskeyEnrollment: WebAuthnCredentialCandidate | null;
+
+  // Monotonic, transient generation of the active controller/authentication context. Every
+  // controller-bound async action captures it (with its request config) and stops after an await
+  // if logout, session loss, identity change, controller-target change, or workflow-mode change
+  // increments it. This prevents an old response from repopulating state/canvas and prevents a
+  // multi-step mutation from continuing under a later target/session/mode. Never persisted.
+  authGeneration: number;
 
   // volatile UI state
   loading: boolean;

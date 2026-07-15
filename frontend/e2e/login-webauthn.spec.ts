@@ -42,10 +42,24 @@ test('login passkey: register, then sign in passwordless', async ({ page, contex
   await seedAndGotoController(page, context, target)
   await loginAsOperator(page)
 
-  // Register a LOGIN passkey (create() via the virtual authenticator). No page.goto after this
-  // until the passwordless get(), so the credential survives (logout is a same-document re-render).
+  // Register a LOGIN passkey: server begin → create() → exact-candidate get() with UV → persist.
+  // No page.goto until the later passwordless get(), so the credential survives logout's re-render.
   await page.goto(`${target.panel}/security`)
+  const beginP = page.waitForRequest(
+    (r) => r.url().includes('/webauthn/enrollment/begin') && r.method() === 'POST',
+  )
+  const registerP = page.waitForRequest(
+    (r) => r.url().includes('/passkey/register') && r.method() === 'POST',
+  )
   await page.getByRole('button', { name: 'Register a login passkey' }).click()
+  const beginBody = (await beginP).postDataJSON() as { purpose: string }
+  const registerBody = (await registerP).postDataJSON() as {
+    credential_id: string
+    enrollment_proof: { credential_id: string }
+  }
+  expect(beginBody.purpose).toBe('login')
+  expect(registerBody.enrollment_proof).toBeTruthy()
+  expect(registerBody.enrollment_proof.credential_id).toBe(registerBody.credential_id)
   await expect(page.getByText('A login passkey is registered')).toBeVisible({ timeout: 20_000 })
 
   // (1.5) Log out (re-render) and sign in PASSWORDLESS with the passkey (loginWithPasskey → get()).

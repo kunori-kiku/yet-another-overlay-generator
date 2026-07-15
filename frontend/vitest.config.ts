@@ -22,6 +22,7 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'node',
+    setupFiles: ['./vitest.setup.ts'],
     // Globals stay OFF: the conformance test imports describe/it/expect explicitly from 'vitest',
     // so eslint sees no undefined globals and the browser-globals lint config stays untouched.
     globals: false,

@@ -10,16 +10,26 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Parallel Links & Babel Failover:** A node pair can carry a primary link plus backup links, each its own WireGuard interface; Babel picks by per-link cost and fails over automatically (e.g. a plain-UDP primary with a `TCP (mimic)` backup). See [`docs/spec/data-model/edge.md`](docs/spec/data-model/edge.md).
 - **TCP-Shaping Transport (mimic):** Set an edge's transport to **`TCP (mimic)`** to wrap its WireGuard traffic with [mimic](https://github.com/hack3ric/mimic) (an eBPF UDP→fake-TCP shaper) so the link traverses networks that throttle (UDP QoS) or block UDP ports. The install script provisions mimic from the node's distribution and configures it automatically; MTU is auto-lowered and both endpoints must be Linux with eBPF. This is a connectivity/performance feature for UDP-restricted networks — **not** a censorship/DPI-circumvention tool. See [`docs/spec/artifacts/mimic.md`](docs/spec/artifacts/mimic.md).
 - **Smart Validation:** Early-fail checks catch logical errors such as missing public IPs, broken NAT requirements, and dangling isolated nodes.
-- **Persistent Cryptographic Key Management:** Generates `wg` keys for new nodes on first compile and persists them back onto the topology, so subsequent recompiles reuse the same keys. Key rotation is an explicit operator action (see [`docs/spec/data-model/node.md`](docs/spec/data-model/node.md)).
+- **Persistent Cryptographic Key Management:** In AirGap mode, the first compile generates `wg` keys
+  and persists them back onto the secret topology so recompiles reuse them. In AgentHeld/controller
+  mode, each managed or manual node keeps its private key on-host and the controller stores only its
+  public half. Key rotation is an explicit operator action (see
+  [`docs/spec/data-model/node.md`](docs/spec/data-model/node.md)).
 - **Compiler-Owned Ports:** The compiler is the sole authority for WireGuard listen ports. `compiled_port` is read-only output; `endpoint_port` is an explicit operator NAT/port-forward override only. Allocations are pinned per link, so values stay stable across recompiles when you add nodes (see [`docs/spec/data-model/edge.md`](docs/spec/data-model/edge.md) and [`docs/spec/compiler/allocation-stability.md`](docs/spec/compiler/allocation-stability.md)).
-- **SSH Auto-Deploy:** Configure SSH connection details per node, then use the generated `deploy-all.sh` / `deploy-all.ps1` scripts to deploy to all nodes via SSH in one command.
+- **Air-Gap SSH Auto-Deploy:** For a locally trusted **AirGap** export, configure SSH connection
+  details per node and use the generated `deploy-all.sh` / `deploy-all.ps1` helper. It uploads each
+  complete, node-ID-keyed bundle directory to a fresh remote staging directory before invoking its
+  integrity-gated installer. AgentHeld/controller bundles deliberately disable this shortcut.
 - **Comprehensive Legacy Cleanup:** Install scripts automatically detect and remove all stale WireGuard interfaces and configs (not just `wg0`), ensuring clean upgrades.
-- **Offline Configuration Bundles:** One-click deployment bundle generation — download portable `.zip` archives containing safe Bash installation scripts, sysctl modifications, Babel daemons, and WireGuard interfaces.
+- **Offline Configuration Bundles:** One-click deployment bundle generation — download a portable
+  `.zip` whose complete per-node directories are keyed by stable node ID and whose root
+  `deploy-all.sh` / `deploy-all.ps1` were produced by the same in-browser compile. Bundles contain
+  the Bash installer, sysctl settings, Babel configuration, and WireGuard interfaces.
 - **Immutable Artifacts:** Generated scripts hash and verify checksums (`sha256`) explicitly mitigating tamper attacks.
 - **Controller Mode (Agent-Pull Deploy):** Optionally run YAOG as a long-lived **controller** — a single Docker image (panel + API) where each node **pulls** its own keystone-signed config instead of you exporting a bundle. Operator login (password + optional TOTP / passkey 2FA), one-line node enrollment, and one-click Deploy. See [Controller Mode (Docker)](#controller-mode-docker).
 - **Server-Authoritative Controller (2.0):** In controller mode the controller's stored design is the single source of truth — opening the panel lands on a full-page login gate, and each login hydrates the canvas from the server (downloading a safety backup of any divergent, undeployed local work first). WireGuard private keys are enforced never to reach the server, the controller retains the last 10 topology versions for recovery, and one approved key binds to exactly one node-id. The operator/agent secret path prefixes are independent (`YAOG_OPERATOR_PATH_PREFIX` / `YAOG_AGENT_PATH_PREFIX`). Upgrading an existing controller? See [`docs/MIGRATION-controller-server-authority.md`](docs/MIGRATION-controller-server-authority.md).
 - **Dashboard App Shell (2.0):** The operator panel is a deep-linkable dashboard — **Overview, Design, Fleet, Deploy, Security, Settings** sections behind a collapsible sidebar. The Design page pairs the canvas with a creation toolbar and a selection-driven properties aside; navigation and the landing page adapt to the mode (controller → Overview, local generator → Design).
-- **Off-Host Signing Keystone (2.0):** Each controller Deploy is signed by the operator's hardware-backed passkey in a WebAuthn ceremony over the exact trust-list bytes, and nodes verify the signature before applying — a compromised controller alone cannot push configs to your fleet.
+- **Off-Host Signing Keystone (2.0):** When a keystone is pinned, each controller Deploy requires an operator-held signature over the exact trust-list bytes, and nodes verify it before applying — a compromised controller alone cannot push membership changes to your fleet. The panel uses a browser WebAuthn credential; the CLI-compatible path uses raw Ed25519. The controller stores only the credential's public descriptor/key, and YAOG does not claim that a browser credential is hardware-backed or non-exportable.
 - **Hardened Operator Auth (2.0):** Sessions live in an httpOnly cookie (login survives page refresh; no token in `localStorage`) with double-submit CSRF protection and credentialed CORS (`YAOG_PANEL_ORIGIN`). Second factors are TOTP (RFC 6238) and/or passkeys; passkeys also enable passwordless login.
 - **Fleet Management (2.0):** Per-node fleet pages with status detail, single-use enrollment tokens minted from the panel, a compile-history/audit view, and manual fleet-wide WireGuard key rotation (Roll keys).
 - **Live Fleet Health (2.0):** Agents report structured **Node Conditions** (`configapply`, `selfupdate`, `wireguard`, `mimic`) and refresh them on a dedicated `/telemetry` heartbeat (default 30s), so the panel reflects *current* health — not a frozen apply-time snapshot. The node-detail page has a collapsible **WireGuard links** panel showing each peer's last handshake, and a partly-degraded node reads `SomePeersDown` (which link is down), not a blanket `LinkDown`.
@@ -91,7 +101,9 @@ All topology editing happens on the **Design** page (the default landing in loca
 3. **Edit Properties:** Select any domain, node, or edge on the canvas (or via the toolbar's list drawer) to edit it in the right-hand aside — including the optional SSH Connection section (alias or host/port/user/key) used by auto-deploy.
 4. **Draw Edges:** Connect nodes by dragging from source to target on the canvas. Set the endpoint IP (from target's public addresses dropdown). Leave the port at `0` so the compiler allocates it; only set `endpoint_port` when you need an explicit NAT/port-forward override.
 5. **Compile:** Hit `Compile` in the canvas toolbar to allocate IPs and ports, derive peer configs, and generate all artifacts. This runs **in the browser** (no backend round-trip). The canvas will show color-coded per-peer interface handles, and each edge displays the allocated `compiled_port` read-only.
-6. **Export & Deploy:** Switch to the **Deploy** page to review the compiled artifacts and download the artifact ZIP. Use the generated `deploy-all.sh` or `deploy-all.ps1` to deploy to all SSH-configured nodes in one command.
+6. **Export & Deploy:** Switch to the **Deploy** page to review the compiled artifacts and download
+   the artifact ZIP. In local/AirGap mode, its root `deploy-all.sh` and `deploy-all.ps1` come from
+   that same compile and can deploy the complete ID-keyed bundles to all SSH-configured nodes.
 
 ## Controller Mode (Docker)
 
@@ -139,6 +151,8 @@ By default both ports bind to **loopback only** (`127.0.0.1`) — the login form
 
 > **Passkeys/WebAuthn work over `http://localhost`** (browsers treat loopback as a secure context), so you can test password + TOTP/passkey login locally **without** TLS. ⚠️ Use the hostname **`localhost`**, not the IP `http://127.0.0.1` — WebAuthn forbids IP-address domains, so passkey enrollment at `127.0.0.1` fails with *"invalid domain."* For any **remote** access, front the controller with a TLS-terminating reverse proxy (an example `caddy` service is commented in the compose file) — plain HTTP on a public address would both leak the password and make browsers refuse the passkey ceremony. (The rest of the panel — including Compile — degrades gracefully over plain HTTP on a LAN address; only the passkey/WebAuthn ceremonies hard-require a secure context.)
 
+> **WebAuthn custody is provider-dependent.** New browser login-passkey and browser-keystone enrollments require a user-verified assertion over an authenticated, one-use server challenge. That confirms user verification for the enrollment ceremony; it does **not** prove the credential is hardware-bound or non-exportable. Software and synced passkeys may be copied by their provider. Later login and signing assertions remain compatible with existing valid user-present credentials, so this enrollment hardening does not lock out already-enrolled users. The raw Ed25519 CLI keystone has no browser ceremony and is unchanged.
+
 ### 4. Deploy to a node (agent pull)
 
 To let a remote node pull its config, first expose the agent port — for a lab, `YAOG_BIND_ADDR=0.0.0.0 docker compose up -d`; for production, the TLS proxy above. Then, in the panel:
@@ -152,9 +166,32 @@ bash <(curl -fsSL https://<public-agent-url>/api/v1/agent/bootstrap) \
      --token <enrollment-token> --node-id <id>
 ```
 
-This downloads the `yaog-agent` binary, enrolls the node, applies the current generation, and installs a systemd daemon so future **Deploy**s auto-apply. Add `--once` to apply a single generation without the daemon. With the keystone enabled, each Deploy is signed by your off-host hardware key and the node verifies the signature before applying.
+This downloads the `yaog-agent` binary, enrolls the node, applies the current generation, and installs a systemd daemon so future **Deploy**s auto-apply. Add `--once` to apply a single generation without the daemon. With the keystone enabled, each Deploy carries an operator-held signature or WebAuthn assertion and the node verifies it before applying.
 
 Besides `--token` and `--node-id` (required), the one-liner accepts `--controller`, `--gh-proxy`, and `--release-base` to override the server-configured defaults. It installs the agent at `/usr/local/bin/yaog-agent` with a `yaog-agent.service` systemd unit; the per-node bearer token lands at `/etc/wireguard/agent-controller.token` (mode 0600), and with the keystone on, the operator's verification credential at `/etc/wireguard/operator-cred.pem`. The agent binary itself has `keygen` / `enroll` / `run` subcommands for manual or non-systemd setups — see [`docs/spec/controller/agent.md`](docs/spec/controller/agent.md).
+
+**Manual AgentHeld nodes use the verified kit path, not direct `install.sh` or `deploy-all`.** Run
+`yaog-agent kit --node-id <id>` on the host, paste its public descriptor into a node whose deployment
+mode is **Manual**, Deploy, and download that node's bundle from **Fleet**. Provision the pinned
+operator public credential to the host through a separate trusted channel, then apply the download:
+
+```bash
+# Raw Ed25519 operator credential
+sudo yaog-agent kit apply --bundle <node-bundle.zip> --node-id <id> \
+  --operator-cred <trusted-public-key.pem> --operator-cred-alg ed25519
+
+# Browser/WebAuthn operator credential (use the exact enrolled binding)
+sudo yaog-agent kit apply --bundle <node-bundle.zip> --node-id <id> \
+  --operator-cred <trusted-public-key.pem> \
+  --operator-cred-alg <webauthn-es256|webauthn-eddsa> \
+  --operator-rpid <rp-id> --operator-origin <origin>
+```
+
+Use the same command with `--uninstall` for removal. A fleet that has **never** used a keystone can
+acknowledge that legacy posture with `--dangerously-allow-no-keystone`; `kit apply` rejects that
+downgrade when the bundle carries a trust list or the node's durable state records prior keystone
+verification. Never obtain the trust anchor from the same untrusted bundle, and never run a
+downloaded AgentHeld `install.sh` directly.
 
 ### 5. Configuration reference
 

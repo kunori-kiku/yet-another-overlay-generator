@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
 )
 
 // wgPublicKeyPattern matches a WireGuard public key: 32 bytes of standard base64 = exactly 43 base64
@@ -33,11 +34,9 @@ func ValidWGPublicKey(s string) bool {
 // Allowed only: letters, digits, spaces, dots, underscores, and hyphens.
 var nodeNameCharset = regexp.MustCompile(`^[A-Za-z0-9 ._-]+$`)
 
-// nodeIDCharset constrains a node ID. Unlike a node NAME it is used as a path/file component (the
-// operator deploy-script filename `<id>-install.sh`, the manual-bundle Content-Disposition), an
-// interface-name seed, and a map key — so it forbids spaces and '/' (no path traversal) and every
-// shell metacharacter. Frontend-generated IDs (node-<uuid>) already satisfy it. Mirrors the TS
-// validator's nodeIDCharset byte-for-byte (conformance parity).
+// nodeIDCharset is the character-set half of the portable node-directory contract. The naming
+// package additionally enforces length, Windows device names/trailing-dot rules, and root-helper
+// reservations. Frontend local compilation executes this same Go validator through WASM.
 var nodeIDCharset = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // mimicEgressIfacePattern validates an optional per-node mimic egress-interface override. A Linux
@@ -309,14 +308,16 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 
 		if node.ID == "" {
 			result.AddError(prefix+".id", CodeNodeIDRequired)
-		} else if !nodeIDCharset.MatchString(node.ID) {
-			// A node ID reaches path/file/interface-name sinks (deploy-script filename,
-			// Content-Disposition), so reject spaces, '/', and shell metacharacters at the source.
+		} else if node.ID == "." || node.ID == ".." || !nodeIDCharset.MatchString(node.ID) {
+			// A node ID reaches path/file/interface-name sinks, so reject spaces, '/', and shell
+			// metacharacters at the source.
 			result.AddError(prefix+".id", CodeNodeIDIllegalChars, P{"id", fmt.Sprintf("%q", node.ID)})
+		} else if !naming.ValidPortableNodeID(node.ID) {
+			result.AddError(prefix+".id", CodeNodeIDNotPortable, P{"id", fmt.Sprintf("%q", node.ID)}, P{"max", fmt.Sprint(naming.MaxPortableNodeIDLength)})
 		}
 		if node.Name == "" {
 			result.AddError(prefix+".name", CodeNodeNameRequired)
-		} else if !nodeNameCharset.MatchString(node.Name) {
+		} else if node.Name == "." || node.Name == ".." || !nodeNameCharset.MatchString(node.Name) {
 			// Node name charset validation (D15 defence-in-depth): the name derives a WireGuard
 			// interface name and is interpolated into the install script that runs as root, so quotes,
 			// backticks, $, ; and other shell metacharacters are forbidden.

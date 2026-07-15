@@ -75,12 +75,9 @@ mutual-TLS pull, bound `{tenant,node,version,expiry}` headers, and long-poll cha
 
 The agent fetches `<source>/<--node-id>/` and, after verifying, cross-checks the bundle's
 `manifest.json` `node_id` against `--node-id` (a mismatch is refused, so a misconfigured or malicious
-source cannot get the agent to apply another node's bundle). **Operator note (Phase 1b layout):** the
-air-gap export currently names each node's bundle directory by the node's *name* (`node.Name`) while
-`manifest.json` records `node_id` (`node.ID`); since `--node-id` keys both the fetch path and the
-`node_id` cross-check, the operator must stage the static source with each bundle under a directory
-matching its `manifest.json` `node_id` (i.e. `node.ID`). Unifying the export directory name on
-`node.ID` end-to-end is a Plan 4 cleanup, when the controller owns the serving layout.
+source cannot get the agent to apply another node's bundle). Every export and staging surface uses
+that same `node.ID` as the canonical per-node directory key; `node.Name` is display text and is never
+a bundle lookup fallback. See [../artifacts/naming.md](../artifacts/naming.md).
 
 ### 3. verify (Go-side, fail-closed)
 
@@ -153,6 +150,23 @@ if it is absent) and invokes the script. Cross-references:
 signed and the verify order), [../artifacts/install-script.md](../artifacts/install-script.md) (the
 splice step inside Phase 2 and the verify-before-apply order).
 
+Root application is supported on Linux. Before starting the synchronous installer, the agent writes
+a crash-durable `PendingApply` record containing the exact verified bundle digest, manifest checksum,
+apply/uninstall action, signing and keystone anchors, `compiled_at` floor, and membership epoch while
+retaining the prior last-known-good fields. An exact retry re-saves and directory-syncs that same
+intent before root runs again; a strictly newer candidate may replace it only under the same action
+and trust anchors. Success advances last-known-good and clears the intent in one atomic state-file
+replacement. A failed or interrupted installer leaves the intent in force, so recovery cannot accept
+an older epoch, substitute different same-version root bytes, or silently drop a trust anchor.
+
+The state-directory `flock` covers rekey, apply, and self-update. The Linux apply command runs beneath
+a small guardian that inherits the exact locked open-file description. If the Go parent dies while
+`install.sh` is still running, a restarted daemon or manual kit remains excluded until the installer
+exits. The real installer closes the inherited descriptor, preventing a service it starts from
+retaining the lease indefinitely. Windows root apply is refused before mutation because its
+`LockFileEx` ownership cannot be transferred with the same guarantee; portable `kit verify`, key
+generation, and release-inspection commands remain available.
+
 ### 6. report
 
 After apply the agent records the new last-applied `compiled_at` and reports outcome (success, or the
@@ -161,13 +175,16 @@ the controller (and the controller-side registry/UI) is Plan 4.
 
 ## Fail-closed and keep-last-good
 
-Every stage is **fail-closed**: a failed verify, a rolled-back bundle, a missing `agent.key`, or a
-nonzero `install.sh` exit aborts the pass **without** disturbing the currently-running overlay. The
-agent never partially applies — verification is fully completed *before* `install.sh` is invoked, and
-`install.sh` itself verifies the pristine bundle again before Phase 2 touches `/etc/wireguard`. The
-result is **keep-last-good**: on any failure the node keeps the configuration from its last
-successful apply. (Automated *rollback to a prior signed bundle* and instant fleet-wide rollback are
-Plan 4/Plan 5; Phase 1b only guarantees it does not break what is already working.)
+Every pre-root stage is **fail-closed**: a failed verify, a rolled-back bundle, or a missing
+`agent.key` aborts the pass **without** disturbing the currently-running overlay. A nonzero
+`install.sh` exit also fails the pass and never advances last-known-good, but may follow partial host
+mutation by the root script. The verification layer never partially applies: it completes *before* `install.sh` is
+invoked, and `install.sh` itself verifies the pristine bundle again before Phase 2 touches
+`/etc/wireguard`. Once the synchronous root script begins, a host/process/storage failure can leave a
+partial mutation; the durable `PendingApply` record deliberately treats that candidate's security
+floors as effective and authorizes only a convergent exact retry or a strictly newer verified
+candidate. The prior last-known-good record is not falsely advanced. Automated rollback to a prior
+signed bundle and instant fleet-wide rollback remain separate operations.
 
 ## The thin-wrapper boundary
 
@@ -176,7 +193,7 @@ What the agent **is** (Phase 1b):
 - local keygen + private-key custody at `/etc/wireguard/agent.key` (0600);
 - a single keygen→pull→verify→anti-rollback→apply→report pass;
 - Go-side `bundlesig.Verify` + per-file SHA-256 against a **pinned** public key;
-- a monotonic anti-rollback high-water mark on `compiled_at`;
+- a last-known-good high-water mark plus a crash-durable pending root-mutation intent;
 - delegation of all config application to the bundle's `install.sh`.
 
 What the agent is **not**: it owns no rendering, no routing, no WireGuard/Babel control-plane logic,
@@ -310,7 +327,8 @@ pull→verify→anti-rollback→apply→report core as static-source mode — on
    **custody-gated splice** of `/etc/wireguard/agent.key` into the copied confs
    ([../artifacts/install-script.md](../artifacts/install-script.md)). The agent never splices, never
    parses the WG private key, and never mutates the signed bundle bytes — apply is idempotent and the
-   bundle stays pristine, exactly as in Phase 1b.
+   bundle stays pristine, exactly as in Phase 1b. The same `PendingApply` write-ahead record and
+   crash-surviving Linux installer lease cover controller and manual-kit application.
 5. **Report (bearer).** After a successful apply, `ControllerClient.Report(nodeID, payload)` issues `POST
    /report` with the bearer header (`reportRequestJSON`, [controller-api.md](controller-api.md) §`POST
    /report`), so the controller's registry records the node's `AppliedGeneration` / checksum / health and

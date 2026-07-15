@@ -103,6 +103,9 @@ var allCodes = []Code{
 	CodeSigningKeyMissing,
 	CodeSigningKeyMismatch,
 	CodeKeystoneRotationRequiresAck,
+	CodeKeystoneCredentialChanged,
+	CodeLoginCredentialChanged,
+	CodeTOTPStateChanged,
 	CodeReqBearerRequired,
 	CodeAuthCredentialsInvalid,
 	CodeReqCSRFInvalid,
@@ -111,6 +114,7 @@ var allCodes = []Code{
 	CodeNodeRateLimited,
 	CodeAuthPasskeyFailed,
 	CodeAuthPasskeyVerifyFailed,
+	CodeWebAuthnEnrollmentVerifyFailed,
 	CodeTotpInvalidCode,
 	CodeTotpRequiresLogin,
 }

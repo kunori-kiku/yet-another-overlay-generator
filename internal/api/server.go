@@ -63,9 +63,10 @@ func NewServer() *Server {
 // SPA if EnableStatic was called) and s.agentMux serves nothing. cmd/server calls this
 // only under the controller env gate.
 //
-// Both ports are served as PLAIN HTTP (plan-4.5); confidentiality is delegated to a
-// reverse proxy's TLS. Authentication is per-node bearer tokens (agent) and a shared
-// operator token (operator), enforced by the auth chokepoint in auth_controller.go.
+// Both ports are served as PLAIN HTTP; confidentiality is delegated to a reverse
+// proxy's TLS. Protected agent routes use per-node bearer tokens. Protected operator
+// routes use named login sessions or the optional break-glass bearer, enforced by
+// the auth chokepoint in auth_controller.go; pre-auth routes are registered explicitly.
 // The controller routes live under /api/v1/operator/ (operator mux) and
 // /api/v1/agent/ (agent mux) and never collide with /api/health on s.mux.
 func (s *Server) EnableController(ch *ControllerHandler) {

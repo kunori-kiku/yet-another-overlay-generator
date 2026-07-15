@@ -41,6 +41,9 @@ import (
 // take no locks.
 func InstallTrustListSignature(ctx context.Context, store Store, t TenantID, submittedCanonical []byte, signed trustlist.SignedTrustList) (int64, error) {
 	defer lockTenantOps(t)()
+	if err := reconcileKeystoneTrustBoundaryLocked(ctx, store, t); err != nil {
+		return 0, err
+	}
 
 	// A signature is meaningless without a pinned credential to verify it against.
 	cred, err := store.GetOperatorCredential(ctx, t)

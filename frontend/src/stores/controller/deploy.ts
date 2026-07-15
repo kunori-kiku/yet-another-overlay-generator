@@ -6,7 +6,15 @@
 import type { ControllerSet, ControllerGet } from './types';
 import type { Topology } from '../../types/topology';
 import type { DeployForceArg } from '../../lib/deployPreview';
-import { configOf, localizeError, tLocal, canonicalDesign, sameIdSet, selectHasLocalSigningKey } from './helpers';
+import {
+  captureControllerActionContext,
+  controllerActionContextIsCurrent,
+  localizeError,
+  tLocal,
+  canonicalDesign,
+  sameIdSet,
+  selectHasLocalSigningKey,
+} from './helpers';
 import {
   compilePreview as ctlCompilePreview,
   deployPreview as ctlDeployPreview,
@@ -53,14 +61,15 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
     // compilePreview (PR6): a server-authoritative read-only compile. See the interface comment.
     // previewing is its dedicated flag (not the global loading).
     compilePreview: async () => {
+      const context = captureControllerActionContext(get);
       set({ previewing: true, error: null });
       try {
-        const cfg = configOf(get());
         // POST the current canvas (zero-knowledge fail-safe: strip private keys; the controller
         // canvas has none anyway).
         const current = useTopologyStore.getState().getTopology();
         const { topo: clean } = stripPrivateKeys(current);
-        const resp = await ctlCompilePreview(cfg, JSON.stringify(clean));
+        const resp = await ctlCompilePreview(context.config, JSON.stringify(clean));
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // No enrolled nodes → no rendered configs: clear the preview and give an actionable
         // hint, leaving the canvas alone.
         if (!resp.topology || !resp.wireguard_configs || Object.keys(resp.wireguard_configs).length === 0) {
@@ -83,6 +92,7 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         }
         set({ previewing: false });
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ error: localizeError(err, 'error.generic'), previewing: false });
       }
     },
@@ -92,6 +102,7 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
     // deployPreview is never persisted (see the partialize note).
     openDeployPreview: async () => {
       if (get().deployPreviewing || get().loading || get().deployPreview) return;
+      const context = captureControllerActionContext(get);
       // Clear any prior preview-error banner so a retry starts clean (do NOT guard on it — the
       // Deploy button must be able to re-attempt the preview after a failure).
       set({ deployPreviewing: true, error: null, deployPreviewError: null });
@@ -104,9 +115,11 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // compilePreview / deploy()).
         const current = useTopologyStore.getState().getTopology();
         const { topo: clean } = stripPrivateKeys(current);
-        const preview = await ctlDeployPreview(configOf(get()), JSON.stringify(clean));
+        const preview = await ctlDeployPreview(context.config, JSON.stringify(clean));
+        if (!controllerActionContextIsCurrent(get, context)) return;
         set({ deployPreview: preview, deployPreviewing: false });
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // Best-effort (plan-6): the preview endpoint may be unavailable (a newer panel POSTs the
         // deploy-preview route to an OLDER controller — 405 GET-only / 404 no route). Record the
         // failure in deployPreviewError (NOT the global `error`) so the DeployBar surfaces it beside
@@ -132,12 +145,11 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
       // shrink re-call is unaffected: the shrink-confirm branch sets loading:false before
       // returning, so deploy({confirmedShrink:true}) runs with loading already cleared.
       if (get().loading) return;
+      const context = captureControllerActionContext(get);
       // Clear the preview-error banner too: a deploy (whether from the dialog Confirm or the
       // "Deploy anyway" fallback) supersedes any stale preview-fetch failure.
       set({ loading: true, error: null, deployPreviewError: null });
       try {
-        const cfg = configOf(get());
-
         // Resolve the design to upload + its stripped-key count. On a confirmed
         // shrink we deploy the SNAPSHOT the warning was computed from (binds the
         // confirmation to what the operator actually saw, not a since-changed
@@ -175,8 +187,10 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
           // rather than blocking a legitimate upload on a transient guard-read error.
           let server: Topology | null = null;
           try {
-            server = (await ctlGetTopology(cfg)) as Topology | null;
+            server = (await ctlGetTopology(context.config)) as Topology | null;
+            if (!controllerActionContextIsCurrent(get, context)) return;
           } catch {
+            if (!controllerActionContextIsCurrent(get, context)) return;
             server = null; // guard read failed → skip the guard (history is the backstop)
           }
           if (server && Array.isArray(server.nodes) && server.nodes.length > 0) {
@@ -207,7 +221,8 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         }
 
         const topoJSON = JSON.stringify(cleanTopo);
-        await updateTopology(cfg, topoJSON);
+        await updateTopology(context.config, topoJSON);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // The design is now the server's authoritative copy. Mark the canvas server-held
         // (even if stage/promote later fails — it IS on the server now) so it stops
         // persisting at rest and is flushed on logout/gate. Without this, a design BUILT
@@ -235,20 +250,22 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // design once stage's allocation has been read back (and is the fallback baseline
         // if that read fails).
         set({ lastSyncedSnapshot: canonicalDesign(cleanTopo), lastSyncedTopology: cleanTopo });
-        const result = await stage(cfg, force);
+        const result = await stage(context.config, force);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // When there are no enrolled nodes, stage produces no bundle (staged is empty), and
         // promote would then return 409 ErrNoStagedBundle — that is not an error but "no node
         // has joined the network yet". Just show skippedUnenrolled and skip promote (and
         // signing too), so a normal situation is not rendered as an error.
         if (result.staged.length > 0) {
           // KEYSTONE: retrieve the manifest to sign. null = keystone OFF, promote directly.
-          const toSign = await getTrustlist(cfg);
+          const toSign = await getTrustlist(context.config);
+          if (!controllerActionContextIsCurrent(get, context)) return;
           if (toSign !== null) {
-            // Signing-handle auto-recovery belt (plan-3): a fresh/cleared browser may hold no local
+            // Signing-handle auto-recovery belt (plan-3): a fresh/cleared browser may hold no public
             // signing descriptor even though the controller HAS a credential pinned. Re-probe server
-            // truth once on the deploy path — hydrateKeystoneStatus recovers the non-secret
-            // descriptor into the empty local slots (WebAuthn only) — then re-read, so the operator
-            // is not forced into a fleet-stranding re-pin just because this browser was cleared.
+            // truth once on the deploy path — hydrateKeystoneStatus atomically reconciles a complete
+            // non-secret WebAuthn descriptor — then re-read, so the operator is not forced into a
+            // fleet-stranding re-pin just because this browser was cleared.
             // Best-effort: a probe failure must not mask the actionable precondition error below.
             if (!selectHasLocalSigningKey(get())) {
               try {
@@ -256,17 +273,19 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
               } catch {
                 // ignore — the precondition check below still fires with a clear message.
               }
+              if (!controllerActionContextIsCurrent(get, context)) return;
             }
             const credentialId = get().operatorCredentialId;
             const alg = get().operatorCredentialAlg;
             const pem = get().operatorPublicKeyPEM;
             if (credentialId === null || alg === null || !pem) {
               // keystone is on (nodes require a signature) but this browser still holds no complete
-              // signing descriptor (credential_id + alg + PEM). We are PROVABLY inside the
+              // WebAuthn invocation descriptor (credential_id + alg + PEM). We are PROVABLY inside the
               // keystone-ON branch (toSign !== null ⇒ getTrustlist returned a staged manifest ⇒ a
               // credential is pinned), so the right message is "pinned but this browser couldn't
-              // recover a browser-signable descriptor — connect the enrolling authenticator /
-              // re-enroll on this device, NOT a re-pin". Discriminate on `!== false` (not truthy):
+              // recover a browser-signable descriptor — connect the credential provider or use the
+              // raw-Ed25519 off-host path, but do NOT re-pin for browser-state recovery". Discriminate
+              // on `!== false` (not truthy):
               // serverOperatorPinned is null on a fresh browser and the belt re-probe above is
               // best-effort, so a transient probe failure leaves it null — a truthy check would
               // then wrongly nudge toward a fleet-stranding re-pin (the very thing this fixes).
@@ -290,16 +309,19 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
             try {
               signed = await signManifest(manifestBytes, credentialId, alg, rpId, pem);
             } finally {
-              set({ signing: false });
+              if (controllerActionContextIsCurrent(get, context)) set({ signing: false });
             }
+            if (!controllerActionContextIsCurrent(get, context)) return;
             // Before submitting the signature, re-check trustlist_json with the server's
             // substitution guard (echo back the exact standard-base64 bytes we just signed).
-            await postTrustlistSignature(cfg, {
+            await postTrustlistSignature(context.config, {
               trustlistJson: toSign.trustlistJson,
               signed,
             });
+            if (!controllerActionContextIsCurrent(get, context)) return;
           }
-          await promote(cfg);
+          await promote(context.config);
+          if (!controllerActionContextIsCurrent(get, context)) return;
         }
         // Post-deploy reconciliation (PR1): stage() ran CompileAndStage → persistAllocations,
         // which merged the freshly-allocated compiled_port + pinned_* (ports, transit IPs,
@@ -313,7 +335,8 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         // canvas as the uploaded (unpinned) design — the pins are on the server and a later
         // Save adopts them (non-clobber) or a re-login hydrates them.
         try {
-          const persisted = (await ctlGetTopology(cfg)) as Topology | null;
+          const persisted = (await ctlGetTopology(context.config)) as Topology | null;
+          if (!controllerActionContextIsCurrent(get, context)) return;
           if (persisted && Array.isArray(persisted.nodes) && Array.isArray(persisted.edges)) {
             const ts = useTopologyStore.getState();
             const canvas = ts.getTopology();
@@ -326,6 +349,7 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
             set({ lastSyncedSnapshot: canonicalDesign(reconciled), lastSyncedTopology: reconciled });
           }
         } catch {
+          if (!controllerActionContextIsCurrent(get, context)) return;
           // best-effort (see comment above) — never fail an otherwise-successful deploy on it.
         }
         // Clear any pending shrink-confirm (a confirmed deploy consumes it) + the preview dialog
@@ -340,6 +364,7 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         });
         await get().refresh();
       } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return;
         // Clear pendingShrink on failure too: a CONFIRMED-shrink deploy
         // (deploy({confirmedShrink:true})) that throws during update/stage/
         // promote/signature still has pendingShrink set (it is consumed only on

@@ -94,7 +94,7 @@ zero-knowledge placeholder spliced with the node's locally-held key).
 | Generation | Monotonic deploy counter per tenant; agents poll for generations newer than their cursor |
 | Stage / Promote | Stage compiles enrolled nodes into staged bundles; promote atomically flips staged→current and bumps the generation |
 | Enrollment | One-time ceremony binding a machine to a design node ID via a single-use token, yielding a per-node bearer token |
-| Keystone | The off-host operator signing credential (hardware passkey); when pinned, promote requires a valid trust-list signature |
+| Keystone | The operator-held signing credential (browser WebAuthn or raw Ed25519 CLI); when pinned, promote requires a valid trust-list signature. The controller stores public material only, and does not attest WebAuthn hardware backing or non-exportability |
 | Trust-list | Canonical signed manifest of approved members (node ID + WG pubkey + bundle checksum), verified by agents before apply |
 | Operator | The human controlling the panel (password/TOTP/passkey login) |
 | Tenant | The single state scope a controller serves (`YAOG_TENANT_ID`) |

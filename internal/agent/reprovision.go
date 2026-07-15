@@ -2,8 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 )
 
 // ReprovisionKeystone atomically rewrites the node's pinned off-host operator credential
@@ -31,29 +29,8 @@ func ReprovisionKeystone(credPath, alg string, newPEM []byte) error {
 		return fmt.Errorf("agent: reprovision-keystone: refusing to pin an unparsable credential: %w", err)
 	}
 
-	dir := filepath.Dir(credPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("agent: reprovision-keystone: create %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, ".operator-cred-*.tmp")
-	if err != nil {
-		return fmt.Errorf("agent: reprovision-keystone: temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // best-effort cleanup; a no-op after a successful rename
-	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("agent: reprovision-keystone: chmod temp: %w", err)
-	}
-	if _, err := tmp.Write(newPEM); err != nil {
-		tmp.Close()
-		return fmt.Errorf("agent: reprovision-keystone: write temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("agent: reprovision-keystone: close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, credPath); err != nil {
-		return fmt.Errorf("agent: reprovision-keystone: rename into place: %w", err)
+	if err := WritePrivateFileAtomic(credPath, newPEM); err != nil {
+		return fmt.Errorf("agent: reprovision-keystone: persist credential: %w", err)
 	}
 	return nil
 }

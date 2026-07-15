@@ -113,15 +113,18 @@ func main() {
 		fmt.Printf("  %s -> %s\n", node.Name, node.OverlayIP)
 	}
 
-	exportResult, err := artifacts.Export(result, *outputDir)
+	exportResult, err := artifacts.ExportWithSigner(result, *outputDir, signer)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to export artifacts: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Printf("\nexported to: %s\n", exportResult.OutputDir)
-	for _, nodeName := range exportResult.Nodes {
-		fmt.Printf("  📦 %s/\n", nodeName)
+	for _, nodeID := range exportResult.Nodes {
+		fmt.Printf("  📦 %s/\n", nodeID)
+	}
+	for _, warning := range exportResult.CleanupWarnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
 	fmt.Printf("\ndone! checksum: %s\n", result.Manifest.Checksum)
 }

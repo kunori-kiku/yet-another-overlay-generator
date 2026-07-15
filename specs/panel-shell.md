@@ -1,53 +1,126 @@
 # Panel app shell
 
-<!-- last-verified: 2026-06-12 -->
+<!-- last-verified: 2026-07-15 -->
 
 ## Responsibility
-Mounts the persistent panel chrome (collapsible sidebar + top app bar) around deep-linkable routes, owning theme/translucency/sidebar preferences, the bilingual string layer, mode-aware navigation and landing, and login-state restore on mount.
+
+Keep one persistent, mode-aware frame around the routed panel: authentication gating, responsive
+navigation, active-route chrome, appearance and language controls, import/export affordances, and
+custody notices. The shell coordinates domain stores but does not own topology, controller, or
+credential state itself.
 
 ## Files
-- `frontend/src/App.tsx:24-46` — `createBrowserRouter` config: `Shell` layout route wrapping all pages; `IndexRedirect` (lines 16-19) for index and `*` fallback.
-- `frontend/src/main.tsx:6-10` — entry point; renders `<App/>` under `StrictMode`.
-- `frontend/index.html:10-31` — anti-FOUC inline script: applies `.dark`/`.no-translucency` to `<html>` pre-paint from persisted `ui-storage`.
-- `frontend/src/components/shell/Shell.tsx:13-42` — layout grid, a11y skip-link, `<Outlet/>` main region, session-restore effect (lines 20-22).
-- `frontend/src/components/shell/Sidebar.tsx:13-83` — collapsible left nav of `<NavLink>`s; fold button persists collapsed state via uiStore.
-- `frontend/src/components/shell/Topbar.tsx:14-109` — active-section breadcrumb; Design-only import/export/flush cluster (lines 54-78); zh/en language toggle (lines 80-103); ThemeToggle + UserMenu.
-- `frontend/src/components/shell/nav.ts:32-56` — `NAV_ITEMS` taxonomy (single source of truth) + `navItemsForMode`, `landingPathForMode`, `activeNavItem`.
-- `frontend/src/components/shell/ThemeToggle.tsx:9-33` — top-right button cycling system → light → dark.
-- `frontend/src/components/shell/UserMenu.tsx:10-58` — click-outside/Escape-dismiss account popover; contents still the P1 placeholder (lines 45-55).
-- `frontend/src/components/shell/icons.tsx:9-129` — dependency-free inline SVG icon set (stroke, `currentColor`).
-- `frontend/src/components/shell/styles.ts:5-6` — shared `FOCUS_RING` class fragment for consistent keyboard focus styling.
-- `frontend/src/theme/ThemeProvider.tsx:22-42` — owns `.dark` and `.no-translucency` classes on `<html>`; live-tracks OS scheme while pref is `system`.
-- `frontend/src/stores/uiStore.ts:27-55` — persisted zustand store (`ui-storage` key): `theme`, `sidebarCollapsed`, `translucency` + setters/togglers.
-- `frontend/src/i18n.ts:1-148` — `UILanguage` (`'zh' | 'en'`), `detectSystemLanguage()`, `txt()`, and the shared `STRINGS` tuple table.
 
-## Inputs
-- **controllerStore** (see specs/panel-auth.md, specs/panel-deploy-fleet.md): `mode: 'local' | 'controller'` (`frontend/src/stores/controllerStore.ts:62`) drives nav filtering and landing; `checkSession(): Promise<void>` (`frontend/src/stores/controllerStore.ts:463-485`) is called by the shell's mount effect.
-- **topologyStore** (see specs/panel-design.md): `language: UILanguage` + `setLanguage` (`frontend/src/stores/topologyStore.ts:46-47`), `exportProject(): void`, `importProject(file: File): Promise<void>`, `flushWorkspace(): void` (`frontend/src/stores/topologyStore.ts:95-98`) wired to the Topbar I/O cluster.
-- **Browser**: `localStorage['ui-storage']` (read pre-paint by `frontend/index.html:14` and rehydrated by zustand `persist`, `frontend/src/stores/uiStore.ts:45`); `navigator.language` for the language default (`frontend/src/i18n.ts:3-8`, applied at `frontend/src/stores/topologyStore.ts:126`); `prefers-color-scheme` media query (`frontend/src/theme/ThemeProvider.tsx:5`).
+- `frontend/src/App.tsx:18-73` defines the browser router, mode-aware landing, controller-only deep
+  link guard, route-scoped `ReactFlowProvider`, error boundary, and theme provider.
+- `frontend/src/components/shell/Shell.tsx:14-140` performs session restoration and renders the
+  login/splash gate or the persistent sidebar/drawer/topbar/notices/outlet layout.
+- `frontend/src/components/shell/Sidebar.tsx:10-114` shares one navigation body between the
+  collapsible desktop sidebar and always-expanded mobile drawer.
+- `frontend/src/components/shell/Topbar.tsx:14-125` derives the breadcrumb and owns mode-aware design
+  import/export/flush controls plus language, theme, and user menus.
+- `frontend/src/components/shell/nav.ts:12-57` is the single navigation taxonomy and landing helper.
+- `frontend/src/components/shell/UserMenu.tsx:8-113` shows local mode, signed-in identity and expiry,
+  break-glass state, controller version, and sign-out.
+- `frontend/src/theme/ThemeProvider.tsx:7-42` owns the `.dark` and `.no-translucency` document classes;
+  `frontend/index.html:9-31` seeds them before first paint.
+- `frontend/src/stores/uiStore.ts:4-92` owns non-secret shell preferences and ephemeral mobile-drawer
+  state.
+- `frontend/src/i18n/index.ts:1-87` and `frontend/src/i18n/messages/{en,zh}.ts` provide the keyed,
+  typed catalog, interpolation, English fallback, and coded-error localization.
 
-Deep doc: `docs/spec/frontend/architecture.md` covers frontend state-management conventions, but its component-hierarchy section predates this shell (see Gotchas).
+## Router and mode boundaries
 
-## Outputs
-- **Route mount points** under the persistent shell (`frontend/src/App.tsx:28-43`): `/design` (panel-design, with `ReactFlowProvider` scoped to that route only), `/overview`, `/fleet`, `/fleet/nodes/:id`, `/deploy`, `/settings` (panel-deploy-fleet), `/security` (panel-auth).
-- **`<html>` classes** `.dark` and `.no-translucency` (`frontend/src/theme/ThemeProvider.tsx:12,38`) consumed by the token CSS in `frontend/src/index.css`.
-- **Shared utilities consumed by every panel sibling**: `txt(lang: UILanguage, zh: string, en: string): string` and `STRINGS` (`frontend/src/i18n.ts:10-12,16`); `FOCUS_RING` (`frontend/src/components/shell/styles.ts:5-6`); shell icons.
-- **Nav helpers**: `navItemsForMode(mode: PanelMode): readonly NavItem[]` (`frontend/src/components/shell/nav.ts:42-44`), `landingPathForMode(mode: PanelMode): string` (`nav.ts:47-49`), `activeNavItem(pathname: string): NavItem | undefined` (`nav.ts:52-56`).
-- **`useUiStore`** preference state (theme/translucency/sidebar) read by the Settings appearance section (see specs/panel-deploy-fleet.md).
+`App` renders `ErrorBoundary -> ThemeProvider -> RouterProvider`. The router mounts `Shell` once and
+places route content in its `<Outlet>`. `/design` alone receives a `ReactFlowProvider`; the other
+pages do not initialize the canvas runtime (`frontend/src/App.tsx:36-61`).
 
-## Decision points (if any)
-- **Mode-aware landing**: index route and unknown paths redirect to `/overview` in controller mode, `/design` in local mode (`frontend/src/App.tsx:16-19,43`; `frontend/src/components/shell/nav.ts:47-49`).
-- **Per-mode sidebar visibility**: local mode hides Overview and Fleet (`localVisible: false`); Security stays visible because it hosts local Compile History; hidden routes remain deep-linkable (`frontend/src/components/shell/nav.ts:25-29,42-44`).
-- **Session restore gating**: `checkSession()` fires only when `mode === 'controller'`, on mount and on mode flips (`frontend/src/components/shell/Shell.tsx:20-22`); the genuine-cookie-vs-break-glass distinction is owned by panel-auth.
-- **Design-only project I/O**: the import/export/flush cluster renders only when the active nav item is `design`; flush requires a `window.confirm` (`frontend/src/components/shell/Topbar.tsx:24,32-41,54-78`).
-- **Theme resolution**: dark iff pref is `dark`, or pref is `system` and the OS prefers dark; the OS-change listener attaches only while pref is `system` (`frontend/src/theme/ThemeProvider.tsx:9-13,28-32`).
+The index route and wildcard redirect to `/overview` in controller mode and `/design` in local
+mode. Overview, Fleet, and fleet-node detail are controller-only not just in the sidebar: their
+elements are wrapped in `RequireControllerMode`, so a local-mode deep link redirects instead of
+rendering stale cached controller UI (`frontend/src/App.tsx:18-34,52-58`). Design, Deploy, Security,
+and Settings remain reachable in both modes and gate their own mode-specific content.
 
-## Invariants
-- uiStore persists only an explicit non-secret allowlist (`theme`, `sidebarCollapsed`, `translucency`) via `partialize` — deliberate guard so future fields can't silently leak to localStorage, aligned with the key-custody principle (PRINCIPLES.md "Key custody"; `frontend/src/stores/uiStore.ts:46-52`).
-- The shell never touches tokens or credentials: login-state restore is delegated entirely to controllerStore's httpOnly-cookie probe (`frontend/src/components/shell/Shell.tsx:18-22`; see specs/panel-auth.md).
-- `NAV_ITEMS` is the single source of truth for the section taxonomy — Sidebar links, Topbar breadcrumb, and landing logic all derive from it (`frontend/src/components/shell/nav.ts:12-14,32-39`).
+`NAV_ITEMS` supplies paths, icons, labels, and local visibility. Sidebar links, Topbar active-route
+labels, and landing behavior derive from that table rather than maintaining parallel route lists
+(`frontend/src/components/shell/nav.ts:33-57`).
 
-## Gotchas (optional)
-- In controller mode the **server** is the translucency authority: controllerStore's `refresh`/`loadSettings` overwrite `uiStore.translucency` from `ControllerSettings` (`frontend/src/stores/controllerStore.ts:292-294,313-315`); the local toggle stands only in local mode.
-- The anti-FOUC script in `frontend/index.html:14-20` parses the persisted zustand JSON (`parsed.state.theme`, `parsed.state.translucency`) directly — renaming the `ui-storage` key or reshaping the store breaks pre-paint theming silently (ThemeProvider reconciles after mount, so it shows as a flash, not an error).
-- UI language lives in **topologyStore** (persisted with the topology workspace), not uiStore — the Topbar toggle writes cross-store (`frontend/src/components/shell/Topbar.tsx:16-17`; `frontend/src/stores/topologyStore.ts:46-47,428`). Also note `docs/spec/frontend/architecture.md:12-22` still documents the retired `AppLayout`/`TopBar` hierarchy; trust this spec + code for shell structure.
+## Authentication gate
+
+Local mode enters the shell directly. Controller mode first probes the httpOnly session cookie via
+`checkSession`. Until that probe settles, the shell renders a quiet full-viewport status splash;
+this prevents a protected canvas or login-page flash. An unauthenticated operator sees `LoginPage`
+before any chrome renders. A configured in-memory break-glass bearer passes the gate without being
+misrepresented as a login session (`frontend/src/components/shell/Shell.tsx:18-82`).
+
+The requested route remains in the router while the gate is closed, so a valid session resumes the
+original deep link. Switching away from and back to controller mode resets and reruns the probe
+instead of trusting stale login state.
+
+The shell never reads or persists session credentials. It consumes derived auth state from
+`controllerStore`; cookie handling, CSRF, bearer headers, and logout remain in the auth/client
+layer. `UserMenu` distinguishes a named session from break-glass recovery and exposes session
+expiry, server build version, and sign-out only where meaningful.
+
+## Responsive chrome and design surface
+
+At the `lg` breakpoint and above, the docked Sidebar can persist an expanded or icon-only width.
+Below it, the docked sidebar is hidden and Topbar opens an off-canvas Drawer containing the same
+navigation body. `mobileNavOpen` is ephemeral and omitted from persistence, so reload cannot
+restore a blocking overlay (`frontend/src/components/shell/Shell.tsx:84-107` and
+`frontend/src/stores/uiStore.ts:19-24,80-89`).
+
+The Design route is deliberately not a compressed desktop editor. Below `lg` it mounts a
+read-only pan/zoom canvas with a gate; at desktop width it mounts the toolbar, optional elements
+list, editable canvas, selection aside, and validation footer
+(`frontend/src/components/pages/DesignPage.tsx:12-60`).
+
+The shell includes a keyboard skip link, semantic navigation and main regions, accessible drawer
+labels, route-aware `NavLink` current-state behavior, and shared focus-ring styling.
+
+## Design import/export controls
+
+Topbar shows the project I/O cluster only on Design. Export downloads the current design in either
+mode. Import is custody-aware:
+
+- Local mode loads a local draft through `topologyStore.importProject`.
+- Controller mode confirms replacement, strips non-authoritative key material, writes a new server
+  topology version, and rehydrates from server through `controllerStore.importDesignToServer`.
+
+Flush is local-only. In controller mode clearing the disposable browser mirror would neither
+delete nor undo the authoritative server design, so presenting it as a destructive action would be
+misleading (`frontend/src/components/shell/Topbar.tsx:30-43`).
+
+Shell-level notice banners surface when a server hydration replaces a local design, when a
+controller import drops design key material, or when a local import clears unusable stranded
+public-key-only state (`frontend/src/components/shell/Shell.tsx:109-133`).
+
+## Appearance, language, and persistence
+
+`uiStore` persists an explicit non-secret allowlist: `theme`, `sidebarCollapsed`, effective
+`translucency`, and `localTranslucency`. `mobileNavOpen` is excluded. ThemeProvider applies the
+resolved system/light/dark preference and vibrancy class; the inline document script reads the
+same store shape before React mounts to avoid a theme flash.
+
+Controller mode treats server settings as the effective translucency authority, while
+`localTranslucency` retains the user's independent local preference. Returning to local mode
+restores that preference instead of inheriting the server's fleet setting
+(`frontend/src/stores/uiStore.ts:25-41,60-64`).
+
+UI language remains part of the topology workspace and is consumed explicitly by components. The
+catalog is keyed by the complete English key set; Chinese is additive and falls back per key.
+`tError` and `tValidationError` localize coded backend and validation errors without ad-hoc string
+parsing (`frontend/src/i18n/index.ts:11-87`).
+
+## Invariants and gotchas
+
+- The auth gate encloses all shell chrome in controller mode; logged-out narrow viewports do not
+  leak a sidebar or drawer.
+- Controller-only visibility is enforced by router guards as well as navigation filtering.
+- The shell persists preferences only. Credentials and topology/controller domain state stay in
+  their dedicated stores and custody allowlists.
+- The anti-FOUC script depends on the `ui-storage` key and its persisted field names; a store-shape
+  migration must update both the store and inline bootstrap.
+- Import/export semantics are mode-aware even though their controls occupy the same Topbar slots.
+
+Deep documentation: [frontend architecture](../docs/spec/frontend/architecture.md).

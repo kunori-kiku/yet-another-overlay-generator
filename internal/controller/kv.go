@@ -45,21 +45,24 @@ type kvRecord struct {
 // persisted-data backward-compat, so these names/paths must not change). Keyed collections take
 // a key (nodeID / hash / username / version); singleton collections take key == "".
 const (
-	collNodes         = "nodes"         // keyed by nodeID       — filekv: nodes/<id>.json
-	collStaged        = "staged"        // keyed by nodeID       — filekv: bundles/<id>.staged.json
-	collCurrent       = "current"       // keyed by nodeID       — filekv: bundles/<id>.current.json
-	collTokens        = "tokens"        // keyed by tokenHash    — filekv: tokens/<h>.json
-	collLoginChal     = "loginchal"     // keyed by challengeHash — filekv: login-challenges/<h>.json
-	collAPITokens     = "apitokens"     // keyed by tokenHash    — filekv: apitokens/<h>.json
-	collOperators     = "operators"     // keyed by username     — filekv: operators/<u>.json
-	collSessions      = "sessions"      // keyed by tokenHash    — filekv: sessions/<h>.json
-	collTopoHistory   = "topohistory"   // keyed by version      — filekv: topology-history/<v>.json
-	collTopology      = "topology"      // singleton             — filekv: topology.json
-	collOperatorCred  = "operatorcred"  // singleton             — filekv: operator_credential.json
-	collStagedTL      = "stagedtl"      // singleton             — filekv: signed_trustlist.json
-	collServedTL      = "servedtl"      // singleton             — filekv: served_trustlist.json
-	collSettings      = "settings"      // singleton             — filekv: settings.json
-	collSigningAnchor = "signinganchor" // singleton             — filekv: signing-anchor.json
+	collNodes              = "nodes"              // keyed by nodeID       — filekv: nodes/<id>.json
+	collStaged             = "staged"             // keyed by nodeID       — filekv: bundles/<id>.staged.json
+	collCurrent            = "current"            // keyed by nodeID       — filekv: bundles/<id>.current.json
+	collTokens             = "tokens"             // keyed by tokenHash    — filekv: tokens/<h>.json
+	collLoginChal          = "loginchal"          // keyed by challengeHash — filekv: login-challenges/<h>.json
+	collAPITokens          = "apitokens"          // keyed by tokenHash    — filekv: apitokens/<h>.json
+	collOperators          = "operators"          // keyed by username     — filekv: operators/<u>.json
+	collSessions           = "sessions"           // keyed by tokenHash    — filekv: sessions/<h>.json
+	collTopoHistory        = "topohistory"        // keyed by version      — filekv: topology-history/<v>.json
+	collTopology           = "topology"           // singleton             — filekv: topology.json
+	collOperatorCred       = "operatorcred"       // singleton             — filekv: operator_credential.json
+	collKeystoneTransition = "keystonetransition" // singleton       — filekv: keystone-transition.json
+	collStagedTL           = "stagedtl"           // singleton             — filekv: signed_trustlist.json
+	collStagedTLHist       = "stagedtlhist"       // singleton             — filekv: trustlist-history.json
+	collStagedSeal         = "stagedseal"         // singleton             — filekv: staged-set.json
+	collServedTL           = "servedtl"           // singleton             — filekv: served_trustlist.json
+	collSettings           = "settings"           // singleton             — filekv: settings.json
+	collSigningAnchor      = "signinganchor"      // singleton             — filekv: signing-anchor.json
 )
 
 // kvBackend is the storage port every backend implements. It is intentionally small: record

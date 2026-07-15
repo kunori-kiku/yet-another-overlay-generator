@@ -41,10 +41,9 @@ docs/spec/
 │   ├── babel.md                   # babeld.conf rendering, router-id generation
 │   ├── sysctl.md                  # Forwarding / rp_filter settings
 │   ├── install-script.md          # Install script phases, SNAT fix, uninstall support
-│   ├── deploy-scripts.md          # SSH deploy scripts, self-extracting installer
-│   ├── naming.md                  # Canonical artifact naming, uniqueness invariants,
-│   │                              #   interface-name algorithm
-│   └── export-bundle.md           # Export directory structure, checksums
+│   ├── deploy-scripts.md          # Custody-aware ID-keyed complete-bundle SSH helpers
+│   ├── naming.md                  # Portable bundle-directory and WireGuard-interface naming
+│   └── export-bundle.md           # Canonical bundle members, checksums, signatures, custody
 ├── api/
 │   ├── http-api.md                # HTTP API endpoints and contracts
 │   └── wire-contract.md           # FE↔BE field parity table, round-trip rules

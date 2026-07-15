@@ -361,7 +361,9 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 	// template emits no fetch branch and install.sh stays byte-identical (air-gap byte-identity).
 	installFetch := model.InstallFetch{GithubProxy: fs.GithubProxy}
 
-	//
+	// A mixed result is not a normal custody mode, but fail closed if any node carries the
+	// AgentHeld placeholder: a project-wide deploy helper must never bypass that node's agent.
+	agentHeldDeploy := false
 	for _, node := range result.Topology.Nodes {
 		// artifacts.json is PER-NODE (plan-9): the mimic block is fleet-wide, but the agent
 		// self-update block is emitted only for nodes in the rollout set. Empty ⇒ export omits
@@ -377,8 +379,9 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 		// is the placeholder, the install.sh must splice the agent-held key at install time. Air-gap
 		// nodes carry a real private key here, so custody=false and no splice block is emitted
 		// (keeping the air-gap install.sh byte-identical). See docs/spec/controller/key-custody.md.
-		custody := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
-		splice := renderer.CustodySplice{Enabled: custody, Token: PrivateKeyPlaceholder}
+		nodeAgentHeld := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
+		agentHeldDeploy = agentHeldDeploy || nodeAgentHeld
+		splice := renderer.CustodySplice{Enabled: nodeAgentHeld, Token: PrivateKeyPlaceholder}
 		if node.Role == "client" {
 			// Pass this client's ClientPeerInfo so its single wg0 link also installs
 			// mimic when transport=="tcp" (decision #5: clients are supported too).
@@ -401,7 +404,8 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 	}
 
 	// Deploy scripts (bash + PowerShell)
-	bashDeploy, ps1Deploy, err := renderer.RenderDeployScripts(result.Topology, result.PeerMap, result.BabelConfigs)
+	result.AgentHeld = agentHeldDeploy
+	bashDeploy, ps1Deploy, err := renderer.RenderDeployScriptsForCustody(result.Topology, result.PeerMap, result.BabelConfigs, agentHeldDeploy)
 	if err != nil {
 		return fmt.Errorf("deploy script render: %w", err)
 	}

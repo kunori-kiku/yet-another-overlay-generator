@@ -1,5 +1,5 @@
 // HTTP client for the controller panel — a barrel over the per-domain modules under ./controller/.
-// Each function targets an operator-facing route exposed by internal/api/handler_controller.go (the
+// Each function targets an operator-facing route registered by internal/api/routes_controller.go (the
 // operator namespace, kept separate from the agent namespace /api/v1/agent/):
 //   <baseURL><pathPrefix>/api/v1/operator/<route>
 // Auth is uniformly Authorization: Bearer <operatorToken>. The backend responds with snake_case
@@ -13,7 +13,7 @@
 //
 // This module re-exports the public client surface unchanged so existing import sites keep working;
 // the implementation lives in the per-domain modules (auth / fleet / deploy / keystone / settings /
-// release / telemetry) over the shared ./controller/transport plumbing.
+// release / telemetry / WebAuthn enrollment) over the shared ./controller/transport plumbing.
 
 export * from './controller/auth';
 export * from './controller/fleet';
@@ -22,6 +22,7 @@ export * from './controller/keystone';
 export * from './controller/settings';
 export * from './controller/release';
 export * from './controller/telemetry';
+export * from './controller/webauthnEnrollment';
 
 // From the shared transport, re-export ONLY the originally-public surface. The fetch/CSRF/error
 // plumbing (request / postJSON / errorFromResponse / controllerErrorFromText) stays internal to the

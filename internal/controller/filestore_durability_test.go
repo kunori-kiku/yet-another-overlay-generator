@@ -1,7 +1,7 @@
 package controller
 
 // filestore_durability_test.go is the no-regression net for the B2 crash-consistency
-// hardening (plan-8 Phase 7): writeJSONAtomic now does OpenFile+Write+Sync+Close then
+// hardening (plan-8 Phase 7): writeJSONAtomic does CreateTemp+Write+Sync+Close then
 // fsyncs the parent dir after the rename, AppendAudit now f.Sync()s before f.Close(), and
 // the audit-log rotation/migration rewrite (writeAuditJSONL, via the shared writeBytesDurable
 // primitive) is durable the same way (review #5). Durability itself is verified by
@@ -19,7 +19,7 @@ import (
 )
 
 // TestWriteJSONAtomicRoundTrip: a write into an existing dir lands durably-readable bytes
-// and leaves no leftover .tmp sidecar (the rename consumed it).
+// and leaves no historical predictable .tmp sidecar.
 func TestWriteJSONAtomicRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rec.json")
@@ -38,16 +38,15 @@ func TestWriteJSONAtomicRoundTrip(t *testing.T) {
 	if got != want {
 		t.Fatalf("round-trip = %+v, want %+v", got, want)
 	}
-	// The temp sidecar must be gone (rename consumed it).
+	// The historical predictable temp sidecar must not be created.
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("leftover %s.tmp after a successful write (stat err = %v)", path, err)
 	}
 }
 
-// TestWriteJSONAtomicMissingParentDir: with a parent dir that does NOT exist, the OpenFile
-// of the temp file fails — the function must surface that error (not silently succeed) and
-// not panic. This exercises the new OpenFile error path that replaced os.WriteFile, plus
-// the new parent-dir fsync (which must not be reached / not panic on the error path).
+// TestWriteJSONAtomicMissingParentDir: with a parent dir that does NOT exist, custody
+// validation fails before temp creation — the function must surface that error (not silently
+// succeed) and not panic. The parent-dir fsync must not be reached on this error path.
 func TestWriteJSONAtomicMissingParentDir(t *testing.T) {
 	dir := t.TempDir()
 	// "absent" is never created, so <absent>/rec.json has no parent dir.
@@ -62,7 +61,7 @@ func TestWriteJSONAtomicMissingParentDir(t *testing.T) {
 }
 
 // TestWriteJSONAtomicOverwritePreservesPerms: overwriting an existing file via the temp+
-// rename path keeps the 0600 mode (the new OpenFile creates the temp 0600; the rename
+// rename path keeps the 0600 mode (CreateTemp creates the temp 0600; the rename
 // replaces the target). A regression that dropped the mode (e.g. switching to a default
 // 0666 create) would be caught here.
 func TestWriteJSONAtomicOverwritePreservesPerms(t *testing.T) {
@@ -139,8 +138,8 @@ func TestAppendAuditDurableRoundTrip(t *testing.T) {
 
 // TestWriteAuditJSONLDurableRoundTrip: the rotation/migration rewrite primitive (now routed
 // through writeBytesDurable, review #5) lands all entries durably-readable as JSONL, in order,
-// and leaves no leftover .tmp sidecar. This is the no-regression net for moving writeAuditJSONL
-// off the pre-B2 non-durable os.WriteFile onto the shared OpenFile+Sync+Close+rename+dir-fsync
+// and leaves no historical predictable .tmp sidecar. This is the no-regression net for moving writeAuditJSONL
+// off the pre-B2 non-durable os.WriteFile onto the shared CreateTemp+Sync+Close+rename+dir-fsync
 // path — a regression that dropped or reordered an entry would surface here.
 func TestWriteAuditJSONLDurableRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -168,14 +167,14 @@ func TestWriteAuditJSONLDurableRoundTrip(t *testing.T) {
 			t.Fatalf("entry %d round-trip = %+v, want %+v", i, got[i], in[i])
 		}
 	}
-	// The temp sidecar must be gone (rename consumed it).
+	// The historical predictable temp sidecar must not be created.
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("leftover %s.tmp after a successful rewrite (stat err = %v)", path, err)
 	}
 }
 
 // TestWriteAuditJSONLMissingParentDir: with a parent dir that does NOT exist, the temp-file
-// OpenFile inside writeBytesDurable fails — writeAuditJSONL must surface that error (not
+// custody validation inside writeBytesDurable fails — writeAuditJSONL must surface that error (not
 // silently succeed) and not leak a temp file. This is the error-path no-regression net for
 // the rotation/migration rewrite after it was moved onto the durable primitive (review #5).
 func TestWriteAuditJSONLMissingParentDir(t *testing.T) {

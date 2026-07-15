@@ -39,7 +39,17 @@ func classify(condType, status, reason, detail string, since time.Time) runtimec
 // Every detail string is a Go-emitted constant — never prev.LastError / err.Error() (the curation
 // invariant).
 func configApplyCondition(ok bool, now time.Time) runtimecontract.Condition {
+	return configActionCondition(ok, LastActionApply, now)
+}
+
+// configActionCondition keeps the configapply condition truthful for the manual
+// uninstall path while preserving the established degraded/last-good failure shape.
+func configActionCondition(ok bool, action string, now time.Time) runtimecontract.Condition {
 	if ok {
+		if action == LastActionUninstall {
+			return classify(runtimecontract.ConditionTypeConfigApply, runtimecontract.ConditionStatusOK,
+				"Uninstalled", "configuration uninstalled", now)
+		}
 		return classify(runtimecontract.ConditionTypeConfigApply, runtimecontract.ConditionStatusOK,
 			"Applied", "configuration applied", now)
 	}
@@ -55,7 +65,18 @@ func configApplyCondition(ok bool, now time.Time) runtimecontract.Condition {
 // terminal marker the new state resets — see selfUpdateCondition), and the wireguard condition is a
 // best-effort `wg show` sample that yields nothing on a probe error (never fails a cycle).
 func collectConditions(prev *State, ok bool, now time.Time) []runtimecontract.Condition {
-	conds := []runtimecontract.Condition{configApplyCondition(ok, now)}
+	action := LastActionApply
+	if ok && prev != nil && prev.LastAction == LastActionUninstall {
+		action = LastActionUninstall
+	}
+	return collectConditionsForAction(prev, ok, action, now)
+}
+
+// collectConditionsForAction is the apply-time variant: recordSuccess has the
+// action that just completed, whereas collectConditions' telemetry caller derives
+// it from the persisted prior state.
+func collectConditionsForAction(prev *State, ok bool, action string, now time.Time) []runtimecontract.Condition {
+	conds := []runtimecontract.Condition{configActionCondition(ok, action, now)}
 	if c, has := selfUpdateCondition(prev, now); has {
 		conds = append(conds, c)
 	}

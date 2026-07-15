@@ -6,13 +6,14 @@ package controller
 // the TOTP watermark CAS, enrollment-token single-use burn, node API-token rotation, and — in the
 // sibling storecore_telemetry.go — the volatile telemetry overlay. MemStore and FileStore are thin
 // wrappers around a *storeCore over a memkv / filekv backend, so the impl used in every test is the
-// impl that ships. The Store interface (store.go) is unchanged; a backend holds NO business rule.
+// impl that ships. Store is the public contract; a backend holds NO business rule.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -355,156 +356,8 @@ func (c *storeCore) GetTopologyVersion(ctx context.Context, t TenantID, version 
 }
 
 // ========================= Bundles + generation ============================
-
-// StageBundle stores a node's bundle as the staged (not-yet-current) version, replacing any prior.
-func (c *storeCore) StageBundle(ctx context.Context, t TenantID, b SignedBundle) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return c.kv.withLock(func() error {
-		b.IsStaged = true
-		b.IsCurrent = false
-		return c.saveJSON(t, collStaged, b.NodeID, b)
-	})
-}
-
-// PruneStagedBundles deletes staged bundles whose NodeID is not in keep and returns the purged node
-// IDs (stable order). Current bundles are never touched. A per-record delete failure is recorded but
-// does not abort the loop — every actual removal is reported even if a later one fails.
-func (c *storeCore) PruneStagedBundles(ctx context.Context, t TenantID, keep []string) ([]string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	keepSet := make(map[string]bool, len(keep))
-	for _, id := range keep {
-		keepSet[id] = true
-	}
-	var purged []string
-	var firstErr error
-	err := c.kv.withLock(func() error {
-		recs, err := c.kv.list(t, collStaged)
-		if err != nil {
-			return err
-		}
-		for _, r := range recs {
-			if keepSet[r.key] {
-				continue
-			}
-			if err := c.kv.del(t, collStaged, r.key); err != nil {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("controller: prune staged bundle %s: %w", r.key, err)
-				}
-				continue
-			}
-			purged = append(purged, r.key)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(purged)
-	return purged, firstErr
-}
-
-// PromoteStaged atomically flips the staged bundles whose provisional Generation equals the generation
-// being promoted (current+1) to current, bumps each promoted node's DesiredGeneration (only if a
-// registry record exists — never creates one), copies a SIGNED staged trust-list into the served slot,
-// and commits the new generation LAST (so the counter never runs ahead of the bundle/manifest pair),
-// waking WaitForGeneration waiters. A stale provisional (invalidated by an interleaved bump/promote)
-// stays staged. Returns ErrNoStagedBundle when nothing matches, changing NOTHING.
-func (c *storeCore) PromoteStaged(ctx context.Context, t TenantID) (int64, error) {
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	var newGen int64
-	err := c.kv.withLock(func() error {
-		cur, err := c.kv.generation(t)
-		if err != nil {
-			return err
-		}
-		newGen = cur + 1
-
-		recs, err := c.kv.list(t, collStaged)
-		if err != nil {
-			return err
-		}
-		var staged []SignedBundle // list is stable by key(=NodeID), so this is deterministic
-		for _, r := range recs {
-			var b SignedBundle
-			if err := json.Unmarshal(r.val, &b); err != nil {
-				return fmt.Errorf("controller: parse %s/%s: %w", collStaged, r.key, err)
-			}
-			if b.Generation != newGen {
-				continue // stale provisional generation — not part of the stage being promoted
-			}
-			staged = append(staged, b)
-		}
-		if len(staged) == 0 {
-			return ErrNoStagedBundle
-		}
-
-		for _, b := range staged {
-			b.IsStaged = false
-			b.IsCurrent = true
-			b.Generation = newGen
-			if err := c.saveJSON(t, collCurrent, b.NodeID, b); err != nil {
-				return err
-			}
-			if err := c.kv.del(t, collStaged, b.NodeID); err != nil {
-				return err
-			}
-			// Bump the promoted node's DesiredGeneration if a registry record exists.
-			var n Node
-			switch err := c.loadJSON(t, collNodes, b.NodeID, &n); {
-			case err == nil:
-				n.DesiredGeneration = newGen
-				if err := c.saveJSON(t, collNodes, b.NodeID, n); err != nil {
-					return err
-				}
-			case errors.Is(err, ErrNotFound):
-				// no registry record for this node; nothing to update (never create one)
-			default:
-				return err
-			}
-		}
-
-		// Served-slot promote gate: copy the staged trust-list into the served slot ONLY when it is
-		// signed; an unsigned/absent staged manifest leaves the served slot intact.
-		var stagedTL StoredTrustList
-		switch err := c.loadJSON(t, collStagedTL, "", &stagedTL); {
-		case err == nil:
-			if len(stagedTL.SignatureJSON) > 0 {
-				if err := c.saveJSON(t, collServedTL, "", stagedTL); err != nil {
-					return err
-				}
-			}
-		case errors.Is(err, ErrNotFound):
-			// nothing staged; leave the served slot as-is
-		default:
-			return err
-		}
-
-		// Commit the generation LAST (and wake waiters) — the crash-atomicity invariant, documented
-		// here because the ordering is load-bearing. Every bundle flip (collCurrent), each promoted
-		// node's DesiredGeneration bump, and the served trust-list copy (collServedTL) are written
-		// ABOVE, BEFORE this line. The generation counter is the single commit point the fleet keys
-		// off: WaitForGeneration wakes parked agents ONLY on an advance, and it advances ONLY here. So
-		// a process crash BEFORE this setGeneration leaves the prior generation as the served config —
-		// the counter never runs ahead of a half-written promote, so no agent is woken to a torn
-		// generation — and a re-run of PromoteStaged re-drives the flip. In-process the whole body runs
-		// under one kv lock, so a concurrent GetServedConfig reader can never observe a torn
-		// (old-bundle, new-manifest) pair. (A transient on-disk torn pair after a FileStore crash is
-		// fail-closed at the agent's offline digest binding and self-repairing — see ServedConfig. This
-		// is a DOC of the existing ordering, deliberately NOT a new atomic-snapshot / promote-in-progress
-		// marker: generation-tagging the served slot would be wrong, per ServedConfig.)
-		return c.kv.setGeneration(t, newGen)
-	})
-	if err != nil {
-		return 0, err
-	}
-	return newGen, nil
-}
+// Stage/replace/promote live in storecore_stage.go. Keeping the durable staged-set seal machinery
+// together makes its invalidate-components-seal-last ordering reviewable as one unit.
 
 // GetCurrentBundle returns the node's current (promoted) bundle, or ErrNotFound.
 func (c *storeCore) GetCurrentBundle(ctx context.Context, t TenantID, nodeID string) (SignedBundle, error) {
@@ -547,7 +400,47 @@ func (c *storeCore) BumpGeneration(ctx context.Context, t TenantID) (int64, erro
 		if err != nil {
 			return err
 		}
+		if err := c.requireCompletedPromotionLocked(t, cur); err != nil {
+			return err
+		}
 		newGen = cur + 1
+		// A wake invalidates every bundle compiled for the old current+1. Remove the authority
+		// marker before advancing the counter; loose staged records remain inert and are replaced by
+		// the next clean stage. Preserve the last trust-list only behind a Historical marker so
+		// status/epoch compatibility survives rekey-all without making it promotable.
+		var history StoredTrustList
+		hasHistory := false
+		if err := c.loadJSON(t, collStagedTLHist, "", &history); err == nil {
+			hasHistory = true
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		} else if err := c.loadJSON(t, collStagedTL, "", &history); err == nil {
+			hasHistory = true // pre-seal upgrade fallback
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := c.kv.del(t, collStagedSeal, ""); err != nil {
+			return err
+		}
+		if hasHistory {
+			if err := c.saveJSON(t, collStagedTLHist, "", history); err != nil {
+				return err
+			}
+			if err := c.saveJSON(t, collStagedTL, "", history); err != nil {
+				return err
+			}
+			if err := c.saveJSON(t, collStagedSeal, "", stagedSetSeal{
+				Generation:      newGen,
+				Historical:      true,
+				HasTrustList:    true,
+				TrustListSHA256: trustListSHA256(history.TrustListJSON),
+				TrustListEpoch:  history.Epoch,
+			}); err != nil {
+				return err
+			}
+		} else if err := c.kv.del(t, collStagedTL, ""); err != nil {
+			return err
+		}
 		return c.kv.setGeneration(t, newGen)
 	})
 	if err != nil {
@@ -650,41 +543,68 @@ func (c *storeCore) PurgeEnrollmentTokensForNode(ctx context.Context, t TenantID
 	return n, nil
 }
 
-// ====================== Passkey login challenges ===========================
+// ====================== WebAuthn assertion challenges ======================
 
-// CreateLoginChallenge stores a single-use, operator-scoped, TTL login challenge keyed by its hash.
-func (c *storeCore) CreateLoginChallenge(ctx context.Context, t TenantID, lc LoginChallenge) error {
+// createAssertionChallenge stores a challenge after removing expired records and, when
+// replaceSubject is true, any still-live record for the same subject. Caller does not hold a lock.
+func (c *storeCore) createAssertionChallenge(ctx context.Context, t TenantID, challenge AssertionChallenge, now time.Time, replaceSubject bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return c.kv.withLock(func() error {
-		return c.saveJSON(t, collLoginChal, lc.ChallengeHash, lc)
+		recs, err := c.kv.list(t, collLoginChal)
+		if err != nil {
+			return err
+		}
+		for _, r := range recs {
+			var prior AssertionChallenge
+			if err := json.Unmarshal(r.val, &prior); err != nil {
+				continue // preserve unreadable records; a storage audit should diagnose them
+			}
+			if !now.Before(prior.ExpiresAt) || replaceSubject && prior.Subject == challenge.Subject {
+				if err := c.kv.del(t, collLoginChal, r.key); err != nil {
+					return err
+				}
+			}
+		}
+		return c.saveJSON(t, collLoginChal, challenge.ChallengeHash, challenge)
 	})
 }
 
-// ConsumeLoginChallenge atomically validates and burns a login challenge by DELETING it:
-// ErrChallengeInvalid if absent, expired, or scoped to a different operator; else delete + nil. An
-// expired record is deleted (lazy GC); a wrong-operator record is left intact.
-func (c *storeCore) ConsumeLoginChallenge(ctx context.Context, t TenantID, challengeHash, operator string, now time.Time) error {
+// CreateAssertionChallenge stores a single-use challenge and garbage-collects expired records.
+func (c *storeCore) CreateAssertionChallenge(ctx context.Context, t TenantID, challenge AssertionChallenge, now time.Time) error {
+	return c.createAssertionChallenge(ctx, t, challenge, now, false)
+}
+
+// ReplaceAssertionChallengeForSubject bounds browser enrollment to one live challenge per
+// purpose+actor subject while leaving ordinary login's concurrent challenges unchanged.
+func (c *storeCore) ReplaceAssertionChallengeForSubject(ctx context.Context, t TenantID, challenge AssertionChallenge, now time.Time) error {
+	return c.createAssertionChallenge(ctx, t, challenge, now, true)
+}
+
+// ConsumeAssertionChallenge atomically validates and burns a challenge by DELETING it:
+// ErrChallengeInvalid if absent, expired, or scoped to a different subject; else delete + nil. An
+// expired record is deleted (lazy GC); a wrong-subject record is left intact.
+func (c *storeCore) ConsumeAssertionChallenge(ctx context.Context, t TenantID, challengeHash, subject string, now time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return c.kv.withLock(func() error {
-		var lc LoginChallenge
-		switch err := c.loadJSON(t, collLoginChal, challengeHash, &lc); {
+		var challenge AssertionChallenge
+		switch err := c.loadJSON(t, collLoginChal, challengeHash, &challenge); {
 		case err == nil:
 		case errors.Is(err, ErrNotFound):
 			return ErrChallengeInvalid
 		default:
 			return err
 		}
-		if !now.Before(lc.ExpiresAt) {
+		if !now.Before(challenge.ExpiresAt) {
 			if err := c.kv.del(t, collLoginChal, challengeHash); err != nil { // expired: lazy GC
 				return err
 			}
 			return ErrChallengeInvalid
 		}
-		if lc.Operator != operator {
+		if challenge.Subject != subject {
 			return ErrChallengeInvalid // not the caller's challenge to burn
 		}
 		return c.kv.del(t, collLoginChal, challengeHash) // success: single-use consume
@@ -782,14 +702,39 @@ func (c *storeCore) RevokeNodeAPIToken(ctx context.Context, t TenantID, nodeID s
 
 // ===================== Keystone: operator credential + trust-list ==========
 
-// SetOperatorCredential pins (or replaces) the tenant's off-host operator signing credential. Pinning
-// one turns KEYSTONE ON.
-func (c *storeCore) SetOperatorCredential(ctx context.Context, t TenantID, cred OperatorCredential) error {
+// CompareAndSetOperatorCredential conditionally replaces the tenant keystone in one store-lock
+// scope. Exact struct equality is intentional: OperatorCredential contains only strings, and the
+// caller supplies the precise snapshot it classified. Semantic key equality belongs above this
+// storage primitive (SameKeystoneCredential); this method only detects intervening state changes.
+func (c *storeCore) CompareAndSetOperatorCredential(ctx context.Context, t TenantID, expected *OperatorCredential, next OperatorCredential) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return c.kv.withLock(func() error {
-		return c.saveJSON(t, collOperatorCred, "", cred)
+		var current OperatorCredential
+		err := c.loadJSON(t, collOperatorCred, "", &current)
+		if expected == nil {
+			if err == nil {
+				return ErrOperatorCredentialChanged
+			}
+			if !errors.Is(err, ErrNotFound) {
+				return err
+			}
+		} else {
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return ErrOperatorCredentialChanged
+				}
+				return err
+			}
+			if current != *expected {
+				return ErrOperatorCredentialChanged
+			}
+			if current == next {
+				return nil // compare-only idempotent path: detect races without rewriting
+			}
+		}
+		return c.saveJSON(t, collOperatorCred, "", next)
 	})
 }
 
@@ -808,25 +753,162 @@ func (c *storeCore) GetOperatorCredential(ctx context.Context, t TenantID) (Oper
 	return cred, nil
 }
 
-// PutSignedTrustList stores (replacing any prior) the STAGED membership trust-list. It is NOT what
-// /config serves; staging it must never disturb the served slot.
+// CreatePendingKeystoneTransition creates the durable audit/CAS recovery marker without ever
+// clobbering another unresolved event. The marker contains no private material; nevertheless it
+// follows the same 0600 durable-record path as the credential.
+func (c *storeCore) CreatePendingKeystoneTransition(ctx context.Context, t TenantID, pending PendingKeystoneTransition) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if pending.Audit.EventID == "" || pending.Audit.Timestamp.IsZero() {
+		return errors.New("controller: pending keystone transition requires an audit event id and timestamp")
+	}
+	return c.kv.withLock(func() error {
+		var current PendingKeystoneTransition
+		if err := c.loadJSON(t, collKeystoneTransition, "", &current); err == nil {
+			if current.Audit.EventID == pending.Audit.EventID && reflect.DeepEqual(current, pending) {
+				return nil
+			}
+			return fmt.Errorf("%w: unresolved event %q would be replaced by %q", ErrPendingKeystoneTransitionConflict, current.Audit.EventID, pending.Audit.EventID)
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return c.saveJSON(t, collKeystoneTransition, "", pending)
+	})
+}
+
+// GetPendingKeystoneTransition returns the pending marker, or ErrNotFound.
+func (c *storeCore) GetPendingKeystoneTransition(ctx context.Context, t TenantID) (PendingKeystoneTransition, error) {
+	if err := ctx.Err(); err != nil {
+		return PendingKeystoneTransition{}, err
+	}
+	var pending PendingKeystoneTransition
+	err := c.kv.withLock(func() error {
+		return c.loadJSON(t, collKeystoneTransition, "", &pending)
+	})
+	if err != nil {
+		return PendingKeystoneTransition{}, err
+	}
+	return pending, nil
+}
+
+// DeletePendingKeystoneTransition idempotently clears the reconciled marker with eventID. A stale
+// cleanup can never erase a newer unresolved transition.
+func (c *storeCore) DeletePendingKeystoneTransition(ctx context.Context, t TenantID, eventID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if eventID == "" {
+		return errors.New("controller: pending keystone transition deletion requires an event id")
+	}
+	return c.kv.withLock(func() error {
+		var current PendingKeystoneTransition
+		if err := c.loadJSON(t, collKeystoneTransition, "", &current); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil
+			}
+			return err
+		}
+		if current.Audit.EventID != eventID {
+			return fmt.Errorf("%w: cleanup event %q does not match unresolved event %q", ErrPendingKeystoneTransitionConflict, eventID, current.Audit.EventID)
+		}
+		return c.kv.del(t, collKeystoneTransition, "")
+	})
+}
+
+// PutSignedTrustList retains the manifest-first/signature-fill Store API. A canonical-byte/epoch
+// change invalidates the candidate seal before writing the manifest and re-seals the exact
+// next-generation bundle set afterward. Updating only SignatureJSON over the same sealed bytes is a
+// single-record atomic write and deliberately leaves the seal unchanged.
 func (c *storeCore) PutSignedTrustList(ctx context.Context, t TenantID, sl StoredTrustList) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return c.kv.withLock(func() error {
-		return c.saveJSON(t, collStagedTL, "", sl)
+		cur, err := c.kv.generation(t)
+		if err != nil {
+			return err
+		}
+		if err := c.requireCompletedPromotionLocked(t, cur); err != nil {
+			return err
+		}
+		next := cur + 1
+
+		// The signature installation path is allowed to mutate only SignatureJSON over the same
+		// bytes/epoch named by the existing seal. No component invalidation is needed for that
+		// atomic one-file replacement.
+		if seal, sealErr := c.loadSealLocked(t); sealErr == nil && (seal.Historical || seal.Generation == next) && seal.HasTrustList &&
+			seal.TrustListEpoch == sl.Epoch && seal.TrustListSHA256 == trustListSHA256(sl.TrustListJSON) {
+			if err := c.saveJSON(t, collStagedTLHist, "", sl); err != nil {
+				return err
+			}
+			return c.saveJSON(t, collStagedTL, "", sl)
+		}
+
+		if err := c.kv.del(t, collStagedSeal, ""); err != nil {
+			return err
+		}
+		if err := c.saveJSON(t, collStagedTL, "", sl); err != nil {
+			return err
+		}
+		if err := c.saveJSON(t, collStagedTLHist, "", sl); err != nil {
+			return err
+		}
+		// allowEmpty preserves legacy manifest-first callers: the manifest is fetchable/signable,
+		// but PromoteStaged still refuses until at least one exact bundle is sealed with it.
+		return c.saveSealForGenerationLocked(t, next, &sl, true)
 	})
 }
 
-// GetCurrentSignedTrustList returns the STAGED trust-list, or ErrNotFound when none is staged.
+// GetCurrentSignedTrustList returns only a trust-list that matches a staged-set seal (a pending
+// candidate or its explicit non-promotable historical marker). Loose or partially-written manifest
+// bytes are intentionally invisible after a failed/crashed stage.
 func (c *storeCore) GetCurrentSignedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
 	if err := ctx.Err(); err != nil {
 		return StoredTrustList{}, err
 	}
 	var sl StoredTrustList
 	err := c.kv.withLock(func() error {
-		return c.loadJSON(t, collStagedTL, "", &sl)
+		seal, err := c.loadSealLocked(t)
+		if err != nil {
+			return err
+		}
+		sealed, err := c.loadSealedTrustListLocked(t, seal)
+		if err != nil {
+			return err
+		}
+		if sealed == nil {
+			return ErrNotFound
+		}
+		sl = *sealed
+		return nil
+	})
+	if err != nil {
+		return StoredTrustList{}, err
+	}
+	return sl, nil
+}
+
+// GetLastStagedTrustList is the epoch-history read for CompileAndStage. It never participates in
+// promotion. The fallback order lazily supports pre-seal FileStore deployments: old active staged
+// data first, then the last served manifest when no dedicated history record exists yet.
+func (c *storeCore) GetLastStagedTrustList(ctx context.Context, t TenantID) (StoredTrustList, error) {
+	if err := ctx.Err(); err != nil {
+		return StoredTrustList{}, err
+	}
+	var sl StoredTrustList
+	err := c.kv.withLock(func() error {
+		if err := c.loadJSON(t, collStagedTLHist, "", &sl); err == nil {
+			return nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := c.loadJSON(t, collStagedTL, "", &sl); err == nil {
+			return nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return c.loadJSON(t, collServedTL, "", &sl)
 	})
 	if err != nil {
 		return StoredTrustList{}, err
@@ -842,7 +924,17 @@ func (c *storeCore) GetServedTrustList(ctx context.Context, t TenantID) (StoredT
 	}
 	var sl StoredTrustList
 	err := c.kv.withLock(func() error {
-		return c.loadJSON(t, collServedTL, "", &sl)
+		if err := c.loadJSON(t, collServedTL, "", &sl); err != nil {
+			return err
+		}
+		committed, err := c.kv.generation(t)
+		if err != nil {
+			return err
+		}
+		if sl.PromotedGeneration > committed {
+			return fmt.Errorf("%w: served trust-list generation %d is ahead of committed generation %d", ErrUncommittedPromotion, sl.PromotedGeneration, committed)
+		}
+		return nil
 	})
 	if err != nil {
 		return StoredTrustList{}, err
@@ -864,6 +956,17 @@ func (c *storeCore) GetServedConfig(ctx context.Context, t TenantID, nodeID stri
 		if err := c.loadJSON(t, collCurrent, nodeID, &b); err != nil {
 			return err // ErrNotFound when no current bundle
 		}
+		committed, err := c.kv.generation(t)
+		if err != nil {
+			return err
+		}
+		// PromoteStaged writes current bundles before generation.json. A process crash can
+		// therefore leave a subset of next-generation bundle files on disk. Never serve one
+		// until the tenant-wide commit marker catches up; an older bundle remains legitimate
+		// because delta-skipped nodes intentionally retain earlier generations.
+		if b.Generation > committed {
+			return fmt.Errorf("%w: bundle generation %d is ahead of committed generation %d", ErrUncommittedPromotion, b.Generation, committed)
+		}
 		sc = ServedConfig{Bundle: b}
 		// Keystone ON iff a pinned operator credential exists.
 		var cred OperatorCredential
@@ -879,6 +982,9 @@ func (c *storeCore) GetServedConfig(ctx context.Context, t TenantID, nodeID stri
 			var sl StoredTrustList
 			switch err := c.loadJSON(t, collServedTL, "", &sl); {
 			case err == nil:
+				if sl.PromotedGeneration > committed {
+					return fmt.Errorf("%w: served trust-list generation %d is ahead of committed generation %d", ErrUncommittedPromotion, sl.PromotedGeneration, committed)
+				}
 				if len(sl.SignatureJSON) > 0 {
 					sc.TrustList = sl
 					sc.HasTrustList = true
@@ -906,6 +1012,62 @@ func (c *storeCore) PutOperator(ctx context.Context, t TenantID, op Operator) er
 	}
 	return c.kv.withLock(func() error {
 		return c.saveJSON(t, collOperators, op.Username, op)
+	})
+}
+
+func sameLoginCredential(a, b *LoginCredential) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// CompareAndSetLoginCredential is a field-scoped operator update. It preserves every concurrent
+// account field outside LoginCredential and rejects a stale expected credential rather than
+// letting a delayed registration/disable ceremony overwrite newer passkey state.
+func (c *storeCore) CompareAndSetLoginCredential(ctx context.Context, t TenantID, username string, expected, next *LoginCredential, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.kv.withLock(func() error {
+		var op Operator
+		if err := c.loadJSON(t, collOperators, username, &op); err != nil {
+			return err
+		}
+		if !sameLoginCredential(op.LoginCredential, expected) {
+			return ErrLoginCredentialChanged
+		}
+		if next == nil {
+			op.LoginCredential = nil
+		} else {
+			copy := *next
+			op.LoginCredential = &copy
+		}
+		op.UpdatedAt = now
+		return c.saveJSON(t, collOperators, username, op)
+	})
+}
+
+// CompareAndSetTOTPState is the TOTP counterpart to CompareAndSetLoginCredential: update only the
+// TOTP configuration/replay fields and preserve all unrelated account state. Exact expected-state
+// comparison ensures a delayed confirm/disable cannot overwrite a newer TOTP choice or replay step.
+func (c *storeCore) CompareAndSetTOTPState(ctx context.Context, t TenantID, username string, expected, next TOTPState, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.kv.withLock(func() error {
+		var op Operator
+		if err := c.loadJSON(t, collOperators, username, &op); err != nil {
+			return err
+		}
+		current := TOTPState{Secret: op.TOTPSecret, LastUsedStep: op.TOTPLastUsedStep}
+		if current != expected {
+			return ErrTOTPStateChanged
+		}
+		op.TOTPSecret = next.Secret
+		op.TOTPLastUsedStep = next.LastUsedStep
+		op.UpdatedAt = now
+		return c.saveJSON(t, collOperators, username, op)
 	})
 }
 

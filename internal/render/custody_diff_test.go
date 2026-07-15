@@ -12,9 +12,9 @@ import (
 // identical to the AirGap render for the same topology EXCEPT each node's own
 // [Interface] PrivateKey line (the real key vs the placeholder). Both topology
 // copies use identical key material, so peer PublicKey lines, transit IPs, ports,
-// interface names, and the Babel/sysctl/install/deploy artifacts all match exactly
-// — pinning the "air-gap path is frozen; only the private key is withheld"
-// guarantee.
+// interface names, and Babel/sysctl artifacts all match exactly. Install scripts
+// differ at the private-key splice, while project deploy helpers deliberately fail
+// closed under AgentHeld custody so they cannot bypass membership verification.
 func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 	rk, pk, ck := mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)
 
@@ -57,16 +57,38 @@ func TestCustody_AgentHeldEqualsAirGapExceptPrivateKey(t *testing.T) {
 		assertDiffersOnlyOnPrivateKey(t, key, airCfg, heldCfg)
 	}
 
-	// Babel/sysctl/deploy artifacts must stay byte-identical between the two custody modes.
+	// Babel/sysctl artifacts stay byte-identical between custody modes.
 	assertMapsEqual(t, "BabelConfigs", air.BabelConfigs, held.BabelConfigs)
 	assertMapsEqual(t, "SysctlConfigs", air.SysctlConfigs, held.SysctlConfigs)
-	assertMapsEqual(t, "DeployScripts", air.DeployScripts, held.DeployScripts)
+	assertAgentHeldDeployGuidance(t, air.DeployScripts, held.DeployScripts)
 
 	// InstallScripts legitimately diverge: the AgentHeld install.sh gains a custody-splice block
 	// (it must splice the agent-held private key into the copied conf at install time), while the
 	// AirGap install.sh must NOT, so it stays frozen. Pin that asymmetry via the "agent.key" marker
 	// instead of byte-equality.
 	assertSpliceMarkerAsymmetry(t, air.InstallScripts, held.InstallScripts)
+}
+
+func assertAgentHeldDeployGuidance(t *testing.T, air, held map[string]string) {
+	t.Helper()
+	for _, name := range []string{"deploy-all.sh", "deploy-all.ps1"} {
+		airScript, airOK := air[name]
+		heldScript, heldOK := held[name]
+		if !airOK || !heldOK {
+			t.Fatalf("deploy helper %s missing: air=%v held=%v", name, airOK, heldOK)
+		}
+		if strings.Contains(airScript, "deploy-all is disabled") {
+			t.Errorf("AirGap %s was incorrectly replaced by AgentHeld fail-closed guidance", name)
+		}
+		if strings.Contains(heldScript, "bundle/install.sh") || strings.Contains(heldScript, "sudo bash") {
+			t.Errorf("AgentHeld %s directly invokes install.sh and bypasses yaog-agent", name)
+		}
+		for _, want := range []string{"disabled", "yaog-agent kit apply", "--uninstall"} {
+			if !strings.Contains(heldScript, want) {
+				t.Errorf("AgentHeld %s missing fail-closed guidance %q", name, want)
+			}
+		}
+	}
 }
 
 // assertSpliceMarkerAsymmetry verifies that, per node, the AirGap install.sh carries no custody

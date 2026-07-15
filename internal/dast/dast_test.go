@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,20 @@ type server struct {
 	cmd                  *exec.Cmd
 }
 
+// secureTestStateDir tightens a test-owned directory explicitly instead of relying on the
+// invoking shell's umask. The controller's production custody check must continue rejecting
+// group/world-writable state directories; it is the DAST fixture that owns this directory and
+// therefore must establish its intended mode before boot.
+func secureTestStateDir(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return // Windows custody is ACL/reparse based; Unix mode bits are not authoritative.
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatalf("protect DAST state dir: %v", err)
+	}
+}
+
 // bootController builds + boots cmd/e2eserver in controller mode (seeds an operator, a break-glass
 // bearer token, and one enrollment token), waits for E2E_READY, and registers teardown.
 func bootController(t *testing.T) *server {
@@ -50,9 +66,11 @@ func bootController(t *testing.T) *server {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build e2eserver: %v\n%s", err, out)
 	}
+	stateDir := t.TempDir()
+	secureTestStateDir(t, stateDir)
 	cmd := exec.Command(bin,
 		"--mode", "controller",
-		"--state-dir", t.TempDir(),
+		"--state-dir", stateDir,
 		"--operator-token", dastOpToken, // break-glass bearer (CSRF-exempt) — auth_controller.go:152
 		"--enroll-node", "node-1",
 	)
@@ -102,6 +120,26 @@ func bootController(t *testing.T) *server {
 		t.Fatalf("E2E_READY missing panel/agent addr (panel=%q agent=%q)", srv.panel, srv.agent)
 	}
 	return srv
+}
+
+func TestSecureTestStateDirTightensPermissiveMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix custody mode check")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0775); err != nil {
+		t.Fatalf("make DAST state dir permissive: %v", err)
+	}
+
+	secureTestStateDir(t, dir)
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat DAST state dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0700 {
+		t.Fatalf("DAST state dir mode = %04o, want 0700", got)
+	}
 }
 
 // postJSON fires a POST with an optional Bearer token and a JSON body, returning the status code.

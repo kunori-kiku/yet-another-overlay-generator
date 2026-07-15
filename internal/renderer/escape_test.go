@@ -24,6 +24,11 @@ import (
 // the moment it reaches an unquoted shell context (command substitution).
 const nodeNamePayload = `x$(touch /tmp/pwned)`
 
+// deployNodeNamePayload keeps the same command-substitution hazard without a slash. Bundle
+// directory segments reject path separators before rendering, while the deploy escaping test still
+// needs a syntactically admissible segment whose shell metacharacters would execute if unquoted.
+const deployNodeNamePayload = `x$(touch pwned)`
+
 // sshHostPayload is an ssh_host that would run `rm -rf $HOME` on the operator's
 // machine if interpolated unquoted (statement separator + variable expansion +
 // trailing comment to swallow the rest of the line).
@@ -141,7 +146,7 @@ func hostileDeployTopology() *model.Topology {
 		Nodes: []model.Node{
 			{
 				ID:         "node-1",
-				Name:       nodeNamePayload,
+				Name:       deployNodeNamePayload,
 				Role:       "router",
 				DomainID:   "d1",
 				OverlayIP:  "10.20.0.1",
@@ -173,13 +178,15 @@ func TestRenderDeployScripts_BashRendersPayloadInert(t *testing.T) {
 
 	// The deploy script must NOT contain the raw command-substitution sequence
 	// from the node name outside its single-quoted form.
-	nameToken := bashSingleQuote(nodeNamePayload) // 'x$(touch /tmp/pwned)'
-	assertMarkerOnlyInToken(t, "bash deploy / node name", bash, "$(touch /tmp/pwned)", nameToken)
+	nameToken := bashSingleQuote(deployNodeNamePayload)
+	assertMarkerOnlyInToken(t, "bash deploy / node name", bash, "$(touch pwned)", nameToken)
 
 	// The SSH target is "root@x; rm -rf $HOME #"; its dangerous markers must
 	// likewise live only inside the single-quoted target token.
 	targetToken := bashSingleQuote("root@" + sshHostPayload) // 'root@x; rm -rf $HOME #'
-	assertMarkerOnlyInToken(t, "bash deploy / ssh target (separator)", bash, "; rm -rf", targetToken)
+	// Do not scan for the separator fragment alone: deploy-all legitimately contains its own
+	// fixed `; rm -rf -- <validated-temp>` cleanup. The full hostile target and its expansion
+	// marker are unique to operator input and therefore remain precise injection assertions.
 	assertMarkerOnlyInToken(t, "bash deploy / ssh target (var)", bash, "$HOME", targetToken)
 
 	// Defence-in-depth sanity: the full target+separator sequence may appear
@@ -215,8 +222,8 @@ func TestRenderDeployScripts_PowerShellRendersPayloadInert(t *testing.T) {
 	//     neutralised so $(...) cannot run as a PS subexpression).
 	//  2. The bash here-string echo lines, escaped via bashSingleQuote (run on
 	//     the remote shell).
-	psNameToken := powerShellArgQuote(nodeNamePayload) // "x`$(touch /tmp/pwned)"
-	bashNameToken := bashSingleQuote(nodeNamePayload)  // 'x$(touch /tmp/pwned)'
+	psNameToken := powerShellArgQuote(deployNodeNamePayload)
+	bashNameToken := bashSingleQuote(deployNodeNamePayload)
 
 	// The raw PS-executable subexpression `$(touch` (dollar NOT backtick-escaped)
 	// must never appear: every dollar from the payload is neutralised in one of
@@ -224,7 +231,7 @@ func TestRenderDeployScripts_PowerShellRendersPayloadInert(t *testing.T) {
 	// gone.
 	residue := strings.ReplaceAll(ps1, psNameToken, "")
 	residue = strings.ReplaceAll(residue, bashNameToken, "")
-	if strings.Contains(residue, "$(touch /tmp/pwned)") {
+	if strings.Contains(residue, "$(touch pwned)") {
 		t.Errorf("ps1 deploy: raw command substitution from node name survives outside an escaped token — injection path open")
 	}
 	// Both escaped forms must actually be present (payload preserved, not dropped).

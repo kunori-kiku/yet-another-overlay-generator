@@ -12,18 +12,16 @@ import { localOnly } from '../../lib/localOnly';
 export const PERSIST_NAME = 'controller-storage';
 
 // partialize is the custody allowlist. Persist only the connection endpoints + the non-secret
-// identifiers of the pinned operator signing credential (credential_id/alg/rpId/public-key PEM are
-// none of them key material — the private key never leaves the authenticator). Never persist
-// operatorToken / sessionToken / CSRF (no secrets in localStorage), nor loading / error / signing.
+// public descriptor of the pinned operator signing credential (credential_id/alg/rpId/public-key
+// PEM). YAOG never receives plaintext private-key material, but requests no attestation and makes
+// no claim that a provider cannot export/synchronize it. Never persist operatorToken / sessionToken
+// / CSRF (no secrets in localStorage), nor loading / error / signing.
 //
 // The non-secret cache P4 added (mode / nodes / settings / lastSyncedAt) is only for
 // "instant coloring" after a refresh. nodes carries only non-secret fields like
-// nodeId/status/agentVersion/timestamps, no key material. The cache is advisory: the one place
-// nodes participates in gating (selectRekeyingCount → DeployBar disables Deploy while nodes
-// are rotating) is fail-closed — after a reload a stale cache at most "disables" Deploy,
-// never "lets through" a deploy that live state should have blocked; refresh() converges once
-// it has the live state. The controller backend is still the final authority at
-// stage/promote.
+// nodeId/status/agentVersion/timestamps, no key material. The cache is advisory: rekey state
+// drives a warning/confirmation rather than an authorization gate, and refresh() converges it
+// to live server truth. The controller backend remains authoritative at stage/promote.
 //
 // Per-node LIVE telemetry (beta.12 wireguardPeers) is stripped via stripLiveTelemetry — it
 // carries raw peer endpoints (fleet-confidential) and a frozen handshake age is stale on

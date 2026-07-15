@@ -220,6 +220,7 @@ export interface RegisterPasskeyBody {
   publicKeyPEM: string;
   rpId: string;
   origin: string;
+  enrollmentProof: SignedTrustList;
 }
 
 // DisablePasskeyOutcome: the two-phase disable returns either a challenge to assert
@@ -228,10 +229,39 @@ export type DisablePasskeyOutcome =
   | { kind: 'challenge'; challenge: PasskeyChallenge }
   | { kind: 'done' };
 
-// getPasskeyStatus reports whether the current operator has a login passkey registered.
-export async function getPasskeyStatus(cfg: ControllerConfig): Promise<boolean> {
+// LoginPasskeyStatus includes the authenticated account's public credential descriptor. The
+// descriptor lets the store distinguish "our POST committed but its response was lost" from a
+// different tab winning the registration race; no secret/private key material is returned.
+export interface LoginPasskeyStatus {
+  registered: boolean;
+  alg: WebAuthnAlg | '';
+  credentialId: string;
+  publicKeyPEM: string;
+  rpId: string;
+  origin: string;
+}
+
+interface LoginPasskeyStatusJSON {
+  registered: boolean;
+  alg?: string;
+  credential_id?: string;
+  public_key_pem?: string;
+  rpid?: string;
+  origin?: string;
+}
+
+// getPasskeyStatus reports the current operator's login-passkey state and public descriptor.
+export async function getPasskeyStatus(cfg: ControllerConfig): Promise<LoginPasskeyStatus> {
   const res = await request(cfg, 'passkey/status', { method: 'GET' });
-  return ((await res.json()) as { registered: boolean }).registered;
+  const d = (await res.json()) as LoginPasskeyStatusJSON;
+  return {
+    registered: d.registered,
+    alg: (d.alg as WebAuthnAlg) || '',
+    credentialId: d.credential_id ?? '',
+    publicKeyPEM: d.public_key_pem ?? '',
+    rpId: d.rpid ?? '',
+    origin: d.origin ?? '',
+  };
 }
 
 // registerPasskey stores the operator's login passkey (operator-authed).
@@ -245,6 +275,7 @@ export async function registerPasskey(cfg: ControllerConfig, body: RegisterPassk
       public_key_pem: body.publicKeyPEM,
       rpid: body.rpId,
       origin: body.origin,
+      enrollment_proof: body.enrollmentProof,
     }),
   );
   await res.text();

@@ -66,7 +66,7 @@ const (
 
 	// Render + export (plan-3.5b) — the template/IO layer. CodeRenderFailed is a 500 bucket the
 	// handler assigns when render.All fails (internal template/plumbing, not operator-fixable).
-	// CodeExportUnsafeName is a 400 coded at the source (Export holds the node name). CodeExportIOFailed
+	// CodeExportUnsafeName is a 400 coded at the source (Export holds the node ID). CodeExportIOFailed
 	// is a 500 bucket returned at the export source for disk/marshal/sign write failures.
 	CodeRenderFailed     Code = "render_failed"
 	CodeExportUnsafeName Code = "export_unsafe_name"
@@ -137,18 +137,25 @@ const (
 	// is refused unless the operator explicitly acknowledges the rotation (rotate:true) —
 	// the anti-footgun analogue of YAOG_BUNDLE_SIGNING_KEY_ROTATE for the keystone.
 	CodeKeystoneRotationRequiresAck Code = "keystone_rotation_requires_ack" // 409: changed cred, no rotate ack
+	// CodeKeystoneCredentialChanged reports that the pinned keystone changed between the
+	// request's read/classification and its conditional write. The client must refresh and retry;
+	// automatic retry could silently change a first pin into a rotation.
+	CodeKeystoneCredentialChanged Code = "keystone_credential_changed" // 409: concurrent transition
+	CodeLoginCredentialChanged    Code = "login_credential_changed"    // 409: concurrent passkey change
+	CodeTOTPStateChanged          Code = "totp_state_changed"          // 409: concurrent TOTP change
 
 	// Auth + session surface (plan-3.5b) — login / passkey / TOTP / bootstrap / node + operator auth.
-	CodeReqBearerRequired       Code = "req_bearer_required"
-	CodeAuthCredentialsInvalid  Code = "auth_credentials_invalid"
-	CodeReqCSRFInvalid          Code = "req_csrf_invalid"
-	CodeReqOperatorRequired     Code = "req_operator_required"
-	CodeAuthRateLimited         Code = "auth_rate_limited"
-	CodeNodeRateLimited         Code = "node_rate_limited"
-	CodeAuthPasskeyFailed       Code = "auth_passkey_failed"
-	CodeAuthPasskeyVerifyFailed Code = "auth_passkey_verify_failed"
-	CodeTotpInvalidCode         Code = "totp_invalid_code"
-	CodeTotpRequiresLogin       Code = "totp_requires_login"
+	CodeReqBearerRequired              Code = "req_bearer_required"
+	CodeAuthCredentialsInvalid         Code = "auth_credentials_invalid"
+	CodeReqCSRFInvalid                 Code = "req_csrf_invalid"
+	CodeReqOperatorRequired            Code = "req_operator_required"
+	CodeAuthRateLimited                Code = "auth_rate_limited"
+	CodeNodeRateLimited                Code = "node_rate_limited"
+	CodeAuthPasskeyFailed              Code = "auth_passkey_failed"
+	CodeAuthPasskeyVerifyFailed        Code = "auth_passkey_verify_failed"
+	CodeWebAuthnEnrollmentVerifyFailed Code = "webauthn_enrollment_verify_failed"
+	CodeTotpInvalidCode                Code = "totp_invalid_code"
+	CodeTotpRequiresLogin              Code = "totp_requires_login"
 )
 
 // def is the immutable per-code metadata: the default English message TEMPLATE (with
@@ -183,7 +190,7 @@ var registry = map[Code]def{
 	CodeNodeUnknownDomain:         {"Node {node} references unknown domain {domain}.", http.StatusUnprocessableEntity},
 
 	CodeRenderFailed:     {"Rendering the deployment artifacts failed.", http.StatusInternalServerError},
-	CodeExportUnsafeName: {"Node name {name} is unsafe for export: it must be non-empty and must not be an absolute path or contain a path separator or \"..\".", http.StatusBadRequest},
+	CodeExportUnsafeName: {"Export path key {name} is unsafe: node IDs must be non-empty, portable, case-fold unique directory keys, and project helpers must use a known fixed name.", http.StatusBadRequest},
 	CodeExportIOFailed:   {"Writing the export artifacts failed.", http.StatusInternalServerError},
 
 	CodeMethodNotAllowed: {"Only {method} is supported for this endpoint.", http.StatusMethodNotAllowed},
@@ -223,17 +230,21 @@ var registry = map[Code]def{
 	CodeSigningKeyMismatch: {"The configured bundle signing key does not match the one this fleet was pinned to. Restore the original key, or set YAOG_BUNDLE_SIGNING_KEY_ROTATE=1 for one deploy to intentionally rotate it.", http.StatusConflict},
 
 	CodeKeystoneRotationRequiresAck: {"A different operator signing credential is already pinned. Rotating it strands every enrolled node until each is re-provisioned (yaog-agent reprovision-keystone) AND a fresh deploy is signed under the new key. Re-send with rotate:true to acknowledge and proceed.", http.StatusConflict},
+	CodeKeystoneCredentialChanged:   {"The pinned operator signing credential changed while this request was in progress. Refresh its status and retry; no credential was changed by this request.", http.StatusConflict},
+	CodeLoginCredentialChanged:      {"The login passkey changed while this request was in progress. Refresh its status and repeat the passkey operation.", http.StatusConflict},
+	CodeTOTPStateChanged:            {"The two-factor configuration changed while this request was in progress. Refresh its status and repeat the operation with a current code.", http.StatusConflict},
 
-	CodeReqBearerRequired:       {"A valid bearer token is required.", http.StatusUnauthorized},
-	CodeAuthCredentialsInvalid:  {"Invalid username or password.", http.StatusUnauthorized},
-	CodeReqCSRFInvalid:          {"Missing or invalid CSRF token.", http.StatusForbidden},
-	CodeReqOperatorRequired:     {"Operator privileges are required.", http.StatusForbidden},
-	CodeAuthRateLimited:         {"Too many login attempts; try again later.", http.StatusTooManyRequests},
-	CodeNodeRateLimited:         {"Too many requests from this node; slow down and retry later.", http.StatusTooManyRequests},
-	CodeAuthPasskeyFailed:       {"Passkey login failed.", http.StatusUnauthorized},
-	CodeAuthPasskeyVerifyFailed: {"Passkey verification failed.", http.StatusBadRequest},
-	CodeTotpInvalidCode:         {"Invalid two-factor code; check your authenticator's time and try again.", http.StatusBadRequest},
-	CodeTotpRequiresLogin:       {"Two-factor management requires a logged-in operator account, not the break-glass token.", http.StatusForbidden},
+	CodeReqBearerRequired:              {"A valid bearer token is required.", http.StatusUnauthorized},
+	CodeAuthCredentialsInvalid:         {"Invalid username or password.", http.StatusUnauthorized},
+	CodeReqCSRFInvalid:                 {"Missing or invalid CSRF token.", http.StatusForbidden},
+	CodeReqOperatorRequired:            {"Operator privileges are required.", http.StatusForbidden},
+	CodeAuthRateLimited:                {"Too many login attempts; try again later.", http.StatusTooManyRequests},
+	CodeNodeRateLimited:                {"Too many requests from this node; slow down and retry later.", http.StatusTooManyRequests},
+	CodeAuthPasskeyFailed:              {"Passkey login failed.", http.StatusUnauthorized},
+	CodeAuthPasskeyVerifyFailed:        {"Passkey verification failed.", http.StatusBadRequest},
+	CodeWebAuthnEnrollmentVerifyFailed: {"The new WebAuthn credential's enrollment verification failed. Retry verification with the same credential.", http.StatusBadRequest},
+	CodeTotpInvalidCode:                {"Invalid two-factor code; check your authenticator's time and try again.", http.StatusBadRequest},
+	CodeTotpRequiresLogin:              {"Two-factor management requires a logged-in operator account, not the break-glass token.", http.StatusForbidden},
 }
 
 // Error is a coded API error. It implements error and supports errors.Is/As via Unwrap,

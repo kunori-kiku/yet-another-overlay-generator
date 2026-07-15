@@ -79,6 +79,11 @@ const flagsUPUV = 0x05
 // the given trust list, signing with a fresh P-256 key.
 func buildES256Assertion(t *testing.T, tl TrustList) (SignedTrustList, PinnedCredential) {
 	t.Helper()
+	return buildES256AssertionWithFlags(t, tl, flagsUPUV)
+}
+
+func buildES256AssertionWithFlags(t *testing.T, tl TrustList, flags byte) (SignedTrustList, PinnedCredential) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate es256: %v", err)
@@ -89,7 +94,7 @@ func buildES256Assertion(t *testing.T, tl TrustList) (SignedTrustList, PinnedCre
 	}
 	challengeB64 := base64.RawURLEncoding.EncodeToString(chal)
 
-	authData := buildAuthData(testRPID, flagsUPUV)
+	authData := buildAuthData(testRPID, flags)
 	clientData := buildClientData(t, "webauthn.get", challengeB64, testOrigin)
 	signed := signedMessage(authData, clientData)
 	digest := sha256.Sum256(signed)
@@ -128,7 +133,9 @@ func buildEdDSAAssertion(t *testing.T, tl TrustList) (SignedTrustList, PinnedCre
 	}
 	challengeB64 := base64.RawURLEncoding.EncodeToString(chal)
 
-	authData := buildAuthData(testRPID, flagsUPUV)
+	// Content-bound keystone verification is deliberately generic: historical manifests
+	// carrying only User Presence remain valid after UV moved to the enrollment boundary.
+	authData := buildAuthData(testRPID, flagUserPresent)
 	clientData := buildClientData(t, "webauthn.get", challengeB64, testOrigin)
 	signed := signedMessage(authData, clientData)
 	// Ed25519 signs the message directly (no pre-hash).
@@ -160,8 +167,20 @@ func TestWebAuthnES256Valid(t *testing.T) {
 	}
 }
 
-// TestWebAuthnEdDSAValid: a correctly-built EdDSA assertion verifies.
-func TestWebAuthnEdDSAValid(t *testing.T) {
+// TestWebAuthnES256PresenceOnlyValid is the ES256 half of the historical-manifest
+// compatibility contract. An upgraded node must not reject a correctly signed manifest solely
+// because its pre-rc.7 assertion recorded UP without UV.
+func TestWebAuthnES256PresenceOnlyValid(t *testing.T) {
+	tl := sampleTL()
+	art, pin := buildES256AssertionWithFlags(t, tl, flagUserPresent)
+	if err := Verify(tl, art, pin); err != nil {
+		t.Fatalf("Verify on presence-only ES256 assertion: %v", err)
+	}
+}
+
+// TestWebAuthnEdDSAPresenceOnlyValid pins the no-fleet-migration contract: a correctly-built,
+// content-bound EdDSA manifest assertion remains valid with UP set and UV absent.
+func TestWebAuthnEdDSAPresenceOnlyValid(t *testing.T) {
 	tl := sampleTL()
 	art, pin := buildEdDSAAssertion(t, tl)
 	if err := Verify(tl, art, pin); err != nil {

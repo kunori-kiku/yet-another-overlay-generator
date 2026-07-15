@@ -124,7 +124,7 @@ deployment/operator can use either):
 
 The login challenge is a **server-issued, single-use, short-TTL (5 min) random nonce**,
 scoped to the operator and stored hash-only (`internal/controller/login_challenge.go`);
-`ConsumeLoginChallenge` burns it atomically **by deleting it**, so a captured assertion
+`ConsumeAssertionChallenge` burns it atomically **by deleting it**, so a captured assertion
 cannot be replayed (the record is gone) and two concurrent logins cannot both consume one;
 completed and expired challenges leave no residue. The unauthenticated `begin` is
 **rate-limited** per username+IP by the same limiter as password login (so an attacker
@@ -145,27 +145,52 @@ iCloud Keychain, 1Password) needs no hardware key. **Honest limit:** passwordles
 reveals whether a username has a passkey (the `allow_credentials` is empty for none) — a
 low-value signal, and both `begin` and `finish` are rate-limited.
 
-### User-Verification (UV) enforcement
+### Enrollment-scoped User Verification (UV)
 
-Status: on `main` (post-refactor-debt-paydown plan-6, PR #282); **ships in `v2.0.0-rc.7`**, not
-rc.6. `verifyAssertion` (`internal/trustlist/webauthn.go`) requires the WebAuthn **User-Verified**
-flag (`flagUserVerified = 0x04`) in addition to User-Present, failing closed with
-`ErrUserVerification`. Both ceremonies already pin `userVerification:"required"` client-side, so the
-**server is the enforcement authority**: a possession-only assertion (touch/presence, no
-PIN/biometric) is refused. A UV-capable authenticator sets this bit under UV=required, so honest
-passkey login / 2FA / keystone signing are unaffected — but a bare, PIN-less security key is now
-rejected.
+Status: in the ready, still-uncut `v2.0.0-rc.7` candidate. This supersedes the blanket assertion gate
+from post-refactor-debt-paydown plan-6 / PR #282 before that gate reached a release.
 
-**Fleet consequence (the reason this is behind a release, not a hotfix).** Because login, 2FA, and
-keystone signing share the one `VerifyAssertion` core, the UV gate **also runs node-side** in
-`VerifyMembership` on every config fetch — a node verifies the operator's trust-list signature
-before trusting a bundle. So once a build containing plan-6 is deployed, **every served manifest must
-have been UV-signed**, or nodes reject their config. **Operator action on deploy:** after updating to
-a UV-enforcing controller/agent build, **(re-)sign the trust-list with a UV-capable authenticator**
-(platform passkey / PIN'd key) so every served manifest carries UV before the new agent reaches
-nodes. If any enrolled operator authenticator cannot do UV, do NOT deploy a plan-6 build to the
-fleet as-is — the follow-up is per-credential enforcement + a re-enrollment path (tracked as
-plan-6.5). Merging plan-6 to `main` changed no deployed bytes; the gate takes effect only on deploy.
+**Compatibility is the reason for the enrollment boundary.** Existing operators enrolled their
+credentials under an acceptance contract that did not require the server-observed UV bit on every
+assertion, and existing fleets may currently serve a valid trust-list signature whose ceremony carried
+User Presence but not UV. Enabling the blanket gate in an upgrade could therefore lock an operator out
+and, because the same verifier runs on nodes, stop upgraded agents from accepting the current config.
+New enrollment can require proof prospectively without changing the rules underneath those users.
+
+Both browser-credential enrollment paths — the per-operator **login passkey** and the tenant-level
+**keystone passkey** — now prove UV to the controller before the public credential is persisted:
+
+1. The authenticated panel calls `POST /webauthn/enrollment/begin` with purpose `login` or
+   `keystone`. The controller creates a 32-byte, ten-minute, single-use challenge stored only as a
+   hash and scoped to both the authenticated operator and that purpose.
+2. The panel uses the server nonce for `navigator.credentials.create()` with
+   `userVerification:"required"`, extracts the candidate credential ID and public key, and immediately
+   asks that exact candidate to answer the same nonce with `navigator.credentials.get()`. The panel
+   does not transmit registration attestation to the controller, so this signed assertion is the server-verifiable result
+   of the first-party enrollment ceremony rather than client-reported capability metadata.
+3. The relevant persistence endpoint verifies the assertion against the candidate public key,
+   requires the exact candidate credential ID and RP/origin binding, then atomically consumes the nonce.
+   It rejects the enrollment unless the authenticator data for **that ceremony** has both User Presence
+   and the User-Verified bit (`0x04`). A proof for one purpose or operator cannot be replayed into the
+   other path. Raw Ed25519 CLI keystones are not WebAuthn credentials and retain their existing path.
+
+`VerifyUserVerifiedAssertion` is intentionally separate from the shared `VerifyAssertion` core.
+Ordinary login, 2FA, disable re-authentication, keystone manifest signing, and node-side
+`VerifyMembership` require the cryptographic assertion and User Presence but do not impose the
+enrollment-only UV check. The first-party browser uses `userVerification:"preferred"` for those later
+ceremonies so UV-capable authenticators can still perform it without excluding an existing non-UV
+credential. UV is a result bit for one ceremony, not an immutable credential property, so a one-time
+enrollment proof cannot honestly guarantee that every future assertion from a custom client performed UV.
+
+The panel therefore warns on both enrollment surfaces: if a later assertion occurs without UV, it is
+possession-only, and whoever holds the authenticator — or a usable synced/duplicated copy — can use the
+credential. Backup eligibility/state (`BE`/`BS`, which describes whether a credential can be backed up
+or is currently backed up) is independent of UV: a synced passkey can perform UV, while a non-UV
+assertion does not by itself prove that the credential is copyable.
+
+There is no rc.7 fleet migration or mandatory trust-list re-sign. Existing credentials and manifest
+signatures remain valid under the generic verifier, so deploying this change cannot lock out an
+existing operator or brick node config fetch merely because a historical assertion lacked UV.
 
 ## Transport (hard requirement)
 

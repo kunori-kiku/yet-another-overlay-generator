@@ -3,46 +3,26 @@ package naming
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 )
 
-func TestSafeInstallerFileName(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"simple lowercase", "alpha", "alpha.install.sh"},
-		{"uppercase to lowercase", "Alpha", "alpha.install.sh"},
-		{"spaces to hyphens", "Web 1", "web-1.install.sh"},
-		{"already hyphenated", "web-1", "web-1.install.sh"},
-		{"special chars and folding", "Edge Router", "edge-router.install.sh"},
-		{"all-special falls back to node", "  ***  ", "node.install.sh"},
-		{"underscores preserved", "my_server", "my_server.install.sh"},
+func TestValidPortableNodeID(t *testing.T) {
+	valid := []string{"node-alpha", "node..east", ".hidden", "com0", "lpt10"}
+	invalid := []string{
+		"", ".", "..", "node/alpha", "node alpha", "node.",
+		"CON", "con.txt", "NUL", "COM1", "lpt9.log", "deploy-all.sh", "DEPLOY-ALL.PS1",
+		strings.Repeat("a", MaxPortableNodeIDLength+1),
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := SafeInstallerFileName(tt.input)
-			if got != tt.expected {
-				t.Errorf("SafeInstallerFileName(%q) = %q, want %q", tt.input, got, tt.expected)
-			}
-		})
+	for _, id := range valid {
+		if !ValidPortableNodeID(id) {
+			t.Errorf("ValidPortableNodeID(%q) = false, want true", id)
+		}
 	}
-}
-
-// TestSafeInstallerFileNameCollision verifies that the two distinct original
-// names cited in Spec D ("Web 1" and "web-1") normalize to the same installer
-// script filename -- precisely the collision case that the N2 uniqueness
-// invariant requires semantic validation to catch.
-func TestSafeInstallerFileNameCollision(t *testing.T) {
-	a := SafeInstallerFileName("Web 1")
-	b := SafeInstallerFileName("web-1")
-	if a != b {
-		t.Fatalf("expected %q and %q to normalize to the same filename, got %q != %q", "Web 1", "web-1", a, b)
-	}
-	if a != "web-1.install.sh" {
-		t.Fatalf("collision result should be %q, got %q", "web-1.install.sh", a)
+	for _, id := range invalid {
+		if ValidPortableNodeID(id) {
+			t.Errorf("ValidPortableNodeID(%q) = true, want false", id)
+		}
 	}
 }
 

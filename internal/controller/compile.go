@@ -12,17 +12,20 @@ package controller
 //     and exporter stay frozen and dependency-minimal (see
 //     docs/spec/controller/persistence.md §The quarantine boundary). This step
 //     drives them through the single shared localcompile façade (the one compile
-//     authority) — exactly as the air-gap callers do, keeping the controller's rendered
-//     bundles byte-identical — and reads the export back through a temp directory.
+//     authority) — the same path used by the standalone compiler and browser/WASM,
+//     keeping the controller's rendered bundles byte-identical — and reads the export
+//     back through a temp directory.
 //
-//   - RENDER WHAT'S READY. Only the enrolled subgraph is compiled: a topology node
-//     is included iff its registry record is NodeApproved with a non-empty
-//     WGPublicKey, and any edge whose far end is not enrolled is dropped.
+//   - RENDER WHAT'S READY. The ready subgraph is compiled: managed topology nodes
+//     require a NodeApproved registry record with a non-empty WGPublicKey, while manual
+//     nodes and client targets use their validated topology public key. Any edge whose
+//     far end is not ready is dropped.
 //
 // KEYSTONE (CORRECTION). The off-host signature must cover what RUNS, not merely the
 // membership list. So the staged bundles are exported WITHOUT any trust-list files
 // (the trust-list binds the checksums digest and therefore cannot live inside it);
-// instead CompileAndStage computes, for every staged node, bundleSHA256 =
+// instead CompileAndStage computes, for every ready node (including delta-skipped
+// nodes that keep their served bundle), bundleSHA256 =
 // hex(sha256(checksums.sha256)) — and checksums.sha256 covers install.sh + every
 // config — and assembles a TrustList whose Members each carry {NodeID, WGPublicKey,
 // BundleSHA256}. That manifest is STORED as the staged, to-be-signed manifest (its

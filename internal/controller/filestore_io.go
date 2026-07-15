@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -39,21 +40,59 @@ func (fs *filekv) tenantDir(t TenantID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(fs.root, tc), nil
+	// The root was validated at construction, but it remains an external
+	// filesystem object and may have been replaced since. Revalidate it at each
+	// operation, then validate an existing tenant without creating one on reads.
+	if err := revalidateSecureStoreDir(fs.root); err != nil {
+		return "", fmt.Errorf("controller: unsafe filestore root: %w", err)
+	}
+	dir := filepath.Join(fs.root, tc)
+	if err := validateSecureStoreDirIfExists(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 // ensureTenantDir creates the tenant directory and its sub-directories (0700).
 func (fs *filekv) ensureTenantDir(t TenantID) (string, error) {
-	dir, err := fs.tenantDir(t)
+	tc, err := sanitizeComponent("tenant id", string(t))
 	if err != nil {
 		return "", err
 	}
-	for _, sub := range []string{"", "nodes", "bundles", "tokens", "login-challenges", "apitokens", "operators", "sessions", "topology-history"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
-			return "", fmt.Errorf("controller: create tenant dir: %w", err)
+	dir, err := ensureSecureStoreChild(fs.root, tc)
+	if err != nil {
+		return "", fmt.Errorf("controller: create tenant custody: %w", err)
+	}
+	for _, sub := range fileCollectionSubdirs() {
+		if _, err := ensureSecureStoreChild(dir, sub); err != nil {
+			return "", fmt.Errorf("controller: create tenant custody: %w", err)
 		}
 	}
+	if err := revalidateSecureStoreDir(fs.root); err != nil {
+		return "", fmt.Errorf("controller: unsafe filestore root: %w", err)
+	}
+	if err := revalidateSecureStoreDir(dir); err != nil {
+		return "", err
+	}
 	return dir, nil
+}
+
+// fileCollectionSubdirs derives the custody tree from the frozen collection
+// registry so adding a keyed collection cannot accidentally omit creation and
+// security validation for its directory.
+func fileCollectionSubdirs() []string {
+	seen := make(map[string]struct{})
+	for _, spec := range fileColls {
+		if !spec.singleton {
+			seen[spec.subdir] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for sub := range seen {
+		out = append(out, sub)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // --- atomic JSON IO ---------------------------------------------------------
@@ -79,34 +118,56 @@ func writeJSONAtomic(path string, v any) error {
 // rename-atomic writer in the store (put for per-record files, writeAuditJSONL for the audit rewrite),
 // so the fsync dance lives in exactly one place (B2).
 func writeBytesDurable(path string, data []byte) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	dir := filepath.Dir(path)
+	if err := revalidateSecureStoreDir(dir); err != nil {
+		return fmt.Errorf("controller: unsafe parent for %s: %w", filepath.Base(path), err)
+	}
+	// CreateTemp uses an unpredictable same-directory name and O_EXCL-style
+	// creation. Unlike the historical <record>.tmp + O_TRUNC path, a planted
+	// symlink can neither redirect nor clobber another file.
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("controller: write %s: %w", filepath.Base(path), err)
 	}
+	tmp := f.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if err := f.Chmod(0600); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("controller: protect %s temporary file: %w", filepath.Base(path), err)
+	}
+	if err := validateOpenedStoreTemp(tmp, f); err != nil {
+		_ = f.Close()
+		return err
+	}
 	if _, werr := f.Write(data); werr != nil {
 		_ = f.Close()
-		_ = os.Remove(tmp)
 		return fmt.Errorf("controller: write %s: %w", filepath.Base(path), werr)
 	}
 	if serr := f.Sync(); serr != nil {
 		_ = f.Close()
-		_ = os.Remove(tmp)
 		return fmt.Errorf("controller: sync %s: %w", filepath.Base(path), serr)
 	}
 	if cerr := f.Close(); cerr != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("controller: close %s: %w", filepath.Base(path), cerr)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	// Revalidate the custody boundary immediately before publishing the opened
+	// inode, then atomically replace the stable record name.
+	if err := revalidateSecureStoreDir(dir); err != nil {
+		return fmt.Errorf("controller: unsafe parent for %s: %w", filepath.Base(path), err)
+	}
+	if err := replaceStoreFileAtomic(tmp, path); err != nil {
 		return fmt.Errorf("controller: install %s: %w", filepath.Base(path), err)
 	}
-	// fsync the parent directory so the rename (a directory metadata change) is itself durable.
-	// Best-effort: a dir that cannot be opened/synced must not fail an otherwise-committed write.
-	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	removeTemp = false
+	// fsync the parent directory so the rename (a directory metadata change) is
+	// itself durable. Windows uses MOVEFILE_WRITE_THROUGH in replaceStoreFileAtomic.
+	if err := syncStoreDirectory(dir); err != nil {
+		return fmt.Errorf("controller: sync directory for %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

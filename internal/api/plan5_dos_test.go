@@ -45,7 +45,7 @@ func TestNodeLimiter(t *testing.T) {
 // TestClientIP covers trusted-proxy-aware source-IP resolution (F4): without trusted proxies the direct
 // peer is used and forwarding headers are ignored (unspoofable); with a trusted direct peer the real
 // client is the rightmost UNtrusted X-Forwarded-For hop (skipping trusted proxies); a forged XFF from
-// an untrusted peer is ignored; X-Real-IP is honored only from a trusted peer.
+// an untrusted peer is ignored; X-Real-IP is honored only from a trusted peer and only when valid.
 func TestClientIP(t *testing.T) {
 	mk := func(remote, xff, xrealip string) *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -71,6 +71,7 @@ func TestClientIP(t *testing.T) {
 		{"trusted proxy: rightmost-untrusted XFF is the client", []string{"10.0.0.0/8"}, "10.1.2.3:443", "9.9.9.9, 198.51.100.7", "", "198.51.100.7"},
 		{"trusted chain: skip trusted hops right-to-left", []string{"10.0.0.0/8"}, "10.1.2.3:443", "198.51.100.7, 10.4.5.6", "", "198.51.100.7"},
 		{"trusted proxy, X-Real-IP fallback", []string{"10.0.0.0/8"}, "10.1.2.3:443", "", "198.51.100.7", "198.51.100.7"},
+		{"trusted proxy, malformed X-Real-IP falls back", []string{"10.0.0.0/8"}, "10.1.2.3:443", "", "not-an-ip", "10.1.2.3"},
 		{"trusted proxy, no forwarding headers: RemoteAddr", []string{"10.0.0.0/8"}, "10.1.2.3:443", "", "", "10.1.2.3"},
 		{"bare-IP trusted entry", []string{"10.1.2.3"}, "10.1.2.3:443", "198.51.100.7", "", "198.51.100.7"},
 		{"malformed XFF entry skipped", []string{"10.0.0.0/8"}, "10.1.2.3:443", "not-an-ip, 198.51.100.7", "", "198.51.100.7"},

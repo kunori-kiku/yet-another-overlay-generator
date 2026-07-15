@@ -6,6 +6,34 @@ import (
 	"time"
 )
 
+func TestCanonicalAuditBytesPreservesLegacyAndBindsEventID(t *testing.T) {
+	entry := AuditEntry{
+		Seq:       7,
+		Timestamp: time.Date(2026, 7, 16, 12, 34, 56, 789, time.FixedZone("offset", 10*60*60)),
+		Actor:     "operator:admin",
+		Action:    "pin-operator-credential",
+		NodeID:    "node-a",
+		PrevHash:  "prior",
+	}
+	wantLegacy := "7\n2026-07-16T02:34:56.000000789Z\noperator:admin\npin-operator-credential\nnode-a\nprior\n"
+	if got := string(canonicalAuditBytes(entry)); got != wantLegacy {
+		t.Fatalf("legacy canonical bytes changed:\n got %q\nwant %q", got, wantLegacy)
+	}
+
+	entry.EventID = "00000000000000000000000000000001"
+	gotV2 := string(canonicalAuditBytes(entry))
+	wantV2 := "v2\n7\n2026-07-16T02:34:56.000000789Z\noperator:admin\npin-operator-credential\nnode-a\n00000000000000000000000000000001\nprior\n"
+	if gotV2 != wantV2 {
+		t.Fatalf("event-bearing canonical bytes:\n got %q\nwant %q", gotV2, wantV2)
+	}
+
+	chained := chainAudit(entry, entry.PrevHash)
+	chained.EventID = "00000000000000000000000000000002"
+	if bad := VerifyAuditChain([]AuditEntry{chained}); bad != 0 {
+		t.Fatalf("EventID tamper was not detected: VerifyAuditChain = %d, want 0", bad)
+	}
+}
+
 // buildAuditChainViaStore appends n entries through a FileStore's AppendAudit (so
 // the chain is produced by real Store wiring, not just chainAudit in isolation)
 // and returns the listed entries in Seq order. FileStore uses t.TempDir(), so no

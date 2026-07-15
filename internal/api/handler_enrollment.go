@@ -137,7 +137,7 @@ func (h *ControllerHandler) HandleRevoke(ctx context.Context, tenant controller.
 // HandleEnrollmentToken mints a single-use, node-scoped enrollment token
 // (operator-only) and returns its plaintext ONCE. The controller stores only the
 // token hash (CreateEnrollmentToken), so the plaintext cannot be recovered later.
-func (h *ControllerHandler) HandleEnrollmentToken(ctx context.Context, tenant controller.TenantID, _ string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
+func (h *ControllerHandler) HandleEnrollmentToken(ctx context.Context, tenant controller.TenantID, actor string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	var req enrollmentTokenRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		return nil, codedErr(apierr.CodeReqInvalidBody, err)
@@ -167,7 +167,7 @@ func (h *ControllerHandler) HandleEnrollmentToken(ctx context.Context, tenant co
 	}
 	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
 		Timestamp: now,
-		Actor:     "operator:" + h.operatorName,
+		Actor:     "operator:" + actor,
 		Action:    "enrollment-token",
 		NodeID:    req.NodeID,
 	}); err != nil {

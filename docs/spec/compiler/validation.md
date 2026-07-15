@@ -4,6 +4,7 @@
 
 Structural checks on the raw topology JSON:
 - Required fields present (project ID/name, domain CIDR, node role, etc.)
+- Node IDs are portable canonical bundle-directory keys
 - CIDR format validity
 - Enum value validity (roles, routing modes, transport protocols)
 - Port range validity (0–65535)
@@ -16,6 +17,7 @@ Cross-reference and logical checks:
 - Edge from/to node references exist
 - Overlay IPs within domain CIDRs
 - No duplicate IDs (domains, nodes, edges)
+- No node-ID collisions after portable case-folding
 - No IP address collisions
 - Effective per-peer port range in-bounds (`base`+offset must not overflow past 65535)
 - Isolated node detection (warning)
@@ -67,8 +69,8 @@ user-supplied.
 
 | Field | Pass | Rule | Status |
 |---|---|---|---|
-| `id` | schema | non-empty; unique (semantic) | schema + semantic |
-| `name` | schema + semantic | non-empty; **strict charset** (feeds WG interface + root-executed scripts); raw-name AND sanitized-name uniqueness | schema + semantic |
+| `id` | schema + semantic | non-empty; `[A-Za-z0-9._-]+`; valid portable bundle-directory key; exact and portable case-folded uniqueness | schema + semantic |
+| `name` | schema + semantic | non-empty; **strict charset** (feeds WG interface + root-executed scripts); raw-name and derived WireGuard-interface-name uniqueness | schema + semantic |
 | `hostname` | — | optional | none-yet |
 | `platform` | schema | enum `debian`/`ubuntu` (warning if other) | schema |
 | `role` | schema | enum `peer`/`router`/`relay`/`gateway`/`client` | schema |
@@ -89,16 +91,23 @@ user-supplied.
 | `ssh_user` | schema | **strict charset** | schema |
 | `ssh_key_path` | schema | path charset (forbids shell metacharacters) | schema |
 
-> **Compliance — node-name charset & uniqueness:** node names are interpolated unescaped into a
-> root-executed `install.sh echo` (`script.go:61`, D15) and into a deploy-script heredoc that a
-> single quote breaks (`deploy.go:237`, D16); names also feed `wg-<name>` interface names where two
-> names sanitizing identically collide (`peers.go:492-522`, D13/D14). Schema validation enforces a
-> strict name charset (`nodeNameCharset` — letters, digits, space, `.`, `_`, `-` only →
-> `CodeNodeNameIllegalChars`, `schema.go:241-244`); semantic validation rejects raw-name duplicates
-> (`CodeNodeNameDuplicate`, `semantic.go:228`), installer-name collisions
-> (`CodeNodeNameInstallerCollision`, `semantic.go:237`), and sanitized interface-name collisions
-> (`CodeNodeNameInterfaceCollision`, `semantic.go:247`). Canonical naming and the uniqueness
-> invariant: [../artifacts/naming.md](../artifacts/naming.md).
+> **Compliance — canonical node IDs:** a node ID is the only key for its complete per-node bundle
+> directory. Schema validation first applies `nodeIDCharset` (`[A-Za-z0-9._-]+`) and then
+> `naming.ValidPortableNodeID`, which also rejects IDs longer than 240 bytes, trailing dots, Windows
+> device basenames, and collisions with the root `deploy-all` helper names
+> (`CodeNodeIDIllegalChars` / `CodeNodeIDNotPortable`). Semantic validation applies
+> `naming.PortableNodeIDKey` and rejects distinct IDs that differ only by ASCII letter case
+> (`CodeNodeIDPortableCollision`). This keeps an export safe and unambiguous when copied to or
+> extracted on a case-insensitive Windows filesystem.
+
+> **Compliance — node-name charset & uniqueness:** names remain human-facing labels and inputs to
+> WireGuard interface naming; they do not select bundle directories. Render sites shell-quote names,
+> while schema validation retains the strict `nodeNameCharset` (letters, digits, space, `.`, `_`,
+> `-`) as defence in depth for root-executed output. Semantic validation rejects exact duplicate
+> names (`CodeNodeNameDuplicate`) and distinct names that derive the same
+> `naming.WgInterfaceName` (`CodeNodeNameInterfaceCollision`). There is no sanitized installer-name
+> identity or flat installer wrapper. Canonical directory and interface naming are specified in
+> [../artifacts/naming.md](../artifacts/naming.md).
 
 > **Compliance — effective per-peer port range:** the compiler binds each peer interface at
 > `base+offset`, which can exceed 65535 and would then be rendered verbatim into the WG config
@@ -170,6 +179,8 @@ user-supplied.
 ### Cross-entity rules (semantic)
 
 - ID uniqueness across domains, nodes, and edges (`validateIDUniqueness`).
+- Portable node-ID uniqueness after case-folding (`naming.PortableNodeIDKey`), so canonical bundle
+  directories remain distinct on Windows as well as Linux.
 - Overlay-IP collision and in-CIDR membership (`validateIPSemantics`).
 - Effective per-peer port-range overflow on each node — `base`+offset across that node's edges
   must fit in 0–65535 (`validateEffectivePortRanges`). (The former per-node listen-port conflict

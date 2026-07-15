@@ -3,17 +3,16 @@
 // the renderers, render.All, and the artifacts byte set that artifacts.Export writes
 // to disk. It exposes a stable, documented, reproducible input→output contract
 // (CompileRequest → CompileArtifacts) so that every non-deterministic and
-// environment-coupled input is (eventually — see plan-3 Phase 2/4) lifted into an
-// explicit parameter: the keygen seam, the bundle-signing key, the install-time
+// environment-coupled input is lifted into an explicit parameter: the keygen
+// seam, the bundle-signing key, the install-time
 // fetch settings, the compile clock, and the controller subgraph's reserved
 // allocations.
 //
 // The contract is the substrate the in-browser Go/WASM engine and the WASM
 // conformance gate consume; its canonical schema lives in
-// docs/spec/compiler/io-contract.md. This package introduces NO intentional byte
-// change to either the air-gap or the controller rendered output — it wraps the
-// existing pipeline rather than relocating it (the wrap-not-move discipline,
-// outline principle P10).
+// docs/spec/compiler/io-contract.md. Both native Go and Go/WASM call this same
+// implementation; intentional contract changes are reviewed by updating its
+// conformance goldens.
 package localcompile
 
 import (
@@ -29,13 +28,9 @@ import (
 // Keygen is the WireGuard key-derivation seam — the one input lifted out of the
 // pipeline that decouples key derivation from wgtypes/wgctrl (the browser/WASM blocker).
 // It is part of the frozen contract: the WASM engine shares this seam, and the WASM
-// conformance gate asserts public-key DERIVATION only
-// (never private-key material — zero-knowledge custody, principle P2).
-//
-// This phase (plan-3 Phase 1) declares the seam so CompileRequest can name it; the
-// implementations — wgtypesKeygen (the default, byte-identical to today) and ecdhKeygen
-// (the stdlib crypto/ecdh X25519 reference) — and the wiring into render.GenerateKeys
-// land in plan-3 Phase 2.
+// conformance gate asserts public-key DERIVATION only (never newly generated
+// private-key material). The default implementation uses wgtypes; the stdlib
+// crypto/ecdh implementation is the cross-platform reference.
 type Keygen interface {
 	// DerivePublic returns the base64 public key for a base64 X25519 private key. It
 	// covers the AgentHeld pub-from-private derivation and the air-gap case-a/case-c
@@ -50,15 +45,9 @@ type Keygen interface {
 }
 
 // CompileRequest is the canonical topology-in side of the frozen contract: a topology
-// plus every input that the legacy pipeline used to read from the environment, the
-// clock, or a global. Lifting these into explicit fields is what makes Compile a pure
-// function (proven by the run-twice-assert-equal golden sub-test in plan-3 Phase 5).
-//
-// The skeleton phase (plan-3 Phase 1) defines all fields up front but does NOT yet
-// thread Keygen / SigningKey / CompiledAt into the pipeline — those seams are wired in
-// plan-3 Phase 2 (Keygen) and Phase 4 (clock + signer). Until then the façade reads the
-// signer from the environment exactly as the existing callers do, so this phase is a
-// byte-identical wrapper.
+// plus every keygen, signer, fetch, clock, custody, and reserved-allocation input.
+// Keeping those inputs explicit makes Compile pure and reproducible; the golden
+// suite proves that running an identical request twice returns identical bytes.
 type CompileRequest struct {
 	// Topology is the only required input.
 	Topology model.Topology
@@ -70,16 +59,14 @@ type CompileRequest struct {
 	Custody render.KeyCustody
 
 	// Keygen is the WireGuard key-derivation seam; a nil value means the default
-	// wgtypesKeygen (byte-identical to today). It is wired into render.GenerateKeys in
-	// plan-3 Phase 2; this phase leaves it unread.
+	// wgtypesKeygen. Compile passes it to render.GenerateKeysWith.
 	Keygen Keygen
 
 	// SigningKey is the optional tier-1 bundle signer. It is the bundlesig.ConfigSigner
 	// INTERFACE (not a pointer): a nil interface means "unsigned" — the byte-identical
 	// no-signing path. The interface (rather than a *bundlesig.Signing pointer) avoids
-	// Go's typed-nil gotcha, so a plain `SigningKey == nil` test is safe. It is wired
-	// through render.AllWith in plan-3 Phase 4; this phase reads the signer from the
-	// environment internally (as the existing callers do).
+	// Go's typed-nil gotcha, so a plain `SigningKey == nil` test is safe. Compile passes
+	// it through render.AllWith; the façade never reads a signing key from the environment.
 	SigningKey bundlesig.ConfigSigner
 
 	// Fetch is the typed channel of install-time fetch pins (mimic GitHub-.deb fallback,
@@ -90,8 +77,7 @@ type CompileRequest struct {
 
 	// CompiledAt is the explicit compile clock, replacing the compiler's internal
 	// time.Now(). It feeds only manifest.json's compiled_at, which is OUT of the
-	// conformance byte set (display-only). It is wired into compiler.CompileAt in
-	// plan-3 Phase 4; this phase leaves it unread.
+	// conformance byte set (display-only). Compile passes it to compiler.CompileAt.
 	CompiledAt time.Time
 
 	// Reserved carries the allocation resources (ports / transit IPs / link-locals)
@@ -106,18 +92,16 @@ type CompileRequest struct {
 // rendered byte output for every node, the project-level deploy scripts, the per-node
 // checksums and (when signing is on) detached signatures, plus the compile manifest.
 //
-// Its shape mirrors what artifacts.Export already writes to disk (export.go), so the
+// Its shape mirrors what artifacts.Export writes to disk (export.go), so the
 // in-memory contract and the on-disk bundle are byte-consistent. The disk write is
-// presentation, not contract: artifacts.Export becomes a thin adapter over this struct
-// in plan-3 Phase 6.
+// presentation; the canonical member set is shared through artifacts.BundleFiles.
 type CompileArtifacts struct {
 	// Topology is the compiled topology with the allocator's write-backs applied: the
 	// six pinned_* edge fields + CompiledPort (model.Edge), and OverlayIP + RouterID
 	// (model.Node).
 	//
-	// RouterID note: this field is observed and re-emitted by the contract; this plan
-	// only FREEZES whatever the current pipeline writes back. It does NOT define or
-	// change router_id semantics — plan-9 owns router_id (and the FE↔Go drift around it).
+	// RouterID is observed and re-emitted by the contract; its derivation remains the
+	// compiler's responsibility.
 	Topology *model.Topology
 
 	// Files is the per-node bundle file set: nodeID -> relpath -> content. The relpath
@@ -129,14 +113,16 @@ type CompileArtifacts struct {
 	//	babel/babeld.conf        (non-client nodes only)
 	//	sysctl/99-overlay.conf
 	//	install.sh
+	//	README.txt
 	//	artifacts.json           (only when a mimic/agent catalog is configured; omitted
 	//	                          otherwise so a non-catalog bundle stays byte-identical, D4)
 	//
 	// This is exactly the checksummed set — the bytes Checksums and Signatures cover.
 	Files map[string]map[string]string
 
-	// Deploy holds the project-level deploy scripts (deploy-all.sh / deploy-all.ps1),
-	// written to the root of the export directory rather than into a node dir.
+	// Deploy holds the project-level deploy-all.sh / deploy-all.ps1 files written to
+	// the export root. They are operational complete-bundle SSH helpers for AirGap
+	// custody and fail-closed enrolled-agent / kit-apply guidance for AgentHeld custody.
 	Deploy map[string]string
 
 	// Checksums maps nodeID -> the canonical checksums.sha256 content, produced by
@@ -158,7 +144,8 @@ type CompileArtifacts struct {
 
 	// Manifest carries the compile summary, including CompiledAt and Checksum — both OUT
 	// of the conformance byte set (compiled_at is a timestamp; checksum is a
-	// display-only sha256(fmt.Sprintf("%v", topo)) with no TS counterpart). They are
-	// masked in the golden corpus and excluded from the cross-language byte assertions.
+	// display-only sha256(fmt.Sprintf("%v", topo)) with no cross-language counterpart).
+	// The manifest checksum is metadata, not the hash verified by checksums.sha256.
+	// Both fields are masked in the golden corpus and excluded from byte assertions.
 	Manifest compiler.CompileManifest
 }

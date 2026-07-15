@@ -29,6 +29,10 @@ jobs:
       # FileStore/tenantlock mutex paths. A surfaced race is a NEW rc.1 blocker (criterion A2).
       - name: Test
         run: go test -race ./...
+      - name: Generated PowerShell deploy contract
+        run: |
+          command -v pwsh
+          go test ./internal/renderer -run 'TestRenderDeployScripts_PowerShell' -count=1
       # Per-package coverage FLOOR over the local-compile pipeline packages, re-homed from the deleted
       # `conformance` job (framework-refactor plan-5). The frozen floors live in
       # internal/localcompile/testdata/coverage_floor.json; TestCoverageFloor shells out to `go test
@@ -276,7 +280,7 @@ jobs:
       # build profiles to ONE). A reachable vuln fails the job; allowlist an accepted advisory with a rationale.
       - name: govulncheck (REQUIRED)
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           "$(go env GOPATH)/bin/govulncheck" ./...
       # ADVISORY: gosec static analysis. continue-on-error keeps it non-blocking (a baseline of
       # pre-existing findings is recorded in docs/spec/rc1/4.2-verdict.md; the job surfaces the current

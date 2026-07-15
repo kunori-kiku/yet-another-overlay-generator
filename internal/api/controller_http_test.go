@@ -905,8 +905,9 @@ func TestControllerHTTP_CORS(t *testing.T) {
 // TestControllerHTTP_AuditWireShape locks the /audit JSON contract: entries must
 // serialize in snake_case (the operator DTO) so the browser panel can read them. An
 // enroll appends an "enroll" entry; GET /audit must return it with snake_case keys and
-// verified=true. (Regression guard: controller.AuditEntry has no json tags, so without
-// the DTO it would serialize PascalCase and the panel's audit table would render blank.)
+// verified=true. (Regression guard: controller.AuditEntry's persistence shape is not the API
+// contract; without the DTO it would serialize PascalCase/internal fields and the panel's audit
+// table would render blank.)
 func TestControllerHTTP_AuditWireShape(t *testing.T) {
 	env := newCtlTestEnv(t)
 	env.enrollNode(t, "node-1")
@@ -942,9 +943,8 @@ func TestControllerHTTP_AuditWireShape(t *testing.T) {
 }
 
 // TestControllerHTTP_RevokeClearsRekey is a regression guard: revoking a node that was
-// flagged for rekey must clear RekeyRequested, else the panel's "rotating" gate (which
-// counts rekey_requested nodes) would stay stuck forever on a node that can never
-// re-register.
+// flagged for rekey must clear RekeyRequested, else the panel's rotating warning would
+// stay stuck forever on a node that can never re-register.
 func TestControllerHTTP_RevokeClearsRekey(t *testing.T) {
 	env := newCtlTestEnv(t)
 	env.enrollNode(t, "node-1")
@@ -975,7 +975,7 @@ func TestControllerHTTP_RevokeClearsRekey(t *testing.T) {
 				t.Errorf("node-1 status = %q, want revoked", n.Status)
 			}
 			if n.RekeyRequested {
-				t.Errorf("node-1 rekey_requested still true after revoke (would stick the Deploy gate)")
+				t.Errorf("node-1 rekey_requested still true after revoke (would stick the deploy warning)")
 			}
 		}
 	}

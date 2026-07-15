@@ -461,10 +461,10 @@ func TestWarnInsecureControllerPosture(t *testing.T) {
 	}
 	if out := capture(func(ch *ControllerHandler) {
 		ch.SetSecureCookie(false)
-		if err := ch.store.SetOperatorCredential(context.Background(), testTenant, controller.OperatorCredential{
+		if err := ch.store.CompareAndSetOperatorCredential(context.Background(), testTenant, nil, controller.OperatorCredential{
 			Alg: string(trustlist.AlgEd25519), PublicKeyPEM: ed25519PinPEM(t, pub),
 		}); err != nil {
-			t.Fatalf("SetOperatorCredential: %v", err)
+			t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 		}
 	}); strings.Contains(out, "insecure dev posture") {
 		t.Fatalf("keystone-ON + secureCookie=false: want NO warning, got %q", out)

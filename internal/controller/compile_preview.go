@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/artifacts"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/normalize"
 )
@@ -57,7 +58,21 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 	}
 	fs := BuildFetchSettings(cs.WithDefaults())
 	fs.AgentRolloutNodeIDs = AgentRolloutNodeIDs(cs, nodes)
-	result, subgraph, skipped, err := CompileSubgraph(ctx, topo, nodes, fs)
+	// Match CompileAndStage's empty-subgraph semantics: with no ready node there are no bytes to
+	// render or sign, so an unrelated unreadable signing-key file must not turn an empty preview
+	// into an error. Project first, then resolve the signer only for a non-empty compile/export.
+	ready, skipped, err := projectEnrolledSubgraph(topo, nodes)
+	if err != nil {
+		return DeployPreviewResult{}, err
+	}
+	if len(ready.Nodes) == 0 {
+		return DeployPreviewResult{SkippedUnenrolled: skipped}, nil
+	}
+	signer, err := bundlesig.LoadConfigSignerFromEnv()
+	if err != nil {
+		return DeployPreviewResult{}, fmt.Errorf("controller: loading bundle signing key: %w", err)
+	}
+	result, subgraph, skipped, err := CompileSubgraphWithSigner(ctx, topo, nodes, fs, signer)
 	if err != nil {
 		return DeployPreviewResult{}, err
 	}
@@ -67,7 +82,7 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 
 	keystoneOn := false
 	var opCred OperatorCredential
-	if cred, cerr := store.GetOperatorCredential(ctx, t); cerr == nil {
+	if cred, cerr := GetKeystoneCredential(ctx, store, t); cerr == nil {
 		keystoneOn = true
 		opCred = cred
 	} else if !errors.Is(cerr, ErrNotFound) {
@@ -83,7 +98,7 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 		return DeployPreviewResult{}, fmt.Errorf("controller: creating preview temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmp)
-	if _, err := artifacts.Export(result, tmp); err != nil {
+	if _, err := artifacts.ExportWithSigner(result, tmp, signer); err != nil {
 		return DeployPreviewResult{}, fmt.Errorf("controller: exporting bundles to preview: %w", err)
 	}
 
@@ -93,7 +108,7 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 		Nodes:               make([]NodeDeployChange, 0, len(subgraph.Nodes)),
 	}
 	for _, node := range subgraph.Nodes {
-		files, err := readBundleDir(filepath.Join(tmp, node.Name))
+		files, err := readBundleDir(filepath.Join(tmp, node.ID))
 		if err != nil {
 			return DeployPreviewResult{}, fmt.Errorf("controller: reading bundle for node %s: %w", node.ID, err)
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -268,18 +269,29 @@ func (h *telemetryHistory) nodeFile(t TenantID, nodeID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(h.dir, tc, nc+".jsonl"), nil
+	if err := revalidateSecureStoreDir(h.dir); err != nil {
+		return "", fmt.Errorf("controller: telemetry history custody: %w", err)
+	}
+	tenantDir := filepath.Join(h.dir, tc)
+	if err := validateSecureStoreDirIfExists(tenantDir); err != nil {
+		return "", err
+	}
+	return filepath.Join(tenantDir, nc+".jsonl"), nil
 }
 
 // writeJSONL appends the samples to the node's JSONL, then compacts to the last `cap` lines when the file
 // exceeds cap×slack (amortized — most flushes are pure appends). The line count is tracked in memory,
 // counted once from disk on the first flush after start.
 func (h *telemetryHistory) writeJSONL(t TenantID, nodeID string, samples []ResourceSample, cap int) error {
-	p, err := h.nodeFile(t, nodeID)
+	tc, err := sanitizeComponent("tenant", string(t))
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+	if _, err := ensureSecureStoreChild(h.dir, tc); err != nil {
+		return fmt.Errorf("controller: telemetry history custody: %w", err)
+	}
+	p, err := h.nodeFile(t, nodeID)
+	if err != nil {
 		return err
 	}
 	var batch bytes.Buffer
@@ -413,30 +425,12 @@ func compactJSONL(p string, cap int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	tmp := p + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return 0, err
-	}
-	w := bufio.NewWriter(f)
+	var compacted bytes.Buffer
 	for _, ln := range lines {
-		if _, err := w.WriteString(ln); err != nil {
-			f.Close()
-			return 0, err
-		}
-		if err := w.WriteByte('\n'); err != nil {
-			f.Close()
-			return 0, err
-		}
+		compacted.WriteString(ln)
+		compacted.WriteByte('\n')
 	}
-	if err := w.Flush(); err != nil {
-		f.Close()
-		return 0, err
-	}
-	if err := f.Close(); err != nil {
-		return 0, err
-	}
-	if err := os.Rename(tmp, p); err != nil {
+	if err := writeBytesDurable(p, compacted.Bytes()); err != nil {
 		return 0, err
 	}
 	return len(lines), nil

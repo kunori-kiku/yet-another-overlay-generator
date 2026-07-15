@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
@@ -61,7 +62,8 @@ func pinFromParts(alg, credentialID, publicKeyPEM, rpid, origin string) (trustli
 
 // HandleOperatorCredential is the keystone-credential resource (operator-only): GET reports the
 // SERVER-authoritative keystone status; POST pins or rotates the off-host operator signing
-// credential. The op() wrapper enforces operator auth for both methods.
+// credential. RegisterOperatorRoutes applies the shared operator auth/CSRF middleware; this
+// multi-method handler performs its own method dispatch rather than using the typed op() adapter.
 func (h *ControllerHandler) HandleOperatorCredential(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -84,7 +86,7 @@ func (h *ControllerHandler) handleOperatorCredentialStatus(w http.ResponseWriter
 		writeAPIError(w, apierr.New(apierr.CodeInternalIdentityMissing))
 		return
 	}
-	cred, err := h.store.GetOperatorCredential(r.Context(), tenant)
+	cred, err := controller.GetKeystoneCredential(r.Context(), h.store, tenant)
 	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			writeJSON(w, http.StatusOK, operatorCredentialStatusJSON{Pinned: false})
@@ -128,7 +130,7 @@ func (h *ControllerHandler) handleOperatorCredentialStatus(w http.ResponseWriter
 // operation — never a silent overwrite:
 //
 //   - first pin (no prior credential): trust-on-first-use, audited "pin-operator-credential".
-//   - idempotent re-pin (same key + binding): refreshed in place, no fleet impact, no audit.
+//   - idempotent re-pin (same key + binding): compare-only, no fleet impact, no audit.
 //   - changed credential WITHOUT rotate:true: refused (CodeKeystoneRotationRequiresAck), no mutation.
 //   - changed credential WITH rotate:true: stored, audited "rotate-operator-credential", and the
 //     result reports redeploy_required when the served fleet is still signed under the old key.
@@ -152,18 +154,9 @@ func (h *ControllerHandler) handleOperatorCredentialPin(w http.ResponseWriter, r
 		writeCodedOr(w, apierr.CodeReqInvalidBody, err)
 		return
 	}
-	// Validate the PEM parses for the declared algorithm before pinning it.
-	switch trustlist.Alg(req.Alg) {
-	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA:
-		if _, err := trustlist.ParseEd25519PinPEM([]byte(req.PublicKeyPEM)); err != nil {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
-			return
-		}
-	case trustlist.AlgWebAuthnES256:
-		if _, err := trustlist.ParseES256Pin([]byte(req.PublicKeyPEM)); err != nil {
-			writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
-			return
-		}
+	alg := trustlist.Alg(req.Alg)
+	switch alg {
+	case trustlist.AlgEd25519, trustlist.AlgWebAuthnEdDSA, trustlist.AlgWebAuthnES256:
 	default:
 		writeAPIError(w, apierr.New(apierr.CodeReqUnsupportedAlg).With("alg", req.Alg))
 		return
@@ -176,6 +169,11 @@ func (h *ControllerHandler) handleOperatorCredentialPin(w http.ResponseWriter, r
 		RPID:         req.RPID,
 		Origin:       req.Origin,
 	}
+	candidatePin, err := pinFromParts(req.Alg, req.CredentialID, req.PublicKeyPEM, req.RPID, req.Origin)
+	if err != nil {
+		writeAPIError(w, apierr.New(apierr.CodeReqFieldInvalid).With("field", "public_key_pem").Wrap(err))
+		return
+	}
 
 	// RPID/Origin are baked UNQUOTED into the root-executed bootstrap script's OP_FLAGS
 	// accumulator (the unquoted ${OP_FLAGS} is intentional word-splitting — see
@@ -186,51 +184,86 @@ func (h *ControllerHandler) handleOperatorCredentialPin(w http.ResponseWriter, r
 		writeAPIError(w, err)
 		return
 	}
-
-	prior, perr := h.store.GetOperatorCredential(r.Context(), tenant)
-	switch {
-	case errors.Is(perr, controller.ErrNotFound):
-		// First pin: keystone turns ON (trust-on-first-use).
-		if err := h.store.SetOperatorCredential(r.Context(), tenant, newCred); err != nil {
-			writeCodedOr(w, apierr.CodeInternalStorage, err)
-			return
-		}
-		if !h.auditKeystone(r.Context(), w, tenant, operator, "pin-operator-credential") {
-			return
-		}
-		writeJSON(w, http.StatusOK, operatorCredentialPinResultJSON{OK: true})
-		return
-	case perr != nil:
+	prior, perr := controller.GetKeystoneCredential(r.Context(), h.store, tenant)
+	firstPin := errors.Is(perr, controller.ErrNotFound)
+	if perr != nil && !firstPin {
 		writeCodedOr(w, apierr.CodeInternalStorage, perr)
 		return
 	}
-
-	same, err := controller.SameKeystoneCredential(prior, newCred)
-	if err != nil {
-		// The PRIOR stored credential won't parse — an internal fault (it was validated when pinned).
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
-	}
-	if same {
-		// Idempotent re-pin of the same key + binding: refresh in place, no fleet impact, no audit churn.
-		if err := h.store.SetOperatorCredential(r.Context(), tenant, newCred); err != nil {
+	if !firstPin {
+		same, err := controller.SameKeystoneCredential(prior, newCred)
+		if err != nil {
+			// The PRIOR stored credential won't parse — an internal fault (it was validated when pinned).
 			writeCodedOr(w, apierr.CodeInternalStorage, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, operatorCredentialPinResultJSON{OK: true, Unchanged: true})
-		return
+		if same {
+			// Compare-only CAS: preserve the compatibility path (no proof for an existing key) while
+			// detecting a concurrent rotation. Passing prior as next avoids rewriting or normalizing
+			// any grandfathered record.
+			if err := controller.CompareAndSetKeystoneCredential(r.Context(), h.store, tenant, &prior, prior, nil); err != nil {
+				if errors.Is(err, controller.ErrOperatorCredentialChanged) {
+					writeAPIError(w, apierr.New(apierr.CodeKeystoneCredentialChanged))
+				} else {
+					writeCodedOr(w, apierr.CodeInternalStorage, err)
+				}
+				return
+			}
+			writeJSON(w, http.StatusOK, operatorCredentialPinResultJSON{OK: true, Unchanged: true})
+			return
+		}
+		// A genuinely different credential is a rotation. Refuse without explicit acknowledgement.
+		if !req.Rotate {
+			writeAPIError(w, apierr.New(apierr.CodeKeystoneRotationRequiresAck))
+			return
+		}
 	}
 
-	// A genuinely different credential — a rotation. Refuse without an explicit acknowledgement.
-	if !req.Rotate {
-		writeAPIError(w, apierr.New(apierr.CodeKeystoneRotationRequiresAck))
+	// A raw Ed25519 CLI keystone has no browser ceremony. New/rotated WebAuthn credentials must
+	// provide complete RP binding and a UV-bearing assertion by this exact candidate. These checks
+	// are deliberately after the idempotent branch so legacy WebAuthn pins with an empty optional
+	// field remain usable and can be re-posted without migration.
+	if alg == trustlist.AlgWebAuthnES256 || alg == trustlist.AlgWebAuthnEdDSA {
+		for _, required := range []struct {
+			name  string
+			value string
+		}{
+			{name: "credential_id", value: req.CredentialID},
+			{name: "rpid", value: req.RPID},
+			{name: "origin", value: req.Origin},
+		} {
+			if strings.TrimSpace(required.value) == "" {
+				writeAPIError(w, apierr.New(apierr.CodeReqFieldRequired).With("field", required.name))
+				return
+			}
+		}
+		if aerr := h.verifyWebAuthnEnrollmentProof(r.Context(), tenant, operator, webAuthnEnrollmentKeystone, req.EnrollmentProof, candidatePin); aerr != nil {
+			writeAPIError(w, aerr)
+			return
+		}
+	}
+
+	var expected *controller.OperatorCredential
+	if !firstPin {
+		expected = &prior
+	}
+	action := "pin-operator-credential"
+	if !firstPin {
+		action = "rotate-operator-credential"
+	}
+	if err := controller.CompareAndSetKeystoneCredential(r.Context(), h.store, tenant, expected, newCred, &controller.AuditEntry{
+		Actor:  "operator:" + operator,
+		Action: action,
+	}); err != nil {
+		if errors.Is(err, controller.ErrOperatorCredentialChanged) {
+			writeAPIError(w, apierr.New(apierr.CodeKeystoneCredentialChanged))
+		} else {
+			writeCodedOr(w, apierr.CodeInternalStorage, err)
+		}
 		return
 	}
-	if err := h.store.SetOperatorCredential(r.Context(), tenant, newCred); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return
-	}
-	if !h.auditKeystone(r.Context(), w, tenant, operator, "rotate-operator-credential") {
+	if firstPin {
+		writeJSON(w, http.StatusOK, operatorCredentialPinResultJSON{OK: true})
 		return
 	}
 	redeploy, err := controller.KeystoneRedeployRequired(r.Context(), h.store, tenant, newCred)
@@ -239,23 +272,6 @@ func (h *ControllerHandler) handleOperatorCredentialPin(w http.ResponseWriter, r
 		return
 	}
 	writeJSON(w, http.StatusOK, operatorCredentialPinResultJSON{OK: true, Rotated: true, RedeployRequired: redeploy})
-}
-
-// auditKeystone appends a keystone credential audit entry (a trust transition that must be
-// attributable in the hash-chained log). Unlike the best-effort stage-path audits, a failure to
-// record a keystone pin/rotate IS surfaced as an error: the credential change already committed,
-// so an un-auditable trust transition must not be reported as a clean success. Returns false (and
-// writes the error) on failure so the caller stops.
-func (h *ControllerHandler) auditKeystone(ctx context.Context, w http.ResponseWriter, tenant controller.TenantID, operator, action string) bool {
-	if _, err := h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
-		Timestamp: time.Now(),
-		Actor:     "operator:" + operator,
-		Action:    action,
-	}); err != nil {
-		writeCodedOr(w, apierr.CodeInternalStorage, err)
-		return false
-	}
-	return true
 }
 
 // HandleTrustList returns the STAGED membership manifest's canonical bytes (base64) plus

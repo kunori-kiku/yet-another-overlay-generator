@@ -2,7 +2,10 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +19,77 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 )
+
+// TestBootstrapReconcilesKeystoneAuditBeforeServing pins the audit-before-use boundary on the
+// unauthenticated bootstrap route. A credential CAS may commit before its mandatory audit append;
+// bootstrap must fail without distributing that new trust anchor until the durable transition
+// marker can be reconciled.
+func TestBootstrapReconcilesKeystoneAuditBeforeServing(t *testing.T) {
+	ctx := context.Background()
+	base := controller.NewMemStore()
+	faults := &apiKeystoneAppendFaultStore{Store: base, failBeforeCommit: 2}
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate operator credential: %v", err)
+	}
+	cred := controller.OperatorCredential{Alg: "ed25519", PublicKeyPEM: ed25519PinPEM(t, pub)}
+	if err := controller.CompareAndSetKeystoneCredential(ctx, faults, testTenant, nil, cred, &controller.AuditEntry{
+		Actor: "operator:admin", Action: "pin-operator-credential",
+	}); err == nil {
+		t.Fatal("credential transition with injected audit failure succeeded")
+	}
+
+	h := NewControllerHandler(faults, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
+	mux := http.NewServeMux()
+	h.RegisterAgentRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := srv.Client().Get(srv.URL + "/api/v1/agent/bootstrap")
+	if err != nil {
+		t.Fatalf("GET bootstrap while audit unavailable: %v", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read blocked bootstrap response: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("bootstrap while audit unavailable = %d, want 500", resp.StatusCode)
+	}
+	if bytes.Contains(body, []byte(cred.PublicKeyPEM)) {
+		t.Fatal("blocked bootstrap response distributed the unaudited credential")
+	}
+	if entries, err := base.ListAudit(ctx, testTenant); err != nil || len(entries) != 0 {
+		t.Fatalf("audit before recovery = (%+v, %v), want empty", entries, err)
+	}
+	if _, err := base.GetPendingKeystoneTransition(ctx, testTenant); err != nil {
+		t.Fatalf("bootstrap lost pending transition marker: %v", err)
+	}
+
+	resp, err = srv.Client().Get(srv.URL + "/api/v1/agent/bootstrap")
+	if err != nil {
+		t.Fatalf("GET bootstrap after audit recovery: %v", err)
+	}
+	body, readErr = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read recovered bootstrap response: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bootstrap after audit recovery = %d, want 200: %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte(cred.PublicKeyPEM)) {
+		t.Fatal("recovered bootstrap omitted the audited credential")
+	}
+	entries, err := base.ListAudit(ctx, testTenant)
+	if err != nil || len(entries) != 1 || entries[0].Action != "pin-operator-credential" {
+		t.Fatalf("audit after recovery = (%+v, %v), want one pin event", entries, err)
+	}
+	if _, err := base.GetPendingKeystoneTransition(ctx, testTenant); !errors.Is(err, controller.ErrNotFound) {
+		t.Fatalf("pending marker after recovery = %v, want ErrNotFound", err)
+	}
+}
 
 // TestShellSingleQuote proves the POSIX single-quote escaping primitive (renamed from shQuote):
 // empty and no-quote values wrap verbatim; a single quote becomes the '\” idiom; adjacent quotes

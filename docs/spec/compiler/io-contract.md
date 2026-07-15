@@ -11,11 +11,11 @@ This document is the **authority** the in-browser Go/WASM engine builds on (the 
 (`internal/localcompile/testdata/contract/`) is the **authoritative byte-freeze**: the exact bytes
 today's pipeline emits for a fixed set of fixtures with fixed keys and a fixed clock.
 
-> Scope: this contract **freezes current behavior**. It defines no new semantics. In particular it
-> does **not** define or change `router_id` semantics (owned by plan-9) — it only freezes the
-> `RouterID` write-back the pipeline already performs. It introduces **no intentional byte change**:
-> every existing caller (the air-gap CLI, the WASM engine, the controller subgraph compile) is
-> byte-identical before and after the extraction.
+> Scope: this contract freezes the current shared behavior. It does not independently define
+> `router_id` semantics; it records the `RouterID` write-back the pipeline performs. When an
+> intentional artifact-contract change lands, the Go golden corpus and fresh WASM output are
+> regenerated and reviewed together so the CLI, browser, and controller do not acquire divergent
+> implementations.
 
 ---
 
@@ -59,15 +59,17 @@ bytes, so it is deliberately not a request field.
 |-------|------|---------|-------------|
 | `Topology` | `*model.Topology` | The compiled topology with allocator write-backs applied: the seven `model.Edge` pin fields + `OverlayIP` + `RouterID` per node. | allocated values **IN**; echoed input **n/a** |
 | `Files` | `map[string]map[string]string` | Per-node bundle set: `nodeID -> relpath -> content` (see §3). | **IN** |
-| `Deploy` | `map[string]string` | Project-level deploy scripts (`deploy-all.sh` / `deploy-all.ps1`). | **IN** |
+| `Deploy` | `map[string]string` | Project-level custody-aware helpers (`deploy-all.sh` / `deploy-all.ps1`): operational SSH scripts for AirGap, fail-closed guidance stubs for AgentHeld. | **IN** |
 | `Checksums` | `map[string]string` | `nodeID -> checksums.sha256` content, via `bundlesig.Canonicalize` (see §2). | **IN** |
 | `Signatures` | `map[string]string` | `nodeID -> bundle.sig` (**bare** base64 of the Ed25519 signature over the node's canonical checksums). Present only when `SigningKey != nil`. The on-disk `bundle.sig` the exporter writes is this same base64 **plus a trailing newline** — a file-representation detail; the signed/digest-bound bytes (the node's `checksums.sha256`) are identical. | **IN** (when signing on) |
 | `SigningPubPEM` | `[]byte` | PKIX (`PUBLIC KEY`) PEM of the verifying key, identical per node. Present iff signing on. | **IN** (when signing on) |
 | `Warnings` | `[]validator.ValidationError` | Non-fatal schema/semantic findings. | informational |
 | `Manifest` | `compiler.CompileManifest` | The compile summary. `CompiledAt` (timestamp) and `Checksum` (display-only digest) are **OUT** (see §7). | mixed |
 
-The shape mirrors what `artifacts.Export` already writes to disk; the disk write is **presentation,
-not contract** (`artifacts.Export` is a thin adapter over `CompileArtifacts`).
+The shape mirrors what `artifacts.Export` writes to disk. The exporter consumes a rendered
+`compiler.CompileResult` rather than this struct, but both paths call the same
+`artifacts.BundleFiles` member-set authority and canonicalizer; the filesystem layout is
+presentation, while member identity and bytes are contract surfaces.
 
 ---
 
@@ -101,11 +103,13 @@ checksummed set — exactly the bytes `Checksums` and (when signing on) `Signatu
 | `babel/babeld.conf` | non-client nodes | Babel router config. Omitted for the client role (the client exception: single `wg0`, no Babel). |
 | `sysctl/99-overlay.conf` | every node | Forwarding / `rp_filter` settings. |
 | `install.sh` | every node | Install / uninstall script (verifies root, splices keys, applies the SNAT fix). |
+| `README.txt` | every node | Human usage and custody guidance. It is a member so an untrusted delivery cannot rewrite the AgentHeld application instructions without invalidating integrity. |
 | `artifacts.json` | when a catalog is configured | The controller-signed mimic/agent-update pins. **Omitted entirely when no catalog is configured**, so a non-catalog bundle stays byte-identical. A signed member (its pins inherit the bundle's signature + keystone digest). |
 
-`bundle.sig` / `signing-pubkey.pem` (when signing on) and `manifest.json` are **not** members of
-the checksummed set — they are the authenticity layer over it (and the display-only manifest),
-represented in `CompileArtifacts` as `Signatures` / `SigningPubPEM` / `Manifest`, not in `Files`.
+`bundle.sig` / `signing-pubkey.pem` (when signing on), `checksums.sha256`, and `manifest.json` are
+**not** members of the checksummed set: the first two are the authenticity layer over it,
+`checksums.sha256` is the digest list itself, and the manifest is compile metadata. They are
+represented separately rather than in `Files`.
 
 This per-node set is **single-sourced**: both the in-memory `CompileArtifacts.Files`
 (`localcompile.ArtifactsFromResult`) and the on-disk bundle (`artifacts.Export`) build it through
@@ -135,16 +139,20 @@ compiler→validator import cycle).
   `PinKey(from, to) + "#" + e.ID` for a backup edge (each backup is its own link).
 - **`IsBackup(e)`** — `e.Role == "backup"`; empty role and `"primary"` are both primary class.
 
-### 4.2 `internal/naming` — artifact names
+### 4.2 `internal/naming` — portable node IDs and interface names
 
-The single authority for installer file names and WireGuard interface names
-(`internal/naming/naming.go`, Spec D — `docs/spec/artifacts/naming.md`). Leaf package, stdlib only.
+The single authority for portable node-directory IDs and WireGuard interface names
+(`internal/naming/naming.go`; [artifact naming](../artifacts/naming.md)). It is a stdlib-only leaf
+package shared by validation, export, and rendering.
 
-- **`SafeInstallerFileName(nodeName)`** — lowercase → map non-`[a-z0-9-_]` to `-` → collapse
-  repeated `-` → trim `-` → empty becomes `"node"` → append `".install.sh"`.
-- **`WgInterfaceName(remoteName)`** — `"wg-"` + cleaned name (non-`[a-z0-9-]` → `-`, underscore NOT
-  preserved); ≤15 chars returned as-is, otherwise `"wg-" + clean[:8] + sha256(remoteName)[:4]`
-  (15-char budget). **Note** the cleaner here, unlike `SafeInstallerFileName`, maps `_` to `-`.
+- **`ValidPortableNodeID(nodeID)`** — accepts only the canonical cross-platform bundle-directory
+  contract: `[A-Za-z0-9._-]+`, at most 240 ASCII bytes, no trailing dot, Windows device basename,
+  or project-helper collision.
+- **`PortableNodeIDKey(nodeID)`** — ASCII-lowercase collision key. Semantic validation rejects two
+  node IDs that share it, because a Windows extraction would alias their directories.
+- **`WgInterfaceName(remoteName)`** — `"wg-"` + cleaned name (non-`[a-z0-9-]` → `-`, underscore
+  maps to `-`); ≤15 chars returned as-is, otherwise
+  `"wg-" + clean[:8] + sha256(remoteName)[:4]` (15-char budget).
 - **`WgInterfaceNameForEdge(remoteName, edgeID, backup)`** — for `backup == false` returns
   `WgInterfaceName(remoteName)` byte-identical (zero rename for existing fleets); for `backup ==
   true` returns `"wg-" + clean[:8] + sha256(remoteName + "|" + edgeID)[:4]` unconditionally, folding
@@ -246,10 +254,12 @@ config.
 
 What the cross-language byte-equality assertions cover, and what they deliberately exclude.
 
-**IN (must be byte-identical Go ↔ TS):**
+**IN (must be byte-identical native Go ↔ Go/WASM):**
 - Every rendered file in `CompileArtifacts.Files` — `wireguard/<iface>.conf`, `babel/babeld.conf`,
-  `sysctl/99-overlay.conf`, `install.sh`, and `artifacts.json` (when a catalog is configured).
-- The project-level `Deploy` scripts (`deploy-all.sh` / `deploy-all.ps1`).
+  `sysctl/99-overlay.conf`, `install.sh`, `README.txt`, and `artifacts.json` (when a catalog is
+  configured).
+- The project-level custody-aware `Deploy` helpers (`deploy-all.sh` / `deploy-all.ps1`). AirGap
+  output is operational; AgentHeld output must remain a non-executing guidance stub.
 - The per-node `Checksums` (`checksums.sha256`, via `Canonicalize`).
 - The allocated values written back onto the topology: `OverlayIP` per node and the seven pin fields
   per edge (allocated ports / transit IPs / link-locals — §4.4).
@@ -265,10 +275,15 @@ What the cross-language byte-equality assertions cover, and what they deliberate
   `CompileManifest.CompiledAt` (← `CompileRequest.CompiledAt`). Display/provenance only.
 - **`manifest.json`'s `checksum`** — `compiler.computeChecksum` is `sha256(fmt.Sprintf("%v", topo))[:16]`,
   a **non-canonical, display-only** digest with no TS counterpart and explicitly NOT the signed
-  digest (that is `Canonicalize`, §2). Masked in the golden corpus.
+  member hash (that authority is `Canonicalize`, §2). Install scripts and agents do not verify this
+  metadata field. It is masked in the golden corpus.
 
 `manifest.json` itself is reconstructed by the `artifacts.Export` adapter at write time from the
 deterministic identity fields plus these two OUT fields; it is not a member of `CompileArtifacts.Files`.
+
+The browser/WASM preview ZIP container is also presentation rather than a byte-frozen field. Its
+contents are contract-bound: ID-keyed `Files`, matching `Checksums`, and the matching root `Deploy`
+helpers from one compile are written into the same archive.
 
 ---
 

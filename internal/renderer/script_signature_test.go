@@ -93,6 +93,7 @@ func TestRenderInstallScriptSigned_VerifyStepPrecedesChecksum(t *testing.T) {
 	if verifyIdx < 0 || verifyIdx >= checksumIdx {
 		t.Errorf("openssl verify step must PRECEDE the sha256sum check (verifyIdx=%d, checksumIdx=%d)", verifyIdx, checksumIdx)
 	}
+	assertSignedInstallerGateOrder(t, script, verifyIdx, checksumIdx)
 
 	// Fail-clear discipline: a present bundle.sig with no/insufficient openssl must abort.
 	if !strings.Contains(script, "bundle.sig present but openssl is not installed") {
@@ -162,6 +163,23 @@ func TestRenderClientInstallScriptSigned_VerifyStepPrecedesChecksum(t *testing.T
 	}
 	if verifyIdx < 0 || verifyIdx >= checksumIdx {
 		t.Errorf("client openssl verify must PRECEDE the sha256sum check (verifyIdx=%d, checksumIdx=%d)", verifyIdx, checksumIdx)
+	}
+	assertSignedInstallerGateOrder(t, script, verifyIdx, checksumIdx)
+}
+
+func assertSignedInstallerGateOrder(t *testing.T, script string, verifyIdx, checksumIdx int) {
+	t.Helper()
+	rootIdx := strings.Index(script, `if [ "$(id -u)" -ne 0 ]`)
+	uninstallIdx := strings.Index(script, `if [ "$UNINSTALL" -eq 1 ]; then`)
+	cleanIdx := strings.Index(script, `if [ "$CLEAN" -eq 1 ]; then`)
+	phase0Idx := strings.Index(script, "=== Phase 0: Cleanup Previous Installation ===")
+	if verifyIdx < 0 || checksumIdx < 0 || rootIdx < 0 || uninstallIdx < 0 || cleanIdx < 0 || phase0Idx < 0 {
+		t.Fatalf("signed installer missing an execution-order marker: verify=%d checksum=%d root=%d uninstall=%d clean=%d phase0=%d",
+			verifyIdx, checksumIdx, rootIdx, uninstallIdx, cleanIdx, phase0Idx)
+	}
+	if !(verifyIdx < checksumIdx && checksumIdx < rootIdx && rootIdx < uninstallIdx && uninstallIdx < cleanIdx && cleanIdx < phase0Idx) {
+		t.Fatalf("signed installer can mutate before integrity gates: verify=%d checksum=%d root=%d uninstall=%d clean=%d phase0=%d",
+			verifyIdx, checksumIdx, rootIdx, uninstallIdx, cleanIdx, phase0Idx)
 	}
 }
 

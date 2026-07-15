@@ -13,12 +13,38 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
+
+type apiKeystoneAppendFaultStore struct {
+	controller.Store
+	failBeforeCommit int
+}
+
+func (s *apiKeystoneAppendFaultStore) AppendAudit(ctx context.Context, tenant controller.TenantID, entry controller.AuditEntry) (controller.AuditEntry, error) {
+	if s.failBeforeCommit > 0 {
+		s.failBeforeCommit--
+		return controller.AuditEntry{}, errors.New("injected keystone audit append failure")
+	}
+	return s.Store.AppendAudit(ctx, tenant, entry)
+}
+
+func newKeystoneFaultTestEnv(t *testing.T, store controller.Store) *ctlTestEnv {
+	t.Helper()
+	h := NewControllerHandler(store, testTenant, controller.HashToken(testOperatorToken), DefaultOperatorName, "dev")
+	mux := http.NewServeMux()
+	h.RegisterOperatorRoutes(mux)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return &ctlTestEnv{opSrv: server, store: store}
+}
 
 // keystoneAuditActions returns the audit-log action strings recorded for the test tenant, so a
 // test can assert the exact pin/rotate accountability entries (and their absence on an idempotent
@@ -71,6 +97,44 @@ func TestKeystoneStatus_OffUntilPinned(t *testing.T) {
 	}
 	if st.RedeployRequired {
 		t.Fatalf("after first pin (nothing deployed): redeploy_required must be false, got %+v", st)
+	}
+}
+
+// TestKeystoneStatusReadHealsCommittedCredentialAudit is the HTTP-level recovery contract the
+// panel relies on: a failed POST can have committed the candidate credential before its audit
+// append. GET /operator-credential must finish that pending audit and report the candidate as
+// pinned, so the frontend need not repeat the mutating CAS (which could otherwise lose the event).
+func TestKeystoneStatusReadHealsCommittedCredentialAudit(t *testing.T) {
+	base := controller.NewMemStore()
+	faults := &apiKeystoneAppendFaultStore{Store: base, failBeforeCommit: 1}
+	env := newKeystoneFaultTestEnv(t, faults)
+	pub, _, _ := ed25519.GenerateKey(nil)
+
+	if status, _ := postCred(t, env, pub, false); status != http.StatusInternalServerError {
+		t.Fatalf("pin with injected append failure: status %d, want 500", status)
+	}
+	if entries, err := base.ListAudit(context.Background(), testTenant); err != nil || len(entries) != 0 {
+		t.Fatalf("audit before status recovery = (%+v, %v), want empty", entries, err)
+	}
+	if _, err := base.GetPendingKeystoneTransition(context.Background(), testTenant); err != nil {
+		t.Fatalf("pending marker after failed POST: %v", err)
+	}
+
+	status := keystoneStatus(t, env)
+	if !status.Pinned || status.PublicKeyPEM != ed25519PinPEM(t, pub) {
+		t.Fatalf("status recovery reported wrong credential: %+v", status)
+	}
+	actions := keystoneAuditActions(t, env)
+	if got := countAction(actions, "pin-operator-credential"); got != 1 {
+		t.Fatalf("pin audit count after status recovery = %d, want exactly 1 (actions %v)", got, actions)
+	}
+	if _, err := base.GetPendingKeystoneTransition(context.Background(), testTenant); !errors.Is(err, controller.ErrNotFound) {
+		t.Fatalf("pending marker after status recovery = %v, want ErrNotFound", err)
+	}
+
+	_ = keystoneStatus(t, env)
+	if got := countAction(keystoneAuditActions(t, env), "pin-operator-credential"); got != 1 {
+		t.Fatalf("repeated status duplicated pin audit: got %d", got)
 	}
 }
 
@@ -161,6 +225,9 @@ func TestKeystoneRotationCode(t *testing.T) {
 	if apierr.New(apierr.CodeKeystoneRotationRequiresAck).Status() != http.StatusConflict {
 		t.Fatal("CodeKeystoneRotationRequiresAck must be a 409")
 	}
+	if apierr.New(apierr.CodeKeystoneCredentialChanged).Status() != http.StatusConflict {
+		t.Fatal("CodeKeystoneCredentialChanged must be a 409")
+	}
 }
 
 // TestKeystoneAudit pins the accountability invariant: a first pin records exactly one
@@ -196,9 +263,9 @@ func TestKeystoneAudit(t *testing.T) {
 	}
 }
 
-// es256PinPEM builds a fresh ES256 (P-256) PKIX public-key PEM — the production keystone uses a
-// WebAuthn ES256 passkey, so the rotation gate must be exercised through the WebAuthn alg too.
-func es256PinPEM(t *testing.T) string {
+// es256PinPEM builds a fresh ES256 (P-256) keypair — the production keystone uses a
+// WebAuthn ES256 passkey, so the rotation and enrollment-proof gates exercise that alg too.
+func es256PinPEM(t *testing.T) (string, *ecdsa.PrivateKey) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -208,7 +275,7 @@ func es256PinPEM(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("marshal pkix: %v", err)
 	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), priv
 }
 
 // TestKeystoneRotation_WebAuthnRebinding drives the rotation gate end-to-end through the PRODUCTION
@@ -217,11 +284,15 @@ func es256PinPEM(t *testing.T) string {
 // WITH rotate it succeeds. It also asserts the public identifiers round-trip through GET status.
 func TestKeystoneRotation_WebAuthnRebinding(t *testing.T) {
 	env := newCtlTestEnv(t)
-	pemES := es256PinPEM(t)
+	pemES, priv := es256PinPEM(t)
 	base := operatorCredentialRequestJSON{
 		Alg: string(trustlist.AlgWebAuthnES256), PublicKeyPEM: pemES,
 		RPID: "rp.example", Origin: "https://rp.example", CredentialID: "cred-1",
 	}
+	proof := buildAssertion(t, trustlist.AlgWebAuthnES256, base.RPID, base.Origin,
+		beginWebAuthnEnrollment(t, env.opSrv, testOperatorToken, webAuthnEnrollmentKeystone),
+		base.CredentialID, pemES, priv)
+	base.EnrollmentProof = &proof
 	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, base, nil); status != http.StatusOK {
 		t.Fatalf("first webauthn pin: status %d, want 200", status)
 	}
@@ -248,11 +319,156 @@ func TestKeystoneRotation_WebAuthnRebinding(t *testing.T) {
 
 	// With rotate it succeeds and the new rpid is stored.
 	rebind.Rotate = true
+	rotateProof := buildAssertion(t, trustlist.AlgWebAuthnES256, rebind.RPID, rebind.Origin,
+		beginWebAuthnEnrollment(t, env.opSrv, testOperatorToken, webAuthnEnrollmentKeystone),
+		rebind.CredentialID, pemES, priv)
+	rebind.EnrollmentProof = &rotateProof
 	var res operatorCredentialPinResultJSON
 	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, rebind, &res); status != http.StatusOK || !res.Rotated {
 		t.Fatalf("webauthn rebinding with rotate: status %d res %+v, want 200 rotated", status, res)
 	}
 	if got := keystoneStatus(t, env); got.RPID != "evil.example" {
 		t.Fatalf("acked rebinding must store the new rpid, got %q", got.RPID)
+	}
+}
+
+// TestKeystoneWebAuthnPinRequiresUVEnrollmentProof covers the first-pin side of the shared
+// enrollment policy. Raw Ed25519 pins remain CLI-compatible, but a browser WebAuthn keystone is
+// not stored without an unconsumed server challenge and a UV assertion by the candidate key.
+func TestKeystoneWebAuthnPinRequiresUVEnrollmentProof(t *testing.T) {
+	env := newCtlTestEnv(t)
+	pemES, priv := es256PinPEM(t)
+	base := operatorCredentialRequestJSON{
+		Alg:          string(trustlist.AlgWebAuthnES256),
+		CredentialID: "keystone-enrollment-proof",
+		PublicKeyPEM: pemES,
+		RPID:         "rp.example",
+		Origin:       "https://rp.example",
+	}
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, base, nil); status != http.StatusBadRequest {
+		t.Fatalf("missing keystone enrollment proof = %d, want 400", status)
+	}
+	if keystoneStatus(t, env).Pinned {
+		t.Fatal("missing keystone enrollment proof mutated server state")
+	}
+
+	upOnly := buildAssertionWithFlags(t, trustlist.AlgWebAuthnES256, base.RPID, base.Origin,
+		beginWebAuthnEnrollment(t, env.opSrv, testOperatorToken, webAuthnEnrollmentKeystone),
+		base.CredentialID, pemES, priv, 0x01)
+	withUPOnly := base
+	withUPOnly.EnrollmentProof = &upOnly
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, withUPOnly, nil); status != http.StatusBadRequest {
+		t.Fatalf("UP-only keystone enrollment proof = %d, want 400", status)
+	}
+	if keystoneStatus(t, env).Pinned {
+		t.Fatal("UP-only keystone enrollment proof mutated server state")
+	}
+
+	uv := buildAssertion(t, trustlist.AlgWebAuthnES256, base.RPID, base.Origin,
+		beginWebAuthnEnrollment(t, env.opSrv, testOperatorToken, webAuthnEnrollmentKeystone),
+		base.CredentialID, pemES, priv)
+	withUV := base
+	withUV.EnrollmentProof = &uv
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, withUV, nil); status != http.StatusOK {
+		t.Fatalf("UV keystone enrollment proof = %d, want 200", status)
+	}
+}
+
+// TestKeystoneWebAuthnIdempotentRepinNeedsNoProof is the direct compatibility contract for rc.7:
+// a credential already pinned before enrollment-scoped UV was introduced is not forced through a
+// new ceremony merely because its public descriptor is re-posted. No state or audit entry changes.
+func TestKeystoneWebAuthnIdempotentRepinNeedsNoProof(t *testing.T) {
+	env := newCtlTestEnv(t)
+	pemES, priv := es256PinPEM(t)
+	req := operatorCredentialRequestJSON{
+		Alg:          string(trustlist.AlgWebAuthnES256),
+		CredentialID: "existing-web-authn",
+		PublicKeyPEM: pemES,
+		RPID:         "rp.example",
+		Origin:       "https://rp.example",
+	}
+	proof := buildAssertion(t, trustlist.AlgWebAuthnES256, req.RPID, req.Origin,
+		beginWebAuthnEnrollment(t, env.opSrv, testOperatorToken, webAuthnEnrollmentKeystone),
+		req.CredentialID, pemES, priv)
+	req.EnrollmentProof = &proof
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, req, nil); status != http.StatusOK {
+		t.Fatalf("initial WebAuthn pin = %d, want 200", status)
+	}
+	before := keystoneStatus(t, env)
+	beforeAudit := keystoneAuditActions(t, env)
+
+	req.EnrollmentProof = nil
+	var result operatorCredentialPinResultJSON
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, req, &result); status != http.StatusOK || !result.Unchanged || result.Rotated {
+		t.Fatalf("idempotent proof-free re-pin = %d %+v, want 200 unchanged", status, result)
+	}
+	after := keystoneStatus(t, env)
+	if after.Fingerprint != before.Fingerprint || after.CredentialID != before.CredentialID || after.RPID != before.RPID || after.Origin != before.Origin {
+		t.Fatalf("idempotent re-pin changed server state: before=%+v after=%+v", before, after)
+	}
+	if afterAudit := keystoneAuditActions(t, env); len(afterAudit) != len(beforeAudit) {
+		t.Fatalf("idempotent re-pin added audit entries: before=%v after=%v", beforeAudit, afterAudit)
+	}
+}
+
+// TestKeystoneNewWebAuthnPinRequiresCompleteBinding applies the new binding contract only to real
+// enrollments. The idempotent compatibility test above proves old stored descriptors remain usable.
+func TestKeystoneNewWebAuthnPinRequiresCompleteBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+	}{
+		{name: "credential id", field: "credential_id"},
+		{name: "rp id", field: "rpid"},
+		{name: "origin", field: "origin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newCtlTestEnv(t)
+			pemES, _ := es256PinPEM(t)
+			req := operatorCredentialRequestJSON{
+				Alg:          string(trustlist.AlgWebAuthnES256),
+				CredentialID: "credential",
+				PublicKeyPEM: pemES,
+				RPID:         "rp.example",
+				Origin:       "https://rp.example",
+			}
+			switch tc.field {
+			case "credential_id":
+				req.CredentialID = ""
+			case "rpid":
+				req.RPID = ""
+			case "origin":
+				req.Origin = ""
+			}
+			if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken, req, nil); status != http.StatusBadRequest {
+				t.Fatalf("missing %s status = %d, want 400", tc.field, status)
+			}
+			if keystoneStatus(t, env).Pinned {
+				t.Fatalf("missing %s mutated server state", tc.field)
+			}
+		})
+	}
+}
+
+func TestKeystoneLegacyWebAuthnEmptyOriginCanRepinIdempotently(t *testing.T) {
+	env := newCtlTestEnv(t)
+	pemES, _ := es256PinPEM(t)
+	legacy := controller.OperatorCredential{
+		Alg:          string(trustlist.AlgWebAuthnES256),
+		CredentialID: "legacy-credential",
+		PublicKeyPEM: pemES,
+		RPID:         "rp.example",
+		Origin:       "",
+	}
+	if err := env.store.CompareAndSetOperatorCredential(context.Background(), testTenant, nil, legacy); err != nil {
+		t.Fatalf("seed legacy credential: %v", err)
+	}
+	var result operatorCredentialPinResultJSON
+	if status := doJSON(t, http.MethodPost, env.opURL("operator-credential"), testOperatorToken,
+		operatorCredentialRequestJSON{
+			Alg: legacy.Alg, CredentialID: legacy.CredentialID, PublicKeyPEM: legacy.PublicKeyPEM,
+			RPID: legacy.RPID, Origin: legacy.Origin,
+		}, &result); status != http.StatusOK || !result.Unchanged {
+		t.Fatalf("legacy empty-origin idempotent re-pin = %d %+v, want 200 unchanged", status, result)
 	}
 }

@@ -33,6 +33,9 @@ func PromoteStaged(ctx context.Context, store Store, t TenantID) (int64, error) 
 	// Serialized against any concurrent stage/promote for this tenant — a promote
 	// landing mid-stage would flip a partial stage set (see lockTenantOps).
 	defer lockTenantOps(t)()
+	if err := reconcileKeystoneTrustBoundaryLocked(ctx, store, t); err != nil {
+		return 0, err
+	}
 
 	cred, err := store.GetOperatorCredential(ctx, t)
 	if err != nil {

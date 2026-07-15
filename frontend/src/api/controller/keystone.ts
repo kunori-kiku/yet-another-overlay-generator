@@ -1,7 +1,7 @@
 // Keystone (off-host operator signing) client routes + wire types.
 //
 // These mirror internal/trustlist/types.go (SignedTrustList) and the keystone routes in
-// internal/api/handler_controller.go. The byte-level contract — every base64url field is RFC4648
+// internal/api/handler_keystone.go. The byte-level contract — every base64url field is RFC4648
 // url-alphabet WITHOUT padding (Go base64.RawURLEncoding), the challenge binding, and the rpid
 // binding — lives in ../../lib/webauthn.ts, which is the single place that builds these structs.
 
@@ -16,11 +16,9 @@ export type WebAuthnAlg = 'webauthn-es256' | 'webauthn-eddsa';
 export const AlgWebAuthnES256 = 'webauthn-es256' as const;
 export const AlgWebAuthnEdDSA = 'webauthn-eddsa' as const;
 
-// SignedTrustList is the detached-signature artifact the operator's authenticator
-// produces over a deploy's canonical membership manifest. Field names + base64url
-// encodings match trustlist.SignedTrustList exactly (snake_case JSON, RawURLEncoding
-// on every base64url field). It is carried as the `signed` field of POST
-// /trustlist-signature.
+// SignedTrustList is the historical wire name for a WebAuthn assertion. It normally carries the
+// detached signature over a deploy's canonical manifest, and the same shape carries random-
+// challenge login and enrollment assertions. Field names + base64url encodings match Go exactly.
 export interface SignedTrustList {
   alg: WebAuthnAlg;
   credential_id: string; // base64url(rawId)
@@ -48,14 +46,15 @@ export interface TrustListToSign {
 
 // operatorCredentialRequestJSON shape for POST /operator-credential: the pinned
 // off-host signing credential. public_key_pem is the PKIX "PUBLIC KEY" PEM; rpid
-// MUST equal the rp.id used at create() time (the node binds SHA256(rpid) to the
-// assertion rpIdHash); origin is advisory on the node.
+// MUST equal the rp.id used at create() time (the verifier binds SHA256(rpid) to the
+// assertion rpIdHash). New/rotated browser credentials also carry enrollmentProof.
 export interface OperatorCredentialBody {
   alg: WebAuthnAlg;
   credentialId: string; // base64url(rawId)
   publicKeyPEM: string; // PKIX "PUBLIC KEY" PEM
   rpId: string; // location.hostname
   origin: string; // location.origin
+  enrollmentProof: SignedTrustList; // candidate's UV assertion over a one-use server challenge
   // rotate ACKNOWLEDGES that this pin REPLACES a different already-pinned credential (which
   // strands every node until re-provisioned + redeployed). The controller refuses a changed
   // credential without it (409 keystone_rotation_requires_ack). Ignored on a first/idempotent pin.
@@ -77,7 +76,8 @@ export interface OperatorCredentialPinResult {
 // read "Not enrolled". It carries only non-secret public identifiers. publicKeyPEM is the
 // credential's PUBLIC PEM (audit-only, already baked into every node bundle): a cleared/fresh
 // browser recovers it — with credentialId/alg/rpId — to re-prompt the authenticator WITHOUT
-// re-pinning (plan-3 signing-handle auto-recovery). The private key never leaves the authenticator.
+// re-pinning (plan-3 signing-handle auto-recovery). Only public descriptor material is returned;
+// YAOG does not receive plaintext private-key material or establish provider non-exportability.
 export interface OperatorCredentialStatus {
   pinned: boolean;
   alg: string;
@@ -149,6 +149,7 @@ export async function postOperatorCredential(
       public_key_pem: body.publicKeyPEM,
       rpid: body.rpId,
       origin: body.origin,
+      enrollment_proof: body.enrollmentProof,
       rotate: body.rotate ?? false,
     }),
   );
@@ -184,8 +185,14 @@ export async function getOperatorCredentialStatus(
     public_key_pem?: string;
     redeploy_required?: boolean;
   };
+  // Security-sensitive tri-state boundary: an absent/malformed `pinned` value is UNKNOWN, not
+  // keystone-off. Callers deliberately retain their prior/null status on this error, so the panel
+  // cannot expose the dangerous no-keystone workflow without an explicit false from the server.
+  if (typeof d.pinned !== 'boolean') {
+    throw new Error('operator credential status response is missing boolean pinned');
+  }
   return {
-    pinned: d.pinned ?? false,
+    pinned: d.pinned,
     alg: d.alg ?? '',
     credentialId: d.credential_id ?? '',
     rpId: d.rpid ?? '',

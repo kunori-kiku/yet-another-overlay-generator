@@ -12,6 +12,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -44,6 +45,9 @@ type totpStatusResponseJSON struct {
 // authenticated via the break-glass token, which has no account and so cannot manage 2FA /
 // passkeys. Shared by the TOTP and passkey-management handlers.
 func (h *ControllerHandler) currentOperatorAccount(ctx context.Context, tenant controller.TenantID, name string) (controller.Operator, *apierr.Error) {
+	if kind, ok := operatorAuthKindFromCtx(ctx); !ok || kind != operatorAuthSession {
+		return controller.Operator{}, apierr.New(apierr.CodeTotpRequiresLogin)
+	}
 	op, err := h.store.GetOperator(ctx, tenant, name)
 	if err != nil {
 		return controller.Operator{}, apierr.New(apierr.CodeTotpRequiresLogin).Wrap(err)
@@ -93,10 +97,12 @@ func (h *ControllerHandler) HandleTOTPConfirm(ctx context.Context, tenant contro
 	if !totpOK {
 		return nil, apierr.New(apierr.CodeTotpInvalidCode)
 	}
-	op.TOTPSecret = req.Secret
-	op.TOTPLastUsedStep = step
-	op.UpdatedAt = now
-	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+	expected := controller.TOTPState{Secret: op.TOTPSecret, LastUsedStep: op.TOTPLastUsedStep}
+	next := controller.TOTPState{Secret: req.Secret, LastUsedStep: step}
+	if err := h.store.CompareAndSetTOTPState(ctx, tenant, op.Username, expected, next, now); err != nil {
+		if errors.Is(err, controller.ErrTOTPStateChanged) {
+			return nil, apierr.New(apierr.CodeTOTPStateChanged)
+		}
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{
@@ -123,10 +129,11 @@ func (h *ControllerHandler) HandleTOTPDisable(ctx context.Context, tenant contro
 	if totpOK, _ := controller.VerifyTOTP(op.TOTPSecret, req.Code, now, op.TOTPLastUsedStep); !totpOK {
 		return nil, apierr.New(apierr.CodeTotpInvalidCode)
 	}
-	op.TOTPSecret = ""
-	op.TOTPLastUsedStep = 0
-	op.UpdatedAt = now
-	if err := h.store.PutOperator(ctx, tenant, op); err != nil {
+	expected := controller.TOTPState{Secret: op.TOTPSecret, LastUsedStep: op.TOTPLastUsedStep}
+	if err := h.store.CompareAndSetTOTPState(ctx, tenant, op.Username, expected, controller.TOTPState{}, now); err != nil {
+		if errors.Is(err, controller.ErrTOTPStateChanged) {
+			return nil, apierr.New(apierr.CodeTOTPStateChanged)
+		}
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
 	_, _ = h.store.AppendAudit(ctx, tenant, controller.AuditEntry{

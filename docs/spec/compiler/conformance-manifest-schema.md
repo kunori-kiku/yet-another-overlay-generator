@@ -25,12 +25,12 @@ list). This harness MIRRORS that list: the manifest covers every §7-IN surface 
 per-node bundle files, the allocated pins/IPs/ports, the project-level deploy scripts, and the
 detached `bundle.sig` signatures + `signing-pubkey.pem` when signing is on — and excludes what §7
 marks OUT (`manifest.json`'s `compiled_at`, the display-only `computeChecksum`, and the
-self-extracting tar.gz wrapper bytes — bundle CONTENTS + checksums are compared, not the archive
-framing).
+browser/WASM ZIP container bytes — canonical bundle members, checksums, and the matching root
+deploy helpers are compared, not the archive framing).
 
 ## The manifest
 
-One canonical JSON document per fixture. The serializer (`conformance.Marshal`) emits sorted keys,
+One canonical JSON document per fixture. The serializer (`localcompile.Marshal`) emits sorted keys,
 two-space indent, LF newlines, no trailing whitespace, and exactly one trailing LF (see
 [Canonical-JSON rules](#canonical-json-rules)). Top-level shape:
 
@@ -142,8 +142,8 @@ Mirrored from [`io-contract.md`](./io-contract.md) §7 (OUT list) — **not rede
   `FixedCompiledAt` for determinism, but the field is out of the conformance byte set regardless.
 - **`compiler.computeChecksum`** — `sha256(fmt.Sprintf("%v", topo))[:16]`, a display-only digest with
   no TS counterpart (NOT the signed `Canonicalize` digest, which IS in `checksums`).
-- **The self-extracting `tar.gz` wrapper bytes** — the harness compares bundle CONTENTS + the
-  per-node `checksums` only, never the installer wrapper.
+- **Browser/WASM ZIP container bytes** — the harness compares the canonical bundle members,
+  per-node `checksums`, and matching root `deploy-all` helpers, not ZIP metadata or archive framing.
 - **Random private-key material** — non-reproducible by construction; the harness asserts key
   *derivation* (X25519, pinned by `testdata/keygen_kat.json` + `TestKeygenKAT`), not generation.
   Fixtures carry fixed per-node private keys as INPUT and the harness asserts only the derived PUBLIC

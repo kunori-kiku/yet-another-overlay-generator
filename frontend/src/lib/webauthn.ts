@@ -1,6 +1,7 @@
-// WebAuthn (FIDO2) ceremony helpers for the keystone operator signing flow
-// (plan-5.1d). The operator pins an OFF-HOST credential (a passkey / YubiKey)
-// once at enrollment, then signs every deploy's membership manifest with it.
+// WebAuthn (FIDO2) ceremony helpers shared by login passkeys and the keystone operator
+// signing key. New credentials are created, then immediately make a UV-requesting assertion
+// over a controller nonce before either public descriptor is persisted. Existing credentials
+// continue to drive login and content-bound manifest assertions through the same wire shape.
 //
 // The bytes produced here must verify byte-for-byte against the Go node verifier
 // in internal/trustlist/webauthn.go. The exact wire contract is:
@@ -16,13 +17,14 @@
 //   — authenticator_data: base64url(response.authenticatorData)
 //   — client_data_json  : base64url(response.clientDataJSON)
 //
-//   Operator credential PIN (POST /operator-credential at enrollment):
-//     { alg, credential_id, public_key_pem, rpid, origin }
+//   Browser credential enrollment (POST /passkey/register or /operator-credential):
+//     { alg, credential_id, public_key_pem, rpid, origin, enrollment_proof }
 //   — public_key_pem: PKIX "PUBLIC KEY" PEM wrapping the SPKI DER returned by
 //                     cred.response.getPublicKey()
 //   — rpid          : location.hostname (node checks SHA256(rpid)==authData
 //                     rpIdHash, so rp.id at create() MUST equal this)
-//   — origin        : location.origin (advisory on the node)
+//   — origin        : location.origin
+//   — enrollment_proof: a SignedTrustList-shaped assertion over the one-use server challenge
 //
 // CHALLENGE BINDING: the node checks clientData.challenge ==
 // base64url(SHA256(Canonical(manifest))). The browser base64url-encodes the
@@ -58,6 +60,7 @@ export type WebAuthnErrorKind =
   | 'unsupported-algorithm' // authenticator returned a non-ES256/EdDSA key
   | 'no-public-key' // getPublicKey() returned null (no SPKI available)
   | 'invalid-rp-id' // RP ID is an IP literal (e.g. panel opened at http://127.0.0.1)
+  | 'enrollment-verification-failed' // create succeeded, but candidate proof/persistence did not
   | 'failed'; // any other ceremony failure
 
 export class WebAuthnError extends Error {
@@ -98,12 +101,18 @@ function assertRegistrableRpId(rpId: string): void {
   );
 }
 
-// The result of pinning an operator credential: everything the panel needs to
-// (a) POST /operator-credential and (b) persist enough to drive later signings.
-export interface EnrolledOperatorCredential {
+// Public descriptor extracted after navigator.credentials.create(). It is a candidate—not yet
+// enrolled server state—and is safe to keep in volatile UI memory so a failed second phase can
+// retry the same credential instead of creating duplicates in the authenticator.
+export interface WebAuthnCredentialCandidate {
   alg: WebAuthnAlg;
   credentialId: string; // base64url(rawId)
   publicKeyPEM: string; // PKIX "PUBLIC KEY" PEM
+  // Creation-context binding. These public values are part of a WebAuthn credential's
+  // verification identity, so lost-response reconciliation must compare them alongside the
+  // key/algorithm/id rather than treating a same-key credential from another RP/origin as exact.
+  rpId: string;
+  origin: string;
 }
 
 // --- base64 / base64url helpers (hand-rolled, no deps) ---
@@ -139,12 +148,12 @@ function spkiToPEM(spki: Uint8Array): string {
   return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`;
 }
 
-// --- random challenge / user id (enrollment only) ---
+// --- random user id (enrollment only) ---
 
 // A fresh random n-byte buffer, explicitly backed by an ArrayBuffer (not a
 // SharedArrayBuffer) so it satisfies the BufferSource the WebAuthn options want.
-// Used for the enrollment challenge (NOT content-bound: enrollment proves
-// possession, not authorization of any bytes) and for a random user.id handle.
+// Used for the opaque random user.id handle. Enrollment challenges come from the
+// controller and are consumed once when the post-create UV proof is submitted.
 function randomBytes(n: number): Uint8Array<ArrayBuffer> {
   const b = new Uint8Array(new ArrayBuffer(n));
   crypto.getRandomValues(b);
@@ -197,20 +206,21 @@ function toWebAuthnError(err: unknown, fallback: string): WebAuthnError {
   return new WebAuthnError('failed', `${fallback}: ${msg}`);
 }
 
-// --- enrollment: pin an off-host operator credential ---
+// --- enrollment: create a login or off-host operator credential ---
 
-// enrollOperatorCredential drives navigator.credentials.create() to mint a new
-// off-host signing credential, then extracts its SPKI public key + COSE alg via
+// createWebAuthnCredentialCandidate drives navigator.credentials.create() to mint a new login
+// or off-host signing credential, then extracts its SPKI public key + COSE alg via
 // the MODERN WebAuthn API (getPublicKey / getPublicKeyAlgorithm), avoiding CBOR
 // attestation parsing entirely.
 //
 // rpId MUST equal the rpid you POST to /operator-credential (the node verifier
 // checks SHA256(rpid)==authData rpIdHash), so callers pass location.hostname.
 // origin is recorded for the advisory origin check on the node.
-export async function enrollOperatorCredential(
+export async function createWebAuthnCredentialCandidate(
   rpId: string,
   origin: string,
-): Promise<EnrolledOperatorCredential> {
+  enrollmentChallenge: string,
+): Promise<WebAuthnCredentialCandidate> {
   assertWebAuthnAvailable();
   // Reject an IP-literal RP ID with actionable guidance before the browser throws
   // its opaque "invalid domain" (panel opened at http://127.0.0.1 instead of localhost).
@@ -229,9 +239,10 @@ export async function enrollOperatorCredential(
   }
 
   const options: PublicKeyCredentialCreationOptions = {
-    // Enrollment challenge is NOT content-bound (it only proves the
-    // authenticator is present); a fresh random value defeats replay.
-    challenge: randomBytes(32),
+    // Server-issued, one-use challenge. After create(), the new credential immediately
+    // asserts over the same nonce; the controller consumes and verifies that UV proof
+    // before accepting the public key.
+    challenge: base64UrlToBytes(enrollmentChallenge),
     rp: {
       // id MUST equal the rpid posted to the controller; the node binds
       // SHA256(rpid) against the assertion's rpIdHash at verify time.
@@ -263,7 +274,7 @@ export async function enrollOperatorCredential(
       publicKey: options,
     })) as PublicKeyCredential | null;
   } catch (err) {
-    throw toWebAuthnError(err, 'failed to enroll signing credential');
+    throw toWebAuthnError(err, 'failed to enroll WebAuthn credential');
   }
   if (!cred) {
     throw new WebAuthnError('failed', 'no credential was created');
@@ -283,11 +294,43 @@ export async function enrollOperatorCredential(
     throw new WebAuthnError('no-public-key', 'the authenticator did not return a public key');
   }
 
-  return {
-    alg,
-    credentialId: bytesToBase64Url(new Uint8Array(cred.rawId)),
-    publicKeyPEM: spkiToPEM(new Uint8Array(spki)),
-  };
+  const credentialId = bytesToBase64Url(new Uint8Array(cred.rawId));
+  const publicKeyPEM = spkiToPEM(new Uint8Array(spki));
+
+  return { alg, credentialId, publicKeyPEM, rpId, origin };
+}
+
+// proveWebAuthnCredentialEnrollment asks the exact candidate to assert over the controller's
+// one-use nonce with userVerification:"required". The controller verifies the signature and
+// signed UV result bit under the submitted candidate key before persisting it. YAOG requests no
+// attestation, so this validates the first-party browser ceremony; it does not establish hardware
+// provenance, non-exportability, or resistance to a custom client submitting a software key.
+export async function proveWebAuthnCredentialEnrollment(
+  candidate: WebAuthnCredentialCandidate,
+  rpId: string,
+  enrollmentChallenge: string,
+): Promise<SignedTrustList> {
+  try {
+    return await runAssertion(
+      base64UrlToBytes(enrollmentChallenge),
+      candidate.credentialId,
+      candidate.alg,
+      rpId,
+      candidate.publicKeyPEM,
+      'required',
+      'failed to complete PIN/biometric verification for the new credential',
+    );
+  } catch (err) {
+    const detail = toWebAuthnError(
+      err,
+      'failed to complete PIN/biometric verification for the new credential',
+    );
+    throw new WebAuthnError(
+      'enrollment-verification-failed',
+      `The credential was created, but YAOG did not enroll it because PIN/biometric verification did not complete. ` +
+        `YAOG kept this candidate for the current session; retry enrollment verification instead of creating another credential. (${detail.message})`,
+    );
+  }
 }
 
 // --- signing: produce a content-bound SignedTrustList over a manifest ---
@@ -331,6 +374,7 @@ export async function signManifest(
     alg,
     rpId,
     publicKeyPEM,
+    'preferred',
     'failed to sign the deploy manifest',
   );
 }
@@ -358,6 +402,7 @@ export async function assertLogin(
     alg,
     rpId,
     '',
+    'preferred',
     'failed to complete the passkey login',
   );
 }
@@ -365,14 +410,16 @@ export async function assertLogin(
 // runAssertion is the shared navigator.credentials.get() ceremony: it asserts the pinned
 // credential over `challenge` (raw bytes the browser base64url-encodes into
 // clientDataJSON) and assembles the SignedTrustList wire struct. Both signManifest
-// (challenge = manifest hash) and assertLogin (challenge = random nonce) delegate here;
-// only the challenge bytes and the audit-only public_key differ.
+// (challenge = manifest hash), assertLogin (challenge = random nonce), and the enrollment proof
+// (challenge = purpose-scoped random nonce) delegate here. Enrollment requires UV; ordinary
+// assertions prefer it without excluding historical non-UV credentials.
 async function runAssertion(
   challenge: Uint8Array,
   credentialId: string,
   alg: WebAuthnAlg,
   rpId: string,
   publicKeyPEM: string,
+  userVerification: UserVerificationRequirement,
   failMessage: string,
 ): Promise<SignedTrustList> {
   assertWebAuthnAvailable();
@@ -387,7 +434,9 @@ async function runAssertion(
     challenge: challenge as BufferSource,
     rpId,
     allowCredentials: [{ type: 'public-key', id: base64UrlToBytes(credentialId) as BufferSource }],
-    userVerification: 'required',
+    // Only enrollment passes "required". Ordinary login and signing use "preferred" so a
+    // credential that worked before rc.7 is never rejected merely because it cannot perform UV.
+    userVerification,
     timeout: 120000,
   };
 
@@ -418,10 +467,10 @@ async function runAssertion(
 
 // base64url (no padding) -> bytes. Mirrors Go's base64.RawURLEncoding.Decode;
 // used to turn the stored credential_id back into an allowCredentials id.
-function base64UrlToBytes(s: string): Uint8Array {
+function base64UrlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
   const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
+  const out = new Uint8Array(new ArrayBuffer(bin.length));
   for (let i = 0; i < bin.length; i++) {
     out[i] = bin.charCodeAt(i);
   }

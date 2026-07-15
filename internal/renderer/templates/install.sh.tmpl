@@ -5,30 +5,113 @@
 # Role: {{ .NodeRole }}
 # Architecture: per-peer WireGuard interfaces
 #
-# Usage:
+{{ if .SplicePlaceholder -}}
+# Controller/manual bundle: do not invoke this downloaded script directly. Apply or uninstall only
+# through `yaog-agent kit apply`, which verifies off-host membership and executes a trusted copy:
+#   sudo yaog-agent kit apply --bundle <DIR|ZIP> --node-id <id> [verification flags]
+#   sudo yaog-agent kit apply --bundle <DIR|ZIP> --node-id <id> [verification flags] --uninstall
+{{ else -}}
+# Locally trusted offline-bundle usage:
 #   sudo bash install.sh              # Install / upgrade overlay
 #   sudo bash install.sh --uninstall  # Completely remove overlay
+{{ end }}
 
 set -euo pipefail
 
 UNINSTALL=0
+CLEAN=0
 for arg in "$@"; do
     case "$arg" in
         --uninstall|-u) UNINSTALL=1 ;;
+        --clean) CLEAN=1 ;;
     esac
 done
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+{{ if .HasSigning -}}
+# Verify the bundle's Ed25519 signature BEFORE the checksum check (docs/spec/controller/signing.md).
+# bundle.sig is base64(raw 64-byte Ed25519 signature) over the exact bytes of checksums.sha256
+# (the canonical bundle digest). The verifying public key is pinned below at generation time, so a
+# tampered checksums.sha256 (even with matching file hashes) is rejected before any root mutation.
+if [ -f "$SCRIPT_DIR/bundle.sig" ]; then
+    echo "Verifying bundle signature..."
+    if ! command -v openssl >/dev/null 2>&1; then
+        # bundle.sig is present but we cannot verify it: fail clearly, never silently skip.
+        echo "ERROR: bundle.sig present but openssl is not installed; cannot verify signature" >&2
+        exit 1
+    fi
+    # Write the pinned verifying public key to a temp file for openssl pkeyutl -pubin.
+    _sig_pubkey="$(mktemp)"
+    _sig_raw="$(mktemp)"
+    cleanup_sig() {
+        rm -f "$_sig_pubkey" "$_sig_raw"
+    }
+    trap cleanup_sig EXIT
+    cat > "$_sig_pubkey" << 'YAOG_SIGNING_PUBKEY_PEM'
+{{ .SigningPubkeyPEM }}
+YAOG_SIGNING_PUBKEY_PEM
+    # Decode base64 signature to raw bytes for openssl -rawin verification.
+    if ! base64 -d "$SCRIPT_DIR/bundle.sig" > "$_sig_raw" 2>/dev/null; then
+        echo "ERROR: failed to decode bundle.sig (not valid base64)" >&2
+        exit 1
+    fi
+    # Ed25519 is a one-shot (raw) signature: -rawin feeds the message directly, no pre-hash.
+    # openssl without Ed25519 support exits nonzero here, satisfying the fail-clear requirement.
+    if ! openssl pkeyutl -verify -pubin -inkey "$_sig_pubkey" -rawin -sigfile "$_sig_raw" -in "$SCRIPT_DIR/checksums.sha256" >/dev/null 2>&1; then
+        echo "ERROR: bundle signature verification failed (openssl missing Ed25519 support or signature invalid)" >&2
+        exit 1
+    fi
+    echo "Bundle signature verification passed."
+    cleanup_sig
+    trap - EXIT
+else
+    # This install.sh was rendered with signing enabled, so bundle.sig is MANDATORY: a missing
+    # signature is signature-stripping tamper, not an unsigned bundle. We KNOW the bundle was
+    # signed at generation time (the verifying key is pinned above), so refuse to proceed rather
+    # than fall through to the bare checksum check an attacker could satisfy with rewritten files.
+    echo "ERROR: bundle was signed at generation but bundle.sig is missing; refusing to proceed (possible signature-stripping tamper)" >&2
+    exit 1
+fi
+
+{{ end -}}
+# Verify the mandatory checksum manifest. This gate intentionally precedes BOTH --uninstall and Phase 0:
+# a corrupt/tampered candidate must not stop interfaces or remove the last-good configuration.
+if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
+    echo "Verifying file integrity..."
+    cd "$SCRIPT_DIR"
+    if ! sha256sum --status -c checksums.sha256; then
+        echo "ERROR: Checksum validation failed!" >&2
+        exit 1
+    fi
+    echo "Checksum validation passed."
+{{ if .HasMimic }}    # SIGNED-SET COVERAGE GUARD (mirrors internal/agent/verify.go): sha256sum -c above
+    # only verifies files LISTED in checksums.sha256 — it never flags an extra, unlisted file. The mimic
+    # fallback below reads artifacts.json for the .deb pins it installs as ROOT, so a present-but-unlisted
+    # artifacts.json (added without re-signing) would smuggle in attacker-chosen pins that still pass the
+    # signature + sha256sum -c checks. Refuse it before any pin is read. (A LISTED artifacts.json is
+    # already content-verified above.)
+    if [ -f "$SCRIPT_DIR/artifacts.json" ] && ! grep -qE '^[0-9a-f]{64}  artifacts\.json$' "$SCRIPT_DIR/checksums.sha256"; then
+        echo "ERROR: artifacts.json is present but not covered by the signed checksums.sha256; refusing" >&2
+        exit 1
+    fi
+{{ end }}    cd - >/dev/null
+else
+    echo "ERROR: checksums.sha256 is missing; refusing to mutate the host" >&2
+    exit 1
+fi
+
+# Check root only after the read-only integrity gate, but before every host mutation.
+if [ "$(id -u)" -ne 0 ]; then
+    echo "ERROR: This script must be run as root" >&2
+    exit 1
+fi
 
 # ============================================================
 # Uninstall All
 # ============================================================
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    # Check root
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "ERROR: This script must be run as root" >&2
-        exit 1
-    fi
-
     echo "=== Uninstalling overlay from node: "{{ .NodeNameQuoted }}" ==="
 
 {{ if .HasMimic -}}
@@ -128,6 +211,34 @@ if [ "$UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
+# `--clean` is intentionally handled only after signature/checksum verification and the root
+# check above. The project-level deploy helper uses it when switching interface layouts; doing
+# this cleanup before authenticating the candidate bundle could destroy the last-good network
+# configuration in response to a corrupt or tampered download.
+if [ "$CLEAN" -eq 1 ]; then
+    echo "=== Cleaning existing WireGuard interfaces ==="
+    if command -v ip >/dev/null 2>&1; then
+        for _iface in $(ip -o link show type wireguard 2>/dev/null | awk -F: '{print $2}' | tr -d ' '); do
+            wg-quick down "$_iface" 2>/dev/null || ip link del "$_iface" 2>/dev/null || true
+        done
+    fi
+    rm -f /etc/wireguard/wg*.conf
+    nft delete table inet overlay-snat 2>/dev/null || true
+    if command -v iptables >/dev/null 2>&1 && command -v iptables-save >/dev/null 2>&1; then
+        iptables-save -t nat 2>/dev/null \
+            | grep -E '^-A POSTROUTING ' \
+            | grep -F -- '-j SNAT' \
+            | grep -F -- '-o wg-+' \
+            | while IFS= read -r _snat_rule; do
+                _snat_del="${_snat_rule/#-A/-D}"
+                # shellcheck disable=SC2086
+                iptables -t nat $_snat_del 2>/dev/null || true
+            done || true
+    fi
+    systemctl disable overlay-snat.service 2>/dev/null || true
+    rm -f /etc/systemd/system/overlay-snat.service
+fi
+
 # ============================================================
 # Phase 0: Cleanup Previous Installation
 # ============================================================
@@ -220,82 +331,6 @@ echo "Phase 0 complete."
 # ============================================================
 
 echo "=== Phase 1: Environment Preparation ==="
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-{{ if .HasSigning -}}
-# Verify the bundle's Ed25519 signature BEFORE the checksum check (docs/spec/controller/signing.md).
-# bundle.sig is base64(raw 64-byte Ed25519 signature) over the exact bytes of checksums.sha256
-# (the canonical bundle digest). The verifying public key is pinned below at generation time, so a
-# tampered checksums.sha256 (even with matching file hashes) is rejected before any root action.
-if [ -f "$SCRIPT_DIR/bundle.sig" ]; then
-    echo "Verifying bundle signature..."
-    if ! command -v openssl >/dev/null 2>&1; then
-        # bundle.sig is present but we cannot verify it: fail clearly, never silently skip.
-        echo "ERROR: bundle.sig present but openssl is not installed; cannot verify signature" >&2
-        exit 1
-    fi
-    # Write the pinned verifying public key to a temp file for openssl pkeyutl -pubin.
-    _sig_pubkey="$(mktemp)"
-    _sig_raw="$(mktemp)"
-    cleanup_sig() {
-        rm -f "$_sig_pubkey" "$_sig_raw"
-    }
-    trap cleanup_sig EXIT
-    cat > "$_sig_pubkey" << 'YAOG_SIGNING_PUBKEY_PEM'
-{{ .SigningPubkeyPEM }}
-YAOG_SIGNING_PUBKEY_PEM
-    # Decode base64 signature to raw bytes for openssl -rawin verification.
-    if ! base64 -d "$SCRIPT_DIR/bundle.sig" > "$_sig_raw" 2>/dev/null; then
-        echo "ERROR: failed to decode bundle.sig (not valid base64)" >&2
-        exit 1
-    fi
-    # Ed25519 is a one-shot (raw) signature: -rawin feeds the message directly, no pre-hash.
-    # openssl without Ed25519 support exits nonzero here, satisfying the fail-clear requirement.
-    if ! openssl pkeyutl -verify -pubin -inkey "$_sig_pubkey" -rawin -sigfile "$_sig_raw" -in "$SCRIPT_DIR/checksums.sha256" >/dev/null 2>&1; then
-        echo "ERROR: bundle signature verification failed (openssl missing Ed25519 support or signature invalid)" >&2
-        exit 1
-    fi
-    echo "Bundle signature verification passed."
-    cleanup_sig
-    trap - EXIT
-else
-    # This install.sh was rendered with signing enabled, so bundle.sig is MANDATORY: a missing
-    # signature is signature-stripping tamper, not an unsigned bundle. We KNOW the bundle was
-    # signed at generation time (the verifying key is pinned above), so refuse to proceed rather
-    # than fall through to the bare checksum check an attacker could satisfy with rewritten files.
-    echo "ERROR: bundle was signed at generation but bundle.sig is missing; refusing to proceed (possible signature-stripping tamper)" >&2
-    exit 1
-fi
-
-{{ end -}}
-# Verify checksums if available
-if [ -f "$SCRIPT_DIR/checksums.sha256" ]; then
-    echo "Verifying file integrity..."
-    cd "$SCRIPT_DIR"
-    if ! sha256sum --status -c checksums.sha256; then
-        echo "ERROR: Checksum validation failed!" >&2
-        exit 1
-    fi
-    echo "Checksum validation passed."
-{{ if .HasMimic }}    # SIGNED-SET COVERAGE GUARD (mirrors internal/agent/verify.go): sha256sum -c above
-    # only verifies files LISTED in checksums.sha256 — it never flags an extra, unlisted file. The mimic
-    # fallback below reads artifacts.json for the .deb pins it installs as ROOT, so a present-but-unlisted
-    # artifacts.json (added without re-signing) would smuggle in attacker-chosen pins that still pass the
-    # signature + sha256sum -c checks. Refuse it before any pin is read. (A LISTED artifacts.json is
-    # already content-verified above.)
-    if [ -f "$SCRIPT_DIR/artifacts.json" ] && ! grep -qE '^[0-9a-f]{64}  artifacts\.json$' "$SCRIPT_DIR/checksums.sha256"; then
-        echo "ERROR: artifacts.json is present but not covered by the signed checksums.sha256; refusing" >&2
-        exit 1
-    fi
-{{ end }}    cd - >/dev/null
-fi
-
-# Check root
-if [ "$(id -u)" -ne 0 ]; then
-    echo "ERROR: This script must be run as root" >&2
-    exit 1
-fi
 
 # Detect OS
 if [ -f /etc/os-release ]; then

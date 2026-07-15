@@ -1,23 +1,18 @@
 package api
 
-// handler_controller.go is the HTTP surface of the networked controller
-// (plan-4.5). It exposes the controller core (Store + enrollment + compile) under
-// two audience-named namespaces — operator/panel routes under /api/v1/operator/ and
-// agent/node routes under /api/v1/agent/ — with JSON request/response bodies. Authentication and the
-// tenant/node identity are handled entirely by the auth chokepoint in
-// auth_controller.go: every handler here reads the caller's node from the request
-// context (nodeFromCtx) rather than from the request, so a node can only ever act
-// as itself. The single exception is /enroll, which is registered WITHOUT the auth
-// middleware (it must be reachable before the node has any API token) and is
-// instead gated by the single-use enrollment token.
+// handler_controller.go holds the small definitions shared by the networked
+// controller HTTP surface. Route registration lives in routes_controller.go; DTOs
+// live in wire_controller.go; behavior is split across the sibling handler_*.go
+// files. The two audience namespaces are served by separate plain-HTTP muxes:
+// operator/panel routes under /api/v1/operator/ and agent/node routes under
+// /api/v1/agent/ (each optionally prefixed independently).
 //
-// The routes are split across two muxes (served on two plain-HTTP ports):
-//   - agent routes (/enroll,/config,/poll,/report,/rekey) → RegisterAgentRoutes.
-//   - operator routes (everything else, incl. /rekey-all) → RegisterOperatorRoutes.
-//
-// Transport is plain HTTP; TLS is delegated to a reverse proxy (plan-4.5). Bearer
-// tokens authenticate both kinds of caller (per-node tokens for agents, a single
-// operator token for the operator).
+// Protected agent routes derive their tenant/node from a per-node bearer through
+// requireNode. Protected operator routes derive a named session identity, or the
+// configured break-glass actor, through operatorAuth. Pre-auth exceptions are
+// explicit in route registration: agent enrollment/bootstrap and operator
+// password/passkey login. Production delegates transport confidentiality to a
+// TLS-terminating reverse proxy.
 
 import (
 	"time"
@@ -25,10 +20,10 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 )
 
-// DefaultOperatorName is the operator's identity stamped into the request context
-// (and audit actor) for operator routes. Under single-tenant v1 the operator is
-// authenticated by a single shared operator token (YAOG_CONTROLLER_OPERATOR_TOKEN);
-// Plan 5 (OIDC/RBAC) replaces this with a real per-operator principal model.
+// DefaultOperatorName is the fallback display/audit identity for the optional
+// break-glass operator credential when no explicit actor name is configured. Named
+// login sessions carry their account username instead; auth kind remains separately
+// pinned in context even if that username equals this fallback.
 const DefaultOperatorName = "operator"
 
 // defaultPollDeadline bounds a single /poll long-poll on the server side. The

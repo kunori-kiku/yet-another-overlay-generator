@@ -22,7 +22,10 @@ import (
 func TestMain(m *testing.M) {
 	os.Unsetenv(bundlesig.EnvSigningKey)
 	os.Unsetenv(bundlesig.EnvSigningKeyRotate)
-	os.Exit(m.Run())
+	oldUmask := setSecureTestUmask()
+	code := m.Run()
+	restoreTestUmask(oldUmask)
+	os.Exit(code)
 }
 
 // writeEd25519KeyPEM writes a fresh Ed25519 PKCS#8 PEM (the form YAOG_BUNDLE_SIGNING_KEY points at)

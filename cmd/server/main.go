@@ -49,7 +49,8 @@ const (
 	envTenantID = "YAOG_TENANT_ID"
 	// envOperatorToken is the operator's bearer token (plaintext). It is hashed
 	// (controller.HashToken) before it reaches the handler; the plaintext is never
-	// stored. REQUIRED in controller mode.
+	// stored. Optional when named operator accounts provide the normal login path;
+	// when set, it remains an explicit break-glass credential.
 	envOperatorToken = "YAOG_CONTROLLER_OPERATOR_TOKEN"
 	// envAgentAddr overrides the default agent-port listen address.
 	envAgentAddr = "YAOG_CONTROLLER_AGENT_ADDR"

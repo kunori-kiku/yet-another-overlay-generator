@@ -25,8 +25,8 @@ export interface NavItem {
   Icon: ComponentType<SVGProps<SVGSVGElement>>;
   /** Whether this section appears in the sidebar in Local mode (P4). Overview and
    *  Fleet are controller-only; Security stays visible because it also hosts the
-   *  local "Compile History" (so no local feature is stranded). Routes remain
-   *  reachable by deep link regardless. */
+   *  local "Compile History" (so no local feature is stranded). Mode guards redirect
+   *  local users away from controller-only routes, including direct deep links. */
   localVisible: boolean;
 }
 
@@ -55,4 +55,3 @@ export function activeNavItem(pathname: string): NavItem | undefined {
     (item) => pathname === item.path || pathname.startsWith(`${item.path}/`),
   );
 }
-

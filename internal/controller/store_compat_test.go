@@ -780,6 +780,64 @@ func TestStoreAuditRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStorePendingKeystoneTransitionRoundTrip pins the write-ahead marker contract across both
+// backends. The marker is create-only, survives a Store round trip byte-for-byte, rejects a
+// clobbering event, and deletion is idempotent but EventID-conditional.
+func TestStorePendingKeystoneTransitionRoundTrip(t *testing.T) {
+	for _, impl := range storeImpls() {
+		impl := impl
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := impl.factory(t)
+			if _, err := s.GetPendingKeystoneTransition(ctx, tenant); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetPendingKeystoneTransition(empty) = %v, want ErrNotFound", err)
+			}
+
+			expected := OperatorCredential{Alg: "ed25519", PublicKeyPEM: "old-public-key"}
+			want := PendingKeystoneTransition{
+				Expected: &expected,
+				Next:     OperatorCredential{Alg: "ed25519", PublicKeyPEM: "new-public-key"},
+				Audit: AuditEntry{
+					Timestamp: time.Date(2026, 7, 16, 12, 0, 0, 123, time.UTC),
+					Actor:     "operator:admin",
+					Action:    "rotate-operator-credential",
+					EventID:   "00000000000000000000000000000001",
+				},
+			}
+			if err := s.CreatePendingKeystoneTransition(ctx, tenant, want); err != nil {
+				t.Fatalf("CreatePendingKeystoneTransition: %v", err)
+			}
+			if err := s.CreatePendingKeystoneTransition(ctx, tenant, want); err != nil {
+				t.Fatalf("identical CreatePendingKeystoneTransition retry: %v", err)
+			}
+			got, err := s.GetPendingKeystoneTransition(ctx, tenant)
+			if err != nil {
+				t.Fatalf("GetPendingKeystoneTransition: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("pending transition round trip = %+v, want %+v", got, want)
+			}
+			other := want
+			other.Audit.EventID = "00000000000000000000000000000002"
+			if err := s.CreatePendingKeystoneTransition(ctx, tenant, other); !errors.Is(err, ErrPendingKeystoneTransitionConflict) {
+				t.Fatalf("clobbering CreatePendingKeystoneTransition = %v, want conflict", err)
+			}
+			if err := s.DeletePendingKeystoneTransition(ctx, tenant, other.Audit.EventID); !errors.Is(err, ErrPendingKeystoneTransitionConflict) {
+				t.Fatalf("stale DeletePendingKeystoneTransition = %v, want conflict", err)
+			}
+			if err := s.DeletePendingKeystoneTransition(ctx, tenant, want.Audit.EventID); err != nil {
+				t.Fatalf("DeletePendingKeystoneTransition(first): %v", err)
+			}
+			if err := s.DeletePendingKeystoneTransition(ctx, tenant, want.Audit.EventID); err != nil {
+				t.Fatalf("DeletePendingKeystoneTransition(idempotent): %v", err)
+			}
+			if _, err := s.GetPendingKeystoneTransition(ctx, tenant); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("GetPendingKeystoneTransition(deleted) = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
 // TestStoreWaitForGeneration covers the long-poll primitive: a concurrent promote
 // wakes a blocked waiter, and a cancelled ctx makes the waiter return promptly.
 func TestStoreWaitForGeneration(t *testing.T) {
@@ -1118,7 +1176,7 @@ func TestStoreAPITokens(t *testing.T) {
 }
 
 // TestStoreOperatorCredential covers the keystone operator-credential contract across
-// both Store impls: ErrNotFound before any pin (keystone OFF), a SetOperatorCredential
+// both Store impls: ErrNotFound before any pin (keystone OFF), a conditional credential pin
 // round-trips every field, and a second Set replaces the prior credential in place.
 func TestStoreOperatorCredential(t *testing.T) {
 	for _, impl := range storeImpls() {
@@ -1139,8 +1197,8 @@ func TestStoreOperatorCredential(t *testing.T) {
 				RPID:         "yaog.example",
 				Origin:       "https://yaog.example",
 			}
-			if err := s.SetOperatorCredential(ctx, tenant, want); err != nil {
-				t.Fatalf("SetOperatorCredential: %v", err)
+			if err := s.CompareAndSetOperatorCredential(ctx, tenant, nil, want); err != nil {
+				t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 			}
 			got, err := s.GetOperatorCredential(ctx, tenant)
 			if err != nil {
@@ -1154,8 +1212,8 @@ func TestStoreOperatorCredential(t *testing.T) {
 			want2 := want
 			want2.Alg = "webauthn-es256"
 			want2.CredentialID = "cred-xyz"
-			if err := s.SetOperatorCredential(ctx, tenant, want2); err != nil {
-				t.Fatalf("SetOperatorCredential(replace): %v", err)
+			if err := s.CompareAndSetOperatorCredential(ctx, tenant, &want, want2); err != nil {
+				t.Fatalf("CompareAndSetOperatorCredential(replace): %v", err)
 			}
 			got2, err := s.GetOperatorCredential(ctx, tenant)
 			if err != nil {
@@ -1245,10 +1303,10 @@ func TestStoreServedTrustList(t *testing.T) {
 			}
 			// Keystone ON: pin a credential so GetServedConfig reports KeystoneOn (its presence, not
 			// its bytes, is what flips the flag).
-			if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{
+			if err := s.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{
 				Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n",
 			}); err != nil {
-				t.Fatalf("SetOperatorCredential: %v", err)
+				t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 			}
 
 			// Nothing promoted yet -> both served reads are ErrNotFound.
@@ -1330,8 +1388,8 @@ func TestStoreServedTrustList(t *testing.T) {
 			// unsigned promote leaves the served trust-list ABSENT — GetServedConfig then reports
 			// KeystoneOn but HasTrustList=false (the /config fail-closed case).
 			s2 := impl.factory(t)
-			if err := s2.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
-				t.Fatalf("SetOperatorCredential s2: %v", err)
+			if err := s2.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
+				t.Fatalf("CompareAndSetOperatorCredential s2: %v", err)
 			}
 			if err := s2.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
 				t.Fatalf("UpsertNode s2: %v", err)
@@ -1356,25 +1414,20 @@ func TestStoreServedTrustList(t *testing.T) {
 	}
 }
 
-// TestFileStoreServedConfigSurvivesGenerationLagCrash simulates a FileStore crash mid-PromoteStaged
-// AFTER the per-node current-bundle and served_trustlist.json atomic renames but BEFORE the final
-// generation.json commit (generation.json is written LAST). /config reads via GetServedConfig, which
-// is NOT gated on the generation counter, so on reopen the node still gets a COHERENT
-// (new-bundle, new-served-manifest) pair; only the counter lags (it self-heals on the next
-// promote/bump). This pins the "generation committed last, /config independent of it" ordering
-// invariant the PromoteStaged comment documents. The OTHER crash shape (a node's new bundle paired
-// with an OLD served manifest, from a kill mid per-node loop) is covered by the agent's offline
-// digest-binding rejection in the regression suite — the store faithfully returns whatever is on
-// disk; the agent fails closed on the mismatch.
-func TestFileStoreServedConfigSurvivesGenerationLagCrash(t *testing.T) {
+// TestFileStoreServedConfigRejectsGenerationLag simulates a current bundle and served trust-list
+// becoming visible before generation.json commits. This is the FileStore promotion crash boundary:
+// even if the pair is internally coherent, it is not tenant-wide committed and must not be served.
+// In particular, keystone-off fleets have no signed membership digest to catch a partially-written
+// set, so generation.json is the durable publication marker for every mode.
+func TestFileStoreServedConfigRejectsGenerationLag(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s, err := NewFileStore(dir)
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
 	}
-	if err := s.SetOperatorCredential(ctx, tenant, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
-		t.Fatalf("SetOperatorCredential: %v", err)
+	if err := s.CompareAndSetOperatorCredential(ctx, tenant, nil, OperatorCredential{Alg: "ed25519", PublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n"}); err != nil {
+		t.Fatalf("CompareAndSetOperatorCredential: %v", err)
 	}
 	if err := s.UpsertNode(ctx, tenant, Node{NodeID: "alpha", Status: NodeApproved}); err != nil {
 		t.Fatalf("UpsertNode: %v", err)
@@ -1401,7 +1454,7 @@ func TestFileStoreServedConfigSurvivesGenerationLagCrash(t *testing.T) {
 		t.Fatalf("roll back generation.json: %v", err)
 	}
 
-	// Reopen (crash + restart) and assert /config is still coherent even though the counter lags.
+	// Reopen (crash + restart) and assert /config fails closed while the counter lags.
 	s2, err := NewFileStore(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -1409,15 +1462,11 @@ func TestFileStoreServedConfigSurvivesGenerationLagCrash(t *testing.T) {
 	if gen, err := s2.CurrentGeneration(ctx, tenant); err != nil || gen != 0 {
 		t.Fatalf("counter should read the lagged 0 (the crash dropped the commit) = (%d, %v)", gen, err)
 	}
-	sc, err := s2.GetServedConfig(ctx, tenant, "alpha")
-	if err != nil {
-		t.Fatalf("GetServedConfig after reopen: %v", err)
+	if _, err := s2.GetServedConfig(ctx, tenant, "alpha"); !errors.Is(err, ErrUncommittedPromotion) {
+		t.Fatalf("GetServedConfig after reopen = %v, want ErrUncommittedPromotion", err)
 	}
-	if !sc.HasTrustList || sc.Bundle.Generation != 1 || string(sc.Bundle.Files["checksums.sha256"]) != "sum-v1" {
-		t.Fatalf("post-crash /config must be coherent (new bundle + served manifest); got HasTrustList=%v gen=%d", sc.HasTrustList, sc.Bundle.Generation)
-	}
-	if !bytes.Equal(sc.TrustList.SignatureJSON, signed.SignatureJSON) {
-		t.Fatalf("post-crash served manifest signature mismatch: the (bundle, manifest) pair must stay coherent")
+	if _, err := s2.GetServedTrustList(ctx, tenant); !errors.Is(err, ErrUncommittedPromotion) {
+		t.Fatalf("GetServedTrustList after reopen = %v, want ErrUncommittedPromotion", err)
 	}
 }
 

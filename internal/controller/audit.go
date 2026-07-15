@@ -25,12 +25,26 @@ const (
 // The field order and the RFC3339Nano/UTC timestamp formatting are fixed so the
 // hash is deterministic across processes and Store implementations.
 func canonicalAuditBytes(e AuditEntry) []byte {
-	return []byte(fmt.Sprintf("%d\n%s\n%s\n%s\n%s\n%s\n",
+	// Preserve the historical byte format exactly for every legacy/general audit entry. Keystone
+	// transition recovery is the first caller that needs a stable idempotency identity; only those
+	// EventID-bearing records opt into the versioned extension below.
+	if e.EventID == "" {
+		return []byte(fmt.Sprintf("%d\n%s\n%s\n%s\n%s\n%s\n",
+			e.Seq,
+			e.Timestamp.UTC().Format(time.RFC3339Nano),
+			e.Actor,
+			e.Action,
+			e.NodeID,
+			e.PrevHash,
+		))
+	}
+	return []byte(fmt.Sprintf("v2\n%d\n%s\n%s\n%s\n%s\n%s\n%s\n",
 		e.Seq,
 		e.Timestamp.UTC().Format(time.RFC3339Nano),
 		e.Actor,
 		e.Action,
 		e.NodeID,
+		e.EventID,
 		e.PrevHash,
 	))
 }

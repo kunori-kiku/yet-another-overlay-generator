@@ -1,11 +1,17 @@
 # Install Script
 
 Generated per-node bash script with phases:
+
+- **Integrity preflight**: Before root is required or any host state is touched, require
+  `checksums.sha256`; for signed bundles, verify `bundle.sig` first; then verify every listed file.
 - **Uninstall mode** (`--uninstall` / `-u`): Complete teardown — stops all WG interfaces, disables
   Babel, removes configs, removes SNAT rules, removes dummy0, removes systemd services
+- **Clean mode** (`--clean`): After the integrity and root gates, clear legacy/all-WireGuard layout
+  state before a normal install. The operational AirGap `deploy-all` helper delegates its clean
+  option here; AgentHeld helpers do not execute the downloaded installer.
 - **Phase 0**: Cleanup previous installation (managed + legacy interfaces)
-- **Phase 1**: Environment preparation — bundle verification (signature, then checksums; see below),
-  dependency installation, dummy0 interface creation with overlay IP, SNAT source address fix. When
+- **Phase 1**: Environment preparation — dependency installation, dummy0 interface creation with
+  overlay IP, SNAT source address fix. When
   any link uses `transport: "tcp"`, also installs the `mimic` package, `modprobe mimic` (persisted),
   and checks kernel-eBPF support
 - **Phase 2**: Configuration deployment — copies WG configs, Babel config, sysctl config
@@ -20,9 +26,10 @@ mimic teardown (`local=`/`remote=` filters on the egress NIC, MTU −12 per mimi
 in [mimic.md](./mimic.md); uninstall stops/disables `mimic@<egress>`, removes its config and
 modules-load entry, and detaches.
 
-## Bundle Verification (Phase 1)
+## Bundle Verification (Preflight)
 
-Before any configuration is touched, Phase 1 verifies the bundle. The ordering depends on whether
+Before uninstall, clean mode, Phase 0, or any other mutation, the preflight verifies the bundle.
+The ordering depends on whether
 the bundle is signed (i.e. whether `bundle.sig` was shipped — see
 [../controller/signing.md](../controller/signing.md)):
 
@@ -44,10 +51,7 @@ before integrity. Because the verifying key is embedded, a signed `install.sh` *
 **refuses to proceed** (it does not fall back to the bare `sha256sum -c`, which an attacker could
 satisfy with rewritten files + rewritten checksums). If `bundle.sig` is present but `openssl` is
 missing or its build lacks Ed25519 / `-rawin` support, the script **fails loudly with a nonzero
-exit** — it never silently downgrades to hash-only when a signature was expected. This mirrors the
-self-extracting installer's fail-clear style, which as of Phase 0 performs **both** the
-`EXPECTED_PAYLOAD_SHA256` payload-hash check **and** (when signing is enabled) an Ed25519
-payload-signature check (see [deploy-scripts.md](deploy-scripts.md)).
+exit** — it never silently downgrades to hash-only when a signature was expected.
 
 **Unsigned bundle (rendered without signing):**
 
@@ -55,11 +59,51 @@ The script behaves exactly as before Phase 0 — `sha256sum --status -c checksum
 hash-only / air-gap path is unchanged. Signing is opt-in; an operator who never sets
 `YAOG_BUNDLE_SIGNING_KEY` sees identical install-time behavior.
 
+`checksums.sha256` is mandatory in both modes. A missing checksum manifest fails before root
+checking or cleanup; hash-only means there is no provenance signature, not that integrity
+verification is optional. The covered member set includes `install.sh` and `README.txt` as well as
+the rendered WireGuard/Babel/sysctl files and optional `artifacts.json`. `manifest.json` and its
+short `checksum` field are compile metadata, not the integrity authority and not inputs to this
+preflight.
+
 > **Trust caveat:** when the verifying public key ships *inside* the bundle, the signature proves
 > internal consistency, not provenance, against a bundle from an untrusted source — an attacker who
 > rewrites the bundle can swap the bundled pubkey too. The signature is only an authenticity anchor
 > when the key is pinned out of band. See the limitation in
 > [../controller/signing.md](../controller/signing.md) and [../security/security.md](../security/security.md).
+
+## Custody-specific execution boundary
+
+The direct `sudo bash install.sh` path is only for a locally trusted **AirGap** bundle. The
+operational AirGap `deploy-all` helpers copy the complete directory to a fresh remote staging path;
+this script then performs the verification sequence above before mutation.
+
+Controller/manual **AgentHeld** bundles contain a private-key placeholder and carry a generated
+header telling the operator not to execute the downloaded script directly. Their project-level
+`deploy-all` files are fail-closed guidance stubs. Managed nodes deploy through controller
+stage/promote and the enrolled agent. A manual node uses `kit apply`, which captures a bounded
+immutable snapshot, verifies the exact candidate through the bundle and off-host membership gates,
+checks rollback state, stages an owned copy, and invokes only that verified copy.
+
+```bash
+# Raw Ed25519 operator credential
+sudo yaog-agent kit apply \
+  --bundle <node-bundle-dir-or-zip> --node-id <node-id> \
+  --operator-cred <trusted-public-key.pem> --operator-cred-alg ed25519
+
+# WebAuthn operator credential
+sudo yaog-agent kit apply \
+  --bundle <node-bundle-dir-or-zip> --node-id <node-id> \
+  --operator-cred <trusted-public-key.pem> \
+  --operator-cred-alg <webauthn-es256|webauthn-eddsa> \
+  --operator-rpid <rp-id> --operator-origin <origin>
+```
+
+The RP ID is required for WebAuthn verification; the origin preserves the browser-enrollment
+binding. Append `--uninstall` to the same verified command for removal. A never-keystoned legacy
+node can instead make the unsafe absence explicit with `--dangerously-allow-no-keystone`. The agent
+rejects that acknowledgement when the bundle carries trust-list files or durable state records a
+previously verified keystone, so it cannot silently downgrade an existing trust commitment.
 
 ## Source Address Fix (SNAT)
 
@@ -73,11 +117,14 @@ survives reboots.
 ## Uninstall Support
 
 Both the per-peer install script and the client install script support a `--uninstall` (or `-u`)
-flag:
+flag. This direct example is the AirGap path:
 
 ```bash
 sudo bash install.sh --uninstall
 ```
+
+For AgentHeld/manual bundles, use the verified `yaog-agent kit apply ... --uninstall` command above;
+do not run the downloaded script directly.
 
 The uninstall operation:
 1. Stops and disables all managed WireGuard interfaces

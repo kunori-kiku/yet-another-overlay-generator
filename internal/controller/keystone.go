@@ -82,6 +82,13 @@ func enforceSigningAnchor(ctx context.Context, store Store, t TenantID, now time
 		// so a half-configured signer never slips past the anchor reconciliation.
 		return fmt.Errorf("controller: loading bundle signing key: %w", err)
 	}
+	return enforceSigningAnchorWithSigner(ctx, store, t, now, signer)
+}
+
+// enforceSigningAnchorWithSigner reconciles a signer already resolved for the current stage.
+// Keeping this check, render, and export on one signer object prevents a key-file change during a
+// deploy from pinning one public key while embedding or signing with another.
+func enforceSigningAnchorWithSigner(ctx context.Context, store Store, t TenantID, now time.Time, signer bundlesig.ConfigSigner) error {
 	var configuredPub string
 	if signer != nil {
 		configuredPub = string(signer.PublicKeyPEM())
@@ -122,12 +129,15 @@ func enforceSigningAnchor(ctx context.Context, store Store, t TenantID, now time
 	}
 }
 
-// stageManifest assembles the off-host-signable membership manifest from the staged
-// nodes — each Member is {NodeID, WGPublicKey, BundleSHA256} — and stores it as the
+// buildStagedManifest assembles the off-host-signable membership manifest from the full ready
+// set — staged nodes plus delta-skipped nodes retaining their served bundles. Each Member
+// is {NodeID, WGPublicKey, BundleSHA256}; the result is stored as the
 // staged, UNSIGNED manifest (StoredTrustList.TrustListJSON = Canonical(manifest),
 // SignatureJSON empty, Epoch set by the monotonic rule). The members are exactly the
-// nodes that were rendered this stage (only they carry a bundle digest); their WG public
-// keys come from the registry value stamped on the subgraph.
+// nodes rendered for this stage (all carry a freshly computed digest); their WG public keys come
+// from the readiness source stamped on the subgraph. It deliberately does NOT write the Store:
+// CompileAndStage hands the returned record to ReplaceStagedSet so bundles + manifest become one
+// seal-last candidate rather than several independently promotable writes.
 //
 // Monotonic epoch (anti-rollback): reuse the prior stored manifest's epoch iff its
 // membership (node_id -> {wg key, bundle digest}) is byte-for-byte the same; otherwise
@@ -135,7 +145,7 @@ func enforceSigningAnchor(ctx context.Context, store Store, t TenantID, now time
 // part of the membership tuple, ANY change to a node's install.sh/config (which changes
 // its bundle digest) advances the epoch, so a node's anti-rollback floor admits the fresh
 // deploy and rejects a stale one.
-func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKeys map[string]string) error {
+func buildStagedManifest(ctx context.Context, store Store, t TenantID, digests, pubKeys map[string]string) (StoredTrustList, error) {
 	members := make([]trustlist.Member, 0, len(digests))
 	for nodeID, dig := range digests {
 		members = append(members, trustlist.Member{
@@ -150,16 +160,14 @@ func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKey
 		newMembers[m.NodeID] = memberKey{wgPublicKey: m.WGPublicKey, bundleSHA256: m.BundleSHA256}
 	}
 
-	// Monotonic epoch relative to the prior STAGED manifest (GetCurrentSignedTrustList) — NOT the
-	// served slot. Chaining off the staging history keeps in-flight re-stages monotonic; because the
-	// served epoch is always a subsequence of staged epochs (served only ever takes a value that was
-	// once staged, at promote), anti-rollback on the served path is preserved. Do not "simplify" this
-	// to read the served slot — that would lose monotonicity across un-promoted re-stages.
+	// Monotonic epoch relative to the durable staging HISTORY — not merely the active/served slot.
+	// Chaining off every fully-written manifest keeps abandoned and un-promoted re-stages monotonic;
+	// clearing their active seal must not make a later manifest reuse an already-issued epoch.
 	var epoch int64
-	if stored, err := store.GetCurrentSignedTrustList(ctx, t); err == nil {
+	if stored, err := store.GetLastStagedTrustList(ctx, t); err == nil {
 		priorMembers, perr := manifestMembers(stored.TrustListJSON)
 		if perr != nil {
-			return perr
+			return StoredTrustList{}, perr
 		}
 		if sameMembership(newMembers, priorMembers) {
 			epoch = stored.Epoch
@@ -167,7 +175,7 @@ func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKey
 			epoch = stored.Epoch + 1
 		}
 	} else if !errors.Is(err, ErrNotFound) {
-		return fmt.Errorf("controller: loading prior manifest for epoch: %w", err)
+		return StoredTrustList{}, fmt.Errorf("controller: loading prior manifest for epoch: %w", err)
 	}
 
 	manifest := trustlist.TrustList{
@@ -178,21 +186,16 @@ func stageManifest(ctx context.Context, store Store, t TenantID, digests, pubKey
 	}
 	canonical, err := trustlist.Canonical(manifest)
 	if err != nil {
-		return fmt.Errorf("controller: canonicalizing staged manifest: %w", err)
+		return StoredTrustList{}, fmt.Errorf("controller: canonicalizing staged manifest: %w", err)
 	}
 
-	// Store the staged manifest with an EMPTY signature: staging never requires a
-	// signature. The operator signs it off-host (GET /trustlist → POST
-	// /trustlist-signature, which sets SignatureJSON), and PromoteStaged refuses until
-	// that signature exists, matches these bytes, and verifies.
-	if err := store.PutSignedTrustList(ctx, t, StoredTrustList{
+	// Return an EMPTY signature: the operator fills only SignatureJSON off-host after the complete
+	// staged candidate has been sealed.
+	return StoredTrustList{
 		TrustListJSON: canonical,
 		SignatureJSON: nil,
 		Epoch:         epoch,
-	}); err != nil {
-		return fmt.Errorf("controller: storing staged manifest: %w", err)
-	}
-	return nil
+	}, nil
 }
 
 // pinFromOperatorCredential builds the trustlist.PinnedCredential the verifier checks

@@ -80,6 +80,12 @@ The Store holds the records defined alongside the interface:
   `checksums.sha256`, `bundle.sig`, `signing-pubkey.pem`, `manifest.json`, …), and the `IsStaged` /
   `IsCurrent` flags.
 - **`AuditEntry`** — one append-only, hash-chained audit record (see [below](#audit-hash-chain)).
+  Keystone credential transitions additionally carry a random `EventID`, which is an idempotency
+  identity rather than a secret or an authentication token.
+- **`PendingKeystoneTransition`** — the public-only write-ahead record for an audited keystone pin or
+  rotation: exact expected credential (or absence), target credential, and the unchained audit event
+  with its fixed timestamp and `EventID`. FileStore persists the singleton as
+  `keystone-transition.json`; MemStore stores the same JSON record through the shared store core.
 
 ## Zero-knowledge custody — public keys only
 
@@ -178,20 +184,33 @@ Durability discipline:
 - **Permissions:** the root directory is **0700**; written files are **0600**. The store can hold
   signed bundles, tenant topology, and the API-token index, so it is treated as sensitive even though it
   carries no private keys (and no plaintext tokens — only their hashes).
-- **Atomic per-file writes (torn-write safe, not crash-durable):** every single record is written to a
-  **temporary file then `rename`d** into place, so a concurrent reader sees either the old complete
-  file or the new complete file — never a half-written one. This is *torn-write* protection, not full
-  *crash durability*: the temp file is not `fsync`ed before rename, so a power loss can still lose a
-  just-written record that the OS had only buffered. For v1 this is acceptable (the agent re-pulls and
-  re-applies; the operator can re-deploy); real crash-durability + multi-record transactionality is a
-  property of the future Postgres adapter.
-- **`PromoteStaged` is atomic for concurrent in-process callers, best-effort across a crash.** The flip
-  writes several files in sequence (each node's current bundle, removing its staged marker, bumping its
-  node record) and commits `generation.json` **last**, so an in-process caller (guarded by the store
-  mutex) and any reader only ever observe a consistent generation. A crash *mid-flip* can leave a
-  partially-flipped on-disk state (some nodes flipped, `generation.json` not yet bumped); because the
-  generation is committed last, a retry re-promotes the still-staged remainder and converges. True
-  cross-record crash-atomicity (a single transaction) is a Postgres-adapter property, deferred.
+- **Durable atomic per-file writes:** every record is written to a **temporary file**, the bytes are
+  `fsync`ed, the file is closed and `rename`d, then the parent directory is synced best-effort. A
+  concurrent reader therefore sees the old complete file or the new complete file, never a truncated
+  record. Successful deletes also sync the parent directory best-effort; this is load-bearing for
+  staged-set seal invalidation.
+- **Keystone credential + audit recover as one logical transition.** Before an audited credential
+  CAS, `CompareAndSetKeystoneCredential` durably writes `keystone-transition.json`. Every later
+  keystone mutation, and the server-authoritative credential-status read, reconciles that marker
+  under the tenant operation lock. If the target credential is current, the exact `EventID` audit is
+  appended only when absent and the marker is cleared; if the expected state is still current, the
+  uncommitted marker is safely discarded; any third state fails closed without auditing. An append
+  or delete error retains the marker, and a post-error audit re-read distinguishes an append that did
+  commit from one that did not. This closes the crash/error gap between two individually durable
+  files without pretending FileStore has a cross-record transaction.
+- **Multi-record stage is seal-committed and fail-closed across a crash.** `ReplaceStagedSet` removes
+  `staged-set.json` before touching component records, writes/prunes every candidate bundle and the
+  optional manifest, then writes the seal last with the exact provisional generation, sorted node IDs,
+  and manifest digest/epoch. A crash can leave partial component files, but after reopen no promotion
+  accepts them without the matching seal. A clean re-stage overwrites/prunes the residue and recovers.
+  After promote or an unchanged cleanup, a manifest may remain behind an explicitly `historical`
+  zero-node seal for status/epoch compatibility; that marker can never authorize promotion.
+- **`PromoteStaged` is atomic for concurrent in-process callers and retryable before its disk commit.**
+  It validates the exact seal, keeps all staged inputs while writing current bundles, node desired
+  generations, and the served manifest, then commits `generation.json` **last**. A crash before that
+  counter write can re-drive the complete promote because no staged input was removed. A crash after
+  the counter commit can leave only stale cleanup records whose seal generation cannot match the next
+  promote. True single-transaction cross-record atomicity remains a future database-adapter property.
 - **Long-poll:** `FileStore` satisfies the same `WaitForGeneration` **contract** as `MemStore`, but by
   a different mechanism: it **polls the persisted `generation.json` on a short interval** (no in-process
   condition variable), returning as soon as the counter advances past `afterGen` or `ctx` is done. The
@@ -223,9 +242,12 @@ two-step **stage → promote** that makes a fleet roll-out atomic and observable
 
 - **`StageBundle`** stores a node's rendered bundle as its **staged** (not-yet-current) version.
   Staging **replaces** any prior staged bundle for that node — staging is idempotent per node, so a
-  re-render before promote simply overwrites.
+  re-render before promote simply overwrites. It remains as a focused/legacy incremental primitive;
+  production `CompileAndStage` publishes the entire candidate with **`ReplaceStagedSet`** so the exact
+  bundle set and optional manifest share one durable seal.
 - **`PromoteStaged`** is the atomic flip. If **no** bundles are staged it returns `ErrNoStagedBundle`.
-  Otherwise it, in one atomic step: flips **all** staged bundles to current (`IsStaged=false`,
+  Loose or partially-written records without an exact seal additionally match
+  `ErrIncompleteStagedSet`. Otherwise it, in one atomic step: flips **all sealed** staged bundles to current (`IsStaged=false`,
   `IsCurrent=true`, clearing the prior current for each promoted node), **increments the tenant
   generation by 1**, sets each promoted node's `DesiredGeneration` to the new generation, **wakes any
   `WaitForGeneration` waiters**, and returns the new generation. The flip is all-or-nothing: a deploy
@@ -256,9 +278,11 @@ staged, promoted, node enrolled/revoked, …). Each implementation **must** chai
 - assign **`Seq`** monotonically **per tenant**;
 - set the entry's **`Timestamp`** from the caller-provided value;
 - set **`PrevHash`** to the tenant's **prior** entry `Hash` (empty for the first entry);
-- compute **`Hash`** = `hex(SHA256(canonical(entry incl. PrevHash)))` over the fixed canonical encoding
-  (`Seq`, RFC3339Nano/UTC `Timestamp`, `Actor`, `Action`, `NodeID`, `PrevHash` — every field except the
-  `Hash` itself), so the digest is deterministic across processes and both Store implementations.
+- compute **`Hash`** = `hex(SHA256(canonical(entry incl. PrevHash)))` over a fixed canonical encoding.
+  Entries without `EventID` retain the historical sequence (`Seq`, RFC3339Nano/UTC `Timestamp`,
+  `Actor`, `Action`, `NodeID`, `PrevHash`) byte-for-byte. Event-bearing keystone entries use a
+  versioned `v2` encoding that inserts `EventID` before `PrevHash`, so the recovery identity is bound
+  into the chain without invalidating an existing tenant's audit history.
 
 `ListAudit` returns a tenant's entries in `Seq` order. `VerifyAuditChain([]AuditEntry) int` reports the
 index of the first entry that breaks the chain (a `PrevHash` mismatch or a `Hash` that does not
@@ -336,7 +360,8 @@ keeping the rest of the controller driver-agnostic. A brief schema sketch — ev
 | `api_tokens`     | `(tenant_id, token_hash)`                   | reverse index `token_hash → node_id`; hash only, never plaintext |
 | `topologies`     | `(tenant_id, version)`                      | public-keys-only JSON; `version` increments per `PutTopology` |
 | `signed_bundles` | `(tenant_id, node_id, generation)`          | bundle files, `is_staged` / `is_current` flags               |
-| `audit_log`      | `(tenant_id, seq)`                          | append-only; `prev_hash` / `hash` chain, timestamp, actor, action, node_id |
+| `keystone_transition` | `(tenant_id)`                         | pending expected/next credential plus fixed audit event identity; delete after reconciliation |
+| `audit_log`      | `(tenant_id, seq)`                          | append-only; `prev_hash` / `hash` chain, timestamp, actor, action, node_id, optional event_id |
 
 `tenant_id` as the leading column of every primary key makes the tenant predicate a **structural**
 property of the schema itself (and the place a database-level row-security policy would attach in Plan

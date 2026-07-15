@@ -24,7 +24,9 @@ func TestVerifyAssertionRandomChallenge(t *testing.T) {
 	challenge := []byte("0123456789abcdef0123456789abcdef") // 32 bytes of "random" nonce
 	challengeB64 := base64.RawURLEncoding.EncodeToString(challenge)
 
-	authData := buildAuthData(rpid, flagUserPresent|flagUserVerified)
+	// The generic verifier accepts a valid presence-only assertion: UV is now an explicit
+	// enrollment-proof policy, not a blanket login/signing/node-membership requirement.
+	authData := buildAuthData(rpid, flagUserPresent)
 	clientData := buildClientData(t, "webauthn.get", challengeB64, origin)
 	sig := ed25519.Sign(priv, signedMessage(authData, clientData))
 	art := SignedTrustList{
@@ -35,7 +37,7 @@ func TestVerifyAssertionRandomChallenge(t *testing.T) {
 		AuthenticatorData: base64.RawURLEncoding.EncodeToString(authData),
 		ClientDataJSON:    base64.RawURLEncoding.EncodeToString(clientData),
 	}
-	pin := PinnedCredential{Alg: AlgWebAuthnEdDSA, Ed25519Pub: pub, RPID: rpid, Origin: origin}
+	pin := PinnedCredential{Alg: AlgWebAuthnEdDSA, CredentialID: "login-cred", Ed25519Pub: pub, RPID: rpid, Origin: origin}
 
 	// Valid assertion over the expected random challenge.
 	if err := VerifyAssertion(art, pin, challenge); err != nil {
@@ -66,15 +68,22 @@ func TestVerifyAssertionRandomChallenge(t *testing.T) {
 		t.Fatalf("VerifyAssertion(raw ed25519) = %v, want ErrUnsupportedAlg", err)
 	}
 
-	// User-Present-ONLY (UV cleared): a possession-only assertion is REJECTED. Both ceremonies pin
-	// userVerification:"required", so the server must enforce UV — a PIN-less authenticator, or a
-	// tampered client requesting UV=discouraged, must not mint a session / sign a manifest. (Before the
-	// fix, this test's own "valid" case used a UP-only assertion and PASSED — the live vulnerability.)
-	upOnlyAuth := buildAuthData(rpid, flagUserPresent) // UV bit cleared
-	upOnly := art
-	upOnly.AuthenticatorData = base64.RawURLEncoding.EncodeToString(upOnlyAuth)
-	upOnly.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, signedMessage(upOnlyAuth, clientData)))
-	if err := VerifyAssertion(upOnly, pin, challenge); !errors.Is(err, ErrUserVerification) {
-		t.Fatalf("VerifyAssertion(User-Present only) = %v, want ErrUserVerification", err)
+	// The enrollment-only entry point rejects that same UP-only assertion, then accepts an
+	// otherwise-identical assertion whose signed authenticatorData carries UV.
+	if err := VerifyUserVerifiedAssertion(art, pin, challenge); !errors.Is(err, ErrUserVerification) {
+		t.Fatalf("VerifyUserVerifiedAssertion(User-Present only) = %v, want ErrUserVerification", err)
+	}
+	uvAuth := buildAuthData(rpid, flagUserPresent|flagUserVerified)
+	uv := art
+	uv.AuthenticatorData = base64.RawURLEncoding.EncodeToString(uvAuth)
+	uv.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, signedMessage(uvAuth, clientData)))
+	if err := VerifyUserVerifiedAssertion(uv, pin, challenge); err != nil {
+		t.Fatalf("VerifyUserVerifiedAssertion(UP|UV) = %v, want nil", err)
+	}
+
+	// A valid UV proof from a different credential ID cannot be spliced into enrollment.
+	uv.CredentialID = "other-credential"
+	if err := VerifyUserVerifiedAssertion(uv, pin, challenge); err == nil {
+		t.Fatal("VerifyUserVerifiedAssertion(mismatched credential_id) = nil, want rejection")
 	}
 }
