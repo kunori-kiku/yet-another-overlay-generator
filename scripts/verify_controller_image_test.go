@@ -23,6 +23,11 @@ JSON
 elif [[ $1 == buildx && $2 == imagetools && $3 == inspect && $* == *'.Image'* ]]; then
   printf '{"config":{"Labels":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.version":"%s"}}}\n' "$EXPECTED_REVISION" "$EXPECTED_VERSION"
 elif [[ $1 == run ]]; then
+  case "$4:$5:$6" in
+    linux/amd64:ghcr.io/owner/image:9.9.9-rc.7@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:version) ;;
+    linux/arm64:ghcr.io/owner/image:9.9.9-rc.7@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:version) ;;
+    *) echo "runtime did not use the exact child digest: $*" >&2; exit 1 ;;
+  esac
   printf '%s\n' "$EXPECTED_VERSION"
 else
   echo "unexpected docker mock: $*" >&2

@@ -74,8 +74,10 @@ jq -e '
 ' "$manifest" >/dev/null \
   || die "$image_ref does not contain exactly linux/amd64 and linux/arm64 runtime images"
 
-# Read each runtime child config by digest, then execute both children through
-# the verified parent index. No mutable tag lookup is reused for labels/runtime.
+# Read and execute each runtime child by its exact digest. Reusing the parent
+# index digest for sequential --platform runs makes Docker's classic image
+# store bind that digest to the first platform and reject the second one.
+# No mutable tag lookup is reused for labels or runtime verification.
 for architecture in amd64 arm64; do
   child_digest=$(jq -er --arg architecture "$architecture" '
     .manifests[]
@@ -101,7 +103,7 @@ for architecture in amd64 arm64; do
     || die "$image_ref linux/$architecture version label is $version_label, expected $expected_version"
   runtime_ok=false
   for attempt in 1 2 3 4 5; do
-    if docker run --rm --platform "linux/$architecture" "$image_ref@$digest" version >"$version_output"; then
+    if docker run --rm --platform "linux/$architecture" "$image_ref@$child_digest" version >"$version_output"; then
       runtime_ok=true
       break
     fi

@@ -40,6 +40,14 @@ finalizer can leave one verified pointer ahead of another; rerunning only that f
 normal idempotent recovery. Do not create a release manually or replace a versioned image while the
 workflow is running.
 
+`recover-release.yml` is the exceptional post-boundary recovery path when a deterministic defect in the
+tagged workflow itself makes an ordinary rerun impossible. It is RC/GA- and GHCR-only, runs under the
+same publication lock, and must be dispatched from the default branch with an explicit publication
+confirmation. It accepts only an exact failed tag-triggered Release graph, binds the supplied digest to
+the original successful image-build log, resolves the original unexpired artifact IDs, re-verifies all
+22 files and the immutable tag/image, and then runs the same private-draft seal and Latest finalizer. It
+cannot build or overwrite a version image. This path is not a substitute for ordinary failed-job reruns.
+
 ## Deployment Scripts
 
 `scripts/deploy.sh` and `scripts/deploy.ps1` pull a prebuilt bundle from GitHub Releases and set

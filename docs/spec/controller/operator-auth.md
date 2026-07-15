@@ -147,8 +147,9 @@ low-value signal, and both `begin` and `finish` are rate-limited.
 
 ### Enrollment-scoped User Verification (UV)
 
-Status: implemented on `main` at `01ab037` in the ready, still-uncut and unpublished
-`v2.0.0-rc.7` release state. This supersedes the blanket assertion gate from
+Status: included in the immutable `v2.0.0-rc.7` tag at `c3c5c25`; the versioned container exists, but
+the GitHub release remains unpublished while the exact-state release transaction is recovered. This
+supersedes the blanket assertion gate from
 post-refactor-debt-paydown plan-6 / PR #282 before that gate reached a release.
 
 **Compatibility is the reason for the enrollment boundary.** Existing operators enrolled their

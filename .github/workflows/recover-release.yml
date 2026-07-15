@@ -1,0 +1,520 @@
+name: Recover Release
+
+run-name: Recover ${{ inputs.release_tag }} from Release run ${{ inputs.source_run_id }}
+
+# This is a publication-boundary recovery path, not a second release builder.
+# It consumes one failed Release run's immutable, already-verified artifacts and
+# one policy-non-overwritten GHCR version. It can never build or retag that
+# version. RC/GA only: the final job intentionally converges GitHub/GHCR Latest.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing annotated RC/GA tag to recover (for example v2.0.0-rc.7)
+        required: true
+        type: string
+      source_revision:
+        description: Full commit SHA peeled from the immutable release tag
+        required: true
+        type: string
+      source_run_id:
+        description: Failed Release workflow run that produced the verified artifacts
+        required: true
+        type: string
+      expected_ghcr_digest:
+        description: Existing policy-non-overwritten GHCR version digest (sha256:...)
+        required: true
+        type: string
+      confirm_publication:
+        description: Confirm promotion of GHCR Latest and publication as GitHub Latest
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Share the normal release transaction lock. A recovery must not race a new tag
+# or another recovery while either mutable Latest pointer is being converged.
+concurrency:
+  group: yaog-release-publication
+  cancel-in-progress: false
+
+jobs:
+  validate-recovery:
+    name: Validate immutable recovery state
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      # Draft release objects are visible only to a token with write access.
+      contents: write
+      packages: read
+    outputs:
+      artifact_ids: ${{ steps.artifacts.outputs.artifact_ids }}
+      ghcr_ref: ${{ steps.identity.outputs.ghcr_ref }}
+    steps:
+      - name: Checkout default-branch recovery tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate typed inputs and default-branch invocation
+        id: identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONFIRM_PUBLICATION: ${{ inputs.confirm_publication }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          EXPECTED_GHCR_DIGEST: ${{ inputs.expected_ghcr_digest }}
+        run: |
+          set -euo pipefail
+          [ "$CONFIRM_PUBLICATION" = true ] \
+            || { echo "::error::confirm_publication must be explicitly enabled"; exit 1; }
+          # This workflow publishes Latest, so preview/beta tags are deliberately
+          # outside its authority. Accept only GA or numbered RC identities.
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]] \
+            || { echo "::error::recovery tag is not an RC/GA release"; exit 1; }
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo "::error::source revision is not a full Git SHA"; exit 1; }
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] \
+            || { echo "::error::source run id is invalid"; exit 1; }
+          [[ "$EXPECTED_GHCR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::expected GHCR digest is invalid"; exit 1; }
+
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          [ "$GITHUB_REF_TYPE" = branch ] && [ "$GITHUB_REF_NAME" = "$default_branch" ] \
+            || { echo "::error::recovery tooling must be dispatched from the default branch"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] \
+            || { echo "::error::checkout does not equal the dispatched tooling revision"; exit 1; }
+
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+          ghcr_ref="ghcr.io/$GITHUB_REPOSITORY_OWNER/yaog-controller:${RELEASE_TAG#v}"
+          echo "ghcr_ref=$ghcr_ref" >>"$GITHUB_OUTPUT"
+
+      - name: Prove the source Release run and its complete prerequisite graph
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_GHCR_DIGEST: ${{ inputs.expected_ghcr_digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > /tmp/source-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" \
+            --arg sha "$SOURCE_REVISION" \
+            --argjson run_id "$SOURCE_RUN_ID" '
+              .id == $run_id
+              and .name == "Release"
+              and .path == ".github/workflows/release.yml"
+              and .event == "push"
+              and .head_branch == $tag
+              and .head_sha == $sha
+              and .status == "completed"
+              and .conclusion == "failure"
+              and .repository.full_name == $repository
+              and .head_repository.full_name == $repository
+            ' /tmp/source-run.json >/dev/null \
+            || { echo "::error::source run is not the exact failed tag-triggered Release run"; exit 1; }
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=latest&per_page=100" \
+            > /tmp/source-jobs.json
+          jq -e '
+            def expected:
+              {
+                "Validate release tag + current main tip": "success",
+                "Gate — Go vet + test": "success",
+                "Gate — Wire-DTO + omitempty drift": "success",
+                "Gate — Frontend lint + build + test": "success",
+                "Gate — WASM conformance": "success",
+                "Gate — Security": "success",
+                "Gate — Frontend E2E (Playwright)": "success",
+                "Gate — Real-tunnel netns integration": "success",
+                "Build Frontend Dist": "success",
+                "Build linux-amd64 Bundle": "success",
+                "Build linux-arm64 Bundle": "success",
+                "Build linux-386 Bundle": "success",
+                "Build linux-armv7 Bundle": "success",
+                "Build windows-amd64 Bundle": "success",
+                "Build windows-arm64 Bundle": "success",
+                "Build windows-386 Bundle": "success",
+                "Package Static-Local-Design Site": "success",
+                "Verify exact 22-file release set": "success",
+                "Verify native Windows amd64 + 386 release versions": "success",
+                "Refuse public or misclassified release reuse": "success",
+                "Publish verified versioned controller image / Build or recover + verify controller image": "failure",
+                "Upload verified GitHub Release draft": "skipped",
+                "Publish verified preview/beta draft": "skipped",
+                "Promote verified digest + GitHub Latest": "skipped"
+              };
+            ([.jobs[].name] | length == (unique | length))
+            and (.total_count == (expected | length))
+            and (all(.jobs[]; .status == "completed"))
+            and (([.jobs[] | {key: .name, value: .conclusion}] | from_entries) == expected)
+            and ([
+              .jobs[]
+              | select(.name == "Publish verified versioned controller image / Build or recover + verify controller image")
+              | .steps[]
+              | select(.name == "Log in to Docker Hub" and .conclusion == "skipped")
+            ] | length == 1)
+          ' /tmp/source-jobs.json >/dev/null \
+            || { echo "::error::source Release graph is not the exact verified pre-draft failure state"; exit 1; }
+
+          # Bind the supplied digest to the immutable build output from the
+          # first publication attempt, not merely to whatever the version tag
+          # happens to resolve to now. Later failed-job reruns may adopt/inspect
+          # that image without running the build step again.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=all&per_page=100" \
+            > /tmp/all-source-jobs.json
+          build_job_id=$(jq -er '
+            [
+              .jobs[]
+              | select(.name == "Publish verified versioned controller image / Build or recover + verify controller image")
+              | select(any(.steps[]; .name == "Build and push absent refs" and .conclusion == "success"))
+              | select(any(.steps[]; .name == "Log in to Docker Hub" and .conclusion == "skipped"))
+            ]
+            | if length == 1 then .[0].id else error("expected one source image build job") end
+          ' /tmp/all-source-jobs.json)
+          [[ "$build_job_id" =~ ^[0-9]+$ ]] \
+            || { echo "::error::source image build job id is invalid"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$build_job_id/logs" > /tmp/source-image-build.log
+          action_digest=$(sed -nE \
+            's/.*"containerimage\.digest": "(sha256:[0-9a-f]{64})".*/\1/p' \
+            /tmp/source-image-build.log | sort -u)
+          converge_digest=$(sed -nE \
+            's/.*BUILD_DIGEST: (sha256:[0-9a-f]{64}).*/\1/p' \
+            /tmp/source-image-build.log | sort -u)
+          [ "$action_digest" = "$EXPECTED_GHCR_DIGEST" ] \
+            && [ "$converge_digest" = "$EXPECTED_GHCR_DIGEST" ] \
+            || { echo "::error::expected digest is not the exact source-run build output"; exit 1; }
+
+      - name: Resolve the exact 15 immutable artifact IDs
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100" \
+            > /tmp/source-artifacts.json
+          jq -e \
+            --arg sha "$SOURCE_REVISION" \
+            --argjson run_id "$SOURCE_RUN_ID" '
+              def expected_names:
+                [
+                  "yaog-agent-linux-386",
+                  "yaog-agent-linux-amd64",
+                  "yaog-agent-linux-arm64",
+                  "yaog-agent-linux-armv7",
+                  "yaog-agent-windows-386",
+                  "yaog-agent-windows-amd64",
+                  "yaog-agent-windows-arm64",
+                  "yaog-bundle-linux-386",
+                  "yaog-bundle-linux-amd64",
+                  "yaog-bundle-linux-arm64",
+                  "yaog-bundle-linux-armv7",
+                  "yaog-bundle-windows-386",
+                  "yaog-bundle-windows-amd64",
+                  "yaog-bundle-windows-arm64",
+                  "yaog-local-design"
+                ];
+              [.artifacts[] | select(.name | startswith("yaog-"))] as $release_artifacts
+              | ($release_artifacts | length == 15)
+                and (($release_artifacts | map(.name) | sort) == expected_names)
+                and (($release_artifacts | map(.id) | length) == ($release_artifacts | map(.id) | unique | length))
+                and all($release_artifacts[];
+                  (.id | type == "number")
+                  and (.size_in_bytes | type == "number" and . > 0)
+                  and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+                  and .expired == false
+                  and .workflow_run.id == $run_id
+                  and .workflow_run.head_sha == $sha)
+            ' /tmp/source-artifacts.json >/dev/null \
+            || { echo "::error::source run does not retain the exact immutable 15-artifact release input"; exit 1; }
+          artifact_ids=$(jq -r '
+            [.artifacts[] | select(.name | startswith("yaog-"))]
+            | sort_by(.name)
+            | map(.id | tostring)
+            | join(",")
+          ' /tmp/source-artifacts.json)
+          [[ "$artifact_ids" =~ ^[0-9]+(,[0-9]+){14}$ ]] \
+            || { echo "::error::resolved artifact ID set is malformed"; exit 1; }
+          echo "artifact_ids=$artifact_ids" >>"$GITHUB_OUTPUT"
+
+      - name: Refuse public or misclassified GitHub release state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: bash scripts/verify-github-release.sh preflight-state "$GITHUB_REPOSITORY" "$RELEASE_TAG" false
+
+      - name: Set up QEMU for exact two-platform runtime verification
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Buildx manifest tooling
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR read-only
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Adopt only the exact existing versioned image
+        env:
+          GHCR_REF: ${{ steps.identity.outputs.ghcr_ref }}
+          EXPECTED_GHCR_DIGEST: ${{ inputs.expected_ghcr_digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          verified=$(bash scripts/verify-controller-image.sh \
+            "$GHCR_REF" "$RELEASE_TAG" "$SOURCE_REVISION" "$EXPECTED_GHCR_DIGEST")
+          [ "$verified" = "$EXPECTED_GHCR_DIGEST" ] \
+            || { echo "::error::existing versioned GHCR image is not the expected recovery state"; exit 1; }
+
+  upload-release-draft:
+    name: Upload exact recovery draft
+    needs: validate-recovery
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      release_id: ${{ steps.select-draft.outputs.release_id }}
+    steps:
+      - name: Checkout default-branch recovery tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go for publish-input verification
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Download the exact source-run artifact IDs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.validate-recovery.outputs.artifact_ids }}
+          merge-multiple: true
+          path: release-assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Re-seal source artifacts and tag identity
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-release-assets.sh release-assets "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+
+      - name: Preflight absent or same-byte recovery draft
+        id: preflight-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-github-release.sh preflight-upload \
+            "$GITHUB_REPOSITORY" "$RELEASE_TAG" false release-assets \
+            | tee /tmp/yaog-release-preflight.outputs
+          cat /tmp/yaog-release-preflight.outputs >>"$GITHUB_OUTPUT"
+
+      - name: Select one exact private draft
+        id: select-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREFLIGHT_STATUS: ${{ steps.preflight-draft.outputs.release_status }}
+          PREFLIGHT_ID: ${{ steps.preflight-draft.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          if [ "$PREFLIGHT_STATUS" = absent ]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -F draft=true \
+              -F prerelease=false \
+              -f make_latest=false > /tmp/yaog-created-draft.json
+            release_id=$(jq -er --arg tag "$RELEASE_TAG" '
+              select(.tag_name == $tag and .draft == true and .prerelease == false)
+              | .id | select(type == "number")
+            ' /tmp/yaog-created-draft.json)
+          elif [ "$PREFLIGHT_STATUS" = draft ] && [[ "$PREFLIGHT_ID" =~ ^[0-9]+$ ]]; then
+            release_id=$PREFLIGHT_ID
+          else
+            echo "::error::invalid draft preflight result"
+            exit 1
+          fi
+          echo "release_id=$release_id" >>"$GITHUB_OUTPUT"
+
+      - name: Upload the exact 22-file allowlist to the selected draft
+        id: create-release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          working_directory: release-assets
+          draft: true
+          prerelease: false
+          make_latest: false
+          fail_on_unmatched_files: true
+          overwrite_files: false
+          files: |
+            yaog-bundle-linux-amd64.tar.gz
+            yaog-bundle-linux-arm64.tar.gz
+            yaog-bundle-linux-386.tar.gz
+            yaog-bundle-linux-armv7.tar.gz
+            yaog-bundle-windows-amd64.zip
+            yaog-bundle-windows-arm64.zip
+            yaog-bundle-windows-386.zip
+            yaog-agent-linux-amd64
+            yaog-agent-linux-amd64.sha256
+            yaog-agent-linux-arm64
+            yaog-agent-linux-arm64.sha256
+            yaog-agent-linux-386
+            yaog-agent-linux-386.sha256
+            yaog-agent-linux-armv7
+            yaog-agent-linux-armv7.sha256
+            yaog-agent-windows-amd64.exe
+            yaog-agent-windows-amd64.exe.sha256
+            yaog-agent-windows-arm64.exe
+            yaog-agent-windows-arm64.exe.sha256
+            yaog-agent-windows-386.exe
+            yaog-agent-windows-386.exe.sha256
+            yaog-local-design-${{ inputs.release_tag }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Seal uploaded draft metadata, names, sizes, and digests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION_RELEASE_ID: ${{ steps.create-release.outputs.id }}
+          RELEASE_ID: ${{ steps.select-draft.outputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] && [ "$ACTION_RELEASE_ID" = "$RELEASE_ID" ] \
+            || { echo "::error::release action selected $ACTION_RELEASE_ID, expected private draft $RELEASE_ID"; exit 1; }
+          bash scripts/verify-github-release.sh verify \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" true false release-assets ignore
+
+  promote-latest:
+    name: Promote recovered digest + GitHub Latest
+    needs: [validate-recovery, upload-release-draft]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout default-branch recovery tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go for final publish-input verification
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Download the exact source-run artifact IDs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.validate-recovery.outputs.artifact_ids }}
+          merge-multiple: true
+          path: release-assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Set up QEMU for exact two-platform runtime verification
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Buildx manifest tooling
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-seal final local input and immutable identities
+        env:
+          GHCR_REF: ${{ needs.validate-recovery.outputs.ghcr_ref }}
+          EXPECTED_GHCR_DIGEST: ${{ inputs.expected_ghcr_digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-release-assets.sh release-assets "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+          [ "$(bash scripts/verify-controller-image.sh \
+            "$GHCR_REF" "$RELEASE_TAG" "$SOURCE_REVISION" "$EXPECTED_GHCR_DIGEST")" = "$EXPECTED_GHCR_DIGEST" ]
+
+      - name: Idempotently converge GHCR Latest from the verified version digest
+        env:
+          GHCR_REF: ${{ needs.validate-recovery.outputs.ghcr_ref }}
+          EXPECTED_GHCR_DIGEST: ${{ inputs.expected_ghcr_digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          latest_ref=${GHCR_REF%:*}:latest
+          for attempt in 1 2 3 4 5; do
+            if docker buildx imagetools create \
+              --tag "$latest_ref" "$GHCR_REF@$EXPECTED_GHCR_DIGEST"; then
+              if verified=$(bash scripts/verify-controller-image.sh \
+                "$latest_ref" "$RELEASE_TAG" "$SOURCE_REVISION" "$EXPECTED_GHCR_DIGEST"); then
+                [ "$verified" = "$EXPECTED_GHCR_DIGEST" ] && exit 0
+              fi
+            fi
+            (( attempt == 5 )) || sleep $((attempt * 2))
+          done
+          echo "::error::could not converge $latest_ref to $EXPECTED_GHCR_DIGEST"
+          exit 1
+
+      - name: Re-seal and idempotently publish the release as GitHub Latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.upload-release-draft.outputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] \
+            || { echo "::error::draft upload did not return a valid release id"; exit 1; }
+          bash scripts/verify-release-ref.sh "$RELEASE_TAG" "$SOURCE_REVISION"
+          bash scripts/verify-github-release.sh publish \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" false release-assets must
+
+      - name: Verify every recovered public pointer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_REF: ${{ needs.validate-recovery.outputs.ghcr_ref }}
+          EXPECTED_GHCR_DIGEST: ${{ inputs.expected_ghcr_digest }}
+          RELEASE_ID: ${{ needs.upload-release-draft.outputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          latest_ref=${GHCR_REF%:*}:latest
+          [ "$(bash scripts/verify-controller-image.sh \
+            "$GHCR_REF" "$RELEASE_TAG" "$SOURCE_REVISION" "$EXPECTED_GHCR_DIGEST")" = "$EXPECTED_GHCR_DIGEST" ]
+          [ "$(bash scripts/verify-controller-image.sh \
+            "$latest_ref" "$RELEASE_TAG" "$SOURCE_REVISION" "$EXPECTED_GHCR_DIGEST")" = "$EXPECTED_GHCR_DIGEST" ]
+          bash scripts/verify-github-release.sh verify \
+            "$GITHUB_REPOSITORY" "$RELEASE_ID" "$RELEASE_TAG" false false release-assets must
