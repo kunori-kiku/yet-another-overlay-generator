@@ -223,6 +223,32 @@ docker buildx imagetools inspect "ghcr.io/kunori-kiku/yaog-controller:$IMAGE_VER
   verified digest/draft and re-check every pointer. If the existing state is not an exact recovery
   state, preserve the evidence and cut the next release number.
 
+If a deterministic defect in the tagged workflow makes that ordinary rerun impossible, do not replace
+it with manual `gh release create` or registry mutation. First fix and merge the recovery tooling, pass
+exact-commit `main` CI, and independently review `.github/workflows/recover-release.yml`. That workflow
+is deliberately narrower than a release build: RC/GA and GHCR only, default-branch dispatch only, and
+the same `yaog-release-publication` lock. It requires the exact immutable tag/revision, failed Release
+run, version-image digest, and an explicit publication confirmation. It proves the source run's complete
+pre-draft job graph, binds the digest to the successful source build log, resolves the exact unexpired
+artifact IDs, re-seals all 22 files, and adopts—but never builds or overwrites—the versioned image before
+running the ordinary private-draft and Latest finalizers.
+
+Dispatch it only after verifying that Docker Hub was disabled in the source run (the workflow also
+enforces that condition):
+
+```bash
+gh workflow run recover-release.yml --ref main \
+  -f release_tag="$TAG" \
+  -f source_revision="$SOURCE_COMMIT" \
+  -f source_run_id="$FAILED_RELEASE_RUN_ID" \
+  -f expected_ghcr_digest="$IMAGE_DIGEST" \
+  -F confirm_publication=true
+```
+
+Watch and verify the recovery run exactly like the ordinary Release run. If its immutable run, artifact,
+tag, image, or draft checks disagree, preserve the state and advance the release number; do not loosen
+the allowlists to force publication.
+
 ### 6. Edit notes after automation finishes
 
 Once the workflow has completed, edit only the release title/body in place when richer notes are

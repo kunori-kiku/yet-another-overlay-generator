@@ -1,13 +1,14 @@
 # STATUS
 <!-- regenerated: 2026-07-16 -->
-<!-- by: hand — v2.0.0-rc.6 = GitHub Latest; the independently reviewed rc.7 implementation is merged on main at 01ab037 with exact-commit main CI green, but remains uncut/unpublished after its first tag-triggered run stopped at annotated-tag validation before any gate or publication boundary; the checkout-ref fix is underway -->
+<!-- by: hand — v2.0.0-rc.6 remains GitHub Latest; rc.7 is immutably tagged at c3c5c25 and its exact GHCR version image exists at sha256:7e71e286 after every release gate, exact-22 check, and native-Windows check passed, but a parent-index runtime-verifier defect stopped the transaction before any GitHub release object or Latest promotion; child-digest verification + an exact-state recovery workflow are underway -->
 
 ## Active work
 
 - **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
   `_completed/`). Shipped as `v2.0.0-rc.6`; the independently reviewed, gate-green rc.7 implementation
-  is merged on `main` at `01ab037` but remains uncut/unpublished, and carries enrollment-scoped WebAuthn
-  UV proof instead of plan-6's blanket runtime/node gate.** The successor to `framework-refactor`, from
+  is immutably tagged at `c3c5c25` and awaiting completion of its failed publication transaction, and
+  carries enrollment-scoped WebAuthn UV proof instead of plan-6's blanket runtime/node gate.** The
+  successor to `framework-refactor`, from
   a fresh **30-agent repo-wide debt sweep + a 7-agent security-correctness gap-pass** (both briefed to
   NOT re-report shipped work) → **14 plans in 4 tiers**:
   correctness/security fixes → structural paydown → machine-gate/FE → doc/state hygiene. Executed per-PR
@@ -43,10 +44,15 @@
   assertion by the exact candidate credential before persistence. Normal login/signing/membership
   remains signature + binding + User-Presence verified; the first-party browser prefers UV for later
   assertions without requiring it, and both enrollment surfaces warn that a later non-UV assertion is
-  possession-only. WebAuthn backup/sync state is separate from UV. **The first rc.7 tag-triggered
-  workflow run failed during annotated-tag validation before any build, image, release draft, or public
-  pointer existed; no rc.7 bytes have been published, no fleet re-sign is required, and existing
-  manifests remain valid.** The merged implementation also reconciles the bilingual operator wiki and
+  possession-only. WebAuthn backup/sync state is separate from UV. **The initial rc.7 tag run failed
+  before publication because checkout flattened the local annotated tag; after the centralized fix and
+  documented pre-boundary retag, Release run `29437046676` passed every gate, the exact-22 asset check,
+  and native Windows execution, then published immutable version image `sha256:7e71e286…`. Its new
+  read-back verifier incorrectly reused the multi-arch parent digest across sequential amd64/arm64 runs
+  on Docker's classic image store, so no GitHub release object was created and Latest remains rc.6. The
+  image children, labels, and runtime versions are exact; the tag/image may not move, and an exact-state
+  automated recovery is underway. No fleet re-sign is required and existing manifests remain valid.**
+  The merged implementation also reconciles the bilingual operator wiki and
   controller-agent lifecycle documentation. Deferred, non-blocking: **plan-3.5**
   (go:embed/`ShellToken` PowerShell deploy templating —
   no PS1 `ShellToken` constructor yet). Memory: `post-refactor-debt-paydown-shipped.md`.
@@ -279,16 +285,20 @@
   is fetched without a pre-shared pin); the FileStore SPOF (global mutex + 200ms generation poll) fix;
   a reliable *persistent* per-node `failed` update-state (would need a positive agent-reported field —
   the chip's `failed` is best-effort/transient today); the full wiki rewrite; a frontend test runner.
-- `main` now contains the reviewed rc.7 implementation at `01ab037`; exact-commit main CI run
-  `29434577226` passed all seven required jobs. Its local gate mirror is also green across Go
+- `main` contains the reviewed rc.7 implementation and annotated-tag validator repair; exact-commit
+  main CI runs `29434577226` (`01ab037`) and `29436552114` (`c3c5c25`) passed all seven required jobs.
+  Its local gate mirror is also green across Go
   format/vet/test/race/coverage, frontend lint/build/Vitest/Playwright, WASM conformance, govulncheck,
   DAST, release-asset synthesis, workflow lint, cross-builds, and the real-tunnel canary. The first
-  tag-triggered Release run (`29434982352`) failed in its initial validator because `actions/checkout`
-  rewrote the local annotated tag ref to the peeled commit. It crossed no publication boundary: the
-  versioned GHCR reference and GitHub release object were both absent when checked. The workflow fix is
-  underway; rc.7 remains uncut/unpublished. Hardware-backed browser enrollment remains an explicit
-  owner smoke; native Windows amd64/386 execution is required in the release workflow and has not yet run
-  for rc.7.
+  first tag-triggered Release run (`29434982352`) failed pre-boundary because `actions/checkout` rewrote
+  the local annotated tag ref to the peeled commit. After PR #300 fixed that and the tag was lawfully
+  recreated, run `29437046676` passed its validator, seven gates, seven platform builds, exact-22 seal,
+  and native Windows amd64/386 execution. It pushed exact GHCR digest `sha256:7e71e286…`, then its new
+  runtime verifier failed by reusing one parent index digest for sequential amd64/arm64 Docker runs.
+  Both exact child digests verify successfully; GitHub has no rc.7 release object and both Latest
+  pointers remain rc.6. Because the image boundary was crossed, neither tag nor image will move. The
+  child-digest fix and a fail-closed recovery transaction over the original artifacts are active.
+  Hardware-backed browser enrollment remains an explicit owner smoke.
 
 ## Next actions
 
@@ -311,15 +321,14 @@ implementation.
 22 assets — the 7 `yaog-server-airgap-*` binaries are intentionally gone, one server build post
 framework-refactor). It ships the `post-refactor-debt-paydown` delta (PRs #277–#292). The road to GA
 (current rc.7 release recovery is active; hardware-only checks remain owner-paced):**
-1. **Fix the tag validator and cut `v2.0.0-rc.7`.** The implementation and ready-and-uncut release state
-   are merged at `01ab037`, and exact-commit main CI is green. The first tag run failed before its gates
-   because checkout replaced the local annotated-tag object with the peeled commit; it created neither a
-   versioned image nor a GitHub release object. Merge the centralized remote-tag verification fix, wait
-   for required `main` CI on that exact commit, re-confirm that both publication boundaries are absent,
-   then replace the failed annotated tag under `RELEASING.md`'s pre-publication recovery rule. The new tag
-   workflow must verify the exact 22-file asset allowlist and versioned GHCR image before publishing the
-   GitHub release or moving Latest. Only post-publication verification may change this file from
-   ready/uncut to shipped.
+1. **Complete the immutable `v2.0.0-rc.7` recovery transaction.** Tag `v2.0.0-rc.7` is fixed at
+   `c3c5c25`; versioned GHCR digest `sha256:7e71e286…` is fixed and must not be overwritten. The source
+   run's validator, seven gates, exact 22 assets, and native Windows checks are green, but its
+   parent-index runtime verifier prevented the draft/finalizer jobs from running. Merge the child-digest
+   verifier and reviewed `Recover Release` workflow, wait for exact-main CI, then dispatch it with the
+   immutable tag, source run, revision, and image digest. It must adopt—not rebuild—the version image;
+   re-download and re-seal the original artifact IDs; create one private draft; then converge
+   GHCR/GitHub Latest and verify both. Only post-publication verification may change this file to shipped.
 2. **Carry the rc.6 real-host/browser smokes as explicitly owed risk where hardware is unavailable.**
    Owner owes: update the controller to rc.6+ and browser-smoke
    the fixes — (a) **local in-browser design now actually loads** (the shipped panel finally contains

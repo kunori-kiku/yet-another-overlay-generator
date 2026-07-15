@@ -9,6 +9,15 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-platform release-image verification now executes each exact child manifest digest.** The
+  rc.7 publication run exposed that reusing one parent index digest for sequential amd64/arm64
+  `docker run --platform` checks fails on Docker's classic image store even though both children are
+  valid. The verifier and its mock now require the platform-specific child digest, and a fail-closed
+  recovery workflow can finish an immutable post-boundary RC/GA transaction from its original verified
+  run, artifacts, tag, and image without rebuilding or overwriting the version.
+
 ## [2.0.0-rc.7] - 2026-07-16
 
 **Release candidate.** A compatibility, custody, and release-integrity hardening release over
