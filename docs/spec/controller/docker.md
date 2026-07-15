@@ -92,10 +92,11 @@ Different existing bytes fail closed. RC/GA `latest` pointers and the GitHub rel
 separate external updates, so a failed finalizer can temporarily leave verified pointers ahead or
 behind; rerunning only that finalizer converges and re-verifies the same transaction.
 
-> **Known arm64 warning:** the current `latest` / `2.0.0-rc.6` controller image advertises an arm64
-> child but contains an amd64 server in that child. Use its amd64 image only until rc.8 replaces
-> `latest`; the withdrawn `2.0.0-rc.7` version has the same defect and must not be used or promoted.
-> This Dockerfile defect does not affect the standalone arm64 agents or release bundles.
+> **Historical arm64 warning:** current `latest` / `2.0.0-rc.8` is verified to contain native amd64
+> and arm64 servers. The retained `2.0.0-rc.6` and withdrawn `2.0.0-rc.7` versioned images still have
+> malformed arm64 children containing an amd64 server and must not be used on arm64. The rc.7 identity
+> must not be recovered, overwritten, promoted, or reused. This historical Dockerfile defect does not
+> affect standalone arm64 agents or release bundles.
 
 ## Notes
 
