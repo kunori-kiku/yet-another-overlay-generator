@@ -1,5 +1,5 @@
 # STATUS
-<!-- regenerated: 2026-07-16 -->
+<!-- regenerated: 2026-07-17 -->
 <!-- by: hand — v2.0.0-rc.11 is GitHub Latest from annotated tag object
 661c9ddfbab19870300843dda54d531a441615be, targeting
 9a8a3a33340a7ed2526144e9a92ce6bf6fd287a1. Release run 29508065549 succeeded and
@@ -10,6 +10,19 @@ and linux/arm64 sha256:04ab2c5ab7a6e4ffb5908c1bce41cd16f1657da76253bcac116e1c42c
 rc.7 remains withdrawn and preserved; its identity must not be recovered or reused. -->
 
 ## Active work
+
+- **📋 SUBJECT `deployment-stability-and-charted-telemetry-2026_07_17` — PLAN WRITTEN /
+  EXECUTION AUTHORIZED.** Work continues on `fix/rc12-telemetry-drafts` from `origin/main` commit
+  `12be8fa`, preserving the existing partial fix set. Plans 1–3 repair deploy validation, historical
+  client allocation compatibility, routine audit noise, and display-only probe names before any
+  feature work. Plans 4–7 add the rolling-upgrade-safe successor policy, constrained URL probes, and
+  opt-in automatic disk/GPU inventory and charted samples. Plan 8 owns independent whole-subject
+  review, fix/re-review, full CI-equivalent gates, documentation/spec refresh, closure, merge, and
+  exact-main verification. Plan 9 is a terminal release checklist outside normal plan closure so the
+  annotated `v2.0.0-rc.12` tag remains the final repository mutation. Tests are intentionally minimal:
+  each plan pins its public boundary and production regression, while the full suite runs on the
+  integrated candidate. Folder:
+  [`implementation_plans/deployment-stability-and-charted-telemetry-2026_07_17/`](implementation_plans/deployment-stability-and-charted-telemetry-2026_07_17/outline.md).
 
 - **✅ `v2.0.0-rc.11` — RELEASED / GITHUB LATEST (2026-07-16).** The final independent rc.10
   requirement audit found one material local-custody gap: ordinary stable FileStore records still used
