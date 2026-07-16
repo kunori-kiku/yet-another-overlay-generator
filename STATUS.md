@@ -1,16 +1,17 @@
 # STATUS
 <!-- regenerated: 2026-07-16 -->
-<!-- by: hand — v2.0.0-rc.9 is GitHub Latest from annotated tag object
-8b0a6e83c3845b03b3a02935cffdb60a7c6d4f1e, targeting
-3344e0d5f60e1db042e3ca5463a76a0991c03d42. Release run 29486416928 succeeded and
-published the exact 22 verified assets. GHCR 2.0.0-rc.9 and latest share parent
-sha256:88ad6a7416ddc5c0ed61fc095df068e9a17019b9e112218290e34b70dcc86af7 with the
-verified native linux/amd64 + linux/arm64 children.
+<!-- by: hand — v2.0.0-rc.10 is GitHub Latest from annotated tag object
+47727de3bda6cc6f47108caa9180ac534c6b54e4, targeting
+2eaa4d3e987252920ae988de4bf9327d78909e50. Release run 29499539666 succeeded and
+published the exact 22 verified assets. GHCR 2.0.0-rc.10 and latest share parent
+sha256:372862a6db2302a9e6e46516966a1a7f8783942733f07be11758a884e431dfdd; its
+verified runtime children are linux/amd64 sha256:e654aa66ba8e578f1efac3782d77dc8cc6b19e3aedc72b7d2c1fb91c4ad1cc55
+and linux/arm64 sha256:7eee453f07db4b263f0d7edbeb25542ba49eeed4cdbe98dc554e39d7ffb6da3c.
 rc.7 remains withdrawn and preserved; its identity must not be recovered or reused. -->
 
 ## Active work
 
-- **🚧 `v2.0.0-rc.10` — READY-AND-UNCUT (2026-07-16; not yet published).** This candidate completes
+- **✅ `v2.0.0-rc.10` — RELEASED / GITHUB LATEST (2026-07-16).** This release completes
   the active-telemetry observation framework introduced in rc.9. Nodes still perform bounded signed
   ICMP/TCP observations and upload them over the existing authenticated HTTP heartbeat; the controller
   now retains/deduplicates the attempts, serves exact-probe latency/availability history, and rolls
@@ -38,25 +39,31 @@ rc.7 remains withdrawn and preserved; its identity must not be recovered or reus
   race tests exercise both interleavings, and a new real-route Playwright scenario covers exact probe
   switching, Live feedback, and retaining the last good charts across one injected history failure.
 
-  Final local evidence after those fixes is green: gofmt, vet, the full Go race suite, coverage floors,
+  Final local evidence after those fixes was green: gofmt, vet, the full Go race suite, coverage floors,
   wire drift, the generated PowerShell contract test, DAST, `govulncheck`, frontend lint/controller/
   local/WASM builds, **365 Vitest cases**, the 25-fixture WASM/Go byte-equality gate, and the required
   Playwright matrix (**77 passed, 6 expected project skips**). The exact-22 release-asset positive and
-  adversarial contract suite is green. **Recorded residuals:** local native `pwsh` is unavailable, so
-  GitHub's required runner must execute that contract before merge; the final local
+  adversarial contract suite was green. **Recorded residuals:** local native `pwsh` is unavailable;
+  GitHub's required native Windows runner executed the release checks successfully. The final local
   `docker buildx build --check` could not re-resolve `docker/dockerfile:1` because Docker Hub reset the
-  connection twice (the unchanged Docker/release contract had already passed, and CI/release will
-  re-run it); and an rc.10-agent/real-node ICMP-permission + response-header-stripping soak is **owed
+  connection twice; the release workflow subsequently built and verified the native two-platform
+  controller image. An rc.10-agent/real-node ICMP-permission + response-header-stripping soak is **owed
   (owner-authorized release risk under the explicit ship instruction)** rather than claimed as a
-  hardware pass. Required main CI still supplies the native PowerShell, real-tunnel, clean-checkout,
-  and container-build evidence.
+  hardware pass.
 
-  **Remaining before tag:** commit and publish this exact reviewed scope as a PR, merge only after all
-  required checks pass, wait for current-main CI on the merge commit, synchronize a clean
-  `HEAD == origin/main`, create one annotated `v2.0.0-rc.10` tag at that exact tip, and let the sealed
-  release workflow publish/verify all 22 assets plus the native two-platform controller image. Move
-  this ledger to published/shipped wording only after GitHub Latest and GHCR/container Latest are
-  independently verified.
+  **Publication evidence:** PR #306 merged the independently re-reviewed scope as
+  `2eaa4d3e987252920ae988de4bf9327d78909e50`; exact-main CI run `29499084700` passed all seven jobs.
+  Annotated tag object `47727de3bda6cc6f47108caa9180ac534c6b54e4` peels to that commit. Release run
+  `29499539666` passed every release gate, built all target bundles, verified the exact 22-file set and
+  native Windows versions, executed both controller platforms under QEMU, and transactionally promoted
+  GitHub Latest plus GHCR `2.0.0-rc.10` / `latest`. An independent public download re-ran
+  `verify-release-assets.sh` successfully against all 22 assets. Both container references resolve to
+  parent `sha256:372862a6db2302a9e6e46516966a1a7f8783942733f07be11758a884e431dfdd`; local
+  consumer-side inspection confirmed the exact revision/version/entrypoint on both children, an
+  executable amd64 runtime reporting `v2.0.0-rc.10`, and an ELF64 little-endian AArch64 arm64 server.
+  This workstation has no arm64 binfmt/QEMU, so the independent local arm64 execution was intentionally
+  not claimed; the release runner's QEMU-backed execution is green. Optional Docker Hub publication was
+  not configured and was correctly skipped.
 
 - **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
   `_completed/`). Thirteen non-held plans shipped as `v2.0.0-rc.6`; held plan-6 was redesigned before
@@ -393,16 +400,17 @@ node-side UV migration and no mandatory trust-list re-sign. Full detail is in th
 
 **Track 2 — the rc line to GA.**
 
-**`v2.0.0-rc.8` is GitHub Latest (2026-07-16; annotated tag targeting `6b99a20`; 22 verified assets;
-GHCR `2.0.0-rc.8` and `latest` share verified parent `sha256:1fa7a64e…9fe15`). It carries the
-enrollment-scoped UV, custody, and exact-publication follow-up plus the native multi-platform controller
-correction. Historical warning: the retained `2.0.0-rc.6` and withdrawn `2.0.0-rc.7` versioned arm64
+**`v2.0.0-rc.10` is GitHub Latest (2026-07-16; annotated tag targeting `2eaa4d3`; 22 verified assets;
+GHCR `2.0.0-rc.10` and `latest` share verified parent `sha256:372862a6…1dfdd`). It carries the
+enrollment-scoped UV, custody, and exact-publication follow-up; the native multi-platform controller
+correction; and the signed active-probe plus charted, compacted telemetry-history/Fleet-Live framework.
+Historical warning: the retained `2.0.0-rc.6` and withdrawn `2.0.0-rc.7` versioned arm64
 controller children remain malformed and must not be used. rc.7 remains preserved as failure evidence;
 do not recover, overwrite, promote, or reuse that identity. Standalone arm64 agents and release bundles
 are unaffected because they use the separate release matrix. The road to GA (hardware-only checks remain
 owner-paced):**
 1. **Carry the real-host/browser smokes as explicitly owed risk where hardware is unavailable.**
-   Owner owes: update the controller to rc.8 and browser-smoke
+   Owner owes: update the controller to rc.10 and browser-smoke
    the fixes — (a) **local in-browser design now actually loads** (the shipped panel finally contains
    `yaog.wasm`: design → Validate → compile → export with no backend — the headline fix); (b) deploy a
    `transport: tcp` node then run the deploy-script `--uninstall` → the `mimic@` unit is stopped/disabled
@@ -412,13 +420,15 @@ owner-paced):**
    deploy-script fixes ride the rendered scripts, so **update the controller and redeploy** to apply.
    Release cut hit a real `release.yml` E2E-gate gap (it wasn't building the wasm before the E2E panel
    build — fixed #295, tag moved to the fixed commit); rc.6's GitHub assets are correct, but its arm64
-   controller image is not. Any confirmed rc.8 defect advances to rc.9 (a red required gate or a new
-   blocker never tags over).
+   controller image is not; and (e) deploy multiple ICMP/TCP probes, confirm ten-second Fleet Live
+   feedback plus history charts/resolution widening, and exercise ICMP permission failure and stripped
+   protocol-v2 headers on a real node. Any confirmed rc.10 defect advances to a fresh RC identity (a red
+   required gate or a new blocker never tags over).
 2. **rc.5 surfaces to also smoke** (carried, not yet owner-confirmed): the node-detail CPU/RAM/load
    charts (granularities + retention cap incl. `0`=off) and delta deploy (unchanged topology →
    "0 updated, N unchanged", no node refresh; change one → only it re-stages; Force redeploys an
    unchanged node). **STILL owed from rc.4:** set L7-relay edges to `transport: udp`. The single
-   controller-update + redeploy to rc.8 covers the carried rc.4/rc.5/rc.6 smokes at once.
+   controller-update + redeploy to rc.10 covers the carried rc.4/rc.5/rc.6/rc.9 smokes at once.
 3. **rc.x backlog (deliberate deferrals, unchanged):** FileStore host-loss SPOF (backup/restore/HA — see
    the persisted encrypted-object-storage plan), bootstrap-TOFU first-fetch pinning + operator-cred OOB
    delivery, the pinned-endpoint anti-roaming re-assert option (owner decision open), the `EDGE_OMITEMPTY`
@@ -433,7 +443,7 @@ Historical (rc.1 shipped 2026-07-03, GitHub Latest at the time): the pre-rc.1 pr
 PRs #137–#159), the rc.1 go/no-go gate ([`docs/spec/rc1/RC1-GATE.md`](docs/spec/rc1/RC1-GATE.md), closed
 GO with zero exceptions), and the `link-directionality` NAT/roaming fix (single-link the accelerator
 edge so the reverse peer can't race the relay; folded into rc.1) are all delivered + archived. The
-release line has since advanced preview → beta → rc through **rc.8**.
+release line has since advanced preview → beta → rc through **rc.10**.
 
 ## Recently closed subjects (most recent first)
 
