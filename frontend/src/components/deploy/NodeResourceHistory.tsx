@@ -251,6 +251,7 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
             <select
               value={granularity}
               onChange={(e) => setGranularity(e.target.value as Granularity)}
+              aria-describedby="history-resolution-hint"
               data-testid="history-granularity"
               className="rounded border border-[var(--hairline)] bg-[var(--control)] px-1.5 py-1 text-xs text-[var(--content)] outline-none focus:border-[var(--accent)]"
             >
@@ -263,6 +264,13 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
           </label>
         </div>
       </div>
+      <p
+        id="history-resolution-hint"
+        className="mt-1 text-xs text-[var(--content-muted)]"
+        data-testid="history-resolution-hint"
+      >
+        {t(language, 'nodeHistory.granularityHint')}
+      </p>
 
       {history && (
         <div className="mt-2 min-h-4 text-xs" data-testid="history-refresh-feedback">
@@ -300,7 +308,11 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
       )}
 
       {history && !history.disabled && effectiveResolution && (
-        <p className="mt-1 text-xs text-[var(--content-muted)]" data-testid="history-effective-resolution">
+        <p
+          className="mt-1 text-xs text-[var(--content-muted)]"
+          data-testid="history-effective-resolution"
+          role="status"
+        >
           {resolutionWidened && displayedGranularity !== null
             ? t(language, 'nodeHistory.effectiveResolutionWidened', {
                 effective: effectiveResolution,
