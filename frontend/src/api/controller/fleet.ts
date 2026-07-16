@@ -13,6 +13,7 @@ import type {
   MimicCapability,
 } from '../../types/controller';
 import { mapNodeConditions, type ConditionWire } from '../../lib/nodeConditions';
+import { mapProbeResults } from '../../lib/probeResults';
 import { parseContentDispositionFilename } from '../../lib/download';
 
 // --- backend snake_case response shapes (used only inside this module, discarded after mapping) ---
@@ -33,7 +34,13 @@ interface NodeJSON {
   conditions?: ConditionWire[];
   // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
   // known wireguard_peers + resource keys; other keys are ignored here.
-  telemetry?: { wireguard_peers?: WireGuardPeerWire[]; resource?: ResourceMetricWire; native_xdp?: NativeXDPWire; mimic_capability?: MimicCapabilityWire } | null;
+  telemetry?: {
+    wireguard_peers?: WireGuardPeerWire[];
+    resource?: ResourceMetricWire;
+    probe_results?: unknown;
+    native_xdp?: NativeXDPWire;
+    mimic_capability?: MimicCapabilityWire;
+  } | null;
 }
 
 // ResourceMetricWire mirrors the agent's host resource metric (snake_case wire shape under
@@ -130,6 +137,7 @@ function mapNode(n: NodeJSON): ControllerNode {
     conditions: mapNodeConditions(n.conditions),
     wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
     resource: mapResource(n.telemetry?.resource),
+    probeResults: mapProbeResults(n.telemetry?.probe_results),
     nativeXDP: mapNativeXDP(n.telemetry?.native_xdp),
     mimicCapability: mapMimicCapability(n.telemetry?.mimic_capability),
   };

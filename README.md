@@ -32,7 +32,8 @@ Yet Another Overlay Generator is a robust, web-based control plane and code gene
 - **Off-Host Signing Keystone (2.0):** When a keystone is pinned, each controller Deploy requires an operator-held signature over the exact trust-list bytes, and nodes verify it before applying — a compromised controller alone cannot push membership changes to your fleet. The panel uses a browser WebAuthn credential; the CLI-compatible path uses raw Ed25519. The controller stores only the credential's public descriptor/key, and YAOG does not claim that a browser credential is hardware-backed or non-exportable.
 - **Hardened Operator Auth (2.0):** Sessions live in an httpOnly cookie (login survives page refresh; no token in `localStorage`) with double-submit CSRF protection and credentialed CORS (`YAOG_PANEL_ORIGIN`). Second factors are TOTP (RFC 6238) and/or passkeys; passkeys also enable passwordless login.
 - **Fleet Management (2.0):** Per-node fleet pages with status detail, single-use enrollment tokens minted from the panel, a compile-history/audit view, and manual fleet-wide WireGuard key rotation (Roll keys).
-- **Live Fleet Health (2.0):** Agents report structured **Node Conditions** (`configapply`, `selfupdate`, `wireguard`, `mimic`) and refresh them on a dedicated `/telemetry` heartbeat (default 30s), so the panel reflects *current* health — not a frozen apply-time snapshot. The node-detail page has a collapsible **WireGuard links** panel showing each peer's last handshake, and a partly-degraded node reads `SomePeersDown` (which link is down), not a blanket `LinkDown`.
+- **Reliable Fleet Health (2.0):** Agents report structured **Node Conditions** (`configapply`, `selfupdate`, `wireguard`, `mimic`) on the authenticated `/telemetry` heartbeat. A bounded sequenced replay queue bridges short HTTP/CDN interruptions without adding WebSocket/gRPC, while receipt time remains authoritative for liveness. The node-detail page charts cadence-aware CPU/RAM/load history and has a collapsible **WireGuard links** panel showing each peer's last handshake.
+- **Signed Active Telemetry (2.0):** Configure multiple ICMP echo or TCP-connect checks per managed node from **Fleet**. Each check has one required destination `host` that may be an IP literal or DNS hostname (there is no separate mandatory DNS field); TCP also has a port. The policy is checksum/signature-covered, requires the off-host keystone, activates only after a successful apply, and uses an in-process TCP/raw-ICMP implementation rather than shelling out or adding a `tcping` dependency. See [`docs/spec/operations/active-telemetry.md`](docs/spec/operations/active-telemetry.md).
 - **Signed Agent Self-Update + Version-Aware Rollout (2.0):** Agents can update their own binary from a release, verified against the controller-signed `artifacts.json` (hash + a self-test) before exec, with a crash-bounded canary-then-fleet rollout and an anti-downgrade floor. The panel knows its own version, drives a one-click "update all to the controller version," and refuses a target newer than itself; a stalled rollout surfaces as a `selfupdate: Blocked` condition.
 - **Mimic `.deb` Catalog (2.0):** For distros that don't package mimic, the panel pins per-`<codename>-<arch>` `.deb` packages by SHA-256; **Discover from release** lists a GitHub release's `.deb` assets to pick from (the install verifies each against the signed pin before `dpkg`).
 - **Theming, i18n & Accessibility (2.0):** System-following dark/light themes with manual override and optional translucency/vibrancy, reduced-motion support, keyboard/skip-link accessibility, and a fully bilingual English/中文 UI.
@@ -117,14 +118,28 @@ Requires Docker Engine with the Compose plugin (`docker compose`, v2).
 # Grab the compose file (or clone the repo and use the one at the root)
 curl -fsSLO https://raw.githubusercontent.com/kunori-kiku/yet-another-overlay-generator/main/docker-compose.yml
 
-# State lives in ./data (a bind mount). The container runs as uid 65532,
-# so create that directory with the right owner ONCE:
-mkdir -p data && sudo chown 65532:65532 data
+# Rootful Docker without userns-remap: state lives in ./data (a bind mount).
+# Create it private and owned by the container's uid 65532 ONCE:
+sudo install -d -m 0700 -o 65532 -g 65532 data
 
 docker compose up -d
 ```
 
-All controller state persists to `./data` next to the compose file, so backing up the controller is just snapshotting that folder. No `.env` is required — the compose file ships with working defaults.
+The literal host uid above is correct only for rootful Docker with user-namespace remapping disabled.
+For rootless Docker or a daemon using `userns-remap`, do not pre-create or `chown ./data`; let Docker
+map ownership inside a managed volume instead. Add this persistent setting to `.env` before `up`, so
+later `docker compose run` and maintenance commands select the same state:
+
+```dotenv
+YAOG_DATA_SOURCE=controller-data
+```
+
+Then run `docker compose up -d` normally.
+
+With the default bind mount, all controller state persists to `./data` next to the compose file, so
+backing up the controller is just snapshotting that folder. With `controller-data`, state lives in
+the Compose project-scoped Docker volume and must be backed up through Docker's volume tooling. The
+default bind-mount mode needs no `.env`; only the portable named-volume choice adds the setting above.
 
 > **Image visibility:** the compose pulls `ghcr.io/kunori-kiku/yaog-controller:latest`. If the pull is denied (the GHCR package is private), either run `docker login ghcr.io` first, or build locally — comment `image:` and uncomment `build: .` in `docker-compose.yml` (needs a repo checkout).
 
@@ -143,7 +158,7 @@ The panel + operator API is at **`http://localhost:8080`** (the node-facing agen
 
 **The server is authoritative.** On every login the panel pulls the controller's stored design and overwrites its local canvas — the browser cache is a disposable mirror. If your browser is holding a local design that differs from the server copy, the panel downloads a fresh `pre-hydration-backup-<date>.json` and shows a notice before overwriting — this happens on *every* such overwrite, not just the first, so undeployed local work is never silently lost.
 
-After login you land on **Overview** (topology + fleet at a glance). The other sections: **Design** (the topology canvas), **Fleet** (node enrollment + per-node detail, with "not in design" markers for orphaned fleet rows), **Deploy** (compile preview + one-click Deploy, with a shrink-guard confirmation; the server keeps the last 10 topology versions for recovery via its API), **Security** (TOTP and passkey enrollment, audit log, compile history), and **Settings** (mode, connection, bootstrap, appearance — switching back to local mode is a confirmed, lossy action that regenerates keys). The EN/中文 language toggle sits in the top bar (and on the login screen).
+After login you land on **Overview** (topology + fleet at a glance). The other sections: **Design** (the topology canvas), **Fleet** (node enrollment, active-telemetry configuration/results, and per-node detail, with "not in design" markers for orphaned fleet rows), **Deploy** (compile preview + one-click Deploy, with a shrink-guard confirmation; the server keeps the last 10 topology versions for recovery via its API), **Security** (TOTP and passkey enrollment, audit log, compile history), and **Settings** (mode, connection, bootstrap, appearance — switching back to local mode is a confirmed, lossy action that regenerates keys). The EN/中文 language toggle sits in the top bar (and on the login screen).
 
 > **Upgrading an existing controller?** This release renames the secret path prefix env and changes the login/hydration flow — see [`docs/MIGRATION-controller-server-authority.md`](docs/MIGRATION-controller-server-authority.md) before deploying.
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
@@ -227,6 +228,15 @@ func VerifyBundle(files map[string][]byte, pinnedPubPEM []byte) (*VerifyResult, 
 	if _, ok := files["artifacts.json"]; ok {
 		if _, covered := listed["artifacts.json"]; !covered {
 			return nil, fmt.Errorf("agent: artifacts.json present but not covered by checksums.sha256; refusing")
+		}
+	}
+
+	// telemetry.json is executable network policy: its destinations become outbound traffic
+	// only after apply. Presence therefore requires membership in the exact checksummed set;
+	// VerifyMembership additionally binds that set to the off-host keystone before activation.
+	if _, ok := files[probepolicy.FileName]; ok {
+		if _, covered := listed[probepolicy.FileName]; !covered {
+			return nil, fmt.Errorf("agent: %s present but not covered by checksums.sha256; refusing", probepolicy.FileName)
 		}
 	}
 

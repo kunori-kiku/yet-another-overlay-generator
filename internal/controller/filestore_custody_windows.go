@@ -9,5 +9,6 @@ import "os"
 // while deployment/service configuration remains responsible for restricting
 // the FileStore root ACL. Failing every Windows FileStore closed here would make
 // the supported backend unusable without actually proving an ACL property.
-func validateSecureStoreDirPlatform(os.FileInfo) error { return nil }
-func validateStoreFilePlatform(os.FileInfo) error      { return nil }
+func validateSecureStoreDirPlatform(os.FileInfo) error        { return nil }
+func validateStoreFilePlatform(os.FileInfo) error             { return nil }
+func tightenOwnedStoreRoot(string, os.FileInfo) (bool, error) { return false, nil }

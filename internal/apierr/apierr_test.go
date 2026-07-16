@@ -95,6 +95,7 @@ var allCodes = []Code{
 	CodeStagedManifestMismatch,
 	CodeManifestSignatureInvalid,
 	CodeStageFailed,
+	CodeTelemetryProbesRequireKeystone,
 	CodeManualNodeInvalid,
 	CodeAgentReleaseRequestInvalid,
 	CodeAgentReleaseFetchFailed,

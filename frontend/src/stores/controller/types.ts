@@ -287,7 +287,7 @@ export interface ControllerState {
   // canvas. The success path of login/loginWithPasskey/checkSession all call it. Before
   // overwriting, if the local design is "non-empty and differs from the server", export a backup
   // first (D9).
-  hydrateFromServer: () => Promise<void>;
+  hydrateFromServer: (opts?: { reportError?: boolean }) => Promise<boolean>;
   dismissHydrationNotice: () => void;
   // Passwordless passkey login (plan-5.2): begin → assertLogin → finish.
   loginWithPasskey: (username: string) => Promise<void>;

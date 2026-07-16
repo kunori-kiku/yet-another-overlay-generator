@@ -10,6 +10,36 @@ rc.7 remains withdrawn and preserved; its identity must not be recovered or reus
 
 ## Active work
 
+- **🚧 `v2.0.0-rc.9` — READY-AND-UNCUT (2026-07-16; not yet published).** This candidate keeps the
+  rc.8 compatibility boundary intact while closing the live issues found after release: owned Unix
+  FileStore roots commonly created as `0775` are descriptor-safely tightened to `0700`; controller
+  telemetry uses authenticated HTTP protocol-v2 headers plus a bounded volatile replay queue and
+  cadence-aware history instead of a parallel WebSocket/gRPC path; and official controller-image
+  references are attached only after run-scoped amd64/arm64 candidates pass exact-digest, native-ELF,
+  config, label, entrypoint, and runtime verification. It also adds the owner-requested signed active
+  telemetry framework in **Fleet**: multiple hand-configured ICMP/TCP probes per managed node, one
+  required `host` accepting an IP literal or DNS hostname, TCP-only port, checksum-covered and
+  off-host-signature-bound `telemetry.json`, bundle-local agent-capability refusal for pre-rc.9
+  launchers, last-known-good activation, monotonic bounded in-process execution, and authenticated
+  live non-persisted results. **Explicit RC policy exception:** although `RELEASING.md` normally
+  limits RCs to fixes, the owner explicitly approved this bounded feature for rc.9 after reviewing its
+  signing/custody boundary and Fleet placement; the exception does not broaden future RC scope.
+  Existing login passkeys, browser keystones, and node membership remain on the rc.8
+  enrollment-only-UV contract—there is no retroactive User-Verification requirement and no fleet
+  re-sign. Final multi-agent re-review also closed three last release issues: a history query now sees
+  the exact batch between buffer drain and durable append (and deduplicates the disk/in-flight overlap),
+  live telemetry JSON bytes are deep-copied across the Store boundary, and the owned-root compatibility
+  repair refuses sticky/set-ID shared directories such as `/tmp` before and after descriptor opening.
+  Final local evidence is green: gofmt, vet, the full Go race suite, coverage floors, wire drift, DAST,
+  `govulncheck`, frontend lint/controller/local/WASM builds, all 321 Vitest cases, the 25-fixture
+  WASM/Go golden gate, 76 required Playwright cases, all seven release target triples (21 stamped Go
+  mains), the uncached release/Docker contract suite, and both Compose storage models. **Remaining
+  before tag:** commit and merge these reviewed bytes to `main`, wait for current-main CI (including
+  its native PowerShell and real-tunnel runners), create one annotated `v2.0.0-rc.9` tag at that exact
+  tip, and let the sealed release workflow publish and verify all 22 assets plus the native
+  two-platform image. Move this ledger to published/shipped wording only after those public checks
+  succeed.
+
 - **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
   `_completed/`). Thirteen non-held plans shipped as `v2.0.0-rc.6`; held plan-6 was redesigned before
   release, and its compatibility-preserving enrollment UV plus custody/publication-integrity follow-up

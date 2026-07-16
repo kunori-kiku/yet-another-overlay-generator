@@ -66,6 +66,18 @@ export interface Node {
   ssh_port?: number;
   ssh_user?: string;
   ssh_key_path?: string;
+  // Optional active-connectivity checks run by this managed node. Each signed policy names one
+  // destination host and, for TCP, one port; it is deliberately not an arbitrary URL/command.
+  telemetry_probes?: TelemetryProbe[];
+}
+
+export interface TelemetryProbe {
+  id: string;
+  type: 'icmp' | 'tcp';
+  host: string;
+  port?: number;
+  interval_seconds?: number;
+  timeout_milliseconds?: number;
 }
 
 export interface PublicEndpoint {

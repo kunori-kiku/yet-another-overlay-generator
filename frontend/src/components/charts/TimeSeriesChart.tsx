@@ -48,6 +48,9 @@ export interface TimeSeriesChartProps {
   // yDomain passes straight to recharts' YAxis domain (e.g. [0, 100] for a percent metric); default
   // ['auto','auto'] lets recharts fit the data.
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax'];
+  // An explicit request window keeps leading/trailing data loss visible. allowDataOverflow below
+  // clips an epoch-aligned bucket whose start falls just before the requested from boundary.
+  xDomain?: [number, number];
   language: UILanguage;
 }
 
@@ -128,7 +131,7 @@ function ChartTooltip(props: {
   );
 }
 
-export function TimeSeriesChart({ series, height, yDomain, language }: TimeSeriesChartProps) {
+export function TimeSeriesChart({ series, height, yDomain, xDomain, language }: TimeSeriesChartProps) {
   const rows = buildRows(series);
   const axisTick = { fill: 'var(--content-muted)', fontSize: 11 };
   const fmtTime = (v: number | string): string => {
@@ -158,7 +161,8 @@ export function TimeSeriesChart({ series, height, yDomain, language }: TimeSerie
             dataKey="t"
             type="number"
             scale="time"
-            domain={['dataMin', 'dataMax']}
+            domain={xDomain ?? ['dataMin', 'dataMax']}
+            allowDataOverflow={xDomain !== undefined}
             tickFormatter={fmtTime}
             tick={axisTick}
             stroke="var(--hairline)"

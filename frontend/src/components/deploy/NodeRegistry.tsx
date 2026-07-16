@@ -4,11 +4,12 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type MessageKey } from '../../i18n';
 import type { ControllerNode, ControllerNodeStatus } from '../../types/controller';
-import type { Node } from '../../types/topology';
+import type { Node, TelemetryProbe } from '../../types/topology';
 import { nodeNameMap, nodeDisplayName } from '../../lib/nodeName';
 import { UpdateStatusChip } from './UpdateStatusChip';
 import { NodeConditions } from './NodeConditions';
 import { ManualKitApplyGuide } from './ManualKitApplyGuide';
+import { TelemetryProbeSummary } from './TelemetryProbeSummary';
 
 // manualEndpoint formats a manual node's first public endpoint as host:port (port omitted when auto/0),
 // or "—" when none is set.
@@ -71,17 +72,20 @@ const CELL_LABEL_KEYS: readonly MessageKey[] = [
   'nodeRegistry.conditions',
   'nodeRegistry.agentVersion',
   'updateStatus.label',
+  'nodeRegistry.telemetry',
   'nodeRegistry.lastSeen',
 ];
 
 // nodeCells builds the descriptor array for one node from the same module-scope helpers (isDrifting,
 // statusClass, fmtTime), the UpdateStatusChip, and the rekeying/orphan badges the table used inline.
-// settings drives the UpdateStatusChip (plan-5); orphan marks a node in the registry but not in the
-// current design (computed by the component-scope isOrphan closure and passed in).
+// settings drives the UpdateStatusChip (plan-5); configuredProbes joins the design policy to live
+// results by ID; orphan marks a registry node absent from the current design (computed by the
+// component-scope isOrphan closure and passed in).
 function nodeCells(
   n: ControllerNode,
   settings: Parameters<typeof UpdateStatusChip>[0]['settings'],
   language: Parameters<typeof UpdateStatusChip>[0]['language'],
+  configuredProbes: readonly TelemetryProbe[],
   orphan: boolean,
 ): NodeCell[] {
   const drift = isDrifting(n.appliedGeneration, n.desiredGeneration);
@@ -143,6 +147,16 @@ function nodeCells(
       value: <UpdateStatusChip node={n} settings={settings} language={language} />,
     },
     {
+      labelKey: 'nodeRegistry.telemetry',
+      value: (
+        <TelemetryProbeSummary
+          configured={configuredProbes}
+          results={n.probeResults ?? []}
+          language={language}
+        />
+      ),
+    },
+    {
       labelKey: 'nodeRegistry.lastSeen',
       value: <span className="text-[var(--content-muted)] text-xs">{fmtTime(n.lastSeen)}</span>,
     },
@@ -188,6 +202,7 @@ export function NodeRegistry() {
   // operator reads the friendly design name — nodeDisplayName resolves id→name with an id fallback
   // (orphan / no design / blank name). The node labels and the edge-readiness list share this one map.
   const nameByNodeId = nodeNameMap(topoNodes);
+  const topologyNodeByID = new Map(topoNodes.map((candidate) => [candidate.id, candidate]));
   // The set of node ids in the current design: a node-id present in the registry but absent from the
   // design is an "orphan" — it is still in the fleet (holds a valid token, fetches config) but no
   // longer belongs to the current design (plan-6, identity reconciliation).
@@ -268,7 +283,7 @@ export function NodeRegistry() {
         </p>
       ) : (
         <>
-          {/* Desktop / large-tablet: the 8-column table (lg+, ≥1024px). Hidden below lg, where the
+          {/* Desktop / large-tablet: the status table (lg+, ≥1024px). Hidden below lg, where the
               card list (next block) takes over — both iterate the SAME nodeCells descriptor spine, so
               the column set never drifts between presentations. */}
           <div className="hidden lg:block overflow-x-auto">
@@ -303,7 +318,13 @@ export function NodeRegistry() {
                         )}
                       </Link>
                     </td>
-                    {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
+                    {nodeCells(
+                      n,
+                      settings,
+                      language,
+                      topologyNodeByID.get(n.nodeId)?.telemetry_probes ?? [],
+                      isOrphan(n.nodeId),
+                    ).map((c) => (
                       <td key={c.labelKey} className="py-2 pr-3">
                         {c.value}
                       </td>
@@ -336,7 +357,13 @@ export function NodeRegistry() {
                   )}
                 </Link>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
-                  {nodeCells(n, settings, language, isOrphan(n.nodeId)).map((c) => (
+                  {nodeCells(
+                    n,
+                    settings,
+                    language,
+                    topologyNodeByID.get(n.nodeId)?.telemetry_probes ?? [],
+                    isOrphan(n.nodeId),
+                  ).map((c) => (
                     <div key={c.labelKey} className="contents">
                       <dt className="text-xs text-[var(--content-muted)]">{t(language, c.labelKey)}</dt>
                       <dd className="text-right">{c.value}</dd>

@@ -24,6 +24,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/bundlesig"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/renderer"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -312,6 +313,11 @@ func All(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs Fe
 // nil interface (never a non-nil interface wrapping a nil *Signing), a plain
 // `signer == nil` test is safe (no typed-nil gotcha).
 func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, fs FetchSettings, signer bundlesig.ConfigSigner) error {
+	// Active telemetry is an agent-only, serialized bundle member, so construct it in the
+	// rendering layer rather than the compiler's derivation pass. Resetting the map also makes a
+	// repeated render unable to retain policy bytes from a different custody presentation.
+	result.TelemetryPolicyJSON = make(map[string]string)
+
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
 	if err != nil {
@@ -365,6 +371,22 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 	// AgentHeld placeholder: a project-wide deploy helper must never bypass that node's agent.
 	agentHeldDeploy := false
 	for _, node := range result.Topology.Nodes {
+		// AgentHeld custody is detected per-node from the rendered private key: when the node's key
+		// is the placeholder, the install.sh must splice the agent-held key at install time and the
+		// signed bundle may carry its active-telemetry policy. Air-gap nodes carry a real private key,
+		// so they receive neither agent-only behavior.
+		nodeAgentHeld := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
+		agentHeldDeploy = agentHeldDeploy || nodeAgentHeld
+		if nodeAgentHeld {
+			telemetryContent, err := probepolicy.Marshal(node.TelemetryProbes)
+			if err != nil {
+				return fmt.Errorf("building active telemetry policy for node %s failed: %w", node.ID, err)
+			}
+			if len(telemetryContent) > 0 {
+				result.TelemetryPolicyJSON[node.ID] = string(telemetryContent)
+			}
+		}
+
 		// artifacts.json is PER-NODE (plan-9): the mimic block is fleet-wide, but the agent
 		// self-update block is emitted only for nodes in the rollout set. Empty ⇒ export omits
 		// the file, keeping a non-catalog / non-rollout bundle byte-identical (D4).
@@ -375,12 +397,6 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 		if artifactsContent != "" {
 			result.ArtifactsJSON[node.ID] = artifactsContent
 		}
-		// AgentHeld custody is detected per-node from the rendered private key: when the node's key
-		// is the placeholder, the install.sh must splice the agent-held key at install time. Air-gap
-		// nodes carry a real private key here, so custody=false and no splice block is emitted
-		// (keeping the air-gap install.sh byte-identical). See docs/spec/controller/key-custody.md.
-		nodeAgentHeld := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
-		agentHeldDeploy = agentHeldDeploy || nodeAgentHeld
 		splice := renderer.CustodySplice{Enabled: nodeAgentHeld, Token: PrivateKeyPlaceholder}
 		if node.Role == "client" {
 			// Pass this client's ClientPeerInfo so its single wg0 link also installs

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 )
 
 // Config holds the agent's runtime configuration, assembled from CLI flags. All
@@ -202,6 +204,28 @@ func run(cfg *Config, heldStateLease *stateLease) (*RunResult, error) {
 	}
 	res.Verify = vr
 
+	// Active probes are outbound network authority, so telemetry.json is inert unless it is both
+	// part of the verified bundle and covered by the off-host keystone. Parse it before any root
+	// action; only recordSuccess can atomically replace the last-known-good active policy.
+	var candidateTelemetryPolicy json.RawMessage
+	if raw, ok := files[probepolicy.FileName]; ok {
+		if len(cfg.OperatorCredPEM) == 0 {
+			err := fmt.Errorf("active telemetry policy requires a configured off-host operator credential")
+			recordFailure(cfg, prev, err.Error())
+			return res, fmt.Errorf("agent: %w", err)
+		}
+		policy, err := probepolicy.Parse(raw)
+		if err != nil {
+			recordFailure(cfg, prev, fmt.Sprintf("telemetry policy invalid: %v", err))
+			return res, fmt.Errorf("agent: telemetry policy: %w", err)
+		}
+		candidateTelemetryPolicy, err = probepolicy.Marshal(policy.Probes)
+		if err != nil {
+			recordFailure(cfg, prev, fmt.Sprintf("telemetry policy canonicalization failed: %v", err))
+			return res, fmt.Errorf("agent: telemetry policy canonicalization: %w", err)
+		}
+	}
+
 	// 2b. membership keystone (fail-closed, AFTER tier-1 integrity, BEFORE apply).
 	// When an off-host operator credential is pinned, the bundle's membership must be
 	// signed by that credential — a breached controller cannot forge it. No-op when
@@ -306,7 +330,10 @@ func run(cfg *Config, heldStateLease *stateLease) (*RunResult, error) {
 	// 7. Commit the successful result, advancing the last-known-good fields and
 	// clearing PendingApply in one durable replacement. A failure leaves the earlier
 	// intent as the conservative recovery floor and is returned loudly.
-	if err := recordSuccess(cfg, intentState, man, vr, membershipEpoch); err != nil {
+	if action == LastActionUninstall {
+		candidateTelemetryPolicy = nil
+	}
+	if err := recordSuccess(cfg, intentState, man, vr, membershipEpoch, candidateTelemetryPolicy); err != nil {
 		return res, fmt.Errorf("agent: install.sh completed but anti-rollback state is not durable: %w", err)
 	}
 
@@ -522,7 +549,7 @@ func validateInstallArgs(args []string) error {
 // report to the source when it is a Reporter (best-effort). membershipEpoch is the
 // verified trust-list epoch this apply locked in (also 0 when keystone is OFF); the
 // separate MembershipVerified bit disambiguates a valid signed initial epoch zero.
-func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult, membershipEpoch int64) error {
+func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult, membershipEpoch int64, telemetryPolicy json.RawMessage) error {
 	action := LastActionApply
 	health := "applied"
 	if len(cfg.InstallArgs) == 1 && cfg.InstallArgs[0] == "--uninstall" {
@@ -530,16 +557,17 @@ func recordSuccess(cfg *Config, prev *State, man *manifestInfo, vr *VerifyResult
 		health = "uninstalled"
 	}
 	s := &State{
-		NodeID:             cfg.NodeID,
-		LastCompiledAt:     man.CompiledAt,
-		LastChecksum:       man.Checksum,
-		LastResult:         LastResultOK,
-		LastAction:         action,
-		LastSigned:         vr != nil && vr.Signed,
-		MembershipEpoch:    membershipEpoch,
-		MembershipVerified: len(cfg.OperatorCredPEM) > 0,
-		AppliedAt:          time.Now().UTC().Format(compiledAtLayout),
-		Health:             health,
+		NodeID:                cfg.NodeID,
+		LastCompiledAt:        man.CompiledAt,
+		LastChecksum:          man.Checksum,
+		LastResult:            LastResultOK,
+		LastAction:            action,
+		LastSigned:            vr != nil && vr.Signed,
+		MembershipEpoch:       membershipEpoch,
+		MembershipVerified:    len(cfg.OperatorCredPEM) > 0,
+		AppliedAt:             time.Now().UTC().Format(compiledAtLayout),
+		Health:                health,
+		ActiveTelemetryPolicy: append(json.RawMessage(nil), telemetryPolicy...),
 	}
 	// Preserve the self-update custody state across the apply-state rebuild (plan-9): the
 	// health-confirmed AgentVersionFloor must NOT be wiped by a routine apply (or a later signed
@@ -601,6 +629,7 @@ func recordFailure(cfg *Config, prev *State, detail string) {
 		s.PendingApply = prev.PendingApply
 		s.AbandonedAgentVersion = prev.AbandonedAgentVersion
 		s.AbandonedReason = prev.AbandonedReason
+		s.ActiveTelemetryPolicy = append(json.RawMessage(nil), prev.ActiveTelemetryPolicy...)
 	}
 	if s.NodeID == "" {
 		s.NodeID = cfg.NodeID

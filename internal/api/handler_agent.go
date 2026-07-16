@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetryprotocol"
 )
 
 // HandleEnroll runs the node-enrollment ceremony. It requires NO bearer token (it
@@ -190,8 +192,8 @@ const (
 	// maxTelemetryMetrics / maxTelemetryMetricsBytes bound the /telemetry metrics map. node.Telemetry
 	// is served verbatim in every ListNodes response, so an unbounded map would bloat the operator
 	// /nodes payload as well as the per-node record.
-	maxTelemetryMetrics      = 32
-	maxTelemetryMetricsBytes = 64 << 10 // 64 KiB total across all metric KEYS + values
+	maxTelemetryMetrics      = telemetryprotocol.MaxMetrics
+	maxTelemetryMetricsBytes = telemetryprotocol.MaxMetricsBytes // total across metric KEYS + values
 	// maxConditionBytes bounds the total size of ALL of a single condition's attacker-controlled
 	// string fields (Type+Status+Reason+Message+Since). Generous — a legit condition is a short
 	// enum/timestamp set plus a <=160-rune Message (~640 bytes worst-case multibyte) — but it stops a
@@ -270,18 +272,88 @@ func (h *ControllerHandler) HandleReport(ctx context.Context, tenant controller.
 	return map[string]string{"status": "ok"}, nil
 }
 
+type telemetryRequestMetadata struct {
+	bootID    string
+	sequence  uint64
+	sampledAt time.Time
+	interval  time.Duration
+}
+
+// telemetryMetadata reads protocol-v2 delivery metadata from headers, leaving the JSON body exactly
+// compatible with strict legacy controllers. An absent protocol header is a legacy heartbeat. Old
+// controllers ignore all of these headers, so a new agent can roll out before its controller.
+func telemetryMetadata(r *http.Request) (*telemetryRequestMetadata, *apierr.Error) {
+	protocol := r.Header.Get(telemetryprotocol.HeaderProtocol)
+	if protocol == "" {
+		return nil, nil
+	}
+	if protocol != telemetryprotocol.Version {
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "telemetry_protocol")
+	}
+	bootID := r.Header.Get(telemetryprotocol.HeaderBootID)
+	decodedBootID, err := hex.DecodeString(bootID)
+	if err != nil || len(decodedBootID) != telemetryprotocol.BootIDBytes {
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "boot_id")
+	}
+	sequence, err := strconv.ParseUint(r.Header.Get(telemetryprotocol.HeaderSequence), 10, 64)
+	if err != nil || sequence == 0 {
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "sequence")
+	}
+	sampledAt, err := time.Parse(time.RFC3339Nano, r.Header.Get(telemetryprotocol.HeaderSampledAt))
+	if err != nil || sampledAt.IsZero() {
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "sampled_at")
+	}
+	return &telemetryRequestMetadata{
+		bootID:    bootID,
+		sequence:  sequence,
+		sampledAt: sampledAt.UTC(),
+		interval:  telemetryInterval(r),
+	}, nil
+}
+
+// telemetryInterval is advisory cadence. Missing, malformed, non-positive, oversized, or
+// time.Duration-overflowing values are ignored; cadence metadata must never reject a heartbeat.
+func telemetryInterval(r *http.Request) time.Duration {
+	raw := r.Header.Get(telemetryprotocol.HeaderIntervalMillis)
+	if raw == "" || len(raw) > telemetryprotocol.MaxIntervalHeaderBytes {
+		return 0
+	}
+	millis, err := strconv.ParseInt(raw, 10, 64)
+	const maxDurationMillis = int64(1<<63-1) / int64(time.Millisecond)
+	if err != nil || millis <= 0 || millis > maxDurationMillis {
+		return 0
+	}
+	return time.Duration(millis) * time.Millisecond
+}
+
+func writeTelemetryReceiptHeaders(w http.ResponseWriter, metadata *telemetryRequestMetadata, receipt controller.TelemetryReceipt) {
+	w.Header().Set(telemetryprotocol.HeaderProtocol, telemetryprotocol.Version)
+	w.Header().Set(telemetryprotocol.HeaderBootID, metadata.bootID)
+	w.Header().Set(telemetryprotocol.HeaderAckSequence, strconv.FormatUint(receipt.AcknowledgedSequence, 10))
+	w.Header().Set(telemetryprotocol.HeaderReceivedAt, receipt.ReceivedAt.UTC().Format(time.RFC3339Nano))
+	if receipt.Duplicate {
+		w.Header().Set(telemetryprotocol.HeaderDuplicate, "true")
+	}
+}
+
 // HandleTelemetry records a LIVE health heartbeat from the CALLER (the node from the bearer token,
 // never the request body) — beta9-smoke-hardening plan-1. Unlike HandleReport it carries NO
-// applied_generation/checksum and writes ONLY the node's conditions + last_seen via RecordTelemetry:
-// telemetry is high-frequency observability kept strictly separate from deploy custody, so a heartbeat
-// can never advance or regress the applied generation. It is INTENTIONALLY NOT audited — a 30s
+// applied_generation/checksum and writes the node's last_seen, conditions, volatile current metrics,
+// and bounded cadence history via RecordTelemetry: telemetry is high-frequency observability kept
+// strictly separate from deploy custody, so a heartbeat can never advance or regress the applied
+// generation. It is INTENTIONALLY NOT audited — a 30s
 // heartbeat would flood the hash-chained audit log (HandleReport's append); do not "fix" the
 // asymmetry by adding an audit entry here. Conditions are server-stamped with the controller clock
-// inside the store (a node clock cannot be trusted for ageing). The metrics map (the framework's
-// extension slot — e.g. wireguard_peers) is persisted wholesale and served under node.telemetry.
+// inside the store (a node clock cannot be trusted for ageing). The validated metrics map (the
+// framework's extension slot — e.g. resource and probe results) feeds the volatile node.telemetry
+// overlay and its bounded history; it is not durable deploy state.
 // Returns {status:"ok"}. Routed through op() (routes_controller.go): the adapter runs the method
 // guard + structural identity() check before this body.
 func (h *ControllerHandler) HandleTelemetry(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
+	metadata, ae := telemetryMetadata(r)
+	if ae != nil {
+		return nil, ae
+	}
 	var req telemetryRequestJSON
 	if err := decodeJSON(w, r, &req); err != nil {
 		return nil, codedErr(apierr.CodeReqInvalidBody, err)
@@ -292,12 +364,26 @@ func (h *ControllerHandler) HandleTelemetry(ctx context.Context, tenant controll
 	if ae := validateMetrics(req.Metrics); ae != nil {
 		return nil, ae
 	}
-	if err := h.store.RecordTelemetry(ctx, tenant, node, req.Conditions, req.Metrics, req.AgentVersion, time.Now()); err != nil {
+
+	receivedAt := time.Now().UTC()
+	if metadata == nil {
+		if err := h.store.RecordTelemetry(ctx, tenant, node, req.Conditions, req.Metrics, req.AgentVersion, receivedAt); err != nil {
+			if errors.Is(err, controller.ErrNotFound) {
+				return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
+			}
+			return nil, codedErr(apierr.CodeInternalStorage, err)
+		}
+		return map[string]string{"status": "ok"}, nil
+	}
+
+	receipt, err := h.store.RecordTelemetrySequenced(ctx, tenant, node, req.Conditions, req.Metrics, req.AgentVersion, metadata.bootID, metadata.sequence, metadata.sampledAt, metadata.interval, receivedAt)
+	if err != nil {
 		if errors.Is(err, controller.ErrNotFound) {
 			return nil, apierr.New(apierr.CodeNodeNotFound).Wrap(err)
 		}
 		return nil, codedErr(apierr.CodeInternalStorage, err)
 	}
+	writeTelemetryReceiptHeaders(w, metadata, receipt)
 	return map[string]string{"status": "ok"}, nil
 }
 

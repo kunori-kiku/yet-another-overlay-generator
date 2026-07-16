@@ -175,6 +175,25 @@ describe('metricSeries', () => {
     expect(s.map((p) => p.avg)).toEqual([1, 2, null, 3]);
   });
 
+  it('does not invent a gap for one empty bucket at the heartbeat-cadence boundary', () => {
+    const oneEmptyBucket: HistoryBucket[] = [
+      {
+        t: '2026-07-13T10:00:00Z',
+        load1: { avg: 1 },
+        load5: { avg: 1 },
+        load15: { avg: 1 },
+      },
+      {
+        t: '2026-07-13T10:10:00Z',
+        load1: { avg: 2 },
+        load5: { avg: 2 },
+        load15: { avg: 2 },
+      },
+    ];
+    const s = metricSeries(oneEmptyBucket, stepMs, (b) => b.load1);
+    expect(s.map((p) => p.avg)).toEqual([1, 2]);
+  });
+
   it('does not insert gap sentinels when the step is unknown (0)', () => {
     const s = metricSeries(buckets, 0, (b) => b.load1);
     expect(s.filter((p) => p.avg === null)).toHaveLength(0);

@@ -88,6 +88,12 @@ and public keystone identifiers. It excludes operator/session/CSRF tokens, signi
 preview results, transient errors/loading, and raw live telemetry. Auth secrets stay in memory or
 httpOnly cookies.
 
+Fleet owns active telemetry. The registry joins each topology node's configured `telemetry_probes`
+with the live controller node's `probeResults` for a compact summary; the node-detail page co-locates
+the policy editor, whole-design Save action/conflict dialog, and latest results. Design's properties
+aside does not own this operational editor. Saving remains a topology-draft mutation, while Deploy is
+the distinct signature and activation boundary.
+
 ### `uiStore`
 
 `frontend/src/stores/uiStore.ts` owns shell-only presentation state: theme, sidebar collapse,
@@ -156,7 +162,8 @@ wire-drift mirror, and a shared frontend resolver instead of growing view-local 
   stripped/refused at controller boundaries.
 - Controller auth secrets are never in a Zustand persistence allowlist. Browser sessions use
   httpOnly cookies; break-glass bearer material is memory-only.
-- Live peer telemetry is fetched for display and removed from the persisted fleet cache.
+- Live peer and active-probe telemetry is fetched for display and removed from the persisted fleet
+  cache.
 - Every persisted store has an explicit allowlist. Adding a field to a store does not implicitly
   authorize writing it to localStorage.
 - Mode transitions are security boundaries: they scrub keys, allocations, compile results/history,

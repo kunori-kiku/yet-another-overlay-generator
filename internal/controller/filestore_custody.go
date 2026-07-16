@@ -20,8 +20,20 @@ func ensureSecureStoreRoot(root string) (string, error) {
 		return "", fmt.Errorf("controller: resolve filestore root: %w", err)
 	}
 	if info, err := os.Lstat(abs); err == nil {
-		if err := validateSecureStoreDir(abs, info); err != nil {
-			return "", fmt.Errorf("controller: unsafe filestore root: %w", err)
+		validationErr := validateSecureStoreDir(abs, info)
+		if validationErr != nil {
+			tightened, tightenErr := tightenOwnedStoreRoot(abs, info)
+			if tightenErr != nil {
+				return "", fmt.Errorf("controller: unsafe filestore root: %w; automatic chmod 0700 failed: %v", validationErr, tightenErr)
+			}
+			if !tightened {
+				return "", fmt.Errorf("controller: unsafe filestore root: %w", validationErr)
+			}
+			// Re-read the pathname after descriptor-based chmod. A concurrent replacement still
+			// has to satisfy the full real-directory, owner, and mode validation.
+			if err := revalidateSecureStoreDir(abs); err != nil {
+				return "", fmt.Errorf("controller: unsafe filestore root after automatic chmod 0700: %w", err)
+			}
 		}
 		return abs, nil
 	} else if !os.IsNotExist(err) {

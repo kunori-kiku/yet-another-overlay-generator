@@ -2,7 +2,8 @@ name: Docker
 
 # Reusable controller-image publisher. Release versions are accepted only from release.yml;
 # workflow_dispatch is intentionally edge-only. Version references are policy-non-overwritten:
-# recovery may adopt matching bytes, but this workflow never replaces a mismatched version.
+# recovery may adopt an existing reference only when its verified runtime/config properties and
+# digest state satisfy the trusted-registry-writer contract; this workflow never replaces a mismatch.
 on:
   workflow_call:
     inputs:
@@ -114,18 +115,33 @@ jobs:
           else
             image_tag=${RELEASE_VERSION#v}
           fi
-          echo "ghcr_ref=$GHCR_IMAGE:$image_tag" >>"$GITHUB_OUTPUT"
-          echo "dockerhub_enabled=$DOCKERHUB_ENABLED" >>"$GITHUB_OUTPUT"
+          candidate_tag=candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}
+          ghcr_ref=$GHCR_IMAGE:$image_tag
+          ghcr_candidate_ref=$GHCR_IMAGE:$candidate_tag
+          dockerhub_ref=
+          dockerhub_candidate_ref=
           if [ "$DOCKERHUB_ENABLED" = true ]; then
             [[ "$DOCKERHUB_USERNAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
               || { echo "::error::Docker Hub username is unsafe in an image reference"; exit 1; }
-            echo "dockerhub_ref=$DOCKERHUB_USERNAME/yaog-controller:$image_tag" >>"$GITHUB_OUTPUT"
-          elif [ "$DOCKERHUB_ENABLED" = false ]; then
-            echo "dockerhub_ref=" >>"$GITHUB_OUTPUT"
-          else
+            dockerhub_ref=$DOCKERHUB_USERNAME/yaog-controller:$image_tag
+            dockerhub_candidate_ref=$DOCKERHUB_USERNAME/yaog-controller:$candidate_tag
+          elif [ "$DOCKERHUB_ENABLED" != false ]; then
             echo "::error::invalid Docker Hub enabled state"
             exit 1
           fi
+          {
+            echo "ghcr_ref=$ghcr_ref"
+            echo "ghcr_candidate_ref=$ghcr_candidate_ref"
+            echo "dockerhub_ref=$dockerhub_ref"
+            echo "dockerhub_candidate_ref=$dockerhub_candidate_ref"
+            echo "dockerhub_enabled=$DOCKERHUB_ENABLED"
+            echo "candidate_tags<<EOF"
+            echo "$ghcr_candidate_ref"
+            if [ -n "$dockerhub_candidate_ref" ]; then
+              echo "$dockerhub_candidate_ref"
+            fi
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Probe policy-non-overwritten version references
         id: probe
@@ -191,18 +207,18 @@ jobs:
         if: ${{ env.RELEASE_VERSION == 'edge' }}
         run: echo "mode=build" >>"$GITHUB_OUTPUT"
 
-      - name: Build and push absent refs
+      # A build writes only run-scoped candidate tags. The policy-non-overwritten
+      # version references remain untouched until every configured candidate has
+      # passed the full two-platform runtime and embedded-ELF verifier below.
+      - name: Build and push run-scoped candidates
         id: build
         if: ${{ steps.probe.outputs.mode == 'build' || steps.edge-probe.outputs.mode == 'build' }}
-        continue-on-error: true
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ steps.refs.outputs.ghcr_ref }}
-            ${{ steps.refs.outputs.dockerhub_ref }}
+          tags: ${{ steps.refs.outputs.candidate_tags }}
           labels: |
             org.opencontainers.image.revision=${{ env.SOURCE_REVISION }}
             org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
@@ -211,55 +227,105 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Adopt or converge both registry references
+      - name: Verify every run-scoped candidate
+        id: candidate
+        if: ${{ steps.probe.outputs.mode == 'build' || steps.edge-probe.outputs.mode == 'build' }}
+        shell: bash
+        env:
+          GHCR_CANDIDATE_REF: ${{ steps.refs.outputs.ghcr_candidate_ref }}
+          DOCKERHUB_CANDIDATE_REF: ${{ steps.refs.outputs.dockerhub_candidate_ref }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::candidate build did not return a valid digest"; exit 1; }
+
+          ghcr_digest=$(bash scripts/verify-controller-image.sh \
+            "$GHCR_CANDIDATE_REF" "$RELEASE_VERSION" "$SOURCE_REVISION" "$BUILD_DIGEST")
+          [ "$ghcr_digest" = "$BUILD_DIGEST" ] \
+            || { echo "::error::GHCR candidate failed exact digest verification"; exit 1; }
+
+          if [ -n "$DOCKERHUB_CANDIDATE_REF" ]; then
+            dockerhub_digest=$(bash scripts/verify-controller-image.sh \
+              "$DOCKERHUB_CANDIDATE_REF" "$RELEASE_VERSION" "$SOURCE_REVISION" "$BUILD_DIGEST")
+            [ "$dockerhub_digest" = "$BUILD_DIGEST" ] \
+              || { echo "::error::Docker Hub candidate failed exact digest verification"; exit 1; }
+          fi
+
+          echo "digest=$BUILD_DIGEST" >>"$GITHUB_OUTPUT"
+
+      - name: Adopt or publish official registry references
         id: converge
         shell: bash
         env:
           GHCR_REF: ${{ steps.refs.outputs.ghcr_ref }}
           DOCKERHUB_REF: ${{ steps.refs.outputs.dockerhub_ref }}
+          GHCR_CANDIDATE_REF: ${{ steps.refs.outputs.ghcr_candidate_ref }}
+          DOCKERHUB_CANDIDATE_REF: ${{ steps.refs.outputs.dockerhub_candidate_ref }}
           PROBE_DIGEST: ${{ steps.probe.outputs.digest }}
           PROBE_SOURCE_REF: ${{ steps.probe.outputs.source_ref }}
-          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
         run: |
           set -euo pipefail
 
           verify_ref() {
             local ref=$1
             local expected=${2:-}
+            local verified_digest
+            local verify_status
             set +e
             if [ -n "$expected" ]; then
-              digest=$(bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION" "$expected")
+              verified_digest=$(bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION" "$expected")
             else
-              digest=$(bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION")
+              verified_digest=$(bash scripts/verify-controller-image.sh "$ref" "$RELEASE_VERSION" "$SOURCE_REVISION")
             fi
-            status=$?
+            verify_status=$?
             set -e
-            case "$status" in
-              0) printf '%s' "$digest" ;;
+            case "$verify_status" in
+              0) printf '%s' "$verified_digest" ;;
               3) return 3 ;;
-              *) return "$status" ;;
+              *) return "$verify_status" ;;
             esac
           }
 
           copy_ref() {
             local source_ref=$1
             local target_ref=$2
-            local digest=$3
+            local expected_digest=$3
             local attempt
             for attempt in 1 2 3 4 5; do
-              if docker buildx imagetools create --tag "$target_ref" "$source_ref@$digest"; then
-                if verify_ref "$target_ref" "$digest" >/dev/null; then
+              if docker buildx imagetools create --tag "$target_ref" "$source_ref@$expected_digest"; then
+                if verify_ref "$target_ref" "$expected_digest" >/dev/null; then
                   return 0
                 fi
               fi
               (( attempt == 5 )) || sleep $((attempt * 2))
             done
-            echo "::error::could not converge $target_ref to $digest"
+            echo "::error::could not converge $target_ref to $expected_digest"
             return 1
           }
 
           canonical_digest=$PROBE_DIGEST
           canonical_ref=$PROBE_SOURCE_REF
+          if [ -n "$CANDIDATE_DIGEST" ]; then
+            [ -z "$canonical_digest" ] \
+              || { echo "::error::cannot adopt an existing version and publish a fresh candidate"; exit 1; }
+            canonical_digest=$CANDIDATE_DIGEST
+            canonical_ref=$GHCR_CANDIDATE_REF
+          fi
+          [[ "$canonical_digest" =~ ^sha256:[0-9a-f]{64}$ ]] && [ -n "$canonical_ref" ] \
+            || { echo "::error::build/recovery produced no verifiable registry reference"; exit 1; }
+
+          # Edge is intentionally mutable, but it still moves only after both
+          # run-scoped registry candidates have passed full verification.
+          if [ "$RELEASE_VERSION" = edge ]; then
+            copy_ref "$GHCR_CANDIDATE_REF" "$GHCR_REF" "$canonical_digest"
+            if [ -n "$DOCKERHUB_REF" ]; then
+              copy_ref "$DOCKERHUB_CANDIDATE_REF" "$DOCKERHUB_REF" "$canonical_digest"
+            fi
+            echo "digest=$canonical_digest" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           set +e
           ghcr_digest=$(verify_ref "$GHCR_REF")
@@ -280,6 +346,10 @@ jobs:
             || { echo "::error::Docker Hub verification failed"; exit 1; }
 
           if [ "$ghcr_status" -eq 0 ]; then
+            if [ -n "$canonical_digest" ] && [ "$ghcr_digest" != "$canonical_digest" ]; then
+              echo "::error::GHCR version ref $ghcr_digest differs from verified candidate $canonical_digest"
+              exit 1
+            fi
             canonical_digest=$ghcr_digest
             canonical_ref=$GHCR_REF
           fi
@@ -291,18 +361,20 @@ jobs:
             canonical_digest=$dockerhub_digest
             canonical_ref=$DOCKERHUB_REF
           fi
-          [[ "$canonical_digest" =~ ^sha256:[0-9a-f]{64}$ ]] && [ -n "$canonical_ref" ] \
-            || { echo "::error::build/recovery produced no verifiable registry reference"; exit 1; }
-          if [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$BUILD_DIGEST" != "$canonical_digest" ]; then
-            echo "::error::read-back digest $canonical_digest differs from build digest $BUILD_DIGEST"
-            exit 1
-          fi
 
           if [ "$ghcr_status" -eq 3 ]; then
-            copy_ref "$canonical_ref" "$GHCR_REF" "$canonical_digest"
+            ghcr_source=$canonical_ref
+            if [ -n "$CANDIDATE_DIGEST" ]; then
+              ghcr_source=$GHCR_CANDIDATE_REF
+            fi
+            copy_ref "$ghcr_source" "$GHCR_REF" "$canonical_digest"
           fi
           if [ -n "$DOCKERHUB_REF" ] && [ "$dockerhub_status" -eq 3 ]; then
-            copy_ref "$canonical_ref" "$DOCKERHUB_REF" "$canonical_digest"
+            dockerhub_source=$canonical_ref
+            if [ -n "$CANDIDATE_DIGEST" ]; then
+              dockerhub_source=$DOCKERHUB_CANDIDATE_REF
+            fi
+            copy_ref "$dockerhub_source" "$DOCKERHUB_REF" "$canonical_digest"
           fi
 
           final_ghcr=$(verify_ref "$GHCR_REF" "$canonical_digest")

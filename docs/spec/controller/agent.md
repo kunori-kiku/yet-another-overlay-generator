@@ -397,6 +397,24 @@ addition is the loop and the fetched-generation cursor. A production deployment 
 process supervisor (systemd) so a hard crash still restarts; `--daemon` is the in-process near-real-time
 path, the supervisor is the crash-recovery backstop.
 
+### Reliable telemetry and signed active probes
+
+Daemon telemetry remains a separate authenticated `POST /telemetry` heartbeat; it never advances
+deployment state. Sampling and upload are decoupled through a 32-sample volatile queue, so a short
+controller/CDN interruption does not create a visual hole merely because one request failed. Optional
+protocol-v2 headers add boot ID, sequence, sample time, and cadence while preserving the legacy JSON
+body. Retryable failures retain the sample with bounded backoff, and exact acknowledgements remove it.
+The queue is intentionally not custody state and is lost on restart. See
+[../operations/telemetry-history.md](../operations/telemetry-history.md).
+
+After a verified apply commits a signed `telemetry.json`, the active-probe sampler may run the bounded
+ICMP/TCP policy. It performs no network I/O in the heartbeat collection call: due attempts run
+asynchronously, at most four at once, with no overlap per probe and bounded DNS fan-out. A failed apply
+keeps the prior policy; a verified omission/uninstall clears it. ICMP uses raw sockets directly and
+reports `permission_denied` when unavailable; it never shells out to `ping` or installs a dependency.
+The complete authorization and result contract is
+[../operations/active-telemetry.md](../operations/active-telemetry.md).
+
 ### Anti-rollback in controller mode (honest)
 
 Controller mode **reuses Phase 1b's anti-rollback decision unchanged**: the `agent.Run` core still

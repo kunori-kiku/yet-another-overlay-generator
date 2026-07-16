@@ -51,6 +51,10 @@ func TryKick(ch chan<- struct{}) {
 // (the controller replaces the set wholesale; an applied node always yields at least the configapply
 // condition, so this only ever skips genuinely-empty samples). Runs until the process exits/exec's.
 func RunHeartbeat(poster TelemetryPoster, tel *Telemetry, interval time.Duration, kick, done <-chan struct{}, stderr io.Writer) {
+	if reliable, ok := poster.(ReliableTelemetryPoster); ok {
+		runReliableHeartbeat(reliable, tel, interval, kick, done, stderr)
+		return
+	}
 	beat := func() {
 		// A panic anywhere in a beat (a sampler outside its own guard, the merge, or the POST) must
 		// NOT kill this goroutine — it is the ONLY thing that refreshes Last Seen after apply time, so

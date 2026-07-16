@@ -325,4 +325,19 @@ describe('controller action context generation', () => {
     expect(createElement).not.toHaveBeenCalled();
     expect(useControllerStore.getState().loading).toBe(false);
   });
+
+  it('keeps routine hydration quiet but reports an explicit conflict re-sync failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('controller unreachable');
+    }));
+
+    await expect(useControllerStore.getState().hydrateFromServer()).resolves.toBe(false);
+    expect(useControllerStore.getState().error).toBeNull();
+
+    await expect(
+      useControllerStore.getState().hydrateFromServer({ reportError: true }),
+    ).resolves.toBe(false);
+    expect(useControllerStore.getState().error).toBeTruthy();
+    expect(useTopologyStore.getState().project.id).toBe('current');
+  });
 });

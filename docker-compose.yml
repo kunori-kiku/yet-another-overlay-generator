@@ -1,10 +1,17 @@
 # YAOG controller — one-command deploy.
 #
-# State persists to ./data NEXT TO this file (a bind mount), so backing up the
-# controller is just copying that folder. The container runs as uid 65532, so create
-# the folder with that owner ONCE before the first `up`:
+# State persists to ./data NEXT TO this file by default (a bind mount), so backing up
+# the controller is just copying that folder. For ROOTFUL Docker without userns-remap,
+# create the folder with container uid 65532 and private mode ONCE before the first `up`:
 #
-#   mkdir -p data && sudo chown 65532:65532 data
+#   sudo install -d -m 0700 -o 65532 -g 65532 data
+#   docker compose up -d
+#
+# For rootless Docker or userns-remap, do not chown a host path to literal uid 65532.
+# Persist the declared Docker-managed named volume selection in .env so every later
+# `docker compose` command uses the same state:
+#
+#   # add YAOG_DATA_SOURCE=controller-data to .env, then:
 #   docker compose up -d
 #
 # Then create the first operator account (interactive password prompt):
@@ -54,9 +61,10 @@ services:
       - "${YAOG_BIND_ADDR:-127.0.0.1}:${YAOG_PANEL_PORT:-8080}:8080" # operator / panel
       - "${YAOG_BIND_ADDR:-127.0.0.1}:${YAOG_AGENT_PORT:-9090}:9090" # agent
     volumes:
-      # Bind-mount the FileStore state to ./data alongside this file (easy to back up /
-      # snapshot). See the header note for the one-time `chown 65532:65532 data`.
-      - ./data:/data
+      # Default: bind-mount ./data alongside this file (easy to back up/snapshot).
+      # Rootless/userns-remap: set YAOG_DATA_SOURCE=controller-data so Docker manages
+      # ownership in the container's user namespace. See the header note.
+      - "${YAOG_DATA_SOURCE:-./data}:/data"
 
   # Optional TLS-terminating reverse proxy. Uncomment, add a Caddyfile next to this
   # file, and point your domain at it. Caddy fetches/renews Let's Encrypt certs.
@@ -71,3 +79,8 @@ services:
   #     - ./Caddyfile:/etc/caddy/Caddyfile
   #     - ./caddy-data:/data
   #     - ./caddy-config:/config
+
+volumes:
+  # Portable state storage for rootless Docker and userns-remap. It is unused while
+  # YAOG_DATA_SOURCE keeps its default ./data bind mount.
+  controller-data:

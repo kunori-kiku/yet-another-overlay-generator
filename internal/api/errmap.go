@@ -52,6 +52,8 @@ func mapControllerErr(err error) *apierr.Error {
 		return apierr.New(apierr.CodeReqFieldInvalid).With("field", "wg_public_key").Wrap(err)
 	case errors.Is(err, controller.ErrDuplicateWGKey):
 		return apierr.New(apierr.CodeDuplicateWGKey).Wrap(err)
+	case errors.Is(err, controller.ErrTelemetryProbesRequireKeystone):
+		return apierr.New(apierr.CodeTelemetryProbesRequireKeystone).Wrap(err)
 	default:
 		return nil
 	}

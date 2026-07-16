@@ -74,7 +74,7 @@ const DOMAIN_OMITEMPTY = ['description', 'reserved_ranges', 'transit_cidr'];
 const NODE_OMITEMPTY = [
   'hostname', 'platform', 'deployment_mode', 'overlay_ip', 'mtu', 'xdp_mode', 'mimic_egress_interface', 'router_id',
   'fixed_private_key', 'wireguard_private_key', 'wireguard_public_key', 'public_endpoints',
-  'extra_prefixes', 'ssh_alias', 'ssh_host', 'ssh_port', 'ssh_user', 'ssh_key_path',
+  'extra_prefixes', 'ssh_alias', 'ssh_host', 'ssh_port', 'ssh_user', 'ssh_key_path', 'telemetry_probes',
 ];
 const EDGE_OMITEMPTY = [
   'endpoint_host', 'endpoint_port', 'compiled_port', 'priority', 'weight', 'role', 'transport',
@@ -83,6 +83,9 @@ const EDGE_OMITEMPTY = [
 ];
 // PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
 const PUBLIC_ENDPOINT_OMITEMPTY = ['note'];
+// TelemetryProbe nests inside node.telemetry_probes. Its schedule defaults and ICMP's absent port are
+// encoded as zero values in Go and therefore disappear when the controller canonicalizes the topology.
+const TELEMETRY_PROBE_OMITEMPTY = ['port', 'interval_seconds', 'timeout_milliseconds'];
 
 // isEmptyVal mirrors Go's encoding/json `omitempty` "empty" definition: false, 0, "", nil,
 // and zero-length slices. (Empty objects/structs are NOT omitted by Go, and aren't dropped here.)
@@ -120,6 +123,14 @@ export function canonicalDesign(t: Topology): string {
       if (Array.isArray(x.public_endpoints)) {
         x.public_endpoints = (x.public_endpoints as Array<Record<string, unknown>>).map((pe) =>
           dropOmitempty(pe, PUBLIC_ENDPOINT_OMITEMPTY),
+        );
+      }
+      // telemetry_probes likewise survives when non-empty, but each nested probe has its own
+      // `omitempty` fields. Normalizing those zeros prevents a successful save from later looking like
+      // a concurrent server edit after Go's json.Marshal drops the explicit defaults.
+      if (Array.isArray(x.telemetry_probes)) {
+        x.telemetry_probes = (x.telemetry_probes as Array<Record<string, unknown>>).map((probe) =>
+          dropOmitempty(probe, TELEMETRY_PROBE_OMITEMPTY),
         );
       }
       return x;

@@ -164,6 +164,11 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	} else if !errors.Is(err, ErrNotFound) {
 		return StageResult{}, fmt.Errorf("controller: loading operator credential to stage: %w", err)
 	}
+	// A probe policy authorizes outbound traffic from the node, so it must be keystone-bound.
+	// Refuse before allocation write-back, signing-anchor mutation, export, or staged-set mutation.
+	if err := requireTelemetryProbeKeystone(result, keystoneOn); err != nil {
+		return StageResult{}, err
+	}
 
 	// (plan-5) The per-node DELTA-SKIP: a node whose freshly compiled bundle digest equals its served
 	// bundle is NOT re-staged (it keeps its generation, its agent never re-applies) — UNLESS a keystone

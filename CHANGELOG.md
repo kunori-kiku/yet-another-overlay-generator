@@ -9,6 +9,95 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.9] - 2026-07-16
+
+**Release candidate.** Makes telemetry resilient to short HTTP/CDN interruptions, adds signed
+per-node ICMP/TCP checks in Fleet, restores compatibility for controller data directories commonly
+created as owned mode `0775`, and moves official container references behind a verified run-scoped
+candidate. It keeps the existing authenticated HTTP transport and the rc.8 WebAuthn enrollment-only
+UV contract; no existing login, keystone assertion, or node membership rule is tightened.
+
+### Security
+
+- **Active probes are signed deployment policy, not an arbitrary command surface.** A managed node may
+  configure up to 16 typed `icmp` or `tcp` checks. Each has one required `host` accepting a bare IP
+  literal or ASCII DNS hostname; TCP alone requires a port. URLs, schemes, paths, embedded ports,
+  unknown fields/types, and shell syntax are rejected. AgentHeld bundles carry a versioned
+  `telemetry.json` inside the checksum/signature set, and both deploy preview/stage and the agent's
+  activation boundary require the pinned off-host keystone. A failed candidate keeps the
+  last-known-good policy; a verified omission or uninstall clears it. DNS is re-resolved on every
+  attempt, so signing a hostname authorizes its changing answers; private/loopback destinations remain
+  an explicit operator decision at the keystone ceremony.
+- **Official image references are attached only after candidate verification.** Fresh builds push a
+  unique run/attempt-scoped candidate, verify its exact digest, complete amd64+arm64 platform set,
+  native ELF machine, labels, entrypoint, and runtime version, then copy that exact index by digest to
+  the official version or `edge` reference. Failed/partial candidates and publication races fail
+  closed without exposing an unverified official tag. Release publication still uses the sealed,
+  exact-asset transaction and does not permit manual asset upload. Recovery enumerates every paginated
+  candidate-producing attempt in the source run and accepts only one whose Buildx output and verifier
+  environment both bind the operator-supplied digest.
+
+### Added
+
+- **Fleet now owns active telemetry configuration and results.** The registry shows a compact
+  healthy/waiting/failing summary. Each Fleet node-detail page co-locates the hand-edited probe policy,
+  the whole-design Save/conflict workflow, and live probe results. There is no separate mandatory DNS
+  field: the destination field accepts either an IP address or DNS hostname. Saving changes the draft;
+  Deploy remains the distinct sign-and-activate step. Probe results are removed from browser
+  persistence alongside other live telemetry. Future URL probing is reserved as a separately typed
+  extension rather than overloading the current TCP contract.
+- **The agent implements TCP connect and ICMP echo checks without a new dependency.** Attempts run
+  asynchronously with at most four concurrent checks, no overlap per probe, stable startup jitter,
+  and at most eight DNS answers per attempt. TCP uses the Go standard library; ICMP uses direct
+  IPv4/IPv6 raw sockets and reports `permission_denied` when the node lacks privilege instead of
+  invoking or installing an external `ping`/`tcping` utility.
+
+### Changed
+
+- **Telemetry protocol v2 adds bounded replay while preserving the legacy body.** Optional HTTP
+  headers carry a per-process boot ID, exact sequence, sample time, and sampling interval; the JSON
+  request remains compatible with strict older controllers. Sampling and upload are decoupled through
+  a 32-sample volatile queue (including the in-flight head). Transport failures, 408/429, malformed
+  acknowledgements, and 5xx retry with bounded backoff; permanent 4xx responses drop only the affected
+  sample. The controller acknowledges the exact sequence and uses bounded volatile per-boot
+  deduplication. Receipt time remains authoritative for `LastSeen`; bounded sample time is history-only.
+  If a proxy/CDN strips the optional headers, delivery safely degrades to the legacy no-deduplication
+  contract. No WebSocket or gRPC reporting surface was added.
+- **Resource-history Auto granularity is cadence-aware.** It prefers the newest valid advertised
+  heartbeat interval, otherwise infers a lower-median cadence from positive sample deltas, rounds to a
+  second, applies a 30-second floor, and then enforces the 1000-bucket cap. Explicit steps retain the
+  previous 1-second floor/cap behavior. Buckets are epoch-anchored so sliding refreshes do not move
+  existing timestamps. Metric-absent buckets remain explicit gaps; one empty effective bucket is
+  tolerated as scheduling jitter, while longer missing runs break the chart line. Finite online
+  aggregation avoids overflow through an infinite intermediate sum.
+- **Compose documents both rootful bind storage and rootless/user-namespace storage.** `./data` remains
+  the default backup-friendly bind mount. `YAOG_DATA_SOURCE=controller-data` selects the declared
+  Docker-managed named volume for rootless or `userns-remap` installations where literal host UID
+  `65532` ownership is not meaningful.
+
+### Fixed
+
+- **Probe policies cannot be silently ignored by a pre-rc.9 agent.** Probe-bearing AgentHeld
+  installers require a versioned execution capability before normal host mutation. rc.9 launchers
+  provide it explicitly; older agents fail with an upgrade message before applying the generation,
+  while uninstall remains available as a recovery operation.
+
+- **An owned controller root created as mode `0775` no longer prevents startup.** On Unix, FileStore
+  may descriptor-safely tighten only the configured real root directory to `0700`, and only when it is
+  owned by the controller's effective UID. Wrong ownership, symlinks, special files, and unsafe nested
+  custody directories still fail closed. Sticky or set-ID shared directories are rejected unchanged
+  both before and after descriptor opening, so a root-run controller pointed at `/tmp` cannot rewrite
+  its host permissions. The image's `/data` directory is created private by default.
+- **Brief telemetry upload failures no longer appear as unexplained chart discontinuities whenever
+  they fit inside the replay bound.** Exact retries do not duplicate history, a stalled upload does not
+  stop sampling, old agent boots cannot overwrite current live state, and post-apply kick samples do
+  not force Auto history into an artificially fine cadence. A drained history batch remains
+  query-visible while its append is in flight, including the append-before-clear overlap, and live
+  telemetry JSON values are deep-copied so caller or reader mutation cannot corrupt shared Store state.
+- **Fleet save conflicts remain actionable.** The shared Design/Fleet conflict prompt is a focus-trapped
+  native modal that restores prior focus, keeps actions disabled during re-sync, and stays open with a
+  visible error if reloading server state fails instead of dismissing on an unconfirmed refresh.
+
 ## [2.0.0-rc.8] - 2026-07-16
 
 **Release candidate.** Releases under a fresh identity the compatibility, custody, and
@@ -1235,7 +1324,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.8...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.9...HEAD
+[2.0.0-rc.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.8...v2.0.0-rc.9
 [2.0.0-rc.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.8
 [2.0.0-rc.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.7
 [2.0.0-rc.6]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.5...v2.0.0-rc.6
