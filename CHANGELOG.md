@@ -9,6 +9,50 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.11] - 2026-07-16
+
+**Release candidate.** Closes a final-component custody gap in FileStore records discovered during the
+post-rc.10 independent security re-review, and makes the existing telemetry resolution/downsampling
+behavior easier to understand. It does not change the on-disk layout, reject ordinary regular state
+files solely for older/restored permission modes, add a transport, or alter the agent/WebAuthn
+compatibility contracts.
+
+### Security
+
+- **Stable FileStore records are opened relative to a pinned, validated parent directory.** Keyed and
+  singleton reads, generation reads, JSONL audit reads, deletes, and audit appends now reject a final
+  symlink/reparse substitution or non-regular file before consuming or mutating it. Descriptor-bearing
+  paths compare the opened object with observations of the stable name; Unix also opens nonblocking so
+  a FIFO swapped into the final component cannot stall controller work.
+- **The audit append path can no longer be redirected outside controller custody.** A missing
+  `audit.jsonl` is created exclusively, validated, and synchronized with its opened parent before the
+  first line is appended. Existing logs use the same secure stable-record opener even when the cached
+  audit tail avoids a read, and legacy-log cleanup removes relative to the pinned parent.
+
+### Changed
+
+- **Fleet explains the existing history Resolution trade-off at the control itself.** The bilingual
+  hint states that Auto follows reporting cadence and may widen the interval to limit chart data, while
+  a coarser selection can transfer fewer points. The selector is associated with that description for
+  assistive technology, and the controller-returned effective/widened resolution is announced as a
+  status update. A Playwright regression selects `5m`, proves `step=5m` reaches the controller, and
+  verifies that an authoritative widened `30m` response is shown.
+- **Stable-record custody is isolated from directory-custody creation.** The new record helper keeps
+  open/read/exists/remove/append mechanics together behind small platform seams. The Unix root-repair
+  bitmask is also width-neutral, restoring clean Darwin compilation even though Darwin is not a release
+  target.
+
+### Fixed
+
+- **Preplanted or restored stable-name links can no longer substitute controller state.** This covers
+  keyed collection entries, singleton records, `generation.json`, current and legacy audit logs, and
+  the lock-free node-existence probe. Matching-suffix special files now fail closed instead of being
+  followed or blocking a collection listing.
+- **The custody fix preserves absent-record and upgrade compatibility.** Missing get/delete/list,
+  generation-zero defaults, corrupt-but-regular existence checks, audit migration, and ordinary
+  regular records retain their prior semantics. New controller files remain private `0600`; this RC
+  deliberately does not impose a retroactive read-time mode rejection on older/restored regular files.
+
 ## [2.0.0-rc.10] - 2026-07-16
 
 **Release candidate.** Completes the active-telemetry observation path introduced in rc.9: every
@@ -1400,7 +1444,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.10...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.11...HEAD
+[2.0.0-rc.11]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.10...v2.0.0-rc.11
 [2.0.0-rc.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.9...v2.0.0-rc.10
 [2.0.0-rc.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.8...v2.0.0-rc.9
 [2.0.0-rc.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.8

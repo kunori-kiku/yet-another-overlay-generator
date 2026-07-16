@@ -11,6 +11,37 @@ rc.7 remains withdrawn and preserved; its identity must not be recovered or reus
 
 ## Active work
 
+- **🟡 `v2.0.0-rc.11` — CANDIDATE / UNCUT (2026-07-16).** The final independent rc.10
+  requirement audit found one material local-custody gap: ordinary stable FileStore records still used
+  pathname-following reads and append opens even though root/tenant directories and telemetry-history
+  files already rejected links and special files. The successor candidate routes keyed/singleton JSON,
+  generation, audit read/append, existence, and delete through a shared stable-record boundary. It pins
+  the direct parent with `os.Root`, rejects final symlink/reparse and non-regular objects, compares the
+  opened descriptor with the stable name, confines deletes to that opened parent, uses exclusive audit
+  creation, and keeps Unix opens nonblocking against a last-moment FIFO substitution. Missing-record,
+  migration, corrupt-but-regular existence, and ordinary restored-file behavior remain compatible;
+  files written by the controller stay `0600`, but older regular files are not retroactively rejected
+  merely for a permissive mode.
+
+  The telemetry granularity idea is already implemented in rc.10 as controller-side range+Resolution
+  rollup under one global 1000-bucket response budget; the browser does not fetch the raw retained
+  stream. rc.11 adds an English/Chinese explanation beside the selector, associates it accessibly, and
+  browser-tests an exact `step=5m` request plus an authoritative widened `30m` response. Durable tiered
+  rollup files and transport gzip/Brotli remain separate scalability/proxy concerns, not prerequisites
+  for truthful charting or bounded browser fetches.
+
+  Final local candidate gates are green: gofmt/diff hygiene, the full Go race suite, `go vet ./...`,
+  all seven supported release-target cross-compiles (including AArch64 Linux/Windows machine checks),
+  Darwin cross-compilation, frontend lint, WASM plus production/E2E panel builds, **365 Vitest cases**,
+  and the complete Playwright matrix (**81 passed, 8 expected project skips**). The four Settings
+  visual baselines had remained stale since the earlier semantic light/dark-theme correction and were
+  refreshed only after expected/actual review; the clean rerun includes that corpus. Independent
+  backend/security and frontend/UX re-reviews found no remaining material issue after their small
+  structure/hot-path/copy/a11y findings were incorporated. The reviewed PR, exact-main CI, and release
+  transaction remain required before an annotated rc.11 tag may be cut. The rc.10 real-node
+  ICMP-permission and response-header-stripping soak remains owed; this fix does not broaden node
+  privileges or protocol behavior.
+
 - **✅ `v2.0.0-rc.10` — RELEASED / GITHUB LATEST (2026-07-16).** This release completes
   the active-telemetry observation framework introduced in rc.9. Nodes still perform bounded signed
   ICMP/TCP observations and upload them over the existing authenticated HTTP heartbeat; the controller
