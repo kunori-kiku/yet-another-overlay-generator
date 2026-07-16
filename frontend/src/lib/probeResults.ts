@@ -109,6 +109,12 @@ export function formatProbeTarget(host: string, port: number | undefined): strin
   return host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
+// probeDisplayName is presentation-only. Empty/absent names fall back to the immutable ID; callers
+// must continue using id + exact executable destination for matching and history requests.
+export function probeDisplayName(probe: Pick<TelemetryProbe, 'id' | 'name'>): string {
+  return probe.name?.trim() || probe.id;
+}
+
 // A live result belongs to a draft policy row only when both its stable ID and its executable
 // destination agree. This prevents a result from the previously deployed target being displayed as
 // proof about an edited-but-not-yet-deployed host or port.
@@ -134,6 +140,7 @@ export function sameTelemetryPolicy(
     const other = right[index];
     return other !== undefined &&
       probe.id === other.id &&
+      (probe.name || undefined) === (other.name || undefined) &&
       probe.type === other.type &&
       probe.host === other.host &&
       (probe.port ?? undefined) === (other.port ?? undefined) &&

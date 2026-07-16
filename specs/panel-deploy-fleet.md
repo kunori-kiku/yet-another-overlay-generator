@@ -113,6 +113,10 @@ split internally (`frontend/src/App.tsx:24-34,43-58`).
   unavailable, the UI exposes an explicit "Deploy anyway" fallback instead of deadlocking deployment
   (`frontend/src/stores/controller/deploy.ts:90-118`;
   `frontend/src/components/deploy/DeployBar.tsx:113-136`).
+- **Telemetry display metadata:** an optional probe `name` is presentation-only and falls back to the
+  stable ID. A name-only Fleet Save updates the controller design without changing agent
+  `telemetry.json`, result/history identity, bundle digests, or deployment generation, so it does not
+  require restaging.
 - **Shrink guard:** emptying a non-empty server design or dropping at least half its node IDs requires
   typing the project name (or a non-empty sentinel). The confirmation carries a snapshot and any
   force selection so the eventual upload is exactly what was reviewed
@@ -165,6 +169,9 @@ split internally (`frontend/src/App.tsx:24-34,43-58`).
   telemetry-stripped `nodes`, `settings`, and `lastSyncedAt`. It excludes tokens, CSRF, live
   telemetry, deploy previews, sync baselines, ceremony flags, and both pending WebAuthn candidates
   (`frontend/src/stores/controller/persist.ts:14-45`).
+- **Audit verification precedes filtering:** the fetched audit array remains the complete raw chain
+  and drives the integrity badge. The visible table filters only legacy `action:"report"` rows after
+  that verification; current routine reports update Fleet state without entering the durable chain.
 - **The persisted fleet cache is advisory:** it provides instant coloring only. Rekey state can prompt
   or over-warn after reload, but it never authorizes a server mutation; controller auth and
   stage/promote remain authoritative (`frontend/src/stores/controller/persist.ts:19-31`;

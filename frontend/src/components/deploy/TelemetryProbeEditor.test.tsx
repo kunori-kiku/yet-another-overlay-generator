@@ -16,7 +16,7 @@ const node: Node = {
     has_public_ip: true,
   },
   telemetry_probes: [
-    { id: 'dns-ping', type: 'icmp', host: 'resolver.example' },
+    { id: 'dns-ping', name: 'Primary resolver', type: 'icmp', host: 'resolver.example' },
   ],
 };
 
@@ -34,7 +34,29 @@ describe('TelemetryProbeEditor', () => {
     expect(html).toContain('outbound traffic');
     expect(html).toContain('DNS names are resolved by the node for every attempt');
     expect(html).toContain('Enroll an operator keystone before deployment');
-    expect(html.match(/type="text"/g)).toHaveLength(1);
+    expect(html.match(/type="text"/g)).toHaveLength(2);
+    expect(html).toContain('value="Primary resolver"');
+    expect(html).toContain('dns-ping');
     expect(html).toContain('value="resolver.example"');
+  });
+
+  it('marks an invalid display name with accessible feedback', () => {
+    const html = renderToStaticMarkup(
+      createElement(TelemetryProbeEditor, {
+        node: {
+          ...node,
+          telemetry_probes: [{ id: 'dns-ping', name: 'Primary\u00a0resolver', type: 'icmp', host: 'resolver.example' }],
+        },
+        keystonePinned: true,
+        language: 'en',
+        updateNode: () => undefined,
+      }),
+    );
+
+    expect(html).toContain('aria-invalid="true"');
+    expect(html).toContain('aria-describedby="telemetry-probe-dns-ping-name-error"');
+    expect(html).toContain('id="telemetry-probe-dns-ping-name-error"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('Use at most 128 printable characters without leading or trailing spaces');
   });
 });

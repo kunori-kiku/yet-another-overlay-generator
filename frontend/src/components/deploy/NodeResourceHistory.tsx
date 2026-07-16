@@ -4,7 +4,7 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type MessageKey, type UILanguage } from '../../i18n';
 import { TimeSeriesChart, type TimeSeriesSeries } from '../charts/TimeSeriesChart';
-import { formatProbeTarget } from '../../lib/probeResults';
+import { formatProbeTarget, probeDisplayName } from '../../lib/probeResults';
 import {
   GRANULARITIES,
   HISTORY_CHART_FAMILIES,
@@ -474,11 +474,16 @@ function ProbeHistorySection({
               data-testid="history-probe-select"
               className="max-w-[min(28rem,70vw)] rounded border border-[var(--hairline)] bg-[var(--control)] px-1.5 py-1 text-xs text-[var(--content)] outline-none focus:border-[var(--accent)]"
             >
-              {configuredProbes.map((probe) => (
-                <option key={probe.id} value={probe.id}>
-                  {probe.id} · {probe.type.toUpperCase()} · {formatProbeTarget(probe.host, probe.port)}
-                </option>
-              ))}
+              {configuredProbes.map((probe) => {
+                const displayName = probeDisplayName(probe);
+                return (
+                  <option key={probe.id} value={probe.id}>
+                    {displayName}
+                    {displayName !== probe.id ? ` · ${probe.id}` : ''}
+                    {' · '}{probe.type.toUpperCase()} · {formatProbeTarget(probe.host, probe.port)}
+                  </option>
+                );
+              })}
             </select>
           </label>
         )}

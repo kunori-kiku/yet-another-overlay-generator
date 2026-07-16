@@ -1,6 +1,9 @@
 package probepolicy
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -46,7 +49,7 @@ func TestValidHost_IPOrDNSWithoutSeparateDNSField(t *testing.T) {
 
 func TestValidate_TypedKindsBoundsAndDefaults(t *testing.T) {
 	valid := []model.TelemetryProbe{
-		{ID: "dns-icmp", Type: model.TelemetryProbeICMP, Host: "edge.example"},
+		{ID: "dns-icmp", Name: "Primary 解析器", Type: model.TelemetryProbeICMP, Host: "edge.example"},
 		{ID: "tcp-v6", Type: model.TelemetryProbeTCP, Host: "2001:db8::1", Port: 443, IntervalSeconds: 30, TimeoutMilliseconds: 100},
 	}
 	if err := Validate(valid); err != nil {
@@ -73,6 +76,12 @@ func TestValidate_TypedKindsBoundsAndDefaults(t *testing.T) {
 		{"timeout low", model.TelemetryProbe{ID: "p", Type: model.TelemetryProbeICMP, Host: "example.com", TimeoutMilliseconds: 99}},
 		{"timeout high", model.TelemetryProbe{ID: "p", Type: model.TelemetryProbeICMP, Host: "example.com", TimeoutMilliseconds: 5001}},
 		{"bad id", model.TelemetryProbe{ID: "bad id", Type: model.TelemetryProbeICMP, Host: "example.com"}},
+		{"name outer whitespace", model.TelemetryProbe{ID: "p", Name: " padded", Type: model.TelemetryProbeICMP, Host: "example.com"}},
+		{"name control", model.TelemetryProbe{ID: "p", Name: "line\nbreak", Type: model.TelemetryProbeICMP, Host: "example.com"}},
+		{"name line separator", model.TelemetryProbe{ID: "p", Name: "line\u2028break", Type: model.TelemetryProbeICMP, Host: "example.com"}},
+		{"name bidi format", model.TelemetryProbe{ID: "p", Name: "safe\u202eevil", Type: model.TelemetryProbeICMP, Host: "example.com"}},
+		{"name zero width format", model.TelemetryProbe{ID: "p", Name: "zero\u200bwidth", Type: model.TelemetryProbeICMP, Host: "example.com"}},
+		{"name too long", model.TelemetryProbe{ID: "p", Name: strings.Repeat("界", MaxNameRunes+1), Type: model.TelemetryProbeICMP, Host: "example.com"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,6 +104,58 @@ func TestValidate_TypedKindsBoundsAndDefaults(t *testing.T) {
 	if err := Validate(tooMany); err == nil {
 		t.Fatal("Validate accepted more than MaxProbes")
 	}
+	if err := Validate([]model.TelemetryProbe{{
+		ID: "emoji", Name: "Sydney latency 🌏", Type: model.TelemetryProbeICMP, Host: "example.com",
+	}}); err != nil {
+		t.Fatalf("printable non-ASCII name rejected: %v", err)
+	}
+}
+
+func TestMarshal_DisplayNameDoesNotChangeExecutablePolicy(t *testing.T) {
+	base := model.TelemetryProbe{ID: "dns", Type: model.TelemetryProbeICMP, Host: "resolver.example"}
+	unnamed, err := Marshal([]model.TelemetryProbe{base})
+	if err != nil {
+		t.Fatalf("Marshal unnamed: %v", err)
+	}
+	named, err := Marshal([]model.TelemetryProbe{{
+		ID: base.ID, Name: "Primary resolver", Type: base.Type, Host: base.Host,
+	}})
+	if err != nil {
+		t.Fatalf("Marshal named: %v", err)
+	}
+	if !bytes.Equal(named, unnamed) {
+		t.Fatalf("display name changed executable policy:\nunnamed %s\nnamed   %s", unnamed, named)
+	}
+	if bytes.Contains(named, []byte(`"name"`)) {
+		t.Fatalf("display name leaked into telemetry.json: %s", named)
+	}
+
+	policy, err := Parse(named)
+	if err != nil {
+		t.Fatalf("Parse named projection: %v", err)
+	}
+	if policy.Probes[0].Name != "" {
+		t.Fatalf("parsed executable policy acquired display metadata: %+v", policy.Probes[0])
+	}
+	withNameOnWire := `{"version":1,"probes":[{"id":"dns","name":"Primary resolver","type":"icmp","host":"resolver.example"}]}`
+	if _, err := Parse([]byte(withNameOnWire)); err == nil {
+		t.Fatal("Parse accepted controller-only display name inside strict telemetry.json")
+	}
+}
+
+func TestPolicyRejectsGenericJSONMarshal(t *testing.T) {
+	policy := Policy{Version: CurrentVersion, Probes: []model.TelemetryProbe{{
+		ID: "dns", Name: "Controller-only label", Type: model.TelemetryProbeICMP, Host: "resolver.example",
+	}}}
+	for _, value := range []any{policy, &policy} {
+		raw, err := json.Marshal(value)
+		if !errors.Is(err, errPolicyRuntimeOnly) {
+			t.Fatalf("json.Marshal(%T) error = %v, want %v", value, err, errPolicyRuntimeOnly)
+		}
+		if len(raw) != 0 {
+			t.Fatalf("json.Marshal(%T) returned usable bytes %q", value, raw)
+		}
+	}
 }
 
 func TestParse_StrictVersionedCanonicalPolicy(t *testing.T) {
@@ -116,6 +177,7 @@ func TestParse_StrictVersionedCanonicalPolicy(t *testing.T) {
 
 	for _, raw := range []string{
 		`{"version":1,"probes":[{"id":"p","type":"icmp","host":"example.com","dns":"extra"}]}`,
+		`{"version":1,"probes":[{"id":"p","name":"display-only","type":"icmp","host":"example.com"}]}`,
 		`{"version":2,"probes":[{"id":"p","type":"icmp","host":"example.com"}]}`,
 		`{"version":1,"probes":[]}`,
 		`{"version":1,"probes":[{"id":"p","type":"icmp","host":"example.com"}]} {}`,

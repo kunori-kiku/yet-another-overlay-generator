@@ -72,9 +72,18 @@ The schema pass then checks, among other constraints:
 - role, deployment-mode, edge-type, transport, fallback, direction, and primary/backup enums;
 - safe node IDs/names, SSH values, endpoint hosts, key paths, and mimic interface names before
   those strings reach config paths or root-run scripts;
+- active telemetry as a bounded typed policy: unique stable IDs, optional printable single-line
+  display names, one required `host` accepting either an IP literal or ASCII DNS hostname, TCP-only
+  ports, and bounded interval/timeout values. There is no separate DNS field;
 - WireGuard public keys using one strict 43-base64-characters-plus-padding pattern that rejects
   whitespace/newline injection (`internal/validator/schema.go:13-27,375-381`);
 - MTU, SSH/endpoint ports, router IDs, XDP mode, extra prefixes, and self-loops.
+
+The strict version-1 executable policy is serialized only by `probepolicy.Marshal` through private
+wire DTOs that exclude controller-only display metadata. The exported `probepolicy.Policy` is a
+runtime parse view: its `MarshalJSON` deliberately rejects generic `json.Marshal`, while `Parse`
+continues to reject unknown fields. This prevents `name` or later topology metadata from becoming an
+accidental alternate `telemetry.json` wire (`internal/probepolicy/policy.go`).
 
 It normalizes empty `routing_mode` to `babel` and empty edge `transport` to `udp` by mutating the
 indexed object so the default round-trips (`internal/validator/schema.go:243-262,458-493`). `babel`

@@ -135,10 +135,14 @@ type Node struct {
 	TelemetryProbes []TelemetryProbe `json:"telemetry_probes,omitempty"`
 }
 
-// TelemetryProbe is one manually configured active check. Zero interval/timeout values select
-// the documented policy defaults. TCP accepts exactly one port; ICMP accepts none.
+// TelemetryProbe is one manually configured active check. Name is optional controller/Fleet
+// presentation metadata: ID plus exact Type/Host/Port remain the executable policy/history identity,
+// and probepolicy projects Name out of telemetry.json so existing strict agents receive the unchanged
+// version-1 executable contract. Zero interval/timeout values select the documented policy defaults.
+// TCP accepts exactly one port; ICMP accepts none.
 type TelemetryProbe struct {
 	ID                  string `json:"id"`
+	Name                string `json:"name,omitempty"`
 	Type                string `json:"type"`
 	Host                string `json:"host"`
 	Port                int    `json:"port,omitempty"`

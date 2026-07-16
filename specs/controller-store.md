@@ -146,7 +146,9 @@ they become filenames (`filestore.go:103-117`; `internal/controller/filestore_io
   challenge, while normal login permits concurrent challenges for the same account.
 - **Telemetry is observability, not deploy custody.** Heartbeats update a volatile overlay and an
   in-memory history buffer without the store-wide lock or synchronous disk writes. `/report` can still
-  update durable applied-generation state; its fresher observations are reflected into the overlay.
+  update durable applied-generation state and reflect fresher observations into the overlay, but
+  routine reports no longer append to the durable audit chain. Historical `action:"report"` rows from
+  older controllers remain untouched in `ListAudit`, preserving raw-chain compatibility.
 - **Promote and bump are different operations.** `PromoteStaged` publishes eligible staged data;
   `BumpGeneration` only advances the wake counter, for signals such as fleet rekey. It never changes a
   current bundle.

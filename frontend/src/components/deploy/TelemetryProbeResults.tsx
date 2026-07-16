@@ -5,7 +5,7 @@ import type {
   TelemetryProbeResultStatus,
 } from '../../types/controller';
 import type { TelemetryProbe } from '../../types/topology';
-import { formatProbeTarget, probeResultMatchesPolicy } from '../../lib/probeResults';
+import { formatProbeTarget, probeDisplayName, probeResultMatchesPolicy } from '../../lib/probeResults';
 
 const FAILURE_KEYS: Record<TelemetryProbeFailureReason, MessageKey> = {
   dns_failed: 'telemetryProbes.failure.dnsFailed',
@@ -43,6 +43,7 @@ function statusClass(status: TelemetryProbeResultStatus | 'not_reported'): strin
 type Row = {
   key: string;
   id: string;
+  name?: string;
   type: TelemetryProbe['type'];
   host: string;
   port?: number;
@@ -64,6 +65,7 @@ export function TelemetryProbeResults({
   const rows: Row[] = configured.map((probe) => ({
     key: `configured:${probe.id}`,
     id: probe.id,
+    name: probe.name,
     type: probe.type,
     host: probe.host,
     port: probe.port,
@@ -79,6 +81,7 @@ export function TelemetryProbeResults({
       rows.push({
         key: `reported:${result.id}:${result.type}:${result.host}:${result.port ?? ''}`,
         id: result.id,
+        name: configuredProbe?.name,
         type: result.type,
         host: result.host,
         port: result.port,
@@ -109,6 +112,8 @@ export function TelemetryProbeResults({
         <div className="space-y-2">
           {rows.map((row) => {
             const status = row.result?.status ?? 'not_reported';
+            const displayName = probeDisplayName(row);
+            const hasDisplayName = displayName !== row.id;
             const statusLabel =
               status === 'not_reported'
                 ? t(language, 'telemetryProbes.status.notReported')
@@ -124,15 +129,17 @@ export function TelemetryProbeResults({
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <div className="font-mono text-sm text-[var(--content)]">
+                    <div className="text-sm font-medium text-[var(--content)]">
+                      {displayName}
+                    </div>
+                    <div className="mt-0.5 font-mono text-xs text-[var(--content)]">
                       {formatProbeTarget(row.host, row.port)}
                     </div>
                     <div className="mt-0.5 text-xs text-[var(--content-muted)]">
                       {row.type === 'tcp'
                         ? t(language, 'telemetryProbes.tcp')
                         : t(language, 'telemetryProbes.icmp')}
-                      {' · '}
-                      {row.id}
+                      {hasDisplayName && <> · {row.id}</>}
                       {row.retired && (
                         <span className="ml-1 text-[var(--warning)]">
                           {t(language, 'telemetryProbes.reportedOnly')}

@@ -75,10 +75,12 @@ best effort and never deny a node its bundle or polling response.
 
 ## Report, telemetry, and rekey
 
-`POST /report` updates the caller's applied generation, checksum, health, agent version, and
-server-stamped conditions, then appends an `agent:<node>` audit entry
-(`internal/api/handler_agent.go:238-270`). Condition count and field sizes are bounded at the HTTP
-boundary.
+`POST /report` updates the caller's applied generation, checksum, health, agent version,
+server-stamped conditions, and last-seen (`internal/api/handler_agent.go`). Condition count and field
+sizes are bounded at the HTTP boundary. This is operational Fleet state rather than a durable
+security/operator audit event: failed applies can retry every few seconds, and a bare `report` action
+does not capture the useful report fields. Current controllers therefore do not append it to the
+hash-chained audit log.
 
 `POST /telemetry` is deliberately separate from deployment custody. It updates only live
 conditions, bounded metrics, agent version, and last-seen; it cannot advance or regress an applied
@@ -108,7 +110,9 @@ per-node or enrollment rate limits to `429`.
 - The controller stores and transports WireGuard public keys only. Private keys remain on nodes.
 - Enrollment validates a public key before burning a legitimate token; uniqueness/lifecycle
   conflicts occur after the burn so only an authorized caller reaches those checks.
-- `/report` is deployment state and audited; `/telemetry` is observability and intentionally is not.
+- `/report` may update durable deployment/Fleet state and `/telemetry` is volatile observability, but
+  neither routine path appends to the durable audit chain. Legacy `report` rows written by older
+  controllers remain in the raw chain for compatibility and verification.
 - The listeners are plain HTTP. Production must provide TLS at a reverse proxy because bearer
   credentials are replayable if exposed on the wire.
 

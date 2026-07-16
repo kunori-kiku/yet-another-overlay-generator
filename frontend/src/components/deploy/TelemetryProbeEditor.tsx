@@ -5,6 +5,9 @@ import type { Node, TelemetryProbe } from '../../types/topology';
 const MAX_PROBES = 16;
 const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_MILLISECONDS = 2000;
+const MAX_NAME_CODE_POINTS = 128;
+// Match Go unicode.IsPrint: letters, marks, numbers, punctuation, symbols, and ASCII space only.
+const PRINTABLE_NAME = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u;
 
 interface Props {
   node: Node;
@@ -77,8 +80,43 @@ export function TelemetryProbeEditor({
             )}
 
             {probes.map((probe) => {
+              const rawName = probe.name ?? '';
+              const nameInvalid = rawName !== rawName.trim() ||
+                Array.from(rawName).length > MAX_NAME_CODE_POINTS ||
+                !PRINTABLE_NAME.test(rawName);
+              const nameErrorID = `telemetry-probe-${probe.id}-name-error`;
               return (
                 <div key={probe.id} className="space-y-2 rounded border border-[var(--hairline)] p-2">
+                  <label className="block text-xs text-[var(--content-muted)]">
+                    {t(language, 'telemetryProbes.name')}
+                    <input
+                      type="text"
+                      value={rawName}
+                      autoComplete="off"
+                      placeholder={t(language, 'telemetryProbes.namePlaceholder')}
+                      onChange={(event) => patchProbe(probe.id, { name: event.target.value || undefined })}
+                      onBlur={(event) => {
+                        const trimmed = event.target.value.trim();
+                        if (trimmed !== event.target.value) {
+                          patchProbe(probe.id, { name: trimmed || undefined });
+                        }
+                      }}
+                      aria-invalid={nameInvalid || undefined}
+                      aria-describedby={nameInvalid ? nameErrorID : undefined}
+                      className={`mt-1 w-full rounded border bg-[var(--control)] px-2 py-1 text-xs ${nameInvalid
+                        ? 'border-[var(--danger-border)]'
+                        : 'border-[var(--hairline)]'}`}
+                    />
+                  </label>
+                  {nameInvalid && (
+                    <p id={nameErrorID} role="alert" className="text-xs text-[var(--danger)]">
+                      {t(language, 'telemetryProbes.nameInvalid')}
+                    </p>
+                  )}
+                  <p className="break-all text-xs text-[var(--content-muted)]">
+                    {t(language, 'telemetryProbes.id')}{' '}
+                    <span className="font-mono">{probe.id}</span>
+                  </p>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-xs text-[var(--content-muted)]">
                       {t(language, 'telemetryProbes.type')}

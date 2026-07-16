@@ -39,6 +39,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -388,6 +389,77 @@ func TestControllerHTTP_EnrollConfigPollReport(t *testing.T) {
 		if !n.HasWGPublicKey {
 			t.Fatalf("nodes: %s reports no WG public key", n.NodeID)
 		}
+	}
+}
+
+func TestHandleReport_UpdatesFleetStateWithoutFloodingAudit(t *testing.T) {
+	env := newCtlTestEnv(t)
+	token := env.enrollNode(t, "node-report")
+	ctx := context.Background()
+
+	before, err := env.store.ListAudit(ctx, testTenant)
+	if err != nil {
+		t.Fatalf("ListAudit before reports: %v", err)
+	}
+	for i := 1; i <= 3; i++ {
+		var conditions []runtimecontract.Condition
+		if i == 3 {
+			conditions = []runtimecontract.Condition{{
+				Type:    runtimecontract.ConditionTypeConfigApply,
+				Status:  runtimecontract.ConditionStatusOK,
+				Reason:  "Applied",
+				Message: "generation applied",
+			}}
+		}
+		if status := doJSON(t, http.MethodPost, env.agentURL("report"), token, reportRequestJSON{
+			AppliedGeneration: int64(i),
+			Checksum:          fmt.Sprintf("checksum-%d", i),
+			Health:            fmt.Sprintf("attempt-%d", i),
+			AgentVersion:      "v2.0.0-rc.test",
+			Conditions:        conditions,
+		}, nil); status != http.StatusOK {
+			t.Fatalf("report %d: status %d, want 200", i, status)
+		}
+	}
+
+	node, err := env.store.GetNode(ctx, testTenant, "node-report")
+	if err != nil {
+		t.Fatalf("GetNode after reports: %v", err)
+	}
+	if node.AppliedGeneration != 3 || node.LastChecksum != "checksum-3" || node.LastHealth != "attempt-3" || node.LastAgentVersion != "v2.0.0-rc.test" {
+		t.Fatalf("latest report state not preserved: %+v", node)
+	}
+	if node.LastSeen.IsZero() {
+		t.Fatal("latest report did not stamp last_seen")
+	}
+	if len(node.Conditions) != 1 || node.Conditions[0].Reason != "Applied" || node.Conditions[0].ObservedAt.IsZero() {
+		t.Fatalf("latest report conditions not preserved/server-stamped: %+v", node.Conditions)
+	}
+
+	var fleet []nodeJSON
+	if status := doJSON(t, http.MethodGet, env.opURL("nodes"), testOperatorToken, nil, &fleet); status != http.StatusOK {
+		t.Fatalf("GET /nodes after reports: status %d, want 200", status)
+	}
+	if len(fleet) != 1 || fleet[0].NodeID != "node-report" || fleet[0].AppliedGeneration != 3 ||
+		fleet[0].LastChecksum != "checksum-3" || fleet[0].LastHealth != "attempt-3" ||
+		fleet[0].AgentVersion != "v2.0.0-rc.test" || fleet[0].LastSeen.IsZero() ||
+		len(fleet[0].Conditions) != 1 || fleet[0].Conditions[0].Reason != "Applied" {
+		t.Fatalf("Fleet projection does not reflect latest report: %+v", fleet)
+	}
+	after, err := env.store.ListAudit(ctx, testTenant)
+	if err != nil {
+		t.Fatalf("ListAudit after reports: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("reports changed audit length from %d to %d: %+v", len(before), len(after), after)
+	}
+	for _, entry := range after {
+		if entry.Action == "report" {
+			t.Fatalf("routine report leaked into durable audit: %+v", entry)
+		}
+	}
+	if bad := controller.VerifyAuditChain(after); bad != -1 {
+		t.Fatalf("VerifyAuditChain after reports = %d, want -1", bad)
 	}
 }
 
@@ -963,6 +1035,15 @@ func TestControllerHTTP_CORS(t *testing.T) {
 func TestControllerHTTP_AuditWireShape(t *testing.T) {
 	env := newCtlTestEnv(t)
 	env.enrollNode(t, "node-1")
+	legacy, err := env.store.AppendAudit(context.Background(), testTenant, controller.AuditEntry{
+		Timestamp: time.Unix(1_700_000_000, 0).UTC(),
+		Actor:     "agent:node-1",
+		Action:    "report",
+		NodeID:    "node-1",
+	})
+	if err != nil {
+		t.Fatalf("AppendAudit(legacy report): %v", err)
+	}
 
 	var resp struct {
 		Entries []struct {
@@ -980,17 +1061,27 @@ func TestControllerHTTP_AuditWireShape(t *testing.T) {
 	if !resp.Verified {
 		t.Errorf("audit verified = false, want true")
 	}
-	found := false
+	foundEnroll := false
+	foundReport := false
 	for _, e := range resp.Entries {
 		if e.Action == "enroll" && e.NodeID == "node-1" {
-			found = true
+			foundEnroll = true
 			if e.Timestamp == "" || e.Actor == "" {
 				t.Errorf("enroll entry missing timestamp/actor (snake_case mapping broken): %+v", e)
 			}
 		}
+		if e.Seq == legacy.Seq && e.Action == "report" && e.NodeID == "node-1" {
+			foundReport = true
+			if e.Timestamp == "" || e.Actor != "agent:node-1" {
+				t.Errorf("legacy report entry missing snake_case fields: %+v", e)
+			}
+		}
 	}
-	if !found {
+	if !foundEnroll {
 		t.Errorf("no snake_case enroll audit entry for node-1 in %+v", resp.Entries)
+	}
+	if !foundReport {
+		t.Errorf("legacy report audit entry was filtered from raw API response: %+v", resp.Entries)
 	}
 }
 

@@ -73,6 +73,9 @@ export interface Node {
 
 export interface TelemetryProbe {
   id: string;
+  // Optional controller/Fleet display label. Stable id plus exact type/host/port remain the
+  // executable/history identity; name is deliberately excluded from telemetry.json and reports.
+  name?: string;
   type: 'icmp' | 'tcp';
   host: string;
   port?: number;

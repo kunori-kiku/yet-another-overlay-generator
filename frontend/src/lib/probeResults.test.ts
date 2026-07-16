@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatProbeTarget,
   mapProbeResults,
+  probeDisplayName,
   probeResultMatchesPolicy,
   sameTelemetryPolicy,
   summarizeProbeResults,
@@ -126,10 +127,12 @@ describe('summarizeProbeResults', () => {
 
 describe('policy/result identity', () => {
   it('matches executable destination fields and compares complete policy fields', () => {
-    const probe = { id: 'tls', type: 'tcp' as const, host: 'service.example', port: 443 };
+    const probe = { id: 'tls', name: 'Customer API', type: 'tcp' as const, host: 'service.example', port: 443 };
     expect(probeResultMatchesPolicy(probe, { ...probe, status: 'success' })).toBe(true);
+    expect(probeResultMatchesPolicy({ ...probe, name: 'Renamed API' }, { ...probe, status: 'success' })).toBe(true);
     expect(probeResultMatchesPolicy(probe, { ...probe, host: 'other.example', status: 'success' })).toBe(false);
     expect(sameTelemetryPolicy([probe], [{ ...probe }])).toBe(true);
+    expect(sameTelemetryPolicy([probe], [{ ...probe, name: 'Renamed API' }])).toBe(false);
     expect(sameTelemetryPolicy([probe], [{ ...probe, timeout_milliseconds: 1000 }])).toBe(false);
   });
 });
@@ -139,5 +142,11 @@ describe('formatProbeTarget', () => {
     expect(formatProbeTarget('2001:db8::1', 443)).toBe('[2001:db8::1]:443');
     expect(formatProbeTarget('192.0.2.10', 443)).toBe('192.0.2.10:443');
     expect(formatProbeTarget('resolver.example', undefined)).toBe('resolver.example');
+  });
+
+  it('uses a configured display name and falls back to the immutable ID', () => {
+    expect(probeDisplayName({ id: 'dns', name: 'Primary resolver' })).toBe('Primary resolver');
+    expect(probeDisplayName({ id: 'dns' })).toBe('dns');
+    expect(probeDisplayName({ id: 'dns', name: '' })).toBe('dns');
   });
 });
