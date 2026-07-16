@@ -9,6 +9,7 @@ package controller
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,7 +48,7 @@ func (fs *filekv) readAudit(dir string) ([]AuditEntry, error) {
 	// No JSONL yet — fall back to a (possibly present) legacy array.
 	var legacy []AuditEntry
 	if err := readJSON(filepath.Join(dir, legacyAuditFileName), &legacy); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -65,9 +66,9 @@ func (fs *filekv) readAudit(dir string) ([]AuditEntry, error) {
 // self-heals by rewriting the clean prefix before the next append). A malformed INTERIOR line is real
 // corruption, not a torn append, and is surfaced as a hard error.
 func readAuditJSONL(path string) (entries []AuditEntry, tornTail bool, err error) {
-	data, rerr := os.ReadFile(path)
+	data, rerr := readStoreFile(path)
 	if rerr != nil {
-		if os.IsNotExist(rerr) {
+		if errors.Is(rerr, os.ErrNotExist) {
 			return nil, false, nil
 		}
 		return nil, false, rerr
@@ -128,14 +129,18 @@ func (fs *filekv) loadAuditTail(t TenantID, dir string) (*auditTail, error) {
 	legacyPath := filepath.Join(dir, legacyAuditFileName)
 	// Migrate a legacy array to JSONL once, BEFORE seeding the tail, so appends and listAudit never
 	// split across the two formats.
-	if _, err := os.Stat(jsonlPath); os.IsNotExist(err) {
+	if exists, err := storeFileExists(jsonlPath); err != nil {
+		return nil, err
+	} else if !exists {
 		var legacy []AuditEntry
 		if err := readJSON(legacyPath, &legacy); err == nil {
 			if werr := writeAuditJSONL(jsonlPath, legacy); werr != nil {
 				return nil, werr
 			}
-			_ = os.Remove(legacyPath)
-		} else if !os.IsNotExist(err) {
+			if _, derr := removeStoreFile(legacyPath); derr != nil {
+				return nil, fmt.Errorf("controller: remove migrated %s: %w", legacyAuditFileName, derr)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
 	}
@@ -205,7 +210,7 @@ func (fs *filekv) appendAudit(t TenantID, e AuditEntry) (AuditEntry, error) {
 		return AuditEntry{}, fmt.Errorf("controller: marshal %s: %w", auditFileName, err)
 	}
 	line = append(line, '\n')
-	f, err := os.OpenFile(filepath.Join(dir, auditFileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := openStoreFileForAppend(filepath.Join(dir, auditFileName))
 	if err != nil {
 		return AuditEntry{}, fmt.Errorf("controller: open %s: %w", auditFileName, err)
 	}

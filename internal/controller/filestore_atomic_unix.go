@@ -17,3 +17,15 @@ func syncStoreDirectory(path string) error {
 	}
 	return dir.Close()
 }
+
+func syncOpenedStoreDirectory(root *os.Root) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
+}

@@ -2,7 +2,11 @@
 
 package controller
 
-import "golang.org/x/sys/windows"
+import (
+	"os"
+
+	"golang.org/x/sys/windows"
+)
 
 func replaceStoreFileAtomic(from, to string) error {
 	fromPtr, err := windows.UTF16PtrFromString(from)
@@ -19,3 +23,5 @@ func replaceStoreFileAtomic(from, to string) error {
 // MOVEFILE_WRITE_THROUGH is the Windows durability boundary. Directory handles
 // cannot be portably opened and flushed through os.File.
 func syncStoreDirectory(string) error { return nil }
+
+func syncOpenedStoreDirectory(*os.Root) error { return nil }

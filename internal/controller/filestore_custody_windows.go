@@ -12,3 +12,7 @@ import "os"
 func validateSecureStoreDirPlatform(os.FileInfo) error        { return nil }
 func validateStoreFilePlatform(os.FileInfo) error             { return nil }
 func tightenOwnedStoreRoot(string, os.FileInfo) (bool, error) { return false, nil }
+
+// os.Root.OpenFile uses a directory-relative Windows handle with
+// OBJ_DONT_REPARSE; no extra platform flag is required here.
+func storeFileOpenFlags(flag int) int { return flag }

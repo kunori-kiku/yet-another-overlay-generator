@@ -3,12 +3,14 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestFileStoreRejectsUnsafeConfiguredRoot(t *testing.T) {
@@ -275,5 +277,310 @@ func TestWriteBytesDurableDoesNotFollowPreplantedTempSymlink(t *testing.T) {
 	}
 	if len(leaked) != 0 {
 		t.Fatalf("random temporary files leaked after install: %v", leaked)
+	}
+}
+
+func newStableRecordCustodyFixture(t *testing.T) (*FileStore, TenantID, string) {
+	t.Helper()
+	fs, err := NewFileStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	tenant := TenantID("acme")
+	dir, err := fs.ensureTenantDir(tenant)
+	if err != nil {
+		t.Fatalf("ensureTenantDir: %v", err)
+	}
+	return fs, tenant, dir
+}
+
+func requireStableRecordCustodyError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "symlink or special file") {
+		t.Fatalf("stable-record operation err = %v, want symlink/special-file custody rejection", err)
+	}
+}
+
+func TestFileStoreRejectsSymlinkStableRecords(t *testing.T) {
+	t.Run("keyed get list exists and delete", func(t *testing.T) {
+		fs, tenant, dir := newStableRecordCustodyFixture(t)
+		victim := filepath.Join(t.TempDir(), "outside.json")
+		const sentinel = `{"outside":true}`
+		if err := os.WriteFile(victim, []byte(sentinel), 0600); err != nil {
+			t.Fatal(err)
+		}
+		record := filepath.Join(dir, "nodes", "node-1.json")
+		if err := os.Symlink(victim, record); err != nil {
+			t.Fatal(err)
+		}
+
+		if got, err := fs.get(tenant, collNodes, "node-1"); err == nil {
+			t.Fatalf("get followed stable symlink and returned %q", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if got, err := fs.list(tenant, collNodes); err == nil {
+			t.Fatalf("list accepted stable symlink and returned %v", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if exists, err := fs.exists(tenant, collNodes, "node-1"); err == nil {
+			t.Fatalf("exists(symlink) = %v, nil; want hard custody error", exists)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if err := fs.del(tenant, collNodes, "node-1"); err == nil {
+			t.Fatal("del(symlink) = nil, want hard custody error")
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if info, err := os.Lstat(record); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("delete altered planted symlink: info=%v err=%v", info, err)
+		}
+		if got, err := os.ReadFile(victim); err != nil || string(got) != sentinel {
+			t.Fatalf("outside target = %q, %v; want unchanged %q", got, err, sentinel)
+		}
+	})
+
+	t.Run("singleton", func(t *testing.T) {
+		fs, tenant, dir := newStableRecordCustodyFixture(t)
+		victim := filepath.Join(t.TempDir(), "outside-settings.json")
+		if err := os.WriteFile(victim, []byte(`{"telemetry_history_limit":1}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, filepath.Join(dir, "settings.json")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := fs.get(tenant, collSettings, ""); err == nil {
+			t.Fatalf("singleton get followed stable symlink and returned %q", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+	})
+
+	t.Run("generation", func(t *testing.T) {
+		_, _, dir := newStableRecordCustodyFixture(t)
+		victim := filepath.Join(t.TempDir(), "outside-generation.json")
+		if err := os.WriteFile(victim, []byte(`{"generation":42}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, filepath.Join(dir, generationFileName)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := readGeneration(dir); err == nil {
+			t.Fatalf("readGeneration followed stable symlink and returned %d", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+	})
+}
+
+func TestFileStoreRejectsSymlinkAuditFiles(t *testing.T) {
+	t.Run("jsonl read and first append", func(t *testing.T) {
+		fs, tenant, dir := newStableRecordCustodyFixture(t)
+		victim := filepath.Join(t.TempDir(), "outside-audit.jsonl")
+		const sentinel = "outside audit must remain unchanged\n"
+		if err := os.WriteFile(victim, []byte(sentinel), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, filepath.Join(dir, auditFileName)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := fs.listAudit(tenant); err == nil {
+			t.Fatalf("listAudit followed stable symlink and returned %v", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if got, err := fs.appendAudit(tenant, AuditEntry{Actor: "operator", Action: "unsafe"}); err == nil {
+			t.Fatalf("appendAudit followed stable symlink and returned %+v", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if got, err := os.ReadFile(victim); err != nil || string(got) != sentinel {
+			t.Fatalf("outside audit target = %q, %v; want unchanged %q", got, err, sentinel)
+		}
+	})
+
+	t.Run("legacy read", func(t *testing.T) {
+		fs, tenant, dir := newStableRecordCustodyFixture(t)
+		victim := filepath.Join(t.TempDir(), "outside-audit.json")
+		if err := os.WriteFile(victim, []byte(`[]`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, filepath.Join(dir, legacyAuditFileName)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := fs.listAudit(tenant); err == nil {
+			t.Fatalf("listAudit followed legacy stable symlink and returned %v", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+	})
+
+	t.Run("cached tail cannot bypass append validation", func(t *testing.T) {
+		fs, tenant, dir := newStableRecordCustodyFixture(t)
+		if _, err := fs.appendAudit(tenant, AuditEntry{Actor: "operator", Action: "seed"}); err != nil {
+			t.Fatalf("seed appendAudit: %v", err)
+		}
+		auditPath := filepath.Join(dir, auditFileName)
+		if err := os.Rename(auditPath, auditPath+".saved"); err != nil {
+			t.Fatal(err)
+		}
+		victim := filepath.Join(t.TempDir(), "outside-cached-tail.jsonl")
+		const sentinel = "cached tail must not redirect append\n"
+		if err := os.WriteFile(victim, []byte(sentinel), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, auditPath); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := fs.appendAudit(tenant, AuditEntry{Actor: "operator", Action: "unsafe"}); err == nil {
+			t.Fatalf("cached-tail append followed stable symlink and returned %+v", got)
+		} else {
+			requireStableRecordCustodyError(t, err)
+		}
+		if got, err := os.ReadFile(victim); err != nil || string(got) != sentinel {
+			t.Fatalf("outside cached-tail target = %q, %v; want unchanged %q", got, err, sentinel)
+		}
+	})
+}
+
+func TestFileStoreRejectsSpecialStableRecordsWithoutBlocking(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*FileStore, TenantID) error
+	}{
+		{name: "get", run: func(fs *FileStore, tenant TenantID) error {
+			_, err := fs.get(tenant, collNodes, "node-1")
+			return err
+		}},
+		{name: "list", run: func(fs *FileStore, tenant TenantID) error {
+			_, err := fs.list(tenant, collNodes)
+			return err
+		}},
+		{name: "exists", run: func(fs *FileStore, tenant TenantID) error {
+			_, err := fs.exists(tenant, collNodes, "node-1")
+			return err
+		}},
+		{name: "delete", run: func(fs *FileStore, tenant TenantID) error {
+			return fs.del(tenant, collNodes, "node-1")
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, tenant, dir := newStableRecordCustodyFixture(t)
+			if err := syscall.Mkfifo(filepath.Join(dir, "nodes", "node-1.json"), 0600); err != nil {
+				t.Fatalf("mkfifo: %v", err)
+			}
+			result := make(chan error, 1)
+			go func() { result <- tc.run(fs, tenant) }()
+			select {
+			case err := <-result:
+				requireStableRecordCustodyError(t, err)
+			case <-time.After(2 * time.Second):
+				t.Fatal("stable-record operation blocked on FIFO")
+			}
+		})
+	}
+
+	t.Run("audit append", func(t *testing.T) {
+		fs, tenant, dir := newStableRecordCustodyFixture(t)
+		if err := syscall.Mkfifo(filepath.Join(dir, auditFileName), 0600); err != nil {
+			t.Fatalf("mkfifo: %v", err)
+		}
+		result := make(chan error, 1)
+		go func() {
+			_, err := fs.appendAudit(tenant, AuditEntry{Actor: "operator", Action: "unsafe"})
+			result <- err
+		}()
+		select {
+		case err := <-result:
+			requireStableRecordCustodyError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("audit append blocked on FIFO")
+		}
+	})
+}
+
+func TestStoreFileOpenFlagsKeepFIFORaceNonblocking(t *testing.T) {
+	dir := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(dir, "record.json"), 0600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer root.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		f, err := root.OpenFile("record.json", storeFileOpenFlags(os.O_RDONLY), 0)
+		if err == nil {
+			err = f.Close()
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("nonblocking FIFO open: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("store file open flags blocked on FIFO")
+	}
+}
+
+func TestFileStoreStableRecordCompatibilitySemantics(t *testing.T) {
+	fs, tenant, dir := newStableRecordCustodyFixture(t)
+
+	if _, err := fs.get(tenant, collNodes, "missing"); err != errKVNotFound {
+		t.Fatalf("get(missing) err = %v, want errKVNotFound", err)
+	}
+	if got, err := fs.list(tenant, collNodes); err != nil || len(got) != 0 {
+		t.Fatalf("list(empty) = %v, %v; want empty, nil", got, err)
+	}
+	if exists, err := fs.exists(tenant, collNodes, "missing"); err != nil || exists {
+		t.Fatalf("exists(missing) = %v, %v; want false, nil", exists, err)
+	}
+	if err := fs.del(tenant, collNodes, "missing"); err != nil {
+		t.Fatalf("del(missing): %v", err)
+	}
+	if got, err := readGeneration(dir); err != nil || got != 0 {
+		t.Fatalf("readGeneration(absent) = %d, %v; want 0, nil", got, err)
+	}
+
+	corrupt := filepath.Join(dir, "nodes", "corrupt.json")
+	if err := os.WriteFile(corrupt, []byte("not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := fs.exists(tenant, collNodes, "corrupt"); err != nil || !exists {
+		t.Fatalf("exists(corrupt regular) = %v, %v; want true, nil", exists, err)
+	}
+
+	// Controller writes remain 0600, but the no-follow fix must not turn an
+	// older/restored same-owner regular record into a retroactive outage solely
+	// because its mode is more permissive.
+	permissive := filepath.Join(dir, "nodes", "permissive.json")
+	const permissiveBody = `{"compatible":true}`
+	if err := os.WriteFile(permissive, []byte(permissiveBody), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(permissive, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fs.get(tenant, collNodes, "permissive"); err != nil || string(got) != permissiveBody {
+		t.Fatalf("get(permissive regular) = %q, %v; want compatible bytes", got, err)
+	}
+
+	if _, err := fs.AppendAudit(context.Background(), tenant, AuditEntry{Actor: "operator", Action: "created"}); err != nil {
+		t.Fatalf("AppendAudit(create): %v", err)
+	}
+	auditInfo, err := os.Lstat(filepath.Join(dir, auditFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auditInfo.Mode().IsRegular() || auditInfo.Mode().Perm() != 0600 {
+		t.Fatalf("created audit mode = %v, want regular 0600", auditInfo.Mode())
 	}
 }

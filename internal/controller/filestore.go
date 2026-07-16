@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -140,12 +141,9 @@ func (fs *filekv) get(t TenantID, coll, key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateSecureStoreDirIfExists(filepath.Dir(p)); err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(p)
+	data, err := readStoreFile(p)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, errKVNotFound
 		}
 		return nil, err
@@ -176,20 +174,11 @@ func (fs *filekv) del(t TenantID, coll, key string) error {
 	if err != nil {
 		return err
 	}
-	if err := validateSecureStoreDirIfExists(filepath.Dir(p)); err != nil {
-		return err
-	}
-	if err := os.Remove(p); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+	// Deleting the staged-set seal is the crash-safety commit invalidation. The
+	// rooted helper both rejects an unsafe final component and durably syncs the
+	// directory entry removal, so a parent-path swap cannot redirect the unlink.
+	if _, err := removeStoreFile(p); err != nil {
 		return fmt.Errorf("controller: delete %s/%s: %w", coll, key, err)
-	}
-	// Deleting the staged-set seal is the crash-safety commit invalidation. Make the directory
-	// entry removal durable just like writeBytesDurable makes a rename durable, so a power loss
-	// cannot resurrect a seal whose component mutation only partially completed.
-	if err := syncStoreDirectory(filepath.Dir(p)); err != nil {
-		return fmt.Errorf("controller: sync directory after deleting %s/%s: %w", coll, key, err)
 	}
 	return nil
 }
@@ -212,7 +201,7 @@ func (fs *filekv) list(t TenantID, coll string) ([]kvRecord, error) {
 	}
 	ents, err := os.ReadDir(d)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("controller: list %s: %w", coll, err)
@@ -226,9 +215,9 @@ func (fs *filekv) list(t TenantID, coll string) ([]kvRecord, error) {
 		if !found {
 			continue // wrong suffix (a temp sidecar, or the sibling staged/current file)
 		}
-		data, rerr := os.ReadFile(filepath.Join(d, e.Name()))
+		data, rerr := readStoreFile(filepath.Join(d, e.Name()))
 		if rerr != nil {
-			if os.IsNotExist(rerr) {
+			if errors.Is(rerr, os.ErrNotExist) {
 				continue // deleted between ReadDir and ReadFile
 			}
 			return nil, rerr
@@ -239,8 +228,10 @@ func (fs *filekv) list(t TenantID, coll string) ([]kvRecord, error) {
 	return out, nil
 }
 
-// exists is the metadata-only heartbeat existence probe (lock-free os.Stat; NO deserialize), called
-// OUTSIDE withLock so a heartbeat never contends on fs.mu and a corrupt-but-present record still passes.
+// exists is the no-deserialize heartbeat existence probe, called OUTSIDE withLock so a heartbeat
+// never contends on fs.mu and a corrupt-but-present regular record still passes. It securely inspects
+// the final component with Lstat rather than following os.Stat through a symlink or accepting a special
+// file.
 func (fs *filekv) exists(t TenantID, coll, key string) (bool, error) {
 	dir, err := fs.tenantDir(t)
 	if err != nil {
@@ -250,16 +241,7 @@ func (fs *filekv) exists(t TenantID, coll, key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := validateSecureStoreDirIfExists(filepath.Dir(p)); err != nil {
-		return false, err
-	}
-	if _, err := os.Stat(p); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
+	return storeFileExists(p)
 }
 
 // --- kvBackend: generation counter + wake ----------------------------------
@@ -271,7 +253,7 @@ const generationFileName = "generation.json"
 func readGeneration(dir string) (int64, error) {
 	var g generationFile
 	if err := readJSON(filepath.Join(dir, generationFileName), &g); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, err

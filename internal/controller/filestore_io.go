@@ -172,10 +172,10 @@ func writeBytesDurable(path string, data []byte) error {
 	return nil
 }
 
-// readJSON reads and unmarshals path into v. A missing file is reported via os.IsNotExist on the
-// returned error so callers can map it to errKVNotFound / ErrNotFound.
+// readJSON reads and unmarshals path into v. A missing file remains discoverable with
+// errors.Is(err, os.ErrNotExist) so callers can map it to errKVNotFound / ErrNotFound.
 func readJSON(path string, v any) error {
-	data, err := os.ReadFile(path)
+	data, err := readStoreFile(path)
 	if err != nil {
 		return err
 	}
