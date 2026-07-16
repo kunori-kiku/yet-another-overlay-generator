@@ -123,6 +123,32 @@ short-lived, single-use node-scoped token and a pre-body per-IP limiter; bootstr
 configuration and public trust material only. See [controller-agent-api.md](../../../specs/controller-agent-api.md)
 for their detailed state transitions.
 
+#### Reliable `POST /telemetry` extension
+
+The request body remains the legacy `{conditions, metrics, agent_version}` JSON shape. Protocol v2
+adds optional headers so a new agent remains compatible with a strict old controller and an old agent
+remains compatible with a new controller:
+
+| Header | Meaning |
+|---|---|
+| `X-YAOG-Telemetry-Protocol: 2` | Opt in to sequenced delivery. Absence selects legacy handling. |
+| `X-YAOG-Telemetry-Boot-ID` | 16 random process bytes encoded as hex. |
+| `X-YAOG-Telemetry-Sequence` | Positive, per-boot monotonically increasing integer. |
+| `X-YAOG-Telemetry-Sampled-At` | Agent observation time in RFC3339Nano. |
+| `X-YAOG-Telemetry-Interval-Millis` | Optional advisory sampling cadence; invalid values are ignored. |
+
+On success the controller echoes protocol/boot ID, the **exact submitted sequence** in
+`X-YAOG-Telemetry-Ack-Sequence`, and its receipt time. A duplicate may additionally carry
+`X-YAOG-Telemetry-Duplicate: true`. The JSON response remains `{ "status": "ok" }`.
+
+Receipt time, never the node clock, controls `LastSeen` and live condition age. A bounded sample time
+is used only for resource history. Sequence cursors and live telemetry are volatile so a heartbeat
+never rewrites/fsyncs the node record. See
+[../operations/telemetry-history.md](../operations/telemetry-history.md) for queue, retry, deduplication,
+cadence, and intermediary-header-stripping behavior; authenticated live `probe_results` for a signed
+policy are defined in
+[../operations/active-telemetry.md](../operations/active-telemetry.md).
+
 ### Operator listener: `/api/v1/operator/`
 
 The following endpoints are unauthenticated because they establish a session:
@@ -180,6 +206,9 @@ intentional pre-auth surfaces.
 - Bundle files in `/config` are base64 values keyed by bundle-relative path. When keystone is on, the
   atomically read served snapshot also includes `trustlist.json` and `trustlist.sig`; those files are
   outside the bundle's own checksum set because the trust list binds that set's digest.
+- Probe-bearing preview/stage failures use the registered 412
+  `telemetry_probes_require_keystone` code; the controller never silently emits an unsigned active
+  network policy.
 
 ## Structural invariants
 

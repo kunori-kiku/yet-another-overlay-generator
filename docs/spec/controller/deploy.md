@@ -94,6 +94,20 @@ not staged, exactly like an unenrolled node, and activates on a later deploy onc
 This keeps render-what's-ready honest for clients — a client enrolling before its router never fails
 the whole stage.
 
+### Active telemetry requires the off-host keystone
+
+An admitted managed node may carry a bounded `telemetry_probes` policy. That policy becomes outbound
+network activity, so it has a stronger gate than passive metrics: both `DeployPreview` and
+`CompileAndStage` refuse a probe-bearing ready subgraph unless the tenant has a pinned off-host
+keystone. The refusal occurs before export, allocation write-back, or staging and maps to HTTP 412
+`telemetry_probes_require_keystone`.
+
+When authorized, AgentHeld rendering emits versioned `telemetry.json` as an ordinary checksum- and
+signature-covered bundle member. The agent repeats membership verification and activates it only after
+a successful apply, preserving the previous policy on failure. See
+[../operations/active-telemetry.md](../operations/active-telemetry.md). This gate does not apply to a
+node with no probes, so existing fleets and historical bundle bytes remain compatible.
+
 ## Delta deploy — skip unchanged nodes
 
 Render-what's-ready decides **which nodes are eligible** to stage; the **delta-skip** (plan-5) decides

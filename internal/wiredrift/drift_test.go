@@ -22,10 +22,10 @@ import (
 // their Go source of truth DIRECTLY, so a Go field rename or a missing omitempty entry is a RED BUILD
 // with no snapshot to refresh. It pins three ungated hand-mirror classes:
 //
-//  1. The five frontend *_OMITEMPTY lists (stores/controller/helpers.ts) each equal, EXACTLY, the
+//  1. The six frontend *_OMITEMPTY lists (stores/controller/helpers.ts) each equal, EXACTLY, the
 //     set of json-tagged omitempty fields on their model struct (Project/Domain/Node/Edge/
-//     PublicEndpoint). These lists tell the store which zero-valued fields the SERVER drops on
-//     marshal, so canonicalDesign's save/hydrate round-trip compares equal; a Go omitempty field
+//     PublicEndpoint/TelemetryProbe). These lists tell the store which zero-valued fields the SERVER
+//     drops on marshal, so canonicalDesign's save/hydrate round-trip compares equal; a Go omitempty field
 //     absent from its list (the recorded "EDGE_OMITEMPTY mimic_fallback gap") phantoms a save
 //     conflict, and a list entry the model does NOT mark omitempty would wrongly drop a required
 //     field. Exact equality catches both directions.
@@ -260,6 +260,7 @@ func TestFEOmitemptyListsMatchModel(t *testing.T) {
 		{"NODE_OMITEMPTY", feControllerHelps, "Node"},
 		{"EDGE_OMITEMPTY", feControllerHelps, "Edge"},
 		{"PUBLIC_ENDPOINT_OMITEMPTY", feControllerHelps, "PublicEndpoint"},
+		{"TELEMETRY_PROBE_OMITEMPTY", feControllerHelps, "TelemetryProbe"},
 	}
 	for _, c := range cases {
 		t.Run(c.list, func(t *testing.T) {

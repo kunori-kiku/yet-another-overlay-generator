@@ -74,21 +74,28 @@ export function dropAllKeys(topo: Topology): { topo: Topology; dropped: number }
   return { topo: { ...topo, nodes }, dropped };
 }
 
-// stripLiveTelemetry clears a node's LIVE telemetry (beta.12 wireguardPeers) before it enters the
+// stripLiveTelemetry clears a node's LIVE telemetry before it enters the
 // persisted controller-storage cache. It is live-only, never persisted, for two reasons: (1) custody —
-// wireguardPeers carries each peer's raw endpoint (IP:port), fleet-confidential network topology of the
-// same class the server-held design blank keeps out of localStorage; (2) honesty — a handshake age
-// frozen at persist time is stale and misleading after a reload. The aggregate wireguard CONDITION
-// (curated, endpoint-free) still persists for instant coloring; the per-link detail is re-fetched live
-// on refresh. Setting the field to undefined makes JSON.stringify omit the key (same idiom as
-// dropAllKeys), so a rehydrated node has no wireguardPeers and every reader coerces (?? []).
+// wireguardPeers carries each peer's raw endpoint and probeResults carries operator-authorized probe
+// destinations, both fleet-confidential network topology of the same class the server-held design
+// blank keeps out of localStorage; (2) honesty — a handshake age, load value, or probe outcome frozen
+// at persist time is stale and misleading after a reload. The aggregate conditions still persist for
+// instant coloring; details are re-fetched live on refresh. Setting fields to undefined makes
+// JSON.stringify omit their keys (same idiom as dropAllKeys).
 //
-// MAINTENANCE: this clears the live-only telemetry fields (wireguardPeers + resource). If a future
+// MAINTENANCE: this clears every live-only telemetry projection. If a future
 // Sampler's metric is lifted by mapNode into a NEW live ControllerNode field, clear it here too
 // (rather than allowlisting it in leakOracle) — the leakOracle e2e guard is the backstop that fails
 // the build if a new non-allowlisted field reaches the persisted cache. resource carries no
 // endpoint/IP/key material, but a load average frozen at persist time is stale (honesty), so it is
 // live-only for the same reason as wireguardPeers.
 export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
-  return { ...node, wireguardPeers: undefined, resource: undefined, nativeXDP: undefined, mimicCapability: undefined };
+  return {
+    ...node,
+    wireguardPeers: undefined,
+    resource: undefined,
+    probeResults: undefined,
+    nativeXDP: undefined,
+    mimicCapability: undefined,
+  };
 }

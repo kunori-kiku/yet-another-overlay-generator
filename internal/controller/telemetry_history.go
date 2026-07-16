@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,7 @@ const historyFlushInterval = 5 * time.Minute
 // carries NO endpoint/IP/key material — observability only.
 type ResourceSample struct {
 	TS         time.Time `json:"ts"`
+	IntervalMS int64     `json:"interval_ms,omitempty"`
 	CpuPct     *float64  `json:"cpu_pct,omitempty"`
 	Load1      float64   `json:"load1"`
 	Load5      float64   `json:"load5"`
@@ -48,7 +50,7 @@ type ResourceSample struct {
 // resourceSampleFromMetrics projects metrics["resource"] into a ResourceSample. ok=false when the key is
 // absent or malformed — a heartbeat without a usable resource metric simply adds no history sample
 // (tolerant, never an error on the heartbeat path).
-func resourceSampleFromMetrics(metrics map[string]json.RawMessage, at time.Time) (ResourceSample, bool) {
+func resourceSampleFromMetrics(metrics map[string]json.RawMessage, at time.Time, interval time.Duration) (ResourceSample, bool) {
 	raw, present := metrics["resource"]
 	if !present || len(raw) == 0 {
 		return ResourceSample{}, false
@@ -61,19 +63,34 @@ func resourceSampleFromMetrics(metrics map[string]json.RawMessage, at time.Time)
 		MemTotalKB uint64   `json:"mem_total_kb"`
 		MemAvailKB uint64   `json:"mem_available_kb"`
 	}
-	if json.Unmarshal(raw, &w) != nil {
+	if json.Unmarshal(raw, &w) != nil || !finiteTelemetryNumber(w.Load1) || !finiteTelemetryNumber(w.Load5) || !finiteTelemetryNumber(w.Load15) {
 		return ResourceSample{}, false
 	}
+	if w.CpuPct != nil && !finiteTelemetryNumber(*w.CpuPct) {
+		w.CpuPct = nil
+	}
+	intervalMS := interval.Milliseconds()
+	if intervalMS < 0 {
+		intervalMS = 0
+	}
 	return ResourceSample{
-		TS: at, CpuPct: w.CpuPct, Load1: w.Load1, Load5: w.Load5, Load15: w.Load15,
+		TS: at, IntervalMS: intervalMS, CpuPct: w.CpuPct,
+		Load1: w.Load1, Load5: w.Load5, Load15: w.Load15,
 		MemTotalKB: w.MemTotalKB, MemAvailKB: w.MemAvailKB,
 	}, true
+}
+
+func finiteTelemetryNumber(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
 // nodeHist is one node's in-memory history state: the not-yet-flushed samples plus (durable mode) the
 // known JSONL line count for amortized compaction (-1 until counted once from disk).
 type nodeHist struct {
-	buf       []ResourceSample
+	buf []ResourceSample
+	// inflight is the batch drained from buf and currently being written. Query snapshots it
+	// alongside buf so a read racing the drain/write window cannot temporarily lose samples.
+	inflight  []ResourceSample
 	fileLines int
 }
 
@@ -87,6 +104,13 @@ type telemetryHistory struct {
 	mu    sync.Mutex
 	nodes map[TenantID]map[string]*nodeHist
 	dir   string
+
+	// flushMu admits one drain/write pass at a time. Production has one flusher goroutine, but
+	// serializing the primitive also keeps direct shutdown/test flushes from creating overlapping
+	// in-flight batches whose failure requeue order would otherwise be ambiguous.
+	flushMu sync.Mutex
+	// writeBatch is an injected seam for deterministic drain/write visibility tests.
+	writeBatch func(TenantID, string, []ResourceSample, int) error
 
 	capMu       sync.RWMutex
 	capByTenant map[TenantID]int
@@ -103,13 +127,15 @@ type telemetryHistory struct {
 }
 
 func newTelemetryHistory(dir string, defaultCap int, capLoader func(TenantID) int) *telemetryHistory {
-	return &telemetryHistory{
+	h := &telemetryHistory{
 		nodes:       map[TenantID]map[string]*nodeHist{},
 		dir:         dir,
 		capByTenant: map[TenantID]int{},
 		defaultCap:  defaultCap,
 		capLoader:   capLoader,
 	}
+	h.writeBatch = h.writeJSONL
+	return h
 }
 
 // ensureSeeded seeds a tenant's cap from persisted settings once, on its first flush (off the heartbeat
@@ -223,6 +249,9 @@ type flushJob struct {
 // blocks on disk. A write failure re-queues the drained samples (retry next tick), never surfacing to
 // the heartbeat.
 func (h *telemetryHistory) flushOnce() {
+	h.flushMu.Lock()
+	defer h.flushMu.Unlock()
+
 	h.mu.Lock()
 	var jobs []flushJob
 	for t, byNode := range h.nodes {
@@ -230,8 +259,9 @@ func (h *telemetryHistory) flushOnce() {
 			if len(e.buf) == 0 {
 				continue
 			}
-			jobs = append(jobs, flushJob{t: t, nodeID: nodeID, samples: e.buf})
+			e.inflight = e.buf
 			e.buf = nil
+			jobs = append(jobs, flushJob{t: t, nodeID: nodeID, samples: e.inflight})
 		}
 	}
 	h.mu.Unlock()
@@ -240,21 +270,36 @@ func (h *telemetryHistory) flushOnce() {
 		h.ensureSeeded(j.t) // seed a restarted-controller's cap from settings before deciding to write
 		cap := h.capFor(j.t)
 		if cap <= 0 {
+			h.clearInflight(j.t, j.nodeID)
 			continue // history disabled (incl. persisted cap=0 across restart): drop, no disk write
 		}
-		if err := h.writeJSONL(j.t, j.nodeID, j.samples, cap); err != nil {
-			h.requeueFront(j.t, j.nodeID, j.samples, cap)
+		if err := h.writeBatch(j.t, j.nodeID, j.samples, cap); err != nil {
+			h.requeueInflight(j.t, j.nodeID, cap)
+			continue
 		}
+		h.clearInflight(j.t, j.nodeID)
 	}
 }
 
-// requeueFront re-adds drained samples to the FRONT of the buffer after a failed flush (they are older
-// than any beat that arrived during the IO, so front keeps time order), re-capping.
-func (h *telemetryHistory) requeueFront(t TenantID, nodeID string, samples []ResourceSample, cap int) {
+func (h *telemetryHistory) clearInflight(t TenantID, nodeID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	e := h.entryLocked(t, nodeID)
-	e.buf = append(append([]ResourceSample{}, samples...), e.buf...)
+	e.inflight = nil
+}
+
+// requeueInflight atomically moves the failed in-flight batch back to the FRONT of the buffer. The
+// batch is older than samples appended while the write ran, so this preserves chronological order.
+// flushMu ensures two failed writes cannot invert their batches while requeueing.
+func (h *telemetryHistory) requeueInflight(t TenantID, nodeID string, cap int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	e := h.entryLocked(t, nodeID)
+	requeued := make([]ResourceSample, 0, len(e.inflight)+len(e.buf))
+	requeued = append(requeued, e.inflight...)
+	requeued = append(requeued, e.buf...)
+	e.inflight = nil
+	e.buf = requeued
 	if over := len(e.buf) - cap; over > 0 {
 		e.buf = e.buf[over:]
 	}
@@ -339,13 +384,35 @@ func (h *telemetryHistory) writeJSONL(t TenantID, nodeID string, samples []Resou
 	return nil
 }
 
-// query returns the node's samples within [from, to] (inclusive), merging the durable JSONL with the
-// in-memory buffer, sorted by TS ascending. It reads the file fresh (bounded by cap) — nothing large is
-// retained. Returns nil when history is disabled (cap<=0).
+// query returns the node's samples within [from, to] (inclusive), merging the durable JSONL with both
+// the in-flight flush batch and the ordinary in-memory buffer. It snapshots volatile samples BEFORE
+// reading disk: whether a concurrent flush drains, writes, or completes afterwards, the sample is then
+// visible in at least one side of the merge. Exact same-timestamp retry/partial-write duplicates are
+// removed after a stable sort. Returns nil when history is disabled (cap<=0).
 func (h *telemetryHistory) query(t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error) {
 	if h.capFor(t) <= 0 {
 		return nil, nil
 	}
+
+	var volatile []ResourceSample
+	h.mu.Lock()
+	if byNode := h.nodes[t]; byNode != nil {
+		if e := byNode[nodeID]; e != nil {
+			volatile = make([]ResourceSample, 0, len(e.inflight)+len(e.buf))
+			for _, s := range e.inflight {
+				if inWindow(s.TS, from, to) {
+					volatile = append(volatile, s)
+				}
+			}
+			for _, s := range e.buf {
+				if inWindow(s.TS, from, to) {
+					volatile = append(volatile, s)
+				}
+			}
+		}
+	}
+	h.mu.Unlock()
+
 	var out []ResourceSample
 	if h.dir != "" {
 		p, err := h.nodeFile(t, nodeID)
@@ -358,19 +425,60 @@ func (h *telemetryHistory) query(t TenantID, nodeID string, from, to time.Time) 
 		}
 		out = disk
 	}
-	h.mu.Lock()
-	if byNode := h.nodes[t]; byNode != nil {
-		if e := byNode[nodeID]; e != nil {
-			for _, s := range e.buf {
-				if inWindow(s.TS, from, to) {
-					out = append(out, s)
-				}
-			}
-		}
+	out = append(out, volatile...)
+	return sortAndDedupeResourceSamples(out), nil
+}
+
+type resourceSampleValueKey struct {
+	intervalMS int64
+	cpuPresent bool
+	cpuBits    uint64
+	load1Bits  uint64
+	load5Bits  uint64
+	load15Bits uint64
+	memTotalKB uint64
+	memAvailKB uint64
+}
+
+func resourceSampleValue(s ResourceSample) resourceSampleValueKey {
+	key := resourceSampleValueKey{
+		intervalMS: s.IntervalMS,
+		load1Bits:  math.Float64bits(s.Load1),
+		load5Bits:  math.Float64bits(s.Load5),
+		load15Bits: math.Float64bits(s.Load15),
+		memTotalKB: s.MemTotalKB,
+		memAvailKB: s.MemAvailKB,
 	}
-	h.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].TS.Before(out[j].TS) })
-	return out, nil
+	if s.CpuPct != nil {
+		key.cpuPresent = true
+		key.cpuBits = math.Float64bits(*s.CpuPct)
+	}
+	return key
+}
+
+// sortAndDedupeResourceSamples orders samples chronologically and removes only exact duplicates at
+// the same instant. That is the shape produced when a query sees both disk and the still-in-flight
+// batch, or when a partial append is retried. Distinct observations at the same timestamp survive.
+func sortAndDedupeResourceSamples(samples []ResourceSample) []ResourceSample {
+	sort.SliceStable(samples, func(i, j int) bool { return samples[i].TS.Before(samples[j].TS) })
+	out := samples[:0]
+	seenAtTimestamp := make(map[resourceSampleValueKey]struct{})
+	var timestamp time.Time
+	haveTimestamp := false
+	for _, sample := range samples {
+		if !haveTimestamp || !sample.TS.Equal(timestamp) {
+			clear(seenAtTimestamp)
+			timestamp = sample.TS
+			haveTimestamp = true
+		}
+		key := resourceSampleValue(sample)
+		if _, duplicate := seenAtTimestamp[key]; duplicate {
+			continue
+		}
+		seenAtTimestamp[key] = struct{}{}
+		out = append(out, sample)
+	}
+	return out
 }
 
 func inWindow(ts, from, to time.Time) bool {

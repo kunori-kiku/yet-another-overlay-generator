@@ -31,10 +31,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetryprotocol"
 )
 
 // controllerHTTPTimeout bounds non-poll controller requests (enroll/config/report).
@@ -107,8 +109,9 @@ type reportRequestWire struct {
 // heartbeat. It carries the same conditions as a report PLUS an extensible metrics map, but
 // DELIBERATELY no applied_generation/checksum — telemetry is observability, kept strictly separate
 // from deploy custody so a heartbeat can never advance (or regress) the node's applied generation.
-// Metrics is the framework's extension slot (a future probe writes named values here); it is
-// omitempty and ignored by the current controller, so adding a probe needs no wire change.
+// Metrics is the framework's extension slot for resource and active-probe observations. It remains
+// omitempty so older agents can report only conditions; reliable delivery metadata is carried by
+// protocol headers rather than changing this metrics envelope.
 type telemetryRequestWire struct {
 	Conditions   []runtimecontract.Condition `json:"conditions,omitempty"`
 	Metrics      map[string]any              `json:"metrics,omitempty"`
@@ -455,4 +458,70 @@ func (c *ControllerClient) Telemetry(conditions []runtimecontract.Condition, met
 		return fmt.Errorf("agent: telemetry: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// PostTelemetry sends one sequenced sample using protocol metadata in HTTP headers. The JSON body is
+// byte-for-shape compatible with the legacy telemetry contract: an older strict controller ignores the
+// headers and still accepts the sample. Absence of an acknowledgement header therefore means a
+// successful legacy delivery; a v2 controller returns the exact (boot, sequence) acknowledgement.
+func (c *ControllerClient) PostTelemetry(sample TelemetrySample) (TelemetryReceipt, error) {
+	if sample.BootID == "" || sample.Sequence == 0 || sample.SampledAt.IsZero() {
+		return TelemetryReceipt{}, permanentTelemetry(fmt.Errorf("agent: invalid reliable telemetry metadata"))
+	}
+	reqBody, err := json.Marshal(telemetryRequestWire{
+		Conditions:   sample.Conditions,
+		Metrics:      sample.Metrics,
+		AgentVersion: c.AgentVersion,
+	})
+	if err != nil {
+		return TelemetryReceipt{}, permanentTelemetry(fmt.Errorf("agent: marshal telemetry request: %w", err))
+	}
+	req, err := c.authedRequest(http.MethodPost, c.url("telemetry"), bytes.NewReader(reqBody))
+	if err != nil {
+		return TelemetryReceipt{}, permanentTelemetry(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(telemetryprotocol.HeaderProtocol, telemetryprotocol.Version)
+	req.Header.Set(telemetryprotocol.HeaderBootID, sample.BootID)
+	req.Header.Set(telemetryprotocol.HeaderSequence, strconv.FormatUint(sample.Sequence, 10))
+	req.Header.Set(telemetryprotocol.HeaderSampledAt, sample.SampledAt.UTC().Format(time.RFC3339Nano))
+	if millis := sample.Interval.Milliseconds(); millis > 0 {
+		req.Header.Set(telemetryprotocol.HeaderIntervalMillis, strconv.FormatInt(millis, 10))
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return TelemetryReceipt{}, fmt.Errorf("agent: telemetry POST: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err := fmt.Errorf("agent: telemetry: status %d", resp.StatusCode)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
+			return TelemetryReceipt{}, permanentTelemetry(err)
+		}
+		return TelemetryReceipt{}, err
+	}
+	if resp.Header.Get(telemetryprotocol.HeaderProtocol) != telemetryprotocol.Version {
+		// Legacy controller (or a proxy that strips optional extension headers): delivery succeeded,
+		// but exact replay acknowledgement is unavailable. Retaining the same JSON body is what makes
+		// agent-first and controller rollback upgrades safe.
+		return TelemetryReceipt{Reliable: false}, nil
+	}
+	ackBootID := resp.Header.Get(telemetryprotocol.HeaderBootID)
+	ackSequence, err := strconv.ParseUint(resp.Header.Get(telemetryprotocol.HeaderAckSequence), 10, 64)
+	if err != nil || ackSequence != sample.Sequence || ackBootID != sample.BootID {
+		return TelemetryReceipt{}, fmt.Errorf("agent: invalid telemetry acknowledgement")
+	}
+	receivedAt, err := time.Parse(time.RFC3339Nano, resp.Header.Get(telemetryprotocol.HeaderReceivedAt))
+	if err != nil || receivedAt.IsZero() {
+		return TelemetryReceipt{}, fmt.Errorf("agent: invalid telemetry received-at acknowledgement")
+	}
+	return TelemetryReceipt{
+		BootID:               ackBootID,
+		AcknowledgedSequence: ackSequence,
+		ReceivedAt:           receivedAt.UTC(),
+		Reliable:             true,
+		Duplicate:            resp.Header.Get(telemetryprotocol.HeaderDuplicate) == "true",
+	}, nil
 }

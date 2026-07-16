@@ -170,8 +170,10 @@ export function parseNodeHistory(raw: unknown): NodeHistory {
 // selects the metric (e.g. b => b.cpuPct). Two gap sources are honored so connectNulls=false breaks
 // the line correctly: (1) a bucket missing the metric → a null point at its timestamp; (2) a run of
 // MISSING buckets (server omits empty buckets) → a single null sentinel inserted one step after the
-// previous bucket when the time jump exceeds ~1.5×step. stepMs (parseGoDuration of the effective
-// step) gates the sentinel; a 0/unknown step skips it (points still carry their own null avg).
+// previous bucket only when MORE THAN one whole bucket is empty. One empty bucket is tolerated: at
+// the 30s heartbeat floor, ordinary scheduling jitter can place two healthy consecutive samples on
+// opposite sides of a bucket boundary and leave that one bucket empty. stepMs (parseGoDuration of the
+// effective step) gates the sentinel; a 0/unknown step skips it (points still carry their own null avg).
 export function metricSeries(
   buckets: HistoryBucket[],
   stepMs: number,
@@ -182,7 +184,7 @@ export function metricSeries(
   for (const b of buckets) {
     const ms = Date.parse(b.t);
     if (Number.isNaN(ms)) continue;
-    if (prevMs !== null && stepMs > 0 && ms - prevMs > stepMs * 1.5) {
+    if (prevMs !== null && stepMs > 0 && ms - prevMs > stepMs * 2) {
       out.push({ t: prevMs + stepMs, avg: null, min: null, max: null });
     }
     const agg = pick(b);

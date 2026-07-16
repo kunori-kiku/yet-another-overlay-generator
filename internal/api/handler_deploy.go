@@ -36,6 +36,9 @@ func (h *ControllerHandler) HandleStage(ctx context.Context, tenant controller.T
 	}
 	result, err := controller.CompileAndStage(ctx, h.store, tenant, time.Now(), opts...)
 	if err != nil {
+		if ae := mapControllerErr(err); ae != nil {
+			return nil, ae
+		}
 		// CompileAndStage wraps source-coded errors (%w), so codedErr surfaces each at its
 		// OWN status — compile constraints stay 422, but a keygen error (e.g. an AgentHeld node
 		// with no registered public key) surfaces its native 400 and an export I/O failure its
@@ -67,6 +70,9 @@ func (h *ControllerHandler) HandleDeployPreview(ctx context.Context, tenant cont
 	}
 	pv, err := controller.DeployPreview(ctx, h.store, tenant, topo)
 	if err != nil {
+		if ae := mapControllerErr(err); ae != nil {
+			return nil, ae
+		}
 		return nil, codedErr(apierr.CodeInternal, err)
 	}
 	nodes := make([]deployPreviewNodeJSON, 0, len(pv.Nodes))

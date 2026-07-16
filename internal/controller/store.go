@@ -162,10 +162,11 @@ type Node struct {
 	// each report (the latest report is the truth). Observability only — not custody, not allocation.
 	Conditions []NodeCondition
 	// Telemetry is the agent's extensible metrics map from the last /telemetry heartbeat (the
-	// framework's extension slot — e.g. wireguard_peers, the per-peer link detail). Opaque JSON the
-	// controller persists + serves verbatim for the panel to interpret by key; nil until a
-	// metrics-emitting agent heartbeats. Replaced wholesale each heartbeat. Observability only — never
-	// custody, never key material (the agent emits no keys/allowed-ips).
+	// framework's extension slot — e.g. wireguard_peers, the per-peer link detail). The controller's
+	// volatile observability overlay serves this opaque JSON verbatim for the panel to interpret by
+	// key; it is not written into the durable node record. Nil until a metrics-emitting agent
+	// heartbeats and replaced wholesale on each accepted heartbeat. Observability only — never custody,
+	// never key material (the agent emits no keys/allowed-ips).
 	Telemetry  map[string]json.RawMessage
 	LastSeen   time.Time
 	EnrolledAt time.Time
@@ -185,6 +186,17 @@ type NodeCondition struct {
 	runtimecontract.Condition
 	// ObservedAt is the controller wall-clock time SetAppliedGeneration recorded this condition.
 	ObservedAt time.Time `json:"observed_at"`
+}
+
+// TelemetryReceipt is the volatile acknowledgement for a sequenced telemetry sample. Sequence
+// cursors are deliberately in-memory only: telemetry is observability, and acknowledging a 30s
+// heartbeat must never turn into a custody-store rewrite/fsync. A controller restart can therefore
+// admit one replayed sample again; the bounded history and live-overlay semantics remain safe.
+type TelemetryReceipt struct {
+	AcknowledgedSequence uint64
+	Duplicate            bool
+	SampledAt            time.Time
+	ReceivedAt           time.Time
 }
 
 // maxStoredConditions is a defense-in-depth ceiling on the conditions stampConditions will allocate,
@@ -578,6 +590,12 @@ type Store interface {
 	// telemetry is observability, kept strictly separate from deploy custody, so a heartbeat can never
 	// advance or regress a node's applied generation. Returns ErrNotFound if the node does not exist.
 	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error
+	// RecordTelemetrySequenced is the reliable-upload form of RecordTelemetry. receivedAt remains the
+	// controller-authoritative LastSeen/condition timestamp; sampledAt is retained independently and
+	// timestamps a replayed resource-history sample. A repeated (bootID, sequence) is acknowledged but
+	// does not replace the live overlay or append history again. Deduplication is volatile and bounded,
+	// preserving the no-per-heartbeat-durable-write invariant.
+	RecordTelemetrySequenced(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion, bootID string, sequence uint64, sampledAt time.Time, interval time.Duration, receivedAt time.Time) (TelemetryReceipt, error)
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
 	TouchLastSeen(ctx context.Context, t TenantID, nodeID string, at time.Time) error
 	// QueryTelemetryHistory returns the node's retained resource-history samples within [from, to]

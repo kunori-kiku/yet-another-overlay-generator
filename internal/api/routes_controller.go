@@ -228,6 +228,19 @@ func (h *ControllerHandler) isReservedNodeID(id string) bool {
 	return id == h.operatorName
 }
 
+const dynamicAPICacheControl = "private, no-store"
+
+// noStoreDynamicAPI is the outermost wrapper for controller API routes. It runs before CORS and
+// authentication so successes, method errors, auth failures, raw downloads, and pre-auth credential
+// responses all carry the same standard shared-cache prohibition. The CDN/reverse proxy must still
+// be configured not to override this origin policy.
+func noStoreDynamicAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", dynamicAPICacheControl)
+		next(w, r)
+	}
+}
+
 // RegisterAgentRoutes registers the agent-facing controller routes on mux (served
 // on the agent port), under AgentBasePath() (the optional agent secret prefix + the
 // fixed /api/v1/agent/). /enroll and /bootstrap are registered WITHOUT bearer auth;
@@ -236,10 +249,11 @@ func (h *ControllerHandler) isReservedNodeID(id string) bool {
 // top-level panic recovery to the whole mux.
 func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	base := h.AgentBasePath()
+	api := noStoreDynamicAPI
 	// /enroll is PRE-AUTH (reachable before the node has a token) and STAYS hand-rolled: it reserves a
 	// per-IP rate-limit slot BEFORE decoding the body and has no identity() to assert, so it must not be
 	// routed through the op()/opRaw() adapter (which rejects a request that reached it without an identity).
-	mux.HandleFunc(base+"enroll", h.HandleEnroll)
+	mux.HandleFunc(base+"enroll", api(h.HandleEnroll))
 	// config/poll/report/telemetry/rekey run under requireNode (the per-node bearer chokepoint that pins
 	// the identity onto the context) AND are additionally wrapped by the op()/opRaw() ADAPTER (adapter.go),
 	// which runs the per-handler method guard + structural identity() check ONCE so no handler body can
@@ -248,16 +262,16 @@ func (h *ControllerHandler) RegisterAgentRoutes(mux *http.ServeMux) {
 	// (which cannot dispatch without an identity) — the adapter just makes that guarantee structural rather
 	// than a per-handler convention. /poll uses opRaw because it writes its OWN response (the bodyless 204
 	// long-poll-deadline reply op's writeJSON(200,result) contract cannot express); the rest use op.
-	mux.HandleFunc(base+"config", h.requireNode(h.op(http.MethodGet, h.HandleConfig)))
-	mux.HandleFunc(base+"poll", h.requireNode(h.opRaw(http.MethodGet, h.HandlePoll)))
-	mux.HandleFunc(base+"report", h.requireNode(h.op(http.MethodPost, h.HandleReport)))
+	mux.HandleFunc(base+"config", api(h.requireNode(h.op(http.MethodGet, h.HandleConfig))))
+	mux.HandleFunc(base+"poll", api(h.requireNode(h.opRaw(http.MethodGet, h.HandlePoll))))
+	mux.HandleFunc(base+"report", api(h.requireNode(h.op(http.MethodPost, h.HandleReport))))
 	// /telemetry is the LIVE health heartbeat (beta9-smoke-hardening plan-1): per-node bearer auth like
 	// /report, but observability-only — it updates conditions + last_seen and never touches deploy custody.
-	mux.HandleFunc(base+"telemetry", h.requireNode(h.op(http.MethodPost, h.HandleTelemetry)))
-	mux.HandleFunc(base+"rekey", h.requireNode(h.op(http.MethodPost, h.HandleRekey)))
+	mux.HandleFunc(base+"telemetry", api(h.requireNode(h.op(http.MethodPost, h.HandleTelemetry))))
+	mux.HandleFunc(base+"rekey", api(h.requireNode(h.op(http.MethodPost, h.HandleRekey))))
 	// Bootstrap (plan-5.2): the one-shot install script, served WITHOUT auth (it is
 	// generic; the single-use enrollment token is a flag the operator supplies).
-	mux.HandleFunc(base+"bootstrap", h.HandleBootstrap)
+	mux.HandleFunc(base+"bootstrap", api(h.HandleBootstrap))
 }
 
 // RegisterOperatorRoutes registers the operator-facing controller routes on mux
@@ -276,12 +290,13 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// response/method behavior outside the adapter's typed JSON shape (settings,
 	// operator-credential, login/logout, release-pins/assets) stay hand-rolled. Protected
 	// members of that group are still inside secure; bypassing the adapter does not bypass auth.
-	secure := func(next http.HandlerFunc) http.HandlerFunc { return h.cors(h.operatorAuth(next)) }
+	browser := func(next http.HandlerFunc) http.HandlerFunc { return noStoreDynamicAPI(h.cors(next)) }
+	secure := func(next http.HandlerFunc) http.HandlerFunc { return browser(h.operatorAuth(next)) }
 	// Operator login (plan-5.2): /login is UNAUTHENTICATED (reachable before the
 	// operator has a session) — cors-wrapped but NOT operatorAuth; it verifies a
 	// password and mints a session. /logout is authenticated and revokes the
 	// presented session.
-	mux.HandleFunc(base+"login", h.cors(h.HandleLogin))
+	mux.HandleFunc(base+"login", browser(h.HandleLogin))
 	mux.HandleFunc(base+"logout", secure(h.HandleLogout))
 	// Session probe (panel-appshell P5): the panel calls GET /session on mount to derive
 	// login state from the httpOnly cookie after a refresh (no token read in JS).
@@ -289,8 +304,8 @@ func (h *ControllerHandler) RegisterOperatorRoutes(mux *http.ServeMux) {
 	// Passwordless passkey login (plan-5.2): UNAUTHENTICATED (reachable before a session),
 	// cors-wrapped but NOT operatorAuth. begin issues a single-use random challenge for a
 	// username; finish verifies the WebAuthn assertion and mints a session (no password).
-	mux.HandleFunc(base+"login/passkey/begin", h.cors(h.HandlePasskeyLoginBegin))
-	mux.HandleFunc(base+"login/passkey/finish", h.cors(h.HandlePasskeyLoginFinish))
+	mux.HandleFunc(base+"login/passkey/begin", browser(h.HandlePasskeyLoginBegin))
+	mux.HandleFunc(base+"login/passkey/finish", browser(h.HandlePasskeyLoginFinish))
 	// TOTP login 2FA (plan-5.2): manage the current operator's optional second factor.
 	mux.HandleFunc(base+"totp/status", secure(h.op(http.MethodGet, h.HandleTOTPStatus)))
 	mux.HandleFunc(base+"totp/enroll", secure(h.op(http.MethodPost, h.HandleTOTPEnroll)))

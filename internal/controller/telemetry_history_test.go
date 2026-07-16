@@ -38,17 +38,17 @@ func TestEffectiveHistoryCap(t *testing.T) {
 func TestResourceSampleFromMetrics(t *testing.T) {
 	at := time.Unix(1000, 0).UTC()
 	cpu := 42.5
-	s, ok := resourceSampleFromMetrics(sampleMetrics(&cpu, 1.5), at)
-	if !ok || s.Load1 != 1.5 || s.CpuPct == nil || *s.CpuPct != 42.5 || s.MemTotalKB != 2048 || !s.TS.Equal(at) {
+	s, ok := resourceSampleFromMetrics(sampleMetrics(&cpu, 1.5), at, 30*time.Second)
+	if !ok || s.Load1 != 1.5 || s.CpuPct == nil || *s.CpuPct != 42.5 || s.MemTotalKB != 2048 || s.IntervalMS != 30000 || !s.TS.Equal(at) {
 		t.Fatalf("parse = %+v ok=%v", s, ok)
 	}
-	if _, ok := resourceSampleFromMetrics(map[string]json.RawMessage{"other": json.RawMessage(`1`)}, at); ok {
+	if _, ok := resourceSampleFromMetrics(map[string]json.RawMessage{"other": json.RawMessage(`1`)}, at, 0); ok {
 		t.Error("absent resource key must be ok=false")
 	}
-	if _, ok := resourceSampleFromMetrics(map[string]json.RawMessage{"resource": json.RawMessage(`{not json`)}, at); ok {
+	if _, ok := resourceSampleFromMetrics(map[string]json.RawMessage{"resource": json.RawMessage(`{not json`)}, at, 0); ok {
 		t.Error("malformed resource must be ok=false")
 	}
-	if s2, ok := resourceSampleFromMetrics(sampleMetrics(nil, 2.0), at); !ok || s2.CpuPct != nil {
+	if s2, ok := resourceSampleFromMetrics(sampleMetrics(nil, 2.0), at, 0); !ok || s2.CpuPct != nil {
 		t.Errorf("cpu-absent sample should be ok with nil CpuPct, got %+v ok=%v", s2, ok)
 	}
 }
@@ -123,6 +123,73 @@ func TestHistory_FlushAndQueryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHistory_QuerySeesInflightFlushExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(1000, 0).UTC()
+	// Two distinct observations deliberately share a timestamp. The merge must remove only the
+	// disk/in-flight copies, not collapse different values merely because their times match.
+	h.append("tn", "n1", ResourceSample{TS: base, Load1: 1})
+	h.append("tn", "n1", ResourceSample{TS: base, Load1: 2})
+
+	writeStarted := make(chan struct{})
+	allowWrite := make(chan struct{})
+	written := make(chan struct{})
+	allowReturn := make(chan struct{})
+	flushDone := make(chan struct{})
+	var allowWriteOnce sync.Once
+	var allowReturnOnce sync.Once
+	releaseWrite := func() { allowWriteOnce.Do(func() { close(allowWrite) }) }
+	releaseReturn := func() { allowReturnOnce.Do(func() { close(allowReturn) }) }
+	defer releaseWrite()
+	defer releaseReturn()
+
+	writeBatch := h.writeBatch
+	h.writeBatch = func(tn TenantID, nodeID string, samples []ResourceSample, cap int) error {
+		close(writeStarted)
+		<-allowWrite
+		err := writeBatch(tn, nodeID, samples, cap)
+		close(written)
+		<-allowReturn
+		return err
+	}
+	go func() {
+		h.flushOnce()
+		close(flushDone)
+	}()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not reach the injected writer")
+	}
+	assertLoads := func(stage string) {
+		t.Helper()
+		got, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(time.Second))
+		if err != nil || len(got) != 2 || got[0].Load1 != 1 || got[1].Load1 != 2 {
+			t.Fatalf("%s query = %+v, err=%v; want the two ordered observations exactly once", stage, got, err)
+		}
+	}
+
+	// The buffer has been drained and disk is still empty: visibility comes from inflight.
+	assertLoads("before write")
+	releaseWrite()
+	select {
+	case <-written:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not finish the disk append")
+	}
+	// Disk now contains the batch while inflight intentionally remains set: the merge deduplicates it.
+	assertLoads("after write before completion")
+	releaseReturn()
+	select {
+	case <-flushDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("flush did not complete")
+	}
+	assertLoads("after completion")
+}
+
 func TestHistory_CompactOverCap(t *testing.T) {
 	dir := t.TempDir()
 	h := newTelemetryHistory(dir, 5, nil) // cap 5; the FILE compacts once it passes cap*slack=10 lines
@@ -164,10 +231,12 @@ func TestHistory_FlushFailureRequeues(t *testing.T) {
 	// Assert the buffer directly (the same bad path would fail query's read too — this isolates the
 	// re-queue behavior): the sample must be back in the buffer, not lost.
 	h.mu.Lock()
-	n := len(h.nodes["tn"]["n1"].buf)
+	e := h.nodes["tn"]["n1"]
+	n := len(e.buf)
+	inflight := len(e.inflight)
 	h.mu.Unlock()
-	if n != 1 {
-		t.Fatalf("a failed flush must re-queue the sample (1 buffered), got %d", n)
+	if n != 1 || inflight != 0 {
+		t.Fatalf("a failed flush must re-queue the sample (1 buffered, 0 in-flight), got %d/%d", n, inflight)
 	}
 }
 

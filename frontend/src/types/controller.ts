@@ -58,6 +58,11 @@ export interface ControllerNode {
   // before the persisted cache, like wireguardPeers): a load average frozen at persist time is stale.
   // Observability only; carries no endpoint/IP/key material. Optional — absent for a pre-plan-10 agent.
   resource?: NodeResource;
+  // Authenticated live outcomes for the node's signed active-probe policy, projected from
+  // telemetry.probe_results. The outcomes are not independently signed. Live-only: destinations can
+  // disclose internal addressing and a frozen result becomes misleading, so the persistence boundary
+  // strips this field alongside the other telemetry projections.
+  probeResults?: TelemetryProbeResult[];
   // nativeXDP is the egress NIC's native-XDP capability heuristic (plan-4 metrics["native_xdp"]) — a
   // PRE-DEPLOY advisory so the panel can warn before an operator picks xdp_mode=native. Live-only
   // (stripped before the persisted cache, like resource — telemetry stays out of localStorage).
@@ -96,6 +101,29 @@ export interface NodeResource {
   load15: number;
   memTotalKB: number;
   memAvailableKB: number;
+}
+
+export type TelemetryProbeResultStatus = 'pending' | 'success' | 'failure';
+
+export type TelemetryProbeFailureReason =
+  | 'dns_failed'
+  | 'timeout'
+  | 'permission_denied'
+  | 'connection_refused'
+  | 'network_unreachable'
+  | 'network_error';
+
+// TelemetryProbeResult is one bounded ICMP/TCP check result reported by the agent. host is the
+// configured IP literal or DNS hostname; resolved addresses are intentionally not exposed.
+export interface TelemetryProbeResult {
+  id: string;
+  type: 'icmp' | 'tcp';
+  host: string;
+  port?: number;
+  status: TelemetryProbeResultStatus;
+  latencyMS?: number;
+  checkedAt?: string;
+  failureReason?: TelemetryProbeFailureReason;
 }
 
 // NativeXDP is the node's egress-NIC native-XDP capability heuristic (plan-4), projected from the

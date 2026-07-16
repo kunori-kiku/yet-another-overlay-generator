@@ -41,7 +41,7 @@ func TestBuildTelemetry_RegistrationSet(t *testing.T) {
 		got = append(got, s.Name())
 	}
 	sort.Strings(got)
-	want := []string{"conditions", "mimic-capability", "native-xdp", "resource", "wireguard-peers"}
+	want := []string{"active-probes", "conditions", "mimic-capability", "native-xdp", "resource", "wireguard-peers"}
 	if len(got) != len(want) {
 		t.Fatalf("BuildTelemetry samplers = %v, want %v", got, want)
 	}

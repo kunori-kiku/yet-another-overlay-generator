@@ -390,16 +390,29 @@ Requires Docker Engine with the Compose plugin (`docker compose`, v2).
 # Grab the compose file (or use the one at the repo root)
 curl -fsSLO https://raw.githubusercontent.com/kunori-kiku/yet-another-overlay-generator/main/docker-compose.yml
 
-# State lives in ./data (a bind mount); the container runs as uid 65532, so create it once:
-mkdir -p data && sudo chown 65532:65532 data
+# Rootful Docker without userns-remap: create the ./data bind mount private and
+# owned by the container's uid 65532:
+sudo install -d -m 0700 -o 65532 -g 65532 data
 
 docker compose up -d
 ```
 
-All controller state persists to `./data`, so backing up the controller is just snapshotting that
-folder. The compose ships working defaults — no `.env` required. By default both ports bind to
-**loopback only** (`127.0.0.1`) because the login form carries a plaintext password; reach the panel
-from the same host or tunnel it (`ssh -L 8080:127.0.0.1:8080 <host>`).
+That literal host uid is valid only for rootful Docker with user-namespace remapping disabled. For
+rootless Docker or `userns-remap`, do not pre-create or `chown ./data`; persist the Docker-managed
+volume selection in `.env` so all later Compose commands use the same state:
+
+```dotenv
+YAOG_DATA_SOURCE=controller-data
+```
+
+Then run `docker compose up -d` normally.
+
+With the default bind mount, controller state persists to `./data`; with `controller-data`, it lives
+in the Compose project-scoped Docker volume and must be backed up through Docker volume tooling. The
+default bind-mount mode needs no `.env`; only the portable named-volume choice adds the setting above.
+By default both ports bind to **loopback only** (`127.0.0.1`) because the login form carries a
+plaintext password; reach the panel from the same host or tunnel it
+(`ssh -L 8080:127.0.0.1:8080 <host>`).
 
 > **Image visibility.** The compose pulls `ghcr.io/kunori-kiku/yaog-controller:latest`. If the pull is
 > denied (the GHCR package is private), either `docker login ghcr.io` first, or build locally —
@@ -622,6 +635,13 @@ carries conditions plus an extensible `metrics` map and deliberately **never** t
 custody fields (applied generation/checksum) — observability is strictly separate from deploy state,
 and the heartbeat is not audited.
 
+**Short interruptions use bounded replay, not a second transport.** The JSON body stays compatible
+with old controllers; optional protocol-v2 headers add a per-process boot ID, sequence, sample time,
+and cadence. Sampling continues while upload retries transport errors, 408/429, and 5xx in a volatile
+32-sample queue. The controller deduplicates exact retries in memory and keeps its receipt time
+authoritative for `LastSeen`. If a CDN/proxy strips the extension headers, the request safely degrades
+to legacy delivery without exact deduplication. No WebSocket or gRPC endpoint is required.
+
 The four condition **types** (lowercase, closed set) and their `status` (`ok`/`warn`/`error`/`unknown`):
 
 | Type | What it reports | Notable reasons |
@@ -658,6 +678,11 @@ into buckets (average / min / max per bucket) and **omits empty buckets** — a 
 offline, history just enabled) stays a gap on the chart, never a fabricated zero. Very fine steps are
 floored (≈ 1s), and a too-fine step over a large range is automatically widened so the chart stays
 bounded; the effective step is echoed back, so the axis is labelled with what you actually got.
+With **Auto** granularity, the server first uses the most recent advertised heartbeat interval,
+otherwise infers the lower-median observed cadence (resisting outage gaps and post-deploy kick
+samples), with a 30s floor. A missing metric value is always a chart gap. To avoid a false break when
+healthy samples straddle bucket boundaries, one empty effective bucket is tolerated; longer missing
+runs break the line rather than connecting through an outage.
 
 **Retention is configurable.** A per-node sample cap in controller **Settings** bounds the history; the
 default is ≈ 20160 samples ≈ **7 days at the 30s heartbeat**. Setting the cap to **0 disables**
@@ -665,6 +690,16 @@ history — the charts then show a "history off" state. History is append-only a
 heartbeat** (a heartbeat never writes to disk). It is also never frozen: a just-deployed node's charts
 update **promptly** (not only at deploy time), because the heartbeat is the single source and the agent
 nudges a fresh sample right after each apply.
+
+**Signed active telemetry.** In **Fleet**, open a node detail page to configure multiple ICMP echo or
+TCP-connect checks and see their latest results in the same place. Each row has one required
+destination `host`, which may be an IP literal or DNS hostname; there is no separate or mandatory DNS
+field. TCP adds a required port. Saving updates the controller design draft, while **Deploy** is the
+separate signature/activation boundary. A probe-bearing deploy requires the pinned off-host keystone,
+and the agent repeats that membership gate before activation. DNS is resolved afresh by the node on
+each attempt. ICMP needs raw-socket privilege and reports a permission failure if unavailable; TCP and
+ICMP are implemented in-process, without a `ping`/`tcping` package. A future URL probe remains a
+separate typed feature. See [the active-telemetry spec](spec/operations/active-telemetry.md).
 
 ### 5.9 Mimic `.deb` catalog
 

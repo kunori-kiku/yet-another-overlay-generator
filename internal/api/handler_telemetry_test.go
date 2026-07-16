@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetryprotocol"
 )
 
 // TestHandleTelemetry covers the controller side of the LIVE health heartbeat (beta9-smoke-hardening
@@ -119,5 +121,123 @@ func TestHandleTelemetry_MetricsRoundTrip(t *testing.T) {
 		if nodes[i].NodeID == "node-1" && nodes[i].Telemetry != nil {
 			t.Fatalf("node.telemetry = %+v, want nil after a nil-metrics heartbeat", nodes[i].Telemetry)
 		}
+	}
+}
+
+func TestHandleTelemetry_ReliableHeadersAndLegacyBodyCompatibility(t *testing.T) {
+	env := newCtlTestEnv(t)
+	token := env.enrollNode(t, "node-1")
+	bootID := "00112233445566778899aabbccddeeff"
+	sampledAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+
+	post := func(sequence string, sampled string, body telemetryRequestJSON) *http.Response {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequest(http.MethodPost, env.agentURL("telemetry"), bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set(telemetryprotocol.HeaderProtocol, telemetryprotocol.Version)
+		req.Header.Set(telemetryprotocol.HeaderBootID, bootID)
+		req.Header.Set(telemetryprotocol.HeaderSequence, sequence)
+		req.Header.Set(telemetryprotocol.HeaderIntervalMillis, "17000")
+		if sampled != "" {
+			req.Header.Set(telemetryprotocol.HeaderSampledAt, sampled)
+		}
+		resp, err := env.agentSrv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	first := post("1", sampledAt.Format(time.RFC3339Nano), telemetryRequestJSON{
+		Metrics: map[string]json.RawMessage{
+			"probe_results": json.RawMessage(`[{"id":"tcp-main","type":"tcp","host":"example.net","port":443,"status":"success"}]`),
+			"resource":      json.RawMessage(`{"load1":1}`),
+		},
+	})
+	defer first.Body.Close()
+	if first.StatusCode != http.StatusOK || first.Header.Get(telemetryprotocol.HeaderProtocol) != telemetryprotocol.Version ||
+		first.Header.Get(telemetryprotocol.HeaderBootID) != bootID || first.Header.Get(telemetryprotocol.HeaderAckSequence) != "1" {
+		t.Fatalf("first response status=%d headers=%v", first.StatusCode, first.Header)
+	}
+	receivedAt, err := time.Parse(time.RFC3339Nano, first.Header.Get(telemetryprotocol.HeaderReceivedAt))
+	if err != nil || receivedAt.IsZero() {
+		t.Fatalf("received-at header %q: %v", first.Header.Get(telemetryprotocol.HeaderReceivedAt), err)
+	}
+
+	duplicate := post("1", sampledAt.Format(time.RFC3339Nano), telemetryRequestJSON{
+		Metrics: map[string]json.RawMessage{"probe_results": json.RawMessage(`[{"id":"tcp-wrong","type":"tcp","host":"wrong.example","port":1,"status":"failure"}]`)},
+	})
+	defer duplicate.Body.Close()
+	if duplicate.StatusCode != http.StatusOK || duplicate.Header.Get(telemetryprotocol.HeaderAckSequence) != "1" || duplicate.Header.Get(telemetryprotocol.HeaderDuplicate) != "true" {
+		t.Fatalf("duplicate response status=%d headers=%v", duplicate.StatusCode, duplicate.Header)
+	}
+	node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(node.Telemetry["probe_results"], []byte("example.net")) || bytes.Contains(node.Telemetry["probe_results"], []byte("wrong.example")) {
+		t.Fatalf("duplicate replaced probe payload: %s", node.Telemetry["probe_results"])
+	}
+	if node.LastSeen.Before(receivedAt) {
+		t.Fatalf("LastSeen %v is before first controller received-at %v", node.LastSeen, receivedAt)
+	}
+
+	history, err := env.store.QueryTelemetryHistory(context.Background(), testTenant, "node-1", sampledAt.Add(-time.Second), sampledAt.Add(time.Second))
+	if err != nil || len(history) != 1 || history[0].IntervalMS != 17000 {
+		t.Fatalf("cadence-aware history=%+v err=%v", history, err)
+	}
+
+	malformed := post("2", "", telemetryRequestJSON{})
+	defer malformed.Body.Close()
+	if malformed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing sampled-at status=%d, want 400", malformed.StatusCode)
+	}
+
+	// The JSON contract itself remains legacy-only; no reliable metadata field is added to the body,
+	// so strict old controllers using DisallowUnknownFields continue to accept a new agent request.
+	raw, _ := json.Marshal(telemetryRequestJSON{})
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"boot_id", "sequence", "sampled_at", "received_at"} {
+		if _, present := decoded[forbidden]; present {
+			t.Fatalf("reliable metadata leaked into legacy JSON body as %q", forbidden)
+		}
+	}
+}
+
+func TestTelemetryInterval_IsAdvisoryAndTolerant(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "missing"},
+		{name: "valid", raw: "17000", want: 17 * time.Second},
+		{name: "zero ignored", raw: "0"},
+		{name: "negative ignored", raw: "-1"},
+		{name: "malformed ignored", raw: "not-a-number"},
+		{name: "duration overflow ignored", raw: "9223372036854775807"},
+		{name: "oversized ignored", raw: "999999999999999999999"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/telemetry", nil)
+			if tt.raw != "" {
+				req.Header.Set(telemetryprotocol.HeaderIntervalMillis, tt.raw)
+			}
+			if got := telemetryInterval(req); got != tt.want {
+				t.Fatalf("telemetryInterval(%q)=%v, want %v", tt.raw, got, tt.want)
+			}
+		})
 	}
 }

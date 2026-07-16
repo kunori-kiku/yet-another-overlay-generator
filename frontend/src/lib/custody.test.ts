@@ -6,8 +6,8 @@ import type { Node, Topology } from '../types/topology';
 // custody.test.ts — pins the persist-custody invariant that LIVE telemetry never enters the persisted
 // controller-storage cache (beta.12 regression: wireguardPeers, which carries raw peer endpoints, leaked
 // into localStorage and tripped the e2e leakOracle allowlist). stripLiveTelemetry is the partialize
-// node-mapper; the contract is that the SERIALIZED node has no wireguardPeers key (JSON.stringify omits
-// the undefined-valued field) while every other field round-trips untouched.
+// node-mapper; the contract is that SERIALIZED nodes omit every live projection, including active-probe
+// destinations, while every non-live field round-trips untouched.
 
 function node(overrides: Partial<ControllerNode> = {}): ControllerNode {
   return {
@@ -38,6 +38,16 @@ function node(overrides: Partial<ControllerNode> = {}): ControllerNode {
       { peer: 'charlie', interface: 'wg-charlie', endpoint: '', lastHandshake: 0, status: 'never' },
     ],
     resource: { load1: 0.5, load5: 0.4, load15: 0.3, memTotalKB: 2048, memAvailableKB: 1024 },
+    probeResults: [
+      {
+        id: 'database',
+        type: 'tcp',
+        host: 'db.internal.example',
+        port: 5432,
+        status: 'failure',
+        failureReason: 'connection_refused',
+      },
+    ],
     ...overrides,
   };
 }
@@ -55,6 +65,13 @@ describe('stripLiveTelemetry (persist custody)', () => {
     expect('resource' in serialized).toBe(false);
   });
 
+  it('omits active-probe results and their internal destination from browser persistence', () => {
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    expect('probeResults' in serialized).toBe(false);
+    expect(JSON.stringify(serialized).includes('db.internal.example')).toBe(false);
+    expect(JSON.stringify(serialized).includes('5432')).toBe(false);
+  });
+
   it('keeps the aggregate wireguard condition and every other field intact', () => {
     const out = stripLiveTelemetry(node());
     expect(out.nodeId).toBe('node-1');
@@ -69,6 +86,7 @@ describe('stripLiveTelemetry (persist custody)', () => {
     const input = node();
     stripLiveTelemetry(input);
     expect(input.wireguardPeers).toHaveLength(2);
+    expect(input.probeResults?.[0].host).toBe('db.internal.example');
   });
 
   it('is a no-op shape for a node that already has no telemetry (legacy/beta.11 cache)', () => {

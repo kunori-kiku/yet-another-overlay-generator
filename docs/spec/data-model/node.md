@@ -26,6 +26,7 @@ A Node represents a physical or virtual host in the overlay.
 | `ssh_port` | int | SSH port (default: 22) |
 | `ssh_user` | string | SSH username (default: root) |
 | `ssh_key_path` | string | SSH private key file path |
+| `telemetry_probes` | []TelemetryProbe | Optional managed-node ICMP/TCP checks. Each has one IP-or-DNS `host`; TCP additionally requires `port`. The policy is signed and activated at Deploy, not an arbitrary command or URL surface. See [../operations/active-telemetry.md](../operations/active-telemetry.md). |
 
 Role semantics are specified in [../roles/roles.md](../roles/roles.md).
 

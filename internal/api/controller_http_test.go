@@ -856,6 +856,58 @@ func keysOfMap(m map[string]string) []string {
 	return out
 }
 
+// TestControllerHTTP_NoStoreDynamicAPI pins the route-level cache boundary. The wrapper is
+// outermost, so authenticated successes and pre-authentication errors on both controller audiences
+// cannot be stored by a conforming browser or shared cache.
+func TestControllerHTTP_NoStoreDynamicAPI(t *testing.T) {
+	env := newCtlTestEnv(t)
+	nodeToken := env.enrollNode(t, "node-cache")
+
+	tests := []struct {
+		name   string
+		method string
+		url    string
+		token  string
+		body   string
+		want   int
+	}{
+		{name: "operator success", method: http.MethodGet, url: env.opURL("nodes"), token: testOperatorToken, want: http.StatusOK},
+		{name: "operator auth error", method: http.MethodGet, url: env.opURL("nodes"), want: http.StatusUnauthorized},
+		{name: "agent success", method: http.MethodPost, url: env.agentURL("telemetry"), token: nodeToken, body: "{}", want: http.StatusOK},
+		{name: "agent auth error", method: http.MethodPost, url: env.agentURL("telemetry"), body: "{}", want: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body io.Reader
+			if tt.body != "" {
+				body = strings.NewReader(tt.body)
+			}
+			req, err := http.NewRequest(tt.method, tt.url, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+			if tt.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != tt.want {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.want)
+			}
+			if got := resp.Header.Get("Cache-Control"); got != dynamicAPICacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, dynamicAPICacheControl)
+			}
+		})
+	}
+}
+
 // TestControllerHTTP_CORS confirms operator routes answer a browser CORS preflight
 // (OPTIONS, which carries no Authorization) with 204 + the headers the panel needs,
 // and stamp Allow-Origin onto real responses, so a cross-origin panel can call them.

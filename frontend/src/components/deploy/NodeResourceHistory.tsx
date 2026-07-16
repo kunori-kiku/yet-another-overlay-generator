@@ -16,21 +16,31 @@ import type { Granularity, NodeHistory, RangePreset } from '../../lib/telemetryH
 
 // NodeResourceHistory (telemetry-history plan-4): the node-detail CPU/RAM/load history charts. It
 // owns the range preset (1h/6h/24h/7d) + granularity (auto/30s/5m/30m/1h) controls, fetches the
-// plan-3 endpoint on view + on any param change, and renders three reusable TimeSeriesCharts (CPU %,
-// load 1/5/15, memory used %). LIVE-ONLY: the fetched history lives in component state and is NEVER
+// plan-3 endpoint on view, parameter change, and each successful page refresh, then renders three
+// reusable TimeSeriesCharts (CPU %, load 1/5/15, memory used %). LIVE-ONLY: the fetched history is NEVER
 // persisted (the stripLiveTelemetry custody rule). Disabled/empty/loading/error each have a state.
 
 // A percent metric pins the Y axis to 0..100 so a flat-ish series is not visually exaggerated; load
 // has no natural ceiling, so it auto-fits.
 const PERCENT_DOMAIN: [number, number] = [0, 100];
 
-export function NodeResourceHistory({ nodeId }: { nodeId: string }) {
+interface NodeResourceHistoryProps {
+  nodeId: string;
+  // The parent fleet refresh updates this after a successful manual/Live poll. It is a trigger only;
+  // history stays component-local and is never copied into the persisted controller store.
+  refreshAt?: number | null;
+}
+
+export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryProps) {
   const language = useTopologyStore((s) => s.language);
   const fetchNodeHistory = useControllerStore((s) => s.fetchNodeHistory);
 
   const [range, setRange] = useState<RangePreset>('6h');
   const [granularity, setGranularity] = useState<Granularity>('auto');
   const [history, setHistory] = useState<NodeHistory | null>(null);
+  // Bound the axis to the exact window that produced history. Keeping it alongside the response
+  // prevents a moving Date.now() render from showing an axis that does not match the fetched data.
+  const [historyWindow, setHistoryWindow] = useState<[number, number] | null>(null);
   // Start loading (the first fetch is always in flight on mount); the parent keys this component on
   // the node id so a node switch remounts and resets to this initial loading state.
   const [loading, setLoading] = useState(true);
@@ -48,6 +58,7 @@ export function NodeResourceHistory({ nodeId }: { nodeId: string }) {
       .then((h) => {
         if (!ignore) {
           setHistory(h);
+          setHistoryWindow([Date.parse(from), Date.parse(to)]);
           setError(false);
           setLoading(false);
         }
@@ -55,6 +66,7 @@ export function NodeResourceHistory({ nodeId }: { nodeId: string }) {
       .catch(() => {
         if (!ignore) {
           setHistory(null);
+          setHistoryWindow(null);
           setError(true);
           setLoading(false);
         }
@@ -62,7 +74,7 @@ export function NodeResourceHistory({ nodeId }: { nodeId: string }) {
     return () => {
       ignore = true;
     };
-  }, [nodeId, range, granularity, fetchNodeHistory]);
+  }, [nodeId, range, granularity, refreshAt, fetchNodeHistory]);
 
   // Param changes reset to a clean loading state (allowed here — event handlers, not the effect
   // body) so switching from an error/empty view shows the spinner immediately, then the effect
@@ -80,6 +92,7 @@ export function NodeResourceHistory({ nodeId }: { nodeId: string }) {
 
   const buckets = history?.buckets ?? [];
   const stepMs = parseGoDuration(history?.step ?? '');
+  const xDomain = historyWindow ?? undefined;
 
   const cpuSeries: TimeSeriesSeries[] = [
     {
@@ -177,9 +190,9 @@ export function NodeResourceHistory({ nodeId }: { nodeId: string }) {
         </p>
       ) : (
         <div className="mt-3 space-y-4">
-          <HistoryChart title={t(language, 'nodeHistory.cpuTitle')} series={cpuSeries} yDomain={PERCENT_DOMAIN} language={language} />
-          <HistoryChart title={t(language, 'nodeHistory.loadTitle')} series={loadSeries} language={language} />
-          <HistoryChart title={t(language, 'nodeHistory.memTitle')} series={memSeries} yDomain={PERCENT_DOMAIN} language={language} />
+          <HistoryChart title={t(language, 'nodeHistory.cpuTitle')} series={cpuSeries} yDomain={PERCENT_DOMAIN} xDomain={xDomain} language={language} />
+          <HistoryChart title={t(language, 'nodeHistory.loadTitle')} series={loadSeries} xDomain={xDomain} language={language} />
+          <HistoryChart title={t(language, 'nodeHistory.memTitle')} series={memSeries} yDomain={PERCENT_DOMAIN} xDomain={xDomain} language={language} />
         </div>
       )}
     </div>
@@ -190,17 +203,19 @@ function HistoryChart({
   title,
   series,
   yDomain,
+  xDomain,
   language,
 }: {
   title: string;
   series: TimeSeriesSeries[];
   yDomain?: [number, number];
+  xDomain?: [number, number];
   language: UILanguage;
 }) {
   return (
     <div>
       <div className="mb-1 text-xs font-medium text-[var(--content-muted)]">{title}</div>
-      <TimeSeriesChart series={series} yDomain={yDomain} height={180} language={language} />
+      <TimeSeriesChart series={series} yDomain={yDomain} xDomain={xDomain} height={180} language={language} />
     </div>
   );
 }

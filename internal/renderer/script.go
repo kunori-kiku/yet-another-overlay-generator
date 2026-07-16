@@ -103,6 +103,10 @@ type InstallScriptConfig struct {
 	// Only meaningful when SplicePlaceholder is true. It is a fixed sentinel spliced inside a
 	// single-quoted literal in the template, so it is ShellRaw.
 	SplicePlaceholderToken ShellToken
+	// RequiresTelemetryPolicyV1 makes a probe-bearing AgentHeld installer require the matching
+	// yaog-agent execution capability before any host mutation. It is false for air-gap bundles and
+	// AgentHeld nodes without probes, preserving their historical installer bytes and direct usage.
+	RequiresTelemetryPolicyV1 bool
 	// GithubProxy is the shell-escaped GitHub-.deb mimic-fallback proxy prefix (was Fetch.GithubProxy;
 	// model.InstallFetch's only install.sh-relevant field). It is baked as GH_PROXY=<token> and may be
 	// operator-supplied, so it is a single-quoted token (ShellQuoted); the empty default renders GH_PROXY=''
@@ -229,6 +233,7 @@ func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasB
 	config.HasSigning = signingPubkeyPEM != ""
 	config.SplicePlaceholder = splice.Enabled
 	config.SplicePlaceholderToken = ShellRaw(splice.Token)
+	config.RequiresTelemetryPolicyV1 = splice.Enabled && len(node.TelemetryProbes) > 0
 	config.GithubProxy = ShellQuoted(fetch.GithubProxy)
 	return renderTemplate("install.sh", installScriptTemplate, config)
 }
@@ -463,6 +468,9 @@ type ClientInstallScriptConfig struct {
 	// (PrivateKeyPlaceholder); same semantics as InstallScriptConfig.SplicePlaceholderToken. Spliced
 	// inside a single-quoted literal in the template (ShellRaw). Only meaningful when SplicePlaceholder is true.
 	SplicePlaceholderToken ShellToken
+	// RequiresTelemetryPolicyV1 has the same fail-closed compatibility semantics as the peer/router
+	// installer field above.
+	RequiresTelemetryPolicyV1 bool
 	// GithubProxy is the shell-escaped GitHub-.deb mimic-fallback proxy prefix (was Fetch.GithubProxy);
 	// same semantics as InstallScriptConfig.GithubProxy (ShellQuoted). Empty default → no catalog → the
 	// HasMimic branch renders GH_PROXY=''. Set by the signed renderer after buildClientInstallScriptConfig.
@@ -496,6 +504,7 @@ func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, 
 	config.HasSigning = signingPubkeyPEM != ""
 	config.SplicePlaceholder = splice.Enabled
 	config.SplicePlaceholderToken = ShellRaw(splice.Token)
+	config.RequiresTelemetryPolicyV1 = splice.Enabled && len(node.TelemetryProbes) > 0
 	config.GithubProxy = ShellQuoted(fetch.GithubProxy)
 	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
 }

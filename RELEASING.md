@@ -37,7 +37,8 @@ validate annotated tag + current main tip
   -> build seven platform bundles + standalone agents, and package local-design
   -> verify the exact 22-file allowlist, safe archive trees, all target metadata,
      and native Linux amd64 + Windows amd64/386 execution
-  -> publish/recover and verify the policy-non-overwritten multi-arch controller image
+  -> build run-scoped controller-image candidates, verify their exact digest/native
+     platforms, then attach or recover the policy-non-overwritten version references
   -> upload the exact assets to a GitHub release draft
   -> preview/beta: publish the draft as a non-Latest prerelease
   -> RC/GA: promote the verified image digest, then publish the draft as Latest
@@ -76,15 +77,23 @@ sizes, and SHA-256 digests.
 
 Container publication is an explicit transaction phase through reusable `.github/workflows/docker.yml`;
 it no longer triggers independently on a tag push. A manual Docker run can publish only `edge`.
-The called workflow publishes a version reference (the release tag without its leading `v`) under a
-non-overwrite policy, verifies its digest, exact runtime platforms (`linux/amd64` and `linux/arm64`),
-source/version labels, embedded server version, and the server ELF machine extracted from each exact
-child without executing it. The Dockerfile inherits BuildKit's automatic target arguments and asserts
-the built Go binary's OS/architecture metadata before the final image can be assembled. A failed
-post-push run may adopt an existing reference only when both platform configs/runtimes and all of those
-properties match; a missing optional mirror is repaired from that verified digest, while any different
-existing bytes fail closed. GHCR is required. Docker Hub is included only when both credentials are
-configured.
+For a fresh build, the called workflow pushes only a unique run/attempt-scoped candidate to each
+configured registry. It verifies every candidate at the exact build digest, including the exact runtime
+platform set (`linux/amd64` and `linux/arm64`), source/version labels, entrypoint, embedded server
+version, and the server ELF machine extracted from each exact child without executing it. Only after
+all configured candidates pass does it attach the official version reference (the release tag without
+its leading `v`) from the same-registry candidate by digest. The Dockerfile inherits BuildKit's
+automatic target arguments and asserts the built Go binary's OS/architecture metadata before the final
+image can be assembled.
+
+Ordinary failed-job adoption is a recovery mechanism under the repository's trusted-registry-writer
+assumption. When no current-attempt build digest exists, the workflow re-verifies the documented
+platform/config/runtime properties and requires configured official references to agree on their
+digest; it does not reconstruct byte provenance for every image layer or frontend file. Do not manually
+seed, replace, or retag a release-version reference. A missing optional mirror may be repaired from the
+verified canonical digest, while a reference that disagrees with the current verified candidate or its
+configured peer registry fails closed. GHCR is required. Docker Hub is included only when both
+credentials are configured.
 
 GitHub upload accepts only an absent release or one exact private draft whose existing assets are a
 same-byte subset of the verified set. The pinned action fills that selected draft without overwriting

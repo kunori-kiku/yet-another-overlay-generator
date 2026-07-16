@@ -79,26 +79,27 @@ const (
 	CodeReqInvalidBody   Code = "req_invalid_body"
 
 	// Controller HTTP surface (plan-3.5b) — operator/agent endpoints in handler_controller.go.
-	CodeInternalIdentityMissing  Code = "internal_identity_missing"
-	CodeInternalStorage          Code = "internal_storage"
-	CodeNodeNotFound             Code = "node_not_found"
-	CodeConfigNotFound           Code = "config_not_found"
-	CodeNodeIDReserved           Code = "node_id_reserved"
-	CodeEnrollmentTokenInvalid   Code = "enrollment_token_invalid"
-	CodeEnrollNodeRevoked        Code = "enroll_node_revoked"
-	CodeDuplicateWGKey           Code = "duplicate_wg_key"
-	CodeNoStagedBundle           Code = "no_staged_bundle"
-	CodeReqFieldRequired         Code = "req_field_required"
-	CodeReqFieldInvalid          Code = "req_field_invalid"
-	CodeReqUnsupportedAlg        Code = "req_unsupported_alg"
-	CodeTopologyVersionNotFound  Code = "topology_version_not_found"
-	CodeNoTopologyStored         Code = "no_topology_stored"
-	CodeKeystoneNoSignedManifest Code = "keystone_no_signed_manifest"
-	CodeNoStagedManifest         Code = "no_staged_manifest"
-	CodeNoPinnedCredential       Code = "no_pinned_credential"
-	CodeStagedManifestMismatch   Code = "staged_manifest_mismatch"
-	CodeManifestSignatureInvalid Code = "manifest_signature_invalid"
-	CodeStageFailed              Code = "stage_failed"
+	CodeInternalIdentityMissing        Code = "internal_identity_missing"
+	CodeInternalStorage                Code = "internal_storage"
+	CodeNodeNotFound                   Code = "node_not_found"
+	CodeConfigNotFound                 Code = "config_not_found"
+	CodeNodeIDReserved                 Code = "node_id_reserved"
+	CodeEnrollmentTokenInvalid         Code = "enrollment_token_invalid"
+	CodeEnrollNodeRevoked              Code = "enroll_node_revoked"
+	CodeDuplicateWGKey                 Code = "duplicate_wg_key"
+	CodeNoStagedBundle                 Code = "no_staged_bundle"
+	CodeReqFieldRequired               Code = "req_field_required"
+	CodeReqFieldInvalid                Code = "req_field_invalid"
+	CodeReqUnsupportedAlg              Code = "req_unsupported_alg"
+	CodeTopologyVersionNotFound        Code = "topology_version_not_found"
+	CodeNoTopologyStored               Code = "no_topology_stored"
+	CodeKeystoneNoSignedManifest       Code = "keystone_no_signed_manifest"
+	CodeNoStagedManifest               Code = "no_staged_manifest"
+	CodeNoPinnedCredential             Code = "no_pinned_credential"
+	CodeStagedManifestMismatch         Code = "staged_manifest_mismatch"
+	CodeManifestSignatureInvalid       Code = "manifest_signature_invalid"
+	CodeStageFailed                    Code = "stage_failed"
+	CodeTelemetryProbesRequireKeystone Code = "telemetry_probes_require_keystone"
 	// CodeManualNodeInvalid rejects a stage whose topology carries a manual (deployment_mode=manual)
 	// node that is not deployable: no WireGuard public key, or a key that duplicates another manual
 	// node's or collides with an enrolled node's. A manual node is hand-deployed with a pre-known key
@@ -198,27 +199,28 @@ var registry = map[Code]def{
 	CodeReqBodyEmpty:     {"The request body is empty.", http.StatusBadRequest},
 	CodeReqInvalidBody:   {"The request body could not be parsed.", http.StatusBadRequest},
 
-	CodeInternalIdentityMissing:  {"The request is missing an authenticated identity.", http.StatusInternalServerError},
-	CodeInternalStorage:          {"A storage operation failed; please retry.", http.StatusInternalServerError},
-	CodeNodeNotFound:             {"The requested node was not found.", http.StatusNotFound},
-	CodeConfigNotFound:           {"No configuration is available for this node yet.", http.StatusNotFound},
-	CodeNodeIDReserved:           {"That node id is reserved and cannot be used.", http.StatusForbidden},
-	CodeEnrollmentTokenInvalid:   {"The enrollment token is invalid or has expired; request a new one.", http.StatusUnauthorized},
-	CodeEnrollNodeRevoked:        {"That node id has been revoked; delete it before re-enrolling.", http.StatusConflict},
-	CodeDuplicateWGKey:           {"That WireGuard public key is already enrolled under a different node.", http.StatusConflict},
-	CodeNoStagedBundle:           {"Nothing is staged for the next generation; stage a deploy before promoting.", http.StatusConflict},
-	CodeReqFieldRequired:         {"The field {field} is required.", http.StatusBadRequest},
-	CodeReqFieldInvalid:          {"The field {field} is invalid.", http.StatusBadRequest},
-	CodeReqUnsupportedAlg:        {"Unsupported algorithm {alg}.", http.StatusBadRequest},
-	CodeTopologyVersionNotFound:  {"No such retained topology version (it may have been pruned).", http.StatusNotFound},
-	CodeNoTopologyStored:         {"No topology has been stored yet.", http.StatusNotFound},
-	CodeKeystoneNoSignedManifest: {"The keystone is enabled but no signed membership manifest has been promoted to serve yet; sign and promote a deploy under the pinned credential. Nodes keep their current config and retry.", http.StatusConflict},
-	CodeNoStagedManifest:         {"No staged membership manifest; stage a deploy before signing.", http.StatusNotFound},
-	CodeNoPinnedCredential:       {"No operator credential is pinned; pin one before signing.", http.StatusPreconditionFailed},
-	CodeStagedManifestMismatch:   {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
-	CodeManifestSignatureInvalid: {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
-	CodeStageFailed:              {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
-	CodeManualNodeInvalid:        {"Manual node {node} is invalid: {detail}", http.StatusUnprocessableEntity},
+	CodeInternalIdentityMissing:        {"The request is missing an authenticated identity.", http.StatusInternalServerError},
+	CodeInternalStorage:                {"A storage operation failed; please retry.", http.StatusInternalServerError},
+	CodeNodeNotFound:                   {"The requested node was not found.", http.StatusNotFound},
+	CodeConfigNotFound:                 {"No configuration is available for this node yet.", http.StatusNotFound},
+	CodeNodeIDReserved:                 {"That node id is reserved and cannot be used.", http.StatusForbidden},
+	CodeEnrollmentTokenInvalid:         {"The enrollment token is invalid or has expired; request a new one.", http.StatusUnauthorized},
+	CodeEnrollNodeRevoked:              {"That node id has been revoked; delete it before re-enrolling.", http.StatusConflict},
+	CodeDuplicateWGKey:                 {"That WireGuard public key is already enrolled under a different node.", http.StatusConflict},
+	CodeNoStagedBundle:                 {"Nothing is staged for the next generation; stage a deploy before promoting.", http.StatusConflict},
+	CodeReqFieldRequired:               {"The field {field} is required.", http.StatusBadRequest},
+	CodeReqFieldInvalid:                {"The field {field} is invalid.", http.StatusBadRequest},
+	CodeReqUnsupportedAlg:              {"Unsupported algorithm {alg}.", http.StatusBadRequest},
+	CodeTopologyVersionNotFound:        {"No such retained topology version (it may have been pruned).", http.StatusNotFound},
+	CodeNoTopologyStored:               {"No topology has been stored yet.", http.StatusNotFound},
+	CodeKeystoneNoSignedManifest:       {"The keystone is enabled but no signed membership manifest has been promoted to serve yet; sign and promote a deploy under the pinned credential. Nodes keep their current config and retry.", http.StatusConflict},
+	CodeNoStagedManifest:               {"No staged membership manifest; stage a deploy before signing.", http.StatusNotFound},
+	CodeNoPinnedCredential:             {"No operator credential is pinned; pin one before signing.", http.StatusPreconditionFailed},
+	CodeStagedManifestMismatch:         {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
+	CodeManifestSignatureInvalid:       {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
+	CodeStageFailed:                    {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
+	CodeTelemetryProbesRequireKeystone: {"Active telemetry probes require a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.", http.StatusPreconditionFailed},
+	CodeManualNodeInvalid:              {"Manual node {node} is invalid: {detail}", http.StatusUnprocessableEntity},
 
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},
 	CodeAgentReleaseFetchFailed:    {"Could not fetch from the release at {url}: {detail}", http.StatusBadGateway},

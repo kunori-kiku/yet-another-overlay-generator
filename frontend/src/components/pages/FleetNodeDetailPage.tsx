@@ -11,6 +11,10 @@ import { NodeConditions } from '../deploy/NodeConditions';
 import { WireGuardPeersPanel } from '../deploy/WireGuardPeersPanel';
 import { ResourcePanel } from '../deploy/ResourcePanel';
 import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
+import { TelemetryProbeEditor } from '../deploy/TelemetryProbeEditor';
+import { TelemetryProbeResults } from '../deploy/TelemetryProbeResults';
+import { SaveConflictDialog } from '../design/SaveConflictDialog';
+import { sameTelemetryPolicy } from '../../lib/probeResults';
 
 // NodeResourceHistory is lazy-loaded so its recharts dependency (~105 kB gzip) is code-split into its
 // own chunk and never bloats the initial bundle — it loads only when a node-detail page is viewed.
@@ -42,12 +46,22 @@ export function FleetNodeDetailPage() {
   const language = useTopologyStore((s) => s.language);
   // The fleet is keyed by node_id, but the operator reads the friendly design name (id fallback when
   // no design is loaded / the node is an orphan / the name is blank).
-  const nameByNodeId = nodeNameMap(useTopologyStore((s) => s.nodes));
+  const topologyNodes = useTopologyStore((s) => s.nodes);
+  const nameByNodeId = nodeNameMap(topologyNodes);
+  const topologyNode = topologyNodes.find((candidate) => candidate.id === id);
+  const configuredProbes = topologyNode?.telemetry_probes ?? [];
+  const updateNode = useTopologyStore((s) => s.updateNode);
   const node = useControllerStore((s) => s.nodes.find((n) => n.nodeId === id));
   const settings = useControllerStore((s) => s.settings);
   const refresh = useControllerStore((s) => s.refresh);
   const loading = useControllerStore((s) => s.loading);
   const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
+  const lastSyncedTopology = useControllerStore((s) => s.lastSyncedTopology);
+  const saveDesign = useControllerStore((s) => s.saveDesign);
+  const saving = useControllerStore((s) => s.saving);
+  const serverOperatorPinned = useControllerStore((s) => s.serverOperatorPinned);
+  const syncedProbes = lastSyncedTopology?.nodes.find((candidate) => candidate.id === id)?.telemetry_probes ?? [];
+  const telemetryDirty = topologyNode !== undefined && !sameTelemetryPolicy(configuredProbes, syncedProbes);
   // Force redeploy this node (plan-6): re-stage it even if unchanged, then the usual promote path
   // (reuses controllerStore.deploy with force_nodes). Disabled without auth (a mutating action).
   const forceRedeployNode = useControllerStore((s) => s.forceRedeployNode);
@@ -113,7 +127,7 @@ export function FleetNodeDetailPage() {
       {!node ? (
         <p className="text-sm text-[var(--content-muted)]">{t(language, 'fleetNodeNotFound')}</p>
       ) : (
-        <section className="max-w-2xl space-y-3 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-4">
+        <section className="max-w-4xl space-y-3 rounded-lg border border-[var(--hairline)] bg-[var(--surface-elevated)] p-4">
           <div className="space-y-0.5">
             <h2 className="break-all text-lg font-semibold text-[var(--info)]">
               {nodeDisplayName(node.nodeId, nameByNodeId)}
@@ -146,6 +160,49 @@ export function FleetNodeDetailPage() {
               {node.rekeyRequested ? t(language, 'fleetNodeDetailPage.yes') : t(language, 'fleetNodeDetailPage.no')}
             </Field>
           </dl>
+          <div className="space-y-3 border-t border-[var(--hairline)] pt-3">
+            {topologyNode ? (
+              <>
+                <TelemetryProbeEditor
+                  node={topologyNode}
+                  keystonePinned={serverOperatorPinned}
+                  language={language}
+                  updateNode={updateNode}
+                />
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    data-testid="save-node-telemetry"
+                    onClick={() => void saveDesign()}
+                    disabled={saving || !telemetryDirty || noAuth}
+                    title={!telemetryDirty ? t(language, 'canvasToolbar.saveUpToDate') : undefined}
+                    className={`self-start rounded px-3 py-2 text-sm font-medium ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]`}
+                  >
+                    {saving
+                      ? t(language, 'telemetryProbes.saving')
+                      : telemetryDirty
+                        ? t(language, 'telemetryProbes.save')
+                        : t(language, 'telemetryProbes.saved')}
+                  </button>
+                  <p className="text-xs text-[var(--content-muted)]">
+                    {t(language, 'telemetryProbes.saveHint')}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <p
+                data-testid="telemetry-node-not-in-design"
+                className="rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] p-3 text-sm text-[var(--content)]"
+              >
+                {t(language, 'telemetryProbes.notInDesign')}
+              </p>
+            )}
+            <TelemetryProbeResults
+              configured={configuredProbes}
+              results={node.probeResults ?? []}
+              language={language}
+            />
+          </div>
           {/* Force redeploy this node (plan-6): a per-node escape hatch beside the registry actions
               (clear-rekey precedent). It re-stages this node even if its config is unchanged, then
               promotes via the usual deploy path. Errors surface in the ControllerErrorBanner above;
@@ -207,15 +264,21 @@ export function FleetNodeDetailPage() {
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
           <ResourcePanel resource={node.resource} language={language} />
           {/* Historical CPU/RAM/load charts (plan-4). Live-only: the fetched history is never
-              persisted (custody), so it fetches on view + on range/granularity change. Keyed on the
-              node id so navigating to a different node remounts it with a fresh loading state. */}
+              persisted (custody), so it fetches on view, range/granularity change, and after each
+              successful manual/Live fleet refresh. Keyed on the node id so navigating to a different
+              node remounts it with a fresh loading state. */}
           <Suspense
             fallback={<div className="h-40" data-testid="history-chunk-loading" aria-hidden="true" />}
           >
-            <NodeResourceHistory key={node.nodeId} nodeId={node.nodeId} />
+            <NodeResourceHistory
+              key={node.nodeId}
+              nodeId={node.nodeId}
+              refreshAt={lastSyncedAt}
+            />
           </Suspense>
         </section>
       )}
+      <SaveConflictDialog language={language} />
     </div>
   );
 }

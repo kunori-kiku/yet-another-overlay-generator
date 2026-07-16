@@ -4,8 +4,9 @@ This document defines how the controller **retains** the per-node host-resource 
 node-detail page charts over time, and how the operator **queries** them back as a bucketed series. It
 is the durable backing for the CPU / RAM / load-average charts; it sits **strictly on top of** the live
 telemetry heartbeat ([controller-api.md](../controller/controller-api.md) §`POST /telemetry`) and adds
-**no** new agent transport — the agent already emits a `resource` metric every heartbeat; this layer
-keeps a bounded history of it and serves an aggregated query.
+**no** parallel agent transport — the agent already emits a `resource` metric over authenticated HTTP;
+this layer keeps a bounded history of it and serves an aggregated query. Short reporting interruptions
+are handled by protocol-v2 sequence headers and a bounded replay queue, not WebSocket or gRPC.
 
 Three pieces, each independently testable:
 
@@ -18,13 +19,17 @@ Three pieces, each independently testable:
 
 ## The resource sample
 
-Each heartbeat's `metrics["resource"]` is projected into a `ResourceSample`
-(`resourceSampleFromMetrics`) stamped with the **server-observed** time. It carries **no**
+Each accepted heartbeat's `metrics["resource"]` is projected into a `ResourceSample`
+(`resourceSampleFromMetrics`). A legacy sample is stamped with the **server-observed** time. A
+protocol-v2 sample uses its agent `sampled_at` for history only when it is within 24 hours before or
+five minutes after receipt; otherwise it safely falls back to receipt time. Controller receipt time
+always remains authoritative for `LastSeen` and live condition observation. The sample carries **no**
 endpoint / IP / key material — it is observability only:
 
 | Field | JSON | Notes |
 |---|---|---|
-| `TS` | `ts` | Server-observed sample time (RFC3339). |
+| `TS` | `ts` | Bounded observation time (RFC3339): trusted v2 sample time, else controller receipt time. |
+| `IntervalMS` | `interval_ms` | Optional advisory sampling cadence accepted from the v2 header. |
 | `CpuPct` | `cpu_pct` | `*float64`, **omitempty** — absent on the first beat after daemon start (see below). |
 | `Load1` / `Load5` / `Load15` | `load1` / `load5` / `load15` | Load averages; always present. |
 | `MemTotalKB` | `mem_total_kb` | omitempty. |
@@ -32,6 +37,32 @@ endpoint / IP / key material — it is observability only:
 
 A heartbeat whose `resource` metric is absent or malformed simply adds **no** sample — tolerant, never
 an error on the heartbeat path.
+
+## Reliable delivery over the existing HTTP endpoint
+
+Protocol v2 preserves the legacy JSON body exactly. Delivery metadata lives only in optional
+`X-YAOG-Telemetry-*` headers: protocol version, a random per-process boot ID, a monotonically
+increasing sequence, sample time, and advisory interval. An old controller ignores the headers and
+accepts the unchanged body; a new controller treats a request without the protocol header as legacy.
+
+The agent samples independently from upload. Each immutable observation enters a volatile queue whose
+capacity is 32 total samples, including the in-flight head. Transport failures, HTTP 408/429, 5xx, and
+invalid acknowledgements retry with bounded jittered backoff while the sample remains retained. A
+deterministic other 4xx drops that sample and advances. If the queue fills, it front-evicts the oldest
+sample—even one currently retrying—so upload cannot permanently block new sampling. Agent restart
+loses unsent observations by design.
+
+The controller acknowledges the exact submitted sequence and keeps at most four volatile boot cursors
+per node. A duplicate retry can advance receipt-authoritative liveness but cannot append history or
+replace metrics twice. Delayed samples from a known retired boot, and clearly stale unseen boots, may
+contribute bounded history but cannot replace the active boot's live conditions or metrics. Cursor
+state is deliberately not durable: persisting it would reintroduce heartbeat-path disk writes, so a
+controller restart may admit a replay once.
+
+Admission is bounded on both sides: at most 32 metric keys and 64 KiB of metrics. If an intermediary
+strips the extension headers, the request degrades to legacy success: observations still arrive, but
+exact retry deduplication and advertised cadence are unavailable. This is the intended CDN/proxy
+failure mode.
 
 **`cpu_pct` is a jiffies delta, so the first beat is a gap.** The agent's `resourceSampler`
 (`internal/agent/telemetry_resource.go`) is **stateful**: it computes CPU utilisation as the delta of
@@ -52,12 +83,12 @@ a durable directory is configured:
 - **MemStore** (`dir == ""`) — there is nothing durable, so `buf` **is** the whole (capped) history
   (dev/parity mode).
 
-### The invariant: a 30 s heartbeat never touches disk
+### The invariant: a heartbeat never touches disk
 
 `RecordTelemetry` calls `append`, which records the sample **in memory only** — take the history mutex
 (its **own** lock, never the store-wide `mu` nor `telemetryMu`, so history can never stall or deadlock a
 beat), append to `buf`, front-evict anything past the cap, unlock. **No disk IO, O(1).** This preserves
-the standing DoS invariant that an unauthenticated-in-volume 30 s heartbeat can never be turned into an
+the standing DoS invariant that a high-frequency authenticated heartbeat can never be turned into an
 fsync amplifier. The cap itself is read from an **in-memory cache** (`capByTenant`), never from settings
 on disk — see the cap section.
 
@@ -113,15 +144,21 @@ bucketed series the charts render directly:
 
 - `from` / `to` must parse as RFC3339, `to` must be **after** `from`, and the window must be
   `≤ maxHistoryRange` (**366 days**).
-- `step` is **optional**. Default = `window / maxHistoryBuckets` (**1000**). It is **floored** at
-  `minHistoryStep` (**1 s** — samples arrive ~every 30 s, so sub-second steps are noise) and **widened**
-  if the requested step would produce more than **1000** buckets. The **effective** step is echoed back
-  in `step`, so the panel labels the axis with what it actually got, not what it asked for.
+- `step` is **optional**. With an explicit value, the legacy contract remains: floor it at **1 s** and
+  widen it only when necessary to keep the response at no more than **1000** buckets.
+- **Auto** first prefers the most recent valid advertised `IntervalMS`. If none exists, it sorts a copy
+  of the samples, derives positive timestamp deltas, requires at least two, chooses the lower median to
+  resist outage gaps, and rounds to the nearest second. Auto is floored at **30 s**, then widened for
+  the same 1000-bucket cap. Insufficient data falls back to 30 s. The **effective** step is echoed back
+  in `step`, so the panel renders and detects gaps using what the server actually chose.
 - Unknown `node` → **404**. History disabled (cap 0) → **200** with `{ disabled: true, buckets: [] }`
   (the panel shows a "history off" hint instead of an empty chart).
 
-**Aggregation (`aggregateHistory`, pure + table-tested).** Samples are bucketed by `step` from `from`;
-each bucket reports **avg / min / max** per metric with the bucket **start** as `t`. Two honesty rules:
+**Aggregation (`aggregateHistory`, pure + table-tested).** Samples are bucketed on a stable Unix-epoch
+grid rather than re-phased from each moving request's `from`; re-fetching a sliding window therefore
+does not move existing bucket timestamps. Each bucket reports **avg / min / max** per metric with the
+bucket **start** as `t`. The online mean stays finite for finite inputs instead of overflowing an
+intermediate sum. Two honesty rules:
 
 - **Empty buckets are OMITTED** — a gap in the data (node offline, history just enabled) stays a gap on
   the chart; no interpolation, no zero-fill.
@@ -143,11 +180,19 @@ path instead of the heartbeat. The fix (see [controller-api.md](../controller/co
 **post-apply kick**: after each applied cycle the agent nudges the heartbeat loop so a fresh sample
 (with the just-applied state) lands immediately rather than up to one interval later. So resource
 history advances on the heartbeat cadence **and** promptly after every deploy — it is never a frozen
-apply-time snapshot. (Conditions, unlike metrics, are still dual-written by `/report` at apply-time and
-refreshed live by the heartbeat — last-writer-wins — but that is the conditions path, not this metric.)
+apply-time snapshot. The post-apply kick may create one short delta; cadence-aware Auto uses the lower
+median or the latest advertised interval rather than mistaking that kick for the sustained reporting
+rate. The chart receives the effective step. A metric-absent bucket is always a null point, and runs
+longer than one empty effective bucket break the line instead of connecting across an outage. One
+empty effective bucket is tolerated because healthy samples near opposite bucket boundaries can
+produce that shape under ordinary scheduling jitter. (Conditions, unlike metrics, are still
+dual-written by `/report` at
+apply-time and refreshed live by the heartbeat — last-writer-wins — but that is the conditions path,
+not this metric.)
 
 ## Cross-references
 
 - Live heartbeat + the `Sampler` framework + the post-apply kick: [controller-api.md](../controller/controller-api.md) §`POST /telemetry`.
+- Signed outbound ICMP/TCP checks carried in the same metrics framework: [active-telemetry.md](active-telemetry.md).
 - Persistence / the store contract: [../controller/persistence.md](../controller/persistence.md).
 - The node-detail charts (frontend): the reusable `TimeSeriesChart` + lazy-loaded Recharts chunk render this series; see the panel.

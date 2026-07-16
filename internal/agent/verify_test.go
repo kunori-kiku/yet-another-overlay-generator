@@ -643,7 +643,7 @@ func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &Config{NodeID: "n1", StateDir: dir}
 		prev := &State{NodeID: "n1", MembershipEpoch: 5}
-		recordSuccess(cfg, prev, man, &VerifyResult{}, 0) // keystone OFF this run
+		recordSuccess(cfg, prev, man, &VerifyResult{}, 0, nil) // keystone OFF this run
 		st, err := LoadState(dir)
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
@@ -657,7 +657,7 @@ func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &Config{NodeID: "n1", StateDir: dir}
 		prev := &State{NodeID: "n1", MembershipEpoch: 5}
-		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 7) // genuine advance
+		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 7, nil) // genuine advance
 		st, err := LoadState(dir)
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
@@ -670,7 +670,7 @@ func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
 	t.Run("no prior state takes the applied epoch verbatim", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &Config{NodeID: "n1", StateDir: dir}
-		recordSuccess(cfg, nil, man, &VerifyResult{Signed: true}, 3) // first ever apply
+		recordSuccess(cfg, nil, man, &VerifyResult{Signed: true}, 3, nil) // first ever apply
 		st, err := LoadState(dir)
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
@@ -684,7 +684,7 @@ func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &Config{NodeID: "n1", StateDir: dir}
 		prev := &State{NodeID: "n1", MembershipEpoch: 5}
-		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 5) // idempotent re-apply at the same epoch
+		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 5, nil) // idempotent re-apply at the same epoch
 		st, err := LoadState(dir)
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
@@ -701,7 +701,7 @@ func TestRecordSuccessEpochFloorMonotonic(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &Config{NodeID: "n1", StateDir: dir}
 		prev := &State{NodeID: "n1", MembershipEpoch: 5}
-		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 3)
+		recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 3, nil)
 		st, err := LoadState(dir)
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)

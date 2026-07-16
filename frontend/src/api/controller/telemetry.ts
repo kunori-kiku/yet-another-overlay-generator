@@ -18,6 +18,10 @@ export async function nodeHistory(
   to: string,
   step?: string,
 ): Promise<NodeHistory> {
-  const res = await request(cfg, `node-history?${historyQueryString(nodeId, from, to, step)}`);
+  const res = await request(
+    cfg,
+    `node-history?${historyQueryString(nodeId, from, to, step)}`,
+    { cache: 'no-store' },
+  );
   return parseNodeHistory(await res.json());
 }

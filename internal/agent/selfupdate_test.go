@@ -1042,7 +1042,7 @@ func TestRecordPreservesSelfUpdateState(t *testing.T) {
 	}
 	man := &manifestInfo{NodeID: "n1", CompiledAt: "2026-06-16T00:00:00Z", Checksum: "abc"}
 
-	recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 0)
+	recordSuccess(cfg, prev, man, &VerifyResult{Signed: true}, 0, nil)
 	st, _ := LoadState(dir)
 	if st.AgentVersionFloor != "1.1.0" {
 		t.Errorf("recordSuccess wiped AgentVersionFloor (custody regression); got %q", st.AgentVersionFloor)

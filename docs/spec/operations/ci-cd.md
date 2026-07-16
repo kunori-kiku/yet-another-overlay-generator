@@ -25,13 +25,18 @@ The release graph is:
    seven sidecars, and one local-design ZIP. It rejects unsafe or ambiguous archive trees, verifies all
    Go target/VCS/version metadata and agent byte identity, compares the complete frontend across
    bundles, executes Linux amd64 binaries, and is followed by native Windows amd64/386 execution.
-6. **Publish or recover the versioned controller image.** GHCR is required; Docker Hub is mirrored only
-   when both credentials are configured. BuildKit's automatic target OS/architecture values are
-   inherited without defaults, and the build checks the Go binary metadata before assembling each
-   target image. The version reference is adopted only if its digest, exact `linux/amd64` +
-   `linux/arm64` platform set, source/version labels, extracted server ELF machine, and runtime version
-   all match. Inspecting the executable is required because an image manifest can advertise arm64 while
-   containing an amd64 entrypoint.
+6. **Verify candidates, then publish or recover the versioned controller image.** GHCR is required;
+   Docker Hub is mirrored only when both credentials are configured. A fresh build pushes only unique
+   run/attempt-scoped candidates. Every configured candidate must match the exact build digest, exact
+   `linux/amd64` + `linux/arm64` platform set, source/version labels, entrypoint, extracted server ELF
+   machine, and runtime version before the workflow attaches an official version reference from the
+   same-registry candidate by digest. BuildKit's automatic target OS/architecture values are inherited
+   without defaults, and the build checks the Go binary metadata before assembling each target image.
+   Inspecting the executable is required because a manifest can advertise arm64 while containing an
+   amd64 entrypoint. Failed-job adoption assumes trusted registry writers: it re-verifies those
+   documented properties and cross-registry digest agreement, but does not prove byte provenance for
+   every layer or frontend file without a current candidate digest. Manual version-tag mutation is
+   outside the recovery contract.
 7. **Create or recover one private GitHub Release draft.** Only an absent release or an exactly
    classified private draft containing a same-byte subset of the verified assets is accepted. The
    workflow uploads without overwriting and re-seals all 22 remote names, sizes, and SHA-256 digests.

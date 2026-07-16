@@ -4,6 +4,7 @@ import { useControllerStore, isDesignDirty } from '../../stores/controllerStore'
 import { t } from '../../i18n';
 import { DomainForm } from '../domains/DomainForm';
 import { NodeForm } from '../nodes/NodeForm';
+import { SaveConflictDialog } from './SaveConflictDialog';
 
 // Canvas toolbar that replaces the docked LeftPanel: the [+ Domain] / [+ Node]
 // create entry points (the self-contained collapsible forms), a toggle for the
@@ -44,9 +45,6 @@ export function CanvasToolbar({
   // save-scoped flag (not the global `loading`): so an unrelated in-flight controller op
   // (refresh/deploy/saveSettings) can't mislabel Save as "Saving…" or disable it (plan-11 review #1).
   const saving = useControllerStore((s) => s.saving);
-  const saveConflict = useControllerStore((s) => s.saveConflict);
-  const dismissSaveConflict = useControllerStore((s) => s.dismissSaveConflict);
-  const hydrateFromServer = useControllerStore((s) => s.hydrateFromServer);
   const lastSyncedSnapshot = useControllerStore((s) => s.lastSyncedSnapshot);
   // Dirty = the canvas differs from the last server-synced baseline. Subscribe to the design
   // slices so this recomputes on every edit; memoize the (whole-design) canonicalization so the
@@ -127,49 +125,7 @@ export function CanvasToolbar({
         </button>
       )}
 
-      {/* Save conflict (plan-10 / T2): the server design changed since we last synced. Offer a
-          non-destructive re-sync (hydrateFromServer auto-backs-up divergent local work) or an
-          explicit force-overwrite, instead of silently clobbering the other change. */}
-      {saveConflict && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md space-y-4 rounded-lg border border-[var(--warning-border)] bg-[var(--surface-elevated)] p-5">
-            <h4 className="text-base font-semibold text-[var(--warning)]">
-              {t(language, 'canvasToolbar.saveConflictTitle')}
-            </h4>
-            <p className="text-sm text-[var(--content)]">
-              {t(language, 'canvasToolbar.saveConflictBody')}
-            </p>
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={dismissSaveConflict}
-                className="rounded border border-[var(--hairline)] px-3 py-1.5 text-sm text-[var(--content)] hover:bg-[var(--control-hover)]"
-              >
-                {t(language, 'canvasToolbar.cancel')}
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => {
-                  dismissSaveConflict();
-                  void hydrateFromServer();
-                }}
-                className="rounded border border-[var(--warning-border)] px-3 py-1.5 text-sm text-[var(--warning)] hover:bg-[var(--warning-bg)] disabled:opacity-40"
-              >
-                {t(language, 'canvasToolbar.resyncFromServer')}
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void saveDesign({ force: true })}
-                className="rounded bg-[var(--warning-solid)] px-3 py-1.5 text-sm font-medium text-[var(--warning-solid-fg)] hover:bg-[var(--warning-solid)] disabled:bg-[var(--control)] disabled:text-[var(--content-muted)]"
-              >
-                {t(language, 'canvasToolbar.overwriteServer')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SaveConflictDialog language={language} />
     </div>
   );
 }

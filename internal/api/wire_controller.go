@@ -69,7 +69,8 @@ type reportRequestJSON struct {
 // telemetry is observability, kept strictly separate from deploy custody, so a heartbeat updates only
 // the node's conditions + metrics + last_seen and can never advance/regress its applied generation.
 // Metrics is the framework's extension slot (e.g. wireguard_peers — the per-peer link detail);
-// RecordTelemetry persists it wholesale and HandleNodes serves it verbatim under node.telemetry.
+// RecordTelemetry replaces it wholesale in the volatile observability overlay and HandleNodes serves
+// it verbatim under node.telemetry without rewriting/fsyncing the durable node record.
 type telemetryRequestJSON struct {
 	Conditions   []runtimecontract.Condition `json:"conditions,omitempty"`
 	Metrics      map[string]json.RawMessage  `json:"metrics,omitempty"`

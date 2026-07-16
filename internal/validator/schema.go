@@ -9,6 +9,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 )
 
 // wgPublicKeyPattern matches a WireGuard public key: 32 bytes of standard base64 = exactly 43 base64
@@ -340,6 +341,17 @@ func validateNodesSchema(topo *model.Topology, result *ValidationResult) {
 		// rather than silently treating it as managed.
 		if node.DeploymentMode != "" && node.DeploymentMode != model.DeploymentManaged && node.DeploymentMode != model.DeploymentManual {
 			result.AddError(prefix+".deployment_mode", CodeNodeDeploymentModeInvalid, P{"mode", node.DeploymentMode})
+		}
+
+		// Active probes are deployment policy, not an air-gap/manual-node side effect. Validate
+		// their complete typed contract here so neither render nor the agent has to interpret an
+		// ambiguous destination. Runtime parses the signed copy again as defense in depth.
+		if len(node.TelemetryProbes) > 0 {
+			if node.IsManual() {
+				result.AddError(prefix+".telemetry_probes", CodeNodeTelemetryProbesInvalid, P{"detail", "active probes require an agent-managed source node"})
+			} else if err := probepolicy.Validate(node.TelemetryProbes); err != nil {
+				result.AddError(prefix+".telemetry_probes", CodeNodeTelemetryProbesInvalid, P{"detail", err.Error()})
+			}
 		}
 
 		// Platform (optional; unsupported values are a warning, not an error)

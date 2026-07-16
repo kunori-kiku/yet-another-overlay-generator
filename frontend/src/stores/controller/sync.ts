@@ -75,18 +75,26 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
     // and the local cache is just a discardable mirror — overwritten after each login/session
     // restore. On failure (network/parse) it keeps the local canvas and returns quietly:
     // hydration is a side action of login and a single fetch failure must not block login
-    // itself; the next login/refresh retries.
-    hydrateFromServer: async () => {
+    // itself; the next login/refresh retries. Callers resolving an explicit save conflict opt into
+    // a visible error and use the boolean result so the modal closes only after a real hydration.
+    hydrateFromServer: async (opts?: { reportError?: boolean }) => {
       const context = captureControllerActionContext(get);
+      if (opts?.reportError) set({ error: null });
       try {
         const raw = await ctlGetTopology(context.config);
-        if (!controllerActionContextIsCurrent(get, context)) return;
+        if (!controllerActionContextIsCurrent(get, context)) return false;
         if (raw === null) {
-          return; // Server has no topology yet (before the first deploy): keep the local canvas.
+          if (opts?.reportError) {
+            set({ error: t(useTopologyStore.getState().language, 'canvasToolbar.resyncFailed') });
+          }
+          return false; // Server has no topology yet (before the first deploy): keep the local canvas.
         }
         const topo = raw as Topology;
         if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
-          return; // Shape mismatch: do not overwrite (the server bytes are guaranteed by update-topology's custody gate; this is just defensive).
+          if (opts?.reportError) {
+            set({ error: t(useTopologyStore.getState().language, 'canvasToolbar.resyncFailed') });
+          }
+          return false; // Shape mismatch: do not overwrite (the server bytes are guaranteed by update-topology's custody gate; this is just defensive).
         }
         // Record the server-authoritative design's normalized snapshot — the baseline for the
         // dirty indicator + save conflict check (plan-10 / T2). Update it whether or not the
@@ -102,7 +110,7 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         // a miss).
         const differs = stableStringify(loadSlices(local)) !== stableStringify(loadSlices(topo));
         if (!differs) {
-          return; // Identical to the local copy: skip the overwrite (do not needlessly clear history/selection).
+          return true; // Identical to the local copy: skip the overwrite (do not needlessly clear history/selection).
         }
         // Backup insurance (D9, review fix): whenever an overwrite would discard a local design
         // that is "non-empty and differs from the server", export a backup first — no longer
@@ -120,9 +128,14 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         // fromServer=true: this canvas is a server secret mirror, forbidden from hitting disk /
         // must be wiped after logout (see topologyStore.canvasFromServer's security invariant).
         topoStore.loadTopology(topo, true);
-      } catch {
-        if (!controllerActionContextIsCurrent(get, context)) return;
+        return true;
+      } catch (err) {
+        if (!controllerActionContextIsCurrent(get, context)) return false;
         // Fetch failed: keep the local canvas, do not block login (see the function comment).
+        if (opts?.reportError) {
+          set({ error: localizeError(err, 'canvasToolbar.resyncFailed') });
+        }
+        return false;
       }
     },
 

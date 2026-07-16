@@ -120,6 +120,12 @@ type State struct {
 	// with no conditions, or an old persisted state, round-trips as nil). It is observability that
 	// recordSuccess/recordFailure regenerate each cycle — NOT load-bearing custody state.
 	Conditions []runtimecontract.Condition `json:"conditions,omitempty"`
+
+	// ActiveTelemetryPolicy is the last-known-good, strictly parsed telemetry.json that was
+	// committed in the same durable state replacement as a successful apply. Failed candidates
+	// preserve it and a successfully applied signed omission clears it. The live sampler reads
+	// only this field, never a staging directory or unverified download.
+	ActiveTelemetryPolicy json.RawMessage `json:"active_telemetry_policy,omitempty"`
 }
 
 // PendingApply is the write-ahead record for a root-side install/uninstall. It prevents

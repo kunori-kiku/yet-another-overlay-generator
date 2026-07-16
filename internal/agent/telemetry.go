@@ -16,25 +16,27 @@ import (
 // and DELIBERATELY no generation/checksum — observability is kept strictly separate from deploy
 // custody (the controller's RecordTelemetry never touches applied_generation).
 //
-// This is a FRAMEWORK, not a one-off: a Sampler is one monitored signal. The condition sampler is the
-// first; a future probe (e.g. per-peer handshake RTT) implements Sampler, is registered in
-// BuildTelemetry, and rides the same heartbeat — writing into the metrics map (which already travels
-// on the wire) with zero transport change.
+// This is a FRAMEWORK, not a one-off: a Sampler is one monitored signal. Conditions, resources,
+// WireGuard detail, and signed active probes already share it; a future typed signal implements
+// Sampler, is registered in BuildTelemetry, and rides the same heartbeat with no transport fork.
 
 // Sampler produces one monitoring signal: a set of conditions and/or a map of named metrics. Sample is
 // called once per heartbeat tick; it must be cheap and self-contained (it runs best-effort under a
 // recover guard, so a panic in one probe never crashes the daemon). Either return may be nil.
 //
-// FRESHNESS CONTRACT (plan-1.5): a Sampler MUST re-measure the LIVE system on each call — it must NEVER
-// cache a value captured at apply/deploy time and re-emit it unchanged. A sampler that reads a
-// deploy-time artifact (a breadcrumb file, a persisted apply outcome) MUST reconcile it against live
-// state (see readMimicCondition's `systemctl is-active` reconcile) or it re-emits a FROZEN value
-// forever — which reads as "works at deploy, then goes stale," the exact recurring defect this
-// framework exists to prevent. Registering a signal HERE (a Sampler in BuildTelemetry) is now the SOLE
-// wiring needed: the daemon beats every interval AND on a post-apply kick (cmd/agent runHeartbeat), so a
-// registered signal fires at deploy AND live by construction — there is no second apply-path list to
-// keep in parity. telemetry_liveness_test.go asserts the freshness contract for the injectable samplers
-// (mutate the input → the output must change).
+// FRESHNESS CONTRACT (plan-1.5): a Sampler normally re-measures the LIVE system on each call and must
+// never cache a value captured at apply/deploy time and re-emit it unchanged. A sampler with its own
+// explicit bounded cadence may expose its most recent result between due attempts (activeProbeSampler
+// does this so a 60-second signed probe is not repeated on every heartbeat), but it must advance that
+// schedule and re-measure when due; it cannot turn a deploy-time result into permanent truth. A
+// sampler that reads a deploy-time artifact (a breadcrumb file, a persisted apply outcome) MUST
+// reconcile it against live state (see readMimicCondition's `systemctl is-active` reconcile) or it
+// re-emits a FROZEN value forever — which reads as "works at deploy, then goes stale," the exact
+// recurring defect this framework exists to prevent. Registering a signal HERE (a Sampler in
+// BuildTelemetry) is now the SOLE wiring needed: the daemon beats every interval AND on a post-apply
+// kick (cmd/agent runHeartbeat), so a registered signal fires at deploy AND live by construction —
+// there is no second apply-path list to keep in parity. telemetry_liveness_test.go asserts the
+// freshness contract for the injectable samplers (mutate the input → the output must change).
 type Sampler interface {
 	Name() string
 	Sample(now time.Time) (conditions []runtimecontract.Condition, metrics map[string]any)
@@ -122,9 +124,10 @@ func NewTelemetryForTest(samplers ...Sampler) *Telemetry {
 func BuildTelemetry(stateDir string) *Telemetry {
 	return &Telemetry{samplers: []Sampler{
 		conditionSampler{stateDir: stateDir},
-		wireguardPeersSampler{},  // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
-		&resourceSampler{},       // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)
-		nativeXDPSampler{},       // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
-		mimicCapabilitySampler{}, // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
+		newActiveProbeSampler(stateDir), // signed last-known-good policy; asynchronous and bounded
+		wireguardPeersSampler{},         // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
+		&resourceSampler{},              // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)
+		nativeXDPSampler{},              // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
+		mimicCapabilitySampler{},        // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
 	}}
 }

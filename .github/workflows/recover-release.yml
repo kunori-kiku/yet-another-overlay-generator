@@ -169,33 +169,45 @@ jobs:
           ' /tmp/source-jobs.json >/dev/null \
             || { echo "::error::source Release graph is not the exact verified pre-draft failure state"; exit 1; }
 
-          # Bind the supplied digest to the immutable build output from the
-          # first publication attempt, not merely to whatever the version tag
-          # happens to resolve to now. Later failed-job reruns may adopt/inspect
-          # that image without running the build step again.
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=all&per_page=100" \
+          # Bind the supplied digest to an immutable candidate build output from this exact Release
+          # run, not merely to whatever the version tag resolves to now. Failed-job reruns can create
+          # more than one legitimate run-attempt-scoped candidate, so inspect every paginated build
+          # attempt and select a job whose Buildx + convergence logs both name the supplied digest.
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?filter=all&per_page=100" \
             > /tmp/all-source-jobs.json
-          build_job_id=$(jq -er '
+          mapfile -t build_job_ids < <(jq -r '
             [
-              .jobs[]
+              .[].jobs[]
               | select(.name == "Publish verified versioned controller image / Build or recover + verify controller image")
-              | select(any(.steps[]; .name == "Build and push absent refs" and .conclusion == "success"))
+              | select(any(.steps[]; .name == "Build and push run-scoped candidates" and .conclusion == "success"))
+              | select(any(.steps[]; .name == "Verify every run-scoped candidate" and .conclusion == "success"))
               | select(any(.steps[]; .name == "Log in to Docker Hub" and .conclusion == "skipped"))
+              | .id
             ]
-            | if length == 1 then .[0].id else error("expected one source image build job") end
+            | unique | sort | reverse[]
           ' /tmp/all-source-jobs.json)
-          [[ "$build_job_id" =~ ^[0-9]+$ ]] \
-            || { echo "::error::source image build job id is invalid"; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$build_job_id/logs" > /tmp/source-image-build.log
-          action_digest=$(sed -nE \
-            's/.*"containerimage\.digest": "(sha256:[0-9a-f]{64})".*/\1/p' \
-            /tmp/source-image-build.log | sort -u)
-          converge_digest=$(sed -nE \
-            's/.*BUILD_DIGEST: (sha256:[0-9a-f]{64}).*/\1/p' \
-            /tmp/source-image-build.log | sort -u)
-          [ "$action_digest" = "$EXPECTED_GHCR_DIGEST" ] \
-            && [ "$converge_digest" = "$EXPECTED_GHCR_DIGEST" ] \
-            || { echo "::error::expected digest is not the exact source-run build output"; exit 1; }
+          ((${#build_job_ids[@]} > 0)) \
+            || { echo "::error::source Release run has no verified candidate build attempt"; exit 1; }
+          matching_build_job_id=""
+          for build_job_id in "${build_job_ids[@]}"; do
+            [[ "$build_job_id" =~ ^[0-9]+$ ]] || continue
+            build_log="/tmp/source-image-build-$build_job_id.log"
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$build_job_id/logs" > "$build_log"
+            action_digest=$(sed -nE \
+              's/.*"containerimage\.digest": "(sha256:[0-9a-f]{64})".*/\1/p' \
+              "$build_log" | sort -u)
+            converge_digest=$(sed -nE \
+              's/.*BUILD_DIGEST: (sha256:[0-9a-f]{64}).*/\1/p' \
+              "$build_log" | sort -u)
+            if [ "$action_digest" = "$EXPECTED_GHCR_DIGEST" ] \
+              && [ "$converge_digest" = "$EXPECTED_GHCR_DIGEST" ]; then
+              matching_build_job_id="$build_job_id"
+              break
+            fi
+          done
+          [ -n "$matching_build_job_id" ] \
+            || { echo "::error::expected digest is not an exact verified candidate build output from the source run"; exit 1; }
 
       - name: Resolve the exact 15 immutable artifact IDs
         id: artifacts

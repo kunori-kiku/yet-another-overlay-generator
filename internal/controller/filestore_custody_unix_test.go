@@ -3,6 +3,7 @@
 package controller
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,16 +22,46 @@ func TestFileStoreRejectsUnsafeConfiguredRoot(t *testing.T) {
 		}
 	})
 
-	t.Run("group-writable", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state")
+	for _, mode := range []os.FileMode{0775, 0777} {
+		mode := mode
+		t.Run(fmt.Sprintf("owned writable root %04o is tightened", mode), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state")
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewFileStore(path); err != nil {
+				t.Fatalf("NewFileStore(owned %04o root): %v", mode, err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0700 {
+				t.Fatalf("owned root mode after open = %04o, want 0700", got)
+			}
+		})
+	}
+
+	t.Run("sticky shared root is rejected unchanged", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "shared")
 		if err := os.Mkdir(path, 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(path, 0770); err != nil {
+		if err := os.Chmod(path, os.ModeSticky|0777); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := NewFileStore(path); err == nil || !strings.Contains(err.Error(), "group/world-writable") {
-			t.Fatalf("NewFileStore(group-writable root) err = %v, want custody rejection", err)
+			t.Fatalf("NewFileStore(sticky shared root) err = %v, want custody rejection", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode(); got.Perm() != 0777 || got&os.ModeSticky == 0 {
+			t.Fatalf("sticky shared root mode after rejection = %v, want unchanged 01777", got)
 		}
 	})
 

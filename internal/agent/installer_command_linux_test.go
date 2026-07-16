@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 )
 
 func TestInstallerGuardianForwardsArgumentAndExitStatusWithoutLeaseLeak(t *testing.T) {
@@ -28,12 +30,17 @@ func TestInstallerGuardianForwardsArgumentAndExitStatusWithoutLeaseLeak(t *testi
 		t.Fatalf("mkdir staging: %v", err)
 	}
 	record := filepath.Join(base, "arg")
+	capabilityRecord := filepath.Join(base, "capability")
 	leaked := filepath.Join(base, "lease-leaked")
 	t.Setenv("YAOG_GUARDIAN_ARG", record)
+	t.Setenv("YAOG_GUARDIAN_CAPABILITY", capabilityRecord)
 	t.Setenv("YAOG_GUARDIAN_LEAK", leaked)
+	// The launcher must replace, rather than append ambiguously beside, an inherited value.
+	t.Setenv(runtimecontract.InstallerCapabilityTelemetryPolicyV1Env, "spoofed")
 	script := `#!/usr/bin/env bash
 set -eu
 printf '%s' "${1:-}" > "$YAOG_GUARDIAN_ARG"
+printf '%s' "$YAOG_AGENT_CAP_TELEMETRY_POLICY_V1" > "$YAOG_GUARDIAN_CAPABILITY"
 if target="$(readlink /proc/$$/fd/3 2>/dev/null)" && [[ "$target" == */.run.lock ]]; then
   : > "$YAOG_GUARDIAN_LEAK"
 fi
@@ -54,6 +61,10 @@ exit 42
 	arg, readErr := os.ReadFile(record)
 	if readErr != nil || string(arg) != "--uninstall" {
 		t.Fatalf("installer argument = %q, %v; want exact --uninstall", arg, readErr)
+	}
+	capability, readErr := os.ReadFile(capabilityRecord)
+	if readErr != nil || string(capability) != "1" {
+		t.Fatalf("installer capability = %q, %v; want launcher-owned value 1", capability, readErr)
 	}
 	if _, err := os.Stat(filepath.Join(staging, "INJECTED")); !os.IsNotExist(err) {
 		t.Fatalf("shell metacharacters in installer path were evaluated: %v", err)

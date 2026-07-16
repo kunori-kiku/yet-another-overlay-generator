@@ -58,7 +58,8 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -u 65532 yaog \
     && mkdir -p /data \
-    && chown -R yaog:yaog /data
+    && chown -R yaog:yaog /data \
+    && chmod 0700 /data
 COPY --from=backend /out/yaog-server /usr/local/bin/yaog-server
 COPY --from=frontend --chown=yaog:yaog /app/frontend/dist /app/web
 # The WASM local engine (plan-2): the panel fetches /yaog.wasm + /wasm_exec.js from the web root. The
@@ -77,9 +78,9 @@ EXPOSE 8080 9090
 # an orchestrator can restart/replace it. start-period covers the brief startup window.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1
-# /data is owned by uid 65532 above. A fresh NAMED volume inherits that ownership; a
-# BIND mount (the shipped docker-compose.yml uses ./data) does NOT — the host dir must
-# be chowned to 65532 (documented in docker-compose.yml / docs/spec/controller/docker.md).
+# /data is owned by uid 65532 with mode 0700 above. A fresh NAMED volume inherits both; a
+# BIND mount (the shipped docker-compose.yml uses ./data) does NOT — the host dir needs
+# matching owner/mode (documented in docker-compose.yml / docs/spec/controller/docker.md).
 VOLUME ["/data"]
 USER yaog
 # ENTRYPOINT is the bare binary; CMD holds the serve flags. This way

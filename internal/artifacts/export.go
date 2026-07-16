@@ -15,6 +15,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/naming"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 )
 
 // ExportResult reports the outcome of an export run.
@@ -64,6 +65,9 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 	}
 	if artifactsJSON, ok := result.ArtifactsJSON[nodeID]; ok && artifactsJSON != "" {
 		bundleFiles["artifacts.json"] = artifactsJSON
+	}
+	if telemetryJSON, ok := result.TelemetryPolicyJSON[nodeID]; result.AgentHeld && ok && telemetryJSON != "" {
+		bundleFiles[probepolicy.FileName] = telemetryJSON
 	}
 	for i := range result.Topology.Nodes {
 		if result.Topology.Nodes[i].ID == nodeID {

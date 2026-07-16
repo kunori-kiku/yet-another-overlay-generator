@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 )
 
 // bundleFileNames is the closed set of bundle-relative paths the agent knows how
@@ -44,6 +46,7 @@ var bundleFileNames = []string{
 	"trustlist.sig",
 	"sysctl/99-overlay.conf",
 	"babel/babeld.conf",
+	probepolicy.FileName,
 	"README.txt",
 }
 

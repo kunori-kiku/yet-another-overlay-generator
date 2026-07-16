@@ -39,6 +39,9 @@ func TestStoreTelemetryOverlay(t *testing.T) {
 			if err := s.RecordTelemetry(ctx, tenant, "node-1", conds, metrics, "v-new", base); err != nil {
 				t.Fatalf("RecordTelemetry: %v", err)
 			}
+			// RecordTelemetry must own the RawMessage bytes, not just copy the map header. HTTP
+			// decoders and other callers are free to reuse their input buffer after the call returns.
+			copy(metrics["resource"], []byte(`{"load1":9.5}`))
 
 			check := func(n Node, where string) {
 				t.Helper()
@@ -71,7 +74,16 @@ func TestStoreTelemetryOverlay(t *testing.T) {
 			}
 			check(list[0], "ListNodes")
 
-			// (FileStore-overlay deep-copy isolation is asserted in TestFileStoreTelemetryNoFsync.)
+			// Reads must also own their RawMessage bytes. Replacing a map value would only prove
+			// the map was copied; mutate the returned slice in place to catch byte-level aliasing.
+			got.Conditions[0].Message = "TAMPERED"
+			copy(got.Telemetry["resource"], []byte(`{"load1":8.5}`))
+			isolated, err := s.GetNode(ctx, tenant, "node-1")
+			if err != nil {
+				t.Fatalf("GetNode(after returned-value mutation): %v", err)
+			}
+			check(isolated, "GetNode after returned-value mutation")
+
 			// TouchLastSeen advances LastSeen only; conditions survive.
 			later := base.Add(time.Minute)
 			if err := s.TouchLastSeen(ctx, tenant, "node-1", later); err != nil {
@@ -130,7 +142,13 @@ func TestFileStoreTelemetryNoFsync(t *testing.T) {
 		map[string]json.RawMessage{"resource": json.RawMessage(`{"load1":1}`)}, "v-new", base); err != nil {
 		t.Fatalf("RecordTelemetry: %v", err)
 	}
-	if err := s.TouchLastSeen(ctx, tenant, "node-1", base.Add(time.Second)); err != nil {
+	if _, err := s.RecordTelemetrySequenced(ctx, tenant, "node-1",
+		[]runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Message: "up"}},
+		map[string]json.RawMessage{"resource": json.RawMessage(`{"load1":1}`)}, "v-new",
+		"00112233445566778899aabbccddeeff", 1, base.Add(time.Second), 30*time.Second, base.Add(2*time.Second)); err != nil {
+		t.Fatalf("RecordTelemetrySequenced: %v", err)
+	}
+	if err := s.TouchLastSeen(ctx, tenant, "node-1", base.Add(3*time.Second)); err != nil {
 		t.Fatalf("TouchLastSeen: %v", err)
 	}
 
@@ -161,7 +179,7 @@ func TestFileStoreTelemetryNoFsync(t *testing.T) {
 	// Deep-copy isolation: the overlay is a SHARED in-memory structure, so a returned node must not
 	// alias it — a caller mutating the returned Conditions/Telemetry must not corrupt a later read.
 	got.Conditions[0].Message = "TAMPERED"
-	got.Telemetry["resource"] = json.RawMessage(`"tampered"`)
+	copy(got.Telemetry["resource"], []byte(`{"load1":9}`))
 	again, err := s.GetNode(ctx, tenant, "node-1")
 	if err != nil {
 		t.Fatalf("GetNode(again): %v", err)

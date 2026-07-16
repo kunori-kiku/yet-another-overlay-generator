@@ -45,6 +45,7 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetryprotocol"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -744,4 +745,114 @@ func errStr(_ int64, _ bool, err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func TestControllerClient_PostTelemetryReliableAckAndLegacyController(t *testing.T) {
+	t.Run("v2 acknowledgement and duplicate", func(t *testing.T) {
+		env := newCtlEnv(t)
+		token := env.enrollViaAgent(t, "node-1")
+		client, err := agent.NewControllerClient(env.agentSrv.URL, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.AgentVersion = "v-rc9"
+		sample := agent.TelemetrySample{
+			BootID: "00112233445566778899aabbccddeeff", Sequence: 1,
+			SampledAt: time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC), Interval: 17 * time.Second,
+			Metrics: map[string]any{"probe_results": []map[string]any{{
+				"id": "tcp-main", "type": "tcp", "host": "example.net", "port": 443, "status": "success",
+			}}},
+		}
+		receipt, err := client.PostTelemetry(sample)
+		if err != nil {
+			t.Fatalf("PostTelemetry: %v", err)
+		}
+		if !receipt.Reliable || receipt.Duplicate || receipt.BootID != sample.BootID || receipt.AcknowledgedSequence != 1 || receipt.ReceivedAt.IsZero() {
+			t.Fatalf("first receipt = %+v", receipt)
+		}
+		sample.Metrics = map[string]any{"probe_results": []map[string]any{{
+			"id": "tcp-wrong", "type": "tcp", "host": "must-not-win", "port": 1, "status": "failure",
+		}}}
+		retry, err := client.PostTelemetry(sample)
+		if err != nil {
+			t.Fatalf("PostTelemetry(retry): %v", err)
+		}
+		if !retry.Reliable || !retry.Duplicate || retry.AcknowledgedSequence != 1 {
+			t.Fatalf("retry receipt = %+v", retry)
+		}
+		node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(node.Telemetry["probe_results"], []byte("example.net")) || bytes.Contains(node.Telemetry["probe_results"], []byte("must-not-win")) {
+			t.Fatalf("duplicate replaced first probe results: %s", node.Telemetry["probe_results"])
+		}
+	})
+
+	t.Run("strict legacy controller", func(t *testing.T) {
+		var sawProtocolHeader, sawIntervalHeader bool
+		legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sawProtocolHeader = r.Header.Get(telemetryprotocol.HeaderProtocol) == telemetryprotocol.Version
+			sawIntervalHeader = r.Header.Get(telemetryprotocol.HeaderIntervalMillis) == "17000"
+			defer r.Body.Close()
+			var body struct {
+				Conditions   []runtimecontract.Condition `json:"conditions,omitempty"`
+				Metrics      map[string]any              `json:"metrics,omitempty"`
+				AgentVersion string                      `json:"agent_version,omitempty"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		}))
+		defer legacy.Close()
+
+		client, err := agent.NewControllerClient(legacy.URL, "node-token")
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := client.PostTelemetry(agent.TelemetrySample{
+			BootID: "00112233445566778899aabbccddeeff", Sequence: 1,
+			SampledAt: time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC), Interval: 17 * time.Second,
+			Metrics: map[string]any{"resource": map[string]any{"load1": 1}},
+		})
+		if err != nil {
+			t.Fatalf("new agent -> strict legacy controller: %v", err)
+		}
+		if receipt.Reliable {
+			t.Fatalf("legacy response reported reliable acknowledgement: %+v", receipt)
+		}
+		if !sawProtocolHeader || !sawIntervalHeader {
+			t.Fatalf("new client headers: protocol=%v interval=%v", sawProtocolHeader, sawIntervalHeader)
+		}
+	})
+}
+
+func TestControllerClient_PostTelemetryRejectsNonExactAcknowledgement(t *testing.T) {
+	bootID := "00112233445566778899aabbccddeeff"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(telemetryprotocol.HeaderProtocol, telemetryprotocol.Version)
+		w.Header().Set(telemetryprotocol.HeaderBootID, bootID)
+		w.Header().Set(telemetryprotocol.HeaderAckSequence, "2")
+		w.Header().Set(telemetryprotocol.HeaderReceivedAt, time.Now().UTC().Format(time.RFC3339Nano))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client, err := agent.NewControllerClient(server.URL, "node-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.PostTelemetry(agent.TelemetrySample{
+		BootID: bootID, Sequence: 1, SampledAt: time.Now().UTC(),
+		Metrics: map[string]any{"resource": map[string]any{"load1": 1}},
+	})
+	if err == nil {
+		t.Fatal("client accepted acknowledgement for a different sequence")
+	}
 }

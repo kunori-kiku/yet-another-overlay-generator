@@ -353,8 +353,11 @@ func TestWriteJSONL_NoDuplicateBookkeeping(t *testing.T) {
 	if got := countLines(p); got != 16 {
 		t.Fatalf("after buffered flush: %d lines, want 16", got)
 	}
-	h.requeueFront(nt, node, batch(1, 100), cap) // SIMULATE the old close-error requeue of a written batch
-	h.flushOnce()                                // re-writes it → duplication
+	h.mu.Lock()
+	h.entryLocked(nt, node).inflight = batch(1, 100)
+	h.mu.Unlock()
+	h.requeueInflight(nt, node, cap) // SIMULATE the old close-error requeue of a written batch
+	h.flushOnce()                    // re-writes it → duplication
 	if got := countLines(p); got != 17 {
 		t.Fatalf("requeuing an already-written batch must duplicate it (documenting why the fix is log-and-continue): got %d lines, want 17", got)
 	}

@@ -30,6 +30,7 @@ func TestMapControllerErr_Table(t *testing.T) {
 		{"node_revoked", controller.ErrNodeRevoked, apierr.CodeEnrollNodeRevoked, http.StatusConflict, ""},
 		{"invalid_wg_key", controller.ErrInvalidWGKey, apierr.CodeReqFieldInvalid, http.StatusBadRequest, "wg_public_key"},
 		{"duplicate_wg_key", controller.ErrDuplicateWGKey, apierr.CodeDuplicateWGKey, http.StatusConflict, ""},
+		{"telemetry_probes_require_keystone", controller.ErrTelemetryProbesRequireKeystone, apierr.CodeTelemetryProbesRequireKeystone, http.StatusPreconditionFailed, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -26,6 +26,16 @@ for arg in "$@"; do
         --clean) CLEAN=1 ;;
     esac
 done
+{{- if .RequiresTelemetryPolicyV1 }}
+
+# telemetry.json policy v1 is activated by the agent only after this installer succeeds. Refuse a
+# normal apply from an older launcher that would otherwise mutate the network and silently ignore
+# the signed probe policy. Uninstall remains available as a recovery operation on older agents.
+if [ "$UNINSTALL" -eq 0 ] && [ "${YAOG_AGENT_CAP_TELEMETRY_POLICY_V1:-}" != "1" ]; then
+    echo "ERROR: this bundle contains signed active telemetry policy and requires yaog-agent v2.0.0-rc.9 or later; upgrade the agent before applying" >&2
+    exit 1
+fi
+{{- end }}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 

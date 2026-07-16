@@ -181,6 +181,10 @@ export function NodeEditor() {
               onChange={(e) =>
                 updateNode(selectedNode.id, {
                   deployment_mode: e.target.value === 'manual' ? 'manual' : undefined,
+                  // A manual node has no resident agent. Clear source-side active probes at this
+                  // custody transition instead of leaving an invalid, apparently configured policy.
+                  telemetry_probes:
+                    e.target.value === 'manual' ? undefined : selectedNode.telemetry_probes,
                 })
               }
               className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"

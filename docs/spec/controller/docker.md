@@ -8,20 +8,39 @@ systemd and installs via the one-shot host bootstrap (see [bootstrap.md](bootstr
 ## Deploy
 
 ```
-# State persists to ./data next to the compose file; the container runs as uid 65532,
-# so create that folder with the right owner once:
-mkdir -p data && sudo chown 65532:65532 data
+# Rootful Docker without userns-remap: state persists to ./data next to the
+# compose file. Create it private and owned by the container's uid 65532 once:
+sudo install -d -m 0700 -o 65532 -g 65532 data
 docker compose up -d
 # create the first operator account (interactive password prompt):
 docker compose run --rm controller create-operator \
     --state-dir /data --tenant default --username admin
 ```
 
-`docker-compose.yml` **bind-mounts** the FileStore to `./data` next to the file (so backing
-up the controller is just snapshotting that folder), publishes both ports, and sets controller
-mode via `YAOG_TENANT_ID` + `YAOG_CONTROLLER_STATE_DIR`. Front it with a TLS-terminating reverse
-proxy in production (the commented `caddy` service): `POST /login` carries a plaintext password,
-so TLS at the proxy is required.
+The literal host uid command applies only to rootful Docker with user-namespace remapping disabled.
+For rootless Docker or a daemon using `userns-remap`, do not pre-create or `chown ./data`. Select the
+declared Docker-managed volume so ownership is created in the container's user namespace. Put the
+selection in `.env` so every subsequent Compose command uses the same state:
+
+```dotenv
+YAOG_DATA_SOURCE=controller-data
+```
+
+Then run `docker compose up -d` normally.
+
+At startup, FileStore safely tightens a real configured root from a group/world-writable mode to
+`0700` only when it is already owned by the controller's runtime uid. A wrong owner, symlink, or
+special file still fails closed. For the rootful bind-mount path, manual repair is
+`sudo chown 65532:65532 data && sudo chmod 0700 data`; do not apply that literal host uid repair to
+rootless or user-namespace-remapped Docker.
+
+`docker-compose.yml` **bind-mounts** the FileStore to `./data` by default (so backing up the
+controller is just snapshotting that folder). Setting `YAOG_DATA_SOURCE=controller-data` selects the
+declared, project-scoped Docker volume instead; back that mode up through Docker's volume tooling,
+because there is no authoritative `./data` host folder. The compose also publishes both ports and
+sets controller mode via `YAOG_TENANT_ID` + `YAOG_CONTROLLER_STATE_DIR`. Front it with a
+TLS-terminating reverse proxy in production (the commented `caddy` service): `POST /login` carries a
+plaintext password, so TLS at the proxy is required.
 
 ### Network exposure (loopback by default)
 
@@ -53,12 +72,14 @@ precedence, the SPA catch-all serves everything else with an index.html fallback
 
 ## Backups
 
-The whole controller state is `./data` — back it up by copying/snapshotting that directory.
-It holds the registry, topology, bundles, audit log, operator accounts (argon2id hashes), and
-the pinned operator credential (public key only). It does NOT hold any WireGuard private key
+The whole controller state is the storage mounted at `/data`: `./data` in the default bind-mount
+mode, or the Compose project-scoped `controller-data` volume when that portable mode is selected.
+Back up the former by copying/snapshotting the directory and the latter with Docker volume tooling.
+It holds the registry, topology, bundles, audit log, operator accounts (argon2id hashes), and the
+pinned operator credential (public key only). It does NOT hold any WireGuard private key
 (zero-knowledge custody) or any plaintext password/token.
 
-**Future direction (not yet built):** push encrypted snapshots of `./data` to an object-storage
+**Future direction (not yet built):** push encrypted snapshots of the `/data` state to an object-storage
 bucket (S3/R2/GCS), encrypted under the operator's off-host hardware/passkey (Bitwarden) key —
 so backups are confidential at rest and recoverable only with the same off-host key that anchors
 the keystone. Tracked as a follow-up.
@@ -84,24 +105,37 @@ the keystone. Tracked as a follow-up.
 Both `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` must be non-empty. When both are absent the mirror is
 a clean skip; configuring only one is an error.
 A direct `workflow_dispatch` is intentionally **edge-only**; it cannot accept or publish a release
-version. Version references are policy-non-overwritten, not registry-immutable: recovery adopts one
-only after its source/version labels, runtime version, exact amd64/arm64 platform set, extracted server
-ELF machine, and digest all match. The build inherits BuildKit's automatic target OS/architecture and
-checks the resulting Go binary metadata, so an arm64 image cannot silently carry an amd64 server.
-Different existing bytes fail closed. RC/GA `latest` pointers and the GitHub release are
-separate external updates, so a failed finalizer can temporarily leave verified pointers ahead or
-behind; rerunning only that finalizer converges and re-verifies the same transaction.
+version. Version references are policy-non-overwritten, not registry-immutable. The build inherits
+BuildKit's automatic target OS/architecture and checks the resulting Go binary metadata, so an arm64
+image cannot silently carry an amd64 server.
+Fresh builds push only unique run-scoped candidate references to every configured registry. Each
+candidate must pass that full verifier at the build digest before the workflow attaches the official
+version reference in the same registry, preserving the complete verified index (including any
+attestations) by digest. A failed build or candidate check therefore leaves official version
+references untouched.
 
-> **Historical arm64 warning:** current `latest` / `2.0.0-rc.8` is verified to contain native amd64
-> and arm64 servers. The retained `2.0.0-rc.6` and withdrawn `2.0.0-rc.7` versioned images still have
-> malformed arm64 children containing an amd64 server and must not be used on arm64. The rc.7 identity
-> must not be recovered, overwritten, promoted, or reused. This historical Dockerfile defect does not
-> affect standalone arm64 agents or release bundles.
+Failed-job adoption assumes trusted registry writers. Without a current-attempt candidate digest, the
+workflow re-verifies source/version labels, runtime version, entrypoint, the exact amd64/arm64 platform
+set, and each extracted server ELF machine; configured official references must also agree on their
+digest. That recovery check does not reconstruct byte provenance for every image layer or frontend
+file, so operators must never manually seed, replace, or retag a release-version reference. A reference
+that disagrees with the current verified candidate or its configured peer registry fails closed.
+RC/GA `latest` pointers and the GitHub release are separate external updates, so a failed finalizer can
+temporarily leave verified pointers ahead or behind; rerunning only that finalizer converges and
+re-verifies the same transaction.
+
+> **Historical arm64 warning:** `2.0.0-rc.8` is verified to contain native amd64 and arm64 servers, and
+> the current pipeline repeats that proof before attaching an official reference. The retained
+> `2.0.0-rc.6` and withdrawn `2.0.0-rc.7` versioned images still have malformed arm64 children containing
+> an amd64 server and must not be used on arm64. The rc.7 identity must not be recovered, overwritten,
+> promoted, or reused. This historical Dockerfile defect does not affect standalone arm64 agents or
+> release bundles.
 
 ## Notes
 
 - Multi-arch: `linux/amd64` + `linux/arm64` (QEMU + Buildx).
-- Runs as a non-root user (uid 65532). The shipped compose uses a **bind mount**, so the
-  host `./data` must be chowned to 65532 (see Deploy). `/data` in the image is owned by
-  65532, so a *named* volume would inherit writable ownership automatically if you revert.
+- Runs as a non-root user (uid 65532). The shipped compose defaults to a **bind mount**; only
+  rootful Docker without `userns-remap` should chown host `./data` to literal uid 65532 (see Deploy).
+  Rootless and user-namespace-remapped deployments should set
+  `YAOG_DATA_SOURCE=controller-data` and let Docker manage the declared named volume.
 - Build locally instead of pulling: uncomment `build: .` in `docker-compose.yml`.

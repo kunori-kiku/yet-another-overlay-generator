@@ -88,6 +88,12 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 	} else if !errors.Is(cerr, ErrNotFound) {
 		return DeployPreviewResult{}, fmt.Errorf("controller: loading operator credential to preview: %w", cerr)
 	}
+	// Match real stage: active outbound probes are only deployable under a pinned keystone.
+	// Check before temp-dir creation/export. The separate non-deploy compile preview remains
+	// available for design work; this endpoint intentionally predicts the real Deploy gate.
+	if err := requireTelemetryProbeKeystone(result, keystoneOn); err != nil {
+		return DeployPreviewResult{}, err
+	}
 	skipEnabled, err := stageSkipEnabled(ctx, store, t, keystoneOn, opCred)
 	if err != nil {
 		return DeployPreviewResult{}, err

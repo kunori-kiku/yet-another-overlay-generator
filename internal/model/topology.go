@@ -124,7 +124,32 @@ type Node struct {
 	SSHPort    int    `json:"ssh_port,omitempty"`     // SSH port (default 22)
 	SSHUser    string `json:"ssh_user,omitempty"`     // SSH username
 	SSHKeyPath string `json:"ssh_key_path,omitempty"` // SSH private-key path
+
+	// TelemetryProbes are operator-authorized active reachability checks run by this managed
+	// node after the containing deployment bundle has passed the off-host keystone gate and
+	// applied successfully. Host is an explicit IP literal or DNS hostname; it is intentionally
+	// independent of topology membership so operators can monitor external dependencies. The
+	// type discriminator is the extension boundary for future probe kinds (for example URL),
+	// whose additional fields must be introduced and validated explicitly rather than smuggled
+	// through Host.
+	TelemetryProbes []TelemetryProbe `json:"telemetry_probes,omitempty"`
 }
+
+// TelemetryProbe is one manually configured active check. Zero interval/timeout values select
+// the documented policy defaults. TCP accepts exactly one port; ICMP accepts none.
+type TelemetryProbe struct {
+	ID                  string `json:"id"`
+	Type                string `json:"type"`
+	Host                string `json:"host"`
+	Port                int    `json:"port,omitempty"`
+	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
+	TimeoutMilliseconds int    `json:"timeout_milliseconds,omitempty"`
+}
+
+const (
+	TelemetryProbeICMP = "icmp"
+	TelemetryProbeTCP  = "tcp"
+)
 
 // Value constants for Node.DeploymentMode. An empty value is equivalent to DeploymentManaged.
 const (
