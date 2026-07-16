@@ -170,6 +170,10 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 - 2026-07-17 — Workflow resolution: plans 1-8 use execute-implementation-plan and close-phase. Plan 9 is
   a terminal release checklist outside those skills so all closure/archive/status commits precede the
   final tag.
+- 2026-07-17 — plan-1 closed as completed: `3035a2e` restored structured deploy validation,
+  preserved served/staged state on rejected drafts, and restricted compatibility bypass to 404/405.
+- 2026-07-17 — plan-1 specs touch update deferred to plan-8's mandatory full refresh; the current
+  dirty specs cache contains coordinated later-plan changes and must not be partially committed here.
 
 ## Milestones
 
@@ -189,7 +193,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-1 — Restore deploy validation and compatibility boundaries
 
-- **Plan:** plan-1-2026_07_17.md
+- **Plan:** _completed/completed-plan-1-2026_07_17.md
 - **Goal:** invalid drafts become structured blocking validation, while only a missing old-controller
   preview route permits compatibility deployment.
 - **Proposed solution:** preserve validator findings through compiler/API mapping; separate draft save
