@@ -178,6 +178,11 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
   complete address pairs on client links, aligned Go/TypeScript healing, and normalized browser sync baselines.
 - 2026-07-17 — plan-2 specs touch update deferred to plan-8's mandatory full refresh; active allocation
   documents were corrected now, while the generated component cache will be rebuilt after integration.
+- 2026-07-17 — plan-3 closed as completed: `a7d4fd1` kept routine report/telemetry state out of new
+  durable audit rows while preserving the verified legacy chain, and finished display-only probe names
+  without changing strict version-1 policy bytes, result identity, staging, or generation.
+- 2026-07-17 — plan-3 aligned the targeted active specs for audit and probe-name boundaries; the
+  mandatory whole-cache `refresh-specs` regeneration remains scheduled for plan 8 after integration.
 
 ## Milestones
 
@@ -220,7 +225,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-3 — Quiet routine audits and finish display-only probe names
 
-- **Plan:** plan-3-2026_07_17.md
+- **Plan:** _completed/completed-plan-3-2026_07_17.md
 - **Goal:** routine status remains Fleet state, not visible durable audit noise; names remain display-only.
 - **Proposed solution:** suppress new report audit appends, filter legacy rows after server verification,
   share current display labels, forbid generic JSON marshaling of runtime Policy.
