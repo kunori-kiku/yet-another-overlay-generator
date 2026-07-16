@@ -90,15 +90,22 @@ httpOnly cookies.
 
 Fleet owns active telemetry. The registry joins each topology node's configured `telemetry_probes`
 with the live controller node's `probeResults` for a compact summary; the node-detail page co-locates
-the policy editor, whole-design Save action/conflict dialog, and latest results. Design's properties
-aside does not own this operational editor. Saving remains a topology-draft mutation, while Deploy is
-the distinct signature and activation boundary.
+the policy editor, whole-design Save action/conflict dialog, latest results, and component-local
+latency/availability history. Design's properties aside does not own this operational editor. Saving
+remains a topology-draft mutation, while Deploy is the distinct signature and activation boundary.
+History fetched for charts never enters the Zustand persistence boundary. Both Fleet routes share a
+non-overlapping ten-second Live scheduler and one feedback control that exposes in-flight refresh,
+last-success age, next refresh, hidden-tab pause, and stale/error state. The Live/manual path fetches
+only the node observation endpoint; full audit, Settings, and keystone hydration remain foreground or
+security/bootstrap work. Fleet freshness has its own transient clock, so an unrelated topology save
+cannot make telemetry appear current.
 
 ### `uiStore`
 
 `frontend/src/stores/uiStore.ts` owns shell-only presentation state: theme, sidebar collapse,
-effective and local translucency, and the ephemeral mobile drawer. Its `partialize` allowlist
-persists only non-secret preferences; the open drawer state is intentionally transient.
+effective and local translucency, the ephemeral mobile drawer, and the shared in-memory Fleet Live
+toggle. Its `partialize` allowlist persists only non-secret preferences; the open drawer and Live
+observation state are intentionally transient.
 
 ## Compute integration
 

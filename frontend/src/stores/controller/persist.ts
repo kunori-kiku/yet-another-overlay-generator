@@ -22,6 +22,8 @@ export const PERSIST_NAME = 'controller-storage';
 // nodeId/status/agentVersion/timestamps, no key material. The cache is advisory: rekey state
 // drives a warning/confirmation rather than an authorization gate, and refresh() converges it
 // to live server truth. The controller backend remains authoritative at stage/promote.
+// lastFleetSyncedAt is intentionally absent: it is a session-local observation clock and the first
+// authenticated Fleet read after reload rebuilds it instead of presenting an old cache age as Live.
 //
 // Per-node LIVE telemetry (beta.12 wireguardPeers) is stripped via stripLiveTelemetry — it
 // carries raw peer endpoints (fleet-confidential) and a frozen handshake age is stale on

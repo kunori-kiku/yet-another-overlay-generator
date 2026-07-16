@@ -331,6 +331,7 @@ func writeTelemetryReceiptHeaders(w http.ResponseWriter, metadata *telemetryRequ
 	w.Header().Set(telemetryprotocol.HeaderBootID, metadata.bootID)
 	w.Header().Set(telemetryprotocol.HeaderAckSequence, strconv.FormatUint(receipt.AcknowledgedSequence, 10))
 	w.Header().Set(telemetryprotocol.HeaderReceivedAt, receipt.ReceivedAt.UTC().Format(time.RFC3339Nano))
+	w.Header().Set(telemetryprotocol.HeaderCapabilities, telemetryprotocol.CapabilityProbeSamplesV1)
 	if receipt.Duplicate {
 		w.Header().Set(telemetryprotocol.HeaderDuplicate, "true")
 	}
@@ -345,8 +346,8 @@ func writeTelemetryReceiptHeaders(w http.ResponseWriter, metadata *telemetryRequ
 // heartbeat would flood the hash-chained audit log (HandleReport's append); do not "fix" the
 // asymmetry by adding an audit entry here. Conditions are server-stamped with the controller clock
 // inside the store (a node clock cannot be trusted for ageing). The validated metrics map (the
-// framework's extension slot — e.g. resource and probe results) feeds the volatile node.telemetry
-// overlay and its bounded history; it is not durable deploy state.
+// framework's extension slot — e.g. resource and probe results) feeds bounded history in full; only
+// its cataloged live-visible subset feeds node.telemetry. It is not durable deploy state.
 // Returns {status:"ok"}. Routed through op() (routes_controller.go): the adapter runs the method
 // guard + structural identity() check before this body.
 func (h *ControllerHandler) HandleTelemetry(ctx context.Context, tenant controller.TenantID, node string, w http.ResponseWriter, r *http.Request) (any, *apierr.Error) {

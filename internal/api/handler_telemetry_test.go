@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetryprotocol"
 )
 
@@ -74,16 +76,26 @@ func TestHandleTelemetry(t *testing.T) {
 }
 
 // TestHandleTelemetry_MetricsRoundTrip pins the full metrics seam: a heartbeat carrying the
-// extensible metrics map (wireguard_peers — the per-peer link detail) is persisted by the agent
-// endpoint and served VERBATIM to the operator under node.telemetry, so the panel can render the
-// collapsible per-link panel. A nil-metrics heartbeat then clears it.
+// extensible metrics map is admitted by the agent endpoint. Live-visible metrics are served verbatim
+// to the operator under node.telemetry, while probe_samples remains history-only and is not echoed by
+// every Fleet refresh. A nil-metrics heartbeat then clears the latest map.
 func TestHandleTelemetry_MetricsRoundTrip(t *testing.T) {
 	env := newCtlTestEnv(t)
 	token := env.enrollNode(t, "node-1")
+	sampledAt := time.Now().UTC().Truncate(time.Second)
+	latency := 6.25
+	probeSamples, err := json.Marshal([]probemetric.Result{{
+		ID: "dns", Type: "icmp", Host: "resolver.example", Status: probemetric.StatusSuccess,
+		LatencyMS: &latency, CheckedAt: sampledAt.Format(time.RFC3339Nano), IntervalMS: 30_000,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	body := telemetryRequestJSON{
 		Metrics: map[string]json.RawMessage{
-			"wireguard_peers": json.RawMessage(`[{"peer":"bravo","interface":"wg-bravo","last_handshake":1782820825,"status":"up"}]`),
+			telemetrymetric.WireGuardPeers.Key: json.RawMessage(`[{"peer":"bravo","interface":"wg-bravo","last_handshake":1782820825,"status":"up"}]`),
+			telemetrymetric.ProbeSamples.Key:   probeSamples,
 		},
 	}
 	if status := doJSON(t, http.MethodPost, env.agentURL("telemetry"), token, body, nil); status != http.StatusOK {
@@ -104,9 +116,16 @@ func TestHandleTelemetry_MetricsRoundTrip(t *testing.T) {
 	if found == nil {
 		t.Fatalf("node-1 not in /nodes response")
 	}
-	raw, ok := found.Telemetry["wireguard_peers"]
+	raw, ok := found.Telemetry[telemetrymetric.WireGuardPeers.Key]
 	if !ok || !bytes.Contains(raw, []byte("bravo")) {
 		t.Fatalf("served node.telemetry[wireguard_peers] = %s (ok=%v), want the per-peer payload", raw, ok)
+	}
+	if _, leaked := found.Telemetry[telemetrymetric.ProbeSamples.Key]; leaked {
+		t.Fatalf("history-only probe_samples leaked through GET /nodes: %+v", found.Telemetry)
+	}
+	probeHistory, err := env.store.QueryTelemetryProbeHistory(context.Background(), testTenant, "node-1", sampledAt.Add(-time.Second), sampledAt.Add(time.Second))
+	if err != nil || len(probeHistory) != 1 || probeHistory[0].ID != "dns" || probeHistory[0].IntervalMS != 30_000 {
+		t.Fatalf("probe_samples hidden from /nodes but not retained in history: %+v err=%v", probeHistory, err)
 	}
 
 	// A nil-metrics heartbeat clears the served map.
@@ -156,15 +175,29 @@ func TestHandleTelemetry_ReliableHeadersAndLegacyBodyCompatibility(t *testing.T)
 		return resp
 	}
 
+	probeLatency := 12.5
+	probeRaw, err := json.Marshal([]map[string]any{{
+		"id": "tcp-main", "type": "tcp", "host": "example.net", "port": 443,
+		"status": "success", "latency_ms": 12.5, "checked_at": sampledAt.Format(time.RFC3339Nano),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	first := post("1", sampledAt.Format(time.RFC3339Nano), telemetryRequestJSON{
 		Metrics: map[string]json.RawMessage{
-			"probe_results": json.RawMessage(`[{"id":"tcp-main","type":"tcp","host":"example.net","port":443,"status":"success"}]`),
-			"resource":      json.RawMessage(`{"load1":1}`),
+			telemetrymetric.ProbeResults.Key: probeRaw,
+			telemetrymetric.ProbeSamples.Key: apiProbeMetric(t, probemetric.Result{
+				ID: "tcp-main", Type: "tcp", Host: "example.net", Port: 443,
+				Status: probemetric.StatusSuccess, LatencyMS: &probeLatency,
+				CheckedAt: sampledAt.Format(time.RFC3339Nano), IntervalMS: 30_000,
+			}),
+			telemetrymetric.Resource.Key: json.RawMessage(`{"load1":1}`),
 		},
 	})
 	defer first.Body.Close()
 	if first.StatusCode != http.StatusOK || first.Header.Get(telemetryprotocol.HeaderProtocol) != telemetryprotocol.Version ||
-		first.Header.Get(telemetryprotocol.HeaderBootID) != bootID || first.Header.Get(telemetryprotocol.HeaderAckSequence) != "1" {
+		first.Header.Get(telemetryprotocol.HeaderBootID) != bootID || first.Header.Get(telemetryprotocol.HeaderAckSequence) != "1" ||
+		!telemetryprotocol.HasCapability(first.Header.Get(telemetryprotocol.HeaderCapabilities), telemetryprotocol.CapabilityProbeSamplesV1) {
 		t.Fatalf("first response status=%d headers=%v", first.StatusCode, first.Header)
 	}
 	receivedAt, err := time.Parse(time.RFC3339Nano, first.Header.Get(telemetryprotocol.HeaderReceivedAt))
@@ -173,18 +206,22 @@ func TestHandleTelemetry_ReliableHeadersAndLegacyBodyCompatibility(t *testing.T)
 	}
 
 	duplicate := post("1", sampledAt.Format(time.RFC3339Nano), telemetryRequestJSON{
-		Metrics: map[string]json.RawMessage{"probe_results": json.RawMessage(`[{"id":"tcp-wrong","type":"tcp","host":"wrong.example","port":1,"status":"failure"}]`)},
+		Metrics: map[string]json.RawMessage{telemetrymetric.ProbeResults.Key: json.RawMessage(`[{"id":"tcp-wrong","type":"tcp","host":"wrong.example","port":1,"status":"failure"}]`)},
 	})
 	defer duplicate.Body.Close()
-	if duplicate.StatusCode != http.StatusOK || duplicate.Header.Get(telemetryprotocol.HeaderAckSequence) != "1" || duplicate.Header.Get(telemetryprotocol.HeaderDuplicate) != "true" {
+	if duplicate.StatusCode != http.StatusOK || duplicate.Header.Get(telemetryprotocol.HeaderAckSequence) != "1" || duplicate.Header.Get(telemetryprotocol.HeaderDuplicate) != "true" ||
+		!telemetryprotocol.HasCapability(duplicate.Header.Get(telemetryprotocol.HeaderCapabilities), telemetryprotocol.CapabilityProbeSamplesV1) {
 		t.Fatalf("duplicate response status=%d headers=%v", duplicate.StatusCode, duplicate.Header)
 	}
 	node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(node.Telemetry["probe_results"], []byte("example.net")) || bytes.Contains(node.Telemetry["probe_results"], []byte("wrong.example")) {
-		t.Fatalf("duplicate replaced probe payload: %s", node.Telemetry["probe_results"])
+	if !bytes.Contains(node.Telemetry[telemetrymetric.ProbeResults.Key], []byte("example.net")) || bytes.Contains(node.Telemetry[telemetrymetric.ProbeResults.Key], []byte("wrong.example")) {
+		t.Fatalf("duplicate replaced probe payload: %s", node.Telemetry[telemetrymetric.ProbeResults.Key])
+	}
+	if _, leaked := node.Telemetry[telemetrymetric.ProbeSamples.Key]; leaked {
+		t.Fatalf("sequenced heartbeat leaked history-only probe_samples onto live telemetry: %+v", node.Telemetry)
 	}
 	if node.LastSeen.Before(receivedAt) {
 		t.Fatalf("LastSeen %v is before first controller received-at %v", node.LastSeen, receivedAt)
@@ -193,6 +230,10 @@ func TestHandleTelemetry_ReliableHeadersAndLegacyBodyCompatibility(t *testing.T)
 	history, err := env.store.QueryTelemetryHistory(context.Background(), testTenant, "node-1", sampledAt.Add(-time.Second), sampledAt.Add(time.Second))
 	if err != nil || len(history) != 1 || history[0].IntervalMS != 17000 {
 		t.Fatalf("cadence-aware history=%+v err=%v", history, err)
+	}
+	probeHistory, err := env.store.QueryTelemetryProbeHistory(context.Background(), testTenant, "node-1", sampledAt.Add(-time.Second), sampledAt.Add(time.Second))
+	if err != nil || len(probeHistory) != 1 || probeHistory[0].ID != "tcp-main" || probeHistory[0].LatencyMS == nil || *probeHistory[0].LatencyMS != 12.5 || probeHistory[0].IntervalMS != 30_000 {
+		t.Fatalf("probe fallback history=%+v err=%v", probeHistory, err)
 	}
 
 	malformed := post("2", "", telemetryRequestJSON{})

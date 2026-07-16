@@ -673,26 +673,34 @@ measured" must never look alike); every later beat has it.
 
 **CPU / RAM / load history charts.** The controller retains a bounded per-node **history** of the
 `resource` metric, and the node-detail page charts it over time: CPU %, memory-used %, and the load
-averages. You pick a **time range** and a **granularity** (step); the server aggregates the raw samples
+averages. You pick a **time range** and **Resolution**; the server aggregates retained observations
 into buckets (average / min / max per bucket) and **omits empty buckets** — a gap in the data (node
 offline, history just enabled) stays a gap on the chart, never a fabricated zero. Very fine steps are
 floored (≈ 1s), and a too-fine step over a large range is automatically widened so the chart stays
-bounded; the effective step is echoed back, so the axis is labelled with what you actually got.
-With **Auto** granularity, the server first uses the most recent advertised heartbeat interval,
+bounded. One global 1000-bucket budget is shared by resource and selected-probe streams, and Fleet
+fetches only the exact probe currently selected, so a wide range transfers compact rollups instead of
+the full retained series. The effective step is echoed back, so the axis reflects what you got. With
+an explicit Resolution, Fleet also displays when the controller widened it to honor the global
+response budget; 24-hour and seven-day axes include dates rather than repeating ambiguous clock times.
+With
+**Auto** Resolution, the server first uses the most recent advertised heartbeat interval,
 otherwise infers the lower-median observed cadence (resisting outage gaps and post-deploy kick
 samples), with a 30s floor. A missing metric value is always a chart gap. To avoid a false break when
 healthy samples straddle bucket boundaries, one empty effective bucket is tolerated; longer missing
 runs break the line rather than connecting through an outage.
 
-**Retention is configurable.** A per-node sample cap in controller **Settings** bounds the history; the
-default is ≈ 20160 samples ≈ **7 days at the 30s heartbeat**. Setting the cap to **0 disables**
-history — the charts then show a "history off" state. History is append-only and **never blocks the
-heartbeat** (a heartbeat never writes to disk). It is also never frozen: a just-deployed node's charts
-update **promptly** (not only at deploy time), because the heartbeat is the single source and the agent
-nudges a fresh sample right after each apply.
+**Retention is configurable and byte-bounded.** A per-node record target in controller **Settings**
+bounds logical history; the default is ≈ 20160 records ≈ **7 days at the 30s heartbeat**. Setting it to
+**0 disables** history. An independent 128 MiB per-node file ceiling wins over the target for
+variable-width probe records; streaming compaction aims below it, and queries scan only the newest
+bounded suffix. History **never blocks the heartbeat** (a heartbeat never writes to disk). It is also
+never frozen: a just-deployed node's charts update promptly because the heartbeat is the single source
+and the agent nudges a fresh sample right after each apply.
 
 **Signed active telemetry.** In **Fleet**, open a node detail page to configure multiple ICMP echo or
-TCP-connect checks and see their latest results in the same place. Each row has one required
+TCP-connect checks and see their latest results plus latency/availability history in the same place.
+Failures remain visible as attempted outages and are never plotted as zero-millisecond latency; a
+missing report remains a real gap. Each row has one required
 destination `host`, which may be an IP literal or DNS hostname; there is no separate or mandatory DNS
 field. TCP adds a required port. Saving updates the controller design draft, while **Deploy** is the
 separate signature/activation boundary. A probe-bearing deploy requires the pinned off-host keystone,
@@ -700,6 +708,17 @@ and the agent repeats that membership gate before activation. DNS is resolved af
 each attempt. ICMP needs raw-socket privilege and reports a permission failure if unavailable; TCP and
 ICMP are implemented in-process, without a `ping`/`tcping` package. A future URL probe remains a
 separate typed feature. See [the active-telemetry spec](spec/operations/active-telemetry.md).
+
+**Fleet Live feedback.** Enabling **Live** performs an immediate refresh and then polls ten seconds
+after each completed request, so a slow controller cannot accumulate overlapping calls. The page shows
+when it is actively refreshing, how long ago the last successful update arrived, and the next-refresh
+countdown. It pauses while the tab is hidden, refreshes immediately on return, and changes to a
+delayed/stale state when successful updates stop; the refresh icon rotates only during network work.
+This frequent path fetches only the node observation snapshot—not the full audit chain, Settings, or
+keystone status—and uses a dedicated Fleet-success clock, so saving an unrelated topology cannot make
+telemetry look fresh. History refreshes when that node's `last_seen` advances, preserves the last
+successful graph through a transient read failure, and shows its own updating/last-success/warning
+feedback with an explicit retry for quiet or offline nodes.
 
 ### 5.9 Mimic `.deb` catalog
 

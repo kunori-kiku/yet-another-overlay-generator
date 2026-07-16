@@ -767,7 +767,7 @@ func TestControllerClient_PostTelemetryReliableAckAndLegacyController(t *testing
 		if err != nil {
 			t.Fatalf("PostTelemetry: %v", err)
 		}
-		if !receipt.Reliable || receipt.Duplicate || receipt.BootID != sample.BootID || receipt.AcknowledgedSequence != 1 || receipt.ReceivedAt.IsZero() {
+		if !receipt.Reliable || receipt.Duplicate || receipt.BootID != sample.BootID || receipt.AcknowledgedSequence != 1 || receipt.ReceivedAt.IsZero() || !receipt.ProbeSamplesV1 {
 			t.Fatalf("first receipt = %+v", receipt)
 		}
 		sample.Metrics = map[string]any{"probe_results": []map[string]any{{
@@ -777,7 +777,7 @@ func TestControllerClient_PostTelemetryReliableAckAndLegacyController(t *testing
 		if err != nil {
 			t.Fatalf("PostTelemetry(retry): %v", err)
 		}
-		if !retry.Reliable || !retry.Duplicate || retry.AcknowledgedSequence != 1 {
+		if !retry.Reliable || !retry.Duplicate || retry.AcknowledgedSequence != 1 || !retry.ProbeSamplesV1 {
 			t.Fatalf("retry receipt = %+v", retry)
 		}
 		node, err := env.store.GetNode(context.Background(), testTenant, "node-1")
@@ -823,11 +823,40 @@ func TestControllerClient_PostTelemetryReliableAckAndLegacyController(t *testing
 		if err != nil {
 			t.Fatalf("new agent -> strict legacy controller: %v", err)
 		}
-		if receipt.Reliable {
+		if receipt.Reliable || receipt.ProbeSamplesV1 {
 			t.Fatalf("legacy response reported reliable acknowledgement: %+v", receipt)
 		}
 		if !sawProtocolHeader || !sawIntervalHeader {
 			t.Fatalf("new client headers: protocol=%v interval=%v", sawProtocolHeader, sawIntervalHeader)
+		}
+	})
+
+	t.Run("v2 controller without additive capability", func(t *testing.T) {
+		bootID := "00112233445566778899aabbccddeeff"
+		legacyV2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer r.Body.Close()
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set(telemetryprotocol.HeaderProtocol, telemetryprotocol.Version)
+			w.Header().Set(telemetryprotocol.HeaderBootID, bootID)
+			w.Header().Set(telemetryprotocol.HeaderAckSequence, "1")
+			w.Header().Set(telemetryprotocol.HeaderReceivedAt, time.Now().UTC().Format(time.RFC3339Nano))
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer legacyV2.Close()
+
+		client, err := agent.NewControllerClient(legacyV2.URL, "node-token")
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := client.PostTelemetry(agent.TelemetrySample{
+			BootID: bootID, Sequence: 1, SampledAt: time.Now().UTC(),
+			Metrics: map[string]any{"resource": map[string]any{"load1": 1}},
+		})
+		if err != nil {
+			t.Fatalf("new agent -> rc.9-style v2 controller: %v", err)
+		}
+		if !receipt.Reliable || receipt.ProbeSamplesV1 {
+			t.Fatalf("rc.9-style receipt = %+v, want reliable without probe-samples capability", receipt)
 		}
 	})
 }

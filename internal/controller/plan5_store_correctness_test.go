@@ -354,7 +354,8 @@ func TestWriteJSONL_NoDuplicateBookkeeping(t *testing.T) {
 		t.Fatalf("after buffered flush: %d lines, want 16", got)
 	}
 	h.mu.Lock()
-	h.entryLocked(nt, node).inflight = batch(1, 100)
+	writtenSample := batch(1, 100)[0]
+	h.entryLocked(nt, node).inflight = []telemetryHistoryRecord{{Resource: &writtenSample, RecordedAt: writtenSample.TS}}
 	h.mu.Unlock()
 	h.requeueInflight(nt, node, cap) // SIMULATE the old close-error requeue of a written batch
 	h.flushOnce()                    // re-writes it → duplication

@@ -6,14 +6,15 @@ import { t, type UILanguage } from '../../i18n';
 import { Field } from '../../ui/Field';
 
 // TelemetryHistorySettings (telemetry-history plan-4): the fleet card for the per-node resource-
-// history sample cap (plan-2 backend field telemetry_history_cap). One numeric knob that rides the
+// history record target (plan-2 backend field telemetry_history_cap). One numeric knob that rides the
 // existing full-replace /settings contract. The form is keyed only on whether settings have LOADED
 // (empty→loaded) so it initializes from the server value once; it deliberately does NOT remount when a
 // save mutates settings (that would reset the "Saved." notice) — the form owns the operator's edits
 // after load, matching MimicCatalogSettings/AgentUpdateSettings (the notice-bearing cards).
 //
 // Semantics mirror the Go *int: blank ⇒ default (DefaultTelemetryHistoryCap), 0 ⇒ history disabled
-// (the node-detail charts then show a "history off" hint), N ⇒ retain N samples per node.
+// (the node-detail charts then show a "history off" hint), N ⇒ target N records per node. The
+// controller's independent physical byte ceiling may retain fewer variable-width probe records.
 
 // Mirrors internal/controller/telemetry_history.go DefaultTelemetryHistoryCap and
 // internal/api/handler_bootstrap.go maxTelemetryHistoryCap; used for the hint + client-side bound

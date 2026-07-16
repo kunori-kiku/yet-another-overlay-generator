@@ -8,13 +8,15 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  type DotItemDotProps,
 } from 'recharts';
 import type { UILanguage } from '../../i18n';
+import { formatTimeSeriesTick, isolatedPointTimes } from '../../lib/timeSeries';
 
 // TimeSeriesChart — a SERIES-GENERIC, theme-token-only line chart with an optional min/max band
 // (plan-4). It knows NOTHING resource-specific: it plots whatever {key,label,unit,data} series it is
-// handed, so a future subject can reuse it for ping/RTT (the owner's decision-1 "one day it could
-// carry ping data"). All color comes from CSS custom properties (the beta.13 lesson: zero hardcoded
+// handed, which now includes both host-resource and active-probe latency/availability charts. All
+// color comes from CSS custom properties (the beta.13 lesson: zero hardcoded
 // hex/rgb) — recharts resolves var(--…) in its stroke/fill props against the current theme, so the
 // chart follows light/dark automatically. `language` is used only as a locale for time/number
 // formatting (still generic — not tied to any metric).
@@ -134,10 +136,7 @@ function ChartTooltip(props: {
 export function TimeSeriesChart({ series, height, yDomain, xDomain, language }: TimeSeriesChartProps) {
   const rows = buildRows(series);
   const axisTick = { fill: 'var(--content-muted)', fontSize: 11 };
-  const fmtTime = (v: number | string): string => {
-    const ms = typeof v === 'number' ? v : Number(v);
-    return Number.isNaN(ms) ? '' : new Date(ms).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' });
-  };
+  const fmtTime = (v: number | string): string => formatTimeSeriesTick(v, language, xDomain);
 
   return (
     <div data-testid="timeseries-chart" className="w-full">
@@ -189,19 +188,53 @@ export function TimeSeriesChart({ series, height, yDomain, xDomain, language }: 
               />
             ) : null,
           )}
-          {series.map((s, i) => (
-            <Line
-              key={`${s.key}__avg`}
-              type="monotone"
-              dataKey={`${s.key}__avg`}
-              name={s.label}
-              stroke={s.color ?? PALETTE[i % PALETTE.length]}
-              strokeWidth={2}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={false}
-            />
-          ))}
+          {series.map((s, i) => {
+            const color = s.color ?? PALETTE[i % PALETTE.length];
+            const valueKey = `${s.key}__avg`;
+            // Recharts plots every series against the merged row set. Derive singleton runs from
+            // that same shape so a timestamp contributed only by another series is correctly a gap.
+            const isolated = isolatedPointTimes({
+              data: rows.map((row) => ({
+                t: row.t,
+                avg: typeof row[valueKey] === 'number' ? row[valueKey] : null,
+              })),
+            });
+            const dot = isolated.size === 0
+              ? false
+              : (props: DotItemDotProps) => {
+                  const t = Number(props.payload?.t);
+                  if (
+                    !isolated.has(t) ||
+                    typeof props.cx !== 'number' ||
+                    typeof props.cy !== 'number'
+                  ) {
+                    return null;
+                  }
+                  return (
+                    <circle
+                      cx={props.cx}
+                      cy={props.cy}
+                      r={3}
+                      fill={color}
+                      stroke={color}
+                      pointerEvents="none"
+                    />
+                  );
+                };
+            return (
+              <Line
+                key={`${s.key}__avg`}
+                type="monotone"
+                dataKey={valueKey}
+                name={s.label}
+                stroke={color}
+                strokeWidth={2}
+                dot={dot}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            );
+          })}
         </ComposedChart>
       </ResponsiveContainer>
     </div>

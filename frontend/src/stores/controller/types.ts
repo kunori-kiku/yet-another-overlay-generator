@@ -20,7 +20,7 @@ import type {
   ReleaseAssetsRequest,
   ReleaseAssetsResult,
 } from '../../api/controllerClient';
-import type { NodeHistory } from '../../lib/telemetryHistory';
+import type { NodeHistory, NodeHistoryRequestOptions } from '../../lib/telemetryHistory';
 import type { DeployPreview, DeployForceArg } from '../../lib/deployPreview';
 import type { Topology } from '../../types/topology';
 import type { WebAuthnCredentialCandidate } from '../../lib/webauthn';
@@ -205,6 +205,10 @@ export interface ControllerState {
   loading: boolean;
   error: string | null;
   lastSyncedAt: number | null;
+  // Dedicated freshness clock for the Fleet node snapshot. Unlike lastSyncedAt, this is never
+  // advanced by topology saves or other controller work, so Live telemetry cannot look fresh merely
+  // because an unrelated mutation succeeded. Transient: rebuilt by the first Fleet observation.
+  lastFleetSyncedAt: number | null;
   // The normalized snapshot (canonicalDesign) of the "server-authoritative design" recorded
   // after the last sync with the server (hydrate / save). Used for: (1) the dirty indicator —
   // the current canvas differing from it means unsaved changes; (2) the conflict-detection
@@ -275,7 +279,17 @@ export interface ControllerState {
   // sets store state nor persists (the fetched history must never enter localStorage — the
   // stripLiveTelemetry custody rule); it does NOT touch global loading/error (the caller owns its own
   // busy/empty/error state). Throws ControllerError on a coded failure.
-  fetchNodeHistory: (nodeId: string, from: string, to: string, step?: string) => Promise<NodeHistory>;
+  fetchNodeHistory: (
+    nodeId: string,
+    from: string,
+    to: string,
+    step?: string,
+    options?: NodeHistoryRequestOptions,
+  ) => Promise<NodeHistory>;
+  // Background/manual Fleet observation. Unlike refresh(), it never touches the global mutation
+  // loading/error gate. true means this request installed current server truth; false means it was
+  // skipped or superseded by a newer/context-changing read. A current transport/API failure rejects.
+  refreshFleetView: () => Promise<boolean>;
   refresh: () => Promise<void>;
   login: (username: string, password: string, totp?: string) => Promise<void>;
   logout: () => Promise<void>;

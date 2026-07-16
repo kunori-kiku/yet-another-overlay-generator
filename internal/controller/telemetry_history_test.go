@@ -3,11 +3,18 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // sampleMetrics builds an agent-shaped metrics["resource"] payload (snake_case wire, mirroring
@@ -19,6 +26,261 @@ func sampleMetrics(cpu *float64, load1 float64) map[string]json.RawMessage {
 	}
 	raw, _ := json.Marshal(obj)
 	return map[string]json.RawMessage{"resource": raw}
+}
+
+func encodedProbeMetric(t *testing.T, results ...probemetric.Result) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// pauseAfterUnlockKV is a test backend that can pause one withLock caller after its storage
+// critical section has been released but before withLock returns to the store core. That exposes the
+// exact stale-GET/newer-PUT ordering window that existed when history-cap publication happened after
+// withLock returned.
+type pauseAfterUnlockKV struct {
+	*memkv
+	pause  chan struct{}
+	paused chan struct{}
+	resume chan struct{}
+}
+
+func (p *pauseAfterUnlockKV) withLock(fn func() error) error {
+	p.memkv.mu.Lock()
+	err := fn()
+	p.memkv.mu.Unlock()
+	select {
+	case <-p.pause:
+		close(p.paused)
+		<-p.resume
+	default:
+	}
+	return err
+}
+
+func TestTelemetryHistoryProjectorCatalogParity(t *testing.T) {
+	if err := validateTelemetryHistoryProjectorRegistry(); err != nil {
+		t.Fatalf("projector registry validation: %v", err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	cpu, latency := 25.0, 3.5
+	probe := probemetric.Result{
+		ID: "fixture", Type: "icmp", Host: "fixture.example", Status: probemetric.StatusSuccess,
+		LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano), IntervalMS: 30_000,
+	}
+	fixtures := map[string]json.RawMessage{
+		telemetrymetric.Resource.Key:     sampleMetrics(&cpu, 1)[telemetrymetric.Resource.Key],
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, probe),
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, probe),
+	}
+	charted := make(map[string]telemetrymetric.ChartFamily)
+	for _, definition := range telemetrymetric.Charted() {
+		charted[definition.Key] = definition.ChartFamily
+		registration, ok := telemetryHistoryProjectors[definition.Key]
+		if !ok || registration.project == nil {
+			t.Errorf("charted telemetry metric %q has no controller history projector", definition.Key)
+			continue
+		}
+		if registration.family != definition.ChartFamily {
+			t.Errorf("projector %q family = %q, catalog declares %q", definition.Key, registration.family, definition.ChartFamily)
+		}
+		raw, ok := fixtures[definition.Key]
+		if !ok {
+			t.Errorf("charted telemetry metric %q has no valid runtime fixture", definition.Key)
+			continue
+		}
+		projection := registration.project(raw, base, 30*time.Second)
+		record := telemetryHistoryRecordFromMetrics(map[string]json.RawMessage{definition.Key: raw}, base, 30*time.Second)
+		switch definition.ChartFamily {
+		case telemetrymetric.ChartFamilyResource:
+			if projection.resource == nil || len(projection.probes) != 0 || record.Resource == nil || len(record.ProbeAttempts) != 0 {
+				t.Errorf("resource fixture %q did not reach only the resource family: projection=%+v record=%+v", definition.Key, projection, record)
+			}
+		case telemetrymetric.ChartFamilyProbe:
+			if projection.resource != nil || len(projection.probes) == 0 || record.Resource != nil || len(record.ProbeAttempts) == 0 {
+				t.Errorf("probe fixture %q did not reach only the probe family: projection=%+v record=%+v", definition.Key, projection, record)
+			}
+		default:
+			t.Errorf("runtime projector fixture has no assertion for chart family %q", definition.ChartFamily)
+		}
+	}
+	for key := range telemetryHistoryProjectors {
+		if _, ok := charted[key]; !ok {
+			t.Errorf("controller history projector %q is not cataloged as charted", key)
+		}
+	}
+	for key := range fixtures {
+		if _, ok := charted[key]; !ok {
+			t.Errorf("runtime projector fixture %q is not cataloged as charted", key)
+		}
+	}
+	if len(telemetryHistoryProjectors) != len(charted) {
+		t.Errorf("history projector/catalog cardinality = %d/%d, want exact parity", len(telemetryHistoryProjectors), len(charted))
+	}
+	if len(fixtures) != len(charted) {
+		t.Errorf("history fixture/catalog cardinality = %d/%d, want exact parity", len(fixtures), len(charted))
+	}
+	families := make(map[telemetrymetric.ChartFamily]struct{})
+	for _, family := range telemetrymetric.ChartFamilies() {
+		families[family] = struct{}{}
+		if telemetryHistoryFamilyAccumulators[family] == nil {
+			t.Errorf("charted family %q has no controller history accumulator", family)
+		}
+	}
+	for family := range telemetryHistoryFamilyAccumulators {
+		if _, ok := families[family]; !ok {
+			t.Errorf("controller history accumulator %q is not a charted catalog family", family)
+		}
+	}
+	if len(telemetryHistoryFamilyAccumulators) != len(families) {
+		t.Errorf("history accumulator/catalog family cardinality = %d/%d, want exact parity", len(telemetryHistoryFamilyAccumulators), len(families))
+	}
+}
+
+func TestProbeHistoryProjectsSamplesAndRC9FallbackWithoutDuplicates(t *testing.T) {
+	h := newTelemetryHistory("", 100, nil)
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	latency := 12.5
+	success := probemetric.Result{
+		ID: "service", Type: "tcp", Host: "one.example", Port: 443,
+		Status: probemetric.StatusSuccess, LatencyMS: &latency,
+		CheckedAt: base.Add(-10 * time.Second).Format(time.RFC3339Nano), IntervalMS: 60_000,
+	}
+	failure := probemetric.Result{
+		// Reusing the human id for a changed destination must form a separate exact-target series.
+		ID: "service", Type: "tcp", Host: "two.example", Port: 443,
+		Status: probemetric.StatusFailure, FailureReason: probemetric.FailureConnectionRefused,
+		CheckedAt: base.Add(-5 * time.Second).Format(time.RFC3339Nano), IntervalMS: 30_000,
+	}
+	pending := probemetric.Result{
+		ID: "pending", Type: "icmp", Host: "pending.example", Status: probemetric.StatusPending,
+	}
+	metrics := map[string]json.RawMessage{
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, success, failure),
+		// rc.9 latest repeats success and includes pending. The high-fidelity copy must win and pending
+		// never becomes a completed history attempt.
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, success, pending),
+	}
+	h.appendMetrics("tn", "n1", metrics, base, 30*time.Second)
+	h.appendMetrics("tn", "n1", metrics, base.Add(30*time.Second), 30*time.Second)
+
+	got, err := h.queryProbes("tn", "n1", base.Add(-time.Minute), base.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("overlapping samples + fallback + repeated snapshot = %d attempts, want 2: %+v", len(got), got)
+	}
+	if got[0].SeriesID == got[1].SeriesID || got[0].Host != "one.example" || got[1].Host != "two.example" {
+		t.Fatalf("exact destination series were spliced or reordered: %+v", got)
+	}
+	if got[0].IntervalMS != 60_000 || got[0].LatencyMS == nil || *got[0].LatencyMS != latency {
+		t.Fatalf("high-fidelity success was not retained: %+v", got[0])
+	}
+	if got[1].LatencyMS != nil || got[1].FailureReason != probemetric.FailureConnectionRefused {
+		t.Fatalf("failure manufactured latency or lost reason: %+v", got[1])
+	}
+}
+
+func TestProbeHistoryBoundsAttemptTimestampsAndTenant(t *testing.T) {
+	h := newTelemetryHistory("", 100, nil)
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	latency := 1.0
+	results := []probemetric.Result{
+		{ID: "old", Type: "icmp", Host: "old.example", Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: base.Add(-maxTelemetryReplayAge - time.Second).Format(time.RFC3339Nano)},
+		{ID: "future", Type: "icmp", Host: "future.example", Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: base.Add(maxTelemetryFutureSkew + time.Second).Format(time.RFC3339Nano)},
+		{ID: "ok", Type: "icmp", Host: "ok.example", Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano)},
+	}
+	h.appendMetrics("tenant-a", "node", map[string]json.RawMessage{
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, results...),
+	}, base, time.Minute)
+	got, err := h.queryProbes("tenant-a", "node", base.Add(-25*time.Hour), base.Add(time.Hour))
+	if err != nil || len(got) != 1 || got[0].ID != "ok" {
+		t.Fatalf("bounded attempt history = %+v, err=%v; want only ok", got, err)
+	}
+	other, err := h.queryProbes("tenant-b", "node", base.Add(-time.Hour), base.Add(time.Hour))
+	if err != nil || len(other) != 0 {
+		t.Fatalf("probe history crossed tenant custody: %+v, err=%v", other, err)
+	}
+}
+
+func TestProbeHistoryFlushRestartAndLegacyResourceCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	latency := 4.25
+	result := probemetric.Result{
+		ID: "dns", Type: "icmp", Host: "resolver.example", Status: probemetric.StatusSuccess,
+		LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano), IntervalMS: 60_000,
+	}
+	h.appendMetrics("tn", "n1", map[string]json.RawMessage{
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, result),
+	}, base, 30*time.Second)
+	legacy := ResourceSample{TS: base.Add(time.Second), Load1: 7}
+	h.append("tn", "n1", legacy)
+	h.flushOnce()
+
+	h2 := newTelemetryHistory(dir, 100, nil)
+	snapshot, err := h2.querySnapshot("tn", "n1", base.Add(-time.Second), base.Add(time.Minute))
+	if err != nil || len(snapshot.Probes) != 1 || len(snapshot.Resources) != 1 {
+		t.Fatalf("combined cross-restart snapshot = %+v, err=%v; want one probe and one resource", snapshot, err)
+	}
+	probes, err := h2.queryProbes("tn", "n1", base.Add(-time.Second), base.Add(time.Minute))
+	if err != nil || len(probes) != 1 || probes[0].ID != "dns" {
+		t.Fatalf("cross-restart probe history = %+v, err=%v", probes, err)
+	}
+	resources, err := h2.query("tn", "n1", base.Add(-time.Second), base.Add(time.Minute))
+	if err != nil || len(resources) != 1 || resources[0].Load1 != 7 {
+		t.Fatalf("legacy flat resource line no longer round-trips: %+v, err=%v", resources, err)
+	}
+
+	// The volatile deduper intentionally restarts empty. A repeated rc.9 snapshot may be appended once,
+	// but query-time exact dedupe must still expose one attempt across disk + the new in-memory tail.
+	h2.appendMetrics("tn", "n1", map[string]json.RawMessage{
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, result),
+	}, base.Add(30*time.Second), 30*time.Second)
+	probes, err = h2.queryProbes("tn", "n1", base.Add(-time.Second), base.Add(time.Minute))
+	if err != nil || len(probes) != 1 {
+		t.Fatalf("post-restart fallback duplicate leaked through query: %+v, err=%v", probes, err)
+	}
+}
+
+func TestProbeHistoryPersistsFullSampleWindowPlusLatestFallback(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	latency := 2.0
+	samples := make([]probemetric.Result, 0, probemetric.MaxRecentSamples)
+	latest := make([]probemetric.Result, 0, 16)
+	for probeIndex := 0; probeIndex < 16; probeIndex++ {
+		id := fmt.Sprintf("probe-%02d", probeIndex)
+		host := fmt.Sprintf("host-%02d.example", probeIndex)
+		for attemptIndex := 4; attemptIndex > 0; attemptIndex-- {
+			samples = append(samples, probemetric.Result{
+				ID: id, Type: "icmp", Host: host, Status: probemetric.StatusSuccess,
+				LatencyMS: &latency, CheckedAt: base.Add(-time.Duration(attemptIndex) * time.Second).Format(time.RFC3339Nano),
+			})
+		}
+		latest = append(latest, probemetric.Result{
+			ID: id, Type: "icmp", Host: host, Status: probemetric.StatusSuccess,
+			LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano),
+		})
+	}
+	h.appendMetrics("tn", "n1", map[string]json.RawMessage{
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, samples...),
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, latest...),
+	}, base, time.Second)
+	h.flushOnce()
+
+	restarted := newTelemetryHistory(dir, 100, nil)
+	got, err := restarted.queryProbes("tn", "n1", base.Add(-time.Minute), base.Add(time.Minute))
+	want := probemetric.MaxRecentSamples + len(latest)
+	if err != nil || len(got) != want {
+		t.Fatalf("persisted full probe window + fallback = %d, err=%v; want %d", len(got), err, want)
+	}
 }
 
 func TestEffectiveHistoryCap(t *testing.T) {
@@ -53,6 +315,25 @@ func TestResourceSampleFromMetrics(t *testing.T) {
 	}
 }
 
+func TestTelemetryHistoryRecordPreservesLegacyResourceJSON(t *testing.T) {
+	cpu := 42.5
+	sample := ResourceSample{
+		TS: time.Unix(1000, 0).UTC(), IntervalMS: 30_000, CpuPct: &cpu,
+		Load1: 1, Load5: 2, Load15: 3, MemTotalKB: 2048, MemAvailKB: 1024,
+	}
+	legacy, err := json.Marshal(sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	additive, err := json.Marshal(telemetryHistoryRecord{Resource: &sample, RecordedAt: sample.TS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(additive) != string(legacy) {
+		t.Fatalf("resource-only history line changed:\nlegacy  %s\nadditive %s", legacy, additive)
+	}
+}
+
 func TestHistory_MemRingCapEvicts(t *testing.T) {
 	h := newTelemetryHistory("", 3, nil) // in-memory, cap 3
 	base := time.Unix(0, 0).UTC()
@@ -75,6 +356,18 @@ func TestHistory_Disabled(t *testing.T) {
 	if err != nil || len(got) != 0 {
 		t.Fatalf("disabled history must append nothing + query empty, got %+v err=%v", got, err)
 	}
+	latency := 1.0
+	at := time.Unix(2, 0).UTC()
+	h.appendMetrics("tn", "n1", map[string]json.RawMessage{
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, probemetric.Result{
+			ID: "disabled", Type: "icmp", Host: "disabled.example", Status: probemetric.StatusSuccess,
+			LatencyMS: &latency, CheckedAt: at.Format(time.RFC3339Nano),
+		}),
+	}, at, 30*time.Second)
+	probes, err := h.queryProbes("tn", "n1", time.Unix(0, 0), time.Unix(100, 0))
+	if err != nil || len(probes) != 0 {
+		t.Fatalf("disabled history retained probes: %+v, err=%v", probes, err)
+	}
 }
 
 // TestHistory_DisabledCapSeededAcrossRestart covers the review fix: a tenant that persisted cap=0
@@ -95,6 +388,65 @@ func TestHistory_DisabledCapSeededAcrossRestart(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "tn", "n1.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("a persisted cap=0 (disabled) tenant must NOT get a history file after restart, err=%v", err)
+	}
+}
+
+func TestHistory_SeedDoesNotOverwriteConcurrentSettingsCap(t *testing.T) {
+	loaded := make(chan struct{})
+	resume := make(chan struct{})
+	h := newTelemetryHistory(t.TempDir(), DefaultTelemetryHistoryCap, func(TenantID) int {
+		close(loaded)
+		<-resume
+		return 0 // stale persisted value read before the concurrent settings write
+	})
+	done := make(chan struct{})
+	go func() {
+		h.ensureSeeded("tn")
+		close(done)
+	}()
+	<-loaded
+	h.setCap("tn", 7) // models the newer value published by PutSettings
+	close(resume)
+	<-done
+	if got := h.capFor("tn"); got != 7 {
+		t.Fatalf("stale startup seed overwrote concurrent settings cap: got %d, want 7", got)
+	}
+}
+
+func TestSettingsCapCacheOrdering_PutWinsOverStaleGet(t *testing.T) {
+	backend := &pauseAfterUnlockKV{
+		memkv:  newMemkv(),
+		pause:  make(chan struct{}, 1),
+		paused: make(chan struct{}),
+		resume: make(chan struct{}),
+	}
+	history := newTelemetryHistory("", DefaultTelemetryHistoryCap, nil)
+	core := newStoreCore(backend, history)
+	ctx := context.Background()
+	zero := 0
+	if err := core.PutSettings(ctx, "tn", ControllerSettings{TelemetryHistoryCap: &zero}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pause the GET after it has read the old cap and released the backend lock. A concurrent PUT can
+	// now complete. The GET must not publish its stale value after the PUT's newer value.
+	backend.pause <- struct{}{}
+	getDone := make(chan error, 1)
+	go func() {
+		_, err := core.GetSettings(ctx, "tn")
+		getDone <- err
+	}()
+	<-backend.paused
+	newCap := 7
+	if err := core.PutSettings(ctx, "tn", ControllerSettings{TelemetryHistoryCap: &newCap}); err != nil {
+		t.Fatal(err)
+	}
+	close(backend.resume)
+	if err := <-getDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := history.capFor("tn"); got != newCap {
+		t.Fatalf("stale GetSettings overwrote newer PutSettings cap: got %d, want %d", got, newCap)
 	}
 }
 
@@ -145,7 +497,7 @@ func TestHistory_QuerySeesInflightFlushExactlyOnce(t *testing.T) {
 	defer releaseReturn()
 
 	writeBatch := h.writeBatch
-	h.writeBatch = func(tn TenantID, nodeID string, samples []ResourceSample, cap int) error {
+	h.writeBatch = func(tn TenantID, nodeID string, samples []telemetryHistoryRecord, cap int) error {
 		close(writeStarted)
 		<-allowWrite
 		err := writeBatch(tn, nodeID, samples, cap)
@@ -275,8 +627,24 @@ func TestMemStore_HistoryWiring(t *testing.T) {
 	}
 	cpu := 33.0
 	at := time.Unix(1000, 0).UTC()
-	if err := s.RecordTelemetry(ctx, "tn", "n1", nil, sampleMetrics(&cpu, 1.0), "v1", at); err != nil {
+	latency := 8.5
+	metrics := sampleMetrics(&cpu, 1.0)
+	metrics[telemetrymetric.ProbeSamples.Key] = encodedProbeMetric(t, probemetric.Result{
+		ID: "tcp-main", Type: "tcp", Host: "example.net", Port: 443,
+		Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: at.Format(time.RFC3339Nano),
+	})
+	if err := s.RecordTelemetry(ctx, "tn", "n1", nil, metrics, "v1", at); err != nil {
 		t.Fatal(err)
+	}
+	snapshot, err := s.QueryTelemetryHistorySnapshot(ctx, "tn", "n1", time.Unix(0, 0), time.Unix(2000, 0))
+	if err != nil || len(snapshot.Resources) != 1 || len(snapshot.Probes) != 1 || snapshot.Probes[0].ID != "tcp-main" {
+		t.Fatalf("combined history snapshot = %+v err=%v", snapshot, err)
+	}
+	*snapshot.Resources[0].CpuPct = 0
+	*snapshot.Probes[0].LatencyMS = 0
+	independent, err := s.QueryTelemetryHistorySnapshot(ctx, "tn", "n1", time.Unix(0, 0), time.Unix(2000, 0))
+	if err != nil || *independent.Resources[0].CpuPct != cpu || *independent.Probes[0].LatencyMS != latency {
+		t.Fatalf("query result mutation leaked into retained history: %+v err=%v", independent, err)
 	}
 	got, err := s.QueryTelemetryHistory(ctx, "tn", "n1", time.Unix(0, 0), time.Unix(2000, 0))
 	if err != nil || len(got) != 1 || got[0].CpuPct == nil || *got[0].CpuPct != 33.0 {
@@ -322,4 +690,392 @@ func TestFileStore_HistoryStartClose(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Load1 != 4.0 {
 		t.Fatalf("Close should flush the sample durably; fresh store query = %d (%v), want 1", len(got), err)
 	}
+}
+
+func TestHistory_LogicalCapAppliesBeforePhysicalCompaction(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 5, nil)
+	base := time.Unix(10_000, 0).UTC()
+	for batch := 0; batch < 2; batch++ {
+		for i := 0; i < 5; i++ {
+			value := batch*5 + i
+			h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(value) * time.Second), Load1: float64(value)})
+		}
+		h.flushOnce()
+	}
+	p := filepath.Join(dir, "tn", "n1.jsonl")
+	if got := countLines(p); got != 10 {
+		t.Fatalf("physical slack file lines = %d, want 10 before the >cap*2 compaction trigger", got)
+	}
+	got, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 || got[0].Load1 != 5 || got[4].Load1 != 9 {
+		t.Fatalf("logical cap query = %+v, want newest five values 5..9", got)
+	}
+}
+
+func TestHistory_CapReductionIsImmediateForMemAndOfflineFile(t *testing.T) {
+	base := time.Unix(20_000, 0).UTC()
+	for _, tc := range []struct {
+		name string
+		dir  func(*testing.T) string
+	}{
+		{name: "mem", dir: func(*testing.T) string { return "" }},
+		{name: "file", dir: func(t *testing.T) string { return t.TempDir() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tc.dir(t)
+			h := newTelemetryHistory(dir, 10, nil)
+			for i := 0; i < 10; i++ {
+				h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+			}
+			if dir != "" {
+				h.flushOnce()
+			}
+			h.setCap("tn", 3)
+			got, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 3 || got[0].Load1 != 7 || got[2].Load1 != 9 {
+				t.Fatalf("reduced-cap query = %+v, want newest three values 7..9", got)
+			}
+			if dir != "" {
+				if physical := countLines(filepath.Join(dir, "tn", "n1.jsonl")); physical != 10 {
+					t.Fatalf("offline file was unexpectedly rewritten synchronously: lines=%d, want 10", physical)
+				}
+			}
+		})
+	}
+}
+
+func TestHistory_ByteCeilingWinsOverRecordTarget(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(30_000, 0).UTC()
+	records := make([]telemetryHistoryRecord, 10)
+	for i := range records {
+		sample := ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)}
+		records[i] = telemetryHistoryRecord{Resource: &sample, RecordedAt: sample.TS}
+	}
+	var threeLineBudget int64
+	for _, record := range records[7:] {
+		size, err := telemetryHistoryRecordEncodedBytes(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		threeLineBudget += size
+	}
+	for i := 0; i < 5; i++ {
+		h.appendRecord("tn", "n1", records[i])
+	}
+	h.flushOnce()
+	p := filepath.Join(dir, "tn", "n1.jsonl")
+	if info, err := os.Stat(p); err != nil || info.Size() <= threeLineBudget {
+		t.Fatalf("five-line setup size = %v err=%v, want larger than three-line budget %d", func() int64 {
+			if info == nil {
+				return 0
+			}
+			return info.Size()
+		}(), err, threeLineBudget)
+	}
+	h.maxFileBytes = threeLineBudget
+	h.compactTargetBytes = threeLineBudget
+	for i := 5; i < 10; i++ {
+		h.appendRecord("tn", "n1", records[i])
+	}
+	h.flushOnce()
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > threeLineBudget {
+		t.Fatalf("history file size = %d, exceeds hard test ceiling %d", info.Size(), threeLineBudget)
+	}
+	if lines := countLines(p); lines != 3 {
+		t.Fatalf("byte-bounded file lines = %d, want newest three", lines)
+	}
+	got, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(time.Hour))
+	if err != nil || len(got) != 3 || got[0].Load1 != 7 || got[2].Load1 != 9 {
+		t.Fatalf("byte-bounded query = %+v err=%v, want values 7..9", got, err)
+	}
+}
+
+func TestHistory_TornTailIsToleratedThenRepairedBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(40_000, 0).UTC()
+	h.append("tn", "n1", ResourceSample{TS: base, Load1: 1})
+	h.flushOnce()
+	p := filepath.Join(dir, "tn", "n1.jsonl")
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte(`{"ts":`)); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(time.Hour))
+	if err != nil || len(before) != 1 || before[0].Load1 != 1 {
+		t.Fatalf("query with torn tail = %+v err=%v, want intact prior line only", before, err)
+	}
+	h.append("tn", "n1", ResourceSample{TS: base.Add(time.Second), Load1: 2})
+	h.flushOnce()
+	after, err := h.query("tn", "n1", base.Add(-time.Second), base.Add(time.Hour))
+	if err != nil || len(after) != 2 || after[0].Load1 != 1 || after[1].Load1 != 2 {
+		t.Fatalf("query after torn-tail repair = %+v err=%v, want intact values 1,2", after, err)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Fatalf("repaired JSONL still has a torn tail: %q", data)
+	}
+	if lines := countLines(p); lines != 2 {
+		t.Fatalf("repaired JSONL lines = %d, want 2", lines)
+	}
+}
+
+func TestHistory_FileVolatileByteBudgetAndMemStoreParity(t *testing.T) {
+	base := time.Unix(50_000, 0).UTC()
+	payload := strings.Repeat("x", 300<<10)
+	appendLarge := func(h *telemetryHistory) {
+		for i := 0; i < 30; i++ {
+			at := base.Add(time.Duration(i) * time.Second)
+			resource := ResourceSample{TS: at, Load1: float64(i)}
+			h.appendRecord("tn", "n1", telemetryHistoryRecord{
+				Resource: &resource, RecordedAt: at,
+				ProbeAttempts: []ProbeHistorySample{{
+					SeriesID: fmt.Sprintf("series-%d", i), ID: fmt.Sprintf("probe-%d", i), Type: "icmp", Host: "example.net",
+					Status: probemetric.StatusFailure, CheckedAt: at, FailureReason: payload,
+				}},
+			})
+		}
+	}
+
+	fileHistory := newTelemetryHistory(t.TempDir(), 100, nil)
+	appendLarge(fileHistory)
+	fileHistory.mu.Lock()
+	fileEntry := fileHistory.nodes["tn"]["n1"]
+	fileLen, fileBytes := len(fileEntry.buf), fileEntry.bufBytes
+	fileHistory.mu.Unlock()
+	if fileBytes > maxFileTelemetryHistoryVolatileBytes || fileLen >= 30 {
+		t.Fatalf("FileStore volatile tail = %d records/%d bytes, want oldest eviction below %d bytes", fileLen, fileBytes, maxFileTelemetryHistoryVolatileBytes)
+	}
+	fileHistory.writeBatch = func(TenantID, string, []telemetryHistoryRecord, int) error { return errors.New("disk unavailable") }
+	fileHistory.flushOnce()
+	fileHistory.mu.Lock()
+	fileEntry = fileHistory.nodes["tn"]["n1"]
+	fileLen, fileBytes = len(fileEntry.buf), fileEntry.bufBytes
+	inflight := len(fileEntry.inflight)
+	fileHistory.mu.Unlock()
+	if fileBytes > maxFileTelemetryHistoryVolatileBytes || inflight != 0 {
+		t.Fatalf("requeued FileStore tail = %d records/%d bytes, inflight=%d; want bounded buffer and no inflight", fileLen, fileBytes, inflight)
+	}
+
+	memHistory := newTelemetryHistory("", 100, nil)
+	appendLarge(memHistory)
+	memHistory.mu.Lock()
+	memEntry := memHistory.nodes["tn"]["n1"]
+	memLen, memBytes := len(memEntry.buf), memEntry.bufBytes
+	memHistory.mu.Unlock()
+	if memLen != 30 || memBytes <= maxFileTelemetryHistoryVolatileBytes || memBytes > maxMemTelemetryHistoryVolatileBytes {
+		t.Fatalf("MemStore history = %d records/%d bytes, want all 30 above FileStore budget and below MemStore ceiling", memLen, memBytes)
+	}
+}
+
+func TestHistory_FilteredSnapshotPushesExactSeriesIntoDiskScan(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Unix(60_000, 0).UTC()
+	seriesID := ""
+	for i := 0; i < 3; i++ {
+		at := base.Add(time.Duration(i) * time.Second)
+		resource := ResourceSample{TS: at, Load1: float64(i)}
+		attempts := make([]ProbeHistorySample, 0, 2)
+		for _, spec := range []struct{ id, host string }{{"selected", "selected.example"}, {"other", "other.example"}} {
+			latency := float64(i + 1)
+			result := probemetric.Result{
+				ID: spec.id, Type: "icmp", Host: spec.host, Status: probemetric.StatusSuccess,
+				LatencyMS: &latency, CheckedAt: at.Format(time.RFC3339Nano), IntervalMS: 30_000,
+			}
+			id := probemetric.SeriesID(result)
+			if spec.id == "selected" {
+				seriesID = id
+			}
+			attempts = append(attempts, ProbeHistorySample{
+				SeriesID: id, ID: result.ID, Type: result.Type, Host: result.Host, Status: result.Status,
+				LatencyMS: &latency, CheckedAt: at, IntervalMS: result.IntervalMS,
+			})
+		}
+		h.appendRecord("tn", "n1", telemetryHistoryRecord{Resource: &resource, RecordedAt: at, ProbeAttempts: attempts})
+	}
+	h.flushOnce()
+	from, to := base.Add(-time.Second), base.Add(time.Hour)
+	zero, err := h.querySnapshotFilteredContext(context.Background(), "tn", "n1", from, to, TelemetryHistoryQueryOptions{})
+	if err != nil || len(zero.Resources) != 3 || len(zero.Probes) != 0 {
+		t.Fatalf("zero filtered snapshot = %+v err=%v, want resources only", zero, err)
+	}
+	selected, err := h.querySnapshotFilteredContext(context.Background(), "tn", "n1", from, to, TelemetryHistoryQueryOptions{ProbeSeriesID: seriesID})
+	if err != nil || len(selected.Resources) != 3 || len(selected.Probes) != 3 {
+		t.Fatalf("exact filtered snapshot = %+v err=%v, want three resources and selected probes", selected, err)
+	}
+	for _, sample := range selected.Probes {
+		if sample.SeriesID != seriesID || sample.ID != "selected" {
+			t.Fatalf("filtered snapshot leaked another series: %+v", sample)
+		}
+	}
+	all, err := h.querySnapshot("tn", "n1", from, to)
+	if err != nil || len(all.Probes) != 6 {
+		t.Fatalf("legacy unfiltered snapshot probes = %d err=%v, want 6", len(all.Probes), err)
+	}
+}
+
+func TestHistory_ContextCancellationInterruptsTailScan(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 2_000, nil)
+	base := time.Unix(70_000, 0).UTC()
+	for i := 0; i < 1_000; i++ {
+		h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+	}
+	h.flushOnce()
+	ctx := &cancelAfterHistoryChecksContext{Context: context.Background(), remaining: 3}
+	_, err := readHistoryJSONLTail(ctx, filepath.Join(dir, "tn", "n1.jsonl"), base.Add(-time.Second), base.Add(time.Hour), 1_000, h.fileByteLimit(), telemetryHistoryProbeFilter{all: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("tail scan error = %v, want context cancellation during bounded backward scan", err)
+	}
+}
+
+func TestHistory_StartupAndCapQueueConvergeOfflineFiles(t *testing.T) {
+	t.Run("startup byte ceiling", func(t *testing.T) {
+		dir := t.TempDir()
+		writer := newTelemetryHistory(dir, 100, nil)
+		base := time.Unix(80_000, 0).UTC()
+		records := make([]telemetryHistoryRecord, 10)
+		for i := range records {
+			sample := ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)}
+			records[i] = telemetryHistoryRecord{Resource: &sample, RecordedAt: sample.TS}
+			writer.appendRecord("tn", "n1", records[i])
+		}
+		writer.flushOnce()
+		var budget int64
+		for _, record := range records[7:] {
+			size, err := telemetryHistoryRecordEncodedBytes(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			budget += size
+		}
+		restarted := newTelemetryHistory(dir, 100, nil)
+		restarted.maxFileBytes = budget
+		restarted.compactTargetBytes = budget
+		restarted.start()
+		defer restarted.close()
+		waitForHistoryLines(t, filepath.Join(dir, "tn", "n1.jsonl"), 3)
+	})
+
+	t.Run("cap change queue", func(t *testing.T) {
+		dir := t.TempDir()
+		h := newTelemetryHistory(dir, 10, nil)
+		base := time.Unix(90_000, 0).UTC()
+		for i := 0; i < 10; i++ {
+			h.append("tn", "n1", ResourceSample{TS: base.Add(time.Duration(i) * time.Second), Load1: float64(i)})
+		}
+		h.flushOnce()
+		h.start()
+		defer h.close()
+		h.setCap("tn", 3)
+		waitForHistoryLines(t, filepath.Join(dir, "tn", "n1.jsonl"), 3)
+	})
+
+	t.Run("cap change coalescer retains every tenant", func(t *testing.T) {
+		h := newTelemetryHistory(t.TempDir(), 10, nil)
+		h.maintenancePending = make(map[TenantID]struct{})
+		h.maintenanceWake = make(chan struct{}, 1)
+		for i := 0; i < 128; i++ {
+			h.scheduleMaintenance(TenantID(fmt.Sprintf("tenant-%03d", i)))
+		}
+		pending := h.takePendingMaintenance()
+		if len(pending) != 128 {
+			t.Fatalf("pending maintenance tenants = %d, want 128", len(pending))
+		}
+		for i, tenant := range pending {
+			want := TenantID(fmt.Sprintf("tenant-%03d", i))
+			if tenant != want {
+				t.Fatalf("pending[%d] = %q, want %q", i, tenant, want)
+			}
+		}
+		if len(h.maintenanceWake) != 1 {
+			t.Fatalf("coalesced wake count = %d, want 1", len(h.maintenanceWake))
+		}
+	})
+}
+
+func TestCopyHistoryContextUsesBoundedStreamingBuffer(t *testing.T) {
+	source := &historyReadProbe{remaining: 2 << 20}
+	if err := copyHistoryContext(context.Background(), io.Discard, source); err != nil {
+		t.Fatal(err)
+	}
+	if source.maxRequest > historyIOChunkBytes || source.calls < 2 {
+		t.Fatalf("stream reads: max request=%d calls=%d, want <=%d and multiple chunks", source.maxRequest, source.calls, historyIOChunkBytes)
+	}
+}
+
+type cancelAfterHistoryChecksContext struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterHistoryChecksContext) Err() error {
+	if c.remaining <= 1 {
+		c.remaining = 0
+		return context.Canceled
+	}
+	c.remaining--
+	return nil
+}
+
+type historyReadProbe struct {
+	remaining  int
+	maxRequest int
+	calls      int
+}
+
+func (r *historyReadProbe) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	r.calls++
+	if len(p) > r.maxRequest {
+		r.maxRequest = len(p)
+	}
+	n := len(p)
+	if n > r.remaining {
+		n = r.remaining
+	}
+	r.remaining -= n
+	return n, nil
+}
+
+func waitForHistoryLines(t *testing.T, p string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := countLines(p); got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("history file %s did not converge to %d lines (got %d)", p, want, countLines(p))
 }

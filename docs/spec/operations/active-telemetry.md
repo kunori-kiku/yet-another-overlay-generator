@@ -15,13 +15,14 @@ occurs only after off-host keystone authorization.
 Fleet owns both configuration and observation:
 
 - The Fleet registry shows a compact health summary for each node.
-- A Fleet node-detail page co-locates the hand-edited policy and the latest live results.
+- A Fleet node-detail page co-locates the hand-edited policy, latest live results, and bounded
+  latency/availability history.
 - Saving edits the controller's whole design draft. It does not activate the policy.
 - Deploy compiles, signs, promotes, and lets the node activate the policy.
 
 The broader page remains named **Fleet** because it also owns enrollment, deployment state, node
-identity, and health. Probe results are live telemetry and are removed from the browser persistence
-allowlist.
+identity, and health. Latest results and fetched history are removed from the browser persistence
+allowlist; retained history lives only behind the authenticated controller API.
 
 ## Topology policy
 
@@ -117,10 +118,10 @@ loopback, link-local, or otherwise sensitive destination intentionally authorize
 that destination; the validator does not pretend those networks are universally unsafe. Operators
 must treat the keystone signing ceremony as the review point for that authority.
 
-## Result contract
+## Result and history contracts
 
-The sampler reports a bounded `metrics["probe_results"]` array through the ordinary authenticated
-telemetry heartbeat:
+The sampler keeps the backward-compatible bounded `metrics["probe_results"]` latest-value array for
+Fleet status cards and older controllers:
 
 ```json
 [
@@ -145,10 +146,46 @@ The reported host is always the configured value; transient DNS answers are not 
 `permission_denied`, `connection_refused`, `network_unreachable`, and `network_error`; raw platform
 errors do not cross the wire.
 
-Results are controller live state, not durable resource history. They can disappear across controller
-restart and are deliberately stripped from browser persistence. A configured probe with no result is
-shown as waiting, while a result from the just-previous deployed policy may remain visible until the
-next heartbeat converges.
+After a protocol-v2 controller advertises the explicit `probe-samples-v1` receipt capability, an
+updated agent also emits `metrics["probe_samples"]`, a rolling window of at most 64 **completed**
+attempts. Each row uses the same result shape plus the effective `interval_ms`. It never includes the
+initial `pending` state. This additive metric closes the latest-snapshot hole: multiple attempts that
+finish between two ordinary heartbeats remain available to the reliable replay queue. The agent keeps
+the rc.9 metrics shape until negotiation succeeds, disables the extension again after a no-capability
+receipt, and sends one coalesced clean heartbeat after rollback. An updated controller can still derive
+a progressive, lower-fidelity history from an rc.9 agent's repeated `probe_results` snapshots.
+
+Completing 32 attempts since the previous snapshot schedules at most one early collection, leaving the
+other half of the rolling window as headroom. This does not create a second transport or an unbounded
+per-attempt POST: collection stays single-goroutine, the uploader keeps its ordinary bounded replay
+queue, and old/header-stripped controllers retain the configured heartbeat cadence.
+
+The controller strictly parses both keys, bounds `checked_at` against the already-normalized outer
+telemetry sample clock, and retains only completed attempts. Repeated heartbeat snapshots and exact
+transport retries are deduplicated by the exact attempt identity. A series is identified by
+`id + type + host + port`, so reusing an ID for a different destination cannot splice two graphs. The
+ordinary telemetry-history cap, private JSONL custody, off-heartbeat flusher, query window, stable
+bucket grid, and response bound apply to probe history as well as resources.
+
+Cadence is advisory metadata. A future or malformed `interval_ms` is cleared to unknown while an
+otherwise valid attempt is retained; it cannot distort chart gaps or erase the measurement. The
+authenticated history query accepts one exact `id/type/host/port` selector, and Fleet requests only
+the currently selected configured probe. Server-side Resolution/downsampling shares a global
+1000-bucket budget with resource history, so wider ranges transfer coarser summaries rather than every
+raw attempt.
+
+Fleet charts successful latency in milliseconds using per-bucket average/minimum/maximum and charts
+availability from success/failure counts. A failure is a real attempted outage with a stable reason
+and **no latency value**; it must never become `0 ms`. A missing telemetry interval remains a gap and
+must not be counted as network failure. A configured probe with no latest result is shown as waiting,
+while a result from the just-previous deployed policy may remain visible until the next heartbeat
+converges. Historical data is fetched into component-local state and is never stored in the browser.
+
+The shared telemetry metric catalog makes this a framework rule rather than ICMP/TCP special casing:
+every production metric declares either charted history or a documented live-only reason, and the
+controller test gate requires a projector for every charted metric. A future separately typed URL
+probe therefore inherits the probe history path when its result contract is added; it must not ship as
+another latest-only card.
 
 ## Cross-references
 

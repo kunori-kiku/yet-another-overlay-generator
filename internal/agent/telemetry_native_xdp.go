@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // nativeXDPMetricKey carries the PRE-DEPLOY native-XDP capability heuristic (mimic-provisioning
 // plan-4): a best-effort hint the panel reads so it can warn BEFORE an operator picks
 // xdp_mode=native, rather than only learning at deploy time.
-const nativeXDPMetricKey = "native_xdp"
+const nativeXDPMetricKey = telemetrymetric.NativeXDPKey
 
 // nativeXDPCapability is the heuristic classification of whether this node's default-route (egress)
 // NIC can attach an XDP program in DRIVER (native) mode. It is BEST-EFFORT — a driver-name + kernel
@@ -53,6 +54,10 @@ var (
 type nativeXDPSampler struct{}
 
 func (nativeXDPSampler) Name() string { return "native-xdp" }
+
+func (nativeXDPSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{telemetrymetric.NativeXDP}
+}
 
 func (nativeXDPSampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	routeRaw, err := procNetRouteFn()

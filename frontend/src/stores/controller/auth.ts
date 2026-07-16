@@ -68,6 +68,7 @@ const authContextReset = {
   deployPreviewing: false,
   deployPreviewError: null,
   pendingShrink: null,
+  lastFleetSyncedAt: null,
 } as const;
 
 function loginPasskeyStatusMatchesCandidate(

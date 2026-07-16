@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // volatileTelemetry is the in-memory-only overlay of a node's observability fields, written by the
@@ -144,6 +145,24 @@ func cloneMetrics(in map[string]json.RawMessage) map[string]json.RawMessage {
 	out := make(map[string]json.RawMessage, len(in))
 	for k, v := range in {
 		out[k] = append(json.RawMessage(nil), v...)
+	}
+	return out
+}
+
+// cloneLiveMetrics applies the known-key latest/live-surface policy while taking byte ownership.
+// Unknown keys remain visible deliberately so rolling a newer agent before its controller does not
+// erase forward-compatible telemetry. History projection always receives the full admitted map before
+// this filter is applied; in particular probe_samples is retained but not echoed through Fleet.
+func cloneLiveMetrics(in map[string]json.RawMessage) map[string]json.RawMessage {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(in))
+	for key, value := range in {
+		if !telemetrymetric.VisibleOnLiveSurface(key) {
+			continue
+		}
+		out[key] = append(json.RawMessage(nil), value...)
 	}
 	return out
 }
@@ -300,23 +319,21 @@ func (c *storeCore) recordTelemetryLocked(t TenantID, nodeID string, ent *volati
 	}
 	if !ent.telemetrySet || !observedAt.Before(ent.writtenAt) { // observedAt >= writtenAt
 		ent.conditions = stampConditions(conditions, observedAt)
-		ent.telemetry = cloneMetrics(metrics)
+		// The full admitted map reaches history before history-only transport windows are removed from
+		// latest state. Both operations are memory-only and run under the existing freshness gate.
+		// History owns a separate mutex; the established lock order is telemetryMu then history.mu.
+		c.appendTelemetryHistoryLocked(t, nodeID, metrics, historyAt, interval)
+		ent.telemetry = cloneLiveMetrics(metrics)
 		ent.telemetrySet = true
 		ent.writtenAt = observedAt
 		if agentVersion != "" {
 			ent.agentVersion = agentVersion
 		}
-		// Retain a resource-history sample (in-memory append; a background flusher persists it off the
-		// heartbeat path). Gated on the same monotonic freshness. history has its OWN mutex; lock order
-		// telemetryMu → history.mu is consistent (nothing takes telemetryMu while holding history.mu).
-		c.appendTelemetryHistoryLocked(t, nodeID, metrics, historyAt, interval)
 	}
 }
 
 func (c *storeCore) appendTelemetryHistoryLocked(t TenantID, nodeID string, metrics map[string]json.RawMessage, historyAt time.Time, interval time.Duration) {
-	if s, ok := resourceSampleFromMetrics(metrics, historyAt, interval); ok {
-		c.history.append(t, nodeID, s)
-	}
+	c.history.appendMetrics(t, nodeID, metrics, historyAt, interval)
 }
 
 func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, protectedBootID string) {
@@ -364,8 +381,26 @@ func (c *storeCore) TouchLastSeen(ctx context.Context, t TenantID, nodeID string
 // QueryTelemetryHistory returns the node's retained resource-history samples within [from, to]
 // (inclusive), sorted by time and bounded by the operator's per-node cap. Observability only.
 func (c *storeCore) QueryTelemetryHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return c.history.query(t, nodeID, from, to)
+	return c.history.queryContext(ctx, t, nodeID, from, to)
+}
+
+// QueryTelemetryProbeHistory returns completed typed ICMP/TCP attempts within [from, to], sorted and
+// exact-deduplicated across reliable retries, overlapping probe_samples windows, the rc.9 latest-result
+// fallback, and disk/inflight visibility overlap. Retention and tenant custody are shared with resource
+// history; no live metric or destination crosses tenant boundaries.
+func (c *storeCore) QueryTelemetryProbeHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ProbeHistorySample, error) {
+	return c.history.queryProbesContext(ctx, t, nodeID, from, to)
+}
+
+// QueryTelemetryHistorySnapshot returns the resource and active-probe projections from one coherent
+// merge of durable, in-flight, and buffered history. The node-history endpoint uses this combined
+// query so each refresh performs only one JSONL scan.
+func (c *storeCore) QueryTelemetryHistorySnapshot(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error) {
+	return c.history.querySnapshotContext(ctx, t, nodeID, from, to)
+}
+
+// QueryTelemetryHistorySnapshotFiltered is the selector-pushdown form used by the API when it needs
+// resources plus either no probe series or one exact series. The legacy snapshot remains all-probes.
+func (c *storeCore) QueryTelemetryHistorySnapshotFiltered(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error) {
+	return c.history.querySnapshotFilteredContext(ctx, t, nodeID, from, to, options)
 }
