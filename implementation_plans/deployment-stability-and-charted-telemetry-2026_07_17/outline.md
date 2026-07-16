@@ -183,6 +183,12 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
   without changing strict version-1 policy bytes, result identity, staging, or generation.
 - 2026-07-17 — plan-3 aligned the targeted active specs for audit and probe-name boundaries; the
   mandatory whole-cache `refresh-specs` regeneration remains scheduled for plan 8 after integration.
+- 2026-07-17 — plan-4 closed as completed: `5e751ca` froze strict v1 policy bytes, added an
+  exclusive signed successor member, and gated deployment on current authenticated agent capabilities
+  with a legacy-projection rollout bridge that preserves the full saved draft.
+- 2026-07-17 — plan-4 specs touch update deferred to plan-8's mandatory full refresh; the shared
+  worktree already contains coordinated later-plan spec edits, so a partial cache update here would
+  misrepresent the final telemetry architecture.
 
 ## Milestones
 
@@ -236,7 +242,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-4 — rolling-upgrade-safe policy foundation
 
-- **Plan:** plan-4-2026_07_17.md
+- **Plan:** _completed/completed-plan-4-2026_07_17.md
 - **Goal:** add an exclusive successor policy and current-heartbeat readiness bridge without changing
   v1 bytes or erasing a saved v2 draft.
 - **Proposed solution:** keep telemetry.json strict v1; introduce a separately named, versioned successor policy
