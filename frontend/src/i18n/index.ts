@@ -63,6 +63,24 @@ export function tError(body: unknown, lang: UILanguage): string {
     const { code, message, params } = err as ErrorEnvelopeObject;
     if (code) {
       const key = ('error.' + code) as MessageKey;
+      if (code === 'topology_validation_failed' && params) {
+        const validationCode = params.validation_code;
+        const validationMessage = params.validation_message;
+        const validationParams: TParams = {};
+        for (const [name, value] of Object.entries(params)) {
+          if (name.startsWith('validation_param_')) {
+            validationParams[name.slice('validation_param_'.length)] = value;
+          }
+        }
+        const detail = tValidationError({
+          code: typeof validationCode === 'string' ? validationCode : undefined,
+          message: typeof validationMessage === 'string' ? validationMessage : undefined,
+          params: validationParams,
+        }, lang);
+        if (key in en || catalogs[lang]?.[key] !== undefined) {
+          return t(lang, key, { ...params, detail });
+        }
+      }
       if (key in en || catalogs[lang]?.[key] !== undefined) return t(lang, key, params);
     }
     if (message && message.trim()) return message;

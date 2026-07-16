@@ -59,6 +59,7 @@ var allCodes = []Code{
 	CodeKeygenPrivkeyParse,
 	CodeKeygenPinnedNoPrivkey,
 	CodeKeygenGenerateFailed,
+	CodeTopologyValidationFailed,
 	CodeCompileFailed,
 	CodeTransitPoolExhausted,
 	CodeTransitCIDRInvalid,

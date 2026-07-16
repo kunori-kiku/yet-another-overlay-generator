@@ -2,10 +2,63 @@ package compiler
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/validator"
 )
+
+func TestCompilePreservesStructuredValidationFindings(t *testing.T) {
+	tests := []struct {
+		name      string
+		phase     string
+		mutate    func(*model.Topology)
+		wantField string
+		wantCode  validator.Code
+	}{
+		{
+			name:  "schema",
+			phase: "schema",
+			mutate: func(topo *model.Topology) {
+				topo.Project.Name = ""
+			},
+			wantField: "project.name",
+			wantCode:  validator.CodeProjectNameRequired,
+		},
+		{
+			name:  "semantic",
+			phase: "semantic",
+			mutate: func(topo *model.Topology) {
+				topo.Nodes[0].DomainID = "missing-domain"
+			},
+			wantField: "nodes[0].domain_id",
+			wantCode:  validator.CodeNodeDomainRefMissing,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			topo := simpleMeshTopo()
+			tc.mutate(topo)
+			_, err := NewCompiler().Compile(context.Background(), topo, testKeys())
+			var validationErr *TopologyValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("Compile error = %T %v, want *TopologyValidationError", err, err)
+			}
+			if validationErr.Phase != tc.phase {
+				t.Fatalf("phase = %q, want %q", validationErr.Phase, tc.phase)
+			}
+			if len(validationErr.Findings) == 0 {
+				t.Fatal("structured validation error has no findings")
+			}
+			finding := validationErr.Findings[0]
+			if finding.Field != tc.wantField || finding.Code != string(tc.wantCode) {
+				t.Fatalf("first finding = %+v, want field %q code %q", finding, tc.wantField, tc.wantCode)
+			}
+		})
+	}
+}
 
 func testKeys() map[string]KeyPair {
 	return map[string]KeyPair{

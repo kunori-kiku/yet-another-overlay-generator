@@ -80,6 +80,34 @@ type CompileResult struct {
 	Manifest CompileManifest
 }
 
+// TopologyValidationError preserves the structured findings from the compiler's schema or
+// semantic validation pass. Callers can inspect it with errors.As and surface the validator's
+// stable code, field, and interpolation parameters without parsing the human-readable Error
+// string. The compiler package owns this wrapper because validator findings deliberately remain
+// a separate channel from HTTP apierr codes.
+type TopologyValidationError struct {
+	Phase    string
+	Findings []validator.ValidationError
+}
+
+func (e *TopologyValidationError) Error() string {
+	return fmt.Sprintf("topology failed %s validation: %v", e.Phase, e.Findings)
+}
+
+func newTopologyValidationError(phase string, findings []validator.ValidationError) *TopologyValidationError {
+	cloned := make([]validator.ValidationError, len(findings))
+	for i, finding := range findings {
+		cloned[i] = finding
+		if finding.Params != nil {
+			cloned[i].Params = make(map[string]string, len(finding.Params))
+			for key, value := range finding.Params {
+				cloned[i].Params[key] = value
+			}
+		}
+	}
+	return &TopologyValidationError{Phase: phase, Findings: cloned}
+}
+
 // CompileManifest summarizes a compile: project identity, version, timestamp, node count, and checksum.
 type CompileManifest struct {
 	ProjectID   string    `json:"project_id"`
@@ -153,13 +181,13 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	// Pass 1: Schema validation.
 	schemaResult := validator.ValidateSchema(topo)
 	if !schemaResult.IsValid() {
-		return nil, fmt.Errorf("topology failed schema validation: %v", schemaResult.Errors)
+		return nil, newTopologyValidationError("schema", schemaResult.Errors)
 	}
 
 	// Pass 2: Semantic validation.
 	semanticResult := validator.ValidateSemantic(topo)
 	if !semanticResult.IsValid() {
-		return nil, fmt.Errorf("topology failed semantic validation: %v", semanticResult.Errors)
+		return nil, newTopologyValidationError("semantic", semanticResult.Errors)
 	}
 
 	// Collect the non-fatal warnings from both validation stages and return them with the compile

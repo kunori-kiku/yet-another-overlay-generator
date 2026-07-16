@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 )
 
@@ -57,6 +58,27 @@ func mapControllerErr(err error) *apierr.Error {
 	default:
 		return nil
 	}
+}
+
+// mapTopologyValidationErr converts the compiler's structured schema/semantic failure into one
+// stable HTTP 422 envelope. Validator codes deliberately remain distinct from apierr codes, so the
+// first finding is carried as params for edge localization instead of being promoted into an HTTP
+// code. Unknown compile, render, export, and storage failures return nil and retain the handler's
+// operational 500 fallback.
+func mapTopologyValidationErr(err error) *apierr.Error {
+	var validationErr *compiler.TopologyValidationError
+	if !errors.As(err, &validationErr) || len(validationErr.Findings) == 0 {
+		return nil
+	}
+	finding := validationErr.Findings[0]
+	mapped := apierr.New(apierr.CodeTopologyValidationFailed).
+		With("field", finding.Field).
+		With("validation_code", finding.Code).
+		With("validation_message", finding.Message)
+	for key, value := range finding.Params {
+		mapped.With("validation_param_"+key, value)
+	}
+	return mapped.Wrap(err)
 }
 
 // codedErr is the return-value twin of writeCodedOr (handler.go): it surfaces err as its own

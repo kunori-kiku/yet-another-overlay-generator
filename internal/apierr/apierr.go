@@ -52,8 +52,13 @@ const (
 	// change) by the compile/export/deploy-script paths: the controller's HandleCompilePreview/
 	// HandleStage and the in-browser WASM engine. These are coded at the SOURCE in
 	// internal/compiler + internal/allocator and flow through the writeCodedOr relay;
-	// CodeCompileFailed is the relay's 422 fallback for any compile error not coded at the source
-	// (e.g. a schema/semantic validation failure reaching compile).
+	// CodeTopologyValidationFailed is the HTTP envelope for a structured compiler validation
+	// failure. Its params preserve the first validator finding as field, validation_code,
+	// validation_message, and validation_param_<name> entries so the panel can localize the
+	// validator code without collapsing the validator and HTTP code namespaces.
+	// CodeCompileFailed remains available for explicitly chosen compile-only fallback surfaces;
+	// controller deploy handlers do not use it for unknown operational failures.
+	CodeTopologyValidationFailed  Code = "topology_validation_failed"
 	CodeCompileFailed             Code = "compile_failed"
 	CodeTransitPoolExhausted      Code = "compile_transit_pool_exhausted"
 	CodeTransitCIDRInvalid        Code = "compile_transit_cidr_invalid"
@@ -180,6 +185,7 @@ var registry = map[Code]def{
 	CodeKeygenPinnedNoPrivkey: {"Node {node} has a pinned WireGuard public key but no matching private key: the stateless compiler cannot reconstruct it. Paste the in-use private key from that host's /etc/wireguard/<interface>.conf, or clear BOTH key fields to rotate.", http.StatusBadRequest},
 	CodeKeygenGenerateFailed:  {"Failed to generate a WireGuard key for node {node}: {detail}", http.StatusInternalServerError},
 
+	CodeTopologyValidationFailed:  {"Topology validation failed at {field}: {validation_message}", http.StatusUnprocessableEntity},
 	CodeCompileFailed:             {"Compilation failed. Check the topology and try again.", http.StatusUnprocessableEntity},
 	CodeTransitPoolExhausted:      {"The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.", http.StatusUnprocessableEntity},
 	CodeTransitCIDRInvalid:        {"The transit CIDR {cidr} is invalid: {detail}", http.StatusUnprocessableEntity},

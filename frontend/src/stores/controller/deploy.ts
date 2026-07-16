@@ -16,6 +16,7 @@ import {
   selectHasLocalSigningKey,
 } from './helpers';
 import {
+  ControllerError,
   compilePreview as ctlCompilePreview,
   deployPreview as ctlDeployPreview,
   stage,
@@ -120,11 +121,16 @@ export function createDeploySlice(set: ControllerSet, get: ControllerGet) {
         set({ deployPreview: preview, deployPreviewing: false });
       } catch (err) {
         if (!controllerActionContextIsCurrent(get, context)) return;
-        // Best-effort (plan-6): the preview endpoint may be unavailable (a newer panel POSTs the
-        // deploy-preview route to an OLDER controller — 405 GET-only / 404 no route). Record the
-        // failure in deployPreviewError (NOT the global `error`) so the DeployBar surfaces it beside
-        // a "Deploy anyway" fallback, rather than leaving Deploy permanently dead.
-        set({ deployPreviewError: localizeError(err, 'error.generic'), deployPreviewing: false });
+        const localized = localizeError(err, 'error.generic');
+        // Compatibility fallback only: an older controller may genuinely lack the POST preview
+        // route (404/405). Validation, security, storage, export, and network failures are blocking;
+        // bypassing their preview would merely repeat the same failure during stage or risk hiding a
+        // real controller fault.
+        if (err instanceof ControllerError && (err.status === 404 || err.status === 405)) {
+          set({ deployPreviewError: localized, deployPreviewing: false });
+          return;
+        }
+        set({ error: localized, deployPreviewError: null, deployPreviewing: false });
       }
     },
 

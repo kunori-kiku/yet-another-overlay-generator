@@ -849,6 +849,7 @@ export const en = {
   // Compile-time constraint codes (plan-3.5b) — 422s from /api/compile|export|deploy-script. The en
   // value mirrors the Go registry template verbatim (the English default + i18n fallback).
   'error.compile_failed': 'Compilation failed. Check the topology and try again.',
+  'error.topology_validation_failed': 'Deployment blocked at {field}: {detail}',
   'error.compile_transit_pool_exhausted': 'The transit address pool for CIDR {cidr} is exhausted; widen the transit CIDR or reduce the number of links between these nodes.',
   'error.compile_transit_cidr_invalid': 'The transit CIDR {cidr} is invalid: {detail}',
   'error.compile_transit_cidr_not_ipv4': 'The transit CIDR {cidr} must be IPv4.',

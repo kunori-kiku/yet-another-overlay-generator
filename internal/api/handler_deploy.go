@@ -39,12 +39,15 @@ func (h *ControllerHandler) HandleStage(ctx context.Context, tenant controller.T
 		if ae := mapControllerErr(err); ae != nil {
 			return nil, ae
 		}
+		if ae := mapTopologyValidationErr(err); ae != nil {
+			return nil, ae
+		}
 		// CompileAndStage wraps source-coded errors (%w), so codedErr surfaces each at its
 		// OWN status — compile constraints stay 422, but a keygen error (e.g. an AgentHeld node
 		// with no registered public key) surfaces its native 400 and an export I/O failure its
-		// 500. This is intentionally MORE precise than the old blanket 422; CodeStageFailed (422)
-		// is only the fallback for an un-coded stage error. (See TestWriteCodedOr_* in handler_test.)
-		return nil, codedErr(apierr.CodeStageFailed, err)
+		// 500. Structured schema/semantic findings took the explicit 422 path above; any other
+		// uncoded failure is operational and must not be misreported as operator-fixable.
+		return nil, codedErr(apierr.CodeInternal, err)
 	}
 	return stageResponseJSON{
 		Staged:            result.Staged,
@@ -73,6 +76,12 @@ func (h *ControllerHandler) HandleDeployPreview(ctx context.Context, tenant cont
 		if ae := mapControllerErr(err); ae != nil {
 			return nil, ae
 		}
+		if ae := mapTopologyValidationErr(err); ae != nil {
+			return nil, ae
+		}
+		// Source-coded errors retain their own status. An uncoded store, signer, render, or
+		// export fault is operational and remains a 500; only the typed validation error above
+		// is translated into an operator-correctable 422.
 		return nil, codedErr(apierr.CodeInternal, err)
 	}
 	nodes := make([]deployPreviewNodeJSON, 0, len(pv.Nodes))
@@ -128,9 +137,13 @@ func (h *ControllerHandler) HandleCompilePreview(ctx context.Context, tenant con
 	pfs.AgentRolloutNodeIDs = controller.AgentRolloutNodeIDs(cs, nodes)
 	result, _, skipped, err := controller.CompileSubgraph(ctx, topo, nodes, pfs)
 	if err != nil {
-		// CompileSubgraph wraps source-coded errors (%w); codedErr surfaces each at its own
-		// status (compile constraints 422, keygen 400, etc.), CodeCompileFailed the fallback.
-		return nil, codedErr(apierr.CodeCompileFailed, err)
+		if ae := mapTopologyValidationErr(err); ae != nil {
+			return nil, ae
+		}
+		// CompileSubgraph wraps source-coded errors (%w), which codedErr surfaces at their own
+		// status (compile constraints 422, keygen 400, etc.). Unknown render/runtime faults are
+		// operational 500s, not generic topology failures.
+		return nil, codedErr(apierr.CodeInternal, err)
 	}
 	if result == nil {
 		// Nothing enrolled yet: report the skipped set so the panel can say "no node enrolled".

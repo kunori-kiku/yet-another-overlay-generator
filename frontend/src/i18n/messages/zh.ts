@@ -829,6 +829,7 @@ export const zh: Record<keyof typeof en, string> = {
   'error.keygen_generate_failed': "为节点 {node} 生成 WireGuard 密钥失败：{detail}",
   // Compile-time constraint codes (plan-3.5b) — 422 failures returned by /api/compile|export|deploy-script.
   'error.compile_failed': '编译失败，请检查拓扑后重试。',
+  'error.topology_validation_failed': '部署在 {field} 被阻止：{detail}',
   'error.compile_transit_pool_exhausted': 'CIDR {cidr} 的 transit 地址池已耗尽；请扩大 transit CIDR 或减少这些节点之间的链路数。',
   'error.compile_transit_cidr_invalid': 'transit CIDR {cidr} 无效：{detail}',
   'error.compile_transit_cidr_not_ipv4': 'transit CIDR {cidr} 必须为 IPv4。',
