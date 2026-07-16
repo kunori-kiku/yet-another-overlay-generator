@@ -363,7 +363,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 |---|---|
 | plan-1 | done — `3035a2e` — structured deploy validation and 404/405-only compatibility fallback |
 | plan-2 | done — `f136d72` — endpoint-specific client allocation and normalized browser baselines |
-| plan-3 | pending |
+| plan-3 | done — `a7d4fd1` — quiet routine audits and display-only probe names |
 | plan-4 | pending |
 | plan-5 | pending |
 | plan-6 | pending |
