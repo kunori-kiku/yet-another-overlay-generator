@@ -122,9 +122,11 @@ export interface Edge {
   link_direction?: 'both' | 'forward';
   is_enabled: boolean;
   notes?: string;
-  // Allocation pins: written by the compiler and echoed back verbatim, so that a recompile preserves existing
-  // allocations (port / transit IP / link-local address), so adding new nodes does not disturb existing links. See
-  // docs/spec/compiler/allocation-stability.md.
+  // Allocation pins are compiler-written sticky state. Transit and link-local values remain
+  // complete pairs. Ports are paired on ordinary links; on a client link only the client endpoint
+  // lacks a per-link port, while the non-client endpoint retains one valid sticky port.
+  // compiled_port is only the effective dial-port echo, not the sticky allocation authority.
+  // See docs/spec/compiler/allocation-stability.md.
   pinned_from_port?: number;
   pinned_to_port?: number;
   pinned_from_transit_ip?: string;

@@ -2,11 +2,17 @@
 
 ## Phase 1 — Resource Pre-allocation
 
-For each enabled, unique node pair:
-1. Allocate a transit IP pair from `10.10.0.0/24` (sequential: `10.10.0.1/2`, `10.10.0.3/4`, ...)
-2. Allocate an IPv6 link-local pair (`fe80::1/2`, `fe80::3/4`, ...)
-3. Allocate listen ports for both ends: `base_port + per_node_offset++`
-4. Store in `pairAllocation` map (keyed both directions)
+1. Collapse enabled primary-class edges onto their canonical node-pair link identity; keep each
+   backup edge as its own edge-ID-qualified identity.
+2. Reserve every valid existing sticky allocation before choosing any new value: complete transit
+   and link-local pairs, complete ordinary-link port pairs, and the one non-client port on a client
+   link.
+3. Visit link identities in deterministic order and gap-fill each missing resource from its pool.
+   Per-node ports scan upward from the fixed fleet-wide base `51820`; transit and link-local values
+   are allocated as pairs.
+4. Store the resulting oriented allocation for peer construction and compiler write-back. A client
+   endpoint keeps no per-link port because it uses shared `wg0`, while the router-side port and both
+   address pairs remain real link state.
 
 ## Phase 2 — PeerInfo Construction
 
@@ -114,15 +120,14 @@ fix is single-linking the edge (`link_direction: forward`,
 [../data-model/edge.md](../data-model/edge.md#link-direction)): the reverse peer then never
 initiates, so the race cannot start.
 
-### Determinism caveat
+### Determinism and sticky reuse
 
-The auto-allocated listen ports referenced above are assigned by positional counters over edge
-array order in Phase 1, so the *value* of an auto-allocated port (and thus a non-overridden
-`Endpoint`) is order-dependent and can shift on reorder / delete-re-add until sticky-pin
-allocation lands. The resolution *rule* in this section is order-independent; only the underlying
-port values are not yet stable. See [allocation-stability.md](allocation-stability.md) and
-[ip-allocation.md](ip-allocation.md) for the stability contract and the pin mechanism that
-closes this.
+Existing valid pins are reserved before deterministic gap filling, so an established link's port
+and address pairs do not shift when unrelated edges are reordered, added, disabled, or removed.
+`Endpoint` is therefore stable when it derives from the remote sticky listen port; an explicit
+`endpoint_port` remains an operator-owned override. Clearing a pin, changing link identity, or
+changing the applicable pool is an explicit renumber boundary. See
+[allocation-stability.md](allocation-stability.md) and [ip-allocation.md](ip-allocation.md).
 
 ### Worked examples
 

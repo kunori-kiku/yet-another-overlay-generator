@@ -108,27 +108,30 @@ const (
 	CodeClientExtraPrefixesMeaningless     Code = "validation_client_extra_prefixes_meaningless"
 	CodeEdgeMimicPlatformUnsupported       Code = "validation_edge_mimic_platform_unsupported"
 	CodePinClientPortPin                   Code = "validation_pin_client_port_pin"
-	CodePinClientAllocationIgnored         Code = "validation_pin_client_allocation_ignored"
-	CodePinPortIncomplete                  Code = "validation_pin_port_incomplete"
-	CodePinTransitIPIncomplete             Code = "validation_pin_transit_ip_incomplete"
-	CodePinLinkLocalIncomplete             Code = "validation_pin_link_local_incomplete"
-	CodePinPortOutOfRange                  Code = "validation_pin_port_out_of_range"
-	CodePinTransitIPInvalid                Code = "validation_pin_transit_ip_invalid"
-	CodePinTransitIPOutOfCIDR              Code = "validation_pin_transit_ip_out_of_cidr"
-	CodePinPortDuplicateCrossLink          Code = "validation_pin_port_duplicate_cross_link"
-	CodePinTransitIPDuplicateCrossLink     Code = "validation_pin_transit_ip_duplicate_cross_link"
-	CodePinLinkLocalDuplicateCrossLink     Code = "validation_pin_link_local_duplicate_cross_link"
-	CodeEdgeEndpointNoMatch                Code = "validation_edge_endpoint_no_match"
-	CodeEdgeDuplicateEnabledSameDirection  Code = "validation_edge_duplicate_enabled_same_direction"
-	CodeNodeInterfaceNameCollision         Code = "validation_node_interface_name_collision"
-	CodeEdgeMultipleExplicitPrimary        Code = "validation_edge_multiple_explicit_primary"
-	CodeEdgeBackupTouchesClient            Code = "validation_edge_backup_touches_client"
-	CodeLinkNoPrimary                      Code = "validation_link_no_primary"
-	CodeLinkEqualCost                      Code = "validation_link_equal_cost"
-	CodeNATTargetUnreachable               Code = "validation_nat_target_unreachable"
-	CodeNATDeadLink                        Code = "validation_nat_dead_link"
-	CodeNATDoubleNATNoEndpoint             Code = "validation_nat_double_nat_no_endpoint"
-	CodeNATNoOutboundToPublic              Code = "validation_nat_no_outbound_to_public"
+	// Deprecated: retained in the registered catalog for compatibility with historical
+	// manifests/frontends, but no longer emitted. Client-link transit/link-local allocations are
+	// real router-side interface state and are validated/persisted normally.
+	CodePinClientAllocationIgnored        Code = "validation_pin_client_allocation_ignored"
+	CodePinPortIncomplete                 Code = "validation_pin_port_incomplete"
+	CodePinTransitIPIncomplete            Code = "validation_pin_transit_ip_incomplete"
+	CodePinLinkLocalIncomplete            Code = "validation_pin_link_local_incomplete"
+	CodePinPortOutOfRange                 Code = "validation_pin_port_out_of_range"
+	CodePinTransitIPInvalid               Code = "validation_pin_transit_ip_invalid"
+	CodePinTransitIPOutOfCIDR             Code = "validation_pin_transit_ip_out_of_cidr"
+	CodePinPortDuplicateCrossLink         Code = "validation_pin_port_duplicate_cross_link"
+	CodePinTransitIPDuplicateCrossLink    Code = "validation_pin_transit_ip_duplicate_cross_link"
+	CodePinLinkLocalDuplicateCrossLink    Code = "validation_pin_link_local_duplicate_cross_link"
+	CodeEdgeEndpointNoMatch               Code = "validation_edge_endpoint_no_match"
+	CodeEdgeDuplicateEnabledSameDirection Code = "validation_edge_duplicate_enabled_same_direction"
+	CodeNodeInterfaceNameCollision        Code = "validation_node_interface_name_collision"
+	CodeEdgeMultipleExplicitPrimary       Code = "validation_edge_multiple_explicit_primary"
+	CodeEdgeBackupTouchesClient           Code = "validation_edge_backup_touches_client"
+	CodeLinkNoPrimary                     Code = "validation_link_no_primary"
+	CodeLinkEqualCost                     Code = "validation_link_equal_cost"
+	CodeNATTargetUnreachable              Code = "validation_nat_target_unreachable"
+	CodeNATDeadLink                       Code = "validation_nat_dead_link"
+	CodeNATDoubleNATNoEndpoint            Code = "validation_nat_double_nat_no_endpoint"
+	CodeNATNoOutboundToPublic             Code = "validation_nat_no_outbound_to_public"
 
 	// Link-direction semantic rules (per-edge dial-direction policy, docs/spec/data-model/edge.md
 	// §Link direction). Each is an ERROR, not a warning: a single-linked edge that cannot dial, or
@@ -229,8 +232,8 @@ var registry = map[Code]string{
 	CodeClientRouterIDMeaningless:          "Client {node} has router_id set but clients do not run Babel",
 	CodeClientExtraPrefixesMeaningless:     "Client {node} has extra_prefixes set but clients do not announce routes",
 	CodeEdgeMimicPlatformUnsupported:       "Edge {id} uses tcp transport (mimic), but endpoint node {node} has platform {platform} which is not a deployable Linux: mimic is an eBPF/kernel feature, so both ends of a tcp edge must be Linux (debian / ubuntu)",
-	CodePinClientPortPin:                   "Edge {id} touches a client node but sets a port pin: clients use a single wg0 with no per-peer listen ports; please clear pinned_from_port / pinned_to_port on this edge",
-	CodePinClientAllocationIgnored:         "Edge {id} touches a client node; its allocation pins will be ignored: clients use a single wg0 and do not participate in per-peer transit/link-local allocation",
+	CodePinClientPortPin:                   "Edge {id} sets a per-link listen-port pin on its client endpoint; clients use one shared wg0, so clear only the pinned port on the client side (the non-client endpoint port remains valid)",
+	CodePinClientAllocationIgnored:         "Deprecated legacy finding for edge {id}: older versions ignored client-link allocations; current versions preserve the non-client port and complete transit/link-local pairs",
 	CodePinPortIncomplete:                  "Edge {id} has an incomplete listen port pin (only one end is pinned): pins must be set in pairs; please complete both pinned_from_port and pinned_to_port, or clear both",
 	CodePinTransitIPIncomplete:             "Edge {id} has an incomplete transit IP pin (only one end is pinned): pins must be set in pairs; please complete both pinned_from_transit_ip and pinned_to_transit_ip, or clear both",
 	CodePinLinkLocalIncomplete:             "Edge {id} has an incomplete link-local pin (only one end is pinned): pins must be set in pairs; please complete both pinned_from_link_local and pinned_to_link_local, or clear both",

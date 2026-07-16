@@ -8,7 +8,8 @@ import type { ControllerState } from './types';
 import type { ControllerConfig } from '../../api/controllerClient';
 import type { Topology } from '../../types/topology';
 import { localizeError as localizeErrorFor } from '../../lib/localizeError';
-import { useTopologyStore, ALLOCATION_PIN_FIELDS } from '../topologyStore';
+import { SERVER_ALLOCATION_FIELDS } from '../../lib/allocationFields';
+import { useTopologyStore } from '../topologyStore';
 import { t, type MessageKey, type TParams } from '../../i18n';
 
 // localizeError localizes a caught error at the live UI language via the shared localizer (a
@@ -161,7 +162,7 @@ export function canonicalDesignIgnoringPins(t: Topology): string {
     ...t,
     edges: t.edges.map((e) => {
       const x = { ...e } as Record<string, unknown>;
-      for (const f of ALLOCATION_PIN_FIELDS) delete x[f];
+      for (const f of SERVER_ALLOCATION_FIELDS) delete x[f];
       return x as unknown as typeof e;
     }),
   };

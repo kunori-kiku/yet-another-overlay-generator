@@ -87,6 +87,8 @@ export function EdgeEditor() {
   const selectedEdgeIsBackup = selectedEdge?.role === 'backup';
   const selectedEdgeTouchesClient =
     selectedEdgeFrom?.role === 'client' || selectedEdgeTarget?.role === 'client';
+  const selectedEdgeFromIsClient = selectedEdgeFrom?.role === 'client';
+  const selectedEdgeTargetIsClient = selectedEdgeTarget?.role === 'client';
   // Backup button: hidden when either source/target is a client (the backend rejects it), and
   // hidden when the selected edge is already a backup (a backup is added from the primary link,
   // not derived from another backup).
@@ -136,6 +138,7 @@ export function EdgeEditor() {
     (selectedEdgeFrom && domains.find((d) => d.id === selectedEdgeFrom.domain_id)?.transit_cidr) ||
     DEFAULT_TRANSIT_CIDR;
   const portPairIncomplete =
+    !selectedEdgeTouchesClient &&
     (selectedEdge.pinned_from_port !== undefined) !== (selectedEdge.pinned_to_port !== undefined);
   const portOutOfRange = [selectedEdge.pinned_from_port, selectedEdge.pinned_to_port].some(
     (p) => p !== undefined && (p < MIN_PINNED_PORT || p > 65535),
@@ -568,16 +571,18 @@ export function EdgeEditor() {
                   type="number"
                   value={selectedEdge.pinned_from_port ?? ''}
                   onChange={(e) => setPinPort('pinned_from_port', e.target.value)}
+                  disabled={selectedEdgeFromIsClient}
                   placeholder={t(language, 'edgeEditor.pinFrom')}
-                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <span className="text-[var(--content-muted)]">→</span>
                 <input
                   type="number"
                   value={selectedEdge.pinned_to_port ?? ''}
                   onChange={(e) => setPinPort('pinned_to_port', e.target.value)}
+                  disabled={selectedEdgeTargetIsClient}
                   placeholder={t(language, 'edgeEditor.pinTo')}
-                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none"
+                  className="w-full px-2 py-1 bg-[var(--control)] rounded text-xs border border-[var(--hairline)] focus:border-[var(--accent)] outline-none disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </div>
               {portPairIncomplete && (

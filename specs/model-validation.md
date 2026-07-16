@@ -106,18 +106,22 @@ a rule would reject all multi-node-host designs.
 
 ## Allocation pins
 
-Pins are validated before the allocator reserves them. For each enabled non-client link:
+Pins are validated before the allocator reserves them. For each enabled link:
 
-- from/to values for each resource must be both present or both absent;
+- transit and link-local values must be both present or both absent;
+- listen-port values must be paired on ordinary links; on a client link only the non-client
+  endpoint may carry the one valid sticky port;
 - operator-chosen ports must be in `[1024,65535]`; auto-allocation still begins at `51820`;
 - transit addresses must parse and fall inside the edge's resolved transit pool;
 - a node port, transit IP, or link-local address cannot belong to two distinct links;
 - forward/reverse primary-class edges may share their mirrored resources because they compile into
   one link, while each backup edge has a distinct link identity.
 
-On client edges, port pins are errors and transit/link-local pins warn that they will be ignored
-(`internal/validator/semantic_pins.go:38-150`). The shared limits and fallback pool live in
-`internal/allocconst`; validator and allocator must not copy alternate literals.
+On client edges, only a port attached to the client endpoint is an error. The non-client endpoint's
+port and complete transit/link-local pairs are validated, deduplicated, reserved, rendered, and
+persisted normally. The deprecated `validation_pin_client_allocation_ignored` code remains
+registered for historical catalog compatibility but is no longer emitted. The shared limits and
+fallback pool live in `internal/allocconst`; validator and allocator must not copy alternate literals.
 
 ## Caller behavior
 

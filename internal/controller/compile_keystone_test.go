@@ -30,11 +30,8 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
 
-// noClientTopo is a router + peer topology (no client). It avoids the stageTestTopo
-// client-edge port-pin quirk, where persistAllocations stamps a port pin onto a client
-// edge that a later re-compile rejects — irrelevant to the keystone behaviour but fatal
-// to any test that re-stages the SAME topology twice (the epoch-reuse test does). All
-// keystone behaviour under test is independent of whether the fixture has a client.
+// noClientTopo is a router + peer topology (no client). Keystone behavior is independent of the
+// client role, so this smaller fixture keeps those tests focused on manifest/signature transitions.
 func noClientTopo() *model.Topology {
 	return &model.Topology{
 		Project: model.Project{ID: "ctrl-keystone-001", Name: "Keystone Test"},
@@ -280,9 +277,9 @@ func TestPromoteStaged_KeystoneRejectsBadSignature(t *testing.T) {
 // changed config (which changes a node's bundle digest) advances it. The epoch is what
 // the agent's anti-rollback floor uses to admit a fresh deploy and reject a stale one.
 func TestCompileAndStage_KeystoneEpochAdvancesWithBundle(t *testing.T) {
-	// Use the no-client fixture so re-staging the SAME topology compiles cleanly (the
-	// stageTestTopo client edge would trip a re-compile port-pin quirk unrelated to the
-	// keystone). Pin a real Ed25519 credential and approve the two nodes.
+	// Use the no-client fixture so this test stays focused on keystone epoch changes rather than
+	// also exercising the controller's client-link projection. Pin a real Ed25519 credential and
+	// approve the two nodes.
 	store := NewMemStore()
 	ctx := putNoClientTopo(t, store)
 	pub, priv, err := ed25519.GenerateKey(nil)

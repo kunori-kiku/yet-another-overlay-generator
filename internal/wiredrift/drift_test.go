@@ -32,9 +32,10 @@ import (
 //     conflict, and a list entry the model does NOT mark omitempty would wrongly drop a required
 //     field. Exact equality catches both directions.
 //
-//  2. The two frontend pin lists — PIN_FIELDS (lib/normalizeEdges.ts) and ALLOCATION_PIN_FIELDS
-//     (stores/topologyStore.ts) — are each a SUBSET of model.Edge's json tags. A Go rename of any
-//     pinned field (e.g. pinned_from_port) orphans the FE literal, which the subset check reds.
+//  2. The frontend persisted-pin list — PERSISTED_ALLOCATION_PIN_FIELDS
+//     (lib/allocationFields.ts) — is a SUBSET of model.Edge's json tags. A Go rename of any pinned
+//     field (e.g. pinned_from_port) orphans the FE literal, which the subset check reds. The
+//     seven-field server list uses a TypeScript spread and is checked by the frontend unit suite.
 //
 //  3. The controller wire DTOs, hand-duplicated across the agent client (`...Wire`,
 //     internal/agent/controller_client.go — "they must match the server's JSON exactly") and the
@@ -81,15 +82,14 @@ import (
 
 // Source paths, relative to this package directory (internal/wiredrift/).
 const (
-	modelSrc          = "../model/topology.go"
-	agentWireSrc      = "../agent/controller_client.go"
-	apiWireSrc        = "../api/wire_controller.go"
-	probeMetricSrc    = "../probemetric/result.go"
-	feNormalizeEdges  = "../../frontend/src/lib/normalizeEdges.ts"
-	feTopologyStore   = "../../frontend/src/stores/topologyStore.ts"
-	feControllerHelps = "../../frontend/src/stores/controller/helpers.ts"
-	feProbeResults    = "../../frontend/src/lib/probeResults.ts"
-	feTelemetryHist   = "../../frontend/src/lib/telemetryHistory.ts"
+	modelSrc           = "../model/topology.go"
+	agentWireSrc       = "../agent/controller_client.go"
+	apiWireSrc         = "../api/wire_controller.go"
+	probeMetricSrc     = "../probemetric/result.go"
+	feAllocationFields = "../../frontend/src/lib/allocationFields.ts"
+	feControllerHelps  = "../../frontend/src/stores/controller/helpers.ts"
+	feProbeResults     = "../../frontend/src/lib/probeResults.ts"
+	feTelemetryHist    = "../../frontend/src/lib/telemetryHistory.ts"
 )
 
 // jsonField is one struct field's on-the-wire identity: its json name, whether it carries
@@ -291,30 +291,20 @@ func TestFEOmitemptyListsMatchModel(t *testing.T) {
 	}
 }
 
-// TestFEPinListsAreEdgeFields asserts every element of the FE pin lists is a real model.Edge json
-// tag (subset). A Go rename of a pinned field orphans the FE literal and reds here.
+// TestFEPinListsAreEdgeFields asserts every persisted frontend pin is a real model.Edge json tag.
+// A Go rename of a pinned field orphans the FE literal and reds here.
 func TestFEPinListsAreEdgeFields(t *testing.T) {
 	edge, ok := structsOf(t, modelSrc)["Edge"]
 	if !ok {
 		t.Fatalf("model struct Edge not found in %s", modelSrc)
 	}
 	edgeNames := allNames(edge)
-	cases := []struct {
-		list string
-		path string
-	}{
-		{"PIN_FIELDS", feNormalizeEdges},
-		{"ALLOCATION_PIN_FIELDS", feTopologyStore},
-	}
-	for _, c := range cases {
-		t.Run(c.list, func(t *testing.T) {
-			for _, f := range feArrayElements(t, c.path, c.list) {
-				if !edgeNames[f] {
-					t.Errorf("%s contains %q, which is NOT a model.Edge json tag — a Go rename orphaned it.\n"+
-						"  Reconcile %s (%s) with model.Edge's json tags.", c.list, f, c.list, c.path)
-				}
-			}
-		})
+	const list = "PERSISTED_ALLOCATION_PIN_FIELDS"
+	for _, f := range feArrayElements(t, feAllocationFields, list) {
+		if !edgeNames[f] {
+			t.Errorf("%s contains %q, which is NOT a model.Edge json tag — a Go rename orphaned it.\n"+
+				"  Reconcile %s (%s) with model.Edge's json tags.", list, f, list, feAllocationFields)
+		}
 	}
 }
 

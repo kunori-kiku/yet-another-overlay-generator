@@ -245,8 +245,25 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	//   - when EndpointPort > 0 (an explicit operator NAT/port-forward override), reflect that
 	//     override value verbatim;
 	//   - otherwise use the peer interface's allocated listen port (compiler-assigned).
+	roleByNode := make(map[string]string, len(compiledTopo.Nodes))
+	for i := range compiledTopo.Nodes {
+		roleByNode[compiledTopo.Nodes[i].ID] = compiledTopo.Nodes[i].Role
+	}
 	for i := range compiledTopo.Edges {
 		edge := &compiledTopo.Edges[i]
+		// A client owns one shared wg0 rather than a per-link interface, so only the port
+		// field on the client endpoint itself is meaningless. Clear that side even on a
+		// disabled edge, where validation/allocation otherwise deliberately do nothing; this
+		// makes a compile converge stale role-flip data before the edge is enabled again. The
+		// non-client endpoint still owns a real per-link interface and listen port, and the
+		// transit/link-local pair is used by that router-side interface, so those allocations
+		// remain sticky and are written back below.
+		if roleByNode[edge.FromNodeID] == "client" {
+			edge.PinnedFromPort = 0
+		}
+		if roleByNode[edge.ToNodeID] == "client" {
+			edge.PinnedToPort = 0
+		}
 		if !edge.IsEnabled {
 			continue
 		}
@@ -265,6 +282,15 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 		// otherwise mirror them.
 		isForward := alloc.fromNodeID == edge.FromNodeID
 		edge.PinnedFromPort, edge.PinnedToPort, edge.PinnedFromTransitIP, edge.PinnedToTransitIP, edge.PinnedFromLinkLocal, edge.PinnedToLinkLocal = alloc.oriented(isForward)
+		// Enforce the endpoint contract at the final write boundary as well as in allocation.
+		// This keeps the compiled topology correct even if a future allocator path accidentally
+		// carries a stale client-side port in pairAllocations.
+		if roleByNode[edge.FromNodeID] == "client" {
+			edge.PinnedFromPort = 0
+		}
+		if roleByNode[edge.ToNodeID] == "client" {
+			edge.PinnedToPort = 0
+		}
 
 		// CompiledPort: written back only for edges with endpoint_host (matching the rendered
 		// Endpoint port).

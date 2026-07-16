@@ -16,7 +16,7 @@ import { healCollidingPins } from './normalizeEdges'
 // `normalize.HealCollidingPins` run over the fixture's INPUT topology, projected to {id +
 // compiled_port + the six pinned_* fields} and sorted by id. This test re-runs the FE
 // healCollidingPins over the SAME inputs and asserts the SAME projection — so a divergence in the FE
-// linkKey / pinKey / PIN_FIELDS / canonicalIP mirror reds the vitest run.
+// linkKey / pinKey / allocation-field catalog / canonicalIP mirror reds the vitest run.
 
 // Repo layout: this file lives at <repo>/frontend/src/lib/heal.conformance.test.ts, so the repo root
 // is three directories up from frontend/, i.e. ../../.. from src/lib.
@@ -41,8 +41,8 @@ const corpora = [
   },
 ] as const
 
-// HealedEdge mirrors internal/localcompile.HealedEdge: the edge identity plus the seven pin fields the
-// heal strips/keeps. The Go manifest emits zero values (0 / "") for absent pins; the FE Edge type has
+// HealedEdge mirrors internal/localcompile.HealedEdge: edge identity, compiled_port, and six
+// pinned_* fields the heal strips/keeps. The Go manifest emits zero values (0 / "") for absent pins; the FE Edge type has
 // them optional, so projectEdge fills the same zero values to make the two byte-comparable.
 interface HealedEdge {
   id: string

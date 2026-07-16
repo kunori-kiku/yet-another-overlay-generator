@@ -263,6 +263,24 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 		clientPub := genWGPubKey(t)
 		approveNode(t, ctx, store, tnt, "node-router", routerPub)
 		approveNode(t, ctx, store, tnt, "node-peer", peerPub)
+		storedClientEdge := func(when string) model.Edge {
+			t.Helper()
+			rec, err := store.GetTopology(ctx, tnt)
+			if err != nil {
+				t.Fatalf("GetTopology %s: %v", when, err)
+			}
+			var stored model.Topology
+			if err := json.Unmarshal(rec.JSON, &stored); err != nil {
+				t.Fatalf("unmarshal stored topology %s: %v", when, err)
+			}
+			for _, edge := range stored.Edges {
+				if edge.ID == "e-client" {
+					return edge
+				}
+			}
+			t.Fatalf("stored topology %s is missing e-client", when)
+			return model.Edge{}
+		}
 
 		// First stage + promote with only router+peer.
 		res1, err := CompileAndStage(ctx, store, tnt, time.Now())
@@ -308,6 +326,33 @@ func TestCompileAndStage_RenderWhatsReady(t *testing.T) {
 		// And a current bundle now exists for the client itself.
 		if _, err := store.GetCurrentBundle(ctx, tnt, "node-client"); err != nil {
 			t.Errorf("GetCurrentBundle(node-client): %v", err)
+		}
+
+		// Regression: an unchanged third stage must accept and retain the endpoint-specific
+		// client allocation persisted by the second stage.
+		before := storedClientEdge("after second stage")
+		if before.PinnedFromPort != 0 {
+			t.Fatalf("stored client-side port = %d, want 0", before.PinnedFromPort)
+		}
+		if before.PinnedToPort == 0 || before.CompiledPort != before.PinnedToPort {
+			t.Fatalf("stored router/compiled ports are inconsistent: %+v", before)
+		}
+		if before.PinnedFromTransitIP == "" || before.PinnedToTransitIP == "" ||
+			before.PinnedFromLinkLocal == "" || before.PinnedToLinkLocal == "" {
+			t.Fatalf("stored client address allocation is incomplete: %+v", before)
+		}
+		if _, err := CompileAndStage(ctx, store, tnt, time.Now()); err != nil {
+			t.Fatalf("CompileAndStage(third, unchanged client topology): %v", err)
+		}
+		after := storedClientEdge("after third stage")
+		if after.PinnedFromPort != 0 ||
+			after.PinnedToPort != before.PinnedToPort ||
+			after.PinnedFromTransitIP != before.PinnedFromTransitIP ||
+			after.PinnedToTransitIP != before.PinnedToTransitIP ||
+			after.PinnedFromLinkLocal != before.PinnedFromLinkLocal ||
+			after.PinnedToLinkLocal != before.PinnedToLinkLocal ||
+			after.CompiledPort != before.CompiledPort {
+			t.Fatalf("stored client allocation changed on unchanged third stage:\n  before: %+v\n  after:  %+v", before, after)
 		}
 	})
 }

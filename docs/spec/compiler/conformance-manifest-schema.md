@@ -45,7 +45,7 @@ two-space indent, LF newlines, no trailing whitespace, and exactly one trailing 
   "deploy":      { "deploy-all.sh": "<verbatim>", "deploy-all.ps1": "<verbatim>" },
   "signatures":  { "<nodeID>": "<bare base64 Ed25519 bundle.sig>", ... },
   "signing_pub_pem": "<PKIX public-key PEM, or \"\" when not signing>",
-  "healed_edges": [ { "id": "...", ...seven pin fields... }, ... ]
+  "healed_edges": [ { "id": "...", ...compiled_port plus six pinned_* fields... }, ... ]
 }
 ```
 
@@ -113,8 +113,8 @@ The load-bearing allocator output, keyed so the projection is order-free (`null`
 ### `healed_edges` — the heal canary surface
 
 The corpus-INPUT topology after `normalize.HealCollidingPins` (run over a copy, so the compile path
-is untouched), projected to `{id + the seven pin fields}` and **sorted by edge ID**. Computed for
-**every** fixture independent of the compile verdict, because the vitest heal canary
+is untouched), projected to `{id + compiled_port + the six pinned_* fields}` and **sorted by edge
+ID**. Computed for **every** fixture independent of the compile verdict, because the vitest heal canary
 (`frontend/src/lib/heal.conformance.test.ts`) pins this layer — the TS `healCollidingPins` must
 byte-equal the Go heal over the shared corpus — regardless of whether the full TS pipeline can
 compile the fixture yet.

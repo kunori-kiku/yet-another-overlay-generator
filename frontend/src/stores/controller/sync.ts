@@ -21,6 +21,7 @@ import {
   clearServerCanvasAtGate,
 } from './helpers';
 import { stripPrivateKeys, dropAllKeys } from '../../lib/custody';
+import { normalizeTopologyForCanvas } from '../../lib/normalizeEdges';
 import { useTopologyStore } from '../topologyStore';
 import { useUiStore } from '../uiStore';
 import { localOnly } from '../../lib/localOnly';
@@ -89,13 +90,14 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
           }
           return false; // Server has no topology yet (before the first deploy): keep the local canvas.
         }
-        const topo = raw as Topology;
-        if (!topo || typeof topo !== 'object' || !topo.project || !topo.domains || !topo.nodes || !topo.edges) {
+        const received = raw as Topology;
+        if (!received || typeof received !== 'object' || !received.project || !received.domains || !received.nodes || !received.edges) {
           if (opts?.reportError) {
             set({ error: t(useTopologyStore.getState().language, 'canvasToolbar.resyncFailed') });
           }
           return false; // Shape mismatch: do not overwrite (the server bytes are guaranteed by update-topology's custody gate; this is just defensive).
         }
+        const topo = normalizeTopologyForCanvas(received);
         // Record the server-authoritative design's normalized snapshot — the baseline for the
         // dirty indicator + save conflict check (plan-10 / T2). Update it whether or not the
         // local canvas is actually overwritten below (differs/!differs), so the baseline always
@@ -160,7 +162,14 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
       try {
         // Zero-knowledge fail-safe: as in deploy(), strip private keys before upload (the
         // controller canvas has none anyway; this is the backstop).
-        const current = useTopologyStore.getState().getTopology();
+        const topologyStore = useTopologyStore.getState();
+        const rawCurrent = topologyStore.getTopology();
+        const current = normalizeTopologyForCanvas(rawCurrent);
+        if (current !== rawCurrent) {
+          // Keep the visible canvas and the value sent/recorded below identical without resetting
+          // selection or history through a full loadTopology call.
+          useTopologyStore.setState({ edges: current.edges });
+        }
         let { topo: clean, stripped } = stripPrivateKeys(current);
         // no-op guard: if the design equals the last sync baseline, return immediately — neither
         // sending a network request nor needlessly adding a same-content version history entry on
@@ -219,6 +228,11 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
           const reread = stripPrivateKeys(ts.getTopology());
           clean = reread.topo;
           stripped = reread.stripped;
+        }
+        const normalizedClean = normalizeTopologyForCanvas(clean);
+        if (normalizedClean !== clean) {
+          clean = normalizedClean;
+          useTopologyStore.setState({ edges: normalizedClean.edges });
         }
         await updateTopology(context.config, JSON.stringify(clean));
         if (!controllerActionContextIsCurrent(get, context)) return;

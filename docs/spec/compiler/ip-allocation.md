@@ -39,19 +39,16 @@ line of defense. See [validation.md](validation.md) for the IPv4-only and CIDR-s
 
 ## Determinism and renumbering caveats
 
-The overlay-IP pass is already stable across recompiles by the skip-set mechanism above: a node that
-already holds a valid in-CIDR overlay IP keeps it. This is the proven pattern the broader
-sticky-pin allocation work generalizes.
+The overlay-IP pass is stable across recompiles by the skip-set mechanism above: a node that already
+holds a valid in-CIDR overlay IP keeps it. Per-link listen ports, transit pairs, and link-locals use
+the corresponding identity-bound `pinned_*` fields: valid pins are reserved before unpinned links
+gap-fill, so reordering or adding unrelated edges does not renumber an established link. A client
+link keeps complete address pairs and the non-client endpoint's listen port; only the client
+endpoint lacks a per-link port. See [allocation-stability.md](allocation-stability.md) for the full
+identity, validation, and explicit-renumber contract.
 
-Two caveats hold until that work lands:
+One explicit caveat remains:
 
-- **Other allocated values are NOT yet identity-stable.** Listen ports, transit IP pairs, and Babel
-  link-locals are assigned by positional counters over `topo.Edges` order, not bound to a stable
-  link identity, so they are stable on a pure append but SHIFT on any reorder, delete-and-re-add, or
-  enable/disable of an unrelated edge (audit theme T13). Only the overlay IP survives those
-  operations today. The order-independence and identity-binding guarantees, and the sticky-pin
-  mechanism that delivers them, are specified in
-  [allocation-stability.md](allocation-stability.md) (invariants I1–I10).
 - **Editing a domain `cidr` renumbers.** The allocator clears any overlay IP that falls outside its
   domain's (possibly changed) CIDR and reallocates it; changing a domain's CIDR therefore renumbers
   every node whose old IP no longer fits. Renumbering MUST be an explicit consequence of editing the

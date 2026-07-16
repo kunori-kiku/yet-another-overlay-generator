@@ -276,10 +276,14 @@ type Edge struct {
 	//
 	// Pins are oriented by the owning edge's FromNodeID/ToNodeID: from_* is the value on this edge's from side,
 	// to_* is the value on the to side; the reverse edge for the same pair of nodes carries the same pair of values, mirrored.
-	// Each resource is either fully pinned as a pair or not pinned at all; a single-ended (partial) pin is rejected by the validator.
+	// Transit and link-local resources are either fully pinned as a pair or not pinned at all. Listen ports are paired on
+	// ordinary links; a client link is the endpoint-specific exception because the client uses one shared wg0, so its port
+	// stays zero while the non-client endpoint retains one valid sticky listen-port pin. CompiledPort remains only the
+	// effective dial-port echo (including an explicit endpoint_port override), not the sticky allocation authority.
 	// See docs/spec/compiler/allocation-stability.md and docs/spec/data-model/edge.md (Allocation pins).
 
-	// Listen-port pins for the from / to side interfaces (the client role does not use per-peer ports, so it is not pinned).
+	// Listen-port pins for the from / to side interfaces. Only a client endpoint lacks a per-link port;
+	// the opposite non-client endpoint still owns and persists its real per-link listen port.
 	PinnedFromPort int `json:"pinned_from_port,omitempty"`
 	PinnedToPort   int `json:"pinned_to_port,omitempty"`
 

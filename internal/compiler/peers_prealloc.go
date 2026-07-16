@@ -27,20 +27,20 @@ type ReservedAllocations struct {
 	linkLocals map[string]bool            // set of link-local strings
 }
 
-// BuildReservedFromExcludedEdges scans the full topology and, for every enabled,
-// non-client-touching edge with complete paired pins whose "ID is not in
-// includedEdgeIDs", reserves its port / transit IP / link-local. These are exactly
+// BuildReservedFromExcludedEdges scans the full topology and, for every enabled edge
+// whose "ID is not in includedEdgeIDs", reserves its valid pinned port / transit IP /
+// link-local resources. These are exactly
 // the edges dropped during subgraph compilation that still hold pins in storage —
 // reserving them keeps the subgraph's new allocations from colliding with them. The
 // CIDR is resolved via transitCIDRForNode (same source as link construction).
 //
 //   - Skip disabled edges: both the validator and the allocator ignore them, their
 //     pins do not form a collision, and reserving them only adds needless avoidance.
-//   - Skip client-touching edges: a client uses a single wg0 with no per-peer
-//     resources, so its port pin is already wrong and its transit/LL are ignored
-//     (consistent with client handling in the pre-allocation phase).
-//   - Only reserve "complete paired" pins (a single-sided value is treated as
-//     unpinned, consistent with the pre-allocation phase).
+//   - A client endpoint uses one shared wg0 and contributes no per-link port. Its
+//     non-client endpoint still owns one valid listen port, and complete transit/LL
+//     pairs remain real rendered allocations, so all of those are reserved.
+//   - Ordinary port pins and every transit/LL pin are reserved only as complete pairs;
+//     the non-client-side port on a client link is the deliberate one-sided exception.
 func BuildReservedFromExcludedEdges(full *model.Topology, includedEdgeIDs map[string]bool) *ReservedAllocations {
 	r := &ReservedAllocations{
 		ports:      make(map[string]map[int]bool),
@@ -68,10 +68,18 @@ func BuildReservedFromExcludedEdges(full *model.Topology, includedEdgeIDs map[st
 		if from == nil || to == nil {
 			continue
 		}
-		if from.Role == "client" || to.Role == "client" {
-			continue
-		}
-		if e.PinnedFromPort > 0 && e.PinnedToPort > 0 {
+		fromClient := from.Role == "client"
+		toClient := to.Role == "client"
+		switch {
+		case fromClient && !toClient:
+			if e.PinnedToPort > 0 {
+				r.reservePort(e.ToNodeID, e.PinnedToPort)
+			}
+		case toClient && !fromClient:
+			if e.PinnedFromPort > 0 {
+				r.reservePort(e.FromNodeID, e.PinnedFromPort)
+			}
+		case !fromClient && !toClient && e.PinnedFromPort > 0 && e.PinnedToPort > 0:
 			r.reservePort(e.FromNodeID, e.PinnedFromPort)
 			r.reservePort(e.ToNodeID, e.PinnedToPort)
 		}

@@ -1,18 +1,27 @@
 import { linkKey } from './linkid';
-import type { Edge, Node } from '../types/topology';
+import type { Edge, Node, Topology } from '../types/topology';
+import { SERVER_ALLOCATION_FIELDS } from './allocationFields';
 
-// healCollidingPins repairs the "pin occupied by two different links" corruption: an edge whose
-// pinned listen port / transit IP / link-local collides with an EARLIER edge of a DIFFERENT link
-// identity gets ALL its allocation pins stripped, so it re-allocates fresh on the next compile.
-// This is the browser-side mirror of the Go normalize.HealCollidingPins (applied on the controller
-// write path) and the inverse of the semantic validator's cross-link dedup — what it strips is
-// exactly what the validator would flag. Two corruption sources are covered:
+export { PERSISTED_ALLOCATION_PIN_FIELDS, SERVER_ALLOCATION_FIELDS } from './allocationFields';
+
+// healCollidingPins is the browser-side migration mirror of Go normalize.HealCollidingPins. It:
+//   - removes only a port attached to a client endpoint, preserving the valid non-client-side port,
+//     full transit/link-local pairs, and compiled_port; and
+//   - repairs the "pin occupied by two different links" corruption by stripping all seven
+//     server-derived allocation fields from the colliding edge so it re-allocates fresh.
+//
+// The cross-link pass is the inverse of the semantic validator's dedup. Historical corruption
+// sources covered are:
+//   - a role change that left a now-client endpoint carrying its old per-link listen port;
 //   - a backup edge that kept its sibling primary's pins (legacy EdgeEditor role-flip bug), and
 //   - two DIFFERENT links (cross-pair, or a pair's primary vs a new same-pair link) handed the same
 //     allocation by successive incremental-enrollment subgraph compiles (the controller root cause).
 //
 // It mirrors the validator/Go heal precisely:
-//   - disabled edges and client-touched edges are skipped (single wg0, no per-peer resources);
+//   - an invalid client-endpoint port is cleared even on disabled edges, so a later enable cannot
+//     revive corruption;
+//   - disabled edges are skipped by the cross-link collision pass, while valid client-link
+//     allocations participate like the backend validator/allocator;
 //   - link identity = linkKey (primary class folds A->B / B->A and same-pair primaries into one
 //     link, so their legitimately-mirrored equal values are NOT a collision; each backup is its own
 //     link via the "#id" suffix);
@@ -28,40 +37,32 @@ import type { Edge, Node } from '../types/topology';
 // Pure and idempotent: returns the SAME array reference when nothing needs healing (no React/zustand
 // churn), otherwise a new array with the offending edges' pins cleared.
 
-// PIN_FIELDS is the single source of truth for the seven per-link allocation-pin edge fields (the
-// compiled listen port + the three pinned pin PAIRS). healCollidingPins strips them on a collision;
-// clearedPinFields() (below) builds the "clear payload" from the SAME list so every deliberate
-// pin-reset site derives from one place instead of a hand-written literal enumeration.
-export const PIN_FIELDS = [
-  'compiled_port',
-  'pinned_from_port',
-  'pinned_to_port',
-  'pinned_from_transit_ip',
-  'pinned_to_transit_ip',
-  'pinned_from_link_local',
-  'pinned_to_link_local',
-] as const;
-
-// clearedPinFields returns the pin-clear payload: an object mapping every PIN_FIELDS entry to
-// undefined (keys PRESENT with undefined values, so spreading it over an edge — or passing it to
+// clearedPinFields returns the allocation-clear payload: an object mapping every
+// SERVER_ALLOCATION_FIELDS entry to undefined (keys PRESENT with undefined values, so spreading it over an edge — or passing it to
 // updateEdge — actually resets those fields, exactly as the prior hand-written `{ compiled_port:
 // undefined, ... }` literals did). It is the ONE definition of "clear the allocation pins", routed
 // through by all three deliberate-reset sites (EdgeEditor's role-change clear + unpin clear, and the
-// store's purgeModeBoundaryState edge scrub), so adding a field to PIN_FIELDS clears it everywhere
-// automatically instead of drifting across three literals.
+// store's purgeModeBoundaryState edge scrub), so adding a field to SERVER_ALLOCATION_FIELDS clears
+// it everywhere automatically instead of drifting across three literals.
 //
-// SCOPE NOTE: this covers ONLY the seven EDGE-PIN fields. purgeModeBoundaryState ALSO scrubs
+// SCOPE NOTE: this covers ONLY the seven server-derived edge allocation fields: the six persisted
+// sticky pins plus compiled_port. purgeModeBoundaryState ALSO scrubs
 // NODE-SECRET fields (wireguard_private_key, wireguard_public_key, fixed_private_key, overlay_ip) —
 // that is a SEPARATE concern and stays its own explicit list there; node secrets are intentionally
-// NOT folded into PIN_FIELDS. And edgeDirection.ts's flipEdge enumerates the same pin set as a SWAP
+// NOT folded into SERVER_ALLOCATION_FIELDS. And edgeDirection.ts's flipEdge enumerates the same pin
+// set as a SWAP
 // map (pinned_from_* ⇄ pinned_to_*) — a different shape (mirror, not clear), so it is intentionally
-// not expressed through this helper; if PIN_FIELDS grows, that swap map is the related site to revisit.
+// not expressed through this helper; if SERVER_ALLOCATION_FIELDS grows, that swap map is the related
+// site to revisit.
 export function clearedPinFields(): Partial<Edge> {
   const cleared: Partial<Edge> = {};
   // Assign (not delete) so the keys are PRESENT with an undefined value, matching the literals these
   // sites used. Route the index through unknown — Edge does not structurally overlap Record<string,
-  // unknown> (tsc -b TS2352); the keys are the literal, all-optional PIN_FIELDS, so it is well-formed.
-  for (const f of PIN_FIELDS) (cleared as unknown as Record<string, unknown>)[f] = undefined;
+  // unknown> (tsc -b TS2352); the keys are the literal, all-optional server allocation fields, so
+  // it is well-formed.
+  for (const f of SERVER_ALLOCATION_FIELDS) {
+    (cleared as unknown as Record<string, unknown>)[f] = undefined;
+  }
   return cleared;
 }
 
@@ -90,28 +91,47 @@ function stripPins(e: Edge): Edge {
   const out: Edge = { ...e };
   // Delete each pin by dynamic key. Edge does not structurally overlap Record<string, unknown>
   // (tsc -b TS2352), so route the index access through unknown — the keys are the literal,
-  // all-optional PIN_FIELDS, so the delete is well-formed.
-  for (const f of PIN_FIELDS) delete (out as unknown as Record<string, unknown>)[f];
+  // all-optional server allocation fields, so the delete is well-formed.
+  for (const f of SERVER_ALLOCATION_FIELDS) {
+    delete (out as unknown as Record<string, unknown>)[f];
+  }
   return out;
 }
 
 export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
   const roleByNode = new Map<string, string>();
   for (const n of nodes) roleByNode.set(n.id, n.role);
-  const isClientTouched = (e: Edge) =>
-    roleByNode.get(e.from_node_id) === 'client' || roleByNode.get(e.to_node_id) === 'client';
 
-  // Process enabled, non-client edges in reserve-first (linkKey-SORTED) order — the same priority
+  const healed = edges.slice(); // identity refs until a migration replaces one; discarded if unchanged
+  let changed = false;
+  for (let i = 0; i < edges.length; i++) {
+    const edge = edges[i];
+    let next = edge;
+    if (roleByNode.get(edge.from_node_id) === 'client' && edge.pinned_from_port !== undefined) {
+      next = { ...next };
+      delete (next as unknown as Record<string, unknown>).pinned_from_port;
+    }
+    if (roleByNode.get(edge.to_node_id) === 'client' && edge.pinned_to_port !== undefined) {
+      if (next === edge) next = { ...next };
+      delete (next as unknown as Record<string, unknown>).pinned_to_port;
+    }
+    if (next !== edge) {
+      healed[i] = next;
+      changed = true;
+    }
+  }
+
+  // Process enabled edges in reserve-first (linkKey-SORTED) order — the same priority
   // the Go allocator's gap-fill uses — so the kept claimant of a contested slot is the smaller-linkKey
-  // (reserve-first) owner, not whichever edge comes first in array order. Disabled/client edges are
-  // skipped entirely (Go's bool zero treats a missing is_enabled as DISABLED, so require strictly
-  // true). We sort INDICES (ties broken by original index for determinism — a primary class's
+  // (reserve-first) owner, not whichever edge comes first in array order. Disabled edges are skipped
+  // entirely (Go's bool zero treats a missing is_enabled as DISABLED, so require strictly true).
+  // We sort INDICES (ties broken by original index for determinism — a primary class's
   // forward/reverse edges share a linkKey and never collide with each other) so the healed result
   // stays in the caller's original edge order. Mirrors internal/normalize/pins.go.
   const order: number[] = [];
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
-    if (e.is_enabled !== true || isClientTouched(e)) continue;
+    if (e.is_enabled !== true) continue;
     order.push(i);
   }
   order.sort((a, b) => {
@@ -126,15 +146,27 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
   const transitOwner = new Map<string, string>(); // ip -> linkKey
   const llOwner = new Map<string, string>(); // ip -> linkKey
 
-  const healed = edges.slice(); // identity refs until a strip replaces one; discarded if unchanged
-  let changed = false;
   for (const i of order) {
     const e = edges[i];
     const link = linkKey(e);
 
-    // The resources this edge would claim (only complete pin pairs, matching the allocator).
+    // The resources this edge would claim. Ordinary ports and all address allocations require
+    // complete pairs; a client link deliberately claims its one non-client-side port alone.
     const claims: Array<{ table: Map<string, string>; key: string }> = [];
-    if (e.pinned_from_port && e.pinned_to_port) {
+    const fromClient = roleByNode.get(e.from_node_id) === 'client';
+    const toClient = roleByNode.get(e.to_node_id) === 'client';
+    if (fromClient && !toClient && e.pinned_to_port !== undefined && e.pinned_to_port > 0) {
+      claims.push({ table: portOwner, key: `${e.to_node_id}:${e.pinned_to_port}` });
+    } else if (toClient && !fromClient && e.pinned_from_port !== undefined && e.pinned_from_port > 0) {
+      claims.push({ table: portOwner, key: `${e.from_node_id}:${e.pinned_from_port}` });
+    } else if (
+      !fromClient &&
+      !toClient &&
+      e.pinned_from_port !== undefined &&
+      e.pinned_from_port > 0 &&
+      e.pinned_to_port !== undefined &&
+      e.pinned_to_port > 0
+    ) {
       claims.push({ table: portOwner, key: `${e.from_node_id}:${e.pinned_from_port}` });
       claims.push({ table: portOwner, key: `${e.to_node_id}:${e.pinned_to_port}` });
     }
@@ -163,6 +195,15 @@ export function healCollidingPins(edges: Edge[], nodes: Node[]): Edge[] {
   }
 
   return changed ? healed : edges;
+}
+
+// normalizeTopologyForCanvas applies every edge migration used by loadTopology while preserving
+// the original topology reference on a no-op. Controller synchronization uses this before recording
+// a server/save baseline, so the baseline and the normalized canvas can never diverge.
+export function normalizeTopologyForCanvas(topo: Topology): Topology {
+  const healed = healCollidingPins(topo.edges, topo.nodes);
+  const edges = sanitizeLinkDirection(healed);
+  return edges === topo.edges ? topo : { ...topo, edges };
 }
 
 // sanitizeLinkDirection coerces an out-of-enum link_direction to undefined (≡ "both") on every

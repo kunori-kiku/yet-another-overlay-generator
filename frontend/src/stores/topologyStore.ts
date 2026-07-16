@@ -13,12 +13,13 @@ import type {
 import { detectSystemLanguage, t, tError, type MessageKey, type UILanguage } from '../i18n';
 import { uuid } from '../lib/uuid';
 import { clearedPinFields, healCollidingPins, sanitizeLinkDirection } from '../lib/normalizeEdges';
+import { SERVER_ALLOCATION_FIELDS } from '../lib/allocationFields';
 import { dropAllKeys } from '../lib/custody';
 import { triggerBrowserDownload } from '../lib/download';
 // The local-engine seam: these four adapters bridge the compute action shapes onto the in-browser
 // Go/WASM engine (web/yaog.wasm, proven byte-equal to the Go controller pipeline by the permanent
 // WASM-vs-golden gate). It is the ONLY local engine — there is no server-fetch fallback (see the seam
-// docstring below ALLOCATION_PIN_FIELDS).
+// docstring below the shared server-allocation field catalog).
 import {
   localValidate,
   localCompile,
@@ -30,22 +31,6 @@ import {
 // controllerStore reads useTopologyStore.getState(). Needed for mode-aware import
 // custody (plan-5, D5).
 import { useControllerStore } from './controllerStore';
-
-// The server-derived per-edge allocation fields: the compiled_port echo plus the six
-// pinned_* ports / transit IPs / link-locals. mergeServerAllocations overlays exactly
-// these, and controllerStore imports this same constant for its save-time conflict-check
-// pin set (canonicalDesignIgnoringPins) — single source of truth, no hand-synced copy.
-// KEEP IN SYNC only with EDGE_OMITEMPTY's pin entries in controllerStore.ts (a superset
-// that also carries non-pin fields, so it cannot share this array directly).
-export const ALLOCATION_PIN_FIELDS = [
-  'compiled_port',
-  'pinned_from_port',
-  'pinned_to_port',
-  'pinned_from_transit_ip',
-  'pinned_to_transit_ip',
-  'pinned_from_link_local',
-  'pinned_to_link_local',
-] as const;
 
 // ── The local-engine seam ──
 //
@@ -381,11 +366,16 @@ export const useTopologyStore = create<TopologyState>()(
     set((state) => ({ nodes: [...state.nodes, node] })),
 
   updateNode: (id, updates) =>
-    set((state) => ({
-      nodes: state.nodes.map((n) =>
-        n.id === id ? { ...n, ...updates } : n
-      ),
-    })),
+    set((state) => {
+      const nodes = state.nodes.map((n) => (n.id === id ? { ...n, ...updates } : n));
+      // A role flip can make one endpoint a client after it already owned a per-link port.
+      // Normalize against the new role map immediately so enabling/saving/validating the edge
+      // cannot revive the stale client-side port. Other sticky client-link allocations remain.
+      const edges = updates.role !== undefined
+        ? healCollidingPins(state.edges, nodes)
+        : state.edges;
+      return { nodes, edges };
+    }),
 
   removeNode: (id) =>
     set((state) => ({
@@ -444,11 +434,12 @@ export const useTopologyStore = create<TopologyState>()(
   },
 
   updateEdge: (id, updates) =>
-    set((state) => ({
-      edges: state.edges.map((e) =>
-        e.id === id ? { ...e, ...updates } : e
-      ),
-    })),
+    set((state) => {
+      const updated = state.edges.map((e) => (e.id === id ? { ...e, ...updates } : e));
+      // In particular, re-enabling a disabled edge passes through the same deterministic migration
+      // and collision ownership as server hydration and imports.
+      return { edges: healCollidingPins(updated, state.nodes) };
+    }),
 
   mergeServerAllocations: (serverEdges, baseEdges) =>
     set((state) => {
@@ -463,7 +454,7 @@ export const useTopologyStore = create<TopologyState>()(
         const baseRec = base?.get(e.id) as unknown as Record<string, unknown> | undefined;
         const next: Record<string, unknown> = { ...cur };
         let edgeChanged = false;
-        for (const f of ALLOCATION_PIN_FIELDS) {
+        for (const f of SERVER_ALLOCATION_FIELDS) {
           if (base) {
             // Conditional non-clobber adoption: take a server pin only when the server ADDED
             // it (neither canvas nor base carried one). Operator-set / operator-unpinned wins.
@@ -624,7 +615,8 @@ export const useTopologyStore = create<TopologyState>()(
       nodes: topo.nodes,
       // Self-heal the "pin occupied by two different links" corruption on every load (server hydrate
       // or local import) so a stale topology validates/compiles cleanly — strips a colliding edge's
-      // pins so it re-allocates fresh. Needs node roles to skip client edges. Then coerce any
+      // pins so it re-allocates fresh. Node roles drive endpoint-local client-port healing while
+      // valid client-link allocations still participate in collision ownership. Then coerce any
       // out-of-enum link_direction to undefined (≡ both) so foreign/garbled stored data falls back
       // to doubly-linked instead of tripping the validator. See lib/normalizeEdges.
       edges: sanitizeLinkDirection(healCollidingPins(topo.edges, topo.nodes)),
@@ -651,7 +643,8 @@ export const useTopologyStore = create<TopologyState>()(
   // fleet-used keys behind in the browser. The NODE-SECRET scrub is enumerated explicitly one by
   // one (rather than by pattern match), so when a secret field is added it must be updated here too
   // (the scrub-list-completeness risk of the plan-5.5 insertion point); the EDGE-PIN scrub is
-  // single-sourced via clearedPinFields (lib/normalizeEdges) — a field added to PIN_FIELDS clears
+  // single-sourced via clearedPinFields (lib/normalizeEdges) — a field added to
+  // SERVER_ALLOCATION_FIELDS clears
   // here automatically. The two lists are a deliberately SEPARATE concern (node secrets vs edge pins).
   purgeModeBoundaryState: () =>
     set((state) => ({

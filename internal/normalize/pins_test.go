@@ -27,7 +27,8 @@ func hasAnyPin(e model.Edge) bool {
 //     (distinct link identity via #id);
 //   - mirrored reverse primary (same link): a-b and its reverse b-a carry the SAME values -> kept;
 //   - disabled colliding edge -> skipped (kept, neither checked nor claimed);
-//   - client-touched colliding edge -> skipped;
+//   - client-touched edge -> only the client endpoint's port is cleared; its router port,
+//     complete address pairs, and CompiledPort are kept;
 //
 // and confirms the heal is idempotent (a second pass reports no change).
 func TestHealCollidingPins(t *testing.T) {
@@ -64,9 +65,12 @@ func TestHealCollidingPins(t *testing.T) {
 			// Disabled edge colliding on .1/.2: SKIPPED (kept, never checked/claimed).
 			{ID: "dis", FromNodeID: "c", ToNodeID: "d", IsEnabled: false,
 				PinnedFromTransitIP: "10.10.0.1", PinnedToTransitIP: "10.10.0.2"},
-			// Client-touched edge colliding on .1/.2: SKIPPED.
+			// Client-touched edge: clear only the invalid client-side port. The router-side port
+			// and non-colliding complete address pairs remain valid sticky allocations.
 			{ID: "cli", FromNodeID: "cl", ToNodeID: "c", IsEnabled: true,
-				PinnedFromTransitIP: "10.10.0.1", PinnedToTransitIP: "10.10.0.2"},
+				CompiledPort: 51829, PinnedFromPort: 51900, PinnedToPort: 51829,
+				PinnedFromTransitIP: "10.10.0.9", PinnedToTransitIP: "10.10.0.10",
+				PinnedFromLinkLocal: "fe80::9", PinnedToLinkLocal: "fe80::a"},
 		},
 	}
 
@@ -85,6 +89,22 @@ func TestHealCollidingPins(t *testing.T) {
 		if hasAnyPin(edgeByID(topo.Edges, id)) {
 			t.Errorf("edge %q kept pins but should have been stripped (colliding)", id)
 		}
+	}
+	client := edgeByID(topo.Edges, "cli")
+	if client.PinnedFromPort != 0 {
+		t.Errorf("client-side port = %d, want cleared", client.PinnedFromPort)
+	}
+	if client.PinnedToPort != 51829 {
+		t.Errorf("router-side port = %d, want preserved 51829", client.PinnedToPort)
+	}
+	if client.PinnedFromTransitIP != "10.10.0.9" || client.PinnedToTransitIP != "10.10.0.10" {
+		t.Errorf("client transit pair changed: %+v", client)
+	}
+	if client.PinnedFromLinkLocal != "fe80::9" || client.PinnedToLinkLocal != "fe80::a" {
+		t.Errorf("client link-local pair changed: %+v", client)
+	}
+	if client.CompiledPort != 51829 {
+		t.Errorf("client CompiledPort = %d, want preserved 51829", client.CompiledPort)
 	}
 
 	// Idempotent + converged: a second pass finds nothing to strip.
