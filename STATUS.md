@@ -5,28 +5,28 @@
 ## Active work
 
 - **Subject:** `deployment-stability-and-charted-telemetry-2026_07_17`
-- **Branch:** `fix/rc12-telemetry-drafts` @ `5e77878`
-- **Current plan:** plan-5 — Add constrained URL probes end to end
-- **Last shipped:** Plan 4 preserved exact version-1 telemetry policy behavior, added an exclusive
-  signed successor policy member, and introduced authenticated latest-heartbeat readiness plus a
-  draft-preserving agent-upgrade projection (commit `5e751ca`, 2026-07-17).
+- **Branch:** `fix/rc12-telemetry-drafts` @ `b9728a2`
+- **Current plan:** plan-6 — Build bounded automatic disk/GPU collector primitives
+- **Last shipped:** Plan 5 added successor-only fixed-GET URL probes with exact expected-status
+  success, bounded latest actual-status metadata, and shared latency/availability history without
+  redirects, ambient proxies, arbitrary requests, or status-code charts (commit `09eff0a`, 2026-07-17).
 - **Other open subject:** `mixed-controller-local-mode-2026_06_25` remains open with its historical
   plan-5 and plan-7 pending; it is not part of the rc.12 execution sequence.
 
 ## Open questions / blockers
 
-- None. The isolated Plan 4 index passed all relevant Go packages, frontend lint, 45 focused tests,
-  the production build, and a Windows agent cross-compile; three independent final reviews found no
-  remaining rollout, compatibility, custody, structural, or hygiene defect.
+- None. All Go packages, `go vet`, frontend lint, the production build, and all 55 frontend test files
+  (415 tests) passed. Three independent final reviews found no remaining URL execution, history,
+  custody, boundedness, compatibility, accessibility, structural, or hygiene defect.
 
 ## Next actions
 
-1. Execute and close plan-5's constrained URL probes, exact expected-status success rule, live status
-   metadata, and shared latency/availability charts.
-2. Execute plans 6–7 for automatic disk/GPU discovery, bounded collection, controller history, and
-   reusable Fleet charts.
-3. Run plan-8's whole-subject review/fix/re-review loop, CI-equivalent gates, documentation updates,
-   and mandatory full `refresh-specs` flow.
+1. Execute and close plan-6's bounded, injectable disk/GPU discovery and sampling primitives without
+   registering production metrics yet.
+2. Execute and close plan-7's signed opt-in activation, controller history/API projection, and reusable
+   Fleet charts for every dynamic device metric.
+3. Run plan-8's whole-subject review/fix/re-review loop, CI/release-equivalent gates, documentation
+   updates, and mandatory full `refresh-specs` flow.
 4. Run plan-9 only after exact-main verification; the annotated `v2.0.0-rc.12` tag remains the final
    repository mutation before read-only GitHub/container verification.
 
