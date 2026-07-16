@@ -19,6 +19,7 @@ import {
   loadSlices,
   stableStringify,
   clearServerCanvasAtGate,
+  assertControllerCanWriteTopology,
 } from './helpers';
 import { stripPrivateKeys, dropAllKeys } from '../../lib/custody';
 import { normalizeTopologyForCanvas } from '../../lib/normalizeEdges';
@@ -37,7 +38,9 @@ const modeContextReset = {
   previewing: false,
   deployPreview: null,
   deployPreviewing: false,
+  deployPreviewMode: 'normal',
   deployPreviewError: null,
+  telemetryPolicyUpgradeOffer: null,
   pendingShrink: null,
   signing: false,
   enrolling: false,
@@ -158,7 +161,7 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
       // loading = the global busy flag (consistent with other actions); saving = specific to
       // this save, driving the Save button / conflict dialog, so the global loading set by an
       // unrelated op does not light it up (plan-11 review #1). Both must be cleared at every exit.
-      set({ loading: true, saving: true, error: null });
+      set({ loading: true, saving: true, error: null, telemetryPolicyUpgradeOffer: null });
       try {
         // Zero-knowledge fail-safe: as in deploy(), strip private keys before upload (the
         // controller canvas has none anyway; this is the backstop).
@@ -234,6 +237,8 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
           clean = normalizedClean;
           useTopologyStore.setState({ edges: normalizedClean.edges });
         }
+        await assertControllerCanWriteTopology(clean, context.config);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         await updateTopology(context.config, JSON.stringify(clean));
         if (!controllerActionContextIsCurrent(get, context)) return;
         // The canvas is now the server-authoritative copy: mark it server-held (stop hitting
@@ -259,7 +264,7 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
 
     importDesignToServer: async (file: File) => {
       const context = captureControllerActionContext(get);
-      set({ loading: true, error: null });
+      set({ loading: true, error: null, telemetryPolicyUpgradeOffer: null });
       try {
         const text = await file.text();
         if (!controllerActionContextIsCurrent(get, context)) return;
@@ -298,6 +303,8 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
         // Write to the server: update-topology lands a version history entry and heals colliding
         // pins + normalizes at the write boundary. Never stage/promote — an import only updates
         // the authoritative design; reaching the fleet still needs a separate Deploy.
+        await assertControllerCanWriteTopology(cleaned, context.config);
+        if (!controllerActionContextIsCurrent(get, context)) return;
         await updateTopology(context.config, JSON.stringify(cleaned));
         if (!controllerActionContextIsCurrent(get, context)) return;
         // Optimistic load (the already-healed imported design, fromServer=true so it does not
@@ -319,7 +326,15 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
     // Clear the controller-mode transient notices (hydration / stripping / pending shrink). Called
     // on a controller→local switch so no controller-mode banner lingers in local mode (plan-5
     // review).
-    clearModeNotices: () => set({ hydrationNotice: false, lastStrippedKeys: 0, pendingShrink: null, deployPreview: null }),
+    clearModeNotices: () => set({
+      hydrationNotice: false,
+      lastStrippedKeys: 0,
+      pendingShrink: null,
+      deployPreview: null,
+      deployPreviewMode: 'normal',
+      deployPreviewError: null,
+      telemetryPolicyUpgradeOffer: null,
+    }),
 
     // The single controller→local switch path (plan-10 / T1). The security fork is identical to
     // the login gate LoginPage's:

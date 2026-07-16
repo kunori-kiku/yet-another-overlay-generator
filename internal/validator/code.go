@@ -51,6 +51,7 @@ const (
 	CodeNodeRoleInvalid                    Code = "validation_node_role_invalid"
 	CodeNodeDeploymentModeInvalid          Code = "validation_node_deployment_mode_invalid"
 	CodeNodeTelemetryProbesInvalid         Code = "validation_node_telemetry_probes_invalid"
+	CodeNodeTelemetryDevicesInvalid        Code = "validation_node_telemetry_devices_invalid"
 	CodeNodePlatformUnsupported            Code = "validation_node_platform_unsupported"
 	CodeNodeXDPModeInvalid                 Code = "validation_node_xdp_mode_invalid"
 	CodeNodeMimicEgressInterfaceInvalid    Code = "validation_node_mimic_egress_interface_invalid"
@@ -176,6 +177,7 @@ var registry = map[Code]string{
 	CodeNodeRoleInvalid:                    "Invalid role: {role}. Allowed values: peer, router, relay, gateway, client.",
 	CodeNodeDeploymentModeInvalid:          "Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).",
 	CodeNodeTelemetryProbesInvalid:         "Invalid active telemetry configuration: {detail}. Set one host (an IP literal or DNS hostname) per probe; TCP also requires one port.",
+	CodeNodeTelemetryDevicesInvalid:        "Invalid automatic device telemetry configuration: {detail}.",
 	CodeNodePlatformUnsupported:            "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
 	CodeNodeXDPModeInvalid:                 "Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).",
 	CodeNodeMimicEgressInterfaceInvalid:    "Invalid mimic egress interface: {iface}. Use a valid interface name (letters, digits, . _ -, up to 15 chars).",

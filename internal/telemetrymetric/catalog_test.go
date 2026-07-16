@@ -1,9 +1,12 @@
 package telemetrymetric
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
 func TestCatalogDefinitionsAreUniqueAndExplicit(t *testing.T) {
@@ -109,9 +112,68 @@ func TestLiveSurfacePolicyPreservesUnknownCompatibility(t *testing.T) {
 	if VisibleOnLiveSurface(ProbeSamplesKey) {
 		t.Fatal("probe_samples must be history-only on the latest/live surface")
 	}
-	for _, key := range []string{ResourceKey, ProbeResultsKey, WireGuardPeersKey, NativeXDPKey, MimicCapabilityKey, "future_metric"} {
+	for _, key := range []string{ResourceKey, ProbeResultsKey, WireGuardPeersKey, NativeXDPKey, MimicCapabilityKey, AgentCapabilitiesKey, "future_metric"} {
 		if !VisibleOnLiveSurface(key) {
 			t.Errorf("metric %q must remain live-visible", key)
 		}
+	}
+}
+
+func TestAgentCapabilities_NormalizeValidateAndCatalog(t *testing.T) {
+	got := NormalizeAgentCapabilities([]string{
+		telemetrycap.PolicyV2,
+		"Bad_Capability",
+		telemetrycap.DeviceV1,
+		telemetrycap.PolicyV2,
+		"",
+	})
+	want := []string{
+		telemetrycap.DeviceV1,
+		telemetrycap.PolicyV2,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NormalizeAgentCapabilities = %v, want %v", got, want)
+	}
+	if err := ValidateAgentCapabilities(got); err != nil {
+		t.Fatalf("ValidateAgentCapabilities(canonical): %v", err)
+	}
+
+	many := make([]string, MaxAgentCapabilities+4)
+	for i := range many {
+		many[i] = fmt.Sprintf("cap-%02d", i)
+	}
+	bounded := NormalizeAgentCapabilities(many)
+	if len(bounded) != MaxAgentCapabilities {
+		t.Fatalf("normalized capability count = %d, want cap %d", len(bounded), MaxAgentCapabilities)
+	}
+	if err := ValidateAgentCapabilities(bounded); err != nil {
+		t.Fatalf("ValidateAgentCapabilities(bounded): %v", err)
+	}
+	for name, invalid := range map[string][]string{
+		"missing":   nil,
+		"unsorted":  {"z-cap", "a-cap"},
+		"duplicate": {"a-cap", "a-cap"},
+		"invalid":   {"Bad_Capability"},
+		"too many":  many,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateAgentCapabilities(invalid); err == nil {
+				t.Fatalf("ValidateAgentCapabilities accepted %v", invalid)
+			}
+		})
+	}
+
+	found := false
+	for _, definition := range All() {
+		if definition.Key != AgentCapabilitiesKey {
+			continue
+		}
+		found = true
+		if definition.History != HistoryLiveOnly || definition.LiveSurface != LiveSurfaceVisible || definition.LiveOnlyReason == "" {
+			t.Fatalf("agent capability catalog definition = %+v", definition)
+		}
+	}
+	if !found {
+		t.Fatal("agent capability metric is absent from the shared catalog")
 	}
 }

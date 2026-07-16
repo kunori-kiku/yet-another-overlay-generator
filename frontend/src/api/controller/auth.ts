@@ -30,6 +30,9 @@ export interface LoginResult {
   // the literal "dev" (the controller normalizes an empty BuildVersion to "dev"); "" only when an
   // older controller predates the field. The panel treats "dev"/non-semver as "no version to match".
   controllerVersion: string;
+  // Authenticated controller schema capabilities. Empty means an older/malformed response and is
+  // deliberately fail-closed for writes containing successor-only topology fields.
+  controllerCapabilities: string[];
 }
 
 // LoginOutcome is what login() returns. Either the password (and any required second
@@ -83,6 +86,18 @@ interface LoginResponseJSON {
   expires_at: string;
   csrf_token: string;
   controller_version?: string;
+  controller_capabilities?: unknown;
+}
+
+function mapControllerCapabilities(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length > 16) return [];
+  const capabilities: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(value)) return [];
+    if (capabilities.length > 0 && capabilities[capabilities.length - 1] >= value) return [];
+    capabilities.push(value);
+  }
+  return capabilities;
 }
 
 // --- operator login (plan-5.2) ---
@@ -145,6 +160,7 @@ export async function login(
       expiresAt: data.expires_at,
       csrfToken: data.csrf_token,
       controllerVersion: data.controller_version ?? '',
+      controllerCapabilities: mapControllerCapabilities(data.controller_capabilities),
     },
   };
 }
@@ -338,6 +354,7 @@ export async function passkeyLoginFinish(
     expiresAt: d.expires_at,
     csrfToken: d.csrf_token,
     controllerVersion: d.controller_version ?? '',
+    controllerCapabilities: mapControllerCapabilities(d.controller_capabilities),
   };
 }
 
@@ -353,6 +370,7 @@ export interface SessionInfo {
   // the field. The panel surfaces it in the user menu and uses a real-semver value as the one-click
   // "update all agents" target + the refuse-newer hint ("dev"/non-semver = no version to match).
   controllerVersion: string;
+  controllerCapabilities: string[];
 }
 
 interface SessionResponseJSON {
@@ -360,6 +378,7 @@ interface SessionResponseJSON {
   expires_at: string;
   csrf_token: string;
   controller_version?: string;
+  controller_capabilities?: unknown;
 }
 
 // getSession probes the current operator session via the httpOnly cookie (or Bearer).
@@ -384,6 +403,7 @@ export async function getSession(cfg: ControllerConfig): Promise<SessionInfo | n
     expiresAt: d.expires_at,
     csrfToken: d.csrf_token,
     controllerVersion: d.controller_version ?? '',
+    controllerCapabilities: mapControllerCapabilities(d.controller_capabilities),
   };
 }
 

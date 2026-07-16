@@ -6,6 +6,9 @@ import {
   summarizeDeployPreview,
   deployPreviewRows,
   resolveDeployForce,
+  currentTelemetryPolicyUpgradeOffer,
+  successorTelemetryPolicyFingerprint,
+  phaseOneAgentRolloutState,
   type DeployPreview,
 } from './deployPreview';
 
@@ -61,6 +64,47 @@ describe('ForceSelection reducers', () => {
     const s3 = setForceAll(s2, false);
     expect(s3.forceAll).toBe(false);
     expect(s3.forceNodes.has('n2')).toBe(true);
+  });
+});
+
+describe('successor telemetry readiness offer', () => {
+  it('is invalidated by a relevant policy edit and remains separate from unrelated errors', () => {
+    const withDevices = {
+      nodes: [{
+        id: 'n1',
+        deployment_mode: 'managed' as const,
+        telemetry_devices: { mode: 'all-eligible-v1' as const },
+      }],
+    };
+    const offer = {
+      error: 'upgrade agents first',
+      fingerprint: successorTelemetryPolicyFingerprint(withDevices),
+    };
+    expect(currentTelemetryPolicyUpgradeOffer(offer, withDevices)).toBe(offer);
+    expect(currentTelemetryPolicyUpgradeOffer(offer, {
+      nodes: [{ id: 'n1', deployment_mode: 'managed' as const }],
+    })).toBeNull();
+  });
+});
+
+describe('phase-one agent rollout warning', () => {
+  const base = {
+    targetAgentVersion: 'v2.0.0-rc.12',
+    agentBins: { 'linux-amd64': {} },
+    agentCanaryNodeIds: ['n1'],
+    agentRolloutFleetWide: false,
+  };
+
+  it('distinguishes an inert rollout, partial canary coverage, and fleet-wide coverage', () => {
+    expect(phaseOneAgentRolloutState({ ...base, targetAgentVersion: '' }, ['n1'])).toEqual({
+      kind: 'missing', uncoveredNodeIDs: ['n1'],
+    });
+    expect(phaseOneAgentRolloutState(base, ['n2', 'n1'])).toEqual({
+      kind: 'partial', uncoveredNodeIDs: ['n2'],
+    });
+    expect(phaseOneAgentRolloutState({ ...base, agentRolloutFleetWide: true }, ['n2', 'n1'])).toEqual({
+      kind: 'ready', uncoveredNodeIDs: [],
+    });
   });
 });
 

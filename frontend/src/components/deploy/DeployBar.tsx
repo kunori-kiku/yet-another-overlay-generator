@@ -20,6 +20,9 @@ import {
   type ForceSelection,
   type DeployPreview,
   type DeployForceArg,
+  currentTelemetryPolicyUpgradeOffer,
+  phaseOneAgentRolloutState,
+  type PhaseOneAgentRolloutSettings,
 } from '../../lib/deployPreview';
 
 // DeployBar publishes the current topology to the fleet. controllerStore.deploy() chains
@@ -39,16 +42,23 @@ export function DeployBar() {
   const cancelDeployPreview = useControllerStore((s) => s.cancelDeployPreview);
   const deployPreview = useControllerStore((s) => s.deployPreview);
   const deployPreviewing = useControllerStore((s) => s.deployPreviewing);
-  // Best-effort preview (plan-6): non-null when the dry-run fetch failed (e.g. an older controller
-  // 404s/405s the POST route). We then show the error + a "Deploy anyway" fallback rather than a dead
-  // Deploy button.
+  const deployPreviewMode = useControllerStore((s) => s.deployPreviewMode);
+  // Old-controller compatibility only: non-null when the preview POST route is absent (404/405).
+  // Validation, security, network, and server faults stay blocking in the ordinary error banner.
   const deployPreviewError = useControllerStore((s) => s.deployPreviewError);
+  const telemetryPolicyUpgradeOffer = useControllerStore((s) => s.telemetryPolicyUpgradeOffer);
+  const topologyNodes = useTopologyStore((s) => s.nodes);
+  const activeTelemetryPolicyUpgradeOffer = currentTelemetryPolicyUpgradeOffer(
+    telemetryPolicyUpgradeOffer,
+    { nodes: topologyNodes },
+  );
   const enrollOperator = useControllerStore((s) => s.enrollOperator);
   const loading = useControllerStore((s) => s.loading);
   const signing = useControllerStore((s) => s.signing);
   const enrolling = useControllerStore((s) => s.enrolling);
   const error = useControllerStore((s) => s.error);
   const lastDeploy = useControllerStore((s) => s.lastDeploy);
+  const settings = useControllerStore((s) => s.settings);
   // Keystone status is SERVER-authoritative (never the browser-local cache): null = checking,
   // true = a credential is pinned on the controller, false = none. This is what kills the false
   // "Not enrolled" a browser-data clear used to show (which invited a fleet-stranding re-pin).
@@ -122,9 +132,8 @@ export function DeployBar() {
     void openDeployPreview();
   };
 
-  // "Deploy anyway" fallback (plan-6 best-effort): the preview fetch failed, so the confirmation
-  // dialog never opened. Deploy directly (no preview, no Force — a plain delta deploy) so the operator
-  // is never stuck. It still honors the same advisory rekeying confirm as onDeploy.
+  // "Deploy anyway" exists only for an older controller that has no preview route. Deploy directly
+  // (no preview, no Force — a plain delta deploy), while preserving the rekey advisory.
   const onDeployAnyway = () => {
     if (anyRekeying) {
       const ok = window.confirm(
@@ -132,7 +141,11 @@ export function DeployBar() {
       );
       if (!ok) return;
     }
-    void deploy();
+    void deploy({ legacyPreviewFallback: true });
+  };
+
+  const onUpgradeAgentsFirst = () => {
+    void openDeployPreview('upgrade-agents-first');
   };
 
   // Orphans (plan-6): approved fleet nodes that were NOT in the just-promoted
@@ -311,6 +324,30 @@ export function DeployBar() {
         </p>
       )}
 
+      {activeTelemetryPolicyUpgradeOffer && (
+        <div className="space-y-2">
+          <p
+            data-testid="telemetry-policy-upgrade-error"
+            role="alert"
+            aria-live="assertive"
+            className="text-xs text-[var(--warning)] bg-[var(--warning-bg)] px-2 py-1 rounded break-all"
+          >
+            ⚠️ {activeTelemetryPolicyUpgradeOffer.error}
+          </p>
+          <button
+            type="button"
+            data-testid="upgrade-agents-first"
+            onClick={onUpgradeAgentsFirst}
+            disabled={loading || deployPreviewing || noAuth}
+            className={`px-4 py-2 text-sm ${BTN_CTA} disabled:bg-[var(--control)] disabled:text-[var(--content-muted)] rounded font-medium`}
+          >
+            {deployPreviewing
+              ? t(language, 'deployBar.previewing')
+              : t(language, 'deployBar.upgradeAgentsFirst')}
+          </button>
+        </div>
+      )}
+
       {/* "Stripped N private keys" notice (plan-5, D4): controller mode is zero-knowledge, so private
           keys were stripped before upload. Dismissible. */}
       {lastStrippedKeys > 0 && (
@@ -371,6 +408,17 @@ export function DeployBar() {
               </p>
             </div>
           )}
+          {lastDeploy.telemetryPolicyOmittedNodeIDs.length > 0 && (
+            <div>
+              <p className="text-xs text-[var(--warning)]">
+                {t(language, 'deployBar.telemetryPolicyOmitted')} (
+                {lastDeploy.telemetryPolicyOmittedNodeIDs.length})
+              </p>
+              <p className="text-xs text-[var(--warning)] font-mono break-all">
+                {lastDeploy.telemetryPolicyOmittedNodeIDs.join(', ')}
+              </p>
+            </div>
+          )}
           {/* plan-6 identity reconciliation: nodes that are enrolled but not in this design. They
               were not deployed to, yet still hold a token and keep polling — offer a one-click
               "revoke" per row (manual only, never automatic, D10). */}
@@ -399,10 +447,8 @@ export function DeployBar() {
         </div>
       )}
 
-      {/* Best-effort preview fallback (plan-6): the dry-run fetch failed (e.g. a newer panel POSTs the
-          deploy-preview route to an older controller that 404s/405s it). The Deploy button only opens
-          the preview dialog, so without this the operator could not deploy at all — surface the error
-          and a "Deploy anyway" that deploys with no preview (a plain delta deploy). Dismissible. */}
+      {/* Compatibility fallback: the preview POST route is absent on an older controller (404/405).
+          Other failures remain blocking and never render this bypass. */}
       {deployPreviewError && (
         <div className="space-y-2 rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2">
           <div className="flex items-start justify-between gap-2 text-xs text-[var(--warning)]">
@@ -440,8 +486,9 @@ export function DeployBar() {
           preview={deployPreview}
           loading={loading}
           language={language}
+          settings={settings}
           onCancel={cancelDeployPreview}
-          onConfirm={(force) => void deploy({ force })}
+          onConfirm={(force) => void deploy({ force, telemetryPolicyMode: deployPreviewMode })}
         />
       )}
 
@@ -513,18 +560,21 @@ function DeployPreviewDialog({
   preview,
   loading,
   language,
+  settings,
   onCancel,
   onConfirm,
 }: {
   preview: DeployPreview;
   loading: boolean;
   language: UILanguage;
+  settings: PhaseOneAgentRolloutSettings | null;
   onCancel: () => void;
   onConfirm: (force: DeployForceArg) => void;
 }) {
   const [forceSel, setForceSel] = useState<ForceSelection>(emptyForceSelection());
   const rows = deployPreviewRows(preview, forceSel);
   const summary = summarizeDeployPreview(preview);
+  const phaseOneRollout = phaseOneAgentRolloutState(settings, preview.telemetryPolicyOmittedNodeIDs);
 
   return (
     <div
@@ -563,6 +613,32 @@ function DeployPreviewDialog({
               {t(language, 'deployBar.forceAll')}
             </label>
           </>
+        )}
+
+        {preview.telemetryPolicyOmittedNodeIDs.length > 0 && (
+          <div className="space-y-2">
+            <p
+              data-testid="deploy-telemetry-policy-omitted"
+              className="rounded border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-sm text-[var(--warning)]"
+            >
+              {t(language, 'deployBar.upgradeAgentsFirstPreview', {
+                count: preview.telemetryPolicyOmittedNodeIDs.length,
+                nodes: preview.telemetryPolicyOmittedNodeIDs.join(', '),
+              })}
+            </p>
+            {phaseOneRollout.kind !== 'ready' && (
+              <p
+                data-testid="deploy-agent-rollout-warning"
+                className="rounded border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger)]"
+              >
+                {phaseOneRollout.kind === 'missing'
+                  ? t(language, 'deployBar.upgradeAgentsFirstNoRollout')
+                  : t(language, 'deployBar.upgradeAgentsFirstPartialRollout', {
+                      nodes: phaseOneRollout.uncoveredNodeIDs.join(', '),
+                    })}
+              </p>
+            )}
+          </div>
         )}
 
         {rows.length === 0 ? (

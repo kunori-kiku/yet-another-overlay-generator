@@ -116,7 +116,11 @@ func TestExport_BundleFileSet_SingleSource(t *testing.T) {
 				nodeDir := filepath.Join(outDir, node.ID)
 
 				// (B) sorted BundleFiles keys — the single source of truth.
-				want := sortedKeys(BundleFiles(result, node.ID))
+				bundleFiles, err := BundleFiles(result, node.ID)
+				if err != nil {
+					t.Fatalf("%s: BundleFiles: %v", node.Name, err)
+				}
+				want := sortedKeys(bundleFiles)
 				if len(want) == 0 {
 					t.Fatalf("%s: BundleFiles returned no members", node.Name)
 				}

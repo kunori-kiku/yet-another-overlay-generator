@@ -34,6 +34,12 @@ func (h *ControllerHandler) HandleStage(ctx context.Context, tenant controller.T
 	if len(req.ForceNodes) > 0 {
 		opts = append(opts, controller.WithForceNodes(req.ForceNodes...))
 	}
+	if req.TelemetryPolicyMode != "" {
+		if req.TelemetryPolicyMode != controller.TelemetryPolicyDeployNormal && req.TelemetryPolicyMode != controller.TelemetryPolicyDeployUpgradeAgentsFirst {
+			return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "telemetry_policy_mode")
+		}
+		opts = append(opts, controller.WithTelemetryPolicyDeployMode(req.TelemetryPolicyMode))
+	}
 	result, err := controller.CompileAndStage(ctx, h.store, tenant, time.Now(), opts...)
 	if err != nil {
 		if ae := mapControllerErr(err); ae != nil {
@@ -50,10 +56,11 @@ func (h *ControllerHandler) HandleStage(ctx context.Context, tenant controller.T
 		return nil, codedErr(apierr.CodeInternal, err)
 	}
 	return stageResponseJSON{
-		Staged:            result.Staged,
-		Unchanged:         result.UnchangedNodeIDs,
-		SkippedUnenrolled: result.SkippedUnenrolled,
-		Generation:        result.Generation,
+		Staged:                      result.Staged,
+		Unchanged:                   result.UnchangedNodeIDs,
+		SkippedUnenrolled:           result.SkippedUnenrolled,
+		TelemetryPolicyOmittedNodes: result.TelemetryPolicyOmittedNodeIDs,
+		Generation:                  result.Generation,
 	}, nil
 }
 
@@ -71,7 +78,11 @@ func (h *ControllerHandler) HandleDeployPreview(ctx context.Context, tenant cont
 	if err != nil {
 		return nil, codedErr(apierr.CodeReqInvalidBody, err)
 	}
-	pv, err := controller.DeployPreview(ctx, h.store, tenant, topo)
+	mode := controller.TelemetryPolicyDeployMode(r.URL.Query().Get("telemetry_policy_mode"))
+	if mode != "" && mode != controller.TelemetryPolicyDeployNormal && mode != controller.TelemetryPolicyDeployUpgradeAgentsFirst {
+		return nil, apierr.New(apierr.CodeReqFieldInvalid).With("field", "telemetry_policy_mode")
+	}
+	pv, err := controller.DeployPreview(ctx, h.store, tenant, topo, mode)
 	if err != nil {
 		if ae := mapControllerErr(err); ae != nil {
 			return nil, ae
@@ -89,9 +100,10 @@ func (h *ControllerHandler) HandleDeployPreview(ctx context.Context, tenant cont
 		nodes = append(nodes, deployPreviewNodeJSON{NodeID: n.NodeID, Name: n.Name, Changed: n.Changed})
 	}
 	return deployPreviewResponseJSON{
-		KeystoneFullRestage: pv.KeystoneFullRestage,
-		Nodes:               nodes,
-		SkippedUnenrolled:   pv.SkippedUnenrolled,
+		KeystoneFullRestage:         pv.KeystoneFullRestage,
+		Nodes:                       nodes,
+		SkippedUnenrolled:           pv.SkippedUnenrolled,
+		TelemetryPolicyOmittedNodes: pv.TelemetryPolicyOmittedNodeIDs,
 	}, nil
 }
 

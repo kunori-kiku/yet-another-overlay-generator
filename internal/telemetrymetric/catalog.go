@@ -7,6 +7,7 @@ package telemetrymetric
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 )
 
@@ -52,13 +53,63 @@ type Definition struct {
 }
 
 const (
-	ProbeResultsKey    = "probe_results"
-	ProbeSamplesKey    = "probe_samples"
-	ResourceKey        = "resource"
-	WireGuardPeersKey  = "wireguard_peers"
-	NativeXDPKey       = "native_xdp"
-	MimicCapabilityKey = "mimic_capability"
+	ProbeResultsKey      = "probe_results"
+	ProbeSamplesKey      = "probe_samples"
+	ResourceKey          = "resource"
+	WireGuardPeersKey    = "wireguard_peers"
+	NativeXDPKey         = "native_xdp"
+	MimicCapabilityKey   = "mimic_capability"
+	AgentCapabilitiesKey = "agent_capabilities"
+	MaxAgentCapabilities = 16
 )
+
+var agentCapabilityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+type AgentCapabilitiesMetric struct {
+	Capabilities []string `json:"capabilities"`
+}
+
+// NormalizeAgentCapabilities produces the bounded canonical wire set used by the agent. Invalid
+// tokens are omitted; duplicates collapse; the retained values are sorted and capped.
+func NormalizeAgentCapabilities(input []string) []string {
+	seen := make(map[string]struct{}, len(input))
+	capabilities := make([]string, 0, len(input))
+	for _, capability := range input {
+		if !agentCapabilityPattern.MatchString(capability) {
+			continue
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			continue
+		}
+		seen[capability] = struct{}{}
+		capabilities = append(capabilities, capability)
+	}
+	sort.Strings(capabilities)
+	if len(capabilities) > MaxAgentCapabilities {
+		capabilities = capabilities[:MaxAgentCapabilities]
+	}
+	return capabilities
+}
+
+// ValidateAgentCapabilities enforces the exact canonical latest-heartbeat form. A malformed metric
+// is not readiness evidence; callers should treat validation failure as "not confirmed".
+func ValidateAgentCapabilities(capabilities []string) error {
+	if capabilities == nil {
+		return fmt.Errorf("agent capabilities field is missing or null")
+	}
+	if len(capabilities) > MaxAgentCapabilities {
+		return fmt.Errorf("agent capabilities exceed %d entries", MaxAgentCapabilities)
+	}
+	for i, capability := range capabilities {
+		if !agentCapabilityPattern.MatchString(capability) {
+			return fmt.Errorf("agent capability %d is invalid", i)
+		}
+		if i > 0 && capabilities[i-1] >= capability {
+			return fmt.Errorf("agent capabilities are not sorted unique")
+		}
+	}
+	return nil
+}
 
 var (
 	ProbeResults = Definition{
@@ -88,6 +139,10 @@ var (
 		Key: MimicCapabilityKey, History: HistoryLiveOnly, LiveSurface: LiveSurfaceVisible,
 		LiveOnlyReason: "capability is a point-in-time deployment advisory rather than a sampled numeric signal",
 	}
+	AgentCapabilities = Definition{
+		Key: AgentCapabilitiesKey, History: HistoryLiveOnly, LiveSurface: LiveSurfaceVisible,
+		LiveOnlyReason: "executable compatibility is current readiness, not a time-series measurement",
+	}
 )
 
 var catalogDefinitions = []Definition{
@@ -97,6 +152,7 @@ var catalogDefinitions = []Definition{
 	WireGuardPeers,
 	NativeXDP,
 	MimicCapability,
+	AgentCapabilities,
 }
 
 var orderedChartedDefinitions = func() []Definition {

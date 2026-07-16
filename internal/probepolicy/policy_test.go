@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
 func TestValidHost_IPOrDNSWithoutSeparateDNSField(t *testing.T) {
@@ -188,5 +191,111 @@ func TestParse_StrictVersionedCanonicalPolicy(t *testing.T) {
 	}
 	if raw, err := Marshal(nil); err != nil || raw != nil {
 		t.Fatalf("Marshal(nil) = %q, %v; want nil, nil", raw, err)
+	}
+}
+
+func TestPolicyV1_FrozenBytesExcludeDisplayName(t *testing.T) {
+	probes := []model.TelemetryProbe{{
+		ID: "control", Name: "Controller reachability", Type: model.TelemetryProbeTCP,
+		Host: "control.example", Port: 443, IntervalSeconds: 30, TimeoutMilliseconds: 500,
+	}}
+	raw, err := Marshal(probes)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	const want = `{"version":1,"probes":[{"id":"control","type":"tcp","host":"control.example","port":443,"interval_seconds":30,"timeout_milliseconds":500}]}`
+	if string(raw) != want {
+		t.Fatalf("telemetry.json = %s, want frozen v1 bytes %s", raw, want)
+	}
+	if bytes.Contains(raw, []byte(`"name"`)) {
+		t.Fatalf("controller display metadata leaked into telemetry.json: %s", raw)
+	}
+}
+
+func TestSuccessorPolicy_StrictRoundTripBoundsAndHelpers(t *testing.T) {
+	policy := SuccessorPolicy{
+		Probes: []model.TelemetryProbe{{
+			ID: "resolver", Name: "Display only", Type: model.TelemetryProbeICMP,
+			Host: "resolver.example", IntervalSeconds: 30,
+		}},
+		Devices: &DevicePolicy{Mode: DeviceModeAllEligibleV1},
+	}
+	raw, err := MarshalSuccessor(policy)
+	if err != nil {
+		t.Fatalf("MarshalSuccessor: %v", err)
+	}
+	const want = `{"version":2,"probes":[{"id":"resolver","type":"icmp","host":"resolver.example","interval_seconds":30}],"devices":{"mode":"all-eligible-v1"}}`
+	if string(raw) != want {
+		t.Fatalf("telemetry-policy.json = %s, want %s", raw, want)
+	}
+	if bytes.Contains(raw, []byte(`"name"`)) {
+		t.Fatalf("controller display metadata leaked into successor policy: %s", raw)
+	}
+
+	parsed, err := ParseSuccessor(raw)
+	if err != nil {
+		t.Fatalf("ParseSuccessor: %v", err)
+	}
+	if parsed.Version != SuccessorVersion || len(parsed.Probes) != 1 || parsed.Probes[0].Name != "" ||
+		parsed.Devices == nil || parsed.Devices.Mode != DeviceModeAllEligibleV1 {
+		t.Fatalf("parsed successor policy = %+v", parsed)
+	}
+	active, err := ParseActive(raw)
+	if err != nil || active.Version != SuccessorVersion || active.Devices == nil {
+		t.Fatalf("ParseActive(successor) = %+v, %v", active, err)
+	}
+	v1, err := Marshal([]model.TelemetryProbe{{ID: "legacy", Type: model.TelemetryProbeICMP, Host: "legacy.example"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err = ParseActive(v1)
+	if err != nil || active.Version != CurrentVersion || active.Devices != nil || len(active.Probes) != 1 {
+		t.Fatalf("ParseActive(v1) = %+v, %v", active, err)
+	}
+	if _, err := json.Marshal(policy); !errors.Is(err, errSuccessorPolicyRuntimeOnly) {
+		t.Fatalf("generic successor marshal error = %v, want %v", err, errSuccessorPolicyRuntimeOnly)
+	}
+
+	for name, invalid := range map[string][]byte{
+		"unknown root field":  []byte(`{"version":2,"devices":{"mode":"all-eligible-v1"},"future":true}`),
+		"unknown probe field": []byte(`{"version":2,"probes":[{"id":"p","type":"icmp","host":"example.com","name":"display"}]}`),
+		"wrong version":       []byte(`{"version":1,"devices":{"mode":"all-eligible-v1"}}`),
+		"empty policy":        []byte(`{"version":2}`),
+		"unknown device mode": []byte(`{"version":2,"devices":{"mode":"future"}}`),
+		"trailing JSON":       []byte(`{"version":2,"devices":{"mode":"all-eligible-v1"}} {}`),
+		"oversize":            append(append([]byte(nil), raw...), bytes.Repeat([]byte(" "), maxPolicyBytes)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseSuccessor(invalid); err == nil {
+				t.Fatalf("ParseSuccessor accepted invalid %s input", name)
+			}
+		})
+	}
+
+	tooMany := make([]model.TelemetryProbe, MaxProbes+1)
+	for i := range tooMany {
+		tooMany[i] = model.TelemetryProbe{ID: fmt.Sprintf("p-%d", i), Type: model.TelemetryProbeICMP, Host: "example.com"}
+	}
+	if _, err := MarshalSuccessor(SuccessorPolicy{Probes: tooMany}); err == nil {
+		t.Fatal("MarshalSuccessor accepted more than MaxProbes")
+	}
+
+	node := model.Node{
+		TelemetryProbes:  append([]model.TelemetryProbe(nil), policy.Probes...),
+		TelemetryDevices: &model.TelemetryDevicePolicy{Mode: string(DeviceModeAllEligibleV1)},
+	}
+	if !RequiresSuccessor(node) {
+		t.Fatal("device policy did not select the successor member")
+	}
+	wantCapabilities := []string{
+		telemetrycap.DeviceV1,
+		telemetrycap.PolicyV2,
+	}
+	if got := RequiredCapabilities(node); !reflect.DeepEqual(got, wantCapabilities) {
+		t.Fatalf("RequiredCapabilities = %v, want %v", got, wantCapabilities)
+	}
+	ProjectLegacy(&node)
+	if node.TelemetryDevices != nil || len(node.TelemetryProbes) != 1 {
+		t.Fatalf("ProjectLegacy removed the wrong fields: %+v", node)
 	}
 }

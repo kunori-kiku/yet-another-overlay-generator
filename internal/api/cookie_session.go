@@ -22,6 +22,7 @@ import (
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
 const (
@@ -141,6 +142,14 @@ type sessionResponseJSON struct {
 	// anonymous surface. The panel displays it and (plan-8) uses it to default the agent-rollout
 	// target + reject a target newer than the controller. omitempty: additive wire shape.
 	ControllerVersion string `json:"controller_version,omitempty"`
+	// ControllerCapabilities is an authenticated additive schema handshake. The panel treats a
+	// missing telemetry-policy token as an older controller and refuses topology writes that would
+	// otherwise be canonicalized with successor-only fields silently removed.
+	ControllerCapabilities []string `json:"controller_capabilities,omitempty"`
+}
+
+func controllerCapabilities() []string {
+	return []string{telemetrycap.ControllerTopologyPolicyV2}
 }
 
 // HandleSession reports the current operator session (operator-authed via Bearer OR
@@ -164,7 +173,10 @@ func (h *ControllerHandler) HandleSession(ctx context.Context, _ controller.Tena
 	if c, err := r.Cookie(csrfCookieName); err == nil {
 		csrf = c.Value
 	}
-	return sessionResponseJSON{Operator: actor, ExpiresAt: expiresAt, CSRFToken: csrf, ControllerVersion: h.version}, nil
+	return sessionResponseJSON{
+		Operator: actor, ExpiresAt: expiresAt, CSRFToken: csrf, ControllerVersion: h.version,
+		ControllerCapabilities: controllerCapabilities(),
+	}, nil
 }
 
 // bearerOrCookieToken returns the operator credential from the Authorization header if

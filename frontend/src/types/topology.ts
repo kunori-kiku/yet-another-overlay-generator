@@ -69,6 +69,12 @@ export interface Node {
   // Optional active-connectivity checks run by this managed node. Each signed policy names one
   // destination host and, for TCP, one port; it is deliberately not an arbitrary URL/command.
   telemetry_probes?: TelemetryProbe[];
+  // Automatic device discovery uses the separately versioned successor telemetry policy.
+  telemetry_devices?: TelemetryDevicePolicy;
+}
+
+export interface TelemetryDevicePolicy {
+  mode: 'all-eligible-v1';
 }
 
 export interface TelemetryProbe {

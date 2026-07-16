@@ -11,16 +11,20 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
 const (
 	FileName                   = "telemetry.json"
 	CurrentVersion             = 1
+	SuccessorFileName          = "telemetry-policy.json"
+	SuccessorVersion           = 2
 	MaxProbes                  = 16
 	DefaultIntervalSeconds     = 60
 	MinIntervalSeconds         = 30
@@ -35,12 +39,34 @@ const (
 var probeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,63}$`)
 
 var errPolicyRuntimeOnly = errors.New("probepolicy: Policy is a parsed runtime view; use Marshal for telemetry.json")
+var errSuccessorPolicyRuntimeOnly = errors.New("probepolicy: SuccessorPolicy is a runtime view; use MarshalSuccessor for telemetry-policy.json")
 
 // Policy is the parsed runtime view of the canonical, versioned bundle member. It deliberately
 // cannot be marshaled directly; telemetry.json is emitted only through Marshal's private wire DTO.
 type Policy struct {
 	Version int
 	Probes  []model.TelemetryProbe
+}
+
+type DeviceMode string
+
+const DeviceModeAllEligibleV1 DeviceMode = "all-eligible-v1"
+
+type DevicePolicy struct {
+	Mode DeviceMode `json:"mode"`
+}
+
+// SuccessorPolicy is the unified runtime view used for the separately named version-2 member and
+// for reading the one durable last-known-good policy field. It is serialized only through the
+// private strict wire DTO in MarshalSuccessor so controller-only probe metadata cannot leak on-node.
+type SuccessorPolicy struct {
+	Version int                    `json:"version"`
+	Probes  []model.TelemetryProbe `json:"probes,omitempty"`
+	Devices *DevicePolicy          `json:"devices,omitempty"`
+}
+
+func (SuccessorPolicy) MarshalJSON() ([]byte, error) {
+	return nil, errSuccessorPolicyRuntimeOnly
 }
 
 // MarshalJSON blocks accidental serialization of the runtime view, including controller-only
@@ -66,6 +92,49 @@ type executableProbeWire struct {
 type policyWire struct {
 	Version int                   `json:"version"`
 	Probes  []executableProbeWire `json:"probes"`
+}
+
+type devicePolicyWire struct {
+	Mode DeviceMode `json:"mode"`
+}
+
+type successorPolicyWire struct {
+	Version int                  `json:"version"`
+	Probes  []successorProbeWire `json:"probes,omitempty"`
+	Devices *devicePolicyWire    `json:"devices,omitempty"`
+}
+
+// successorProbeWire is deliberately separate from executableProbeWire even while their Plan-4
+// fields match. Future successor-only probe fields must not touch the frozen telemetry.json v1 DTO.
+type successorProbeWire struct {
+	ID                  string `json:"id"`
+	Type                string `json:"type"`
+	Host                string `json:"host"`
+	Port                int    `json:"port,omitempty"`
+	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
+	TimeoutMilliseconds int    `json:"timeout_milliseconds,omitempty"`
+}
+
+func successorProbe(probe model.TelemetryProbe) successorProbeWire {
+	return successorProbeWire{
+		ID:                  probe.ID,
+		Type:                probe.Type,
+		Host:                probe.Host,
+		Port:                probe.Port,
+		IntervalSeconds:     probe.IntervalSeconds,
+		TimeoutMilliseconds: probe.TimeoutMilliseconds,
+	}
+}
+
+func successorTopologyProbe(probe successorProbeWire) model.TelemetryProbe {
+	return model.TelemetryProbe{
+		ID:                  probe.ID,
+		Type:                probe.Type,
+		Host:                probe.Host,
+		Port:                probe.Port,
+		IntervalSeconds:     probe.IntervalSeconds,
+		TimeoutMilliseconds: probe.TimeoutMilliseconds,
+	}
 }
 
 func executableProbe(probe model.TelemetryProbe) executableProbeWire {
@@ -143,6 +212,160 @@ func Parse(data []byte) (*Policy, error) {
 		return nil, err
 	}
 	return policy, nil
+}
+
+// MarshalSuccessor emits the strict, compact telemetry-policy.json version-2 member. Version zero
+// means "use the current successor" for callers constructing a fresh runtime value; any other
+// non-current version is rejected rather than silently rewritten.
+func MarshalSuccessor(policy SuccessorPolicy) ([]byte, error) {
+	if policy.Version != 0 && policy.Version != SuccessorVersion {
+		return nil, fmt.Errorf("unsupported successor telemetry policy version %d", policy.Version)
+	}
+	if len(policy.Probes) == 0 && policy.Devices == nil {
+		return nil, fmt.Errorf("successor telemetry policy has no executable features")
+	}
+	if err := Validate(policy.Probes); err != nil {
+		return nil, err
+	}
+	if err := ValidateDevicePolicy(policy.Devices); err != nil {
+		return nil, err
+	}
+	wire := successorPolicyWire{Version: SuccessorVersion}
+	if len(policy.Probes) > 0 {
+		wire.Probes = make([]successorProbeWire, len(policy.Probes))
+		for i := range policy.Probes {
+			wire.Probes[i] = successorProbe(policy.Probes[i])
+		}
+	}
+	if policy.Devices != nil {
+		wire.Devices = &devicePolicyWire{Mode: policy.Devices.Mode}
+	}
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		return nil, fmt.Errorf("marshal successor telemetry policy: %w", err)
+	}
+	if len(raw) > maxPolicyBytes {
+		return nil, fmt.Errorf("successor telemetry policy exceeds %d bytes", maxPolicyBytes)
+	}
+	return raw, nil
+}
+
+// ParseSuccessor strictly decodes telemetry-policy.json. Unknown fields and trailing JSON remain
+// fail-closed, independently of the frozen telemetry.json v1 parser above.
+func ParseSuccessor(data []byte) (*SuccessorPolicy, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("successor telemetry policy is empty")
+	}
+	if len(data) > maxPolicyBytes {
+		return nil, fmt.Errorf("successor telemetry policy exceeds %d bytes", maxPolicyBytes)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var wire successorPolicyWire
+	if err := dec.Decode(&wire); err != nil {
+		return nil, fmt.Errorf("parse successor telemetry policy: %w", err)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("parse successor telemetry policy: trailing JSON value")
+		}
+		return nil, fmt.Errorf("parse successor telemetry policy trailing data: %w", err)
+	}
+	if wire.Version != SuccessorVersion {
+		return nil, fmt.Errorf("unsupported successor telemetry policy version %d", wire.Version)
+	}
+	if len(wire.Probes) == 0 && wire.Devices == nil {
+		return nil, fmt.Errorf("successor telemetry policy has no executable features")
+	}
+	policy := &SuccessorPolicy{Version: wire.Version}
+	if len(wire.Probes) > 0 {
+		policy.Probes = make([]model.TelemetryProbe, len(wire.Probes))
+		for i := range wire.Probes {
+			policy.Probes[i] = successorTopologyProbe(wire.Probes[i])
+		}
+	}
+	if wire.Devices != nil {
+		policy.Devices = &DevicePolicy{Mode: wire.Devices.Mode}
+	}
+	if err := Validate(policy.Probes); err != nil {
+		return nil, err
+	}
+	if err := ValidateDevicePolicy(policy.Devices); err != nil {
+		return nil, err
+	}
+	return policy, nil
+}
+
+// ParseActive dispatches a bounded durable policy by its root version, then delegates to the exact
+// strict parser for that version. It does not weaken either file contract or accept a filename.
+func ParseActive(data []byte) (*SuccessorPolicy, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("telemetry policy is empty")
+	}
+	if len(data) > maxPolicyBytes {
+		return nil, fmt.Errorf("telemetry policy exceeds %d bytes", maxPolicyBytes)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var root struct {
+		Version int `json:"version"`
+	}
+	if err := dec.Decode(&root); err != nil {
+		return nil, fmt.Errorf("parse telemetry policy version: %w", err)
+	}
+	switch root.Version {
+	case CurrentVersion:
+		policy, err := Parse(data)
+		if err != nil {
+			return nil, err
+		}
+		return &SuccessorPolicy{Version: policy.Version, Probes: policy.Probes}, nil
+	case SuccessorVersion:
+		return ParseSuccessor(data)
+	default:
+		return nil, fmt.Errorf("unsupported telemetry policy version %d", root.Version)
+	}
+}
+
+// ValidateDevicePolicy is the canonical topology/runtime validator for the successor device
+// selector. Schema validation calls the same definition so malformed drafts fail as structured
+// validation errors instead of reaching render as an internal error.
+func ValidateDevicePolicy(policy *DevicePolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if policy.Mode != DeviceModeAllEligibleV1 {
+		return fmt.Errorf("unsupported telemetry device mode %q", policy.Mode)
+	}
+	return nil
+}
+
+// RequiresSuccessor reports whether a node needs the separately named version-2 policy member.
+func RequiresSuccessor(node model.Node) bool {
+	return node.TelemetryDevices != nil
+}
+
+// RequiredCapabilities returns the exact authenticated agent capabilities needed to deploy a node's
+// successor policy. The list is sorted so installer requirements and readiness diagnostics are stable.
+func RequiredCapabilities(node model.Node) []string {
+	if !RequiresSuccessor(node) {
+		return nil
+	}
+	capabilities := []string{telemetrycap.PolicyV2}
+	if node.TelemetryDevices != nil {
+		capabilities = append(capabilities, telemetrycap.DeviceV1)
+	}
+	sort.Strings(capabilities)
+	return capabilities
+}
+
+// ProjectLegacy removes only successor-only fields from an already-copied topology node. ICMP/TCP
+// probes remain available to the frozen telemetry.json v1 path during the upgrade-first deployment.
+func ProjectLegacy(node *model.Node) {
+	if node == nil {
+		return
+	}
+	node.TelemetryDevices = nil
 }
 
 // Validate checks the topology and runtime form of an active probe set.

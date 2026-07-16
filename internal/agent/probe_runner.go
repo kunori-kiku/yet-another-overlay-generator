@@ -122,7 +122,7 @@ func (s *activeProbeSampler) Sample(_ time.Time) ([]runtimecontract.Condition, m
 		s.clear()
 		return nil, nil
 	}
-	policy, err := probepolicy.Parse(state.ActiveTelemetryPolicy)
+	policy, err := probepolicy.ParseActive(state.ActiveTelemetryPolicy)
 	if err != nil {
 		// Corrupt or hand-edited state is not an authorization source. Cancel active work and fail
 		// closed until a future verified apply commits a valid replacement.

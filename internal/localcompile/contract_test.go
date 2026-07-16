@@ -90,7 +90,10 @@ func TestCompile_LosslessWrapper(t *testing.T) {
 	wantFiles := make(map[string]map[string]string)
 	wantChecksums := make(map[string]string)
 	for _, node := range directResult.Topology.Nodes {
-		bundleFiles := artifacts.BundleFiles(directResult, node.ID)
+		bundleFiles, err := artifacts.BundleFiles(directResult, node.ID)
+		if err != nil {
+			t.Fatalf("BundleFiles(%s): %v", node.ID, err)
+		}
 		wantFiles[node.ID] = bundleFiles
 		wantChecksums[node.ID] = string(bundlesig.Canonicalize(bundleFiles))
 	}

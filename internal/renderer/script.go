@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"fmt"
 	"net"
 	"sort"
 	"strconv"
@@ -8,7 +9,16 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/allocconst"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
+
+// InstallerCapabilityRequirement is one fixed launcher marker checked before normal apply. Both
+// fields are pre-classified ShellTokens because the generated installer runs as root.
+type InstallerCapabilityRequirement struct {
+	ValueExpression ShellToken
+	ErrorMessage    ShellToken
+}
 
 // InstallScriptConfig holds the data for rendering the per-peer install script. Every field the
 // template splices into the root-executed script is a ShellToken (never a bare string): the
@@ -103,10 +113,9 @@ type InstallScriptConfig struct {
 	// Only meaningful when SplicePlaceholder is true. It is a fixed sentinel spliced inside a
 	// single-quoted literal in the template, so it is ShellRaw.
 	SplicePlaceholderToken ShellToken
-	// RequiresTelemetryPolicyV1 makes a probe-bearing AgentHeld installer require the matching
-	// yaog-agent execution capability before any host mutation. It is false for air-gap bundles and
-	// AgentHeld nodes without probes, preserving their historical installer bytes and direct usage.
-	RequiresTelemetryPolicyV1 bool
+	// RequiredInstallerCapabilities is a bounded, sorted list of exact launcher markers required by
+	// the one signed telemetry policy member. Empty for air-gap and policy-free bundles.
+	RequiredInstallerCapabilities []InstallerCapabilityRequirement
 	// GithubProxy is the shell-escaped GitHub-.deb mimic-fallback proxy prefix (was Fetch.GithubProxy;
 	// model.InstallFetch's only install.sh-relevant field). It is baked as GH_PROXY=<token> and may be
 	// operator-supplied, so it is a single-quoted token (ShellQuoted); the empty default renders GH_PROXY=''
@@ -233,7 +242,11 @@ func RenderInstallScriptSigned(node *model.Node, peers []compiler.PeerInfo, hasB
 	config.HasSigning = signingPubkeyPEM != ""
 	config.SplicePlaceholder = splice.Enabled
 	config.SplicePlaceholderToken = ShellRaw(splice.Token)
-	config.RequiresTelemetryPolicyV1 = splice.Enabled && len(node.TelemetryProbes) > 0
+	requirements, err := requiredInstallerCapabilities(node, splice.Enabled)
+	if err != nil {
+		return "", err
+	}
+	config.RequiredInstallerCapabilities = requirements
 	config.GithubProxy = ShellQuoted(fetch.GithubProxy)
 	return renderTemplate("install.sh", installScriptTemplate, config)
 }
@@ -468,9 +481,9 @@ type ClientInstallScriptConfig struct {
 	// (PrivateKeyPlaceholder); same semantics as InstallScriptConfig.SplicePlaceholderToken. Spliced
 	// inside a single-quoted literal in the template (ShellRaw). Only meaningful when SplicePlaceholder is true.
 	SplicePlaceholderToken ShellToken
-	// RequiresTelemetryPolicyV1 has the same fail-closed compatibility semantics as the peer/router
+	// RequiredInstallerCapabilities has the same fail-before-mutation semantics as the peer/router
 	// installer field above.
-	RequiresTelemetryPolicyV1 bool
+	RequiredInstallerCapabilities []InstallerCapabilityRequirement
 	// GithubProxy is the shell-escaped GitHub-.deb mimic-fallback proxy prefix (was Fetch.GithubProxy);
 	// same semantics as InstallScriptConfig.GithubProxy (ShellQuoted). Empty default → no catalog → the
 	// HasMimic branch renders GH_PROXY=''. Set by the signed renderer after buildClientInstallScriptConfig.
@@ -504,9 +517,47 @@ func RenderClientInstallScriptSigned(node *model.Node, signingPubkeyPEM string, 
 	config.HasSigning = signingPubkeyPEM != ""
 	config.SplicePlaceholder = splice.Enabled
 	config.SplicePlaceholderToken = ShellRaw(splice.Token)
-	config.RequiresTelemetryPolicyV1 = splice.Enabled && len(node.TelemetryProbes) > 0
+	requirements, err := requiredInstallerCapabilities(node, splice.Enabled)
+	if err != nil {
+		return "", err
+	}
+	config.RequiredInstallerCapabilities = requirements
 	config.GithubProxy = ShellQuoted(fetch.GithubProxy)
 	return renderTemplate("client-install.sh", clientInstallScriptTemplate, config)
+}
+
+func requiredInstallerCapabilities(node *model.Node, agentHeld bool) ([]InstallerCapabilityRequirement, error) {
+	if !agentHeld || node == nil {
+		return nil, nil
+	}
+	var capabilities []string
+	if probepolicy.RequiresSuccessor(*node) {
+		capabilities = probepolicy.RequiredCapabilities(*node)
+	} else if len(node.TelemetryProbes) > 0 {
+		capabilities = []string{telemetrycap.PolicyV1}
+	}
+	definitions := make([]telemetrycap.Definition, 0, len(capabilities))
+	for _, capability := range capabilities {
+		definition, ok := telemetrycap.Lookup(capability)
+		if !ok {
+			return nil, fmt.Errorf("telemetry capability %q has no installer contract", capability)
+		}
+		definitions = append(definitions, definition)
+	}
+	sort.Slice(definitions, func(i, j int) bool {
+		if definitions[i].InstallerEnvironment == definitions[j].InstallerEnvironment {
+			return definitions[i].Token < definitions[j].Token
+		}
+		return definitions[i].InstallerEnvironment < definitions[j].InstallerEnvironment
+	})
+	out := make([]InstallerCapabilityRequirement, 0, len(definitions))
+	for _, definition := range definitions {
+		out = append(out, InstallerCapabilityRequirement{
+			ValueExpression: ShellRaw("${" + definition.InstallerEnvironment + ":-}"),
+			ErrorMessage:    ShellQuoted(definition.InstallerError),
+		})
+	}
+	return out, nil
 }
 
 // buildClientInstallScriptConfig assembles the ClientInstallScriptConfig shared by the plain and

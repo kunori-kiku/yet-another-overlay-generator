@@ -5,6 +5,96 @@
 // Force-selection state reducer. None of this is ever persisted — a deploy preview + the operator's
 // Force ticks are a one-shot transient action (the same custody rule as stripLiveTelemetry).
 
+import type { Node, Topology } from '../types/topology';
+
+export const CONTROLLER_TELEMETRY_POLICY_V2_CAPABILITY = 'telemetry-policy-v2-topology';
+
+export function controllerPreservesSuccessorTelemetryPolicy(capabilities: readonly string[]): boolean {
+  return capabilities.includes(CONTROLLER_TELEMETRY_POLICY_V2_CAPABILITY);
+}
+
+// requiredTelemetryCapabilities is the one frontend projection from a node policy to authenticated
+// agent capability tokens. Fleet readiness and every old-controller write guard consume this same
+// helper so adding a successor field cannot become visible in one path but ungated in another.
+export function requiredTelemetryCapabilities(
+  node: Pick<Node, 'telemetry_devices'>,
+): string[] {
+  if (node.telemetry_devices === undefined) return [];
+  return ['device-telemetry-v1', 'telemetry-policy-v2'];
+}
+
+// requiresSuccessorTelemetryPolicy is the frontend compatibility boundary for controllers that
+// predate successor policy fields. Such a controller canonicalizes through its older Go model and
+// would silently erase unknown draft fields, so its no-preview fallback must remain v1-only. Plan 5
+// extends this helper when URL probes also select the successor member.
+export function requiresSuccessorTelemetryPolicy(topo: Pick<Topology, 'nodes'>): boolean {
+  return topo.nodes.some((node) => requiredTelemetryCapabilities(node).length > 0);
+}
+
+// successorTelemetryPolicyFingerprint binds a readiness offer to exactly the managed nodes and
+// successor capabilities that produced it. Unrelated graph edits do not invalidate the offer, while
+// adding/removing/changing successor policy does. The backend preview is still rerun before phase one.
+type SuccessorTelemetryTopology = {
+  nodes: Array<Pick<Node, 'id' | 'deployment_mode' | 'telemetry_devices'>>;
+};
+
+export function successorTelemetryPolicyFingerprint(topo: SuccessorTelemetryTopology): string {
+  return JSON.stringify(
+    topo.nodes
+      .map((node) => [node.id, node.deployment_mode ?? 'managed', requiredTelemetryCapabilities(node)] as const)
+      .filter(([, , capabilities]) => capabilities.length > 0),
+  );
+}
+
+export interface TelemetryPolicyUpgradeOffer {
+  error: string;
+  fingerprint: string;
+}
+
+export function currentTelemetryPolicyUpgradeOffer(
+  offer: TelemetryPolicyUpgradeOffer | null,
+  topo: SuccessorTelemetryTopology,
+): TelemetryPolicyUpgradeOffer | null {
+  return offer?.fingerprint === successorTelemetryPolicyFingerprint(topo) ? offer : null;
+}
+
+export type PhaseOneAgentRolloutState =
+  | { kind: 'ready'; uncoveredNodeIDs: [] }
+  | { kind: 'missing'; uncoveredNodeIDs: string[] }
+  | { kind: 'partial'; uncoveredNodeIDs: string[] };
+
+// Narrow structural seam for the deploy UI. Components receive the full store settings object,
+// but this compatibility check intentionally depends only on rollout coverage and never imports
+// the transport-layer ControllerSettings contract.
+export interface PhaseOneAgentRolloutSettings {
+  targetAgentVersion: string;
+  agentBins: Record<string, unknown>;
+  agentCanaryNodeIds: string[];
+  agentRolloutFleetWide: boolean;
+}
+
+// phaseOneAgentRolloutState keeps the compatibility projection honest: it does not itself configure
+// self-update. It only permits the signed rollout already configured in Settings to reach agents.
+export function phaseOneAgentRolloutState(
+  settings: PhaseOneAgentRolloutSettings | null,
+  omittedNodeIDs: readonly string[],
+): PhaseOneAgentRolloutState {
+  const omitted = [...omittedNodeIDs].sort();
+  if (
+    settings === null
+    || settings.targetAgentVersion.trim() === ''
+    || Object.keys(settings.agentBins).length === 0
+  ) {
+    return { kind: 'missing', uncoveredNodeIDs: omitted };
+  }
+  if (settings.agentRolloutFleetWide) return { kind: 'ready', uncoveredNodeIDs: [] };
+  const canaries = new Set(settings.agentCanaryNodeIds);
+  const uncoveredNodeIDs = omitted.filter((nodeID) => !canaries.has(nodeID));
+  return uncoveredNodeIDs.length === 0
+    ? { kind: 'ready', uncoveredNodeIDs: [] }
+    : { kind: 'partial', uncoveredNodeIDs };
+}
+
 // DeployPreviewNode is one node's dry-run verdict. changed=true ⇒ an UNFORCED Deploy would
 // re-stage it (its digest differs from what it is served); changed=false ⇒ it would be skipped
 // (unchanged — it keeps its current config).
@@ -13,6 +103,12 @@ export interface DeployPreviewNode {
   name: string;
   changed: boolean;
 }
+
+// TelemetryPolicyDeployMode selects the compatibility projection used by deploy preview + stage.
+// The ordinary/default request omits this field entirely for old-controller wire compatibility.
+// upgrade-agents-first is the explicit phase-one bridge: the controller saves the full draft but
+// compiles a temporary legacy projection so the fleet can receive the newer agent first.
+export type TelemetryPolicyDeployMode = 'normal' | 'upgrade-agents-first';
 
 // DeployPreview is the read-only dry-run of what a Deploy WOULD do (POST .../deploy-preview with the
 // CURRENT canvas as the body), with no side effects. keystoneFullRestage=true ⇒ a keystone rotation /
@@ -24,6 +120,9 @@ export interface DeployPreview {
   keystoneFullRestage: boolean;
   nodes: DeployPreviewNode[];
   skippedUnenrolled: string[];
+  // Nodes whose successor-only telemetry fields are omitted from an explicit phase-one projection.
+  // Empty for an ordinary preview. Transient preview data; never persisted.
+  telemetryPolicyOmittedNodeIDs: string[];
 }
 
 // ForceSelection is the operator's transient Force choices in the deploy dialog. forceAll re-stages

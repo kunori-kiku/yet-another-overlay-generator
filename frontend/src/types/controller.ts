@@ -75,6 +75,11 @@ export interface ControllerNode {
   // Live-only (stripped before the persisted cache, like resource). Advisory only; no endpoint/IP/key
   // material. Optional — absent for a pre-plan-3 agent or before the first heartbeat.
   mimicCapability?: MimicCapability;
+  // agentCapabilities is the strict, bounded executable-capability set from the latest accepted
+  // authenticated heartbeat. undefined means no valid current evidence ("Not confirmed"); [] is a
+  // valid confirmed heartbeat advertising no successor capabilities. Live-only and stripped before
+  // browser persistence: stale compatibility evidence must never imply readiness.
+  agentCapabilities?: string[];
 }
 
 // WireGuardPeer is one peer's live link health (the per-link panel row). peer is the link name (the
@@ -164,5 +169,8 @@ export interface StageResult {
   // stage touched everyone. The result area surfaces "staged N / unchanged M".
   unchanged: string[];
   skippedUnenrolled: string[];
+  // Nodes whose successor-only telemetry fields were omitted from an explicit
+  // upgrade-agents-first stage. Empty for an ordinary stage.
+  telemetryPolicyOmittedNodeIDs: string[];
   generation: number;
 }

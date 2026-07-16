@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
-	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
 )
 
-func TestProbeBearingAgentHeldInstallerRequiresPolicyAwareAgent(t *testing.T) {
+func TestInstallerCapability_LegacyProbeRequiresPolicyAwareAgent(t *testing.T) {
 	tests := []struct {
 		name   string
 		render func(*model.Node, CustodySplice) (string, error)
@@ -44,8 +44,8 @@ func TestProbeBearingAgentHeldInstallerRequiresPolicyAwareAgent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
-			if !strings.Contains(script, runtimecontract.InstallerCapabilityTelemetryPolicyV1Env) {
-				t.Fatalf("probe-bearing AgentHeld installer lacks %s gate", runtimecontract.InstallerCapabilityTelemetryPolicyV1Env)
+			if !strings.Contains(script, telemetrycap.InstallerPolicyV1Env) {
+				t.Fatalf("probe-bearing AgentHeld installer lacks %s gate", telemetrycap.InstallerPolicyV1Env)
 			}
 
 			path := filepath.Join(t.TempDir(), "install.sh")
@@ -53,7 +53,7 @@ func TestProbeBearingAgentHeldInstallerRequiresPolicyAwareAgent(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", path)
-			cmd.Env = withoutEnvironmentVariable(os.Environ(), runtimecontract.InstallerCapabilityTelemetryPolicyV1Env)
+			cmd.Env = withoutEnvironmentVariable(os.Environ(), telemetrycap.InstallerPolicyV1Env)
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			if err := cmd.Run(); err == nil {
@@ -66,7 +66,7 @@ func TestProbeBearingAgentHeldInstallerRequiresPolicyAwareAgent(t *testing.T) {
 	}
 }
 
-func TestTelemetryCapabilityGateIsAgentHeldAndPolicyScoped(t *testing.T) {
+func TestInstallerCapability_GateIsAgentHeldAndPolicyScoped(t *testing.T) {
 	node := &model.Node{ID: "node-1", Name: "node-1", Role: "peer", Platform: "debian"}
 	withoutProbes, err := RenderInstallScriptSigned(node, nil, false, "", CustodySplice{Enabled: true, Token: "PRIVATEKEY_PLACEHOLDER"}, model.InstallFetch{})
 	if err != nil {
@@ -78,9 +78,71 @@ func TestTelemetryCapabilityGateIsAgentHeldAndPolicyScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for label, script := range map[string]string{"AgentHeld without probes": withoutProbes, "air-gap with design probes": airGap} {
-		if strings.Contains(script, runtimecontract.InstallerCapabilityTelemetryPolicyV1Env) {
+		if strings.Contains(script, telemetrycap.InstallerPolicyV1Env) {
 			t.Fatalf("%s unexpectedly gained an agent capability gate", label)
 		}
+	}
+}
+
+func TestInstallerCapability_SuccessorRequiresGenericAndDeviceMarkers(t *testing.T) {
+	node := &model.Node{
+		ID: "node-1", Name: "node-1", Role: "peer", Platform: "debian",
+		TelemetryDevices: &model.TelemetryDevicePolicy{Mode: "all-eligible-v1"},
+	}
+	requirements, err := requiredInstallerCapabilities(node, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requirements) != 2 {
+		t.Fatalf("successor installer requirements = %+v, want generic and device markers", requirements)
+	}
+	wantExpressions := []string{
+		"${" + telemetrycap.InstallerDeviceV1Env + ":-}",
+		"${" + telemetrycap.InstallerPolicyV2Env + ":-}",
+	}
+	for i, want := range wantExpressions {
+		if got := requirements[i].ValueExpression.String(); got != want {
+			t.Fatalf("requirement %d expression = %q, want %q", i, got, want)
+		}
+	}
+
+	script, err := RenderInstallScriptSigned(node, nil, false, "", CustodySplice{Enabled: true, Token: "PRIVATEKEY_PLACEHOLDER"}, model.InstallFetch{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	mutationBoundary := strings.Index(script, `SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"`)
+	if mutationBoundary < 0 {
+		t.Fatal("installer lacks expected pre-mutation boundary")
+	}
+	for _, envName := range []string{
+		telemetrycap.InstallerDeviceV1Env,
+		telemetrycap.InstallerPolicyV2Env,
+	} {
+		marker := strings.Index(script, "${"+envName+":-}")
+		if marker < 0 || marker > mutationBoundary {
+			t.Fatalf("%s gate is absent or occurs after installer mutation setup", envName)
+		}
+	}
+	if got := strings.Count(script, `if [ "$UNINSTALL" -eq 0 ] &&`); got != 2 {
+		t.Fatalf("successor installer has %d capability gates guarded by normal apply, want 2", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", path)
+	base := withoutEnvironmentVariable(os.Environ(), telemetrycap.InstallerPolicyV2Env)
+	base = withoutEnvironmentVariable(base, telemetrycap.InstallerDeviceV1Env)
+	cmd.Env = append(base,
+		telemetrycap.InstallerDeviceV1Env+"=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("launcher missing the generic successor marker unexpectedly applied the bundle")
+	}
+	if !strings.Contains(stderr.String(), "telemetry-policy-v2 capable") {
+		t.Fatalf("generic successor refusal = %q", stderr.String())
 	}
 }
 

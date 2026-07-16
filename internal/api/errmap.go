@@ -9,6 +9,8 @@ package api
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/apierr"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/compiler"
@@ -56,7 +58,18 @@ func mapControllerErr(err error) *apierr.Error {
 	case errors.Is(err, controller.ErrTelemetryProbesRequireKeystone):
 		return apierr.New(apierr.CodeTelemetryProbesRequireKeystone).Wrap(err)
 	default:
-		return nil
+		var readiness *controller.TelemetryPolicyReadinessError
+		if !errors.As(err, &readiness) {
+			return nil
+		}
+		bounded := readiness.NodeIDs
+		if len(bounded) > 16 {
+			bounded = bounded[:16]
+		}
+		return apierr.New(apierr.CodeTelemetryPolicyUpgradeRequired).
+			With("count", strconv.Itoa(len(readiness.NodeIDs))).
+			With("nodes", strings.Join(bounded, ", ")).
+			Wrap(err)
 	}
 }
 

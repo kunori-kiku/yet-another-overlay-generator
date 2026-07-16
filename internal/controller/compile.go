@@ -66,6 +66,9 @@ type StageResult struct {
 	// from the render because they are not yet enrolled (not NodeApproved, or no
 	// WGPublicKey). Each fills in on a later deploy once it enrolls.
 	SkippedUnenrolled []string
+	// TelemetryPolicyOmittedNodeIDs identifies nodes whose successor-only policy fields were omitted
+	// from an explicit upgrade-agents-first deployment. The stored design remains unchanged.
+	TelemetryPolicyOmittedNodeIDs []string
 	// Generation is the staged generation. Zero when nothing was staged.
 	Generation int64
 }

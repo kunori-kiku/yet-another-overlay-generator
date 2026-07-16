@@ -21,7 +21,12 @@ import type {
   ReleaseAssetsResult,
 } from '../../api/controllerClient';
 import type { NodeHistory, NodeHistoryRequestOptions } from '../../lib/telemetryHistory';
-import type { DeployPreview, DeployForceArg } from '../../lib/deployPreview';
+import type {
+  DeployPreview,
+  DeployForceArg,
+  TelemetryPolicyDeployMode,
+  TelemetryPolicyUpgradeOffer,
+} from '../../lib/deployPreview';
 import type { Topology } from '../../types/topology';
 import type { WebAuthnCredentialCandidate } from '../../lib/webauthn';
 
@@ -71,6 +76,8 @@ export interface ControllerState {
   // refuse-newer advisory (treating "dev"/non-semver as "no version to match"). Memory only, never
   // persisted (server truth).
   controllerVersion: string;
+  // Authenticated additive topology-schema handshake. Empty for older controllers; memory-only.
+  controllerCapabilities: string[];
 
   // TOTP 2FA (plan-5.2): totpRequired means the last login had the correct password but a
   // missing/wrong second-factor code (backend 401 totp_required); the login form shows the code
@@ -100,14 +107,18 @@ export interface ControllerState {
   // is the fetch-in-flight flag (distinct from the global loading, so an unrelated op does not flip it).
   deployPreview: DeployPreview | null;
   deployPreviewing: boolean;
-  // deployPreviewError (plan-6 best-effort): the preview fetch FAILED — e.g. a newer panel POSTs the
-  // deploy-preview route to an OLDER controller that only served the GET form (405) or lacks the route
-  // entirely (404). Because the Deploy button now only OPENS the preview dialog (which renders only
-  // after a successful preview), a dead preview endpoint would otherwise leave the operator unable to
-  // deploy at all. Non-null ⇒ the DeployBar shows this error AND a "Deploy anyway" fallback that
-  // deploys with no preview. Cleared when a deploy starts, on cancel, and on a fresh preview attempt.
+  // Mode bound to the currently open preview. This is transient operator intent, not server state;
+  // it must survive preview confirmation and the shrink-confirm continuation without being persisted.
+  deployPreviewMode: TelemetryPolicyDeployMode;
+  // deployPreviewError is the narrow old-controller compatibility state: a newer panel POSTed the
+  // preview route but received 404/405 because that route is absent. Non-null ⇒ DeployBar offers a
+  // no-preview fallback. Validation/security/server/network failures use the global blocking error
+  // instead and must never expose "Deploy anyway".
   // TRANSIENT + never persisted (same custody rule as deployPreview).
   deployPreviewError: string | null;
+  // Set only for the exact structured telemetry_policy_upgrade_required precondition and bound to
+  // the successor-policy fingerprint that produced it. Independent from unrelated global errors.
+  telemetryPolicyUpgradeOffer: TelemetryPolicyUpgradeOffer | null;
 
   // bootstrap settings (plan-5.2, server-persisted): public agent URL / GitHub proxy / agent
   // release base. null means not yet loaded from the server (fetched on refresh).
@@ -148,6 +159,9 @@ export interface ControllerState {
     // (deploy({confirmedShrink:true})) re-stages with the SAME force the operator chose in the
     // preview dialog rather than silently dropping it. undefined ⇒ a plain (unforced) deploy.
     force?: DeployForceArg;
+    // The rollout projection reviewed before this shrink confirmation. A confirmed continuation must
+    // stage with the same mode or phase one would silently revert to the blocked normal deployment.
+    telemetryPolicyMode: TelemetryPolicyDeployMode;
   } | null;
 
   // KEYSTONE (plan-5.1d): the pinned operator-held signing credential (passkey / YubiKey).
@@ -341,10 +355,9 @@ export interface ControllerState {
   // openDeployPreview (plan-6): POST the CURRENT canvas (private keys stripped, exactly what deploy()
   // pushes) to /deploy-preview and set deployPreview so the DeployBar renders the confirmation dialog.
   // It is what the Deploy button now triggers (instead of deploying immediately) — the operator reviews
-  // "N update / M unchanged" + picks any Force, then confirms. Best-effort: a fetch failure sets
-  // deployPreviewError (not the global `error`) so the DeployBar can offer a "Deploy anyway" fallback
-  // instead of leaving Deploy dead when the preview endpoint is unavailable.
-  openDeployPreview: () => Promise<void>;
+  // "N update / M unchanged" + picks any Force, then confirms. Only a 404/405 route-compatibility
+  // response sets deployPreviewError and offers "Deploy anyway"; every other failure blocks deploy.
+  openDeployPreview: (mode?: TelemetryPolicyDeployMode) => Promise<void>;
   // cancelDeployPreview clears the preview dialog / error banner (the operator dismissed it without
   // deploying).
   cancelDeployPreview: () => void;
@@ -353,7 +366,14 @@ export interface ControllerState {
   // chosen in the preview dialog. When a deploy would shrink the server design substantially, unless
   // confirmedShrink it sets pendingShrink (carrying the force) and holds the deploy (awaiting the
   // typed project-name confirmation).
-  deploy: (opts?: { confirmedShrink?: boolean; force?: DeployForceArg }) => Promise<void>;
+  deploy: (opts?: {
+    confirmedShrink?: boolean;
+    force?: DeployForceArg;
+    telemetryPolicyMode?: TelemetryPolicyDeployMode;
+    // True only for the old-controller 404/405 no-preview fallback. The deploy action rechecks the
+    // exact snapshot and refuses successor policy so a later canvas edit cannot lose unknown fields.
+    legacyPreviewFallback?: boolean;
+  }) => Promise<void>;
   // forceRedeployNode (plan-6) re-stages ONE node even if unchanged, then promotes — the node-detail
   // escape hatch (clear-rekey precedent). It reuses deploy() with force_nodes:[nodeId] so the
   // keystone sign step is not reimplemented; the current design is what gets deployed.

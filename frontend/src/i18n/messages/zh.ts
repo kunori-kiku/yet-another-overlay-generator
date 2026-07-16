@@ -291,6 +291,7 @@ export const zh: Record<keyof typeof en, string> = {
   'connectionSettings.syncing': "同步中...",
   'controllerStore.cannotDisableNoCredential': "无法禁用：未注册可用于重新认证的凭据。",
   'controllerStore.controllerContextChanged': "请求处理期间，控制器连接或登录身份已更改。请在当前控制器上重试。",
+  'controllerStore.successorTelemetryRequiresNewController': "此遥测草稿使用了当前控制器无法保留的新版策略字段。请先升级控制器再部署；“仍然部署”仅适用于兼容旧版的草稿。",
   'controllerStore.noEnrolledNodes': "暂无已注册节点可编译——请先在「机群」注册节点，再编译。",
   'controllerStore.noSigningKeyEnrolled': "本次部署需要离机签名，但尚未注册操作员签名密钥——请先注册签名密钥。",
   'controllerStore.signingDescriptorUnrecovered': "本次部署需要离机签名。控制器已固定签名凭据，但本浏览器没有可用的 WebAuthn 签名句柄。如果它是浏览器凭据，请连接持有它的认证器/提供方后重试；如果是原始 Ed25519，请使用其离机签名流程。不要仅为恢复浏览器状态而轮换或重新固定。",
@@ -304,6 +305,7 @@ export const zh: Record<keyof typeof en, string> = {
   'deployBar.deploy': "🚀 发布",
   'deployBar.deployToFleet': "发布到 Fleet",
   'deployBar.deploying': "发布中...",
+  'deployBar.previewing': "正在检查就绪状态...",
   'deployBar.reviewDeploy': "确认发布",
   'deployBar.previewSummary': "{changed} 个将更新 · {unchanged} 个不变",
   'deployBar.previewWillUpdate': "将更新",
@@ -314,6 +316,11 @@ export const zh: Record<keyof typeof en, string> = {
   'deployBar.keystoneRestagePending': "密钥基石正在轮换 —— 将对每个节点进行完整重新下发。",
   'deployBar.previewUnavailable': "无法加载部署预览（控制器版本可能较旧）。",
   'deployBar.deployAnyway': "仍然部署",
+  'deployBar.upgradeAgentsFirst': "先升级 Agent",
+  'deployBar.upgradeAgentsFirstPreview': "第一阶段会保留已保存的遥测草稿，但暂不向以下 {count} 个节点下发新版策略：{nodes}。这样已配置的签名 Agent 更新可以继续；收到新的能力心跳后，请再进行一次普通部署。",
+  'deployBar.upgradeAgentsFirstNoRollout': "尚未配置签名 Agent 更新目标和二进制校验信息。本阶段不会自行升级 Agent；请在 Fleet 中配置 Agent Update，或通过带外方式升级。",
+  'deployBar.upgradeAgentsFirstPartialRollout': "已配置的 Agent 更新未覆盖以下节点：{nodes}。在将它们纳入更新或通过带外方式升级前，这些节点仍会被阻止。",
+  'deployBar.telemetryPolicyOmitted': "为升级 Agent 暂缓下发新版遥测策略",
   'deployBar.unchangedNodes': "未变化（保留原配置）",
   'deployBar.dismissNotice': "关闭提示",
   'deployBar.enrollSigningKeyPasskey': "🔐 注册签名密钥（passkey / YubiKey）",
@@ -459,6 +466,10 @@ export const zh: Record<keyof typeof en, string> = {
   'fleetNodeDetailPage.no': "否",
   'fleetNodeDetailPage.rekeying': "轮换密钥中",
   'fleetNodeDetailPage.status': "状态",
+  'fleetNodeDetailPage.telemetryPolicyReadiness': "遥测策略就绪状态",
+  'fleetNodeDetailPage.telemetryPolicyReady': "已就绪",
+  'fleetNodeDetailPage.telemetryPolicyUpgradeRequired': "需要升级",
+  'fleetNodeDetailPage.telemetryPolicyNotConfirmed': "尚未确认",
   'fleetNodeDetailPage.forceRedeploy': "强制重新发布此节点",
   'fleetNodeDetailPage.forceRedeploying': "重新发布中…",
   'fleetNodeDetailPage.forceRedeployConfirm': "确定强制重新发布此节点？即使配置未变化，也会在新一代中重新下发该节点的配置并随后提升发布。发布的是当前设计。是否继续？",
@@ -873,7 +884,9 @@ export const zh: Record<keyof typeof en, string> = {
   'error.manifest_signature_invalid': '无法用已固定的凭据验证清单签名。',
   'error.stage_failed': '暂存或提升部署失败。',
   'error.telemetry_probes_require_keystone':
-    '主动遥测探测需要已固定的离线钥石。请先注册并固定操作员钥石，然后重试部署。',
+    '主动遥测策略需要已固定的离线钥石。请先注册并固定操作员钥石，然后重试部署。',
+  'error.telemetry_policy_upgrade_required':
+    '部分节点尚未确认支持此遥测策略。请先升级代理，等待新的心跳上报后再重新部署。',
   'error.manual_node_invalid': '手动节点 {node} 无效：{detail}',
   // Assisted fetch of release pins (controller-panel-rollout-ui plan-1) — operator release-pins endpoint.
   'error.agent_release_request_invalid': 'release-pin 请求字段 {field} 无效。',
@@ -994,6 +1007,8 @@ export const zh: Record<keyof typeof en, string> = {
   'error.validation_node_deployment_mode_invalid': "deployment_mode 无效: {mode}，可选值: managed、manual（留空即 managed）",
   'error.validation_node_telemetry_probes_invalid':
     "主动遥测配置无效：{detail}。每个探测请设置一个主机（IP 地址或 DNS 主机名）；TCP 还必须单独设置一个端口。",
+  'error.validation_node_telemetry_devices_invalid':
+    "自动设备遥测配置无效：{detail}。",
   'error.validation_node_router_id_invalid': "router_id {id} 格式无效：必须为 MAC-48 形式（六组冒号分隔的十六进制对，如 02:11:22:33:44:55）或 IPv4 地址，否则会被 babeld 拒绝",
   'error.validation_node_ssh_alias_illegal_chars': "ssh_alias {alias} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符",
   'error.validation_node_ssh_host_illegal_chars': "ssh_host {host} 含有非法字符：仅允许字母、数字、点(.)、下划线(_)、冒号(:)、@、连字符(-)，禁止空白与 shell 元字符",

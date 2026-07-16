@@ -40,6 +40,7 @@ interface NodeJSON {
     probe_results?: unknown;
     native_xdp?: NativeXDPWire;
     mimic_capability?: MimicCapabilityWire;
+    agent_capabilities?: unknown;
   } | null;
 }
 
@@ -140,7 +141,36 @@ function mapNode(n: NodeJSON): ControllerNode {
     probeResults: mapProbeResults(n.telemetry?.probe_results),
     nativeXDP: mapNativeXDP(n.telemetry?.native_xdp),
     mimicCapability: mapMimicCapability(n.telemetry?.mimic_capability),
+    agentCapabilities: mapAgentCapabilities(n.telemetry?.agent_capabilities),
   };
+}
+
+const agentCapabilityPattern = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const maxAgentCapabilities = 16;
+
+// mapAgentCapabilities accepts only the controller's exact canonical latest-heartbeat form: at most
+// 16 valid tokens, already sorted and unique. It does not sort, deduplicate, or truncate malformed
+// evidence client-side because doing so could turn an invalid compatibility claim into a false
+// "Ready" state. A valid empty set remains [] so Fleet can distinguish it from not-confirmed.
+export function mapAgentCapabilities(w: unknown): string[] | undefined {
+  if (
+    !w ||
+    typeof w !== 'object' ||
+    Array.isArray(w) ||
+    Object.keys(w).length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(w, 'capabilities')
+  ) {
+    return undefined;
+  }
+  const raw = (w as { capabilities: unknown }).capabilities;
+  if (!Array.isArray(raw) || raw.length > maxAgentCapabilities) return undefined;
+  const capabilities: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== 'string' || !agentCapabilityPattern.test(value)) return undefined;
+    if (capabilities.length > 0 && capabilities[capabilities.length - 1] >= value) return undefined;
+    capabilities.push(value);
+  }
+  return capabilities;
 }
 
 // mapResource projects the agent's host resource metric (snake_case) to NodeResource. Defensive: a

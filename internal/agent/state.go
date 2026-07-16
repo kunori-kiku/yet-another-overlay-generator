@@ -121,10 +121,10 @@ type State struct {
 	// recordSuccess/recordFailure regenerate each cycle — NOT load-bearing custody state.
 	Conditions []runtimecontract.Condition `json:"conditions,omitempty"`
 
-	// ActiveTelemetryPolicy is the last-known-good, strictly parsed telemetry.json that was
-	// committed in the same durable state replacement as a successful apply. Failed candidates
-	// preserve it and a successfully applied signed omission clears it. The live sampler reads
-	// only this field, never a staging directory or unverified download.
+	// ActiveTelemetryPolicy is the last-known-good, strictly parsed v1 or successor telemetry policy
+	// committed in the same durable state replacement as a successful apply. Exactly one filename can
+	// feed this field. Failed candidates preserve it and a successfully applied signed omission clears
+	// it. The live sampler reads only this field, never a staging directory or unverified download.
 	ActiveTelemetryPolicy json.RawMessage `json:"active_telemetry_policy,omitempty"`
 }
 

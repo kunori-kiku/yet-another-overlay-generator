@@ -48,6 +48,7 @@ function node(overrides: Partial<ControllerNode> = {}): ControllerNode {
         failureReason: 'connection_refused',
       },
     ],
+    agentCapabilities: ['telemetry-policy-v2'],
     ...overrides,
   };
 }
@@ -72,6 +73,12 @@ describe('stripLiveTelemetry (persist custody)', () => {
     expect(JSON.stringify(serialized).includes('5432')).toBe(false);
   });
 
+  it('omits live agent capability evidence so stale readiness cannot survive a reload', () => {
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    expect('agentCapabilities' in serialized).toBe(false);
+    expect(JSON.stringify(serialized).includes('telemetry-policy-v2')).toBe(false);
+  });
+
   it('keeps the aggregate wireguard condition and every other field intact', () => {
     const out = stripLiveTelemetry(node());
     expect(out.nodeId).toBe('node-1');
@@ -87,6 +94,7 @@ describe('stripLiveTelemetry (persist custody)', () => {
     stripLiveTelemetry(input);
     expect(input.wireguardPeers).toHaveLength(2);
     expect(input.probeResults?.[0].host).toBe('db.internal.example');
+    expect(input.agentCapabilities).toEqual(['telemetry-policy-v2']);
   });
 
   it('is a no-op shape for a node that already has no telemetry (legacy/beta.11 cache)', () => {

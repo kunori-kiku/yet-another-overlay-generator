@@ -36,6 +36,10 @@ type volatileTelemetry struct {
 	// sequenceCursors bounds exact-retry suppression to the most recently observed agent boots.
 	// It is intentionally volatile: making it durable would add a write/fsync to every heartbeat.
 	sequenceCursors map[string]telemetrySequenceCursor
+	// retiredBoots remembers a second bounded tier of evicted cursor identities. It lets a genuinely
+	// new restart win by receipt inside the clock-skew window without mistaking a delayed evicted boot
+	// for that restart. Values are last receipt times used only for deterministic bounded eviction.
+	retiredBoots map[string]time.Time
 	// activeBootID prevents a delayed sample from a known retired agent process from replacing live
 	// state produced by its successor. activeSampledAt helps identify a previously unseen stale boot.
 	activeBootID    string
@@ -53,6 +57,7 @@ type telemetrySequenceCursor struct {
 // requests without turning telemetry into an unbounded memory surface.
 const (
 	maxTelemetrySequenceCursors = 4
+	maxTelemetryRetiredBoots    = 8
 	maxTelemetryReplayAge       = 24 * time.Hour
 	maxTelemetryFutureSkew      = 5 * time.Minute
 	telemetryBootStaleSlack     = 5 * time.Minute
@@ -238,19 +243,32 @@ func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, no
 	cursor, seen := ent.sequenceCursors[bootID]
 	historyAt, sampledAtTrusted := normalizeTelemetrySampleTime(sampledAt, receivedAt)
 	live := ent.activeBootID == "" || ent.activeBootID == bootID
-	if ent.activeBootID != "" && ent.activeBootID != bootID {
+	crossBoot := ent.activeBootID != "" && ent.activeBootID != bootID
+	_, retiredBoot := ent.retiredBoots[bootID]
+	ambiguousCrossBoot := crossBoot && (!sampledAtTrusted ||
+		(!ent.activeSampledAt.IsZero() && !sampledAt.After(ent.activeSampledAt)))
+	if crossBoot {
 		switch {
+		case retiredBoot:
+			live = false
 		case seen:
-			// A cursor can become "retired" only because a delayed, previously evicted
-			// boot landed inside the restart-skew window. Let the known current boot
-			// reclaim the live overlay once it supplies a newer trusted sample; otherwise
-			// one delayed request could strand the node on stale live state indefinitely.
+			// A cursor can become "retired" only because a delayed, previously evicted boot landed
+			// inside the restart-skew window. Let the known current boot reclaim the live overlay once
+			// it supplies a newer trusted sample.
 			live = sampledAtTrusted && (ent.activeSampledAt.IsZero() || sampledAt.After(ent.activeSampledAt))
 		case sampledAtTrusted && !ent.activeSampledAt.IsZero() && sampledAt.Before(ent.activeSampledAt.Add(-telemetryBootStaleSlack)):
 			live = false
 		default:
+			// A previously unseen boot inside the bounded skew window is a restart. Receipt order is
+			// authoritative for live state; the agent clock remains advisory history metadata.
 			live = true
 		}
+	}
+	if ambiguousCrossBoot && ent.telemetrySet {
+		// Capability readiness fails closed at every ambiguous restart boundary, even if the sample
+		// is too old to replace the rest of the live overlay. This prevents a downgraded new process
+		// (or a delayed evicted process) from inheriting another boot's executable-support claim.
+		delete(ent.telemetry, telemetrymetric.AgentCapabilitiesKey)
 	}
 	if seen && !cursor.lastSampledAt.IsZero() && sampledAt.Before(cursor.lastSampledAt) {
 		historyAt = receivedAt
@@ -260,7 +278,8 @@ func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, no
 	}
 
 	if !seen && len(ent.sequenceCursors) >= maxTelemetrySequenceCursors {
-		evictOldestTelemetryCursor(ent.sequenceCursors, ent.activeBootID)
+		retiredID, retiredAt := evictOldestTelemetryCursor(ent.sequenceCursors, ent.activeBootID)
+		rememberRetiredTelemetryBoot(ent, retiredID, retiredAt)
 	}
 	cursor.highestSequence = sequence
 	if cursor.lastSampledAt.IsZero() || sampledAt.After(cursor.lastSampledAt) {
@@ -276,11 +295,27 @@ func (c *storeCore) RecordTelemetrySequenced(ctx context.Context, t TenantID, no
 		ent.lastSeenSet = true
 	}
 	if live {
+		if crossBoot {
+			previousBootID := ent.activeBootID
+			previousAt := ent.activeSampledAt
+			if previous, ok := ent.sequenceCursors[previousBootID]; ok && !previous.lastReceivedAt.IsZero() {
+				previousAt = previous.lastReceivedAt
+			}
+			// A boot generation that has been superseded must never reauthorize itself merely by
+			// presenting a later advisory wall-clock sample. Remember it independently of cursor
+			// eviction so receipt-ordered restart semantics remain monotonic.
+			rememberRetiredTelemetryBoot(ent, previousBootID, previousAt)
+		}
 		ent.activeBootID = bootID
 		if ent.activeSampledAt.IsZero() || historyAt.After(ent.activeSampledAt) {
 			ent.activeSampledAt = historyAt
 		}
-		c.recordTelemetryLocked(t, nodeID, ent, conditions, metrics, agentVersion, receivedAt, historyAt, interval)
+		liveMetrics := metrics
+		if ambiguousCrossBoot {
+			liveMetrics = cloneMetrics(metrics)
+			delete(liveMetrics, telemetrymetric.AgentCapabilitiesKey)
+		}
+		c.recordTelemetryLocked(t, nodeID, ent, conditions, liveMetrics, agentVersion, receivedAt, historyAt, interval)
 	} else {
 		c.appendTelemetryHistoryLocked(t, nodeID, metrics, historyAt, interval)
 	}
@@ -336,7 +371,7 @@ func (c *storeCore) appendTelemetryHistoryLocked(t TenantID, nodeID string, metr
 	c.history.appendMetrics(t, nodeID, metrics, historyAt, interval)
 }
 
-func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, protectedBootID string) {
+func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, protectedBootID string) (string, time.Time) {
 	var oldestID string
 	var oldestAt time.Time
 	for bootID, cursor := range cursors {
@@ -352,6 +387,29 @@ func evictOldestTelemetryCursor(cursors map[string]telemetrySequenceCursor, prot
 	if oldestID != "" {
 		delete(cursors, oldestID)
 	}
+	return oldestID, oldestAt
+}
+
+func rememberRetiredTelemetryBoot(ent *volatileTelemetry, bootID string, at time.Time) {
+	if ent == nil || bootID == "" {
+		return
+	}
+	if ent.retiredBoots == nil {
+		ent.retiredBoots = make(map[string]time.Time)
+	}
+	if _, exists := ent.retiredBoots[bootID]; !exists && len(ent.retiredBoots) >= maxTelemetryRetiredBoots {
+		var oldestID string
+		var oldestAt time.Time
+		for candidateID, candidateAt := range ent.retiredBoots {
+			if oldestID == "" || candidateAt.Before(oldestAt) ||
+				(candidateAt.Equal(oldestAt) && candidateID < oldestID) {
+				oldestID = candidateID
+				oldestAt = candidateAt
+			}
+		}
+		delete(ent.retiredBoots, oldestID)
+	}
+	ent.retiredBoots[bootID] = at
 }
 
 // TouchLastSeen records that the agent for nodeID checked in — to the in-memory overlay ONLY (no

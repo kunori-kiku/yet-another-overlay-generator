@@ -45,7 +45,7 @@ type ExportResult struct {
 // never drift. bundle.sig, signing-pubkey.pem and manifest.json are NOT members (they are the
 // authenticity/metadata layer over this set, not part of the checksummed bytes). README.txt is a
 // member: its custody-critical apply instructions must be checksum/signature/keystone-bound too.
-func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]string {
+func BundleFiles(result *compiler.CompileResult, nodeID string) (map[string]string, error) {
 	bundleFiles := make(map[string]string)
 	for configKey, wgConf := range result.WireGuardConfigs {
 		parts := strings.SplitN(configKey, ":", 2)
@@ -66,8 +66,16 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 	if artifactsJSON, ok := result.ArtifactsJSON[nodeID]; ok && artifactsJSON != "" {
 		bundleFiles["artifacts.json"] = artifactsJSON
 	}
-	if telemetryJSON, ok := result.TelemetryPolicyJSON[nodeID]; result.AgentHeld && ok && telemetryJSON != "" {
+	telemetryJSON := result.TelemetryPolicyJSON[nodeID]
+	successorJSON := result.TelemetrySuccessorPolicyJSON[nodeID]
+	if telemetryJSON != "" && successorJSON != "" {
+		return nil, fmt.Errorf("node %s contains both %s and %s", nodeID, probepolicy.FileName, probepolicy.SuccessorFileName)
+	}
+	if result.AgentHeld && telemetryJSON != "" {
 		bundleFiles[probepolicy.FileName] = telemetryJSON
+	}
+	if result.AgentHeld && successorJSON != "" {
+		bundleFiles[probepolicy.SuccessorFileName] = successorJSON
 	}
 	for i := range result.Topology.Nodes {
 		if result.Topology.Nodes[i].ID == nodeID {
@@ -75,7 +83,7 @@ func BundleFiles(result *compiler.CompileResult, nodeID string) map[string]strin
 			break
 		}
 	}
-	return bundleFiles
+	return bundleFiles, nil
 }
 
 func bundleREADME(result *compiler.CompileResult, node *model.Node) string {
@@ -289,7 +297,10 @@ func exportInto(result *compiler.CompileResult, outputDir string, signer bundles
 		// demand. Members are written in sorted order so the run is deterministic; that same
 		// sorted key list is reused verbatim as manifest.json's "files" below (replacing the
 		// old wg-map-ordered — non-reproducible — list).
-		bundleFiles := BundleFiles(result, node.ID)
+		bundleFiles, err := BundleFiles(result, node.ID)
+		if err != nil {
+			return nil, apierr.New(apierr.CodeExportIOFailed).Wrap(err)
+		}
 		if err := validateBundleMemberPaths(bundleFiles); err != nil {
 			return nil, apierr.New(apierr.CodeExportUnsafeName).With("name", node.ID).Wrap(err)
 		}

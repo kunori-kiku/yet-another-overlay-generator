@@ -168,6 +168,7 @@ func NewTelemetryForTest(samplers ...Sampler) *Telemetry {
 func BuildTelemetry(stateDir string) *Telemetry {
 	samplers := []Sampler{
 		conditionSampler{stateDir: stateDir},
+		agentCapabilitiesSampler{},      // exact executable feature tokens → metrics["agent_capabilities"]
 		newActiveProbeSampler(stateDir), // signed last-known-good policy; asynchronous and bounded
 		wireguardPeersSampler{},         // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
 		&resourceSampler{},              // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)

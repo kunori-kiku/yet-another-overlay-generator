@@ -140,7 +140,10 @@ func ArtifactsFromResult(result *compiler.CompileResult, signer bundlesig.Config
 		// The per-node checksummed bundle file set — one source of truth (artifacts.BundleFiles)
 		// for relpath keys and set membership (including README.txt and the artifacts.json guard), shared
 		// with the on-disk exporter so the two can never drift.
-		bundleFiles := artifacts.BundleFiles(result, node.ID)
+		bundleFiles, err := artifacts.BundleFiles(result, node.ID)
+		if err != nil {
+			return CompileArtifacts{}, fmt.Errorf("build bundle files for node %s: %w", node.ID, err)
+		}
 		out.Files[node.ID] = bundleFiles
 
 		// The canonical checksums.sha256 content over this node's bundle (sorted by

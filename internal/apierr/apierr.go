@@ -105,6 +105,7 @@ const (
 	CodeManifestSignatureInvalid       Code = "manifest_signature_invalid"
 	CodeStageFailed                    Code = "stage_failed"
 	CodeTelemetryProbesRequireKeystone Code = "telemetry_probes_require_keystone"
+	CodeTelemetryPolicyUpgradeRequired Code = "telemetry_policy_upgrade_required"
 	// CodeManualNodeInvalid rejects a stage whose topology carries a manual (deployment_mode=manual)
 	// node that is not deployable: no WireGuard public key, or a key that duplicates another manual
 	// node's or collides with an enrolled node's. A manual node is hand-deployed with a pre-known key
@@ -225,7 +226,8 @@ var registry = map[Code]def{
 	CodeStagedManifestMismatch:         {"The submitted manifest does not match the current staged manifest; re-fetch and re-sign.", http.StatusConflict},
 	CodeManifestSignatureInvalid:       {"The manifest signature could not be verified against the pinned credential.", http.StatusBadRequest},
 	CodeStageFailed:                    {"Staging or promoting the deployment failed.", http.StatusUnprocessableEntity},
-	CodeTelemetryProbesRequireKeystone: {"Active telemetry probes require a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.", http.StatusPreconditionFailed},
+	CodeTelemetryProbesRequireKeystone: {"Active telemetry policy requires a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.", http.StatusPreconditionFailed},
+	CodeTelemetryPolicyUpgradeRequired: {"Successor telemetry policy requires confirmed agent capabilities on {count} node(s): {nodes}. Upgrade agents first, wait for a fresh heartbeat, then deploy again.", http.StatusPreconditionFailed},
 	CodeManualNodeInvalid:              {"Manual node {node} is invalid: {detail}", http.StatusUnprocessableEntity},
 
 	CodeAgentReleaseRequestInvalid: {"The release-pin request field {field} is invalid.", http.StatusBadRequest},

@@ -56,6 +56,9 @@ type loginResponseJSON struct {
 	// normalizes an empty BuildVersion to "dev"), so this is normally populated; omitempty is
 	// defensive for a future "" and never fires on the live controller path.
 	ControllerVersion string `json:"controller_version,omitempty"`
+	// ControllerCapabilities mirrors GET /session so every successful authentication path has the
+	// same explicit topology-schema handshake before it can issue a write.
+	ControllerCapabilities []string `json:"controller_capabilities,omitempty"`
 }
 
 // HandleLogin authenticates an operator by username + password and mints a session.
@@ -200,11 +203,12 @@ func (h *ControllerHandler) mintSessionResponse(w http.ResponseWriter, ctx conte
 		Action:    "login-success",
 	})
 	writeJSON(w, http.StatusOK, loginResponseJSON{
-		SessionToken:      plaintext,
-		Operator:          op.Username,
-		ExpiresAt:         sess.ExpiresAt.Format(time.RFC3339),
-		CSRFToken:         csrf,
-		ControllerVersion: h.version,
+		SessionToken:           plaintext,
+		Operator:               op.Username,
+		ExpiresAt:              sess.ExpiresAt.Format(time.RFC3339),
+		CSRFToken:              csrf,
+		ControllerVersion:      h.version,
+		ControllerCapabilities: controllerCapabilities(),
 	})
 }
 

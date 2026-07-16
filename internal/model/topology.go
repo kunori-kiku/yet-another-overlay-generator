@@ -133,6 +133,16 @@ type Node struct {
 	// whose additional fields must be introduced and validated explicitly rather than smuggled
 	// through Host.
 	TelemetryProbes []TelemetryProbe `json:"telemetry_probes,omitempty"`
+
+	// TelemetryDevices requests automatic discovery of eligible local devices. It is a separately
+	// versioned successor-policy feature rather than an extension to strict telemetry.json v1.
+	TelemetryDevices *TelemetryDevicePolicy `json:"telemetry_devices,omitempty"`
+}
+
+// TelemetryDevicePolicy selects one bounded automatic device-discovery contract. The policy shape
+// is deliberately small; collectors and charted metrics are activated by later feature milestones.
+type TelemetryDevicePolicy struct {
+	Mode string `json:"mode"`
 }
 
 // TelemetryProbe is one manually configured active check. Name is optional controller/Fleet

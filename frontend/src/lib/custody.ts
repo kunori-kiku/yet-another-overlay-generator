@@ -97,5 +97,6 @@ export function stripLiveTelemetry(node: ControllerNode): ControllerNode {
     probeResults: undefined,
     nativeXDP: undefined,
     mimicCapability: undefined,
+    agentCapabilities: undefined,
   };
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 func sequencedResourceMetric(load float64) map[string]json.RawMessage {
@@ -192,8 +193,9 @@ func TestRecordTelemetrySequenced_CurrentBootReclaimsAfterEvictedBootArrivesLate
 		}
 	}
 
-	// The evicted boot is now indistinguishable from a new restart and lands inside
-	// the permitted skew window, so it may temporarily become the live overlay.
+	// The evicted boot is now indistinguishable from a new restart, but its trusted sample time is
+	// older than the active boot. It remains valid history and liveness evidence without replacing
+	// the newer live overlay.
 	lateAReceivedAt := bootBAt.Add(6 * time.Second)
 	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, sequencedResourceMetric(30), "late-a", bootA, 2,
 		bootBAt.Add(-time.Minute), 30*time.Second, lateAReceivedAt); err != nil {
@@ -203,8 +205,8 @@ func TestRecordTelemetrySequenced_CurrentBootReclaimsAfterEvictedBootArrivesLate
 	if err != nil {
 		t.Fatal(err)
 	}
-	if node.LastAgentVersion != "late-a" {
-		t.Fatalf("test setup did not select delayed evicted boot: version=%q", node.LastAgentVersion)
+	if node.LastAgentVersion != "boot-b" || string(node.Telemetry["resource"]) != `{"load1":2}` {
+		t.Fatalf("delayed evicted boot replaced newer live state: version=%q telemetry=%s", node.LastAgentVersion, node.Telemetry["resource"])
 	}
 
 	// A newer trusted sample from the known current boot must reclaim live state.
@@ -218,6 +220,122 @@ func TestRecordTelemetrySequenced_CurrentBootReclaimsAfterEvictedBootArrivesLate
 	}
 	if node.LastAgentVersion != "boot-b-current" || string(node.Telemetry["resource"]) != `{"load1":40}` {
 		t.Fatalf("current boot did not reclaim live state: version=%q telemetry=%s", node.LastAgentVersion, node.Telemetry["resource"])
+	}
+}
+
+func TestAgentCapabilities_DelayedEvictedBootCannotRestoreLiveReadiness(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	bootA := "00112233445566778899aabbccddeeff"
+	bootB := "ffeeddccbbaa99887766554433221100"
+	capabilityMetric := map[string]json.RawMessage{
+		"agent_capabilities": json.RawMessage(`{"capabilities":["telemetry-policy-v2"]}`),
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capabilityMetric, "boot-a", bootA, 1,
+		base, 30*time.Second, base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	bootBAt := base.Add(10 * time.Minute)
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, nil, "boot-b", bootB, 1,
+		bootBAt, 30*time.Second, bootBAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fill the cursor set so boot A is evicted, then replay a later sequence from A whose sample
+	// predates B. The newer heartbeat's omission must continue to mean "not confirmed".
+	for i, bootID := range []string{
+		"11111111111111111111111111111111",
+		"22222222222222222222222222222222",
+		"33333333333333333333333333333333",
+	} {
+		if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, nil, "stale", bootID, 1,
+			base.Add(time.Duration(i+1)*time.Minute), 30*time.Second, bootBAt.Add(time.Duration(i+2)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capabilityMetric, "late-a", bootA, 2,
+		bootBAt.Add(-time.Minute), 30*time.Second, bootBAt.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, restored := node.Telemetry["agent_capabilities"]; restored {
+		t.Fatalf("delayed older boot restored stale readiness: telemetry=%v", node.Telemetry)
+	}
+
+	// A genuinely newer sample from the active boot may confirm support again.
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capabilityMetric, "boot-b-current", bootB, 2,
+		bootBAt.Add(time.Minute), 30*time.Second, bootBAt.Add(time.Minute+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err = store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, confirmed := node.Telemetry["agent_capabilities"]; !confirmed {
+		t.Fatalf("fresh current-boot sample did not reconfirm readiness: telemetry=%v", node.Telemetry)
+	}
+}
+
+func TestAgentCapabilities_NewBootWithRolledBackClockBecomesLiveAndClearsReadiness(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemStore()
+	if err := store.UpsertNode(ctx, "tn", Node{NodeID: "n1"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	capable := map[string]json.RawMessage{
+		telemetrymetric.AgentCapabilitiesKey: json.RawMessage(`{"capabilities":["telemetry-policy-v2"]}`),
+		telemetrymetric.ResourceKey:          json.RawMessage(`{"load1":1}`),
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capable, "capable-a",
+		"00112233445566778899aabbccddeeff", 1, base, 30*time.Second, base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The restart is received later but its wall clock is one minute behind. That advisory rollback
+	// must not freeze A's live version/metrics or let B inherit A's capability evidence.
+	restartedAt := base.Add(-time.Minute)
+	receivedAt := base.Add(2 * time.Second)
+	metricsB := map[string]json.RawMessage{
+		telemetrymetric.ResourceKey: json.RawMessage(`{"load1":2}`),
+	}
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, metricsB, "downgraded-b",
+		"ffeeddccbbaa99887766554433221100", 1, restartedAt, 30*time.Second, receivedAt); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.LastAgentVersion != "downgraded-b" || string(node.Telemetry[telemetrymetric.ResourceKey]) != `{"load1":2}` {
+		t.Fatalf("new boot did not become live by receipt: version=%q telemetry=%v", node.LastAgentVersion, node.Telemetry)
+	}
+	if _, inherited := node.Telemetry[telemetrymetric.AgentCapabilitiesKey]; inherited {
+		t.Fatalf("new boot inherited predecessor capability readiness: telemetry=%v", node.Telemetry)
+	}
+
+	// A delayed later sequence from the now-retired capable boot has a newer advisory timestamp,
+	// but receipt-ordered boot generations must prevent it from reauthorizing after B took over.
+	if _, err := store.RecordTelemetrySequenced(ctx, "tn", "n1", nil, capable, "late-capable-a",
+		"00112233445566778899aabbccddeeff", 2, base.Add(time.Minute), 30*time.Second, receivedAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	node, err = store.GetNode(ctx, "tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.LastAgentVersion != "downgraded-b" {
+		t.Fatalf("retired predecessor reclaimed live version: %q", node.LastAgentVersion)
+	}
+	if _, restored := node.Telemetry[telemetrymetric.AgentCapabilitiesKey]; restored {
+		t.Fatalf("retired predecessor restored capability readiness: telemetry=%v", node.Telemetry)
 	}
 }
 

@@ -33,6 +33,9 @@ type DeployPreviewResult struct {
 	Nodes []NodeDeployChange
 	// SkippedUnenrolled are topology nodes not yet enrolled (excluded from the compile).
 	SkippedUnenrolled []string
+	// TelemetryPolicyOmittedNodeIDs identifies successor drafts projected out only for an explicit
+	// upgrade-agents-first preview/deployment.
+	TelemetryPolicyOmittedNodeIDs []string
 }
 
 // DeployPreview is the READ-ONLY dry-run of CompileAndStage (plan-6): it compiles + exports the PASSED
@@ -45,13 +48,23 @@ type DeployPreviewResult struct {
 // (stageSkipEnabled) with CompileAndStage, so the preview cannot disagree with the real stage of the same
 // design. Force is an operator override applied at Deploy time, so the preview reports the UNFORCED
 // baseline. Heal the colliding pins a save/stage would, so the previewed digests match a real Deploy.
-func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Topology) (DeployPreviewResult, error) {
-	normalize.HealCollidingPins(topo)
-
+func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Topology, modes ...TelemetryPolicyDeployMode) (DeployPreviewResult, error) {
 	nodes, err := store.ListNodes(ctx, t)
 	if err != nil {
 		return DeployPreviewResult{}, fmt.Errorf("controller: listing nodes to preview: %w", err)
 	}
+	mode := TelemetryPolicyDeployNormal
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
+	if len(modes) > 1 {
+		return DeployPreviewResult{}, fmt.Errorf("controller: multiple telemetry policy deploy modes")
+	}
+	deploymentTopo, omitted, err := PrepareTelemetryPolicyDeployment(topo, nodes, mode)
+	if err != nil {
+		return DeployPreviewResult{}, err
+	}
+	normalize.HealCollidingPins(deploymentTopo)
 	cs, err := store.GetSettings(ctx, t)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return DeployPreviewResult{}, fmt.Errorf("controller: loading settings to preview: %w", err)
@@ -61,23 +74,23 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 	// Match CompileAndStage's empty-subgraph semantics: with no ready node there are no bytes to
 	// render or sign, so an unrelated unreadable signing-key file must not turn an empty preview
 	// into an error. Project first, then resolve the signer only for a non-empty compile/export.
-	ready, skipped, err := projectEnrolledSubgraph(topo, nodes)
+	ready, skipped, err := projectEnrolledSubgraph(deploymentTopo, nodes)
 	if err != nil {
 		return DeployPreviewResult{}, err
 	}
 	if len(ready.Nodes) == 0 {
-		return DeployPreviewResult{SkippedUnenrolled: skipped}, nil
+		return DeployPreviewResult{SkippedUnenrolled: skipped, TelemetryPolicyOmittedNodeIDs: omitted}, nil
 	}
 	signer, err := bundlesig.LoadConfigSignerFromEnv()
 	if err != nil {
 		return DeployPreviewResult{}, fmt.Errorf("controller: loading bundle signing key: %w", err)
 	}
-	result, subgraph, skipped, err := CompileSubgraphWithSigner(ctx, topo, nodes, fs, signer)
+	result, subgraph, skipped, err := CompileSubgraphWithSigner(ctx, deploymentTopo, nodes, fs, signer)
 	if err != nil {
 		return DeployPreviewResult{}, err
 	}
 	if len(subgraph.Nodes) == 0 {
-		return DeployPreviewResult{SkippedUnenrolled: skipped}, nil
+		return DeployPreviewResult{SkippedUnenrolled: skipped, TelemetryPolicyOmittedNodeIDs: omitted}, nil
 	}
 
 	keystoneOn := false
@@ -109,9 +122,10 @@ func DeployPreview(ctx context.Context, store Store, t TenantID, topo *model.Top
 	}
 
 	out := DeployPreviewResult{
-		KeystoneFullRestage: !skipEnabled,
-		SkippedUnenrolled:   skipped,
-		Nodes:               make([]NodeDeployChange, 0, len(subgraph.Nodes)),
+		KeystoneFullRestage:           !skipEnabled,
+		SkippedUnenrolled:             skipped,
+		TelemetryPolicyOmittedNodeIDs: omitted,
+		Nodes:                         make([]NodeDeployChange, 0, len(subgraph.Nodes)),
 	}
 	for _, node := range subgraph.Nodes {
 		files, err := readBundleDir(filepath.Join(tmp, node.ID))

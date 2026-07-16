@@ -303,6 +303,7 @@ export const en = {
   'connectionSettings.syncing': "Syncing...",
   'controllerStore.cannotDisableNoCredential': "Cannot disable: no credential is registered to re-authenticate with.",
   'controllerStore.controllerContextChanged': "The controller connection or sign-in changed while this request was in progress. Retry on the current controller.",
+  'controllerStore.successorTelemetryRequiresNewController': "This telemetry draft uses policy fields the connected controller cannot preserve. Upgrade the controller before deploying; Deploy anyway is available only for legacy-compatible drafts.",
   'controllerStore.noEnrolledNodes': "No enrolled nodes to compile yet — enroll nodes in Fleet, then Compile.",
   'controllerStore.noSigningKeyEnrolled': "This deploy requires an off-host signature, but no operator signing key is enrolled — enroll your signing key first.",
   'controllerStore.signingDescriptorUnrecovered': "This deploy requires an off-host signature. A signing credential is pinned, but this browser has no usable WebAuthn signing handle. If it is a browser credential, connect the authenticator/provider that holds it and retry; if it is raw Ed25519, use its off-host signing workflow. Do not rotate or re-pin merely to recover browser state.",
@@ -316,6 +317,7 @@ export const en = {
   'deployBar.deploy': "🚀 Deploy",
   'deployBar.deployToFleet': "Deploy to Fleet",
   'deployBar.deploying': "Deploying...",
+  'deployBar.previewing': "Checking readiness...",
   'deployBar.reviewDeploy': "Review deploy",
   'deployBar.previewSummary': "{changed} will update · {unchanged} unchanged",
   'deployBar.previewWillUpdate': "will update",
@@ -326,6 +328,11 @@ export const en = {
   'deployBar.keystoneRestagePending': "Keystone rotation pending — a full redeploy will be staged for every node.",
   'deployBar.previewUnavailable': "Couldn't load the deploy preview (the controller may be an older version).",
   'deployBar.deployAnyway': "Deploy anyway",
+  'deployBar.upgradeAgentsFirst': "Upgrade agents first",
+  'deployBar.upgradeAgentsFirstPreview': "Phase one keeps the saved telemetry draft but omits successor policy for {count} node(s): {nodes}. This allows the configured signed agent rollout to proceed; deploy normally again after fresh capability heartbeats.",
+  'deployBar.upgradeAgentsFirstNoRollout': "No signed agent-update target and binary pins are configured. This phase will not upgrade agents by itself; configure Agent Update in Fleet or update the agents out of band.",
+  'deployBar.upgradeAgentsFirstPartialRollout': "The configured agent rollout does not target: {nodes}. Those nodes will remain blocked until they are included or updated out of band.",
+  'deployBar.telemetryPolicyOmitted': "Successor telemetry held for agent upgrade",
   'deployBar.unchangedNodes': "Unchanged (kept config)",
   'deployBar.dismissNotice': "Dismiss notice",
   'deployBar.enrollSigningKeyPasskey': "🔐 Enroll signing key (passkey / YubiKey)",
@@ -471,6 +478,10 @@ export const en = {
   'fleetNodeDetailPage.no': "no",
   'fleetNodeDetailPage.rekeying': "Rekeying",
   'fleetNodeDetailPage.status': "Status",
+  'fleetNodeDetailPage.telemetryPolicyReadiness': "Telemetry policy readiness",
+  'fleetNodeDetailPage.telemetryPolicyReady': "Ready",
+  'fleetNodeDetailPage.telemetryPolicyUpgradeRequired': "Upgrade required",
+  'fleetNodeDetailPage.telemetryPolicyNotConfirmed': "Not confirmed",
   'fleetNodeDetailPage.forceRedeploy': "Force redeploy this node",
   'fleetNodeDetailPage.forceRedeploying': "Redeploying…",
   'fleetNodeDetailPage.forceRedeployConfirm': "Force a redeploy of this node? It re-stages this node's config at a new generation even if unchanged, then promotes. The current design is what gets deployed. Continue?",
@@ -893,7 +904,9 @@ export const en = {
   'error.manifest_signature_invalid': 'The manifest signature could not be verified against the pinned credential.',
   'error.stage_failed': 'Staging or promoting the deployment failed.',
   'error.telemetry_probes_require_keystone':
-    'Active telemetry probes require a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.',
+    'Active telemetry policy requires a pinned off-host keystone. Enroll and pin an operator keystone, then retry deployment.',
+  'error.telemetry_policy_upgrade_required':
+    'Some nodes have not confirmed support for this telemetry policy. Upgrade agents first, wait for a fresh heartbeat, then deploy again.',
   'error.manual_node_invalid': 'Manual node {node} is invalid: {detail}',
   // Assisted release-pin fetch (controller-panel-rollout-ui plan-1) — the operator release-pins endpoint.
   'error.agent_release_request_invalid': 'The release-pin request field {field} is invalid.',
@@ -1014,6 +1027,8 @@ export const en = {
   'error.validation_node_deployment_mode_invalid': "Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).",
   'error.validation_node_telemetry_probes_invalid':
     "Invalid active telemetry configuration: {detail}. Set one host (an IP literal or DNS hostname) per probe; TCP also requires one port.",
+  'error.validation_node_telemetry_devices_invalid':
+    "Invalid automatic device telemetry configuration: {detail}.",
   'error.validation_node_router_id_invalid': "Invalid router_id format: {id}. It must be in MAC-48 form (six colon-separated hex pairs, e.g. 02:11:22:33:44:55) or an IPv4 address; otherwise babeld will reject it.",
   'error.validation_node_ssh_alias_illegal_chars': "ssh_alias {alias} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), @, and hyphen (-) are allowed; whitespace and shell metacharacters are forbidden.",
   'error.validation_node_ssh_host_illegal_chars': "ssh_host {host} contains illegal characters: only letters, digits, dot (.), underscore (_), colon (:), @, and hyphen (-) are allowed; whitespace and shell metacharacters are forbidden.",

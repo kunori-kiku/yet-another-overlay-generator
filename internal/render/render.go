@@ -317,6 +317,7 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 	// rendering layer rather than the compiler's derivation pass. Resetting the map also makes a
 	// repeated render unable to retain policy bytes from a different custody presentation.
 	result.TelemetryPolicyJSON = make(map[string]string)
+	result.TelemetrySuccessorPolicyJSON = make(map[string]string)
 
 	// WireGuard (per-peer configs for non-client nodes)
 	wgConfigs, err := renderer.RenderAllWireGuardConfigs(result.Topology, result.PeerMap, keys)
@@ -378,12 +379,24 @@ func AllWith(result *compiler.CompileResult, keys map[string]compiler.KeyPair, f
 		nodeAgentHeld := keys[node.ID].PrivateKey == PrivateKeyPlaceholder
 		agentHeldDeploy = agentHeldDeploy || nodeAgentHeld
 		if nodeAgentHeld {
-			telemetryContent, err := probepolicy.Marshal(node.TelemetryProbes)
-			if err != nil {
-				return fmt.Errorf("building active telemetry policy for node %s failed: %w", node.ID, err)
-			}
-			if len(telemetryContent) > 0 {
-				result.TelemetryPolicyJSON[node.ID] = string(telemetryContent)
+			if probepolicy.RequiresSuccessor(node) {
+				policy := probepolicy.SuccessorPolicy{Version: probepolicy.SuccessorVersion, Probes: node.TelemetryProbes}
+				if node.TelemetryDevices != nil {
+					policy.Devices = &probepolicy.DevicePolicy{Mode: probepolicy.DeviceMode(node.TelemetryDevices.Mode)}
+				}
+				telemetryContent, err := probepolicy.MarshalSuccessor(policy)
+				if err != nil {
+					return fmt.Errorf("building successor telemetry policy for node %s failed: %w", node.ID, err)
+				}
+				result.TelemetrySuccessorPolicyJSON[node.ID] = string(telemetryContent)
+			} else {
+				telemetryContent, err := probepolicy.Marshal(node.TelemetryProbes)
+				if err != nil {
+					return fmt.Errorf("building active telemetry policy for node %s failed: %w", node.ID, err)
+				}
+				if len(telemetryContent) > 0 {
+					result.TelemetryPolicyJSON[node.ID] = string(telemetryContent)
+				}
 			}
 		}
 

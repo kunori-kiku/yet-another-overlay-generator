@@ -47,8 +47,9 @@ import (
 type StageOption func(*stageConfig)
 
 type stageConfig struct {
-	forceAll   bool
-	forceNodes map[string]bool
+	forceAll            bool
+	forceNodes          map[string]bool
+	telemetryPolicyMode TelemetryPolicyDeployMode
 }
 
 // WithForceAll re-stages EVERY enrolled node even if unchanged (fleet-wide force redeploy).
@@ -64,6 +65,10 @@ func WithForceNodes(ids ...string) StageOption {
 			c.forceNodes[id] = true
 		}
 	}
+}
+
+func WithTelemetryPolicyDeployMode(mode TelemetryPolicyDeployMode) StageOption {
+	return func(c *stageConfig) { c.telemetryPolicyMode = mode }
 }
 
 func (c stageConfig) forced(nodeID string) bool { return c.forceAll || c.forceNodes[nodeID] }
@@ -113,6 +118,10 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	if err != nil {
 		return StageResult{}, fmt.Errorf("controller: listing nodes to stage: %w", err)
 	}
+	deploymentTopo, telemetryPolicyOmitted, err := PrepareTelemetryPolicyDeployment(&topo, nodes, cfg.telemetryPolicyMode)
+	if err != nil {
+		return StageResult{}, err
+	}
 	// Load the tenant settings (defaults applied) and map them into the render FetchSettings so a
 	// configured mimic catalog flows into install.sh + the signed artifacts.json. No mimic catalog
 	// ⇒ zero-relevant fs ⇒ no artifacts.json (D4), bundles byte-identical to today. An absent
@@ -126,7 +135,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	// Project readiness before resolving the signer. An empty stage is a destructive cleanup
 	// operation: it must purge any superseded staged bundles even if an unrelated configured
 	// signing-key file is currently broken/unreadable.
-	ready, skipped, err := projectEnrolledSubgraph(&topo, nodes)
+	ready, skipped, err := projectEnrolledSubgraph(deploymentTopo, nodes)
 	if err != nil {
 		return StageResult{}, err
 	}
@@ -139,7 +148,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 			appendStageAudit(ctx, store, t, now, "purge-staged", nodeID)
 		}
 		appendStageAudit(ctx, store, t, now, "stage-empty", "")
-		return StageResult{SkippedUnenrolled: skipped}, nil
+		return StageResult{SkippedUnenrolled: skipped, TelemetryPolicyOmittedNodeIDs: telemetryPolicyOmitted}, nil
 	}
 	// Resolve the signer exactly once for this tenant-serialized stage. The same in-memory object
 	// feeds render, signing-anchor reconciliation, and export, so a key-file change mid-stage cannot
@@ -148,7 +157,7 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	if err != nil {
 		return StageResult{}, fmt.Errorf("controller: loading bundle signing key: %w", err)
 	}
-	result, subgraph, skipped, err := CompileSubgraphWithSigner(ctx, &topo, nodes, fs, signer)
+	result, subgraph, skipped, err := CompileSubgraphWithSigner(ctx, deploymentTopo, nodes, fs, signer)
 	if err != nil {
 		return StageResult{}, err
 	}
@@ -284,9 +293,10 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 		}
 		appendStageAudit(ctx, store, t, now, "stage-unchanged", "")
 		return StageResult{
-			UnchangedNodeIDs:  unchanged,
-			SkippedUnenrolled: skipped,
-			Generation:        cur, // unchanged — no new generation
+			UnchangedNodeIDs:              unchanged,
+			SkippedUnenrolled:             skipped,
+			TelemetryPolicyOmittedNodeIDs: telemetryPolicyOmitted,
+			Generation:                    cur, // unchanged — no new generation
 		}, nil
 	}
 
@@ -321,10 +331,11 @@ func CompileAndStage(ctx context.Context, store Store, t TenantID, now time.Time
 	appendStageAudit(ctx, store, t, now, "stage", "")
 
 	return StageResult{
-		Staged:            staged,
-		UnchangedNodeIDs:  unchanged,
-		SkippedUnenrolled: skipped,
-		Generation:        nextGen,
+		Staged:                        staged,
+		UnchangedNodeIDs:              unchanged,
+		SkippedUnenrolled:             skipped,
+		TelemetryPolicyOmittedNodeIDs: telemetryPolicyOmitted,
+		Generation:                    nextGen,
 	}, nil
 }
 

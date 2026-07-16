@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/trustlist"
 )
@@ -80,16 +81,18 @@ type telemetryRequestJSON struct {
 
 // stageResponseJSON is the wire form of a stage result.
 type stageResponseJSON struct {
-	Staged            []string `json:"staged"`
-	Unchanged         []string `json:"unchanged"` // delta-skipped nodes (plan-5): kept their generation, no re-apply
-	SkippedUnenrolled []string `json:"skipped_unenrolled"`
-	Generation        int64    `json:"generation"`
+	Staged                      []string `json:"staged"`
+	Unchanged                   []string `json:"unchanged"` // delta-skipped nodes (plan-5): kept their generation, no re-apply
+	SkippedUnenrolled           []string `json:"skipped_unenrolled"`
+	TelemetryPolicyOmittedNodes []string `json:"telemetry_policy_omitted_node_ids,omitempty"`
+	Generation                  int64    `json:"generation"`
 }
 
 // stageRequestJSON is the OPTIONAL POST body for Deploy (plan-6 Force). Empty body = no force.
 type stageRequestJSON struct {
-	ForceAll   bool     `json:"force_all,omitempty"`   // re-stage every node even if unchanged (fleet)
-	ForceNodes []string `json:"force_nodes,omitempty"` // re-stage named nodes even if unchanged (per-node)
+	ForceAll            bool                                 `json:"force_all,omitempty"`   // re-stage every node even if unchanged (fleet)
+	ForceNodes          []string                             `json:"force_nodes,omitempty"` // re-stage named nodes even if unchanged (per-node)
+	TelemetryPolicyMode controller.TelemetryPolicyDeployMode `json:"telemetry_policy_mode,omitempty"`
 }
 
 // deployPreviewNodeJSON / deployPreviewResponseJSON are the plan-6 pre-deploy preview wire form.
@@ -100,9 +103,10 @@ type deployPreviewNodeJSON struct {
 }
 
 type deployPreviewResponseJSON struct {
-	KeystoneFullRestage bool                    `json:"keystone_full_restage"`
-	Nodes               []deployPreviewNodeJSON `json:"nodes"`
-	SkippedUnenrolled   []string                `json:"skipped_unenrolled"`
+	KeystoneFullRestage         bool                    `json:"keystone_full_restage"`
+	Nodes                       []deployPreviewNodeJSON `json:"nodes"`
+	SkippedUnenrolled           []string                `json:"skipped_unenrolled"`
+	TelemetryPolicyOmittedNodes []string                `json:"telemetry_policy_omitted_node_ids,omitempty"`
 }
 
 // generationResponseJSON is the wire form of a promote result.

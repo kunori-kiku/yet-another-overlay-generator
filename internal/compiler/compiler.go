@@ -58,11 +58,11 @@ type CompileResult struct {
 	// It is a signed bundleFiles member — the install.sh reads its pins after integrity verify.
 	ArtifactsJSON map[string]string
 
-	// TelemetryPolicyJSON holds the versioned per-node active-probe policy. It is empty for
-	// nodes without probes, preserving their historical bundle bytes. For AgentHeld results,
-	// the artifact exporter includes each non-empty value as telemetry.json in the
-	// checksummed/signed member set; air-gap exports intentionally omit agent-only policy.
-	TelemetryPolicyJSON map[string]string
+	// TelemetryPolicyJSON holds frozen telemetry.json v1. TelemetrySuccessorPolicyJSON holds the
+	// separately named strict successor. A node may occupy at most one map; BundleFiles rejects both.
+	// AgentHeld exports include the one non-empty member, while air-gap exports omit agent policy.
+	TelemetryPolicyJSON          map[string]string
+	TelemetrySuccessorPolicyJSON map[string]string
 
 	// DeployScripts holds the auto-generated deploy script per node.
 	DeployScripts map[string]string
@@ -310,17 +310,18 @@ func (c *Compiler) CompileAt(ctx context.Context, topo *model.Topology, keys map
 	}
 
 	result := &CompileResult{
-		Topology:            compiledTopo,
-		PeerMap:             peerMap,
-		WireGuardConfigs:    make(map[string]string),
-		BabelConfigs:        make(map[string]string),
-		SysctlConfigs:       make(map[string]string),
-		InstallScripts:      make(map[string]string),
-		ArtifactsJSON:       make(map[string]string),
-		TelemetryPolicyJSON: make(map[string]string),
-		DeployScripts:       make(map[string]string),
-		ClientConfigs:       clientConfigs,
-		Warnings:            warnings,
+		Topology:                     compiledTopo,
+		PeerMap:                      peerMap,
+		WireGuardConfigs:             make(map[string]string),
+		BabelConfigs:                 make(map[string]string),
+		SysctlConfigs:                make(map[string]string),
+		InstallScripts:               make(map[string]string),
+		ArtifactsJSON:                make(map[string]string),
+		TelemetryPolicyJSON:          make(map[string]string),
+		TelemetrySuccessorPolicyJSON: make(map[string]string),
+		DeployScripts:                make(map[string]string),
+		ClientConfigs:                clientConfigs,
+		Warnings:                     warnings,
 		Manifest: CompileManifest{
 			ProjectID:   topo.Project.ID,
 			ProjectName: topo.Project.Name,

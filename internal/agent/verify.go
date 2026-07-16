@@ -155,6 +155,11 @@ func VerifyBundle(files map[string][]byte, pinnedPubPEM []byte) (*VerifyResult, 
 	if err != nil {
 		return nil, err
 	}
+	_, hasLegacyPolicy := files[probepolicy.FileName]
+	_, hasSuccessorPolicy := files[probepolicy.SuccessorFileName]
+	if hasLegacyPolicy && hasSuccessorPolicy {
+		return nil, fmt.Errorf("agent: bundle contains both %s and %s; refusing", probepolicy.FileName, probepolicy.SuccessorFileName)
+	}
 
 	sigB64, hasSig := files["bundle.sig"]
 	bundlePubPEM, hasPub := files["signing-pubkey.pem"]
@@ -237,6 +242,11 @@ func VerifyBundle(files map[string][]byte, pinnedPubPEM []byte) (*VerifyResult, 
 	if _, ok := files[probepolicy.FileName]; ok {
 		if _, covered := listed[probepolicy.FileName]; !covered {
 			return nil, fmt.Errorf("agent: %s present but not covered by checksums.sha256; refusing", probepolicy.FileName)
+		}
+	}
+	if _, ok := files[probepolicy.SuccessorFileName]; ok {
+		if _, covered := listed[probepolicy.SuccessorFileName]; !covered {
+			return nil, fmt.Errorf("agent: %s present but not covered by checksums.sha256; refusing", probepolicy.SuccessorFileName)
 		}
 	}
 
