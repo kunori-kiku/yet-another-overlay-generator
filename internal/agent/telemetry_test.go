@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // fakeSampler is a test Sampler with canned output (or a panic, to prove the recover guard).
@@ -13,9 +14,21 @@ type fakeSampler struct {
 	conds   []runtimecontract.Condition
 	metrics map[string]any
 	panics  bool
+	defs    []telemetrymetric.Definition
+}
+
+func testMetricDefinition(key string) telemetrymetric.Definition {
+	return telemetrymetric.Definition{
+		Key: key, History: telemetrymetric.HistoryCharted,
+		ChartFamily: telemetrymetric.ChartFamilyResource, HistoryPriority: 1,
+		LiveSurface: telemetrymetric.LiveSurfaceVisible,
+	}
 }
 
 func (f fakeSampler) Name() string { return f.name }
+func (f fakeSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return f.defs
+}
 func (f fakeSampler) Sample(now time.Time) ([]runtimecontract.Condition, map[string]any) {
 	if f.panics {
 		panic("sampler boom")
@@ -34,9 +47,9 @@ func TestTelemetryCollect_MergeRecover(t *testing.T) {
 	cfg := runtimecontract.Condition{Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK, Reason: "Applied"}
 
 	tel := &Telemetry{samplers: []Sampler{
-		fakeSampler{name: "a", conds: []runtimecontract.Condition{cfg, wgDown}, metrics: map[string]any{"x": 1, "y": 2}},
+		fakeSampler{name: "a", conds: []runtimecontract.Condition{cfg, wgDown}, metrics: map[string]any{"x": 1, "y": 2}, defs: []telemetrymetric.Definition{testMetricDefinition("x"), testMetricDefinition("y")}},
 		fakeSampler{name: "panicky", panics: true}, // recovered → contributes nothing
-		fakeSampler{name: "b", conds: []runtimecontract.Condition{wgUp}, metrics: map[string]any{"y": 9, "z": 3}},
+		fakeSampler{name: "b", conds: []runtimecontract.Condition{wgUp}, metrics: map[string]any{"y": 9, "z": 3}, defs: []telemetrymetric.Definition{testMetricDefinition("y"), testMetricDefinition("z")}},
 	}}
 
 	conds, metrics := tel.Collect(now)
@@ -54,6 +67,38 @@ func TestTelemetryCollect_MergeRecover(t *testing.T) {
 	}
 	if metrics["x"] != 1 || metrics["y"] != 9 || metrics["z"] != 3 {
 		t.Fatalf("metrics = %+v, want union with later keys winning (x:1, y:9, z:3)", metrics)
+	}
+}
+
+func TestTelemetryCollect_RejectsUndeclaredAndDriftedMetricsWithoutStoppingOthers(t *testing.T) {
+	goodCondition := runtimecontract.Condition{Type: runtimecontract.ConditionTypeConfigApply, Status: runtimecontract.ConditionStatusOK, Reason: "Applied"}
+	badCondition := runtimecontract.Condition{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusWarn, Reason: "MustBeDropped"}
+	tel := &Telemetry{samplers: []Sampler{
+		fakeSampler{
+			name: "good", conds: []runtimecontract.Condition{goodCondition},
+			metrics: map[string]any{"good": 1}, defs: []telemetrymetric.Definition{testMetricDefinition("good")},
+		},
+		// No declaration at all: both its condition and raw metric are rejected under the guard.
+		fakeSampler{name: "undeclared", conds: []runtimecontract.Condition{badCondition}, metrics: map[string]any{"raw": 2}},
+		// A declaration whose key drifted from the emitted wire key is equally rejected.
+		fakeSampler{
+			name: "drifted", conds: []runtimecontract.Condition{badCondition},
+			metrics: map[string]any{"renamed": 3}, defs: []telemetrymetric.Definition{testMetricDefinition("original")},
+		},
+		// An invalid live-only declaration without its required rationale is rejected before sampling.
+		fakeSampler{
+			name: "invalid-definition", conds: []runtimecontract.Condition{badCondition},
+			metrics: map[string]any{"invalid": 4},
+			defs:    []telemetrymetric.Definition{{Key: "invalid", History: telemetrymetric.HistoryLiveOnly}},
+		},
+	}}
+
+	conditions, metrics := tel.Collect(time.Now().UTC())
+	if len(conditions) != 1 || conditions[0].Reason != "Applied" {
+		t.Fatalf("conditions = %+v, want only the valid sampler", conditions)
+	}
+	if len(metrics) != 1 || metrics["good"] != 1 {
+		t.Fatalf("metrics = %+v, want only declared good=1", metrics)
 	}
 }
 

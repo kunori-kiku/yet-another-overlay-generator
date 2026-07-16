@@ -22,6 +22,11 @@ interface UiState {
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;
   closeMobileNav: () => void;
+  /** Fleet Live is an in-memory shell preference shared by the registry and node-detail routes.
+   *  It is deliberately NOT persisted: navigation should not turn an explicitly enabled session
+   *  off, while a browser reload must not silently resume background polling. */
+  fleetLive: boolean;
+  setFleetLive: (live: boolean) => void;
   /** Vibrancy/translucency on the shell chrome. Default on; off = solid surfaces
    *  ("plainer minimalism"). This is the EFFECTIVE value the ThemeProvider reads. In
    *  controller mode the server is the source of truth and drives it via
@@ -57,6 +62,8 @@ export const useUiStore = create<UiState>()(
       mobileNavOpen: false,
       setMobileNavOpen: (mobileNavOpen) => set({ mobileNavOpen }),
       closeMobileNav: () => set({ mobileNavOpen: false }),
+      fleetLive: false,
+      setFleetLive: (fleetLive) => set({ fleetLive }),
       translucency: true,
       localTranslucency: true,
       setTranslucency: (translucency) => set({ translucency, localTranslucency: translucency }),
@@ -79,8 +86,8 @@ export const useUiStore = create<UiState>()(
       },
       // Explicit allowlist: only non-secret UI prefs are persisted. Locks the
       // zero-knowledge custody invariant in for future fields added to this store.
-      // mobileNavOpen is deliberately absent — it is ephemeral overlay state; a
-      // refresh must never restore an open drawer.
+      // mobileNavOpen and fleetLive are deliberately absent — both are ephemeral shell state; a
+      // refresh must never restore an open overlay or silently resume controller polling.
       partialize: (state) => ({
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,

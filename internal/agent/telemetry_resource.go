@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // resourceMetricKey is the telemetry metrics-map key carrying host resource utilization (load + memory).
-const resourceMetricKey = "resource"
+const resourceMetricKey = telemetrymetric.ResourceKey
 
 // hostResource is the point-in-time host load + memory reading, carried on the telemetry metrics map
 // (metrics["resource"]) and rendered on the node detail page. It carries NO endpoint/IP/key material —
@@ -51,6 +52,10 @@ type resourceSampler struct {
 }
 
 func (*resourceSampler) Name() string { return "resource" }
+
+func (*resourceSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{telemetrymetric.Resource}
+}
 
 func (s *resourceSampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	loadRaw, err := loadavgFn()

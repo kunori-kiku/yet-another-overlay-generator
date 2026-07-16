@@ -161,12 +161,11 @@ type Node struct {
 	// ObservedAt on receipt (plan-1). Nil until a conditions-aware agent reports; replaced wholesale
 	// each report (the latest report is the truth). Observability only — not custody, not allocation.
 	Conditions []NodeCondition
-	// Telemetry is the agent's extensible metrics map from the last /telemetry heartbeat (the
-	// framework's extension slot — e.g. wireguard_peers, the per-peer link detail). The controller's
-	// volatile observability overlay serves this opaque JSON verbatim for the panel to interpret by
-	// key; it is not written into the durable node record. Nil until a metrics-emitting agent
-	// heartbeats and replaced wholesale on each accepted heartbeat. Observability only — never custody,
-	// never key material (the agent emits no keys/allowed-ips).
+	// Telemetry is the live-visible subset of the agent's extensible metrics map from the last
+	// /telemetry heartbeat (the framework's extension slot — e.g. wireguard_peers). Known history-only
+	// transport windows are retained separately and omitted here; unknown keys stay visible for rolling
+	// compatibility. The opaque JSON is not written into the durable node record. Nil until a
+	// metrics-emitting agent heartbeats and replaced wholesale on each accepted heartbeat.
 	Telemetry  map[string]json.RawMessage
 	LastSeen   time.Time
 	EnrolledAt time.Time
@@ -517,15 +516,16 @@ type ControllerSettings struct {
 	// an explicit false: WithDefaults() fills nil with true, preserving the default-on
 	// appearance after an upgrade instead of silently reading false.
 	Translucency *bool `json:"translucency,omitempty"`
-	// TelemetryHistoryCap is the per-node hard cap on retained resource-history samples (plan-2), a
+	// TelemetryHistoryCap is the per-node logical target for retained telemetry-history records, a
 	// POINTER so a legacy record predating the field (nil) is distinguishable from an explicit 0
 	// (disable history): nil ⇒ DefaultTelemetryHistoryCap, an explicit value (incl. 0) is honored. See
-	// EffectiveHistoryCap. NON-SECRET (a retention count); not baked into the bootstrap script.
+	// EffectiveHistoryCap. The independent physical byte ceiling may retain fewer variable-width
+	// records. NON-SECRET (a retention count); not baked into the bootstrap script.
 	TelemetryHistoryCap *int `json:"telemetry_history_cap,omitempty"`
 }
 
-// EffectiveHistoryCap resolves the per-node telemetry-history sample cap: a nil field (legacy / unset)
-// means the default; an explicit value (including 0 = history disabled) is honored verbatim.
+// EffectiveHistoryCap resolves the per-node telemetry-history record target: a nil field (legacy /
+// unset) means the default; an explicit value (including 0 = history disabled) is honored verbatim.
 func (cs ControllerSettings) EffectiveHistoryCap() int {
 	if cs.TelemetryHistoryCap == nil {
 		return DefaultTelemetryHistoryCap
@@ -584,16 +584,17 @@ type Store interface {
 	SetAppliedGeneration(ctx context.Context, t TenantID, nodeID string, gen int64, checksum, health, agentVersion string, conditions []runtimecontract.Condition, observedAt time.Time) error
 	// RecordTelemetry records a LIVE health heartbeat (beta9-smoke-hardening plan-1): it writes ONLY
 	// the node's structured conditions (server-stamped with observedAt; nil/empty clears the set), the
-	// extensible metrics map (replaced wholesale; nil clears it), its last-seen time, and — when
-	// non-empty — its reported agent build version. It is a strict subset of SetAppliedGeneration that
+	// live-visible subset of the extensible metrics map (replaced wholesale; nil clears it), its
+	// last-seen time, and — when non-empty — its reported agent build version. The full admitted map
+	// still feeds bounded history. It is a strict subset of SetAppliedGeneration that
 	// DELIBERATELY does NOT touch AppliedGeneration / LastChecksum / LastHealth / DesiredGeneration:
 	// telemetry is observability, kept strictly separate from deploy custody, so a heartbeat can never
 	// advance or regress a node's applied generation. Returns ErrNotFound if the node does not exist.
 	RecordTelemetry(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion string, observedAt time.Time) error
 	// RecordTelemetrySequenced is the reliable-upload form of RecordTelemetry. receivedAt remains the
 	// controller-authoritative LastSeen/condition timestamp; sampledAt is retained independently and
-	// timestamps a replayed resource-history sample. A repeated (bootID, sequence) is acknowledged but
-	// does not replace the live overlay or append history again. Deduplication is volatile and bounded,
+	// timestamps a replayed history projection. A repeated (bootID, sequence) is acknowledged but does
+	// not replace the live overlay or append history again. Deduplication is volatile and bounded,
 	// preserving the no-per-heartbeat-durable-write invariant.
 	RecordTelemetrySequenced(ctx context.Context, t TenantID, nodeID string, conditions []runtimecontract.Condition, metrics map[string]json.RawMessage, agentVersion, bootID string, sequence uint64, sampledAt time.Time, interval time.Duration, receivedAt time.Time) (TelemetryReceipt, error)
 	// TouchLastSeen records that the agent for nodeID checked in at the given time.
@@ -604,6 +605,18 @@ type Store interface {
 	// samples carry no endpoint/IP/key material. Distinct from RecordTelemetry (the live overlay): this
 	// is the durable, bounded backing for the node-detail CPU/RAM charts.
 	QueryTelemetryHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ResourceSample, error)
+	// QueryTelemetryProbeHistory returns the same bounded history's completed active-probe attempts.
+	// Exact executable destinations remain separated by SeriesID; repeated latest snapshots and
+	// overlapping recent-attempt windows are deduplicated. The controller exposes at most the most
+	// recently active sixteen series from this raw typed result.
+	QueryTelemetryProbeHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ProbeHistorySample, error)
+	// QueryTelemetryHistorySnapshot returns both history projections from one coherent store snapshot.
+	// Prefer it when a caller needs resources and probes together so durable JSONL is scanned once.
+	QueryTelemetryHistorySnapshot(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error)
+	// QueryTelemetryHistorySnapshotFiltered pushes an exact probe-series selector into the bounded store
+	// scan. Zero options return resources and no probes; ProbeSeriesID returns only that exact series.
+	// This avoids materializing every probe attempt before an API response applies its selector.
+	QueryTelemetryHistorySnapshotFiltered(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error)
 
 	// --- Topology (public-keys-only) ---
 

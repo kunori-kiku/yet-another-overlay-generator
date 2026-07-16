@@ -1,27 +1,33 @@
-// Telemetry-history client route (telemetry-history plan-3/4): the operator node resource-history
-// read. LIVE-ONLY by contract — the caller renders the result and NEVER persists it (the
+// Telemetry-history client route: the operator node resource + active-probe history read. LIVE-ONLY
+// by browser contract — the caller renders the result and NEVER persists it (the
 // stripLiveTelemetry custody rule).
 
 import { request, type ControllerConfig } from './transport';
-import { historyQueryString, parseNodeHistory, type NodeHistory } from '../../lib/telemetryHistory';
+import {
+  historyQueryString,
+  parseNodeHistory,
+  type NodeHistory,
+  type NodeHistoryRequestOptions,
+} from '../../lib/telemetryHistory';
 
-// nodeHistory fetches a node's resource history (telemetry-history plan-3/4): GET
+// nodeHistory fetches a node's resource and active-probe history: GET
 // node-history?node=<id>&from=<RFC3339>&to=<RFC3339>[&step=<Go-duration>]. Operator-only,
 // credentialed like every other operator read. LIVE-ONLY by contract: the caller renders the result
 // and NEVER persists it (no store/localStorage write) — the same custody rule as stripLiveTelemetry.
-// The wire buckets are parsed into a typed NodeHistory at the boundary (parseNodeHistory is defensive
-// so a garbled bucket never throws). Omitting `step` lets the server pick a step that fits the window.
+// Both resource buckets and the additive probe series are parsed into a typed NodeHistory at the
+// boundary (defensively, so a garbled row never throws). Omitting `step` lets the server pick one.
 export async function nodeHistory(
   cfg: ControllerConfig,
   nodeId: string,
   from: string,
   to: string,
   step?: string,
+  options: NodeHistoryRequestOptions = {},
 ): Promise<NodeHistory> {
   const res = await request(
     cfg,
-    `node-history?${historyQueryString(nodeId, from, to, step)}`,
-    { cache: 'no-store' },
+    `node-history?${historyQueryString(nodeId, from, to, step, options)}`,
+    { cache: 'no-store', signal: options.signal },
   );
   return parseNodeHistory(await res.json());
 }

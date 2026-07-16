@@ -5,7 +5,7 @@ package api
 // legible from the bootstrap-script rendering it feeds:
 //   - operator routes GET/POST /settings — read/update the server-persisted controller
 //     settings (public agent URL, GitHub proxy, agent release URL, mimic GitHub-.deb catalog,
-//     signed agent self-update rollout pins, panel translucency, resource-history cap).
+//     signed agent self-update rollout pins, panel translucency, telemetry-history cap).
 //
 // GET reads the stored settings with defaults applied and needs NO identity; POST requires the
 // operator identity, validates every field, persists, and audits. BOTH branches respond through
@@ -26,8 +26,8 @@ import (
 )
 
 // settingsJSON is the wire form of the operator-editable controller settings.
-// maxTelemetryHistoryCap bounds the operator-settable per-node resource-history sample cap (plan-2) so a
-// typo cannot request an effectively unbounded history file. 1e6 samples ≈ 347 days at a 30s heartbeat.
+// maxTelemetryHistoryCap bounds the operator-settable per-node history record target so a typo cannot
+// request unbounded logical retention. The independent physical byte ceiling remains authoritative.
 const maxTelemetryHistoryCap = 1_000_000
 
 type settingsJSON struct {
@@ -56,9 +56,9 @@ type settingsJSON struct {
 	AgentBins             map[string]model.Artifact `json:"agent_bins,omitempty"`
 	AgentCanaryNodeIDs    []string                  `json:"agent_canary_node_ids,omitempty"`
 	AgentRolloutFleetWide bool                      `json:"agent_rollout_fleet_wide,omitempty"`
-	// TelemetryHistoryCap is the per-node resource-history sample cap (plan-2). A POINTER: nil ⇒ use the
-	// default, an explicit value (incl. 0 = disable history) is honored. Validated >= 0 and <= a sanity
-	// bound on POST.
+	// TelemetryHistoryCap is the per-node telemetry-history record target. A POINTER: nil ⇒ use the
+	// default, an explicit value (incl. 0 = disable history) is honored. Validated >= 0 and <= a
+	// sanity bound on POST; the physical byte ceiling may retain fewer records.
 	TelemetryHistoryCap *int `json:"telemetry_history_cap,omitempty"`
 }
 

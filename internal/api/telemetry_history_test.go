@@ -3,12 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 func apiResourceMetrics(cpu *float64, load1 float64, memTotal, memAvail uint64) map[string]json.RawMessage {
@@ -18,6 +22,80 @@ func apiResourceMetrics(cpu *float64, load1 float64, memTotal, memAvail uint64) 
 	}
 	raw, _ := json.Marshal(obj)
 	return map[string]json.RawMessage{"resource": raw}
+}
+
+func apiProbeMetric(t *testing.T, results ...probemetric.Result) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestTelemetryHistoryFamilyEncoderCatalogParityAndRuntimeFixtures(t *testing.T) {
+	if err := validateTelemetryHistoryFamilyEncoderRegistry(); err != nil {
+		t.Fatalf("history family encoder registry validation: %v", err)
+	}
+	expected := make(map[telemetrymetric.ChartFamily]struct{})
+	for _, family := range telemetrymetric.ChartFamilies() {
+		if _, duplicate := expected[family]; duplicate {
+			t.Errorf("catalog returned chart family %q more than once", family)
+		}
+		expected[family] = struct{}{}
+		if telemetryHistoryFamilyEncoders[family] == nil {
+			t.Errorf("charted telemetry family %q has no API encoder", family)
+		}
+	}
+	for family := range telemetryHistoryFamilyEncoders {
+		if _, ok := expected[family]; !ok {
+			t.Errorf("API history encoder %q is not a cataloged chart family", family)
+		}
+	}
+	if len(telemetryHistoryFamilyEncoders) != len(expected) {
+		t.Errorf("history encoder/catalog family cardinality = %d/%d, want exact parity", len(telemetryHistoryFamilyEncoders), len(expected))
+	}
+
+	base := time.Unix(1000, 0).UTC()
+	cpu, latency := 40.0, 8.0
+	wire := probemetric.Result{ID: "fixture", Type: "icmp", Host: "fixture.example"}
+	fixture := controller.TelemetryHistorySnapshot{
+		Resources: []controller.ResourceSample{{TS: base, CpuPct: &cpu, Load1: 1, Load5: 2, Load15: 3}},
+		Probes: []controller.ProbeHistorySample{{
+			SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host,
+			Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: base,
+		}},
+	}
+	for family, encoder := range telemetryHistoryFamilyEncoders {
+		var response historyResponse
+		encoder(&response, fixture, time.Minute, telemetryHistoryEncodingOptions{includeProbes: true})
+		switch family {
+		case telemetrymetric.ChartFamilyResource:
+			if len(response.Buckets) == 0 || response.Probes != nil {
+				t.Errorf("resource family fixture did not reach only buckets: %+v", response)
+			}
+		case telemetrymetric.ChartFamilyProbe:
+			if len(response.Probes) == 0 || response.Buckets != nil {
+				t.Errorf("probe family fixture did not reach only probes: %+v", response)
+			}
+		default:
+			t.Errorf("runtime fixture has no assertion for chart family %q", family)
+		}
+	}
+
+	combined, err := encodeTelemetryHistoryFamilies(
+		fixture, time.Minute, telemetryHistoryEncodingOptions{includeProbes: true},
+	)
+	if err != nil || len(combined.Buckets) == 0 || len(combined.Probes) == 0 {
+		t.Fatalf("catalog-driven combined encoding = %+v err=%v", combined, err)
+	}
+	empty, err := encodeTelemetryHistoryFamilies(
+		controller.TelemetryHistorySnapshot{}, time.Minute,
+		telemetryHistoryEncodingOptions{includeProbes: true},
+	)
+	if err != nil || empty.Buckets == nil || empty.Probes == nil || len(empty.Buckets) != 0 || len(empty.Probes) != 0 {
+		t.Fatalf("empty family encoding must preserve non-null additive arrays: %+v err=%v", empty, err)
+	}
 }
 
 func TestAggregateHistory(t *testing.T) {
@@ -84,6 +162,91 @@ func TestAggregateHistoryUsesStableEpochAnchor(t *testing.T) {
 	again := aggregateHistory(samples, step)
 	if !again[0].T.Equal(buckets[0].T) || !again[1].T.Equal(buckets[1].T) {
 		t.Fatalf("repeat aggregation re-phased buckets: first=%v second=%v", buckets, again)
+	}
+}
+
+func TestAggregateProbeHistorySeparatesTargetsAndPreservesFailures(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	latency10, latency20 := 10.0, 20.0
+	resultFor := func(host string, checkedAt time.Time, status string, latency *float64, reason string) controller.ProbeHistorySample {
+		wire := probemetric.Result{ID: "service", Type: "tcp", Host: host, Port: 443}
+		return controller.ProbeHistorySample{
+			SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host, Port: wire.Port,
+			Status: status, LatencyMS: latency, CheckedAt: checkedAt, FailureReason: reason, IntervalMS: 30_000,
+		}
+	}
+	samples := []controller.ProbeHistorySample{
+		resultFor("one.example", base.Add(time.Second), probemetric.StatusSuccess, &latency10, ""),
+		resultFor("one.example", base.Add(2*time.Second), probemetric.StatusFailure, nil, probemetric.FailureTimeout),
+		resultFor("one.example", base.Add(31*time.Second), probemetric.StatusSuccess, &latency20, ""),
+		resultFor("two.example", base.Add(3*time.Second), probemetric.StatusFailure, nil, probemetric.FailureConnectionRefused),
+	}
+	series := aggregateProbeHistory(samples, 30*time.Second)
+	if len(series) != 2 || series[0].Host != "one.example" || series[1].Host != "two.example" {
+		t.Fatalf("exact targets were not separated/most-recent ordered: %+v", series)
+	}
+	if len(series[0].Buckets) != 2 {
+		t.Fatalf("one.example buckets = %+v, want 2", series[0].Buckets)
+	}
+	first := series[0].Buckets[0]
+	if first.Attempts != 2 || first.Successes != 1 || first.Failures != 1 || first.IntervalMS != 30_000 || first.LatencyMS == nil || first.LatencyMS.Avg != 10 || first.FailureReasons[probemetric.FailureTimeout] != 1 {
+		t.Fatalf("success/failure/latency bucket = %+v", first)
+	}
+	other := series[1].Buckets[0]
+	if other.LatencyMS != nil || other.Failures != 1 || other.FailureReasons[probemetric.FailureConnectionRefused] != 1 {
+		t.Fatalf("failure must not become zero latency: %+v", other)
+	}
+}
+
+func TestAggregateProbeHistoryCarriesPerBucketCadenceTransitions(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	latency := 4.0
+	wire := probemetric.Result{ID: "cadence", Type: "icmp", Host: "cadence.example"}
+	series := aggregateProbeHistory([]controller.ProbeHistorySample{
+		{
+			SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host,
+			Status: probemetric.StatusSuccess, LatencyMS: &latency,
+			CheckedAt: base.Add(time.Second), IntervalMS: 30_000,
+		},
+		{
+			SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host,
+			Status: probemetric.StatusSuccess, LatencyMS: &latency,
+			CheckedAt: base.Add(31 * time.Second), IntervalMS: 300_000,
+		},
+	}, 30*time.Second)
+	if len(series) != 1 || len(series[0].Buckets) != 2 {
+		t.Fatalf("cadence transition series = %+v", series)
+	}
+	if series[0].Buckets[0].IntervalMS != 30_000 || series[0].Buckets[1].IntervalMS != 300_000 {
+		t.Fatalf("per-bucket cadence was not preserved: %+v", series[0].Buckets)
+	}
+	if series[0].IntervalMS != 300_000 {
+		t.Fatalf("series compatibility cadence = %d, want newest 300000", series[0].IntervalMS)
+	}
+}
+
+func TestAggregateProbeHistoryBoundsSeriesCardinality(t *testing.T) {
+	base := time.Unix(1000, 0).UTC()
+	latency := 1.0
+	var samples []controller.ProbeHistorySample
+	for i := 0; i < maxProbeHistorySeries+3; i++ {
+		wire := probemetric.Result{ID: "shared", Type: "icmp", Host: fmt.Sprintf("host-%d.example", i)}
+		samples = append(samples, controller.ProbeHistorySample{
+			SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host,
+			Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: base.Add(time.Duration(i) * time.Second),
+		})
+	}
+	series := aggregateProbeHistory(samples, time.Second)
+	if len(series) != maxProbeHistorySeries {
+		t.Fatalf("series count = %d, want cap %d", len(series), maxProbeHistorySeries)
+	}
+	if series[0].Host != fmt.Sprintf("host-%d.example", maxProbeHistorySeries+2) {
+		t.Fatalf("newest series was not selected first: %+v", series[0])
+	}
+	for _, item := range series {
+		if item.Host == "host-0.example" || item.Host == "host-1.example" || item.Host == "host-2.example" {
+			t.Fatalf("old series survived most-recent cap: %q", item.Host)
+		}
 	}
 }
 
@@ -182,6 +345,82 @@ func TestEffectiveHistoryStepCapsEpochAlignedBuckets(t *testing.T) {
 	}
 }
 
+func TestEffectiveHistoryStepEnforcesGlobalResponseBucketBudget(t *testing.T) {
+	window := 24 * time.Hour
+	from := time.Unix(1, 0).UTC() // deliberately off the epoch grid
+	to := from.Add(window)
+	latency := 1.0
+	history := controller.TelemetryHistorySnapshot{}
+	for at := from; !at.After(to); at = at.Add(time.Minute) {
+		history.Resources = append(history.Resources, controller.ResourceSample{TS: at, Load1: 1})
+		for i := 0; i < maxProbeHistorySeries; i++ {
+			wire := probemetric.Result{ID: fmt.Sprintf("probe-%d", i), Type: "icmp", Host: fmt.Sprintf("host-%d.example", i)}
+			history.Probes = append(history.Probes, controller.ProbeHistorySample{
+				SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host,
+				Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: at,
+			})
+		}
+	}
+	step := effectiveHistoryStepForStreams(
+		window, time.Second, history.Resources, telemetryHistoryStreamCount(history),
+	)
+	response, err := encodeTelemetryHistoryFamilies(
+		history, step, telemetryHistoryEncodingOptions{includeProbes: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := len(response.Buckets)
+	for _, series := range response.Probes {
+		total += len(series.Buckets)
+	}
+	if total > maxHistoryBuckets {
+		t.Fatalf("global response buckets = %d, want <= %d (step %v)", total, maxHistoryBuckets, step)
+	}
+	if len(response.Probes) != maxProbeHistorySeries {
+		t.Fatalf("probe series = %d, want %d", len(response.Probes), maxProbeHistorySeries)
+	}
+}
+
+func TestParseTelemetryHistoryEncodingOptions(t *testing.T) {
+	t.Run("omitted preserves all probes", func(t *testing.T) {
+		options, err := parseTelemetryHistoryEncodingOptions(url.Values{})
+		if err != nil || !options.includeProbes || options.probeSelector != nil {
+			t.Fatalf("options = %+v err=%v", options, err)
+		}
+	})
+	t.Run("resource only", func(t *testing.T) {
+		options, err := parseTelemetryHistoryEncodingOptions(url.Values{"include_probes": {"false"}})
+		if err != nil || options.includeProbes || options.probeSelector != nil {
+			t.Fatalf("options = %+v err=%v", options, err)
+		}
+	})
+	t.Run("exact TCP selector", func(t *testing.T) {
+		options, err := parseTelemetryHistoryEncodingOptions(url.Values{
+			"probe_id": {"main"}, "probe_type": {"tcp"},
+			"probe_host": {"db.example"}, "probe_port": {"5432"},
+		})
+		want := probeHistorySelector{ID: "main", Type: "tcp", Host: "db.example", Port: 5432}
+		if err != nil || options.probeSelector == nil || *options.probeSelector != want {
+			t.Fatalf("selector = %+v err=%v, want %+v", options.probeSelector, err, want)
+		}
+	})
+
+	invalid := []url.Values{
+		{"include_probes": {"sometimes"}},
+		{"include_probes": {""}},
+		{"include_probes": {"false"}, "probe_id": {"main"}},
+		{"probe_id": {"main"}},
+		{"probe_id": {"main"}, "probe_type": {"tcp"}, "probe_host": {"db.example"}},
+		{"probe_id": {"main"}, "probe_type": {"icmp"}, "probe_host": {"db.example"}, "probe_port": {"7"}},
+	}
+	for i, query := range invalid {
+		if _, err := parseTelemetryHistoryEncodingOptions(query); err == nil {
+			t.Errorf("invalid query %d unexpectedly succeeded: %v", i, query)
+		}
+	}
+}
+
 func TestHandleNodeHistory(t *testing.T) {
 	env := newCtlTestEnv(t)
 	env.enrollNode(t, "node-1")
@@ -189,8 +428,22 @@ func TestHandleNodeHistory(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
 	cpu := 40.0
 	for i := 0; i < 6; i++ {
-		if err := env.store.RecordTelemetry(ctx, testTenant, "node-1", nil,
-			apiResourceMetrics(&cpu, float64(i), 2048, 1024), "v1", base.Add(time.Duration(i)*time.Minute)); err != nil {
+		at := base.Add(time.Duration(i) * time.Minute)
+		metrics := apiResourceMetrics(&cpu, float64(i), 2048, 1024)
+		latency := float64(10 + i)
+		metrics[telemetrymetric.ProbeSamples.Key] = apiProbeMetric(t,
+			probemetric.Result{
+				ID: "tcp-main", Type: "tcp", Host: "example.net", Port: 443,
+				Status: probemetric.StatusSuccess, LatencyMS: &latency,
+				CheckedAt: at.Format(time.RFC3339Nano), IntervalMS: 60_000,
+			},
+			probemetric.Result{
+				ID: "icmp-dns", Type: "icmp", Host: "resolver.example",
+				Status: probemetric.StatusSuccess, LatencyMS: &latency,
+				CheckedAt: at.Format(time.RFC3339Nano), IntervalMS: 60_000,
+			},
+		)
+		if err := env.store.RecordTelemetry(ctx, testTenant, "node-1", nil, metrics, "v1", at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -210,17 +463,51 @@ func TestHandleNodeHistory(t *testing.T) {
 	if resp.Step != "1m0s" {
 		t.Errorf("explicit 1m step = %q, want 1m0s", resp.Step)
 	}
+	if len(resp.Probes) != 2 {
+		t.Fatalf("additive probe history missing from response: %+v", resp.Probes)
+	}
 
-	// Auto resolves after querying samples, so legacy history without an advertised interval uses
-	// the robust observed one-minute cadence.
+	// Exact selection returns only the requested executable destination while resource history stays
+	// present. Omitting the selector above remains all-series compatible for older callers.
+	var selected historyResponse
+	selectedURL := url + "&probe_id=tcp-main&probe_type=tcp&probe_host=example.net&probe_port=443"
+	if status := doJSON(t, http.MethodGet, selectedURL, testOperatorToken, nil, &selected); status != http.StatusOK {
+		t.Fatalf("selected history: status %d, want 200", status)
+	}
+	if len(selected.Buckets) == 0 || len(selected.Probes) != 1 || selected.Probes[0].ID != "tcp-main" || selected.Probes[0].Host != "example.net" {
+		t.Fatalf("exact selected history = %+v", selected)
+	}
+
+	// Resource-only callers can avoid all probe aggregation/response bytes explicitly.
+	var resourcesOnly historyResponse
+	if status := doJSON(t, http.MethodGet, url+"&include_probes=false", testOperatorToken, nil, &resourcesOnly); status != http.StatusOK {
+		t.Fatalf("resource-only history: status %d, want 200", status)
+	}
+	if len(resourcesOnly.Buckets) == 0 || resourcesOnly.Probes == nil || len(resourcesOnly.Probes) != 0 {
+		t.Fatalf("resource-only history = %+v", resourcesOnly)
+	}
+
+	for _, suffix := range []string{
+		"&include_probes=maybe",
+		"&probe_id=tcp-main",
+		"&include_probes=false&probe_id=tcp-main&probe_type=tcp&probe_host=example.net&probe_port=443",
+	} {
+		if status := doJSON(t, http.MethodGet, url+suffix, testOperatorToken, nil, nil); status != http.StatusBadRequest {
+			t.Errorf("invalid selector %q: status %d, want 400", suffix, status)
+		}
+	}
+
+	// Auto first resolves the observed one-minute cadence, then widens it just enough for the global
+	// resource + two-probe response budget.
 	var auto historyResponse
 	autoFrom := base.Add(-6 * time.Hour).Format(time.RFC3339)
 	autoURL := histURL + "?node=node-1&from=" + autoFrom + "&to=" + to
 	if status := doJSON(t, http.MethodGet, autoURL, testOperatorToken, nil, &auto); status != http.StatusOK {
 		t.Fatalf("auto: status %d", status)
 	}
-	if auto.Step != "1m0s" {
-		t.Errorf("six-hour Auto step = %q, want observed cadence 1m0s", auto.Step)
+	wantAutoStep := ceilDurationDiv(6*time.Hour+10*time.Minute, int64(maxHistoryBuckets/3-1)).String()
+	if auto.Step != wantAutoStep {
+		t.Errorf("six-hour all-series Auto step = %q, want globally budgeted %q", auto.Step, wantAutoStep)
 	}
 
 	// Unknown node → 404.
@@ -239,8 +526,9 @@ func TestHandleNodeHistory(t *testing.T) {
 	if status := doJSON(t, http.MethodGet, wideURL, testOperatorToken, nil, &wide); status != http.StatusOK {
 		t.Fatalf("wide: status %d", status)
 	}
-	if wide.Step != "1s" {
-		t.Errorf("a 1ns explicit step must keep the legacy 1s floor, got echoed step %q", wide.Step)
+	wideStep, err := time.ParseDuration(wide.Step)
+	if err != nil || wideStep <= time.Second {
+		t.Errorf("all-series 1ns step must widen beyond the legacy 1s floor for the global budget, got %q", wide.Step)
 	}
 
 	// History disabled (cap 0) → 200 with disabled=true + empty buckets.
@@ -252,8 +540,8 @@ func TestHandleNodeHistory(t *testing.T) {
 	if status := doJSON(t, http.MethodGet, url, testOperatorToken, nil, &off); status != http.StatusOK || !off.Disabled {
 		t.Errorf("disabled: status %d disabled=%v, want 200 + disabled", status, off.Disabled)
 	}
-	if off.Step != "1m0s" || len(off.Buckets) != 0 {
-		t.Errorf("disabled explicit response = step %q, %d buckets; want 1m0s and none", off.Step, len(off.Buckets))
+	if off.Step != "1m0s" || len(off.Buckets) != 0 || len(off.Probes) != 0 {
+		t.Errorf("disabled explicit response = step %q, %d resource buckets, %d probes; want 1m0s and none", off.Step, len(off.Buckets), len(off.Probes))
 	}
 
 	// Disabled Auto cannot infer cadence because history is intentionally not queried; retain the
@@ -262,8 +550,8 @@ func TestHandleNodeHistory(t *testing.T) {
 	if status := doJSON(t, http.MethodGet, autoURL, testOperatorToken, nil, &autoOff); status != http.StatusOK || !autoOff.Disabled {
 		t.Errorf("disabled Auto: status %d disabled=%v, want 200 + disabled", status, autoOff.Disabled)
 	}
-	if autoOff.Step != "30s" || len(autoOff.Buckets) != 0 {
-		t.Errorf("disabled Auto response = step %q, %d buckets; want 30s and none", autoOff.Step, len(autoOff.Buckets))
+	if autoOff.Step != "30s" || len(autoOff.Buckets) != 0 || len(autoOff.Probes) != 0 {
+		t.Errorf("disabled Auto response = step %q, %d resource buckets, %d probes; want 30s and none", autoOff.Step, len(autoOff.Buckets), len(autoOff.Probes))
 	}
 }
 

@@ -65,9 +65,10 @@ export interface ControllerSettings {
   mimicDebs: Record<string, MimicDebPin>;
   // Fleet-wide mimic→UDP fallback policy a tcp link inherits ('' / 'udp' / 'none'). plan-4; UI in plan-6.
   mimicFallbackDefault: string;
-  // Per-node resource-history sample cap (telemetry-history plan-2). null ⇒ server default
-  // (DefaultTelemetryHistoryCap, 20160 ≈ 7 days at 30s beats); 0 ⇒ history disabled; N ⇒ cap N. A
-  // nullable number mirroring the Go *int (nil pointer omitted on the wire → default; an explicit 0
+  // Per-node telemetry-history record target (telemetry-history plan-2). null ⇒ server default
+  // (DefaultTelemetryHistoryCap, 20160 ≈ 7 days at 30s beats); 0 ⇒ history disabled; N ⇒ target N.
+  // The controller's independent 128 MiB per-node physical ceiling may retain fewer variable-width
+  // records. A nullable number mirrors the Go *int (nil pointer omitted on the wire → default; an explicit 0
   // disables). Validated >= 0 and <= 1_000_000 client-side (server authoritative).
   telemetryHistoryCap: number | null;
 }

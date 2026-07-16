@@ -24,65 +24,113 @@ import { useUiStore } from '../uiStore';
 import { triggerBrowserDownload } from '../../lib/download';
 
 export function createFleetSlice(set: ControllerSet, get: ControllerGet) {
-  return {
-    nodes: [],
-    audit: [],
-    auditVerified: false,
+  // All fleet reads share one request generation. A foreground refresh started after an older Live
+  // read makes that older response stale, so it cannot overwrite post-mutation truth. Background
+  // reads never start while the global mutation/loading gate is already held.
+  let fleetReadSequence = 0;
+  let backgroundRead: { generation: number; request: Promise<boolean> } | null = null;
 
-    // Refresh the fleet view: fetch nodes + audit + bootstrap settings in parallel. If any
-    // fails, record the error and leave the existing view unchanged. A settings-fetch failure
-    // does not affect nodes/audit (best-effort, caught separately).
-    refresh: async () => {
-      const context = captureControllerActionContext(get);
-      set({ loading: true, error: null });
+  const readFleet = async (foreground: boolean): Promise<boolean> => {
+    if (!foreground && get().loading) return false;
+
+    const requestSequence = ++fleetReadSequence;
+    const context = captureControllerActionContext(get);
+    const isCurrent = () =>
+      requestSequence === fleetReadSequence && controllerActionContextIsCurrent(get, context);
+    if (foreground) set({ loading: true, error: null });
+
+    try {
+      if (!foreground) {
+        // Live is a lightweight observation loop. Audit can contain ten thousand entries and
+        // Settings/keystone are administrative/bootstrap truth, so downloading all three every ten
+        // seconds would make a simple telemetry refresh increasingly expensive and let an unrelated
+        // slow endpoint stall the next completion-based tick.
+        const nodes = await getNodes(context.config);
+        if (!isCurrent()) return false;
+        const completedAt = Date.now();
+        set({ nodes, lastSyncedAt: completedAt, lastFleetSyncedAt: completedAt });
+        return true;
+      }
+
+      const [nodes, audit] = await Promise.all([getNodes(context.config), getAudit(context.config)]);
+      if (!isCurrent()) return false;
+      const completedAt = Date.now();
+      set({
+        nodes,
+        audit: audit.entries,
+        auditVerified: audit.verified,
+        loading: false,
+        lastSyncedAt: completedAt,
+        lastFleetSyncedAt: completedAt,
+      });
+
+      // Bootstrap settings are best-effort and do not invalidate an otherwise successful fleet
+      // observation. In controller mode the server remains authoritative for translucency.
       try {
-        const [nodes, audit] = await Promise.all([
-          getNodes(context.config),
-          getAudit(context.config),
-        ]);
-        if (!controllerActionContextIsCurrent(get, context)) return;
-        set({
-          nodes,
-          audit: audit.entries,
-          auditVerified: audit.verified,
-          loading: false,
-          lastSyncedAt: Date.now(),
-        });
-        // Also refresh the bootstrap settings (does not block the fleet view; keep the old
-        // value on failure). In controller mode the server is the authority for translucency,
-        // so once fetched sync it to the appearance store (same as loadSettings), keeping the
-        // settings-page checkbox from diverging from the server value.
-        try {
-          const settings = await getSettings(context.config);
-          if (!controllerActionContextIsCurrent(get, context)) return;
-          set({ settings });
-          if (get().mode === 'controller') {
-            useUiStore.getState().applyServerTranslucency(settings.translucency);
-          }
-        } catch {
-          if (!controllerActionContextIsCurrent(get, context)) return;
-          /* Settings fetch failed: keep the existing settings, do not overwrite the fleet view's success state. */
+        const settings = await getSettings(context.config);
+        if (!isCurrent()) return false;
+        set({ settings });
+        if (get().mode === 'controller') {
+          useUiStore.getState().applyServerTranslucency(settings.translucency);
         }
-        // Keystone status is server-authoritative (the panel's "enrolled" source); refresh it
-        // alongside the fleet so the display + the rotated-but-not-redeployed banner stay current.
-        // Best-effort (hydrateKeystoneStatus swallows its own errors).
-        if (!controllerActionContextIsCurrent(get, context)) return;
-        await get().hydrateKeystoneStatus();
-      } catch (err) {
-        if (!controllerActionContextIsCurrent(get, context)) return;
+      } catch {
+        if (!isCurrent()) return false;
+      }
+
+      // Keystone status is likewise a best-effort read and owns its own stale-response guard.
+      if (!isCurrent()) return false;
+      await get().hydrateKeystoneStatus();
+      return isCurrent();
+    } catch (err) {
+      if (!isCurrent()) return false;
+      if (foreground) {
         set({
           error: localizeError(err, 'error.generic'),
           loading: false,
         });
+        return false;
       }
+      // Live/manual Fleet feedback is component-local. Do not clear or replace a mutation's global
+      // error banner merely because an observability read failed.
+      throw err;
+    }
+  };
+
+  return {
+    nodes: [],
+    audit: [],
+    auditVerified: false,
+    lastFleetSyncedAt: null,
+
+    // Foreground refresh retains the historical global loading/error behavior used by login,
+    // connection setup, and mutation follow-ups.
+    refresh: async () => {
+      await readFleet(true);
     },
 
-    // Node resource-history read for the node-detail charts: wraps the client over the current auth
-    // config and returns the parsed series. Live-only — no set()/persist (custody), no global
+    // Fleet Live/manual observation is deliberately isolated from mutation UI state. It returns
+    // false when skipped/superseded, throws on a current read failure, and never toggles or clears
+    // the global loading/error pair that guards deploy/revoke/save workflows.
+    refreshFleetView: () => {
+      // The hook is single-flight per mounted route. This store-level join covers the short route-
+      // transition window where /fleet and /fleet/nodes/:id hook instances can overlap, keeping one
+      // authenticated node observation in flight for the whole panel. The generation key prevents a
+      // new login/controller context from joining an old context's hanging request.
+      const generation = get().authGeneration;
+      if (backgroundRead?.generation === generation) return backgroundRead.request;
+      const request = readFleet(false).finally(() => {
+        if (backgroundRead?.request === request) backgroundRead = null;
+      });
+      backgroundRead = { generation, request };
+      return request;
+    },
+
+    // Node resource + active-probe history read for the node-detail charts: wraps the client over the
+    // current auth config and returns the parsed series. Live-only — no set()/persist (custody), no global
     // loading/error (the NodeResourceHistory card owns its own state); rethrows for local handling.
-    fetchNodeHistory: async (nodeId: string, from: string, to: string, step?: string) => {
+    fetchNodeHistory: async (nodeId: string, from: string, to: string, step?: string, options = {}) => {
       const context = captureControllerActionContext(get);
-      const history = await ctlNodeHistory(context.config, nodeId, from, to, step).catch((err: unknown) => {
+      const history = await ctlNodeHistory(context.config, nodeId, from, to, step, options).catch((err: unknown) => {
         requireControllerActionContext(get, context);
         throw err;
       });

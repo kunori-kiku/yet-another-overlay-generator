@@ -15,16 +15,19 @@ const FAILURE_REASONS = new Set<TelemetryProbeFailureReason>([
   'network_error',
 ]);
 
-type ProbeResultWire = {
+export interface ProbeResultWire {
   id?: unknown;
   type?: unknown;
   host?: unknown;
   port?: unknown;
+  // Newer agents may echo the effective cadence for server-side history bucketing. The live latest-
+  // result UI does not need it, but keep the additive wire field named here for drift checking.
+  interval_ms?: unknown;
   status?: unknown;
   latency_ms?: unknown;
   checked_at?: unknown;
   failure_reason?: unknown;
-};
+}
 
 // mapProbeResults is the defensive snake_case wire boundary for telemetry.probe_results. A malformed
 // row is ignored instead of poisoning the entire Fleet response; duplicate IDs are collapsed to the

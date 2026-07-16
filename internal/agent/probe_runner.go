@@ -18,38 +18,31 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/probepolicy"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 const (
-	probeResultsMetricKey          = "probe_results"
-	probeStatusPending             = "pending"
-	probeStatusSuccess             = "success"
-	probeStatusFailure             = "failure"
-	probeFailureDNSFailed          = "dns_failed"
-	probeFailureTimeout            = "timeout"
-	probeFailurePermissionDenied   = "permission_denied"
-	probeFailureConnectionRefused  = "connection_refused"
-	probeFailureNetworkUnreachable = "network_unreachable"
-	probeFailureNetworkError       = "network_error"
+	probeResultsMetricKey          = probemetric.LatestMetricKey
+	probeSamplesMetricKey          = probemetric.SamplesMetricKey
+	probeStatusPending             = probemetric.StatusPending
+	probeStatusSuccess             = probemetric.StatusSuccess
+	probeStatusFailure             = probemetric.StatusFailure
+	probeFailureDNSFailed          = probemetric.FailureDNSFailed
+	probeFailureTimeout            = probemetric.FailureTimeout
+	probeFailurePermissionDenied   = probemetric.FailurePermissionDenied
+	probeFailureConnectionRefused  = probemetric.FailureConnectionRefused
+	probeFailureNetworkUnreachable = probemetric.FailureNetworkUnreachable
+	probeFailureNetworkError       = probemetric.FailureNetworkError
 	maxConcurrentProbes            = 4
 	maxResolvedAddresses           = 8
 )
 
-// activeProbeResult is the generic, typed result carried in metrics["probe_results"]. Host is the
-// configured value (never a resolver-selected address), so DNS does not leak transient answers into
-// controller state. FailureReason is a small stable category, never a raw platform/network error.
-type activeProbeResult struct {
-	ID            string   `json:"id"`
-	Type          string   `json:"type"`
-	Host          string   `json:"host"`
-	Port          int      `json:"port,omitempty"`
-	Status        string   `json:"status"`
-	LatencyMS     *float64 `json:"latency_ms,omitempty"`
-	CheckedAt     string   `json:"checked_at,omitempty"`
-	FailureReason string   `json:"failure_reason,omitempty"`
-}
+// activeProbeResult keeps the existing package-local name used by the focused scheduler tests while
+// making probemetric.Result the single agent/controller wire contract.
+type activeProbeResult = probemetric.Result
 
 type probeAttemptFunc func(context.Context, model.TelemetryProbe) string
 
@@ -68,6 +61,9 @@ type activeProbeSampler struct {
 	stateDir string
 	attempt  probeAttemptFunc
 	jitter   func(string, model.TelemetryProbe) time.Duration
+	// wait keeps probe cadence independent from heartbeat cadence. Production uses a cancellable
+	// monotonic timer; tests inject a deterministic gate so multiple attempts need no wall-clock sleep.
+	wait func(context.Context, time.Duration) bool
 	// monotonicNow is the scheduling/elapsed clock; time.Now retains its monotonic reading.
 	monotonicNow func() time.Time
 	// checkedAtNow is wall time used only for the checked_at wire timestamp.
@@ -79,6 +75,14 @@ type activeProbeSampler struct {
 	policyDigest [sha256.Size]byte
 	order        []string
 	probes       map[string]*probeRuntime
+	// samples is the rolling completed-attempt window emitted as metrics["probe_samples"]. It never
+	// contains initial pending rows. A half-window high-water kick leaves 32 slots (two maximum
+	// sixteen-probe rounds) of scheduling headroom before collection; reliable snapshots then preserve
+	// overlapping windows across upload retries.
+	samples                []activeProbeResult
+	completedSinceSnapshot int
+	completionKickPending  bool
+	probeCompletionKick    func()
 }
 
 func newActiveProbeSampler(stateDir string) *activeProbeSampler {
@@ -86,14 +90,26 @@ func newActiveProbeSampler(stateDir string) *activeProbeSampler {
 		stateDir:     stateDir,
 		attempt:      performProbeAttempt,
 		jitter:       startupProbeJitter,
+		wait:         waitProbeDelay,
 		monotonicNow: time.Now,
 		checkedAtNow: func() time.Time { return time.Now().UTC() },
 		slots:        make(chan struct{}, maxConcurrentProbes),
 		probes:       make(map[string]*probeRuntime),
+		samples:      make([]activeProbeResult, 0, probemetric.MaxRecentSamples),
 	}
 }
 
 func (*activeProbeSampler) Name() string { return "active-probes" }
+
+func (*activeProbeSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{telemetrymetric.ProbeResults, telemetrymetric.ProbeSamples}
+}
+
+func (s *activeProbeSampler) setProbeCompletionKick(kick func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.probeCompletionKick = kick
+}
 
 func (s *activeProbeSampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	state, err := LoadState(s.stateDir)
@@ -120,6 +136,7 @@ func (s *activeProbeSampler) Sample(_ time.Time) ([]runtimecontract.Condition, m
 	type scheduled struct {
 		runtime *probeRuntime
 		delay   time.Duration
+		ctx     context.Context
 	}
 	var due []scheduled
 	s.mu.Lock()
@@ -133,15 +150,17 @@ func (s *activeProbeSampler) Sample(_ time.Time) ([]runtimecontract.Condition, m
 		if runtime.neverRun {
 			delay = s.jitter(state.NodeID, runtime.probe)
 		}
-		due = append(due, scheduled{runtime: runtime, delay: delay})
+		ctx, cancel := context.WithCancel(context.Background())
+		runtime.cancel = cancel
+		due = append(due, scheduled{runtime: runtime, delay: delay, ctx: ctx})
 	}
-	results := s.snapshotLocked()
+	metrics := s.snapshotLocked()
 	s.mu.Unlock()
 
 	for _, item := range due {
-		go s.execute(item.runtime, item.delay)
+		go s.execute(item.ctx, item.runtime, item.delay)
 	}
-	return nil, map[string]any{probeResultsMetricKey: results}
+	return nil, metrics
 }
 
 func (s *activeProbeSampler) reconcile(probes []model.TelemetryProbe, digest [sha256.Size]byte, now time.Time) {
@@ -171,6 +190,16 @@ func (s *activeProbeSampler) reconcile(probes []model.TelemetryProbe, digest [sh
 			prior.cancel()
 		}
 	}
+	// A changed/removed destination must not remain in the rolling live window indefinitely. Retain
+	// history for exact executable destinations that remain authorized; interval/timeout edits keep the
+	// same series, while an id reused for another host/type/port starts clean.
+	retained := s.samples[:0]
+	for _, sample := range s.samples {
+		if runtime := next[sample.ID]; runtime != nil && probeResultMatchesProbe(sample, runtime.probe) {
+			retained = append(retained, sample)
+		}
+	}
+	s.samples = retained
 	s.hasPolicy = true
 	s.policyDigest = digest
 	s.order = order
@@ -189,6 +218,9 @@ func (s *activeProbeSampler) clear() {
 	s.policyDigest = [sha256.Size]byte{}
 	s.order = nil
 	s.probes = make(map[string]*probeRuntime)
+	s.samples = nil
+	s.completedSinceSnapshot = 0
+	s.completionKickPending = false
 }
 
 func (s *activeProbeSampler) snapshot() map[string]any {
@@ -197,68 +229,171 @@ func (s *activeProbeSampler) snapshot() map[string]any {
 	if len(s.order) == 0 {
 		return nil
 	}
-	return map[string]any{probeResultsMetricKey: s.snapshotLocked()}
+	return s.snapshotLocked()
 }
 
-func (s *activeProbeSampler) snapshotLocked() []activeProbeResult {
+func (s *activeProbeSampler) snapshotLocked() map[string]any {
+	// A collection has captured every attempt currently retained. Permit one later high-water kick for
+	// the next uncollected batch; the samples themselves remain as a rolling window so reliable replay
+	// and controller deduplication can bridge retries and overlapping snapshots.
+	s.completedSinceSnapshot = 0
+	s.completionKickPending = false
 	results := make([]activeProbeResult, 0, len(s.order))
 	for _, id := range s.order {
 		if runtime := s.probes[id]; runtime != nil {
 			results = append(results, runtime.result)
 		}
 	}
-	return results
+	metrics := map[string]any{probeResultsMetricKey: results}
+	if len(s.samples) > 0 {
+		// Copy the slice header/backing values before leaving the sampler lock. The reliable heartbeat
+		// sequencer deep-copies the resulting JSON immediately, but this also prevents a later append or
+		// policy reconciliation from mutating a snapshot already returned to a caller.
+		samples := append([]activeProbeResult(nil), s.samples...)
+		metrics[probeSamplesMetricKey] = samples
+	}
+	return metrics
 }
 
-func (s *activeProbeSampler) execute(runtime *probeRuntime, delay time.Duration) {
-	if delay > 0 {
-		timer := time.NewTimer(delay)
-		<-timer.C
-	}
-	s.slots <- struct{}{}
-	defer func() { <-s.slots }()
+func (s *activeProbeSampler) execute(runtimeCtx context.Context, runtime *probeRuntime, delay time.Duration) {
+	defer s.markProbeRuntimeStopped(runtime)
+	for {
+		if !s.wait(runtimeCtx, delay) {
+			return
+		}
+		select {
+		case s.slots <- struct{}{}:
+		case <-runtimeCtx.Done():
+			return
+		}
 
-	s.mu.Lock()
-	current := s.probes[runtime.probe.ID]
-	if current != runtime || !runtime.running {
+		s.mu.Lock()
+		current := s.probes[runtime.probe.ID]
+		if current != runtime || !runtime.running || runtimeCtx.Err() != nil {
+			s.mu.Unlock()
+			<-s.slots
+			return
+		}
+		timeout := time.Duration(probepolicy.EffectiveTimeoutMilliseconds(runtime.probe)) * time.Millisecond
+		attemptCtx, cancelAttempt := context.WithTimeout(runtimeCtx, timeout)
 		s.mu.Unlock()
-		return
+
+		started := s.monotonicNow()
+		failureReason := performProbeAttemptSafely(s.attempt, attemptCtx, runtime.probe)
+		finished := s.monotonicNow()
+		checkedAt := s.checkedAtNow().UTC()
+		cancelAttempt()
+		<-s.slots
+
+		// Cancellation means the signed policy changed or cleared while this attempt was in flight. The
+		// result belongs to an authorization that is no longer current and must not enter either latest
+		// telemetry or the recent-attempt window.
+		if runtimeCtx.Err() != nil {
+			return
+		}
+		result := configuredProbeResult(runtime.probe, probeStatusSuccess)
+		result.CheckedAt = checkedAt.Format(time.RFC3339Nano)
+		if failureReason == "" {
+			ms := probeLatencyMilliseconds(started, finished)
+			result.LatencyMS = &ms
+		} else {
+			result.Status = probeStatusFailure
+			result.FailureReason = failureReason
+		}
+
+		s.mu.Lock()
+		if s.probes[runtime.probe.ID] != runtime || !runtime.running || runtimeCtx.Err() != nil {
+			s.mu.Unlock()
+			return
+		}
+		runtime.result = result
+		sample := result
+		interval := time.Duration(probepolicy.EffectiveIntervalSeconds(runtime.probe)) * time.Second
+		sample.IntervalMS = interval.Milliseconds()
+		shouldKick := s.appendCompletedSampleLocked(sample)
+		completionKick := s.probeCompletionKick
+		runtime.neverRun = false
+		runtime.next = finished.Add(interval)
+		s.mu.Unlock()
+		if shouldKick && completionKick != nil {
+			completionKick()
+		}
+
+		// Attempts are scheduled by their signed cadence, not by the upload heartbeat. The rolling sample
+		// window is what lets the next heartbeat carry every completion since its previous collection.
+		delay = interval
 	}
-	timeout := time.Duration(probepolicy.EffectiveTimeoutMilliseconds(runtime.probe)) * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	runtime.cancel = cancel
-	s.mu.Unlock()
+}
 
-	started := s.monotonicNow()
-	failureReason := s.attempt(ctx, runtime.probe)
-	finished := s.monotonicNow()
-	checkedAt := s.checkedAtNow().UTC()
-	cancel()
+func performProbeAttemptSafely(attempt probeAttemptFunc, ctx context.Context, probe model.TelemetryProbe) (failureReason string) {
+	defer func() {
+		if recover() != nil {
+			// A sampler panic is already isolated by the telemetry framework, but active attempts run on
+			// their own cadence goroutine. Preserve the same daemon-liveness invariant here and expose only
+			// the closed, non-sensitive failure category.
+			failureReason = probeFailureNetworkError
+		}
+	}()
+	return attempt(ctx, probe)
+}
 
-	result := configuredProbeResult(runtime.probe, probeStatusSuccess)
-	result.CheckedAt = checkedAt.Format(time.RFC3339Nano)
-	if failureReason == "" {
-		ms := math.Round(float64(finished.Sub(started))/float64(time.Millisecond)*10) / 10
-		result.LatencyMS = &ms
-	} else {
-		result.Status = probeStatusFailure
-		result.FailureReason = failureReason
+func probeLatencyMilliseconds(started, finished time.Time) float64 {
+	elapsed := finished.Sub(started)
+	if elapsed < 0 {
+		// Production time.Now values carry a monotonic component, but a defensive clamp keeps a broken
+		// clock seam or unusual platform behavior from emitting an invalid negative latency.
+		elapsed = 0
 	}
+	return math.Round(float64(elapsed)/float64(time.Millisecond)*10) / 10
+}
 
+func (s *activeProbeSampler) markProbeRuntimeStopped(runtime *probeRuntime) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.probes[runtime.probe.ID] != runtime {
-		return
+	if s.probes[runtime.probe.ID] == runtime {
+		runtime.running = false
+		runtime.cancel = nil
 	}
-	runtime.result = result
-	runtime.running = false
-	runtime.neverRun = false
-	runtime.cancel = nil
-	runtime.next = finished.Add(time.Duration(probepolicy.EffectiveIntervalSeconds(runtime.probe)) * time.Second)
+}
+
+func waitProbeDelay(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func configuredProbeResult(probe model.TelemetryProbe, status string) activeProbeResult {
 	return activeProbeResult{ID: probe.ID, Type: probe.Type, Host: probe.Host, Port: probe.Port, Status: status}
+}
+
+func (s *activeProbeSampler) appendCompletedSampleLocked(sample activeProbeResult) bool {
+	if !probemetric.Completed(sample) {
+		return false
+	}
+	if len(s.samples) < probemetric.MaxRecentSamples {
+		s.samples = append(s.samples, sample)
+	} else {
+		copy(s.samples, s.samples[1:])
+		s.samples[len(s.samples)-1] = sample
+	}
+	s.completedSinceSnapshot++
+	if !s.completionKickPending && s.completedSinceSnapshot >= probemetric.MaxRecentSamples/2 {
+		s.completionKickPending = true
+		return true
+	}
+	return false
+}
+
+func probeResultMatchesProbe(result activeProbeResult, probe model.TelemetryProbe) bool {
+	return result.ID == probe.ID && result.Type == probe.Type && result.Host == probe.Host && result.Port == probe.Port
 }
 
 // startupProbeJitter spreads a newly activated policy over at most five seconds. Including the

@@ -332,7 +332,7 @@ export function createSyncSlice(set: ControllerSet, get: ControllerGet) {
       useUiStore.getState().restoreLocalTranslucency();
       // Switching back to local: clear the controller-mode sync snapshot and conflict flag
       // (server-authoritative concepts).
-      // About the fleet-view cache (nodes/audit/lastDeploy/lastSyncedAt): deliberately NOT
+      // About the fleet-view cache (nodes/audit/lastDeploy/lastSyncedAt/lastFleetSyncedAt): deliberately NOT
       // cleared here. It is a non-secret advisory cache (only nodeId/status/agentVersion/timestamps,
       // no keys, no design-level public IP/SSH), and in local mode the fleet/overview routes are
       // already redirected by the RequireControllerMode guard and will not display it (plan-11 /

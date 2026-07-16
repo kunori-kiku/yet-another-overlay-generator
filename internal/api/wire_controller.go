@@ -68,9 +68,10 @@ type reportRequestJSON struct {
 // heartbeat. It carries conditions + an extensible metrics map but NO applied_generation/checksum —
 // telemetry is observability, kept strictly separate from deploy custody, so a heartbeat updates only
 // the node's conditions + metrics + last_seen and can never advance/regress its applied generation.
-// Metrics is the framework's extension slot (e.g. wireguard_peers — the per-peer link detail);
-// RecordTelemetry replaces it wholesale in the volatile observability overlay and HandleNodes serves
-// it verbatim under node.telemetry without rewriting/fsyncing the durable node record.
+// Metrics is the framework's extension slot (e.g. wireguard_peers and retained probe windows).
+// RecordTelemetry sends the full admitted map to bounded history, then replaces the volatile overlay
+// with its live-visible subset. HandleNodes serves that subset without rewriting/fsyncing the durable
+// node record.
 type telemetryRequestJSON struct {
 	Conditions   []runtimecontract.Condition `json:"conditions,omitempty"`
 	Metrics      map[string]json.RawMessage  `json:"metrics,omitempty"`
@@ -172,10 +173,10 @@ type nodeJSON struct {
 	// strip — byte-identical served JSON to the pre-conditions shape. Curated + length-capped at
 	// ingest (handler_agent); this view re-serializes only (see mapConditions in handler_enrollment.go).
 	Conditions []conditionJSON `json:"conditions,omitempty"`
-	// Telemetry is the agent's extensible metrics map from the last /telemetry heartbeat (e.g.
-	// wireguard_peers — the per-peer link detail behind a collapsible panel). Opaque JSON served
-	// verbatim for the panel to interpret by key; omitempty so a node that emits none round-trips with
-	// the field absent. Observability only — no key material.
+	// Telemetry is the live-visible subset of the agent's latest extensible metrics map. Known
+	// history-only transport windows are omitted; unknown keys stay visible for forward compatibility.
+	// Opaque JSON served verbatim for the panel to interpret by key; omitempty keeps an empty map absent.
+	// Observability only — no key material.
 	Telemetry map[string]json.RawMessage `json:"telemetry,omitempty"`
 }
 

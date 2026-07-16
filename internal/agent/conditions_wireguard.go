@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // conditions_wireguard.go is the best-effort WireGuard link-health sampler (plan-3). It probes
@@ -122,7 +123,7 @@ func classifyWGDump(dump []byte, now time.Time) (reason, status, msg string) {
 }
 
 // wgMetricKey is the telemetry metrics-map key carrying the per-peer WireGuard link detail.
-const wgMetricKey = "wireguard_peers"
+const wgMetricKey = telemetrymetric.WireGuardPeersKey
 
 // wgPeerHealth is one WireGuard peer's live link health — the per-peer detail BEHIND the aggregate
 // wireguard condition, carried on the telemetry metrics map (metrics["wireguard_peers"]) and
@@ -191,6 +192,10 @@ func samplePeers(dump []byte, now time.Time) []wgPeerHealth {
 type wireguardPeersSampler struct{}
 
 func (wireguardPeersSampler) Name() string { return "wireguard-peers" }
+
+func (wireguardPeersSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{telemetrymetric.WireGuardPeers}
+}
 
 func (wireguardPeersSampler) Sample(now time.Time) ([]runtimecontract.Condition, map[string]any) {
 	out, err := wgShowFn()

@@ -85,6 +85,7 @@ function seedControllerContext(): void {
     auditVerified: false,
     settings: null,
     lastSyncedAt: null,
+    lastFleetSyncedAt: null,
     lastSyncedSnapshot: null,
     lastSyncedTopology: null,
     loading: false,
@@ -171,6 +172,7 @@ describe('controller action context generation', () => {
     expect(state.audit).toEqual([]);
     expect(state.settings).toBeNull();
     expect(state.lastSyncedAt).toBeNull();
+    expect(state.lastFleetSyncedAt).toBeNull();
     expect(state.loading).toBe(false);
     // getSettings/hydrateKeystoneStatus must not start after the old nodes/audit leg settles.
     expect(fetch).toHaveBeenCalledTimes(2);

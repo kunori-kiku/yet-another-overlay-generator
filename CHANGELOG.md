@@ -9,6 +9,82 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.10] - 2026-07-16
+
+**Release candidate.** Completes the active-telemetry observation path introduced in rc.9: every
+configured ICMP/TCP probe now has bounded latency and availability history in Fleet, the Live surface
+refreshes predictably with visible feedback, and wide graph requests are compacted at the controller
+instead of transferring the retained raw stream to the browser. It keeps authenticated HTTP and the
+rc.9 signed-policy boundary; no WebSocket/gRPC listener, remote-command surface, or new node privilege
+is introduced. The owner explicitly approved this bounded completion of the active-telemetry
+framework during the RC phase; the compatibility-preserving exception does not broaden future RC
+scope.
+
+### Security
+
+- **Richer probe history is capability-negotiated and rollback-safe.** The controller advertises
+  `probe-samples-v1` only after accepting a protocol-v2 heartbeat. Until the agent observes that token,
+  it preserves the rc.9 metrics body; if a later success omits the token, the agent disables the
+  extension and sends one coalesced clean sample. A proxy that strips response headers therefore
+  degrades to the legacy contract instead of leaving an older controller with an unknown live key.
+- **Telemetry retention now has independent logical, volatile, record-size, and physical bounds.**
+  FileStore limits each in-memory per-node tail to 8 MiB and each JSONL record to 1 MiB, rewrites toward
+  96 MiB before the hard 128 MiB per-node ceiling, and scans/compacts with fixed-size buffers. Cap
+  reductions apply immediately at query time and schedule lossless background maintenance even for
+  offline nodes and bursts spanning many tenants; the authenticated heartbeat path still performs no
+  disk I/O.
+
+### Added
+
+- **Fleet node detail now charts each configured probe.** An exact signed destination selector fetches
+  only the chosen probe's latency and success/failure buckets, while the existing resource charts can
+  exclude probe data entirely. Failed attempts contribute to availability without fabricating zero
+  latency, missing observations remain chart gaps, and cadence changes use the interval recorded with
+  each bucket rather than retroactively applying the current schedule.
+- **Fleet Live has a shared ten-second refresh experience.** The panel shows refresh progress, last
+  successful update, a countdown, delayed/stale state, and an accessible reduced-motion-safe activity
+  cue. It pauses while the tab is hidden, refreshes immediately when visible again, joins concurrent
+  callers, permits only one in-flight request, and keeps transient background failures from replacing
+  the last good fleet view or global mutation state.
+- **The telemetry framework now makes chart support an explicit producer contract.** A shared metric
+  catalog requires every production metric to be declared charted or live-only with a reason, and
+  parity tests bind agent producers, controller projectors, API chart families, wire DTOs, and frontend
+  renderers. Future telemetry cannot silently appear only in a live payload without an intentional
+  history decision.
+
+### Changed
+
+- **History resolution is selected server-side under one global response budget.** `Auto` derives a
+  cadence-aware, epoch-stable step and explicit 30-second, 5-minute, 30-minute, and 1-hour resolutions
+  let the operator choose the detail/cost trade-off. The controller widens one shared step as needed to
+  keep resource plus selected probe output within 1,000 bucket objects. Long ranges are therefore
+  compact rollups; narrowing the range or choosing a finer Resolution reveals detail without fetching
+  the raw retained file. Reverse-proxy/CDN compression remains optional rather than correctness-critical.
+- **High-fidelity probe attempts ride the existing reliable heartbeat queue.** Once negotiated, the
+  agent reports a bounded rolling window of completed attempts and schedules at most one coalesced
+  early collection after 32 completions. The controller deduplicates overlapping windows and retries,
+  preserves otherwise-valid measurements when an advisory interval is invalid, and retains rc.9's
+  latest-result projection as the compatibility fallback.
+- **History reads and rewrites are streaming and cancellation-aware.** FileStore discovers only the
+  newest logical/byte-bounded suffix, pushes an exact probe selector into the store query, repairs a
+  torn final JSONL fragment, and atomically replaces compacted files after file and directory sync.
+
+### Fixed
+
+- **Configured probes no longer stop at a live status row with no graph.** Latency, availability,
+  failure reasons, and isolated samples are now represented honestly in node history, including
+  reliable recovery across short upload/CDN interruptions that fit inside the replay bounds.
+- **History refreshes no longer race or blank a useful chart.** Parameter changes abort obsolete
+  requests, a node `last_seen` advance schedules one latest follow-up, and transient failures retain
+  the last successful series with an updating/error indication.
+- **Telemetry cap changes can no longer be dropped by a fixed maintenance queue.** A deduplicated
+  tenant set plus wake signal covers arbitrarily large bursts, and a lower cap is enforced for offline
+  FileStore nodes before amortized physical compaction completes.
+- **A stale retention-cap read can no longer overwrite a newer operator setting.** Startup seeding is
+  side-effect-free and installs only while the tenant cache remains absent; ordinary settings GET/PUT
+  publish the cap in the same serialized backend operation as their persistent read/write. Enabling or
+  disabling history therefore cannot be reverted by an overlapping startup read or older GET.
+
 ## [2.0.0-rc.9] - 2026-07-16
 
 **Release candidate.** Makes telemetry resilient to short HTTP/CDN interruptions, adds signed
@@ -1324,7 +1400,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.9...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.10...HEAD
+[2.0.0-rc.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.9...v2.0.0-rc.10
 [2.0.0-rc.9]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.8...v2.0.0-rc.9
 [2.0.0-rc.8]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.8
 [2.0.0-rc.7]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.6...v2.0.0-rc.7

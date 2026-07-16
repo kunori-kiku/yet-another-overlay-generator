@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // mimicCapabilityMetricKey carries the PRE-DEPLOY "can this node run mimic" heuristic (plan-3 of
@@ -14,7 +15,7 @@ import (
 // kernel cannot build the mimic DKMS module — the exact stale-kernel case (linux-headers-<kernel>
 // pruned from the repo → the module never builds → mimic exit 22) the live fleet hit. Node-global
 // (the module is not per-interface), so it is unaffected by the per-node egress override.
-const mimicCapabilityMetricKey = "mimic_capability"
+const mimicCapabilityMetricKey = telemetrymetric.MimicCapabilityKey
 
 // mimicCapability classifies whether the mimic kernel module is (or can be) usable on this node, over
 // PURE filesystem reads (no shell, no dkms build, no modprobe — inspection only; the DEFINITIVE answer
@@ -57,6 +58,10 @@ var (
 type mimicCapabilitySampler struct{}
 
 func (mimicCapabilitySampler) Name() string { return "mimic-capability" }
+
+func (mimicCapabilitySampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{telemetrymetric.MimicCapability}
+}
 
 func (mimicCapabilitySampler) Sample(_ time.Time) ([]runtimecontract.Condition, map[string]any) {
 	kRaw, kerr := kernelReleaseFn()

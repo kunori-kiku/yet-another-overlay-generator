@@ -15,6 +15,7 @@ import { TelemetryProbeEditor } from '../deploy/TelemetryProbeEditor';
 import { TelemetryProbeResults } from '../deploy/TelemetryProbeResults';
 import { SaveConflictDialog } from '../design/SaveConflictDialog';
 import { sameTelemetryPolicy } from '../../lib/probeResults';
+import { FleetRefreshControls } from '../deploy/FleetRefreshControls';
 
 // NodeResourceHistory is lazy-loaded so its recharts dependency (~105 kB gzip) is code-split into its
 // own chunk and never bloats the initial bundle — it loads only when a node-detail page is viewed.
@@ -53,9 +54,7 @@ export function FleetNodeDetailPage() {
   const updateNode = useTopologyStore((s) => s.updateNode);
   const node = useControllerStore((s) => s.nodes.find((n) => n.nodeId === id));
   const settings = useControllerStore((s) => s.settings);
-  const refresh = useControllerStore((s) => s.refresh);
   const loading = useControllerStore((s) => s.loading);
-  const lastSyncedAt = useControllerStore((s) => s.lastSyncedAt);
   const lastSyncedTopology = useControllerStore((s) => s.lastSyncedTopology);
   const saveDesign = useControllerStore((s) => s.saveDesign);
   const saving = useControllerStore((s) => s.saving);
@@ -85,7 +84,7 @@ export function FleetNodeDetailPage() {
   // Refresh-on-mount + the opt-in Live poll (beta.16): this deep-linked route previously rendered a
   // FROZEN cache snapshot (no refresh-on-mount), so an operator watching a node saw stale status that
   // never advanced. Shared with /fleet via the hook so the two stay behaviorally identical.
-  const { live, setLive } = useFleetLiveRefresh();
+  const liveRefresh = useFleetLiveRefresh();
 
   return (
     <div className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--content)] p-3 sm:p-6 space-y-4">
@@ -103,25 +102,11 @@ export function FleetNodeDetailPage() {
         </h1>
         {/* Server-truth controls: a manual Refresh, the opt-in Live poll, and a "last synced" stamp so
             the operator knows this is a snapshot (and how fresh) rather than a live mirror. */}
-        <div className="flex items-center gap-3 text-xs text-[var(--content-muted)]">
-          {lastSyncedAt && (
-            <span>
-              {t(language, 'fleetNodeDetailPage.lastSynced')}: {new Date(lastSyncedAt).toLocaleTimeString()}
-            </span>
-          )}
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
-            {t(language, 'updateStatus.live')}
-          </label>
-          <button
-            onClick={() => void refresh()}
-            disabled={loading}
-            data-testid="node-detail-refresh"
-            className="px-2 py-1 rounded border border-[var(--hairline)] text-[var(--info)] hover:bg-[var(--control)] disabled:text-[var(--content-muted)]"
-          >
-            {t(language, 'fleetNodeDetailPage.refresh')}
-          </button>
-        </div>
+        <FleetRefreshControls
+          state={liveRefresh}
+          language={language}
+          refreshTestID="node-detail-refresh"
+        />
       </div>
 
       {!node ? (
@@ -263,17 +248,17 @@ export function FleetNodeDetailPage() {
               would crash on a reload after upgrade. The panel itself renders nothing for an empty list. */}
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
           <ResourcePanel resource={node.resource} language={language} />
-          {/* Historical CPU/RAM/load charts (plan-4). Live-only: the fetched history is never
-              persisted (custody), so it fetches on view, range/granularity change, and after each
-              successful manual/Live fleet refresh. Keyed on the node id so navigating to a different
-              node remounts it with a fresh loading state. */}
+          {/* Resource + active-probe history. Live-only in the browser: the fetched response is never
+              persisted, so it fetches on view, range/Resolution change, and when this node's last_seen
+              advances after a manual/Live fleet refresh. Keyed on node id so navigation resets local
+              chart state. */}
           <Suspense
             fallback={<div className="h-40" data-testid="history-chunk-loading" aria-hidden="true" />}
           >
             <NodeResourceHistory
               key={node.nodeId}
               nodeId={node.nodeId}
-              refreshAt={lastSyncedAt}
+              refreshAt={node.lastSeen}
             />
           </Suspense>
         </section>

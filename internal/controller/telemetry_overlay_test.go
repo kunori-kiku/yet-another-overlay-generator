@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // TestStoreTelemetryOverlay (plan-5 F3) pins the telemetry channel across BOTH Store impls: a heartbeat
@@ -35,13 +37,42 @@ func TestStoreTelemetryOverlay(t *testing.T) {
 			}
 
 			conds := []runtimecontract.Condition{{Type: runtimecontract.ConditionTypeWireGuard, Status: runtimecontract.ConditionStatusOK, Reason: "AllPeersUp", Message: "2/2 up"}}
-			metrics := map[string]json.RawMessage{"resource": json.RawMessage(`{"load1":0.5}`)}
+			latency := 7.5
+			probeSample, err := json.Marshal([]probemetric.Result{{
+				ID: "dns", Type: "icmp", Host: "resolver.example", Status: probemetric.StatusSuccess,
+				LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano), IntervalMS: 30_000,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			probeLatest, err := json.Marshal([]probemetric.Result{{
+				ID: "dns", Type: "icmp", Host: "resolver.example", Status: probemetric.StatusSuccess,
+				LatencyMS: &latency, CheckedAt: base.Format(time.RFC3339Nano),
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantProbeLatest := append([]byte(nil), probeLatest...)
+			metrics := map[string]json.RawMessage{
+				telemetrymetric.Resource.Key:     json.RawMessage(`{"load1":0.5}`),
+				telemetrymetric.ProbeSamples.Key: probeSample,
+				telemetrymetric.ProbeResults.Key: probeLatest,
+				"future_metric":                  json.RawMessage(`{"value":1}`),
+			}
 			if err := s.RecordTelemetry(ctx, tenant, "node-1", conds, metrics, "v-new", base); err != nil {
 				t.Fatalf("RecordTelemetry: %v", err)
 			}
 			// RecordTelemetry must own the RawMessage bytes, not just copy the map header. HTTP
 			// decoders and other callers are free to reuse their input buffer after the call returns.
-			copy(metrics["resource"], []byte(`{"load1":9.5}`))
+			copy(metrics[telemetrymetric.Resource.Key], []byte(`{"load1":9.5}`))
+			copy(metrics["future_metric"], []byte(`{"value":9}`))
+			for i := range metrics[telemetrymetric.ProbeSamples.Key] {
+				metrics[telemetrymetric.ProbeSamples.Key][i] = 'x'
+			}
+			for i := range metrics[telemetrymetric.ProbeResults.Key] {
+				metrics[telemetrymetric.ProbeResults.Key][i] = 'x'
+			}
+			delete(metrics, "future_metric")
 
 			check := func(n Node, where string) {
 				t.Helper()
@@ -51,8 +82,17 @@ func TestStoreTelemetryOverlay(t *testing.T) {
 				if n.Conditions[0].ObservedAt.IsZero() {
 					t.Fatalf("%s: condition ObservedAt not server-stamped", where)
 				}
-				if string(n.Telemetry["resource"]) != `{"load1":0.5}` {
+				if string(n.Telemetry[telemetrymetric.Resource.Key]) != `{"load1":0.5}` {
 					t.Fatalf("%s: Telemetry = %+v, want the resource metric", where, n.Telemetry)
+				}
+				if _, leaked := n.Telemetry[telemetrymetric.ProbeSamples.Key]; leaked {
+					t.Fatalf("%s: history-only probe_samples leaked onto live telemetry: %+v", where, n.Telemetry)
+				}
+				if !bytes.Equal(n.Telemetry[telemetrymetric.ProbeResults.Key], wantProbeLatest) {
+					t.Fatalf("%s: live probe_results were not cloned/preserved: %s", where, n.Telemetry[telemetrymetric.ProbeResults.Key])
+				}
+				if string(n.Telemetry["future_metric"]) != `{"value":1}` {
+					t.Fatalf("%s: unknown forward-compatible metric was hidden or aliased: %+v", where, n.Telemetry)
 				}
 				if n.LastAgentVersion != "v-new" || !n.LastSeen.Equal(base) {
 					t.Fatalf("%s: LastAgentVersion=%q LastSeen=%v, want v-new/%v", where, n.LastAgentVersion, n.LastSeen, base)
@@ -74,10 +114,19 @@ func TestStoreTelemetryOverlay(t *testing.T) {
 			}
 			check(list[0], "ListNodes")
 
+			probeHistory, err := s.QueryTelemetryProbeHistory(ctx, tenant, "node-1", base.Add(-time.Second), base.Add(time.Second))
+			if err != nil || len(probeHistory) != 1 || probeHistory[0].ID != "dns" || probeHistory[0].IntervalMS != 30_000 {
+				t.Fatalf("full admitted map did not retain history-only probe_samples: %+v err=%v", probeHistory, err)
+			}
+
 			// Reads must also own their RawMessage bytes. Replacing a map value would only prove
 			// the map was copied; mutate the returned slice in place to catch byte-level aliasing.
 			got.Conditions[0].Message = "TAMPERED"
-			copy(got.Telemetry["resource"], []byte(`{"load1":8.5}`))
+			copy(got.Telemetry[telemetrymetric.Resource.Key], []byte(`{"load1":8.5}`))
+			copy(got.Telemetry["future_metric"], []byte(`{"value":8}`))
+			for i := range got.Telemetry[telemetrymetric.ProbeResults.Key] {
+				got.Telemetry[telemetrymetric.ProbeResults.Key][i] = 'y'
+			}
 			isolated, err := s.GetNode(ctx, tenant, "node-1")
 			if err != nil {
 				t.Fatalf("GetNode(after returned-value mutation): %v", err)

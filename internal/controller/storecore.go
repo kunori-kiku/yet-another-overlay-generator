@@ -1213,12 +1213,17 @@ func (c *storeCore) GetSettings(ctx context.Context, t TenantID) (ControllerSett
 	}
 	var cs ControllerSettings
 	err := c.kv.withLock(func() error {
-		return c.loadJSON(t, collSettings, "", &cs)
+		if err := c.loadJSON(t, collSettings, "", &cs); err != nil {
+			return err
+		}
+		// Keep the history-cap cache update in the same ordered critical section as the persistent
+		// read. Otherwise a stale GET can resume after a concurrent PUT and overwrite the newer cap.
+		c.history.setCap(t, cs.EffectiveHistoryCap())
+		return nil
 	})
 	if err != nil {
 		return ControllerSettings{}, err
 	}
-	c.history.setCap(t, cs.EffectiveHistoryCap())
 	return cs, nil
 }
 
@@ -1227,13 +1232,15 @@ func (c *storeCore) PutSettings(ctx context.Context, t TenantID, cs ControllerSe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := c.kv.withLock(func() error {
-		return c.saveJSON(t, collSettings, "", cs)
-	}); err != nil {
-		return err
-	}
-	c.history.setCap(t, cs.EffectiveHistoryCap())
-	return nil
+	return c.kv.withLock(func() error {
+		if err := c.saveJSON(t, collSettings, "", cs); err != nil {
+			return err
+		}
+		// Persistence and cache publication share the backend order, so every later settings read or
+		// write observes and publishes this cap after this operation—not before it.
+		c.history.setCap(t, cs.EffectiveHistoryCap())
+		return nil
+	})
 }
 
 // GetSigningAnchor returns the tenant's pinned bundle-signing public key, or ErrNotFound when none.

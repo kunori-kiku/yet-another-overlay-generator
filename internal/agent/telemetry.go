@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // telemetry.go is the agent's LIVE monitoring framework (beta9-smoke-hardening plan-1). The Node
@@ -39,6 +41,11 @@ import (
 // freshness contract for the injectable samplers (mutate the input → the output must change).
 type Sampler interface {
 	Name() string
+	// MetricDefinitions declares every top-level metrics key this sampler may emit and whether that
+	// signal is retained for charts or intentionally live-only. Even condition-only samplers declare
+	// an explicit empty set. BuildTelemetry validates the complete production registry against the
+	// shared catalog, so adding a metric cannot silently stop at the latest-value overlay.
+	MetricDefinitions() []telemetrymetric.Definition
 	Sample(now time.Time) (conditions []runtimecontract.Condition, metrics map[string]any)
 }
 
@@ -47,6 +54,25 @@ type Sampler interface {
 // needs no internal locking.
 type Telemetry struct {
 	samplers []Sampler
+}
+
+// probeCompletionKicker is implemented by cadence-owning samplers whose bounded result window may
+// need an early heartbeat flush. It remains an internal framework seam: ordinary samplers do not need
+// to know about delivery negotiation, and the heartbeat installs a capability-gated callback only for
+// the reliable protocol path.
+type probeCompletionKicker interface {
+	setProbeCompletionKick(func())
+}
+
+func (t *Telemetry) setProbeCompletionKick(kick func()) {
+	if t == nil {
+		return
+	}
+	for _, sampler := range t.samplers {
+		if kicker, ok := sampler.(probeCompletionKicker); ok {
+			kicker.setProbeCompletionKick(kick)
+		}
+	}
 }
 
 // Collect runs every Sampler under a recover guard and merges their output. Conditions are merged by
@@ -84,7 +110,23 @@ func sampleGuarded(s Sampler, now time.Time) (conds []runtimecontract.Condition,
 			conds, metrics = nil, nil
 		}
 	}()
-	return s.Sample(now)
+	declared := make(map[string]struct{})
+	for _, definition := range s.MetricDefinitions() {
+		if err := validateMetricDefinition(definition); err != nil {
+			panic(err)
+		}
+		if _, duplicate := declared[definition.Key]; duplicate {
+			panic("duplicate sampler metric declaration: " + definition.Key)
+		}
+		declared[definition.Key] = struct{}{}
+	}
+	conds, metrics = s.Sample(now)
+	for key := range metrics {
+		if _, ok := declared[key]; !ok {
+			panic("sampler emitted undeclared metric: " + key)
+		}
+	}
+	return conds, metrics
 }
 
 // conditionSampler reports the agent's Node Conditions LIVE — the same set collectConditions builds at
@@ -97,6 +139,8 @@ type conditionSampler struct {
 }
 
 func (conditionSampler) Name() string { return "conditions" }
+
+func (conditionSampler) MetricDefinitions() []telemetrymetric.Definition { return nil }
 
 func (s conditionSampler) Sample(now time.Time) ([]runtimecontract.Condition, map[string]any) {
 	prev, err := LoadState(s.stateDir)
@@ -122,12 +166,66 @@ func NewTelemetryForTest(samplers ...Sampler) *Telemetry {
 }
 
 func BuildTelemetry(stateDir string) *Telemetry {
-	return &Telemetry{samplers: []Sampler{
+	samplers := []Sampler{
 		conditionSampler{stateDir: stateDir},
 		newActiveProbeSampler(stateDir), // signed last-known-good policy; asynchronous and bounded
 		wireguardPeersSampler{},         // per-peer link detail → metrics["wireguard_peers"] (collapsible panel)
 		&resourceSampler{},              // host CPU% + load + memory → metrics["resource"] (STATEFUL: cpu_pct is a /proc/stat delta, so the pointer's snapshot survives across beats)
 		nativeXDPSampler{},              // egress NIC native-XDP capability heuristic → metrics["native_xdp"] (pre-deploy warning)
 		mimicCapabilitySampler{},        // can this node build/load the mimic kernel module → metrics["mimic_capability"] (pre-deploy warning)
-	}}
+	}
+	if err := validateProductionMetricDefinitions(samplers); err != nil {
+		// This is a static programmer invariant over BuildTelemetry plus telemetrymetric.All, not an
+		// operator-controlled runtime condition. Failing at construction is safer than shipping a new
+		// metric whose history disposition was never implemented or reviewed.
+		panic("agent: invalid production telemetry metric declarations: " + err.Error())
+	}
+	return &Telemetry{samplers: samplers}
+}
+
+// validateProductionMetricDefinitions proves that the production sampler registry declares the
+// shared metric catalog exactly once and without locally changing a definition's history semantics.
+// It stays a pure seam so tests can exercise malformed registries without constructing live samplers.
+func validateProductionMetricDefinitions(samplers []Sampler) error {
+	definitions := telemetrymetric.All()
+	if err := telemetrymetric.ValidateCatalog(definitions); err != nil {
+		return fmt.Errorf("catalog metric: %w", err)
+	}
+	catalog := make(map[string]telemetrymetric.Definition, len(definitions))
+	for _, definition := range definitions {
+		catalog[definition.Key] = definition
+	}
+
+	declared := make(map[string]string)
+	for _, sampler := range samplers {
+		if sampler == nil {
+			return fmt.Errorf("nil sampler")
+		}
+		for _, definition := range sampler.MetricDefinitions() {
+			if err := validateMetricDefinition(definition); err != nil {
+				return fmt.Errorf("sampler %q: %w", sampler.Name(), err)
+			}
+			authoritative, ok := catalog[definition.Key]
+			if !ok {
+				return fmt.Errorf("sampler %q declares unknown metric %q", sampler.Name(), definition.Key)
+			}
+			if definition != authoritative {
+				return fmt.Errorf("sampler %q changes catalog definition for metric %q", sampler.Name(), definition.Key)
+			}
+			if owner, duplicate := declared[definition.Key]; duplicate {
+				return fmt.Errorf("metric %q is declared by both %q and %q", definition.Key, owner, sampler.Name())
+			}
+			declared[definition.Key] = sampler.Name()
+		}
+	}
+	for key := range catalog {
+		if _, ok := declared[key]; !ok {
+			return fmt.Errorf("catalog metric %q has no production sampler", key)
+		}
+	}
+	return nil
+}
+
+func validateMetricDefinition(definition telemetrymetric.Definition) error {
+	return telemetrymetric.ValidateDefinition(definition)
 }

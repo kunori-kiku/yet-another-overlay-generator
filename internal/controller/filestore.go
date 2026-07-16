@@ -358,14 +358,19 @@ func NewFileStore(root string) (*FileStore, error) {
 	var core *storeCore
 	// The cap loader lets the flusher seed a tenant's cap from persisted settings on first flush (off
 	// the heartbeat path), so an operator's cap=0 (disable history) survives a controller restart. It
-	// closes over core, which is assigned just below (the closure runs later, at flush time).
+	// deliberately performs a side-effect-free settings read: ensureSeeded atomically installs the
+	// result only when no concurrent GetSettings/PutSettings has already installed newer truth. The
+	// closure runs after core is assigned just below.
 	historyRoot, err := ensureSecureStoreChild(kv.root, "telemetry-history")
 	if err != nil {
 		return nil, fmt.Errorf("controller: prepare telemetry history custody: %w", err)
 	}
 	hist := newTelemetryHistory(historyRoot, DefaultTelemetryHistoryCap,
 		func(t TenantID) int {
-			cs, err := core.GetSettings(context.Background(), t)
+			var cs ControllerSettings
+			err := core.kv.withLock(func() error {
+				return core.loadJSON(t, collSettings, "", &cs)
+			})
 			if err != nil {
 				return DefaultTelemetryHistoryCap
 			}
@@ -375,7 +380,7 @@ func NewFileStore(root string) (*FileStore, error) {
 	return &FileStore{storeCore: core, filekv: kv}, nil
 }
 
-// Start launches the resource-history background flusher (plan-2). The server calls it once after
+// Start launches the telemetry-history background flusher (plan-2). The server calls it once after
 // construction; tests that exercise durable flush call it explicitly (and Close).
 func (fs *FileStore) Start() { fs.storeCore.history.start() }
 

@@ -523,5 +523,9 @@ func (c *ControllerClient) PostTelemetry(sample TelemetrySample) (TelemetryRecei
 		ReceivedAt:           receivedAt.UTC(),
 		Reliable:             true,
 		Duplicate:            resp.Header.Get(telemetryprotocol.HeaderDuplicate) == "true",
+		ProbeSamplesV1: telemetryprotocol.HasCapability(
+			resp.Header.Get(telemetryprotocol.HeaderCapabilities),
+			telemetryprotocol.CapabilityProbeSamplesV1,
+		),
 	}, nil
 }

@@ -66,6 +66,10 @@ func RunHeartbeat(poster TelemetryPoster, tel *Telemetry, interval time.Duration
 			}
 		}()
 		conds, metrics := tel.Collect(time.Now().UTC())
+		// A poster without protocol-v2 receipts has no way to negotiate the additive recent-attempt
+		// contract. Preserve the rc.9/legacy JSON shape even for wrappers and alternate posters that do
+		// not expose ReliableTelemetryPoster; latest probe_results remains available as before.
+		metrics = withoutProbeSamples(metrics)
 		if len(conds) == 0 && len(metrics) == 0 {
 			return
 		}

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // drift_test.go — the wire-DTO / omitempty drift gate (framework-refactor plan-10).
@@ -20,7 +22,7 @@ import (
 // with internal/conformance/. The old manifest merely SNAPSHOTTED the FE lists (a change reddened
 // only until you re-ran -update); this gate instead cross-checks the hand-mirrored contracts against
 // their Go source of truth DIRECTLY, so a Go field rename or a missing omitempty entry is a RED BUILD
-// with no snapshot to refresh. It pins three ungated hand-mirror classes:
+// with no snapshot to refresh. It pins five ungated hand-mirror classes:
 //
 //  1. The six frontend *_OMITEMPTY lists (stores/controller/helpers.ts) each equal, EXACTLY, the
 //     set of json-tagged omitempty fields on their model struct (Project/Domain/Node/Edge/
@@ -60,11 +62,15 @@ import (
 //     mappers — is NOT a json-tag copy; gating it directly needs the lossy camel↔snake transform the
 //     assessment warned against, so it stays covered by the FE unit suite under src/api/ + src/lib/.)
 //
+//  5. The telemetry-history chart-family catalog. The executable Go catalog drives controller
+//     projection/API encoding; the frontend literal drives exhaustive parser and renderer registries.
+//     Exact equality makes a new chart family fail CI until the panel can both parse and render it.
+//
 // FAIL-CLOSED (invariant [5]): this gate only EXTENDS the guarantee. There is deliberately no
 // allowlist / escape hatch — a legitimately new omitempty field or wire field MUST be reflected in
 // the mirror (the RED BUILD forces that edit), because a weakened gate is worse than none. The gate
-// reads every authority as SOURCE (go/ast + regexp), imports none of them, and so cannot itself
-// drift out of sync with what ships.
+// reads wire authorities as SOURCE (go/ast + regexp). The chart-family gate imports only the leaf
+// telemetrymetric catalog so it compares the executable family list rather than a second Go manifest.
 //
 // Non-vacuity: authored against the live tree, this gate first reddened on the pre-existing
 // EDGE_OMITEMPTY mimic_fallback gap (model.Edge tags mimic_fallback omitempty; the list omitted it);
@@ -78,9 +84,12 @@ const (
 	modelSrc          = "../model/topology.go"
 	agentWireSrc      = "../agent/controller_client.go"
 	apiWireSrc        = "../api/wire_controller.go"
+	probeMetricSrc    = "../probemetric/result.go"
 	feNormalizeEdges  = "../../frontend/src/lib/normalizeEdges.ts"
 	feTopologyStore   = "../../frontend/src/stores/topologyStore.ts"
 	feControllerHelps = "../../frontend/src/stores/controller/helpers.ts"
+	feProbeResults    = "../../frontend/src/lib/probeResults.ts"
+	feTelemetryHist   = "../../frontend/src/lib/telemetryHistory.ts"
 )
 
 // jsonField is one struct field's on-the-wire identity: its json name, whether it carries
@@ -349,6 +358,45 @@ func TestWireDTOsMirror(t *testing.T) {
 	}
 }
 
+// TestProbeResultWireMirror pins the shared Go active-probe result against the panel's defensive
+// snake_case boundary. Probe results used to be a private agent struct plus a hand-written TS type;
+// adding history made that drift capable of silently dropping a chart dimension, so the source-read
+// gate is deliberately bidirectional here.
+func TestProbeResultWireMirror(t *testing.T) {
+	goFields, ok := structsOf(t, probeMetricSrc)["Result"]
+	if !ok {
+		t.Fatalf("probemetric.Result not found in %s", probeMetricSrc)
+	}
+	want := fieldNames(goFields)
+	got := feInterfaceFields(t, feProbeResults, "ProbeResultWire")
+	missing, extra := diffSets(want, got)
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Errorf("probemetric.Result drifted from ProbeResultWire.\n"+
+			"  Go fields missing from the frontend boundary: %v\n"+
+			"  frontend fields missing from the Go contract: %v", missing, extra)
+	}
+}
+
+// TestTelemetryHistoryChartFamiliesMirrorFrontend closes the non-flat telemetry-history gap left by
+// the DTO mirror below. Go families are executable controller/API registration identities; the TS
+// literal is consumed by exhaustive parser and renderer registries. A family added on only one side
+// is therefore a release-blocking drift rather than a silently uncharted metric.
+func TestTelemetryHistoryChartFamiliesMirrorFrontend(t *testing.T) {
+	goFamilies := telemetrymetric.ChartFamilies()
+	want := make([]string, len(goFamilies))
+	for i, family := range goFamilies {
+		want[i] = string(family)
+	}
+	sort.Strings(want)
+	got := feArrayElements(t, feTelemetryHist, "HISTORY_CHART_FAMILIES")
+	missing, extra := diffSets(want, got)
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Errorf("telemetry history chart families drifted between Go and the frontend.\n"+
+			"  Go families missing from parser/render registries: %v\n"+
+			"  frontend families missing from the Go catalog: %v", missing, extra)
+	}
+}
+
 // --- [4] the operator-panel controller wire DTO ↔ FE snake_case mirror gate (plan-10) ---
 
 // FE snake_case controller wire-mirror sources (the *JSON / *Wire interfaces the operator panel maps
@@ -392,8 +440,10 @@ const (
 //     the panel consumes these via INLINE anonymous response types (keystone.ts), no named interface.
 //   - release pins: releasePinRequestJSON / releasePinResponseJSON (release_pins.go) — release.ts maps
 //     them to a camelCase result with a NESTED `data` object, not a flat snake_case interface.
-//   - telemetry-history: historyResponse / historyBucket / metricAgg (telemetry_history.go) — parsed by
-//     lib/telemetryHistory.ts (a defensive parseNodeHistory), again no named snake_case interface.
+//   - telemetry-history field shapes: historyResponse / historyBucket / metricAgg
+//     (telemetry_history.go) — parsed defensively rather than mirrored as flat snake_case interfaces.
+//     Its chart-family coverage is separately fail-closed in
+//     TestTelemetryHistoryChartFamiliesMirrorFrontend above.
 //   - the agent↔controller `...Wire` / `...JSON` pairs are already covered by TestWireDTOsMirror above.
 //   - the map-value types AgentPin (↔ renderer.Artifact) and MimicDebPinJSON (↔ model.MimicDebPin) are
 //     nested inside agent_bins / mimic_debs; their enclosing map fields ARE gated here.

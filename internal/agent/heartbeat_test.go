@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/runtimecontract"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
 // fakePoster counts Telemetry POSTs (the beats that actually had something to send).
@@ -21,6 +23,9 @@ func (f *fakePoster) Telemetry(_ []runtimecontract.Condition, _ map[string]any) 
 type alwaysSampler struct{}
 
 func (alwaysSampler) Name() string { return "test" }
+func (alwaysSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{testMetricDefinition("test")}
+}
 func (alwaysSampler) Sample(time.Time) ([]runtimecontract.Condition, map[string]any) {
 	return nil, map[string]any{"test": 1}
 }
@@ -66,4 +71,62 @@ func TestTryKick_NonBlocking(t *testing.T) {
 		t.Fatalf("TryKick should coalesce to 1 pending, got %d", len(ch))
 	}
 	TryKick(nil) // nil channel (heartbeat disabled) → no-op, no panic
+}
+
+type legacyProbePoster struct {
+	posted chan map[string]any
+}
+
+func (p *legacyProbePoster) Telemetry(_ []runtimecontract.Condition, metrics map[string]any) error {
+	p.posted <- metrics
+	return nil
+}
+
+type legacyProbeSampler struct{}
+
+func (legacyProbeSampler) Name() string { return "legacy-probe" }
+
+func (legacyProbeSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{telemetrymetric.ProbeResults, telemetrymetric.ProbeSamples}
+}
+
+func (legacyProbeSampler) Sample(time.Time) ([]runtimecontract.Condition, map[string]any) {
+	latest := []probemetric.Result{{ID: "dns", Type: "icmp", Host: "resolver.example", Status: probemetric.StatusPending}}
+	completed := []probemetric.Result{{
+		ID: "dns", Type: "icmp", Host: "resolver.example", Status: probemetric.StatusFailure,
+		CheckedAt:     time.Date(2026, time.July, 16, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FailureReason: probemetric.FailureTimeout, IntervalMS: 30_000,
+	}}
+	return nil, map[string]any{
+		probemetric.LatestMetricKey:  latest,
+		probemetric.SamplesMetricKey: completed,
+	}
+}
+
+func TestRunHeartbeat_LegacyPosterNeverSendsProbeSamples(t *testing.T) {
+	poster := &legacyProbePoster{posted: make(chan map[string]any, 1)}
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		RunHeartbeat(poster, NewTelemetryForTest(legacyProbeSampler{}), time.Hour, nil, done, io.Discard)
+		close(stopped)
+	}()
+
+	select {
+	case metrics := <-poster.posted:
+		if _, ok := metrics[probemetric.LatestMetricKey]; !ok {
+			t.Fatalf("legacy heartbeat lost backward-compatible probe_results: %+v", metrics)
+		}
+		if _, ok := metrics[probemetric.SamplesMetricKey]; ok {
+			t.Fatalf("legacy heartbeat sent unnegotiated probe_samples: %+v", metrics)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("legacy heartbeat was not posted")
+	}
+	close(done)
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("legacy heartbeat did not stop")
+	}
 }

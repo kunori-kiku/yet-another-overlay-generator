@@ -1,44 +1,62 @@
 # STATUS
 <!-- regenerated: 2026-07-16 -->
-<!-- by: hand — v2.0.0-rc.8 is GitHub Latest from annotated tag object
-5535834866ebe5ead244131e6005b4c438cbe575, targeting
-6b99a20bfe8455cce5e410330518ca6b97501cb2. Release run 29445833406 had
-23 successful jobs plus one expected preview/beta publisher skip and published 22 verified assets.
-GHCR 2.0.0-rc.8 and latest share parent sha256:1fa7a64e6524c6400695f1e5eafb7cc3b35d500486de0e3df9aa3dee4499fe15
-(amd64 child 4febaf16… / e_machine=62; arm64 child 710d0e2f… / e_machine=183).
+<!-- by: hand — v2.0.0-rc.9 is GitHub Latest from annotated tag object
+8b0a6e83c3845b03b3a02935cffdb60a7c6d4f1e, targeting
+3344e0d5f60e1db042e3ca5463a76a0991c03d42. Release run 29486416928 succeeded and
+published the exact 22 verified assets. GHCR 2.0.0-rc.9 and latest share parent
+sha256:88ad6a7416ddc5c0ed61fc095df068e9a17019b9e112218290e34b70dcc86af7 with the
+verified native linux/amd64 + linux/arm64 children.
 rc.7 remains withdrawn and preserved; its identity must not be recovered or reused. -->
 
 ## Active work
 
-- **🚧 `v2.0.0-rc.9` — READY-AND-UNCUT (2026-07-16; not yet published).** This candidate keeps the
-  rc.8 compatibility boundary intact while closing the live issues found after release: owned Unix
-  FileStore roots commonly created as `0775` are descriptor-safely tightened to `0700`; controller
-  telemetry uses authenticated HTTP protocol-v2 headers plus a bounded volatile replay queue and
-  cadence-aware history instead of a parallel WebSocket/gRPC path; and official controller-image
-  references are attached only after run-scoped amd64/arm64 candidates pass exact-digest, native-ELF,
-  config, label, entrypoint, and runtime verification. It also adds the owner-requested signed active
-  telemetry framework in **Fleet**: multiple hand-configured ICMP/TCP probes per managed node, one
-  required `host` accepting an IP literal or DNS hostname, TCP-only port, checksum-covered and
-  off-host-signature-bound `telemetry.json`, bundle-local agent-capability refusal for pre-rc.9
-  launchers, last-known-good activation, monotonic bounded in-process execution, and authenticated
-  live non-persisted results. **Explicit RC policy exception:** although `RELEASING.md` normally
-  limits RCs to fixes, the owner explicitly approved this bounded feature for rc.9 after reviewing its
-  signing/custody boundary and Fleet placement; the exception does not broaden future RC scope.
-  Existing login passkeys, browser keystones, and node membership remain on the rc.8
-  enrollment-only-UV contract—there is no retroactive User-Verification requirement and no fleet
-  re-sign. Final multi-agent re-review also closed three last release issues: a history query now sees
-  the exact batch between buffer drain and durable append (and deduplicates the disk/in-flight overlap),
-  live telemetry JSON bytes are deep-copied across the Store boundary, and the owned-root compatibility
-  repair refuses sticky/set-ID shared directories such as `/tmp` before and after descriptor opening.
-  Final local evidence is green: gofmt, vet, the full Go race suite, coverage floors, wire drift, DAST,
-  `govulncheck`, frontend lint/controller/local/WASM builds, all 321 Vitest cases, the 25-fixture
-  WASM/Go golden gate, 76 required Playwright cases, all seven release target triples (21 stamped Go
-  mains), the uncached release/Docker contract suite, and both Compose storage models. **Remaining
-  before tag:** commit and merge these reviewed bytes to `main`, wait for current-main CI (including
-  its native PowerShell and real-tunnel runners), create one annotated `v2.0.0-rc.9` tag at that exact
-  tip, and let the sealed release workflow publish and verify all 22 assets plus the native
-  two-platform image. Move this ledger to published/shipped wording only after those public checks
-  succeed.
+- **🚧 `v2.0.0-rc.10` — READY-AND-UNCUT (2026-07-16; not yet published).** This candidate completes
+  the active-telemetry observation framework introduced in rc.9. Nodes still perform bounded signed
+  ICMP/TCP observations and upload them over the existing authenticated HTTP heartbeat; the controller
+  now retains/deduplicates the attempts, serves exact-probe latency/availability history, and rolls
+  wide requests into one epoch-stable shared **1000-bucket response budget**. Fleet offers Auto plus
+  explicit Resolution choices, discloses the controller's effective/widened step, labels multi-day
+  axes with dates, and never downloads the raw retained file merely to draw a wide graph. Live uses a
+  completion-based ten-second, node-only observation read with a dedicated transient freshness clock,
+  visible progress/countdown/delayed/stale feedback, hidden-tab pause, context-scoped single-flight,
+  last-good preservation, and explicit history Retry for quiet/offline nodes. Future telemetry is
+  structurally forced through a shared catalog that declares every metric charted or live-only and
+  drift-gates agent producers, controller projectors, API families, wire DTOs, and frontend renderers.
+  **Explicit RC policy exception:** although `RELEASING.md` normally limits RCs to fixes, the owner
+  explicitly instructed us to complete and ship this bounded telemetry follow-up in rc.10. It
+  preserves authenticated HTTP, the rc.9 signed-policy/capability boundary, rollback compatibility,
+  and existing-user behavior; the exception does not broaden future RC scope. No WebSocket/gRPC
+  listener, arbitrary command surface, new node privilege, WebAuthn enforcement, or fleet re-sign is
+  introduced.
+
+  Fresh independent storage/security, frontend/UX, and architecture/hygiene review found and closed
+  two blocker classes before publication. Fleet Live no longer downloads the full up-to-10,000-entry
+  audit chain plus Settings/keystone every ten seconds, cannot borrow freshness from a topology save,
+  and cannot join a hanging request from an old controller/auth context. Retention-cap startup and
+  ordinary settings reads now use side-effect-free seed-if-absent plus backend-ordered cache
+  publication, so a stale read cannot overwrite a newer operator enable/disable. Focused deterministic
+  race tests exercise both interleavings, and a new real-route Playwright scenario covers exact probe
+  switching, Live feedback, and retaining the last good charts across one injected history failure.
+
+  Final local evidence after those fixes is green: gofmt, vet, the full Go race suite, coverage floors,
+  wire drift, the generated PowerShell contract test, DAST, `govulncheck`, frontend lint/controller/
+  local/WASM builds, **365 Vitest cases**, the 25-fixture WASM/Go byte-equality gate, and the required
+  Playwright matrix (**77 passed, 6 expected project skips**). The exact-22 release-asset positive and
+  adversarial contract suite is green. **Recorded residuals:** local native `pwsh` is unavailable, so
+  GitHub's required runner must execute that contract before merge; the final local
+  `docker buildx build --check` could not re-resolve `docker/dockerfile:1` because Docker Hub reset the
+  connection twice (the unchanged Docker/release contract had already passed, and CI/release will
+  re-run it); and an rc.10-agent/real-node ICMP-permission + response-header-stripping soak is **owed
+  (owner-authorized release risk under the explicit ship instruction)** rather than claimed as a
+  hardware pass. Required main CI still supplies the native PowerShell, real-tunnel, clean-checkout,
+  and container-build evidence.
+
+  **Remaining before tag:** commit and publish this exact reviewed scope as a PR, merge only after all
+  required checks pass, wait for current-main CI on the merge commit, synchronize a clean
+  `HEAD == origin/main`, create one annotated `v2.0.0-rc.10` tag at that exact tip, and let the sealed
+  release workflow publish/verify all 22 assets plus the native two-platform controller image. Move
+  this ledger to published/shipped wording only after GitHub Latest and GHCR/container Latest are
+  independently verified.
 
 - **✅ SUBJECT `post-refactor-debt-paydown-2026_07_14` — COMPLETE 2026-07-15 (14/14 merged; archived to
   `_completed/`). Thirteen non-held plans shipped as `v2.0.0-rc.6`; held plan-6 was redesigned before
