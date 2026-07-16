@@ -123,6 +123,7 @@ test('node-detail telemetry charts, exact probe selection, Live feedback, and la
   let failNextHistory = false
   let nodeReads = 0
   const probeRequests: ProbeRequest[] = []
+  const historySteps: Array<string | null> = []
 
   await page.route('**/api/v1/operator/**', async (route: Route) => {
     const request = route.request()
@@ -146,6 +147,7 @@ test('node-detail telemetry charts, exact probe selection, Live feedback, and la
     }
     if (request.method() === 'GET' && apiRoute === 'node-history') {
       const url = new URL(request.url())
+      historySteps.push(url.searchParams.get('step'))
       probeRequests.push({
         id: url.searchParams.get('probe_id') ?? '',
         type: url.searchParams.get('probe_type') ?? '',
@@ -164,7 +166,10 @@ test('node-detail telemetry charts, exact probe selection, Live feedback, and la
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(historyWire(url)),
+        body: JSON.stringify({
+          ...historyWire(url),
+          step: url.searchParams.get('step') === '5m' ? '30m0s' : '30s',
+        }),
       })
       return
     }
@@ -177,6 +182,9 @@ test('node-detail telemetry charts, exact probe selection, Live feedback, and la
 
   const historyCard = page.getByTestId('node-resource-history')
   await expect(historyCard).toBeVisible({ timeout: 15_000 })
+  await expect(historyCard.getByTestId('history-resolution-hint')).toContainText(
+    'Choosing a coarser resolution can reduce the number of transferred points',
+  )
   await expect.poll(() => probeRequests.at(-1)).toEqual({
     id: FIRST_PROBE.id,
     type: FIRST_PROBE.type,
@@ -197,6 +205,16 @@ test('node-detail telemetry charts, exact probe selection, Live feedback, and la
   await expect(probeSelect).toHaveValue(SECOND_PROBE.id)
   await expect(historyCard.getByText('DNS lookup failed', { exact: true })).toBeVisible()
   await expect(historyCard.getByTestId('probe-history-failures').getByText('2', { exact: true })).toBeVisible()
+
+  const resolutionSelect = historyCard.getByTestId('history-granularity')
+  await expect(resolutionSelect).toHaveAccessibleDescription(
+    /Auto follows the node's reporting cadence.*coarser resolution can reduce/i,
+  )
+  await resolutionSelect.selectOption('5m')
+  await expect.poll(() => historySteps.at(-1)).toBe('5m')
+  await expect(historyCard.getByTestId('history-effective-resolution')).toContainText(
+    'Effective resolution: 30m (widened from 5m',
+  )
 
   const health = page.getByTestId('fleet-refresh-visible-health')
   const liveToggle = page.getByTestId('fleet-live-toggle')

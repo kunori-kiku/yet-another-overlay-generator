@@ -59,7 +59,7 @@ func tightenOwnedStoreRoot(path string, info os.FileInfo) (bool, error) {
 	}
 	// Repeat the special-bit check on the opened object so a path replacement between Lstat and
 	// Open cannot redirect the repair onto a sticky or set-ID directory.
-	if opened.Mode&uint32(unix.S_ISUID|unix.S_ISGID|unix.S_ISVTX) != 0 {
+	if uint64(opened.Mode)&uint64(unix.S_ISUID|unix.S_ISGID|unix.S_ISVTX) != 0 {
 		return false, nil
 	}
 	if os.FileMode(opened.Mode).Perm()&0022 == 0 {
@@ -81,3 +81,8 @@ func validateStoreFilePlatform(info os.FileInfo) error {
 	}
 	return nil
 }
+
+// A regular file ignores O_NONBLOCK, while a pathname swapped to a FIFO between
+// Lstat and open returns promptly for validation instead of blocking a store
+// operation indefinitely. os.Root supplies O_NOFOLLOW/openat confinement.
+func storeFileOpenFlags(flag int) int { return flag | unix.O_NONBLOCK }

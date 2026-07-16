@@ -488,6 +488,7 @@ export const en = {
   'nodeHistory.rangeLabel': "Range",
   'nodeHistory.granularityLabel': "Resolution",
   'nodeHistory.granularityAuto': "Auto",
+  'nodeHistory.granularityHint': "Auto follows the node's reporting cadence and widens as needed to limit the amount of chart data loaded. Choosing a coarser resolution can reduce the number of transferred points.",
   'nodeHistory.resourceHeading': "Host resource history",
   'nodeHistory.cpuTitle': "CPU utilization",
   'nodeHistory.cpuSeries': "CPU",

@@ -476,6 +476,7 @@ export const zh: Record<keyof typeof en, string> = {
   'nodeHistory.rangeLabel': "时间范围",
   'nodeHistory.granularityLabel': "分辨率",
   'nodeHistory.granularityAuto': "自动",
+  'nodeHistory.granularityHint': "“自动”会跟随节点上报频率，并在需要时调宽，以限制图表加载的数据量；选择较粗的分辨率可减少传输的数据点。",
   'nodeHistory.resourceHeading': "主机资源历史",
   'nodeHistory.cpuTitle': "CPU 使用率",
   'nodeHistory.cpuSeries': "CPU",
