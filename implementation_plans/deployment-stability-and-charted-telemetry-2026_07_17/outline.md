@@ -189,6 +189,12 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 - 2026-07-17 — plan-4 specs touch update deferred to plan-8's mandatory full refresh; the shared
   worktree already contains coordinated later-plan spec edits, so a partial cache update here would
   misrepresent the final telemetry architecture.
+- 2026-07-17 — plan-5 closed as completed: `09eff0a` added successor-only fixed-GET URL probes,
+  exact expected-status success, bounded latest actual-status metadata, and shared latency/availability
+  history without widening the request surface or charting status codes.
+- 2026-07-17 — plan-5 specs touch update deferred to plan-8's mandatory full refresh; the shared
+  worktree already contains coordinated device/history spec edits, so committing a partial cache now
+  would describe an intentionally intermediate architecture.
 
 ## Milestones
 
@@ -260,7 +266,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-5 — URL probes
 
-- **Plan:** plan-5-2026_07_17.md
+- **Plan:** _completed/completed-plan-5-2026_07_17.md
 - **Goal:** add exact-status URL checks whose actual code is live metadata and whose latency/availability
   reuse the probe chart family.
 - **Proposed solution:** a distinct typed URL probe with fixed GET, ordinary TLS verification, no redirects, no
