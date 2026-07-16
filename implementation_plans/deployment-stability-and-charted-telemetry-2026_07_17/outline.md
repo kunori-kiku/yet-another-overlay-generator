@@ -174,6 +174,10 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
   preserved served/staged state on rejected drafts, and restricted compatibility bypass to 404/405.
 - 2026-07-17 — plan-1 specs touch update deferred to plan-8's mandatory full refresh; the current
   dirty specs cache contains coordinated later-plan changes and must not be partially committed here.
+- 2026-07-17 — plan-2 closed as completed: `f136d72` preserved the non-client endpoint port and
+  complete address pairs on client links, aligned Go/TypeScript healing, and normalized browser sync baselines.
+- 2026-07-17 — plan-2 specs touch update deferred to plan-8's mandatory full refresh; active allocation
+  documents were corrected now, while the generated component cache will be rebuilt after integration.
 
 ## Milestones
 
@@ -204,7 +208,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-2 — Repair client allocation compatibility and browser baselines
 
-- **Plan:** plan-2-2026_07_17.md
+- **Plan:** _completed/completed-plan-2-2026_07_17.md
 - **Goal:** preserve historical router-side port/address pins and browser/server baselines.
 - **Proposed solution:** endpoint-specific pin semantics across validator/compiler/reservations/normalizers;
   normalize before synchronization baselines; repair drift/goldens/specs.
