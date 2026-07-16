@@ -376,7 +376,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 | plan-2 | done — `f136d72` — endpoint-specific client allocation and normalized browser baselines |
 | plan-3 | done — `a7d4fd1` — quiet routine audits and display-only probe names |
 | plan-4 | done — `5e751ca` — exclusive signed successor policy and latest-heartbeat rollout readiness |
-| plan-5 | pending |
+| plan-5 | done — `09eff0a` — constrained fixed-GET URL probes with charted latency/availability |
 | plan-6 | pending |
 | plan-7 | pending |
 | plan-8 | pending |
