@@ -1,48 +1,63 @@
 # STATUS
 <!-- regenerated: 2026-07-16 -->
-<!-- by: hand — v2.0.0-rc.10 is GitHub Latest from annotated tag object
-47727de3bda6cc6f47108caa9180ac534c6b54e4, targeting
-2eaa4d3e987252920ae988de4bf9327d78909e50. Release run 29499539666 succeeded and
-published the exact 22 verified assets. GHCR 2.0.0-rc.10 and latest share parent
-sha256:372862a6db2302a9e6e46516966a1a7f8783942733f07be11758a884e431dfdd; its
-verified runtime children are linux/amd64 sha256:e654aa66ba8e578f1efac3782d77dc8cc6b19e3aedc72b7d2c1fb91c4ad1cc55
-and linux/arm64 sha256:7eee453f07db4b263f0d7edbeb25542ba49eeed4cdbe98dc554e39d7ffb6da3c.
+<!-- by: hand — v2.0.0-rc.11 is GitHub Latest from annotated tag object
+661c9ddfbab19870300843dda54d531a441615be, targeting
+9a8a3a33340a7ed2526144e9a92ce6bf6fd287a1. Release run 29508065549 succeeded and
+published the exact 22 verified assets. GHCR 2.0.0-rc.11 and latest share parent
+sha256:574bf81f3be108273ffcee1e0f713e300693c869b2e9f22db0fcb08ce2a0f87e; its
+verified runtime children are linux/amd64 sha256:8a27346b62d959b3459d0d93c1496d298abca38ff7516a5a5d8f13d04aafb2e3
+and linux/arm64 sha256:04ab2c5ab7a6e4ffb5908c1bce41cd16f1657da76253bcac116e1c42cc938a96.
 rc.7 remains withdrawn and preserved; its identity must not be recovered or reused. -->
 
 ## Active work
 
-- **🟡 `v2.0.0-rc.11` — CANDIDATE / UNCUT (2026-07-16).** The final independent rc.10
+- **✅ `v2.0.0-rc.11` — RELEASED / GITHUB LATEST (2026-07-16).** The final independent rc.10
   requirement audit found one material local-custody gap: ordinary stable FileStore records still used
   pathname-following reads and append opens even though root/tenant directories and telemetry-history
-  files already rejected links and special files. The successor candidate routes keyed/singleton JSON,
-  generation, audit read/append, existence, and delete through a shared stable-record boundary. It pins
-  the direct parent with `os.Root`, rejects final symlink/reparse and non-regular objects, compares the
-  opened descriptor with the stable name, confines deletes to that opened parent, uses exclusive audit
-  creation, and keeps Unix opens nonblocking against a last-moment FIFO substitution. Missing-record,
-  migration, corrupt-but-regular existence, and ordinary restored-file behavior remain compatible;
-  files written by the controller stay `0600`, but older regular files are not retroactively rejected
-  merely for a permissive mode.
+  files already rejected links and special files. rc.11 routes keyed/singleton JSON, generation, audit
+  read/append, existence, and delete through a shared stable-record boundary. It pins the direct parent
+  with `os.Root`, rejects final symlink/reparse and non-regular objects, compares the opened descriptor
+  with the stable name, confines deletes to that opened parent, uses exclusive audit creation, and keeps
+  Unix opens nonblocking against a last-moment FIFO substitution. Missing-record, migration,
+  corrupt-but-regular existence, and ordinary restored-file behavior remain compatible; files written
+  by the controller stay `0600`, but older regular files are not retroactively rejected merely for a
+  permissive mode.
 
-  The telemetry granularity idea is already implemented in rc.10 as controller-side range+Resolution
-  rollup under one global 1000-bucket response budget; the browser does not fetch the raw retained
-  stream. rc.11 adds an English/Chinese explanation beside the selector, associates it accessibly, and
-  browser-tests an exact `step=5m` request plus an authoritative widened `30m` response. Durable tiered
-  rollup files and transport gzip/Brotli remain separate scalability/proxy concerns, not prerequisites
-  for truthful charting or bounded browser fetches.
+  The telemetry granularity model remains controller-side range + Resolution rollup under one global
+  1000-bucket response budget, so the browser does not fetch the raw retained stream. rc.11 adds an
+  English/Chinese explanation beside the selector, associates it accessibly, and browser-tests an exact
+  `step=5m` request plus an authoritative widened `30m` response. Durable tiered rollup files and
+  transport gzip/Brotli remain separate future storage/proxy optimizations rather than prerequisites for
+  truthful charting or bounded browser fetches.
 
-  Final local candidate gates are green: gofmt/diff hygiene, the full Go race suite, `go vet ./...`,
-  all seven supported release-target cross-compiles (including AArch64 Linux/Windows machine checks),
-  Darwin cross-compilation, frontend lint, WASM plus production/E2E panel builds, **365 Vitest cases**,
-  and the complete Playwright matrix (**81 passed, 8 expected project skips**). The four Settings
-  visual baselines had remained stale since the earlier semantic light/dark-theme correction and were
-  refreshed only after expected/actual review; the clean rerun includes that corpus. Independent
-  backend/security and frontend/UX re-reviews found no remaining material issue after their small
-  structure/hot-path/copy/a11y findings were incorporated. The reviewed PR, exact-main CI, and release
-  transaction remain required before an annotated rc.11 tag may be cut. The rc.10 real-node
-  ICMP-permission and response-header-stripping soak remains owed; this fix does not broaden node
-  privileges or protocol behavior.
+  Final source gates were green: gofmt/diff hygiene, the full Go race suite, `go vet ./...`, all seven
+  supported release-target cross-compiles (including AArch64 Linux/Windows machine checks), Darwin
+  cross-compilation, frontend lint, WASM plus production/E2E panel builds, **365 Vitest cases**, and the
+  complete Playwright matrix (**81 passed, 8 expected project skips**). The four Settings visual
+  baselines had remained stale since the earlier semantic light/dark-theme correction and were refreshed
+  only after expected/actual review; the clean rerun includes that corpus. Independent backend/security
+  and frontend/UX re-reviews found no remaining material issue after their small
+  structure/hot-path/copy/a11y findings were incorporated.
 
-- **✅ `v2.0.0-rc.10` — RELEASED / GITHUB LATEST (2026-07-16).** This release completes
+  **Publication evidence:** PR #308 merged the independently re-reviewed scope as
+  `9a8a3a33340a7ed2526144e9a92ce6bf6fd287a1`; PR CI run `29507142941` and exact-main CI run
+  `29507569745` passed all seven jobs. Annotated tag object
+  `661c9ddfbab19870300843dda54d531a441615be` peels to that exact commit. Release run `29508065549`
+  passed every release gate, published the exact 22-asset set, executed both controller platforms under
+  QEMU, and transactionally promoted GitHub Latest plus GHCR `2.0.0-rc.11` / `latest`. Both container
+  references resolve to parent
+  `sha256:574bf81f3be108273ffcee1e0f713e300693c869b2e9f22db0fcb08ce2a0f87e`; consumer-side inspection
+  confirmed revision/version/entrypoint on both runtime children, an amd64 runtime reporting
+  `v2.0.0-rc.11`, and an ELF64 little-endian AArch64 arm64 server. This workstation has no arm64
+  binfmt/QEMU, so independent local arm64 execution is not claimed; the release runner's QEMU-backed
+  execution is green. A bounded public-asset audit independently confirmed the exact 22-name allowlist,
+  all 142,565,328 bytes as uploaded/non-empty with API SHA-256 digests, and all seven directly downloaded
+  standalone-agent sidecars against both their binary and sidecar digests. Optional Docker Hub
+  publication was not configured and was correctly skipped. The rc.10 real-node ICMP-permission and
+  response-header-stripping soak remains owed; rc.11 does not broaden node privileges or protocol
+  behavior.
+
+- **✅ `v2.0.0-rc.10` — RELEASED / PREVIOUS (2026-07-16).** This release completes
   the active-telemetry observation framework introduced in rc.9. Nodes still perform bounded signed
   ICMP/TCP observations and upload them over the existing authenticated HTTP heartbeat; the controller
   now retains/deduplicates the attempts, serves exact-probe latency/availability history, and rolls
