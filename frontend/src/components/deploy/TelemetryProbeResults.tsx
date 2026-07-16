@@ -5,7 +5,12 @@ import type {
   TelemetryProbeResultStatus,
 } from '../../types/controller';
 import type { TelemetryProbe } from '../../types/topology';
-import { formatProbeTarget, probeDisplayName, probeResultMatchesPolicy } from '../../lib/probeResults';
+import {
+  effectiveExpectedStatus,
+  formatProbeDestination,
+  probeDisplayName,
+  probeResultMatchesPolicy,
+} from '../../lib/probeResults';
 
 const FAILURE_KEYS: Record<TelemetryProbeFailureReason, MessageKey> = {
   dns_failed: 'telemetryProbes.failure.dnsFailed',
@@ -14,6 +19,7 @@ const FAILURE_KEYS: Record<TelemetryProbeFailureReason, MessageKey> = {
   connection_refused: 'telemetryProbes.failure.connectionRefused',
   network_unreachable: 'telemetryProbes.failure.networkUnreachable',
   network_error: 'telemetryProbes.failure.networkError',
+  unexpected_status: 'telemetryProbes.failure.unexpectedStatus',
 };
 
 const STATUS_KEYS: Record<TelemetryProbeResultStatus, MessageKey> = {
@@ -44,9 +50,7 @@ type Row = {
   key: string;
   id: string;
   name?: string;
-  type: TelemetryProbe['type'];
-  host: string;
-  port?: number;
+  descriptor: TelemetryProbe | TelemetryProbeResult;
   result?: TelemetryProbeResult;
   retired: boolean;
 };
@@ -66,9 +70,7 @@ export function TelemetryProbeResults({
     key: `configured:${probe.id}`,
     id: probe.id,
     name: probe.name,
-    type: probe.type,
-    host: probe.host,
-    port: probe.port,
+    descriptor: probe,
     result: (() => {
       const candidate = byID.get(probe.id);
       return candidate && probeResultMatchesPolicy(probe, candidate) ? candidate : undefined;
@@ -79,12 +81,12 @@ export function TelemetryProbeResults({
     const configuredProbe = configuredByID.get(result.id);
     if (!configuredProbe || !probeResultMatchesPolicy(configuredProbe, result)) {
       rows.push({
-        key: `reported:${result.id}:${result.type}:${result.host}:${result.port ?? ''}`,
+        key: `reported:${result.id}:${result.type}:${formatProbeDestination(result)}:${
+          result.type === 'url' ? result.expectedStatus : ''
+        }`,
         id: result.id,
         name: configuredProbe?.name,
-        type: result.type,
-        host: result.host,
-        port: result.port,
+        descriptor: result,
         result,
         retired: true,
       });
@@ -121,6 +123,12 @@ export function TelemetryProbeResults({
             const reason = row.result?.failureReason
               ? t(language, FAILURE_KEYS[row.result.failureReason])
               : '—';
+            const expectedStatus = row.descriptor.type === 'url'
+              ? 'expectedStatus' in row.descriptor
+                ? row.descriptor.expectedStatus
+                : effectiveExpectedStatus(row.descriptor)
+              : undefined;
+            const actualStatus = row.result?.type === 'url' ? row.result.actualStatus : undefined;
             return (
               <article
                 key={row.key}
@@ -133,12 +141,14 @@ export function TelemetryProbeResults({
                       {displayName}
                     </div>
                     <div className="mt-0.5 font-mono text-xs text-[var(--content)]">
-                      {formatProbeTarget(row.host, row.port)}
+                      {formatProbeDestination(row.descriptor)}
                     </div>
                     <div className="mt-0.5 text-xs text-[var(--content-muted)]">
-                      {row.type === 'tcp'
-                        ? t(language, 'telemetryProbes.tcp')
-                        : t(language, 'telemetryProbes.icmp')}
+                      {row.descriptor.type === 'url'
+                        ? t(language, 'telemetryProbes.url')
+                        : row.descriptor.type === 'tcp'
+                          ? t(language, 'telemetryProbes.tcp')
+                          : t(language, 'telemetryProbes.icmp')}
                       {hasDisplayName && <> · {row.id}</>}
                       {row.retired && (
                         <span className="ml-1 text-[var(--warning)]">
@@ -162,6 +172,18 @@ export function TelemetryProbeResults({
                     {t(language, 'telemetryProbes.lastChecked')}
                   </dt>
                   <dd className="text-[var(--content)]">{fmtTime(row.result?.checkedAt, language)}</dd>
+                  {expectedStatus !== undefined && (
+                    <>
+                      <dt className="text-[var(--content-muted)]">
+                        {t(language, 'telemetryProbes.expectedStatus')}
+                      </dt>
+                      <dd className="font-mono text-[var(--content)]">{expectedStatus}</dd>
+                      <dt className="text-[var(--content-muted)]">
+                        {t(language, 'telemetryProbes.actualStatus')}
+                      </dt>
+                      <dd className="font-mono text-[var(--content)]">{actualStatus ?? '—'}</dd>
+                    </>
+                  )}
                   {status === 'failure' && (
                     <>
                       <dt className="text-[var(--content-muted)]">

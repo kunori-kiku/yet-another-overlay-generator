@@ -146,6 +146,45 @@ func TestInstallerCapability_SuccessorRequiresGenericAndDeviceMarkers(t *testing
 	}
 }
 
+func TestInstallerCapability_URLRequiresGenericAndFeatureMarkers(t *testing.T) {
+	node := &model.Node{
+		ID: "node-1", Name: "node-1", Role: "peer", Platform: "debian",
+		TelemetryProbes: []model.TelemetryProbe{{
+			ID: "health", Type: model.TelemetryProbeURL, URL: "https://service.internal/ready",
+		}},
+	}
+	requirements, err := requiredInstallerCapabilities(node, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requirements) != 2 ||
+		requirements[0].ValueExpression.String() != "${"+telemetrycap.InstallerPolicyV2Env+":-}" ||
+		requirements[1].ValueExpression.String() != "${"+telemetrycap.InstallerURLV1Env+":-}" {
+		t.Fatalf("URL installer requirements = %+v, want generic and URL markers", requirements)
+	}
+
+	script, err := RenderInstallScriptSigned(node, nil, false, "", CustodySplice{Enabled: true, Token: "PRIVATEKEY_PLACEHOLDER"}, model.InstallFetch{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", path)
+	base := withoutEnvironmentVariable(os.Environ(), telemetrycap.InstallerPolicyV2Env)
+	base = withoutEnvironmentVariable(base, telemetrycap.InstallerURLV1Env)
+	cmd.Env = append(base, telemetrycap.InstallerPolicyV2Env+"=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("generic-v2-only launcher unexpectedly applied a URL bundle")
+	}
+	if !strings.Contains(stderr.String(), "url-probes-v1 capable") {
+		t.Fatalf("URL capability refusal = %q", stderr.String())
+	}
+}
+
 func withoutEnvironmentVariable(base []string, name string) []string {
 	prefix := name + "="
 	out := make([]string, 0, len(base))

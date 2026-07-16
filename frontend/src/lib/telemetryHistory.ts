@@ -1,3 +1,6 @@
+import type { TelemetryProbe } from '../types/topology';
+import { isValidProbeURL } from './probeResults';
+
 // telemetryHistory.ts — PURE logic for the node-detail telemetry-history charts: the param→query
 // wiring (range preset + granularity → from/to/step), the wire→typed parsing of the additive
 // `GET node-history` response, the Go-duration math the charts need, and the resource/probe
@@ -65,7 +68,7 @@ export interface HistoryBucket {
 }
 
 // ProbeHistoryBucket aggregates completed attempts for one signed probe policy in one time bucket.
-// latencyMS is absent when the bucket had no successful attempt; that is a chart gap, never 0 ms.
+// latencyMS is absent when no completed response carried latency; that is a chart gap, never 0 ms.
 // failureReasons is intentionally an open string map so a newer controller can add a stable reason
 // without making an older panel discard an otherwise valid bucket.
 export interface ProbeHistoryBucket {
@@ -82,17 +85,20 @@ export interface ProbeHistoryBucket {
 }
 
 // ProbeHistorySeries is keyed by the controller's policy identity. The executable destination is
-// repeated so the UI can require an exact id/type/host/port match with the CURRENT design before it
+// repeated so the UI can require an exact typed-destination match with the CURRENT design before it
 // attributes old measurements to a configured probe.
-export interface ProbeHistorySeries {
+interface ProbeHistorySeriesBase {
   seriesId: string;
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
   intervalMS?: number;
   buckets: ProbeHistoryBucket[];
 }
+
+export type ProbeHistorySeries = ProbeHistorySeriesBase & (
+  | { type: 'icmp'; host: string; port?: never; url?: never; expectedStatus?: never }
+  | { type: 'tcp'; host: string; port: number; url?: never; expectedStatus?: never }
+  | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
+);
 
 // NodeHistory is the parsed response. step is the EFFECTIVE step (may be widened from the
 // request); disabled true means history retention is off (fleet cap 0) → the panel shows a hint.
@@ -103,12 +109,15 @@ export interface NodeHistory {
   probes: ProbeHistorySeries[];
 }
 
-export interface HistoryProbeSelector {
+interface HistoryProbeSelectorBase {
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
 }
+
+export type HistoryProbeSelector = HistoryProbeSelectorBase & (
+  | { type: 'icmp'; host: string; port?: never; url?: never; expectedStatus?: never }
+  | { type: 'tcp'; host: string; port: number; url?: never; expectedStatus?: never }
+  | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
+);
 
 // Request options stay component-local. `probe` is an exact executable-destination selector;
 // `includeProbes:false` is useful when the current node has no configured probe. `signal` is not
@@ -190,8 +199,13 @@ export function historyQueryString(
   if (options.probe) {
     p.set('probe_id', options.probe.id);
     p.set('probe_type', options.probe.type);
-    p.set('probe_host', options.probe.host);
-    if (options.probe.type === 'tcp' && options.probe.port !== undefined) {
+    if (options.probe.type === 'url') {
+      p.set('probe_url', options.probe.url);
+      p.set('probe_expected_status', String(options.probe.expectedStatus));
+    } else {
+      p.set('probe_host', options.probe.host);
+    }
+    if (options.probe.type === 'tcp') {
       p.set('probe_port', String(options.probe.port));
     }
   }
@@ -335,7 +349,6 @@ function parseProbeBucket(raw: unknown): ProbeHistoryBucket | null {
   const latency = parseAgg(o.latency_ms);
   if (
     latency &&
-    successes > 0 &&
     latency.avg >= 0 &&
     (latency.min === undefined || latency.min >= 0) &&
     (latency.max === undefined || latency.max >= 0)
@@ -354,33 +367,68 @@ function parseProbeSeries(raw: unknown): ProbeHistorySeries | null {
     typeof o.id !== 'string' ||
     o.id.length === 0 ||
     o.id.length > 63 ||
-    (o.type !== 'icmp' && o.type !== 'tcp') ||
+    (o.type !== 'icmp' && o.type !== 'tcp' && o.type !== 'url')
+  ) {
+    return null;
+  }
+  const common = {
+    seriesId: o.series_id,
+    id: o.id,
+    intervalMS: parseProbeIntervalMS(o.interval_ms),
+    buckets: parseAccepted(o.buckets, MAX_HISTORY_BUCKETS, parseProbeBucket),
+  };
+  if (o.type === 'url') {
+    const expectedStatus = parseCount(o.expected_status);
+    if (
+      o.host !== undefined ||
+      o.port !== undefined ||
+      !isValidProbeURL(o.url) ||
+      expectedStatus === null || expectedStatus < 100 || expectedStatus > 599
+    ) {
+      return null;
+    }
+    return {
+      seriesId: common.seriesId,
+      id: common.id,
+      type: 'url',
+      url: o.url,
+      expectedStatus,
+      ...(common.intervalMS === undefined ? {} : { intervalMS: common.intervalMS }),
+      buckets: common.buckets,
+    };
+  }
+  if (
+    o.url !== undefined ||
+    o.expected_status !== undefined ||
     typeof o.host !== 'string' ||
     o.host.length === 0 ||
     o.host.length > 253
   ) {
     return null;
   }
-  let port: number | undefined;
   if (o.type === 'tcp') {
     const parsed = parseCount(o.port);
     if (parsed === null || parsed < 1 || parsed > 65535) return null;
-    port = parsed;
-  } else if (o.port !== undefined) {
-    return null;
+    return {
+      seriesId: common.seriesId,
+      id: common.id,
+      type: 'tcp',
+      host: o.host,
+      port: parsed,
+      ...(common.intervalMS === undefined ? {} : { intervalMS: common.intervalMS }),
+      buckets: common.buckets,
+    };
   }
+  if (o.port !== undefined) return null;
   // Cadence is advisory chart metadata. A newer controller value outside the currently understood
   // range must not discard a valid exact series; degrade it to "unknown" and use current policy.
-  const intervalMS = parseProbeIntervalMS(o.interval_ms);
-  const buckets = parseAccepted(o.buckets, MAX_HISTORY_BUCKETS, parseProbeBucket);
   return {
-    seriesId: o.series_id,
-    id: o.id,
-    type: o.type,
+    seriesId: common.seriesId,
+    id: common.id,
+    type: 'icmp',
     host: o.host,
-    ...(port === undefined ? {} : { port }),
-    ...(intervalMS === undefined ? {} : { intervalMS }),
-    buckets,
+    ...(common.intervalMS === undefined ? {} : { intervalMS: common.intervalMS }),
+    buckets: common.buckets,
   };
 }
 
@@ -554,13 +602,18 @@ export function summarizeProbeFailures(buckets: readonly ProbeHistoryBucket[]): 
 }
 
 export function probeHistoryMatchesPolicy(
-  probe: { id: string; type: 'icmp' | 'tcp'; host: string; port?: number },
+  probe: TelemetryProbe,
   series: ProbeHistorySeries,
 ): boolean {
-  return probe.id === series.id &&
-    probe.type === series.type &&
-    probe.host === series.host &&
-    (probe.port ?? undefined) === (series.port ?? undefined);
+  if (probe.id !== series.id || probe.type !== series.type) return false;
+  if (probe.type === 'url') {
+    return series.type === 'url' && probe.url === series.url &&
+      (probe.expected_status || 200) === series.expectedStatus;
+  }
+  if (probe.type === 'tcp') {
+    return series.type === 'tcp' && probe.host === series.host && probe.port === series.port;
+  }
+  return series.type === 'icmp' && probe.host === series.host;
 }
 
 export interface LatestRequestCoordinator<Query> {

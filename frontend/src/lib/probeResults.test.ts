@@ -1,12 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatProbeTarget,
+  isValidProbeURL,
   mapProbeResults,
   probeDisplayName,
+  probeExpectedStatusInvalid,
   probeResultMatchesPolicy,
   sameTelemetryPolicy,
   summarizeProbeResults,
 } from './probeResults';
+
+describe('URL policy validation', () => {
+  it('matches the signed Go policy for raw authority and expected-status boundaries', () => {
+    expect(isValidProbeURL('http://127.0.0.1:8080/health')).toBe(true);
+    expect(isValidProbeURL('https://[::1]:8443/status?check=yes')).toBe(true);
+    for (const invalid of [
+      'HTTPS://example.test/',
+      'https://@example.test/',
+      'https://user@example.test/',
+      'https://example.test:/',
+      'https://example.test:0/',
+      'https://example.test:65536/',
+      'https://example.test/\u0085',
+    ]) {
+      expect(isValidProbeURL(invalid), invalid).toBe(false);
+    }
+
+    expect(probeExpectedStatusInvalid({ id: 'default', type: 'url', url: 'https://example.test/' })).toBe(false);
+    expect(probeExpectedStatusInvalid({ id: 'low', type: 'url', url: 'https://example.test/', expected_status: 99 })).toBe(true);
+    expect(probeExpectedStatusInvalid({ id: 'high', type: 'url', url: 'https://example.test/', expected_status: 600 })).toBe(true);
+    expect(probeExpectedStatusInvalid({ id: 'icmp', type: 'icmp', host: 'example.test' })).toBe(false);
+  });
+});
 
 describe('mapProbeResults', () => {
   it('maps the closed ICMP/TCP result contract without exposing resolved addresses', () => {
@@ -68,6 +93,57 @@ describe('mapProbeResults', () => {
   it('returns an empty list for non-array telemetry', () => {
     expect(mapProbeResults(null)).toEqual([]);
     expect(mapProbeResults({})).toEqual([]);
+  });
+
+  it('maps strict URL success and mismatch outcomes with categorical latest codes', () => {
+    expect(mapProbeResults([{
+      id: 'ok',
+      type: 'url',
+      url: 'https://service.example/health',
+      expected_status: 204,
+      actual_status: 204,
+      status: 'success',
+      latency_ms: 12.5,
+      checked_at: '2026-07-17T10:00:00Z',
+    }, {
+      id: 'mismatch',
+      type: 'url',
+      url: 'https://service.example/health',
+      expected_status: 200,
+      actual_status: 500,
+      status: 'failure',
+      latency_ms: 19.25,
+      checked_at: '2026-07-17T10:00:01Z',
+      failure_reason: 'unexpected_status',
+    }])).toEqual([{
+      id: 'ok',
+      type: 'url',
+      url: 'https://service.example/health',
+      expectedStatus: 204,
+      actualStatus: 204,
+      status: 'success',
+      latencyMS: 12.5,
+      checkedAt: '2026-07-17T10:00:00Z',
+    }, {
+      id: 'mismatch',
+      type: 'url',
+      url: 'https://service.example/health',
+      expectedStatus: 200,
+      actualStatus: 500,
+      status: 'failure',
+      latencyMS: 19.25,
+      checkedAt: '2026-07-17T10:00:01Z',
+      failureReason: 'unexpected_status',
+    }]);
+  });
+
+  it('rejects mixed URL fields and invalid status/result combinations', () => {
+    expect(mapProbeResults([
+      { id: 'host', type: 'url', url: 'https://example.test', host: 'example.test', expected_status: 200, status: 'pending' },
+      { id: 'range', type: 'url', url: 'https://example.test', expected_status: 99, status: 'pending' },
+      { id: 'equal-mismatch', type: 'url', url: 'https://example.test', expected_status: 500, actual_status: 500, status: 'failure', latency_ms: 1, failure_reason: 'unexpected_status' },
+      { id: 'transport-code', type: 'url', url: 'https://example.test', expected_status: 200, actual_status: 500, status: 'failure', failure_reason: 'timeout' },
+    ])).toEqual([]);
   });
 });
 
@@ -134,6 +210,23 @@ describe('policy/result identity', () => {
     expect(sameTelemetryPolicy([probe], [{ ...probe }])).toBe(true);
     expect(sameTelemetryPolicy([probe], [{ ...probe, name: 'Renamed API' }])).toBe(false);
     expect(sameTelemetryPolicy([probe], [{ ...probe, timeout_milliseconds: 1000 }])).toBe(false);
+  });
+
+  it('matches URL results by exact URL and effective expected status while ignoring display name', () => {
+    const probe = { id: 'health', name: 'API', type: 'url' as const, url: 'https://service.example/' };
+    const result = {
+      id: 'health',
+      type: 'url' as const,
+      url: 'https://service.example/',
+      expectedStatus: 200,
+      status: 'pending' as const,
+    };
+    expect(probeResultMatchesPolicy(probe, result)).toBe(true);
+    expect(probeResultMatchesPolicy({ ...probe, name: 'Renamed' }, result)).toBe(true);
+    expect(probeResultMatchesPolicy({ ...probe, expected_status: 204 }, result)).toBe(false);
+    expect(probeResultMatchesPolicy({ ...probe, url: 'https://other.example/' }, result)).toBe(false);
+    expect(sameTelemetryPolicy([probe], [{ ...probe, expected_status: 200 }])).toBe(true);
+    expect(sameTelemetryPolicy([probe], [{ ...probe, expected_status: 204 }])).toBe(false);
   });
 });
 

@@ -185,6 +185,65 @@ func TestProbeHistoryProjectsSamplesAndRC9FallbackWithoutDuplicates(t *testing.T
 	}
 }
 
+func TestProbeHistoryURLMismatchSurvivesRestartWithoutActualStatus(t *testing.T) {
+	dir := t.TempDir()
+	h := newTelemetryHistory(dir, 100, nil)
+	base := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	latency := 18.75
+	resultFor := func(expectedStatus int) probemetric.Result {
+		return probemetric.Result{
+			ID: "health", Type: "url", URL: "https://service.example/ready",
+			ExpectedStatus: expectedStatus, ActualStatus: 500,
+			Status: probemetric.StatusFailure, LatencyMS: &latency,
+			CheckedAt:     base.Format(time.RFC3339Nano),
+			FailureReason: probemetric.FailureUnexpectedStatus, IntervalMS: 30_000,
+		}
+	}
+	expects204 := resultFor(204)
+	expects200 := resultFor(200)
+	h.appendMetrics("tn", "n1", map[string]json.RawMessage{
+		telemetrymetric.ProbeSamples.Key: encodedProbeMetric(t, expects204, expects200),
+		// The latest snapshot repeats one exact attempt; it must not survive as a duplicate.
+		telemetrymetric.ProbeResults.Key: encodedProbeMetric(t, expects204),
+	}, base, 30*time.Second)
+	h.flushOnce()
+
+	path, err := h.nodeFile("tn", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"actual_status"`) {
+		t.Fatalf("categorical actual status leaked into durable history: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"expected_status":204`) || !strings.Contains(string(raw), `"unexpected_status"`) {
+		t.Fatalf("durable URL identity/outcome missing: %s", raw)
+	}
+
+	restarted := newTelemetryHistory(dir, 100, nil)
+	got, err := restarted.queryProbes("tn", "n1", base.Add(-time.Second), base.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("reloaded URL histories = %d, want two exact expected-status series: %+v", len(got), got)
+	}
+	seen := map[int]bool{}
+	for _, sample := range got {
+		seen[sample.ExpectedStatus] = true
+		if sample.URL != expects204.URL || sample.Status != probemetric.StatusFailure ||
+			sample.FailureReason != probemetric.FailureUnexpectedStatus || sample.LatencyMS == nil || *sample.LatencyMS != latency {
+			t.Fatalf("reloaded URL mismatch lost retained chart data: %+v", sample)
+		}
+	}
+	if !seen[200] || !seen[204] || got[0].SeriesID == got[1].SeriesID {
+		t.Fatalf("expected status did not separate URL series: %+v", got)
+	}
+}
+
 func TestProbeHistoryBoundsAttemptTimestampsAndTenant(t *testing.T) {
 	h := newTelemetryHistory("", 100, nil)
 	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)

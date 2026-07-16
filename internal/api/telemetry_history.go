@@ -187,13 +187,15 @@ type probeHistoryBucket struct {
 }
 
 type probeHistorySeries struct {
-	SeriesID   string               `json:"series_id"`
-	ID         string               `json:"id"`
-	Type       string               `json:"type"`
-	Host       string               `json:"host"`
-	Port       int                  `json:"port,omitempty"`
-	IntervalMS int64                `json:"interval_ms,omitempty"`
-	Buckets    []probeHistoryBucket `json:"buckets"`
+	SeriesID       string               `json:"series_id"`
+	ID             string               `json:"id"`
+	Type           string               `json:"type"`
+	Host           string               `json:"host,omitempty"`
+	Port           int                  `json:"port,omitempty"`
+	URL            string               `json:"url,omitempty"`
+	ExpectedStatus int                  `json:"expected_status,omitempty"`
+	IntervalMS     int64                `json:"interval_ms,omitempty"`
+	Buckets        []probeHistoryBucket `json:"buckets"`
 }
 
 // aggAcc accumulates one metric across a bucket.
@@ -308,22 +310,27 @@ func aggregateHistory(samples []controller.ResourceSample, step time.Duration) [
 }
 
 type probeHistorySelector struct {
-	ID   string
-	Type string
-	Host string
-	Port int
+	ID             string
+	Type           string
+	Host           string
+	Port           int
+	URL            string
+	ExpectedStatus int
 }
 
 func (selector probeHistorySelector) matches(sample controller.ProbeHistorySample) bool {
 	return sample.ID == selector.ID &&
 		sample.Type == selector.Type &&
 		sample.Host == selector.Host &&
-		sample.Port == selector.Port
+		sample.Port == selector.Port &&
+		sample.URL == selector.URL &&
+		sample.ExpectedStatus == selector.ExpectedStatus
 }
 
 func (selector probeHistorySelector) seriesID() string {
 	return probemetric.SeriesID(probemetric.Result{
 		ID: selector.ID, Type: selector.Type, Host: selector.Host, Port: selector.Port,
+		URL: selector.URL, ExpectedStatus: selector.ExpectedStatus,
 	})
 }
 
@@ -373,22 +380,25 @@ func telemetryHistoryStreamCount(history controller.TelemetryHistorySnapshot) in
 
 // aggregateProbeHistory keeps exact executable destinations separate, selects at most the sixteen
 // series with the newest attempt in the requested window, and applies the same stable epoch bucket grid
-// as resource history. A failure increments availability counters/reasons but contributes no latency;
-// zero milliseconds remains a valid successful measurement, never an outage sentinel.
+// as resource history. Every completed response carrying latency contributes it, including a URL
+// response whose exact status mismatched; transport failures still form latency gaps. Zero milliseconds
+// remains a valid measurement, never an outage sentinel.
 func aggregateProbeHistory(samples []controller.ProbeHistorySample, step time.Duration) []probeHistorySeries {
 	if step <= 0 || len(samples) == 0 {
 		return nil
 	}
 	type seriesAcc struct {
-		seriesID   string
-		id         string
-		typeName   string
-		host       string
-		port       int
-		intervalMS int64
-		intervalAt time.Time
-		latest     time.Time
-		samples    []controller.ProbeHistorySample
+		seriesID       string
+		id             string
+		typeName       string
+		host           string
+		port           int
+		url            string
+		expectedStatus int
+		intervalMS     int64
+		intervalAt     time.Time
+		latest         time.Time
+		samples        []controller.ProbeHistorySample
 	}
 	bySeries := make(map[string]*seriesAcc)
 	for _, sample := range samples {
@@ -397,6 +407,7 @@ func aggregateProbeHistory(samples []controller.ProbeHistorySample, step time.Du
 			series = &seriesAcc{
 				seriesID: sample.SeriesID, id: sample.ID, typeName: sample.Type,
 				host: sample.Host, port: sample.Port,
+				url: sample.URL, expectedStatus: sample.ExpectedStatus,
 			}
 			bySeries[sample.SeriesID] = series
 		}
@@ -447,12 +458,12 @@ func aggregateProbeHistory(samples []controller.ProbeHistorySample, step time.Du
 				bucket.intervalMS = sample.IntervalMS
 				bucket.intervalAt = sample.CheckedAt
 			}
+			if sample.LatencyMS != nil {
+				bucket.latency.add(*sample.LatencyMS)
+			}
 			switch sample.Status {
 			case probemetric.StatusSuccess:
 				bucket.successes++
-				if sample.LatencyMS != nil {
-					bucket.latency.add(*sample.LatencyMS)
-				}
 			case probemetric.StatusFailure:
 				bucket.failures++
 				if sample.FailureReason != "" {
@@ -480,7 +491,8 @@ func aggregateProbeHistory(samples []controller.ProbeHistorySample, step time.Du
 		}
 		out = append(out, probeHistorySeries{
 			SeriesID: series.seriesID, ID: series.id, Type: series.typeName,
-			Host: series.host, Port: series.port, IntervalMS: series.intervalMS,
+			Host: series.host, Port: series.port,
+			URL: series.url, ExpectedStatus: series.expectedStatus, IntervalMS: series.intervalMS,
 			Buckets: buckets,
 		})
 	}
@@ -573,7 +585,9 @@ func parseTelemetryHistoryEncodingOptions(q url.Values) (telemetryHistoryEncodin
 		}
 	}
 
-	selectorFields := []string{"probe_id", "probe_type", "probe_host", "probe_port"}
+	selectorFields := []string{
+		"probe_id", "probe_type", "probe_host", "probe_port", "probe_url", "probe_expected_status",
+	}
 	hasSelector := false
 	for _, field := range selectorFields {
 		if q.Has(field) {
@@ -587,26 +601,56 @@ func parseTelemetryHistoryEncodingOptions(q url.Values) (telemetryHistoryEncodin
 	if !options.includeProbes {
 		return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "include_probes")
 	}
-	for _, field := range []string{"probe_id", "probe_type", "probe_host"} {
+	for _, field := range []string{"probe_id", "probe_type"} {
 		if q.Get(field) == "" {
 			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldRequired).With("field", field)
 		}
 	}
 
 	probe := model.TelemetryProbe{
-		ID: q.Get("probe_id"), Type: q.Get("probe_type"), Host: q.Get("probe_host"),
+		ID: q.Get("probe_id"), Type: q.Get("probe_type"),
 	}
 	switch probe.Type {
 	case model.TelemetryProbeTCP:
+		if q.Get("probe_host") == "" {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldRequired).With("field", "probe_host")
+		}
+		if q.Has("probe_url") || q.Has("probe_expected_status") {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_type")
+		}
+		if q.Get("probe_port") == "" {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldRequired).With("field", "probe_port")
+		}
+		probe.Host = q.Get("probe_host")
 		port, err := strconv.Atoi(q.Get("probe_port"))
 		if err != nil {
 			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_port")
 		}
 		probe.Port = port
 	case model.TelemetryProbeICMP:
-		if q.Has("probe_port") {
-			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_port")
+		if q.Get("probe_host") == "" {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldRequired).With("field", "probe_host")
 		}
+		if q.Has("probe_port") || q.Has("probe_url") || q.Has("probe_expected_status") {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_type")
+		}
+		probe.Host = q.Get("probe_host")
+	case model.TelemetryProbeURL:
+		if q.Has("probe_host") || q.Has("probe_port") {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_type")
+		}
+		if q.Get("probe_url") == "" {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldRequired).With("field", "probe_url")
+		}
+		if q.Get("probe_expected_status") == "" {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldRequired).With("field", "probe_expected_status")
+		}
+		expectedStatus, err := strconv.Atoi(q.Get("probe_expected_status"))
+		if err != nil || expectedStatus < 100 || expectedStatus > 599 {
+			return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_expected_status")
+		}
+		probe.URL = q.Get("probe_url")
+		probe.ExpectedStatus = expectedStatus
 	default:
 		return telemetryHistoryEncodingOptions{}, apierr.New(apierr.CodeReqFieldInvalid).With("field", "probe_type")
 	}
@@ -615,12 +659,14 @@ func parseTelemetryHistoryEncodingOptions(q url.Values) (telemetryHistoryEncodin
 	}
 	options.probeSelector = &probeHistorySelector{
 		ID: probe.ID, Type: probe.Type, Host: probe.Host, Port: probe.Port,
+		URL: probe.URL, ExpectedStatus: probe.ExpectedStatus,
 	}
 	return options, nil
 }
 
 // HandleNodeHistory serves GET ?node=<id>&from=<RFC3339>&to=<RFC3339>&step=<duration>, with optional
-// include_probes=false or one exact probe_id/probe_type/probe_host[/probe_port] selector.
+// include_probes=false or one exact type-specific probe selector. ICMP/TCP select by host and optional
+// TCP port; URL selects by exact URL and effective expected status.
 // Operator-gated (routed through the op() adapter, which applies the method guard + identity check).
 func (h *ControllerHandler) HandleNodeHistory(ctx context.Context, tenant controller.TenantID, _ string, _ http.ResponseWriter, r *http.Request) (any, *apierr.Error) {
 	q := r.URL.Query()

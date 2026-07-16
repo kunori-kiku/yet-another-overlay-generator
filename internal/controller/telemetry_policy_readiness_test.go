@@ -91,11 +91,36 @@ func TestReadiness_UsesReadyManagedLatestCapabilitiesWithoutVersionInference(t *
 	}
 }
 
-func TestUpgradeAgentsFirst_ProjectsOnlySuccessorFieldsAndReportsSortedIDs(t *testing.T) {
+func TestReadiness_URLRequiresFeatureCapability(t *testing.T) {
 	topo := stageTestTopo()
 	topo.Nodes[0].TelemetryProbes = []model.TelemetryProbe{{
-		ID: "legacy", Type: model.TelemetryProbeICMP, Host: "legacy.example",
+		ID: "health", Type: model.TelemetryProbeURL, URL: "https://service.internal/ready",
 	}}
+	nodes := []Node{{
+		NodeID: "node-router", Status: NodeApproved, WGPublicKey: genWGPubKey(t),
+		Telemetry: map[string]json.RawMessage{
+			telemetrymetric.AgentCapabilitiesKey: agentCapabilitiesJSON(t, telemetrycap.PolicyV2),
+		},
+	}}
+	_, _, err := PrepareTelemetryPolicyDeployment(topo, nodes, TelemetryPolicyDeployNormal)
+	var readiness *TelemetryPolicyReadinessError
+	if !errors.As(err, &readiness) || !reflect.DeepEqual(readiness.NodeIDs, []string{"node-router"}) {
+		t.Fatalf("generic-v2-only readiness = %v / %+v, want node-router blocked", err, readiness)
+	}
+	nodes[0].Telemetry[telemetrymetric.AgentCapabilitiesKey] = agentCapabilitiesJSON(t,
+		telemetrycap.PolicyV2, telemetrycap.URLV1,
+	)
+	if _, _, err := PrepareTelemetryPolicyDeployment(topo, nodes, TelemetryPolicyDeployNormal); err != nil {
+		t.Fatalf("URL-capable agent remained blocked: %v", err)
+	}
+}
+
+func TestUpgradeAgentsFirst_ProjectsOnlySuccessorFieldsAndReportsSortedIDs(t *testing.T) {
+	topo := stageTestTopo()
+	topo.Nodes[0].TelemetryProbes = []model.TelemetryProbe{
+		{ID: "legacy", Type: model.TelemetryProbeICMP, Host: "legacy.example"},
+		{ID: "web", Type: model.TelemetryProbeURL, URL: "https://service.internal/"},
+	}
 	topo.Nodes[0].TelemetryDevices = &model.TelemetryDevicePolicy{Mode: string(probepolicy.DeviceModeAllEligibleV1)}
 	topo.Nodes[2].TelemetryDevices = &model.TelemetryDevicePolicy{Mode: string(probepolicy.DeviceModeAllEligibleV1)}
 
@@ -114,7 +139,7 @@ func TestUpgradeAgentsFirst_ProjectsOnlySuccessorFieldsAndReportsSortedIDs(t *te
 	if len(projected.Nodes[0].TelemetryProbes) != 1 || projected.Nodes[0].TelemetryProbes[0].ID != "legacy" {
 		t.Fatalf("upgrade-first projection removed v1-compatible probes: %+v", projected.Nodes[0].TelemetryProbes)
 	}
-	if topo.Nodes[0].TelemetryDevices == nil || topo.Nodes[2].TelemetryDevices == nil {
+	if topo.Nodes[0].TelemetryDevices == nil || topo.Nodes[2].TelemetryDevices == nil || len(topo.Nodes[0].TelemetryProbes) != 2 {
 		t.Fatal("upgrade-first projection erased the saved successor draft")
 	}
 	if _, _, err := PrepareTelemetryPolicyDeployment(topo, nil, "future-mode"); err == nil {

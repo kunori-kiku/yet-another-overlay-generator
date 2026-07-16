@@ -176,7 +176,7 @@ var registry = map[Code]string{
 	CodeNodeRoleEmpty:                      "Node role must not be empty.",
 	CodeNodeRoleInvalid:                    "Invalid role: {role}. Allowed values: peer, router, relay, gateway, client.",
 	CodeNodeDeploymentModeInvalid:          "Invalid deployment_mode: {mode}. Allowed values: managed, manual (or empty for managed).",
-	CodeNodeTelemetryProbesInvalid:         "Invalid active telemetry configuration: {detail}. Set one host (an IP literal or DNS hostname) per probe; TCP also requires one port.",
+	CodeNodeTelemetryProbesInvalid:         "Invalid active telemetry configuration: {detail}. Set one destination per probe: an IP/DNS host for ICMP or TCP (TCP also requires one port), or an absolute HTTP(S) URL for a URL check.",
 	CodeNodeTelemetryDevicesInvalid:        "Invalid automatic device telemetry configuration: {detail}.",
 	CodeNodePlatformUnsupported:            "Unsupported platform: {platform}. Allowed values: debian, ubuntu.",
 	CodeNodeXDPModeInvalid:                 "Invalid XDP mode: {mode}. Allowed values: skb, native (empty is equivalent to skb).",

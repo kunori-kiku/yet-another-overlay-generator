@@ -67,10 +67,21 @@ describe('stripLiveTelemetry (persist custody)', () => {
   });
 
   it('omits active-probe results and their internal destination from browser persistence', () => {
-    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node())));
+    const serialized = JSON.parse(JSON.stringify(stripLiveTelemetry(node({
+      probeResults: [{
+        id: 'health',
+        type: 'url',
+        url: 'https://internal.example/health',
+        expectedStatus: 200,
+        actualStatus: 503,
+        status: 'failure',
+        latencyMS: 17,
+        failureReason: 'unexpected_status',
+      }],
+    }))));
     expect('probeResults' in serialized).toBe(false);
-    expect(JSON.stringify(serialized).includes('db.internal.example')).toBe(false);
-    expect(JSON.stringify(serialized).includes('5432')).toBe(false);
+    expect(JSON.stringify(serialized).includes('internal.example')).toBe(false);
+    expect(JSON.stringify(serialized).includes('503')).toBe(false);
   });
 
   it('omits live agent capability evidence so stale readiness cannot survive a reload', () => {

@@ -116,20 +116,45 @@ export type TelemetryProbeFailureReason =
   | 'permission_denied'
   | 'connection_refused'
   | 'network_unreachable'
-  | 'network_error';
+  | 'network_error'
+  | 'unexpected_status';
 
-// TelemetryProbeResult is one bounded ICMP/TCP check result reported by the agent. host is the
-// configured IP literal or DNS hostname; resolved addresses are intentionally not exposed.
-export interface TelemetryProbeResult {
+interface TelemetryProbeResultBase {
   id: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
   status: TelemetryProbeResultStatus;
   latencyMS?: number;
   checkedAt?: string;
   failureReason?: TelemetryProbeFailureReason;
 }
+
+// One bounded signed-policy result reported by the agent. Resolved addresses are intentionally not
+// exposed. URL response codes are latest categorical metadata, never a numeric history metric.
+export type TelemetryProbeResult = TelemetryProbeResultBase & (
+  | {
+      type: 'icmp';
+      host: string;
+      port?: never;
+      url?: never;
+      expectedStatus?: never;
+      actualStatus?: never;
+    }
+  | {
+      type: 'tcp';
+      host: string;
+      port: number;
+      url?: never;
+      expectedStatus?: never;
+      actualStatus?: never;
+    }
+  | {
+      type: 'url';
+      url: string;
+      expectedStatus: number;
+      actualStatus?: number;
+      host?: never;
+      port?: never;
+    }
+);
 
 // NativeXDP is the node's egress-NIC native-XDP capability heuristic (plan-4), projected from the
 // agent's metrics["native_xdp"]. Best-effort (driver-name + kernel heuristic, pure sysfs — no live-NIC

@@ -62,4 +62,53 @@ describe('canonicalDesign telemetry probes', () => {
 
     expect(canonicalDesign(scheduled)).not.toBe(canonicalDesign(defaults));
   });
+
+  it('omits an empty display name but preserves a configured name as a design change', () => {
+    const omitted = topologyWithProbe({
+      id: 'service',
+      type: 'tcp',
+      host: 'service.example',
+      port: 443,
+    });
+    const empty = topologyWithProbe({
+      id: 'service',
+      name: '',
+      type: 'tcp',
+      host: 'service.example',
+      port: 443,
+    });
+    const named = topologyWithProbe({
+      id: 'service',
+      name: 'Customer API',
+      type: 'tcp',
+      host: 'service.example',
+      port: 443,
+    });
+
+    expect(canonicalDesign(empty)).toBe(canonicalDesign(omitted));
+    expect(canonicalDesign(named)).not.toBe(canonicalDesign(omitted));
+  });
+
+  it('mirrors URL probe omitempty fields without erasing an explicit success contract', () => {
+    const omittedDefault = topologyWithProbe({
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+    });
+    const explicitZero = topologyWithProbe({
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+      expected_status: 0,
+    });
+    const explicitSuccess = topologyWithProbe({
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+      expected_status: 204,
+    });
+
+    expect(canonicalDesign(explicitZero)).toBe(canonicalDesign(omittedDefault));
+    expect(canonicalDesign(explicitSuccess)).not.toBe(canonicalDesign(omittedDefault));
+  });
 });

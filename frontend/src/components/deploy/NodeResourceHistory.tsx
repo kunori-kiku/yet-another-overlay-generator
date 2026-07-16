@@ -4,7 +4,12 @@ import { useControllerStore } from '../../stores/controllerStore';
 import { useTopologyStore } from '../../stores/topologyStore';
 import { t, type MessageKey, type UILanguage } from '../../i18n';
 import { TimeSeriesChart, type TimeSeriesSeries } from '../charts/TimeSeriesChart';
-import { formatProbeTarget, probeDisplayName } from '../../lib/probeResults';
+import {
+  effectiveExpectedStatus,
+  formatProbeDestination,
+  isValidProbeURL,
+  probeDisplayName,
+} from '../../lib/probeResults';
 import {
   GRANULARITIES,
   HISTORY_CHART_FAMILIES,
@@ -31,6 +36,7 @@ import {
 import type {
   Granularity,
   HistoryChartFamily,
+  HistoryProbeSelector,
   NodeHistory,
   NodeHistoryRequestOptions,
   RangePreset,
@@ -54,6 +60,7 @@ const FAILURE_KEYS: Record<TelemetryProbeFailureReason, MessageKey> = {
   connection_refused: 'telemetryProbes.failure.connectionRefused',
   network_unreachable: 'telemetryProbes.failure.networkUnreachable',
   network_error: 'telemetryProbes.failure.networkError',
+  unexpected_status: 'telemetryProbes.failure.unexpectedStatus',
 };
 
 function failureReasonLabel(reason: string, language: UILanguage): string {
@@ -157,29 +164,52 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
   useEffect(() => () => requestScheduler.dispose(), [requestScheduler]);
 
   const selectedProbe = configuredProbes.find((probe) => probe.id === selectedProbeID) ?? configuredProbes[0];
-  const selectorReady = selectedProbe !== undefined &&
-    selectedProbe.host.length > 0 &&
-    (selectedProbe.type === 'icmp' || (
-      Number.isSafeInteger(selectedProbe.port) &&
-      (selectedProbe.port ?? 0) >= 1 &&
-      (selectedProbe.port ?? 0) <= 65535
-    ));
+  const selectorReady = selectedProbe !== undefined && (
+    selectedProbe.type === 'url'
+      ? isValidProbeURL(selectedProbe.url) &&
+        Number.isSafeInteger(effectiveExpectedStatus(selectedProbe)) &&
+        effectiveExpectedStatus(selectedProbe) >= 100 &&
+        effectiveExpectedStatus(selectedProbe) <= 599
+      : selectedProbe.host.length > 0 && (
+        selectedProbe.type === 'icmp' || (
+          Number.isSafeInteger(selectedProbe.port) &&
+          selectedProbe.port >= 1 &&
+          selectedProbe.port <= 65535
+        )
+      )
+  );
 
   // Fetch on mount, a parameter/exact-selector change, or a node-specific telemetry receipt. The
   // coordinator permits one request at a time, aborts a superseded key, and retains only the latest
   // same-key Live tick for a follow-up. Its callbacks are microtask-delivered, outside effect setup.
   useEffect(() => {
     const { from, to } = rangeWindow(range, Date.now());
-    const selector = selectorReady && selectedProbe
-      ? {
+    let selector: HistoryProbeSelector | undefined;
+    if (selectorReady && selectedProbe) {
+      if (selectedProbe.type === 'url') {
+        selector = {
           id: selectedProbe.id,
-          type: selectedProbe.type,
+          type: 'url',
+          url: selectedProbe.url,
+          expectedStatus: effectiveExpectedStatus(selectedProbe),
+        };
+      } else if (selectedProbe.type === 'tcp') {
+        selector = {
+          id: selectedProbe.id,
+          type: 'tcp',
           host: selectedProbe.host,
-          ...(selectedProbe.type === 'tcp' ? { port: selectedProbe.port } : {}),
-        }
-      : undefined;
+          port: selectedProbe.port,
+        };
+      } else {
+        selector = { id: selectedProbe.id, type: 'icmp', host: selectedProbe.host };
+      }
+    }
     const selectorKey = selector
-      ? `${selector.id}\u0000${selector.type}\u0000${selector.host}\u0000${selector.port ?? ''}`
+      ? selector.type === 'url'
+        ? `${selector.id}\u0000url\u0000${selector.url}\u0000${selector.expectedStatus}`
+        : `${selector.id}\u0000${selector.type}\u0000${selector.host}\u0000${
+          selector.type === 'tcp' ? selector.port : ''
+        }`
       : 'resource-only';
     const requestKey = `${nodeId}\u0000${range}\u0000${granularity}\u0000${selectorKey}`;
     requestScheduler.observe({
@@ -480,7 +510,8 @@ function ProbeHistorySection({
                   <option key={probe.id} value={probe.id}>
                     {displayName}
                     {displayName !== probe.id ? ` · ${probe.id}` : ''}
-                    {' · '}{probe.type.toUpperCase()} · {formatProbeTarget(probe.host, probe.port)}
+                    {' · '}{probe.type.toUpperCase()} · {formatProbeDestination(probe)}
+                    {probe.type === 'url' ? ` · ${effectiveExpectedStatus(probe)}` : ''}
                   </option>
                 );
               })}

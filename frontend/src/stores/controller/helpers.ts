@@ -106,10 +106,11 @@ const EDGE_OMITEMPTY = [
 ];
 // PublicEndpoint nests inside node.public_endpoints; id/host/port are required, note is omitempty.
 const PUBLIC_ENDPOINT_OMITEMPTY = ['note'];
-// TelemetryProbe nests inside node.telemetry_probes. Its optional display name, schedule defaults,
-// and ICMP's absent port are encoded as empty/zero values in Go and therefore disappear when the
-// controller canonicalizes the topology.
-const TELEMETRY_PROBE_OMITEMPTY = ['name', 'port', 'interval_seconds', 'timeout_milliseconds'];
+// TelemetryProbe nests inside node.telemetry_probes. Its optional display name, typed destination
+// fields, URL status default, and schedule defaults disappear when empty/zero in Go's topology form.
+const TELEMETRY_PROBE_OMITEMPTY = [
+  'name', 'host', 'port', 'url', 'expected_status', 'interval_seconds', 'timeout_milliseconds',
+];
 
 // isEmptyVal mirrors Go's encoding/json `omitempty` "empty" definition: false, 0, "", nil,
 // and zero-length slices. (Empty objects/structs are NOT omitted by Go, and aren't dropped here.)

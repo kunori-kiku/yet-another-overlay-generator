@@ -72,7 +72,7 @@ const FAMILY_FIXTURES = {
   probe: {
     ...COMMON_PROPS,
     history: PROBE_HISTORY,
-    configuredProbes: [{ id: 'edge', type: 'tcp', host: 'edge.example.test', port: 443 }],
+    configuredProbes: [{ id: 'edge', name: 'Edge HTTPS', type: 'tcp', host: 'edge.example.test', port: 443 }],
   },
 } satisfies Record<HistoryChartFamily, HistoryChartFamilySectionProps>;
 
@@ -94,6 +94,59 @@ describe('history chart-family renderer registry', () => {
         `data-testid="${EXPECTED_SERIES[family]}"`,
       );
     }
+  });
+
+  it('shows the friendly probe name while retaining the immutable id and exact destination', () => {
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'probe',
+      ...FAMILY_FIXTURES.probe,
+    }));
+
+    expect(html).toContain('Edge HTTPS · edge · TCP · edge.example.test:443');
+  });
+
+  it('reuses latency and availability charts for URL mismatches without a status-code chart', () => {
+    const history: NodeHistory = {
+      step: '30s',
+      disabled: false,
+      buckets: [],
+      probes: [{
+        seriesId: 'f'.repeat(64),
+        id: 'health',
+        type: 'url',
+        url: 'https://service.example/health',
+        expectedStatus: 204,
+        intervalMS: 30_000,
+        buckets: [{
+          t: '2026-07-16T10:00:00Z',
+          attempts: 1,
+          successes: 0,
+          failures: 1,
+          latencyMS: { avg: 18, min: 18, max: 18 },
+          failureReasons: { unexpected_status: 1 },
+        }],
+      }],
+    };
+    const html = renderToStaticMarkup(createElement(HistoryChartFamilySection, {
+      family: 'probe',
+      ...COMMON_PROPS,
+      history,
+      selectedProbeID: 'health',
+      configuredProbes: [{
+        id: 'health',
+        name: 'Customer API',
+        type: 'url',
+        url: 'https://service.example/health',
+        expected_status: 204,
+      }],
+    }));
+
+    expect(html).toContain('Customer API · health · URL · https://service.example/health · 204');
+    expect(html).toContain('data-testid="timeseries-series-probe-latency"');
+    expect(html).toContain('data-testid="timeseries-series-probe-availability"');
+    expect(html).toContain('Unexpected HTTP status');
+    expect(html).not.toContain('status-code-chart');
+    expect(html).not.toContain('Latest HTTP status');
   });
 });
 

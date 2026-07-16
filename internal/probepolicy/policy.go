@@ -10,14 +10,17 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/model"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrycap"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetryprotocol"
 )
 
 const (
@@ -33,7 +36,15 @@ const (
 	MinTimeoutMilliseconds     = 100
 	MaxTimeoutMilliseconds     = 5000
 	MaxNameRunes               = 128
-	maxPolicyBytes             = 64 << 10
+	DefaultExpectedStatus      = 200
+	MaxURLBytes                = 2048
+	// MaxEncodedURLPolicyBytes reserves half of the authenticated telemetry metrics envelope for
+	// the exact URL strings repeated in mandatory latest-result rows. The remaining half covers the
+	// bounded row metadata and other core metrics; recent attempts and peer detail are independently
+	// shed by adaptive admission. Count Go's actual JSON encoding so HTML-sensitive query bytes such
+	// as '&' cannot expand a valid signed policy into an unreportable heartbeat.
+	MaxEncodedURLPolicyBytes = telemetryprotocol.MaxMetricsBytes / 2
+	maxPolicyBytes           = 64 << 10
 )
 
 var probeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,63}$`)
@@ -109,8 +120,10 @@ type successorPolicyWire struct {
 type successorProbeWire struct {
 	ID                  string `json:"id"`
 	Type                string `json:"type"`
-	Host                string `json:"host"`
+	Host                string `json:"host,omitempty"`
 	Port                int    `json:"port,omitempty"`
+	URL                 string `json:"url,omitempty"`
+	ExpectedStatus      int    `json:"expected_status,omitempty"`
 	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
 	TimeoutMilliseconds int    `json:"timeout_milliseconds,omitempty"`
 }
@@ -121,6 +134,8 @@ func successorProbe(probe model.TelemetryProbe) successorProbeWire {
 		Type:                probe.Type,
 		Host:                probe.Host,
 		Port:                probe.Port,
+		URL:                 probe.URL,
+		ExpectedStatus:      canonicalExpectedStatus(probe),
 		IntervalSeconds:     probe.IntervalSeconds,
 		TimeoutMilliseconds: probe.TimeoutMilliseconds,
 	}
@@ -132,6 +147,8 @@ func successorTopologyProbe(probe successorProbeWire) model.TelemetryProbe {
 		Type:                probe.Type,
 		Host:                probe.Host,
 		Port:                probe.Port,
+		URL:                 probe.URL,
+		ExpectedStatus:      probe.ExpectedStatus,
 		IntervalSeconds:     probe.IntervalSeconds,
 		TimeoutMilliseconds: probe.TimeoutMilliseconds,
 	}
@@ -165,7 +182,7 @@ func Marshal(probes []model.TelemetryProbe) ([]byte, error) {
 	if len(probes) == 0 {
 		return nil, nil
 	}
-	if err := Validate(probes); err != nil {
+	if err := validateLegacyProbes(probes); err != nil {
 		return nil, err
 	}
 	wireProbes := make([]executableProbeWire, len(probes))
@@ -208,7 +225,7 @@ func Parse(data []byte) (*Policy, error) {
 	for i := range wire.Probes {
 		policy.Probes[i] = topologyProbe(wire.Probes[i])
 	}
-	if err := Validate(policy.Probes); err != nil {
+	if err := validateLegacyProbes(policy.Probes); err != nil {
 		return nil, err
 	}
 	return policy, nil
@@ -342,7 +359,15 @@ func ValidateDevicePolicy(policy *DevicePolicy) error {
 
 // RequiresSuccessor reports whether a node needs the separately named version-2 policy member.
 func RequiresSuccessor(node model.Node) bool {
-	return node.TelemetryDevices != nil
+	if node.TelemetryDevices != nil {
+		return true
+	}
+	for _, probe := range node.TelemetryProbes {
+		if probe.Type == model.TelemetryProbeURL {
+			return true
+		}
+	}
+	return false
 }
 
 // RequiredCapabilities returns the exact authenticated agent capabilities needed to deploy a node's
@@ -352,6 +377,12 @@ func RequiredCapabilities(node model.Node) []string {
 		return nil
 	}
 	capabilities := []string{telemetrycap.PolicyV2}
+	for _, probe := range node.TelemetryProbes {
+		if probe.Type == model.TelemetryProbeURL {
+			capabilities = append(capabilities, telemetrycap.URLV1)
+			break
+		}
+	}
 	if node.TelemetryDevices != nil {
 		capabilities = append(capabilities, telemetrycap.DeviceV1)
 	}
@@ -366,6 +397,25 @@ func ProjectLegacy(node *model.Node) {
 		return
 	}
 	node.TelemetryDevices = nil
+	legacy := make([]model.TelemetryProbe, 0, len(node.TelemetryProbes))
+	for _, probe := range node.TelemetryProbes {
+		if probe.Type != model.TelemetryProbeURL {
+			legacy = append(legacy, probe)
+		}
+	}
+	node.TelemetryProbes = legacy
+}
+
+func validateLegacyProbes(probes []model.TelemetryProbe) error {
+	if err := Validate(probes); err != nil {
+		return err
+	}
+	for _, probe := range probes {
+		if probe.Type == model.TelemetryProbeURL || probe.URL != "" || probe.ExpectedStatus != 0 {
+			return fmt.Errorf("probe %q requires successor telemetry policy", probe.ID)
+		}
+	}
+	return nil
 }
 
 // Validate checks the topology and runtime form of an active probe set.
@@ -374,6 +424,7 @@ func Validate(probes []model.TelemetryProbe) error {
 		return fmt.Errorf("too many telemetry probes: got %d, max %d", len(probes), MaxProbes)
 	}
 	seen := make(map[string]struct{}, len(probes))
+	encodedURLPolicyBytes := 0
 	for i, probe := range probes {
 		if !probeIDPattern.MatchString(probe.ID) {
 			return fmt.Errorf("probe %d has invalid id %q", i, probe.ID)
@@ -385,10 +436,6 @@ func Validate(probes []model.TelemetryProbe) error {
 			return fmt.Errorf("probe %d duplicates id %q", i, probe.ID)
 		}
 		seen[probe.ID] = struct{}{}
-		if !ValidHost(probe.Host) {
-			return fmt.Errorf("probe %q has invalid host %q", probe.ID, probe.Host)
-		}
-
 		interval := EffectiveIntervalSeconds(probe)
 		if interval < MinIntervalSeconds || interval > MaxIntervalSeconds {
 			return fmt.Errorf("probe %q interval %d is outside %d..%d seconds", probe.ID, interval, MinIntervalSeconds, MaxIntervalSeconds)
@@ -403,15 +450,112 @@ func Validate(probes []model.TelemetryProbe) error {
 
 		switch probe.Type {
 		case model.TelemetryProbeICMP:
+			if !ValidHost(probe.Host) {
+				return fmt.Errorf("probe %q has invalid host %q", probe.ID, probe.Host)
+			}
 			if probe.Port != 0 {
 				return fmt.Errorf("ICMP probe %q must not set a port", probe.ID)
 			}
+			if probe.URL != "" || probe.ExpectedStatus != 0 {
+				return fmt.Errorf("ICMP probe %q must not set URL fields", probe.ID)
+			}
 		case model.TelemetryProbeTCP:
+			if !ValidHost(probe.Host) {
+				return fmt.Errorf("probe %q has invalid host %q", probe.ID, probe.Host)
+			}
 			if probe.Port < 1 || probe.Port > 65535 {
 				return fmt.Errorf("TCP probe %q requires one port in 1..65535", probe.ID)
 			}
+			if probe.URL != "" || probe.ExpectedStatus != 0 {
+				return fmt.Errorf("TCP probe %q must not set URL fields", probe.ID)
+			}
+		case model.TelemetryProbeURL:
+			if probe.Host != "" || probe.Port != 0 {
+				return fmt.Errorf("URL probe %q must not set host or port fields", probe.ID)
+			}
+			if err := ValidateURL(probe.URL); err != nil {
+				return fmt.Errorf("URL probe %q has invalid URL: %w", probe.ID, err)
+			}
+			encodedURL, err := json.Marshal(probe.URL)
+			if err != nil {
+				return fmt.Errorf("URL probe %q encode URL: %w", probe.ID, err)
+			}
+			encodedURLPolicyBytes += len(encodedURL)
+			if encodedURLPolicyBytes > MaxEncodedURLPolicyBytes {
+				return fmt.Errorf("URL probes require %d encoded destination bytes, max %d",
+					encodedURLPolicyBytes, MaxEncodedURLPolicyBytes)
+			}
+			status := EffectiveExpectedStatus(probe)
+			if status < 100 || status > 599 {
+				return fmt.Errorf("URL probe %q expected status %d is outside 100..599", probe.ID, status)
+			}
 		default:
 			return fmt.Errorf("probe %q has unsupported type %q", probe.ID, probe.Type)
+		}
+	}
+	return nil
+}
+
+// EffectiveExpectedStatus returns the exact URL response code considered successful. Zero is the
+// topology shorthand for the default, while successor executable policy writes 200 explicitly.
+func EffectiveExpectedStatus(probe model.TelemetryProbe) int {
+	if probe.ExpectedStatus == 0 {
+		return DefaultExpectedStatus
+	}
+	return probe.ExpectedStatus
+}
+
+func canonicalExpectedStatus(probe model.TelemetryProbe) int {
+	if probe.Type != model.TelemetryProbeURL {
+		return 0
+	}
+	return EffectiveExpectedStatus(probe)
+}
+
+// ValidateURL accepts an exact, unnormalized absolute HTTP(S) target for the fixed GET runner.
+// Internal, private, loopback, and overlay destinations remain valid when explicitly authorized by
+// the signed policy; safety is provided by the closed request shape rather than address filtering.
+func ValidateURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("must not be empty")
+	}
+	if !utf8.ValidString(raw) {
+		return fmt.Errorf("must be valid UTF-8")
+	}
+	if len(raw) > MaxURLBytes {
+		return fmt.Errorf("must be at most %d bytes", MaxURLBytes)
+	}
+	if raw != strings.TrimSpace(raw) {
+		return fmt.Errorf("must not have leading or trailing whitespace")
+	}
+	for _, r := range raw {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("must not contain control characters")
+		}
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	if parsed.Opaque != "" || !parsed.IsAbs() || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("must be an absolute http or https URL")
+	}
+	if parsed.Host == "" || parsed.Hostname() == "" {
+		return fmt.Errorf("must include a host")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("must not include user information")
+	}
+	if parsed.Fragment != "" || strings.Contains(raw, "#") {
+		return fmt.Errorf("must not include a fragment")
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return fmt.Errorf("must not include an empty port")
+	}
+	if port := parsed.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return fmt.Errorf("port must be in 1..65535")
 		}
 	}
 	return nil

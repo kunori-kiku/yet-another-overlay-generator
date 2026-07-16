@@ -55,10 +55,13 @@ func TestAll_SuccessorPolicyIsExclusiveAndAgentHeld(t *testing.T) {
 	renderWithCustody := func(t *testing.T, custody KeyCustody, publicOnly bool) *compiler.CompileResult {
 		t.Helper()
 		topo := custodyTopology(routerKey, peerKey, clientKey, publicOnly)
-		topo.Nodes[0].TelemetryProbes = []model.TelemetryProbe{{
-			ID: "control", Name: "Controller reachability", Type: model.TelemetryProbeTCP,
-			Host: "control.example", Port: 443,
-		}}
+		topo.Nodes[0].TelemetryProbes = []model.TelemetryProbe{
+			{
+				ID: "control", Name: "Controller reachability", Type: model.TelemetryProbeTCP,
+				Host: "control.example", Port: 443,
+			},
+			{ID: "health", Name: "Health endpoint", Type: model.TelemetryProbeURL, URL: "https://service.internal/ready"},
+		}
 		topo.Nodes[0].TelemetryDevices = &model.TelemetryDevicePolicy{Mode: "all-eligible-v1"}
 		keys, err := GenerateKeys(topo, custody)
 		if err != nil {
@@ -78,7 +81,7 @@ func TestAll_SuccessorPolicyIsExclusiveAndAgentHeld(t *testing.T) {
 	if len(agentHeld.TelemetryPolicyJSON) != 0 {
 		t.Fatalf("successor render also emitted telemetry.json: %+v", agentHeld.TelemetryPolicyJSON)
 	}
-	const want = `{"version":2,"probes":[{"id":"control","type":"tcp","host":"control.example","port":443}],"devices":{"mode":"all-eligible-v1"}}`
+	const want = `{"version":2,"probes":[{"id":"control","type":"tcp","host":"control.example","port":443},{"id":"health","type":"url","url":"https://service.internal/ready","expected_status":200}],"devices":{"mode":"all-eligible-v1"}}`
 	if got := agentHeld.TelemetrySuccessorPolicyJSON["router-1"]; got != want {
 		t.Fatalf("AgentHeld successor telemetry policy = %q, want %q", got, want)
 	}

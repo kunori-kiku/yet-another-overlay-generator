@@ -119,14 +119,11 @@ func TestAgentCapabilities_SamplerAdvertisesOnlyImplementedSuccessorSupport(t *t
 	if !ok {
 		t.Fatalf("agent capability metric = %#v", metrics[telemetrymetric.AgentCapabilitiesKey])
 	}
-	want := []string{telemetrycap.PolicyV2}
-	if len(metric.Capabilities) != len(want) || metric.Capabilities[0] != want[0] {
+	want := []string{telemetrycap.PolicyV2, telemetrycap.URLV1}
+	if len(metric.Capabilities) != len(want) || metric.Capabilities[0] != want[0] || metric.Capabilities[1] != want[1] {
 		t.Fatalf("agent capabilities = %v, want %v", metric.Capabilities, want)
 	}
-	for _, unavailable := range []string{
-		telemetrycap.URLV1,
-		telemetrycap.DeviceV1,
-	} {
+	for _, unavailable := range []string{telemetrycap.DeviceV1} {
 		for _, capability := range metric.Capabilities {
 			if capability == unavailable {
 				t.Fatalf("agent advertised unimplemented capability %q", unavailable)

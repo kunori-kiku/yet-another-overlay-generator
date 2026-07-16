@@ -88,21 +88,25 @@ type ResourceSample struct {
 	MemAvailKB uint64    `json:"mem_available_kb,omitempty"`
 }
 
-// ProbeHistorySample is one completed, typed ICMP/TCP attempt admitted to bounded history. SeriesID is
-// derived from the exact executable identity (id/type/host/port), so reusing a human id for a changed
-// destination never splices two targets into one chart. CheckedAt has already been parsed and bounded
-// against the enclosing telemetry sample before this value reaches the store.
+// ProbeHistorySample is one completed, typed active-probe attempt admitted to bounded history.
+// SeriesID is derived from the exact executable identity (id/type/host/port or
+// id/type/url/expected-status), so reusing a human id for a changed destination or URL success contract
+// never splices two targets into one chart. CheckedAt has already been parsed and bounded against the
+// enclosing telemetry sample before this value reaches the store. Actual URL status is intentionally
+// omitted: it is categorical latest-result metadata, not retained chart data.
 type ProbeHistorySample struct {
-	SeriesID      string    `json:"series_id"`
-	ID            string    `json:"id"`
-	Type          string    `json:"type"`
-	Host          string    `json:"host"`
-	Port          int       `json:"port,omitempty"`
-	Status        string    `json:"status"`
-	LatencyMS     *float64  `json:"latency_ms,omitempty"`
-	CheckedAt     time.Time `json:"checked_at"`
-	FailureReason string    `json:"failure_reason,omitempty"`
-	IntervalMS    int64     `json:"interval_ms,omitempty"`
+	SeriesID       string    `json:"series_id"`
+	ID             string    `json:"id"`
+	Type           string    `json:"type"`
+	Host           string    `json:"host,omitempty"`
+	Port           int       `json:"port,omitempty"`
+	URL            string    `json:"url,omitempty"`
+	ExpectedStatus int       `json:"expected_status,omitempty"`
+	Status         string    `json:"status"`
+	LatencyMS      *float64  `json:"latency_ms,omitempty"`
+	CheckedAt      time.Time `json:"checked_at"`
+	FailureReason  string    `json:"failure_reason,omitempty"`
+	IntervalMS     int64     `json:"interval_ms,omitempty"`
 }
 
 // TelemetryHistorySnapshot is one coherent query over the shared resource/probe history. Both
@@ -206,11 +210,12 @@ func validStoredProbeHistorySample(sample ProbeHistorySample) bool {
 	}
 	result := probemetric.Result{
 		ID: sample.ID, Type: sample.Type, Host: sample.Host, Port: sample.Port,
+		URL: sample.URL, ExpectedStatus: sample.ExpectedStatus,
 		Status: sample.Status, LatencyMS: sample.LatencyMS,
 		CheckedAt:     sample.CheckedAt.UTC().Format(time.RFC3339Nano),
 		FailureReason: sample.FailureReason, IntervalMS: sample.IntervalMS,
 	}
-	return probemetric.Valid(result, false) && sample.SeriesID == probemetric.SeriesID(result)
+	return probemetric.ValidHistoryProjection(result) && sample.SeriesID == probemetric.SeriesID(result)
 }
 
 // resourceSampleFromMetrics projects metrics["resource"] into a ResourceSample. ok=false when the key is
@@ -395,6 +400,7 @@ func probeHistorySamplesFromRaw(raw json.RawMessage, outerAt time.Time, max int,
 		out = append(out, ProbeHistorySample{
 			SeriesID: probemetric.SeriesID(result),
 			ID:       result.ID, Type: result.Type, Host: result.Host, Port: result.Port,
+			URL: result.URL, ExpectedStatus: result.ExpectedStatus,
 			Status: result.Status, LatencyMS: result.LatencyMS, CheckedAt: checkedAt,
 			FailureReason: result.FailureReason, IntervalMS: result.IntervalMS,
 		})
@@ -1659,16 +1665,19 @@ func sortAndDedupeResourceSamples(samples []ResourceSample) []ResourceSample {
 }
 
 type probeHistoryIdentity struct {
-	id        string
-	typeName  string
-	host      string
-	port      int
-	checkedAt int64
+	id             string
+	typeName       string
+	host           string
+	port           int
+	url            string
+	expectedStatus int
+	checkedAt      int64
 }
 
 func probeHistorySampleIdentity(sample ProbeHistorySample) probeHistoryIdentity {
 	return probeHistoryIdentity{
 		id: sample.ID, typeName: sample.Type, host: sample.Host, port: sample.Port,
+		url: sample.URL, expectedStatus: sample.ExpectedStatus,
 		checkedAt: sample.CheckedAt.UnixNano(),
 	}
 }

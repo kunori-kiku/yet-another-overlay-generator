@@ -66,8 +66,8 @@ export interface Node {
   ssh_port?: number;
   ssh_user?: string;
   ssh_key_path?: string;
-  // Optional active-connectivity checks run by this managed node. Each signed policy names one
-  // destination host and, for TCP, one port; it is deliberately not an arbitrary URL/command.
+  // Optional active checks run by this managed node. Every destination, expected response, and
+  // schedule is fixed by the signed policy; this is not an arbitrary request/command surface.
   telemetry_probes?: TelemetryProbe[];
   // Automatic device discovery uses the separately versioned successor telemetry policy.
   telemetry_devices?: TelemetryDevicePolicy;
@@ -77,17 +77,38 @@ export interface TelemetryDevicePolicy {
   mode: 'all-eligible-v1';
 }
 
-export interface TelemetryProbe {
+interface TelemetryProbeBase {
   id: string;
-  // Optional controller/Fleet display label. Stable id plus exact type/host/port remain the
+  // Optional controller/Fleet display label. Stable id plus the exact typed destination remain the
   // executable/history identity; name is deliberately excluded from telemetry.json and reports.
   name?: string;
-  type: 'icmp' | 'tcp';
-  host: string;
-  port?: number;
   interval_seconds?: number;
   timeout_milliseconds?: number;
 }
+
+export type TelemetryProbe = TelemetryProbeBase & (
+  | {
+      type: 'icmp';
+      host: string;
+      port?: never;
+      url?: never;
+      expected_status?: never;
+    }
+  | {
+      type: 'tcp';
+      host: string;
+      port: number;
+      url?: never;
+      expected_status?: never;
+    }
+  | {
+      type: 'url';
+      url: string;
+      expected_status?: number;
+      host?: never;
+      port?: never;
+    }
+);
 
 export interface PublicEndpoint {
   id: string;

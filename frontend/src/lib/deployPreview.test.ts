@@ -7,6 +7,7 @@ import {
   deployPreviewRows,
   resolveDeployForce,
   currentTelemetryPolicyUpgradeOffer,
+  requiredTelemetryCapabilities,
   successorTelemetryPolicyFingerprint,
   phaseOneAgentRolloutState,
   type DeployPreview,
@@ -84,6 +85,45 @@ describe('successor telemetry readiness offer', () => {
     expect(currentTelemetryPolicyUpgradeOffer(offer, {
       nodes: [{ id: 'n1', deployment_mode: 'managed' as const }],
     })).toBeNull();
+  });
+
+  it('requires feature-specific URL readiness and invalidates an offer on URL identity changes', () => {
+    const withURL = {
+      nodes: [{
+        id: 'n1',
+        deployment_mode: 'managed' as const,
+        telemetry_probes: [{
+          id: 'health',
+          type: 'url' as const,
+          url: 'https://service.example/health',
+        }],
+      }],
+    };
+    const offer = {
+      error: 'upgrade agents first',
+      fingerprint: successorTelemetryPolicyFingerprint(withURL),
+    };
+    expect(requiredTelemetryCapabilities(withURL.nodes[0])).toEqual([
+      'telemetry-policy-v2',
+      'url-probes-v1',
+    ]);
+    expect(currentTelemetryPolicyUpgradeOffer(offer, withURL)).toBe(offer);
+    expect(currentTelemetryPolicyUpgradeOffer(offer, {
+      nodes: [{
+        ...withURL.nodes[0],
+        telemetry_probes: [{
+          ...withURL.nodes[0].telemetry_probes[0],
+          expected_status: 204,
+        }],
+      }],
+    })).toBeNull();
+  });
+
+  it('deduplicates the generic capability when URL and device telemetry are both selected', () => {
+    expect(requiredTelemetryCapabilities({
+      telemetry_devices: { mode: 'all-eligible-v1' },
+      telemetry_probes: [{ id: 'health', type: 'url', url: 'https://service.example/' }],
+    })).toEqual(['device-telemetry-v1', 'telemetry-policy-v2', 'url-probes-v1']);
   });
 });
 

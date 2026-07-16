@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -195,6 +196,36 @@ func TestAggregateProbeHistorySeparatesTargetsAndPreservesFailures(t *testing.T)
 	other := series[1].Buckets[0]
 	if other.LatencyMS != nil || other.Failures != 1 || other.FailureReasons[probemetric.FailureConnectionRefused] != 1 {
 		t.Fatalf("failure must not become zero latency: %+v", other)
+	}
+}
+
+func TestAggregateURLProbeMismatchRetainsLatencyWithoutActualStatus(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	latency := 27.5
+	wire := probemetric.Result{
+		ID: "health", Type: "url", URL: "https://service.example/ready", ExpectedStatus: 204,
+	}
+	series := aggregateProbeHistory([]controller.ProbeHistorySample{{
+		SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type,
+		URL: wire.URL, ExpectedStatus: wire.ExpectedStatus,
+		Status: probemetric.StatusFailure, LatencyMS: &latency, CheckedAt: base,
+		FailureReason: probemetric.FailureUnexpectedStatus, IntervalMS: 30_000,
+	}}, time.Minute)
+	if len(series) != 1 || series[0].URL != wire.URL || series[0].ExpectedStatus != 204 || len(series[0].Buckets) != 1 {
+		t.Fatalf("URL mismatch series metadata = %+v", series)
+	}
+	bucket := series[0].Buckets[0]
+	if bucket.Attempts != 1 || bucket.Successes != 0 || bucket.Failures != 1 ||
+		bucket.LatencyMS == nil || bucket.LatencyMS.Avg != latency ||
+		bucket.FailureReasons[probemetric.FailureUnexpectedStatus] != 1 {
+		t.Fatalf("URL mismatch did not contribute latency and failure availability: %+v", bucket)
+	}
+	raw, err := json.Marshal(series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"actual_status"`)) {
+		t.Fatalf("categorical actual status leaked into history response: %s", raw)
 	}
 }
 
@@ -405,6 +436,18 @@ func TestParseTelemetryHistoryEncodingOptions(t *testing.T) {
 			t.Fatalf("selector = %+v err=%v, want %+v", options.probeSelector, err, want)
 		}
 	})
+	t.Run("exact URL selector", func(t *testing.T) {
+		options, err := parseTelemetryHistoryEncodingOptions(url.Values{
+			"probe_id": {"health"}, "probe_type": {"url"},
+			"probe_url": {"https://service.example/ready"}, "probe_expected_status": {"204"},
+		})
+		want := probeHistorySelector{
+			ID: "health", Type: "url", URL: "https://service.example/ready", ExpectedStatus: 204,
+		}
+		if err != nil || options.probeSelector == nil || *options.probeSelector != want {
+			t.Fatalf("URL selector = %+v err=%v, want %+v", options.probeSelector, err, want)
+		}
+	})
 
 	invalid := []url.Values{
 		{"include_probes": {"sometimes"}},
@@ -413,6 +456,14 @@ func TestParseTelemetryHistoryEncodingOptions(t *testing.T) {
 		{"probe_id": {"main"}},
 		{"probe_id": {"main"}, "probe_type": {"tcp"}, "probe_host": {"db.example"}},
 		{"probe_id": {"main"}, "probe_type": {"icmp"}, "probe_host": {"db.example"}, "probe_port": {"7"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_expected_status": {"200"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}, "probe_expected_status": {"204"}, "probe_host": {"service.example"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}, "probe_expected_status": {"204"}, "probe_port": {"443"}},
+		{"probe_id": {"main"}, "probe_type": {"icmp"}, "probe_host": {"db.example"}, "probe_url": {"https://db.example"}, "probe_expected_status": {"200"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"service.example/ready"}, "probe_expected_status": {"200"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}, "probe_expected_status": {"99"}},
+		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}, "probe_expected_status": {"ok"}},
 	}
 	for i, query := range invalid {
 		if _, err := parseTelemetryHistoryEncodingOptions(query); err == nil {
@@ -442,6 +493,13 @@ func TestHandleNodeHistory(t *testing.T) {
 				Status: probemetric.StatusSuccess, LatencyMS: &latency,
 				CheckedAt: at.Format(time.RFC3339Nano), IntervalMS: 60_000,
 			},
+			probemetric.Result{
+				ID: "url-health", Type: "url", URL: "https://service.example/ready",
+				ExpectedStatus: 204, ActualStatus: 500,
+				Status: probemetric.StatusFailure, LatencyMS: &latency,
+				CheckedAt:     at.Format(time.RFC3339Nano),
+				FailureReason: probemetric.FailureUnexpectedStatus, IntervalMS: 60_000,
+			},
 		)
 		if err := env.store.RecordTelemetry(ctx, testTenant, "node-1", nil, metrics, "v1", at); err != nil {
 			t.Fatal(err)
@@ -463,7 +521,7 @@ func TestHandleNodeHistory(t *testing.T) {
 	if resp.Step != "1m0s" {
 		t.Errorf("explicit 1m step = %q, want 1m0s", resp.Step)
 	}
-	if len(resp.Probes) != 2 {
+	if len(resp.Probes) != 3 {
 		t.Fatalf("additive probe history missing from response: %+v", resp.Probes)
 	}
 
@@ -476,6 +534,24 @@ func TestHandleNodeHistory(t *testing.T) {
 	}
 	if len(selected.Buckets) == 0 || len(selected.Probes) != 1 || selected.Probes[0].ID != "tcp-main" || selected.Probes[0].Host != "example.net" {
 		t.Fatalf("exact selected history = %+v", selected)
+	}
+	var selectedURLHistory historyResponse
+	selectedURLRequest := url + "&probe_id=url-health&probe_type=url&probe_url=https%3A%2F%2Fservice.example%2Fready&probe_expected_status=204"
+	if status := doJSON(t, http.MethodGet, selectedURLRequest, testOperatorToken, nil, &selectedURLHistory); status != http.StatusOK {
+		t.Fatalf("selected URL history: status %d, want 200", status)
+	}
+	if len(selectedURLHistory.Buckets) == 0 || len(selectedURLHistory.Probes) != 1 ||
+		selectedURLHistory.Probes[0].URL != "https://service.example/ready" || selectedURLHistory.Probes[0].ExpectedStatus != 204 ||
+		len(selectedURLHistory.Probes[0].Buckets) == 0 || selectedURLHistory.Probes[0].Buckets[0].LatencyMS == nil ||
+		selectedURLHistory.Probes[0].Buckets[0].FailureReasons[probemetric.FailureUnexpectedStatus] == 0 {
+		t.Fatalf("exact selected URL history = %+v", selectedURLHistory)
+	}
+	selectedRaw, err := json.Marshal(selectedURLHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(selectedRaw, []byte(`"actual_status"`)) {
+		t.Fatalf("actual URL status leaked into selected history: %s", selectedRaw)
 	}
 
 	// Resource-only callers can avoid all probe aggregation/response bytes explicitly.
@@ -498,14 +574,14 @@ func TestHandleNodeHistory(t *testing.T) {
 	}
 
 	// Auto first resolves the observed one-minute cadence, then widens it just enough for the global
-	// resource + two-probe response budget.
+	// resource + three-probe response budget.
 	var auto historyResponse
 	autoFrom := base.Add(-6 * time.Hour).Format(time.RFC3339)
 	autoURL := histURL + "?node=node-1&from=" + autoFrom + "&to=" + to
 	if status := doJSON(t, http.MethodGet, autoURL, testOperatorToken, nil, &auto); status != http.StatusOK {
 		t.Fatalf("auto: status %d", status)
 	}
-	wantAutoStep := ceilDurationDiv(6*time.Hour+10*time.Minute, int64(maxHistoryBuckets/3-1)).String()
+	wantAutoStep := ceilDurationDiv(6*time.Hour+10*time.Minute, int64(maxHistoryBuckets/4-1)).String()
 	if auto.Step != wantAutoStep {
 		t.Errorf("six-hour all-series Auto step = %q, want globally budgeted %q", auto.Step, wantAutoStep)
 	}

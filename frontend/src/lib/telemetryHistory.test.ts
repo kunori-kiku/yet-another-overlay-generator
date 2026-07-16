@@ -105,6 +105,20 @@ describe('historyQueryString', () => {
     expect(selected.get('probe_port')).toBe('5432');
     expect(selected.has('include_probes')).toBe(false);
 
+    const urlSelected = new URLSearchParams(historyQueryString('n', 'a', 'b', undefined, {
+      probe: {
+        id: 'health',
+        type: 'url',
+        url: 'https://service.example/health?full=1',
+        expectedStatus: 204,
+      },
+    }));
+    expect(urlSelected.get('probe_type')).toBe('url');
+    expect(urlSelected.get('probe_url')).toBe('https://service.example/health?full=1');
+    expect(urlSelected.get('probe_expected_status')).toBe('204');
+    expect(urlSelected.has('probe_host')).toBe(false);
+    expect(urlSelected.has('probe_port')).toBe(false);
+
     const resourceOnly = new URLSearchParams(historyQueryString('n', 'a', 'b', undefined, {
       includeProbes: false,
     }));
@@ -210,6 +224,48 @@ describe('parseNodeHistory', () => {
     expect(h.disabled).toBe(true);
     expect(h.buckets).toHaveLength(0);
     expect(h.probes).toHaveLength(0);
+  });
+
+  it('parses URL mismatch latency without admitting actual status into history', () => {
+    const history = parseNodeHistory({
+      probes: [{
+        series_id: 'c'.repeat(64),
+        id: 'health',
+        type: 'url',
+        url: 'https://service.example/health',
+        expected_status: 204,
+        actual_status: 500,
+        interval_ms: 30_000,
+        buckets: [{
+          t: '2026-07-17T10:00:00Z',
+          attempts: 1,
+          successes: 0,
+          failures: 1,
+          latency_ms: { avg: 17, min: 17, max: 17 },
+          failure_reasons: { unexpected_status: 1 },
+          actual_status: 500,
+        }],
+      }],
+    });
+
+    expect(history.probes).toEqual([{
+      seriesId: 'c'.repeat(64),
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+      expectedStatus: 204,
+      intervalMS: 30_000,
+      buckets: [{
+        t: '2026-07-17T10:00:00Z',
+        attempts: 1,
+        successes: 0,
+        failures: 1,
+        latencyMS: { avg: 17, min: 17, max: 17 },
+        failureReasons: { unexpected_status: 1 },
+      }],
+    }]);
+    expect(JSON.stringify(history)).not.toContain('actualStatus');
+    expect(JSON.stringify(history)).not.toContain('actual_status');
   });
 
   it('never throws on null/garbage input', () => {
@@ -476,6 +532,25 @@ describe('probe history series', () => {
     )).toBe(false);
     expect(probeHistoryMatchesPolicy(
       { id: 'same-id', type: 'tcp', host: 'old.example', port: 8443 },
+      series,
+    )).toBe(false);
+  });
+
+  it('matches URL history by exact URL and effective expected status', () => {
+    const series = parseNodeHistory({ probes: [{
+      series_id: 'd'.repeat(64),
+      id: 'health',
+      type: 'url',
+      url: 'https://service.example/health',
+      expected_status: 200,
+      buckets: [],
+    }] }).probes[0];
+    expect(probeHistoryMatchesPolicy(
+      { id: 'health', type: 'url', url: 'https://service.example/health' },
+      series,
+    )).toBe(true);
+    expect(probeHistoryMatchesPolicy(
+      { id: 'health', type: 'url', url: 'https://service.example/health', expected_status: 204 },
       series,
     )).toBe(false);
   });

@@ -14,7 +14,11 @@ import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
 import { TelemetryProbeEditor } from '../deploy/TelemetryProbeEditor';
 import { TelemetryProbeResults } from '../deploy/TelemetryProbeResults';
 import { SaveConflictDialog } from '../design/SaveConflictDialog';
-import { sameTelemetryPolicy } from '../../lib/probeResults';
+import {
+  probeDestinationInvalid,
+  probeExpectedStatusInvalid,
+  sameTelemetryPolicy,
+} from '../../lib/probeResults';
 import { FleetRefreshControls } from '../deploy/FleetRefreshControls';
 import { requiredTelemetryCapabilities } from '../../lib/deployPreview';
 
@@ -67,6 +71,8 @@ export function FleetNodeDetailPage() {
     !sameTelemetryPolicy(configuredProbes, syncedProbes)
     || configuredDevices?.mode !== syncedDevices?.mode
   );
+  const telemetryIncomplete = configuredProbes.some((probe) =>
+    probeDestinationInvalid(probe) || probeExpectedStatusInvalid(probe));
   const successorCapabilities = topologyNode === undefined
     ? []
     : requiredTelemetryCapabilities(topologyNode);
@@ -206,8 +212,10 @@ export function FleetNodeDetailPage() {
                         ? t(language, 'telemetryProbes.save')
                         : t(language, 'telemetryProbes.saved')}
                   </button>
-                  <p className="text-xs text-[var(--content-muted)]">
-                    {t(language, 'telemetryProbes.saveHint')}
+                  <p className={`text-xs ${telemetryIncomplete ? 'text-[var(--danger)]' : 'text-[var(--content-muted)]'}`}>
+                    {telemetryIncomplete
+                      ? t(language, 'telemetryProbes.saveHintIncomplete')
+                      : t(language, 'telemetryProbes.saveHint')}
                   </p>
                 </div>
               </>

@@ -20,15 +20,23 @@ func telemetryProbeTopology(probe model.TelemetryProbe, deploymentMode string) *
 }
 
 func TestValidateSchema_TelemetryProbeManualDestination(t *testing.T) {
-	valid := model.TelemetryProbe{ID: "dns-tls", Type: model.TelemetryProbeTCP, Host: "service.example", Port: 443}
+	valid := model.TelemetryProbe{ID: "dns-tls", Name: "Primary service", Type: model.TelemetryProbeTCP, Host: "service.example", Port: 443}
 	if result := ValidateSchema(telemetryProbeTopology(valid, model.DeploymentManaged)); hasCode(result, CodeNodeTelemetryProbesInvalid) {
 		t.Fatalf("managed DNS-host probe rejected: %+v", result.Errors)
 	}
 	if result := ValidateSchema(telemetryProbeTopology(valid, model.DeploymentManual)); !hasCode(result, CodeNodeTelemetryProbesInvalid) {
 		t.Fatalf("manual source node must reject active probes: %+v", result.Errors)
 	}
+	validURL := model.TelemetryProbe{ID: "health", Type: model.TelemetryProbeURL, URL: "https://service.internal/ready", ExpectedStatus: 204}
+	if result := ValidateSchema(telemetryProbeTopology(validURL, model.DeploymentManaged)); hasCode(result, CodeNodeTelemetryProbesInvalid) {
+		t.Fatalf("managed URL probe rejected: %+v", result.Errors)
+	}
 	url := model.TelemetryProbe{ID: "future-url", Type: model.TelemetryProbeTCP, Host: "https://service.example/health", Port: 443}
 	if result := ValidateSchema(telemetryProbeTopology(url, model.DeploymentManaged)); !hasCode(result, CodeNodeTelemetryProbesInvalid) {
 		t.Fatalf("URL syntax must remain outside the host contract: %+v", result.Errors)
+	}
+	badName := model.TelemetryProbe{ID: "named", Name: "line\nbreak", Type: model.TelemetryProbeICMP, Host: "service.example"}
+	if result := ValidateSchema(telemetryProbeTopology(badName, model.DeploymentManaged)); !hasCode(result, CodeNodeTelemetryProbesInvalid) {
+		t.Fatalf("control characters in display name must be rejected: %+v", result.Errors)
 	}
 }

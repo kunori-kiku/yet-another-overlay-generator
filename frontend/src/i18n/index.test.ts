@@ -17,7 +17,7 @@ describe('tError topology validation envelope', () => {
 
   it('localizes the nested validator finding in English', () => {
     expect(tError(body, 'en')).toBe(
-      'Deployment blocked at nodes[8].telemetry_probes: Invalid active telemetry configuration: probe "unfinished" has invalid host "". Set one host (an IP literal or DNS hostname) per probe; TCP also requires one port.',
+      'Deployment blocked at nodes[8].telemetry_probes: Invalid active telemetry configuration: probe "unfinished" has invalid host "". ICMP/TCP require an IP literal or DNS hostname, TCP also requires one port, and URL requires one absolute http:// or https:// target with an expected status from 100 through 599.',
     );
   });
 
@@ -26,5 +26,7 @@ describe('tError topology validation envelope', () => {
     expect(message).toContain('nodes[8].telemetry_probes');
     expect(message).toContain('主动遥测');
     expect(message).toContain('probe "unfinished" has invalid host ""');
+    expect(message).toContain('http://');
+    expect(message).toContain('100 到 599');
   });
 });

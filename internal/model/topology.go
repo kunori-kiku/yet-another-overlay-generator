@@ -146,16 +146,17 @@ type TelemetryDevicePolicy struct {
 }
 
 // TelemetryProbe is one manually configured active check. Name is optional controller/Fleet
-// presentation metadata: ID plus exact Type/Host/Port remain the executable policy/history identity,
-// and probepolicy projects Name out of telemetry.json so existing strict agents receive the unchanged
-// version-1 executable contract. Zero interval/timeout values select the documented policy defaults.
-// TCP accepts exactly one port; ICMP accepts none.
+// presentation metadata and is projected out of executable policy. Host/Port identify ICMP/TCP
+// destinations; URL/ExpectedStatus identify the separately versioned URL destination contract.
+// Zero interval/timeout/status values select the documented policy defaults.
 type TelemetryProbe struct {
 	ID                  string `json:"id"`
 	Name                string `json:"name,omitempty"`
 	Type                string `json:"type"`
-	Host                string `json:"host"`
+	Host                string `json:"host,omitempty"`
 	Port                int    `json:"port,omitempty"`
+	URL                 string `json:"url,omitempty"`
+	ExpectedStatus      int    `json:"expected_status,omitempty"`
 	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
 	TimeoutMilliseconds int    `json:"timeout_milliseconds,omitempty"`
 }
@@ -163,6 +164,7 @@ type TelemetryProbe struct {
 const (
 	TelemetryProbeICMP = "icmp"
 	TelemetryProbeTCP  = "tcp"
+	TelemetryProbeURL  = "url"
 )
 
 // Value constants for Node.DeploymentMode. An empty value is equivalent to DeploymentManaged.

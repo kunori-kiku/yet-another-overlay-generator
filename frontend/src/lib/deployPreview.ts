@@ -6,6 +6,7 @@
 // Force ticks are a one-shot transient action (the same custody rule as stripLiveTelemetry).
 
 import type { Node, Topology } from '../types/topology';
+import { effectiveExpectedStatus } from './probeResults';
 
 export const CONTROLLER_TELEMETRY_POLICY_V2_CAPABILITY = 'telemetry-policy-v2-topology';
 
@@ -17,16 +18,21 @@ export function controllerPreservesSuccessorTelemetryPolicy(capabilities: readon
 // agent capability tokens. Fleet readiness and every old-controller write guard consume this same
 // helper so adding a successor field cannot become visible in one path but ungated in another.
 export function requiredTelemetryCapabilities(
-  node: Pick<Node, 'telemetry_devices'>,
+  node: Pick<Node, 'telemetry_devices' | 'telemetry_probes'>,
 ): string[] {
-  if (node.telemetry_devices === undefined) return [];
-  return ['device-telemetry-v1', 'telemetry-policy-v2'];
+  const capabilities = new Set<string>();
+  if (node.telemetry_devices !== undefined) capabilities.add('device-telemetry-v1');
+  if (node.telemetry_probes?.some((probe) => probe.type === 'url')) {
+    capabilities.add('url-probes-v1');
+  }
+  if (capabilities.size > 0) capabilities.add('telemetry-policy-v2');
+  return [...capabilities].sort();
 }
 
 // requiresSuccessorTelemetryPolicy is the frontend compatibility boundary for controllers that
 // predate successor policy fields. Such a controller canonicalizes through its older Go model and
-// would silently erase unknown draft fields, so its no-preview fallback must remain v1-only. Plan 5
-// extends this helper when URL probes also select the successor member.
+// would silently erase unknown draft fields, so its no-preview fallback must remain v1-only. URL
+// probes and automatic device telemetry both select the successor member through the shared helper.
 export function requiresSuccessorTelemetryPolicy(topo: Pick<Topology, 'nodes'>): boolean {
   return topo.nodes.some((node) => requiredTelemetryCapabilities(node).length > 0);
 }
@@ -35,13 +41,31 @@ export function requiresSuccessorTelemetryPolicy(topo: Pick<Topology, 'nodes'>):
 // successor capabilities that produced it. Unrelated graph edits do not invalidate the offer, while
 // adding/removing/changing successor policy does. The backend preview is still rerun before phase one.
 type SuccessorTelemetryTopology = {
-  nodes: Array<Pick<Node, 'id' | 'deployment_mode' | 'telemetry_devices'>>;
+  nodes: Array<Pick<Node, 'id' | 'deployment_mode' | 'telemetry_devices' | 'telemetry_probes'>>;
 };
 
 export function successorTelemetryPolicyFingerprint(topo: SuccessorTelemetryTopology): string {
   return JSON.stringify(
     topo.nodes
-      .map((node) => [node.id, node.deployment_mode ?? 'managed', requiredTelemetryCapabilities(node)] as const)
+      .map((node) => {
+        const capabilities = requiredTelemetryCapabilities(node);
+        const urls = node.telemetry_probes
+          ?.filter((probe) => probe.type === 'url')
+          .map((probe) => [
+            probe.id,
+            probe.url,
+            effectiveExpectedStatus(probe),
+            probe.interval_seconds ?? 0,
+            probe.timeout_milliseconds ?? 0,
+          ] as const) ?? [];
+        return [
+          node.id,
+          node.deployment_mode ?? 'managed',
+          capabilities,
+          node.telemetry_devices?.mode ?? '',
+          urls,
+        ] as const;
+      })
       .filter(([, , capabilities]) => capabilities.length > 0),
   );
 }

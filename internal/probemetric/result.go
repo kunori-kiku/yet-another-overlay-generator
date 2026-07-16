@@ -42,6 +42,7 @@ const (
 	FailureConnectionRefused  = "connection_refused"
 	FailureNetworkUnreachable = "network_unreachable"
 	FailureNetworkError       = "network_error"
+	FailureUnexpectedStatus   = "unexpected_status"
 )
 
 var validFailureReasons = map[string]struct{}{
@@ -58,15 +59,18 @@ var validFailureReasons = map[string]struct{}{
 // agent wall-clock value and must be bounded against the outer telemetry sample time by the
 // controller before it becomes a history timestamp.
 type Result struct {
-	ID            string   `json:"id"`
-	Type          string   `json:"type"`
-	Host          string   `json:"host"`
-	Port          int      `json:"port,omitempty"`
-	Status        string   `json:"status"`
-	LatencyMS     *float64 `json:"latency_ms,omitempty"`
-	CheckedAt     string   `json:"checked_at,omitempty"`
-	FailureReason string   `json:"failure_reason,omitempty"`
-	IntervalMS    int64    `json:"interval_ms,omitempty"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Host           string   `json:"host,omitempty"`
+	Port           int      `json:"port,omitempty"`
+	URL            string   `json:"url,omitempty"`
+	ExpectedStatus int      `json:"expected_status,omitempty"`
+	ActualStatus   int      `json:"actual_status,omitempty"`
+	Status         string   `json:"status"`
+	LatencyMS      *float64 `json:"latency_ms,omitempty"`
+	CheckedAt      string   `json:"checked_at,omitempty"`
+	FailureReason  string   `json:"failure_reason,omitempty"`
+	IntervalMS     int64    `json:"interval_ms,omitempty"`
 }
 
 // DecodeArray performs a tolerant, bounded decode suitable for an authenticated observability
@@ -125,8 +129,21 @@ func DecodeArray(raw json.RawMessage, max int, allowPending bool) []Result {
 
 // Valid enforces the closed result shape before a row may enter durable history.
 func Valid(result Result, allowPending bool) bool {
-	probe := model.TelemetryProbe{ID: result.ID, Type: result.Type, Host: result.Host, Port: result.Port}
+	probe := model.TelemetryProbe{
+		ID: result.ID, Type: result.Type, Host: result.Host, Port: result.Port,
+		URL: result.URL, ExpectedStatus: result.ExpectedStatus,
+	}
 	if probepolicy.Validate([]model.TelemetryProbe{probe}) != nil {
+		return false
+	}
+	isURL := result.Type == model.TelemetryProbeURL
+	// Executable successor policy and agent results always carry the URL success contract
+	// explicitly. Zero remains topology shorthand only; accepting it here would splice a defaulted
+	// result identity into a separately hashed explicit-status series.
+	if isURL && result.ExpectedStatus == 0 {
+		return false
+	}
+	if !isURL && result.ActualStatus != 0 {
 		return false
 	}
 	if result.IntervalMS != 0 {
@@ -139,12 +156,28 @@ func Valid(result Result, allowPending bool) bool {
 	}
 	switch result.Status {
 	case StatusPending:
-		return allowPending && result.CheckedAt == "" && result.LatencyMS == nil && result.FailureReason == ""
+		return allowPending && result.CheckedAt == "" && result.LatencyMS == nil &&
+			result.ActualStatus == 0 && result.FailureReason == ""
 	case StatusSuccess:
-		return result.CheckedAt != "" && result.LatencyMS != nil && finiteNonNegative(*result.LatencyMS) && result.FailureReason == ""
+		if result.CheckedAt == "" || result.LatencyMS == nil ||
+			!finiteNonNegative(*result.LatencyMS) || result.FailureReason != "" {
+			return false
+		}
+		if isURL {
+			return result.ActualStatus == result.ExpectedStatus
+		}
+		return result.ActualStatus == 0
 	case StatusFailure:
+		if result.CheckedAt == "" {
+			return false
+		}
+		if isURL && result.FailureReason == FailureUnexpectedStatus {
+			return result.LatencyMS != nil && finiteNonNegative(*result.LatencyMS) &&
+				result.ActualStatus >= 100 && result.ActualStatus <= 599 &&
+				result.ActualStatus != result.ExpectedStatus
+		}
 		_, reasonOK := validFailureReasons[result.FailureReason]
-		return result.CheckedAt != "" && result.LatencyMS == nil && reasonOK
+		return result.LatencyMS == nil && result.ActualStatus == 0 && reasonOK
 	default:
 		return false
 	}
@@ -169,14 +202,48 @@ func Completed(result Result) bool {
 	return result.Status == StatusSuccess || result.Status == StatusFailure
 }
 
+// ValidHistoryProjection validates the deliberately lossy durable probe-history shape. Actual HTTP
+// status is categorical latest metadata and is therefore absent from history even though a live URL
+// result needs it to prove the exact success/mismatch invariant. Reconstruct only the minimum witness
+// needed to reuse Valid, while requiring the persisted projection itself to omit ActualStatus.
+func ValidHistoryProjection(result Result) bool {
+	if !Completed(result) || result.ActualStatus != 0 {
+		return false
+	}
+	if result.Type != model.TelemetryProbeURL {
+		return Valid(result, false)
+	}
+	candidate := result
+	switch {
+	case result.Status == StatusSuccess:
+		candidate.ActualStatus = result.ExpectedStatus
+	case result.Status == StatusFailure && result.FailureReason == FailureUnexpectedStatus:
+		candidate.ActualStatus = 100
+		if candidate.ActualStatus == result.ExpectedStatus {
+			candidate.ActualStatus++
+		}
+	}
+	return Valid(candidate, false)
+}
+
 // SeriesID is a stable opaque identity for one exact executable destination. Reusing a human probe
-// ID with a changed type/host/port therefore starts a different chart instead of splicing histories.
+// ID with a changed typed destination (including a URL's expected status) therefore starts a
+// different chart instead of splicing histories.
 func SeriesID(result Result) string {
 	h := sha256.New()
 	h.Write([]byte(result.ID))
 	h.Write([]byte{0})
 	h.Write([]byte(result.Type))
 	h.Write([]byte{0})
+	if result.Type == model.TelemetryProbeURL {
+		h.Write([]byte(result.URL))
+		h.Write([]byte{0})
+		effectiveStatus := probepolicy.EffectiveExpectedStatus(model.TelemetryProbe{ExpectedStatus: result.ExpectedStatus})
+		h.Write([]byte(strconv.Itoa(effectiveStatus)))
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	// Keep the legacy hash input byte-for-byte unchanged. Existing ICMP/TCP histories and browser
+	// selectors must retain their stable opaque identities across this additive URL extension.
 	h.Write([]byte(result.Host))
 	h.Write([]byte{0})
 	h.Write([]byte(strconv.Itoa(result.Port)))
