@@ -389,6 +389,6 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 | plan-4 | done — `5e751ca` — exclusive signed successor policy and latest-heartbeat rollout readiness |
 | plan-5 | done — `09eff0a` — constrained fixed-GET URL probes with charted latency/availability |
 | plan-6 | done — `efabd64` — bounded hashed disk/filesystem/GPU collectors, explicit gaps, and dormant chart contract |
-| plan-7 | pending |
+| plan-7 | done — `1bd840d` — signed automatic device telemetry with exact history and Fleet charts |
 | plan-8 | pending |
 | plan-9 | pending terminal release action |
