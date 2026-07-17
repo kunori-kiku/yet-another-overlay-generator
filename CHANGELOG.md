@@ -9,6 +9,23 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.14] - 2026-07-17
+
+**Release candidate.** Improves large-topology navigation and provides a topology-first canvas view
+without changing topology data, compilation, deployment, or address visibility elsewhere in the
+operator interface.
+
+### Fixed
+
+- **Large networks can fit within one canvas viewport.** The Design canvas can zoom out to a tenth
+  of one percent instead of React Flow's fifty-percent default floor, so initial Fit View, the fit
+  control, and Auto layout can frame even the supported topology upper bound while preserving the
+  existing zoom-in and editing behavior.
+- **Canvas address detail can be reduced without editing the network.** Independent, default-on
+  controls hide link endpoint hosts/ports and node overlay IPs. Hidden link labels retain endpoint
+  names, role/direction indicators, pending state, and their full selection target; the preferences
+  remain local display state and never enter topology JSON or deployment dirty-state calculation.
+
 ## [2.0.0-rc.13] - 2026-07-17
 
 **Release candidate.** Corrects the rc.12 agent self-update health-gate regression without changing
@@ -1539,7 +1556,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.13...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.14...HEAD
+[2.0.0-rc.14]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.13...v2.0.0-rc.14
 [2.0.0-rc.13]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.12...v2.0.0-rc.13
 [2.0.0-rc.12]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.11...v2.0.0-rc.12
 [2.0.0-rc.11]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.10...v2.0.0-rc.11

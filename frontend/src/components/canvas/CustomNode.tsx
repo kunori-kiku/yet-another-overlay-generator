@@ -51,6 +51,7 @@ interface CustomNodeData {
   label: string;
   role: string;
   overlayIp: string;
+  showOverlayIps?: boolean;
   domainName: string;
   interfaces?: IfaceChip[];
   // Focus opacity (Decisions #11): a deemphasized node stays mounted, visible, and clickable -- it only fades to 0.15.
@@ -98,7 +99,7 @@ export function CustomNode({ data, selected }: NodeProps & { data: CustomNodeDat
         <div className="text-lg">{icon}</div>
         <div className="text-sm font-bold text-[var(--content)]">{data.label}</div>
         <div className="text-xs text-[var(--content)]">{role}</div>
-        {data.overlayIp && (
+        {data.showOverlayIps !== false && data.overlayIp && (
           <div className="text-xs text-[var(--content-muted)] font-mono">{data.overlayIp}</div>
         )}
         {data.domainName && (
