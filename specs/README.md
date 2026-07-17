@@ -1,118 +1,134 @@
 # specs/ — yet-another-overlay-generator (YAOG)
 
-<!-- regenerated: 2026-06-12 -->
+<!-- regenerated: 2026-07-17 -->
 <!-- by: refresh-specs -->
 
-This directory is the cached architectural ground truth for **YAOG**, a
-WireGuard + Babel overlay-network generator with two operating modes:
-**local/air-gap** (design in the browser, export per-node bundles) and
-**controller** (a long-lived Docker control plane from which enrolled node
-agents pull keystone-signed configs). It is partial-loaded by
-execute-implementation-plan (per a plan file's `Reads from specs:` header)
-and audited by close-phase at every closure boundary.
+This directory is the cached architectural ground truth for YAOG, a Go control plane and compiler
+with a React/Vite panel. It is partial-loaded by `execute-implementation-plan` through a plan's
+`Reads from specs:` header and audited by `close-phase` at closure boundaries. The maintained
+deep-detail documentation remains under `docs/spec/`; live code and these component maps win if a
+deeper document has drifted.
 
 ## How to read this
 
 | If you want to... | Read |
 |---|---|
-| Get oriented as a new contributor | This file's diagram + the components your work touches |
+| Get oriented as a new contributor | This file's diagram, then the components your work touches |
 | Understand a specific subsystem | `specs/<component>.md` for that subsystem |
-| See current open work / blockers | `STATUS.md` at repo root |
-| See project-wide invariants | `PRINCIPLES.md` at repo root |
-| See how to run / use the project | `README.md` at repo root |
-| Go deeper than a component file | `docs/spec/` — the maintained deep-doc layer (cited per component; verify drift-flagged claims against code) |
+| See current open work or blockers | `STATUS.md` at repository root |
+| See project-wide invariants | `PRINCIPLES.md` at repository root |
+| See how to build, run, or operate YAOG | `README.md` and `docs/wiki.md` |
+| Go deeper than a component map | `docs/spec/`, cross-checking architectural claims against current code |
 
 ## Primary operation diagram
 
 ```mermaid
 flowchart TD
-    START([Operator opens the panel]) --> SHELL[panel-shell<br/>app shell · routes · session restore]
-    SHELL --> MODE{mode?}
+    START([Operator turns a topology into an applied overlay]) --> SHELL[panel-shell<br/>build mode · routes · navigation · stores]
+    SHELL --> MODE{workflow mode?}
 
-    MODE -->|local| DESIGN[panel-design<br/>canvas · topology store · editors]
-    MODE -->|controller| AUTH[panel-auth<br/>password + TOTP / passkey login]
-    AUTH --> DESIGN
+    MODE -->|local / air-gap| DESIGN[panel-design<br/>topology workspace · Go/WASM actions]
+    MODE -->|controller| AUTH[panel-auth<br/>connection · session · password/TOTP/passkey]
+    AUTH -->|Design route| DESIGN
+    AUTH -->|Fleet / Deploy routes| FLEET[panel-deploy-fleet<br/>registry · enrollment · preview · deployment]
 
-    DESIGN -->|validate · compile · export in-browser WASM| VALID[model-validation<br/>schema + semantic checks]
-    VALID --> COMPILE[compiler-allocation<br/>IPs · ports · pins · peer derivation]
-    COMPILE --> CUSTODY{key custody}
-    CUSTODY -->|AirGap: keys round-trip| RENDER[render-keys<br/>wg / babel / sysctl / install.sh]
-    CUSTODY -->|AgentHeld: placeholder + splice| RENDER
-    RENDER --> ART[artifacts-signing<br/>per-node bundles · checksums · bundle.sig]
-    ART -->|ZIP + SSH deploy scripts| ENDLOCAL([Configs applied via SSH / manual])
+    DESIGN -->|local compile / export| CUSTODY{key custody?}
+    DESIGN -. shared controller topology draft .-> FLEET
+    FLEET --> PTELEM[panel-telemetry<br/>policy editor · live results · charts]
+    FLEET --> OPAPI[controller-operator-api<br/>authenticated operator HTTP boundary]
+    PTELEM -->|save policy draft / query history| OPAPI
+    OPAPI -->|Fleet live / history response| PTELEM
 
-    DESIGN -->|Deploy| DEPLOY[panel-deploy-fleet<br/>deploy flow · fleet UI · enrollment UI]
-    DEPLOY --> OPAPI[controller-operator-api<br/>cookie session · CSRF · operator routes]
-    OPAPI --> STORE[(controller-store<br/>topology · registry · bundles · audit)]
-    OPAPI --> STAGE[controller-stage-promote<br/>enrolled subgraph → compile → stage → promote]
-    STAGE --> VALID
-    ART -->|staged bundles| STORE
-    STAGE --> KEYSTONE{keystone pinned?}
-    KEYSTONE -->|yes: manifest needs off-host signature| TRUST[keystone-trustlist<br/>canonical manifest · sig verify]
-    TRUST -->|operator signs via WebAuthn| DEPLOY
-    KEYSTONE -->|no| AGENTAPI[controller-agent-api<br/>enroll · poll · config · report · bootstrap]
-    STAGE -->|promote: gen+1| AGENTAPI
-    DEPLOY -->|mint enrollment token| AGENTAPI
-    AGENTAPI --> AGENT[agent<br/>pull → verify → anti-rollback → splice key → apply]
-    AGENT --> ENDCTL([Configs applied on node · status reported])
+    OPAPI -->|stage request| STAGE[controller-stage-promote<br/>stage: select · compile · seal<br/>promote: publish exact served set]
+    OPAPI -. topology / registry / settings / history reads .-> STORE[(controller-store<br/>tenant-scoped durable + volatile state)]
+    STAGE -. staged candidates .-> STORE
+    STAGE --> POLICY[telemetry-policy<br/>validate · version · readiness · projection]
+    POLICY --> CUSTODY
+
+    CUSTODY -->|AirGap: prepare and round-trip keys| VALID[model-validation<br/>schema normalization · semantic rules]
+    CUSTODY -->|AgentHeld: prepare public keys + placeholder| VALID
+    VALID --> COMPILE[compiler-allocation<br/>roles · IPs · ports · pins · peers]
+    COMPILE --> RENDER[render-keys<br/>WireGuard · Babel · sysctl · installers]
+    RENDER --> ART[artifacts-signing<br/>canonical bundles · checksums · tier-1 signature]
+    ART --> DELIVERY{delivery mode?}
+
+    DELIVERY -->|local ZIP / verified manual or SSH apply| END([Overlay applied and observable])
+    DELIVERY -->|controller candidate| KEYSTONE{keystone pinned?}
+    KEYSTONE -->|yes| TRUST[keystone-trustlist<br/>canonical membership · off-host signature · epoch]
+    KEYSTONE -->|no compatibility promote input| STAGE
+    TRUST -->|verified signature for promote| STAGE
+    STAGE -->|promotion commits generation last| STORE
+    STORE -. atomic served snapshot .-> AGENTAPI[controller-agent-api<br/>enroll · config · poll · report · telemetry]
+
+    AGENTAPI --> AGENT[agent<br/>pull · verify · durable intent · apply / recover]
+    AGENT -->|verified apply| END
+    AGENT --> ATELEM[agent-telemetry<br/>sample · probe · discover devices · replay]
+    ATELEM -->|authenticated heartbeat| AGENTAPI
+    AGENTAPI -->|admitted observation| CTELEM[controller-telemetry<br/>ingest · deduplicate · retain · roll up]
+    CTELEM -->|latest overlay + bounded history| STORE
+    PTELEM -->|operator observes current state| END
 ```
 
-**Lifecycle:** Operator opens the panel → configs applied (via SSH/manual
-export in local mode; via verified agent pull in controller mode). The two
-structural decision points are the **mode split** (local vs controller) and
-the **key-custody split** (AirGap: keys round-trip to the browser; AgentHeld:
-zero-knowledge placeholder spliced with the node's locally-held key).
+**Lifecycle:** operator starts with a topology and ends with a locally or controller-delivered overlay
+whose current state is observable. The structural branches are workflow mode, key custody, delivery
+mode, and the optional keystone gate. Controller stage first builds and seals the candidate; the same
+component is re-entered for promotion only after any required keystone signature is installed. In the
+shared compile path, custody selection and key preparation happen before schema/compiler work; text
+rendering happens after compiler derivation.
 
 ## Components — when to read which
 
 | Component | Read when... | File |
 |---|---|---|
-| panel-shell | Touching routes, theming, i18n, nav, session-restore-on-mount | `panel-shell.md` |
-| panel-auth | Touching login flows (password/TOTP/passkey), client session/CSRF state | `panel-auth.md` |
-| panel-design | Touching the canvas, topology store, localStorage persistence, import/export | `panel-design.md` |
-| panel-deploy-fleet | Touching the deploy flow, fleet UI, enrollment UI, connection/bootstrap settings | `panel-deploy-fleet.md` |
-| model-validation | Touching the topology model or validation rules | `model-validation.md` |
-| compiler-allocation | Touching IP/port allocation, pins, stability, peer derivation | `compiler-allocation.md` |
-| render-keys | Touching key generation/custody or config/script rendering | `render-keys.md` |
-| artifacts-signing | Touching bundle layout, checksums, or Ed25519 bundle signing | `artifacts-signing.md` |
-| controller-store | Touching persistence, tenant scoping, generations, audit | `controller-store.md` |
-| controller-stage-promote | Touching the enrolled-subgraph compile, stage/promote semantics | `controller-stage-promote.md` |
-| controller-operator-api | Touching operator routes, cookie/CSRF/CORS, path prefix | `controller-operator-api.md` |
-| controller-agent-api | Touching agent routes, enrollment tokens, long-poll, bootstrap installer | `controller-agent-api.md` |
-| keystone-trustlist | Touching the off-host signing ceremony, trust-list, membership verification | `keystone-trustlist.md` |
-| agent | Touching the node agent (keygen/enroll/apply cycle, verification, state) | `agent.md` |
+| Panel shell | Touching build modes, routes, navigation, store boundaries, i18n, or appearance | [`panel-shell.md`](panel-shell.md) |
+| Panel auth | Touching controller connection, sessions, password/TOTP/passkey login, or browser credential enrollment | [`panel-auth.md`](panel-auth.md) |
+| Panel design | Touching the canvas, topology store, import/export, local persistence, or Go/WASM actions | [`panel-design.md`](panel-design.md) |
+| Panel deploy and Fleet | Touching registry/enrollment, deploy preview, stage/sign/promote orchestration, or Live refresh | [`panel-deploy-fleet.md`](panel-deploy-fleet.md) |
+| Panel telemetry | Touching active-check/device policy UI, live probe/device results, history selectors, or charts | [`panel-telemetry.md`](panel-telemetry.md) |
+| Model validation | Touching topology DTOs, schema defaults, semantic rules, roles, or Go/TypeScript wire drift | [`model-validation.md`](model-validation.md) |
+| Compiler and allocation | Touching role inference, peer derivation, overlay/transit/link-local allocation, ports, or sticky pins | [`compiler-allocation.md`](compiler-allocation.md) |
+| Render and key custody | Touching AirGap/AgentHeld keys, config/script rendering, private-key splice, or deploy helpers | [`render-keys.md`](render-keys.md) |
+| Artifacts and signing | Touching bundle membership, filesystem export, checksums, tier-1 signing, or pre-apply integrity | [`artifacts-signing.md`](artifacts-signing.md) |
+| Telemetry policy | Touching ICMP/TCP/URL policy, automatic-device mode, policy versions, or rollout readiness | [`telemetry-policy.md`](telemetry-policy.md) |
+| Controller store | Touching persistence contracts, FileStore/MemStore parity, filesystem custody, audit, or generic history storage | [`controller-store.md`](controller-store.md) |
+| Controller stage/promote | Touching deployment-ready subgraphs, delta stage, candidate seals, allocation writeback, or promotion recovery | [`controller-stage-promote.md`](controller-stage-promote.md) |
+| Controller operator API | Touching operator listener routes, session/break-glass auth, CSRF/CORS, typed errors, or API cache policy | [`controller-operator-api.md`](controller-operator-api.md) |
+| Controller agent API | Touching node enrollment, bearer auth, config/poll/report/telemetry/rekey, or bootstrap | [`controller-agent-api.md`](controller-agent-api.md) |
+| Keystone trust list | Touching membership manifests, browser/raw signing, credential transitions, epoch, or node membership verification | [`keystone-trustlist.md`](keystone-trustlist.md) |
+| Node agent | Touching node key/state custody, polling, verification, apply/uninstall, recovery, or self-update | [`agent.md`](agent.md) |
+| Agent telemetry | Touching sampling/upload cadence, active probes, device discovery, GPU/disk/filesystem collection, or replay | [`agent-telemetry.md`](agent-telemetry.md) |
+| Controller telemetry | Touching live ingestion, reliable receipts, deduplication, metric catalog, retention, filtering, or rollups | [`controller-telemetry.md`](controller-telemetry.md) |
 
 ## Glossary (domain vocabulary used in the diagram)
 
 | Term | Meaning |
 |---|---|
-| Topology | The editable design graph: project + domains + nodes + edges |
-| Domain | A logical IP domain (CIDR) nodes belong to |
-| Allocation pins | Compiler-written fields (IPs/ports) persisted into the topology so re-compiles stay stable |
-| Custody (AirGap / AgentHeld) | Who holds WG private keys: round-tripped to the operator (local) vs generated and held only on the node (controller) |
-| Bundle | Per-node artifact set: wireguard/babel/sysctl configs + install.sh + checksums (+ optional signature) |
-| Generation | Monotonic deploy counter per tenant; agents poll for generations newer than their cursor |
-| Stage / Promote | Stage compiles enrolled nodes into staged bundles; promote atomically flips staged→current and bumps the generation |
-| Enrollment | One-time ceremony binding a machine to a design node ID via a single-use token, yielding a per-node bearer token |
-| Keystone | The operator-held signing credential (browser WebAuthn or raw Ed25519 CLI); when pinned, promote requires a valid trust-list signature. The controller stores public material only, and does not attest WebAuthn hardware backing or non-exportability |
-| Trust-list | Canonical signed manifest of approved members (node ID + WG pubkey + bundle checksum), verified by agents before apply |
-| Operator | The human controlling the panel (password/TOTP/passkey login) |
-| Tenant | The single state scope a controller serves (`YAOG_TENANT_ID`) |
-| Secret path prefix | Optional per-audience path segment the controller routes mount under: `YAOG_OPERATOR_PATH_PREFIX` (operator/panel port) and `YAOG_AGENT_PATH_PREFIX` (agent port), independently |
+| Topology | Editable project, domain, node, edge, and active-telemetry intent; route policy is reserved and must remain empty |
+| Domain | Overlay address/routing scope to which nodes belong |
+| Allocation pin | Compiler-written port, transit IP, or link-local field persisted so recompiles stay stable |
+| AirGap custody | Offline/local mode in which private keys round-trip with operator-owned topology state |
+| AgentHeld custody | Controller mode in which the node retains its private key and rendered configs carry a placeholder |
+| Bundle | One node's checksummed configuration, policy, installer, and optional tier-1 signature files |
+| Deployment-ready | A managed enrolled node or valid manual node eligible for the controller subgraph |
+| Stage / promote | Build and seal the next exact candidate set, then publish it as one recoverable generation transition |
+| Generation | Monotonic controller deployment cursor used by agents for long-poll convergence |
+| Keystone | Optional operator-controlled public credential whose off-host signature authorizes exact membership |
+| Trust list | Canonical signed members: node ID, WireGuard public key, bundle digest, and monotonic epoch |
+| Active probe | Typed, bounded node policy for ICMP, TCP, or URL observation; not an arbitrary command surface |
+| Telemetry protocol v2 | Header-only reliable delivery extension that preserves the legacy JSON heartbeat body |
+| Metric catalog | Shared registry declaring each production metric charted or live-only and its chart family |
 
 ## Cross-doc map
 
-- `STATUS.md` — what's active right now (regenerated at every closure).
-- `README.md` — how to use the project; referentially comprehensive.
-- `PRINCIPLES.md` — domain invariants (the rules; never violate).
-- `docs/spec/` — the maintained deep-doc layer (controller/, compiler/,
-  data-model/, api/, operations/). Kept live by decision (2026-06-12);
-  component files cite it for depth. **Known drift:** persistence.md's
-  "public-keys-only store" claim is a caller contract, not store-enforced —
-  see `controller-store.md` Invariants.
-- `docs/wiki.md` / `docs/wiki-zh.md` — user-facing documentation.
+- `STATUS.md` — active subjects, current plan, blockers, and next action; regenerated at closure.
+- `README.md` — user/developer entry point and build/run guidance.
+- `PRINCIPLES.md` — minimal project-wide invariants that implementation plans must preserve.
+- `CLAUDE.md` and ignored local `AGENTS.md` — synchronized coding-agent guidance.
+- `docs/spec/` — maintained deep contracts and operational detail; component files provide the
+  architectural navigation layer.
+- `docs/wiki.md` and `docs/wiki-zh.md` — user-facing English and Chinese manuals.
 
 ---
 
-*Generated by `refresh-specs` on 2026-06-12. Regenerate via
-`/refresh-specs`. Per-component touch-ups happen via close-phase Step 4.6.*
+*Generated by `refresh-specs` on 2026-07-17. Regenerate via `$refresh-specs`. Per-component touch-ups
+happen through `close-phase`.*
