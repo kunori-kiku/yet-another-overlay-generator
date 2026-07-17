@@ -628,8 +628,10 @@ An agent can replace its **own binary** with the version pinned in the verified 
 against the **signed SHA-256 pin** (never an upstream `.sha256` sidecar), passes a **self-test**
 (`<newbin> version` must equal the desired version) before exec, and the swap is crash-bounded:
 a `Restart=always` loop is capped at 3 attempts, after which the agent rolls back to the saved
-`.bak`. A health check marks the new version **probationary**, and the **anti-downgrade floor** only
-advances after a full clean cycle.
+`.bak`. A failed post-swap health request keeps the breadcrumb and `.bak` and is retried on the next
+supervised start; one transient `EOF` does not abandon the target. A successful health check marks
+the new version **probationary**, and the **anti-downgrade floor** only advances after a full clean
+cycle.
 
 From the panel: a one-click **"Update all agents to {version}"** targets the controller's own version,
 arms a **canary-then-fleet** rollout, and the controller **refuses a target newer than itself**. A

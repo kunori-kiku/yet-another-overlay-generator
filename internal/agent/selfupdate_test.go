@@ -599,7 +599,9 @@ func TestReconcileSelfUpdatePromote_Probation(t *testing.T) {
 
 	execed, restore := stubSwap(t, self)
 	defer restore()
-	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard)
+	if err := ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
 
 	if *execed != "" {
 		t.Errorf("probation must not re-exec")
@@ -754,45 +756,81 @@ func TestFinalizeSelfUpdate_NoopLeavesBlockedIntact(t *testing.T) {
 	}
 }
 
-// TestReconcileSelfUpdatePromote_HealthFailRollback: booted as the target but unhealthy → roll back
-// to .bak, re-exec, and remember the abandoned target.
-func TestReconcileSelfUpdatePromote_HealthFailRollback(t *testing.T) {
+// TestReconcileSelfUpdatePromote_HealthFailureRetriesBeforeAbandon pins the rc.13 regression fix:
+// one failed health GET keeps the new binary, breadcrumb, and rollback backup so systemd can retry.
+// Only exhausting the shared persisted boot-attempt ceiling rolls back and abandons the target.
+func TestReconcileSelfUpdatePromote_HealthFailureRetriesBeforeAbandon(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "yaog-agent")
-	_ = os.WriteFile(self, []byte("NEW-BROKEN"), 0o755)
+	_ = os.WriteFile(self, []byte("NEW-RETRYING"), 0o755)
 	_ = os.WriteFile(self+".bak", []byte("OLD-GOOD"), 0o755)
 	stateDir := filepath.Join(dir, "state")
 	mustSave(t, stateDir, &State{NodeID: "n1", AgentVersionFloor: "1.0.0", PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0"}})
 
 	execed, restore := stubSwap(t, self)
 	defer restore()
-	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return fmt.Errorf("poll failed") }, io.Discard)
+	var stderr strings.Builder
+	for attempt := 1; attempt <= maxSelfUpdateAttempts; attempt++ {
+		if err := ReconcileSelfUpdateEarly(stateDir, "1.1.0", io.Discard); err != nil {
+			t.Fatalf("early reconcile attempt %d: %v", attempt, err)
+		}
+		err := ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return io.EOF }, &stderr)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("attempt %d/%d", attempt, maxSelfUpdateAttempts)) {
+			t.Fatalf("health failure attempt %d must request a bounded retry, got %v", attempt, err)
+		}
+		st, loadErr := LoadState(stateDir)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if st.PendingUpdate == nil || st.PendingUpdate.Attempts != attempt || st.PendingUpdate.Confirmed {
+			t.Fatalf("attempt %d did not retain the unconfirmed breadcrumb: %+v", attempt, st.PendingUpdate)
+		}
+		if st.AbandonedAgentVersion != "" || st.AbandonedReason != "" {
+			t.Fatalf("attempt %d abandoned the target prematurely: %q / %q", attempt, st.AbandonedAgentVersion, st.AbandonedReason)
+		}
+		if got, _ := os.ReadFile(self); string(got) != "NEW-RETRYING" {
+			t.Fatalf("attempt %d rolled back prematurely; binary=%q", attempt, got)
+		}
+		if got, _ := os.ReadFile(self + ".bak"); string(got) != "OLD-GOOD" {
+			t.Fatalf("attempt %d lost the rollback backup; backup=%q", attempt, got)
+		}
+		if *execed != "" {
+			t.Fatalf("attempt %d re-execed before the ceiling: %q", attempt, *execed)
+		}
+	}
+	if !strings.Contains(stderr.String(), "retrying after restart") {
+		t.Fatalf("retry path did not explain its action: %q", stderr.String())
+	}
 
+	// The next boot crosses the same ceiling used for swap/crash failures and takes the existing
+	// crash-safe rollback path before another health request can run.
+	if err := ReconcileSelfUpdateEarly(stateDir, "1.1.0", io.Discard); err != nil {
+		t.Fatalf("cap reconcile: %v", err)
+	}
 	if *execed != self {
-		t.Errorf("rollback must re-exec the restored binary")
+		t.Errorf("attempt-cap rollback must re-exec the restored binary")
 	}
 	if got, _ := os.ReadFile(self); string(got) != "OLD-GOOD" {
-		t.Errorf("binary not rolled back; content=%q", got)
+		t.Errorf("binary not rolled back at the attempt cap; content=%q", got)
 	}
 	st, _ := LoadState(stateDir)
 	if st.PendingUpdate != nil {
-		t.Errorf("breadcrumb not cleared after rollback")
+		t.Errorf("breadcrumb not cleared after attempt-cap rollback")
 	}
 	if st.AgentVersionFloor != "1.0.0" {
 		t.Errorf("floor must be preserved (not advanced, not wiped) on rollback; got %q", st.AgentVersionFloor)
 	}
 	if st.AbandonedAgentVersion != "1.1.0" {
-		t.Errorf("rollback must remember the abandoned target to prevent re-arm; got %q", st.AbandonedAgentVersion)
+		t.Errorf("attempt-cap rollback must remember the abandoned target; got %q", st.AbandonedAgentVersion)
 	}
 	if st.AbandonedReason == "" || strings.Contains(st.AbandonedReason, "\n") {
-		t.Errorf("rollback must record a curated one-line reason (plan-9); got %q", st.AbandonedReason)
+		t.Errorf("rollback must record a curated one-line reason; got %q", st.AbandonedReason)
 	}
 }
 
-// A health check runs between the initial state read and rollback bookkeeping. If state becomes
-// unreadable in that interval, rollback may restore the binary but must not manufacture a fresh
-// state that erases configuration/membership floors or PendingApply.
-func TestReconcileSelfUpdatePromote_RollbackStateReloadFailureDoesNotWipeCustody(t *testing.T) {
+// If state is unreadable when an attempt-cap rollback records abandonment, it may restore the binary
+// but must not manufacture a fresh state that erases configuration/membership floors or PendingApply.
+func TestRollbackAndAbandon_StateReloadFailureDoesNotWipeCustody(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "yaog-agent")
 	if err := os.WriteFile(self, []byte("NEW"), 0o755); err != nil {
@@ -814,21 +852,21 @@ func TestReconcileSelfUpdatePromote_RollbackStateReloadFailureDoesNotWipeCustody
 			MembershipEpoch: 8,
 			StartedAt:       "2026-07-16T04:01:00Z",
 		},
-		PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0", Attempts: 1},
+		PendingUpdate: &PendingUpdate{From: "1.0.0", To: "1.1.0", Attempts: maxSelfUpdateAttempts + 1},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	execed, restore := stubSwap(t, self)
 	defer restore()
-	corrupt := []byte("{ custody failed during health check")
+	corrupt := []byte("{ custody failed during attempt-cap rollback")
+	if err := os.WriteFile(statePath(stateDir), corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var stderr strings.Builder
-	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error {
-		if err := os.WriteFile(statePath(stateDir), corrupt, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return fmt.Errorf("health check failed")
-	}, &stderr)
+	rollbackAndAbandon(stateDir, "1.1.0", &PendingUpdate{
+		From: "1.0.0", To: "1.1.0", Attempts: maxSelfUpdateAttempts + 1,
+	}, "attempt cap exceeded", &stderr)
 
 	if got, readErr := os.ReadFile(statePath(stateDir)); readErr != nil || !bytes.Equal(got, corrupt) {
 		t.Fatalf("rollback replaced unreadable custody state: %q, %v", got, readErr)
@@ -904,7 +942,9 @@ func TestReconcileSelfUpdatePromote_ProbationRebootResumes(t *testing.T) {
 
 	execed, restore := stubSwap(t, self)
 	defer restore()
-	ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard)
+	if err := ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard); err != nil {
+		t.Fatalf("resume probation: %v", err)
+	}
 
 	if *execed != "" {
 		t.Errorf("a benign probation reboot must NOT roll back (no re-exec); it should resume probation")
@@ -950,7 +990,9 @@ func TestReconcileSelfUpdate_ProbationCrashLoopAbandons(t *testing.T) {
 			}
 			break
 		}
-		ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard) // resumes (Confirmed)
+		if err := ReconcileSelfUpdatePromote(stateDir, "1.1.0", func() error { return nil }, io.Discard); err != nil { // resumes (Confirmed)
+			t.Fatalf("resume probation: %v", err)
+		}
 	}
 	if !abandoned {
 		t.Errorf("a binary that crashes throughout probation must be abandoned at the attempt cap")
