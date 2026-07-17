@@ -222,6 +222,9 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 - 2026-07-17 — authoritative early preflight found no local/GitHub `v2.0.0-rc.12` tag, no GitHub
   release or draft, and no official GHCR rc.12 image reference. Plan 9 must repeat that check from
   clean exact main immediately before the immutable tag.
+- 2026-07-17 — plan-8 release-ready candidate sealed as `f962ab9` after clean integrated
+  review/fix/re-review, full local gates, documentation, and full specs refresh. Subject closure,
+  cumulative PR checks, and exact-main CI remain mandatory before the terminal plan-9 tag.
 
 ## Milestones
 
@@ -412,5 +415,5 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 | plan-5 | done — `09eff0a` — constrained fixed-GET URL probes with charted latency/availability |
 | plan-6 | done — `efabd64` — bounded hashed disk/filesystem/GPU collectors, explicit gaps, and dormant chart contract |
 | plan-7 | done — `1bd840d` — signed automatic device telemetry with exact history and Fleet charts |
-| plan-8 | pending |
-| plan-9 | pending terminal release action |
+| plan-8 | done — `f962ab9` — reviewed release-ready candidate sealed; closure and exact-main proof follow |
+| plan-9 | pending terminal release action after subject closure and exact-main CI |
