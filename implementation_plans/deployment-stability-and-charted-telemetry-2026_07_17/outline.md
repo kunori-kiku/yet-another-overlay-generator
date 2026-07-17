@@ -200,6 +200,11 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
   hard discovery/process bounds, and clean Windows/arm64 portability gates.
 - 2026-07-17 — plan-6 specs touch update deferred to plan-8's mandatory full refresh; production
   registration intentionally remains absent until plan 7 activates the chart/history family atomically.
+- 2026-07-17 — plan-7 closed as completed: `1bd840d` activated signed automatic device telemetry,
+  kept categorical inventory live-only, retained numeric samples at their actual collection cadence,
+  and added exact-series Fleet charts without persisting live hardware data in the browser.
+- 2026-07-17 — plan-7 specs touch update deferred to plan-8's mandatory full refresh; the coordinated
+  dirty specs and adversarial E2E coverage remain isolated for the integrated documentation/gate pass.
 
 ## Milestones
 
@@ -299,7 +304,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-7 — automatic devices and charts
 
-- **Plan:** plan-7-2026_07_17.md
+- **Plan:** _completed/completed-plan-7-2026_07_17.md
 - **Goal:** activate opt-in device collection only when inventory/latest/history/API/Fleet chart coverage
   is complete.
 - **Proposed solution:** opt-in versioned policy object with mode all; periodic rediscovery; register live-only
