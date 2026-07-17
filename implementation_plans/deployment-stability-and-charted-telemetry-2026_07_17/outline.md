@@ -225,6 +225,9 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 - 2026-07-17 — plan-8 release-ready candidate sealed as `f962ab9` after clean integrated
   review/fix/re-review, full local gates, documentation, and full specs refresh. Subject closure,
   cumulative PR checks, and exact-main CI remain mandatory before the terminal plan-9 tag.
+- 2026-07-17 — plan-8 closed as completed under the owner's standing preauthorization: all
+  implementation, review, local verification, documentation, and specs gates passed. No plan-scoped
+  temporary test directory required migration, and no external notification channel was configured.
 
 ## Milestones
 
@@ -339,7 +342,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-8 — integration and release readiness
 
-- **Plan:** plan-8-2026_07_17.md
+- **Plan:** _completed/completed-plan-8-2026_07_17.md
 - **Goal:** obtain a clean whole-subject re-review, full final gates, refreshed specs, closed/archived
   bookkeeping, and exact reviewed main ready for a terminal tag.
 - **Proposed solution:** independent reviewers cover security, controller/history, frontend/custody, compatibility,
