@@ -4,39 +4,43 @@
 
 ## Active work
 
-- **Subject:** the rc.12 implementation subject is archived as Delivered. The only remaining
-  unarchived subject is `mixed-controller-local-mode-2026_06_25`, whose historical plan-5 and plan-7
-  remain pending and were not resumed here.
-- **Branch:** `fix/rc12-telemetry-drafts` @ closure head `34f8240`, retained for the cumulative PR.
-- **Current plan:** the archived rc.12 [Plan 9](implementation_plans/_completed/deployment-stability-and-charted-telemetry-2026_07_17/plan-9-2026_07_17.md)
-  terminal checklist: merge the reviewed branch, prove exact-main CI, then tag and verify publication.
-- **Latest completed work:** plans 1-8, integrated review/fix/re-review, full local gates, full specs
-  refresh, and subject bookkeeping are complete (closure commit `34f8240`, 2026-07-17).
-- **Release candidate:** `v2.0.0-rc.12` is release-ready and **uncut**. No tag, GitHub release/draft,
-  or official GHCR rc.12 reference existed at the early preflight; Plan 9 must repeat that check.
+- **Subject:** focused rc.13 agent self-update health-gate hotfix. The archived rc.12 telemetry and
+  deployment subject remains Delivered; the historical mixed-controller/local-mode subject was not
+  resumed.
+- **Branch:** `fix/rc13-selfupdate-health-retry` at reviewed hotfix commit `5667b46`; PR #311 targets
+  `main`.
+- **Current plan:** pass only the repository-required PR checks, squash-merge, prove required CI on
+  the exact resulting `origin/main`, then cut and verify `v2.0.0-rc.13` through the ordinary release
+  workflow.
+- **Latest completed work:** rc.12 was published from `122b217`; the rc.13 fix now retains the
+  self-update breadcrumb and rollback backup across health failures and uses the existing persisted
+  three-attempt ceiling instead of abandoning on the first request error.
+- **Release candidate:** `v2.0.0-rc.13` is release-ready and **uncut**. No rc.13 source tag, GitHub
+  release, or official versioned image has been created.
 
 ## Open questions / blockers
 
-- No implementation blocker remains. Publication is blocked until the cumulative PR's required checks
-  pass, the reviewed branch is squash-merged, and push CI succeeds on that exact `origin/main` commit.
-- No physical NVIDIA or AMD GPU was available for an on-hardware smoke. Fixture, provider-boundary,
-  process-bound, portability, and cross-build coverage passed; the caveat remains explicit rather than
-  being represented as a completed hardware test.
-- The annotated `v2.0.0-rc.12` tag must be the final repository mutation. Any red exact-main gate or
-  pre-existing immutable reference stops publication.
+- No implementation blocker remains. Publication waits only for PR #311's required checks, the
+  squash merge, and the required push CI on that exact main commit.
+- The behavior change is confined to the already-bounded post-swap health reconciliation path. Its
+  focused regression proves three retries retain the new binary and `.bak`, while the next supervised
+  boot crosses the existing ceiling and performs the crash-safe rollback.
+- Any red required gate or pre-existing immutable rc.13 tag/release/image reference stops fresh
+  publication and enters the documented recovery decision instead.
 
 ## Next actions
 
-1. Create or reuse the cumulative PR from `fix/rc12-telemetry-drafts` and wait for every required check.
-2. Squash-merge the reviewed branch, update local `main`, and prove it exactly equals `origin/main`.
-3. Wait for successful push CI on that exact main commit, including the PowerShell gate unavailable locally.
-4. Repeat the tag/release/GHCR preflight, then create and push the annotated tag as the final source mutation.
-5. Monitor the release transaction and verify all 22 assets plus native amd64/arm64 official image pointers.
+1. Wait for every required PR #311 check; do not add optional local gates.
+2. Squash-merge, update local `main`, and prove it exactly equals `origin/main`.
+3. Wait for the required push CI on that exact main commit.
+4. Run the rc.13 tag/release/GHCR absence preflight and create one annotated tag at that main tip.
+5. Monitor the release transaction and verify the 22 assets, GitHub Latest, and native amd64/arm64
+   official image pointers.
 
 ## Recently closed subjects (last 3)
 
 - `deployment-stability-and-charted-telemetry-2026_07_17` (2026-07-17, Delivered): rc.12 fixes,
-  URL/device telemetry, chart/history framework, reviews, specs, and release-ready evidence completed.
+  URL/device telemetry, chart/history framework, reviews, specs, and publication completed.
 - `post-refactor-debt-paydown-2026_07_14` (2026-07-15, Complete): residual security, correctness,
   documentation, and structural debt closed through fourteen reviewed plans.
 - `framework-refactor-2026_07_13` (2026-07-14, Complete): unified compile architecture and repository

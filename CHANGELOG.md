@@ -9,6 +9,22 @@ Pre-1.0 `v2.0.0` is currently in a `preview → beta → rc → GA` ramp; see
 
 ## [Unreleased]
 
+## [2.0.0-rc.13] - 2026-07-17
+
+**Release candidate.** Corrects the rc.12 agent self-update health-gate regression without changing
+the signed release catalog, binary verification, rollback artifact, version floor, or configuration
+apply contracts.
+
+### Fixed
+
+- **A single post-swap controller failure no longer permanently abandons an agent release.** A failed
+  `Fetch + VerifyBundle` health request retains the pending breadcrumb and `.bak`, exits, and retries
+  through the existing systemd restart path. The durable three-attempt ceiling still rolls back and
+  abandons a target that repeatedly fails, so the retry does not reintroduce an unbounded crash loop.
+- **An rc.12-abandoned node can be re-armed without erasing custody state.** The recovery guidance
+  removes only `abandoned_agent_version` and `abandoned_reason` while the service is stopped and
+  preserves configuration, membership, pending-apply, anti-rollback, ownership, and mode state.
+
 ## [2.0.0-rc.12] - 2026-07-17
 
 **Release candidate.** Repairs the deployment regressions exposed by editing signed telemetry policy,
@@ -1523,7 +1539,8 @@ PRs #59–#65.
 
 - Initial release: visual topology design → WireGuard + Babel config generation.
 
-[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.12...HEAD
+[Unreleased]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.13...HEAD
+[2.0.0-rc.13]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.12...v2.0.0-rc.13
 [2.0.0-rc.12]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.11...v2.0.0-rc.12
 [2.0.0-rc.11]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.10...v2.0.0-rc.11
 [2.0.0-rc.10]: https://github.com/kunori-kiku/yet-another-overlay-generator/compare/v2.0.0-rc.9...v2.0.0-rc.10
