@@ -228,6 +228,20 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 - 2026-07-17 — plan-8 closed as completed under the owner's standing preauthorization: all
   implementation, review, local verification, documentation, and specs gates passed. No plan-scoped
   temporary test directory required migration, and no external notification channel was configured.
+- 2026-07-17 — subject status is Delivered at the reviewed implementation/release-ready boundary under
+  the owner's explicit autonomous-closure authorization. Plans 1-8 and their local gates are complete;
+  cumulative merge, exact-main CI, and immutable publication remain the intentionally post-archive
+  plan-9 checklist and are not represented as already shipped.
+- 2026-07-17 — no subject-scoped temporary test tree required migration. Focused regressions remain in
+  their ordinary perpetual suites. No separate memory note was created because the durable conventions
+  are already captured in CLAUDE.md/AGENTS.md, refreshed specs, and the closure README.
+- 2026-07-17 — close-phase specs choice: the required heavy `refresh-specs` run already completed at
+  `faeee52` and passed three review/fix/re-review rounds, so no duplicate refresh was run. The feature
+  branch is retained for the required cumulative PR and is not eligible for deletion before merge.
+- 2026-07-17 — subject archive and status regeneration were preauthorized; no external notification
+  channel is configured, so closure reporting remains in chat only.
+- 2026-07-17 — post-archive README audit found all root and closure-document relative references
+  resolvable; no referential-index correction was required.
 
 ## Milestones
 
