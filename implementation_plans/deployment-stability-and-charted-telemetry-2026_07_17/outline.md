@@ -195,6 +195,11 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 - 2026-07-17 — plan-5 specs touch update deferred to plan-8's mandatory full refresh; the shared
   worktree already contains coordinated device/history spec edits, so committing a partial cache now
   would describe an intentionally intermediate architecture.
+- 2026-07-17 — plan-6 closed as completed: `efabd64` added dormant bounded disk/filesystem/GPU
+  contracts and Linux collectors with private hashed identity, explicit zero-versus-gap semantics,
+  hard discovery/process bounds, and clean Windows/arm64 portability gates.
+- 2026-07-17 — plan-6 specs touch update deferred to plan-8's mandatory full refresh; production
+  registration intentionally remains absent until plan 7 activates the chart/history family atomically.
 
 ## Milestones
 
@@ -281,7 +286,7 @@ controller-store, agent, render-keys, artifacts-signing, panel-deploy-fleet, pan
 
 ### plan-6 — bounded collector primitives
 
-- **Plan:** plan-6-2026_07_17.md
+- **Plan:** _completed/completed-plan-6-2026_07_17.md
 - **Goal:** safe injectable disk/GPU discovery and sampling without production registration.
 - **Proposed solution:** separate inventory/sample DTOs, explicit block_device/filesystem/GPU identity,
   sysfs/proc collectors, fixed absolute nvidia-smi invocation, AMD sysfs, deterministic caps.
