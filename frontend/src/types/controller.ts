@@ -1,3 +1,5 @@
+import type { DeviceInventoryMetric, DeviceSamplesMetric } from './deviceTelemetry';
+
 // Frontend data model for the controller panel (plan-4.5 networked controller).
 // These types mirror the operator-facing JSON shapes in internal/api/wire_controller.go,
 // but uniformly use camelCase. Per-domain modules under api/controller/ map the backend's
@@ -63,6 +65,11 @@ export interface ControllerNode {
   // disclose internal addressing and a frozen result becomes misleading, so the persistence boundary
   // strips this field alongside the other telemetry projections.
   probeResults?: TelemetryProbeResult[];
+  // Bounded categorical inventory and current numeric device readings. Both are authenticated live
+  // telemetry, not durable browser state: labels/mounts describe fleet hardware and current values
+  // become misleading after reload, so stripLiveTelemetry removes both before persistence.
+  deviceInventory?: DeviceInventoryMetric;
+  deviceSamples?: DeviceSamplesMetric;
   // nativeXDP is the egress NIC's native-XDP capability heuristic (plan-4 metrics["native_xdp"]) — a
   // PRE-DEPLOY advisory so the panel can warn before an operator picks xdp_mode=native. Live-only
   // (stripped before the persisted cache, like resource — telemetry stays out of localStorage).

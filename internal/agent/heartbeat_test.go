@@ -2,6 +2,7 @@ package agent
 
 import (
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,32 @@ type fakePoster struct{ n int64 }
 func (f *fakePoster) Telemetry(_ []runtimecontract.Condition, _ map[string]any) error {
 	atomic.AddInt64(&f.n, 1)
 	return nil
+}
+
+type cadenceCompletionSampler struct {
+	mu   sync.Mutex
+	kick func()
+}
+
+func (*cadenceCompletionSampler) Name() string { return "cadence-completion" }
+func (*cadenceCompletionSampler) MetricDefinitions() []telemetrymetric.Definition {
+	return []telemetrymetric.Definition{testMetricDefinition("test")}
+}
+func (*cadenceCompletionSampler) Sample(time.Time) ([]runtimecontract.Condition, map[string]any) {
+	return nil, map[string]any{"test": 1}
+}
+func (s *cadenceCompletionSampler) setTelemetryCompletionKick(kick func()) {
+	s.mu.Lock()
+	s.kick = kick
+	s.mu.Unlock()
+}
+func (s *cadenceCompletionSampler) complete() {
+	s.mu.Lock()
+	kick := s.kick
+	s.mu.Unlock()
+	if kick != nil {
+		kick()
+	}
 }
 
 // alwaysSampler always emits a metric so beat() posts (rather than skipping the empty sample).
@@ -59,6 +86,18 @@ func TestRunHeartbeat_Kick(t *testing.T) {
 	waitForCount(t, &poster.n, 2, "first kick beat")
 	kick <- struct{}{}
 	waitForCount(t, &poster.n, 3, "second kick beat")
+}
+
+func TestRunHeartbeat_CadenceCompletionBeatsSlowerUploadInterval(t *testing.T) {
+	poster := &fakePoster{}
+	sampler := &cadenceCompletionSampler{}
+	done := make(chan struct{})
+	defer close(done)
+	go RunHeartbeat(poster, NewTelemetryForTest(sampler), time.Hour, nil, done, io.Discard)
+
+	waitForCount(t, &poster.n, 1, "startup beat")
+	sampler.complete()
+	waitForCount(t, &poster.n, 2, "independent cadence completion beat")
 }
 
 // TestTryKick_NonBlocking proves the coalescing, never-block guarantee the apply loop relies on: a

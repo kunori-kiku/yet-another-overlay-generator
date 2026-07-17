@@ -23,6 +23,7 @@ import {
   historyRefreshStarted,
   historyRefreshSucceeded,
   initialHistoryRefreshViewState,
+  deviceMetricSeries,
   metricSeries,
   parseGoDuration,
   probeAvailabilitySeries,
@@ -43,10 +44,16 @@ import type {
 } from '../../lib/telemetryHistory';
 import type { TelemetryProbeFailureReason } from '../../types/controller';
 import type { TelemetryProbe } from '../../types/topology';
+import {
+  DEVICE_NUMERIC_DEFINITIONS,
+  type DeviceInventoryMetric,
+  type DeviceNumericKey,
+} from '../../lib/deviceTelemetry';
 
 // NodeResourceHistory retains its historical exported name, but now renders the complete node
-// telemetry-history response: CPU/RAM/load plus the selected CURRENT configured probe's latency,
-// availability, and range failure summary. One range/resolution picker drives both. The response is
+// telemetry-history response: CPU/RAM/load, the selected CURRENT configured probe's latency,
+// availability and failures, plus one exact detected device's numeric charts. One range/resolution
+// picker drives every family. The response is
 // component-local and NEVER persisted (the stripLiveTelemetry custody rule).
 
 // A percent metric pins the Y axis to 0..100 so a flat-ish series is not visually exaggerated; load
@@ -63,6 +70,24 @@ const FAILURE_KEYS: Record<TelemetryProbeFailureReason, MessageKey> = {
   unexpected_status: 'telemetryProbes.failure.unexpectedStatus',
 };
 
+const DEVICE_HISTORY_METRIC_KEYS = {
+  disk_filesystem_used_pct: 'telemetryDevices.metric.filesystemUsed',
+  disk_read_bytes_per_second: 'telemetryDevices.metric.readRate',
+  disk_write_bytes_per_second: 'telemetryDevices.metric.writeRate',
+  disk_io_busy_pct: 'telemetryDevices.metric.ioBusy',
+  gpu_utilization_pct: 'telemetryDevices.metric.gpuUtilization',
+  gpu_vram_used_pct: 'telemetryDevices.metric.vramUsed',
+} satisfies Record<DeviceNumericKey, MessageKey>;
+
+const DEVICE_HISTORY_COLORS: Record<DeviceNumericKey, string> = {
+  disk_filesystem_used_pct: 'var(--success)',
+  disk_read_bytes_per_second: 'var(--info)',
+  disk_write_bytes_per_second: 'var(--accent)',
+  disk_io_busy_pct: 'var(--warning)',
+  gpu_utilization_pct: 'var(--accent)',
+  gpu_vram_used_pct: 'var(--info)',
+};
+
 function failureReasonLabel(reason: string, language: UILanguage): string {
   if (reason === 'uncategorized') return t(language, 'nodeHistory.probeFailureUncategorized');
   const key = FAILURE_KEYS[reason as TelemetryProbeFailureReason];
@@ -71,6 +96,8 @@ function failureReasonLabel(reason: string, language: UILanguage): string {
 
 interface NodeResourceHistoryProps {
   nodeId: string;
+  deviceInventory?: DeviceInventoryMetric;
+  deviceTelemetryEnabled?: boolean;
   // A change in this node's last_seen means fresh telemetry was actually received. It is a trigger
   // only; history stays component-local and is never copied into the persisted controller store.
   refreshAt?: string | number | null;
@@ -96,6 +123,10 @@ export interface HistoryChartFamilySectionProps {
   configuredProbes: readonly TelemetryProbe[];
   selectedProbeID: string | null;
   onSelectProbeID: (id: string) => void;
+  deviceInventory?: DeviceInventoryMetric;
+  deviceTelemetryEnabled: boolean;
+  selectedDeviceID: string | null;
+  onSelectDeviceID: (id: string) => void;
 }
 
 // This is the production dispatch table, not a documentation-only manifest. The shared family
@@ -105,6 +136,7 @@ export interface HistoryChartFamilySectionProps {
 const HISTORY_CHART_RENDERERS = {
   resource: ResourceHistorySection,
   probe: ProbeHistorySection,
+  device: DeviceHistorySection,
 } satisfies Record<HistoryChartFamily, ComponentType<HistoryChartFamilySectionProps>>;
 
 export function HistoryChartFamilySection({
@@ -115,7 +147,12 @@ export function HistoryChartFamilySection({
   return <Renderer {...props} />;
 }
 
-export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryProps) {
+export function NodeResourceHistory({
+  nodeId,
+  deviceInventory,
+  deviceTelemetryEnabled = false,
+  refreshAt,
+}: NodeResourceHistoryProps) {
   const language = useTopologyStore((s) => s.language);
   const topologyNode = useTopologyStore((s) => s.nodes.find((node) => node.id === nodeId));
   const configuredProbes = topologyNode?.telemetry_probes ?? [];
@@ -124,6 +161,9 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
   const [range, setRange] = useState<RangePreset>('6h');
   const [granularity, setGranularity] = useState<Granularity>('auto');
   const [selectedProbeID, setSelectedProbeID] = useState<string | null>(configuredProbes[0]?.id ?? null);
+  const [selectedDeviceID, setSelectedDeviceID] = useState<string | null>(
+    deviceInventory?.devices[0]?.seriesId ?? null,
+  );
   const [retryNonce, setRetryNonce] = useState(0);
   const [displayedGranularity, setDisplayedGranularity] = useState<Granularity | null>(null);
   // Keep the response and its exact request window together. The reducer-style helpers make the
@@ -164,6 +204,11 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
   useEffect(() => () => requestScheduler.dispose(), [requestScheduler]);
 
   const selectedProbe = configuredProbes.find((probe) => probe.id === selectedProbeID) ?? configuredProbes[0];
+  // Fleet first paints from its persistence-safe cache, which deliberately has no device inventory.
+  // Derive the first live row as a fallback so the first authenticated refresh activates the exact
+  // selector without synchronizing a second copy of inventory into component state.
+  const selectedDevice = deviceInventory?.devices.find((device) => device.seriesId === selectedDeviceID)
+    ?? deviceInventory?.devices[0];
   const selectorReady = selectedProbe !== undefined && (
     selectedProbe.type === 'url'
       ? isValidProbeURL(selectedProbe.url) &&
@@ -211,7 +256,16 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
           selector.type === 'tcp' ? selector.port : ''
         }`
       : 'resource-only';
-    const requestKey = `${nodeId}\u0000${range}\u0000${granularity}\u0000${selectorKey}`;
+    const deviceSelectorKey = selectedDevice
+      ? `${selectedDevice.kind}\u0000${selectedDevice.seriesId}`
+      : 'no-device';
+    const requestKey = `${nodeId}\u0000${range}\u0000${granularity}\u0000${selectorKey}\u0000${deviceSelectorKey}`;
+    const options: NodeHistoryRequestOptions = {
+      ...(selector ? { probe: selector } : { includeProbes: false }),
+      ...(selectedDevice
+        ? { device: { kind: selectedDevice.kind, deviceId: selectedDevice.seriesId } }
+        : {}),
+    };
     requestScheduler.observe({
       requestKey,
       observationKey: `${requestKey}\u0000${String(refreshAt ?? '')}\u0000retry-${retryNonce}`,
@@ -219,7 +273,7 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
       from,
       to,
       step: granularityStep(granularity),
-      options: selector ? { probe: selector } : { includeProbes: false },
+      options,
       window: [Date.parse(from), Date.parse(to)],
       requestedGranularity: granularity,
     });
@@ -232,6 +286,7 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
     requestScheduler,
     selectorReady,
     selectedProbe,
+    selectedDevice,
   ]);
 
   const stepMs = parseGoDuration(history?.step ?? '');
@@ -386,13 +441,17 @@ export function NodeResourceHistory({ nodeId, refreshAt }: NodeResourceHistoryPr
               <HistoryChartFamilySection
                 key={family}
                 family={family}
-                history={history ?? { step: '', disabled: false, buckets: [], probes: [] }}
+                history={history ?? { step: '', disabled: false, buckets: [], probes: [], devices: [] }}
                 stepMs={stepMs}
                 xDomain={xDomain}
                 language={language}
                 configuredProbes={configuredProbes}
                 selectedProbeID={selectedProbeID}
                 onSelectProbeID={setSelectedProbeID}
+                deviceInventory={deviceInventory}
+                deviceTelemetryEnabled={deviceTelemetryEnabled}
+                selectedDeviceID={selectedDeviceID}
+                onSelectDeviceID={setSelectedDeviceID}
               />
             );
           })}
@@ -571,6 +630,93 @@ function ProbeHistorySection({
             )}
           </div>
         </>
+      )}
+    </section>
+  );
+}
+
+function DeviceHistorySection({
+  history,
+  stepMs,
+  xDomain,
+  language,
+  deviceInventory,
+  deviceTelemetryEnabled,
+  selectedDeviceID,
+  onSelectDeviceID,
+}: HistoryChartFamilySectionProps) {
+  const selectedDevice = deviceInventory?.devices.find((device) => device.seriesId === selectedDeviceID)
+    ?? deviceInventory?.devices[0];
+  const selectedHistory = selectedDevice
+    ? history.devices.find((series) =>
+        series.deviceId === selectedDevice.seriesId && series.kind === selectedDevice.kind)
+    : undefined;
+  const buckets = selectedHistory?.buckets ?? [];
+  const definitions = selectedDevice
+    ? DEVICE_NUMERIC_DEFINITIONS.filter((definition) => definition.kind === selectedDevice.kind)
+    : [];
+
+  return (
+    <section
+      className="space-y-4 border-t border-[var(--hairline)] pt-4"
+      data-testid="device-history-section"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold text-[var(--content)]">
+          {t(language, 'nodeHistory.deviceHeading')}
+        </h4>
+        {(deviceInventory?.devices.length ?? 0) > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-[var(--content-muted)]">
+            {t(language, 'nodeHistory.deviceSelect')}
+            <select
+              value={selectedDevice?.seriesId ?? ''}
+              onChange={(event) => onSelectDeviceID(event.target.value)}
+              data-testid="history-device-select"
+              className="max-w-[min(28rem,70vw)] rounded border border-[var(--hairline)] bg-[var(--control)] px-1.5 py-1 text-xs text-[var(--content)] outline-none focus:border-[var(--accent)]"
+            >
+              {deviceInventory?.devices.map((device) => (
+                <option key={`${device.kind}:${device.seriesId}`} value={device.seriesId}>
+                  {device.label} · {device.kind} · {device.seriesId}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+
+      {!deviceInventory || deviceInventory.devices.length === 0 ? (
+        <p className="text-xs text-[var(--content-muted)]" data-testid="device-history-not-configured">
+          {deviceTelemetryEnabled
+            ? t(language, 'nodeHistory.deviceWaiting')
+            : t(language, 'nodeHistory.deviceNotConfigured')}
+        </p>
+      ) : buckets.length === 0 ? (
+        <p className="text-xs text-[var(--content-muted)]" data-testid="device-history-empty">
+          {t(language, 'nodeHistory.deviceEmpty')}
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {definitions.map((definition) => {
+            const label = t(language, DEVICE_HISTORY_METRIC_KEYS[definition.key]);
+            const series: TimeSeriesSeries[] = [{
+              key: definition.key,
+              label,
+              unit: definition.unit,
+              color: DEVICE_HISTORY_COLORS[definition.key],
+              data: deviceMetricSeries(buckets, stepMs, definition.key),
+            }];
+            return (
+              <HistoryChart
+                key={definition.key}
+                title={label}
+                series={series}
+                yDomain={definition.unit === '%' ? PERCENT_DOMAIN : undefined}
+                xDomain={xDomain}
+                language={language}
+              />
+            );
+          })}
+        </div>
       )}
     </section>
   );

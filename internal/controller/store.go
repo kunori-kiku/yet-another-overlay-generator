@@ -610,12 +610,12 @@ type Store interface {
 	// overlapping recent-attempt windows are deduplicated. The controller exposes at most the most
 	// recently active sixteen series from this raw typed result.
 	QueryTelemetryProbeHistory(ctx context.Context, t TenantID, nodeID string, from, to time.Time) ([]ProbeHistorySample, error)
-	// QueryTelemetryHistorySnapshot returns both history projections from one coherent store snapshot.
-	// Prefer it when a caller needs resources and probes together so durable JSONL is scanned once.
+	// QueryTelemetryHistorySnapshot returns the legacy resource/all-probe projections from one coherent
+	// store snapshot. Device history is exact-only and is never exposed through this broad method.
 	QueryTelemetryHistorySnapshot(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error)
-	// QueryTelemetryHistorySnapshotFiltered pushes an exact probe-series selector into the bounded store
-	// scan. Zero options return resources and no probes; ProbeSeriesID returns only that exact series.
-	// This avoids materializing every probe attempt before an API response applies its selector.
+	// QueryTelemetryHistorySnapshotFiltered pushes probe and exact-device selection into the bounded
+	// store scan. Zero options return resources only; AllProbeSeries preserves legacy all-probe reads,
+	// while non-empty series IDs select only those exact series. There is no all-device option.
 	QueryTelemetryHistorySnapshotFiltered(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error)
 
 	// --- Topology (public-keys-only) ---

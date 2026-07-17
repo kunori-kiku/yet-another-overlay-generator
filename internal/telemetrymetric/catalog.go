@@ -26,6 +26,7 @@ type ChartFamily string
 const (
 	ChartFamilyResource ChartFamily = "resource"
 	ChartFamilyProbe    ChartFamily = "probe"
+	ChartFamilyDevice   ChartFamily = "device"
 )
 
 // LiveSurfaceDisposition declares whether the latest opaque metric is appropriate for Node.Telemetry
@@ -60,6 +61,8 @@ const (
 	NativeXDPKey         = "native_xdp"
 	MimicCapabilityKey   = "mimic_capability"
 	AgentCapabilitiesKey = "agent_capabilities"
+	DeviceInventoryKey   = "device_inventory"
+	DeviceSamplesKey     = "device_samples"
 	MaxAgentCapabilities = 16
 )
 
@@ -143,6 +146,15 @@ var (
 		Key: AgentCapabilitiesKey, History: HistoryLiveOnly, LiveSurface: LiveSurfaceVisible,
 		LiveOnlyReason: "executable compatibility is current readiness, not a time-series measurement",
 	}
+	DeviceInventory = Definition{
+		Key: DeviceInventoryKey, History: HistoryLiveOnly, LiveSurface: LiveSurfaceVisible,
+		LiveOnlyReason: "device identity, support, mount, and truncation state are current categorical inventory rather than numeric time series",
+	}
+	DeviceSamples = Definition{
+		Key: DeviceSamplesKey, History: HistoryCharted,
+		ChartFamily: ChartFamilyDevice, HistoryPriority: 40,
+		LiveSurface: LiveSurfaceVisible,
+	}
 )
 
 var catalogDefinitions = []Definition{
@@ -153,6 +165,8 @@ var catalogDefinitions = []Definition{
 	NativeXDP,
 	MimicCapability,
 	AgentCapabilities,
+	DeviceInventory,
+	DeviceSamples,
 }
 
 var orderedChartedDefinitions = func() []Definition {
@@ -200,7 +214,7 @@ func ValidateDefinition(definition Definition) error {
 	switch definition.History {
 	case HistoryCharted:
 		switch definition.ChartFamily {
-		case ChartFamilyResource, ChartFamilyProbe:
+		case ChartFamilyResource, ChartFamilyProbe, ChartFamilyDevice:
 		default:
 			return fmt.Errorf("charted metric %q has invalid chart family %q", definition.Key, definition.ChartFamily)
 		}

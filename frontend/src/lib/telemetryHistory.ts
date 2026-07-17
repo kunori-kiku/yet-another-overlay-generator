@@ -1,9 +1,18 @@
 import type { TelemetryProbe } from '../types/topology';
 import { isValidProbeURL } from './probeResults';
+import {
+  deviceDefinitionsForKind,
+  isDeviceKind,
+  isDeviceSeriesID,
+  type DeviceKind,
+  type DeviceNumericKey,
+} from './deviceTelemetry';
+
+export { DEVICE_NUMERIC_DEFINITIONS } from './deviceTelemetry';
 
 // telemetryHistory.ts — PURE logic for the node-detail telemetry-history charts: the param→query
 // wiring (range preset + granularity → from/to/step), the wire→typed parsing of the additive
-// `GET node-history` response, the Go-duration math the charts need, and the resource/probe
+// `GET node-history` response, the Go-duration math the charts need, and the resource/probe/device
 // wire→series shaping. Deliberately dependency-free and DOM-free so it
 // is pinned directly in telemetryHistory.test.ts without needing a browser DOM.
 //
@@ -27,7 +36,7 @@ export const GRANULARITIES: readonly Granularity[] = ['auto', '30s', '5m', '30m'
 // reads this literal as the frontend authority, while the parser and production renderer each use
 // the derived union in an exhaustive `satisfies Record<...>` registry. A newly charted Go family
 // therefore cannot stop at retention or parsing without making CI red.
-export const HISTORY_CHART_FAMILIES = ['resource', 'probe'] as const;
+export const HISTORY_CHART_FAMILIES = ['resource', 'probe', 'device'] as const;
 export type HistoryChartFamily = typeof HISTORY_CHART_FAMILIES[number];
 
 const MAX_HISTORY_BUCKETS = 1000;
@@ -100,6 +109,20 @@ export type ProbeHistorySeries = ProbeHistorySeriesBase & (
   | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
 );
 
+export interface DeviceHistoryBucket {
+  t: string;
+  metrics: Partial<Record<DeviceNumericKey, MetricAgg>>;
+}
+
+export interface DeviceHistorySeries {
+  // seriesId is the controller's exact history-series identity. deviceId is the opaque inventory
+  // identity selected by Fleet; neither is raw hardware identity.
+  seriesId: string;
+  deviceId: string;
+  kind: DeviceKind;
+  buckets: DeviceHistoryBucket[];
+}
+
 // NodeHistory is the parsed response. step is the EFFECTIVE step (may be widened from the
 // request); disabled true means history retention is off (fleet cap 0) → the panel shows a hint.
 export interface NodeHistory {
@@ -107,6 +130,7 @@ export interface NodeHistory {
   disabled: boolean;
   buckets: HistoryBucket[];
   probes: ProbeHistorySeries[];
+  devices: DeviceHistorySeries[];
 }
 
 interface HistoryProbeSelectorBase {
@@ -119,12 +143,18 @@ export type HistoryProbeSelector = HistoryProbeSelectorBase & (
   | { type: 'url'; url: string; expectedStatus: number; host?: never; port?: never }
 );
 
+export interface HistoryDeviceSelector {
+  kind: DeviceKind;
+  deviceId: string;
+}
+
 // Request options stay component-local. `probe` is an exact executable-destination selector;
 // `includeProbes:false` is useful when the current node has no configured probe. `signal` is not
 // serialized and lets the node-detail request coordinator retire a superseded fetch promptly.
 export interface NodeHistoryRequestOptions {
   includeProbes?: boolean;
   probe?: HistoryProbeSelector;
+  device?: HistoryDeviceSelector;
   signal?: AbortSignal;
 }
 
@@ -191,7 +221,7 @@ export function historyQueryString(
   from: string,
   to: string,
   step?: string,
-  options: Pick<NodeHistoryRequestOptions, 'includeProbes' | 'probe'> = {},
+  options: Pick<NodeHistoryRequestOptions, 'includeProbes' | 'probe' | 'device'> = {},
 ): string {
   const p = new URLSearchParams({ node: nodeId, from, to });
   if (step) p.set('step', step);
@@ -208,6 +238,13 @@ export function historyQueryString(
     if (options.probe.type === 'tcp') {
       p.set('probe_port', String(options.probe.port));
     }
+  }
+  if (options.device) {
+    p.set('include_devices', 'true');
+    p.set('device_kind', options.device.kind);
+    p.set('device_id', options.device.deviceId);
+  } else {
+    p.set('include_devices', 'false');
   }
   return p.toString();
 }
@@ -432,6 +469,60 @@ function parseProbeSeries(raw: unknown): ProbeHistorySeries | null {
   };
 }
 
+function parseDeviceBucket(raw: unknown, kind: DeviceKind): DeviceHistoryBucket | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const wire = raw as Record<string, unknown>;
+  if (typeof wire.t !== 'string' || Number.isNaN(Date.parse(wire.t))) return null;
+  if (!wire.metrics || typeof wire.metrics !== 'object' || Array.isArray(wire.metrics)) return null;
+  const allowed = new Map(
+    deviceDefinitionsForKind(kind).map((definition) => [definition.key, definition]),
+  );
+  const metrics: Partial<Record<DeviceNumericKey, MetricAgg>> = {};
+  let accepted = 0;
+  for (const [rawKey, rawAgg] of Object.entries(wire.metrics as Record<string, unknown>)) {
+    const definition = allowed.get(rawKey as DeviceNumericKey);
+    if (!definition) return null;
+    const aggregate = parseAgg(rawAgg);
+    if (
+      !aggregate ||
+      aggregate.avg < 0 ||
+      (aggregate.min !== undefined && aggregate.min < 0) ||
+      (aggregate.max !== undefined && aggregate.max < 0) ||
+      (definition.unit === '%' && (
+        aggregate.avg > 100 ||
+        (aggregate.min !== undefined && aggregate.min > 100) ||
+        (aggregate.max !== undefined && aggregate.max > 100)
+      ))
+    ) {
+      return null;
+    }
+    metrics[definition.key] = aggregate;
+    accepted++;
+  }
+  return accepted === 0 ? null : { t: wire.t, metrics };
+}
+
+function parseDeviceSeries(raw: unknown): DeviceHistorySeries | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const wire = raw as Record<string, unknown>;
+  if (
+    !isDeviceSeriesID(wire.series_id) ||
+    !isDeviceSeriesID(wire.device_id) ||
+    !isDeviceKind(wire.kind) ||
+    !Array.isArray(wire.buckets)
+  ) {
+    return null;
+  }
+  const kind = wire.kind;
+  return {
+    seriesId: wire.series_id,
+    deviceId: wire.device_id,
+    kind,
+    buckets: parseAccepted(wire.buckets, MAX_HISTORY_BUCKETS, (candidate) =>
+      parseDeviceBucket(candidate, kind)),
+  };
+}
+
 type HistoryFamilyParser = (wire: Record<string, unknown>) => Partial<NodeHistory>;
 
 // Keep the wire's existing additive shape, but make family admission explicit and exhaustive. The
@@ -443,6 +534,13 @@ const HISTORY_CHART_PARSERS = {
   }),
   probe: (wire) => ({
     probes: parseAccepted(wire.probes, MAX_PROBE_SERIES, parseProbeSeries),
+  }),
+  device: (wire) => ({
+    // The API has no broad device-history mode: an exact request can produce zero or one series.
+    // Reject an impossible multi-series response as a whole instead of silently selecting a row.
+    devices: Array.isArray(wire.devices) && wire.devices.length <= 1
+      ? parseAccepted(wire.devices, 1, parseDeviceSeries)
+      : [],
   }),
 } satisfies Record<HistoryChartFamily, HistoryFamilyParser>;
 
@@ -458,6 +556,7 @@ export function parseNodeHistory(raw: unknown): NodeHistory {
     disabled: wire.disabled === true,
     buckets: [],
     probes: [],
+    devices: [],
   };
   for (const family of HISTORY_CHART_FAMILIES) {
     Object.assign(history, HISTORY_CHART_PARSERS[family](wire));
@@ -503,6 +602,14 @@ export function metricSeries(
   pick: (b: HistoryBucket) => MetricAgg | undefined,
 ): ChartPoint[] {
   return aggregateSeries(buckets, stepMs, pick);
+}
+
+export function deviceMetricSeries(
+  buckets: readonly DeviceHistoryBucket[],
+  stepMs: number,
+  key: DeviceNumericKey,
+): ChartPoint[] {
+  return aggregateSeries(buckets, stepMs, (bucket) => bucket.metrics[key]);
 }
 
 function aggregateProbeSeries(

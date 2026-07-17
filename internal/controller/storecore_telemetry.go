@@ -450,15 +450,16 @@ func (c *storeCore) QueryTelemetryProbeHistory(ctx context.Context, t TenantID, 
 	return c.history.queryProbesContext(ctx, t, nodeID, from, to)
 }
 
-// QueryTelemetryHistorySnapshot returns the resource and active-probe projections from one coherent
-// merge of durable, in-flight, and buffered history. The node-history endpoint uses this combined
-// query so each refresh performs only one JSONL scan.
+// QueryTelemetryHistorySnapshot returns the legacy resource and all-active-probe projections from one
+// coherent merge of durable, in-flight, and buffered history. Device history remains exact-only and
+// therefore requires the filtered method below.
 func (c *storeCore) QueryTelemetryHistorySnapshot(ctx context.Context, t TenantID, nodeID string, from, to time.Time) (TelemetryHistorySnapshot, error) {
 	return c.history.querySnapshotContext(ctx, t, nodeID, from, to)
 }
 
-// QueryTelemetryHistorySnapshotFiltered is the selector-pushdown form used by the API when it needs
-// resources plus either no probe series or one exact series. The legacy snapshot remains all-probes.
+// QueryTelemetryHistorySnapshotFiltered is the selector-pushdown form used by the API for resources,
+// optional legacy all-probes or one exact probe, and at most one exact device series. No broad device
+// mode exists, so a browser cannot materialize every retained disk/GPU series in one query.
 func (c *storeCore) QueryTelemetryHistorySnapshotFiltered(ctx context.Context, t TenantID, nodeID string, from, to time.Time, options TelemetryHistoryQueryOptions) (TelemetryHistorySnapshot, error) {
 	return c.history.querySnapshotFilteredContext(ctx, t, nodeID, from, to, options)
 }

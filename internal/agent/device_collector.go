@@ -61,9 +61,10 @@ type deviceCollector struct {
 	deps     deviceCollectorDeps
 	previous map[string]diskCounterSnapshot
 
-	mu            sync.Mutex
-	inFlight      bool
-	lastInventory devicemetric.InventoryMetric
+	mu                 sync.Mutex
+	inFlight           bool
+	baselineGeneration uint64
+	lastInventory      devicemetric.InventoryMetric
 }
 
 func newDeviceCollector(deps deviceCollectorDeps) *deviceCollector {
@@ -92,9 +93,11 @@ func newDeviceCollector(deps deviceCollectorDeps) *deviceCollector {
 }
 
 type deviceCollectionResult struct {
-	inventory devicemetric.InventoryMetric
-	samples   devicemetric.SamplesMetric
-	complete  bool
+	inventory          devicemetric.InventoryMetric
+	samples            devicemetric.SamplesMetric
+	nextPrevious       map[string]diskCounterSnapshot
+	baselineGeneration uint64
+	complete           bool
 }
 
 // Collect enforces one deadline around the otherwise synchronous OS providers and permits at most
@@ -115,15 +118,40 @@ func (c *deviceCollector) Collect(ctx context.Context, now time.Time) (devicemet
 		return inventory, samples
 	}
 	c.inFlight = true
+	baselineGeneration := c.baselineGeneration
+	previous := cloneDiskCounterSnapshots(c.previous)
 	c.mu.Unlock()
 
 	done := make(chan deviceCollectionResult, 1)
 	go func() {
-		inventory, samples, complete := c.collectPlatform(ctx, now)
-		result := deviceCollectionResult{inventory: cloneDeviceInventory(inventory), samples: cloneDeviceSamples(samples), complete: complete}
+		result := deviceCollectionResult{
+			inventory: devicemetric.InventoryMetric{Devices: []devicemetric.InventoryEntry{}},
+			samples:   devicemetric.SamplesMetric{Samples: []devicemetric.Sample{}},
+		}
+		func() {
+			defer func() {
+				// Collection now runs from a long-lived scheduler goroutine, outside Telemetry's
+				// synchronous recover guard. A provider panic is an observation failure, not a reason
+				// to crash the agent or leave the one-worker latch permanently set.
+				if recover() != nil {
+					result.complete = false
+				}
+			}()
+			inventory, samples, nextPrevious, complete := c.collectPlatform(ctx, now, previous)
+			result = deviceCollectionResult{
+				inventory:          cloneDeviceInventory(inventory),
+				samples:            cloneDeviceSamples(samples),
+				nextPrevious:       cloneDiskCounterSnapshots(nextPrevious),
+				baselineGeneration: baselineGeneration,
+				complete:           complete,
+			}
+		}()
 		c.mu.Lock()
-		if complete {
-			c.lastInventory = cloneDeviceInventory(inventory)
+		if result.nextPrevious != nil && c.baselineGeneration == result.baselineGeneration {
+			c.previous = result.nextPrevious
+		}
+		if result.complete {
+			c.lastInventory = cloneDeviceInventory(result.inventory)
 		}
 		c.inFlight = false
 		c.mu.Unlock()
@@ -139,6 +167,16 @@ func (c *deviceCollector) Collect(ctx context.Context, now time.Time) (devicemet
 		c.mu.Unlock()
 		return inventory, samples
 	}
+}
+
+// ResetRateBaselines makes the next authorized block observation a gap. The generation check above
+// prevents a provider that finishes after signed policy removal from restoring its pre-removal
+// counters. Inventory/provider caches remain available for explicit collection-error status.
+func (c *deviceCollector) ResetRateBaselines() {
+	c.mu.Lock()
+	c.baselineGeneration++
+	c.previous = make(map[string]diskCounterSnapshot)
+	c.mu.Unlock()
 }
 
 func (c *deviceCollector) acceptCollectionResult(ctx context.Context, result deviceCollectionResult) (devicemetric.InventoryMetric, devicemetric.SamplesMetric) {
@@ -212,8 +250,19 @@ func cloneDeviceInventory(metric devicemetric.InventoryMetric) devicemetric.Inve
 	return devicemetric.InventoryMetric{Devices: append([]devicemetric.InventoryEntry{}, metric.Devices...), Truncated: metric.Truncated}
 }
 
+func cloneDiskCounterSnapshots(input map[string]diskCounterSnapshot) map[string]diskCounterSnapshot {
+	out := make(map[string]diskCounterSnapshot, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
 func cloneDeviceSamples(metric devicemetric.SamplesMetric) devicemetric.SamplesMetric {
-	out := devicemetric.SamplesMetric{Samples: make([]devicemetric.Sample, len(metric.Samples)), Truncated: metric.Truncated}
+	out := devicemetric.SamplesMetric{
+		Samples: make([]devicemetric.Sample, len(metric.Samples)), Truncated: metric.Truncated,
+		SampledAt: metric.SampledAt,
+	}
 	for i, sample := range metric.Samples {
 		out.Samples[i] = sample
 		out.Samples[i].Values = make(map[devicemetric.NumericKey]float64, len(sample.Values))

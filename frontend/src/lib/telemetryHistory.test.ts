@@ -12,6 +12,7 @@ import {
   RANGE_PRESETS,
   RANGE_SECONDS,
   createLatestRequestCoordinator,
+  deviceMetricSeries,
   formatHistoryResolution,
   granularityStep,
   historyQueryString,
@@ -31,7 +32,7 @@ import {
 
 describe('history chart families', () => {
   it('keeps the frontend parser authority explicit and ordered', () => {
-    expect(HISTORY_CHART_FAMILIES).toEqual(['resource', 'probe']);
+    expect(HISTORY_CHART_FAMILIES).toEqual(['resource', 'probe', 'device']);
   });
 });
 
@@ -87,6 +88,7 @@ describe('historyQueryString', () => {
     expect(p.get('from')).toBe('2026-07-13T06:00:00Z');
     expect(p.get('to')).toBe('2026-07-13T12:00:00Z');
     expect(p.has('step')).toBe(false);
+    expect(p.get('include_devices')).toBe('false');
     expect(q).toContain('%3A'); // colons are percent-encoded on the wire
   });
 
@@ -124,6 +126,20 @@ describe('historyQueryString', () => {
     }));
     expect(resourceOnly.get('include_probes')).toBe('false');
     expect(resourceOnly.has('probe_id')).toBe(false);
+  });
+
+  it('requests exactly one selected device or explicitly omits device history', () => {
+    const selected = new URLSearchParams(historyQueryString('n', 'a', 'b', undefined, {
+      device: { kind: 'gpu', deviceId: 'a'.repeat(64) },
+    }));
+    expect(selected.get('include_devices')).toBe('true');
+    expect(selected.get('device_kind')).toBe('gpu');
+    expect(selected.get('device_id')).toBe('a'.repeat(64));
+
+    const omitted = new URLSearchParams(historyQueryString('n', 'a', 'b'));
+    expect(omitted.get('include_devices')).toBe('false');
+    expect(omitted.has('device_kind')).toBe(false);
+    expect(omitted.has('device_id')).toBe(false);
   });
 });
 
@@ -188,6 +204,15 @@ describe('parseNodeHistory', () => {
         // malformed TCP descriptor (no port) → dropped.
         { series_id: 'bad', id: 'bad', type: 'tcp', host: 'bad.example', buckets: [] },
       ],
+      devices: [{
+        series_id: 'd'.repeat(64),
+        device_id: 'e'.repeat(64),
+        kind: 'filesystem',
+        buckets: [{
+          t: '2026-07-13T10:00:00Z',
+          metrics: { disk_filesystem_used_pct: { avg: 62.5, min: 60, max: 70 } },
+        }],
+      }],
     };
     const h = parseNodeHistory(wire);
     expect(h.step).toBe('5m0s');
@@ -217,6 +242,15 @@ describe('parseNodeHistory', () => {
         }],
       },
     ]);
+    expect(h.devices).toEqual([{
+      seriesId: 'd'.repeat(64),
+      deviceId: 'e'.repeat(64),
+      kind: 'filesystem',
+      buckets: [{
+        t: '2026-07-13T10:00:00Z',
+        metrics: { disk_filesystem_used_pct: { avg: 62.5, min: 60, max: 70 } },
+      }],
+    }]);
   });
 
   it('honors disabled:true with empty buckets (history off)', () => {
@@ -224,6 +258,7 @@ describe('parseNodeHistory', () => {
     expect(h.disabled).toBe(true);
     expect(h.buckets).toHaveLength(0);
     expect(h.probes).toHaveLength(0);
+    expect(h.devices).toHaveLength(0);
   });
 
   it('parses URL mismatch latency without admitting actual status into history', () => {
@@ -269,10 +304,36 @@ describe('parseNodeHistory', () => {
   });
 
   it('never throws on null/garbage input', () => {
-    const empty = { step: '', disabled: false, buckets: [], probes: [] };
+    const empty = { step: '', disabled: false, buckets: [], probes: [], devices: [] };
     expect(parseNodeHistory(null)).toEqual(empty);
     expect(parseNodeHistory({ buckets: 'not-an-array', probes: {} })).toEqual(empty);
     expect(parseNodeHistory(42)).toEqual(empty);
+  });
+
+  it('admits one bounded exact device series and rejects impossible broad or unknown data', () => {
+    const valid = (id: string, metric: Record<string, unknown>) => ({
+      series_id: id.repeat(64),
+      device_id: id.repeat(64),
+      kind: 'gpu',
+      buckets: [{ t: '2026-07-13T10:00:00Z', metrics: metric }],
+    });
+    const broad = parseNodeHistory({ devices: [
+      valid('a', { gpu_utilization_pct: { avg: 0, min: 0, max: 0 } }),
+      valid('b', { gpu_vram_used_pct: { avg: 50 } }),
+    ] });
+    expect(broad.devices).toHaveLength(0);
+
+    const parsed = parseNodeHistory({ devices: [
+      valid('a', { gpu_utilization_pct: { avg: 0, min: 0, max: 0 } }),
+    ] });
+    expect(parsed.devices[0].buckets[0].metrics.gpu_utilization_pct?.avg).toBe(0);
+
+    expect(parseNodeHistory({ devices: [
+      valid('c', { disk_io_busy_pct: { avg: 5 } }),
+    ] }).devices[0].buckets).toHaveLength(0);
+    expect(parseNodeHistory({ devices: [
+      valid('d', { future_gpu_metric: { avg: 5 } }),
+    ] }).devices[0].buckets).toHaveLength(0);
   });
 
   it('bounds accepted cardinality without letting malformed prefixes consume the budget', () => {
@@ -417,6 +478,28 @@ describe('metricSeries', () => {
   it('carries a band only when both min and max are present', () => {
     const s = metricSeries(buckets, stepMs, (b) => b.load1); // load has avg only
     expect(s[0]).toEqual({ t: Date.parse('2026-07-13T10:00:00Z'), avg: 1, min: null, max: null });
+  });
+});
+
+describe('deviceMetricSeries', () => {
+  it('preserves a legitimate zero and renders absent metrics or missing intervals as gaps', () => {
+    const step = 30_000;
+    const points = deviceMetricSeries([
+      {
+        t: '2026-07-13T10:00:00Z',
+        metrics: { gpu_utilization_pct: { avg: 0, min: 0, max: 0 } },
+      },
+      {
+        t: '2026-07-13T10:00:30Z',
+        metrics: { gpu_vram_used_pct: { avg: 50 } },
+      },
+      {
+        t: '2026-07-13T10:02:00Z',
+        metrics: { gpu_utilization_pct: { avg: 25 } },
+      },
+    ], step, 'gpu_utilization_pct');
+
+    expect(points.map((point) => point.avg)).toEqual([0, null, null, 25]);
   });
 });
 

@@ -13,6 +13,7 @@ import { ResourcePanel } from '../deploy/ResourcePanel';
 import { ControllerErrorBanner } from '../deploy/ControllerErrorBanner';
 import { TelemetryProbeEditor } from '../deploy/TelemetryProbeEditor';
 import { TelemetryProbeResults } from '../deploy/TelemetryProbeResults';
+import { TelemetryDevicePanel } from '../deploy/TelemetryDevicePanel';
 import { SaveConflictDialog } from '../design/SaveConflictDialog';
 import {
   probeDestinationInvalid,
@@ -197,6 +198,15 @@ export function FleetNodeDetailPage() {
                   language={language}
                   updateNode={updateNode}
                 />
+                <TelemetryDevicePanel
+                  node={topologyNode}
+                  inventory={node.deviceInventory}
+                  samples={node.deviceSamples}
+                  agentCapabilities={node.agentCapabilities}
+                  keystonePinned={serverOperatorPinned}
+                  language={language}
+                  updateNode={updateNode}
+                />
                 <div className="flex flex-col gap-1">
                   <button
                     type="button"
@@ -293,7 +303,7 @@ export function FleetNodeDetailPage() {
               would crash on a reload after upgrade. The panel itself renders nothing for an empty list. */}
           <WireGuardPeersPanel peers={node.wireguardPeers ?? []} language={language} />
           <ResourcePanel resource={node.resource} language={language} />
-          {/* Resource + active-probe history. Live-only in the browser: the fetched response is never
+          {/* Resource + active-probe + exact-device history. Live-only in the browser: the fetched response is never
               persisted, so it fetches on view, range/Resolution change, and when this node's last_seen
               advances after a manual/Live fleet refresh. Keyed on node id so navigation resets local
               chart state. */}
@@ -303,6 +313,8 @@ export function FleetNodeDetailPage() {
             <NodeResourceHistory
               key={node.nodeId}
               nodeId={node.nodeId}
+              deviceInventory={node.deviceInventory}
+              deviceTelemetryEnabled={configuredDevices?.mode === 'all-eligible-v1'}
               refreshAt={node.lastSeen}
             />
           </Suspense>

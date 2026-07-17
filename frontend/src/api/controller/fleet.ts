@@ -14,6 +14,7 @@ import type {
 } from '../../types/controller';
 import { mapNodeConditions, type ConditionWire } from '../../lib/nodeConditions';
 import { mapProbeResults } from '../../lib/probeResults';
+import { mapDeviceTelemetry } from '../../lib/deviceTelemetry';
 import { parseContentDispositionFilename } from '../../lib/download';
 
 // --- backend snake_case response shapes (used only inside this module, discarded after mapping) ---
@@ -32,12 +33,14 @@ interface NodeJSON {
   rekey_requested: boolean;
   in_rollout?: boolean;
   conditions?: ConditionWire[];
-  // beta.12: the agent's extensible telemetry metrics map (served verbatim). The panel reads the
-  // known wireguard_peers + resource keys; other keys are ignored here.
+  // The agent's extensible telemetry metrics map (served verbatim). This boundary maps the known
+  // Fleet live projections; unknown keys remain forward-compatible and are ignored here.
   telemetry?: {
     wireguard_peers?: WireGuardPeerWire[];
     resource?: ResourceMetricWire;
     probe_results?: unknown;
+    device_inventory?: unknown;
+    device_samples?: unknown;
     native_xdp?: NativeXDPWire;
     mimic_capability?: MimicCapabilityWire;
     agent_capabilities?: unknown;
@@ -122,6 +125,10 @@ interface ClearRekeyResponseJSON {
 // --- snake_case → camelCase mapping ---
 
 function mapNode(n: NodeJSON): ControllerNode {
+  const devices = mapDeviceTelemetry(
+    n.telemetry?.device_inventory,
+    n.telemetry?.device_samples,
+  );
   return {
     nodeId: n.node_id,
     status: n.status as ControllerNode['status'],
@@ -139,6 +146,8 @@ function mapNode(n: NodeJSON): ControllerNode {
     wireguardPeers: mapWireGuardPeers(n.telemetry?.wireguard_peers),
     resource: mapResource(n.telemetry?.resource),
     probeResults: mapProbeResults(n.telemetry?.probe_results),
+    deviceInventory: devices.inventory,
+    deviceSamples: devices.samples,
     nativeXDP: mapNativeXDP(n.telemetry?.native_xdp),
     mimicCapability: mapMimicCapability(n.telemetry?.mimic_capability),
     agentCapabilities: mapAgentCapabilities(n.telemetry?.agent_capabilities),

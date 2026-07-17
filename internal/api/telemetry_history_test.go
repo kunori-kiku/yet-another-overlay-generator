@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/controller"
+	"github.com/kunorikiku/yet-another-overlay-generator/internal/devicemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/probemetric"
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
@@ -28,6 +29,15 @@ func apiResourceMetrics(cpu *float64, load1 float64, memTotal, memAvail uint64) 
 func apiProbeMetric(t *testing.T, results ...probemetric.Result) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func apiDeviceSamplesMetric(t *testing.T, samples ...devicemetric.Sample) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(devicemetric.SamplesMetric{Samples: samples})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,24 +70,40 @@ func TestTelemetryHistoryFamilyEncoderCatalogParityAndRuntimeFixtures(t *testing
 	base := time.Unix(1000, 0).UTC()
 	cpu, latency := 40.0, 8.0
 	wire := probemetric.Result{ID: "fixture", Type: "icmp", Host: "fixture.example"}
+	deviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("fixture-gpu"))
+	deviceSeriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := controller.TelemetryHistorySnapshot{
 		Resources: []controller.ResourceSample{{TS: base, CpuPct: &cpu, Load1: 1, Load5: 2, Load15: 3}},
 		Probes: []controller.ProbeHistorySample{{
 			SeriesID: probemetric.SeriesID(wire), ID: wire.ID, Type: wire.Type, Host: wire.Host,
 			Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: base,
 		}},
+		Devices: []controller.DeviceHistorySample{{
+			SeriesID: deviceSeriesID, DeviceID: deviceID, Kind: devicemetric.KindGPU, TS: base,
+			Values: map[devicemetric.NumericKey]float64{devicemetric.GPUUtilizationPct: 25},
+		}},
 	}
+	deviceSelector := &deviceHistorySelector{Kind: devicemetric.KindGPU, DeviceID: deviceID, SeriesID: deviceSeriesID}
 	for family, encoder := range telemetryHistoryFamilyEncoders {
 		var response historyResponse
-		encoder(&response, fixture, time.Minute, telemetryHistoryEncodingOptions{includeProbes: true})
+		encoder(&response, fixture, time.Minute, telemetryHistoryEncodingOptions{
+			includeProbes: true, includeDevices: true, deviceSelector: deviceSelector,
+		})
 		switch family {
 		case telemetrymetric.ChartFamilyResource:
-			if len(response.Buckets) == 0 || response.Probes != nil {
+			if len(response.Buckets) == 0 || response.Probes != nil || response.Devices != nil {
 				t.Errorf("resource family fixture did not reach only buckets: %+v", response)
 			}
 		case telemetrymetric.ChartFamilyProbe:
-			if len(response.Probes) == 0 || response.Buckets != nil {
+			if len(response.Probes) == 0 || response.Buckets != nil || response.Devices != nil {
 				t.Errorf("probe family fixture did not reach only probes: %+v", response)
+			}
+		case telemetrymetric.ChartFamilyDevice:
+			if len(response.Devices) == 0 || response.Buckets != nil || response.Probes != nil {
+				t.Errorf("device family fixture did not reach only devices: %+v", response)
 			}
 		default:
 			t.Errorf("runtime fixture has no assertion for chart family %q", family)
@@ -85,16 +111,19 @@ func TestTelemetryHistoryFamilyEncoderCatalogParityAndRuntimeFixtures(t *testing
 	}
 
 	combined, err := encodeTelemetryHistoryFamilies(
-		fixture, time.Minute, telemetryHistoryEncodingOptions{includeProbes: true},
+		fixture, time.Minute, telemetryHistoryEncodingOptions{
+			includeProbes: true, includeDevices: true, deviceSelector: deviceSelector,
+		},
 	)
-	if err != nil || len(combined.Buckets) == 0 || len(combined.Probes) == 0 {
+	if err != nil || len(combined.Buckets) == 0 || len(combined.Probes) == 0 || len(combined.Devices) != 1 {
 		t.Fatalf("catalog-driven combined encoding = %+v err=%v", combined, err)
 	}
 	empty, err := encodeTelemetryHistoryFamilies(
 		controller.TelemetryHistorySnapshot{}, time.Minute,
 		telemetryHistoryEncodingOptions{includeProbes: true},
 	)
-	if err != nil || empty.Buckets == nil || empty.Probes == nil || len(empty.Buckets) != 0 || len(empty.Probes) != 0 {
+	if err != nil || empty.Buckets == nil || empty.Probes == nil || empty.Devices == nil ||
+		len(empty.Buckets) != 0 || len(empty.Probes) != 0 || len(empty.Devices) != 0 {
 		t.Fatalf("empty family encoding must preserve non-null additive arrays: %+v err=%v", empty, err)
 	}
 }
@@ -381,6 +410,11 @@ func TestEffectiveHistoryStepEnforcesGlobalResponseBucketBudget(t *testing.T) {
 	from := time.Unix(1, 0).UTC() // deliberately off the epoch grid
 	to := from.Add(window)
 	latency := 1.0
+	deviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("budget-gpu"))
+	deviceSeriesID, err := devicemetric.HistorySeriesID(devicemetric.KindGPU, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	history := controller.TelemetryHistorySnapshot{}
 	for at := from; !at.After(to); at = at.Add(time.Minute) {
 		history.Resources = append(history.Resources, controller.ResourceSample{TS: at, Load1: 1})
@@ -391,12 +425,21 @@ func TestEffectiveHistoryStepEnforcesGlobalResponseBucketBudget(t *testing.T) {
 				Status: probemetric.StatusSuccess, LatencyMS: &latency, CheckedAt: at,
 			})
 		}
+		history.Devices = append(history.Devices, controller.DeviceHistorySample{
+			SeriesID: deviceSeriesID, DeviceID: deviceID, Kind: devicemetric.KindGPU, TS: at,
+			Values: map[devicemetric.NumericKey]float64{devicemetric.GPUUtilizationPct: 10},
+		})
 	}
 	step := effectiveHistoryStepForStreams(
 		window, time.Second, history.Resources, telemetryHistoryStreamCount(history),
 	)
 	response, err := encodeTelemetryHistoryFamilies(
-		history, step, telemetryHistoryEncodingOptions{includeProbes: true},
+		history, step, telemetryHistoryEncodingOptions{
+			includeProbes: true, includeDevices: true,
+			deviceSelector: &deviceHistorySelector{
+				Kind: devicemetric.KindGPU, DeviceID: deviceID, SeriesID: deviceSeriesID,
+			},
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -405,18 +448,95 @@ func TestEffectiveHistoryStepEnforcesGlobalResponseBucketBudget(t *testing.T) {
 	for _, series := range response.Probes {
 		total += len(series.Buckets)
 	}
+	for _, series := range response.Devices {
+		total += len(series.Buckets)
+	}
 	if total > maxHistoryBuckets {
 		t.Fatalf("global response buckets = %d, want <= %d (step %v)", total, maxHistoryBuckets, step)
 	}
 	if len(response.Probes) != maxProbeHistorySeries {
 		t.Fatalf("probe series = %d, want %d", len(response.Probes), maxProbeHistorySeries)
 	}
+	if len(response.Devices) != 1 {
+		t.Fatalf("device series = %d, want 1", len(response.Devices))
+	}
+}
+
+func TestAggregateDeviceHistoryUsesClosedDefinitionsAndPreservesZeroGaps(t *testing.T) {
+	base := time.Unix(2000, 0).UTC()
+	for _, kind := range []devicemetric.Kind{
+		devicemetric.KindBlockDevice, devicemetric.KindFilesystem, devicemetric.KindGPU,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			deviceID := devicemetric.SeriesID(kind, []byte("device-"+string(kind)))
+			seriesID, err := devicemetric.HistorySeriesID(kind, deviceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selector := &deviceHistorySelector{Kind: kind, DeviceID: deviceID, SeriesID: seriesID}
+			values := map[devicemetric.NumericKey]float64{"future_metric": 99}
+			var keys []devicemetric.NumericKey
+			for _, definition := range devicemetric.NumericDefinitions() {
+				if definition.Kind == kind {
+					keys = append(keys, definition.Key)
+					values[definition.Key] = float64(len(keys) - 1) // the first definition is a valid zero
+				}
+			}
+			// A known definition attached to the wrong kind is also excluded defensively.
+			for _, definition := range devicemetric.NumericDefinitions() {
+				if definition.Kind != kind {
+					values[definition.Key] = 77
+					break
+				}
+			}
+			history := []controller.DeviceHistorySample{{
+				SeriesID: seriesID, DeviceID: deviceID, Kind: kind, TS: base, Values: values,
+			}, {
+				SeriesID: seriesID, DeviceID: deviceID, Kind: kind, TS: base.Add(time.Minute),
+				Values: map[devicemetric.NumericKey]float64{keys[len(keys)-1]: 5},
+			}}
+			series := aggregateDeviceHistory(history, selector, time.Minute)
+			if len(series) != 1 || len(series[0].Buckets) != 2 {
+				t.Fatalf("device history = %+v", series)
+			}
+			if len(series[0].Buckets[0].Metrics) != len(keys) {
+				t.Fatalf("first metrics = %+v, want exactly %v", series[0].Buckets[0].Metrics, keys)
+			}
+			if zero := series[0].Buckets[0].Metrics[string(keys[0])]; zero.Avg != 0 || zero.Min != 0 || zero.Max != 0 {
+				t.Fatalf("valid zero was not retained: %+v", zero)
+			}
+			if _, present := series[0].Buckets[1].Metrics[string(keys[0])]; present && keys[0] != keys[len(keys)-1] {
+				t.Fatalf("missing value was fabricated instead of remaining a gap: %+v", series[0].Buckets[1])
+			}
+			if _, present := series[0].Buckets[0].Metrics["future_metric"]; present {
+				t.Fatal("unknown numeric key escaped the closed encoder")
+			}
+		})
+	}
 }
 
 func TestParseTelemetryHistoryEncodingOptions(t *testing.T) {
 	t.Run("omitted preserves all probes", func(t *testing.T) {
 		options, err := parseTelemetryHistoryEncodingOptions(url.Values{})
-		if err != nil || !options.includeProbes || options.probeSelector != nil {
+		if err != nil || !options.includeProbes || options.probeSelector != nil || options.includeDevices || options.deviceSelector != nil {
+			t.Fatalf("options = %+v err=%v", options, err)
+		}
+	})
+	t.Run("exact device selector", func(t *testing.T) {
+		deviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("selected-gpu"))
+		options, err := parseTelemetryHistoryEncodingOptions(url.Values{
+			"include_devices": {"true"}, "device_kind": {"gpu"}, "device_id": {deviceID},
+		})
+		wantSeriesID, seriesErr := devicemetric.HistorySeriesID(devicemetric.KindGPU, deviceID)
+		if seriesErr != nil || err != nil || !options.includeDevices || options.deviceSelector == nil ||
+			options.deviceSelector.Kind != devicemetric.KindGPU || options.deviceSelector.DeviceID != deviceID ||
+			options.deviceSelector.SeriesID != wantSeriesID {
+			t.Fatalf("device selector = %+v err=%v seriesErr=%v", options.deviceSelector, err, seriesErr)
+		}
+	})
+	t.Run("explicitly excludes devices", func(t *testing.T) {
+		options, err := parseTelemetryHistoryEncodingOptions(url.Values{"include_devices": {"false"}})
+		if err != nil || options.includeDevices || options.deviceSelector != nil {
 			t.Fatalf("options = %+v err=%v", options, err)
 		}
 	})
@@ -449,6 +569,7 @@ func TestParseTelemetryHistoryEncodingOptions(t *testing.T) {
 		}
 	})
 
+	deviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("selected-gpu"))
 	invalid := []url.Values{
 		{"include_probes": {"sometimes"}},
 		{"include_probes": {""}},
@@ -464,6 +585,17 @@ func TestParseTelemetryHistoryEncodingOptions(t *testing.T) {
 		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"service.example/ready"}, "probe_expected_status": {"200"}},
 		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}, "probe_expected_status": {"99"}},
 		{"probe_id": {"health"}, "probe_type": {"url"}, "probe_url": {"https://service.example/ready"}, "probe_expected_status": {"ok"}},
+		{"include_devices": {"maybe"}},
+		{"include_devices": {"true"}},
+		{"include_devices": {"true"}, "device_kind": {"gpu"}},
+		{"include_devices": {"true"}, "device_id": {deviceID}},
+		{"include_devices": {"false"}, "device_kind": {"gpu"}, "device_id": {deviceID}},
+		{"device_kind": {"gpu"}, "device_id": {deviceID}},
+		{"include_devices": {"true"}, "device_kind": {"future"}, "device_id": {deviceID}},
+		{"include_devices": {"true"}, "device_kind": {"gpu"}, "device_id": {"raw-serial"}},
+		{"include_devices": {"true", "true"}, "device_kind": {"gpu"}, "device_id": {deviceID}},
+		{"include_devices": {"true"}, "device_kind": {"gpu", "gpu"}, "device_id": {deviceID}},
+		{"include_devices": {"true"}, "device_kind": {"gpu"}, "device_id": {deviceID, deviceID}},
 	}
 	for i, query := range invalid {
 		if _, err := parseTelemetryHistoryEncodingOptions(query); err == nil {
@@ -478,6 +610,7 @@ func TestHandleNodeHistory(t *testing.T) {
 	ctx := context.Background()
 	base := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
 	cpu := 40.0
+	deviceID := devicemetric.SeriesID(devicemetric.KindGPU, []byte("node-1-gpu"))
 	for i := 0; i < 6; i++ {
 		at := base.Add(time.Duration(i) * time.Minute)
 		metrics := apiResourceMetrics(&cpu, float64(i), 2048, 1024)
@@ -501,6 +634,12 @@ func TestHandleNodeHistory(t *testing.T) {
 				FailureReason: probemetric.FailureUnexpectedStatus, IntervalMS: 60_000,
 			},
 		)
+		metrics[telemetrymetric.DeviceSamples.Key] = apiDeviceSamplesMetric(t, devicemetric.Sample{
+			SeriesID: deviceID, Kind: devicemetric.KindGPU,
+			Values: map[devicemetric.NumericKey]float64{
+				devicemetric.GPUUtilizationPct: float64(i), devicemetric.GPUVRAMUsedPct: 50,
+			},
+		})
 		if err := env.store.RecordTelemetry(ctx, testTenant, "node-1", nil, metrics, "v1", at); err != nil {
 			t.Fatal(err)
 		}
@@ -523,6 +662,22 @@ func TestHandleNodeHistory(t *testing.T) {
 	}
 	if len(resp.Probes) != 3 {
 		t.Fatalf("additive probe history missing from response: %+v", resp.Probes)
+	}
+	if resp.Devices == nil || len(resp.Devices) != 0 {
+		t.Fatalf("omitted device selector must return an empty additive array: %+v", resp.Devices)
+	}
+
+	// Device history has no broad mode. One exact opaque inventory ID selects exactly one series while
+	// omitted probe selection retains the established all-probes response.
+	var selectedDevice historyResponse
+	selectedDeviceURL := url + "&include_devices=true&device_kind=gpu&device_id=" + deviceID
+	if status := doJSON(t, http.MethodGet, selectedDeviceURL, testOperatorToken, nil, &selectedDevice); status != http.StatusOK {
+		t.Fatalf("selected device history: status %d, want 200", status)
+	}
+	if len(selectedDevice.Devices) != 1 || selectedDevice.Devices[0].DeviceID != deviceID ||
+		selectedDevice.Devices[0].Kind != string(devicemetric.KindGPU) || len(selectedDevice.Devices[0].Buckets) == 0 ||
+		len(selectedDevice.Probes) != 3 {
+		t.Fatalf("exact selected device history = %+v", selectedDevice)
 	}
 
 	// Exact selection returns only the requested executable destination while resource history stays
@@ -567,6 +722,13 @@ func TestHandleNodeHistory(t *testing.T) {
 		"&include_probes=maybe",
 		"&probe_id=tcp-main",
 		"&include_probes=false&probe_id=tcp-main&probe_type=tcp&probe_host=example.net&probe_port=443",
+		"&include_devices=true",
+		"&include_devices=true&device_kind=gpu",
+		"&include_devices=false&device_kind=gpu&device_id=" + deviceID,
+		"&device_kind=gpu&device_id=" + deviceID,
+		"&include_devices=true&device_kind=future&device_id=" + deviceID,
+		"&include_devices=true&device_kind=gpu&device_id=raw-serial",
+		"&include_devices=true&include_devices=true&device_kind=gpu&device_id=" + deviceID,
 	} {
 		if status := doJSON(t, http.MethodGet, url+suffix, testOperatorToken, nil, nil); status != http.StatusBadRequest {
 			t.Errorf("invalid selector %q: status %d, want 400", suffix, status)
@@ -616,8 +778,8 @@ func TestHandleNodeHistory(t *testing.T) {
 	if status := doJSON(t, http.MethodGet, url, testOperatorToken, nil, &off); status != http.StatusOK || !off.Disabled {
 		t.Errorf("disabled: status %d disabled=%v, want 200 + disabled", status, off.Disabled)
 	}
-	if off.Step != "1m0s" || len(off.Buckets) != 0 || len(off.Probes) != 0 {
-		t.Errorf("disabled explicit response = step %q, %d resource buckets, %d probes; want 1m0s and none", off.Step, len(off.Buckets), len(off.Probes))
+	if off.Step != "1m0s" || len(off.Buckets) != 0 || len(off.Probes) != 0 || len(off.Devices) != 0 {
+		t.Errorf("disabled explicit response = step %q, %d resource buckets, %d probes, %d devices; want 1m0s and none", off.Step, len(off.Buckets), len(off.Probes), len(off.Devices))
 	}
 
 	// Disabled Auto cannot infer cadence because history is intentionally not queried; retain the
@@ -626,8 +788,8 @@ func TestHandleNodeHistory(t *testing.T) {
 	if status := doJSON(t, http.MethodGet, autoURL, testOperatorToken, nil, &autoOff); status != http.StatusOK || !autoOff.Disabled {
 		t.Errorf("disabled Auto: status %d disabled=%v, want 200 + disabled", status, autoOff.Disabled)
 	}
-	if autoOff.Step != "30s" || len(autoOff.Buckets) != 0 || len(autoOff.Probes) != 0 {
-		t.Errorf("disabled Auto response = step %q, %d resource buckets, %d probes; want 30s and none", autoOff.Step, len(autoOff.Buckets), len(autoOff.Probes))
+	if autoOff.Step != "30s" || len(autoOff.Buckets) != 0 || len(autoOff.Probes) != 0 || len(autoOff.Devices) != 0 {
+		t.Errorf("disabled Auto response = step %q, %d resource buckets, %d probes, %d devices; want 30s and none", autoOff.Step, len(autoOff.Buckets), len(autoOff.Probes), len(autoOff.Devices))
 	}
 }
 

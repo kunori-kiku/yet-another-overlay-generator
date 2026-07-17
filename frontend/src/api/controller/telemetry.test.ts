@@ -34,7 +34,7 @@ describe('nodeHistory', () => {
     expect(init.cache).toBe('no-store');
     expect(init.credentials).toBe('include');
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer operator-token');
-    expect(history).toEqual({ step: '30s', disabled: false, buckets: [], probes: [] });
+    expect(history).toEqual({ step: '30s', disabled: false, buckets: [], probes: [], devices: [] });
   });
 
   it('threads an exact probe selector and AbortSignal without widening the browser request', async () => {

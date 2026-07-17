@@ -26,7 +26,7 @@ func TestCatalogDefinitionsAreUniqueAndExplicit(t *testing.T) {
 		switch definition.History {
 		case HistoryCharted:
 			switch definition.ChartFamily {
-			case ChartFamilyResource, ChartFamilyProbe:
+			case ChartFamilyResource, ChartFamilyProbe, ChartFamilyDevice:
 			default:
 				t.Fatalf("charted metric %q has invalid chart family %q", definition.Key, definition.ChartFamily)
 			}
@@ -100,10 +100,10 @@ func TestChartedOrderAndFamilies(t *testing.T) {
 	for i, definition := range charted {
 		keys[i] = definition.Key
 	}
-	if want := []string{ResourceKey, ProbeSamplesKey, ProbeResultsKey}; !reflect.DeepEqual(keys, want) {
+	if want := []string{ResourceKey, ProbeSamplesKey, ProbeResultsKey, DeviceSamplesKey}; !reflect.DeepEqual(keys, want) {
 		t.Fatalf("charted order = %v, want %v", keys, want)
 	}
-	if got, want := ChartFamilies(), []ChartFamily{ChartFamilyResource, ChartFamilyProbe}; !reflect.DeepEqual(got, want) {
+	if got, want := ChartFamilies(), []ChartFamily{ChartFamilyResource, ChartFamilyProbe, ChartFamilyDevice}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("chart families = %v, want %v", got, want)
 	}
 }
@@ -112,10 +112,21 @@ func TestLiveSurfacePolicyPreservesUnknownCompatibility(t *testing.T) {
 	if VisibleOnLiveSurface(ProbeSamplesKey) {
 		t.Fatal("probe_samples must be history-only on the latest/live surface")
 	}
-	for _, key := range []string{ResourceKey, ProbeResultsKey, WireGuardPeersKey, NativeXDPKey, MimicCapabilityKey, AgentCapabilitiesKey, "future_metric"} {
+	for _, key := range []string{ResourceKey, ProbeResultsKey, DeviceInventoryKey, DeviceSamplesKey, WireGuardPeersKey, NativeXDPKey, MimicCapabilityKey, AgentCapabilitiesKey, "future_metric"} {
 		if !VisibleOnLiveSurface(key) {
 			t.Errorf("metric %q must remain live-visible", key)
 		}
+	}
+}
+
+func TestDeviceMetricCatalogSplitIsExplicit(t *testing.T) {
+	if DeviceInventory.History != HistoryLiveOnly || DeviceInventory.ChartFamily != "" ||
+		DeviceInventory.LiveSurface != LiveSurfaceVisible || DeviceInventory.LiveOnlyReason == "" {
+		t.Fatalf("device inventory definition = %+v", DeviceInventory)
+	}
+	if DeviceSamples.History != HistoryCharted || DeviceSamples.ChartFamily != ChartFamilyDevice ||
+		DeviceSamples.HistoryPriority != 40 || DeviceSamples.LiveSurface != LiveSurfaceVisible {
+		t.Fatalf("device samples definition = %+v", DeviceSamples)
 	}
 }
 

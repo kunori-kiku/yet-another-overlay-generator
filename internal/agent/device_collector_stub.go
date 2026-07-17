@@ -19,9 +19,13 @@ func terminateDeviceCommand(cmd *exec.Cmd) {
 	}
 }
 
-func (c *deviceCollector) collectPlatform(context.Context, time.Time) (devicemetric.InventoryMetric, devicemetric.SamplesMetric, bool) {
+func (c *deviceCollector) collectPlatform(
+	context.Context,
+	time.Time,
+	map[string]diskCounterSnapshot,
+) (devicemetric.InventoryMetric, devicemetric.SamplesMetric, map[string]diskCounterSnapshot, bool) {
 	inventory, samples, err := finalizeDeviceMetrics([]devicemetric.InventoryEntry{}, []devicemetric.Sample{})
-	return inventory, samples, err == nil
+	return inventory, samples, map[string]diskCounterSnapshot{}, err == nil
 }
 
 func resolveTrustedNvidiaSMI() (string, bool) { return "", false }

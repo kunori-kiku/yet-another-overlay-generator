@@ -40,14 +40,10 @@ func TestInstallerCapabilityEnvironment_StripsSpoofedAndUnsupportedMarkers(t *te
 		telemetrycap.InstallerPolicyV1Env,
 		telemetrycap.InstallerPolicyV2Env,
 		telemetrycap.InstallerURLV1Env,
+		telemetrycap.InstallerDeviceV1Env,
 	} {
 		if values[supported] != "1" {
 			t.Fatalf("launcher-owned %s = %q, want 1", supported, values[supported])
-		}
-	}
-	for _, unsupported := range []string{telemetrycap.InstallerDeviceV1Env} {
-		if _, exists := values[unsupported]; exists {
-			t.Fatalf("inherited unsupported marker %s survived sanitization", unsupported)
 		}
 	}
 }

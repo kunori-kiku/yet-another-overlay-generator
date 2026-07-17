@@ -2,6 +2,7 @@ import { useTopologyStore } from '../../../stores/topologyStore';
 import { useControllerStore } from '../../../stores/controllerStore';
 import { t, type MessageKey } from '../../../i18n';
 import { deriveCapabilitiesFromRole, type NodeRole } from '../../../lib/roleCapabilities';
+import { nodeDeploymentModeUpdate } from '../../../lib/nodeDeploymentMode';
 import { uuid } from '../../../lib/uuid';
 import { Field, FIELD_SELECT_CLASS } from '../../../ui/Field';
 
@@ -178,15 +179,13 @@ export function NodeEditor() {
             <label className="text-xs text-[var(--content-muted)]">{t(language, 'nodeEditor.deploymentMode')}</label>
             <select
               value={selectedNode.deployment_mode === 'manual' ? 'manual' : 'managed'}
-              onChange={(e) =>
-                updateNode(selectedNode.id, {
-                  deployment_mode: e.target.value === 'manual' ? 'manual' : undefined,
-                  // A manual node has no resident agent. Clear source-side active probes at this
-                  // custody transition instead of leaving an invalid, apparently configured policy.
-                  telemetry_probes:
-                    e.target.value === 'manual' ? undefined : selectedNode.telemetry_probes,
-                })
-              }
+              onChange={(e) => updateNode(
+                selectedNode.id,
+                nodeDeploymentModeUpdate(
+                  selectedNode,
+                  e.target.value === 'manual' ? 'manual' : 'managed',
+                ),
+              )}
               className="w-full px-2 py-1 bg-[var(--control)] rounded text-sm border border-[var(--hairline)]"
             >
               <option value="managed">Managed (agent)</option>

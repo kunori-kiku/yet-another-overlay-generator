@@ -309,6 +309,49 @@ func TestDiskCounterValuesZeroResetAndInvalidElapsed(t *testing.T) {
 	}
 }
 
+func TestDeviceCollectorResetRateBaselinesExcludesDisabledInterval(t *testing.T) {
+	root := t.TempDir()
+	sysRoot := filepath.Join(root, "sys")
+	procRoot := filepath.Join(root, "proc")
+	for _, path := range []string{
+		filepath.Join(sysRoot, "class", "block"), filepath.Join(sysRoot, "dev", "block"),
+		filepath.Join(sysRoot, "class", "drm"), filepath.Join(sysRoot, "bus", "pci", "devices"),
+		filepath.Join(procRoot, "self"),
+	} {
+		mustMkdirAll(t, path)
+	}
+	diskPath := filepath.Join(sysRoot, "devices", "block", "sda")
+	makeBlockFixture(t, sysRoot, "sda", diskPath, "8:0", 1, blockStatLine(100, 200, 300))
+	mustWriteFile(t, filepath.Join(procRoot, "self", "mountinfo"), "")
+	collector := newDeviceCollector(deviceCollectorDeps{
+		ProcRoot: procRoot, SysRoot: sysRoot,
+		ResolveNvidiaSMI: func() (string, bool) { return "", false },
+	})
+
+	_, first := collector.Collect(context.Background(), time.Unix(1, 0))
+	if len(first.Samples) != 0 {
+		t.Fatalf("first observation emitted rates: %+v", first)
+	}
+	mustWriteFile(t, filepath.Join(diskPath, "stat"), blockStatLine(102, 202, 400))
+	_, second := collector.Collect(context.Background(), time.Unix(2, 0))
+	if len(second.Samples) != 1 {
+		t.Fatalf("authorized interval emitted no rate: %+v", second)
+	}
+
+	collector.ResetRateBaselines()
+	// These counter advances happened while signed collection authority was absent.
+	mustWriteFile(t, filepath.Join(diskPath, "stat"), blockStatLine(1000, 2000, 3000))
+	_, afterEnable := collector.Collect(context.Background(), time.Unix(3, 0))
+	if len(afterEnable.Samples) != 0 {
+		t.Fatalf("first post-enable observation leaked disabled-interval rates: %+v", afterEnable)
+	}
+	mustWriteFile(t, filepath.Join(diskPath, "stat"), blockStatLine(1002, 2002, 3100))
+	_, next := collector.Collect(context.Background(), time.Unix(4, 0))
+	if len(next.Samples) != 1 {
+		t.Fatalf("fully authorized interval did not recover rates: %+v", next)
+	}
+}
+
 func TestDeviceCollectorBlockIdentityPrecedenceAndCollisionFallback(t *testing.T) {
 	root := t.TempDir()
 	strongPath := filepath.Join(root, "strong")
@@ -436,6 +479,50 @@ func TestDeviceCollectorDiscoveryFailureDegradesKnownInventory(t *testing.T) {
 		if entry.Status != devicemetric.StatusCollectionError {
 			t.Fatalf("canceled completed result retained a healthy row: %+v", entry)
 		}
+	}
+}
+
+func TestDeviceCollectorProviderPanicDoesNotLatchWorker(t *testing.T) {
+	root := t.TempDir()
+	sysRoot := filepath.Join(root, "sys")
+	procRoot := filepath.Join(root, "proc")
+	for _, path := range []string{
+		filepath.Join(sysRoot, "class", "block"), filepath.Join(sysRoot, "dev", "block"),
+		filepath.Join(sysRoot, "class", "drm"), filepath.Join(sysRoot, "bus", "pci", "devices"),
+		filepath.Join(procRoot, "self"),
+	} {
+		mustMkdirAll(t, path)
+	}
+	diskPath := filepath.Join(sysRoot, "devices", "block", "sda")
+	makeBlockFixture(t, sysRoot, "sda", diskPath, "8:0", 1, blockStatLine(0, 0, 0))
+	mustWriteFile(t, filepath.Join(procRoot, "self", "mountinfo"), "36 25 8:0 / /data rw - ext4 /dev/sda rw\n")
+	panicking := true
+	collector := newDeviceCollector(deviceCollectorDeps{
+		ProcRoot: procRoot, SysRoot: sysRoot,
+		ResolveNvidiaSMI: func() (string, bool) { return "", false },
+		StatFilesystem: func(string) (filesystemStat, error) {
+			if panicking {
+				panic("provider bug")
+			}
+			return filesystemStat{Blocks: 10, Free: 5, BlockSize: 4096}, nil
+		},
+	})
+
+	inventory, samples := collector.Collect(context.Background(), time.Unix(1, 0))
+	if len(inventory.Devices) != 1 || inventory.Devices[0].Status != devicemetric.StatusCollectionError || len(samples.Samples) != 0 {
+		t.Fatalf("provider panic = inventory %+v samples %+v", inventory, samples)
+	}
+	collector.mu.Lock()
+	inFlight := collector.inFlight
+	collector.mu.Unlock()
+	if inFlight {
+		t.Fatal("provider panic left the one-worker latch set")
+	}
+
+	panicking = false
+	inventory, samples = collector.Collect(context.Background(), time.Unix(2, 0))
+	if len(inventory.Devices) != 2 || len(samples.Samples) != 1 {
+		t.Fatalf("collector did not recover after provider panic: inventory %+v samples %+v", inventory, samples)
 	}
 }
 

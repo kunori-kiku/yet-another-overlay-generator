@@ -47,6 +47,35 @@ func TestDeviceMetricDefinitionsAndSeriesIdentity(t *testing.T) {
 	if got, want := SeriesID(KindBlockDevice, []byte("disk-wwid")), "123776c02c7377c01a3c25f77e118a754833a488ebeb74fd7d23127ec3ba73f4"; got != want {
 		t.Fatalf("pinned SeriesID = %q, want %q", got, want)
 	}
+
+	deviceID := SeriesID(KindBlockDevice, []byte("disk-wwid"))
+	historyID, err := HistorySeriesID(KindBlockDevice, deviceID)
+	if err != nil || len(historyID) != 64 {
+		t.Fatalf("HistorySeriesID(valid) = %q, %v", historyID, err)
+	}
+	if want := "e46b4472ce38f7e678d8852cb9a9d3e70a7c688671ce7e697bb9b1ed46856b22"; historyID != want {
+		t.Fatalf("pinned HistorySeriesID = %q, want %q", historyID, want)
+	}
+	if again, err := HistorySeriesID(KindBlockDevice, deviceID); err != nil || again != historyID {
+		t.Fatalf("HistorySeriesID is not deterministic: %q, %v", again, err)
+	}
+	if other, err := HistorySeriesID(KindFilesystem, deviceID); err != nil || other == historyID {
+		t.Fatalf("HistorySeriesID is not kind-separated: %q, %v", other, err)
+	}
+	for name, selector := range map[string]struct {
+		kind Kind
+		id   string
+	}{
+		"unknown kind": {kind: "future", id: deviceID},
+		"raw id":       {kind: KindGPU, id: "serial-123"},
+		"uppercase id": {kind: KindGPU, id: strings.ToUpper(deviceID)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := HistorySeriesID(selector.kind, selector.id); err == nil {
+				t.Fatalf("HistorySeriesID(%q, %q) succeeded", selector.kind, selector.id)
+			}
+		})
+	}
 }
 
 func TestDeviceMetricValidationRejectsInvalidRows(t *testing.T) {
@@ -133,6 +162,7 @@ func TestDeviceMetricValidationRejectsInvalidRows(t *testing.T) {
 		{Samples: []Sample{{SeriesID: blockID, Kind: KindBlockDevice, Values: map[NumericKey]float64{DiskIOBusyPct: 101}}}},
 		{Samples: []Sample{{SeriesID: blockID, Kind: KindBlockDevice, Values: map[NumericKey]float64{DiskReadBytesPerSecond: math.NaN()}}}},
 		{Samples: []Sample{{SeriesID: blockID, Kind: KindBlockDevice, Values: map[NumericKey]float64{}}}},
+		{Samples: validSamples.Samples, SampledAt: "not-a-timestamp"},
 	}
 	for i, metric := range invalid {
 		if err := ValidateSamples(metric); err == nil {

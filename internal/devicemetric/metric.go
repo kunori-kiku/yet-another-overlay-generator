@@ -11,6 +11,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -96,6 +97,10 @@ type InventoryMetric struct {
 type SamplesMetric struct {
 	Samples   []Sample `json:"samples"`
 	Truncated int      `json:"truncated,omitempty"`
+	// SampledAt identifies the local collection shared by every row. The agent repeats the latest
+	// metric for Fleet live state, while controller history uses this bounded timestamp to avoid
+	// mistaking heartbeat uploads for fresh device observations.
+	SampledAt string `json:"sampled_at,omitempty"`
 }
 
 var numericDefinitions = [...]NumericDefinition{
@@ -132,6 +137,26 @@ func SeriesID(kind Kind, canonicalIdentity []byte) string {
 	h.Write([]byte{0})
 	h.Write(canonicalIdentity)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// HistorySeriesID derives the exact retained-series identity from the closed device kind and the
+// already-opaque inventory ID. Keeping this framing in the leaf contract prevents controller and API
+// callers from inventing subtly different concatenations, and ensures mutable display metadata can
+// never affect history identity.
+func HistorySeriesID(kind Kind, deviceID string) (string, error) {
+	if !validKind(kind) {
+		return "", fmt.Errorf("invalid device kind %q", kind)
+	}
+	if !validSeriesID(deviceID) {
+		return "", fmt.Errorf("invalid device series id")
+	}
+	h := sha256.New()
+	h.Write([]byte("yaog-device-history-series-v1"))
+	h.Write([]byte{0})
+	h.Write([]byte(kind))
+	h.Write([]byte{0})
+	h.Write([]byte(deviceID))
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // BoundMetrics sorts before applying the independent disk-related and GPU caps, retains samples only
@@ -194,7 +219,7 @@ func BoundMetrics(entries []InventoryEntry, samples []Sample) (InventoryMetric, 
 	filtered, cappedSamples := capSamples(filtered)
 	sampleMetric := SamplesMetric{Samples: filtered, Truncated: sampleTruncated + cappedSamples}
 
-	for encodedPairLen(inventory, sampleMetric) > MaxEncodedDevicePairBytes && len(inventory.Devices) > 0 {
+	for encodedPairBudgetLen(inventory, sampleMetric) > MaxEncodedDevicePairBytes && len(inventory.Devices) > 0 {
 		removeAt := largestRemovableInventoryIndex(inventory.Devices, sampleMetric.Samples)
 		removed := inventory.Devices[removeAt].SeriesID
 		inventory.Devices = append(inventory.Devices[:removeAt], inventory.Devices[removeAt+1:]...)
@@ -405,6 +430,12 @@ func ValidateSamples(metric SamplesMetric) error {
 	if metric.Truncated < 0 {
 		return fmt.Errorf("device samples have negative truncated count")
 	}
+	if metric.SampledAt != "" {
+		sampledAt, err := time.Parse(time.RFC3339Nano, metric.SampledAt)
+		if err != nil || sampledAt.IsZero() {
+			return fmt.Errorf("device samples have invalid sampled_at")
+		}
+	}
 	diskCount, gpuCount := 0, 0
 	seen := make(map[string]struct{}, len(metric.Samples))
 	for i, sample := range metric.Samples {
@@ -526,6 +557,15 @@ func encodedPairLen(inventory InventoryMetric, samples SamplesMetric) int {
 		Inventory InventoryMetric `json:"device_inventory"`
 		Samples   SamplesMetric   `json:"device_samples"`
 	}{Inventory: inventory, Samples: samples})
+}
+
+func encodedPairBudgetLen(inventory InventoryMetric, samples SamplesMetric) int {
+	if samples.SampledAt == "" {
+		// Reserve the longest RFC3339Nano UTC timestamp the runtime can add after collection. This
+		// keeps BoundMetrics' shared byte guarantee valid when the sampler stamps the returned value.
+		samples.SampledAt = "9999-12-31T23:59:59.999999999Z"
+	}
+	return encodedPairLen(inventory, samples)
 }
 
 func validKind(kind Kind) bool {

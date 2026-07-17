@@ -140,7 +140,7 @@ type Node struct {
 }
 
 // TelemetryDevicePolicy selects one bounded automatic device-discovery contract. The policy shape
-// is deliberately small; collectors and charted metrics are activated by later feature milestones.
+// stays deliberately small: the signed opt-in activates the registered collectors and charted metrics.
 type TelemetryDevicePolicy struct {
 	Mode string `json:"mode"`
 }

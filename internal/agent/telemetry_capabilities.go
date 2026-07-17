@@ -8,12 +8,13 @@ import (
 	"github.com/kunorikiku/yet-another-overlay-generator/internal/telemetrymetric"
 )
 
-// agentCapabilitiesSampler reports compile-time executable support without reading the host. URL
-// probes ship with the generic successor-policy parser/launcher; device support remains absent until
-// its collector and charted metric contract are implemented.
+// agentCapabilitiesSampler reports compile-time executable support without reading the host. These
+// tokens are also the launcher-owned install markers, so a capability is added only when its parser,
+// runtime, and telemetry/chart contract are all production-registered.
 type agentCapabilitiesSampler struct{}
 
 var implementedSuccessorTelemetryCapabilities = []string{
+	telemetrycap.DeviceV1,
 	telemetrycap.PolicyV2,
 	telemetrycap.URLV1,
 }

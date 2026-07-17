@@ -109,9 +109,12 @@ type nvidiaToolGPU struct {
 	vramTotal uint64
 }
 
-func (c *deviceCollector) collectPlatform(ctx context.Context, now time.Time) (devicemetric.InventoryMetric, devicemetric.SamplesMetric, bool) {
-	diskInventory, diskSamples, nextPrevious, diskErr := c.collectLinuxDisks(ctx, now)
-	c.previous = nextPrevious
+func (c *deviceCollector) collectPlatform(
+	ctx context.Context,
+	now time.Time,
+	previous map[string]diskCounterSnapshot,
+) (devicemetric.InventoryMetric, devicemetric.SamplesMetric, map[string]diskCounterSnapshot, bool) {
+	diskInventory, diskSamples, nextPrevious, diskErr := c.collectLinuxDisks(ctx, now, previous)
 	diskMetric, diskNumeric, boundErr := finalizeDeviceMetrics(diskInventory, diskSamples)
 	if diskErr == nil {
 		diskErr = boundErr
@@ -122,29 +125,33 @@ func (c *deviceCollector) collectPlatform(ctx context.Context, now time.Time) (d
 		c.publishBlockPartial(diskMetric)
 	}
 	if diskErr != nil {
-		return diskMetric, diskNumeric, false
+		return diskMetric, diskNumeric, nextPrevious, false
 	}
 	gpuInventory, gpuSamples, gpuErr := c.collectLinuxGPUs(ctx)
 	if gpuErr != nil {
 		if ctx.Err() != nil {
-			return diskMetric, diskNumeric, false
+			return diskMetric, diskNumeric, nextPrevious, false
 		}
 		gpuInventory = c.previousInventoryForKind(devicemetric.KindGPU)
 		gpuSamples = nil
 	}
 	inventory, samples, err := finalizeDeviceMetrics(append(diskInventory, gpuInventory...), append(diskSamples, gpuSamples...))
 	if err == nil {
-		return inventory, samples, true
+		return inventory, samples, nextPrevious, true
 	}
 	previousGPUs := c.previousInventoryForKind(devicemetric.KindGPU)
 	inventory, samples, err = finalizeDeviceMetrics(append(diskInventory, previousGPUs...), diskSamples)
 	if err == nil {
-		return inventory, samples, true
+		return inventory, samples, nextPrevious, true
 	}
-	return diskMetric, diskNumeric, true
+	return diskMetric, diskNumeric, nextPrevious, true
 }
 
-func (c *deviceCollector) collectLinuxDisks(ctx context.Context, now time.Time) ([]devicemetric.InventoryEntry, []devicemetric.Sample, map[string]diskCounterSnapshot, error) {
+func (c *deviceCollector) collectLinuxDisks(
+	ctx context.Context,
+	now time.Time,
+	previous map[string]diskCounterSnapshot,
+) ([]devicemetric.InventoryEntry, []devicemetric.Sample, map[string]diskCounterSnapshot, error) {
 	blocks, err := enumerateLinuxBlocks(ctx, c.deps.SysRoot, now)
 	if err != nil {
 		return nil, nil, make(map[string]diskCounterSnapshot), err
@@ -191,8 +198,8 @@ func (c *deviceCollector) collectLinuxDisks(ctx context.Context, now time.Time) 
 		}
 		current := *block.counter
 		nextPrevious[block.seriesID] = current
-		if previous, ok := c.previous[block.seriesID]; ok {
-			values := diskCounterValues(previous, current)
+		if baseline, ok := previous[block.seriesID]; ok {
+			values := diskCounterValues(baseline, current)
 			if len(values) > 0 {
 				samples = append(samples, devicemetric.Sample{SeriesID: block.seriesID, Kind: devicemetric.KindBlockDevice, Values: values})
 			}
