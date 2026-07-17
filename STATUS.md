@@ -1,42 +1,43 @@
 # STATUS
 <!-- regenerated: 2026-07-17 -->
-<!-- by: execute-implementation-plan -->
+<!-- by: close-phase -->
 
 ## Active work
 
-- **Subject:** `deployment-stability-and-charted-telemetry-2026_07_17`
-- **Branch:** `fix/rc12-telemetry-drafts` @ `faeee52` plus the final Plan 8 candidate worktree
-- **Current plan:** plan-8 — final release-preparation review, commit, closure, and exact-main proof
-- **Latest committed work:** the independently re-reviewed full architecture cache was regenerated with 18
-  component maps and four new telemetry-specific components (commit `faeee52`, 2026-07-17).
-- **Release candidate:** `v2.0.0-rc.12` is release-ready and **uncut**. The local required gates passed;
-  the cumulative PR, exact-main push CI, and terminal publication checklist remain mandatory. No rc.12
-  tag, GitHub release/draft, or official versioned GHCR reference existed at the early preflight.
-- **Other open subject:** `mixed-controller-local-mode-2026_06_25` remains open with its historical
-  plan-5 and plan-7 pending; it is not part of the rc.12 execution sequence.
+- **Subject:** the rc.12 implementation subject is archived as Delivered. The only remaining
+  unarchived subject is `mixed-controller-local-mode-2026_06_25`, whose historical plan-5 and plan-7
+  remain pending and were not resumed here.
+- **Branch:** `fix/rc12-telemetry-drafts` @ closure head `34f8240`, retained for the cumulative PR.
+- **Current plan:** the archived rc.12 [Plan 9](implementation_plans/_completed/deployment-stability-and-charted-telemetry-2026_07_17/plan-9-2026_07_17.md)
+  terminal checklist: merge the reviewed branch, prove exact-main CI, then tag and verify publication.
+- **Latest completed work:** plans 1-8, integrated review/fix/re-review, full local gates, full specs
+  refresh, and subject bookkeeping are complete (closure commit `34f8240`, 2026-07-17).
+- **Release candidate:** `v2.0.0-rc.12` is release-ready and **uncut**. No tag, GitHub release/draft,
+  or official GHCR rc.12 reference existed at the early preflight; Plan 9 must repeat that check.
 
 ## Open questions / blockers
 
-- No implementation blocker. Local fixture/cross-platform coverage passed, but no physical NVIDIA or
-  AMD GPU was available for an on-hardware smoke; that residual validation gap is documented rather
-  than represented as a release gate.
-- Publication remains blocked until required PR checks and push-to-main CI pass on the exact squash
-  commit. The annotated tag must remain the final repository mutation.
+- No implementation blocker remains. Publication is blocked until the cumulative PR's required checks
+  pass, the reviewed branch is squash-merged, and push CI succeeds on that exact `origin/main` commit.
+- No physical NVIDIA or AMD GPU was available for an on-hardware smoke. Fixture, provider-boundary,
+  process-bound, portability, and cross-build coverage passed; the caveat remains explicit rather than
+  being represented as a completed hardware test.
+- The annotated `v2.0.0-rc.12` tag must be the final repository mutation. Any red exact-main gate or
+  pre-existing immutable reference stops publication.
 
 ## Next actions
 
-1. Obtain a clean independent review of the final documentation/release-preparation diff, commit it,
-   and push the complete Plan 8 candidate.
-2. Mark Plan 8 done, close/archive the subject while preserving Plan 9, and regenerate this status as
-   implementation delivered / rc.12 ready and uncut.
-3. Merge the cumulative PR, verify required checks and exact-main push CI, then run the terminal Plan 9
-   publication and read-only GitHub/container verification.
+1. Create or reuse the cumulative PR from `fix/rc12-telemetry-drafts` and wait for every required check.
+2. Squash-merge the reviewed branch, update local `main`, and prove it exactly equals `origin/main`.
+3. Wait for successful push CI on that exact main commit, including the PowerShell gate unavailable locally.
+4. Repeat the tag/release/GHCR preflight, then create and push the annotated tag as the final source mutation.
+5. Monitor the release transaction and verify all 22 assets plus native amd64/arm64 official image pointers.
 
 ## Recently closed subjects (last 3)
 
-- `post-refactor-debt-paydown-2026_07_14` (2026-07-15, delivered): fourteen-plan correctness,
-  structural, CI, and custody/publication paydown shipped through rc.6 and rc.8.
-- `framework-refactor-2026_07_13` (2026-07-14, delivered): modular controller/frontend structure and
-  the chart-first telemetry framework were integrated and independently reviewed.
-- `telemetry-history-and-delta-deploy-2026_07_13` (2026-07-14, delivered): bounded controller history,
-  server-side rollups, visible live refresh, and delta deployment behavior were shipped.
+- `deployment-stability-and-charted-telemetry-2026_07_17` (2026-07-17, Delivered): rc.12 fixes,
+  URL/device telemetry, chart/history framework, reviews, specs, and release-ready evidence completed.
+- `post-refactor-debt-paydown-2026_07_14` (2026-07-15, Complete): residual security, correctness,
+  documentation, and structural debt closed through fourteen reviewed plans.
+- `framework-refactor-2026_07_13` (2026-07-14, Complete): unified compile architecture and repository
+  framework restructuring completed.
