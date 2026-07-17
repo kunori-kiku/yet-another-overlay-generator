@@ -10,6 +10,8 @@ export const zh: Record<keyof typeof en, string> = {
   publicAddressHint: "留空表示该节点在 NAT 之后（由对端主动连入）。",
   autoLayoutLabel: "自动布局",
   showInterfacesLabel: "显示接口详情",
+  showLinkAddressesLabel: "显示链路地址",
+  showOverlayIpsLabel: "显示 Overlay IP",
   portPendingLabel: "待分配",
   addBackupLink: "添加备份链路",
   backupEndpointNudge: "为备份链路指定不同的公网地址以获得路径分集（当前复制了主链路的地址）。",

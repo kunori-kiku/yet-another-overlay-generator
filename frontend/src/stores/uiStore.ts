@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-// App-shell UI preferences. Kept in a dedicated store (and a dedicated
-// `ui-storage` localStorage key) so chrome state stays orthogonal to the
+// App UI preferences. Kept in a dedicated store (and a dedicated
+// `ui-storage` localStorage key) so presentation state stays orthogonal to the
 // topology/controller domain stores. All fields are non-secret and additive.
 export type ThemePref = 'system' | 'light' | 'dark';
 
@@ -27,6 +27,12 @@ interface UiState {
    *  off, while a browser reload must not silently resume background polling. */
   fleetLive: boolean;
   setFleetLive: (live: boolean) => void;
+  /** Canvas readability preferences. These affect presentation only and never enter the
+   *  topology/controller stores, compile input, or deployment dirty-state calculation. */
+  showLinkAddresses: boolean;
+  setShowLinkAddresses: (show: boolean) => void;
+  showOverlayIps: boolean;
+  setShowOverlayIps: (show: boolean) => void;
   /** Vibrancy/translucency on the shell chrome. Default on; off = solid surfaces
    *  ("plainer minimalism"). This is the EFFECTIVE value the ThemeProvider reads. In
    *  controller mode the server is the source of truth and drives it via
@@ -64,6 +70,10 @@ export const useUiStore = create<UiState>()(
       closeMobileNav: () => set({ mobileNavOpen: false }),
       fleetLive: false,
       setFleetLive: (fleetLive) => set({ fleetLive }),
+      showLinkAddresses: true,
+      setShowLinkAddresses: (showLinkAddresses) => set({ showLinkAddresses }),
+      showOverlayIps: true,
+      setShowOverlayIps: (showOverlayIps) => set({ showOverlayIps }),
       translucency: true,
       localTranslucency: true,
       setTranslucency: (translucency) => set({ translucency, localTranslucency: translucency }),
@@ -91,6 +101,8 @@ export const useUiStore = create<UiState>()(
       partialize: (state) => ({
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,
+        showLinkAddresses: state.showLinkAddresses,
+        showOverlayIps: state.showOverlayIps,
         translucency: state.translucency,
         localTranslucency: state.localTranslucency,
       }),

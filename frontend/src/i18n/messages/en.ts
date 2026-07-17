@@ -19,6 +19,8 @@ export const en = {
   publicAddressHint: "Leave empty if this node is behind NAT (peers dial in to it).",
   autoLayoutLabel: "Auto layout",
   showInterfacesLabel: "Show interfaces",
+  showLinkAddressesLabel: "Show link addresses",
+  showOverlayIpsLabel: "Show overlay IPs",
   portPendingLabel: "auto",
   addBackupLink: "Add backup link",
   backupEndpointNudge: "Point the backup at a distinct endpoint for path diversity (it copied the primary’s address).",

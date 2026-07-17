@@ -44,6 +44,9 @@ interface CustomEdgeData {
   // cosmetic churn for existing designs — D8). The drawn arrow already equals the dial
   // direction (D11: no stored reverse; the editor flips the edge instead).
   linkDirection?: string;
+  // Canvas-only view preference. False hides endpoint host/DNS and port while retaining the
+  // selectable label, endpoint names, role/direction chips, and pending line treatment.
+  showLinkAddresses?: boolean;
   // Focus opacity (Decisions #11, literal implementation): a deemphasized element stays mounted,
   // visible, and clickable -- it only fades to 0.15 opacity with the existing 150ms transition.
   // Never display:none / unmount / block clicks.
@@ -68,10 +71,15 @@ export function CustomEdge({
   const edgeType = data?.edgeType || 'direct';
   const stroke = edgeStroke[edgeType] || defaultStroke;
   const rawLabel = data?.label || edgeType;
+  const showLinkAddresses = data?.showLinkAddresses !== false;
   const srcName = data?.sourceNodeName || '';
   const tgtName = data?.targetNodeName || '';
   const namePrefix = srcName && tgtName ? `${srcName} → ${tgtName}` : '';
-  const label = namePrefix ? `${namePrefix} | ${rawLabel}` : rawLabel;
+  const label = showLinkAddresses
+    ? namePrefix
+      ? `${namePrefix} | ${rawLabel}`
+      : rawLabel
+    : namePrefix || edgeType;
   const pending = data?.pending === true;
   const port = data?.port;
   const roleChip = data?.roleChip;
@@ -248,7 +256,7 @@ export function CustomEdge({
             <span>{label}</span>
             {/* Port chip: compiled -> the actual listen port (the backend-allocated truth);
                 uncompiled -> a "pending" placeholder, avoiding the old misleading dangling-colon "host:" form. */}
-            {(port !== undefined || pending) && (
+            {showLinkAddresses && (port !== undefined || pending) && (
               <span
                 style={{
                   fontFamily: 'monospace',

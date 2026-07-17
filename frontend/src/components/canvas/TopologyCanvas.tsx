@@ -21,7 +21,9 @@ import dagre from '@dagrejs/dagre';
 import { CustomNode } from './CustomNode';
 import { CustomEdge } from './CustomEdge';
 import { roleHue } from './roleHue';
+import { MIN_CANVAS_ZOOM } from './canvasViewport';
 import { useTopologyStore } from '../../stores/topologyStore';
+import { useUiStore } from '../../stores/uiStore';
 import { t } from '../../i18n';
 import { resolveNodeInterfaces } from '../../lib/compiledInterfaces';
 import { uuid } from '../../lib/uuid';
@@ -32,7 +34,6 @@ const edgeTypes = { custom: CustomEdge };
 // Default node dimensions for auto-layout (used before React Flow has measured them).
 const DEFAULT_NODE_WIDTH = 180;
 const DEFAULT_NODE_HEIGHT = 110;
-
 // Edge render-equality check for keyed syncing. Only replace the edge object when a
 // render-relevant field changes, keeping object identity stable -> React Flow skips
 // re-rendering unchanged edges (eliminates whole-layer edge flicker).
@@ -51,6 +52,7 @@ function edgeRenderEqual(a: FlowEdge, b: FlowEdge): boolean {
     'targetNodeName',
     'roleChip',
     'linkDirection',
+    'showLinkAddresses',
     'deemphasized',
   ];
   return keys.every((k) => da[k] === db[k]);
@@ -82,6 +84,10 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
     selectedNodeId,
     selectedEdgeId,
   } = useTopologyStore();
+  const showLinkAddresses = useUiStore((state) => state.showLinkAddresses);
+  const setShowLinkAddresses = useUiStore((state) => state.setShowLinkAddresses);
+  const showOverlayIps = useUiStore((state) => state.showOverlayIps);
+  const setShowOverlayIps = useUiStore((state) => state.setShowOverlayIps);
 
   // Focus opacity (Decisions #11): connection-drag-in-progress flag. onConnectStart sets it,
   // onConnectEnd clears it (including drags cancelled mid-way); during a drag all edges are
@@ -222,11 +228,12 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
           label: n.name,
           role: n.role,
           overlayIp: n.overlay_ip || '',
+          showOverlayIps,
           domainName: domainMap[n.domain_id] || '',
           interfaces: nodeInterfaceMap[n.id] || [],
         },
       })),
-    [topoNodes, domainMap, nodeInterfaceMap]
+    [topoNodes, domainMap, nodeInterfaceMap, showOverlayIps]
   );
 
   // Compute parallel-edge indices (multiple edges between the same node pair)
@@ -290,11 +297,12 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
               targetNodeName: targetNode?.name || '',
               roleChip: edgeRoleChip[e.id], // ★ / bN / duplicate / undefined (single-edge pair)
               linkDirection: e.link_direction, // 'forward' -> single-linked chip; else no visual change
+              showLinkAddresses,
             },
             markerEnd: { type: MarkerType.ArrowClosed },
           };
         }),
-    [topoEdges, parallelEdgeInfo, topoNodes, edgeRoleChip]
+    [topoEdges, parallelEdgeInfo, topoNodes, edgeRoleChip, showLinkAddresses]
   );
 
   // Focus-opacity computation (Decisions #11, verbatim): from the current selection + the
@@ -524,7 +532,24 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
       // Inert in the read-only preview (nodesConnectable={false} already prevents the
       // gesture; this guard makes it impossible for a stray connection to add an edge).
       if (!editable) return;
-      setEdges((eds) => addEdge({ ...params, type: 'custom', data: { edgeType: 'direct', label: 'direct', pending: true, parallelIndex: 0, parallelCount: 1 }, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
+      setEdges((eds) =>
+        addEdge(
+          {
+            ...params,
+            type: 'custom',
+            data: {
+              edgeType: 'direct',
+              label: 'direct',
+              pending: true,
+              parallelIndex: 0,
+              parallelCount: 1,
+              showLinkAddresses,
+            },
+            markerEnd: { type: MarkerType.ArrowClosed },
+          },
+          eds,
+        ),
+      );
 
       if (params.source && params.target) {
         // Generate the edge ID with uuid() rather than a millisecond timestamp: two quick
@@ -549,7 +574,7 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
         selectEdge(id);
       }
     },
-    [setEdges, addTopoEdge, topoNodes, selectEdge, editable]
+    [setEdges, addTopoEdge, topoNodes, selectEdge, editable, showLinkAddresses]
   );
 
   // Focus opacity (Decisions #11): a connection drag starting -> set connecting (all edges deemphasized, nodes bright).
@@ -634,33 +659,53 @@ export function TopologyCanvas({ editable = true }: TopologyCanvasProps) {
       nodesDraggable={editable}
       nodesConnectable={editable}
       elementsSelectable={editable}
+      minZoom={MIN_CANVAS_ZOOM}
       fitView
       fitViewOptions={{ padding: 0.2, duration: 400 }}
       className="bg-[var(--surface)]"
     >
       <Background color="var(--hairline)" gap={20} />
       <Controls className="!bg-[var(--control)] !border-[var(--hairline)] !text-[var(--content-muted)]" />
-      {/* Canvas toolbar: auto-layout + interface-detail toggle. Hidden in the
+      {/* Canvas toolbar: auto-layout + display-detail toggles. Hidden in the
           read-only preview — auto-layout mutates node positions and the controls are
           fiddly on a phone; Controls (pan/zoom) and MiniMap stay for read-only use. */}
       {editable && (
-      <Panel position="top-left" className="flex items-center gap-2">
-        <button
-          onClick={runAutoLayout}
-          className="px-2.5 py-1 bg-[var(--control)] hover:bg-[var(--control-hover)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] transition-colors duration-150"
-        >
-          ✨ {t(language, 'autoLayoutLabel')}
-        </button>
-        <label className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--control)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] cursor-pointer transition-colors duration-150 hover:bg-[var(--control-hover)]">
-          <input
-            type="checkbox"
-            checked={showInterfaces}
-            onChange={(e) => setShowInterfaces(e.target.checked)}
-            className="rounded"
-          />
-          {t(language, 'showInterfacesLabel')}
-        </label>
-      </Panel>
+        <Panel position="top-left" className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={runAutoLayout}
+            className="px-2.5 py-1 bg-[var(--control)] hover:bg-[var(--control-hover)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] transition-colors duration-150"
+          >
+            ✨ {t(language, 'autoLayoutLabel')}
+          </button>
+          <label className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--control)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] cursor-pointer transition-colors duration-150 hover:bg-[var(--control-hover)]">
+            <input
+              type="checkbox"
+              checked={showInterfaces}
+              onChange={(e) => setShowInterfaces(e.target.checked)}
+              className="rounded"
+            />
+            {t(language, 'showInterfacesLabel')}
+          </label>
+          <label className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--control)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] cursor-pointer transition-colors duration-150 hover:bg-[var(--control-hover)]">
+            <input
+              type="checkbox"
+              checked={showLinkAddresses}
+              onChange={(e) => setShowLinkAddresses(e.target.checked)}
+              className="rounded"
+            />
+            {t(language, 'showLinkAddressesLabel')}
+          </label>
+          <label className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--control)] border border-[var(--hairline)] rounded text-xs text-[var(--content)] cursor-pointer transition-colors duration-150 hover:bg-[var(--control-hover)]">
+            <input
+              type="checkbox"
+              checked={showOverlayIps}
+              onChange={(e) => setShowOverlayIps(e.target.checked)}
+              className="rounded"
+            />
+            {t(language, 'showOverlayIpsLabel')}
+          </label>
+        </Panel>
       )}
       <MiniMap
         nodeColor={(n) => roleHue((n.data as Record<string, unknown>)?.role as string).hex}
